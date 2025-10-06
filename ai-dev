@@ -239,34 +239,82 @@ claude_execute() {
     return 0  # 成功
 }
 
-# Gemini 執行函式
+# Gemini 執行函式，支援工具使用與權限管理
 gemini_execute() {
     local prompt=$1
-    local agent_name=${2:-"Agent"}
+    local permission_mode=${2:-""}
+    local agent_name=${3:-"Agent"}
     export CURRENT_AGENT="$agent_name"
+    shift 3
+    local allowed_tools=("$@")
 
     log_info "正在執行 Gemini Agent: $agent_name..."
 
-    # Gemini CLI 不支援 session resume 或 tool use，所以直接執行
-    local cmd="$GEMINI_CLI_COMMAND -p \"$prompt\""
+    # 組合 allowed tools 參數
+    local allowed_tools_args=""
+    for tool in "${allowed_tools[@]}"; do
+        allowed_tools_args+=" --allowed-tools \"$tool\""
+    done
+
+    # 組合完整指令
+    local cmd="$GEMINI_CLI_COMMAND -p \"$prompt\" --output-format json"
+    
+    # 處理權限模式
+    if [ -n "$permission_mode" ]; then
+        local approval_mode="$permission_mode"
+        # 將 claude 的 acceptEdits 映射到 gemini 的 auto_edit
+        if [ "$permission_mode" == "acceptEdits" ]; then
+            approval_mode="auto_edit"
+        fi
+        cmd+=" --approval-mode $approval_mode"
+    fi
+
+    if [ -n "$allowed_tools_args" ]; then
+        cmd+="$allowed_tools_args"
+    fi
+
     local output
+    # 執行指令，並將 stderr 導向日誌，以處理可能的 JSON 錯誤輸出
     if ! output=$(eval "$cmd" 2> "$ISSUE_DIR/last_gemini_error.log"); then
         log_error "Gemini CLI 執行失敗。"
         log_error "錯誤訊息請見: $ISSUE_DIR/last_gemini_error.log"
-        return 2
+        # 如果主要輸出是空的，嘗試從錯誤日誌中讀取內容，因為 JSON 結果可能在那裡
+        if [ -z "$output" ]; then
+            output=$(cat "$ISSUE_DIR/last_gemini_error.log")
+        fi
     fi
 
-    # 為了 log_to_conversation，建立一個模擬的 JSON response
+    # 處理輸出：可能是 JSON 字串或一般文字
     local json_response
-    json_response=$(jq -n \
-        --arg agent "$agent_name" \
-        --arg prompt "$prompt" \
-        --arg content "$output" \
-        '{agent: $agent, prompt: $prompt, content: $content, result: $content}')
+    if jq -e . >/dev/null 2>&1 <<<"$output"; then
+        # 如果 output 是合法的 JSON
+        json_response="$output"
+    else
+        # 如果不是 JSON，則手動建立一個模擬的 JSON response 以便記錄
+        json_response=$(jq -n \
+            --arg agent "$agent_name" \
+            --arg prompt "$prompt" \
+            --arg content "$output" \
+            '{agent: $agent, prompt: $prompt, content: $content, result: $content}')
+    fi
 
     log_to_conversation "$prompt" "$json_response"
 
-    echo "$output"
+    # 從 JSON 中提取 content/result
+    local content=$(echo "$json_response" | jq -r '.response // .result // .content // ""' 2>/dev/null)
+    
+    # 如果從 JSON 中提取的 content 為空，則使用原始 output
+    if [ -z "$content" ] || [ "$content" == "null" ]; then
+        content="$output"
+    fi
+
+    echo "$content"
+    
+    # 檢查錯誤
+    if echo "$content" | grep -qi "error\|failed"; then
+        return 2
+    fi
+
     return 0
 }
 
@@ -916,7 +964,7 @@ $diff
 
         local review_feedback
         if [ "$REVIEW_AGENT_TOOL" = "gemini" ]; then
-            review_feedback=$(gemini_execute "$reviewer_prompt" "$REVIEW_AGENT")
+            review_feedback=$(gemini_execute "$reviewer_prompt" "" "$REVIEW_AGENT" "${DEFAULT_REVIEW_ALLOWED_TOOLS[@]}")
         elif [ "$REVIEW_AGENT_TOOL" = "claude" ]; then
             claude_execute "$session_review" "$reviewer_prompt" "" "$REVIEW_AGENT"
             local json_result=$(cat "$ISSUE_DIR/last_raw_output.log")
