@@ -675,11 +675,11 @@ detect_progress() {
             return
         fi
 
-        if [ "$pr_state" = "CLOSED" ]; {
+        if [ "$pr_state" = "CLOSED" ]; then
             log_warn "→ PR #$pr_number 已被關閉 (未合併)，流程終止。"
             log_warn "→ 如需重新開發，請刪除 '$ISSUE_DIR' 目錄後重試。"
             exit 1
-        }
+        fi
 
         # 如果 PR 存在，直接進入最後手動確認階段
         log_info "→ PR 已存在，從 Phase 6 (最後確認) 開始"
@@ -874,11 +874,11 @@ phase3_development() {
     echo ""
     log_info "=== Phase 3: 開發 ==="
 
-    if [ "$DEV_AGENT_TOOL" != "claude" ]; {
+    if [ "$DEV_AGENT_TOOL" != "claude" ]; then
         log_error "DEV Agent 不是 claude，無法自動開發。請手動開發。"
         log_warn "請在完成開發、commit 並 push 到遠端後，再重新執行此腳本。"
         exit 1
-    }
+    fi
 
     local session_dev=$(init_session "$DEV_AGENT")
     local dev_allowed_tools=("${DEFAULT_DEV_ALLOWED_TOOLS[@]}")
@@ -898,8 +898,7 @@ phase3_development() {
 
     log_info "Developer agent $DEV_AGENT 開始開發..."
     while true; do
-        if execute_with_retry "$session_dev" prompt "acceptEdits" "$DEV_AGENT" dev_allowed_tools;
- then
+        if execute_with_retry "$session_dev" prompt "acceptEdits" "$DEV_AGENT" dev_allowed_tools; then
             break
         fi
     done
@@ -989,8 +988,7 @@ $diff
 $review_feedback"
 
         # 3. 檢查 review 是否通過
-        if echo "$review_feedback" | grep -q -E "^LGTM$" ;
- then
+        if echo "$review_feedback" | grep -q -E "^LGTM$" ; then
             log_info "✓ 程式碼已通過 reviewer 審核！"
             touch "$ISSUE_DIR/pre_pr_review_passed"
             break
@@ -1096,8 +1094,7 @@ phase6_final_review() {
             local prompt="$final_input"
             log_info "讓 developer agent $DEV_AGENT 處理你的回饋..."
             while true; do
-                if execute_with_retry "$session_dev" prompt "acceptEdits" "$DEV_AGENT" dev_allowed_tools;
- then
+                if execute_with_retry "$session_dev" prompt "acceptEdits" "$DEV_AGENT" dev_allowed_tools; then
                     break
                 fi
             done
