@@ -1,0 +1,1151 @@
+#!/bin/bash
+
+# AI 開發工作流程
+# 使用 AI agents 進行自動化開發和 code review
+
+set -e
+
+# --- 設定 ---
+
+# PR 號碼 (如果需要從特定 PR 開始)
+PR_NUMBER=""
+
+# 需求檔案
+REQUIREMENTS_FILE="${1:-requirements.md}"
+
+# 最大 review 迭代次數
+MAX_REVIEW_ITERATIONS=5
+
+# AI Agent CLI 設定
+# 為每個 agent 指定要使用的工具。支援: "claude", "gemini"
+# 注意: 目前只有 REVIEW_AGENT 完整支援 "gemini"。PM 和 DEV agents 仍建議使用 "claude"。
+PM_AGENT_TOOL="claude"
+DEV_AGENT_TOOL="claude"
+REVIEW_AGENT_TOOL="gemini"
+
+# CLI 指令名稱
+CLAUDE_CLI_COMMAND="claude"
+GEMINI_CLI_COMMAND="gemini"
+
+
+# --- 目錄與 Agent 名稱 ---
+
+# 目錄結構
+REQUIREMENTS_BASE=$(basename "${1:-requirements.md}" .md)
+SESSION_DIR=".claude/custom/sessions"      # 共用 session 目錄
+ISSUE_DIR=".claude/custom/issues/$REQUIREMENTS_BASE"  # 個別 issue 目錄
+mkdir -p "$SESSION_DIR"
+mkdir -p "$ISSUE_DIR"
+
+# Agent 別名設定
+PM_AGENT="Roger"
+DEV_AGENT="David"
+REVIEW_AGENT="Richard"
+
+
+# --- 權限與 Log ---
+
+# 預設權限設定
+DEFAULT_DEV_ALLOWED_TOOLS=(
+    "Read(*)"
+    "Edit(*)"
+    "Write(*)"
+    "Bash(git status:*)"
+    "Bash(git diff:*)"
+    "Bash(git log:*)"
+    "Bash(git add:*)"
+    "Bash(git commit:*)"
+    "Bash(git push:*)"
+    "Bash(git checkout:*)"
+    "Bash(git branch:*)"
+    "Bash(git fetch:*)"
+    "Bash(git reset:*)"
+    "Bash(git remote:*)"
+    "Bash(git rebase:*)"
+    "Bash(git restore:*)"
+    "Bash(gh pr:*)"
+    "Bash(gh auth:*)"
+    "Bash(gh repo:*)"
+    "Bash(gh api:*)"
+    "Bash(rm:*)"
+    "Bash(mv:*)"
+    "Bash(mkdir:*)"
+    "Bash(composer:*)"
+    "Bash(npm:*)"
+    "Bash(php:*)"
+    "Bash(php vendor/bin/phpunit:*)"
+)
+
+DEFAULT_REVIEW_ALLOWED_TOOLS=(
+    "Bash(gh pr:*)"
+    "Bash(gh api:*)"
+    "Bash(git log:*)"
+    "Bash(git diff:*)"
+    "Bash(git show:*)"
+)
+
+# 顏色輸出
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+log_info() {
+    local timestamp=$(date \'+%Y-%m-%d %H:%M:%S\')
+    echo -e "${GREEN}[INFO]${NC} [$timestamp] $1" >&2
+}
+
+log_warn() {
+    local timestamp=$(date \'+%Y-%m-%d %H:%M:%S\')
+    echo -e "${YELLOW}[WARN]${NC} [$timestamp] $1" >&2
+}
+
+log_error() {
+    local timestamp=$(date \'+%Y-%m-%d %H:%M:%S\')
+    echo -e "${RED}[ERROR]${NC} [$timestamp] $1" >&2
+}
+
+# 記錄對話到 log
+log_to_conversation() {
+    local prompt_content=$1
+    local json_response=$2
+    local log_file="$ISSUE_DIR/conversation.log"
+    local timestamp=$(date \'+%Y-%m-%d %H:%M:%S\')
+
+    # 解析資訊
+    local session_id=$(echo "$json_response" | jq -r ".session_id // empty" 2>/dev/null)
+    local json_type=$(echo "$json_response" | jq -r 'type' 2>/dev/null)
+    local content=""
+    if [ "$json_type" == "array" ]; then
+        content=$(echo "$json_response" | jq -r ".content // empty" 2>/dev/null)
+    else
+        content=$(echo "$json_response" | jq -r ".result // .content // empty" 2>/dev/null)
+    fi
+
+    local total_cost=$(echo "$json_response" | jq -r ".total_cost_usd // empty" 2>/dev/null)
+    local duration=$(echo "$json_response" | jq -r ".duration_ms // empty" 2>/dev/null)
+    local input_tokens=$(echo "$json_response" | jq -r ".usage.input_tokens // empty" 2>/dev/null)
+    local output_tokens=$(echo "$json_response" | jq -r ".usage.output_tokens // empty" 2>/dev/null)
+    local cache_read=$(echo "$json_response" | jq -r ".usage.cache_read_input_tokens // empty" 2>/dev/null)
+    local cache_creation=$(echo "$json_response" | jq -r ".usage.cache_creation_input_tokens // empty" 2>/dev/null)
+
+    # 寫入
+    cat >> "$log_file" << EOF
+
+================================================================================
+Timestamp: $timestamp
+Phase: ${CURRENT_PHASE:-Unknown}
+Agent: ${CURRENT_AGENT:-Unknown}
+Session ID: $session_id
+--------------------------------------------------------------------------------
+Prompt:
+$prompt_content
+--------------------------------------------------------------------------------
+Usage:
+  Input Tokens: $input_tokens
+  Output Tokens: $output_tokens
+  Cache Read: $cache_read
+  Cache Creation: $cache_creation
+  Duration: ${duration}ms
+  Cost: \$$total_cost
+--------------------------------------------------------------------------------
+Response:
+$content
+================================================================================
+
+EOF
+}
+
+# --- AI Agent 執行函式 ---
+
+# 核心函數：執行 claude 並處理回應
+# 參數：$1=session_id, $2=prompt, $3=permission_mode (可選), $4=agent_name (可選), $5+=allowed_tools (可選)
+claude_execute() {
+    local session_id=$1
+    local prompt=$2
+    local permission_mode=${3:-""}
+    local agent_name=${4:-"Agent"}
+    export CURRENT_AGENT="$agent_name"  # 記錄當前 agent 名稱
+    shift 4
+    local allowed_tools=($@)
+
+    # 組合 allowed tools 參數
+    local allowed_tools_args=""
+    for tool in "${allowed_tools[@]}"; do
+        allowed_tools_args+=" --allowedTools \"$tool\""
+    done
+
+    # 再強調一次要照 agent 定義文件行動
+    prompt="請嚴格按照 .claude/custom/agents/${agent_name}.md 的定義行動。\n\n$prompt"
+
+    # 組合完整指令
+    local cmd="$CLAUDE_CLI_COMMAND -p --resume \"$session_id\" \"$prompt\" --output-format json"
+    if [ -n "$permission_mode" ]; then
+        cmd+=" --permission-mode $permission_mode"
+    fi
+    if [ -n "$allowed_tools_args" ]; then
+        cmd+="$allowed_tools_args"
+    fi
+
+    # 執行並保存輸出
+    local temp_output=$(mktemp)
+    eval "$cmd" > "$temp_output" 2>&1
+
+    # 保存原始輸出
+    cp "$temp_output" "$ISSUE_DIR/last_raw_output.log"
+
+    # 提取 JSON
+    local json_result=$(tac "$temp_output" | awk '/{/,0' | tac)
+    rm -f "$temp_output"
+
+    # 解析回應內容
+    local json_type=$(echo "$json_result" | jq -r 'type' 2>/dev/null)
+    local content=""
+    if [ "$json_type" == "array" ]; then
+        content=$(echo "$json_result" | jq -r ".content // empty" 2>/dev/null)
+    else
+        content=$(echo "$json_result" | jq -r ".result // empty" 2>/dev/null)
+    fi
+
+    # 顯示回應
+    if [ -n "$content" ] && [ "$content" != "null" ]; then
+        echo "" >&2
+        echo "==================================" >&2
+        echo "$agent_name 回應：" >&2
+        echo "$content" >&2
+        echo "==================================" >&2
+        echo "" >&2
+    fi
+
+    # 記錄到 conversation.log
+    log_to_conversation "$prompt" "$json_result"
+
+    # 檢查錯誤訊息（如 Session limit, API errors 等）
+    if echo "$content" | grep -qi "session limit\|rate limit\|error\|failed"; then
+        return 2  # 有錯誤，需要例外處理
+    fi
+
+    # 檢查權限問題（只有 Developer 才需要處理）
+    local denials_count=$(echo "$json_result" | jq -r ".permission_denials | length" 2>/dev/null)
+    if [ -n "$denials_count" ] && [ "$denials_count" != "null" ] && [ "$denials_count" -gt 0 ] 2>/dev/null;
+ then
+        if [ "$agent_name" = "$DEV_AGENT" ]; then
+            return 1  # Developer 有權限問題
+        else
+            log_warn "發現權限請求被拒絕 ($agent_name)，非 developer agent $DEV_AGENT 直接忽略"
+            return 0  # 其他角色忽略權限問題，當作成功
+        fi
+    fi
+
+    return 0  # 成功
+}
+
+# Gemini 執行函式
+gemini_execute() {
+    local prompt=$1
+    local agent_name=${2:-"Agent"}
+    export CURRENT_AGENT="$agent_name"
+
+    log_info "正在執行 Gemini Agent: $agent_name..."
+
+    # Gemini CLI 不支援 session resume 或 tool use，所以直接執行
+    local cmd="$GEMINI_CLI_COMMAND -p \"$prompt\""
+    local output
+    if ! output=$(eval "$cmd" 2> "$ISSUE_DIR/last_gemini_error.log"); then
+        log_error "Gemini CLI 執行失敗。"
+        log_error "錯誤訊息請見: $ISSUE_DIR/last_gemini_error.log"
+        return 2
+    fi
+
+    # 為了 log_to_conversation，建立一個模擬的 JSON response
+    local json_response
+    json_response=$(jq -n \
+        --arg agent "$agent_name" \
+        --arg prompt "$prompt" \
+        --arg content "$output" \
+        '{agent: $agent, prompt: $prompt, content: $content, result: $content}')
+
+    log_to_conversation "$prompt" "$json_response"
+
+    echo "$output"
+    return 0
+}
+
+
+# --- 流程控制與例外處理 ---
+
+# 處理權限問題
+handle_permissions() {
+    local session_id=$1
+    local agent_name=$2
+    shift 2
+    local allowed_tools=($@)
+
+    while true; do
+        # 顯示被拒絕的權限
+        echo "" >&2
+        log_warn "發現權限請求被拒絕 ($agent_name)："
+        echo "" >&2
+
+        # 顯示每個被拒絕的權限詳情
+        local denial_index=0
+        while IFS= read -r denial; do
+            denial_index=$((denial_index + 1))
+            local tool_name=$(echo "$denial" | jq -r '.tool_name')
+            echo "[$denial_index] 工具: $tool_name" >&2
+
+            # 顯示所有 tool_input 的內容
+            echo "$denial" | jq -r '.tool_input | to_entries[] | "  \(.key): \(.value)"' 2>&1 | grep -v '^' >&2
+            echo "" >&2
+        done < <(cat "$ISSUE_DIR/last_raw_output.log" | jq -c '.permission_denials[]' 2>/dev/null)
+
+        echo "" >&2
+        log_warn "是否授權這些操作？(y/n)"
+        echo "  y: 同意並加入 allowedTools"
+        echo "  n: 不同意，手動輸入回覆"
+        read -p "請選擇: " choice
+
+        case $choice in
+            y)
+                # 提取權限並加入 allowed_tools
+                while IFS= read -r denial; do
+                    local tool_name=$(echo "$denial" | jq -r '.tool_name')
+                    local file_path=$(echo "$denial" | jq -r '.tool_input.file_path // empty')
+                    local command=$(echo "$denial" | jq -r '.tool_input.command // empty')
+
+                    if [ -n "$file_path" ]; then
+                        allowed_tools+=("$tool_name($file_path)")
+                    elif [ -n "$command" ]; then
+                        local cmd_prefix=$(echo "$command" | awk '{print $1" "$2}')
+                        allowed_tools+=("$tool_name($cmd_prefix)")
+                    fi
+                done < <(cat "$ISSUE_DIR/last_raw_output.log" | jq -c '.permission_denials[]')
+
+                log_info "已加入授權，重新執行..."
+                # 返回 allowed_tools 陣列
+                echo "${allowed_tools[@]}"
+                return 0
+                ;;
+            n)
+                # 進入例外處理
+                return 1
+                ;;
+            *)
+                log_error "無效選項，請重新選擇"
+                # 繼續迴圈，重新提示
+                ;;
+        esac
+    done
+}
+
+# 例外處理流程
+handle_exception() {
+    local session_id=$1
+    local permission_mode=$2
+    local agent_name=$3
+    shift 3
+    local allowed_tools=($@)
+
+    echo "" >&2
+    log_warn "=== 例外處理模式 ==="
+    echo "" >&2
+
+    while true; do
+        log_info "請輸入你要對 $agent_name 說的話 (輸入 END 結束)："
+        echo "" >&2
+
+        local user_input=""
+        while IFS= read -r line; do
+            if [ "$line" == "END" ]; then
+                break
+            fi
+            user_input+="$line"$'\n'
+        done
+
+        # 移除結尾的換行符號
+        user_input="${user_input%$'\n'}"
+
+        if [ -z "$user_input" ]; then
+            log_error "輸入為空"
+            return 1
+        fi
+
+        # 發送使用者輸入
+        log_info "發送訊息給 $agent_name 等待回應..."
+        if ! claude_execute "$session_id" "$user_input" "$permission_mode" "$agent_name" "${allowed_tools[@]}"; then
+            # 遇到權限問題，詢問是否授權
+            local new_tools_str=$(handle_permissions "$session_id" "$agent_name" "${allowed_tools[@]}")
+            if [ $? -eq 0 ]; then
+                # 授權成功，更新 allowed_tools
+                read -ra allowed_tools <<< "$new_tools_str"
+                log_info "已授權，請繼續對話"
+                continue
+            else
+                # 使用者選擇不授權，繼續對話
+                log_warn "未授權權限，繼續對話"
+            fi
+        fi
+
+        echo "" >&2
+        log_warn "是否繼續對話？(y/n)"
+        read -p "請選擇: " continue_chat
+
+        if [ "$continue_chat" != "y" ]; then
+            log_info "結束例外處理，返回原流程"
+            return 0
+        fi
+    done
+}
+
+# 執行 claude 並處理權限/例外
+# 參數：session_id, prompt_var_name, permission_mode, agent_name, allowed_tools_var_name, [needs_new_prompt_var_name]
+execute_with_retry() {
+    local session_id=$1
+    local prompt_var_name=$2
+    local permission_mode=$3
+    local agent_name=$4
+    local allowed_tools_var_name=$5
+    local needs_new_prompt_var_name=${6:-""}
+
+    # 使用 nameref 來操作變數
+    local -n prompt_ref=$prompt_var_name
+    local -n allowed_tools_ref=$allowed_tools_var_name
+
+    # 只在有提供 needs_new_prompt_var_name 時才建立 nameref
+    if [ -n "$needs_new_prompt_var_name" ]; then
+        local -n needs_new_prompt_ref=$needs_new_prompt_var_name
+    fi
+
+    claude_execute "$session_id" "$prompt_ref" "$permission_mode" "$agent_name" "${allowed_tools_ref[@]}"
+    local exec_result=$?
+
+    if [ $exec_result -eq 0 ]; then
+        return 0  # 成功
+    elif [ $exec_result -eq 2 ]; then
+        # 有錯誤（如 Session limit），直接進入例外處理
+        log_warn "Agent 執行遇到錯誤"
+        if ! handle_exception "$session_id" "$permission_mode" "$agent_name" "${allowed_tools_ref[@]}"; then
+            log_error "例外處理失敗"
+            exit 1
+        fi
+        prompt_ref="請繼續執行原本的任務。"
+        if [ -n "$needs_new_prompt_var_name" ]; then
+            needs_new_prompt_ref=false
+        fi
+        return 1  # 需要重試
+    else
+        # 有權限問題（返回碼 1）
+        local new_tools_str=$(handle_permissions "$session_id" "$agent_name" "${allowed_tools_ref[@]}")
+        if [ $? -eq 0 ]; then
+            # 將返回的字串轉換為陣列
+            read -ra allowed_tools_ref <<< "$new_tools_str"
+            prompt_ref="我已授權相關操作，請繼續執行原本的任務。"
+            if [ -n "$needs_new_prompt_var_name" ]; then
+                needs_new_prompt_ref=false
+            fi
+            return 1  # 需要重試
+        else
+            # 進入例外處理
+            if ! handle_exception "$session_id" "$permission_mode" "$agent_name" "${allowed_tools_ref[@]}"; then
+                log_error "例外處理失敗"
+                exit 1
+            fi
+            prompt_ref="請繼續執行原本的任務。"
+            if [ -n "$needs_new_prompt_var_name" ]; then
+                needs_new_prompt_ref=false
+            fi
+            return 1  # 需要重試
+        fi
+    fi
+}
+
+
+# --- 初始化與環境檢查 ---
+
+# 初始化 session
+# 參數：$1=agent_name ($PM_AGENT, $DEV_AGENT, $REVIEW_AGENT)
+init_session() {
+    local agent_name=$1
+    local session_file="$SESSION_DIR/${agent_name}_session_id"
+
+    if [ -f "$session_file" ]; then
+        local session_id=$(cat "$session_file")
+        log_info "找到現存的 $agent_name session: $session_id"
+        echo "$session_id"
+        return 0
+    fi
+
+    # 創建新 session - 發送 hi
+    log_info "創建新 $agent_name session..."
+    local temp_output=$(mktemp)
+    prompt="say hi"
+    $CLAUDE_CLI_COMMAND -p "$prompt" --output-format json > "$temp_output" 2>&1
+
+    cp "$temp_output" "$ISSUE_DIR/last_raw_output.log"
+    local json_result=$(tac "$temp_output" | awk '/{/,0' | tac)
+    rm -f "$temp_output"
+
+    # 提取 session ID
+    local json_type=$(echo "$json_result" | jq -r 'type' 2>/dev/null)
+    local session_id=""
+    if [ "$json_type" == "array" ]; then
+        session_id=$(echo "$json_result" | jq -r '.[] | select(.type=="system") | .session_id' 2>/dev/null | head -1)
+    else
+        session_id=$(echo "$json_result" | jq -r '.session_id' 2>/dev/null)
+    fi
+
+    if [ -z "$session_id" ] || [ "$session_id" == "null" ]; then
+        log_error "無法取得 session ID"
+        return 1
+    fi
+
+    echo "$session_id" > "$session_file"
+    log_info "$agent_name Session ID: $session_id"
+
+    # 記錄初始對話（需要設定 CURRENT_AGENT）
+    export CURRENT_AGENT="$agent_name"
+    log_to_conversation "$prompt" "$json_result"
+
+    echo "$session_id"
+    return 0
+}
+
+# 檢查必要的檔案和工具
+check_prerequisites() {
+    log_info "檢查環境..."
+
+    local tools_needed=()
+    [ "$PM_AGENT_TOOL" = "claude" ] || [ "$DEV_AGENT_TOOL" = "claude" ] || [ "$REVIEW_AGENT_TOOL" = "claude" ] && tools_needed+=("$CLAUDE_CLI_COMMAND")
+    [ "$PM_AGENT_TOOL" = "gemini" ] || [ "$DEV_AGENT_TOOL" = "gemini" ] || [ "$REVIEW_AGENT_TOOL" = "gemini" ] && tools_needed+=("$GEMINI_CLI_COMMAND")
+
+    for tool in "${tools_needed[@]}"; do
+        if ! command -v "$tool" &> /dev/null; then
+            log_error "找不到指令: $tool，請檢查設定或安裝。"
+            exit 1
+        fi
+    done
+
+    if command -v gh &> /dev/null; then
+        if gh auth status &> /dev/null; then
+            USE_GH=true
+            log_info "使用 GitHub CLI (gh)"
+        else
+            log_error "gh 指令已安裝但尚未登入"
+            log_warn "請先執行: gh auth login"
+            exit 1
+        fi
+    else
+        USE_GH=false
+        log_warn "未安裝 gh 指令，將無法自動建立 PR"
+    fi
+
+    if ! command -v jq &> /dev/null; then
+        log_error "找不到 jq 指令，請先安裝 jq"
+        exit 1
+    fi
+
+    if [ ! -f "$REQUIREMENTS_FILE" ]; then
+        log_error "找不到需求文件: $REQUIREMENTS_FILE"
+        exit 1
+    fi
+
+    log_info "環境檢查通過"
+}
+
+# 檢查 PR 是否通過 review
+# 返回 0 表示通過，1 表示未通過
+check_pr_review_passed() {
+    local pr_number=$1
+
+    # 檢查是否已被 approve
+    local review_decision=$(gh pr view "$pr_number" --json reviewDecision -q '.reviewDecision' 2>/dev/null)
+    if [ "$review_decision" = "APPROVED" ]; then
+        return 0
+    fi
+
+    # 舊方法：檢查最後一個 review 是否包含 LGTM (為了相容舊的 review)
+    local last_review_body=$(gh pr view "$pr_number" --json reviews -q '.reviews[-1].body' 2>/dev/null)
+    if echo "$last_review_body" | grep -qi "LGTM"; then
+        return 0
+    fi
+
+    return 1
+}
+
+
+# --- 進度偵測 ---
+
+# 檢測當前進度並決定從哪個階段開始
+detect_progress() {
+    # 檢查當前 branch 是否與任務名稱一致
+    local current_branch=$(git branch --show-current)
+    local expected_branch=$(basename "$REQUIREMENTS_FILE" .md | sed 's/^[0-9]\\{8\\}-//')
+    local main_branch=$(git remote show origin | grep 'HEAD branch' | cut -d' ' -f5 2>/dev/null || echo "main")
+
+    if [ "$current_branch" != "$main_branch" ] && [ "$current_branch" != "$expected_branch" ]; then
+        echo ""
+        log_error "Branch 不一致！"
+        log_error "當前 branch: $current_branch"
+        log_error "預期 branch: $expected_branch (基於 $REQUIREMENTS_FILE)"
+        log_error "或主 branch: $main_branch"
+        echo ""
+        log_warn "請切換到正確的 branch："
+        echo "  - 如果要繼續處理 $current_branch，請使用對應的 requirements 檔案"
+        echo "  - 如果要處理新任務，請先切回 $main_branch: git checkout $main_branch"
+        exit 1
+    fi
+
+    # 初始化 developer session (claude only)
+    if [ "$DEV_AGENT_TOOL" = "claude" ]; then
+        local session_dev=$(init_session "$DEV_AGENT")
+        if [ $? -ne 0 ]; then
+            log_error "無法初始化 developer session ($DEV_AGENT)"
+            exit 1
+        fi
+    fi
+
+    # 倒著檢查進度
+
+    # Phase 6: 檢查 PR 狀態
+    if [ -f "$ISSUE_DIR/pr_number" ]; then
+        local pr_number=$(cat "$ISSUE_DIR/pr_number")
+        local pr_state=$(gh pr view "$pr_number" --json state -q '.state' 2>/dev/null)
+
+        if [ "$pr_state" = "MERGED" ]; then
+            log_info "→ PR 已 merged，所有階段完成"
+            echo "done"
+            return
+        fi
+
+        if [ "$pr_state" = "CLOSED" ]; {
+            log_warn "→ PR #$pr_number 已被關閉 (未合併)，流程終止。"
+            log_warn "→ 如需重新開發，請刪除 '$ISSUE_DIR' 目錄後重試。"
+            exit 1
+        }
+
+        # 如果 PR 存在，直接進入最後手動確認階段
+        log_info "→ PR 已存在，從 Phase 6 (最後確認) 開始"
+        echo "phase6"
+        return
+    fi
+
+    # Phase 5: 檢查 Pre-PR review 是否已通過
+    if [ -f "$ISSUE_DIR/pre_pr_review_passed" ]; then
+        log_info "→ Pre-PR review 已完成，從 Phase 5 (建立 PR) 開始"
+        echo "phase5"
+        return
+    fi
+
+    # Phase 3/4: 檢查開發是否已完成
+    if [ -f "$REQUIREMENTS_FILE" ] && grep -q "實作分析狀態.*已確認" "$REQUIREMENTS_FILE"; then
+        if [ "$DEV_AGENT_TOOL" = "claude" ]; then
+            local main_branch=$(git remote show origin | grep 'HEAD branch' | cut -d' ' -f5)
+            local commit_count=$(git log --oneline origin/$main_branch..HEAD 2>/dev/null | wc -l)
+            local dev_allowed_tools=("${DEFAULT_DEV_ALLOWED_TOOLS[@]}")
+            local check_prompt="請檢查目前的開發狀態：\n\n1. 查看當前 branch 的 commits (有 $commit_count 個 commits)\n2. 查看未 commit 的變更 (git status, git diff)\n3. 對照 $REQUIREMENTS_FILE 的實作分段，確認是否都已完成\n\n請用繁體中文回答：開發是否已完成？\n- 如果已完成，回答「已完成」\n- 如果還在進行中，回答「進行中」並簡述還需要做什麼"
+
+            log_info "讓 agent 檢查開發進度..."
+            while true; do
+                if ! claude_execute "$session_dev" "$check_prompt" "acceptEdits" "$DEV_AGENT" "${dev_allowed_tools[@]}"; then
+                    local new_tools=$(handle_permissions "$session_dev" "$DEV_AGENT" "${dev_allowed_tools[@]}")
+                    if [ $? -eq 0 ]; then
+                        dev_allowed_tools=($new_tools)
+                        continue
+                    else
+                        log_warn "無法檢查開發進度，預設從 Phase 3 開始"
+                        echo "phase3"
+                        return
+                    fi
+                fi
+                break
+            done
+
+            local json_result=$(cat "$ISSUE_DIR/last_raw_output.log")
+            local response=$(echo "$json_result" | jq -r '.result // .content // empty' 2>/dev/null)
+
+            if echo "$response" | grep -qi "已完成"; then
+                log_info "→ 開發已完成，從 Phase 4 (Pre-PR Review) 開始"
+                echo "phase4"
+            else
+                log_info "→ 開發進行中，從 Phase 3 (開發) 開始"
+                echo "phase3"
+            fi
+        else
+            # 如果開發者不是 claude，我們無法自動檢測，直接進入 phase 3
+            log_warn "開發者工具不是 claude，無法自動檢測開發進度。直接從 Phase 3 開始。"
+            echo "phase3"
+        fi
+        return
+    fi
+
+    # Phase 2: 檢查需求分析是否完成
+    if [ -f "$REQUIREMENTS_FILE" ] && grep -q "需求分析狀態.*已確認" "$REQUIREMENTS_FILE"; then
+        log_info "→ 從 Phase 2 (實作分析) 開始"
+        echo "phase2"
+        return
+    fi
+
+    # 都沒有，從頭開始
+    log_info "→ 從 Phase 1 (需求分析) 開始"
+    echo "phase1"
+}
+
+
+# --- 主要工作流程階段 ---
+
+# Phase 1: 需求分析循環
+phase1_requirements_clarification() {
+    export CURRENT_PHASE="Phase 1: Requirements Analysis"
+    echo ""
+    log_info "=== Phase 1: 需求分析循環 ==="
+
+    if [ "$PM_AGENT_TOOL" != "claude" ]; then
+        log_warn "PM Agent 不是 claude，跳過自動需求分析。"
+        log_warn "請手動確認 $REQUIREMENTS_FILE，並將「需求分析狀態」改為「已確認」。"
+        read -p "完成後請按 Enter..."
+        return
+    fi
+
+    local session_pm=$(init_session "$PM_AGENT")
+    if [ $? -ne 0 ]; then log_error "無法初始化 $PM_AGENT session"; exit 1; fi
+
+    if [ ! -f "${REQUIREMENTS_FILE}.backup" ]; then
+        cp "$REQUIREMENTS_FILE" "${REQUIREMENTS_FILE}.backup"
+        log_info "已備份原始需求到 ${REQUIREMENTS_FILE}.backup"
+    fi
+
+    local iteration=0
+    local pm_allowed_tools=("Read($REQUIREMENTS_FILE)" "Edit($REQUIREMENTS_FILE)")
+    local prompt=""
+    local needs_new_prompt=true
+
+    while true; do
+        iteration=$((iteration + 1))
+        echo ""
+        log_info "--- 需求分析 Round $iteration ---"
+
+        if [ "$needs_new_prompt" = true ]; then
+            if [ $iteration -eq 1 ]; then
+            prompt="Use the $PM_AGENT subagent to analyze $REQUIREMENTS_FILE.\n\n請仔細閱讀需求文件，找出所有不清楚、模糊、可能讓開發者自己腦補的地方。\n\n**如果有需求問題需要澄清：**\n直接編輯 $REQUIREMENTS_FILE，在你覺得需要澄清的地方插入問題（按照 $PM_AGENT agent 定義的格式）\n\n**如果需求已經很清楚：**\n直接編輯 $REQUIREMENTS_FILE，將「需求分析狀態」改成「已確認」：\n\
+> 需求分析狀態：已確認\
+"
+            else
+                prompt="Use the $PM_AGENT subagent. 請檢視 $REQUIREMENTS_FILE 中我的回覆，繼續分析。\n如果還有不清楚的地方，繼續在檔案中提出問題。\n如果所有問題都解決了，將「需求分析狀態」改成「已確認」：\n\
+> 需求分析狀態：已確認\
+"
+            fi
+        fi
+
+        log_info "PM agent $PM_AGENT 正在分析需求..."
+        if execute_with_retry "$session_pm" prompt "" "$PM_AGENT" pm_allowed_tools needs_new_prompt; then
+            needs_new_prompt=true
+        else
+            continue
+        fi
+
+        if grep -q "需求分析狀態.*已確認" "$REQUIREMENTS_FILE"; then
+            log_info "✓ 需求分析完成！"
+            break
+        fi
+
+        echo ""
+        log_warn "請編輯 $REQUIREMENTS_FILE 回覆 agent 的問題"
+        log_warn "按 Enter 開啟編輯器..."
+        read
+        ${EDITOR:-vim} "$REQUIREMENTS_FILE"
+        log_info "繼續下一輪分析..."
+    done
+}
+
+# Phase 2: 實作分析循環
+phase2_implementation_analysis() {
+    export CURRENT_PHASE="Phase 2: Implementation Analysis"
+    echo ""
+    log_info "=== Phase 2: 實作分析循環 ==="
+
+    if [ "$DEV_AGENT_TOOL" != "claude" ]; then
+        log_warn "DEV Agent 不是 claude，跳過自動實作分析。"
+        log_warn "請手動完成 $REQUIREMENTS_FILE 中的實作分析，並將「實作分析狀態」改為「已確認」。"
+        read -p "完成後請按 Enter..."
+        return
+    fi
+
+    local session_dev=$(init_session "$DEV_AGENT")
+    local iteration=0
+    local dev_allowed_tools=("${DEFAULT_DEV_ALLOWED_TOOLS[@]}")
+    local prompt=""
+    local needs_new_prompt=true
+
+    while true; do
+        iteration=$((iteration + 1))
+        echo ""
+        log_info "--- 實作分析 Round $iteration ---"
+
+        if [ "$needs_new_prompt" = true ]; then
+            if [ $iteration -eq 1 ]; then
+            prompt="請根據 $REQUIREMENTS_FILE 和範本格式，在 $REQUIREMENTS_FILE 中加入詳細的實作分析。如果有問題需要討論，在檔案中提出（用你覺得清楚的方式寫就好）\n\n**請參考範本格式 issues/template.md**\n**重要：請用繁體中文回應。**"
+            else
+                prompt="請檢視 $REQUIREMENTS_FILE 中我的回饋，繼續完善實作分析。\n如果還有不清楚的地方，繼續在檔案中提出問題或討論。\n**不要自己修改實作分析狀態，等我確認！**"
+            fi
+        fi
+
+        log_info "Developer agent $DEV_AGENT 正在撰寫實作分析..."
+        if execute_with_retry "$session_dev" prompt "acceptEdits" "$DEV_AGENT" dev_allowed_tools needs_new_prompt; then
+            needs_new_prompt=true
+        else
+            continue
+        fi
+
+        if grep -q "實作分析狀態.*已確認" "$REQUIREMENTS_FILE"; then
+            log_info "✓ 實作分析完成！"
+            break
+        fi
+
+        echo ""
+        log_warn "請編輯 $REQUIREMENTS_FILE 檢視實作分析並提供回饋"
+        log_warn "按 Enter 開啟編輯器..."
+        read
+        ${EDITOR:-vim} "$REQUIREMENTS_FILE"
+        log_info "繼續下一輪分析..."
+    done
+}
+
+# Phase 3: 開發
+phase3_development() {
+    export CURRENT_PHASE="Phase 3: Development"
+    echo ""
+    log_info "=== Phase 3: 開發 ==="
+
+    if [ "$DEV_AGENT_TOOL" != "claude" ]; {
+        log_error "DEV Agent 不是 claude，無法自動開發。請手動開發。"
+        log_warn "請在完成開發、commit 並 push 到遠端後，再重新執行此腳本。"
+        exit 1
+    }
+
+    local session_dev=$(init_session "$DEV_AGENT")
+    local dev_allowed_tools=("${DEFAULT_DEV_ALLOWED_TOOLS[@]}")
+
+    local branch_name=$(basename "$REQUIREMENTS_FILE" .md | sed 's/^[0-9]\\{8\\}-//')
+    log_info "分支名稱: $branch_name"
+
+    if git show-ref --verify --quiet "refs/heads/$branch_name"; then
+        log_warn "分支 $branch_name 已存在，切換到該分支"
+        git checkout "$branch_name"
+    else
+        log_info "建立並切換到新分支: $branch_name"
+        git checkout -b "$branch_name"
+    fi
+
+    local prompt="需求已經確認清楚，請根據 $REQUIREMENTS_FILE 進行開發。\n\n**重要：請用繁體中文回應。**\n\n請執行以下步驟：\n1. 按照開發任務拆解的順序進行開發及測試\n2. 每個步驟做完都要在文件中打勾\n3. 全部完成後 push 到 remote: git push -u origin $branch_name"
+
+    log_info "Developer agent $DEV_AGENT 開始開發..."
+    while true; do
+        if execute_with_retry "$session_dev" prompt "acceptEdits" "$DEV_AGENT" dev_allowed_tools;
+ then
+            break
+        fi
+    done
+
+    echo ""
+    log_info "開發完成，準備進入 Pre-PR Review 階段..."
+}
+
+# Phase 4: Pre-PR Code Review 循環
+phase4_pre_pr_review() {
+    export CURRENT_PHASE="Phase 4: Pre-PR Code Review"
+    echo ""
+    log_info "=== Phase 4: Pre-PR Code Review 循環 ==="
+
+    local session_dev=$(init_session "$DEV_AGENT")
+    local session_review
+    if [ "$REVIEW_AGENT_TOOL" = "claude" ]; then
+        session_review=$(init_session "$REVIEW_AGENT")
+    fi
+
+    local branch_name=$(basename "$REQUIREMENTS_FILE" .md | sed 's/^[0-9]\\{8\\}-//')
+    local main_branch=$(git remote show origin | grep 'HEAD branch' | cut -d' ' -f5 2>/dev/null || echo "main")
+    local iteration=0
+
+    while [ $iteration -lt $MAX_REVIEW_ITERATIONS ]; do
+        iteration=$((iteration + 1))
+        echo ""
+        log_info "--- Pre-PR Review Round $iteration/$MAX_REVIEW_ITERATIONS ---"
+
+        # 1. 取得最新 diff
+        log_info "正在取得分支 '$branch_name' 相對於 '$main_branch' 的 diff..."
+        git fetch origin
+        local diff=$(git diff "origin/$main_branch" "HEAD")
+        if [ -z "$diff" ]; then
+            log_warn "沒有發現程式碼變更。請 developer agent 確認狀態。"
+            # 讓 developer agent 報告一次狀態
+            local status_prompt="目前看起來沒有程式碼變更，請報告你的狀態，你是否已完成所有開發任務？"
+            execute_with_retry "$session_dev" status_prompt "acceptEdits" "$DEV_AGENT" dev_allowed_tools
+            # 重新取得 diff
+            diff=$(git diff "origin/$main_branch" "HEAD")
+            if [ -z "$diff" ]; then
+                log_error "仍然沒有發現程式碼變更，流程無法繼續。"
+                exit 1
+            fi
+        fi
+
+        # 2. Reviewer 審查
+        log_info "Reviewer agent $REVIEW_AGENT 正在審查程式碼..."
+        local requirements=$(cat "$REQUIREMENTS_FILE")
+        local reviewer_prompt="你是資深軟體工程師 $REVIEW_AGENT，正在進行程式碼審查 (Code Review)。
+
+請嚴格審查這個分支 '$branch_name' 上的程式碼變更。
+
+**原始需求與實作分析:**
+---
+$requirements
+---
+
+**程式碼變更 (diff):**
+---
+$diff
+---
+
+**你的審查任務:**
+1.  **仔細比對需求**：確認所有需求都已實作，且實作方式符合規劃。
+2.  **找出潛在問題**：檢查程式碼的正確性、可讀性、效能、安全性、以及是否符合專案既有風格。
+3.  **提供具體建議**：給出清晰、可執行的修改建議。如果可能，請附上檔案路徑和行號。
+4.  **用繁體中文回應**。
+
+**審查完畢後，請做出結論：**
+-   如果程式碼品質良好，可以直接建立 PR，請在回覆的**最後一行**加上單獨的 `LGTM` (Looks Good To Me)。
+-   如果程式碼需要修改，請詳細說明需要修改的地方，**不要**加上 `LGTM`."
+
+        local review_feedback
+        if [ "$REVIEW_AGENT_TOOL" = "gemini" ]; then
+            review_feedback=$(gemini_execute "$reviewer_prompt" "$REVIEW_AGENT")
+        elif [ "$REVIEW_AGENT_TOOL" = "claude" ]; then
+            claude_execute "$session_review" "$reviewer_prompt" "" "$REVIEW_AGENT"
+            local json_result=$(cat "$ISSUE_DIR/last_raw_output.log")
+            review_feedback=$(echo "$json_result" | jq -r '.result // .content // empty' 2>/dev/null)
+        else
+            log_error "不支援的 Reviewer tool: $REVIEW_AGENT_TOOL"
+            exit 1
+        fi
+
+        log_info "$REVIEW_AGENT 的回饋：
+$review_feedback"
+
+        # 3. 檢查 review 是否通過
+        if echo "$review_feedback" | grep -q -E "^LGTM$" ;
+ then
+            log_info "✓ 程式碼已通過 reviewer 審核！"
+            touch "$ISSUE_DIR/pre_pr_review_passed"
+            break
+        fi
+
+        if [ $iteration -eq $MAX_REVIEW_ITERATIONS ]; then
+            log_warn "已達最大 review 次數，將繼續建立 PR。"
+            touch "$ISSUE_DIR/pre_pr_review_passed" # 標記為通過以便建立 PR
+            break
+        fi
+
+        # 4. Developer 處理回饋
+        log_info "Developer agent $DEV_AGENT 正在根據回饋修改程式碼..."
+        local dev_allowed_tools=("${DEFAULT_DEV_ALLOWED_TOOLS[@]}")
+        local fix_prompt="你的程式碼已被審查，這是來自 $REVIEW_AGENT 的回饋：
+
+---
+$review_feedback
+---
+
+請根據回饋修改程式碼，完成後 commit 並 push 到 '$branch_name' 分支。
+完成後，請僅回覆 'Done'."
+
+        while true; do
+            if execute_with_retry "$session_dev" fix_prompt "acceptEdits" "$DEV_AGENT" dev_allowed_tools;
+ then
+                break
+            fi
+        done
+        log_info "Developer agent 已完成修改。"
+    done
+}
+
+# Phase 5: 建立 Pull Request
+phase5_create_pr() {
+    export CURRENT_PHASE="Phase 5: Create Pull Request"
+    echo ""
+    log_info "=== Phase 5: 建立 Pull Request ==="
+
+    if [ ! -f "$ISSUE_DIR/pre_pr_review_passed" ]; then
+        log_warn "Pre-PR review 未完成或未通過，但仍繼續建立 PR。"
+    fi
+
+    if [ "$USE_GH" = false ]; then
+        log_error "未安裝 gh 指令，無法自動建立 PR。請手動建立。"
+        exit 1
+    fi
+
+    local branch_name=$(basename "$REQUIREMENTS_FILE" .md | sed 's/^[0-9]\\{8\\}-//')
+    local pr_title=$(head -n 1 "$REQUIREMENTS_FILE" | sed 's/^#\+//;s/^[ \t]*//;s/[ \t]*$//')
+    local main_branch=$(git symbolic-ref refs/remotes/origin/HEAD | sed 's@^refs/remotes/origin/@@')
+    local pr_body=$(git log --oneline origin/$main_branch..HEAD)
+    pr_body+="
+
+---
+*This PR was automatically generated after passing a pre-review by the AI agent $REVIEW_AGENT.*"
+
+    log_info "使用 gh 建立 PR..."
+    local pr_url
+    if ! pr_url=$(gh pr create --title "$pr_title" --body-file <(echo -e "$pr_body") 2>&1); then
+        log_error "gh pr create 失敗。"
+        log_error "輸出: $pr_url"
+        exit 1
+    fi
+
+    PR_NUMBER=$(echo "$pr_url" | grep -oP '/pull/\K[0-9]+' | tail -1)
+
+    if [ -z "$PR_NUMBER" ] || ! [[ "$PR_NUMBER" =~ ^[0-9]+$ ]]; then
+        log_warn "無法從 gh 輸出中提取 PR 號碼。"
+        log_warn "輸出: $pr_url"
+        log_warn "請手動輸入 PR number:"
+        read PR_NUMBER
+    fi
+
+    if [ -z "$PR_NUMBER" ]; then log_error "PR number 不能為空"; exit 1; fi
+
+    echo "$PR_NUMBER" > "$ISSUE_DIR/pr_number"
+    log_info "✓ PR #$PR_NUMBER 已建立: $pr_url"
+}
+
+
+# Phase 6: 最後確認
+phase6_final_review() {
+    export CURRENT_PHASE="Phase 6: Final Review"
+    echo ""
+    log_info "=== Phase 6: 最後確認 ==="
+
+    local PR_NUMBER=$(cat "$ISSUE_DIR/pr_number")
+
+    log_info "PR #$PR_NUMBER 已建立並通過內部 review。"
+    if [ "$USE_GH" = true ]; then
+        log_info "GitHub URL: https://github.com/$(gh repo view --json nameWithOwner -q .nameWithOwner)/pull/$PR_NUMBER"
+    fi
+
+    echo ""
+    log_warn "請進行最終確認。如果有問題，請輸入問題描述；沒問題請輸入 'ok'"
+    read final_input
+
+    if [ "$final_input" != "ok" ]; then
+        if [ "$DEV_AGENT_TOOL" = "claude" ]; then
+            local session_dev=$(init_session "$DEV_AGENT")
+            local dev_allowed_tools=("${DEFAULT_DEV_ALLOWED_TOOLS[@]}")
+            local prompt="$final_input"
+            log_info "讓 developer agent $DEV_AGENT 處理你的回饋..."
+            while true; do
+                if execute_with_retry "$session_dev" prompt "acceptEdits" "$DEV_AGENT" dev_allowed_tools;
+ then
+                    break
+                fi
+            done
+            log_warn "修改完成，請再次確認後手動 merge"
+        else
+            log_warn "DEV agent 不是 claude，請手動處理最後的回饋。"
+        fi
+    fi
+
+    echo ""
+    log_info "=== 工作流程完成 ==="
+    if [ "$USE_GH" = true ]; then
+        log_info "如果確認沒問題，請手動執行: gh pr merge $PR_NUMBER"
+    else
+        log_info "請在 GitHub 網頁上手動 merge PR #$PR_NUMBER"
+    fi
+}
+
+
+# --- 清理與統計 ---
+
+cleanup() {
+    echo ""
+    log_info "=== 工作流程統計 ==="
+
+    if [ -f "$ISSUE_DIR/conversation.log" ]; then
+        local total_cost=$(grep "Cost:" "$ISSUE_DIR/conversation.log" | sed 's/Cost: \$//' | awk '{sum += $1} END {printf "%.6f", sum}')
+        local total_input=$(grep "Input Tokens:" "$ISSUE_DIR/conversation.log" | awk '{sum += $3} END {print sum}')
+        local total_output=$(grep "Output Tokens:" "$ISSUE_DIR/conversation.log" | awk '{sum += $3} END {print sum}')
+        local total_cache_read=$(grep "Cache Read:" "$ISSUE_DIR/conversation.log" | awk '{sum += $3} END {print sum}')
+
+        echo ""
+        log_info "Token 使用量：(僅 claude)"
+        echo "  Input Tokens: ${total_input:-0}"
+        echo "  Output Tokens: ${total_output:-0}"
+        echo "  Cache Read Tokens: ${total_cache_read:-0}"
+        echo ""
+        log_info "總成本 (僅 claude): \$$total_cost USD"
+    fi
+
+    echo ""
+    log_info "Issue 資料已保存在 $ISSUE_DIR/"
+    log_info "Session 資料已保存在 $SESSION_DIR/"
+}
+
+
+# --- 主流程 ---
+
+main() {
+    echo "=================================="
+    echo "  AI 開發工作流程自動化腳本"
+    echo "=================================="
+    log_info "腳本開始執行"
+
+    trap cleanup EXIT
+
+    check_prerequisites
+
+    log_info "檢測當前進度..."
+    local start_phase
+    start_phase=$(detect_progress)
+
+    if [ "$start_phase" == "done" ]; then
+        log_info "所有階段都已完成！"
+        exit 0
+    fi
+
+    log_info "從 $start_phase 開始執行"
+
+    case $start_phase in
+        phase1)
+            phase1_requirements_clarification
+            phase2_implementation_analysis
+            phase3_development
+            phase4_pre_pr_review
+            phase5_create_pr
+            phase6_final_review
+            ;;
+        phase2)
+            phase2_implementation_analysis
+            phase3_development
+            phase4_pre_pr_review
+            phase5_create_pr
+            phase6_final_review
+            ;;
+        phase3)
+            phase3_development
+            phase4_pre_pr_review
+            phase5_create_pr
+            phase6_final_review
+            ;;
+        phase4)
+            phase4_pre_pr_review
+            phase5_create_pr
+            phase6_final_review
+            ;;
+        phase5)
+            phase5_create_pr
+            phase6_final_review
+            ;;
+        phase6)
+            phase6_final_review
+            ;;
+    esac
+
+    log_info "Done!"
+}
+
+main
