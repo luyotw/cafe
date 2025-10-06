@@ -32,10 +32,21 @@ GEMINI_CLI_COMMAND="gemini"
 
 # 目錄結構
 REQUIREMENTS_BASE=$(basename "${1:-requirements.md}" .md)
-SESSION_DIR=".claude/custom/sessions"      # 共用 session 目錄
-ISSUE_DIR=".claude/custom/issues/$REQUIREMENTS_BASE"  # 個別 issue 目錄
-mkdir -p "$SESSION_DIR"
+AI_DIR=".ai"
+AGENTS_DIR="$AI_DIR/agents"
+SESSIONS_DIR="$AI_DIR/sessions"
+LOGS_DIR="$AI_DIR/logs"
+ISSUE_DIR="$LOGS_DIR/$REQUIREMENTS_BASE"
+
+# 建立目錄
+mkdir -p "$SESSIONS_DIR"
 mkdir -p "$ISSUE_DIR"
+
+# 建立 agents 的 soft link
+if [ ! -L "$AGENTS_DIR" ]; then
+    rm -rf "$AGENTS_DIR"
+    ln -s "$(pwd)/agents" "$AGENTS_DIR"
+fi
 
 # Agent 別名設定
 PM_AGENT="Roger"
@@ -175,7 +186,7 @@ claude_execute() {
     done
 
     # 再強調一次要照 agent 定義文件行動
-    prompt="請嚴格按照 .claude/custom/agents/${agent_name}.md 的定義行動。\n\n$prompt"
+    prompt="請嚴格按照 .ai/agents/${agent_name}.md 的定義行動。\n\n$prompt"
 
     # 組合完整指令
     local cmd="$CLAUDE_CLI_COMMAND -p --resume \"$session_id\" \"$prompt\" --output-format json"
