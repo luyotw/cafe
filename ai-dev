@@ -77,8 +77,7 @@ DEFAULT_DEV_ALLOWED_TOOLS=(
 )
 
 DEFAULT_REVIEW_ALLOWED_TOOLS=(
-    "Bash(gh pr:*)"
-    "Bash(gh api:*)"
+    "Bash(git status:*)"
     "Bash(git log:*)"
     "Bash(git diff:*)"
     "Bash(git show:*)"
