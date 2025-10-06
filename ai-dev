@@ -45,7 +45,8 @@ mkdir -p "$ISSUE_DIR"
 # 建立 agents 的 soft link
 if [ ! -L "$AGENTS_DIR" ]; then
     rm -rf "$AGENTS_DIR"
-    ln -s "$(pwd)/agents" "$AGENTS_DIR"
+    REPO_DIR="$(dirname "$(realpath "$0")")"
+    ln -s "$(REPO_DIR)/agents" "$AGENTS_DIR"
 fi
 
 # Agent 別名設定
