@@ -16,12 +16,15 @@ REQUIREMENTS_FILE="${1:-requirements.md}"
 # 最大 review 迭代次數
 MAX_REVIEW_ITERATIONS=5
 
+# AI Agent 執行超時設定（秒）
+AGENT_EXECUTION_TIMEOUT=600  # 10分鐘
+
 # AI Agent CLI 設定
 # 為每個 agent 指定要使用的工具。支援: "claude", "gemini", "cursor-agent"
 # 注意: 目前只有 DEV_AGENT 仍建議使用 "claude"。
-PM_AGENT_TOOL="cursor-agent"
+PM_AGENT_TOOL="claude"
 DEV_AGENT_TOOL="claude"
-REVIEW_AGENT_TOOL="cursor-agent"
+REVIEW_AGENT_TOOL="claude"
 
 # CLI 指令名稱
 CLAUDE_CLI_COMMAND="claude"
@@ -172,95 +175,439 @@ EOF
 
 # --- AI Agent 執行函式 ---
 
-# 核心函數：執行 claude 並處理回應
-# 參數：$1=session_id, $2=prompt, $3=permission_mode (可選), $4=agent_name (可選), $5+=allowed_tools (可選)
-claude_execute() {
-    local session_id=$1
-    local prompt=$2
-    local permission_mode=${3:-""}
-    local agent_name=${4:-"Agent"}
-    export CURRENT_AGENT="$agent_name"  # 記錄當前 agent 名稱
-    shift 4
-    local allowed_tools=($@)
+# 增強 prompt，加入 agent 定義文件指示
+# 參數：$1=prompt, $2=agent_name
+# 返回：enhanced_prompt (透過 stdout)
+enhance_prompt_with_agent_definition() {
+    local prompt=$1
+    local agent_name=$2
 
-    # 組合 allowed tools 參數
-    local allowed_tools_args=""
-    for tool in "${allowed_tools[@]}"; do
-        allowed_tools_args+=" --allowedTools \"$tool\""
-    done
-
-    # 再強調一次要照 agent 定義文件行動
-    prompt="請嚴格按照 .ai/agents/${agent_name}.md 的定義行動。\n\n$prompt"
-
-    # 組合完整指令
-    local cmd="$CLAUDE_CLI_COMMAND -p --resume \"$session_id\" \"$prompt\" --output-format json"
-    if [ -n "$permission_mode" ]; then
-        cmd+=" --permission-mode $permission_mode"
+    # 檢查是否有 agent 定義文件
+    if [ -f ".ai/agents/${agent_name}.md" ]; then
+        echo "請嚴格按照 .ai/agents/${agent_name}.md 的定義行動。\n\n$prompt"
+    else
+        echo "$prompt"
     fi
-    if [ -n "$allowed_tools_args" ]; then
-        cmd+="$allowed_tools_args"
+}
+
+# 設定當前 agent 並記錄日誌
+# 參數：$1=agent_name, $2=agent_type (如 "Claude", "Gemini", "Cursor")
+setup_agent_context() {
+    local agent_name=$1
+    local agent_type=$2
+
+    export CURRENT_AGENT="$agent_name"
+    log_info "正在執行 ${agent_type} Agent: $agent_name..."
+}
+
+# 將 prompt 寫入臨時檔案以避免 shell 轉義問題
+# 參數：$1=prompt, $2=agent_type (如 "gemini", "cursor_agent")
+# 返回：prompt_file_path (透過 stdout)
+write_prompt_to_tempfile() {
+    local prompt=$1
+    local agent_type=$2
+
+    local prompt_file=$(mktemp "$TMP_DIR/${agent_type}_prompt.XXXXXX")
+    echo "$prompt" > "$prompt_file"
+    echo "$prompt_file"
+}
+
+# 處理執行後的 JSON 輸出
+# 參數：$1=raw_output, $2=agent_name, $3=prompt
+# 返回：json_response (透過 stdout)
+process_json_output() {
+    local raw_output=$1
+    local agent_name=$2
+    local prompt=$3
+
+    local json_response
+    if jq -e . >/dev/null 2>&1 <<<"$raw_output"; then
+        # 如果 output 是合法的 JSON
+        json_response="$raw_output"
+    else
+        # 如果不是 JSON，則手動建立一個模擬的 JSON response 以便記錄
+        json_response=$(jq -n \
+            --arg agent "$agent_name" \
+            --arg prompt "$prompt" \
+            --arg content "$raw_output" \
+            '{agent: $agent, prompt: $prompt, content: $content, result: $content}')
     fi
 
-    # 執行並保存輸出
-    local temp_output=$(mktemp "$TMP_DIR/claude_output.XXXXXX")
-    log_info "執行 Claude CLI..."
-    # 使用 exec 來保持信號傳遞，同時使用 timeout 來限制執行時間
-    timeout 600 sh -c "exec $cmd" > "$temp_output" 2>&1
-    local exit_code=$?
+    echo "$json_response"
+}
+
+# 從 JSON 回應中提取內容
+# 參數：$1=json_response, $2=raw_output
+# 返回：content (透過 stdout)
+extract_content_from_json() {
+    local json_response=$1
+    local raw_output=$2
+
+    local content=$(echo "$json_response" | jq -r '.response // .result // .content // ""' 2>/dev/null)
+
+    # 如果從 JSON 中提取的 content 為空，則使用原始 output
+    if [ -z "$content" ] || [ "$content" == "null" ]; then
+        content="$raw_output"
+    fi
+
+    echo "$content"
+}
+
+# 處理執行錯誤
+# 參數：$1=exit_code, $2=agent_name, $3=error_log_file, $4=temp_files...
+# 返回：0=繼續處理, 1=一般錯誤, 2=嚴重錯誤（超時/session失效等）
+handle_execution_error() {
+    local exit_code=$1
+    local agent_name=$2
+    local error_log=$3
+    shift 3
+    local temp_files=("$@")
 
     if [ $exit_code -eq 124 ]; then
-        log_error "Claude CLI 執行超時 (10分鐘)"
+        log_error "$agent_name 執行超時"
+        for f in "${temp_files[@]}"; do
+            rm -f "$f"
+        done
+        return 2
+    elif [ $exit_code -ne 0 ]; then
+        log_error "$agent_name 執行失敗 (exit code: $exit_code)"
+
+        # 檢查錯誤日誌內容
+        if [ -f "$error_log" ]; then
+            local error_content=$(cat "$error_log" 2>/dev/null)
+            # 檢查是否為嚴重錯誤（session 失效等）
+            if echo "$error_content" | grep -qi "No conversation found\|session.*not found\|invalid session"; then
+                log_error "嚴重錯誤: $error_content"
+                for f in "${temp_files[@]}"; do
+                    rm -f "$f"
+                done
+                return 2
+            fi
+            log_error "錯誤訊息: $error_content"
+        fi
+        return 1
+    fi
+
+    return 0
+}
+
+# 組合 allowed tools 參數
+# 參數：$1=tool_type ("claude"|"gemini"|"cursor"), $2..=allowed_tools
+# 返回：tools_args (透過 stdout)
+build_allowed_tools_args() {
+    local tool_type=$1
+    shift
+    local allowed_tools=("$@")
+    local tools_args=""
+
+    case "$tool_type" in
+        claude)
+            for tool in "${allowed_tools[@]}"; do
+                tools_args+=" --allowedTools \"$tool\""
+            done
+            ;;
+        gemini)
+            for tool in "${allowed_tools[@]}"; do
+                tools_args+=" --allowed-tools \"$tool\""
+            done
+            ;;
+        cursor)
+            # cursor-agent 目前不使用 allowed_tools，預留
+            ;;
+    esac
+
+    echo "$tools_args"
+}
+
+# 組合 CLI 命令
+# 參數：$1=tool_type, $2=session_id, $3=prompt_file, $4=permission_mode, $5=allowed_tools_args
+# 返回：cmd (透過 stdout)
+build_agent_command() {
+    local tool_type=$1
+    local session_id=$2
+    local prompt_file=$3
+    local permission_mode=$4
+    local allowed_tools_args=$5
+
+    local cmd=""
+
+    case "$tool_type" in
+        claude)
+            cmd="$CLAUDE_CLI_COMMAND -p --resume \"$session_id\" --output-format json"
+            if [ -n "$permission_mode" ]; then
+                cmd+=" --permission-mode $permission_mode"
+            fi
+            if [ -n "$allowed_tools_args" ]; then
+                cmd+="$allowed_tools_args"
+            fi
+            cmd+=" < \"$prompt_file\""
+            ;;
+        gemini)
+            cmd="$GEMINI_CLI_COMMAND --output-format json"
+            if [ -n "$permission_mode" ]; then
+                local approval_mode="$permission_mode"
+                # 將 claude 的 acceptEdits 映射到 gemini 的 auto_edit
+                if [ "$permission_mode" == "acceptEdits" ]; then
+                    approval_mode="auto_edit"
+                fi
+                cmd+=" --approval-mode $approval_mode"
+            fi
+            if [ -n "$allowed_tools_args" ]; then
+                cmd+="$allowed_tools_args"
+            fi
+            cmd+=" < \"$prompt_file\""
+            ;;
+        cursor)
+            cmd="$CURSOR_AGENT_CLI_COMMAND --print --output-format json"
+            if [ -n "$session_id" ]; then
+                cmd+=" --resume \"$session_id\""
+            fi
+            # cursor-agent 使用 --force 參數
+            if [ -n "$permission_mode" ]; then
+                if [ "$permission_mode" == "acceptEdits" ] || [ "$permission_mode" == "auto_edit" ]; then
+                    cmd+=" --force"
+                fi
+            fi
+            cmd+=" < \"$prompt_file\""
+            ;;
+    esac
+
+    echo "$cmd"
+}
+
+# 通用的背景進程執行與中斷處理函式
+# 參數：$1=command, $2=agent_name, $3=output_file, $4=error_file, $5=timeout_seconds (可選，預設600)
+# 返回：exit_code (124表示超時)
+execute_with_interrupt_handling() {
+    local cmd=$1
+    local agent_name=$2
+    local output_file=$3
+    local error_file=$4
+    local max_timeout=${5:-600}  # 預設 10 分鐘
+
+    local pid=""
+    local pid_file=$(mktemp "$TMP_DIR/${agent_name}_pid.XXXXXX")
+
+    cleanup_process() {
+        if [ -n "$pid" ] && kill -0 $pid 2>/dev/null; then
+            log_warn "正在中斷 $agent_name..."
+            kill -TERM $pid 2>/dev/null
+            sleep 2
+            kill -KILL $pid 2>/dev/null
+        fi
+        [ -n "$pid_file" ] && rm -f "$pid_file"
+    }
+
+    # 設定 trap 來處理中斷信號
+    trap cleanup_process INT TERM
+
+    # 在背景執行命令
+    (
+        echo $$ > "$pid_file"
+        # 使用 sh -c 而非 eval 來執行命令，更安全
+        sh -c "$cmd" > "$output_file" 2> "$error_file"
+    ) &
+    pid=$!
+
+    # 等待完成或超時
+    local timeout_count=0
+
+    while kill -0 $pid 2>/dev/null && [ $timeout_count -lt $max_timeout ]; do
+        sleep 1
+        timeout_count=$((timeout_count + 1))
+    done
+
+    # 檢查是否超時
+    if [ $timeout_count -ge $max_timeout ]; then
+        local timeout_min=$((max_timeout / 60))
+        log_error "$agent_name 執行超時（${timeout_min}分鐘）"
+        kill -TERM $pid 2>/dev/null
+        sleep 2
+        kill -KILL $pid 2>/dev/null
+        rm -f "$pid_file"
+        trap - INT TERM
+        return 124
+    fi
+
+    # 等待進程完成
+    wait $pid
+    local exit_code=$?
+
+    rm -f "$pid_file"
+    trap - INT TERM
+
+    return $exit_code
+}
+
+# --- AI Agent 執行函式 ---
+
+# 通用 Agent 執行函式
+# 參數：$1=tool_type, $2=session_id, $3=prompt, $4=permission_mode, $5=agent_name, $6..=allowed_tools
+# 返回：0=成功, 1=權限問題, 2=錯誤
+generic_agent_execute() {
+    local tool_type=$1
+    local session_id=$2
+    local prompt=$3
+    local permission_mode=${4:-""}
+    local agent_name=${5:-"Agent"}
+    shift 5
+    local allowed_tools=("$@")
+
+    # 設定 agent 上下文
+    local agent_display_name="${tool_type^}"  # 首字母大寫
+    setup_agent_context "$agent_name" "$agent_display_name"
+
+    # 增強 prompt
+    prompt=$(enhance_prompt_with_agent_definition "$prompt" "$agent_name")
+
+    # 組合 allowed tools 參數
+    local allowed_tools_args=$(build_allowed_tools_args "$tool_type" "${allowed_tools[@]}")
+
+    # 將 prompt 寫入臨時檔案（所有 agent 都使用）
+    local prompt_file=$(write_prompt_to_tempfile "$prompt" "$tool_type")
+
+    # 組合完整指令
+    local cmd=$(build_agent_command "$tool_type" "$session_id" "$prompt_file" "$permission_mode" "$allowed_tools_args")
+
+    # 執行並保存輸出
+    local temp_output=$(mktemp "$TMP_DIR/${tool_type}_output.XXXXXX")
+    local error_log="$ISSUE_DIR/last_${tool_type}_error.log"
+
+    log_info "執行 ${agent_display_name} CLI..."
+
+    # 使用通用中斷處理函式
+    execute_with_interrupt_handling "$cmd" "${agent_display_name} Agent" "$temp_output" "$error_log" "$AGENT_EXECUTION_TIMEOUT"
+    local exit_code=$?
+
+    # 讀取輸出
+    local output=""
+    if [ -f "$temp_output" ]; then
+        output=$(cat "$temp_output")
+    fi
+
+    # 先檢查是否為 session 失效錯誤（優先處理）
+    if [ $exit_code -ne 0 ] && [ -f "$error_log" ]; then
+        local error_content=$(cat "$error_log" 2>/dev/null)
+        if echo "$error_content" | grep -qi "No conversation found\|session.*not found\|invalid session"; then
+            log_warn "Session 失效，創建新 session 並重試..."
+
+            # 刪除舊的 session 檔案
+            local session_file="$SESSIONS_DIR/${agent_name}_session_id"
+            rm -f "$session_file"
+
+            # 根據 tool_type 初始化新 session
+            local new_session_id=""
+            if [ "$tool_type" == "claude" ]; then
+                new_session_id=$(init_session "$agent_name")
+            elif [ "$tool_type" == "cursor" ]; then
+                new_session_id=$(cursor_agent_init_session "$agent_name")
+            fi
+
+            if [ -n "$new_session_id" ]; then
+                log_info "新 Session ID: $new_session_id，重新執行..."
+                # 遞迴調用自己，使用新的 session_id
+                rm -f "$prompt_file" "$temp_output"
+                generic_agent_execute "$tool_type" "$new_session_id" "$prompt" "$permission_mode" "$agent_name" "${allowed_tools[@]}"
+                return $?
+            else
+                log_error "無法創建新 session"
+                rm -f "$prompt_file" "$temp_output"
+                return 2
+            fi
+        fi
+    fi
+
+    # 處理其他執行錯誤
+    if ! handle_execution_error $exit_code "${agent_display_name} CLI" "$error_log" "$prompt_file"; then
+        local err_code=$?
+        if [ $err_code -eq 2 ]; then
+            rm -f "$prompt_file" "$temp_output"
+            return 2
+        fi
+        # 如果主要輸出是空的，嘗試從錯誤日誌中讀取內容
+        if [ -z "$output" ]; then
+            output=$(cat "$error_log" 2>/dev/null || echo "")
+        fi
+    fi
+
+    # 清理臨時檔案
+    rm -f "$prompt_file"
+
+    # 檢查輸出是否為 JSON 格式
+    if ! jq -e . >/dev/null 2>&1 <<<"$output"; then
+        # 不是 JSON，直接顯示錯誤訊息並中斷
+        log_error "${agent_display_name} 返回非 JSON 格式輸出："
+        echo "$output" >&2
         rm -f "$temp_output"
         return 2
     fi
 
-    # 保存原始輸出
-    cp "$temp_output" "$ISSUE_DIR/last_raw_output.log"
-
-    # 提取 JSON
-    local json_result=$(tac "$temp_output" | awk '/{/,0' | tac)
-    rm -f "$temp_output"
-
-    # 解析回應內容
-    local json_type=$(echo "$json_result" | jq -r 'type' 2>/dev/null)
-    local content=""
-    if [ "$json_type" == "array" ]; then
-        content=$(echo "$json_result" | jq -r ".content // empty" 2>/dev/null)
+    # 保存原始輸出（僅 claude 需要）
+    if [ "$tool_type" == "claude" ]; then
+        cp "$temp_output" "$ISSUE_DIR/last_raw_output.log"
+        # 提取 JSON（claude 特殊處理）
+        local json_result=$(tac "$temp_output" | awk '/{/,0' | tac)
     else
-        content=$(echo "$json_result" | jq -r ".result // empty" 2>/dev/null)
+        # gemini 和 cursor 直接使用 output
+        local json_result=$(process_json_output "$output" "$agent_name" "$prompt")
     fi
 
-    # 顯示回應
-    if [ -n "$content" ] && [ "$content" != "null" ]; then
-        echo "" >&2
-        echo "==================================" >&2
-        echo "$agent_name 回應：" >&2
-        echo "$content" >&2
-        echo "==================================" >&2
-        echo "" >&2
+    rm -f "$temp_output"
+
+    # 處理回應內容
+    local content=""
+    if [ "$tool_type" == "claude" ]; then
+        # Claude 的特殊 JSON 解析
+        local json_type=$(echo "$json_result" | jq -r 'type' 2>/dev/null)
+        if [ "$json_type" == "array" ]; then
+            content=$(echo "$json_result" | jq -r ".content // empty" 2>/dev/null)
+        else
+            content=$(echo "$json_result" | jq -r ".result // empty" 2>/dev/null)
+        fi
+
+        # 顯示回應
+        if [ -n "$content" ] && [ "$content" != "null" ]; then
+            echo "" >&2
+            echo "==================================" >&2
+            echo "$agent_name 回應：" >&2
+            echo "$content" >&2
+            echo "==================================" >&2
+            echo "" >&2
+        fi
+    else
+        # Gemini 和 Cursor 使用通用提取
+        content=$(extract_content_from_json "$json_result" "$output")
+        echo "$content"
     fi
 
     # 記錄到 conversation.log
     log_to_conversation "$prompt" "$json_result"
 
-    # 檢查錯誤訊息（如 Session limit, API errors 等）
+    # 檢查錯誤訊息
     if echo "$content" | grep -qi "session limit\|rate limit\|error\|failed"; then
         return 2  # 有錯誤，需要例外處理
     fi
 
-    # 檢查權限問題（只有 Developer 才需要處理）
-    local denials_count=$(echo "$json_result" | jq -r ".permission_denials | length" 2>/dev/null)
-    if [ -n "$denials_count" ] && [ "$denials_count" != "null" ] && [ "$denials_count" -gt 0 ] 2>/dev/null;
- then
-        if [ "$agent_name" = "$DEV_AGENT" ]; then
-            return 1  # Developer 有權限問題
-        else
-            log_warn "發現權限請求被拒絕 ($agent_name)，非 developer agent $DEV_AGENT 直接忽略"
-            return 0  # 其他角色忽略權限問題，當作成功
+    # 檢查權限問題（只有 Claude 和 Developer 才需要處理）
+    if [ "$tool_type" == "claude" ]; then
+        local denials_count=$(echo "$json_result" | jq -r ".permission_denials | length" 2>/dev/null)
+        if [ -n "$denials_count" ] && [ "$denials_count" != "null" ] && [ "$denials_count" -gt 0 ] 2>/dev/null; then
+            if [ "$agent_name" = "$DEV_AGENT" ]; then
+                return 1  # Developer 有權限問題
+            else
+                log_warn "發現權限請求被拒絕 ($agent_name)，非 developer agent $DEV_AGENT 直接忽略"
+                return 0  # 其他角色忽略權限問題，當作成功
+            fi
         fi
     fi
 
     return 0  # 成功
+}
+
+# 核心函數：執行 claude 並處理回應
+# 參數：$1=session_id, $2=prompt, $3=permission_mode (可選), $4=agent_name (可選), $5+=allowed_tools (可選)
+claude_execute() {
+    generic_agent_execute "claude" "$@"
 }
 
 # Gemini 執行函式，支援工具使用與權限管理
@@ -268,238 +615,16 @@ gemini_execute() {
     local prompt=$1
     local permission_mode=${2:-""}
     local agent_name=${3:-"Agent"}
-    export CURRENT_AGENT="$agent_name"
     shift 3
     local allowed_tools=("$@")
 
-    log_info "正在執行 Gemini Agent: $agent_name..."
-
-    # 將 prompt 寫入臨時檔案以避免 shell 轉義問題
-    local prompt_file=$(mktemp "$TMP_DIR/gemini_prompt.XXXXXX")
-    echo "$prompt" > "$prompt_file"
-
-    # 組合 allowed tools 參數
-    local allowed_tools_args=""
-    for tool in "${allowed_tools[@]}"; do
-        allowed_tools_args+=" --allowed-tools \"$tool\""
-    done
-
-    # 組合完整指令 - 使用 stdin 而非 -p 參數
-    local cmd="$GEMINI_CLI_COMMAND --output-format json"
-
-    # 處理權限模式
-    if [ -n "$permission_mode" ]; then
-        local approval_mode="$permission_mode"
-        # 將 claude 的 acceptEdits 映射到 gemini 的 auto_edit
-        if [ "$permission_mode" == "acceptEdits" ]; then
-            approval_mode="auto_edit"
-        fi
-        cmd+=" --approval-mode $approval_mode"
-    fi
-
-    if [ -n "$allowed_tools_args" ]; then
-        cmd+="$allowed_tools_args"
-    fi
-
-    local output
-    # 執行指令，並將 stderr 導向日誌，以處理可能的 JSON 錯誤輸出
-    log_info "執行 Gemini CLI (prompt length: $(wc -c < "$prompt_file") bytes)..."
-    if ! output=$(timeout 600 sh -c "exec $cmd < \"$prompt_file\"" 2> "$ISSUE_DIR/last_gemini_error.log"); then
-        rm -f "$prompt_file"
-        local exit_code=$?
-        if [ $exit_code -eq 124 ]; then
-            log_error "Gemini CLI 執行超時 (10分鐘)。"
-        else
-            log_error "Gemini CLI 執行失敗 (exit code: $exit_code)。"
-        fi
-        log_error "錯誤訊息請見: $ISSUE_DIR/last_gemini_error.log"
-        # 如果主要輸出是空的，嘗試從錯誤日誌中讀取內容，因為 JSON 結果可能在那裡
-        if [ -z "$output" ]; then
-            output=$(cat "$ISSUE_DIR/last_gemini_error.log")
-        fi
-    fi
-
-    # 清理臨時檔案
-    rm -f "$prompt_file"
-
-    # 處理輸出：可能是 JSON 字串或一般文字
-    local json_response
-    if jq -e . >/dev/null 2>&1 <<<"$output"; then
-        # 如果 output 是合法的 JSON
-        json_response="$output"
-    else
-        # 如果不是 JSON，則手動建立一個模擬的 JSON response 以便記錄
-        json_response=$(jq -n \
-            --arg agent "$agent_name" \
-            --arg prompt "$prompt" \
-            --arg content "$output" \
-            '{agent: $agent, prompt: $prompt, content: $content, result: $content}')
-    fi
-
-    log_to_conversation "$prompt" "$json_response"
-
-    # 從 JSON 中提取 content/result
-    local content=$(echo "$json_response" | jq -r '.response // .result // .content // ""' 2>/dev/null)
-
-    # 如果從 JSON 中提取的 content 為空，則使用原始 output
-    if [ -z "$content" ] || [ "$content" == "null" ]; then
-        content="$output"
-    fi
-
-    echo "$content"
-
-    # 檢查錯誤
-    if echo "$content" | grep -qi "error\|failed"; then
-        return 2
-    fi
-
-    return 0
+    # gemini 沒有 session_id，傳空字串
+    generic_agent_execute "gemini" "" "$prompt" "$permission_mode" "$agent_name" "${allowed_tools[@]}"
 }
 
 # Cursor Agent 執行函式
 cursor_agent_execute() {
-    local session_id=$1
-    local prompt=$2
-    local permission_mode=${3:-""}
-    local agent_name=${4:-"Agent"}
-    export CURRENT_AGENT="$agent_name"
-    shift 4
-    local allowed_tools=("$@")
-
-    log_info "正在執行 Cursor Agent: $agent_name..."
-    
-    # 設定中斷處理
-    local cursor_pid=""
-    local temp_output=""
-    local temp_pid_file=""
-    
-    cleanup_cursor_agent() {
-        if [ -n "$cursor_pid" ] && kill -0 $cursor_pid 2>/dev/null; then
-            log_warn "正在中斷 Cursor Agent..."
-            kill -TERM $cursor_pid 2>/dev/null
-            sleep 2
-            kill -KILL $cursor_pid 2>/dev/null
-        fi
-        [ -n "$temp_output" ] && rm -f "$temp_output"
-        [ -n "$temp_pid_file" ] && rm -f "$temp_pid_file"
-    }
-    
-    # 設定 trap 來處理中斷信號
-    trap cleanup_cursor_agent INT TERM
-
-    # 將 prompt 寫入臨時檔案以避免 shell 轉義問題
-    local prompt_file=$(mktemp "$TMP_DIR/cursor_agent_prompt.XXXXXX")
-    echo "$prompt" > "$prompt_file"
-
-    # 組合完整指令 - 使用 --print 模式進行非互動式執行
-    local cmd="$CURSOR_AGENT_CLI_COMMAND --print --output-format json"
-
-    # 處理 session resume
-    if [ -n "$session_id" ]; then
-        cmd+=" --resume \"$session_id\""
-    fi
-
-    # 處理權限模式 - cursor-agent 使用 --force 參數
-    if [ -n "$permission_mode" ]; then
-        if [ "$permission_mode" == "acceptEdits" ] || [ "$permission_mode" == "auto_edit" ]; then
-            cmd+=" --force"
-        fi
-    fi
-
-    local output
-    # 執行指令，並將 stderr 導向日誌
-    log_info "執行 Cursor Agent CLI (prompt length: $(wc -c < "$prompt_file") bytes)..."
-    
-    # 使用背景進程和 trap 來處理中斷信號
-    temp_output=$(mktemp "$TMP_DIR/cursor_agent_output.XXXXXX")
-    temp_pid_file=$(mktemp "$TMP_DIR/cursor_agent_pid.XXXXXX")
-    
-    # 在背景執行 cursor-agent
-    (
-        echo $$ > "$temp_pid_file"
-        exec $cmd < "$prompt_file" > "$temp_output" 2> "$ISSUE_DIR/last_cursor_agent_error.log"
-    ) &
-    cursor_pid=$!
-    
-    # 等待完成或超時
-    local timeout_count=0
-    local max_timeout=600  # 10分鐘
-    
-    while kill -0 $cursor_pid 2>/dev/null && [ $timeout_count -lt $max_timeout ]; do
-        sleep 1
-        timeout_count=$((timeout_count + 1))
-    done
-    
-    # 檢查是否超時
-    if [ $timeout_count -ge $max_timeout ]; then
-        log_error "Cursor Agent CLI 執行超時 (10分鐘)。"
-        kill -TERM $cursor_pid 2>/dev/null
-        sleep 2
-        kill -KILL $cursor_pid 2>/dev/null
-        rm -f "$prompt_file" "$temp_output" "$temp_pid_file"
-        trap - INT TERM
-        return 2
-    fi
-    
-    # 等待進程完成
-    wait $cursor_pid
-    local exit_code=$?
-    
-    # 讀取輸出
-    if [ -f "$temp_output" ]; then
-        output=$(cat "$temp_output")
-        rm -f "$temp_output"
-    fi
-    
-    rm -f "$temp_pid_file"
-    
-    if [ $exit_code -ne 0 ]; then
-        log_error "Cursor Agent CLI 執行失敗 (exit code: $exit_code)。"
-        log_error "錯誤訊息請見: $ISSUE_DIR/last_cursor_agent_error.log"
-        # 如果主要輸出是空的，嘗試從錯誤日誌中讀取內容
-        if [ -z "$output" ]; then
-            output=$(cat "$ISSUE_DIR/last_cursor_agent_error.log")
-        fi
-    fi
-
-    # 清理臨時檔案
-    rm -f "$prompt_file"
-    
-    # 清理 trap
-    trap - INT TERM
-
-    # 處理輸出：可能是 JSON 字串或一般文字
-    local json_response
-    if jq -e . >/dev/null 2>&1 <<<"$output"; then
-        # 如果 output 是合法的 JSON
-        json_response="$output"
-    else
-        # 如果不是 JSON，則手動建立一個模擬的 JSON response 以便記錄
-        json_response=$(jq -n \
-            --arg agent "$agent_name" \
-            --arg prompt "$prompt" \
-            --arg content "$output" \
-            '{agent: $agent, prompt: $prompt, content: $content, result: $content}')
-    fi
-
-    log_to_conversation "$prompt" "$json_response"
-
-    # 從 JSON 中提取 content/result
-    local content=$(echo "$json_response" | jq -r '.response // .result // .content // ""' 2>/dev/null)
-
-    # 如果從 JSON 中提取的 content 為空，則使用原始 output
-    if [ -z "$content" ] || [ "$content" == "null" ]; then
-        content="$output"
-    fi
-
-    echo "$content"
-
-    # 檢查錯誤
-    if echo "$content" | grep -qi "error\|failed"; then
-        return 2
-    fi
-
-    return 0
+    generic_agent_execute "cursor" "$@"
 }
 
 # Cursor Agent session 初始化函式
