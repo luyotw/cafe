@@ -1358,7 +1358,12 @@ $diff
         if [ "$REVIEW_AGENT_TOOL" = "gemini" ]; then
             review_feedback=$(gemini_execute "$reviewer_prompt" "" "$REVIEW_AGENT" "${DEFAULT_REVIEW_ALLOWED_TOOLS[@]}")
         elif [ "$REVIEW_AGENT_TOOL" = "claude" ]; then
-            claude_execute "$session_review" "$reviewer_prompt" "" "$REVIEW_AGENT"
+            if ! claude_execute "$session_review" "$reviewer_prompt" "" "$REVIEW_AGENT"; then
+                log_error "Reviewer agent 執行失敗"
+                exit 1
+            fi
+            # 更新 session_review（可能已被自動恢復）
+            session_review=$(cat "$SESSIONS_DIR/${REVIEW_AGENT}_session_id" 2>/dev/null || echo "$session_review")
             local json_result=$(cat "$ISSUE_DIR/last_raw_output.log")
             review_feedback=$(echo "$json_result" | jq -r '.result // .content // empty' 2>/dev/null)
         elif [ "$REVIEW_AGENT_TOOL" = "cursor-agent" ]; then
