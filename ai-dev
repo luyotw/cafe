@@ -525,7 +525,7 @@ execute_with_retry() {
 # 參數：$1=agent_name ($PM_AGENT, $DEV_AGENT, $REVIEW_AGENT)
 init_session() {
     local agent_name=$1
-    local session_file="$SESSION_DIR/${agent_name}_session_id"
+    local session_file="$SESSIONS_DIR/${agent_name}_session_id"
 
     if [ -f "$session_file" ]; then
         local session_id=$(cat "$session_file")
@@ -1138,7 +1138,7 @@ cleanup() {
 
     echo ""
     log_info "Issue 資料已保存在 $ISSUE_DIR/"
-    log_info "Session 資料已保存在 $SESSION_DIR/"
+    log_info "Session 資料已保存在 $SESSIONS_DIR/"
 }
 
 
