@@ -1050,6 +1050,13 @@ phase1_requirements_clarification() {
         log_warn "按 Enter 開啟編輯器..."
         read
         ${EDITOR:-vim} "$REQUIREMENTS_FILE"
+        
+        # 編輯器關閉後立即檢查狀態
+        if grep -q "需求分析狀態.*已確認" "$REQUIREMENTS_FILE"; then
+            log_info "✓ 需求分析完成！"
+            break
+        fi
+        
         log_info "繼續下一輪分析..."
     done
 }
@@ -1103,6 +1110,13 @@ phase2_implementation_analysis() {
         log_warn "按 Enter 開啟編輯器..."
         read
         ${EDITOR:-vim} "$REQUIREMENTS_FILE"
+        
+        # 編輯器關閉後立即檢查狀態
+        if grep -q "實作分析狀態.*已確認" "$REQUIREMENTS_FILE"; then
+            log_info "✓ 實作分析完成！"
+            break
+        fi
+        
         log_info "繼續下一輪分析..."
     done
 }
