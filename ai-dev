@@ -204,7 +204,8 @@ claude_execute() {
     # 執行並保存輸出
     local temp_output=$(mktemp "$TMP_DIR/claude_output.XXXXXX")
     log_info "執行 Claude CLI..."
-    timeout 600 bash -c "$cmd" > "$temp_output" 2>&1
+    # 使用 exec 來保持信號傳遞，同時使用 timeout 來限制執行時間
+    timeout 600 sh -c "exec $cmd" > "$temp_output" 2>&1
     local exit_code=$?
 
     if [ $exit_code -eq 124 ]; then
@@ -303,7 +304,7 @@ gemini_execute() {
     local output
     # 執行指令，並將 stderr 導向日誌，以處理可能的 JSON 錯誤輸出
     log_info "執行 Gemini CLI (prompt length: $(wc -c < "$prompt_file") bytes)..."
-    if ! output=$(timeout 600 bash -c "$cmd < \"$prompt_file\"" 2> "$ISSUE_DIR/last_gemini_error.log"); then
+    if ! output=$(timeout 600 sh -c "exec $cmd < \"$prompt_file\"" 2> "$ISSUE_DIR/last_gemini_error.log"); then
         rm -f "$prompt_file"
         local exit_code=$?
         if [ $exit_code -eq 124 ]; then
