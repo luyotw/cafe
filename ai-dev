@@ -18,8 +18,8 @@ MAX_REVIEW_ITERATIONS=5
 
 # AI Agent CLI 設定
 # 為每個 agent 指定要使用的工具。支援: "claude", "gemini"
-# 注意: 目前只有 REVIEW_AGENT 完整支援 "gemini"。PM 和 DEV agents 仍建議使用 "claude"。
-PM_AGENT_TOOL="claude"
+# 注意: 目前只有 DEV_AGENT 仍建議使用 "claude"。
+PM_AGENT_TOOL="gemini"
 DEV_AGENT_TOOL="claude"
 REVIEW_AGENT_TOOL="gemini"
 
@@ -789,15 +789,11 @@ phase1_requirements_clarification() {
     echo ""
     log_info "=== Phase 1: 需求分析循環 ==="
 
-    if [ "$PM_AGENT_TOOL" != "claude" ]; then
-        log_warn "PM Agent 不是 claude，跳過自動需求分析。"
-        log_warn "請手動確認 $REQUIREMENTS_FILE，並將「需求分析狀態」改為「已確認」。"
-        read -p "完成後請按 Enter..."
-        return
+    local session_pm=""
+    if [ "$PM_AGENT_TOOL" = "claude" ]; then
+        session_pm=$(init_session "$PM_AGENT")
+        if [ $? -ne 0 ]; then log_error "無法初始化 $PM_AGENT session"; exit 1; fi
     fi
-
-    local session_pm=$(init_session "$PM_AGENT")
-    if [ $? -ne 0 ]; then log_error "無法初始化 $PM_AGENT session"; exit 1; fi
 
     if [ ! -f "${REQUIREMENTS_FILE}.backup" ]; then
         cp "$REQUIREMENTS_FILE" "${REQUIREMENTS_FILE}.backup"
@@ -827,10 +823,17 @@ phase1_requirements_clarification() {
         fi
 
         log_info "PM agent $PM_AGENT 正在分析需求..."
-        if execute_with_retry "$session_pm" prompt "" "$PM_AGENT" pm_allowed_tools needs_new_prompt; then
-            needs_new_prompt=true
+        if [ "$PM_AGENT_TOOL" = "gemini" ]; then
+            gemini_execute "$prompt" "auto_edit" "$PM_AGENT" "${pm_allowed_tools[@]}"
+        elif [ "$PM_AGENT_TOOL" = "claude" ]; then
+            if execute_with_retry "$session_pm" prompt "" "$PM_AGENT" pm_allowed_tools needs_new_prompt; then
+                needs_new_prompt=true
+            else
+                continue
+            fi
         else
-            continue
+            log_error "不支援的 PM tool: $PM_AGENT_TOOL"
+            exit 1
         fi
 
         if grep -q "需求分析狀態.*已確認" "$REQUIREMENTS_FILE"; then
