@@ -37,10 +37,12 @@ AGENTS_DIR="$AI_DIR/agents"
 SESSIONS_DIR="$AI_DIR/sessions"
 LOGS_DIR="$AI_DIR/logs"
 ISSUE_DIR="$LOGS_DIR/$REQUIREMENTS_BASE"
+TMP_DIR="$AI_DIR/tmp"
 
 # 建立目錄
 mkdir -p "$SESSIONS_DIR"
 mkdir -p "$ISSUE_DIR"
+mkdir -p "$TMP_DIR"
 
 # 建立 agents 的 soft link
 if [ ! -L "$AGENTS_DIR" ]; then
@@ -199,8 +201,16 @@ claude_execute() {
     fi
 
     # 執行並保存輸出
-    local temp_output=$(mktemp)
-    eval "$cmd" > "$temp_output" 2>&1
+    local temp_output=$(mktemp "$TMP_DIR/claude_output.XXXXXX")
+    log_info "執行 Claude CLI..."
+    timeout 600 eval "$cmd" > "$temp_output" 2>&1
+    local exit_code=$?
+
+    if [ $exit_code -eq 124 ]; then
+        log_error "Claude CLI 執行超時 (10分鐘)"
+        rm -f "$temp_output"
+        return 2
+    fi
 
     # 保存原始輸出
     cp "$temp_output" "$ISSUE_DIR/last_raw_output.log"
@@ -262,15 +272,19 @@ gemini_execute() {
 
     log_info "正在執行 Gemini Agent: $agent_name..."
 
+    # 將 prompt 寫入臨時檔案以避免 shell 轉義問題
+    local prompt_file=$(mktemp "$TMP_DIR/gemini_prompt.XXXXXX")
+    echo "$prompt" > "$prompt_file"
+
     # 組合 allowed tools 參數
     local allowed_tools_args=""
     for tool in "${allowed_tools[@]}"; do
         allowed_tools_args+=" --allowed-tools \"$tool\""
     done
 
-    # 組合完整指令
-    local cmd="$GEMINI_CLI_COMMAND -p \"$prompt\" --output-format json"
-    
+    # 組合完整指令 - 使用 stdin 而非 -p 參數
+    local cmd="$GEMINI_CLI_COMMAND --output-format json"
+
     # 處理權限模式
     if [ -n "$permission_mode" ]; then
         local approval_mode="$permission_mode"
@@ -287,14 +301,24 @@ gemini_execute() {
 
     local output
     # 執行指令，並將 stderr 導向日誌，以處理可能的 JSON 錯誤輸出
-    if ! output=$(eval "$cmd" 2> "$ISSUE_DIR/last_gemini_error.log"); then
-        log_error "Gemini CLI 執行失敗。"
+    log_info "執行 Gemini CLI (prompt length: $(wc -c < "$prompt_file") bytes)..."
+    if ! output=$(timeout 600 bash -c "$cmd < \"$prompt_file\"" 2> "$ISSUE_DIR/last_gemini_error.log"); then
+        rm -f "$prompt_file"
+        local exit_code=$?
+        if [ $exit_code -eq 124 ]; then
+            log_error "Gemini CLI 執行超時 (10分鐘)。"
+        else
+            log_error "Gemini CLI 執行失敗 (exit code: $exit_code)。"
+        fi
         log_error "錯誤訊息請見: $ISSUE_DIR/last_gemini_error.log"
         # 如果主要輸出是空的，嘗試從錯誤日誌中讀取內容，因為 JSON 結果可能在那裡
         if [ -z "$output" ]; then
             output=$(cat "$ISSUE_DIR/last_gemini_error.log")
         fi
     fi
+
+    # 清理臨時檔案
+    rm -f "$prompt_file"
 
     # 處理輸出：可能是 JSON 字串或一般文字
     local json_response
@@ -314,14 +338,14 @@ gemini_execute() {
 
     # 從 JSON 中提取 content/result
     local content=$(echo "$json_response" | jq -r '.response // .result // .content // ""' 2>/dev/null)
-    
+
     # 如果從 JSON 中提取的 content 為空，則使用原始 output
     if [ -z "$content" ] || [ "$content" == "null" ]; then
         content="$output"
     fi
 
     echo "$content"
-    
+
     # 檢查錯誤
     if echo "$content" | grep -qi "error\|failed"; then
         return 2
@@ -536,9 +560,16 @@ init_session() {
 
     # 創建新 session - 發送 hi
     log_info "創建新 $agent_name session..."
-    local temp_output=$(mktemp)
+    local temp_output=$(mktemp "$TMP_DIR/init_session.XXXXXX")
     prompt="say hi"
-    $CLAUDE_CLI_COMMAND -p "$prompt" --output-format json > "$temp_output" 2>&1
+    timeout 120 $CLAUDE_CLI_COMMAND -p "$prompt" --output-format json > "$temp_output" 2>&1
+    local exit_code=$?
+
+    if [ $exit_code -eq 124 ]; then
+        log_error "創建 session 超時"
+        rm -f "$temp_output"
+        return 1
+    fi
 
     cp "$temp_output" "$ISSUE_DIR/last_raw_output.log"
     local json_result=$(tac "$temp_output" | awk '/{/,0' | tac)
