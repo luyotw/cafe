@@ -357,11 +357,12 @@ gemini_execute() {
 
 # Cursor Agent 執行函式
 cursor_agent_execute() {
-    local prompt=$1
-    local permission_mode=${2:-""}
-    local agent_name=${3:-"Agent"}
+    local session_id=$1
+    local prompt=$2
+    local permission_mode=${3:-""}
+    local agent_name=${4:-"Agent"}
     export CURRENT_AGENT="$agent_name"
-    shift 3
+    shift 4
     local allowed_tools=("$@")
 
     log_info "正在執行 Cursor Agent: $agent_name..."
@@ -391,6 +392,11 @@ cursor_agent_execute() {
 
     # 組合完整指令 - 使用 --print 模式進行非互動式執行
     local cmd="$CURSOR_AGENT_CLI_COMMAND --print --output-format json"
+
+    # 處理 session resume
+    if [ -n "$session_id" ]; then
+        cmd+=" --resume \"$session_id\""
+    fi
 
     # 處理權限模式 - cursor-agent 使用 --force 參數
     if [ -n "$permission_mode" ]; then
@@ -493,6 +499,56 @@ cursor_agent_execute() {
     fi
 
     return 0
+}
+
+# Cursor Agent session 初始化函式
+cursor_agent_init_session() {
+    local agent_name=$1
+    local session_file="$SESSIONS_DIR/${agent_name}_session_id"
+
+    if [ -f "$session_file" ]; then
+        local session_id=$(cat "$session_file")
+        log_info "找到現存的 $agent_name session: $session_id"
+        echo "$session_id"
+        return 0
+    fi
+
+    # 創建新 session
+    log_info "創建新 $agent_name session..."
+    local temp_output=$(mktemp "$TMP_DIR/cursor_agent_init.XXXXXX")
+    local prompt="say hi"
+    
+    # 使用 create-chat 命令創建新 session
+    local session_id
+    if session_id=$(cursor-agent create-chat 2>"$ISSUE_DIR/last_cursor_agent_error.log"); then
+        # 驗證 session_id 格式 (UUID)
+        if [[ "$session_id" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]; then
+            echo "$session_id" > "$session_file"
+            log_info "$agent_name Session ID: $session_id"
+            
+            # 記錄初始對話
+            export CURRENT_AGENT="$agent_name"
+            local json_result=$(jq -n \
+                --arg agent "$agent_name" \
+                --arg prompt "$prompt" \
+                --arg session_id "$session_id" \
+                --arg content "Session created successfully" \
+                '{agent: $agent, prompt: $prompt, session_id: $session_id, content: $content, result: $content}')
+            log_to_conversation "$prompt" "$json_result"
+            
+            echo "$session_id"
+            return 0
+        else
+            log_error "無效的 session ID 格式: $session_id"
+            rm -f "$temp_output"
+            return 1
+        fi
+    else
+        log_error "無法創建 $agent_name session"
+        log_error "錯誤訊息請見: $ISSUE_DIR/last_cursor_agent_error.log"
+        rm -f "$temp_output"
+        return 1
+    fi
 }
 
 
@@ -935,6 +991,9 @@ phase1_requirements_clarification() {
     if [ "$PM_AGENT_TOOL" = "claude" ]; then
         session_pm=$(init_session "$PM_AGENT")
         if [ $? -ne 0 ]; then log_error "無法初始化 $PM_AGENT session"; exit 1; fi
+    elif [ "$PM_AGENT_TOOL" = "cursor-agent" ]; then
+        session_pm=$(cursor_agent_init_session "$PM_AGENT")
+        if [ $? -ne 0 ]; then log_error "無法初始化 $PM_AGENT session"; exit 1; fi
     fi
 
     if [ ! -f "${REQUIREMENTS_FILE}.backup" ]; then
@@ -974,7 +1033,7 @@ phase1_requirements_clarification() {
                 continue
             fi
         elif [ "$PM_AGENT_TOOL" = "cursor-agent" ]; then
-            cursor_agent_execute "$prompt" "auto_edit" "$PM_AGENT" "${pm_allowed_tools[@]}"
+            cursor_agent_execute "$session_pm" "$prompt" "auto_edit" "$PM_AGENT" "${pm_allowed_tools[@]}"
         else
             log_error "不支援的 PM tool: $PM_AGENT_TOOL"
             exit 1
@@ -1096,6 +1155,9 @@ phase4_pre_pr_review() {
     local session_review
     if [ "$REVIEW_AGENT_TOOL" = "claude" ]; then
         session_review=$(init_session "$REVIEW_AGENT")
+    elif [ "$REVIEW_AGENT_TOOL" = "cursor-agent" ]; then
+        session_review=$(cursor_agent_init_session "$REVIEW_AGENT")
+        if [ $? -ne 0 ]; then log_error "無法初始化 $REVIEW_AGENT session"; exit 1; fi
     fi
 
     local branch_name=$(basename "$REQUIREMENTS_FILE" .md | sed 's/^[0-9]\{8\}-//')
@@ -1160,7 +1222,7 @@ $diff
             local json_result=$(cat "$ISSUE_DIR/last_raw_output.log")
             review_feedback=$(echo "$json_result" | jq -r '.result // .content // empty' 2>/dev/null)
         elif [ "$REVIEW_AGENT_TOOL" = "cursor-agent" ]; then
-            review_feedback=$(cursor_agent_execute "$reviewer_prompt" "" "$REVIEW_AGENT" "${DEFAULT_REVIEW_ALLOWED_TOOLS[@]}")
+            review_feedback=$(cursor_agent_execute "$session_review" "$reviewer_prompt" "" "$REVIEW_AGENT" "${DEFAULT_REVIEW_ALLOWED_TOOLS[@]}")
         else
             log_error "不支援的 Reviewer tool: $REVIEW_AGENT_TOOL"
             exit 1
