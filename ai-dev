@@ -17,15 +17,16 @@ REQUIREMENTS_FILE="${1:-requirements.md}"
 MAX_REVIEW_ITERATIONS=5
 
 # AI Agent CLI 設定
-# 為每個 agent 指定要使用的工具。支援: "claude", "gemini"
+# 為每個 agent 指定要使用的工具。支援: "claude", "gemini", "cursor-agent"
 # 注意: 目前只有 DEV_AGENT 仍建議使用 "claude"。
-PM_AGENT_TOOL="gemini"
+PM_AGENT_TOOL="cursor-agent"
 DEV_AGENT_TOOL="claude"
-REVIEW_AGENT_TOOL="gemini"
+REVIEW_AGENT_TOOL="cursor-agent"
 
 # CLI 指令名稱
 CLAUDE_CLI_COMMAND="claude"
 GEMINI_CLI_COMMAND="gemini"
+CURSOR_AGENT_CLI_COMMAND="cursor-agent"
 
 
 # --- 目錄與 Agent 名稱 ---
@@ -354,6 +355,146 @@ gemini_execute() {
     return 0
 }
 
+# Cursor Agent 執行函式
+cursor_agent_execute() {
+    local prompt=$1
+    local permission_mode=${2:-""}
+    local agent_name=${3:-"Agent"}
+    export CURRENT_AGENT="$agent_name"
+    shift 3
+    local allowed_tools=("$@")
+
+    log_info "正在執行 Cursor Agent: $agent_name..."
+    
+    # 設定中斷處理
+    local cursor_pid=""
+    local temp_output=""
+    local temp_pid_file=""
+    
+    cleanup_cursor_agent() {
+        if [ -n "$cursor_pid" ] && kill -0 $cursor_pid 2>/dev/null; then
+            log_warn "正在中斷 Cursor Agent..."
+            kill -TERM $cursor_pid 2>/dev/null
+            sleep 2
+            kill -KILL $cursor_pid 2>/dev/null
+        fi
+        [ -n "$temp_output" ] && rm -f "$temp_output"
+        [ -n "$temp_pid_file" ] && rm -f "$temp_pid_file"
+    }
+    
+    # 設定 trap 來處理中斷信號
+    trap cleanup_cursor_agent INT TERM
+
+    # 將 prompt 寫入臨時檔案以避免 shell 轉義問題
+    local prompt_file=$(mktemp "$TMP_DIR/cursor_agent_prompt.XXXXXX")
+    echo "$prompt" > "$prompt_file"
+
+    # 組合完整指令 - 使用 --print 模式進行非互動式執行
+    local cmd="$CURSOR_AGENT_CLI_COMMAND --print --output-format json"
+
+    # 處理權限模式 - cursor-agent 使用 --force 參數
+    if [ -n "$permission_mode" ]; then
+        if [ "$permission_mode" == "acceptEdits" ] || [ "$permission_mode" == "auto_edit" ]; then
+            cmd+=" --force"
+        fi
+    fi
+
+    local output
+    # 執行指令，並將 stderr 導向日誌
+    log_info "執行 Cursor Agent CLI (prompt length: $(wc -c < "$prompt_file") bytes)..."
+    
+    # 使用背景進程和 trap 來處理中斷信號
+    temp_output=$(mktemp "$TMP_DIR/cursor_agent_output.XXXXXX")
+    temp_pid_file=$(mktemp "$TMP_DIR/cursor_agent_pid.XXXXXX")
+    
+    # 在背景執行 cursor-agent
+    (
+        echo $$ > "$temp_pid_file"
+        exec $cmd < "$prompt_file" > "$temp_output" 2> "$ISSUE_DIR/last_cursor_agent_error.log"
+    ) &
+    cursor_pid=$!
+    
+    # 等待完成或超時
+    local timeout_count=0
+    local max_timeout=600  # 10分鐘
+    
+    while kill -0 $cursor_pid 2>/dev/null && [ $timeout_count -lt $max_timeout ]; do
+        sleep 1
+        timeout_count=$((timeout_count + 1))
+    done
+    
+    # 檢查是否超時
+    if [ $timeout_count -ge $max_timeout ]; then
+        log_error "Cursor Agent CLI 執行超時 (10分鐘)。"
+        kill -TERM $cursor_pid 2>/dev/null
+        sleep 2
+        kill -KILL $cursor_pid 2>/dev/null
+        rm -f "$prompt_file" "$temp_output" "$temp_pid_file"
+        trap - INT TERM
+        return 2
+    fi
+    
+    # 等待進程完成
+    wait $cursor_pid
+    local exit_code=$?
+    
+    # 讀取輸出
+    if [ -f "$temp_output" ]; then
+        output=$(cat "$temp_output")
+        rm -f "$temp_output"
+    fi
+    
+    rm -f "$temp_pid_file"
+    
+    if [ $exit_code -ne 0 ]; then
+        log_error "Cursor Agent CLI 執行失敗 (exit code: $exit_code)。"
+        log_error "錯誤訊息請見: $ISSUE_DIR/last_cursor_agent_error.log"
+        # 如果主要輸出是空的，嘗試從錯誤日誌中讀取內容
+        if [ -z "$output" ]; then
+            output=$(cat "$ISSUE_DIR/last_cursor_agent_error.log")
+        fi
+    fi
+
+    # 清理臨時檔案
+    rm -f "$prompt_file"
+    
+    # 清理 trap
+    trap - INT TERM
+
+    # 處理輸出：可能是 JSON 字串或一般文字
+    local json_response
+    if jq -e . >/dev/null 2>&1 <<<"$output"; then
+        # 如果 output 是合法的 JSON
+        json_response="$output"
+    else
+        # 如果不是 JSON，則手動建立一個模擬的 JSON response 以便記錄
+        json_response=$(jq -n \
+            --arg agent "$agent_name" \
+            --arg prompt "$prompt" \
+            --arg content "$output" \
+            '{agent: $agent, prompt: $prompt, content: $content, result: $content}')
+    fi
+
+    log_to_conversation "$prompt" "$json_response"
+
+    # 從 JSON 中提取 content/result
+    local content=$(echo "$json_response" | jq -r '.response // .result // .content // ""' 2>/dev/null)
+
+    # 如果從 JSON 中提取的 content 為空，則使用原始 output
+    if [ -z "$content" ] || [ "$content" == "null" ]; then
+        content="$output"
+    fi
+
+    echo "$content"
+
+    # 檢查錯誤
+    if echo "$content" | grep -qi "error\|failed"; then
+        return 2
+    fi
+
+    return 0
+}
+
 
 # --- 流程控制與例外處理 ---
 
@@ -607,6 +748,7 @@ check_prerequisites() {
     local tools_needed=()
     [ "$PM_AGENT_TOOL" = "claude" ] || [ "$DEV_AGENT_TOOL" = "claude" ] || [ "$REVIEW_AGENT_TOOL" = "claude" ] && tools_needed+=("$CLAUDE_CLI_COMMAND")
     [ "$PM_AGENT_TOOL" = "gemini" ] || [ "$DEV_AGENT_TOOL" = "gemini" ] || [ "$REVIEW_AGENT_TOOL" = "gemini" ] && tools_needed+=("$GEMINI_CLI_COMMAND")
+    [ "$PM_AGENT_TOOL" = "cursor-agent" ] || [ "$DEV_AGENT_TOOL" = "cursor-agent" ] || [ "$REVIEW_AGENT_TOOL" = "cursor-agent" ] && tools_needed+=("$CURSOR_AGENT_CLI_COMMAND")
 
     for tool in "${tools_needed[@]}"; do
         if ! command -v "$tool" &> /dev/null; then
@@ -831,6 +973,8 @@ phase1_requirements_clarification() {
             else
                 continue
             fi
+        elif [ "$PM_AGENT_TOOL" = "cursor-agent" ]; then
+            cursor_agent_execute "$prompt" "auto_edit" "$PM_AGENT" "${pm_allowed_tools[@]}"
         else
             log_error "不支援的 PM tool: $PM_AGENT_TOOL"
             exit 1
@@ -1015,6 +1159,8 @@ $diff
             claude_execute "$session_review" "$reviewer_prompt" "" "$REVIEW_AGENT"
             local json_result=$(cat "$ISSUE_DIR/last_raw_output.log")
             review_feedback=$(echo "$json_result" | jq -r '.result // .content // empty' 2>/dev/null)
+        elif [ "$REVIEW_AGENT_TOOL" = "cursor-agent" ]; then
+            review_feedback=$(cursor_agent_execute "$reviewer_prompt" "" "$REVIEW_AGENT" "${DEFAULT_REVIEW_ALLOWED_TOOLS[@]}")
         else
             log_error "不支援的 Reviewer tool: $REVIEW_AGENT_TOOL"
             exit 1
