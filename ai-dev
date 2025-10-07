@@ -1001,8 +1001,9 @@ $diff
 4.  **用繁體中文回應**。
 
 **審查完畢後，請做出結論：**
--   如果程式碼品質良好，可以直接建立 PR，請在回覆的**最後一行**加上單獨的 `LGTM` (Looks Good To Me)。
--   如果程式碼需要修改，請詳細說明需要修改的地方，**不要**加上 `LGTM`."
+-   如果程式碼品質良好，可以直接建立 PR，請在回覆的**最後一行**加上單獨的 LGTM (Looks Good To Me)。
+-   如果程式碼需要修改，請詳細說明需要修改的地方，**不要**加上 LGTM.
+"
 
         local review_feedback
         if [ "$REVIEW_AGENT_TOOL" = "gemini" ]; then
