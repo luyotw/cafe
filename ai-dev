@@ -13,6 +13,9 @@ PR_NUMBER=""
 # 需求檔案
 REQUIREMENTS_FILE="${1:-requirements.md}"
 
+# 需求範本檔案
+REQUIREMENTS_TEMPLATE="issues/template.md"
+
 # 最大 review 迭代次數
 MAX_REVIEW_ITERATIONS=5
 
@@ -469,9 +472,11 @@ generic_agent_execute() {
     # 組合完整指令
     local cmd=$(build_agent_command "$tool_type" "$session_id" "$prompt_file" "$permission_mode" "$allowed_tools_args")
 
-    # 執行並保存輸出
+    # 執行並保存輸出（使用時間戳記避免覆蓋）
+    local timestamp=$(date +%Y%m%d_%H%M%S)
     local temp_output=$(mktemp "$TMP_DIR/${tool_type}_output.XXXXXX")
-    local error_log="$ISSUE_DIR/last_${tool_type}_error.log"
+    local error_log="$ISSUE_DIR/${timestamp}_${tool_type}_${agent_name}_error.log"
+    local raw_log="$ISSUE_DIR/${timestamp}_${tool_type}_${agent_name}_raw.log"
 
     log_info "執行 ${agent_display_name} CLI..."
 
@@ -542,9 +547,11 @@ generic_agent_execute() {
         return 2
     fi
 
-    # 保存原始輸出（僅 claude 需要）
+    # 保存原始輸出
     if [ "$tool_type" == "claude" ]; then
-        cp "$temp_output" "$ISSUE_DIR/last_raw_output.log"
+        cp "$temp_output" "$raw_log"
+        # 保存最新的 raw_log 路徑供後續使用
+        export LAST_RAW_OUTPUT="$raw_log"
         # 提取 JSON（claude 特殊處理）
         local json_result=$(tac "$temp_output" | awk '/{/,0' | tac)
     else
@@ -583,8 +590,14 @@ generic_agent_execute() {
     # 記錄到 conversation.log
     log_to_conversation "$prompt" "$json_result"
 
-    # 檢查錯誤訊息
-    if echo "$content" | grep -qi "session limit\|rate limit\|error\|failed"; then
+    # 檢查是否有錯誤（檢查 JSON 的 is_error 欄位和特定錯誤訊息）
+    local is_error=$(echo "$json_result" | jq -r '.is_error // false' 2>/dev/null)
+    if [ "$is_error" = "true" ]; then
+        return 2  # 有錯誤，需要例外處理
+    fi
+
+    # 檢查嚴重錯誤訊息（session limit, rate limit）
+    if echo "$content" | grep -qi "session limit\|rate limit"; then
         return 2  # 有錯誤，需要例外處理
     fi
 
@@ -829,7 +842,7 @@ execute_with_retry() {
         return 0  # 成功
     elif [ $exec_result -eq 2 ]; then
         # 有錯誤（如 Session limit），直接進入例外處理
-        log_warn "Agent 執行遇到錯誤"
+        log_warn "Agent 執行遇到錯誤: $exec_result"
         if ! handle_exception "$session_id" "$permission_mode" "$agent_name" "${allowed_tools_ref[@]}"; then
             log_error "例外處理失敗"
             exit 1
@@ -960,6 +973,12 @@ check_prerequisites() {
 
     if [ ! -f "$REQUIREMENTS_FILE" ]; then
         log_error "找不到需求文件: $REQUIREMENTS_FILE"
+        exit 1
+    fi
+
+    if [ ! -f "$REQUIREMENTS_TEMPLATE" ]; then
+        log_error "找不到需求範本檔案: $REQUIREMENTS_TEMPLATE"
+        log_warn "請確保 $REQUIREMENTS_TEMPLATE 存在，以便進行實作分析時參考"
         exit 1
     fi
 
@@ -1158,8 +1177,12 @@ phase1_requirements_clarification() {
             else
                 continue
             fi
+            # 更新 session_pm（可能已被自動恢復）
+            session_pm=$(cat "$SESSIONS_DIR/${PM_AGENT}_session_id" 2>/dev/null || echo "$session_pm")
         elif [ "$PM_AGENT_TOOL" = "cursor-agent" ]; then
             cursor_agent_execute "$session_pm" "$prompt" "auto_edit" "$PM_AGENT" "${pm_allowed_tools[@]}"
+            # 更新 session_pm（可能已被自動恢復）
+            session_pm=$(cat "$SESSIONS_DIR/${PM_AGENT}_session_id" 2>/dev/null || echo "$session_pm")
         else
             log_error "不支援的 PM tool: $PM_AGENT_TOOL"
             exit 1
@@ -1192,6 +1215,25 @@ phase2_implementation_analysis() {
     echo ""
     log_info "=== Phase 2: 實作分析循環 ==="
 
+    # 檢查需求文件中是否有「開發指南」區塊
+    if ! grep -qi "##.*開發指南\|##.*development.*guide" "$REQUIREMENTS_FILE"; then
+        echo ""
+        log_error "需求文件中缺少「開發指南」區塊"
+        log_warn "請參考 $REQUIREMENTS_TEMPLATE 在 $REQUIREMENTS_FILE 中補上「開發指南」區塊"
+        log_warn "開發指南應包含專案的技術架構、開發規範、測試要求等重要資訊"
+        echo ""
+        log_warn "按 Enter 開啟編輯器補充開發指南..."
+        read
+        ${EDITOR:-vim} "$REQUIREMENTS_FILE"
+
+        # 再次檢查
+        if ! grep -qi "##.*開發指南\|##.*development.*guide" "$REQUIREMENTS_FILE"; then
+            log_error "仍未找到「開發指南」區塊，無法繼續實作分析"
+            exit 1
+        fi
+        log_info "✓ 已補充開發指南"
+    fi
+
     if [ "$DEV_AGENT_TOOL" != "claude" ]; then
         log_warn "DEV Agent 不是 claude，跳過自動實作分析。"
         log_warn "請手動完成 $REQUIREMENTS_FILE 中的實作分析，並將「實作分析狀態」改為「已確認」。"
@@ -1212,7 +1254,7 @@ phase2_implementation_analysis() {
 
         if [ "$needs_new_prompt" = true ]; then
             if [ $iteration -eq 1 ]; then
-            prompt="請根據 $REQUIREMENTS_FILE 和範本格式，在 $REQUIREMENTS_FILE 中加入詳細的實作分析。如果有問題需要討論，在檔案中提出（用你覺得清楚的方式寫就好）\n\n**請參考範本格式 issues/template.md**\n**重要：請用繁體中文回應。**"
+            prompt="請根據 $REQUIREMENTS_FILE 和範本格式，在 $REQUIREMENTS_FILE 中加入詳細的實作分析。如果有問題需要討論，在檔案中提出（用你覺得清楚的方式寫就好）\n\n**請參考範本格式 $REQUIREMENTS_TEMPLATE**\n**重要：請用繁體中文回應。**"
             else
                 prompt="請檢視 $REQUIREMENTS_FILE 中我的回饋，繼續完善實作分析。\n如果還有不清楚的地方，繼續在檔案中提出問題或討論。\n**不要自己修改實作分析狀態，等我確認！**"
             fi
@@ -1224,6 +1266,8 @@ phase2_implementation_analysis() {
         else
             continue
         fi
+        # 更新 session_dev（可能已被自動恢復）
+        session_dev=$(cat "$SESSIONS_DIR/${DEV_AGENT}_session_id" 2>/dev/null || echo "$session_dev")
 
         if grep -q "實作分析狀態.*已確認" "$REQUIREMENTS_FILE"; then
             log_info "✓ 實作分析完成！"
@@ -1364,7 +1408,13 @@ $diff
             fi
             # 更新 session_review（可能已被自動恢復）
             session_review=$(cat "$SESSIONS_DIR/${REVIEW_AGENT}_session_id" 2>/dev/null || echo "$session_review")
-            local json_result=$(cat "$ISSUE_DIR/last_raw_output.log")
+            # 從最新的 raw_log 讀取結果
+            if [ -n "$LAST_RAW_OUTPUT" ] && [ -f "$LAST_RAW_OUTPUT" ]; then
+                local json_result=$(cat "$LAST_RAW_OUTPUT")
+            else
+                log_error "找不到 Reviewer 的輸出檔案"
+                exit 1
+            fi
             review_feedback=$(echo "$json_result" | jq -r '.result // .content // empty' 2>/dev/null)
         elif [ "$REVIEW_AGENT_TOOL" = "cursor-agent" ]; then
             review_feedback=$(cursor_agent_execute "$session_review" "$reviewer_prompt" "" "$REVIEW_AGENT" "${DEFAULT_REVIEW_ALLOWED_TOOLS[@]}")
@@ -1406,7 +1456,11 @@ $review_feedback
  then
                 break
             fi
+            # 更新 session_dev（可能已被自動恢復）
+            session_dev=$(cat "$SESSIONS_DIR/${DEV_AGENT}_session_id" 2>/dev/null || echo "$session_dev")
         done
+        # 最後再更新一次 session_dev
+        session_dev=$(cat "$SESSIONS_DIR/${DEV_AGENT}_session_id" 2>/dev/null || echo "$session_dev")
         log_info "Developer agent 已完成修改。"
     done
 }
