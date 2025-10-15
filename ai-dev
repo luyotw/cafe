@@ -10,8 +10,18 @@ set -e
 # PR 號碼 (如果需要從特定 PR 開始)
 PR_NUMBER=""
 
-# 需求檔案
-REQUIREMENTS_FILE="${1:-requirements.md}"
+# 判斷輸入模式：issue ID 或檔案路徑
+if [[ "${1:-}" =~ ^[0-9]+$ ]]; then
+    # GitHub Flow: 使用 issue ID
+    ISSUE_ID="$1"
+    WORKFLOW_MODE="github"
+    REQUIREMENTS_FILE=""  # GitHub Flow 不使用本地檔案
+else
+    # Local Flow: 使用檔案
+    REQUIREMENTS_FILE="${1:-requirements.md}"
+    WORKFLOW_MODE="local"
+    ISSUE_ID=""
+fi
 
 # 需求範本檔案
 REQUIREMENTS_TEMPLATE="issues/template.md"
@@ -38,7 +48,12 @@ CURSOR_AGENT_CLI_COMMAND="cursor-agent"
 # --- 目錄與 Agent 名稱 ---
 
 # 目錄結構
-REQUIREMENTS_BASE=$(basename "${1:-requirements.md}" .md)
+if [ "$WORKFLOW_MODE" = "github" ]; then
+    REQUIREMENTS_BASE="issue-${ISSUE_ID}"
+else
+    REQUIREMENTS_BASE=$(basename "${1:-requirements.md}" .md)
+fi
+
 AI_DIR=".ai"
 AGENTS_DIR="$AI_DIR/agents"
 SESSIONS_DIR="$AI_DIR/sessions"
@@ -171,6 +186,125 @@ $content
 ================================================================================
 
 EOF
+}
+
+# --- GitHub Issue 操作函式 ---
+
+# 讀取 GitHub issue body
+# 參數：$1=issue_id
+# 返回：issue body 內容 (透過 stdout)
+get_issue_body() {
+    local issue_id=$1
+    gh issue view "$issue_id" --json body -q '.body' 2>/dev/null
+}
+
+# 讀取 GitHub issue 所有 comments
+# 參數：$1=issue_id
+# 返回：所有 comments 的內容，格式化後的文字 (透過 stdout)
+get_issue_comments() {
+    local issue_id=$1
+    gh issue view "$issue_id" --json comments -q '.comments[] | "**\(.author.login)** (\(.createdAt)):\n\(.body)\n---"' 2>/dev/null
+}
+
+# 發送 comment 到 GitHub issue
+# 參數：$1=issue_id, $2=comment_body
+post_issue_comment() {
+    local issue_id=$1
+    local comment_body=$2
+
+    # 使用臨時檔案避免 shell 轉義問題
+    local temp_comment=$(mktemp "$TMP_DIR/gh_comment.XXXXXX")
+    echo "$comment_body" > "$temp_comment"
+
+    gh issue comment "$issue_id" --body-file "$temp_comment" 2>/dev/null
+    local exit_code=$?
+
+    rm -f "$temp_comment"
+    return $exit_code
+}
+
+# 更新 GitHub issue body
+# 參數：$1=issue_id, $2=new_body
+update_issue_body() {
+    local issue_id=$1
+    local new_body=$2
+
+    # 使用臨時檔案避免 shell 轉義問題
+    local temp_body=$(mktemp "$TMP_DIR/gh_issue_body.XXXXXX")
+    echo "$new_body" > "$temp_body"
+
+    gh issue edit "$issue_id" --body-file "$temp_body" 2>/dev/null
+    local exit_code=$?
+
+    rm -f "$temp_body"
+    return $exit_code
+}
+
+# 檢查 issue body 中是否包含特定狀態標記
+# 參數：$1=issue_id, $2=status_pattern (例如 "需求分析狀態.*已確認")
+# 返回：0=包含, 1=不包含
+check_issue_status() {
+    local issue_id=$1
+    local status_pattern=$2
+
+    local body=$(get_issue_body "$issue_id")
+    if echo "$body" | grep -q "$status_pattern"; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+# --- 抽象層函數（支援 Local 和 GitHub 兩種模式）---
+
+# 取得 PM 的 allowed tools
+# 返回：allowed_tools 陣列元素 (透過 stdout，換行分隔)
+get_pm_allowed_tools() {
+    if [ "$WORKFLOW_MODE" = "github" ]; then
+        # GitHub 模式：PM 用 gh 指令操作 issue
+        cat <<EOF
+Bash(gh issue view:*)
+Bash(gh issue edit:*)
+Bash(gh issue comment:*)
+Bash(gh api:*)
+EOF
+    else
+        # Local 模式：PM 讀寫本地檔案
+        cat <<EOF
+Read($REQUIREMENTS_FILE)
+Edit($REQUIREMENTS_FILE)
+EOF
+    fi
+}
+
+# 取得 Developer 的 allowed tools
+# 返回：allowed_tools 陣列元素 (透過 stdout，換行分隔)
+get_dev_allowed_tools() {
+    # Developer 基本上兩種模式都一樣，使用預設的 DEV_ALLOWED_TOOLS
+    # 但 GitHub 模式需要額外加上 gh issue 操作權限
+    if [ "$WORKFLOW_MODE" = "github" ]; then
+        printf '%s\n' "${DEFAULT_DEV_ALLOWED_TOOLS[@]}"
+        cat <<EOF
+Bash(gh issue view:*)
+Bash(gh issue edit:*)
+Bash(gh issue comment:*)
+EOF
+    else
+        printf '%s\n' "${DEFAULT_DEV_ALLOWED_TOOLS[@]}"
+    fi
+}
+
+# 檢查需求狀態
+# 參數：$1=status_pattern (例如 "需求分析狀態.*已確認")
+# 返回：0=包含, 1=不包含
+check_requirements_status() {
+    local status_pattern=$1
+
+    if [ "$WORKFLOW_MODE" = "github" ]; then
+        check_issue_status "$ISSUE_ID" "$status_pattern"
+    else
+        grep -q "$status_pattern" "$REQUIREMENTS_FILE" 2>/dev/null
+    fi
 }
 
 # --- AI Agent 執行函式 ---
@@ -968,9 +1102,22 @@ check_prerequisites() {
         exit 1
     fi
 
-    if [ ! -f "$REQUIREMENTS_FILE" ]; then
-        log_error "找不到需求文件: $REQUIREMENTS_FILE"
-        exit 1
+    # Local Flow: 檢查 requirements 檔案
+    if [ "$WORKFLOW_MODE" = "local" ]; then
+        if [ ! -f "$REQUIREMENTS_FILE" ]; then
+            log_error "找不到需求文件: $REQUIREMENTS_FILE"
+            exit 1
+        fi
+    fi
+
+    # GitHub Flow: 檢查 issue 是否存在
+    if [ "$WORKFLOW_MODE" = "github" ]; then
+        if ! gh issue view "$ISSUE_ID" &> /dev/null; then
+            log_error "找不到 GitHub Issue #$ISSUE_ID"
+            log_error "請確認 issue ID 是否正確，且你有權限存取該 repository"
+            exit 1
+        fi
+        log_info "✓ 找到 GitHub Issue #$ISSUE_ID"
     fi
 
     if [ ! -f "$REQUIREMENTS_TEMPLATE" ]; then
@@ -1009,19 +1156,26 @@ check_pr_review_passed() {
 detect_progress() {
     # 檢查當前 branch 是否與任務名稱一致
     local current_branch=$(git branch --show-current)
-    local expected_branch=$(basename "$REQUIREMENTS_FILE" .md | sed 's/^[0-9]\{8\}-//')
+    local expected_branch
+    if [ "$WORKFLOW_MODE" = "github" ]; then
+        expected_branch="issue-${ISSUE_ID}"
+    else
+        expected_branch=$(basename "$REQUIREMENTS_FILE" .md | sed 's/^[0-9]\{8\}-//')
+    fi
     local main_branch=$(git remote show origin | grep 'HEAD branch' | cut -d' ' -f5 2>/dev/null || echo "main")
 
     if [ "$current_branch" != "$main_branch" ] && [ "$current_branch" != "$expected_branch" ]; then
         echo ""
         log_error "Branch 不一致！"
         log_error "當前 branch: $current_branch"
-        log_error "預期 branch: $expected_branch (基於 $REQUIREMENTS_FILE)"
+        if [ "$WORKFLOW_MODE" = "github" ]; then
+            log_error "預期 branch: $expected_branch (基於 Issue #$ISSUE_ID)"
+        else
+            log_error "預期 branch: $expected_branch (基於 $REQUIREMENTS_FILE)"
+        fi
         log_error "或主 branch: $main_branch"
         echo ""
-        log_warn "請切換到正確的 branch："
-        echo "  - 如果要繼續處理 $current_branch，請使用對應的 requirements 檔案"
-        echo "  - 如果要處理新任務，請先切回 $main_branch: git checkout $main_branch"
+        log_warn "請切換到正確的 branch 或檢查輸入參數"
         exit 1
     fi
 
@@ -1067,12 +1221,33 @@ detect_progress() {
     fi
 
     # Phase 3/4: 檢查開發是否已完成
-    if [ -f "$REQUIREMENTS_FILE" ] && grep -q "實作分析狀態.*已確認" "$REQUIREMENTS_FILE"; then
+    if check_requirements_status "實作分析狀態.*已確認"; then
         if [ "$DEV_AGENT_TOOL" = "claude" ]; then
             local main_branch=$(git remote show origin | grep 'HEAD branch' | cut -d' ' -f5)
             local commit_count=$(git log --oneline origin/$main_branch..HEAD 2>/dev/null | wc -l)
-            local dev_allowed_tools=("${DEFAULT_DEV_ALLOWED_TOOLS[@]}")
-            local check_prompt="請檢查目前的開發狀態：\n\n1. 查看當前 branch 的 commits (有 $commit_count 個 commits)\n2. 查看未 commit 的變更 (git status, git diff)\n3. 對照 $REQUIREMENTS_FILE 的實作分段，確認是否都已完成\n\n請用繁體中文回答：開發是否已完成？\n- 如果已完成，回答「已完成」\n- 如果還在進行中，回答「進行中」並簡述還需要做什麼"
+            # 取得 dev_allowed_tools
+            local dev_allowed_tools=()
+            while IFS= read -r tool; do
+                [ -n "$tool" ] && dev_allowed_tools+=("$tool")
+            done < <(get_dev_allowed_tools)
+
+            # 構建檢查 prompt
+            local requirements_ref
+            if [ "$WORKFLOW_MODE" = "github" ]; then
+                requirements_ref="用 \`gh issue view $ISSUE_ID\` 查看 Issue 中的實作分段"
+            else
+                requirements_ref="對照 $REQUIREMENTS_FILE 的實作分段"
+            fi
+
+            local check_prompt="請檢查目前的開發狀態：
+
+1. 查看當前 branch 的 commits (有 $commit_count 個 commits)
+2. 查看未 commit 的變更 (git status, git diff)
+3. ${requirements_ref}，確認是否都已完成
+
+請用繁體中文回答：開發是否已完成？
+- 如果已完成，回答「已完成」
+- 如果還在進行中，回答「進行中」並簡述還需要做什麼"
 
             log_info "讓 agent 檢查開發進度..."
             while true; do
@@ -1109,7 +1284,7 @@ detect_progress() {
     fi
 
     # Phase 2: 檢查需求分析是否完成
-    if [ -f "$REQUIREMENTS_FILE" ] && grep -q "需求分析狀態.*已確認" "$REQUIREMENTS_FILE"; then
+    if check_requirements_status "需求分析狀態.*已確認"; then
         log_info "→ 從 Phase 2 (實作分析) 開始"
         echo "phase2"
         return
@@ -1129,6 +1304,7 @@ phase1_requirements_clarification() {
     echo ""
     log_info "=== Phase 1: 需求分析循環 ==="
 
+    # 初始化 PM session
     local session_pm=""
     if [ "$PM_AGENT_TOOL" = "claude" ]; then
         session_pm=$(init_session "$PM_AGENT")
@@ -1138,13 +1314,19 @@ phase1_requirements_clarification() {
         if [ $? -ne 0 ]; then log_error "無法初始化 $PM_AGENT session"; exit 1; fi
     fi
 
-    if [ ! -f "${REQUIREMENTS_FILE}.backup" ]; then
+    # Local Flow: 備份原始需求檔案
+    if [ "$WORKFLOW_MODE" = "local" ] && [ ! -f "${REQUIREMENTS_FILE}.backup" ]; then
         cp "$REQUIREMENTS_FILE" "${REQUIREMENTS_FILE}.backup"
         log_info "已備份原始需求到 ${REQUIREMENTS_FILE}.backup"
     fi
 
+    # 取得 allowed_tools（根據模式不同）
+    local pm_allowed_tools=()
+    while IFS= read -r tool; do
+        [ -n "$tool" ] && pm_allowed_tools+=("$tool")
+    done < <(get_pm_allowed_tools)
+
     local iteration=0
-    local pm_allowed_tools=("Read($REQUIREMENTS_FILE)" "Edit($REQUIREMENTS_FILE)")
     local prompt=""
     local needs_new_prompt=true
 
@@ -1153,18 +1335,61 @@ phase1_requirements_clarification() {
         echo ""
         log_info "--- 需求分析 Round $iteration ---"
 
+        # 構建 prompt（根據模式和迭代次數）
         if [ "$needs_new_prompt" = true ]; then
-            if [ $iteration -eq 1 ]; then
-            prompt="Use the $PM_AGENT subagent to analyze $REQUIREMENTS_FILE.\n\n請仔細閱讀需求文件，找出所有不清楚、模糊、可能讓開發者自己腦補的地方。\n\n**如果有需求問題需要澄清：**\n直接編輯 $REQUIREMENTS_FILE，在你覺得需要澄清的地方插入問題（按照 $PM_AGENT agent 定義的格式）\n\n**如果需求已經很清楚：**\n直接編輯 $REQUIREMENTS_FILE，將「需求分析狀態」改成「已確認」：\n\
-> 需求分析狀態：已確認\
+            if [ "$WORKFLOW_MODE" = "github" ]; then
+                # GitHub Flow prompt
+                if [ $iteration -eq 1 ]; then
+                    prompt="Use the $PM_AGENT subagent to analyze GitHub Issue #$ISSUE_ID.
+
+請用 \`gh issue view $ISSUE_ID\` 讀取 Issue 內容，仔細分析需求，找出所有不清楚、模糊、可能讓開發者自己腦補的地方。
+
+**如果有需求問題需要澄清：**
+使用 \`gh issue comment $ISSUE_ID --body \"你的問題\"\` 在 Issue 中提問（按照 $PM_AGENT agent 定義的格式）
+
+**如果需求已經很清楚：**
+使用 \`gh issue edit $ISSUE_ID\` 在 Issue body 最後加上：
+
+---
+## 需求分析（by $PM_AGENT）
+需求已確認，可以進入實作分析階段。
+
+> 需求分析狀態：已確認
 "
+                else
+                    prompt="Use the $PM_AGENT subagent. 請用 \`gh issue view $ISSUE_ID\` 檢視 Issue 的最新內容和討論，繼續分析。
+
+如果還有不清楚的地方，用 \`gh issue comment\` 繼續提問。
+如果所有問題都解決了，用 \`gh issue edit $ISSUE_ID\` 更新 Issue body，標記「需求分析狀態：已確認」。"
+                fi
             else
-                prompt="Use the $PM_AGENT subagent. 請檢視 $REQUIREMENTS_FILE 中我的回覆，繼續分析。\n如果還有不清楚的地方，繼續在檔案中提出問題。\n如果所有問題都解決了，將「需求分析狀態」改成「已確認」：\n\
-> 需求分析狀態：已確認\
+                # Local Flow prompt
+                if [ $iteration -eq 1 ]; then
+                    prompt="Use the $PM_AGENT subagent to analyze $REQUIREMENTS_FILE.
+
+請仔細閱讀需求文件，找出所有不清楚、模糊、可能讓開發者自己腦補的地方。
+
+**如果有需求問題需要澄清：**
+直接編輯 $REQUIREMENTS_FILE，在你覺得需要澄清的地方插入問題（按照 $PM_AGENT agent 定義的格式）
+
+**如果需求已經很清楚：**
+直接編輯 $REQUIREMENTS_FILE，將「需求分析狀態」改成「已確認」：
+
+> 需求分析狀態：已確認
 "
+                else
+                    prompt="Use the $PM_AGENT subagent. 請檢視 $REQUIREMENTS_FILE 中我的回覆，繼續分析。
+
+如果還有不清楚的地方，繼續在檔案中提出問題。
+如果所有問題都解決了，將「需求分析狀態」改成「已確認」：
+
+> 需求分析狀態：已確認
+"
+                fi
             fi
         fi
 
+        # 執行 PM agent（共用邏輯）
         log_info "PM agent $PM_AGENT 正在分析需求..."
         if [ "$PM_AGENT_TOOL" = "gemini" ]; then
             gemini_execute "$prompt" "auto_edit" "$PM_AGENT" "${pm_allowed_tools[@]}"
@@ -1185,23 +1410,31 @@ phase1_requirements_clarification() {
             exit 1
         fi
 
-        if grep -q "需求分析狀態.*已確認" "$REQUIREMENTS_FILE"; then
+        # 檢查是否完成（使用抽象層函數）
+        if check_requirements_status "需求分析狀態.*已確認"; then
             log_info "✓ 需求分析完成！"
             break
         fi
 
+        # 等待人工處理（根據模式不同）
         echo ""
-        log_warn "請編輯 $REQUIREMENTS_FILE 回覆 agent 的問題"
-        log_warn "按 Enter 開啟編輯器..."
-        read
-        ${EDITOR:-vim} "$REQUIREMENTS_FILE"
-        
-        # 編輯器關閉後立即檢查狀態
-        if grep -q "需求分析狀態.*已確認" "$REQUIREMENTS_FILE"; then
+        if [ "$WORKFLOW_MODE" = "github" ]; then
+            log_warn "請到 GitHub Issue #$ISSUE_ID 查看並回覆 $PM_AGENT 的問題"
+            log_warn "回覆完成後，按 Enter 繼續..."
+            read
+        else
+            log_warn "請編輯 $REQUIREMENTS_FILE 回覆 agent 的問題"
+            log_warn "按 Enter 開啟編輯器..."
+            read
+            ${EDITOR:-vim} "$REQUIREMENTS_FILE"
+        fi
+
+        # 人工處理後再次檢查狀態（可能人工直接標記為已確認）
+        if check_requirements_status "需求分析狀態.*已確認"; then
             log_info "✓ 需求分析完成！"
             break
         fi
-        
+
         log_info "繼續下一輪分析..."
     done
 }
@@ -1212,35 +1445,50 @@ phase2_implementation_analysis() {
     echo ""
     log_info "=== Phase 2: 實作分析循環 ==="
 
-    # 檢查需求文件中是否有「開發指南」區塊
-    if ! grep -qi "##.*開發指南\|##.*development.*guide" "$REQUIREMENTS_FILE"; then
-        echo ""
-        log_error "需求文件中缺少「開發指南」區塊"
-        log_warn "請參考 $REQUIREMENTS_TEMPLATE 在 $REQUIREMENTS_FILE 中補上「開發指南」區塊"
-        log_warn "開發指南應包含專案的技術架構、開發規範、測試要求等重要資訊"
-        echo ""
-        log_warn "按 Enter 開啟編輯器補充開發指南..."
-        read
-        ${EDITOR:-vim} "$REQUIREMENTS_FILE"
-
-        # 再次檢查
+    # Local Flow: 檢查需求文件中是否有「開發指南」區塊
+    # GitHub Flow: 開發指南應該在 issue body 中
+    if [ "$WORKFLOW_MODE" = "local" ]; then
         if ! grep -qi "##.*開發指南\|##.*development.*guide" "$REQUIREMENTS_FILE"; then
-            log_error "仍未找到「開發指南」區塊，無法繼續實作分析"
-            exit 1
+            echo ""
+            log_error "需求文件中缺少「開發指南」區塊"
+            log_warn "請參考 $REQUIREMENTS_TEMPLATE 在 $REQUIREMENTS_FILE 中補上「開發指南」區塊"
+            log_warn "開發指南應包含專案的技術架構、開發規範、測試要求等重要資訊"
+            echo ""
+            log_warn "按 Enter 開啟編輯器補充開發指南..."
+            read
+            ${EDITOR:-vim} "$REQUIREMENTS_FILE"
+
+            # 再次檢查
+            if ! grep -qi "##.*開發指南\|##.*development.*guide" "$REQUIREMENTS_FILE"; then
+                log_error "仍未找到「開發指南」區塊，無法繼續實作分析"
+                exit 1
+            fi
+            log_info "✓ 已補充開發指南"
         fi
-        log_info "✓ 已補充開發指南"
     fi
 
     if [ "$DEV_AGENT_TOOL" != "claude" ]; then
-        log_warn "DEV Agent 不是 claude，跳過自動實作分析。"
-        log_warn "請手動完成 $REQUIREMENTS_FILE 中的實作分析，並將「實作分析狀態」改為「已確認」。"
+        if [ "$WORKFLOW_MODE" = "github" ]; then
+            log_warn "DEV Agent 不是 claude，跳過自動實作分析。"
+            log_warn "請手動完成 Issue #$ISSUE_ID 中的實作分析，並在 issue body 標記「實作分析狀態：已確認」。"
+        else
+            log_warn "DEV Agent 不是 claude，跳過自動實作分析。"
+            log_warn "請手動完成 $REQUIREMENTS_FILE 中的實作分析，並將「實作分析狀態」改為「已確認」。"
+        fi
         read -p "完成後請按 Enter..."
         return
     fi
 
+    # 初始化 Developer session
     local session_dev=$(init_session "$DEV_AGENT")
+
+    # 取得 allowed_tools（根據模式不同）
+    local dev_allowed_tools=()
+    while IFS= read -r tool; do
+        [ -n "$tool" ] && dev_allowed_tools+=("$tool")
+    done < <(get_dev_allowed_tools)
+
     local iteration=0
-    local dev_allowed_tools=("${DEFAULT_DEV_ALLOWED_TOOLS[@]}")
     local prompt=""
     local needs_new_prompt=true
 
@@ -1249,14 +1497,54 @@ phase2_implementation_analysis() {
         echo ""
         log_info "--- 實作分析 Round $iteration ---"
 
+        # 構建 prompt（根據模式和迭代次數）
         if [ "$needs_new_prompt" = true ]; then
-            if [ $iteration -eq 1 ]; then
-            prompt="請根據 $REQUIREMENTS_FILE 和範本格式，在 $REQUIREMENTS_FILE 中加入詳細的實作分析。如果有問題需要討論，在檔案中提出（用你覺得清楚的方式寫就好）\n\n**請參考範本格式 $REQUIREMENTS_TEMPLATE**\n**重要：請用繁體中文回應。**"
+            if [ "$WORKFLOW_MODE" = "github" ]; then
+                # GitHub Flow prompt
+                if [ $iteration -eq 1 ]; then
+                    prompt="Use the $DEV_AGENT subagent to create implementation analysis for GitHub Issue #$ISSUE_ID.
+
+請用 \`gh issue view $ISSUE_ID\` 讀取 Issue 內容（包含需求和 $PM_AGENT 的分析），根據範本格式撰寫詳細的實作分析。
+
+**請參考範本格式 $REQUIREMENTS_TEMPLATE**
+
+如果有問題需要討論，用 \`gh issue comment $ISSUE_ID\` 提出。
+
+**完成實作分析後：**
+使用 \`gh issue edit $ISSUE_ID\` 在 Issue body 最後加上你的實作分析區塊：
+
+---
+## 實作分析（by $DEV_AGENT）
+[你的實作分析內容]
+
+> 實作分析狀態：已確認
+
+**重要：請用繁體中文回應。**"
+                else
+                    prompt="Use the $DEV_AGENT subagent. 請用 \`gh issue view $ISSUE_ID\` 檢視我的回饋，繼續完善實作分析。
+
+如果還有不清楚的地方，用 \`gh issue comment\` 繼續提問或討論。
+完成後用 \`gh issue edit $ISSUE_ID\` 更新 issue body，標記「實作分析狀態：已確認」。
+
+**不要自己修改實作分析狀態，等我確認！**"
+                fi
             else
-                prompt="請檢視 $REQUIREMENTS_FILE 中我的回饋，繼續完善實作分析。\n如果還有不清楚的地方，繼續在檔案中提出問題或討論。\n**不要自己修改實作分析狀態，等我確認！**"
+                # Local Flow prompt
+                if [ $iteration -eq 1 ]; then
+                    prompt="請根據 $REQUIREMENTS_FILE 和範本格式，在 $REQUIREMENTS_FILE 中加入詳細的實作分析。如果有問題需要討論，在檔案中提出（用你覺得清楚的方式寫就好）
+
+**請參考範本格式 $REQUIREMENTS_TEMPLATE**
+**重要：請用繁體中文回應。**"
+                else
+                    prompt="請檢視 $REQUIREMENTS_FILE 中我的回饋，繼續完善實作分析。
+
+如果還有不清楚的地方，繼續在檔案中提出問題或討論。
+**不要自己修改實作分析狀態，等我確認！**"
+                fi
             fi
         fi
 
+        # 執行 Developer agent
         log_info "Developer agent $DEV_AGENT 正在撰寫實作分析..."
         if execute_with_retry "$session_dev" prompt "acceptEdits" "$DEV_AGENT" dev_allowed_tools needs_new_prompt; then
             needs_new_prompt=true
@@ -1266,23 +1554,31 @@ phase2_implementation_analysis() {
         # 更新 session_dev（可能已被自動恢復）
         session_dev=$(cat "$SESSIONS_DIR/${DEV_AGENT}_session_id" 2>/dev/null || echo "$session_dev")
 
-        if grep -q "實作分析狀態.*已確認" "$REQUIREMENTS_FILE"; then
+        # 檢查是否完成（使用抽象層函數）
+        if check_requirements_status "實作分析狀態.*已確認"; then
             log_info "✓ 實作分析完成！"
             break
         fi
 
+        # 等待人工處理（根據模式不同）
         echo ""
-        log_warn "請編輯 $REQUIREMENTS_FILE 檢視實作分析並提供回饋"
-        log_warn "按 Enter 開啟編輯器..."
-        read
-        ${EDITOR:-vim} "$REQUIREMENTS_FILE"
-        
-        # 編輯器關閉後立即檢查狀態
-        if grep -q "實作分析狀態.*已確認" "$REQUIREMENTS_FILE"; then
+        if [ "$WORKFLOW_MODE" = "github" ]; then
+            log_warn "請到 GitHub Issue #$ISSUE_ID 檢視實作分析並提供回饋"
+            log_warn "回覆完成後，按 Enter 繼續..."
+            read
+        else
+            log_warn "請編輯 $REQUIREMENTS_FILE 檢視實作分析並提供回饋"
+            log_warn "按 Enter 開啟編輯器..."
+            read
+            ${EDITOR:-vim} "$REQUIREMENTS_FILE"
+        fi
+
+        # 人工處理後再次檢查狀態（可能人工直接標記為已確認）
+        if check_requirements_status "實作分析狀態.*已確認"; then
             log_info "✓ 實作分析完成！"
             break
         fi
-        
+
         log_info "繼續下一輪分析..."
     done
 }
@@ -1300,9 +1596,20 @@ phase3_development() {
     fi
 
     local session_dev=$(init_session "$DEV_AGENT")
-    local dev_allowed_tools=("${DEFAULT_DEV_ALLOWED_TOOLS[@]}")
 
-    local branch_name=$(basename "$REQUIREMENTS_FILE" .md | sed 's/^[0-9]\{8\}-//')
+    # 取得 allowed_tools（根據模式不同）
+    local dev_allowed_tools=()
+    while IFS= read -r tool; do
+        [ -n "$tool" ] && dev_allowed_tools+=("$tool")
+    done < <(get_dev_allowed_tools)
+
+    # 生成 branch name（根據模式不同）
+    local branch_name
+    if [ "$WORKFLOW_MODE" = "github" ]; then
+        branch_name="issue-${ISSUE_ID}"
+    else
+        branch_name=$(basename "$REQUIREMENTS_FILE" .md | sed 's/^[0-9]\{8\}-//')
+    fi
     log_info "分支名稱: $branch_name"
 
     if git show-ref --verify --quiet "refs/heads/$branch_name"; then
@@ -1313,7 +1620,23 @@ phase3_development() {
         git checkout -b "$branch_name"
     fi
 
-    local prompt="需求已經確認清楚，請根據 $REQUIREMENTS_FILE 進行開發。\n\n**重要：請用繁體中文回應。**\n\n請執行以下步驟：\n1. 按照開發任務拆解的順序進行開發及測試\n2. 每個步驟做完都要在文件中打勾\n3. 全部完成後 push 到 remote: git push -u origin $branch_name"
+    # 構建 prompt
+    local requirements_source
+    if [ "$WORKFLOW_MODE" = "github" ]; then
+        requirements_source="用 \`gh issue view $ISSUE_ID\` 查看 Issue 中的需求和實作分析"
+    else
+        requirements_source="根據 $REQUIREMENTS_FILE"
+    fi
+
+    local prompt="需求已經確認清楚，請${requirements_source}進行開發。
+
+**重要：請用繁體中文回應。**
+
+請執行以下步驟：
+1. 按照開發任務拆解的順序進行開發及測試
+2. 完成後進行 commit
+
+**注意：先不要 push 到 remote，等 code review 完成後再 push！**"
 
     log_info "Developer agent $DEV_AGENT 開始開發..."
     while true; do
@@ -1341,7 +1664,14 @@ phase4_pre_pr_review() {
         if [ $? -ne 0 ]; then log_error "無法初始化 $REVIEW_AGENT session"; exit 1; fi
     fi
 
-    local branch_name=$(basename "$REQUIREMENTS_FILE" .md | sed 's/^[0-9]\{8\}-//')
+    # 生成 branch name（根據模式不同）
+    local branch_name
+    if [ "$WORKFLOW_MODE" = "github" ]; then
+        branch_name="issue-${ISSUE_ID}"
+    else
+        branch_name=$(basename "$REQUIREMENTS_FILE" .md | sed 's/^[0-9]\{8\}-//')
+    fi
+
     local main_branch=$(git remote show origin | grep 'HEAD branch' | cut -d' ' -f5 2>/dev/null || echo "main")
     local iteration=0
 
@@ -1369,15 +1699,24 @@ phase4_pre_pr_review() {
 
         # 2. Reviewer 審查
         log_info "Reviewer agent $REVIEW_AGENT 正在審查程式碼..."
-        local requirements=$(cat "$REQUIREMENTS_FILE")
+
+        # 構建需求來源描述
+        local requirements_section
+        if [ "$WORKFLOW_MODE" = "github" ]; then
+            requirements_section="請用 \`gh issue view $ISSUE_ID\` 查看 Issue 內容（包含需求與實作分析）。"
+        else
+            local requirements=$(cat "$REQUIREMENTS_FILE")
+            requirements_section="---
+$requirements
+---"
+        fi
+
         local reviewer_prompt="你是資深軟體工程師 $REVIEW_AGENT，正在進行程式碼審查 (Code Review)。
 
 請嚴格審查這個分支 '$branch_name' 上的程式碼變更。
 
 **原始需求與實作分析:**
----
-$requirements
----
+$requirements_section
 
 **程式碼變更 (diff):**
 ---
@@ -1438,14 +1777,22 @@ $review_feedback"
 
         # 4. Developer 處理回饋
         log_info "Developer agent $DEV_AGENT 正在根據回饋修改程式碼..."
-        local dev_allowed_tools=("${DEFAULT_DEV_ALLOWED_TOOLS[@]}")
+
+        # 取得 dev_allowed_tools
+        local dev_allowed_tools=()
+        while IFS= read -r tool; do
+            [ -n "$tool" ] && dev_allowed_tools+=("$tool")
+        done < <(get_dev_allowed_tools)
+
         local fix_prompt="你的程式碼已被審查，這是來自 $REVIEW_AGENT 的回饋：
 
 ---
 $review_feedback
 ---
 
-請根據回饋修改程式碼，完成後 commit 並 push 到 '$branch_name' 分支。
+請根據回饋修改程式碼，完成後 commit。
+**注意：先不要 push，等所有 review 通過後再 push！**
+
 完成後，請僅回覆 'Done'."
 
         while true; do
@@ -1477,14 +1824,34 @@ phase5_create_pr() {
         exit 1
     fi
 
-    local branch_name=$(basename "$REQUIREMENTS_FILE" .md | sed 's/^[0-9]\{8\}-//')
-    local pr_title=$(head -n 1 "$REQUIREMENTS_FILE" | sed 's/^#\+//;s/^[ \t]*//;s/[ \t]*$//')
+    # 生成 branch name（根據模式不同）
+    local branch_name
+    if [ "$WORKFLOW_MODE" = "github" ]; then
+        branch_name="issue-${ISSUE_ID}"
+    else
+        branch_name=$(basename "$REQUIREMENTS_FILE" .md | sed 's/^[0-9]\{8\}-//')
+    fi
+
+    # 取得 PR title（根據模式不同）
+    local pr_title
+    if [ "$WORKFLOW_MODE" = "github" ]; then
+        pr_title=$(gh issue view "$ISSUE_ID" --json title -q '.title')
+    else
+        pr_title=$(head -n 1 "$REQUIREMENTS_FILE" | sed 's/^#\+//;s/^[ \t]*//;s/[ \t]*$//')
+    fi
     local main_branch=$(git symbolic-ref refs/remotes/origin/HEAD | sed 's@^refs/remotes/origin/@@')
     local pr_body=$(git log --oneline origin/$main_branch..HEAD)
 
     log_info "使用 gh 建立 PR..."
     local pr_url
-    if ! pr_url=$(gh pr create --title "$pr_title" --body-file <(echo -e "$pr_body") 2>&1); then
+    local pr_create_cmd="gh pr create --title \"$pr_title\" --body-file <(echo -e \"$pr_body\")"
+
+    # GitHub Flow: 關聯 issue
+    if [ "$WORKFLOW_MODE" = "github" ]; then
+        pr_create_cmd+=" --body \"Closes #${ISSUE_ID}\n\n$pr_body\""
+    fi
+
+    if ! pr_url=$(eval "$pr_create_cmd" 2>&1); then
         log_error "gh pr create 失敗。"
         log_error "輸出: $pr_url"
         exit 1
