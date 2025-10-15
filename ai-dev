@@ -1481,10 +1481,6 @@ phase5_create_pr() {
     local pr_title=$(head -n 1 "$REQUIREMENTS_FILE" | sed 's/^#\+//;s/^[ \t]*//;s/[ \t]*$//')
     local main_branch=$(git symbolic-ref refs/remotes/origin/HEAD | sed 's@^refs/remotes/origin/@@')
     local pr_body=$(git log --oneline origin/$main_branch..HEAD)
-    pr_body+="
-
----
-*This PR was automatically generated after passing a pre-review by the AI agent $REVIEW_AGENT.*"
 
     log_info "使用 gh 建立 PR..."
     local pr_url
