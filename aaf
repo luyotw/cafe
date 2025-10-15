@@ -30,14 +30,14 @@ REQUIREMENTS_TEMPLATE="issues/template.md"
 MAX_REVIEW_ITERATIONS=5
 
 # AI Agent 執行超時設定（秒）
-AGENT_EXECUTION_TIMEOUT=600  # 10分鐘
+AGENT_EXECUTION_TIMEOUT=1800  # 30分鐘
 
 # AI Agent CLI 設定
 # 為每個 agent 指定要使用的工具。支援: "claude", "gemini", "cursor-agent"
 # 注意: 目前只有 DEV_AGENT 仍建議使用 "claude"。
 PM_AGENT_TOOL="claude"
 DEV_AGENT_TOOL="claude"
-REVIEW_AGENT_TOOL="claude"
+REVIEW_AGENT_TOOL="gemini"
 
 # CLI 指令名稱
 CLAUDE_CLI_COMMAND="claude"
@@ -847,13 +847,14 @@ handle_permissions() {
             # 顯示所有 tool_input 的內容
             echo "$denial" | jq -r '.tool_input | to_entries[] | "  \(.key): \(.value)"' 2>&1 | grep -v '^' >&2
             echo "" >&2
-        done < <(cat "$ISSUE_DIR/last_raw_output.log" | jq -c '.permission_denials[]' 2>/dev/null)
+        done < <(cat "$LAST_RAW_OUTPUT" | jq -c '.permission_denials[]' 2>/dev/null)
 
         echo "" >&2
-        log_warn "是否授權這些操作？(y/n)"
-        echo "  y: 同意並加入 allowedTools"
-        echo "  n: 不同意，手動輸入回覆"
-        read -p "請選擇: " choice
+        log_warn "請選擇如何處理："
+        echo "  y: 同意並授權這些操作，讓 agent 繼續執行"
+        echo "  t: 與 agent 對話討論"
+        echo "  s: 跳過這個階段，直接進入下一階段"
+        read -p "請選擇 (y/t/s): " choice
 
         case $choice in
             y)
@@ -869,16 +870,20 @@ handle_permissions() {
                         local cmd_prefix=$(echo "$command" | awk '{print $1" "$2}')
                         allowed_tools+=("$tool_name($cmd_prefix)")
                     fi
-                done < <(cat "$ISSUE_DIR/last_raw_output.log" | jq -c '.permission_denials[]')
+                done < <(cat "$LAST_RAW_OUTPUT" | jq -c '.permission_denials[]')
 
                 log_info "已加入授權，重新執行..."
                 # 返回 allowed_tools 陣列
                 echo "${allowed_tools[@]}"
                 return 0
                 ;;
-            n)
-                # 進入例外處理
+            t)
+                # 進入對話模式
                 return 1
+                ;;
+            s)
+                # 跳過此階段
+                return 2
                 ;;
             *)
                 log_error "無效選項，請重新選擇"
@@ -889,6 +894,7 @@ handle_permissions() {
 }
 
 # 例外處理流程
+# 返回：0=任務完成, 1=需要繼續執行, 2=跳過階段
 handle_exception() {
     local session_id=$1
     local permission_mode=$2
@@ -925,14 +931,20 @@ handle_exception() {
         if ! claude_execute "$session_id" "$user_input" "$permission_mode" "$agent_name" "${allowed_tools[@]}"; then
             # 遇到權限問題，詢問是否授權
             local new_tools_str=$(handle_permissions "$session_id" "$agent_name" "${allowed_tools[@]}")
-            if [ $? -eq 0 ]; then
+            local permission_result=$?
+
+            if [ $permission_result -eq 0 ]; then
                 # 授權成功，更新 allowed_tools
                 read -ra allowed_tools <<< "$new_tools_str"
                 log_info "已授權，請繼續對話"
                 continue
+            elif [ $permission_result -eq 2 ]; then
+                # 使用者選擇跳過階段
+                log_info "結束對話，跳過此階段"
+                return 2
             else
-                # 使用者選擇不授權，繼續對話
-                log_warn "未授權權限，繼續對話"
+                # 使用者選擇進入對話模式，繼續對話
+                log_info "繼續對話"
             fi
         fi
 
@@ -941,10 +953,53 @@ handle_exception() {
         read -p "請選擇: " continue_chat
 
         if [ "$continue_chat" != "y" ]; then
-            log_info "結束例外處理，返回原流程"
-            return 0
+            # 對話結束，詢問任務是否完成
+            echo "" >&2
+            log_warn "任務是否已完成？"
+            echo "  y: 任務已完成，進入下一階段"
+            echo "  n: 任務未完成，繼續執行"
+            read -p "請選擇 (y/n): " task_done
+
+            if [ "$task_done" = "y" ]; then
+                log_info "任務已完成，進入下一階段"
+                return 0
+            else
+                log_info "任務未完成，繼續執行"
+                return 1
+            fi
         fi
     done
+}
+
+# 處理 handle_exception 的返回值
+# 參數：exception_result, prompt_var_name, needs_new_prompt_var_name
+# 返回：0=完成或跳過, 1=需要重試
+process_exception_result() {
+    local exception_result=$1
+    local prompt_var_name=$2
+    local needs_new_prompt_var_name=${3:-""}
+
+    local -n prompt_ref=$prompt_var_name
+    if [ -n "$needs_new_prompt_var_name" ]; then
+        local -n needs_new_prompt_ref=$needs_new_prompt_var_name
+    fi
+
+    if [ $exception_result -eq 0 ]; then
+        # 任務已完成
+        log_info "任務已完成，進入下一階段"
+        return 0
+    elif [ $exception_result -eq 2 ]; then
+        # 跳過階段
+        log_warn "使用者選擇跳過此階段"
+        return 0
+    else
+        # 需要繼續執行
+        prompt_ref="請繼續執行原本的任務。"
+        if [ -n "$needs_new_prompt_var_name" ]; then
+            needs_new_prompt_ref=false
+        fi
+        return 1  # 需要重試
+    fi
 }
 
 # 執行 claude 並處理權限/例外
@@ -974,37 +1029,35 @@ execute_with_retry() {
     elif [ $exec_result -eq 2 ]; then
         # 有錯誤（如 Session limit），直接進入例外處理
         log_warn "Agent 執行遇到錯誤: $exec_result"
-        if ! handle_exception "$session_id" "$permission_mode" "$agent_name" "${allowed_tools_ref[@]}"; then
-            log_error "例外處理失敗"
-            exit 1
-        fi
-        prompt_ref="請繼續執行原本的任務。"
-        if [ -n "$needs_new_prompt_var_name" ]; then
-            needs_new_prompt_ref=false
-        fi
-        return 1  # 需要重試
+        local exception_result
+        handle_exception "$session_id" "$permission_mode" "$agent_name" "${allowed_tools_ref[@]}"
+        exception_result=$?
+        process_exception_result $exception_result "$prompt_var_name" "$needs_new_prompt_var_name"
+        return $?
     else
         # 有權限問題（返回碼 1）
         local new_tools_str=$(handle_permissions "$session_id" "$agent_name" "${allowed_tools_ref[@]}")
-        if [ $? -eq 0 ]; then
-            # 將返回的字串轉換為陣列
+        local permission_result=$?
+
+        if [ $permission_result -eq 0 ]; then
+            # 授權成功，將返回的字串轉換為陣列
             read -ra allowed_tools_ref <<< "$new_tools_str"
             prompt_ref="我已授權相關操作，請繼續執行原本的任務。"
             if [ -n "$needs_new_prompt_var_name" ]; then
                 needs_new_prompt_ref=false
             fi
             return 1  # 需要重試
+        elif [ $permission_result -eq 2 ]; then
+            # 使用者選擇跳過階段
+            log_warn "使用者選擇跳過此階段"
+            return 0  # 視為成功，跳出當前循環
         else
-            # 進入例外處理
-            if ! handle_exception "$session_id" "$permission_mode" "$agent_name" "${allowed_tools_ref[@]}"; then
-                log_error "例外處理失敗"
-                exit 1
-            fi
-            prompt_ref="請繼續執行原本的任務。"
-            if [ -n "$needs_new_prompt_var_name" ]; then
-                needs_new_prompt_ref=false
-            fi
-            return 1  # 需要重試
+            # 進入對話模式
+            local exception_result
+            handle_exception "$session_id" "$permission_mode" "$agent_name" "${allowed_tools_ref[@]}"
+            exception_result=$?
+            process_exception_result $exception_result "$prompt_var_name" "$needs_new_prompt_var_name"
+            return $?
         fi
     fi
 }
@@ -1038,7 +1091,12 @@ init_session() {
         return 1
     fi
 
-    cp "$temp_output" "$ISSUE_DIR/last_raw_output.log"
+    # 保存為帶時間戳的檔案
+    local timestamp=$(date +%Y%m%d_%H%M%S)
+    local raw_log="$ISSUE_DIR/${timestamp}_claude_${agent_name}_init_raw.log"
+    cp "$temp_output" "$raw_log"
+    export LAST_RAW_OUTPUT="$raw_log"
+
     local json_result=$(tac "$temp_output" | awk '/{/,0' | tac)
     rm -f "$temp_output"
 
@@ -1253,10 +1311,19 @@ detect_progress() {
             while true; do
                 if ! claude_execute "$session_dev" "$check_prompt" "acceptEdits" "$DEV_AGENT" "${dev_allowed_tools[@]}"; then
                     local new_tools=$(handle_permissions "$session_dev" "$DEV_AGENT" "${dev_allowed_tools[@]}")
-                    if [ $? -eq 0 ]; then
+                    local permission_result=$?
+
+                    if [ $permission_result -eq 0 ]; then
+                        # 授權成功
                         dev_allowed_tools=($new_tools)
                         continue
+                    elif [ $permission_result -eq 2 ]; then
+                        # 跳過檢查，預設從 Phase 3 開始
+                        log_warn "跳過開發進度檢查，預設從 Phase 3 開始"
+                        echo "phase3"
+                        return
                     else
+                        # 進入對話後，無法繼續檢查
                         log_warn "無法檢查開發進度，預設從 Phase 3 開始"
                         echo "phase3"
                         return
@@ -1265,7 +1332,15 @@ detect_progress() {
                 break
             done
 
-            local json_result=$(cat "$ISSUE_DIR/last_raw_output.log")
+            # 從最新的 raw_log 讀取結果
+            local json_result
+            if [ -n "$LAST_RAW_OUTPUT" ] && [ -f "$LAST_RAW_OUTPUT" ]; then
+                json_result=$(cat "$LAST_RAW_OUTPUT")
+            else
+                log_error "找不到 agent 輸出檔案"
+                echo "phase3"
+                return
+            fi
             local response=$(echo "$json_result" | jq -r '.result // .content // empty' 2>/dev/null)
 
             if echo "$response" | grep -qi "已完成"; then
@@ -1345,17 +1420,20 @@ phase1_requirements_clarification() {
 請用 \`gh issue view $ISSUE_ID\` 讀取 Issue 內容，仔細分析需求，找出所有不清楚、模糊、可能讓開發者自己腦補的地方。
 
 **如果有需求問題需要澄清：**
-使用 \`gh issue comment $ISSUE_ID --body \"你的問題\"\` 在 Issue 中提問（按照 $PM_AGENT agent 定義的格式）
+使用 \`gh issue comment $ISSUE_ID --body \"[需求問題]\n\n你的問題...\"\` 發 comment 提問
 
-**如果需求已經很清楚：**
-使用 \`gh issue edit $ISSUE_ID\` 在 Issue body 最後加上：
+**如果需求已經很清楚，確認完成：**
+分兩步驟：
+1. 先發 comment 說明需求已確認：\`gh issue comment $ISSUE_ID --body \"[需求分析完成]\n\n需求已確認，可以進入實作分析階段。\"\`
+2. 再更新 issue body 加上狀態標記（讀取原 body 後附加）：
 
 ---
 ## 需求分析（by $PM_AGENT）
 需求已確認，可以進入實作分析階段。
 
 > 需求分析狀態：已確認
-"
+
+**注意：討論用 comment，只有在確認完成時才更新 issue body！**"
                 else
                     prompt="Use the $PM_AGENT subagent. 請用 \`gh issue view $ISSUE_ID\` 檢視 Issue 的最新內容和討論，繼續分析。
 
@@ -1504,27 +1582,35 @@ phase2_implementation_analysis() {
                 if [ $iteration -eq 1 ]; then
                     prompt="Use the $DEV_AGENT subagent to create implementation analysis for GitHub Issue #$ISSUE_ID.
 
-請用 \`gh issue view $ISSUE_ID\` 讀取 Issue 內容（包含需求和 $PM_AGENT 的分析），根據範本格式撰寫詳細的實作分析。
+請用 \`gh issue view $ISSUE_ID\` 讀取 Issue 內容，根據範本格式 $REQUIREMENTS_TEMPLATE 分析需求並規劃實作。
 
-**請參考範本格式 $REQUIREMENTS_TEMPLATE**
+**如果有技術問題或需要討論的點：**
+使用 \`gh issue comment $ISSUE_ID --body \"[實作討論]\n\n你的問題或建議...\"\` 發 comment 討論
 
-如果有問題需要討論，用 \`gh issue comment $ISSUE_ID\` 提出。
-
-**完成實作分析後：**
-使用 \`gh issue edit $ISSUE_ID\` 在 Issue body 最後加上你的實作分析區塊：
+**如果實作分析已經完整，可以確認：**
+分兩步驟：
+1. 先發 comment 說明實作分析已完成，摘要重點決策
+2. 再更新 issue body（讀取原 body 後附加以下格式）：
 
 ---
 ## 實作分析（by $DEV_AGENT）
-[你的實作分析內容]
+[你的實作分析內容，包含開發任務拆解、技術決策等]
 
 > 實作分析狀態：已確認
 
-**重要：請用繁體中文回應。**"
+**注意：討論用 comment，只有在確認完成時才更新 issue body！**
+請用繁體中文回應。"
                 else
                     prompt="Use the $DEV_AGENT subagent. 請用 \`gh issue view $ISSUE_ID\` 檢視我的回饋，繼續完善實作分析。
 
-如果還有不清楚的地方，用 \`gh issue comment\` 繼續提問或討論。
-完成後用 \`gh issue edit $ISSUE_ID\` 更新 issue body，標記「實作分析狀態：已確認」。
+**討論或澄清問題時：**
+用 \`gh issue comment\` 發 comment 討論
+
+**確認完成時：**
+1. 先發 comment 說明已完成
+2. 再更新 issue body 加上最終實作分析與「實作分析狀態：已確認」標記
+
+只有在確認完成時才更新 issue body！
 
 **不要自己修改實作分析狀態，等我確認！**"
                 fi
