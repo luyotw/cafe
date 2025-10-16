@@ -846,7 +846,7 @@ handle_permissions() {
             echo "[$denial_index] 工具: $tool_name" >&2
 
             # 顯示所有 tool_input 的內容
-            echo "$denial" | jq -r '.tool_input | to_entries[] | "  \(.key): \(.value)"' 2>&1 | grep -v '^' >&2
+            echo "$denial" | jq -r '.tool_input | to_entries[] | "  \(.key): \(.value)"' 2>/dev/null >&2
             echo "" >&2
         done < <(cat "$LAST_RAW_OUTPUT" | jq -c '.permission_denials[]' 2>/dev/null)
 
@@ -1049,8 +1049,8 @@ execute_with_retry() {
             fi
             return 1  # 需要重試
         elif [ $permission_result -eq 2 ]; then
-            # 使用者選擇跳過階段
-            log_warn "使用者選擇跳過此階段"
+            # 使用者選擇跳過，視為此 agent 已完成工作
+            log_info "視為 $agent_name 已完成工作，進入下一步"
             return 0  # 視為成功，跳出當前循環
         else
             # 進入對話模式
@@ -1305,8 +1305,8 @@ detect_progress() {
 3. ${requirements_ref}，確認是否都已完成
 
 請用繁體中文回答：開發是否已完成？
-- 如果已完成，回答「已完成」
-- 如果還在進行中，回答「進行中」並簡述還需要做什麼"
+- 如果已完成，回答「已完成」，不要提供其他資訊
+- 如果還在進行中，回答「未完成」，不要提供其他資訊"
 
             log_info "讓 agent 檢查開發進度..."
             while true; do
@@ -1821,7 +1821,6 @@ phase4_pre_pr_review() {
         branch_name=$(basename "$REQUIREMENTS_FILE" .md | sed 's/^[0-9]\{8\}-//')
     fi
 
-    local main_branch=$(git remote show origin | grep 'HEAD branch' | cut -d' ' -f5 2>/dev/null || echo "main")
     local iteration=0
 
     while [ $iteration -lt $MAX_REVIEW_ITERATIONS ]; do
@@ -1830,16 +1829,15 @@ phase4_pre_pr_review() {
         log_info "--- Pre-PR Review Round $iteration/$MAX_REVIEW_ITERATIONS ---"
 
         # 1. 取得最新 diff
-        log_info "正在取得分支 '$branch_name' 相對於 '$main_branch' 的 diff..."
-        git fetch origin
-        local diff=$(git diff "origin/$main_branch" "HEAD")
+        log_info "正在取得分支 '$branch_name' 相對於 main 的 diff..."
+        local diff=$(git diff main HEAD)
         if [ -z "$diff" ]; then
             log_warn "沒有發現程式碼變更。請 developer agent 確認狀態。"
             # 讓 developer agent 報告一次狀態
             local status_prompt="目前看起來沒有程式碼變更，請報告你的狀態，你是否已完成所有開發任務？"
             execute_with_retry "$session_dev" status_prompt "acceptEdits" "$DEV_AGENT" dev_allowed_tools
             # 重新取得 diff
-            diff=$(git diff "origin/$main_branch" "HEAD")
+            diff=$(git diff main HEAD)
             if [ -z "$diff" ]; then
                 log_error "仍然沒有發現程式碼變更，流程無法繼續。"
                 exit 1
@@ -2046,6 +2044,13 @@ phase5_create_pr() {
     else
         pr_title=$(head -n 1 "$REQUIREMENTS_FILE" | sed 's/^#\+//;s/^[ \t]*//;s/[ \t]*$//')
     fi
+    # Push 到 remote
+    log_info "Push 分支 $branch_name 到 remote..."
+    if ! git push -u origin "$branch_name" 2>&1; then
+        log_error "git push 失敗"
+        exit 1
+    fi
+
     local main_branch=$(git symbolic-ref refs/remotes/origin/HEAD | sed 's@^refs/remotes/origin/@@')
     local pr_body=$(git log --oneline origin/$main_branch..HEAD)
 
