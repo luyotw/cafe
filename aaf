@@ -27,7 +27,7 @@ fi
 REQUIREMENTS_TEMPLATE="issues/template.md"
 
 # 最大 review 迭代次數
-MAX_REVIEW_ITERATIONS=5
+MAX_REVIEW_ITERATIONS=3
 
 # AI Agent 執行超時設定（秒）
 AGENT_EXECUTION_TIMEOUT=1800  # 30分鐘
@@ -1473,25 +1473,18 @@ phase1_requirements_clarification() {
             if [ "$WORKFLOW_MODE" = "github" ]; then
                 # GitHub Flow prompt
                 if [ $iteration -eq 1 ]; then
-                    prompt="Use the $PM_AGENT subagent to analyze GitHub Issue #$ISSUE_ID.
+                    prompt="Use the $PM_AGENT subagent. 這是第 $iteration 輪需求分析。
 
 請用 \`gh issue view $ISSUE_ID\` 讀取 Issue 內容，仔細分析需求，找出所有不清楚、模糊、可能讓開發者自己腦補的地方。
 
 **如果有需求問題需要澄清：**
-使用 \`gh issue comment $ISSUE_ID --body \"[需求問題]\n\n你的問題...\"\` 發 comment 提問
+用最精簡的方式條列問題，不要給任何建議。
 
 **如果需求已經很清楚，確認完成：**
-分兩步驟：
-1. 先發 comment 說明需求已確認：\`gh issue comment $ISSUE_ID --body \"[需求分析完成]\n\n需求已確認，可以進入實作分析階段。\"\`
-2. 再更新 issue body 加上狀態標記（讀取原 body 後附加）：
+請用戶手動在文件結尾加上一行:
 
----
-## 需求分析（by $PM_AGENT）
-需求已確認，可以進入實作分析階段。
-
-> 需求分析狀態：已確認
-
-**注意：討論用 comment，只有在確認完成時才更新 issue body！**"
+\"> 需求分析狀態：已確認\"
+"
                 else
                     # 讀取上一輪歷史
                     local pm_history=$(get_previous_round_history "pm" $iteration)
@@ -1499,10 +1492,16 @@ phase1_requirements_clarification() {
 
                     prompt="Use the $PM_AGENT subagent. 這是第 $iteration 輪需求分析。
 $history_prompt
-請用 \`gh issue view $ISSUE_ID\` 檢視 Issue 的最新內容和討論。
+請用 \`gh issue view $ISSUE_ID\` 檢視 Issue 的最新內容。
 
-如果還有不清楚的地方，用 \`gh issue comment\` 繼續提問。
-如果所有問題都解決了，用 \`gh issue edit $ISSUE_ID\` 更新 Issue body，標記「需求分析狀態：已確認」。"
+**如果有需求問題需要澄清：**
+用最精簡的方式條列問題，不要給任何建議。
+
+**如果需求已經很清楚，確認完成：**
+請用戶手動在 Issue body 結尾加上一行:
+
+> 需求分析狀態：已確認
+"
                 fi
             else
                 # Local Flow prompt
@@ -1512,7 +1511,8 @@ $history_prompt
 請仔細閱讀需求文件，找出所有不清楚、模糊、可能讓開發者自己腦補的地方。
 
 **如果有需求問題需要澄清：**
-直接編輯 $REQUIREMENTS_FILE，在你覺得需要澄清的地方插入問題（按照 $PM_AGENT agent 定義的格式）
+- 直接編輯 $REQUIREMENTS_FILE，在你覺得需要澄清的地方插入問題（按照 $PM_AGENT agent 定義的格式）
+- 用最精簡的方式條列問題，不要給任何建議。
 
 **如果需求已經很清楚：**
 直接編輯 $REQUIREMENTS_FILE，將「需求分析狀態」改成「已確認」：
@@ -1528,7 +1528,7 @@ $history_prompt
 $history_prompt
 請檢視 $REQUIREMENTS_FILE 中我的回覆。
 
-如果還有不清楚的地方，繼續在檔案中提出問題。
+如果還有不清楚的地方，繼續在檔案中提出問題。用最精簡的方式條列問題，不要給任何建議。
 如果所有問題都解決了，將「需求分析狀態」改成「已確認」：
 
 > 需求分析狀態：已確認
@@ -1603,7 +1603,7 @@ phase2_implementation_analysis() {
             echo ""
             log_error "需求文件中缺少「開發指南」區塊"
             log_warn "請參考 $REQUIREMENTS_TEMPLATE 在 $REQUIREMENTS_FILE 中補上「開發指南」區塊"
-            log_warn "開發指南應包含專案的技術架構、開發規範、測試要求等重要資訊"
+            log_warn "開發指南應給予大致上的實作方向，以及補充開發者可能不知道的資訊，讓開發者有足夠的資訊撰寫實作分析"
             echo ""
             log_warn "按 Enter 開啟編輯器補充開發指南..."
             read
@@ -1650,69 +1650,46 @@ phase2_implementation_analysis() {
 
         # 構建 prompt（根據模式和迭代次數）
         if [ "$needs_new_prompt" = true ]; then
+            local update_requirements_source=""
             if [ "$WORKFLOW_MODE" = "github" ]; then
                 # GitHub Flow prompt
+                update_requirements_source="使用 \`gh issue comment $ISSUE_ID\` 發 comment"
                 if [ $iteration -eq 1 ]; then
-                    prompt="Use the $DEV_AGENT subagent to create implementation analysis for GitHub Issue #$ISSUE_ID.
-
-請用 \`gh issue view $ISSUE_ID\` 讀取 Issue 內容，根據範本格式 $REQUIREMENTS_TEMPLATE 分析需求並規劃實作。
-
-**如果有技術問題或需要討論的點：**
-使用 \`gh issue comment $ISSUE_ID --body \"[實作討論]\n\n你的問題或建議...\"\` 發 comment 討論
-
-**如果實作分析已經完整，可以確認：**
-分兩步驟：
-1. 先發 comment 說明實作分析已完成，摘要重點決策
-2. 再更新 issue body（讀取原 body 後附加以下格式）：
-
----
-## 實作分析（by $DEV_AGENT）
-[你的實作分析內容，包含開發任務拆解、技術決策等]
-
-> 實作分析狀態：已確認
-
-**注意：討論用 comment，只有在確認完成時才更新 issue body！**
-請用繁體中文回應。"
+                    source_prompt="請用 \`gh issue view $ISSUE_ID\` 讀取 Issue 內容，根據範本格式 $REQUIREMENTS_TEMPLATE 分析需求並規劃實作。"
                 else
                     # 讀取上一輪歷史
                     local dev_history=$(get_previous_round_history "dev" $iteration)
                     local history_prompt=$(generate_history_prompt "$dev_history")
-
-                    prompt="Use the $DEV_AGENT subagent. 這是第 $iteration 輪實作分析。
-$history_prompt
-請用 \`gh issue view $ISSUE_ID\` 檢視我的回饋，繼續完善實作分析。
-
-**討論或澄清問題時：**
-用 \`gh issue comment\` 發 comment 討論
-
-**確認完成時：**
-1. 先發 comment 說明已完成
-2. 再更新 issue body 加上最終實作分析與「實作分析狀態：已確認」標記
-
-只有在確認完成時才更新 issue body！
-
-**不要自己修改實作分析狀態，等我確認！**"
+                    source_prompt="$history_prompt
+請用 \`gh issue view $ISSUE_ID\` 讀取最新一則 Issue comment 內容。"
                 fi
             else
                 # Local Flow prompt
+                update_requirements_source="直接編輯 $REQUIREMENTS_FILE 寫在文件最下方"
                 if [ $iteration -eq 1 ]; then
-                    prompt="請根據 $REQUIREMENTS_FILE 和範本格式，在 $REQUIREMENTS_FILE 中加入詳細的實作分析。如果有問題需要討論，在檔案中提出（用你覺得清楚的方式寫就好）
-
-**請參考範本格式 $REQUIREMENTS_TEMPLATE**
-**重要：請用繁體中文回應。**"
+                    source_prompt="請讀取 $REQUIREMENTS_FILE，根據範本格式 $REQUIREMENTS_TEMPLATE 分析需求並規劃實作。
+"
                 else
                     # 讀取上一輪歷史
                     local dev_history=$(get_previous_round_history "dev" $iteration)
                     local history_prompt=$(generate_history_prompt "$dev_history")
-
-                    prompt="這是第 $iteration 輪實作分析。
-$history_prompt
+                    source_prompt="$history_prompt
 請檢視 $REQUIREMENTS_FILE 中我的回饋，繼續完善實作分析。
-
-如果還有不清楚的地方，繼續在檔案中提出問題或討論。
-**不要自己修改實作分析狀態，等我確認！**"
+"
                 fi
             fi
+            prompt="Use the $DEV_AGENT subagent. 這是第 $iteration 輪實作分析。
+$source_prompt
+
+**如果仍技術問題或需要討論的點：**
+- 問題確認完成之前**不要寫入實作分析**。
+- $update_requirements_source，以最精簡的方式條列問題及建議
+
+**如果資訊已足夠撰寫實作分析：**
+- $update_requirements_source，加入實作分析內容，並在結尾加上一行:
+
+> 實作分析狀態：待確認
+"
         fi
 
         # 執行 Developer agent
@@ -1729,12 +1706,6 @@ $history_prompt
         save_round_history "dev" $iteration "### Developer Agent 分析：
 已執行實作分析。"
 
-        # 檢查是否完成（使用抽象層函數）
-        if check_requirements_status "實作分析狀態.*已確認"; then
-            log_info "✓ 實作分析完成！"
-            break
-        fi
-
         # 等待人工處理（根據模式不同）
         echo ""
         if [ "$WORKFLOW_MODE" = "github" ]; then
@@ -1748,7 +1719,7 @@ $history_prompt
             ${EDITOR:-vim} "$REQUIREMENTS_FILE"
         fi
 
-        # 人工處理後再次檢查狀態（可能人工直接標記為已確認）
+        # 人工處理後檢查狀態
         if check_requirements_status "實作分析狀態.*已確認"; then
             log_info "✓ 實作分析完成！"
             break
@@ -1797,19 +1768,21 @@ phase3_development() {
 
     # 構建 prompt
     local requirements_source
+    local update_requirements_source
     if [ "$WORKFLOW_MODE" = "github" ]; then
         requirements_source="用 \`gh issue view $ISSUE_ID\` 查看 Issue 中的需求和實作分析"
+        update_requirements_source="使用 \`gh issue comment $ISSUE_ID\` 發 comment，用最簡單的文字說明進度，例如：\"已完成 Task 3 並 commit。\""
     else
         requirements_source="根據 $REQUIREMENTS_FILE"
+        update_requirements_source="在 $REQUIREMENTS_FILE 中將已完成的項目打勾"
     fi
 
     local prompt="需求已經確認清楚，請${requirements_source}進行開發。
 
-**重要：請用繁體中文回應。**
-
 請執行以下步驟：
-1. 按照開發任務拆解的順序進行開發及測試
-2. 完成後進行 commit
+1. 嚴格按照開發任務拆解的順序進行開發及測試
+2. 直接使用開發任務中的 commit message，禁止加入新的內容
+3. commit 完之後${update_requirements_source}
 
 **注意：先不要 push 到 remote，等 code review 完成後再 push！**"
 
@@ -1921,18 +1894,19 @@ $review_history
             reviewer_prompt+="
 
 **你的審查任務:**
-1.  **仔細比對需求**：確認所有需求都已實作，且實作方式符合規劃。
-2.  **找出潛在問題**：檢查程式碼的正確性、可讀性、效能、安全性、以及是否符合專案既有風格。
-3.  **提供具體建議**：給出清晰、可執行的修改建議。如果可能，請附上檔案路徑和行號。
-4.  **用繁體中文回應**。
+- **檢查 commit message**：確認 commit message 只有一行。
+- **仔細比對需求**：確認所有需求都已實作，且實作方式符合規劃。
+- **找出潛在問題**：檢查程式碼的正確性、可讀性、效能、安全性、以及是否符合專案既有風格。
+- **簡要說明問題**：列出檔案路徑和行號並說明問題，不要提供任何解決方案。
+- **用繁體中文回應**。
 "
         fi
 
         reviewer_prompt+="
 
-**審查完畢後，請做出結論：**
--   如果程式碼品質良好，可以直接建立 PR，請在回覆的**最後一行**加上單獨的 LGTM (Looks Good To Me)。
--   如果程式碼需要修改，請詳細說明需要修改的地方，**不要**加上 LGTM.
+**審查完畢後，不用做出任何結論，只進行：**
+- 如果 commit message 及程式碼品質良好，可以直接建立 PR，請在回覆的**最後一行**加上單獨的 LGTM。
+- 如果 commit message 及程式碼需要修改，用最精簡的方式條列出需要修改的地方，**不要**加上 LGTM。
 "
 
         local review_feedback
@@ -1977,11 +1951,25 @@ $review_feedback"
         fi
 
         if [ $iteration -eq $MAX_REVIEW_ITERATIONS ]; then
-            log_warn "已達最大 review 次數，將繼續建立 PR。"
+            log_warn "已達最大 review 次數 ($MAX_REVIEW_ITERATIONS)。"
             # 儲存本輪記錄（達到最大次數）
             save_round_history "review" $iteration "$round_content"
-            touch "$ISSUE_DIR/pre_pr_review_passed" # 標記為通過以便建立 PR
-            break
+
+            # 詢問用戶是否要繼續建立 PR
+            echo "" >&2
+            log_warn "Code review 未通過，是否仍要建立 Pull Request？"
+            echo "  y: 是，繼續建立 PR" >&2
+            echo "  n: 否，停止流程" >&2
+            read -p "請選擇 (y/n): " create_pr_choice
+
+            if [ "$create_pr_choice" = "y" ]; then
+                log_info "用戶選擇繼續建立 PR"
+                touch "$ISSUE_DIR/pre_pr_review_passed" # 標記為通過以便建立 PR
+                break
+            else
+                log_info "用戶選擇停止流程"
+                exit 0
+            fi
         fi
 
         # 4. Developer 處理回饋
