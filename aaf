@@ -851,9 +851,9 @@ handle_permissions() {
 
         echo "" >&2
         log_warn "請選擇如何處理："
-        echo "  y: 同意並授權這些操作，讓 agent 繼續執行"
-        echo "  t: 與 agent 對話討論"
-        echo "  s: 跳過這個階段，直接進入下一階段"
+        echo "  y: 同意並授權這些操作，讓 agent 繼續執行" >&2
+        echo "  t: 與 agent 對話討論" >&2
+        echo "  s: 跳過這個階段，直接進入下一階段" >&2
         read -p "請選擇 (y/t/s): " choice
 
         case $choice in
@@ -956,8 +956,8 @@ handle_exception() {
             # 對話結束，詢問任務是否完成
             echo "" >&2
             log_warn "任務是否已完成？"
-            echo "  y: 任務已完成，進入下一階段"
-            echo "  n: 任務未完成，繼續執行"
+            echo "  y: 任務已完成，進入下一階段" >&2
+            echo "  n: 任務未完成，繼續執行" >&2
             read -p "請選擇 (y/n): " task_done
 
             if [ "$task_done" = "y" ]; then
