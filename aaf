@@ -1373,6 +1373,64 @@ detect_progress() {
 
 # --- 主要工作流程階段 ---
 
+# 讀取上一輪的歷史記錄（從獨立檔案）
+# 參數：$1=階段名稱 (pm/dev/review), $2=當前輪次
+# 返回：上一輪的內容（透過 stdout）
+get_previous_round_history() {
+    local phase=$1
+    local current_iteration=$2
+
+    if [ $current_iteration -le 1 ]; then
+        return
+    fi
+
+    local prev_iteration=$((current_iteration - 1))
+    local prev_file="$ISSUE_DIR/${phase}_round_${prev_iteration}.md"
+
+    if [ -f "$prev_file" ]; then
+        cat "$prev_file"
+    fi
+}
+
+# 記錄本輪歷史到獨立檔案
+# 參數：$1=階段名稱 (pm/dev/review), $2=當前輪次, $3=內容
+save_round_history() {
+    local phase=$1
+    local iteration=$2
+    local content=$3
+
+    local round_file="$ISSUE_DIR/${phase}_round_${iteration}.md"
+
+    cat > "$round_file" << EOF
+# Round $iteration ($(date '+%Y-%m-%d %H:%M:%S'))
+
+$content
+EOF
+}
+
+# 產生歷史記錄提示（用於 Phase 1/2/4）
+# 參數：$1=歷史記錄內容
+generate_history_prompt() {
+    local history=$1
+
+    if [ -n "$history" ]; then
+        cat << EOF
+
+**上一輪的記錄：**
+---
+$history
+---
+
+**重要原則：**
+- 參考上一輪的記錄，檢查先前提出的問題是否已獲得回覆
+- **優先處理：** 先前提出但尚未解決的問題
+- **新問題限制：** 只提出真正影響開發的 critical 問題
+- **避免：** 不要反覆提出相同或類似的問題
+
+EOF
+    fi
+}
+
 # Phase 1: 需求分析循環
 phase1_requirements_clarification() {
     export CURRENT_PHASE="Phase 1: Requirements Analysis"
@@ -1435,7 +1493,13 @@ phase1_requirements_clarification() {
 
 **注意：討論用 comment，只有在確認完成時才更新 issue body！**"
                 else
-                    prompt="Use the $PM_AGENT subagent. 請用 \`gh issue view $ISSUE_ID\` 檢視 Issue 的最新內容和討論，繼續分析。
+                    # 讀取上一輪歷史
+                    local pm_history=$(get_previous_round_history "pm" $iteration)
+                    local history_prompt=$(generate_history_prompt "$pm_history")
+
+                    prompt="Use the $PM_AGENT subagent. 這是第 $iteration 輪需求分析。
+$history_prompt
+請用 \`gh issue view $ISSUE_ID\` 檢視 Issue 的最新內容和討論。
 
 如果還有不清楚的地方，用 \`gh issue comment\` 繼續提問。
 如果所有問題都解決了，用 \`gh issue edit $ISSUE_ID\` 更新 Issue body，標記「需求分析狀態：已確認」。"
@@ -1456,7 +1520,13 @@ phase1_requirements_clarification() {
 > 需求分析狀態：已確認
 "
                 else
-                    prompt="Use the $PM_AGENT subagent. 請檢視 $REQUIREMENTS_FILE 中我的回覆，繼續分析。
+                    # 讀取上一輪歷史
+                    local pm_history=$(get_previous_round_history "pm" $iteration)
+                    local history_prompt=$(generate_history_prompt "$pm_history")
+
+                    prompt="Use the $PM_AGENT subagent. 這是第 $iteration 輪需求分析。
+$history_prompt
+請檢視 $REQUIREMENTS_FILE 中我的回覆。
 
 如果還有不清楚的地方，繼續在檔案中提出問題。
 如果所有問題都解決了，將「需求分析狀態」改成「已確認」：
@@ -1487,6 +1557,9 @@ phase1_requirements_clarification() {
             log_error "不支援的 PM tool: $PM_AGENT_TOOL"
             exit 1
         fi
+
+        # 記錄這輪的分析
+        save_round_history "pm" $iteration "PM Agent 已執行需求分析"
 
         # 檢查是否完成（使用抽象層函數）
         if check_requirements_status "需求分析狀態.*已確認"; then
@@ -1601,7 +1674,13 @@ phase2_implementation_analysis() {
 **注意：討論用 comment，只有在確認完成時才更新 issue body！**
 請用繁體中文回應。"
                 else
-                    prompt="Use the $DEV_AGENT subagent. 請用 \`gh issue view $ISSUE_ID\` 檢視我的回饋，繼續完善實作分析。
+                    # 讀取上一輪歷史
+                    local dev_history=$(get_previous_round_history "dev" $iteration)
+                    local history_prompt=$(generate_history_prompt "$dev_history")
+
+                    prompt="Use the $DEV_AGENT subagent. 這是第 $iteration 輪實作分析。
+$history_prompt
+請用 \`gh issue view $ISSUE_ID\` 檢視我的回饋，繼續完善實作分析。
 
 **討論或澄清問題時：**
 用 \`gh issue comment\` 發 comment 討論
@@ -1622,7 +1701,13 @@ phase2_implementation_analysis() {
 **請參考範本格式 $REQUIREMENTS_TEMPLATE**
 **重要：請用繁體中文回應。**"
                 else
-                    prompt="請檢視 $REQUIREMENTS_FILE 中我的回饋，繼續完善實作分析。
+                    # 讀取上一輪歷史
+                    local dev_history=$(get_previous_round_history "dev" $iteration)
+                    local history_prompt=$(generate_history_prompt "$dev_history")
+
+                    prompt="這是第 $iteration 輪實作分析。
+$history_prompt
+請檢視 $REQUIREMENTS_FILE 中我的回饋，繼續完善實作分析。
 
 如果還有不清楚的地方，繼續在檔案中提出問題或討論。
 **不要自己修改實作分析狀態，等我確認！**"
@@ -1639,6 +1724,10 @@ phase2_implementation_analysis() {
         fi
         # 更新 session_dev（可能已被自動恢復）
         session_dev=$(cat "$SESSIONS_DIR/${DEV_AGENT}_session_id" 2>/dev/null || echo "$session_dev")
+
+        # 記錄這輪的分析到歷史
+        save_round_history "dev" $iteration "### Developer Agent 分析：
+已執行實作分析。"
 
         # 檢查是否完成（使用抽象層函數）
         if check_requirements_status "實作分析狀態.*已確認"; then
@@ -1761,13 +1850,6 @@ phase4_pre_pr_review() {
     local main_branch=$(git remote show origin | grep 'HEAD branch' | cut -d' ' -f5 2>/dev/null || echo "main")
     local iteration=0
 
-    # 建立 review 歷史記錄檔案
-    local review_history_file="$ISSUE_DIR/review_history.md"
-    if [ ! -f "$review_history_file" ]; then
-        echo "# Code Review 歷史記錄" > "$review_history_file"
-        echo "" >> "$review_history_file"
-    fi
-
     while [ $iteration -lt $MAX_REVIEW_ITERATIONS ]; do
         iteration=$((iteration + 1))
         echo ""
@@ -1804,11 +1886,8 @@ $requirements
 ---"
         fi
 
-        # 讀取歷史 review 記錄
-        local review_history=""
-        if [ -f "$review_history_file" ] && [ $iteration -gt 1 ]; then
-            review_history=$(cat "$review_history_file")
-        fi
+        # 讀取上一輪 review 記錄
+        local review_history=$(get_previous_round_history "review" $iteration)
 
         local reviewer_prompt="你是資深軟體工程師 $REVIEW_AGENT，正在進行程式碼審查 (Code Review)。
 
@@ -1884,25 +1963,23 @@ $review_history
         log_info "$REVIEW_AGENT 的回饋：
 $review_feedback"
 
-        # 記錄這次 review 到歷史
-        cat >> "$review_history_file" << EOF
-
-## Round $iteration ($(date '+%Y-%m-%d %H:%M:%S'))
-
-### Reviewer 意見：
-$review_feedback
-
-EOF
+        # 記錄這次 review 到歷史（先記錄 Reviewer 意見）
+        local round_content="### Reviewer 意見：
+$review_feedback"
 
         # 3. 檢查 review 是否通過
         if echo "$review_feedback" | grep -q -E "^LGTM$" ; then
             log_info "✓ 程式碼已通過 reviewer 審核！"
+            # 儲存本輪記錄（通過）
+            save_round_history "review" $iteration "$round_content"
             touch "$ISSUE_DIR/pre_pr_review_passed"
             break
         fi
 
         if [ $iteration -eq $MAX_REVIEW_ITERATIONS ]; then
             log_warn "已達最大 review 次數，將繼續建立 PR。"
+            # 儲存本輪記錄（達到最大次數）
+            save_round_history "review" $iteration "$round_content"
             touch "$ISSUE_DIR/pre_pr_review_passed" # 標記為通過以便建立 PR
             break
         fi
@@ -1940,12 +2017,13 @@ $review_feedback
         log_info "Developer agent 已完成修改。"
 
         # 記錄 Developer 的修改完成
-        cat >> "$review_history_file" << EOF
-### Developer 修改：
-已根據上述意見進行修改並 commit。
+        round_content+="
 
----
-EOF
+### Developer 修改：
+已根據上述意見進行修改並 commit。"
+
+        # 儲存本輪完整記錄
+        save_round_history "review" $iteration "$round_content"
     done
 }
 
