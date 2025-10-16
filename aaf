@@ -1761,6 +1761,13 @@ phase4_pre_pr_review() {
     local main_branch=$(git remote show origin | grep 'HEAD branch' | cut -d' ' -f5 2>/dev/null || echo "main")
     local iteration=0
 
+    # 建立 review 歷史記錄檔案
+    local review_history_file="$ISSUE_DIR/review_history.md"
+    if [ ! -f "$review_history_file" ]; then
+        echo "# Code Review 歷史記錄" > "$review_history_file"
+        echo "" >> "$review_history_file"
+    fi
+
     while [ $iteration -lt $MAX_REVIEW_ITERATIONS ]; do
         iteration=$((iteration + 1))
         echo ""
@@ -1797,9 +1804,15 @@ $requirements
 ---"
         fi
 
+        # 讀取歷史 review 記錄
+        local review_history=""
+        if [ -f "$review_history_file" ] && [ $iteration -gt 1 ]; then
+            review_history=$(cat "$review_history_file")
+        fi
+
         local reviewer_prompt="你是資深軟體工程師 $REVIEW_AGENT，正在進行程式碼審查 (Code Review)。
 
-請嚴格審查這個分支 '$branch_name' 上的程式碼變更。
+這是第 $iteration 輪審查（共 $MAX_REVIEW_ITERATIONS 輪）。
 
 **原始需求與實作分析:**
 $requirements_section
@@ -1807,13 +1820,36 @@ $requirements_section
 **程式碼變更 (diff):**
 ---
 $diff
+---"
+
+        # 如果有歷史 review，加入提示
+        if [ -n "$review_history" ] && [ $iteration -gt 1 ]; then
+            reviewer_prompt+="
+
+**先前的 Review 記錄:**
 ---
+$review_history
+---
+
+**重要審查原則：**
+- 這不是第一次審查，請先參考上面的歷史記錄
+- **優先檢查：** 先前提出的問題是否已修正
+- **新問題限制：** 只提出 critical 問題（嚴重 bug、安全性問題、功能缺失）
+- **避免：** 不要提出風格、命名、小優化等非必要的建議
+- 如果先前的問題都已解決且沒有 critical 問題，請給予 LGTM
+"
+        else
+            reviewer_prompt+="
 
 **你的審查任務:**
 1.  **仔細比對需求**：確認所有需求都已實作，且實作方式符合規劃。
 2.  **找出潛在問題**：檢查程式碼的正確性、可讀性、效能、安全性、以及是否符合專案既有風格。
 3.  **提供具體建議**：給出清晰、可執行的修改建議。如果可能，請附上檔案路徑和行號。
 4.  **用繁體中文回應**。
+"
+        fi
+
+        reviewer_prompt+="
 
 **審查完畢後，請做出結論：**
 -   如果程式碼品質良好，可以直接建立 PR，請在回覆的**最後一行**加上單獨的 LGTM (Looks Good To Me)。
@@ -1847,6 +1883,16 @@ $diff
 
         log_info "$REVIEW_AGENT 的回饋：
 $review_feedback"
+
+        # 記錄這次 review 到歷史
+        cat >> "$review_history_file" << EOF
+
+## Round $iteration ($(date '+%Y-%m-%d %H:%M:%S'))
+
+### Reviewer 意見：
+$review_feedback
+
+EOF
 
         # 3. 檢查 review 是否通過
         if echo "$review_feedback" | grep -q -E "^LGTM$" ; then
@@ -1892,6 +1938,14 @@ $review_feedback
         # 最後再更新一次 session_dev
         session_dev=$(cat "$SESSIONS_DIR/${DEV_AGENT}_session_id" 2>/dev/null || echo "$session_dev")
         log_info "Developer agent 已完成修改。"
+
+        # 記錄 Developer 的修改完成
+        cat >> "$review_history_file" << EOF
+### Developer 修改：
+已根據上述意見進行修改並 commit。
+
+---
+EOF
     done
 }
 
