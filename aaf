@@ -117,6 +117,7 @@ DEFAULT_REVIEW_ALLOWED_TOOLS=(
     "Bash(git log:*)"
     "Bash(git diff:*)"
     "Bash(git show:*)"
+    "Bash(gh issue view:*)"
 )
 
 # 顏色輸出
