@@ -1,72 +1,59 @@
 # Python 重構待辦清單
 
 ## 進度總覽
-- 已完成: 6/22 項目 (~27%)
+- 已完成: 8/22 項目 (~36%)
 - 進行中: 0 項目
-- 待完成: 16 項目
+- 待完成: 14 項目
 
 ---
 
-## ✅ 已完成 (6/22)
+## ✅ 已完成 (8/22)
 
 ### 核心模組 (Core Modules)
 1. ✅ **types.py** - 型別定義
    - Status: 100% coverage, 16 tests
-   - Commit: Initial Python refactor structure
+   - Commit: c677214
+   - Features: WorkflowMode, AgentTool, PhaseStatus, AgentConfig, PhaseResult
 
 2. ✅ **session.py** - Session 管理
    - Status: 100% coverage, 10 tests
+   - Commit: c677214
    - Features: 建立、載入、刪除、恢復 session
 
 3. ✅ **git.py** - Git 操作
    - Status: 100% coverage, 17 tests
+   - Commit: c677214
    - Features: branch 管理、commit、push、diff
 
 4. ✅ **phase.py** - Phase 基礎類別
    - Status: 83% coverage, 8 tests
+   - Commit: c677214
    - Features: 抽象基礎類別、依賴注入
 
 5. ✅ **permission.py** - 權限處理
    - Status: 93% coverage, 17 tests
+   - Commit: 61ad5ac
    - Features: 權限請求、自動授權規則、模式匹配、歷史記錄
 
+6. ✅ **workflow.py** - 工作流程編排器
+   - Status: 100% coverage, 16 tests
+   - Commit: 9980355
+   - Features: Phase 執行、錯誤處理、資料傳遞、重試邏輯、跳過 phase
+
 ### Agent 模組 (Agents)
-6. ✅ **executor.py** - Agent 執行器
+7. ✅ **executor.py** - Agent 執行器
    - Status: 95% coverage, 15 tests
+   - Commit: c677214
    - Features: Claude/Gemini/Cursor 執行、session 管理、allowed tools
 
----
-
-## ⏳ 待完成 (16/22)
-
-### 核心模組 (Core Modules)
-
-#### 7. ⬜ workflow.py - 工作流程編排器
-**Priority: HIGH**
-```python
-class Workflow:
-    - execute_phases() - 依序執行 phases
-    - handle_phase_errors() - Phase 錯誤處理
-    - phase_transition() - Phase 之間資料傳遞
-    - retry_logic() - 重試邏輯
-```
-**Dependencies**: phase.py
-**Tests needed**: 10+ tests
+8. ✅ **manager.py** - Agent 管理器
+   - Status: 100% coverage, 21 tests
+   - Commit: 443f109
+   - Features: 多 agent 管理、切換、session 管理、執行
 
 ---
 
-### Agent 模組 (Agents)
-
-#### 8. ⬜ agent_manager.py - Agent 管理器
-**Priority: HIGH**
-```python
-class AgentManager:
-    - get_agent(name) - 取得特定 agent
-    - switch_agent() - 切換 agent
-    - manage_sessions() - 管理多個 agent sessions
-```
-**Dependencies**: executor.py, session.py
-**Tests needed**: 8+ tests
+## ⏳ 待完成 (14/22)
 
 ---
 
@@ -242,23 +229,25 @@ class GitHubOps:
 - session.py: 100%
 - git.py: 100%
 - phase.py: 83%
-- executor.py: 95%
 - permission.py: 93%
+- executor.py: 95%
+- workflow.py: 100%
+- manager.py: 100%
 
-**平均覆蓋率: 95%**
+**平均覆蓋率: 96%**
 
 ### 測試數量
-- 已寫測試: 83 tests
-- 預估需要: 150+ tests
-- 完成度: ~55%
+- 已寫測試: 120 tests
+- 預估需要: 180+ tests
+- 完成度: ~67%
 
 ---
 
 ## 🎯 建議執行順序
 
-### 第一階段（核心基礎）- Week 1
-1. ⬜ workflow.py - 工作流程編排
-2. ⬜ agent_manager.py - Agent 管理
+### 第一階段（核心基礎）- Week 1 ✅ 已完成
+1. ✅ workflow.py - 工作流程編排
+2. ✅ agent_manager.py - Agent 管理
 3. ⬜ config.py - 設定管理
 
 ### 第二階段（Phase 實作）- Week 2-3
@@ -295,4 +284,5 @@ class GitHubOps:
 
 **最後更新**: 2025-10-17
 **當前分支**: refactor-python
-**下一步**: 實作 workflow.py
+**目前進度**: 8/22 完成 (~36%), 120 tests, 96% 平均覆蓋率
+**下一步**: Phase 1 (requirements_phase.py) 或 config.py
