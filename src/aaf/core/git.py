@@ -133,3 +133,32 @@ class GitOperations:
             True if there are uncommitted changes
         """
         return bool(self.get_status())
+
+    def get_main_branch(self) -> str:
+        """Get the main branch name (main or master).
+
+        Returns:
+            Main branch name
+        """
+        try:
+            # Try to get default branch from remote
+            output = self.run_git(
+                "symbolic-ref", "refs/remotes/origin/HEAD", "--short"
+            )
+            # Output format: "origin/main" -> "main"
+            return output.split("/")[-1]
+        except GitError:
+            # Fallback to "main"
+            return "main"
+
+    def get_commits_between(self, base: str, head: str) -> str:
+        """Get commit list between two refs.
+
+        Args:
+            base: Base ref
+            head: Head ref
+
+        Returns:
+            Commit list (one-line format)
+        """
+        return self.run_git("log", "--oneline", f"{base}..{head}")
