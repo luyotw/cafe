@@ -54,12 +54,12 @@ else
     REQUIREMENTS_BASE=$(basename "${1:-requirements.md}" .md)
 fi
 
-AI_DIR=".ai"
-AGENTS_DIR="$AI_DIR/agents"
-SESSIONS_DIR="$AI_DIR/sessions"
-LOGS_DIR="$AI_DIR/logs"
+AAF_DIR=".aaf"
+AGENTS_DIR="$AAF_DIR/agents"
+SESSIONS_DIR="$AAF_DIR/sessions"
+LOGS_DIR="$AAF_DIR/logs"
 ISSUE_DIR="$LOGS_DIR/$REQUIREMENTS_BASE"
-TMP_DIR="$AI_DIR/tmp"
+TMP_DIR="$AAF_DIR/tmp"
 
 # 建立目錄
 mkdir -p "$SESSIONS_DIR"
@@ -318,8 +318,8 @@ enhance_prompt_with_agent_definition() {
     local agent_name=$2
 
     # 檢查是否有 agent 定義文件
-    if [ -f ".ai/agents/${agent_name}.md" ]; then
-        echo "請嚴格按照 .ai/agents/${agent_name}.md 的定義行動。\n\n$prompt"
+    if [ -f "${AAF_DIR}/agents/${agent_name}.md" ]; then
+        echo "請嚴格按照 ${AAF_DIR}/agents/${agent_name}.md 的定義行動。\n\n$prompt"
     else
         echo "$prompt"
     fi
