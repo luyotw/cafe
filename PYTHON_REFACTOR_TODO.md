@@ -1,13 +1,13 @@
 # Python 重構待辦清單
 
 ## 進度總覽
-- 已完成: 8/22 項目 (~36%)
+- 已完成: 9/22 項目 (~41%)
 - 進行中: 0 項目
-- 待完成: 14 項目
+- 待完成: 13 項目
 
 ---
 
-## ✅ 已完成 (8/22)
+## ✅ 已完成 (9/22)
 
 ### 核心模組 (Core Modules)
 1. ✅ **types.py** - 型別定義
@@ -51,9 +51,15 @@
    - Commit: 443f109
    - Features: 多 agent 管理、切換、session 管理、執行
 
+### Utils 模組 (Utilities)
+9. ✅ **config.py** - 設定管理
+   - Status: 100% coverage, 22 tests
+   - Commit: 372f75d
+   - Features: 載入/儲存設定、驗證、巢狀 key 支援、設定合併
+
 ---
 
-## ⏳ 待完成 (14/22)
+## ⏳ 待完成 (13/22)
 
 ---
 
@@ -233,13 +239,14 @@ class GitHubOps:
 - executor.py: 95%
 - workflow.py: 100%
 - manager.py: 100%
+- config.py: 100%
 
-**平均覆蓋率: 96%**
+**整體覆蓋率: 98%**
 
 ### 測試數量
-- 已寫測試: 120 tests
-- 預估需要: 180+ tests
-- 完成度: ~67%
+- 已寫測試: 142 tests
+- 預估需要: 200+ tests
+- 完成度: ~71%
 
 ---
 
@@ -248,7 +255,7 @@ class GitHubOps:
 ### 第一階段（核心基礎）- Week 1 ✅ 已完成
 1. ✅ workflow.py - 工作流程編排
 2. ✅ agent_manager.py - Agent 管理
-3. ⬜ config.py - 設定管理
+3. ✅ config.py - 設定管理
 
 ### 第二階段（Phase 實作）- Week 2-3
 4. ⬜ Phase 1: requirements_phase.py
@@ -284,5 +291,6 @@ class GitHubOps:
 
 **最後更新**: 2025-10-17
 **當前分支**: refactor-python
-**目前進度**: 8/22 完成 (~36%), 120 tests, 96% 平均覆蓋率
-**下一步**: Phase 1 (requirements_phase.py) 或 config.py
+**目前進度**: 9/22 完成 (~41%), 142 tests, 98% 整體覆蓋率
+**第一階段**: ✅ 已完成（所有基礎模組完成）
+**下一步**: 第二階段 - Phase 1 (requirements_phase.py)
