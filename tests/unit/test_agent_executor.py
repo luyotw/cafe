@@ -161,3 +161,81 @@ class TestClaudeExecution:
             call_args = mock_run.call_args
             # The implementation should pass allowed_tools to CLI
             mock_run.assert_called_once()
+
+    def test_execute_claude_failure(self) -> None:
+        """測試 Claude 執行失敗時拋出錯誤"""
+        config = AgentConfig(
+            name="Roger",
+            tool=AgentTool.CLAUDE,
+            session_id="test-session"
+        )
+        executor = AgentExecutor(config)
+
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(
+                stdout="",
+                stderr="Error: session not found",
+                returncode=1
+            )
+
+            with pytest.raises(AgentExecutionError, match="Claude execution failed"):
+                executor._execute_claude("Test prompt")
+
+    def test_execute_claude_non_json_response(self) -> None:
+        """測試 Claude 回傳非 JSON 格式時返回原始輸出"""
+        config = AgentConfig(
+            name="David",
+            tool=AgentTool.CLAUDE,
+            session_id="test-session"
+        )
+        executor = AgentExecutor(config)
+
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(
+                stdout="Plain text response",
+                returncode=0
+            )
+
+            result = executor._execute_claude("Test prompt")
+
+            assert result == "Plain text response"
+
+
+class TestGeminiExecution:
+    """Test Gemini-specific execution."""
+
+    def test_execute_gemini_not_implemented(self) -> None:
+        """測試 Gemini 執行目前尚未實作"""
+        config = AgentConfig(name="Roger", tool=AgentTool.GEMINI)
+        executor = AgentExecutor(config)
+
+        with pytest.raises(NotImplementedError, match="Gemini execution not yet implemented"):
+            executor._execute_gemini("Test prompt")
+
+    def test_execute_with_gemini_tool(self) -> None:
+        """測試使用 Gemini tool 執行會呼叫 _execute_gemini 並拋出 AgentExecutionError"""
+        config = AgentConfig(name="Roger", tool=AgentTool.GEMINI)
+        executor = AgentExecutor(config)
+
+        with pytest.raises(AgentExecutionError, match="Gemini execution not yet implemented"):
+            executor.execute("Test prompt")
+
+
+class TestCursorExecution:
+    """Test Cursor-specific execution."""
+
+    def test_execute_cursor_not_implemented(self) -> None:
+        """測試 Cursor 執行目前尚未實作"""
+        config = AgentConfig(name="David", tool=AgentTool.CURSOR)
+        executor = AgentExecutor(config)
+
+        with pytest.raises(NotImplementedError, match="Cursor execution not yet implemented"):
+            executor._execute_cursor("Test prompt")
+
+    def test_execute_with_cursor_tool(self) -> None:
+        """測試使用 Cursor tool 執行會呼叫 _execute_cursor 並拋出 AgentExecutionError"""
+        config = AgentConfig(name="David", tool=AgentTool.CURSOR)
+        executor = AgentExecutor(config)
+
+        with pytest.raises(AgentExecutionError, match="Cursor execution not yet implemented"):
+            executor.execute("Test prompt")
