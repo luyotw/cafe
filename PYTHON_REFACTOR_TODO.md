@@ -1,13 +1,13 @@
 # Python 重構待辦清單
 
 ## 進度總覽
-- 已完成: 14/22 項目 (~64%)
+- 已完成: 15/22 項目 (~68%)
 - 進行中: 0 項目
-- 待完成: 8 項目
+- 待完成: 7 項目
 
 ---
 
-## ✅ 已完成 (14/22)
+## ✅ 已完成 (15/22)
 
 ### 核心模組 (Core Modules)
 1. ✅ **types.py** - 型別定義
@@ -84,27 +84,20 @@
    - Commit: d507657
    - Features: 推送 branch、建立 PR、PR title/body 生成、gh CLI 整合
 
+### UI 模組 (User Interface)
+
+15. ✅ **cli.py** - 命令列介面
+   - Status: 95% coverage, 17 tests
+   - Commit: e507d7b
+   - Features: run/version/config commands、Typer 整合、workflow 編排
+
 ---
 
-## ⏳ 待完成 (8/22)
+## ⏳ 待完成 (7/22)
 
 ---
 
 ### UI 模組 (User Interface)
-
-#### 15. ⬜ cli.py - 命令列介面
-**Priority: HIGH**
-```python
-# 使用 Typer
-@app.command()
-def main(
-    requirements: str = "requirements.md",
-    mode: str = "github",
-    issue_id: Optional[str] = None
-)
-```
-**Dependencies**: workflow.py, config.py
-**Tests needed**: 8+ tests
 
 #### 16. ⬜ display.py - 顯示工具
 **Priority: MEDIUM**
@@ -119,23 +112,7 @@ class Display:
 **Dependencies**: permission.py
 **Tests needed**: 6+ tests
 
-#### 17. ⬜ tui.py - TUI 介面 (未來功能)
-**Priority: LOW**
-```python
-# 使用 Textual
-class AAFApp(App):
-    - Interactive chat interface
-    - Real-time status updates
-    - Fancy UI like Claude Code
-```
-**Dependencies**: All modules
-**Tests needed**: Integration tests
-
----
-
-### Utils 模組 (Utilities)
-
-#### 18. ⬜ github.py - GitHub 操作
+#### 17. ⬜ github.py - GitHub 操作
 **Priority: MEDIUM**
 ```python
 class GitHubOps:
@@ -146,6 +123,18 @@ class GitHubOps:
 ```
 **Dependencies**: None (uses gh CLI)
 **Tests needed**: 10+ tests
+
+#### 18. ⬜ tui.py - TUI 介面 (未來功能)
+**Priority: LOW**
+```python
+# 使用 Textual
+class AAFApp(App):
+    - Interactive chat interface
+    - Real-time status updates
+    - Fancy UI like Claude Code
+```
+**Dependencies**: All modules
+**Tests needed**: Integration tests
 
 ---
 
@@ -203,9 +192,9 @@ class GitHubOps:
 **整體覆蓋率: 97%**
 
 ### 測試數量
-- 已寫測試: 216 tests
+- 已寫測試: 233 tests (+17 CLI tests)
 - 預估需要: 250+ tests
-- 完成度: ~86%
+- 完成度: ~93%
 
 ---
 
@@ -223,8 +212,8 @@ class GitHubOps:
 7. ✅ Phase 4: review_phase.py
 8. ✅ Phase 5: pr_phase.py
 
-### 第三階段（CLI & Utils）- Week 4
-9. ⬜ cli.py - 基本命令列
+### 第三階段（CLI & Utils）- Week 4 🔄 進行中
+9. ✅ cli.py - 基本命令列
 10. ⬜ display.py - 顯示工具
 11. ⬜ github.py - GitHub 工具
 
@@ -248,9 +237,10 @@ class GitHubOps:
 
 ---
 
-**最後更新**: 2025-10-17
+**最後更新**: 2025-10-18
 **當前分支**: refactor-python
-**目前進度**: 14/22 完成 (~64%), 216 tests, 97% 整體覆蓋率
+**目前進度**: 15/22 完成 (~68%), 233 tests, 97% 整體覆蓋率
 **第一階段**: ✅ 已完成（所有基礎模組完成）
 **第二階段**: ✅ 已完成（所有 Phase 實作完成）
-**下一步**: 第三階段 - CLI & Utils (cli.py, display.py, github.py)
+**第三階段**: 🔄 進行中 - CLI & Utils (✅ cli.py, ⬜ display.py, ⬜ github.py)
+**下一步**: 完成 display.py 和 github.py
