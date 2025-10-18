@@ -1,0 +1,375 @@
+"""Tests for CLI."""
+
+import pytest
+from pathlib import Path
+from typer.testing import CliRunner
+from unittest.mock import MagicMock, Mock, patch
+
+from aaf.ui.cli import app, _setup_agents, _build_workflow
+from aaf.core.types import AgentTool, PhaseResult, PhaseStatus, WorkflowMode
+from aaf.utils.config import ConfigManager
+
+
+runner = CliRunner()
+
+
+class TestSetupAgents:
+    """Test agent setup functionality."""
+
+    def test_setup_agents_with_default_config(self, tmp_path: Path) -> None:
+        """測試使用預設設定建立 agents"""
+        config_file = tmp_path / "config.yaml"
+        config_manager = ConfigManager(str(config_file))
+
+        agent_manager = _setup_agents(config_manager)
+
+        # 驗證三個 agents 都已註冊
+        assert "Roger" in agent_manager.agents
+        assert "David" in agent_manager.agents
+        assert "Richard" in agent_manager.agents
+
+        # 驗證預設使用 claude
+        assert agent_manager.agents["Roger"].config.tool == AgentTool.CLAUDE
+        assert agent_manager.agents["David"].config.tool == AgentTool.CLAUDE
+        assert agent_manager.agents["Richard"].config.tool == AgentTool.CLAUDE
+
+    def test_setup_agents_with_custom_config(self, tmp_path: Path) -> None:
+        """測試使用自訂設定建立 agents"""
+        config_file = tmp_path / "config.yaml"
+        config_manager = ConfigManager(str(config_file))
+
+        # 設定自訂 agent 設定（使用 dict 結構而非預設的 list）
+        custom_config = {
+            "agents": {
+                "pm": {"name": "CustomPM", "tool": "gemini", "allowed_tools": []},
+                "developer": {"name": "CustomDev", "tool": "claude", "allowed_tools": []},
+                "reviewer": {"name": "Richard", "tool": "cursor-agent", "allowed_tools": []},
+            }
+        }
+        config_manager.save_config(custom_config)
+
+        agent_manager = _setup_agents(config_manager)
+
+        # 驗證自訂設定
+        assert "CustomPM" in agent_manager.agents
+        assert "CustomDev" in agent_manager.agents
+        assert agent_manager.agents["CustomPM"].config.tool == AgentTool.GEMINI
+        assert agent_manager.agents["Richard"].config.tool == AgentTool.CURSOR
+
+
+class TestBuildWorkflow:
+    """Test workflow building functionality."""
+
+    @patch("aaf.ui.cli.RequirementsPhase")
+    @patch("aaf.ui.cli.AnalysisPhase")
+    @patch("aaf.ui.cli.ImplementationPhase")
+    @patch("aaf.ui.cli.ReviewPhase")
+    @patch("aaf.ui.cli.PRPhase")
+    def test_build_workflow_creates_all_phases(
+        self,
+        mock_pr: Mock,
+        mock_review: Mock,
+        mock_impl: Mock,
+        mock_analysis: Mock,
+        mock_req: Mock,
+        tmp_path: Path,
+    ) -> None:
+        """測試建立 workflow 會初始化所有 5 個 phases"""
+        config_file = tmp_path / "config.yaml"
+        config_manager = ConfigManager(str(config_file))
+        agent_manager = _setup_agents(config_manager)
+        permission_handler = MagicMock()
+
+        workflow = _build_workflow(
+            mode=WorkflowMode.LOCAL,
+            requirements="req.md",
+            issue_id=None,
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            config_manager=config_manager,
+        )
+
+        # 驗證所有 phase 都被建立
+        mock_req.assert_called_once()
+        mock_analysis.assert_called_once()
+        mock_impl.assert_called_once()
+        mock_review.assert_called_once()
+        mock_pr.assert_called_once()
+
+        # 驗證 workflow 有 5 個 phases
+        assert len(workflow.phases) == 5
+
+    @patch("aaf.ui.cli.RequirementsPhase")
+    def test_build_workflow_passes_correct_mode(
+        self,
+        mock_req: Mock,
+        tmp_path: Path,
+    ) -> None:
+        """測試 workflow 正確傳遞 workflow mode"""
+        config_file = tmp_path / "config.yaml"
+        config_manager = ConfigManager(str(config_file))
+        agent_manager = _setup_agents(config_manager)
+        permission_handler = MagicMock()
+
+        _build_workflow(
+            mode=WorkflowMode.GITHUB,
+            requirements="req.md",
+            issue_id="123",
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            config_manager=config_manager,
+        )
+
+        # 驗證 RequirementsPhase 收到正確的 mode
+        call_kwargs = mock_req.call_args.kwargs
+        assert call_kwargs["workflow_mode"] == WorkflowMode.GITHUB
+        assert call_kwargs["issue_id"] == "123"
+
+
+class TestRunCommand:
+    """Test run command."""
+
+    def test_run_local_mode_success(self, tmp_path: Path) -> None:
+        """測試 local mode 成功執行"""
+        # 建立測試檔案
+        req_file = tmp_path / "requirements.md"
+        req_file.write_text("Test requirements")
+        config_file = tmp_path / "config.yaml"
+
+        with patch("aaf.ui.cli._build_workflow") as mock_build:
+            # Mock workflow execution
+            mock_workflow = MagicMock()
+            mock_workflow.execute.return_value = [
+                PhaseResult(status=PhaseStatus.COMPLETED, message="Phase 1 done"),
+                PhaseResult(status=PhaseStatus.COMPLETED, message="Phase 2 done"),
+            ]
+            mock_build.return_value = mock_workflow
+
+            result = runner.invoke(
+                app,
+                [
+                    "run",
+                    "--mode", "local",
+                    "--requirements", str(req_file),
+                    "--config", str(config_file),
+                ]
+            )
+
+            assert result.exit_code == 0
+            assert "Starting AAF workflow" in result.stdout
+            assert "Mode: local" in result.stdout
+
+    def test_run_github_mode_without_issue_fails(self, tmp_path: Path) -> None:
+        """測試 github mode 沒有 issue_id 會失敗"""
+        config_file = tmp_path / "config.yaml"
+
+        result = runner.invoke(
+            app,
+            [
+                "run",
+                "--mode", "github",
+                "--config", str(config_file),
+            ]
+        )
+
+        assert result.exit_code == 1
+        assert "--issue is required for github mode" in result.stdout
+
+    def test_run_local_mode_missing_requirements_file_fails(self, tmp_path: Path) -> None:
+        """測試 local mode 缺少 requirements 檔案會失敗"""
+        config_file = tmp_path / "config.yaml"
+
+        result = runner.invoke(
+            app,
+            [
+                "run",
+                "--mode", "local",
+                "--requirements", "nonexistent.md",
+                "--config", str(config_file),
+            ]
+        )
+
+        assert result.exit_code == 1
+        assert "Requirements file not found" in result.stdout
+
+    def test_run_invalid_mode_fails(self, tmp_path: Path) -> None:
+        """測試無效的 mode 會失敗"""
+        config_file = tmp_path / "config.yaml"
+
+        result = runner.invoke(
+            app,
+            [
+                "run",
+                "--mode", "invalid",
+                "--config", str(config_file),
+            ]
+        )
+
+        assert result.exit_code == 1
+        assert "Invalid mode 'invalid'" in result.stdout
+
+    def test_run_with_skip_phases(self, tmp_path: Path) -> None:
+        """測試跳過特定 phases"""
+        req_file = tmp_path / "requirements.md"
+        req_file.write_text("Test requirements")
+        config_file = tmp_path / "config.yaml"
+
+        with patch("aaf.ui.cli._build_workflow") as mock_build:
+            mock_workflow = MagicMock()
+            mock_workflow.execute.return_value = [
+                PhaseResult(status=PhaseStatus.SKIPPED, message="Skipped"),
+                PhaseResult(status=PhaseStatus.COMPLETED, message="Done"),
+            ]
+            mock_build.return_value = mock_workflow
+
+            result = runner.invoke(
+                app,
+                [
+                    "run",
+                    "--mode", "local",
+                    "--requirements", str(req_file),
+                    "--config", str(config_file),
+                    "--skip", "0,2",
+                ]
+            )
+
+            # 驗證 skip_phases 參數被正確傳遞
+            mock_workflow.execute.assert_called_once_with(skip_phases=[0, 2])
+            assert result.exit_code == 0
+
+    def test_run_with_invalid_skip_format_fails(self, tmp_path: Path) -> None:
+        """測試無效的 skip 格式會失敗"""
+        req_file = tmp_path / "requirements.md"
+        req_file.write_text("Test requirements")
+        config_file = tmp_path / "config.yaml"
+
+        result = runner.invoke(
+            app,
+            [
+                "run",
+                "--mode", "local",
+                "--requirements", str(req_file),
+                "--config", str(config_file),
+                "--skip", "abc,def",
+            ]
+        )
+
+        assert result.exit_code == 1
+        assert "Invalid --skip format" in result.stdout
+
+    def test_run_exits_with_error_on_failed_phase(self, tmp_path: Path) -> None:
+        """測試當有 phase 失敗時會回傳錯誤碼"""
+        req_file = tmp_path / "requirements.md"
+        req_file.write_text("Test requirements")
+        config_file = tmp_path / "config.yaml"
+
+        with patch("aaf.ui.cli._build_workflow") as mock_build:
+            mock_workflow = MagicMock()
+            mock_workflow.execute.return_value = [
+                PhaseResult(status=PhaseStatus.COMPLETED, message="Done"),
+                PhaseResult(status=PhaseStatus.FAILED, message="Error"),
+            ]
+            mock_build.return_value = mock_workflow
+
+            result = runner.invoke(
+                app,
+                [
+                    "run",
+                    "--mode", "local",
+                    "--requirements", str(req_file),
+                    "--config", str(config_file),
+                ]
+            )
+
+            assert result.exit_code == 1
+            assert "FAILED" in result.stdout
+
+
+class TestVersionCommand:
+    """Test version command."""
+
+    def test_version_shows_version_number(self) -> None:
+        """測試 version 指令顯示版本號"""
+        result = runner.invoke(app, ["version"])
+
+        assert result.exit_code == 0
+        assert "0.1.0" in result.stdout
+
+
+class TestConfigCommand:
+    """Test config command."""
+
+    def test_config_list_all(self, tmp_path: Path) -> None:
+        """測試列出所有設定"""
+        config_file = tmp_path / "config.yaml"
+        config_manager = ConfigManager(str(tmp_path))
+        config_manager.set("test.key", "value")  # set() already calls save_config()
+
+        result = runner.invoke(
+            app,
+            ["config", "--list", "--config", str(config_file)]
+        )
+
+        assert result.exit_code == 0
+        assert "test:" in result.stdout or "test" in result.stdout
+        assert "value" in result.stdout
+
+    def test_config_get_existing_key(self, tmp_path: Path) -> None:
+        """測試取得存在的設定值"""
+        config_file = tmp_path / "config.yaml"
+        # Save custom config with dict structure for agents
+        custom_config = {
+            "agents": {
+                "pm": {"name": "Roger"}
+            }
+        }
+        config_manager = ConfigManager(str(tmp_path))
+        config_manager.save_config(custom_config)
+
+        result = runner.invoke(
+            app,
+            ["config", "agents.pm.name", "--config", str(config_file)]
+        )
+
+        assert result.exit_code == 0
+        assert "Roger" in result.stdout
+
+    def test_config_get_nonexistent_key(self, tmp_path: Path) -> None:
+        """測試取得不存在的設定值"""
+        config_file = tmp_path / "config.yaml"
+
+        result = runner.invoke(
+            app,
+            ["config", "nonexistent.key", "--config", str(config_file)]
+        )
+
+        assert result.exit_code == 0
+        assert "Key not found" in result.stdout
+
+    def test_config_set_value(self, tmp_path: Path) -> None:
+        """測試設定值"""
+        config_file = tmp_path / "config.yaml"
+
+        result = runner.invoke(
+            app,
+            ["config", "test.key", "test_value", "--config", str(config_file)]
+        )
+
+        assert result.exit_code == 0
+        assert "Set test.key = test_value" in result.stdout
+
+        # 驗證設定已儲存 (ConfigManager takes directory, not file)
+        config_manager = ConfigManager(str(tmp_path))
+        assert config_manager.get("test.key") == "test_value"
+
+    def test_config_without_args_shows_help(self, tmp_path: Path) -> None:
+        """測試沒有參數時顯示提示"""
+        config_file = tmp_path / "config.yaml"
+
+        result = runner.invoke(
+            app,
+            ["config", "--config", str(config_file)]
+        )
+
+        assert result.exit_code == 0
+        assert "Use --list" in result.stdout
