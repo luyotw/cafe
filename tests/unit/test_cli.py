@@ -208,55 +208,6 @@ class TestRunCommand:
         assert result.exit_code == 1
         assert "Invalid mode 'invalid'" in result.stdout
 
-    def test_run_with_skip_phases(self, tmp_path: Path) -> None:
-        """測試跳過特定 phases"""
-        req_file = tmp_path / "requirements.md"
-        req_file.write_text("Test requirements")
-        config_file = tmp_path / "config.yaml"
-
-        with patch("aaf.ui.cli._build_workflow") as mock_build:
-            mock_workflow = MagicMock()
-            mock_workflow.execute.return_value = [
-                PhaseResult(status=PhaseStatus.SKIPPED, message="Skipped"),
-                PhaseResult(status=PhaseStatus.COMPLETED, message="Done"),
-            ]
-            mock_build.return_value = mock_workflow
-
-            result = runner.invoke(
-                app,
-                [
-                    "run",
-                    "--mode", "local",
-                    "--requirements", str(req_file),
-                    "--config", str(config_file),
-                    "--skip", "0,2",
-                ]
-            )
-
-            # 驗證 skip_phases 參數被正確傳遞
-            mock_workflow.execute.assert_called_once_with(skip_phases=[0, 2])
-            assert result.exit_code == 0
-
-    def test_run_with_invalid_skip_format_fails(self, tmp_path: Path) -> None:
-        """測試無效的 skip 格式會失敗"""
-        req_file = tmp_path / "requirements.md"
-        req_file.write_text("Test requirements")
-        config_file = tmp_path / "config.yaml"
-
-        result = runner.invoke(
-            app,
-            [
-                "run",
-                "--mode", "local",
-                "--requirements", str(req_file),
-                "--config", str(config_file),
-                "--skip", "abc,def",
-            ]
-        )
-
-        assert result.exit_code == 1
-        assert "Invalid --skip format" in result.stdout
-
     def test_run_exits_with_error_on_failed_phase(self, tmp_path: Path) -> None:
         """測試當有 phase 失敗時會回傳錯誤碼"""
         req_file = tmp_path / "requirements.md"

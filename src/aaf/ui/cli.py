@@ -202,12 +202,6 @@ def run(
         "-c",
         help="Path to configuration file",
     ),
-    skip_phases: Optional[str] = typer.Option(
-        None,
-        "--skip",
-        "-s",
-        help="Comma-separated list of phase indices to skip (e.g., '0,2')",
-    ),
 ) -> None:
     """Run the AAF workflow.
 
@@ -217,9 +211,6 @@ def run(
 
         # GitHub mode with issue
         aaf run -m github -i 123
-
-        # Skip specific phases
-        aaf run -m local -r req.md --skip 0,4
     """
     try:
         # Validate mode
@@ -239,15 +230,6 @@ def run(
             req_path = Path(requirements)
             if not req_path.exists():
                 console.print(f"[red]Error: Requirements file not found: {requirements}[/red]")
-                raise typer.Exit(1)
-
-        # Parse skip_phases
-        skip_list = []
-        if skip_phases:
-            try:
-                skip_list = [int(p.strip()) for p in skip_phases.split(",")]
-            except ValueError:
-                console.print("[red]Error: Invalid --skip format. Use comma-separated integers.[/red]")
                 raise typer.Exit(1)
 
         # Initialize components
@@ -274,7 +256,7 @@ def run(
             config_manager=config_manager,
         )
 
-        results = workflow.execute(skip_phases=skip_list)
+        results = workflow.execute()
 
         # Display results
         console.print("\n[bold]Workflow Results:[/bold]")
