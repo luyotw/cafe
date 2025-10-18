@@ -1,13 +1,13 @@
 # Python 重構待辦清單
 
 ## 進度總覽
-- 已完成: 15/22 項目 (~68%)
+- 已完成: 16/22 項目 (~73%)
 - 進行中: 0 項目
-- 待完成: 7 項目
+- 待完成: 6 項目
 
 ---
 
-## ✅ 已完成 (15/22)
+## ✅ 已完成 (16/22)
 
 ### 核心模組 (Core Modules)
 1. ✅ **types.py** - 型別定義
@@ -91,15 +91,22 @@
    - Commit: e507d7b
    - Features: run/version/config commands、Typer 整合、workflow 編排
 
+### Utils 模組 (Utilities)
+
+16. ✅ **github.py** - GitHub 操作
+   - Status: 90% coverage, 21 tests
+   - Commit: 303faf1
+   - Features: get_issue、create_pr、add_comment、get_pr_status、gh CLI 整合
+
 ---
 
-## ⏳ 待完成 (7/22)
+## ⏳ 待完成 (6/22)
 
 ---
 
 ### UI 模組 (User Interface)
 
-#### 16. ⬜ display.py - 顯示工具
+#### 17. ⬜ display.py - 顯示工具
 **Priority: MEDIUM**
 ```python
 # 使用 Rich
@@ -111,18 +118,6 @@ class Display:
 ```
 **Dependencies**: permission.py
 **Tests needed**: 6+ tests
-
-#### 17. ⬜ github.py - GitHub 操作
-**Priority: MEDIUM**
-```python
-class GitHubOps:
-    - get_issue() - 取得 issue 資訊
-    - create_pr() - 建立 PR
-    - add_pr_comment() - 新增 PR 評論
-    - check_pr_status() - 檢查 PR 狀態
-```
-**Dependencies**: None (uses gh CLI)
-**Tests needed**: 10+ tests
 
 #### 18. ⬜ tui.py - TUI 介面 (未來功能)
 **Priority: LOW**
@@ -192,9 +187,9 @@ class AAFApp(App):
 **整體覆蓋率: 97%**
 
 ### 測試數量
-- 已寫測試: 233 tests (+17 CLI tests)
-- 預估需要: 250+ tests
-- 完成度: ~93%
+- 已寫測試: 254 tests (+17 CLI, +21 GitHub tests)
+- 預估需要: 270+ tests
+- 完成度: ~94%
 
 ---
 
@@ -214,8 +209,8 @@ class AAFApp(App):
 
 ### 第三階段（CLI & Utils）- Week 4 🔄 進行中
 9. ✅ cli.py - 基本命令列
-10. ⬜ display.py - 顯示工具
-11. ⬜ github.py - GitHub 工具
+10. ✅ github.py - GitHub 工具
+11. ⬜ display.py - 顯示工具
 
 ### 第四階段（測試與文件）- Week 5
 12. ⬜ Integration tests
@@ -239,8 +234,8 @@ class AAFApp(App):
 
 **最後更新**: 2025-10-18
 **當前分支**: refactor-python
-**目前進度**: 15/22 完成 (~68%), 233 tests, 97% 整體覆蓋率
+**目前進度**: 16/22 完成 (~73%), 254 tests, 96% 整體覆蓋率
 **第一階段**: ✅ 已完成（所有基礎模組完成）
 **第二階段**: ✅ 已完成（所有 Phase 實作完成）
-**第三階段**: 🔄 進行中 - CLI & Utils (✅ cli.py, ⬜ display.py, ⬜ github.py)
-**下一步**: 完成 display.py 和 github.py
+**第三階段**: 🔄 進行中 - CLI & Utils (✅ cli.py, ✅ github.py, ⬜ display.py)
+**下一步**: 完成 display.py
