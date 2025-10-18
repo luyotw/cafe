@@ -24,7 +24,7 @@ dev = [
 ]
 
 [project.scripts]
-aaf = "aaf.cli:main"
+aaf = "aaf.ui.cli:main"
 
 [build-system]
 requires = ["hatchling"]
