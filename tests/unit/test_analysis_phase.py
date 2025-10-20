@@ -63,7 +63,7 @@ Implementation analysis here
 """)
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = "實作分析狀態：已確認"
+        agent_manager.execute.return_value = "CONFIRMED\n實作分析已完成。"
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -107,7 +107,7 @@ Implementation analysis here
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.side_effect = [
             "分析中...",
-            "實作分析狀態：已確認",
+            "CONFIRMED\n實作分析已完成。",
         ]
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -131,7 +131,7 @@ class TestGitHubWorkflow:
     def test_execute_github_workflow(self) -> None:
         """測試執行 GitHub workflow"""
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = "實作分析狀態：已確認"
+        agent_manager.execute.return_value = "CONFIRMED\n實作分析已完成。"
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -154,7 +154,7 @@ class TestGitHubWorkflow:
     def test_github_workflow_uses_issue_id(self) -> None:
         """測試 GitHub workflow 使用 issue ID"""
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = "實作分析狀態：已確認"
+        agent_manager.execute.return_value = "CONFIRMED\n實作分析已完成。"
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -181,7 +181,7 @@ class TestPromptGeneration:
         requirements_file.write_text("# Requirements\n\n## 開發指南\nGuide")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = "實作分析狀態：已確認"
+        agent_manager.execute.return_value = "CONFIRMED\n實作分析已完成。"
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -207,7 +207,7 @@ class TestPromptGeneration:
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.side_effect = [
             "分析中",
-            "實作分析狀態：已確認",
+            "CONFIRMED\n實作分析已完成。",
         ]
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -227,48 +227,6 @@ class TestPromptGeneration:
         assert "第 2 輪" in prompt
 
 
-class TestConfirmationDetection:
-    """Test implementation analysis confirmation detection."""
-
-    def test_detect_confirmation_status(self, tmp_path: Path) -> None:
-        """測試偵測確認狀態"""
-        requirements_file = tmp_path / "requirements.md"
-        requirements_file.write_text("# Requirements\n\n## 開發指南\nGuide")
-
-        agent_manager = MagicMock(spec=AgentManager)
-        permission_handler = MagicMock(spec=PermissionHandler)
-
-        phase = AnalysisPhase(
-            agent_manager=agent_manager,
-            permission_handler=permission_handler,
-            requirements_file=str(requirements_file),
-            workflow_mode=WorkflowMode.LOCAL,
-        )
-
-        # Test various confirmation formats
-        assert phase.is_confirmed("實作分析狀態：已確認")
-        assert phase.is_confirmed("> 實作分析狀態：已確認")
-        assert phase.is_confirmed("some text\n實作分析狀態：已確認\n")
-
-    def test_not_confirmed_without_keyword(self, tmp_path: Path) -> None:
-        """測試沒有關鍵字時不算確認"""
-        requirements_file = tmp_path / "requirements.md"
-        requirements_file.write_text("# Requirements\n\n## 開發指南\nGuide")
-
-        agent_manager = MagicMock(spec=AgentManager)
-        permission_handler = MagicMock(spec=PermissionHandler)
-
-        phase = AnalysisPhase(
-            agent_manager=agent_manager,
-            permission_handler=permission_handler,
-            requirements_file=str(requirements_file),
-            workflow_mode=WorkflowMode.LOCAL,
-        )
-
-        assert not phase.is_confirmed("分析進行中")
-        assert not phase.is_confirmed("還需要更多資訊")
-
-
 class TestAgentSelection:
     """Test developer agent selection."""
 
@@ -278,7 +236,7 @@ class TestAgentSelection:
         requirements_file.write_text("# Requirements\n\n## 開發指南\nGuide")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = "實作分析狀態：已確認"
+        agent_manager.execute.return_value = "CONFIRMED\n實作分析已完成。"
 
         permission_handler = MagicMock(spec=PermissionHandler)
 

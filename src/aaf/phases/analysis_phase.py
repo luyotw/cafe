@@ -7,6 +7,7 @@ from typing import Optional
 from aaf.agents.manager import AgentManager
 from aaf.core.permission import PermissionHandler
 from aaf.core.phase import Phase
+from aaf.core.status_codes import PhaseStatusCode, StatusCodeParser, generate_status_code_prompt
 from aaf.core.types import PhaseResult, PhaseStatus, WorkflowMode
 
 
@@ -80,16 +81,43 @@ class AnalysisPhase(Phase):
                 # Execute developer agent
                 response = self.agent_manager.execute(self.dev_agent, prompt)
 
-                # Check if analysis is confirmed
-                if self.is_confirmed(response):
+                # Extract status code from response
+                status_code = StatusCodeParser.extract(
+                    response,
+                    valid_codes=[
+                        PhaseStatusCode.CONFIRMED,
+                        PhaseStatusCode.NEED_CLARIFICATION,
+                        PhaseStatusCode.REJECTED,
+                    ],
+                )
+
+                # Handle status codes
+                if status_code == PhaseStatusCode.CONFIRMED:
                     return PhaseResult(
                         status=PhaseStatus.COMPLETED,
                         message=f"Implementation analysis completed in {self.iteration} iteration(s)",
-                        data={"iterations": self.iteration, "final_response": response},
+                        data={
+                            "iterations": self.iteration,
+                            "final_response": response,
+                            "status_code": status_code.value,
+                        },
                     )
-
-                # Continue to next iteration if not confirmed
-                # In production, this would involve user interaction
+                elif status_code == PhaseStatusCode.REJECTED:
+                    return PhaseResult(
+                        status=PhaseStatus.FAILED,
+                        message=f"Implementation analysis rejected in iteration {self.iteration}",
+                        data={
+                            "iterations": self.iteration,
+                            "final_response": response,
+                            "status_code": status_code.value,
+                        },
+                    )
+                elif status_code == PhaseStatusCode.NEED_CLARIFICATION:
+                    # Continue to next iteration for clarification
+                    continue
+                else:
+                    # No valid status code found, continue iteration
+                    continue
 
         except Exception as e:
             return PhaseResult(
@@ -139,6 +167,19 @@ class AnalysisPhase(Phase):
         Returns:
             Prompt string
         """
+        status_code_prompt = generate_status_code_prompt(
+            valid_codes=[
+                PhaseStatusCode.CONFIRMED,
+                PhaseStatusCode.NEED_CLARIFICATION,
+                PhaseStatusCode.REJECTED,
+            ],
+            descriptions={
+                PhaseStatusCode.CONFIRMED: "實作分析已完成，可以開始開發",
+                PhaseStatusCode.NEED_CLARIFICATION: "需要更多資訊或確認",
+                PhaseStatusCode.REJECTED: "實作分析無法進行",
+            },
+        )
+
         if self.iteration == 1:
             return f"""Use the {self.dev_agent} subagent to analyze {self.requirements_file}.
 
@@ -146,12 +187,13 @@ class AnalysisPhase(Phase):
 
 請仔細閱讀需求文件和開發指南，規劃詳細的實作步驟。
 
+{status_code_prompt}
+
 **如果需要更多資訊：**
 列出需要確認的問題。
 
 **如果分析完成：**
-請在回應中包含：
-> 實作分析狀態：已確認
+回應確認訊息。
 """
         else:
             return f"""Use the {self.dev_agent} subagent to continue analyzing {self.requirements_file}.
@@ -160,12 +202,13 @@ class AnalysisPhase(Phase):
 
 請繼續檢查實作計畫。
 
+{status_code_prompt}
+
 **如果需要更多資訊：**
 列出需要確認的問題。
 
 **如果分析完成：**
-請在回應中包含：
-> 實作分析狀態：已確認
+回應確認訊息。
 """
 
     def _generate_github_prompt(self) -> str:
@@ -174,38 +217,43 @@ class AnalysisPhase(Phase):
         Returns:
             Prompt string
         """
+        status_code_prompt = generate_status_code_prompt(
+            valid_codes=[
+                PhaseStatusCode.CONFIRMED,
+                PhaseStatusCode.NEED_CLARIFICATION,
+                PhaseStatusCode.REJECTED,
+            ],
+            descriptions={
+                PhaseStatusCode.CONFIRMED: "實作分析已完成，可以開始開發",
+                PhaseStatusCode.NEED_CLARIFICATION: "需要更多資訊或確認",
+                PhaseStatusCode.REJECTED: "實作分析無法進行",
+            },
+        )
+
         if self.iteration == 1:
             return f"""Use the {self.dev_agent} subagent. 這是第 {self.iteration} 輪實作分析。
 
 請用 `gh issue view {self.issue_id}` 讀取 Issue 內容，根據需求和開發指南規劃詳細的實作步驟。
 
+{status_code_prompt}
+
 **如果需要更多資訊：**
 用 `gh issue comment {self.issue_id}` 發 comment 詢問。
 
 **如果分析完成：**
-請用戶手動在 Issue body 結尾加上一行:
-> 實作分析狀態：已確認
+回應確認訊息。
 """
         else:
             return f"""Use the {self.dev_agent} subagent. 這是第 {self.iteration} 輪實作分析。
 
 請用 `gh issue view {self.issue_id}` 檢視 Issue 的最新內容。
 
+{status_code_prompt}
+
 **如果需要更多資訊：**
 用 `gh issue comment {self.issue_id}` 發 comment 詢問。
 
 **如果分析完成：**
-請用戶手動在 Issue body 結尾加上一行:
-> 實作分析狀態：已確認
+回應確認訊息。
 """
 
-    def is_confirmed(self, response: str) -> bool:
-        """Check if implementation analysis is confirmed.
-
-        Args:
-            response: Agent response
-
-        Returns:
-            True if confirmed
-        """
-        return "實作分析狀態：已確認" in response
