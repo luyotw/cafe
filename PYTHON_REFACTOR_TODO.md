@@ -1,13 +1,13 @@
 # Python 重構待辦清單
 
 ## 進度總覽
-- 已完成: 16/22 項目 (~73%)
-- 進行中: 0 項目
-- 待完成: 6 項目
+- 已完成: 17/23 項目 (~74%)
+- 進行中: 1 項目
+- 待完成: 5 項目
 
 ---
 
-## ✅ 已完成 (16/22)
+## ✅ 已完成 (17/23)
 
 ### 核心模組 (Core Modules)
 1. ✅ **types.py** - 型別定義
@@ -98,15 +98,71 @@
    - Commit: 303faf1
    - Features: get_issue、create_pr、add_comment、get_pr_status、gh CLI 整合
 
+### 核心模組 (Core Modules) - 增強
+
+17. ✅ **status_codes.py** - Phase 狀態碼系統
+   - Status: 98% coverage, 20 tests
+   - Commit: f343e1c
+   - Features:
+     - PhaseStatusCode enum (20+ 狀態碼)
+     - StatusCodeParser (智慧解析、支援大小寫、fallback)
+     - generate_status_code_prompt()
+     - 分類方法: is_success(), is_failure(), is_retry(), needs_human_input()
+   - 用途: 統一 agent 回應格式、節省 token、為 cache 系統做準備
+
 ---
 
-## ⏳ 待完成 (6/22)
+## 🔄 進行中 (1/23)
+
+#### 18. 🔄 **Phase 狀態碼整合** - 更新所有 phases 使用狀態碼
+**Priority: HIGH**
+**Status**: 測試已寫好，等待實作
+**Sub-tasks**:
+- ⬜ RequirementsPhase: CONFIRMED / NEED_CLARIFICATION / REJECTED
+- ⬜ AnalysisPhase: CONFIRMED / NEED_CLARIFICATION / REJECTED
+- ⬜ ReviewPhase: APPROVED / LGTM / NEEDS_CHANGES
+- ⬜ ImplementationPhase: COMMITTED / NO_CHANGES
+- ⬜ 更新所有 phase prompts 要求狀態碼
+**Tests**: 7 tests written for RequirementsPhase (test_requirements_phase_status_codes.py)
+**Benefits**:
+- 節省 token（從長句子變成簡短狀態碼）
+- 更明確的控制流程
+- 為 cache 系統打基礎
+
+---
+
+## ⏳ 待完成 (5/23)
 
 ---
 
 ### UI 模組 (User Interface)
 
-#### 17. ⬜ display.py - 顯示工具
+#### 19. ⬜ **phase_cache.py** - Phase Cache 系統
+**Priority: HIGH**
+**Status**: 待開發
+**Dependencies**: status_codes.py
+```python
+class PhaseCache:
+    - save(phase_name, status_code, response, hash) - 儲存 phase 結果
+    - load(phase_name) -> CacheEntry - 載入 cache
+    - is_valid(phase_name, current_hash) -> bool - 驗證 cache 有效性
+    - clear(phase_name) - 清除 cache
+    - clear_all() - 清除所有 cache
+```
+**Cache 檔案結構**:
+```
+.aaf/cache/session_{id}/
+  ├── phase_0_requirements.json
+  ├── phase_1_analysis.json
+  └── ...
+```
+**Tests needed**: 15+ tests
+**Benefits**:
+- 重跑 workflow 時跳過已完成的 phase
+- 節省時間和 API 成本
+- 支援斷點續跑
+
+#### 20. ⬜ display.py - 顯示工具
 **Priority: MEDIUM**
 ```python
 # 使用 Rich
@@ -119,7 +175,7 @@ class Display:
 **Dependencies**: permission.py
 **Tests needed**: 6+ tests
 
-#### 18. ⬜ tui.py - TUI 介面 (未來功能)
+#### 21. ⬜ tui.py - TUI 介面 (未來功能)
 **Priority: LOW**
 ```python
 # 使用 Textual
@@ -135,13 +191,13 @@ class AAFApp(App):
 
 ### 整合測試 (Integration Tests)
 
-#### 19. ⬜ tests/integration/test_full_workflow.py
+#### 22. ⬜ tests/integration/test_full_workflow.py
 **Priority: LOW**
 - End-to-end workflow testing
 - Mock external dependencies
 - Test all phases together
 
-#### 20. ⬜ tests/integration/test_agent_integration.py
+#### 23. ⬜ tests/integration/test_agent_integration.py
 **Priority: LOW**
 - Test agent manager with real agents
 - Test permission flow
@@ -151,14 +207,14 @@ class AAFApp(App):
 
 ### 文件與部署 (Documentation & Deployment)
 
-#### 21. ⬜ README.md - Python 版本說明文件
+#### 24. ⬜ README.md - Python 版本說明文件
 **Priority: LOW**
 - Installation instructions
 - Usage examples
 - API documentation
 - Migration from bash version
 
-#### 22. ⬜ pyproject.toml 完善 + Migration Guide
+#### 25. ⬜ pyproject.toml 完善 + Migration Guide
 **Priority: LOW**
 - Complete packaging setup
 - Entry points configuration
@@ -187,9 +243,9 @@ class AAFApp(App):
 **整體覆蓋率: 97%**
 
 ### 測試數量
-- 已寫測試: 254 tests (+17 CLI, +21 GitHub tests)
-- 預估需要: 270+ tests
-- 完成度: ~94%
+- 已寫測試: 274 tests (+17 CLI, +21 GitHub, +20 status codes)
+- 預估需要: 300+ tests
+- 完成度: ~91%
 
 ---
 
@@ -207,18 +263,21 @@ class AAFApp(App):
 7. ✅ Phase 4: review_phase.py
 8. ✅ Phase 5: pr_phase.py
 
-### 第三階段（CLI & Utils）- Week 4 🔄 進行中
+### 第三階段（CLI & Utils & 增強）- Week 4 🔄 進行中
 9. ✅ cli.py - 基本命令列
 10. ✅ github.py - GitHub 工具
-11. ⬜ display.py - 顯示工具
+11. ✅ status_codes.py - 狀態碼系統
+12. 🔄 Phase 狀態碼整合 - 更新所有 phases
+13. ⬜ phase_cache.py - Cache 系統
+14. ⬜ display.py - 顯示工具
 
 ### 第四階段（測試與文件）- Week 5
-12. ⬜ Integration tests
-13. ⬜ Documentation
-14. ⬜ Migration guide
+15. ⬜ Integration tests
+16. ⬜ Documentation
+17. ⬜ Migration guide
 
 ### 未來（TUI）- Future
-15. ⬜ tui.py - Fancy 對話介面
+18. ⬜ tui.py - Fancy 對話介面
 
 ---
 
@@ -232,10 +291,17 @@ class AAFApp(App):
 
 ---
 
-**最後更新**: 2025-10-18
+**最後更新**: 2025-10-19
 **當前分支**: refactor-python
-**目前進度**: 16/22 完成 (~73%), 254 tests, 96% 整體覆蓋率
+**目前進度**: 17/25 完成 (~68%), 274 tests, 96% 整體覆蓋率
 **第一階段**: ✅ 已完成（所有基礎模組完成）
 **第二階段**: ✅ 已完成（所有 Phase 實作完成）
-**第三階段**: 🔄 進行中 - CLI & Utils (✅ cli.py, ✅ github.py, ⬜ display.py)
-**下一步**: 完成 display.py
+**第三階段**: 🔄 進行中 - CLI & Utils & 增強
+  - ✅ cli.py (命令列介面)
+  - ✅ github.py (GitHub 操作)
+  - ✅ status_codes.py (狀態碼系統)
+  - 🔄 Phase 狀態碼整合 (測試已寫，等待實作)
+  - ⬜ phase_cache.py (Cache 系統)
+  - ⬜ display.py (顯示工具)
+**當前任務**: 完成 Phase 狀態碼整合
+**下一步**: phase_cache.py → display.py
