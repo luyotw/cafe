@@ -260,7 +260,7 @@ class RequirementsPhase(Phase):
         if self.iteration == 1:
             if file_exists:
                 # File exists - analyze and clarify
-                return f"""Use the {self.pm_agent} subagent to analyze {self.requirements_file}.
+                return f"""分析 {self.requirements_file} 的內容。
 
 你是 PM，負責與用戶溝通並產出完整的需求文件。這是第 {self.iteration} 輪需求澄清。
 
@@ -285,9 +285,7 @@ class RequirementsPhase(Phase):
 """
             else:
                 # File doesn't exist - start from scratch
-                return f"""Use the {self.pm_agent} subagent.
-
-你是 PM，負責與用戶溝通並產出完整的需求文件。這是第 {self.iteration} 輪需求澄清。
+                return f"""你是 PM，負責與用戶溝通並產出完整的需求文件。這是第 {self.iteration} 輪需求澄清。
 
 **目前狀況：尚無需求文件，需要從零開始。**
 
@@ -312,7 +310,7 @@ class RequirementsPhase(Phase):
 產出完整的需求文件，包含：功能描述、使用場景、預期行為、驗收標準。
 """
         else:
-            return f"""Use the {self.pm_agent} subagent to continue analyzing {self.requirements_file}.
+            return f"""繼續分析 {self.requirements_file} 的最新版本。
 
 這是第 {self.iteration} 輪需求澄清。請檢查需求文件的最新版本。
 
@@ -347,7 +345,7 @@ class RequirementsPhase(Phase):
         )
 
         if self.iteration == 1:
-            return f"""Use the {self.pm_agent} subagent. 這是第 {self.iteration} 輪需求分析。
+            return f"""這是第 {self.iteration} 輪需求分析。
 
 請用 `gh issue view {self.issue_id}` 讀取 Issue 內容，仔細分析需求，找出所有不清楚、模糊、可能讓開發者自己腦補的地方。
 
@@ -360,7 +358,7 @@ class RequirementsPhase(Phase):
 回應確認訊息。
 """
         else:
-            return f"""Use the {self.pm_agent} subagent. 這是第 {self.iteration} 輪需求分析。
+            return f"""這是第 {self.iteration} 輪需求分析。
 
 請用 `gh issue view {self.issue_id}` 檢視 Issue 的最新內容。
 
