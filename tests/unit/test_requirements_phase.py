@@ -56,7 +56,7 @@ class TestLocalWorkflow:
         requirements_file.write_text("Initial requirements\n")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = "需求分析狀態：已確認"
+        agent_manager.execute.return_value = "CONFIRMED\n需求已清楚。"
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -78,7 +78,7 @@ class TestLocalWorkflow:
         requirements_file.write_text("Original requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = "需求分析狀態：已確認"
+        agent_manager.execute.return_value = "CONFIRMED\n需求已清楚。"
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -103,9 +103,9 @@ class TestLocalWorkflow:
         agent_manager = MagicMock(spec=AgentManager)
         # First two iterations ask questions, third confirms
         agent_manager.execute.side_effect = [
-            "請問：需求問題 1",
-            "請問：需求問題 2",
-            "需求分析狀態：已確認",
+            "NEED_CLARIFICATION\n請問：需求問題 1",
+            "NEED_CLARIFICATION\n請問：需求問題 2",
+            "CONFIRMED\n需求已清楚。",
         ]
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -129,7 +129,7 @@ class TestGitHubWorkflow:
     def test_execute_github_workflow(self) -> None:
         """測試執行 GitHub workflow"""
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = "需求分析狀態：已確認"
+        agent_manager.execute.return_value = "CONFIRMED\n需求已清楚。"
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -152,7 +152,7 @@ class TestGitHubWorkflow:
     def test_github_workflow_uses_issue_id(self) -> None:
         """測試 GitHub workflow 使用 issue ID"""
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = "需求分析狀態：已確認"
+        agent_manager.execute.return_value = "CONFIRMED\n需求已清楚。"
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -179,7 +179,7 @@ class TestPromptGeneration:
         requirements_file.write_text("Requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = "需求分析狀態：已確認"
+        agent_manager.execute.return_value = "CONFIRMED\n需求已清楚。"
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -204,8 +204,8 @@ class TestPromptGeneration:
 
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.side_effect = [
-            "問題 1",
-            "需求分析狀態：已確認",
+            "NEED_CLARIFICATION\n問題 1",
+            "CONFIRMED\n需求已清楚。",
         ]
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -225,48 +225,6 @@ class TestPromptGeneration:
         assert "第 2 輪" in prompt
 
 
-class TestConfirmationDetection:
-    """Test requirements confirmation detection."""
-
-    def test_detect_confirmation_status(self, tmp_path: Path) -> None:
-        """測試偵測確認狀態"""
-        requirements_file = tmp_path / "requirements.md"
-        requirements_file.write_text("Requirements")
-
-        agent_manager = MagicMock(spec=AgentManager)
-        permission_handler = MagicMock(spec=PermissionHandler)
-
-        phase = RequirementsPhase(
-            agent_manager=agent_manager,
-            permission_handler=permission_handler,
-            requirements_file=str(requirements_file),
-            workflow_mode=WorkflowMode.LOCAL,
-        )
-
-        # Test various confirmation formats
-        assert phase.is_confirmed("需求分析狀態：已確認")
-        assert phase.is_confirmed("> 需求分析狀態：已確認")
-        assert phase.is_confirmed("some text\n需求分析狀態：已確認\n")
-
-    def test_not_confirmed_without_keyword(self, tmp_path: Path) -> None:
-        """測試沒有關鍵字時不算確認"""
-        requirements_file = tmp_path / "requirements.md"
-        requirements_file.write_text("Requirements")
-
-        agent_manager = MagicMock(spec=AgentManager)
-        permission_handler = MagicMock(spec=PermissionHandler)
-
-        phase = RequirementsPhase(
-            agent_manager=agent_manager,
-            permission_handler=permission_handler,
-            requirements_file=str(requirements_file),
-            workflow_mode=WorkflowMode.LOCAL,
-        )
-
-        assert not phase.is_confirmed("Some questions about requirements")
-        assert not phase.is_confirmed("需求還不清楚")
-
-
 class TestAgentSelection:
     """Test PM agent selection."""
 
@@ -276,7 +234,7 @@ class TestAgentSelection:
         requirements_file.write_text("Requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = "需求分析狀態：已確認"
+        agent_manager.execute.return_value = "CONFIRMED\n需求已清楚。"
 
         permission_handler = MagicMock(spec=PermissionHandler)
 

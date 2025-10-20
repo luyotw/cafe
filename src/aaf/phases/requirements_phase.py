@@ -6,6 +6,7 @@ from typing import Optional
 from aaf.agents.manager import AgentManager
 from aaf.core.permission import PermissionHandler
 from aaf.core.phase import Phase
+from aaf.core.status_codes import PhaseStatusCode, StatusCodeParser, generate_status_code_prompt
 from aaf.core.types import PhaseResult, PhaseStatus, WorkflowMode
 
 
@@ -75,16 +76,43 @@ class RequirementsPhase(Phase):
                 # Execute PM agent
                 response = self.agent_manager.execute(self.pm_agent, prompt)
 
-                # Check if requirements are confirmed
-                if self.is_confirmed(response):
+                # Extract status code from response
+                status_code = StatusCodeParser.extract(
+                    response,
+                    valid_codes=[
+                        PhaseStatusCode.CONFIRMED,
+                        PhaseStatusCode.NEED_CLARIFICATION,
+                        PhaseStatusCode.REJECTED,
+                    ],
+                )
+
+                # Handle status codes
+                if status_code == PhaseStatusCode.CONFIRMED:
                     return PhaseResult(
                         status=PhaseStatus.COMPLETED,
                         message=f"Requirements clarified in {self.iteration} iteration(s)",
-                        data={"iterations": self.iteration, "final_response": response},
+                        data={
+                            "iterations": self.iteration,
+                            "final_response": response,
+                            "status_code": status_code.value,
+                        },
                     )
-
-                # Continue to next iteration if not confirmed
-                # In production, this would involve user interaction
+                elif status_code == PhaseStatusCode.REJECTED:
+                    return PhaseResult(
+                        status=PhaseStatus.FAILED,
+                        message=f"Requirements rejected in iteration {self.iteration}",
+                        data={
+                            "iterations": self.iteration,
+                            "final_response": response,
+                            "status_code": status_code.value,
+                        },
+                    )
+                elif status_code == PhaseStatusCode.NEED_CLARIFICATION:
+                    # Continue to next iteration for clarification
+                    continue
+                else:
+                    # No valid status code found, continue iteration
+                    continue
 
         except Exception as e:
             return PhaseResult(
@@ -119,6 +147,19 @@ class RequirementsPhase(Phase):
         Returns:
             Prompt string
         """
+        status_code_prompt = generate_status_code_prompt(
+            valid_codes=[
+                PhaseStatusCode.CONFIRMED,
+                PhaseStatusCode.NEED_CLARIFICATION,
+                PhaseStatusCode.REJECTED,
+            ],
+            descriptions={
+                PhaseStatusCode.CONFIRMED: "需求已經很清楚，可以進行開發",
+                PhaseStatusCode.NEED_CLARIFICATION: "需求有不清楚的地方需要澄清",
+                PhaseStatusCode.REJECTED: "需求有嚴重問題，無法進行",
+            },
+        )
+
         if self.iteration == 1:
             return f"""Use the {self.pm_agent} subagent to analyze {self.requirements_file}.
 
@@ -126,12 +167,13 @@ class RequirementsPhase(Phase):
 
 請仔細閱讀需求文件，找出所有不清楚、模糊、可能讓開發者自己腦補的地方。
 
+{status_code_prompt}
+
 **如果有需求問題需要澄清：**
 用最精簡的方式條列問題，不要給任何建議。
 
 **如果需求已經很清楚，確認完成：**
-請在回應中包含：
-> 需求分析狀態：已確認
+回應確認訊息。
 """
         else:
             return f"""Use the {self.pm_agent} subagent to continue analyzing {self.requirements_file}.
@@ -140,12 +182,13 @@ class RequirementsPhase(Phase):
 
 請繼續檢查需求文件的最新版本。
 
+{status_code_prompt}
+
 **如果有需求問題需要澄清：**
 用最精簡的方式條列問題，不要給任何建議。
 
 **如果需求已經很清楚，確認完成：**
-請在回應中包含：
-> 需求分析狀態：已確認
+回應確認訊息。
 """
 
     def _generate_github_prompt(self) -> str:
@@ -154,38 +197,43 @@ class RequirementsPhase(Phase):
         Returns:
             Prompt string
         """
+        status_code_prompt = generate_status_code_prompt(
+            valid_codes=[
+                PhaseStatusCode.CONFIRMED,
+                PhaseStatusCode.NEED_CLARIFICATION,
+                PhaseStatusCode.REJECTED,
+            ],
+            descriptions={
+                PhaseStatusCode.CONFIRMED: "需求已經很清楚，可以進行開發",
+                PhaseStatusCode.NEED_CLARIFICATION: "需求有不清楚的地方需要澄清",
+                PhaseStatusCode.REJECTED: "需求有嚴重問題，無法進行",
+            },
+        )
+
         if self.iteration == 1:
             return f"""Use the {self.pm_agent} subagent. 這是第 {self.iteration} 輪需求分析。
 
 請用 `gh issue view {self.issue_id}` 讀取 Issue 內容，仔細分析需求，找出所有不清楚、模糊、可能讓開發者自己腦補的地方。
 
+{status_code_prompt}
+
 **如果有需求問題需要澄清：**
 用最精簡的方式條列問題，不要給任何建議。
 
 **如果需求已經很清楚，確認完成：**
-請用戶手動在 Issue body 結尾加上一行:
-> 需求分析狀態：已確認
+回應確認訊息。
 """
         else:
             return f"""Use the {self.pm_agent} subagent. 這是第 {self.iteration} 輪需求分析。
 
 請用 `gh issue view {self.issue_id}` 檢視 Issue 的最新內容。
 
+{status_code_prompt}
+
 **如果有需求問題需要澄清：**
 用最精簡的方式條列問題，不要給任何建議。
 
 **如果需求已經很清楚，確認完成：**
-請用戶手動在 Issue body 結尾加上一行:
-> 需求分析狀態：已確認
+回應確認訊息。
 """
 
-    def is_confirmed(self, response: str) -> bool:
-        """Check if requirements are confirmed.
-
-        Args:
-            response: Agent response
-
-        Returns:
-            True if confirmed
-        """
-        return "需求分析狀態：已確認" in response
