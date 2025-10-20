@@ -23,6 +23,7 @@ class TestRequirementsPhaseBasics:
             permission_handler=permission_handler,
             requirements_file="requirements.md",
             workflow_mode=WorkflowMode.LOCAL,
+            interactive=False,
         )
 
         assert phase.agent_manager == agent_manager
@@ -40,6 +41,7 @@ class TestRequirementsPhaseBasics:
             permission_handler=permission_handler,
             requirements_file="requirements.md",
             workflow_mode=WorkflowMode.GITHUB,
+            interactive=False,
             issue_id="123",
         )
 
@@ -65,6 +67,7 @@ class TestLocalWorkflow:
             permission_handler=permission_handler,
             requirements_file=str(requirements_file),
             workflow_mode=WorkflowMode.LOCAL,
+            interactive=False,
         )
 
         result = phase.execute()
@@ -87,6 +90,7 @@ class TestLocalWorkflow:
             permission_handler=permission_handler,
             requirements_file=str(requirements_file),
             workflow_mode=WorkflowMode.LOCAL,
+            interactive=False,
         )
 
         phase.execute()
@@ -115,6 +119,7 @@ class TestLocalWorkflow:
             permission_handler=permission_handler,
             requirements_file=str(requirements_file),
             workflow_mode=WorkflowMode.LOCAL,
+            interactive=False,
         )
 
         result = phase.execute()
@@ -138,6 +143,7 @@ class TestGitHubWorkflow:
             permission_handler=permission_handler,
             requirements_file="requirements.md",
             workflow_mode=WorkflowMode.GITHUB,
+            interactive=False,
             issue_id="123",
         )
 
@@ -164,6 +170,7 @@ class TestGitHubWorkflow:
             permission_handler=permission_handler,
             requirements_file="requirements.md",
             workflow_mode=WorkflowMode.GITHUB,
+            interactive=False,
             issue_id="456",
         )
 
@@ -191,6 +198,7 @@ class TestPromptGeneration:
             permission_handler=permission_handler,
             requirements_file=str(requirements_file),
             workflow_mode=WorkflowMode.LOCAL,
+            interactive=False,
         )
 
         phase.execute()
@@ -218,6 +226,7 @@ class TestPromptGeneration:
             permission_handler=permission_handler,
             requirements_file=str(requirements_file),
             workflow_mode=WorkflowMode.LOCAL,
+            interactive=False,
         )
 
         phase.execute()
@@ -246,6 +255,7 @@ class TestAgentSelection:
             permission_handler=permission_handler,
             requirements_file=str(requirements_file),
             workflow_mode=WorkflowMode.LOCAL,
+            interactive=False,
             pm_agent="Roger",
         )
 
@@ -274,6 +284,7 @@ class TestErrorHandling:
             permission_handler=permission_handler,
             requirements_file=str(requirements_file),
             workflow_mode=WorkflowMode.LOCAL,
+            interactive=False,
         )
 
         result = phase.execute()
@@ -294,6 +305,7 @@ class TestErrorHandling:
             permission_handler=permission_handler,
             requirements_file="requirements.md",
             workflow_mode=WorkflowMode.GITHUB,
+            interactive=False,
             issue_id=None,
         )
 
@@ -322,6 +334,7 @@ class TestErrorHandling:
             permission_handler=permission_handler,
             requirements_file=str(requirements_file),
             workflow_mode=WorkflowMode.LOCAL,
+            interactive=False,
         )
 
         result = phase.execute()
@@ -352,6 +365,7 @@ class TestConversationalRequirementsGeneration:
             permission_handler=permission_handler,
             requirements_file=str(requirements_file),
             workflow_mode=WorkflowMode.LOCAL,
+            interactive=False,
         )
         
         result = phase.execute()
@@ -377,6 +391,7 @@ class TestConversationalRequirementsGeneration:
             permission_handler=permission_handler,
             requirements_file=str(requirements_file),
             workflow_mode=WorkflowMode.LOCAL,
+            interactive=False,
         )
         
         result = phase.execute()
@@ -402,6 +417,7 @@ class TestConversationalRequirementsGeneration:
             permission_handler=permission_handler,
             requirements_file="requirements.md",
             workflow_mode=WorkflowMode.GITHUB,
+            interactive=False,
             issue_id=None,  # No existing issue - should create new one
         )
         
@@ -429,6 +445,7 @@ class TestConversationalRequirementsGeneration:
             permission_handler=permission_handler,
             requirements_file=str(requirements_file),
             workflow_mode=WorkflowMode.LOCAL,
+            interactive=False,
         )
         
         phase.execute()
@@ -456,6 +473,7 @@ class TestConversationalRequirementsGeneration:
             permission_handler=permission_handler,
             requirements_file=str(requirements_file),
             workflow_mode=WorkflowMode.LOCAL,
+            interactive=False,
         )
         
         result = phase.execute()

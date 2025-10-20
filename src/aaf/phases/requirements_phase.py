@@ -53,6 +53,7 @@ class RequirementsPhase(Phase):
         workflow_mode: WorkflowMode,
         issue_id: Optional[str] = None,
         pm_agent: str = "Roger",
+        interactive: bool = True,
     ) -> None:
         """Initialize requirements phase.
 
@@ -63,6 +64,7 @@ class RequirementsPhase(Phase):
             workflow_mode: Workflow mode (local or github)
             issue_id: GitHub issue ID (required for github mode)
             pm_agent: PM agent name (default: Roger)
+            interactive: Enable interactive mode for user input (default: True)
         """
         self.agent_manager = agent_manager
         self.permission_handler = permission_handler
@@ -70,6 +72,7 @@ class RequirementsPhase(Phase):
         self.workflow_mode = workflow_mode
         self.issue_id = issue_id
         self.pm_agent = pm_agent
+        self.interactive = interactive
         self.iteration = 0
 
     def execute(self) -> PhaseResult:
@@ -141,7 +144,41 @@ class RequirementsPhase(Phase):
                         },
                     )
                 elif status_code == PhaseStatusCode.NEED_CLARIFICATION:
-                    # Continue to next iteration for clarification
+                    if self.interactive:
+                        # Interactive mode: Display PM's questions and get user input
+                        print(f"\n{'='*60}")
+                        print(f"PM ({self.pm_agent}) - Iteration {self.iteration}:")
+                        print(f"{'='*60}")
+                        print(response)
+                        print(f"{'='*60}\n")
+
+                        # Get user's response
+                        print("請回答 PM 的問題（輸入完成後按 Ctrl+D 或 Ctrl+Z）:")
+                        user_response_lines = []
+                        try:
+                            while True:
+                                line = input()
+                                user_response_lines.append(line)
+                        except EOFError:
+                            pass
+
+                        user_response = '\n'.join(user_response_lines)
+
+                        if not user_response.strip():
+                            print("\n⚠️  沒有輸入內容，Phase 將終止。")
+                            return PhaseResult(
+                                status=PhaseStatus.FAILED,
+                                message="User provided no response to clarification questions",
+                                data={
+                                    "iterations": self.iteration,
+                                    "last_response": response,
+                                },
+                            )
+
+                        # Save user response to file for next iteration
+                        self._save_user_response(user_response)
+
+                    # Continue to next iteration (in non-interactive mode, just continue)
                     continue
                 else:
                     # No valid status code found, continue iteration
@@ -182,6 +219,31 @@ class RequirementsPhase(Phase):
             else:
                 # Update existing issue
                 update_github_issue(self.issue_id, response)
+
+    def _save_user_response(self, user_response: str) -> None:
+        """Save user's response to requirements file for next iteration.
+
+        Args:
+            user_response: User's response to PM's questions
+        """
+        if self.workflow_mode == WorkflowMode.LOCAL:
+            req_path = Path(self.requirements_file)
+
+            # Read existing content if any
+            existing_content = ""
+            if req_path.exists():
+                existing_content = req_path.read_text()
+
+            # Append user response
+            updated_content = existing_content + f"\n\n---\n用戶回應（第 {self.iteration} 輪）:\n{user_response}\n"
+
+            # Save updated content
+            req_path.parent.mkdir(parents=True, exist_ok=True)
+            req_path.write_text(updated_content)
+        elif self.workflow_mode == WorkflowMode.GITHUB:
+            # For GitHub mode, add comment to issue
+            # TODO: Implement gh issue comment
+            pass
 
     def _create_github_issue(self, content: str) -> str:
         """Create a new GitHub issue with requirements.
