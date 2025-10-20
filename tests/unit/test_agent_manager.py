@@ -35,8 +35,8 @@ class TestAgentManagerBasics:
         assert "Roger" in manager.agents
         assert manager.agents["Roger"].config.name == config.name
         assert manager.agents["Roger"].config.tool == config.tool
-        # session_id should be automatically assigned
-        assert manager.agents["Roger"].config.session_id is not None
+        # session_id is None until first execution (lazy creation)
+        assert manager.agents["Roger"].config.session_id is None
 
 
 class TestAgentRetrieval:
@@ -60,24 +60,21 @@ class TestAgentRetrieval:
         with pytest.raises(AgentNotFoundError, match="Agent 'Unknown' not found"):
             manager.get_agent("Unknown")
 
-    def test_get_agent_creates_session(self) -> None:
-        """測試取得 agent 時建立 session"""
+    def test_get_agent_no_session_until_execute(self) -> None:
+        """測試取得 agent 時 session 尚未建立（延遲創建）"""
         session_mgr = MagicMock(spec=SessionManager)
         session_mgr.load_session.return_value = None
 
         manager = AgentManager(session_manager=session_mgr)
+        config = AgentConfig(name="Roger", tool=AgentTool.CLAUDE)
+        manager.register_agent(config)
 
-        # Mock _create_claude_session to return a UUID
-        with patch.object(manager, '_create_claude_session', return_value="a1b2c3d4-5678-90ab-cdef-1234567890ab"):
-            config = AgentConfig(name="Roger", tool=AgentTool.CLAUDE)
-            manager.register_agent(config)
+        executor = manager.get_agent("Roger")
 
-            executor = manager.get_agent("Roger")
-
-            # Should have session_id set as a valid UUID
-            assert executor.config.session_id == "a1b2c3d4-5678-90ab-cdef-1234567890ab"
-            # Should have saved the session
-            session_mgr.save_session.assert_called_once_with("Roger", "a1b2c3d4-5678-90ab-cdef-1234567890ab")
+        # Session should be None until first execution (lazy creation)
+        assert executor.config.session_id is None
+        # Should not have saved any session yet
+        session_mgr.save_session.assert_not_called()
 
 
 class TestAgentSwitching:
@@ -178,23 +175,21 @@ class TestSessionManagement:
         assert executor.config.session_id == "existing-session-456"
         session_mgr.load_session.assert_called_once_with("David")
 
-    def test_create_new_session_when_none_exists(self) -> None:
-        """測試不存在 session 時建立新的"""
+    def test_session_lazy_creation(self) -> None:
+        """測試 session 延遲創建（在首次執行時）"""
         session_mgr = MagicMock(spec=SessionManager)
         session_mgr.load_session.return_value = None
 
         manager = AgentManager(session_manager=session_mgr)
+        config = AgentConfig(name="Roger", tool=AgentTool.CLAUDE)
+        manager.register_agent(config)
 
-        # Mock the _create_claude_session method to return a UUID
-        with patch.object(manager, '_create_claude_session', return_value="550e8400-e29b-41d4-a716-446655440000"):
-            config = AgentConfig(name="Roger", tool=AgentTool.CLAUDE)
-            manager.register_agent(config)
+        executor = manager.get_agent("Roger")
 
-            executor = manager.get_agent("Roger")
-
-            # Should create and save a valid UUID session ID
-            assert executor.config.session_id == "550e8400-e29b-41d4-a716-446655440000"
-            session_mgr.save_session.assert_called_once_with("Roger", "550e8400-e29b-41d4-a716-446655440000")
+        # Session is None until first execution (lazy creation by executor)
+        assert executor.config.session_id is None
+        # No session created at registration time
+        session_mgr.save_session.assert_not_called()
 
     def test_create_claude_session_calls_cli(self) -> None:
         """測試 _create_claude_session 呼叫 Claude CLI 並解析 session ID"""

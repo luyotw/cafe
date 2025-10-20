@@ -34,14 +34,11 @@ class AgentManager:
         Args:
             config: Agent configuration
         """
-        # Load existing session for this agent
+        # Load existing session for this agent (if any)
         session_id = self.session_manager.load_session(config.name)
-        if not session_id:
-            # Create a new Claude session
-            session_id = self._create_claude_session()
-            self.session_manager.save_session(config.name, session_id)
+        # Note: Don't create session here - let executor handle it on first use
 
-        # Update config with session ID
+        # Update config with session ID (may be None)
         config_with_session = AgentConfig(
             name=config.name,
             tool=config.tool,
