@@ -61,7 +61,7 @@ class TestReviewLoop:
 
         agent_manager = MagicMock(spec=AgentManager)
         # Review agent approves immediately
-        agent_manager.execute.return_value = "LGTM"
+        agent_manager.execute.return_value = "LGTM\nCode looks good!"
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -91,7 +91,7 @@ class TestReviewLoop:
         agent_manager.execute.side_effect = [
             "問題 1: 需要修正",  # Review 1
             "已修正",  # Fix 1
-            "LGTM",  # Review 2
+            "LGTM\nCode looks good!",  # Review 2
         ]
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -174,7 +174,7 @@ class TestDiffChecking:
         requirements_file.write_text("Requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = "LGTM"
+        agent_manager.execute.return_value = "LGTM\nCode looks good!"
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -206,7 +206,7 @@ class TestAgentSelection:
         requirements_file.write_text("Requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.side_effect = ["問題", "已修正", "LGTM"]
+        agent_manager.execute.side_effect = ["問題", "已修正", "LGTM\nCode looks good!"]
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -232,51 +232,6 @@ class TestAgentSelection:
         assert calls[2][0][0] == "Roger"  # Review again
 
 
-class TestLGTMDetection:
-    """Test LGTM detection."""
-
-    def test_detect_lgtm(self, tmp_path: Path) -> None:
-        """測試偵測 LGTM"""
-        requirements_file = tmp_path / "requirements.md"
-        requirements_file.write_text("Requirements")
-
-        agent_manager = MagicMock(spec=AgentManager)
-        permission_handler = MagicMock(spec=PermissionHandler)
-        git_ops = MagicMock(spec=GitOperations)
-
-        phase = ReviewPhase(
-            agent_manager=agent_manager,
-            permission_handler=permission_handler,
-            git_ops=git_ops,
-            requirements_file=str(requirements_file),
-            workflow_mode=WorkflowMode.LOCAL,
-        )
-
-        assert phase.is_approved("LGTM")
-        assert phase.is_approved("looks good to me")
-        assert phase.is_approved("程式碼審查通過，LGTM")
-
-    def test_not_approved_without_lgtm(self, tmp_path: Path) -> None:
-        """測試沒有 LGTM 時不算通過"""
-        requirements_file = tmp_path / "requirements.md"
-        requirements_file.write_text("Requirements")
-
-        agent_manager = MagicMock(spec=AgentManager)
-        permission_handler = MagicMock(spec=PermissionHandler)
-        git_ops = MagicMock(spec=GitOperations)
-
-        phase = ReviewPhase(
-            agent_manager=agent_manager,
-            permission_handler=permission_handler,
-            git_ops=git_ops,
-            requirements_file=str(requirements_file),
-            workflow_mode=WorkflowMode.LOCAL,
-        )
-
-        assert not phase.is_approved("還有問題需要修正")
-        assert not phase.is_approved("請修改以下問題")
-
-
 class TestPromptGeneration:
     """Test prompt generation for review and fix."""
 
@@ -286,7 +241,7 @@ class TestPromptGeneration:
         requirements_file.write_text("Requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = "LGTM"
+        agent_manager.execute.return_value = "LGTM\nCode looks good!"
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -314,7 +269,7 @@ class TestPromptGeneration:
         requirements_file.write_text("Requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.side_effect = ["問題", "已修正", "LGTM"]
+        agent_manager.execute.side_effect = ["問題", "已修正", "LGTM\nCode looks good!"]
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -343,7 +298,7 @@ class TestGitHubWorkflow:
     def test_github_workflow_uses_issue(self) -> None:
         """測試 GitHub workflow 使用 issue"""
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = "LGTM"
+        agent_manager.execute.return_value = "LGTM\nCode looks good!"
 
         permission_handler = MagicMock(spec=PermissionHandler)
 

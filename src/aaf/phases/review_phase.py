@@ -7,6 +7,7 @@ from aaf.agents.manager import AgentManager
 from aaf.core.git import GitOperations
 from aaf.core.permission import PermissionHandler
 from aaf.core.phase import Phase
+from aaf.core.status_codes import PhaseStatusCode, StatusCodeParser, generate_status_code_prompt
 from aaf.core.types import PhaseResult, PhaseStatus, WorkflowMode
 
 
@@ -76,24 +77,38 @@ class ReviewPhase(Phase):
                     self.review_agent, review_prompt
                 )
 
+                # Extract status code from review response
+                status_code = StatusCodeParser.extract(
+                    review_response,
+                    valid_codes=[
+                        PhaseStatusCode.APPROVED,
+                        PhaseStatusCode.LGTM,
+                        PhaseStatusCode.NEEDS_CHANGES,
+                    ],
+                )
+
                 # Check if approved
-                if self.is_approved(review_response):
+                if status_code in [PhaseStatusCode.APPROVED, PhaseStatusCode.LGTM]:
                     return PhaseResult(
                         status=PhaseStatus.COMPLETED,
                         message=f"Code review passed after {self.iteration} iteration(s)",
                         data={
                             "iterations": self.iteration,
                             "review_response": review_response,
+                            "status_code": status_code.value,
                         },
                     )
 
-                # Generate fix prompt
-                fix_prompt = self._generate_fix_prompt(review_response)
+                # If needs changes or no status code, apply fixes and continue
+                if status_code == PhaseStatusCode.NEEDS_CHANGES or status_code is None:
+                    # Generate fix prompt
+                    fix_prompt = self._generate_fix_prompt(review_response)
 
-                # Execute dev agent to fix issues
-                self.agent_manager.execute(self.dev_agent, fix_prompt)
+                    # Execute dev agent to fix issues
+                    self.agent_manager.execute(self.dev_agent, fix_prompt)
 
-                # Continue to next iteration
+                    # Continue to next iteration
+                    continue
 
             # Max iterations reached
             return PhaseResult(
@@ -120,10 +135,26 @@ class ReviewPhase(Phase):
         # Get requirements section
         requirements_section = self._get_requirements_section()
 
+        # Generate status code prompt
+        status_code_prompt = generate_status_code_prompt(
+            valid_codes=[
+                PhaseStatusCode.APPROVED,
+                PhaseStatusCode.LGTM,
+                PhaseStatusCode.NEEDS_CHANGES,
+            ],
+            descriptions={
+                PhaseStatusCode.APPROVED: "程式碼審查通過，沒有問題",
+                PhaseStatusCode.LGTM: "Looks Good To Me，程式碼審查通過",
+                PhaseStatusCode.NEEDS_CHANGES: "需要修正問題",
+            },
+        )
+
         # Build base prompt
         prompt = f"""你是資深軟體工程師 {self.review_agent}，正在進行程式碼審查 (Code Review)。
 
 這是第 {self.iteration} 輪審查（共 {self.max_iterations} 輪）。
+
+{status_code_prompt}
 
 **原始需求與實作分析:**
 {requirements_section}
@@ -142,7 +173,7 @@ class ReviewPhase(Phase):
 - **優先檢查：** 先前提出的問題是否已修正
 - **新問題限制：** 只提出 critical 問題（嚴重 bug、安全性問題、功能缺失）
 - **避免：** 不要提出風格、命名、小優化等非必要的建議
-- 如果先前的問題都已解決且沒有 critical 問題，請給予 LGTM
+- 如果先前的問題都已解決且沒有 critical 問題，請使用 LGTM 或 APPROVED 狀態碼
 """
         else:
             prompt += """
@@ -152,8 +183,6 @@ class ReviewPhase(Phase):
 - **找出潛在問題**：檢查程式碼的正確性、可讀性、效能、安全性、以及是否符合專案既有風格。
 - **簡要說明問題**：列出檔案路徑和行號並說明問題，不要提供任何解決方案。
 - **用繁體中文回應**。
-
-**如果沒有問題，請回覆 "LGTM" (Looks Good To Me)。**
 """
 
         return prompt
@@ -192,14 +221,3 @@ Reviewer 提出了以下問題，請修正：
                 return f"---\n{req_path.read_text()}\n---"
             return f"請參考 {self.requirements_file}"
 
-    def is_approved(self, response: str) -> bool:
-        """Check if code review is approved.
-
-        Args:
-            response: Review response
-
-        Returns:
-            True if approved (contains LGTM)
-        """
-        response_lower = response.lower()
-        return "lgtm" in response_lower or "looks good to me" in response_lower
