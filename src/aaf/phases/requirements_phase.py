@@ -253,8 +253,14 @@ class RequirementsPhase(Phase):
         non_technical = self._get_non_technical_guidelines()
         status_code_prompt = self._get_status_code_prompt()
 
+        # Check if requirements file exists
+        req_path = Path(self.requirements_file)
+        file_exists = req_path.exists()
+
         if self.iteration == 1:
-            return f"""Use the {self.pm_agent} subagent to analyze {self.requirements_file}.
+            if file_exists:
+                # File exists - analyze and clarify
+                return f"""Use the {self.pm_agent} subagent to analyze {self.requirements_file}.
 
 你是 PM，負責與用戶溝通並產出完整的需求文件。這是第 {self.iteration} 輪需求澄清。
 
@@ -276,6 +282,34 @@ class RequirementsPhase(Phase):
 
 **如果需求已清楚（status: CONFIRMED）：**
 確認需求文件已更新完整，包含：功能描述、使用場景、預期行為、驗收標準。
+"""
+            else:
+                # File doesn't exist - start from scratch
+                return f"""Use the {self.pm_agent} subagent.
+
+你是 PM，負責與用戶溝通並產出完整的需求文件。這是第 {self.iteration} 輪需求澄清。
+
+**目前狀況：尚無需求文件，需要從零開始。**
+
+**你的職責：**
+1. **以對話方式**向用戶詢問他們想要什麼功能
+2. 透過提問確認所有必要資訊
+3. 最後產出完整的需求文件
+
+{non_technical}
+
+{status_code_prompt}
+
+**如果需要更多資訊（status: NEED_CLARIFICATION）：**
+以親切的對話方式向用戶提問，例如：
+- 您想要實作什麼功能？
+- 這個功能的主要目的是什麼？
+- 用戶會如何使用這個功能？
+- 預期看到什麼結果？
+記住：不要提技術細節！
+
+**如果資訊已足夠（status: CONFIRMED）：**
+產出完整的需求文件，包含：功能描述、使用場景、預期行為、驗收標準。
 """
         else:
             return f"""Use the {self.pm_agent} subagent to continue analyzing {self.requirements_file}.
