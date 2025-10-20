@@ -59,10 +59,16 @@
 
 ### Phase 實作 (Workflow Phases)
 
-10. ✅ **requirements_phase.py** - Phase 1: 需求澄清
-   - Status: 98% coverage, 15 tests
-   - Commit: 9fb4eb7
-   - Features: 多輪澄清迴圈、確認偵測、requirements 備份、Local/GitHub workflow
+10. ✅ **requirements_phase.py** - Phase 1: 需求澄清 (對話式生成)
+   - Status: 96% coverage, 18 tests
+   - Commit: 5751ac7
+   - Features:
+     - **對話式需求生成**: PM agent 透過多輪對話與用戶確認所有必要資訊
+     - **強調非技術細節**: 每次 prompt 都強調不涉及技術實作
+     - **從無到有生成**: 支援沒有現有需求文件時從對話開始生成
+     - **自動儲存**: 完成後自動存到 local 檔案或創建新 GitHub issue
+     - **狀態碼控制**: CONFIRMED / NEED_CLARIFICATION / REJECTED
+     - Requirements 備份、Local/GitHub workflow
 
 11. ✅ **analysis_phase.py** - Phase 2: 實作分析
    - Status: 97% coverage, 16 tests
@@ -247,9 +253,9 @@ class AAFApp(App):
 **整體覆蓋率: 97%**
 
 ### 測試數量
-- 已寫測試: 303 tests (包含 57 個 status code integration tests + 19 個 phase_cache tests)
-- 預估需要: 315+ tests
-- 完成度: ~96%
+- 已寫測試: 313 tests (包含 57 個 status code integration tests + 19 個 phase_cache tests)
+- 預估需要: 320+ tests
+- 完成度: ~98%
 
 ---
 
@@ -297,15 +303,15 @@ class AAFApp(App):
 
 **最後更新**: 2025-10-20
 **當前分支**: refactor-python
-**目前進度**: 19/23 完成 (~83%), 303 tests, 97% 整體覆蓋率
+**目前進度**: 19/23 完成 (~83%), 313 tests, 96% 整體覆蓋率
 **第一階段**: ✅ 已完成（所有基礎模組完成）
 **第二階段**: ✅ 已完成（所有 Phase 實作完成）
 **第三階段**: ✅ 已完成 - CLI & Utils & 增強
   - ✅ cli.py (命令列介面, 95% coverage)
   - ✅ github.py (GitHub 操作, 90% coverage)
   - ✅ status_codes.py (狀態碼系統, 100% coverage)
-  - ✅ Phase 狀態碼整合 (3 phases, 57 tests, 98%+ coverage)
-    - RequirementsPhase: 19 tests, 98% coverage
+  - ✅ Phase 狀態碼整合 (3 phases, 57 tests, 96%+ coverage)
+    - RequirementsPhase: 18 tests, 96% coverage (對話式需求生成)
     - AnalysisPhase: 20 tests, 97% coverage
     - ReviewPhase: 18 tests, 100% coverage
   - ✅ phase_cache.py (Cache 系統, 19 tests, 100% coverage)
