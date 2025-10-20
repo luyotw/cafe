@@ -1,13 +1,13 @@
 # Python 重構待辦清單
 
 ## 進度總覽
-- 已完成: 18/23 項目 (~78%)
+- 已完成: 19/23 項目 (~83%)
 - 進行中: 0 項目
-- 待完成: 5 項目
+- 待完成: 4 項目
 
 ---
 
-## ✅ 已完成 (18/23)
+## ✅ 已完成 (19/23)
 
 ### 核心模組 (Core Modules)
 1. ✅ **types.py** - 型別定義
@@ -110,11 +110,28 @@
      - 分類方法: is_success(), is_failure(), is_retry(), needs_human_input()
    - 用途: 統一 agent 回應格式、節省 token、為 cache 系統做準備
 
+### 核心模組 (Core Modules) - Cache 系統
+
+18. ✅ **phase_cache.py** - Phase Cache 系統
+   - Status: 100% coverage, 19 tests
+   - Commit: (待提交)
+   - Features:
+     - CacheEntry 資料結構（phase_name, status_code, response, content_hash, timestamp）
+     - PhaseCache.save() - 儲存 phase 結果到 JSON
+     - PhaseCache.load() - 載入 cache 並反序列化
+     - PhaseCache.is_valid() - 驗證 hash 是否匹配
+     - PhaseCache.clear() / clear_all() - 清除單一/所有 cache
+     - Cache 檔案結構：.aaf/cache/session_{id}/phase_{num}_{name}.json
+   - Benefits:
+     - 重跑 workflow 時跳過已完成的 phase
+     - 節省時間和 API 成本
+     - 支援斷點續跑
+
 ---
 
-## ✅ 已完成 Phase 狀態碼整合 (18/23)
+## ✅ 已完成 Phase 狀態碼整合
 
-#### 18. ✅ **Phase 狀態碼整合** - 更新所有 phases 使用狀態碼
+#### 19. ✅ **Phase 狀態碼整合** - 更新所有 phases 使用狀態碼
 **Priority: HIGH**
 **Status**: 100% 完成，3 個 phases 已整合
 **Sub-tasks**:
@@ -139,36 +156,11 @@
 
 ---
 
-## ⏳ 待完成 (5/23)
+## ⏳ 待完成 (4/23)
 
 ---
 
 ### UI 模組 (User Interface)
-
-#### 19. ⬜ **phase_cache.py** - Phase Cache 系統
-**Priority: HIGH**
-**Status**: 待開發
-**Dependencies**: status_codes.py
-```python
-class PhaseCache:
-    - save(phase_name, status_code, response, hash) - 儲存 phase 結果
-    - load(phase_name) -> CacheEntry - 載入 cache
-    - is_valid(phase_name, current_hash) -> bool - 驗證 cache 有效性
-    - clear(phase_name) - 清除 cache
-    - clear_all() - 清除所有 cache
-```
-**Cache 檔案結構**:
-```
-.aaf/cache/session_{id}/
-  ├── phase_0_requirements.json
-  ├── phase_1_analysis.json
-  └── ...
-```
-**Tests needed**: 15+ tests
-**Benefits**:
-- 重跑 workflow 時跳過已完成的 phase
-- 節省時間和 API 成本
-- 支援斷點續跑
 
 #### 20. ⬜ display.py - 顯示工具
 **Priority: MEDIUM**
@@ -248,15 +240,16 @@ class AAFApp(App):
 - review_phase.py: 100%
 - pr_phase.py: 97%
 - status_codes.py: 100%
+- phase_cache.py: 100%
 - cli.py: 95%
 - github.py: 90%
 
 **整體覆蓋率: 97%**
 
 ### 測試數量
-- 已寫測試: 284 tests (包含 57 個 status code integration tests)
-- 預估需要: 300+ tests
-- 完成度: ~95%
+- 已寫測試: 303 tests (包含 57 個 status code integration tests + 19 個 phase_cache tests)
+- 預估需要: 315+ tests
+- 完成度: ~96%
 
 ---
 
@@ -279,7 +272,7 @@ class AAFApp(App):
 10. ✅ github.py - GitHub 工具
 11. ✅ status_codes.py - 狀態碼系統
 12. ✅ Phase 狀態碼整合 - 更新所有 phases (3 phases, 57 tests)
-13. ⬜ phase_cache.py - Cache 系統
+13. ✅ phase_cache.py - Cache 系統 (19 tests, 100% coverage)
 14. ⬜ display.py - 顯示工具
 
 ### 第四階段（測試與文件）- Week 5
@@ -304,7 +297,7 @@ class AAFApp(App):
 
 **最後更新**: 2025-10-20
 **當前分支**: refactor-python
-**目前進度**: 18/23 完成 (~78%), 284 tests, 97% 整體覆蓋率
+**目前進度**: 19/23 完成 (~83%), 303 tests, 97% 整體覆蓋率
 **第一階段**: ✅ 已完成（所有基礎模組完成）
 **第二階段**: ✅ 已完成（所有 Phase 實作完成）
 **第三階段**: ✅ 已完成 - CLI & Utils & 增強
@@ -315,5 +308,6 @@ class AAFApp(App):
     - RequirementsPhase: 19 tests, 98% coverage
     - AnalysisPhase: 20 tests, 97% coverage
     - ReviewPhase: 18 tests, 100% coverage
+  - ✅ phase_cache.py (Cache 系統, 19 tests, 100% coverage)
 **當前任務**: 無（階段三完成）
-**下一步**: phase_cache.py (Cache 系統) → display.py (顯示工具)
+**下一步**: display.py (顯示工具) → Integration tests → Documentation
