@@ -141,13 +141,16 @@ class TestGitHubWorkflow:
             issue_id="123",
         )
 
-        result = phase.execute()
+        with patch('aaf.phases.requirements_phase.update_github_issue') as mock_update:
+            result = phase.execute()
 
-        assert result.status == PhaseStatus.COMPLETED
-        # Should use gh issue view in prompt
-        call_args = agent_manager.execute.call_args
-        prompt = call_args[0][1]
-        assert "gh issue view 123" in prompt
+            assert result.status == PhaseStatus.COMPLETED
+            # Should update existing issue
+            mock_update.assert_called_once_with("123", "CONFIRMED\n需求已清楚。")
+            # Should use gh issue view in prompt
+            call_args = agent_manager.execute.call_args
+            prompt = call_args[0][1]
+            assert "gh issue view 123" in prompt
 
     def test_github_workflow_uses_issue_id(self) -> None:
         """測試 GitHub workflow 使用 issue ID"""
@@ -256,26 +259,34 @@ class TestAgentSelection:
 class TestErrorHandling:
     """Test error handling."""
 
-    def test_missing_requirements_file_fails(self) -> None:
-        """測試缺少需求檔案時失敗"""
+    def test_missing_requirements_file_generates_from_conversation(self, tmp_path: Path) -> None:
+        """測試缺少需求檔案時，透過對話生成"""
+        requirements_file = tmp_path / "nonexistent.md"
+
         agent_manager = MagicMock(spec=AgentManager)
+        # Mock agent to complete in one iteration
+        agent_manager.execute.return_value = "CONFIRMED\n需求已完整"
+
         permission_handler = MagicMock(spec=PermissionHandler)
 
         phase = RequirementsPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
-            requirements_file="/nonexistent/requirements.md",
+            requirements_file=str(requirements_file),
             workflow_mode=WorkflowMode.LOCAL,
         )
 
         result = phase.execute()
 
-        assert result.status == PhaseStatus.FAILED
-        assert "not found" in result.message.lower()
+        # Should succeed and create the file
+        assert result.status == PhaseStatus.COMPLETED
+        assert requirements_file.exists()
 
-    def test_github_mode_without_issue_id_fails(self) -> None:
-        """測試 GitHub mode 沒有 issue_id 時失敗"""
+    def test_github_mode_without_issue_id_creates_new(self) -> None:
+        """測試 GitHub mode 沒有 issue_id 時創建新 issue"""
         agent_manager = MagicMock(spec=AgentManager)
+        agent_manager.execute.return_value = "CONFIRMED\n需求已完整"
+
         permission_handler = MagicMock(spec=PermissionHandler)
 
         phase = RequirementsPhase(
@@ -286,10 +297,15 @@ class TestErrorHandling:
             issue_id=None,
         )
 
-        result = phase.execute()
+        with patch('aaf.phases.requirements_phase.create_github_issue') as mock_create:
+            mock_create.return_value = "789"
 
-        assert result.status == PhaseStatus.FAILED
-        assert "issue_id" in result.message.lower()
+            result = phase.execute()
+
+            # Should succeed and create new issue
+            assert result.status == PhaseStatus.COMPLETED
+            mock_create.assert_called_once()
+            assert result.data.get("issue_id") == "789"
 
     def test_agent_execution_error_fails_phase(self, tmp_path: Path) -> None:
         """測試 agent 執行錯誤時 phase 失敗"""

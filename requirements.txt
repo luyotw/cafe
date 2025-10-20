@@ -1,0 +1,1 @@
+請新增一個 test_hello.py 檔案，內容是印出 'Hello, AAF Test\!'
