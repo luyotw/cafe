@@ -312,3 +312,139 @@ class TestErrorHandling:
 
         assert result.status == PhaseStatus.FAILED
         assert "Agent error" in result.message
+
+
+class TestConversationalRequirementsGeneration:
+    """Test conversational requirements generation workflow."""
+
+    def test_generate_requirements_from_scratch_local(self, tmp_path: Path) -> None:
+        """測試從無到有以對話方式生成需求文件（Local mode）"""
+        requirements_file = tmp_path / "requirements.md"
+        
+        agent_manager = MagicMock(spec=AgentManager)
+        # Simulate conversation: ask questions -> user responds -> generate document
+        agent_manager.execute.side_effect = [
+            "NEED_CLARIFICATION\n請問這個功能的目的是什麼？",
+            "NEED_CLARIFICATION\n預期的使用場景有哪些？",
+            "CONFIRMED\n需求文件已生成",
+        ]
+        
+        permission_handler = MagicMock(spec=PermissionHandler)
+        
+        phase = RequirementsPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            requirements_file=str(requirements_file),
+            workflow_mode=WorkflowMode.LOCAL,
+        )
+        
+        result = phase.execute()
+        
+        # Should complete after conversation
+        assert result.status == PhaseStatus.COMPLETED
+        assert result.data["iterations"] == 3
+        
+        # Should create the requirements file
+        assert requirements_file.exists()
+
+    def test_generate_requirements_saves_to_file(self, tmp_path: Path) -> None:
+        """測試生成的需求文件正確儲存"""
+        requirements_file = tmp_path / "new_requirements.md"
+        
+        agent_manager = MagicMock(spec=AgentManager)
+        agent_manager.execute.return_value = "CONFIRMED\n# 需求文件\n\n功能描述..."
+        
+        permission_handler = MagicMock(spec=PermissionHandler)
+        
+        phase = RequirementsPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            requirements_file=str(requirements_file),
+            workflow_mode=WorkflowMode.LOCAL,
+        )
+        
+        result = phase.execute()
+        
+        assert result.status == PhaseStatus.COMPLETED
+        # File should be created with content
+        assert requirements_file.exists()
+        content = requirements_file.read_text()
+        assert "需求文件" in content or len(content) > 0
+
+    def test_generate_requirements_github_creates_issue(self) -> None:
+        """測試 GitHub mode 創建新 issue"""
+        agent_manager = MagicMock(spec=AgentManager)
+        agent_manager.execute.side_effect = [
+            "NEED_CLARIFICATION\n請問功能目的？",
+            "CONFIRMED\n需求已完整",
+        ]
+        
+        permission_handler = MagicMock(spec=PermissionHandler)
+        
+        phase = RequirementsPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            requirements_file="requirements.md",
+            workflow_mode=WorkflowMode.GITHUB,
+            issue_id=None,  # No existing issue - should create new one
+        )
+        
+        with patch('aaf.phases.requirements_phase.create_github_issue') as mock_create:
+            mock_create.return_value = "456"  # New issue ID
+            
+            result = phase.execute()
+            
+            assert result.status == PhaseStatus.COMPLETED
+            # Should create a new issue
+            mock_create.assert_called_once()
+            assert result.data.get("issue_id") == "456"
+
+    def test_prompt_includes_non_technical_emphasis(self, tmp_path: Path) -> None:
+        """測試 prompt 包含不涉及技術細節的強調"""
+        requirements_file = tmp_path / "requirements.md"
+        
+        agent_manager = MagicMock(spec=AgentManager)
+        agent_manager.execute.return_value = "CONFIRMED\n完成"
+        
+        permission_handler = MagicMock(spec=PermissionHandler)
+        
+        phase = RequirementsPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            requirements_file=str(requirements_file),
+            workflow_mode=WorkflowMode.LOCAL,
+        )
+        
+        phase.execute()
+        
+        # Check that prompt emphasizes non-technical approach
+        call_args = agent_manager.execute.call_args[0]
+        prompt = call_args[1]
+        assert "不可涉及技術細節" in prompt or "不要提及實作方式" in prompt
+        assert "對話方式" in prompt
+
+    def test_no_existing_file_starts_conversation(self, tmp_path: Path) -> None:
+        """測試沒有現有文件時，從對話開始"""
+        requirements_file = tmp_path / "nonexistent.md"
+        
+        agent_manager = MagicMock(spec=AgentManager)
+        agent_manager.execute.side_effect = [
+            "NEED_CLARIFICATION\n請描述功能需求",
+            "CONFIRMED\n需求已完整",
+        ]
+        
+        permission_handler = MagicMock(spec=PermissionHandler)
+        
+        phase = RequirementsPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            requirements_file=str(requirements_file),
+            workflow_mode=WorkflowMode.LOCAL,
+        )
+        
+        result = phase.execute()
+        
+        # Should not fail when file doesn't exist
+        assert result.status == PhaseStatus.COMPLETED
+        # Should create the file
+        assert requirements_file.exists()
