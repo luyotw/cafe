@@ -292,6 +292,118 @@ def version() -> None:
 
 
 @app.command()
+def requirements(
+    output: str = typer.Option(
+        "requirements.md",
+        "--output",
+        "-o",
+        help="Output requirements file path (local mode)",
+    ),
+    mode: str = typer.Option(
+        "local",
+        "--mode",
+        "-m",
+        help="Workflow mode: local or github",
+    ),
+    issue_id: Optional[str] = typer.Option(
+        None,
+        "--issue",
+        "-i",
+        help="GitHub issue ID (github mode)",
+    ),
+    pm_agent: str = typer.Option(
+        "Roger",
+        "--pm",
+        help="PM agent name",
+    ),
+    config_file: str = typer.Option(
+        ".aaf/config.yaml",
+        "--config",
+        "-c",
+        help="Path to configuration file",
+    ),
+) -> None:
+    """Run Phase 1: Requirements clarification with conversational generation.
+
+    The PM agent will engage in a dialogue with you to clarify and generate
+    a complete requirements document. No technical details will be discussed.
+
+    Examples:
+        # Generate requirements through conversation (local)
+        aaf requirements -o requirements.md
+
+        # Create new GitHub issue with requirements
+        aaf requirements -m github
+
+        # Update existing GitHub issue
+        aaf requirements -m github -i 123
+
+        # Use custom PM agent
+        aaf requirements -o req.md --pm CustomPM
+    """
+    try:
+        # Validate mode
+        try:
+            workflow_mode = WorkflowMode(mode)
+        except ValueError:
+            console.print(f"[red]Error: Invalid mode '{mode}'. Use 'local' or 'github'.[/red]")
+            raise typer.Exit(1)
+
+        # Initialize components
+        config_dir = str(Path(config_file).parent) if config_file != ".aaf/config.yaml" else ".aaf"
+        config_manager = ConfigManager(config_dir)
+        agent_manager = _setup_agents(config_manager)
+        permission_handler = PermissionHandler()
+
+        # Display start message
+        console.print("[bold blue]🎯 Phase 1: Requirements Clarification[/bold blue]")
+        console.print(f"Mode: {workflow_mode.value}")
+        console.print(f"PM Agent: {pm_agent}")
+        if workflow_mode == WorkflowMode.LOCAL:
+            console.print(f"Output: {output}")
+        elif issue_id:
+            console.print(f"Issue: #{issue_id}")
+        console.print()
+
+        # Create and execute requirements phase
+        phase = RequirementsPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            requirements_file=output,
+            workflow_mode=workflow_mode,
+            issue_id=issue_id,
+            pm_agent=pm_agent,
+        )
+
+        console.print("[bold]Starting conversational requirements generation...[/bold]")
+        console.print("[dim]The PM will ask questions to clarify all necessary information.[/dim]")
+        console.print("[dim]Focus on WHAT you want, not HOW to implement it.[/dim]")
+        console.print()
+
+        result = phase.execute()
+
+        # Display result
+        if result.status.value == "completed":
+            console.print()
+            console.print("[bold green]✅ Requirements clarification completed![/bold green]")
+            console.print(f"Iterations: {result.data.get('iterations', 'N/A')}")
+            if workflow_mode == WorkflowMode.LOCAL:
+                console.print(f"Saved to: {output}")
+            elif result.data.get('issue_id'):
+                console.print(f"Created issue: #{result.data['issue_id']}")
+            elif issue_id:
+                console.print(f"Updated issue: #{issue_id}")
+        else:
+            console.print()
+            console.print(f"[bold red]❌ Requirements phase failed: {result.message}[/bold red]")
+            raise typer.Exit(1)
+
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1)
+
+
+@app.command()
 def config(
     key: Optional[str] = typer.Argument(None, help="Configuration key to get/set"),
     value: Optional[str] = typer.Argument(None, help="Value to set"),
