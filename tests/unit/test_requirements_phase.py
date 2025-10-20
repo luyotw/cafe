@@ -434,12 +434,12 @@ class TestConversationalRequirementsGeneration:
     def test_prompt_includes_non_technical_emphasis(self, tmp_path: Path) -> None:
         """測試 prompt 包含不涉及技術細節的強調"""
         requirements_file = tmp_path / "requirements.md"
-        
+
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = "CONFIRMED\n完成"
-        
+
         permission_handler = MagicMock(spec=PermissionHandler)
-        
+
         phase = RequirementsPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
@@ -447,14 +447,13 @@ class TestConversationalRequirementsGeneration:
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
         )
-        
+
         phase.execute()
-        
+
         # Check that prompt emphasizes non-technical approach
         call_args = agent_manager.execute.call_args[0]
         prompt = call_args[1]
         assert "不可涉及技術細節" in prompt or "不要提及實作方式" in prompt
-        assert "對話方式" in prompt
 
     def test_no_existing_file_starts_conversation(self, tmp_path: Path) -> None:
         """測試沒有現有文件時，從對話開始"""

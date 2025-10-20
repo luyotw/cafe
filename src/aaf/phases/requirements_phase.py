@@ -91,7 +91,10 @@ class RequirementsPhase(Phase):
                 if req_path.exists():
                     # Backup original requirements if exists
                     self._backup_requirements(req_path)
-                # If file doesn't exist, we'll generate it through conversation
+                else:
+                    # File doesn't exist - prompt user for initial user story
+                    if self.interactive:
+                        self._prompt_for_user_story()
 
             # Requirements clarification loop
             while True:
@@ -189,6 +192,50 @@ class RequirementsPhase(Phase):
                 status=PhaseStatus.FAILED,
                 message=f"Requirements phase failed: {e}",
             )
+
+    def _prompt_for_user_story(self) -> None:
+        """Prompt user to write initial user story when no requirements file exists."""
+        print("\n" + "="*70)
+        print("請用使用者故事格式描述你的需求（可以寫多個）：")
+        print("="*70)
+        print()
+        print("格式：身為[角色]，我想要[功能]，以便[目的/價值]")
+        print()
+        print("範例 1（非技術需求）:")
+        print("  身為產品經理，我想要快速了解專案進度，以便向團隊報告開發狀態")
+        print()
+        print("範例 2（非技術需求）:")
+        print("  身為用戶，我想要看到清楚的錯誤訊息，以便知道哪裡出問題並如何修正")
+        print()
+        print("範例 3（技術需求）:")
+        print("  身為開發者，我想要在 CLI 中看到彩色的權限請求提示，以便快速識別哪些操作需要我確認")
+        print()
+        print("="*70)
+        print("請輸入你的使用者故事（可多行，輸入完成後按 Ctrl+D 或 Ctrl+Z）:")
+        print()
+
+        # Get user's story
+        user_story_lines = []
+        try:
+            while True:
+                line = input()
+                user_story_lines.append(line)
+        except EOFError:
+            pass
+
+        user_story = '\n'.join(user_story_lines).strip()
+
+        if not user_story:
+            raise ValueError("未提供使用者故事，無法繼續")
+
+        # Save user story as initial requirements
+        req_path = Path(self.requirements_file)
+        req_path.parent.mkdir(parents=True, exist_ok=True)
+        req_path.write_text(f"# 初始需求\n\n{user_story}\n")
+
+        print()
+        print("✅ 使用者故事已記錄，開始需求澄清...")
+        print()
 
     def _backup_requirements(self, req_path: Path) -> None:
         """Backup original requirements file.
@@ -346,30 +393,23 @@ class RequirementsPhase(Phase):
 確認需求文件已更新完整，包含：功能描述、使用場景、預期行為、驗收標準。
 """
             else:
-                # File doesn't exist - start from scratch
-                return f"""你是 PM，負責與用戶溝通並產出完整的需求文件。這是第 {self.iteration} 輪需求澄清。
+                # File doesn't exist but user story should have been created
+                return f"""分析 {self.requirements_file} 中的使用者故事。
 
-**目前狀況：尚無需求文件，需要從零開始。**
-
-**你的職責：**
-1. **以對話方式**向用戶詢問他們想要什麼功能
-2. 透過提問確認所有必要資訊
-3. 最後產出完整的需求文件
+你是 PM，負責將使用者故事轉換成完整的需求文件。這是第 {self.iteration} 輪需求澄清。
 
 {non_technical}
 
 {status_code_prompt}
 
 **如果需要更多資訊（status: NEED_CLARIFICATION）：**
-以親切的對話方式向用戶提問，例如：
-- 您想要實作什麼功能？
-- 這個功能的主要目的是什麼？
-- 用戶會如何使用這個功能？
-- 預期看到什麼結果？
-記住：不要提技術細節！
+提出具體問題，確認：
+- 具體使用場景
+- 預期行為
+- 驗收標準
 
 **如果資訊已足夠（status: CONFIRMED）：**
-產出完整的需求文件，包含：功能描述、使用場景、預期行為、驗收標準。
+產出完整需求文件。
 """
         else:
             return f"""繼續分析 {self.requirements_file} 的最新版本。
