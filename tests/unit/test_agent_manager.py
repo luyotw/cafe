@@ -66,16 +66,18 @@ class TestAgentRetrieval:
         session_mgr.load_session.return_value = None
 
         manager = AgentManager(session_manager=session_mgr)
-        config = AgentConfig(name="Roger", tool=AgentTool.CLAUDE)
-        manager.register_agent(config)
 
-        executor = manager.get_agent("Roger")
+        # Mock _create_claude_session to return a UUID
+        with patch.object(manager, '_create_claude_session', return_value="a1b2c3d4-5678-90ab-cdef-1234567890ab"):
+            config = AgentConfig(name="Roger", tool=AgentTool.CLAUDE)
+            manager.register_agent(config)
 
-        # Should have session_id set
-        assert executor.config.session_id is not None
-        assert executor.config.session_id.startswith("Roger-")
-        # Should have saved the session
-        session_mgr.save_session.assert_called_once()
+            executor = manager.get_agent("Roger")
+
+            # Should have session_id set as a valid UUID
+            assert executor.config.session_id == "a1b2c3d4-5678-90ab-cdef-1234567890ab"
+            # Should have saved the session
+            session_mgr.save_session.assert_called_once_with("Roger", "a1b2c3d4-5678-90ab-cdef-1234567890ab")
 
 
 class TestAgentSwitching:
@@ -182,15 +184,63 @@ class TestSessionManagement:
         session_mgr.load_session.return_value = None
 
         manager = AgentManager(session_manager=session_mgr)
-        config = AgentConfig(name="Roger", tool=AgentTool.CLAUDE)
-        manager.register_agent(config)
 
-        executor = manager.get_agent("Roger")
+        # Mock the _create_claude_session method to return a UUID
+        with patch.object(manager, '_create_claude_session', return_value="550e8400-e29b-41d4-a716-446655440000"):
+            config = AgentConfig(name="Roger", tool=AgentTool.CLAUDE)
+            manager.register_agent(config)
 
-        # Should generate and save a session ID
-        assert executor.config.session_id is not None
-        assert executor.config.session_id.startswith("Roger-")
-        session_mgr.save_session.assert_called_once()
+            executor = manager.get_agent("Roger")
+
+            # Should create and save a valid UUID session ID
+            assert executor.config.session_id == "550e8400-e29b-41d4-a716-446655440000"
+            session_mgr.save_session.assert_called_once_with("Roger", "550e8400-e29b-41d4-a716-446655440000")
+
+    def test_create_claude_session_calls_cli(self) -> None:
+        """測試 _create_claude_session 呼叫 Claude CLI 並解析 session ID"""
+        import subprocess
+        import json
+
+        session_mgr = MagicMock(spec=SessionManager)
+        manager = AgentManager(session_manager=session_mgr)
+
+        # Mock subprocess.run to return a JSON response with session_id
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = json.dumps({
+            "session_id": "0603a149-90f6-4bc0-b687-3610aae4e082",
+            "result": "Hi! How can I help you today?"
+        })
+
+        with patch('subprocess.run', return_value=mock_result) as mock_run:
+            session_id = manager._create_claude_session()
+
+            # Should call claude with correct arguments
+            mock_run.assert_called_once()
+            args = mock_run.call_args[0][0]
+            assert args[0] == "claude"
+            assert "-p" in args or "--print" in args
+            assert "--output-format" in args
+            assert "json" in args
+
+            # Should return the session_id from JSON response
+            assert session_id == "0603a149-90f6-4bc0-b687-3610aae4e082"
+
+    def test_create_claude_session_handles_error(self) -> None:
+        """測試 _create_claude_session 處理錯誤"""
+        import subprocess
+
+        session_mgr = MagicMock(spec=SessionManager)
+        manager = AgentManager(session_manager=session_mgr)
+
+        # Mock subprocess.run to fail
+        mock_result = MagicMock()
+        mock_result.returncode = 1
+        mock_result.stderr = "Error: API key not found"
+
+        with patch('subprocess.run', return_value=mock_result):
+            with pytest.raises(RuntimeError, match="Failed to create Claude session"):
+                manager._create_claude_session()
 
     def test_delete_agent_session(self) -> None:
         """測試刪除 agent session"""

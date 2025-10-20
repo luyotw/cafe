@@ -200,6 +200,88 @@ class TestClaudeExecution:
 
             assert result == "Plain text response"
 
+    def test_execute_claude_session_already_in_use_creates_new_session(self) -> None:
+        """測試當 session 已被使用時，自動創建新 session 並重試"""
+        config = AgentConfig(
+            name="Roger",
+            tool=AgentTool.CLAUDE,
+            session_id="old-session-id"
+        )
+        executor = AgentExecutor(config)
+
+        call_count = 0
+
+        def mock_run_side_effect(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+
+            # First call: session already in use error
+            if call_count == 1:
+                return MagicMock(
+                    stdout="",
+                    stderr="Error: Session ID old-session-id is already in use.",
+                    returncode=1
+                )
+            # Second call: create new session
+            elif call_count == 2:
+                return MagicMock(
+                    stdout='{"session_id": "new-session-123", "result": "Hi!"}',
+                    returncode=0
+                )
+            # Third call: retry with new session succeeds
+            else:
+                return MagicMock(
+                    stdout='{"result": "Success with new session"}',
+                    returncode=0
+                )
+
+        with patch("subprocess.run", side_effect=mock_run_side_effect) as mock_run:
+            result = executor._execute_claude("Test prompt")
+
+            # Should have called run 3 times:
+            # 1. Initial attempt (fails with "already in use")
+            # 2. Create new session
+            # 3. Retry with new session
+            assert mock_run.call_count == 3
+            assert result == "Success with new session"
+            # Session ID should be updated
+            assert executor.config.session_id == "new-session-123"
+
+    def test_create_new_session_success(self) -> None:
+        """測試成功創建新 session"""
+        config = AgentConfig(name="David", tool=AgentTool.CLAUDE)
+        executor = AgentExecutor(config)
+
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(
+                stdout='{"session_id": "abc-123", "result": "Hi!"}',
+                returncode=0
+            )
+
+            session_id = executor._create_new_session()
+
+            assert session_id == "abc-123"
+            mock_run.assert_called_once()
+            # Verify it called with correct args
+            args = mock_run.call_args[0][0]
+            assert "claude" in args
+            assert "-p" in args or "--print" in args
+
+    def test_create_new_session_failure(self) -> None:
+        """測試創建 session 失敗時拋出錯誤"""
+        config = AgentConfig(name="Roger", tool=AgentTool.CLAUDE)
+        executor = AgentExecutor(config)
+
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(
+                stdout="",
+                stderr="Error: API key not found",
+                returncode=1
+            )
+
+            with pytest.raises(AgentExecutionError, match="Failed to create new session"):
+                executor._create_new_session()
+
 
 class TestGeminiExecution:
     """Test Gemini-specific execution."""

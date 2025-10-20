@@ -59,18 +59,58 @@ class AgentExecutor:
         Returns:
             Claude's response
         """
-        cmd = ["claude", "run"]
+        # Build command: prompt must come first, then options
+        cmd = ["claude", "--print", prompt]
 
         # Add session if available
         if self.config.session_id:
-            cmd.extend(["--session", self.config.session_id])
+            cmd.extend(["--session-id", self.config.session_id])
 
         # Add allowed tools
-        for tool in self.config.allowed_tools:
-            cmd.extend(["--allow", tool])
+        if self.config.allowed_tools:
+            cmd.extend(["--allowed-tools"] + self.config.allowed_tools)
 
-        # Add prompt
-        cmd.append(prompt)
+        # Add output format last
+        cmd.extend(["--output-format", "json"])
+
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        if result.returncode != 0:
+            # Check if session is already in use
+            if "already in use" in result.stderr:
+                # Create a new session and retry
+                new_session_id = self._create_new_session()
+                self.config.session_id = new_session_id
+                # Retry with new session
+                return self._execute_claude(prompt)
+
+            raise AgentExecutionError(
+                f"Claude execution failed with code {result.returncode}: {result.stderr}"
+            )
+
+        # Parse JSON response
+        try:
+            response_data = json.loads(result.stdout)
+            return response_data.get("result", result.stdout)
+        except json.JSONDecodeError:
+            # If not JSON, return raw output
+            return result.stdout
+
+    def _create_new_session(self) -> str:
+        """Create a new Claude session.
+
+        Returns:
+            New session ID
+
+        Raises:
+            AgentExecutionError: If session creation fails
+        """
+        cmd = ["claude", "-p", "Say 'hi'", "--output-format", "json"]
 
         result = subprocess.run(
             cmd,
@@ -81,16 +121,19 @@ class AgentExecutor:
 
         if result.returncode != 0:
             raise AgentExecutionError(
-                f"Claude execution failed with code {result.returncode}: {result.stderr}"
+                f"Failed to create new session: {result.stderr}"
             )
 
-        # Parse JSON response
         try:
             response_data = json.loads(result.stdout)
-            return response_data.get("content", result.stdout)
-        except json.JSONDecodeError:
-            # If not JSON, return raw output
-            return result.stdout
+            session_id = response_data.get("session_id")
+            if not session_id:
+                raise AgentExecutionError("No session_id in response")
+            return session_id
+        except json.JSONDecodeError as e:
+            raise AgentExecutionError(
+                f"Failed to parse session creation response: {e}"
+            ) from e
 
     def _execute_gemini(self, prompt: str) -> str:
         """Execute Gemini agent.

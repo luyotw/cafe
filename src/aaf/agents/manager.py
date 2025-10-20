@@ -1,5 +1,7 @@
 """Agent management for AAF."""
 
+import json
+import subprocess
 from typing import Dict, List, Optional
 
 from aaf.agents.executor import AgentExecutor
@@ -35,10 +37,8 @@ class AgentManager:
         # Load existing session for this agent
         session_id = self.session_manager.load_session(config.name)
         if not session_id:
-            # Generate a simple session ID if none exists
-            # Actual session creation happens when agent is first executed
-            import uuid
-            session_id = f"{config.name}-{uuid.uuid4().hex[:8]}"
+            # Create a new Claude session
+            session_id = self._create_claude_session()
             self.session_manager.save_session(config.name, session_id)
 
         # Update config with session ID
@@ -166,3 +166,37 @@ class AgentManager:
         """
         executor = self.get_agent(name)
         return executor.config
+
+    def _create_claude_session(self) -> str:
+        """Create a new Claude session by calling Claude CLI.
+
+        Returns:
+            Session ID from Claude CLI
+
+        Raises:
+            RuntimeError: If session creation fails
+        """
+        cmd = ["claude", "-p", "Say 'hi'", "--output-format", "json"]
+
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"Failed to create Claude session: {result.stderr}"
+            )
+
+        try:
+            response = json.loads(result.stdout)
+            session_id = response.get("session_id")
+            if not session_id:
+                raise RuntimeError("No session_id in Claude CLI response")
+            return session_id
+        except json.JSONDecodeError as e:
+            raise RuntimeError(
+                f"Failed to parse Claude CLI response: {e}"
+            ) from e
