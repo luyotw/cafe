@@ -1,5 +1,6 @@
 """Tests for RequirementsPhase."""
 
+import json
 import pytest
 from pathlib import Path
 from unittest.mock import MagicMock, patch, call
@@ -8,6 +9,7 @@ from aaf.phases.requirements_phase import RequirementsPhase
 from aaf.agents.manager import AgentManager
 from aaf.core.types import PhaseResult, PhaseStatus, WorkflowMode
 from aaf.core.permission import PermissionHandler
+from aaf.core.status_codes import PhaseStatusCode
 
 
 class TestRequirementsPhaseBasics:
@@ -476,8 +478,282 @@ class TestConversationalRequirementsGeneration:
         )
         
         result = phase.execute()
-        
+
         # Should not fail when file doesn't exist
         assert result.status == PhaseStatus.COMPLETED
         # Should create the file
         assert requirements_file.exists()
+
+
+class TestHistoryTracking:
+    """Test conversation history tracking for agents without session support."""
+
+    def test_history_directory_structure(self, tmp_path: Path) -> None:
+        """測試歷史記錄目錄結構包含 phase 資訊"""
+        requirements_file = tmp_path / "requirements.md"
+        requirements_file.write_text("Initial requirements\n")
+
+        agent_manager = MagicMock(spec=AgentManager)
+        agent_manager.execute.return_value = "CONFIRMED\n需求已清楚。"
+
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        phase = RequirementsPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            requirements_file=str(requirements_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            interactive=False,
+            issue_name="test-feature",
+        )
+
+        # Verify history directory path includes phase1 and is alongside requirements file
+        assert phase.history_dir == tmp_path / ".aaf" / "issues" / "test-feature" / "phase1" / "history"
+
+    def test_save_iteration_history_creates_json(self, tmp_path: Path) -> None:
+        """測試儲存迭代歷史會建立 JSON 檔案"""
+        requirements_file = tmp_path / "requirements.md"
+        requirements_file.write_text("Initial requirements\n")
+
+        agent_manager = MagicMock(spec=AgentManager)
+        agent_manager.execute.return_value = "NEED_CLARIFICATION\n請問使用者是誰？"
+
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        phase = RequirementsPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            requirements_file=str(requirements_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            interactive=False,
+            issue_name="test-feature",
+        )
+
+        # Manually set iteration and save history
+        phase.iteration = 1
+        phase._save_iteration_history(
+            pm_response="請問使用者是誰？",
+            user_response="一般用戶",
+            status=PhaseStatusCode.NEED_CLARIFICATION,
+        )
+
+        # Check JSON file exists
+        history_file = phase.history_dir / "iteration_001.json"
+        assert history_file.exists()
+
+        # Verify JSON content
+        with open(history_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        assert data["iteration"] == 1
+        assert data["status"] == "NEED_CLARIFICATION"
+        assert data["pm_response"] == "請問使用者是誰？"
+        assert data["user_response"] == "一般用戶"
+        assert "timestamp" in data
+        assert "confirmed_requirements" in data
+        assert "pending_questions" in data
+
+    def test_update_context_file_creates_markdown(self, tmp_path: Path) -> None:
+        """測試更新 context.md 檔案"""
+        requirements_file = tmp_path / "requirements.md"
+        requirements_file.write_text("Initial requirements\n")
+
+        agent_manager = MagicMock(spec=AgentManager)
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        phase = RequirementsPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            requirements_file=str(requirements_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            interactive=False,
+            issue_name="test-feature",
+        )
+
+        # Set up conversation state
+        phase.iteration = 2
+        phase.confirmed_requirements = ["功能1: 用戶登入", "功能2: 用戶註冊"]
+        phase.pending_questions = ["密碼規則是什麼？", "是否需要 email 驗證？"]
+        phase.conversation_history = [
+            {
+                "iteration": 1,
+                "pm_response": "請問需要哪些功能？",
+                "user_response": "需要登入和註冊",
+                "status": "NEED_CLARIFICATION",
+            },
+        ]
+
+        # Update context file
+        phase._update_context_file()
+
+        # Check context file exists
+        context_file = phase.history_dir / "context.md"
+        assert context_file.exists()
+
+        # Verify content
+        content = context_file.read_text(encoding="utf-8")
+        assert "# 需求澄清歷史" in content
+        assert "## 已確定的需求" in content
+        assert "功能1: 用戶登入" in content
+        assert "功能2: 用戶註冊" in content
+        assert "## 待解答的問題" in content
+        assert "密碼規則是什麼？" in content
+        assert "是否需要 email 驗證？" in content
+        assert "## 對話歷史" in content
+        assert "第 1 輪" in content
+        assert "目前是第 2 輪" in content
+
+    def test_context_file_shows_restriction_after_iteration_4(self, tmp_path: Path) -> None:
+        """測試第 4 輪後 context.md 顯示問題限制"""
+        requirements_file = tmp_path / "requirements.md"
+        requirements_file.write_text("Initial requirements\n")
+
+        agent_manager = MagicMock(spec=AgentManager)
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        phase = RequirementsPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            requirements_file=str(requirements_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            interactive=False,
+            issue_name="test-feature",
+        )
+
+        # Set iteration to 4
+        phase.iteration = 4
+        phase._update_context_file()
+
+        # Check restriction message
+        context_file = phase.history_dir / "context.md"
+        content = context_file.read_text(encoding="utf-8")
+        assert "只能針對現有問題繼續追問，不可提出新問題" in content
+
+    def test_load_history_restores_state(self, tmp_path: Path) -> None:
+        """測試載入歷史記錄能還原狀態"""
+        requirements_file = tmp_path / "requirements.md"
+        requirements_file.write_text("Initial requirements\n")
+
+        agent_manager = MagicMock(spec=AgentManager)
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        # Create phase and save history
+        phase1 = RequirementsPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            requirements_file=str(requirements_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            interactive=False,
+            issue_name="test-feature",
+        )
+
+        phase1.iteration = 2
+        phase1.confirmed_requirements = ["功能1", "功能2"]
+        phase1.pending_questions = ["問題1", "問題2"]
+        phase1.conversation_history = [
+            {"iteration": 1, "pm_response": "Q1", "user_response": "A1", "status": "NEED_CLARIFICATION"},
+            {"iteration": 2, "pm_response": "Q2", "user_response": "A2", "status": "NEED_CLARIFICATION"},
+        ]
+
+        # Save iteration 1
+        phase1.iteration = 1
+        phase1._save_iteration_history("Q1", "A1", PhaseStatusCode.NEED_CLARIFICATION)
+
+        # Save iteration 2
+        phase1.iteration = 2
+        phase1.confirmed_requirements = ["功能1", "功能2"]
+        phase1._save_iteration_history("Q2", "A2", PhaseStatusCode.NEED_CLARIFICATION)
+
+        # Create new phase - history will be auto-loaded in __init__
+        phase2 = RequirementsPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            requirements_file=str(requirements_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            interactive=False,
+            issue_name="test-feature",
+        )
+
+        # Verify state restored (history auto-loaded in __init__)
+        assert phase2.iteration == 2
+        assert phase2.confirmed_requirements == ["功能1", "功能2"]
+        assert len(phase2.conversation_history) == 2
+        assert phase2.conversation_history[0]["pm_response"] == "Q1"
+        assert phase2.conversation_history[1]["pm_response"] == "Q2"
+
+    def test_issue_name_derived_from_requirements_file(self, tmp_path: Path) -> None:
+        """測試 issue_name 從 requirements_file 自動推導"""
+        requirements_file = tmp_path / "my-feature.md"
+        requirements_file.write_text("Initial requirements\n")
+
+        agent_manager = MagicMock(spec=AgentManager)
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        phase = RequirementsPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            requirements_file=str(requirements_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            interactive=False,
+        )
+
+        # Verify issue_name is derived from filename
+        assert phase.issue_name == "my-feature"
+        assert phase.history_dir == tmp_path / ".aaf" / "issues" / "my-feature" / "phase1" / "history"
+
+    def test_prompt_includes_context_file_after_iteration_1(self, tmp_path: Path) -> None:
+        """測試第 2 輪後 prompt 包含 context 檔案"""
+        requirements_file = tmp_path / "requirements.md"
+        requirements_file.write_text("Initial requirements\n")
+
+        agent_manager = MagicMock(spec=AgentManager)
+        agent_manager.execute.return_value = "CONFIRMED\n需求已清楚"
+
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        phase = RequirementsPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            requirements_file=str(requirements_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            interactive=False,
+            issue_name="test-feature",
+        )
+
+        # Create history
+        phase.iteration = 1
+        phase._save_iteration_history("Q1", "A1", PhaseStatusCode.NEED_CLARIFICATION)
+        phase.iteration = 2
+
+        # Generate prompt for iteration 2
+        prompt = phase._generate_prompt()
+
+        # Should include reference to context file
+        expected_path = str(tmp_path / ".aaf" / "issues" / "test-feature" / "phase1" / "history" / "context.md")
+        assert "context.md" in prompt or expected_path in prompt
+
+    def test_iteration_4_prompt_includes_restriction(self, tmp_path: Path) -> None:
+        """測試第 4 輪 prompt 包含問題限制"""
+        requirements_file = tmp_path / "requirements.md"
+        requirements_file.write_text("Initial requirements\n")
+
+        agent_manager = MagicMock(spec=AgentManager)
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        phase = RequirementsPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            requirements_file=str(requirements_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            interactive=False,
+            issue_name="test-feature",
+        )
+
+        # Set iteration to 4
+        phase.iteration = 4
+
+        # Generate prompt
+        prompt = phase._generate_prompt()
+
+        # Should include restriction message
+        assert "待解答的問題" in prompt and "不可以提出新的問題" in prompt

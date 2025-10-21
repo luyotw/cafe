@@ -1,5 +1,7 @@
 """Requirements clarification phase."""
 
+import json
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -54,6 +56,7 @@ class RequirementsPhase(Phase):
         issue_id: Optional[str] = None,
         pm_agent: str = "Roger",
         interactive: bool = True,
+        issue_name: Optional[str] = None,
     ) -> None:
         """Initialize requirements phase.
 
@@ -65,6 +68,7 @@ class RequirementsPhase(Phase):
             issue_id: GitHub issue ID (required for github mode)
             pm_agent: PM agent name (default: Roger)
             interactive: Enable interactive mode for user input (default: True)
+            issue_name: Issue name for history tracking (default: derived from requirements_file)
         """
         self.agent_manager = agent_manager
         self.permission_handler = permission_handler
@@ -74,6 +78,28 @@ class RequirementsPhase(Phase):
         self.pm_agent = pm_agent
         self.interactive = interactive
         self.iteration = 0
+
+        # Determine issue name for history tracking
+        if issue_name:
+            self.issue_name = issue_name
+        else:
+            # Derive from requirements_file: requirements.md -> requirements
+            # Use absolute path to ensure unique issue names for different locations
+            req_path = Path(requirements_file).absolute()
+            self.issue_name = req_path.stem
+
+        # History directory (includes phase1 for future phase support)
+        # Place history alongside requirements file to avoid conflicts
+        req_dir = Path(requirements_file).parent.absolute()
+        self.history_dir = req_dir / ".aaf" / "issues" / self.issue_name / "phase1" / "history"
+
+        # Track conversation history
+        self.conversation_history = []
+        self.confirmed_requirements = []
+        self.pending_questions = []
+
+        # Load existing history if available
+        self._load_history()
 
     def execute(self) -> PhaseResult:
         """Execute requirements clarification phase.
@@ -120,6 +146,13 @@ class RequirementsPhase(Phase):
                 if status_code == PhaseStatusCode.CONFIRMED:
                     # Save generated requirements
                     self._save_requirements(response)
+
+                    # Save final iteration history
+                    self._save_iteration_history(
+                        pm_response=response,
+                        user_response="",
+                        status=PhaseStatusCode.CONFIRMED,
+                    )
 
                     result_data = {
                         "iterations": self.iteration,
@@ -183,7 +216,29 @@ class RequirementsPhase(Phase):
                         # Save user response to file for next iteration
                         self._save_user_response(user_response)
 
-                    # Continue to next iteration (in non-interactive mode, just continue)
+                        # Save iteration history
+                        self._save_iteration_history(
+                            pm_response=response,
+                            user_response=user_response,
+                            status=PhaseStatusCode.NEED_CLARIFICATION,
+                        )
+
+                        # Update conversation history
+                        self.conversation_history.append({
+                            "iteration": self.iteration,
+                            "pm_response": response,
+                            "user_response": user_response,
+                            "status": "NEED_CLARIFICATION",
+                        })
+                    else:
+                        # Non-interactive mode: save history without user response
+                        self._save_iteration_history(
+                            pm_response=response,
+                            user_response="",
+                            status=PhaseStatusCode.NEED_CLARIFICATION,
+                        )
+
+                    # Continue to next iteration
                     continue
                 else:
                     # No valid status code found, continue iteration
@@ -416,14 +471,31 @@ class RequirementsPhase(Phase):
 產出完整需求文件。
 """
         else:
+            # Iteration 2+: Include context file reference
+            context_path = self.history_dir / "context.md"
+            context_reference = f"""
+**對話歷史：**
+請先閱讀 {context_path} 了解之前的對話記錄和已確定的需求。
+"""
+
+            # Add restriction for iteration 4+
+            restriction = ""
+            if self.iteration >= 4:
+                restriction = f"""
+⚠️ **重要限制：**
+- 你現在是第 {self.iteration} 輪，只能針對「待解答的問題」繼續追問
+- **不可以提出新的問題**
+- 只能深入釐清已經提出的問題
+"""
+
             return f"""繼續分析 {self.requirements_file} 的最新版本。
 
 這是第 {self.iteration} 輪需求澄清。請檢查需求文件的最新版本。
-
+{context_reference}
 {non_technical}
 
 {status_code_prompt}
-
+{restriction}
 **如果仍需澄清（status: NEED_CLARIFICATION）：**
 繼續以對話方式提問，確認缺失的資訊。
 
@@ -476,4 +548,115 @@ class RequirementsPhase(Phase):
 **如果需求已經很清楚，確認完成：**
 回應確認訊息。
 """
+
+    def _save_iteration_history(
+        self,
+        pm_response: str,
+        user_response: str,
+        status: PhaseStatusCode,
+    ) -> None:
+        """Save iteration history to JSON file.
+
+        Args:
+            pm_response: PM's response (questions or final requirements)
+            user_response: User's response to PM's questions
+            status: Status code for this iteration
+        """
+        # Create history directory
+        self.history_dir.mkdir(parents=True, exist_ok=True)
+
+        # Create iteration record
+        iteration_data = {
+            "iteration": self.iteration,
+            "timestamp": datetime.now().isoformat(),
+            "status": status.value,
+            "pm_response": pm_response,
+            "user_response": user_response,
+            "confirmed_requirements": self.confirmed_requirements.copy(),
+            "pending_questions": self.pending_questions.copy(),
+        }
+
+        # Save to JSON file
+        iteration_file = self.history_dir / f"iteration_{self.iteration:03d}.json"
+        with open(iteration_file, "w", encoding="utf-8") as f:
+            json.dump(iteration_data, f, ensure_ascii=False, indent=2)
+
+        # Update context.md for agent
+        self._update_context_file()
+
+    def _update_context_file(self) -> None:
+        """Update context.md with conversation history for agent."""
+        # Ensure history directory exists
+        self.history_dir.mkdir(parents=True, exist_ok=True)
+
+        context_lines = ["# 需求澄清歷史\n"]
+
+        # Confirmed requirements section
+        context_lines.append("## 已確定的需求\n")
+        if self.confirmed_requirements:
+            for req in self.confirmed_requirements:
+                context_lines.append(f"{req}\n")
+        else:
+            context_lines.append("(尚無已確定的需求)\n")
+        context_lines.append("\n")
+
+        # Pending questions section
+        context_lines.append("## 待解答的問題\n")
+        if self.pending_questions:
+            for i, question in enumerate(self.pending_questions, 1):
+                context_lines.append(f"{i}. {question}\n")
+        else:
+            context_lines.append("(無待解答問題)\n")
+        context_lines.append("\n")
+
+        # Conversation history
+        context_lines.append("## 對話歷史\n")
+        for entry in self.conversation_history:
+            context_lines.append(f"### 第 {entry['iteration']} 輪\n")
+            context_lines.append(f"**PM 問題：**\n{entry['pm_response']}\n\n")
+            if entry.get('user_response'):
+                context_lines.append(f"**用戶回答：**\n{entry['user_response']}\n\n")
+        context_lines.append("\n")
+
+        # Important notes
+        context_lines.append("## 重要提示\n")
+        context_lines.append(f"- 目前是第 {self.iteration} 輪\n")
+        if self.iteration >= 4:
+            context_lines.append("- ⚠️ **限制：只能針對現有問題繼續追問，不可提出新問題**\n")
+
+        # Save context file
+        context_file = self.history_dir / "context.md"
+        context_file.write_text("".join(context_lines), encoding="utf-8")
+
+    def _load_history(self) -> None:
+        """Load conversation history from previous iterations."""
+        if not self.history_dir.exists():
+            return
+
+        # Find all iteration files
+        iteration_files = sorted(self.history_dir.glob("iteration_*.json"))
+
+        for iteration_file in iteration_files:
+            with open(iteration_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+
+            # Restore conversation history
+            self.conversation_history.append({
+                "iteration": data["iteration"],
+                "pm_response": data["pm_response"],
+                "user_response": data["user_response"],
+                "status": data["status"],
+            })
+
+            # Restore confirmed requirements
+            if data.get("confirmed_requirements"):
+                self.confirmed_requirements = data["confirmed_requirements"]
+
+            # Restore pending questions
+            if data.get("pending_questions"):
+                self.pending_questions = data["pending_questions"]
+
+            # Update iteration counter
+            if data["iteration"] >= self.iteration:
+                self.iteration = data["iteration"]
 
