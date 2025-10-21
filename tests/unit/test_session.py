@@ -3,7 +3,7 @@
 import pytest
 from pathlib import Path
 from aaf.core.session import SessionManager
-from aaf.core.types import AgentConfig, AgentTool
+from aaf.core.types import AgentConfig, AgentCLI
 
 
 class TestSessionManager:
@@ -78,7 +78,7 @@ class TestSessionManager:
         manager = SessionManager(str(tmp_path / "sessions"))
         manager.save_session("David", "existing-session")
 
-        agent_config = AgentConfig(name="David", tool=AgentTool.CLAUDE)
+        agent_config = AgentConfig(name="David", cli=AgentCLI.CLAUDE)
         session_id = manager.init_or_resume_session(agent_config)
 
         assert session_id == "existing-session"
@@ -95,7 +95,7 @@ class TestSessionManager:
 
         monkeypatch.setattr(manager, "_create_new_session", mock_create_session)
 
-        agent_config = AgentConfig(name="Roger", tool=AgentTool.CLAUDE)
+        agent_config = AgentConfig(name="Roger", cli=AgentCLI.CLAUDE)
         session_id = manager.init_or_resume_session(agent_config)
 
         assert session_id == "new-session-456"
@@ -105,7 +105,7 @@ class TestSessionManager:
     def test_create_new_session_raises_not_implemented(self, tmp_path: Path) -> None:
         """測試 _create_new_session 預設會拋出 NotImplementedError"""
         manager = SessionManager(str(tmp_path / "sessions"))
-        agent_config = AgentConfig(name="Test", tool=AgentTool.CLAUDE)
+        agent_config = AgentConfig(name="Test", cli=AgentCLI.CLAUDE)
 
         with pytest.raises(NotImplementedError, match="Session creation must be implemented"):
             manager._create_new_session(agent_config)

@@ -5,7 +5,7 @@ from pydantic import ValidationError
 
 from aaf.core.types import (
     AgentConfig,
-    AgentTool,
+    AgentCLI,
     PermissionAction,
     PermissionRequest,
     PhaseResult,
@@ -24,10 +24,10 @@ class TestEnums:
         assert WorkflowMode.LOCAL == "local"
 
     def test_agent_tool_values(self) -> None:
-        """測試 AgentTool enum 的值是否正確"""
-        assert AgentTool.CLAUDE == "claude"
-        assert AgentTool.GEMINI == "gemini"
-        assert AgentTool.CURSOR == "cursor-agent"
+        """測試 AgentCLI enum 的值是否正確"""
+        assert AgentCLI.CLAUDE == "claude"
+        assert AgentCLI.GEMINI == "gemini"
+        assert AgentCLI.CURSOR == "cursor-agent"
 
     def test_phase_status_values(self) -> None:
         """測試 PhaseStatus enum 的值是否正確"""
@@ -49,9 +49,9 @@ class TestAgentConfig:
 
     def test_create_agent_config_minimal(self) -> None:
         """測試只提供必要欄位時可以成功建立 AgentConfig"""
-        config = AgentConfig(name="Roger", tool=AgentTool.CLAUDE)
+        config = AgentConfig(name="Roger", cli=AgentCLI.CLAUDE)
         assert config.name == "Roger"
-        assert config.tool == AgentTool.CLAUDE
+        assert config.tool == AgentCLI.CLAUDE
         assert config.session_id is None
         assert config.allowed_tools == []
 
@@ -59,12 +59,12 @@ class TestAgentConfig:
         """測試提供所有欄位時可以成功建立 AgentConfig"""
         config = AgentConfig(
             name="David",
-            tool=AgentTool.CLAUDE,
+            cli=AgentCLI.CLAUDE,
             session_id="session-123",
             allowed_tools=["Bash(git:*)", "Read(*)"],
         )
         assert config.name == "David"
-        assert config.tool == AgentTool.CLAUDE
+        assert config.tool == AgentCLI.CLAUDE
         assert config.session_id == "session-123"
         assert len(config.allowed_tools) == 2
         assert "Bash(git:*)" in config.allowed_tools
@@ -72,7 +72,7 @@ class TestAgentConfig:
     def test_agent_config_validation_missing_name(self) -> None:
         """測試缺少 name 欄位時會拋出 ValidationError"""
         with pytest.raises(ValidationError):
-            AgentConfig(tool=AgentTool.CLAUDE)  # type: ignore
+            AgentConfig(cli=AgentCLI.CLAUDE)  # type: ignore
 
     def test_agent_config_validation_missing_tool(self) -> None:
         """測試缺少 tool 欄位時會拋出 ValidationError"""

@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 import yaml
 
 from aaf.utils.config import ConfigManager, ConfigError
-from aaf.core.types import WorkflowMode, AgentTool
+from aaf.core.types import WorkflowMode, AgentCLI
 
 
 class TestConfigManagerBasics:

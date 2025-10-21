@@ -41,9 +41,8 @@ class AgentManager:
         # Update config with session ID (may be None)
         config_with_session = AgentConfig(
             name=config.name,
-            tool=config.tool,
+            cli=config.cli,
             session_id=session_id,
-            allowed_tools=config.allowed_tools,
         )
 
         # Create executor

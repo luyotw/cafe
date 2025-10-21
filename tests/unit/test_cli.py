@@ -6,7 +6,7 @@ from typer.testing import CliRunner
 from unittest.mock import MagicMock, Mock, patch
 
 from aaf.ui.cli import app, _setup_agents, _build_workflow
-from aaf.core.types import AgentTool, PhaseResult, PhaseStatus, WorkflowMode
+from aaf.core.types import AgentCLI, PhaseResult, PhaseStatus, WorkflowMode
 from aaf.utils.config import ConfigManager
 
 
@@ -29,9 +29,9 @@ class TestSetupAgents:
         assert "Richard" in agent_manager.agents
 
         # 驗證預設使用 claude
-        assert agent_manager.agents["Roger"].config.tool == AgentTool.CLAUDE
-        assert agent_manager.agents["David"].config.tool == AgentTool.CLAUDE
-        assert agent_manager.agents["Richard"].config.tool == AgentTool.CLAUDE
+        assert agent_manager.agents["Roger"].config.tool == AgentCLI.CLAUDE
+        assert agent_manager.agents["David"].config.tool == AgentCLI.CLAUDE
+        assert agent_manager.agents["Richard"].config.tool == AgentCLI.CLAUDE
 
     def test_setup_agents_with_custom_config(self, tmp_path: Path) -> None:
         """測試使用自訂設定建立 agents"""
@@ -53,8 +53,8 @@ class TestSetupAgents:
         # 驗證自訂設定
         assert "CustomPM" in agent_manager.agents
         assert "CustomDev" in agent_manager.agents
-        assert agent_manager.agents["CustomPM"].config.tool == AgentTool.GEMINI
-        assert agent_manager.agents["Richard"].config.tool == AgentTool.CURSOR
+        assert agent_manager.agents["CustomPM"].config.tool == AgentCLI.GEMINI
+        assert agent_manager.agents["Richard"].config.tool == AgentCLI.CURSOR
 
 
 class TestBuildWorkflow:

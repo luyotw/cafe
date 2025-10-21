@@ -4,7 +4,7 @@ import json
 import subprocess
 from typing import Any, Dict
 
-from aaf.core.types import AgentConfig, AgentTool
+from aaf.core.types import AgentConfig, AgentCLI
 
 
 class AgentExecutionError(Exception):
@@ -37,14 +37,14 @@ class AgentExecutor:
             AgentExecutionError: If agent execution fails
         """
         try:
-            if self.config.tool == AgentTool.CLAUDE:
+            if self.config.cli == AgentCLI.CLAUDE:
                 return self._execute_claude(prompt)
-            elif self.config.tool == AgentTool.GEMINI:
+            elif self.config.cli == AgentCLI.GEMINI:
                 return self._execute_gemini(prompt)
-            elif self.config.tool == AgentTool.CURSOR:
+            elif self.config.cli == AgentCLI.CURSOR:
                 return self._execute_cursor(prompt)
             else:
-                raise AgentExecutionError(f"Unsupported agent tool: {self.config.tool}")
+                raise AgentExecutionError(f"Unsupported agent CLI: {self.config.cli}")
         except AgentExecutionError:
             raise
         except Exception as e:
@@ -65,10 +65,6 @@ class AgentExecutor:
         # Add session if available
         if self.config.session_id:
             cmd.extend(["--session-id", self.config.session_id])
-
-        # Add allowed tools
-        if self.config.allowed_tools:
-            cmd.extend(["--allowed-tools"] + self.config.allowed_tools)
 
         # Add output format last
         cmd.extend(["--output-format", "json"])

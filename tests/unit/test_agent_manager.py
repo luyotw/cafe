@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 
 from aaf.agents.manager import AgentManager, AgentNotFoundError
 from aaf.agents.executor import AgentExecutor
-from aaf.core.types import AgentConfig, AgentTool
+from aaf.core.types import AgentConfig, AgentCLI
 from aaf.core.session import SessionManager
 
 
@@ -28,7 +28,7 @@ class TestAgentManagerBasics:
     def test_register_agent(self) -> None:
         """測試註冊 agent"""
         manager = AgentManager()
-        config = AgentConfig(name="Roger", tool=AgentTool.CLAUDE)
+        config = AgentConfig(name="Roger", cli=AgentCLI.CLAUDE)
 
         manager.register_agent(config)
 
@@ -45,7 +45,7 @@ class TestAgentRetrieval:
     def test_get_agent_returns_executor(self) -> None:
         """測試取得 agent 回傳 AgentExecutor"""
         manager = AgentManager()
-        config = AgentConfig(name="David", tool=AgentTool.CLAUDE)
+        config = AgentConfig(name="David", cli=AgentCLI.CLAUDE)
         manager.register_agent(config)
 
         executor = manager.get_agent("David")
@@ -66,7 +66,7 @@ class TestAgentRetrieval:
         session_mgr.load_session.return_value = None
 
         manager = AgentManager(session_manager=session_mgr)
-        config = AgentConfig(name="Roger", tool=AgentTool.CLAUDE)
+        config = AgentConfig(name="Roger", cli=AgentCLI.CLAUDE)
         manager.register_agent(config)
 
         executor = manager.get_agent("Roger")
@@ -83,8 +83,8 @@ class TestAgentSwitching:
     def test_switch_to_existing_agent(self) -> None:
         """測試切換到已存在的 agent"""
         manager = AgentManager()
-        manager.register_agent(AgentConfig(name="Roger", tool=AgentTool.CLAUDE))
-        manager.register_agent(AgentConfig(name="David", tool=AgentTool.CLAUDE))
+        manager.register_agent(AgentConfig(name="Roger", cli=AgentCLI.CLAUDE))
+        manager.register_agent(AgentConfig(name="David", cli=AgentCLI.CLAUDE))
 
         manager.switch_agent("Roger")
         assert manager.current_agent_name == "Roger"
@@ -102,7 +102,7 @@ class TestAgentSwitching:
     def test_get_current_agent(self) -> None:
         """測試取得當前 agent"""
         manager = AgentManager()
-        manager.register_agent(AgentConfig(name="Roger", tool=AgentTool.CLAUDE))
+        manager.register_agent(AgentConfig(name="Roger", cli=AgentCLI.CLAUDE))
         manager.switch_agent("Roger")
 
         current = manager.get_current_agent()
@@ -125,7 +125,7 @@ class TestAgentExecution:
     def test_execute_with_agent_name(self) -> None:
         """測試使用 agent 名稱執行"""
         manager = AgentManager()
-        config = AgentConfig(name="David", tool=AgentTool.CLAUDE)
+        config = AgentConfig(name="David", cli=AgentCLI.CLAUDE)
         manager.register_agent(config)
 
         with patch.object(AgentExecutor, "execute") as mock_execute:
@@ -139,7 +139,7 @@ class TestAgentExecution:
     def test_execute_current_agent(self) -> None:
         """測試執行當前 agent"""
         manager = AgentManager()
-        config = AgentConfig(name="Roger", tool=AgentTool.CLAUDE)
+        config = AgentConfig(name="Roger", cli=AgentCLI.CLAUDE)
         manager.register_agent(config)
         manager.switch_agent("Roger")
 
@@ -167,7 +167,7 @@ class TestSessionManagement:
         session_mgr.load_session.return_value = "existing-session-456"
 
         manager = AgentManager(session_manager=session_mgr)
-        config = AgentConfig(name="David", tool=AgentTool.CLAUDE)
+        config = AgentConfig(name="David", cli=AgentCLI.CLAUDE)
         manager.register_agent(config)
 
         executor = manager.get_agent("David")
@@ -181,7 +181,7 @@ class TestSessionManagement:
         session_mgr.load_session.return_value = None
 
         manager = AgentManager(session_manager=session_mgr)
-        config = AgentConfig(name="Roger", tool=AgentTool.CLAUDE)
+        config = AgentConfig(name="Roger", cli=AgentCLI.CLAUDE)
         manager.register_agent(config)
 
         executor = manager.get_agent("Roger")
@@ -243,7 +243,7 @@ class TestSessionManagement:
         session_mgr.load_session.return_value = None  # Mock to return None
 
         manager = AgentManager(session_manager=session_mgr)
-        config = AgentConfig(name="David", tool=AgentTool.CLAUDE)
+        config = AgentConfig(name="David", cli=AgentCLI.CLAUDE)
         manager.register_agent(config)
 
         manager.delete_session("David")
@@ -257,9 +257,9 @@ class TestMultipleAgents:
     def test_register_multiple_agents(self) -> None:
         """測試註冊多個 agents"""
         manager = AgentManager()
-        manager.register_agent(AgentConfig(name="Roger", tool=AgentTool.CLAUDE))
-        manager.register_agent(AgentConfig(name="David", tool=AgentTool.CLAUDE))
-        manager.register_agent(AgentConfig(name="Cursor", tool=AgentTool.CURSOR))
+        manager.register_agent(AgentConfig(name="Roger", cli=AgentCLI.CLAUDE))
+        manager.register_agent(AgentConfig(name="David", cli=AgentCLI.CLAUDE))
+        manager.register_agent(AgentConfig(name="Cursor", cli=AgentCLI.CURSOR))
 
         assert len(manager.agents) == 3
         assert "Roger" in manager.agents
@@ -269,8 +269,8 @@ class TestMultipleAgents:
     def test_list_agents(self) -> None:
         """測試列出所有 agents"""
         manager = AgentManager()
-        manager.register_agent(AgentConfig(name="Roger", tool=AgentTool.CLAUDE))
-        manager.register_agent(AgentConfig(name="David", tool=AgentTool.CLAUDE))
+        manager.register_agent(AgentConfig(name="Roger", cli=AgentCLI.CLAUDE))
+        manager.register_agent(AgentConfig(name="David", cli=AgentCLI.CLAUDE))
 
         agent_names = manager.list_agents()
 
@@ -281,7 +281,7 @@ class TestMultipleAgents:
     def test_has_agent(self) -> None:
         """測試檢查 agent 是否存在"""
         manager = AgentManager()
-        manager.register_agent(AgentConfig(name="Roger", tool=AgentTool.CLAUDE))
+        manager.register_agent(AgentConfig(name="Roger", cli=AgentCLI.CLAUDE))
 
         assert manager.has_agent("Roger")
         assert not manager.has_agent("Unknown")
@@ -293,12 +293,12 @@ class TestAgentConfiguration:
     def test_update_agent_config(self) -> None:
         """測試更新 agent 設定"""
         manager = AgentManager()
-        config = AgentConfig(name="David", tool=AgentTool.CLAUDE, allowed_tools=[])
+        config = AgentConfig(name="David", cli=AgentCLI.CLAUDE, allowed_tools=[])
         manager.register_agent(config)
 
         # Update allowed tools
         new_config = AgentConfig(
-            name="David", tool=AgentTool.CLAUDE, allowed_tools=["Bash(git:*)"]
+            name="David", cli=AgentCLI.CLAUDE, allowed_tools=["Bash(git:*)"]
         )
         manager.register_agent(new_config)
 
@@ -309,7 +309,7 @@ class TestAgentConfiguration:
         """測試取得 agent 設定"""
         manager = AgentManager()
         config = AgentConfig(
-            name="Roger", tool=AgentTool.CLAUDE, allowed_tools=["Read(*)"]
+            name="Roger", cli=AgentCLI.CLAUDE, allowed_tools=["Read(*)"]
         )
         manager.register_agent(config)
 

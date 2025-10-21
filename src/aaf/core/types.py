@@ -13,8 +13,8 @@ class WorkflowMode(str, Enum):
     LOCAL = "local"
 
 
-class AgentTool(str, Enum):
-    """Supported agent tools."""
+class AgentCLI(str, Enum):
+    """Supported agent CLIs."""
 
     CLAUDE = "claude"
     GEMINI = "gemini"
@@ -43,9 +43,8 @@ class AgentConfig(BaseModel):
     """Configuration for an AI agent."""
 
     name: str
-    tool: AgentTool
+    cli: AgentCLI
     session_id: Optional[str] = None
-    allowed_tools: List[str] = Field(default_factory=list)
 
 
 class PhaseResult(BaseModel):

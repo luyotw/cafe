@@ -10,7 +10,7 @@ from rich.console import Console
 from aaf.agents.manager import AgentManager
 from aaf.core.git import GitOperations
 from aaf.core.permission import PermissionHandler
-from aaf.core.types import AgentConfig, AgentTool, WorkflowMode
+from aaf.core.types import AgentConfig, AgentCLI, WorkflowMode
 from aaf.core.workflow import Workflow
 from aaf.phases.analysis_phase import AnalysisPhase
 from aaf.phases.implementation_phase import ImplementationPhase
@@ -41,40 +41,34 @@ def _setup_agents(config_manager: ConfigManager) -> AgentManager:
     # Get agent configurations from config or use defaults
     pm_config = config_manager.get("agents.pm", {
         "name": "Roger",
-        "tool": "claude",
-        "allowed_tools": [],
+        "cli": "claude",
     })
     dev_config = config_manager.get("agents.developer", {
         "name": "David",
-        "tool": "claude",
-        "allowed_tools": [],
+        "cli": "claude",
     })
     reviewer_config = config_manager.get("agents.reviewer", {
         "name": "Richard",
-        "tool": "claude",
-        "allowed_tools": [],
+        "cli": "claude",
     })
 
     # Register agents
     agent_manager.register_agent(
         AgentConfig(
             name=pm_config["name"],
-            tool=AgentTool(pm_config["tool"]),
-            allowed_tools=pm_config.get("allowed_tools", []),
+            cli=AgentCLI(pm_config["cli"]),
         )
     )
     agent_manager.register_agent(
         AgentConfig(
             name=dev_config["name"],
-            tool=AgentTool(dev_config["tool"]),
-            allowed_tools=dev_config.get("allowed_tools", []),
+            cli=AgentCLI(dev_config["cli"]),
         )
     )
     agent_manager.register_agent(
         AgentConfig(
             name=reviewer_config["name"],
-            tool=AgentTool(reviewer_config["tool"]),
-            allowed_tools=reviewer_config.get("allowed_tools", []),
+            cli=AgentCLI(reviewer_config["cli"]),
         )
     )
 
