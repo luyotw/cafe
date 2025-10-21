@@ -144,8 +144,28 @@ class AgentExecutor:
         Returns:
             Gemini's response
         """
-        # Placeholder for Gemini implementation
-        raise NotImplementedError("Gemini execution not yet implemented")
+        # Build command: use positional prompt
+        cmd = ["gemini", prompt, "--output-format", "json"]
+
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        if result.returncode != 0:
+            raise AgentExecutionError(
+                f"Gemini execution failed with code {result.returncode}: {result.stderr}"
+            )
+
+        # Parse JSON response
+        try:
+            response_data = json.loads(result.stdout)
+            return response_data.get("response", result.stdout)
+        except json.JSONDecodeError:
+            # If not JSON, return raw output
+            return result.stdout
 
     def _execute_cursor(self, prompt: str) -> str:
         """Execute Cursor agent.

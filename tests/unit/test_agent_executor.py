@@ -286,21 +286,72 @@ class TestClaudeExecution:
 class TestGeminiExecution:
     """Test Gemini-specific execution."""
 
-    def test_execute_gemini_not_implemented(self) -> None:
-        """測試 Gemini 執行目前尚未實作"""
+    def test_execute_gemini_calls_cli(self) -> None:
+        """測試執行 Gemini 會呼叫 gemini CLI"""
         config = AgentConfig(name="Roger", tool=AgentTool.GEMINI)
         executor = AgentExecutor(config)
 
-        with pytest.raises(NotImplementedError, match="Gemini execution not yet implemented"):
-            executor._execute_gemini("Test prompt")
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(
+                stdout='{"response": "Gemini response"}',
+                returncode=0
+            )
+
+            result = executor._execute_gemini("Test prompt")
+
+            assert result == "Gemini response"
+            mock_run.assert_called_once()
+            # Verify command structure
+            call_args = mock_run.call_args[0][0]
+            assert "gemini" in call_args
+            assert "Test prompt" in call_args
+            assert "--output-format" in call_args
+            assert "json" in call_args
 
     def test_execute_with_gemini_tool(self) -> None:
-        """測試使用 Gemini tool 執行會呼叫 _execute_gemini 並拋出 AgentExecutionError"""
+        """測試使用 Gemini tool 執行"""
         config = AgentConfig(name="Roger", tool=AgentTool.GEMINI)
         executor = AgentExecutor(config)
 
-        with pytest.raises(AgentExecutionError, match="Gemini execution not yet implemented"):
-            executor.execute("Test prompt")
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(
+                stdout='{"response": "Hi there"}',
+                returncode=0
+            )
+
+            result = executor.execute("Test prompt")
+
+            assert result == "Hi there"
+
+    def test_execute_gemini_failure(self) -> None:
+        """測試 Gemini 執行失敗時拋出錯誤"""
+        config = AgentConfig(name="Roger", tool=AgentTool.GEMINI)
+        executor = AgentExecutor(config)
+
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(
+                stdout="",
+                stderr="Error: API key not found",
+                returncode=1
+            )
+
+            with pytest.raises(AgentExecutionError, match="Gemini execution failed"):
+                executor._execute_gemini("Test prompt")
+
+    def test_execute_gemini_non_json_response(self) -> None:
+        """測試 Gemini 回傳非 JSON 格式時返回原始輸出"""
+        config = AgentConfig(name="Roger", tool=AgentTool.GEMINI)
+        executor = AgentExecutor(config)
+
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(
+                stdout="Plain text response",
+                returncode=0
+            )
+
+            result = executor._execute_gemini("Test prompt")
+
+            assert result == "Plain text response"
 
 
 class TestCursorExecution:
