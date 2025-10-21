@@ -352,9 +352,12 @@ class SpecPhase(Phase):
             req_path.write_text(content)
         elif self.workflow_mode == WorkflowMode.GITHUB:
             # Sync to GitHub issue
-            if not self.issue_id:
-                # Create new issue
+            if not self.issue_id and not hasattr(self, '_created_issue_id'):
+                # Create new issue (only once)
                 self._created_issue_id = create_github_issue(content)
+            elif hasattr(self, '_created_issue_id'):
+                # Update the created issue
+                update_github_issue(self._created_issue_id, content)
             else:
                 # Update existing issue
                 update_github_issue(self.issue_id, content)

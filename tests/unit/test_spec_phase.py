@@ -4,6 +4,7 @@ import json
 import pytest
 from datetime import datetime
 from pathlib import Path
+from typing import Callable
 from unittest.mock import MagicMock, patch, call
 
 from aaf.phases.spec_phase import SpecPhase
@@ -11,6 +12,27 @@ from aaf.agents.manager import AgentManager
 from aaf.core.types import PhaseProgress, PhaseResult, PhaseStatus, WorkflowMode
 from aaf.core.permission import PermissionHandler
 from aaf.core.status_codes import PhaseStatusCode
+
+
+def create_mock_pm_agent(phase: SpecPhase, content: str, status_code: str = "CONFIRMED") -> Callable:
+    """Create a mock PM agent that writes to history/spec.md before returning status code.
+
+    Args:
+        phase: SpecPhase instance to get history_dir from
+        content: Content to write to spec.md
+        status_code: Status code to return (CONFIRMED, NEED_CLARIFICATION, etc.)
+
+    Returns:
+        Mock function that can be used as agent_manager.execute side_effect
+    """
+    def mock_execute(agent_name: str, prompt: str) -> str:
+        # Write spec content to history/spec.md
+        spec_file = phase.history_dir / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
+        spec_file.write_text(content)
+        return status_code
+
+    return mock_execute
 
 
 class TestSpecPhaseBasics:
@@ -134,17 +156,28 @@ class TestLocalWorkflow:
 class TestGitHubWorkflow:
     """Test GitHub workflow requirements clarification."""
 
-    def test_execute_github_workflow(self) -> None:
+    def test_execute_github_workflow(self, tmp_path: Path) -> None:
         """測試執行 GitHub workflow"""
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = "CONFIRMED\n需求已清楚。"
+
+        # Simulate PM writing to history/spec.md before returning CONFIRMED
+        def mock_execute(agent_name: str, prompt: str) -> str:
+            # Write spec content to history/spec.md
+            # history_dir is based on requirements_file path, not issue_id
+            history_dir = tmp_path / ".aaf" / "issues" / "requirements" / "spec" / "history"
+            history_dir.mkdir(parents=True, exist_ok=True)
+            spec_file = history_dir / "spec.md"
+            spec_file.write_text("需求已清楚。")
+            return "CONFIRMED"
+
+        agent_manager.execute.side_effect = mock_execute
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
-            requirements_file="requirements.md",
+            requirements_file=str(tmp_path / "requirements.md"),
             workflow_mode=WorkflowMode.GITHUB,
             interactive=False,
             issue_id="123",
@@ -154,8 +187,8 @@ class TestGitHubWorkflow:
             result = phase.execute()
 
             assert result.status == PhaseStatus.COMPLETED
-            # Should update existing issue
-            mock_update.assert_called_once_with("123", "CONFIRMED\n需求已清楚。")
+            # Should update existing issue with content from history/spec.md
+            mock_update.assert_called_once_with("123", "需求已清楚。")
             # Should use gh issue view in prompt
             call_args = agent_manager.execute.call_args
             prompt = call_args[0][1]
@@ -277,9 +310,6 @@ class TestErrorHandling:
         requirements_file = tmp_path / "nonexistent.md"
 
         agent_manager = MagicMock(spec=AgentManager)
-        # Mock agent to complete in one iteration
-        agent_manager.execute.return_value = "CONFIRMED\n需求已完整"
-
         permission_handler = MagicMock(spec=PermissionHandler)
 
         phase = SpecPhase(
@@ -290,27 +320,30 @@ class TestErrorHandling:
             interactive=False,
         )
 
+        # Mock agent to complete in one iteration
+        agent_manager.execute.side_effect = create_mock_pm_agent(phase, "需求已完整", "CONFIRMED")
+
         result = phase.execute()
 
         # Should succeed and create the file
         assert result.status == PhaseStatus.COMPLETED
         assert requirements_file.exists()
 
-    def test_github_mode_without_issue_id_creates_new(self) -> None:
+    def test_github_mode_without_issue_id_creates_new(self, tmp_path: Path) -> None:
         """測試 GitHub mode 沒有 issue_id 時創建新 issue"""
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = "CONFIRMED\n需求已完整"
-
         permission_handler = MagicMock(spec=PermissionHandler)
 
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
-            requirements_file="requirements.md",
+            requirements_file=str(tmp_path / "requirements.md"),
             workflow_mode=WorkflowMode.GITHUB,
             interactive=False,
             issue_id=None,
         )
+
+        agent_manager.execute.side_effect = create_mock_pm_agent(phase, "需求已完整", "CONFIRMED")
 
         with patch('aaf.phases.spec_phase.create_github_issue') as mock_create:
             mock_create.return_value = "789"
@@ -352,17 +385,10 @@ class TestConversationalRequirementsGeneration:
     def test_generate_requirements_from_scratch_local(self, tmp_path: Path) -> None:
         """測試從無到有以對話方式生成需求文件（Local mode）"""
         requirements_file = tmp_path / "requirements.md"
-        
+
         agent_manager = MagicMock(spec=AgentManager)
-        # Simulate conversation: ask questions -> user responds -> generate document
-        agent_manager.execute.side_effect = [
-            "NEED_CLARIFICATION\n請問這個功能的目的是什麼？",
-            "NEED_CLARIFICATION\n預期的使用場景有哪些？",
-            "CONFIRMED\n需求文件已生成",
-        ]
-        
         permission_handler = MagicMock(spec=PermissionHandler)
-        
+
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
@@ -370,9 +396,24 @@ class TestConversationalRequirementsGeneration:
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
         )
-        
+
+        # Simulate conversation: ask questions -> user responds -> generate document
+        call_count = [0]
+        def mock_execute(agent_name: str, prompt: str) -> str:
+            spec_file = phase.history_dir / "spec.md"
+            spec_file.parent.mkdir(parents=True, exist_ok=True)
+            call_count[0] += 1
+            if call_count[0] < 3:
+                spec_file.write_text(f"問題 {call_count[0]}")
+                return "NEED_CLARIFICATION"
+            else:
+                spec_file.write_text("需求文件已生成")
+                return "CONFIRMED"
+
+        agent_manager.execute.side_effect = mock_execute
+
         result = phase.execute()
-        
+
         # Should complete after conversation
         assert result.status == PhaseStatus.COMPLETED
         assert result.data["iterations"] == 3
@@ -383,12 +424,10 @@ class TestConversationalRequirementsGeneration:
     def test_generate_requirements_saves_to_file(self, tmp_path: Path) -> None:
         """測試生成的需求文件正確儲存"""
         requirements_file = tmp_path / "new_requirements.md"
-        
+
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = "CONFIRMED\n# 需求文件\n\n功能描述..."
-        
         permission_handler = MagicMock(spec=PermissionHandler)
-        
+
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
@@ -396,43 +435,57 @@ class TestConversationalRequirementsGeneration:
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
         )
-        
+
+        agent_manager.execute.side_effect = create_mock_pm_agent(phase, "# 需求文件\n\n功能描述...", "CONFIRMED")
+
         result = phase.execute()
-        
+
         assert result.status == PhaseStatus.COMPLETED
         # File should be created with content
         assert requirements_file.exists()
         content = requirements_file.read_text()
         assert "需求文件" in content or len(content) > 0
 
-    def test_generate_requirements_github_creates_issue(self) -> None:
+    def test_generate_requirements_github_creates_issue(self, tmp_path: Path) -> None:
         """測試 GitHub mode 創建新 issue"""
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.side_effect = [
-            "NEED_CLARIFICATION\n請問功能目的？",
-            "CONFIRMED\n需求已完整",
-        ]
-        
         permission_handler = MagicMock(spec=PermissionHandler)
-        
+
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
-            requirements_file="requirements.md",
+            requirements_file=str(tmp_path / "requirements.md"),
             workflow_mode=WorkflowMode.GITHUB,
             interactive=False,
             issue_id=None,  # No existing issue - should create new one
         )
-        
+
+        call_count = [0]
+        def mock_execute(agent_name: str, prompt: str) -> str:
+            spec_file = phase.history_dir / "spec.md"
+            spec_file.parent.mkdir(parents=True, exist_ok=True)
+            call_count[0] += 1
+            if call_count[0] == 1:
+                spec_file.write_text("請問功能目的？")
+                return "NEED_CLARIFICATION"
+            else:
+                spec_file.write_text("需求已完整")
+                return "CONFIRMED"
+
+        agent_manager.execute.side_effect = mock_execute
+
         with patch('aaf.phases.spec_phase.create_github_issue') as mock_create:
-            mock_create.return_value = "456"  # New issue ID
-            
-            result = phase.execute()
-            
-            assert result.status == PhaseStatus.COMPLETED
-            # Should create a new issue
-            mock_create.assert_called_once()
-            assert result.data.get("issue_id") == "456"
+            with patch('aaf.phases.spec_phase.update_github_issue') as mock_update:
+                mock_create.return_value = "456"  # New issue ID
+
+                result = phase.execute()
+
+                assert result.status == PhaseStatus.COMPLETED
+                # Should create issue on first iteration (NEED_CLARIFICATION)
+                # Then update on second iteration (CONFIRMED)
+                assert mock_create.call_count == 1  # Created once
+                assert mock_update.call_count == 1  # Updated once
+                assert result.data.get("issue_id") == "456"
 
     def test_prompt_includes_non_technical_emphasis(self, tmp_path: Path) -> None:
         """測試 prompt 包含不涉及技術細節的強調"""
@@ -461,15 +514,10 @@ class TestConversationalRequirementsGeneration:
     def test_no_existing_file_starts_conversation(self, tmp_path: Path) -> None:
         """測試沒有現有文件時，從對話開始"""
         requirements_file = tmp_path / "nonexistent.md"
-        
+
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.side_effect = [
-            "NEED_CLARIFICATION\n請描述功能需求",
-            "CONFIRMED\n需求已完整",
-        ]
-        
         permission_handler = MagicMock(spec=PermissionHandler)
-        
+
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
@@ -477,6 +525,20 @@ class TestConversationalRequirementsGeneration:
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
         )
+
+        call_count = [0]
+        def mock_execute(agent_name: str, prompt: str) -> str:
+            spec_file = phase.history_dir / "spec.md"
+            spec_file.parent.mkdir(parents=True, exist_ok=True)
+            call_count[0] += 1
+            if call_count[0] == 1:
+                spec_file.write_text("請描述功能需求")
+                return "NEED_CLARIFICATION"
+            else:
+                spec_file.write_text("需求已完整")
+                return "CONFIRMED"
+
+        agent_manager.execute.side_effect = mock_execute
         
         result = phase.execute()
 
