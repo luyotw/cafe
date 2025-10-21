@@ -1,5 +1,7 @@
 """Tests for core type definitions."""
 
+from datetime import datetime
+
 import pytest
 from pydantic import ValidationError
 
@@ -8,6 +10,7 @@ from aaf.core.types import (
     AgentCLI,
     PermissionAction,
     PermissionRequest,
+    PhaseProgress,
     PhaseResult,
     PhaseStatus,
     SessionConfig,
@@ -158,3 +161,96 @@ class TestSessionConfig:
         )
         assert config.sessions_dir == "/tmp/sessions"
         assert config.issue_dir == "/tmp/issues"
+
+
+class TestPhaseProgress:
+    """Test PhaseProgress model."""
+
+    def test_create_phase_progress_minimal(self) -> None:
+        """測試只提供必要欄位時可以成功建立 PhaseProgress"""
+        now = datetime.now()
+        progress = PhaseProgress(
+            phase="spec",
+            status=PhaseStatus.COMPLETED,
+            timestamp=now,
+        )
+        assert progress.phase == "spec"
+        assert progress.status == PhaseStatus.COMPLETED
+        assert progress.timestamp == now
+        assert progress.status_code is None
+        assert progress.iteration is None
+        assert progress.message == ""
+
+    def test_create_phase_progress_full(self) -> None:
+        """測試提供所有欄位時可以成功建立 PhaseProgress"""
+        now = datetime.now()
+        progress = PhaseProgress(
+            phase="spec",
+            status=PhaseStatus.COMPLETED,
+            status_code="CONFIRMED",
+            timestamp=now,
+            iteration=2,
+            message="Requirements clarified successfully",
+        )
+        assert progress.phase == "spec"
+        assert progress.status == PhaseStatus.COMPLETED
+        assert progress.status_code == "CONFIRMED"
+        assert progress.timestamp == now
+        assert progress.iteration == 2
+        assert progress.message == "Requirements clarified successfully"
+
+    def test_phase_progress_to_dict(self) -> None:
+        """測試可以將 PhaseProgress 轉換為 dict"""
+        now = datetime.now()
+        progress = PhaseProgress(
+            phase="spec",
+            status=PhaseStatus.COMPLETED,
+            status_code="CONFIRMED",
+            timestamp=now,
+            iteration=2,
+            message="Success",
+        )
+        data = progress.to_dict()
+        assert data["phase"] == "spec"
+        assert data["status"] == "completed"
+        assert data["status_code"] == "CONFIRMED"
+        assert data["timestamp"] == now.isoformat()
+        assert data["iteration"] == 2
+        assert data["message"] == "Success"
+
+    def test_phase_progress_from_dict(self) -> None:
+        """測試可以從 dict 建立 PhaseProgress"""
+        now = datetime.now()
+        data = {
+            "phase": "spec",
+            "status": "completed",
+            "status_code": "CONFIRMED",
+            "timestamp": now.isoformat(),
+            "iteration": 2,
+            "message": "Success",
+        }
+        progress = PhaseProgress.from_dict(data)
+        assert progress.phase == "spec"
+        assert progress.status == PhaseStatus.COMPLETED
+        assert progress.status_code == "CONFIRMED"
+        assert progress.timestamp == now
+        assert progress.iteration == 2
+        assert progress.message == "Success"
+
+    def test_phase_progress_roundtrip(self) -> None:
+        """測試 to_dict 和 from_dict 的往返轉換"""
+        now = datetime.now()
+        original = PhaseProgress(
+            phase="spec",
+            status=PhaseStatus.COMPLETED,
+            status_code="CONFIRMED",
+            timestamp=now,
+            iteration=3,
+        )
+        data = original.to_dict()
+        restored = PhaseProgress.from_dict(data)
+        assert restored.phase == original.phase
+        assert restored.status == original.status
+        assert restored.status_code == original.status_code
+        assert restored.timestamp == original.timestamp
+        assert restored.iteration == original.iteration

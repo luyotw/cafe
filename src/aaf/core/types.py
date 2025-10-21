@@ -1,5 +1,6 @@
 """Core type definitions for AAF."""
 
+from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
@@ -70,3 +71,37 @@ class SessionConfig(BaseModel):
     requirements_file: Optional[str] = None
     sessions_dir: str = ".aaf/sessions"
     issue_dir: str = ".aaf/issues"
+
+
+class PhaseProgress(BaseModel):
+    """Phase execution progress and status."""
+
+    phase: str
+    status: PhaseStatus
+    status_code: Optional[str] = None
+    timestamp: datetime
+    iteration: Optional[int] = None
+    message: str = ""
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary for JSON serialization."""
+        return {
+            "phase": self.phase,
+            "status": self.status.value,
+            "status_code": self.status_code,
+            "timestamp": self.timestamp.isoformat(),
+            "iteration": self.iteration,
+            "message": self.message,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "PhaseProgress":
+        """Create from dictionary."""
+        return cls(
+            phase=data["phase"],
+            status=PhaseStatus(data["status"]),
+            status_code=data.get("status_code"),
+            timestamp=datetime.fromisoformat(data["timestamp"]),
+            iteration=data.get("iteration"),
+            message=data.get("message", ""),
+        )
