@@ -1,26 +1,26 @@
-"""Tests for RequirementsPhase."""
+"""Tests for SpecPhase."""
 
 import json
 import pytest
 from pathlib import Path
 from unittest.mock import MagicMock, patch, call
 
-from aaf.phases.requirements_phase import RequirementsPhase
+from aaf.phases.spec_phase import SpecPhase
 from aaf.agents.manager import AgentManager
 from aaf.core.types import PhaseResult, PhaseStatus, WorkflowMode
 from aaf.core.permission import PermissionHandler
 from aaf.core.status_codes import PhaseStatusCode
 
 
-class TestRequirementsPhaseBasics:
-    """Test basic RequirementsPhase functionality."""
+class TestSpecPhaseBasics:
+    """Test basic SpecPhase functionality."""
 
-    def test_init_requirements_phase(self) -> None:
-        """測試初始化 RequirementsPhase"""
+    def test_init_spec_phase(self) -> None:
+        """測試初始化 SpecPhase"""
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
 
-        phase = RequirementsPhase(
+        phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             requirements_file="requirements.md",
@@ -38,7 +38,7 @@ class TestRequirementsPhaseBasics:
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
 
-        phase = RequirementsPhase(
+        phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             requirements_file="requirements.md",
@@ -64,7 +64,7 @@ class TestLocalWorkflow:
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
-        phase = RequirementsPhase(
+        phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             requirements_file=str(requirements_file),
@@ -87,7 +87,7 @@ class TestLocalWorkflow:
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
-        phase = RequirementsPhase(
+        phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             requirements_file=str(requirements_file),
@@ -116,7 +116,7 @@ class TestLocalWorkflow:
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
-        phase = RequirementsPhase(
+        phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             requirements_file=str(requirements_file),
@@ -140,7 +140,7 @@ class TestGitHubWorkflow:
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
-        phase = RequirementsPhase(
+        phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             requirements_file="requirements.md",
@@ -149,7 +149,7 @@ class TestGitHubWorkflow:
             issue_id="123",
         )
 
-        with patch('aaf.phases.requirements_phase.update_github_issue') as mock_update:
+        with patch('aaf.phases.spec_phase.update_github_issue') as mock_update:
             result = phase.execute()
 
             assert result.status == PhaseStatus.COMPLETED
@@ -167,7 +167,7 @@ class TestGitHubWorkflow:
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
-        phase = RequirementsPhase(
+        phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             requirements_file="requirements.md",
@@ -195,7 +195,7 @@ class TestPromptGeneration:
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
-        phase = RequirementsPhase(
+        phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             requirements_file=str(requirements_file),
@@ -223,7 +223,7 @@ class TestPromptGeneration:
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
-        phase = RequirementsPhase(
+        phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             requirements_file=str(requirements_file),
@@ -252,7 +252,7 @@ class TestAgentSelection:
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
-        phase = RequirementsPhase(
+        phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             requirements_file=str(requirements_file),
@@ -281,7 +281,7 @@ class TestErrorHandling:
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
-        phase = RequirementsPhase(
+        phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             requirements_file=str(requirements_file),
@@ -302,7 +302,7 @@ class TestErrorHandling:
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
-        phase = RequirementsPhase(
+        phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             requirements_file="requirements.md",
@@ -311,7 +311,7 @@ class TestErrorHandling:
             issue_id=None,
         )
 
-        with patch('aaf.phases.requirements_phase.create_github_issue') as mock_create:
+        with patch('aaf.phases.spec_phase.create_github_issue') as mock_create:
             mock_create.return_value = "789"
 
             result = phase.execute()
@@ -331,7 +331,7 @@ class TestErrorHandling:
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
-        phase = RequirementsPhase(
+        phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             requirements_file=str(requirements_file),
@@ -362,7 +362,7 @@ class TestConversationalRequirementsGeneration:
         
         permission_handler = MagicMock(spec=PermissionHandler)
         
-        phase = RequirementsPhase(
+        phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             requirements_file=str(requirements_file),
@@ -388,7 +388,7 @@ class TestConversationalRequirementsGeneration:
         
         permission_handler = MagicMock(spec=PermissionHandler)
         
-        phase = RequirementsPhase(
+        phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             requirements_file=str(requirements_file),
@@ -414,7 +414,7 @@ class TestConversationalRequirementsGeneration:
         
         permission_handler = MagicMock(spec=PermissionHandler)
         
-        phase = RequirementsPhase(
+        phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             requirements_file="requirements.md",
@@ -423,7 +423,7 @@ class TestConversationalRequirementsGeneration:
             issue_id=None,  # No existing issue - should create new one
         )
         
-        with patch('aaf.phases.requirements_phase.create_github_issue') as mock_create:
+        with patch('aaf.phases.spec_phase.create_github_issue') as mock_create:
             mock_create.return_value = "456"  # New issue ID
             
             result = phase.execute()
@@ -442,7 +442,7 @@ class TestConversationalRequirementsGeneration:
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
-        phase = RequirementsPhase(
+        phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             requirements_file=str(requirements_file),
@@ -469,7 +469,7 @@ class TestConversationalRequirementsGeneration:
         
         permission_handler = MagicMock(spec=PermissionHandler)
         
-        phase = RequirementsPhase(
+        phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             requirements_file=str(requirements_file),
@@ -498,7 +498,7 @@ class TestHistoryTracking:
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
-        phase = RequirementsPhase(
+        phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             requirements_file=str(requirements_file),
@@ -508,7 +508,7 @@ class TestHistoryTracking:
         )
 
         # Verify history directory path includes phase1 and is alongside requirements file
-        assert phase.history_dir == tmp_path / ".aaf" / "issues" / "test-feature" / "phase1" / "history"
+        assert phase.history_dir == tmp_path / ".aaf" / "issues" / "test-feature" / "spec" / "history"
 
     def test_save_iteration_history_creates_json(self, tmp_path: Path) -> None:
         """測試儲存迭代歷史會建立 JSON 檔案"""
@@ -520,7 +520,7 @@ class TestHistoryTracking:
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
-        phase = RequirementsPhase(
+        phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             requirements_file=str(requirements_file),
@@ -561,7 +561,7 @@ class TestHistoryTracking:
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
 
-        phase = RequirementsPhase(
+        phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             requirements_file=str(requirements_file),
@@ -611,7 +611,7 @@ class TestHistoryTracking:
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
 
-        phase = RequirementsPhase(
+        phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             requirements_file=str(requirements_file),
@@ -638,7 +638,7 @@ class TestHistoryTracking:
         permission_handler = MagicMock(spec=PermissionHandler)
 
         # Create phase and save history
-        phase1 = RequirementsPhase(
+        phase1 = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             requirements_file=str(requirements_file),
@@ -665,7 +665,7 @@ class TestHistoryTracking:
         phase1._save_iteration_history("Q2", "A2", PhaseStatusCode.NEED_CLARIFICATION)
 
         # Create new phase - history will be auto-loaded in __init__
-        phase2 = RequirementsPhase(
+        phase2 = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             requirements_file=str(requirements_file),
@@ -689,7 +689,7 @@ class TestHistoryTracking:
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
 
-        phase = RequirementsPhase(
+        phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             requirements_file=str(requirements_file),
@@ -699,7 +699,7 @@ class TestHistoryTracking:
 
         # Verify issue_name is derived from filename
         assert phase.issue_name == "my-feature"
-        assert phase.history_dir == tmp_path / ".aaf" / "issues" / "my-feature" / "phase1" / "history"
+        assert phase.history_dir == tmp_path / ".aaf" / "issues" / "my-feature" / "spec" / "history"
 
     def test_prompt_includes_context_file_after_iteration_1(self, tmp_path: Path) -> None:
         """測試第 2 輪後 prompt 包含 context 檔案"""
@@ -711,7 +711,7 @@ class TestHistoryTracking:
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
-        phase = RequirementsPhase(
+        phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             requirements_file=str(requirements_file),
@@ -729,7 +729,7 @@ class TestHistoryTracking:
         prompt = phase._generate_prompt()
 
         # Should include reference to context file
-        expected_path = str(tmp_path / ".aaf" / "issues" / "test-feature" / "phase1" / "history" / "context.md")
+        expected_path = str(tmp_path / ".aaf" / "issues" / "test-feature" / "spec" / "history" / "context.md")
         assert "context.md" in prompt or expected_path in prompt
 
     def test_iteration_4_prompt_includes_restriction(self, tmp_path: Path) -> None:
@@ -740,7 +740,7 @@ class TestHistoryTracking:
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
 
-        phase = RequirementsPhase(
+        phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             requirements_file=str(requirements_file),

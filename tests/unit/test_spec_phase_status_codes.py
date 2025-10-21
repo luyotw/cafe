@@ -1,4 +1,4 @@
-"""Tests for RequirementsPhase with status code system."""
+"""Tests for SpecPhase with status code system."""
 
 import pytest
 from pathlib import Path
@@ -8,11 +8,11 @@ from aaf.agents.manager import AgentManager
 from aaf.core.permission import PermissionHandler
 from aaf.core.status_codes import PhaseStatusCode
 from aaf.core.types import PhaseStatus, WorkflowMode
-from aaf.phases.requirements_phase import RequirementsPhase
+from aaf.phases.spec_phase import SpecPhase
 
 
-class TestRequirementsPhaseWithStatusCodes:
-    """Test RequirementsPhase with status code system."""
+class TestSpecPhaseWithStatusCodes:
+    """Test SpecPhase with status code system."""
 
     @patch("pathlib.Path.exists")
     @patch("pathlib.Path.read_text")
@@ -33,7 +33,7 @@ class TestRequirementsPhaseWithStatusCodes:
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
-        phase = RequirementsPhase(
+        phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             requirements_file="requirements.md",
@@ -65,7 +65,7 @@ class TestRequirementsPhaseWithStatusCodes:
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
-        phase = RequirementsPhase(
+        phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             requirements_file="requirements.md",
@@ -100,7 +100,7 @@ class TestRequirementsPhaseWithStatusCodes:
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
-        phase = RequirementsPhase(
+        phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             requirements_file="requirements.md",
@@ -132,7 +132,7 @@ class TestRequirementsPhaseWithStatusCodes:
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
-        phase = RequirementsPhase(
+        phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             requirements_file="requirements.md",
@@ -166,7 +166,7 @@ class TestRequirementsPhaseWithStatusCodes:
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
-        phase = RequirementsPhase(
+        phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             requirements_file="requirements.md",
@@ -197,7 +197,7 @@ class TestRequirementsPhaseWithStatusCodes:
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
-        phase = RequirementsPhase(
+        phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             requirements_file="requirements.md",

@@ -1,4 +1,4 @@
-"""Requirements clarification phase."""
+"""Specification phase (requirements clarification)."""
 
 import json
 from datetime import datetime
@@ -44,8 +44,8 @@ def update_github_issue(issue_id: str, content: str) -> None:
     raise NotImplementedError("GitHub issue update not yet implemented")
 
 
-class RequirementsPhase(Phase):
-    """Phase 1: Requirements clarification with PM agent."""
+class SpecPhase(Phase):
+    """Specification phase: Requirements clarification with PM agent."""
 
     def __init__(
         self,
@@ -88,10 +88,10 @@ class RequirementsPhase(Phase):
             req_path = Path(requirements_file).absolute()
             self.issue_name = req_path.stem
 
-        # History directory (includes phase1 for future phase support)
+        # History directory for spec phase
         # Place history alongside requirements file to avoid conflicts
         req_dir = Path(requirements_file).parent.absolute()
-        self.history_dir = req_dir / ".aaf" / "issues" / self.issue_name / "phase1" / "history"
+        self.history_dir = req_dir / ".aaf" / "issues" / self.issue_name / "spec" / "history"
 
         # Track conversation history
         self.conversation_history = []

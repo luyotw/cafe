@@ -29,9 +29,9 @@ class TestSetupAgents:
         assert "Richard" in agent_manager.agents
 
         # 驗證預設使用 claude
-        assert agent_manager.agents["Roger"].config.tool == AgentCLI.CLAUDE
-        assert agent_manager.agents["David"].config.tool == AgentCLI.CLAUDE
-        assert agent_manager.agents["Richard"].config.tool == AgentCLI.CLAUDE
+        assert agent_manager.agents["Roger"].config.cli == AgentCLI.CLAUDE
+        assert agent_manager.agents["David"].config.cli == AgentCLI.CLAUDE
+        assert agent_manager.agents["Richard"].config.cli == AgentCLI.CLAUDE
 
     def test_setup_agents_with_custom_config(self, tmp_path: Path) -> None:
         """測試使用自訂設定建立 agents"""
@@ -41,9 +41,9 @@ class TestSetupAgents:
         # 設定自訂 agent 設定（使用 dict 結構而非預設的 list）
         custom_config = {
             "agents": {
-                "pm": {"name": "CustomPM", "tool": "gemini", "allowed_tools": []},
-                "developer": {"name": "CustomDev", "tool": "claude", "allowed_tools": []},
-                "reviewer": {"name": "Richard", "tool": "cursor-agent", "allowed_tools": []},
+                "pm": {"name": "CustomPM", "cli": "gemini"},
+                "developer": {"name": "CustomDev", "cli": "claude"},
+                "reviewer": {"name": "Richard", "cli": "cursor-agent"},
             }
         }
         config_manager.save_config(custom_config)
@@ -53,14 +53,14 @@ class TestSetupAgents:
         # 驗證自訂設定
         assert "CustomPM" in agent_manager.agents
         assert "CustomDev" in agent_manager.agents
-        assert agent_manager.agents["CustomPM"].config.tool == AgentCLI.GEMINI
-        assert agent_manager.agents["Richard"].config.tool == AgentCLI.CURSOR
+        assert agent_manager.agents["CustomPM"].config.cli == AgentCLI.GEMINI
+        assert agent_manager.agents["Richard"].config.cli == AgentCLI.CURSOR
 
 
 class TestBuildWorkflow:
     """Test workflow building functionality."""
 
-    @patch("aaf.ui.cli.RequirementsPhase")
+    @patch("aaf.ui.cli.SpecPhase")
     @patch("aaf.ui.cli.AnalysisPhase")
     @patch("aaf.ui.cli.ImplementationPhase")
     @patch("aaf.ui.cli.ReviewPhase")
@@ -99,7 +99,7 @@ class TestBuildWorkflow:
         # 驗證 workflow 有 5 個 phases
         assert len(workflow.phases) == 5
 
-    @patch("aaf.ui.cli.RequirementsPhase")
+    @patch("aaf.ui.cli.SpecPhase")
     def test_build_workflow_passes_correct_mode(
         self,
         mock_req: Mock,
@@ -120,7 +120,7 @@ class TestBuildWorkflow:
             config_manager=config_manager,
         )
 
-        # 驗證 RequirementsPhase 收到正確的 mode
+        # 驗證 SpecPhase 收到正確的 mode
         call_kwargs = mock_req.call_args.kwargs
         assert call_kwargs["workflow_mode"] == WorkflowMode.GITHUB
         assert call_kwargs["issue_id"] == "123"

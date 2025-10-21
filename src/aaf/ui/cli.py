@@ -15,7 +15,7 @@ from aaf.core.workflow import Workflow
 from aaf.phases.analysis_phase import AnalysisPhase
 from aaf.phases.implementation_phase import ImplementationPhase
 from aaf.phases.pr_phase import PRPhase
-from aaf.phases.requirements_phase import RequirementsPhase
+from aaf.phases.spec_phase import SpecPhase
 from aaf.phases.review_phase import ReviewPhase
 from aaf.utils.config import ConfigManager
 
@@ -103,9 +103,9 @@ def _build_workflow(
 
     workflow = Workflow(max_retries=config_manager.get("workflow.max_retries", 0))
 
-    # Phase 1: Requirements clarification
+    # Spec phase: Requirements clarification
     workflow.add_phase(
-        RequirementsPhase(
+        SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             requirements_file=requirements,
@@ -286,7 +286,7 @@ def version() -> None:
 
 
 @app.command()
-def requirements(
+def spec(
     output: str = typer.Option(
         "requirements.md",
         "--output",
@@ -317,23 +317,23 @@ def requirements(
         help="Path to configuration file",
     ),
 ) -> None:
-    """Run Phase 1: Requirements clarification with conversational generation.
+    """Run specification phase: Requirements clarification with conversational generation.
 
     The PM agent will engage in a dialogue with you to clarify and generate
     a complete requirements document. No technical details will be discussed.
 
     Examples:
         # Generate requirements through conversation (local)
-        aaf requirements -o requirements.md
+        aaf spec -o requirements.md
 
         # Create new GitHub issue with requirements
-        aaf requirements -m github
+        aaf spec -m github
 
         # Update existing GitHub issue
-        aaf requirements -m github -i 123
+        aaf spec -m github -i 123
 
         # Use custom PM agent
-        aaf requirements -o req.md --pm CustomPM
+        aaf spec -o req.md --pm CustomPM
     """
     try:
         # Validate mode
@@ -350,7 +350,7 @@ def requirements(
         permission_handler = PermissionHandler()
 
         # Display start message
-        console.print("[bold blue]🎯 Phase 1: Requirements Clarification[/bold blue]")
+        console.print("[bold blue]🎯 Spec Phase: Requirements Clarification[/bold blue]")
         console.print(f"Mode: {workflow_mode.value}")
         console.print(f"PM Agent: {pm_agent}")
         if workflow_mode == WorkflowMode.LOCAL:
@@ -359,8 +359,8 @@ def requirements(
             console.print(f"Issue: #{issue_id}")
         console.print()
 
-        # Create and execute requirements phase
-        phase = RequirementsPhase(
+        # Create and execute spec phase
+        phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             requirements_file=output,
