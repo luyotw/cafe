@@ -282,3 +282,127 @@ class TestWorkflowRetry:
         # After exhausting retries, should return failed result
         assert phase.attempt == 3  # Initial + 2 retries
         assert results[0].status == PhaseStatus.FAILED
+
+
+class TestWorkflowAutoSkipCompleted:
+    """Test workflow automatic skip of completed phases."""
+
+    def test_skip_completed_phase_automatically(self, tmp_path) -> None:
+        """測試自動跳過已完成的 phase"""
+        from pathlib import Path
+        from datetime import datetime
+        from aaf.core.types import PhaseProgress
+        import json
+
+        # Create a phase with status.json indicating completion
+        status_file = tmp_path / "status.json"
+        progress = PhaseProgress(
+            phase="spec",
+            status=PhaseStatus.COMPLETED,
+            status_code="CONFIRMED",
+            timestamp=datetime.now(),
+            iteration=1,
+            message="Phase completed with CONFIRMED",
+        )
+        with open(status_file, 'w', encoding='utf-8') as f:
+            json.dump(progress.to_dict(), f, ensure_ascii=False, indent=2)
+
+        class PhaseWithStatus(Phase):
+            def __init__(self, status_file: Path) -> None:
+                self._status_file = status_file
+                self.executed = False
+
+            def get_status_file(self) -> Path:
+                return self._status_file
+
+            def execute(self) -> PhaseResult:
+                self.executed = True
+                return PhaseResult(status=PhaseStatus.COMPLETED)
+
+        phase1 = PhaseWithStatus(status_file)
+        phase2 = MockPhase("phase2", PhaseResult(status=PhaseStatus.COMPLETED))
+
+        workflow = Workflow(phases=[phase1, phase2])
+        results = workflow.execute()
+
+        # Phase1 should be auto-skipped
+        assert not phase1.executed
+        assert results[0].status == PhaseStatus.SKIPPED
+        assert "already completed" in results[0].message.lower()
+
+        # Phase2 should execute normally
+        assert phase2.executed
+        assert results[1].status == PhaseStatus.COMPLETED
+
+    def test_do_not_skip_incomplete_phase(self, tmp_path) -> None:
+        """測試不跳過未完成的 phase"""
+        from pathlib import Path
+        from datetime import datetime
+        from aaf.core.types import PhaseProgress
+        import json
+
+        # Create a phase with status.json indicating IN_PROGRESS
+        status_file = tmp_path / "status.json"
+        progress = PhaseProgress(
+            phase="spec",
+            status=PhaseStatus.IN_PROGRESS,
+            status_code="NEED_CLARIFICATION",
+            timestamp=datetime.now(),
+            iteration=1,
+            message="Iteration 1",
+        )
+        with open(status_file, 'w', encoding='utf-8') as f:
+            json.dump(progress.to_dict(), f, ensure_ascii=False, indent=2)
+
+        class PhaseWithStatus(Phase):
+            def __init__(self, status_file: Path) -> None:
+                self._status_file = status_file
+                self.executed = False
+
+            def get_status_file(self) -> Path:
+                return self._status_file
+
+            def execute(self) -> PhaseResult:
+                self.executed = True
+                return PhaseResult(status=PhaseStatus.COMPLETED)
+
+        phase = PhaseWithStatus(status_file)
+        workflow = Workflow(phases=[phase])
+        results = workflow.execute()
+
+        # Phase should execute because it's not completed
+        assert phase.executed
+        assert results[0].status == PhaseStatus.COMPLETED
+
+    def test_do_not_skip_phase_without_status_file(self) -> None:
+        """測試不跳過沒有 status.json 的 phase"""
+        from pathlib import Path
+
+        class PhaseWithStatus(Phase):
+            def __init__(self) -> None:
+                self.executed = False
+
+            def get_status_file(self) -> Path:
+                return Path("/nonexistent/status.json")
+
+            def execute(self) -> PhaseResult:
+                self.executed = True
+                return PhaseResult(status=PhaseStatus.COMPLETED)
+
+        phase = PhaseWithStatus()
+        workflow = Workflow(phases=[phase])
+        results = workflow.execute()
+
+        # Phase should execute because status.json doesn't exist
+        assert phase.executed
+        assert results[0].status == PhaseStatus.COMPLETED
+
+    def test_do_not_skip_phase_without_get_status_file_method(self) -> None:
+        """測試不跳過沒有 get_status_file() 方法的 phase"""
+        phase = MockPhase("phase1", PhaseResult(status=PhaseStatus.COMPLETED))
+        workflow = Workflow(phases=[phase])
+        results = workflow.execute()
+
+        # Phase should execute normally
+        assert phase.executed
+        assert results[0].status == PhaseStatus.COMPLETED

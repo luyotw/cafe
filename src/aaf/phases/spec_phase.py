@@ -726,11 +726,19 @@ class SpecPhase(Phase):
 
     def _get_status_file(self) -> Path:
         """Get the path to status.json file.
-        
+
         Returns:
             Path to status.json in .aaf/issues/{issue_name}/spec/status.json
         """
         return self.history_dir.parent / "status.json"
+
+    def get_status_file(self) -> Path:
+        """Public method to get status file path for workflow integration.
+
+        Returns:
+            Path to status.json
+        """
+        return self._get_status_file()
 
     def _save_progress(self, status_code: PhaseStatusCode) -> None:
         """Save phase progress to status.json.

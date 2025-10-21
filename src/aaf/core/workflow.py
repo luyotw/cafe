@@ -1,9 +1,11 @@
 """Workflow orchestration for AAF."""
 
+import json
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from aaf.core.phase import Phase
-from aaf.core.types import PhaseResult, PhaseStatus
+from aaf.core.types import PhaseProgress, PhaseResult, PhaseStatus
 
 
 class WorkflowError(Exception):
@@ -56,11 +58,21 @@ class Workflow:
         results: List[PhaseResult] = []
 
         for index, phase in enumerate(self.phases):
-            # Check if this phase should be skipped
+            # Check if this phase should be skipped (user-specified)
             if index in skip_phases:
                 skipped_result = PhaseResult(
                     status=PhaseStatus.SKIPPED,
                     message=f"Phase {index} skipped by user",
+                )
+                results.append(skipped_result)
+                self.context["phase_results"].append(skipped_result)
+                continue
+
+            # Check if this phase is already completed
+            if self._is_phase_completed(phase):
+                skipped_result = PhaseResult(
+                    status=PhaseStatus.SKIPPED,
+                    message=f"Phase already completed, skipping execution",
                 )
                 results.append(skipped_result)
                 self.context["phase_results"].append(skipped_result)
@@ -76,6 +88,37 @@ class Workflow:
                 break
 
         return results
+
+    def _is_phase_completed(self, phase: Phase) -> bool:
+        """Check if a phase is already completed.
+
+        Args:
+            phase: Phase to check
+
+        Returns:
+            True if phase is completed, False otherwise
+        """
+        # Check if phase has get_status_file method
+        if not hasattr(phase, "get_status_file"):
+            return False
+
+        try:
+            status_file = phase.get_status_file()
+            if not status_file.exists():
+                return False
+
+            # Read and parse status.json
+            with open(status_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+
+            progress = PhaseProgress.from_dict(data)
+
+            # Check if phase is completed
+            return progress.status == PhaseStatus.COMPLETED
+
+        except Exception:
+            # If any error occurs, assume phase is not completed
+            return False
 
     def _execute_phase_with_retry(self, phase: Phase) -> PhaseResult:
         """Execute a phase with retry logic.
