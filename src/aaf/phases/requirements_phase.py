@@ -182,8 +182,11 @@ class RequirementsPhase(Phase):
                 elif status_code == PhaseStatusCode.NEED_CLARIFICATION:
                     if self.interactive:
                         # Interactive mode: Display PM's questions and get user input
+                        # Get CLI info for display
+                        pm_cli = self.agent_manager.get_agent_config(self.pm_agent).cli.value
+
                         print(f"\n{'='*60}")
-                        print(f"PM ({self.pm_agent}) - Iteration {self.iteration}:")
+                        print(f"PM ({self.pm_agent} by {pm_cli}) - Iteration {self.iteration}:")
                         print(f"{'='*60}")
                         print(response)
                         print(f"{'='*60}\n")
@@ -201,6 +204,12 @@ class RequirementsPhase(Phase):
                                 break
 
                         user_response = '\n'.join(user_response_lines)
+
+                        # Provide feedback after END input
+                        if user_response.strip():
+                            print()
+                            print("✅ 已收到您的回答，正在發送給 PM 處理...")
+                            print()
 
                         if not user_response.strip():
                             print("\n⚠️  沒有輸入內容，Phase 將終止。")
@@ -430,23 +439,28 @@ class RequirementsPhase(Phase):
                 # File exists - analyze and clarify
                 return f"""分析 {self.requirements_file} 的內容。
 
-你是 PM，負責與用戶溝通並產出完整的需求文件。這是第 {self.iteration} 輪需求澄清。
+**你的角色：**
+你是一位經驗豐富的 Product Manager (PM)，專注於需求澄清和產品規劃。
+你不是軟體工程師，你的工作是確保需求清楚，避免開發者自己腦補。
+
+這是第 {self.iteration} 輪需求澄清。
 
 **你的職責：**
-1. 閱讀需求文件，找出所有不清楚、模糊、缺失的資訊
-2. **以對話方式**向用戶提問，確認所有必要資訊
-3. 根據用戶回應更新需求文件
+1. 仔細閱讀需求文件，找出所有不清楚、模糊、可能讓開發者自己腦補的地方
+2. **以 PM 的身份**用對話方式向用戶提問，確認所有必要資訊
+3. 如果需求已經很清楚，就說清楚了，不要硬湊問題
 
 {non_technical}
 
 {status_code_prompt}
 
 **如果需要澄清需求（status: NEED_CLARIFICATION）：**
-以對話方式向用戶提問，例如：
+以 PM 的身份用對話方式向用戶提問，例如：
 - 這個功能的目的是什麼？
 - 用戶預期看到什麼結果？
 - 有哪些使用場景？
-記住：不要提技術細節！
+- 成功的標準是什麼？
+記住：你是 PM，不是工程師，不要提技術細節！
 
 **如果需求已清楚（status: CONFIRMED）：**
 確認需求文件已更新完整，包含：功能描述、使用場景、預期行為、驗收標準。
@@ -455,17 +469,22 @@ class RequirementsPhase(Phase):
                 # File doesn't exist but user story should have been created
                 return f"""分析 {self.requirements_file} 中的使用者故事。
 
-你是 PM，負責將使用者故事轉換成完整的需求文件。這是第 {self.iteration} 輪需求澄清。
+**你的角色：**
+你是一位經驗豐富的 Product Manager (PM)，負責將使用者故事轉換成完整的需求文件。
+你不是軟體工程師，你的工作是確保需求清楚。
+
+這是第 {self.iteration} 輪需求澄清。
 
 {non_technical}
 
 {status_code_prompt}
 
 **如果需要更多資訊（status: NEED_CLARIFICATION）：**
-提出具體問題，確認：
+以 PM 的身份提出具體問題，確認：
 - 具體使用場景
 - 預期行為
 - 驗收標準
+記住：你是 PM，不要問技術實作問題！
 
 **如果資訊已足夠（status: CONFIRMED）：**
 產出完整需求文件。
@@ -490,6 +509,10 @@ class RequirementsPhase(Phase):
 
             return f"""繼續分析 {self.requirements_file} 的最新版本。
 
+**你的角色：**
+你是一位經驗豐富的 Product Manager (PM)，專注於需求澄清。
+你不是軟體工程師，不要提技術實作細節。
+
 這是第 {self.iteration} 輪需求澄清。請檢查需求文件的最新版本。
 {context_reference}
 {non_technical}
@@ -497,7 +520,7 @@ class RequirementsPhase(Phase):
 {status_code_prompt}
 {restriction}
 **如果仍需澄清（status: NEED_CLARIFICATION）：**
-繼續以對話方式提問，確認缺失的資訊。
+以 PM 的身份繼續用對話方式提問，確認缺失的資訊。
 
 **如果需求已清楚（status: CONFIRMED）：**
 確認需求文件完整且無技術細節。
