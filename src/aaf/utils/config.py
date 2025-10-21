@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 import yaml
 
-from aaf.core.types import WorkflowMode, AgentTool
+from aaf.core.types import WorkflowMode, AgentCLI
 
 
 class ConfigError(Exception):
@@ -113,13 +113,13 @@ class ConfigManager:
         # Validate agents
         if isinstance(config["agents"], list):
             for agent in config["agents"]:
-                if "tool" in agent:
+                if "cli" in agent:
                     try:
-                        AgentTool(agent["tool"])
+                        AgentCLI(agent["cli"])
                     except ValueError:
                         raise ConfigError(
-                            f"Invalid agent tool: {agent['tool']}. "
-                            f"Must be one of: {[t.value for t in AgentTool]}"
+                            f"Invalid agent CLI: {agent['cli']}. "
+                            f"Must be one of: {[t.value for t in AgentCLI]}"
                         )
 
         return True
