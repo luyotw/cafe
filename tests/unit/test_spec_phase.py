@@ -2,12 +2,13 @@
 
 import json
 import pytest
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import MagicMock, patch, call
 
 from aaf.phases.spec_phase import SpecPhase
 from aaf.agents.manager import AgentManager
-from aaf.core.types import PhaseResult, PhaseStatus, WorkflowMode
+from aaf.core.types import PhaseProgress, PhaseResult, PhaseStatus, WorkflowMode
 from aaf.core.permission import PermissionHandler
 from aaf.core.status_codes import PhaseStatusCode
 
@@ -757,3 +758,132 @@ class TestHistoryTracking:
 
         # Should include restriction message
         assert "待解答的問題" in prompt and "不可以提出新的問題" in prompt
+
+
+class TestPhaseProgressTracking:
+    """Test phase progress tracking with status.json."""
+
+    def test_save_progress_on_confirmed(self, tmp_path: Path) -> None:
+        """測試 CONFIRMED 時保存進度到 status.json"""
+        agent_manager = MagicMock(spec=AgentManager)
+        agent_manager.execute.return_value = "CONFIRMED\n\n## 需求規格\n完整需求"
+        
+        permission_handler = MagicMock(spec=PermissionHandler)
+        
+        req_file = tmp_path / "requirements.md"
+        
+        phase = SpecPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            requirements_file=str(req_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            interactive=False,
+        )
+        
+        # Execute phase
+        result = phase.execute()
+
+        # Check status.json was created in spec/ directory (not history/)
+        status_file = phase._get_status_file()
+        assert status_file.exists()
+        
+        # Load and verify content
+        with open(status_file) as f:
+            status_data = json.load(f)
+        
+        assert status_data["phase"] == "spec"
+        assert status_data["status"] == "completed"
+        assert status_data["status_code"] == "CONFIRMED"
+        assert "timestamp" in status_data
+
+    def test_save_progress_on_need_clarification(self, tmp_path: Path) -> None:
+        """測試 NEED_CLARIFICATION 時也保存進度"""
+        agent_manager = MagicMock(spec=AgentManager)
+        agent_manager.execute.side_effect = [
+            "NEED_CLARIFICATION\n\n問題1",
+            "CONFIRMED\n\n完整需求",
+        ]
+        
+        permission_handler = MagicMock(spec=PermissionHandler)
+        
+        req_file = tmp_path / "requirements.md"
+        req_file.write_text("初始需求")
+        
+        phase = SpecPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            requirements_file=str(req_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            interactive=False,
+        )
+        
+        # Mock user input
+        with patch('builtins.input', return_value='END'):
+            result = phase.execute()
+
+        # Check status.json exists and has CONFIRMED status
+        status_file = phase._get_status_file()
+        assert status_file.exists()
+        
+        with open(status_file) as f:
+            status_data = json.load(f)
+        
+        assert status_data["status"] == "completed"
+        assert status_data["status_code"] == "CONFIRMED"
+
+    def test_load_progress_from_status_json(self, tmp_path: Path) -> None:
+        """測試可以從 status.json 讀取進度"""
+        req_file = tmp_path / "requirements.md"
+        
+        agent_manager = MagicMock(spec=AgentManager)
+        permission_handler = MagicMock(spec=PermissionHandler)
+        
+        phase = SpecPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            requirements_file=str(req_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            interactive=False,
+        )
+        
+        # Create a status.json manually
+        status_file = phase._get_status_file()
+        status_file.parent.mkdir(parents=True, exist_ok=True)
+        
+        progress = PhaseProgress(
+            phase="spec",
+            status=PhaseStatus.COMPLETED,
+            status_code="CONFIRMED",
+            timestamp=datetime.now(),
+            iteration=2,
+        )
+        
+        with open(status_file, 'w') as f:
+            json.dump(progress.to_dict(), f)
+        
+        # Load progress
+        loaded = phase._load_progress()
+        
+        assert loaded is not None
+        assert loaded.phase == "spec"
+        assert loaded.status == PhaseStatus.COMPLETED
+        assert loaded.status_code == "CONFIRMED"
+        assert loaded.iteration == 2
+
+    def test_status_json_location(self, tmp_path: Path) -> None:
+        """測試 status.json 在正確的位置：.aaf/issues/{issue_name}/spec/status.json"""
+        req_file = tmp_path / "requirements.md"
+        
+        agent_manager = MagicMock(spec=AgentManager)
+        permission_handler = MagicMock(spec=PermissionHandler)
+        
+        phase = SpecPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            requirements_file=str(req_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            interactive=False,
+        )
+        
+        expected_path = tmp_path / ".aaf" / "issues" / "requirements" / "spec" / "status.json"
+        assert phase._get_status_file() == expected_path

@@ -9,7 +9,7 @@ from aaf.agents.manager import AgentManager
 from aaf.core.permission import PermissionHandler
 from aaf.core.phase import Phase
 from aaf.core.status_codes import PhaseStatusCode, StatusCodeParser, generate_status_code_prompt
-from aaf.core.types import PhaseResult, PhaseStatus, WorkflowMode
+from aaf.core.types import PhaseProgress, PhaseResult, PhaseStatus, WorkflowMode
 
 
 def create_github_issue(content: str) -> str:
@@ -154,6 +154,9 @@ class SpecPhase(Phase):
                         status=PhaseStatusCode.CONFIRMED,
                     )
 
+                    # Save progress to status.json
+                    self._save_progress(status_code)
+
                     result_data = {
                         "iterations": self.iteration,
                         "final_response": response,
@@ -182,6 +185,9 @@ class SpecPhase(Phase):
                 elif status_code == PhaseStatusCode.NEED_CLARIFICATION:
                     # Copy spec from history and sync to target (local file or GitHub issue)
                     self._save_requirements(response)
+
+                    # Save progress to status.json
+                    self._save_progress(status_code)
 
                     if self.interactive:
                         # Interactive mode: Display PM's questions and get user input
@@ -717,3 +723,50 @@ class SpecPhase(Phase):
             if data["iteration"] >= self.iteration:
                 self.iteration = data["iteration"]
 
+
+    def _get_status_file(self) -> Path:
+        """Get the path to status.json file.
+        
+        Returns:
+            Path to status.json in .aaf/issues/{issue_name}/spec/status.json
+        """
+        return self.history_dir.parent / "status.json"
+
+    def _save_progress(self, status_code: PhaseStatusCode) -> None:
+        """Save phase progress to status.json.
+        
+        Args:
+            status_code: Phase status code (CONFIRMED, NEED_CLARIFICATION, etc.)
+        """
+        status_file = self._get_status_file()
+        status_file.parent.mkdir(parents=True, exist_ok=True)
+        
+        # Determine phase status
+        phase_status = PhaseStatus.COMPLETED if status_code == PhaseStatusCode.CONFIRMED else PhaseStatus.IN_PROGRESS
+        
+        progress = PhaseProgress(
+            phase="spec",
+            status=phase_status,
+            status_code=status_code.value,
+            timestamp=datetime.now(),
+            iteration=self.iteration,
+            message=f"Phase completed with {status_code.value}" if phase_status == PhaseStatus.COMPLETED else f"Iteration {self.iteration}",
+        )
+        
+        with open(status_file, 'w', encoding='utf-8') as f:
+            json.dump(progress.to_dict(), f, ensure_ascii=False, indent=2)
+
+    def _load_progress(self) -> Optional[PhaseProgress]:
+        """Load phase progress from status.json.
+        
+        Returns:
+            PhaseProgress if file exists, None otherwise
+        """
+        status_file = self._get_status_file()
+        if not status_file.exists():
+            return None
+        
+        with open(status_file, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        
+        return PhaseProgress.from_dict(data)
