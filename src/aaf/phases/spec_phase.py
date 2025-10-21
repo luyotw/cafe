@@ -180,15 +180,22 @@ class SpecPhase(Phase):
                         },
                     )
                 elif status_code == PhaseStatusCode.NEED_CLARIFICATION:
+                    # Copy spec from history and sync to target (local file or GitHub issue)
+                    self._save_requirements(response)
+
                     if self.interactive:
                         # Interactive mode: Display PM's questions and get user input
+                        # Read the spec file that PM agent wrote in history
+                        spec_file = self.history_dir / "spec.md"
+                        pm_content = spec_file.read_text() if spec_file.exists() else "（檔案未產生）"
+
                         # Get CLI info for display
                         pm_cli = self.agent_manager.get_agent_config(self.pm_agent).cli.value
 
                         print(f"\n{'='*60}")
                         print(f"PM ({self.pm_agent} by {pm_cli}) - Iteration {self.iteration}:")
                         print(f"{'='*60}")
-                        print(response)
+                        print(pm_content)
                         print(f"{'='*60}\n")
 
                         # Get user's response
@@ -316,24 +323,35 @@ class SpecPhase(Phase):
             backup_path.write_text(req_path.read_text())
 
     def _save_requirements(self, response: str) -> None:
-        """Save generated requirements to file or GitHub issue.
+        """Copy spec from history to target location and sync to GitHub if needed.
+
+        PM agent writes to history/spec.md. This method:
+        - For local mode: copies history/spec.md to requirements_file
+        - For GitHub mode: syncs history/spec.md content to issue
 
         Args:
-            response: Agent response containing requirements
+            response: Agent response (not used, agent already wrote file)
         """
+        # Read the spec file that PM agent wrote in history
+        spec_file = self.history_dir / "spec.md"
+        if not spec_file.exists():
+            return  # PM hasn't written the file yet
+
+        content = spec_file.read_text()
+
         if self.workflow_mode == WorkflowMode.LOCAL:
-            # Save to local file
+            # Copy to the target requirements file
             req_path = Path(self.requirements_file)
             req_path.parent.mkdir(parents=True, exist_ok=True)
-            req_path.write_text(response)
+            req_path.write_text(content)
         elif self.workflow_mode == WorkflowMode.GITHUB:
-            # Create or update GitHub issue
+            # Sync to GitHub issue
             if not self.issue_id:
                 # Create new issue
-                self._created_issue_id = create_github_issue(response)
+                self._created_issue_id = create_github_issue(content)
             else:
                 # Update existing issue
-                update_github_issue(self.issue_id, response)
+                update_github_issue(self.issue_id, content)
 
     def _save_user_response(self, user_response: str) -> None:
         """Save user's response to requirements file for next iteration.
@@ -455,15 +473,19 @@ class SpecPhase(Phase):
 {status_code_prompt}
 
 **如果需要澄清需求（status: NEED_CLARIFICATION）：**
-以 PM 的身份用對話方式向用戶提問，例如：
-- 這個功能的目的是什麼？
-- 用戶預期看到什麼結果？
-- 有哪些使用場景？
-- 成功的標準是什麼？
+1. 使用 Write tool 將以下內容寫入 {self.history_dir / "spec.md"}：
+   - 「## 使用者故事」- 原始的使用者故事（保持不變，除非用戶要求變更）
+   - 「## 目前的需求規格」- 列出目前已知的所有需求內容
+   - 「## 待釐清的問題」- 以 PM 的身份用對話方式向用戶提問
+2. 寫完檔案後，只回傳：NEED_CLARIFICATION
+
 記住：你是 PM，不是工程師，不要提技術細節！
 
 **如果需求已清楚（status: CONFIRMED）：**
-確認需求文件已更新完整，包含：功能描述、使用場景、預期行為、驗收標準。
+1. 使用 Write tool 將完整需求規格文件寫入 {self.history_dir / "spec.md"}，格式：
+   - 「## 使用者故事」- 原始的使用者故事
+   - 「## 需求規格」- 完整的需求內容，包含：功能描述、使用場景、預期行為、驗收標準
+2. 寫完檔案後，只回傳：CONFIRMED
 """
             else:
                 # File doesn't exist but user story should have been created
@@ -480,14 +502,19 @@ class SpecPhase(Phase):
 {status_code_prompt}
 
 **如果需要更多資訊（status: NEED_CLARIFICATION）：**
-以 PM 的身份提出具體問題，確認：
-- 具體使用場景
-- 預期行為
-- 驗收標準
+1. 使用 Write tool 將以下內容寫入 {self.history_dir / "spec.md"}：
+   - 「## 使用者故事」- 原始的使用者故事（保持不變，除非用戶要求變更）
+   - 「## 目前的需求規格」- 整理目前從使用者故事得知的需求
+   - 「## 待釐清的問題」- 以 PM 的身份提出具體問題（使用場景、預期行為、驗收標準）
+2. 寫完檔案後，只回傳：NEED_CLARIFICATION
+
 記住：你是 PM，不要問技術實作問題！
 
 **如果資訊已足夠（status: CONFIRMED）：**
-產出完整需求文件。
+1. 使用 Write tool 將完整需求文件寫入 {self.history_dir / "spec.md"}，格式：
+   - 「## 使用者故事」- 原始的使用者故事
+   - 「## 需求規格」- 完整的需求內容
+2. 寫完檔案後，只回傳：CONFIRMED
 """
         else:
             # Iteration 2+: Include context file reference
@@ -520,10 +547,17 @@ class SpecPhase(Phase):
 {status_code_prompt}
 {restriction}
 **如果仍需澄清（status: NEED_CLARIFICATION）：**
-以 PM 的身份繼續用對話方式提問，確認缺失的資訊。
+1. 使用 Write tool 將以下內容寫入 {self.history_dir / "spec.md"}：
+   - 「## 使用者故事」- 原始的使用者故事（保持不變，除非用戶要求變更）
+   - 「## 目前的需求規格」- 整合之前的對話和用戶最新回答，列出目前已知的完整需求
+   - 「## 待釐清的問題」- 以 PM 的身份繼續用對話方式提問
+2. 寫完檔案後，只回傳：NEED_CLARIFICATION
 
 **如果需求已清楚（status: CONFIRMED）：**
-確認需求文件完整且無技術細節。
+1. 使用 Write tool 將完整需求規格文件寫入 {self.history_dir / "spec.md"}，格式：
+   - 「## 使用者故事」- 原始的使用者故事
+   - 「## 需求規格」- 完整需求（整合所有已確認的內容）
+2. 寫完檔案後，只回傳：CONFIRMED
 """
 
     def _generate_github_prompt(self) -> str:
