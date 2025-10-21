@@ -156,14 +156,16 @@ class RequirementsPhase(Phase):
                         print(f"{'='*60}\n")
 
                         # Get user's response
-                        print("請回答 PM 的問題（輸入完成後按 Ctrl+D 或 Ctrl+Z）:")
+                        print("請回答 PM 的問題（單獨一行輸入 END 表示結束）:")
                         user_response_lines = []
-                        try:
-                            while True:
+                        while True:
+                            try:
                                 line = input()
+                                if line.strip().upper() == "END":  # "END" ends input
+                                    break
                                 user_response_lines.append(line)
-                        except EOFError:
-                            pass
+                            except EOFError:
+                                break
 
                         user_response = '\n'.join(user_response_lines)
 
@@ -211,17 +213,19 @@ class RequirementsPhase(Phase):
         print("  身為開發者，我想要在 CLI 中看到彩色的權限請求提示，以便快速識別哪些操作需要我確認")
         print()
         print("="*70)
-        print("請輸入你的使用者故事（可多行，輸入完成後按 Ctrl+D 或 Ctrl+Z）:")
+        print("請輸入你的使用者故事（可多行，單獨一行輸入 END 表示結束）:")
         print()
 
         # Get user's story
         user_story_lines = []
-        try:
-            while True:
+        while True:
+            try:
                 line = input()
+                if line.strip().upper() == "END":  # "END" ends input
+                    break
                 user_story_lines.append(line)
-        except EOFError:
-            pass
+            except EOFError:
+                break
 
         user_story = '\n'.join(user_story_lines).strip()
 
