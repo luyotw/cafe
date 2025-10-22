@@ -2,7 +2,7 @@
 
 import json
 import subprocess
-from typing import Any, Dict
+from typing import List, Optional
 
 from aaf.core.types import AgentConfig, AgentCLI
 
@@ -16,6 +16,38 @@ class AgentExecutionError(Exception):
 class AgentExecutor:
     """Executes AI agents and handles their responses."""
 
+    # Tool name mapping from Claude syntax to other CLIs
+    # Reference: https://github.com/google-gemini/gemini-cli/blob/main/docs/tools/file-system.md
+    TOOL_NAME_MAP = {
+        AgentCLI.CLAUDE: {
+            # Claude uses these names (standard)
+            "bash": "Bash",
+            "read": "Read",
+            "write": "Write",
+            "edit": "Edit",
+            "grep": "Grep",
+            "glob": "Glob",
+        },
+        AgentCLI.GEMINI: {
+            # Gemini tool name translations
+            "bash": "bash",
+            "read": "read_file",
+            "write": "write_file",
+            "edit": "replace",
+            "grep": "search_file_content",
+            "glob": "glob",
+        },
+        AgentCLI.CURSOR: {
+            # Cursor tool name translations (TBD)
+            "bash": "bash",
+            "read": "read",
+            "write": "write",
+            "edit": "edit",
+            "grep": "grep",
+            "glob": "glob",
+        },
+    }
+
     def __init__(self, config: AgentConfig) -> None:
         """Initialize agent executor.
 
@@ -24,11 +56,27 @@ class AgentExecutor:
         """
         self.config = config
 
-    def execute(self, prompt: str) -> str:
+    def _translate_tool_names(self, tools: Optional[List[str]]) -> Optional[List[str]]:
+        """Translate tool names from Claude convention to current CLI convention.
+
+        Args:
+            tools: List of tool names in Claude convention
+
+        Returns:
+            List of tool names translated for current CLI, or None if no tools
+        """
+        if not tools:
+            return None
+
+        tool_map = self.TOOL_NAME_MAP.get(self.config.cli, {})
+        return [tool_map.get(tool, tool) for tool in tools]
+
+    def execute(self, prompt: str, allowed_tools: Optional[List[str]] = None) -> str:
         """Execute the agent with given prompt.
 
         Args:
             prompt: Prompt to send to the agent
+            allowed_tools: List of allowed tools (using Claude naming convention)
 
         Returns:
             Agent's response
@@ -36,13 +84,16 @@ class AgentExecutor:
         Raises:
             AgentExecutionError: If agent execution fails
         """
+        # Translate tool names to the appropriate CLI convention
+        translated_tools = self._translate_tool_names(allowed_tools)
+
         try:
             if self.config.cli == AgentCLI.CLAUDE:
-                return self._execute_claude(prompt)
+                return self._execute_claude(prompt, translated_tools)
             elif self.config.cli == AgentCLI.GEMINI:
-                return self._execute_gemini(prompt)
+                return self._execute_gemini(prompt, translated_tools)
             elif self.config.cli == AgentCLI.CURSOR:
-                return self._execute_cursor(prompt)
+                return self._execute_cursor(prompt, translated_tools)
             else:
                 raise AgentExecutionError(f"Unsupported agent CLI: {self.config.cli}")
         except AgentExecutionError:
@@ -50,17 +101,22 @@ class AgentExecutor:
         except Exception as e:
             raise AgentExecutionError(f"Agent execution failed: {e}") from e
 
-    def _execute_claude(self, prompt: str) -> str:
+    def _execute_claude(self, prompt: str, allowed_tools: Optional[List[str]] = None) -> str:
         """Execute Claude agent.
 
         Args:
             prompt: Prompt to send to Claude
+            allowed_tools: List of allowed tools (already translated)
 
         Returns:
             Claude's response
         """
         # Build command: prompt must come first, then options
         cmd = ["claude", "--print", prompt]
+
+        # Add allowed tools if specified
+        if allowed_tools:
+            cmd.extend(["--allowed-tools", ",".join(allowed_tools)])
 
         # Add session if available
         if self.config.session_id:
@@ -131,17 +187,24 @@ class AgentExecutor:
                 f"Failed to parse session creation response: {e}"
             ) from e
 
-    def _execute_gemini(self, prompt: str) -> str:
+    def _execute_gemini(self, prompt: str, allowed_tools: Optional[List[str]] = None) -> str:
         """Execute Gemini agent.
 
         Args:
             prompt: Prompt to send to Gemini
+            allowed_tools: List of allowed tools (already translated)
 
         Returns:
             Gemini's response
         """
         # Build command: use positional prompt
-        cmd = ["gemini", prompt, "--output-format", "json"]
+        cmd = ["gemini", prompt]
+
+        # Add allowed tools if specified
+        if allowed_tools:
+            cmd.extend(["--allowed-tools", ",".join(allowed_tools)])
+
+        cmd.extend(["--output-format", "json"])
 
         result = subprocess.run(
             cmd,
@@ -163,11 +226,12 @@ class AgentExecutor:
             # If not JSON, return raw output
             return result.stdout
 
-    def _execute_cursor(self, prompt: str) -> str:
+    def _execute_cursor(self, prompt: str, allowed_tools: Optional[List[str]] = None) -> str:
         """Execute Cursor agent.
 
         Args:
             prompt: Prompt to send to Cursor
+            allowed_tools: List of allowed tools (already translated)
 
         Returns:
             Cursor's response

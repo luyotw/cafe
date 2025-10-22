@@ -34,7 +34,7 @@ class TestAgentManagerBasics:
 
         assert "Roger" in manager.agents
         assert manager.agents["Roger"].config.name == config.name
-        assert manager.agents["Roger"].config.tool == config.tool
+        assert manager.agents["Roger"].config.cli == config.cli
         # session_id is None until first execution (lazy creation)
         assert manager.agents["Roger"].config.session_id is None
 
@@ -134,7 +134,7 @@ class TestAgentExecution:
             response = manager.execute("David", "Test prompt")
 
             assert response == "Agent response"
-            mock_execute.assert_called_once_with("Test prompt")
+            mock_execute.assert_called_once_with("Test prompt", None)
 
     def test_execute_current_agent(self) -> None:
         """測試執行當前 agent"""
@@ -293,27 +293,27 @@ class TestAgentConfiguration:
     def test_update_agent_config(self) -> None:
         """測試更新 agent 設定"""
         manager = AgentManager()
-        config = AgentConfig(name="David", cli=AgentCLI.CLAUDE, allowed_tools=[])
+        config = AgentConfig(name="David", cli=AgentCLI.CLAUDE)
         manager.register_agent(config)
 
-        # Update allowed tools
+        # Update to different CLI
         new_config = AgentConfig(
-            name="David", cli=AgentCLI.CLAUDE, allowed_tools=["Bash(git:*)"]
+            name="David", cli=AgentCLI.GEMINI
         )
         manager.register_agent(new_config)
 
         executor = manager.get_agent("David")
-        assert executor.config.allowed_tools == ["Bash(git:*)"]
+        assert executor.config.cli == AgentCLI.GEMINI
 
     def test_get_agent_config(self) -> None:
         """測試取得 agent 設定"""
         manager = AgentManager()
         config = AgentConfig(
-            name="Roger", cli=AgentCLI.CLAUDE, allowed_tools=["Read(*)"]
+            name="Roger", cli=AgentCLI.CLAUDE
         )
         manager.register_agent(config)
 
         retrieved_config = manager.get_agent_config("Roger")
 
         assert retrieved_config.name == "Roger"
-        assert retrieved_config.allowed_tools == ["Read(*)"]
+        assert retrieved_config.cli == AgentCLI.CLAUDE

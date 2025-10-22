@@ -10,6 +10,7 @@ from aaf.core.permission import PermissionHandler
 from aaf.core.phase import Phase
 from aaf.core.status_codes import PhaseStatusCode, StatusCodeParser, generate_status_code_prompt
 from aaf.core.types import PhaseProgress, PhaseResult, PhaseStatus, WorkflowMode
+from aaf.ui.display import Display
 
 
 def create_github_issue(content: str) -> str:
@@ -98,6 +99,9 @@ class SpecPhase(Phase):
         self.confirmed_requirements = []
         self.pending_questions = []
 
+        # Initialize display for better input handling
+        self.display = Display()
+
         # Load existing history if available
         self._load_history()
 
@@ -129,8 +133,12 @@ class SpecPhase(Phase):
                 # Generate prompt for this iteration
                 prompt = self._generate_prompt()
 
-                # Execute PM agent
-                response = self.agent_manager.execute(self.pm_agent, prompt)
+                # Execute PM agent with Write tool access for writing spec.md
+                response = self.agent_manager.execute(
+                    self.pm_agent,
+                    prompt,
+                    allowed_tools=["write", "read"]
+                )
 
                 # Extract status code from response
                 status_code = StatusCodeParser.extract(
@@ -204,19 +212,8 @@ class SpecPhase(Phase):
                         print(pm_content)
                         print(f"{'='*60}\n")
 
-                        # Get user's response
-                        print("請回答 PM 的問題（單獨一行輸入 END 表示結束）:")
-                        user_response_lines = []
-                        while True:
-                            try:
-                                line = input()
-                                if line.strip().upper() == "END":  # "END" ends input
-                                    break
-                                user_response_lines.append(line)
-                            except EOFError:
-                                break
-
-                        user_response = '\n'.join(user_response_lines)
+                        # Get user's response using Display for better Unicode support
+                        user_response = self.display.get_multiline_input("請回答 PM 的問題")
 
                         # Provide feedback after END input
                         if user_response.strip():
@@ -293,18 +290,8 @@ class SpecPhase(Phase):
         print("請輸入你的使用者故事（可多行，單獨一行輸入 END 表示結束）:")
         print()
 
-        # Get user's story
-        user_story_lines = []
-        while True:
-            try:
-                line = input()
-                if line.strip().upper() == "END":  # "END" ends input
-                    break
-                user_story_lines.append(line)
-            except EOFError:
-                break
-
-        user_story = '\n'.join(user_story_lines).strip()
+        # Get user's story using Display for better Unicode support
+        user_story = self.display.get_multiline_input("請輸入你的使用者故事").strip()
 
         if not user_story:
             raise ValueError("未提供使用者故事，無法繼續")

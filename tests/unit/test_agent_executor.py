@@ -30,7 +30,7 @@ class TestAgentExecutorBasics:
             result = executor.execute("Test prompt")
 
             assert result == "Agent response"
-            mock_execute.assert_called_once_with("Test prompt")
+            mock_execute.assert_called_once_with("Test prompt", None)
 
 
 class TestAgentExecutorWithSession:

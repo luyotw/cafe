@@ -88,12 +88,13 @@ class AgentManager:
             return None
         return self.agents.get(self.current_agent_name)
 
-    def execute(self, agent_name: str, prompt: str) -> str:
+    def execute(self, agent_name: str, prompt: str, allowed_tools: Optional[List[str]] = None) -> str:
         """Execute prompt with specified agent.
 
         Args:
             agent_name: Name of agent to use
             prompt: Prompt to execute
+            allowed_tools: List of allowed tools (using Claude naming convention)
 
         Returns:
             Agent's response
@@ -102,7 +103,7 @@ class AgentManager:
             AgentNotFoundError: If agent not found
         """
         executor = self.get_agent(agent_name)
-        return executor.execute(prompt)
+        return executor.execute(prompt, allowed_tools)
 
     def execute_current(self, prompt: str) -> str:
         """Execute prompt with current agent.
