@@ -36,7 +36,7 @@ class TestSpecPhaseWithStatusCodes:
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
-            requirements_file="requirements.md",
+            spec_file="spec.md",
             workflow_mode=WorkflowMode.LOCAL,
         )
 
@@ -68,7 +68,7 @@ class TestSpecPhaseWithStatusCodes:
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
-            requirements_file="requirements.md",
+            spec_file="spec.md",
             workflow_mode=WorkflowMode.LOCAL,
         )
 
@@ -103,7 +103,7 @@ class TestSpecPhaseWithStatusCodes:
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
-            requirements_file="requirements.md",
+            spec_file="spec.md",
             workflow_mode=WorkflowMode.LOCAL,
         )
 
@@ -135,7 +135,7 @@ class TestSpecPhaseWithStatusCodes:
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
-            requirements_file="requirements.md",
+            spec_file="spec.md",
             workflow_mode=WorkflowMode.LOCAL,
         )
 
@@ -169,7 +169,7 @@ class TestSpecPhaseWithStatusCodes:
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
-            requirements_file="requirements.md",
+            spec_file="spec.md",
             workflow_mode=WorkflowMode.LOCAL,
         )
 
@@ -200,7 +200,7 @@ class TestSpecPhaseWithStatusCodes:
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
-            requirements_file="requirements.md",
+            spec_file="spec.md",
             workflow_mode=WorkflowMode.LOCAL,
         )
 

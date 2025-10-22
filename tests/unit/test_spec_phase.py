@@ -25,7 +25,7 @@ def create_mock_pm_agent(phase: SpecPhase, content: str, status_code: str = "CON
     Returns:
         Mock function that can be used as agent_manager.execute side_effect
     """
-    def mock_execute(agent_name: str, prompt: str) -> str:
+    def mock_execute(agent_name: str, prompt: str, **kwargs) -> str:
         # Write spec content to history/spec.md
         spec_file = phase.history_dir / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
@@ -46,14 +46,14 @@ class TestSpecPhaseBasics:
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
-            requirements_file="requirements.md",
+            spec_file="spec.md",
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
         )
 
         assert phase.agent_manager == agent_manager
         assert phase.permission_handler == permission_handler
-        assert phase.requirements_file == "requirements.md"
+        assert phase.spec_file == "spec.md"
         assert phase.workflow_mode == WorkflowMode.LOCAL
 
     def test_init_with_github_mode(self) -> None:
@@ -64,7 +64,7 @@ class TestSpecPhaseBasics:
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
-            requirements_file="requirements.md",
+            spec_file="spec.md",
             workflow_mode=WorkflowMode.GITHUB,
             interactive=False,
             issue_id="123",
@@ -79,8 +79,8 @@ class TestLocalWorkflow:
 
     def test_execute_local_workflow_single_iteration(self, tmp_path: Path) -> None:
         """測試執行 local workflow 單次迭代"""
-        requirements_file = tmp_path / "requirements.md"
-        requirements_file.write_text("Initial requirements\n")
+        spec_file = tmp_path / "spec.md"
+        spec_file.write_text("Initial requirements\n")
 
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = "CONFIRMED\n需求已清楚。"
@@ -90,7 +90,7 @@ class TestLocalWorkflow:
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
-            requirements_file=str(requirements_file),
+            spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
         )
@@ -102,8 +102,8 @@ class TestLocalWorkflow:
 
     def test_backup_original_requirements(self, tmp_path: Path) -> None:
         """測試備份原始需求檔案"""
-        requirements_file = tmp_path / "requirements.md"
-        requirements_file.write_text("Original requirements")
+        spec_file = tmp_path / "spec.md"
+        spec_file.write_text("Original requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = "CONFIRMED\n需求已清楚。"
@@ -113,21 +113,21 @@ class TestLocalWorkflow:
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
-            requirements_file=str(requirements_file),
+            spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
         )
 
         phase.execute()
 
-        backup_file = Path(f"{requirements_file}.backup")
+        backup_file = Path(f"{spec_file}.backup")
         assert backup_file.exists()
         assert backup_file.read_text() == "Original requirements"
 
     def test_multiple_iterations_until_confirmed(self, tmp_path: Path) -> None:
         """測試多次迭代直到確認"""
-        requirements_file = tmp_path / "requirements.md"
-        requirements_file.write_text("Initial requirements")
+        spec_file = tmp_path / "spec.md"
+        spec_file.write_text("Initial requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
         # First two iterations ask questions, third confirms
@@ -142,7 +142,7 @@ class TestLocalWorkflow:
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
-            requirements_file=str(requirements_file),
+            spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
         )
@@ -161,10 +161,10 @@ class TestGitHubWorkflow:
         agent_manager = MagicMock(spec=AgentManager)
 
         # Simulate PM writing to history/spec.md before returning CONFIRMED
-        def mock_execute(agent_name: str, prompt: str) -> str:
+        def mock_execute(agent_name: str, prompt: str, **kwargs) -> str:
             # Write spec content to history/spec.md
-            # history_dir is based on requirements_file path, not issue_id
-            history_dir = tmp_path / ".aaf" / "issues" / "requirements" / "spec" / "history"
+            # history_dir is based on spec_file path, not issue_id
+            history_dir = tmp_path / ".aaf" / "issues" / "spec" / "spec" / "history"
             history_dir.mkdir(parents=True, exist_ok=True)
             spec_file = history_dir / "spec.md"
             spec_file.write_text("需求已清楚。")
@@ -177,7 +177,7 @@ class TestGitHubWorkflow:
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
-            requirements_file=str(tmp_path / "requirements.md"),
+            spec_file=str(tmp_path / "spec.md"),
             workflow_mode=WorkflowMode.GITHUB,
             interactive=False,
             issue_id="123",
@@ -204,7 +204,7 @@ class TestGitHubWorkflow:
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
-            requirements_file="requirements.md",
+            spec_file="spec.md",
             workflow_mode=WorkflowMode.GITHUB,
             interactive=False,
             issue_id="456",
@@ -221,8 +221,8 @@ class TestPromptGeneration:
 
     def test_first_iteration_prompt(self, tmp_path: Path) -> None:
         """測試第一次迭代的 prompt"""
-        requirements_file = tmp_path / "requirements.md"
-        requirements_file.write_text("Requirements")
+        spec_file = tmp_path / "spec.md"
+        spec_file.write_text("Requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = "CONFIRMED\n需求已清楚。"
@@ -232,7 +232,7 @@ class TestPromptGeneration:
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
-            requirements_file=str(requirements_file),
+            spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
         )
@@ -241,13 +241,13 @@ class TestPromptGeneration:
 
         call_args = agent_manager.execute.call_args[0]
         prompt = call_args[1]
-        assert "requirements.md" in prompt
+        assert "spec.md" in prompt
         assert "第 1 輪" in prompt
 
     def test_subsequent_iteration_includes_history(self, tmp_path: Path) -> None:
         """測試後續迭代包含歷史記錄"""
-        requirements_file = tmp_path / "requirements.md"
-        requirements_file.write_text("Requirements")
+        spec_file = tmp_path / "spec.md"
+        spec_file.write_text("Requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.side_effect = [
@@ -260,7 +260,7 @@ class TestPromptGeneration:
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
-            requirements_file=str(requirements_file),
+            spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
         )
@@ -278,8 +278,8 @@ class TestAgentSelection:
 
     def test_uses_pm_agent(self, tmp_path: Path) -> None:
         """測試使用 PM agent (Roger)"""
-        requirements_file = tmp_path / "requirements.md"
-        requirements_file.write_text("Requirements")
+        spec_file = tmp_path / "spec.md"
+        spec_file.write_text("Requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = "CONFIRMED\n需求已清楚。"
@@ -289,7 +289,7 @@ class TestAgentSelection:
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
-            requirements_file=str(requirements_file),
+            spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
             pm_agent="Roger",
@@ -305,9 +305,9 @@ class TestAgentSelection:
 class TestErrorHandling:
     """Test error handling."""
 
-    def test_missing_requirements_file_generates_from_conversation(self, tmp_path: Path) -> None:
-        """測試缺少需求檔案時，透過對話生成"""
-        requirements_file = tmp_path / "nonexistent.md"
+    def test_missing_spec_file_generates_from_conversation(self, tmp_path: Path) -> None:
+        """測試缺少 spec 檔案時，透過對話生成"""
+        spec_file = tmp_path / "nonexistent.md"
 
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -315,7 +315,7 @@ class TestErrorHandling:
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
-            requirements_file=str(requirements_file),
+            spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
         )
@@ -327,7 +327,7 @@ class TestErrorHandling:
 
         # Should succeed and create the file
         assert result.status == PhaseStatus.COMPLETED
-        assert requirements_file.exists()
+        assert spec_file.exists()
 
     def test_github_mode_without_issue_id_creates_new(self, tmp_path: Path) -> None:
         """測試 GitHub mode 沒有 issue_id 時創建新 issue"""
@@ -337,7 +337,7 @@ class TestErrorHandling:
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
-            requirements_file=str(tmp_path / "requirements.md"),
+            spec_file=str(tmp_path / "spec.md"),
             workflow_mode=WorkflowMode.GITHUB,
             interactive=False,
             issue_id=None,
@@ -357,8 +357,8 @@ class TestErrorHandling:
 
     def test_agent_execution_error_fails_phase(self, tmp_path: Path) -> None:
         """測試 agent 執行錯誤時 phase 失敗"""
-        requirements_file = tmp_path / "requirements.md"
-        requirements_file.write_text("Requirements")
+        spec_file = tmp_path / "spec.md"
+        spec_file.write_text("Requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.side_effect = Exception("Agent error")
@@ -368,7 +368,7 @@ class TestErrorHandling:
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
-            requirements_file=str(requirements_file),
+            spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
         )
@@ -384,7 +384,7 @@ class TestConversationalRequirementsGeneration:
 
     def test_generate_requirements_from_scratch_local(self, tmp_path: Path) -> None:
         """測試從無到有以對話方式生成需求文件（Local mode）"""
-        requirements_file = tmp_path / "requirements.md"
+        spec_file = tmp_path / "spec.md"
 
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -392,14 +392,14 @@ class TestConversationalRequirementsGeneration:
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
-            requirements_file=str(requirements_file),
+            spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
         )
 
         # Simulate conversation: ask questions -> user responds -> generate document
         call_count = [0]
-        def mock_execute(agent_name: str, prompt: str) -> str:
+        def mock_execute(agent_name: str, prompt: str, **kwargs) -> str:
             spec_file = phase.history_dir / "spec.md"
             spec_file.parent.mkdir(parents=True, exist_ok=True)
             call_count[0] += 1
@@ -419,11 +419,11 @@ class TestConversationalRequirementsGeneration:
         assert result.data["iterations"] == 3
         
         # Should create the requirements file
-        assert requirements_file.exists()
+        assert spec_file.exists()
 
     def test_generate_requirements_saves_to_file(self, tmp_path: Path) -> None:
         """測試生成的需求文件正確儲存"""
-        requirements_file = tmp_path / "new_requirements.md"
+        spec_file = tmp_path / "new_requirements.md"
 
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -431,7 +431,7 @@ class TestConversationalRequirementsGeneration:
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
-            requirements_file=str(requirements_file),
+            spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
         )
@@ -442,8 +442,8 @@ class TestConversationalRequirementsGeneration:
 
         assert result.status == PhaseStatus.COMPLETED
         # File should be created with content
-        assert requirements_file.exists()
-        content = requirements_file.read_text()
+        assert spec_file.exists()
+        content = spec_file.read_text()
         assert "需求文件" in content or len(content) > 0
 
     def test_generate_requirements_github_creates_issue(self, tmp_path: Path) -> None:
@@ -454,14 +454,14 @@ class TestConversationalRequirementsGeneration:
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
-            requirements_file=str(tmp_path / "requirements.md"),
+            spec_file=str(tmp_path / "spec.md"),
             workflow_mode=WorkflowMode.GITHUB,
             interactive=False,
             issue_id=None,  # No existing issue - should create new one
         )
 
         call_count = [0]
-        def mock_execute(agent_name: str, prompt: str) -> str:
+        def mock_execute(agent_name: str, prompt: str, **kwargs) -> str:
             spec_file = phase.history_dir / "spec.md"
             spec_file.parent.mkdir(parents=True, exist_ok=True)
             call_count[0] += 1
@@ -489,7 +489,7 @@ class TestConversationalRequirementsGeneration:
 
     def test_prompt_includes_non_technical_emphasis(self, tmp_path: Path) -> None:
         """測試 prompt 包含不涉及技術細節的強調"""
-        requirements_file = tmp_path / "requirements.md"
+        spec_file = tmp_path / "spec.md"
 
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = "CONFIRMED\n完成"
@@ -499,7 +499,7 @@ class TestConversationalRequirementsGeneration:
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
-            requirements_file=str(requirements_file),
+            spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
         )
@@ -513,7 +513,7 @@ class TestConversationalRequirementsGeneration:
 
     def test_no_existing_file_starts_conversation(self, tmp_path: Path) -> None:
         """測試沒有現有文件時，從對話開始"""
-        requirements_file = tmp_path / "nonexistent.md"
+        spec_file = tmp_path / "nonexistent.md"
 
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -521,13 +521,13 @@ class TestConversationalRequirementsGeneration:
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
-            requirements_file=str(requirements_file),
+            spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
         )
 
         call_count = [0]
-        def mock_execute(agent_name: str, prompt: str) -> str:
+        def mock_execute(agent_name: str, prompt: str, **kwargs) -> str:
             spec_file = phase.history_dir / "spec.md"
             spec_file.parent.mkdir(parents=True, exist_ok=True)
             call_count[0] += 1
@@ -545,7 +545,7 @@ class TestConversationalRequirementsGeneration:
         # Should not fail when file doesn't exist
         assert result.status == PhaseStatus.COMPLETED
         # Should create the file
-        assert requirements_file.exists()
+        assert spec_file.exists()
 
 
 class TestHistoryTracking:
@@ -553,8 +553,8 @@ class TestHistoryTracking:
 
     def test_history_directory_structure(self, tmp_path: Path) -> None:
         """測試歷史記錄目錄結構包含 phase 資訊"""
-        requirements_file = tmp_path / "requirements.md"
-        requirements_file.write_text("Initial requirements\n")
+        spec_file = tmp_path / "spec.md"
+        spec_file.write_text("Initial requirements\n")
 
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = "CONFIRMED\n需求已清楚。"
@@ -564,7 +564,7 @@ class TestHistoryTracking:
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
-            requirements_file=str(requirements_file),
+            spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
             issue_name="test-feature",
@@ -575,8 +575,8 @@ class TestHistoryTracking:
 
     def test_save_iteration_history_creates_json(self, tmp_path: Path) -> None:
         """測試儲存迭代歷史會建立 JSON 檔案"""
-        requirements_file = tmp_path / "requirements.md"
-        requirements_file.write_text("Initial requirements\n")
+        spec_file = tmp_path / "spec.md"
+        spec_file.write_text("Initial requirements\n")
 
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = "NEED_CLARIFICATION\n請問使用者是誰？"
@@ -586,7 +586,7 @@ class TestHistoryTracking:
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
-            requirements_file=str(requirements_file),
+            spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
             issue_name="test-feature",
@@ -618,8 +618,8 @@ class TestHistoryTracking:
 
     def test_update_context_file_creates_markdown(self, tmp_path: Path) -> None:
         """測試更新 context.md 檔案"""
-        requirements_file = tmp_path / "requirements.md"
-        requirements_file.write_text("Initial requirements\n")
+        spec_file = tmp_path / "spec.md"
+        spec_file.write_text("Initial requirements\n")
 
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -627,7 +627,7 @@ class TestHistoryTracking:
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
-            requirements_file=str(requirements_file),
+            spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
             issue_name="test-feature",
@@ -668,8 +668,8 @@ class TestHistoryTracking:
 
     def test_context_file_shows_restriction_after_iteration_4(self, tmp_path: Path) -> None:
         """測試第 4 輪後 context.md 顯示問題限制"""
-        requirements_file = tmp_path / "requirements.md"
-        requirements_file.write_text("Initial requirements\n")
+        spec_file = tmp_path / "spec.md"
+        spec_file.write_text("Initial requirements\n")
 
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -677,7 +677,7 @@ class TestHistoryTracking:
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
-            requirements_file=str(requirements_file),
+            spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
             issue_name="test-feature",
@@ -694,8 +694,8 @@ class TestHistoryTracking:
 
     def test_load_history_restores_state(self, tmp_path: Path) -> None:
         """測試載入歷史記錄能還原狀態"""
-        requirements_file = tmp_path / "requirements.md"
-        requirements_file.write_text("Initial requirements\n")
+        spec_file = tmp_path / "spec.md"
+        spec_file.write_text("Initial requirements\n")
 
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -704,7 +704,7 @@ class TestHistoryTracking:
         phase1 = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
-            requirements_file=str(requirements_file),
+            spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
             issue_name="test-feature",
@@ -731,7 +731,7 @@ class TestHistoryTracking:
         phase2 = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
-            requirements_file=str(requirements_file),
+            spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
             issue_name="test-feature",
@@ -744,10 +744,10 @@ class TestHistoryTracking:
         assert phase2.conversation_history[0]["pm_response"] == "Q1"
         assert phase2.conversation_history[1]["pm_response"] == "Q2"
 
-    def test_issue_name_derived_from_requirements_file(self, tmp_path: Path) -> None:
-        """測試 issue_name 從 requirements_file 自動推導"""
-        requirements_file = tmp_path / "my-feature.md"
-        requirements_file.write_text("Initial requirements\n")
+    def test_issue_name_derived_from_spec_file(self, tmp_path: Path) -> None:
+        """測試 issue_name 從 spec_file 自動推導"""
+        spec_file = tmp_path / "my-feature.md"
+        spec_file.write_text("Initial requirements\n")
 
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -755,7 +755,7 @@ class TestHistoryTracking:
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
-            requirements_file=str(requirements_file),
+            spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
         )
@@ -766,8 +766,8 @@ class TestHistoryTracking:
 
     def test_prompt_includes_context_file_after_iteration_1(self, tmp_path: Path) -> None:
         """測試第 2 輪後 prompt 包含 context 檔案"""
-        requirements_file = tmp_path / "requirements.md"
-        requirements_file.write_text("Initial requirements\n")
+        spec_file = tmp_path / "spec.md"
+        spec_file.write_text("Initial requirements\n")
 
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = "CONFIRMED\n需求已清楚"
@@ -777,7 +777,7 @@ class TestHistoryTracking:
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
-            requirements_file=str(requirements_file),
+            spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
             issue_name="test-feature",
@@ -797,8 +797,8 @@ class TestHistoryTracking:
 
     def test_iteration_4_prompt_includes_restriction(self, tmp_path: Path) -> None:
         """測試第 4 輪 prompt 包含問題限制"""
-        requirements_file = tmp_path / "requirements.md"
-        requirements_file.write_text("Initial requirements\n")
+        spec_file = tmp_path / "spec.md"
+        spec_file.write_text("Initial requirements\n")
 
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -806,7 +806,7 @@ class TestHistoryTracking:
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
-            requirements_file=str(requirements_file),
+            spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
             issue_name="test-feature",
@@ -832,12 +832,12 @@ class TestPhaseProgressTracking:
         
         permission_handler = MagicMock(spec=PermissionHandler)
         
-        req_file = tmp_path / "requirements.md"
+        req_file = tmp_path / "spec.md"
         
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
-            requirements_file=str(req_file),
+            spec_file=str(req_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
         )
@@ -868,13 +868,13 @@ class TestPhaseProgressTracking:
         
         permission_handler = MagicMock(spec=PermissionHandler)
         
-        req_file = tmp_path / "requirements.md"
+        req_file = tmp_path / "spec.md"
         req_file.write_text("初始需求")
         
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
-            requirements_file=str(req_file),
+            spec_file=str(req_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
         )
@@ -895,7 +895,7 @@ class TestPhaseProgressTracking:
 
     def test_load_progress_from_status_json(self, tmp_path: Path) -> None:
         """測試可以從 status.json 讀取進度"""
-        req_file = tmp_path / "requirements.md"
+        req_file = tmp_path / "spec.md"
         
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -903,7 +903,7 @@ class TestPhaseProgressTracking:
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
-            requirements_file=str(req_file),
+            spec_file=str(req_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
         )
@@ -934,7 +934,7 @@ class TestPhaseProgressTracking:
 
     def test_status_json_location(self, tmp_path: Path) -> None:
         """測試 status.json 在正確的位置：.aaf/issues/{issue_name}/spec/status.json"""
-        req_file = tmp_path / "requirements.md"
+        req_file = tmp_path / "spec.md"
         
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -942,10 +942,10 @@ class TestPhaseProgressTracking:
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
-            requirements_file=str(req_file),
+            spec_file=str(req_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
         )
         
-        expected_path = tmp_path / ".aaf" / "issues" / "requirements" / "spec" / "status.json"
+        expected_path = tmp_path / ".aaf" / "issues" / "spec" / "spec" / "status.json"
         assert phase._get_status_file() == expected_path

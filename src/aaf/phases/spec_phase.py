@@ -52,7 +52,7 @@ class SpecPhase(Phase):
         self,
         agent_manager: AgentManager,
         permission_handler: PermissionHandler,
-        requirements_file: str,
+        spec_file: str,
         workflow_mode: WorkflowMode,
         issue_id: Optional[str] = None,
         pm_agent: str = "Roger",
@@ -64,16 +64,16 @@ class SpecPhase(Phase):
         Args:
             agent_manager: Agent manager
             permission_handler: Permission handler
-            requirements_file: Path to requirements file
+            spec_file: Path to spec file
             workflow_mode: Workflow mode (local or github)
             issue_id: GitHub issue ID (required for github mode)
             pm_agent: PM agent name (default: Roger)
             interactive: Enable interactive mode for user input (default: True)
-            issue_name: Issue name for history tracking (default: derived from requirements_file)
+            issue_name: Issue name for history tracking (default: derived from spec_file)
         """
         self.agent_manager = agent_manager
         self.permission_handler = permission_handler
-        self.requirements_file = requirements_file
+        self.spec_file = spec_file
         self.workflow_mode = workflow_mode
         self.issue_id = issue_id
         self.pm_agent = pm_agent
@@ -84,15 +84,15 @@ class SpecPhase(Phase):
         if issue_name:
             self.issue_name = issue_name
         else:
-            # Derive from requirements_file: requirements.md -> requirements
+            # Derive from spec_file: spec.md -> spec
             # Use absolute path to ensure unique issue names for different locations
-            req_path = Path(requirements_file).absolute()
-            self.issue_name = req_path.stem
+            spec_path = Path(spec_file).absolute()
+            self.issue_name = spec_path.stem
 
         # History directory for spec phase
-        # Place history alongside requirements file to avoid conflicts
-        req_dir = Path(requirements_file).parent.absolute()
-        self.history_dir = req_dir / ".aaf" / "issues" / self.issue_name / "spec" / "history"
+        # Place history alongside spec file to avoid conflicts
+        spec_dir = Path(spec_file).parent.absolute()
+        self.history_dir = spec_dir / ".aaf" / "issues" / self.issue_name / "spec" / "history"
 
         # Track conversation history
         self.conversation_history = []
@@ -116,11 +116,11 @@ class SpecPhase(Phase):
             # Note: GitHub mode can now work without issue_id (will create new issue)
 
             if self.workflow_mode == WorkflowMode.LOCAL:
-                # Check if requirements file exists
-                req_path = Path(self.requirements_file)
-                if req_path.exists():
-                    # Backup original requirements if exists
-                    self._backup_requirements(req_path)
+                # Check if spec file exists
+                spec_path = Path(self.spec_file)
+                if spec_path.exists():
+                    # Backup original spec if exists
+                    self._backup_spec(spec_path)
                 else:
                     # File doesn't exist - prompt user for initial user story
                     if self.interactive:
@@ -153,7 +153,7 @@ class SpecPhase(Phase):
                 # Handle status codes
                 if status_code == PhaseStatusCode.CONFIRMED:
                     # Save generated requirements
-                    self._save_requirements(response)
+                    self._save_spec(response)
 
                     # Save final iteration history
                     self._save_iteration_history(
@@ -192,7 +192,7 @@ class SpecPhase(Phase):
                     )
                 elif status_code == PhaseStatusCode.NEED_CLARIFICATION:
                     # Copy spec from history and sync to target (local file or GitHub issue)
-                    self._save_requirements(response)
+                    self._save_spec(response)
 
                     # Save progress to status.json
                     self._save_progress(status_code)
@@ -296,47 +296,47 @@ class SpecPhase(Phase):
         if not user_story:
             raise ValueError("未提供使用者故事，無法繼續")
 
-        # Save user story as initial requirements
-        req_path = Path(self.requirements_file)
-        req_path.parent.mkdir(parents=True, exist_ok=True)
-        req_path.write_text(f"# 初始需求\n\n{user_story}\n")
+        # Save user story as initial spec
+        spec_path = Path(self.spec_file)
+        spec_path.parent.mkdir(parents=True, exist_ok=True)
+        spec_path.write_text(f"# 初始需求\n\n{user_story}\n")
 
         print()
         print("✅ 使用者故事已記錄，開始需求澄清...")
         print()
 
-    def _backup_requirements(self, req_path: Path) -> None:
-        """Backup original requirements file.
+    def _backup_spec(self, spec_path: Path) -> None:
+        """Backup original spec file.
 
         Args:
-            req_path: Path to requirements file
+            spec_path: Path to spec file
         """
-        backup_path = Path(f"{req_path}.backup")
+        backup_path = Path(f"{spec_path}.backup")
         if not backup_path.exists():
-            backup_path.write_text(req_path.read_text())
+            backup_path.write_text(spec_path.read_text())
 
-    def _save_requirements(self, response: str) -> None:
+    def _save_spec(self, response: str) -> None:
         """Copy spec from history to target location and sync to GitHub if needed.
 
         PM agent writes to history/spec.md. This method:
-        - For local mode: copies history/spec.md to requirements_file
+        - For local mode: copies history/spec.md to spec_file
         - For GitHub mode: syncs history/spec.md content to issue
 
         Args:
             response: Agent response (not used, agent already wrote file)
         """
         # Read the spec file that PM agent wrote in history
-        spec_file = self.history_dir / "spec.md"
-        if not spec_file.exists():
+        spec_history_file = self.history_dir / "spec.md"
+        if not spec_history_file.exists():
             return  # PM hasn't written the file yet
 
-        content = spec_file.read_text()
+        content = spec_history_file.read_text()
 
         if self.workflow_mode == WorkflowMode.LOCAL:
-            # Copy to the target requirements file
-            req_path = Path(self.requirements_file)
-            req_path.parent.mkdir(parents=True, exist_ok=True)
-            req_path.write_text(content)
+            # Copy to the target spec file
+            spec_path = Path(self.spec_file)
+            spec_path.parent.mkdir(parents=True, exist_ok=True)
+            spec_path.write_text(content)
         elif self.workflow_mode == WorkflowMode.GITHUB:
             # Sync to GitHub issue
             if not self.issue_id and not hasattr(self, '_created_issue_id'):
@@ -350,25 +350,25 @@ class SpecPhase(Phase):
                 update_github_issue(self.issue_id, content)
 
     def _save_user_response(self, user_response: str) -> None:
-        """Save user's response to requirements file for next iteration.
+        """Save user's response to spec file for next iteration.
 
         Args:
             user_response: User's response to PM's questions
         """
         if self.workflow_mode == WorkflowMode.LOCAL:
-            req_path = Path(self.requirements_file)
+            spec_path = Path(self.spec_file)
 
             # Read existing content if any
             existing_content = ""
-            if req_path.exists():
-                existing_content = req_path.read_text()
+            if spec_path.exists():
+                existing_content = spec_path.read_text()
 
             # Append user response
             updated_content = existing_content + f"\n\n---\n用戶回應（第 {self.iteration} 輪）:\n{user_response}\n"
 
             # Save updated content
-            req_path.parent.mkdir(parents=True, exist_ok=True)
-            req_path.write_text(updated_content)
+            spec_path.parent.mkdir(parents=True, exist_ok=True)
+            spec_path.write_text(updated_content)
         elif self.workflow_mode == WorkflowMode.GITHUB:
             # For GitHub mode, add comment to issue
             # TODO: Implement gh issue comment
@@ -444,14 +444,14 @@ class SpecPhase(Phase):
         non_technical = self._get_non_technical_guidelines()
         status_code_prompt = self._get_status_code_prompt()
 
-        # Check if requirements file exists
-        req_path = Path(self.requirements_file)
-        file_exists = req_path.exists()
+        # Check if spec file exists
+        spec_path = Path(self.spec_file)
+        file_exists = spec_path.exists()
 
         if self.iteration == 1:
             if file_exists:
                 # File exists - analyze and clarify
-                return f"""分析 {self.requirements_file} 的內容。
+                return f"""分析 {self.spec_file} 的內容。
 
 **你的角色：**
 你是一位經驗豐富的 Product Manager (PM)，專注於需求澄清和產品規劃。
@@ -485,7 +485,7 @@ class SpecPhase(Phase):
 """
             else:
                 # File doesn't exist but user story should have been created
-                return f"""分析 {self.requirements_file} 中的使用者故事。
+                return f"""分析 {self.spec_file} 中的使用者故事。
 
 **你的角色：**
 你是一位經驗豐富的 Product Manager (PM)，負責將使用者故事轉換成完整的需求文件。
@@ -530,7 +530,7 @@ class SpecPhase(Phase):
 - 只能深入釐清已經提出的問題
 """
 
-            return f"""繼續分析 {self.requirements_file} 的最新版本。
+            return f"""繼續分析 {self.spec_file} 的最新版本。
 
 **你的角色：**
 你是一位經驗豐富的 Product Manager (PM)，專注於需求澄清。
