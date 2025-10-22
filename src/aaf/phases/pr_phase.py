@@ -20,7 +20,7 @@ class PRPhase(Phase):
         agent_manager: AgentManager,
         permission_handler: PermissionHandler,
         git_ops: GitOperations,
-        requirements_file: str,
+        spec_file: str,
         workflow_mode: WorkflowMode,
         issue_id: Optional[str] = None,
     ) -> None:
@@ -30,14 +30,14 @@ class PRPhase(Phase):
             agent_manager: Agent manager
             permission_handler: Permission handler
             git_ops: Git operations
-            requirements_file: Path to requirements file
+            spec_file: Path to spec file
             workflow_mode: Workflow mode (local or github)
             issue_id: GitHub issue ID (required for github mode)
         """
         self.agent_manager = agent_manager
         self.permission_handler = permission_handler
         self.git_ops = git_ops
-        self.requirements_file = requirements_file
+        self.spec_file = requirements_file
         self.workflow_mode = workflow_mode
         self.issue_id = issue_id
 
@@ -57,11 +57,11 @@ class PRPhase(Phase):
 
             if self.workflow_mode == WorkflowMode.LOCAL:
                 # Check requirements file exists
-                req_path = Path(self.requirements_file)
+                req_path = Path(self.spec_file)
                 if not req_path.exists():
                     return PhaseResult(
                         status=PhaseStatus.FAILED,
-                        message=f"Requirements file not found: {self.requirements_file}",
+                        message=f"Spec file not found: {self.spec_file}",
                     )
 
             # Get branch name
@@ -107,7 +107,7 @@ class PRPhase(Phase):
         else:
             # Extract from requirements filename
             # e.g., "20250101-feature.md" -> "feature"
-            filename = Path(self.requirements_file).stem
+            filename = Path(self.spec_file).stem
             # Remove date prefix if exists
             match = re.match(r"^\d{8}-(.+)$", filename)
             if match:
@@ -131,7 +131,7 @@ class PRPhase(Phase):
             return result.stdout.strip()
         else:
             # Get title from first line of requirements file
-            req_path = Path(self.requirements_file)
+            req_path = Path(self.spec_file)
             first_line = req_path.read_text().split("\n")[0]
             # Remove markdown heading markers and whitespace
             title = re.sub(r"^#+\s*", "", first_line).strip()

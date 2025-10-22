@@ -18,7 +18,7 @@ class AnalysisPhase(Phase):
         self,
         agent_manager: AgentManager,
         permission_handler: PermissionHandler,
-        requirements_file: str,
+        spec_file: str,
         workflow_mode: WorkflowMode,
         issue_id: Optional[str] = None,
         dev_agent: str = "David",
@@ -28,14 +28,14 @@ class AnalysisPhase(Phase):
         Args:
             agent_manager: Agent manager
             permission_handler: Permission handler
-            requirements_file: Path to requirements file
+            spec_file: Path to spec file
             workflow_mode: Workflow mode (local or github)
             issue_id: GitHub issue ID (required for github mode)
             dev_agent: Developer agent name (default: David)
         """
         self.agent_manager = agent_manager
         self.permission_handler = permission_handler
-        self.requirements_file = requirements_file
+        self.spec_file = requirements_file
         self.workflow_mode = workflow_mode
         self.issue_id = issue_id
         self.dev_agent = dev_agent
@@ -57,11 +57,11 @@ class AnalysisPhase(Phase):
 
             if self.workflow_mode == WorkflowMode.LOCAL:
                 # Check requirements file exists
-                req_path = Path(self.requirements_file)
+                req_path = Path(self.spec_file)
                 if not req_path.exists():
                     return PhaseResult(
                         status=PhaseStatus.FAILED,
-                        message=f"Requirements file not found: {self.requirements_file}",
+                        message=f"Spec file not found: {self.spec_file}",
                     )
 
                 # Check for development guide
@@ -131,7 +131,7 @@ class AnalysisPhase(Phase):
         Returns:
             True if development guide exists
         """
-        req_path = Path(self.requirements_file)
+        req_path = Path(self.spec_file)
         if not req_path.exists():
             return False
 
@@ -181,7 +181,7 @@ class AnalysisPhase(Phase):
         )
 
         if self.iteration == 1:
-            return f"""Use the {self.dev_agent} subagent to analyze {self.requirements_file}.
+            return f"""Use the {self.dev_agent} subagent to analyze {self.spec_file}.
 
 這是第 {self.iteration} 輪實作分析。
 
@@ -196,7 +196,7 @@ class AnalysisPhase(Phase):
 回應確認訊息。
 """
         else:
-            return f"""Use the {self.dev_agent} subagent to continue analyzing {self.requirements_file}.
+            return f"""Use the {self.dev_agent} subagent to continue analyzing {self.spec_file}.
 
 這是第 {self.iteration} 輪實作分析。
 

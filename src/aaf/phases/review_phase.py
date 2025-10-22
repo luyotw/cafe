@@ -19,7 +19,7 @@ class ReviewPhase(Phase):
         agent_manager: AgentManager,
         permission_handler: PermissionHandler,
         git_ops: GitOperations,
-        requirements_file: str,
+        spec_file: str,
         workflow_mode: WorkflowMode,
         issue_id: Optional[str] = None,
         review_agent: str = "Roger",
@@ -32,7 +32,7 @@ class ReviewPhase(Phase):
             agent_manager: Agent manager
             permission_handler: Permission handler
             git_ops: Git operations
-            requirements_file: Path to requirements file
+            spec_file: Path to spec file
             workflow_mode: Workflow mode (local or github)
             issue_id: GitHub issue ID (required for github mode)
             review_agent: Review agent name (default: Roger)
@@ -42,7 +42,7 @@ class ReviewPhase(Phase):
         self.agent_manager = agent_manager
         self.permission_handler = permission_handler
         self.git_ops = git_ops
-        self.requirements_file = requirements_file
+        self.spec_file = requirements_file
         self.workflow_mode = workflow_mode
         self.issue_id = issue_id
         self.review_agent = review_agent
@@ -216,8 +216,8 @@ Reviewer 提出了以下問題，請修正：
         if self.workflow_mode == WorkflowMode.GITHUB:
             return f"請用 `gh issue view {self.issue_id}` 查看 Issue 內容（包含需求與實作分析）。"
         else:
-            req_path = Path(self.requirements_file)
+            req_path = Path(self.spec_file)
             if req_path.exists():
                 return f"---\n{req_path.read_text()}\n---"
-            return f"請參考 {self.requirements_file}"
+            return f"請參考 {self.spec_file}"
 

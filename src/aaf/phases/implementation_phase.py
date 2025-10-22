@@ -19,7 +19,7 @@ class ImplementationPhase(Phase):
         agent_manager: AgentManager,
         permission_handler: PermissionHandler,
         git_ops: GitOperations,
-        requirements_file: str,
+        spec_file: str,
         workflow_mode: WorkflowMode,
         issue_id: Optional[str] = None,
         dev_agent: str = "David",
@@ -30,7 +30,7 @@ class ImplementationPhase(Phase):
             agent_manager: Agent manager
             permission_handler: Permission handler
             git_ops: Git operations
-            requirements_file: Path to requirements file
+            spec_file: Path to spec file
             workflow_mode: Workflow mode (local or github)
             issue_id: GitHub issue ID (required for github mode)
             dev_agent: Developer agent name (default: David)
@@ -38,7 +38,7 @@ class ImplementationPhase(Phase):
         self.agent_manager = agent_manager
         self.permission_handler = permission_handler
         self.git_ops = git_ops
-        self.requirements_file = requirements_file
+        self.spec_file = requirements_file
         self.workflow_mode = workflow_mode
         self.issue_id = issue_id
         self.dev_agent = dev_agent
@@ -59,11 +59,11 @@ class ImplementationPhase(Phase):
 
             if self.workflow_mode == WorkflowMode.LOCAL:
                 # Check requirements file exists
-                req_path = Path(self.requirements_file)
+                req_path = Path(self.spec_file)
                 if not req_path.exists():
                     return PhaseResult(
                         status=PhaseStatus.FAILED,
-                        message=f"Requirements file not found: {self.requirements_file}",
+                        message=f"Spec file not found: {self.spec_file}",
                     )
 
             # Create or checkout branch
@@ -102,7 +102,7 @@ class ImplementationPhase(Phase):
         else:
             # Extract from requirements filename
             # e.g., "20250101-feature.md" -> "feature"
-            filename = Path(self.requirements_file).stem
+            filename = Path(self.spec_file).stem
             # Remove date prefix if exists
             match = re.match(r"^\d{8}-(.+)$", filename)
             if match:
@@ -128,12 +128,12 @@ class ImplementationPhase(Phase):
         """
         return f"""Use the {self.dev_agent} subagent for development.
 
-需求已經確認清楚，請根據 {self.requirements_file} 進行開發。
+需求已經確認清楚，請根據 {self.spec_file} 進行開發。
 
 請執行以下步驟：
 1. 嚴格按照開發任務拆解的順序進行開發及測試
 2. 直接使用開發任務中的 commit message，禁止加入新的內容
-3. commit 完之後在 {self.requirements_file} 中將已完成的項目打勾
+3. commit 完之後在 {self.spec_file} 中將已完成的項目打勾
 
 **注意：先不要 push 到 remote，等 code review 完成後再 push！**
 """
