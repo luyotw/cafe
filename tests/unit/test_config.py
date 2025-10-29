@@ -195,16 +195,16 @@ class TestValidateConfig:
             manager.validate_config(config)
 
     def test_validate_invalid_agent_tool(self) -> None:
-        """測試驗證無效的 agent tool"""
+        """測試驗證無效的 agent cli"""
         manager = ConfigManager()
         config = {
             "workflow_mode": "local",
             "agents": [
-                {"name": "Roger", "tool": "invalid_tool"},
+                {"name": "Roger", "cli": "invalid_cli"},
             ],
         }
 
-        with pytest.raises(ConfigError, match="Invalid agent tool"):
+        with pytest.raises(ConfigError, match="Invalid agent"):
             manager.validate_config(config)
 
     def test_validate_missing_required_field(self) -> None:

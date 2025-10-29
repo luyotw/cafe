@@ -30,7 +30,7 @@ class TestReviewPhaseBasics:
 
         assert phase.agent_manager == agent_manager
         assert phase.git_ops == git_ops
-        assert phase.requirements_file == "requirements.md"
+        assert phase.spec_file == "requirements.md"
         assert phase.workflow_mode == WorkflowMode.LOCAL
 
     def test_init_with_max_iterations(self) -> None:

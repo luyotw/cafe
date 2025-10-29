@@ -27,7 +27,7 @@ class TestAnalysisPhaseBasics:
 
         assert phase.agent_manager == agent_manager
         assert phase.permission_handler == permission_handler
-        assert phase.requirements_file == "requirements.md"
+        assert phase.spec_file == "requirements.md"
         assert phase.workflow_mode == WorkflowMode.LOCAL
 
     def test_init_with_github_mode(self) -> None:
