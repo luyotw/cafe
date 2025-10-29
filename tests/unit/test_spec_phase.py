@@ -688,5 +688,87 @@ class TestInteractiveModeStillWorks:
         assert result.data["iterations"] == 1
 
 
+class TestSkipConfirmedSpec:
+    """Test skipping execution if spec is already confirmed."""
+
+    def test_skip_execution_if_already_confirmed(self, tmp_path: Path) -> None:
+        """測試如果已經 CONFIRMED 狀態就不再呼叫 agent"""
+        spec_file = tmp_path / "spec.md"
+        spec_file.write_text("Initial spec")
+
+        # Create status file showing CONFIRMED state
+        issue_dir = tmp_path / ".aaf" / "issues" / "spec"
+        status_file = issue_dir / "spec" / "status.json"
+        status_file.parent.mkdir(parents=True)
+
+        import json
+        status_file.write_text(json.dumps({
+            "phase": "spec",
+            "status": "completed",
+            "status_code": "CONFIRMED",
+            "iteration": 3
+        }))
+
+        agent_manager = MagicMock(spec=AgentManager)
+        agent_manager.get_total_token_usage.return_value = TokenUsage()
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        phase = SpecPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            spec_file=str(spec_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            interactive=False,
+        )
+
+        result = phase.execute()
+
+        # Should skip execution and return completed
+        assert result.status == PhaseStatus.COMPLETED
+        assert result.message == "Spec already confirmed"
+        assert result.data["iterations"] == 3
+
+        # Agent should NOT be called
+        agent_manager.execute.assert_not_called()
+
+
+class TestKeyboardInterrupt:
+    """Test Ctrl+C handling."""
+
+    def test_keyboard_interrupt_does_not_save(self, tmp_path: Path) -> None:
+        """測試 Ctrl+C 時不存檔"""
+        spec_file = tmp_path / "spec.md"
+        spec_file.write_text("Initial spec")
+
+        agent_manager = MagicMock(spec=AgentManager)
+        # Simulate KeyboardInterrupt when agent executes
+        agent_manager.execute.side_effect = KeyboardInterrupt()
+
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        phase = SpecPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            spec_file=str(spec_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            interactive=False,
+        )
+
+        with patch('sys.stdin', StringIO("Test input\nEND\n")), \
+             patch('builtins.print'):
+            result = phase.execute()
+
+        # Should return failed with cancelled message
+        assert result.status == PhaseStatus.FAILED
+        assert result.message == "Cancelled by user"
+
+        # No iteration history should be saved
+        history_dir = tmp_path / ".aaf" / "issues" / "spec" / "spec" / "history"
+        if history_dir.exists():
+            iteration_files = list(history_dir.glob("iteration_*.json"))
+            # Should have no new iteration files (only existing ones if any)
+            assert len(iteration_files) == 0
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
