@@ -21,7 +21,7 @@ class TestAnalysisPhaseBasics:
         phase = AnalysisPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
-            requirements_file="requirements.md",
+            spec_file="requirements.md",
             workflow_mode=WorkflowMode.LOCAL,
         )
 
@@ -38,7 +38,7 @@ class TestAnalysisPhaseBasics:
         phase = AnalysisPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
-            requirements_file="requirements.md",
+            spec_file="requirements.md",
             workflow_mode=WorkflowMode.GITHUB,
             issue_id="123",
         )
@@ -70,7 +70,7 @@ Implementation analysis here
         phase = AnalysisPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
-            requirements_file=str(requirements_file),
+            spec_file=str(requirements_file),
             workflow_mode=WorkflowMode.LOCAL,
         )
 
@@ -90,7 +90,7 @@ Implementation analysis here
         phase = AnalysisPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
-            requirements_file=str(requirements_file),
+            spec_file=str(requirements_file),
             workflow_mode=WorkflowMode.LOCAL,
         )
 
@@ -115,7 +115,7 @@ Implementation analysis here
         phase = AnalysisPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
-            requirements_file=str(requirements_file),
+            spec_file=str(requirements_file),
             workflow_mode=WorkflowMode.LOCAL,
         )
 
@@ -138,7 +138,7 @@ class TestGitHubWorkflow:
         phase = AnalysisPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
-            requirements_file="requirements.md",
+            spec_file="requirements.md",
             workflow_mode=WorkflowMode.GITHUB,
             issue_id="123",
         )
@@ -161,7 +161,7 @@ class TestGitHubWorkflow:
         phase = AnalysisPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
-            requirements_file="requirements.md",
+            spec_file="requirements.md",
             workflow_mode=WorkflowMode.GITHUB,
             issue_id="456",
         )
@@ -188,7 +188,7 @@ class TestPromptGeneration:
         phase = AnalysisPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
-            requirements_file=str(requirements_file),
+            spec_file=str(requirements_file),
             workflow_mode=WorkflowMode.LOCAL,
         )
 
@@ -215,7 +215,7 @@ class TestPromptGeneration:
         phase = AnalysisPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
-            requirements_file=str(requirements_file),
+            spec_file=str(requirements_file),
             workflow_mode=WorkflowMode.LOCAL,
         )
 
@@ -243,7 +243,7 @@ class TestAgentSelection:
         phase = AnalysisPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
-            requirements_file=str(requirements_file),
+            spec_file=str(requirements_file),
             workflow_mode=WorkflowMode.LOCAL,
             dev_agent="David",
         )
@@ -266,7 +266,7 @@ class TestErrorHandling:
         phase = AnalysisPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
-            requirements_file="/nonexistent/requirements.md",
+            spec_file="/nonexistent/requirements.md",
             workflow_mode=WorkflowMode.LOCAL,
         )
 
@@ -283,7 +283,7 @@ class TestErrorHandling:
         phase = AnalysisPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
-            requirements_file="requirements.md",
+            spec_file="requirements.md",
             workflow_mode=WorkflowMode.GITHUB,
             issue_id=None,
         )
@@ -306,7 +306,7 @@ class TestErrorHandling:
         phase = AnalysisPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
-            requirements_file=str(requirements_file),
+            spec_file=str(requirements_file),
             workflow_mode=WorkflowMode.LOCAL,
         )
 
@@ -339,7 +339,7 @@ class TestDevGuideDetection:
             phase = AnalysisPhase(
                 agent_manager=agent_manager,
                 permission_handler=permission_handler,
-                requirements_file=str(requirements_file),
+                spec_file=str(requirements_file),
                 workflow_mode=WorkflowMode.LOCAL,
             )
 

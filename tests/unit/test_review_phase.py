@@ -24,7 +24,7 @@ class TestReviewPhaseBasics:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            requirements_file="requirements.md",
+            spec_file="requirements.md",
             workflow_mode=WorkflowMode.LOCAL,
         )
 
@@ -43,7 +43,7 @@ class TestReviewPhaseBasics:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            requirements_file="requirements.md",
+            spec_file="requirements.md",
             workflow_mode=WorkflowMode.LOCAL,
             max_iterations=5,
         )
@@ -72,7 +72,7 @@ class TestReviewLoop:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            requirements_file=str(requirements_file),
+            spec_file=str(requirements_file),
             workflow_mode=WorkflowMode.LOCAL,
         )
 
@@ -103,7 +103,7 @@ class TestReviewLoop:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            requirements_file=str(requirements_file),
+            spec_file=str(requirements_file),
             workflow_mode=WorkflowMode.LOCAL,
         )
 
@@ -130,7 +130,7 @@ class TestReviewLoop:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            requirements_file=str(requirements_file),
+            spec_file=str(requirements_file),
             workflow_mode=WorkflowMode.LOCAL,
             max_iterations=2,
         )
@@ -159,7 +159,7 @@ class TestDiffChecking:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            requirements_file=str(requirements_file),
+            spec_file=str(requirements_file),
             workflow_mode=WorkflowMode.LOCAL,
         )
 
@@ -185,7 +185,7 @@ class TestDiffChecking:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            requirements_file=str(requirements_file),
+            spec_file=str(requirements_file),
             workflow_mode=WorkflowMode.LOCAL,
         )
 
@@ -217,7 +217,7 @@ class TestAgentSelection:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            requirements_file=str(requirements_file),
+            spec_file=str(requirements_file),
             workflow_mode=WorkflowMode.LOCAL,
             review_agent="Roger",
             dev_agent="David",
@@ -252,7 +252,7 @@ class TestPromptGeneration:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            requirements_file=str(requirements_file),
+            spec_file=str(requirements_file),
             workflow_mode=WorkflowMode.LOCAL,
         )
 
@@ -280,7 +280,7 @@ class TestPromptGeneration:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            requirements_file=str(requirements_file),
+            spec_file=str(requirements_file),
             workflow_mode=WorkflowMode.LOCAL,
         )
 
@@ -309,7 +309,7 @@ class TestGitHubWorkflow:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            requirements_file="requirements.md",
+            spec_file="requirements.md",
             workflow_mode=WorkflowMode.GITHUB,
             issue_id="123",
         )
@@ -339,7 +339,7 @@ class TestErrorHandling:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            requirements_file=str(requirements_file),
+            spec_file=str(requirements_file),
             workflow_mode=WorkflowMode.LOCAL,
         )
 

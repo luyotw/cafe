@@ -38,7 +38,7 @@ class ImplementationPhase(Phase):
         self.agent_manager = agent_manager
         self.permission_handler = permission_handler
         self.git_ops = git_ops
-        self.spec_file = requirements_file
+        self.spec_file = spec_file
         self.workflow_mode = workflow_mode
         self.issue_id = issue_id
         self.dev_agent = dev_agent

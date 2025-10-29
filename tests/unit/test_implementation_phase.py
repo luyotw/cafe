@@ -24,7 +24,7 @@ class TestImplementationPhaseBasics:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            requirements_file="requirements.md",
+            spec_file="requirements.md",
             workflow_mode=WorkflowMode.LOCAL,
         )
 
@@ -43,7 +43,7 @@ class TestImplementationPhaseBasics:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            requirements_file="requirements.md",
+            spec_file="requirements.md",
             workflow_mode=WorkflowMode.GITHUB,
             issue_id="123",
         )
@@ -72,7 +72,7 @@ class TestBranchManagement:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            requirements_file=str(requirements_file),
+            spec_file=str(requirements_file),
             workflow_mode=WorkflowMode.LOCAL,
         )
 
@@ -98,7 +98,7 @@ class TestBranchManagement:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            requirements_file=str(requirements_file),
+            spec_file=str(requirements_file),
             workflow_mode=WorkflowMode.GITHUB,
             issue_id="123",
         )
@@ -122,7 +122,7 @@ class TestBranchManagement:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            requirements_file="requirements.md",
+            spec_file="requirements.md",
             workflow_mode=WorkflowMode.GITHUB,
             issue_id="456",
         )
@@ -153,7 +153,7 @@ class TestDevelopmentExecution:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            requirements_file=str(requirements_file),
+            spec_file=str(requirements_file),
             workflow_mode=WorkflowMode.LOCAL,
         )
 
@@ -176,7 +176,7 @@ class TestDevelopmentExecution:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            requirements_file="requirements.md",
+            spec_file="requirements.md",
             workflow_mode=WorkflowMode.GITHUB,
             issue_id="123",
         )
@@ -210,7 +210,7 @@ class TestPromptGeneration:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            requirements_file=str(requirements_file),
+            spec_file=str(requirements_file),
             workflow_mode=WorkflowMode.LOCAL,
         )
 
@@ -235,7 +235,7 @@ class TestPromptGeneration:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            requirements_file="requirements.md",
+            spec_file="requirements.md",
             workflow_mode=WorkflowMode.GITHUB,
             issue_id="123",
         )
@@ -268,7 +268,7 @@ class TestAgentSelection:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            requirements_file=str(requirements_file),
+            spec_file=str(requirements_file),
             workflow_mode=WorkflowMode.LOCAL,
             dev_agent="David",
         )
@@ -293,7 +293,7 @@ class TestErrorHandling:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            requirements_file="/nonexistent/requirements.md",
+            spec_file="/nonexistent/requirements.md",
             workflow_mode=WorkflowMode.LOCAL,
         )
 
@@ -312,7 +312,7 @@ class TestErrorHandling:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            requirements_file="requirements.md",
+            spec_file="requirements.md",
             workflow_mode=WorkflowMode.GITHUB,
             issue_id=None,
         )
@@ -339,7 +339,7 @@ class TestErrorHandling:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            requirements_file=str(requirements_file),
+            spec_file=str(requirements_file),
             workflow_mode=WorkflowMode.LOCAL,
         )
 
@@ -363,7 +363,7 @@ class TestErrorHandling:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            requirements_file=str(requirements_file),
+            spec_file=str(requirements_file),
             workflow_mode=WorkflowMode.LOCAL,
         )
 

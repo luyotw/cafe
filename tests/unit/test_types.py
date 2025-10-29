@@ -145,7 +145,7 @@ class TestSessionConfig:
         """測試可以成功建立 Local 工作流程的 SessionConfig"""
         config = SessionConfig(
             workflow_mode=WorkflowMode.LOCAL,
-            requirements_file="requirements.md",
+            spec_file="requirements.md",
         )
         assert config.workflow_mode == WorkflowMode.LOCAL
         assert config.requirements_file == "requirements.md"

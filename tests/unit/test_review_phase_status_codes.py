@@ -28,7 +28,7 @@ class TestReviewPhaseWithStatusCodes:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            requirements_file="requirements.md",
+            spec_file="requirements.md",
             workflow_mode=WorkflowMode.LOCAL,
         )
 
@@ -52,7 +52,7 @@ class TestReviewPhaseWithStatusCodes:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            requirements_file="requirements.md",
+            spec_file="requirements.md",
             workflow_mode=WorkflowMode.LOCAL,
         )
 
@@ -80,7 +80,7 @@ class TestReviewPhaseWithStatusCodes:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            requirements_file="requirements.md",
+            spec_file="requirements.md",
             workflow_mode=WorkflowMode.LOCAL,
         )
 
@@ -104,7 +104,7 @@ class TestReviewPhaseWithStatusCodes:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            requirements_file="requirements.md",
+            spec_file="requirements.md",
             workflow_mode=WorkflowMode.LOCAL,
         )
 
@@ -128,7 +128,7 @@ class TestReviewPhaseWithStatusCodes:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            requirements_file="requirements.md",
+            spec_file="requirements.md",
             workflow_mode=WorkflowMode.LOCAL,
             max_iterations=2,
         )
@@ -152,7 +152,7 @@ class TestReviewPhaseWithStatusCodes:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            requirements_file="requirements.md",
+            spec_file="requirements.md",
             workflow_mode=WorkflowMode.LOCAL,
         )
 

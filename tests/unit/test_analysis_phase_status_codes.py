@@ -27,7 +27,7 @@ class TestAnalysisPhaseWithStatusCodes:
         phase = AnalysisPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
-            requirements_file=str(requirements_file),
+            spec_file=str(requirements_file),
             workflow_mode=WorkflowMode.LOCAL,
         )
 
@@ -50,7 +50,7 @@ class TestAnalysisPhaseWithStatusCodes:
         phase = AnalysisPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
-            requirements_file=str(requirements_file),
+            spec_file=str(requirements_file),
             workflow_mode=WorkflowMode.LOCAL,
         )
 
@@ -76,7 +76,7 @@ class TestAnalysisPhaseWithStatusCodes:
         phase = AnalysisPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
-            requirements_file=str(requirements_file),
+            spec_file=str(requirements_file),
             workflow_mode=WorkflowMode.LOCAL,
         )
 
@@ -99,7 +99,7 @@ class TestAnalysisPhaseWithStatusCodes:
         phase = AnalysisPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
-            requirements_file=str(requirements_file),
+            spec_file=str(requirements_file),
             workflow_mode=WorkflowMode.LOCAL,
         )
 
@@ -125,7 +125,7 @@ class TestAnalysisPhaseWithStatusCodes:
         phase = AnalysisPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
-            requirements_file=str(requirements_file),
+            spec_file=str(requirements_file),
             workflow_mode=WorkflowMode.LOCAL,
         )
 
@@ -147,7 +147,7 @@ class TestAnalysisPhaseWithStatusCodes:
         phase = AnalysisPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
-            requirements_file=str(requirements_file),
+            spec_file=str(requirements_file),
             workflow_mode=WorkflowMode.LOCAL,
         )
 
