@@ -16,7 +16,7 @@ class TestAnalysisPhaseWithStatusCodes:
 
     def test_confirmed_status_code_completes_phase(self, tmp_path: Path) -> None:
         """測試 CONFIRMED 狀態碼完成 phase"""
-        requirements_file = tmp_path / "requirements.md"
+        requirements_file = tmp_path / "spec.md"
         requirements_file.write_text("# 需求\n\n## 開發指南\nSome guide")
 
         agent_manager = MagicMock(spec=AgentManager)
@@ -39,7 +39,7 @@ class TestAnalysisPhaseWithStatusCodes:
 
     def test_rejected_status_code_fails_phase(self, tmp_path: Path) -> None:
         """測試 REJECTED 狀態碼導致 phase 失敗"""
-        requirements_file = tmp_path / "requirements.md"
+        requirements_file = tmp_path / "spec.md"
         requirements_file.write_text("# 需求\n\n## 開發指南\nSome guide")
 
         agent_manager = MagicMock(spec=AgentManager)
@@ -61,7 +61,7 @@ class TestAnalysisPhaseWithStatusCodes:
 
     def test_need_clarification_continues_iteration(self, tmp_path: Path) -> None:
         """測試 NEED_CLARIFICATION 繼續迭代"""
-        requirements_file = tmp_path / "requirements.md"
+        requirements_file = tmp_path / "spec.md"
         requirements_file.write_text("# 需求\n\n## 開發指南\nSome guide")
 
         agent_manager = MagicMock(spec=AgentManager)
@@ -88,7 +88,7 @@ class TestAnalysisPhaseWithStatusCodes:
 
     def test_status_code_in_middle_of_response(self, tmp_path: Path) -> None:
         """測試狀態碼在回應中間也能識別"""
-        requirements_file = tmp_path / "requirements.md"
+        requirements_file = tmp_path / "spec.md"
         requirements_file.write_text("# 需求\n\n## 開發指南\nSome guide")
 
         agent_manager = MagicMock(spec=AgentManager)
@@ -110,7 +110,7 @@ class TestAnalysisPhaseWithStatusCodes:
 
     def test_no_status_code_continues_iteration(self, tmp_path: Path) -> None:
         """測試沒有狀態碼時繼續迭代"""
-        requirements_file = tmp_path / "requirements.md"
+        requirements_file = tmp_path / "spec.md"
         requirements_file.write_text("# 需求\n\n## 開發指南\nSome guide")
 
         agent_manager = MagicMock(spec=AgentManager)
@@ -136,7 +136,7 @@ class TestAnalysisPhaseWithStatusCodes:
 
     def test_case_insensitive_status_code(self, tmp_path: Path) -> None:
         """測試狀態碼不區分大小寫"""
-        requirements_file = tmp_path / "requirements.md"
+        requirements_file = tmp_path / "spec.md"
         requirements_file.write_text("# 需求\n\n## 開發指南\nSome guide")
 
         agent_manager = MagicMock(spec=AgentManager)

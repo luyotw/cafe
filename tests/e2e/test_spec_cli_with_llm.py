@@ -90,7 +90,7 @@ def test_spec_cli_with_llm_user():
 
             # Check if completed
             if status == "completed" and status_code == "CONFIRMED":
-                print("✅ CONFIRMED - Requirements complete!")
+                print("✅ CONFIRMED - Spec complete!")
 
                 # Show final spec
                 spec_file = Path(".aaf/issues/test_myip_e2e/spec/history/spec.md")
@@ -114,11 +114,11 @@ def test_spec_cli_with_llm_user():
                 pytest.fail(f"Unexpected status: {status}")
 
         print()
-        print(f"Calling: aaf spec -o test_myip_e2e.md --non-interactive")
+        print(f"Calling: aaf spec test_myip_e2e.md --non-interactive")
 
         # Call aaf spec
         result = subprocess.run(
-            ["aaf", "spec", "-o", "test_myip_e2e.md", "--non-interactive"],
+            ["aaf", "spec", "test_myip_e2e.md", "--non-interactive"],
             input=user_input + "\nEND\n",
             capture_output=True, text=True
         )
@@ -157,7 +157,7 @@ def test_spec_cli_with_llm_user():
     Path("test_myip_e2e.md").unlink()
 
     print("=" * 70)
-    print("✅ E2E TEST PASSED: Requirements confirmed successfully!")
+    print("✅ E2E TEST PASSED: Spec confirmed successfully!")
     print("=" * 70)
 
 

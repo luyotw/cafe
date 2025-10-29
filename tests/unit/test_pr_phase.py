@@ -24,13 +24,13 @@ class TestPRPhaseBasics:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            spec_file="requirements.md",
+            spec_file="spec.md",
             workflow_mode=WorkflowMode.LOCAL,
         )
 
         assert phase.agent_manager == agent_manager
         assert phase.git_ops == git_ops
-        assert phase.spec_file == "requirements.md"
+        assert phase.spec_file == "spec.md"
         assert phase.workflow_mode == WorkflowMode.LOCAL
 
     def test_init_with_github_mode(self) -> None:
@@ -43,7 +43,7 @@ class TestPRPhaseBasics:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            spec_file="requirements.md",
+            spec_file="spec.md",
             workflow_mode=WorkflowMode.GITHUB,
             issue_id="123",
         )
@@ -68,7 +68,7 @@ class TestBranchPushing:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            spec_file="requirements.md",
+            spec_file="spec.md",
             workflow_mode=WorkflowMode.GITHUB,
             issue_id="123",
         )
@@ -122,7 +122,7 @@ class TestBranchPushing:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            spec_file="requirements.md",
+            spec_file="spec.md",
             workflow_mode=WorkflowMode.GITHUB,
             issue_id="123",
         )
@@ -149,7 +149,7 @@ class TestPRCreation:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            spec_file="requirements.md",
+            spec_file="spec.md",
             workflow_mode=WorkflowMode.GITHUB,
             issue_id="123",
         )
@@ -225,7 +225,7 @@ class TestPRCreation:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            spec_file="requirements.md",
+            spec_file="spec.md",
             workflow_mode=WorkflowMode.LOCAL,
         )
 
@@ -255,7 +255,7 @@ class TestPRTitleGeneration:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            spec_file="requirements.md",
+            spec_file="spec.md",
             workflow_mode=WorkflowMode.GITHUB,
             issue_id="456",
         )
@@ -281,7 +281,7 @@ class TestPRTitleGeneration:
 
     def test_pr_title_from_requirements_file(self, tmp_path: Path) -> None:
         """測試從需求檔案第一行取得 PR title"""
-        requirements_file = tmp_path / "requirements.md"
+        requirements_file = tmp_path / "spec.md"
         requirements_file.write_text("# Add User Authentication\n\nDetails...")
 
         agent_manager = MagicMock(spec=AgentManager)
@@ -316,7 +316,7 @@ class TestPRBodyGeneration:
 
     def test_pr_body_includes_commits(self, tmp_path: Path) -> None:
         """測試 PR body 包含 commit 列表"""
-        requirements_file = tmp_path / "requirements.md"
+        requirements_file = tmp_path / "spec.md"
         requirements_file.write_text("# Feature Title\n")
 
         agent_manager = MagicMock(spec=AgentManager)
@@ -362,7 +362,7 @@ class TestErrorHandling:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            spec_file="requirements.md",
+            spec_file="spec.md",
             workflow_mode=WorkflowMode.GITHUB,
             issue_id=None,
         )
@@ -382,7 +382,7 @@ class TestErrorHandling:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            spec_file="/nonexistent/requirements.md",
+            spec_file="/nonexistent/spec.md",
             workflow_mode=WorkflowMode.LOCAL,
         )
 
@@ -403,7 +403,7 @@ class TestErrorHandling:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            spec_file="requirements.md",
+            spec_file="spec.md",
             workflow_mode=WorkflowMode.GITHUB,
             issue_id="123",
         )
@@ -426,7 +426,7 @@ class TestErrorHandling:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            spec_file="requirements.md",
+            spec_file="spec.md",
             workflow_mode=WorkflowMode.GITHUB,
             issue_id="123",
         )

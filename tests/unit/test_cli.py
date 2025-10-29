@@ -82,7 +82,7 @@ class TestBuildWorkflow:
 
         workflow = _build_workflow(
             mode=WorkflowMode.LOCAL,
-            requirements="req.md",
+            spec_file="req.md",
             issue_id=None,
             agent_manager=agent_manager,
             permission_handler=permission_handler,
@@ -113,7 +113,7 @@ class TestBuildWorkflow:
 
         _build_workflow(
             mode=WorkflowMode.GITHUB,
-            requirements="req.md",
+            spec_file="req.md",
             issue_id="123",
             agent_manager=agent_manager,
             permission_handler=permission_handler,
@@ -132,7 +132,7 @@ class TestRunCommand:
     def test_run_local_mode_success(self, tmp_path: Path) -> None:
         """測試 local mode 成功執行"""
         # 建立測試檔案
-        req_file = tmp_path / "requirements.md"
+        req_file = tmp_path / "spec.md"
         req_file.write_text("Test requirements")
         config_file = tmp_path / "config.yaml"
 
@@ -150,7 +150,7 @@ class TestRunCommand:
                 [
                     "run",
                     "--mode", "local",
-                    "--requirements", str(req_file),
+                    "--spec", str(req_file),
                     "--config", str(config_file),
                 ]
             )
@@ -176,7 +176,7 @@ class TestRunCommand:
         assert "--issue is required for github mode" in result.stdout
 
     def test_run_local_mode_missing_requirements_file_fails(self, tmp_path: Path) -> None:
-        """測試 local mode 缺少 requirements 檔案會失敗"""
+        """測試 local mode 缺少 spec 檔案會失敗"""
         config_file = tmp_path / "config.yaml"
 
         result = runner.invoke(
@@ -184,13 +184,13 @@ class TestRunCommand:
             [
                 "run",
                 "--mode", "local",
-                "--requirements", "nonexistent.md",
+                "--spec", "nonexistent.md",
                 "--config", str(config_file),
             ]
         )
 
         assert result.exit_code == 1
-        assert "Requirements file not found" in result.stdout
+        assert "Spec file not found" in result.stdout
 
     def test_run_invalid_mode_fails(self, tmp_path: Path) -> None:
         """測試無效的 mode 會失敗"""
@@ -210,7 +210,7 @@ class TestRunCommand:
 
     def test_run_exits_with_error_on_failed_phase(self, tmp_path: Path) -> None:
         """測試當有 phase 失敗時會回傳錯誤碼"""
-        req_file = tmp_path / "requirements.md"
+        req_file = tmp_path / "spec.md"
         req_file.write_text("Test requirements")
         config_file = tmp_path / "config.yaml"
 
@@ -227,7 +227,7 @@ class TestRunCommand:
                 [
                     "run",
                     "--mode", "local",
-                    "--requirements", str(req_file),
+                    "--spec", str(req_file),
                     "--config", str(config_file),
                 ]
             )
