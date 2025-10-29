@@ -77,7 +77,7 @@ def _setup_agents(config_manager: ConfigManager) -> AgentManager:
 
 def _build_workflow(
     mode: WorkflowMode,
-    requirements: str,
+    spec_file: str,
     issue_id: Optional[str],
     agent_manager: AgentManager,
     permission_handler: PermissionHandler,
@@ -87,7 +87,7 @@ def _build_workflow(
 
     Args:
         mode: Workflow mode
-        requirements: Requirements file path
+        spec_file: Specification file path
         issue_id: GitHub issue ID
         agent_manager: Agent manager
         permission_handler: Permission handler
@@ -103,12 +103,12 @@ def _build_workflow(
 
     workflow = Workflow(max_retries=config_manager.get("workflow.max_retries", 0))
 
-    # Spec phase: Requirements clarification
+    # Spec phase: Specification clarification
     workflow.add_phase(
         SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
-            spec_file=requirements,
+            spec_file=spec_file,
             workflow_mode=mode,
             issue_id=issue_id,
             pm_agent=pm_name,
@@ -120,7 +120,7 @@ def _build_workflow(
         AnalysisPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
-            spec_file=requirements,
+            spec_file=spec_file,
             workflow_mode=mode,
             issue_id=issue_id,
             dev_agent=dev_name,
@@ -134,7 +134,7 @@ def _build_workflow(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            spec_file=requirements,
+            spec_file=spec_file,
             workflow_mode=mode,
             issue_id=issue_id,
             dev_agent=dev_name,
@@ -147,7 +147,7 @@ def _build_workflow(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            spec_file=requirements,
+            spec_file=spec_file,
             workflow_mode=mode,
             issue_id=issue_id,
             review_agent=reviewer_name,
@@ -161,7 +161,7 @@ def _build_workflow(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            spec_file=requirements,
+            spec_file=spec_file,
             workflow_mode=mode,
             issue_id=issue_id,
         )
@@ -172,11 +172,11 @@ def _build_workflow(
 
 @app.command()
 def run(
-    requirements: str = typer.Option(
-        "requirements.md",
-        "--requirements",
-        "-r",
-        help="Path to requirements file (for local mode)",
+    spec_file: str = typer.Option(
+        "spec.md",
+        "--spec",
+        "-s",
+        help="Path to specification file (for local mode)",
     ),
     mode: str = typer.Option(
         "github",
@@ -200,8 +200,8 @@ def run(
     """Run the AAF workflow.
 
     Examples:
-        # Local mode with requirements file
-        aaf run -m local -r requirements.md
+        # Local mode with spec file
+        aaf run -m local -s spec.md
 
         # GitHub mode with issue
         aaf run -m github -i 123
@@ -219,11 +219,11 @@ def run(
             console.print("[red]Error: --issue is required for github mode.[/red]")
             raise typer.Exit(1)
 
-        # Validate requirements file for local mode
+        # Validate spec file for local mode
         if workflow_mode == WorkflowMode.LOCAL:
-            req_path = Path(requirements)
-            if not req_path.exists():
-                console.print(f"[red]Error: Requirements file not found: {requirements}[/red]")
+            spec_path = Path(spec_file)
+            if not spec_path.exists():
+                console.print(f"[red]Error: Spec file not found: {spec_file}[/red]")
                 raise typer.Exit(1)
 
         # Initialize components
@@ -239,11 +239,11 @@ def run(
         if workflow_mode == WorkflowMode.GITHUB:
             console.print(f"Issue: #{issue_id}")
         else:
-            console.print(f"Requirements: {requirements}")
+            console.print(f"Spec file: {spec_file}")
 
         workflow = _build_workflow(
             mode=workflow_mode,
-            requirements=requirements,
+            spec_file=spec_file,
             issue_id=issue_id,
             agent_manager=agent_manager,
             permission_handler=permission_handler,
@@ -287,11 +287,9 @@ def version() -> None:
 
 @app.command()
 def spec(
-    output: str = typer.Option(
-        "requirements.md",
-        "--output",
-        "-o",
-        help="Output requirements file path (local mode)",
+    spec_file: str = typer.Argument(
+        "spec.md",
+        help="Specification file path (local mode)",
     ),
     mode: str = typer.Option(
         "local",
@@ -322,23 +320,26 @@ def spec(
         help="Detect if stdin is redirected and use it for input",
     ),
 ) -> None:
-    """Run specification phase: Requirements clarification with conversational generation.
+    """Run specification phase: Spec clarification with conversational generation.
 
     The PM agent will engage in a dialogue with you to clarify and generate
-    a complete requirements document. No technical details will be discussed.
+    a complete specification document. No technical details will be discussed.
 
     Examples:
-        # Generate requirements through conversation (local)
-        aaf spec -o requirements.md
+        # Generate spec through conversation (local, default spec.md)
+        aaf spec
 
-        # Create new GitHub issue with requirements
+        # Generate spec with custom file name
+        aaf spec myfeature.md
+
+        # Create new GitHub issue with spec
         aaf spec -m github
 
         # Update existing GitHub issue
         aaf spec -m github -i 123
 
         # Use custom PM agent
-        aaf spec -o req.md --pm CustomPM
+        aaf spec custom.md --pm CustomPM
     """
     try:
         # Validate mode
@@ -355,11 +356,11 @@ def spec(
         permission_handler = PermissionHandler()
 
         # Display start message
-        console.print("[bold blue]🎯 Spec Phase: Requirements Clarification[/bold blue]")
+        console.print("[bold blue]🎯 Spec Phase: Specification Clarification[/bold blue]")
         console.print(f"Mode: {workflow_mode.value}")
         console.print(f"PM Agent: {pm_agent}")
         if workflow_mode == WorkflowMode.LOCAL:
-            console.print(f"Output: {output}")
+            console.print(f"Spec file: {spec_file}")
         elif issue_id:
             console.print(f"Issue: #{issue_id}")
         console.print()
@@ -372,14 +373,14 @@ def spec(
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
-            spec_file=output,
+            spec_file=spec_file,
             workflow_mode=workflow_mode,
             issue_id=issue_id,
             pm_agent=pm_agent,
             interactive=is_interactive,
         )
 
-        console.print("[bold]Starting conversational requirements generation...[/bold]")
+        console.print("[bold]Starting conversational spec generation...[/bold]")
         console.print("[dim]The PM will ask questions to clarify all necessary information.[/dim]")
         console.print("[dim]Focus on WHAT you want, not HOW to implement it.[/dim]")
         console.print()
@@ -389,17 +390,17 @@ def spec(
         # Display result
         if result.status.value == "completed":
             console.print()
-            console.print("[bold green]✅ Requirements clarification completed![/bold green]")
+            console.print("[bold green]✅ Spec clarification completed![/bold green]")
             console.print(f"Iterations: {result.data.get('iterations', 'N/A')}")
             if workflow_mode == WorkflowMode.LOCAL:
-                console.print(f"Saved to: {output}")
+                console.print(f"Saved to: {spec_file}")
             elif result.data.get('issue_id'):
                 console.print(f"Created issue: #{result.data['issue_id']}")
             elif issue_id:
                 console.print(f"Updated issue: #{issue_id}")
         else:
             console.print()
-            console.print(f"[bold red]❌ Requirements phase failed: {result.message}[/bold red]")
+            console.print(f"[bold red]❌ Spec phase failed: {result.message}[/bold red]")
             raise typer.Exit(1)
 
     except Exception as e:
