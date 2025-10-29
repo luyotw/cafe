@@ -48,12 +48,23 @@ class AgentConfig(BaseModel):
     session_id: Optional[str] = None
 
 
+class TokenUsage(BaseModel):
+    """Token usage statistics."""
+
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_creation_input_tokens: int = 0
+    cache_read_input_tokens: int = 0
+    total_cost_usd: float = 0.0
+
+
 class PhaseResult(BaseModel):
     """Result of a phase execution."""
 
     status: PhaseStatus
     message: str = ""
     data: Dict[str, Any] = Field(default_factory=dict)
+    token_usage: Optional[TokenUsage] = None
 
 
 class PermissionRequest(BaseModel):

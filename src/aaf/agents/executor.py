@@ -2,9 +2,9 @@
 
 import json
 import subprocess
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
-from aaf.core.types import AgentConfig, AgentCLI
+from aaf.core.types import AgentConfig, AgentCLI, TokenUsage
 
 
 class AgentExecutionError(Exception):
@@ -55,6 +55,7 @@ class AgentExecutor:
             config: Agent configuration
         """
         self.config = config
+        self._total_token_usage = TokenUsage()
 
     def _translate_tool_names(self, tools: Optional[List[str]]) -> Optional[List[str]]:
         """Translate tool names from Claude convention to current CLI convention.
@@ -71,7 +72,7 @@ class AgentExecutor:
         tool_map = self.TOOL_NAME_MAP.get(self.config.cli, {})
         return [tool_map.get(tool, tool) for tool in tools]
 
-    def execute(self, prompt: str, allowed_tools: Optional[List[str]] = None) -> str:
+    def execute(self, prompt: str, allowed_tools: Optional[List[str]] = None) -> Tuple[str, TokenUsage]:
         """Execute the agent with given prompt.
 
         Args:
@@ -79,7 +80,7 @@ class AgentExecutor:
             allowed_tools: List of allowed tools (using Claude naming convention)
 
         Returns:
-            Agent's response
+            Tuple of (agent's response, token usage statistics)
 
         Raises:
             AgentExecutionError: If agent execution fails
@@ -89,19 +90,36 @@ class AgentExecutor:
 
         try:
             if self.config.cli == AgentCLI.CLAUDE:
-                return self._execute_claude(prompt, translated_tools)
+                response, token_usage = self._execute_claude(prompt, translated_tools)
             elif self.config.cli == AgentCLI.GEMINI:
-                return self._execute_gemini(prompt, translated_tools)
+                response, token_usage = self._execute_gemini(prompt, translated_tools)
             elif self.config.cli == AgentCLI.CURSOR:
-                return self._execute_cursor(prompt, translated_tools)
+                response, token_usage = self._execute_cursor(prompt, translated_tools)
             else:
                 raise AgentExecutionError(f"Unsupported agent CLI: {self.config.cli}")
+
+            # Accumulate token usage
+            self._total_token_usage.input_tokens += token_usage.input_tokens
+            self._total_token_usage.output_tokens += token_usage.output_tokens
+            self._total_token_usage.cache_creation_input_tokens += token_usage.cache_creation_input_tokens
+            self._total_token_usage.cache_read_input_tokens += token_usage.cache_read_input_tokens
+            self._total_token_usage.total_cost_usd += token_usage.total_cost_usd
+
+            return response, token_usage
         except AgentExecutionError:
             raise
         except Exception as e:
             raise AgentExecutionError(f"Agent execution failed: {e}") from e
 
-    def _execute_claude(self, prompt: str, allowed_tools: Optional[List[str]] = None) -> str:
+    def get_total_token_usage(self) -> TokenUsage:
+        """Get total accumulated token usage across all execute() calls.
+
+        Returns:
+            Total token usage statistics
+        """
+        return self._total_token_usage
+
+    def _execute_claude(self, prompt: str, allowed_tools: Optional[List[str]] = None) -> Tuple[str, TokenUsage]:
         """Execute Claude agent.
 
         Args:
@@ -109,7 +127,7 @@ class AgentExecutor:
             allowed_tools: List of allowed tools (already translated)
 
         Returns:
-            Claude's response
+            Tuple of (Claude's response, token usage)
         """
         # Build command: prompt must come first, then options
         cmd = ["claude", "--print", prompt]
@@ -148,10 +166,22 @@ class AgentExecutor:
         # Parse JSON response
         try:
             response_data = json.loads(result.stdout)
-            return response_data.get("result", result.stdout)
+            response = response_data.get("result", result.stdout)
+
+            # Parse token usage
+            usage_data = response_data.get("usage", {})
+            token_usage = TokenUsage(
+                input_tokens=usage_data.get("input_tokens", 0),
+                output_tokens=usage_data.get("output_tokens", 0),
+                cache_creation_input_tokens=usage_data.get("cache_creation_input_tokens", 0),
+                cache_read_input_tokens=usage_data.get("cache_read_input_tokens", 0),
+                total_cost_usd=response_data.get("total_cost_usd", 0.0)
+            )
+
+            return response, token_usage
         except json.JSONDecodeError:
-            # If not JSON, return raw output
-            return result.stdout
+            # If not JSON, return raw output with empty token usage
+            return result.stdout, TokenUsage()
 
     def _create_new_session(self) -> str:
         """Create a new Claude session.
@@ -187,7 +217,7 @@ class AgentExecutor:
                 f"Failed to parse session creation response: {e}"
             ) from e
 
-    def _execute_gemini(self, prompt: str, allowed_tools: Optional[List[str]] = None) -> str:
+    def _execute_gemini(self, prompt: str, allowed_tools: Optional[List[str]] = None) -> Tuple[str, TokenUsage]:
         """Execute Gemini agent.
 
         Args:
@@ -195,7 +225,7 @@ class AgentExecutor:
             allowed_tools: List of allowed tools (already translated)
 
         Returns:
-            Gemini's response
+            Tuple of (Gemini's response, token usage)
         """
         # Build command: use positional prompt
         cmd = ["gemini", prompt]
@@ -221,12 +251,18 @@ class AgentExecutor:
         # Parse JSON response
         try:
             response_data = json.loads(result.stdout)
-            return response_data.get("response", result.stdout)
-        except json.JSONDecodeError:
-            # If not JSON, return raw output
-            return result.stdout
+            response = response_data.get("response", result.stdout)
 
-    def _execute_cursor(self, prompt: str, allowed_tools: Optional[List[str]] = None) -> str:
+            # Parse token usage (Gemini format may differ from Claude)
+            # TODO: Update when Gemini CLI provides token usage info
+            token_usage = TokenUsage()
+
+            return response, token_usage
+        except json.JSONDecodeError:
+            # If not JSON, return raw output with empty token usage
+            return result.stdout, TokenUsage()
+
+    def _execute_cursor(self, prompt: str, allowed_tools: Optional[List[str]] = None) -> Tuple[str, TokenUsage]:
         """Execute Cursor agent.
 
         Args:
@@ -234,7 +270,7 @@ class AgentExecutor:
             allowed_tools: List of allowed tools (already translated)
 
         Returns:
-            Cursor's response
+            Tuple of (Cursor's response, token usage)
         """
         # Placeholder for Cursor implementation
         raise NotImplementedError("Cursor execution not yet implemented")

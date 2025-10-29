@@ -4,7 +4,7 @@ import pytest
 from unittest.mock import MagicMock, patch
 
 from aaf.agents.executor import AgentExecutor, AgentExecutionError
-from aaf.core.types import AgentConfig, AgentCLI
+from aaf.core.types import AgentConfig, AgentCLI, TokenUsage
 
 
 class TestAgentExecutorBasics:
@@ -25,11 +25,12 @@ class TestAgentExecutorBasics:
         executor = AgentExecutor(config)
 
         with patch.object(executor, "_execute_claude") as mock_execute:
-            mock_execute.return_value = "Agent response"
+            mock_execute.return_value = ("Agent response", TokenUsage())
 
-            result = executor.execute("Test prompt")
+            response, token_usage = executor.execute("Test prompt")
 
-            assert result == "Agent response"
+            assert response == "Agent response"
+            assert isinstance(token_usage, TokenUsage)
             mock_execute.assert_called_once_with("Test prompt", None)
 
 
@@ -57,11 +58,12 @@ class TestAgentExecutorWithSession:
         executor = AgentExecutor(config)
 
         with patch.object(executor, "_execute_claude") as mock_execute:
-            mock_execute.return_value = "Response with session"
+            mock_execute.return_value = ("Response with session", TokenUsage())
 
-            result = executor.execute("Prompt with session")
+            response, token_usage = executor.execute("Prompt with session")
 
-            assert result == "Response with session"
+            assert response == "Response with session"
+            assert isinstance(token_usage, TokenUsage)
             # Verify session was used in execution
             mock_execute.assert_called_once()
 
@@ -109,13 +111,14 @@ class TestClaudeExecution:
 
         with patch("subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(
-                stdout='{"content": "Claude response"}',
+                stdout='{"result": "Claude response"}',
                 returncode=0
             )
 
-            result = executor._execute_claude("Test prompt")
+            response, token_usage = executor._execute_claude("Test prompt")
 
-            assert "Claude response" in result or result == "Claude response"
+            assert response == "Claude response"
+            assert isinstance(token_usage, TokenUsage)
             mock_run.assert_called_once()
 
     def test_execute_claude_failure(self) -> None:
@@ -152,9 +155,11 @@ class TestClaudeExecution:
                 returncode=0
             )
 
-            result = executor._execute_claude("Test prompt")
+            response, token_usage = executor._execute_claude("Test prompt")
 
-            assert result == "Plain text response"
+            assert response == "Plain text response"
+            assert isinstance(token_usage, TokenUsage)
+            assert token_usage.input_tokens == 0
 
     def test_execute_claude_session_already_in_use_creates_new_session(self) -> None:
         """測試當 session 已被使用時，自動創建新 session 並重試"""
@@ -192,14 +197,15 @@ class TestClaudeExecution:
                 )
 
         with patch("subprocess.run", side_effect=mock_run_side_effect) as mock_run:
-            result = executor._execute_claude("Test prompt")
+            response, token_usage = executor._execute_claude("Test prompt")
 
             # Should have called run 3 times:
             # 1. Initial attempt (fails with "already in use")
             # 2. Create new session
             # 3. Retry with new session
             assert mock_run.call_count == 3
-            assert result == "Success with new session"
+            assert response == "Success with new session"
+            assert isinstance(token_usage, TokenUsage)
             # Session ID should be updated
             assert executor.config.session_id == "new-session-123"
 
@@ -253,9 +259,10 @@ class TestGeminiExecution:
                 returncode=0
             )
 
-            result = executor._execute_gemini("Test prompt")
+            response, token_usage = executor._execute_gemini("Test prompt")
 
-            assert result == "Gemini response"
+            assert response == "Gemini response"
+            assert isinstance(token_usage, TokenUsage)
             mock_run.assert_called_once()
             # Verify command structure
             call_args = mock_run.call_args[0][0]
@@ -275,9 +282,10 @@ class TestGeminiExecution:
                 returncode=0
             )
 
-            result = executor.execute("Test prompt")
+            response, token_usage = executor.execute("Test prompt")
 
-            assert result == "Hi there"
+            assert response == "Hi there"
+            assert isinstance(token_usage, TokenUsage)
 
     def test_execute_gemini_failure(self) -> None:
         """測試 Gemini 執行失敗時拋出錯誤"""
@@ -305,9 +313,10 @@ class TestGeminiExecution:
                 returncode=0
             )
 
-            result = executor._execute_gemini("Test prompt")
+            response, token_usage = executor._execute_gemini("Test prompt")
 
-            assert result == "Plain text response"
+            assert response == "Plain text response"
+            assert isinstance(token_usage, TokenUsage)
 
 
 class TestCursorExecution:
@@ -328,3 +337,84 @@ class TestCursorExecution:
 
         with pytest.raises(AgentExecutionError, match="Cursor execution not yet implemented"):
             executor.execute("Test prompt")
+
+
+class TestTokenUsageTracking:
+    """Test token usage tracking functionality."""
+
+    def test_execute_returns_token_usage(self) -> None:
+        """測試 execute 回傳 token usage 資訊"""
+        config = AgentConfig(name="Roger", cli=AgentCLI.CLAUDE)
+        executor = AgentExecutor(config)
+
+        mock_claude_output = {
+            "result": "Test response",
+            "usage": {
+                "input_tokens": 100,
+                "output_tokens": 50,
+                "cache_creation_input_tokens": 200,
+                "cache_read_input_tokens": 300
+            },
+            "total_cost_usd": 0.05
+        }
+
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(
+                stdout=str(mock_claude_output).replace("'", '"'),
+                returncode=0
+            )
+
+            response, token_usage = executor.execute("Test prompt")
+
+            assert response == "Test response"
+            assert isinstance(token_usage, TokenUsage)
+            assert token_usage.input_tokens == 100
+            assert token_usage.output_tokens == 50
+            assert token_usage.cache_creation_input_tokens == 200
+            assert token_usage.cache_read_input_tokens == 300
+            assert token_usage.total_cost_usd == 0.05
+
+    def test_execute_without_usage_data_returns_empty_token_usage(self) -> None:
+        """測試當 CLI 沒有回傳 usage 資料時，回傳空的 TokenUsage"""
+        config = AgentConfig(name="Roger", cli=AgentCLI.CLAUDE)
+        executor = AgentExecutor(config)
+
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(
+                stdout='{"result": "Response without usage"}',
+                returncode=0
+            )
+
+            response, token_usage = executor.execute("Test prompt")
+
+            assert response == "Response without usage"
+            assert isinstance(token_usage, TokenUsage)
+            assert token_usage.input_tokens == 0
+            assert token_usage.output_tokens == 0
+            assert token_usage.total_cost_usd == 0.0
+
+    def test_get_total_token_usage_sums_across_calls(self) -> None:
+        """測試 get_total_token_usage 會累計所有呼叫的 token usage"""
+        config = AgentConfig(name="Roger", cli=AgentCLI.CLAUDE)
+        executor = AgentExecutor(config)
+
+        with patch("subprocess.run") as mock_run:
+            # First call
+            mock_run.return_value = MagicMock(
+                stdout='{"result": "First", "usage": {"input_tokens": 10, "output_tokens": 5}, "total_cost_usd": 0.01}',
+                returncode=0
+            )
+            executor.execute("First prompt")
+
+            # Second call
+            mock_run.return_value = MagicMock(
+                stdout='{"result": "Second", "usage": {"input_tokens": 20, "output_tokens": 10}, "total_cost_usd": 0.02}',
+                returncode=0
+            )
+            executor.execute("Second prompt")
+
+            total_usage = executor.get_total_token_usage()
+
+            assert total_usage.input_tokens == 30
+            assert total_usage.output_tokens == 15
+            assert total_usage.total_cost_usd == 0.03
