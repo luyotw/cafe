@@ -2,11 +2,11 @@
 
 import json
 import subprocess
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from aaf.agents.executor import AgentExecutor
 from aaf.core.session import SessionManager
-from aaf.core.types import AgentConfig
+from aaf.core.types import AgentConfig, TokenUsage
 
 
 class AgentNotFoundError(Exception):
@@ -27,6 +27,7 @@ class AgentManager:
         self.session_manager = session_manager or SessionManager()
         self.agents: Dict[str, AgentExecutor] = {}
         self.current_agent_name: Optional[str] = None
+        self._total_token_usage = TokenUsage()
 
     def register_agent(self, config: AgentConfig) -> None:
         """Register an agent with configuration.
@@ -103,7 +104,16 @@ class AgentManager:
             AgentNotFoundError: If agent not found
         """
         executor = self.get_agent(agent_name)
-        return executor.execute(prompt, allowed_tools)
+        response, token_usage = executor.execute(prompt, allowed_tools)
+
+        # Accumulate token usage
+        self._total_token_usage.input_tokens += token_usage.input_tokens
+        self._total_token_usage.output_tokens += token_usage.output_tokens
+        self._total_token_usage.cache_creation_input_tokens += token_usage.cache_creation_input_tokens
+        self._total_token_usage.cache_read_input_tokens += token_usage.cache_read_input_tokens
+        self._total_token_usage.total_cost_usd += token_usage.total_cost_usd
+
+        return response
 
     def execute_current(self, prompt: str) -> str:
         """Execute prompt with current agent.
@@ -120,7 +130,25 @@ class AgentManager:
         current = self.get_current_agent()
         if current is None:
             raise AgentNotFoundError("No current agent selected")
-        return current.execute(prompt)
+
+        response, token_usage = current.execute(prompt)
+
+        # Accumulate token usage
+        self._total_token_usage.input_tokens += token_usage.input_tokens
+        self._total_token_usage.output_tokens += token_usage.output_tokens
+        self._total_token_usage.cache_creation_input_tokens += token_usage.cache_creation_input_tokens
+        self._total_token_usage.cache_read_input_tokens += token_usage.cache_read_input_tokens
+        self._total_token_usage.total_cost_usd += token_usage.total_cost_usd
+
+        return response
+
+    def get_total_token_usage(self) -> TokenUsage:
+        """Get total accumulated token usage across all agent executions.
+
+        Returns:
+            Total token usage statistics
+        """
+        return self._total_token_usage
 
     def delete_session(self, agent_name: str) -> None:
         """Delete session for an agent.

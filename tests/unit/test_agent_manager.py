@@ -129,7 +129,8 @@ class TestAgentExecution:
         manager.register_agent(config)
 
         with patch.object(AgentExecutor, "execute") as mock_execute:
-            mock_execute.return_value = "Agent response"
+            from aaf.core.types import TokenUsage
+            mock_execute.return_value = ("Agent response", TokenUsage())
 
             response = manager.execute("David", "Test prompt")
 
@@ -144,7 +145,8 @@ class TestAgentExecution:
         manager.switch_agent("Roger")
 
         with patch.object(AgentExecutor, "execute") as mock_execute:
-            mock_execute.return_value = "Current agent response"
+            from aaf.core.types import TokenUsage
+            mock_execute.return_value = ("Current agent response", TokenUsage())
 
             response = manager.execute_current("Test prompt")
 
