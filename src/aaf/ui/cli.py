@@ -316,6 +316,11 @@ def spec(
         "-c",
         help="Path to configuration file",
     ),
+    non_interactive: bool = typer.Option(
+        False,
+        "--non-interactive",
+        help="Detect if stdin is redirected and use it for input",
+    ),
 ) -> None:
     """Run specification phase: Requirements clarification with conversational generation.
 
@@ -359,14 +364,19 @@ def spec(
             console.print(f"Issue: #{issue_id}")
         console.print()
 
+        # Determine if should be interactive
+        import sys
+        is_interactive = not non_interactive and sys.stdin.isatty()
+
         # Create and execute spec phase
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
-            requirements_file=output,
+            spec_file=output,
             workflow_mode=workflow_mode,
             issue_id=issue_id,
             pm_agent=pm_agent,
+            interactive=is_interactive,
         )
 
         console.print("[bold]Starting conversational requirements generation...[/bold]")
