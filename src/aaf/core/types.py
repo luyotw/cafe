@@ -79,7 +79,7 @@ class SessionConfig(BaseModel):
 
     workflow_mode: WorkflowMode
     issue_id: Optional[str] = None
-    requirements_file: Optional[str] = None
+    spec_file: Optional[str] = None
     sessions_dir: str = ".aaf/sessions"
     issue_dir: str = ".aaf/issues"
 

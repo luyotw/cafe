@@ -54,9 +54,8 @@ class TestAgentConfig:
         """測試只提供必要欄位時可以成功建立 AgentConfig"""
         config = AgentConfig(name="Roger", cli=AgentCLI.CLAUDE)
         assert config.name == "Roger"
-        assert config.tool == AgentCLI.CLAUDE
+        assert config.cli == AgentCLI.CLAUDE
         assert config.session_id is None
-        assert config.allowed_tools == []
 
     def test_create_agent_config_full(self) -> None:
         """測試提供所有欄位時可以成功建立 AgentConfig"""
@@ -64,13 +63,10 @@ class TestAgentConfig:
             name="David",
             cli=AgentCLI.CLAUDE,
             session_id="session-123",
-            allowed_tools=["Bash(git:*)", "Read(*)"],
         )
         assert config.name == "David"
-        assert config.tool == AgentCLI.CLAUDE
+        assert config.cli == AgentCLI.CLAUDE
         assert config.session_id == "session-123"
-        assert len(config.allowed_tools) == 2
-        assert "Bash(git:*)" in config.allowed_tools
 
     def test_agent_config_validation_missing_name(self) -> None:
         """測試缺少 name 欄位時會拋出 ValidationError"""
@@ -138,7 +134,7 @@ class TestSessionConfig:
         config = SessionConfig(workflow_mode=WorkflowMode.GITHUB, issue_id="123")
         assert config.workflow_mode == WorkflowMode.GITHUB
         assert config.issue_id == "123"
-        assert config.requirements_file is None
+        assert config.spec_file is None
         assert config.sessions_dir == ".aaf/sessions"
 
     def test_create_session_config_local_mode(self) -> None:
@@ -148,7 +144,7 @@ class TestSessionConfig:
             spec_file="requirements.md",
         )
         assert config.workflow_mode == WorkflowMode.LOCAL
-        assert config.requirements_file == "requirements.md"
+        assert config.spec_file == "requirements.md"
         assert config.issue_id is None
 
     def test_create_session_config_custom_dirs(self) -> None:
