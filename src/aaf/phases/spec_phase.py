@@ -112,6 +112,30 @@ class SpecPhase(Phase):
             Phase result
         """
         try:
+            # Check if already confirmed - skip execution
+            status_file = self._get_status_file()
+            if status_file.exists():
+                with open(status_file, "r", encoding="utf-8") as f:
+                    status_data = json.load(f)
+                if status_data.get("status") == "completed" and status_data.get("status_code") == "CONFIRMED":
+                    # Already confirmed, return completed result
+                    token_usage = self.agent_manager.get_total_token_usage()
+                    return PhaseResult(
+                        status=PhaseStatus.COMPLETED,
+                        message="Spec already confirmed",
+                        data={
+                            "iterations": status_data.get("iteration", self.iteration),
+                            "status_code": PhaseStatusCode.CONFIRMED.value,
+                            "token_usage": {
+                                "input_tokens": token_usage.input_tokens,
+                                "output_tokens": token_usage.output_tokens,
+                                "cache_creation_input_tokens": token_usage.cache_creation_input_tokens,
+                                "cache_read_input_tokens": token_usage.cache_read_input_tokens,
+                                "total_cost_usd": token_usage.total_cost_usd,
+                            },
+                        },
+                    )
+
             # Validate inputs
             # Note: GitHub mode can now work without issue_id (will create new issue)
 
@@ -362,6 +386,14 @@ class SpecPhase(Phase):
                     # No valid status code found, continue iteration
                     continue
 
+        except KeyboardInterrupt:
+            # User cancelled with Ctrl+C - don't save anything
+            print("\n\n⚠️  Cancelled by user (Ctrl+C). No changes saved.")
+            return PhaseResult(
+                status=PhaseStatus.FAILED,
+                message="Cancelled by user",
+                data={"iterations": self.iteration},
+            )
         except Exception as e:
             return PhaseResult(
                 status=PhaseStatus.FAILED,
