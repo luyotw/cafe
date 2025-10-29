@@ -39,6 +39,11 @@ python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 addopts = "-v --cov=aaf --cov-report=term-missing"
+markers = [
+    "integration: Integration tests that use real components but may mock external dependencies",
+    "e2e: End-to-end tests that run the full system including CLI commands",
+    "slow: Tests that take a long time to run or cost money (e.g., LLM API calls)",
+]
 
 [tool.black]
 line-length = 100
