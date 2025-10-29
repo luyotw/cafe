@@ -122,13 +122,69 @@ class SpecPhase(Phase):
                     # Backup original spec if exists
                     self._backup_spec(spec_path)
                 else:
-                    # File doesn't exist - prompt user for initial user story
+                    # File doesn't exist - get initial user story
                     if self.interactive:
                         self._prompt_for_user_story()
+                    else:
+                        # Non-interactive mode: read user story from stdin
+                        import sys
+                        user_story = sys.stdin.read().strip()
+
+                        # Remove END marker if present
+                        if user_story.upper().endswith("END"):
+                            lines = user_story.split('\n')
+                            if lines[-1].strip().upper() == "END":
+                                user_story = '\n'.join(lines[:-1]).strip()
+
+                        if not user_story:
+                            return PhaseResult(
+                                status=PhaseStatus.FAILED,
+                                message="No user story provided in non-interactive mode",
+                                data={"iterations": 0},
+                            )
+
+                        # Create spec file with user story
+                        spec_path.write_text(user_story, encoding="utf-8")
 
             # Requirements clarification loop
             while True:
                 self.iteration += 1
+
+                # In non-interactive mode after iteration 1, read user response from stdin
+                if not self.interactive and self.iteration > 1:
+                    import sys
+                    user_response = sys.stdin.read().strip()
+
+                    # Remove END marker if present
+                    if user_response.upper().endswith("END"):
+                        lines = user_response.split('\n')
+                        if lines[-1].strip().upper() == "END":
+                            user_response = '\n'.join(lines[:-1]).strip()
+
+                    if not user_response:
+                        return PhaseResult(
+                            status=PhaseStatus.FAILED,
+                            message=f"No user response provided for iteration {self.iteration}",
+                            data={
+                                "iterations": self.iteration - 1,
+                                "last_iteration": self.iteration - 1,
+                            },
+                        )
+
+                    # Save user response to spec file
+                    self._save_user_response(user_response)
+
+                    # Save to conversation history
+                    if self.conversation_history:
+                        # Update the last iteration's user response
+                        self.conversation_history[-1]["user_response"] = user_response
+
+                        # Save iteration history for previous iteration with user response
+                        self._save_iteration_history(
+                            pm_response=self.conversation_history[-1]["pm_response"],
+                            user_response=user_response,
+                            status=PhaseStatusCode.NEED_CLARIFICATION,
+                        )
 
                 # Generate prompt for this iteration
                 prompt = self._generate_prompt()
@@ -165,10 +221,33 @@ class SpecPhase(Phase):
                     # Save progress to status.json
                     self._save_progress(status_code)
 
+                    # Get token usage statistics
+                    token_usage = self.agent_manager.get_total_token_usage()
+
+                    # Print token usage summary
+                    print()
+                    print("=" * 60)
+                    print("📊 Token Usage Summary")
+                    print("=" * 60)
+                    print(f"Input tokens:              {token_usage.input_tokens:,}")
+                    print(f"Output tokens:             {token_usage.output_tokens:,}")
+                    print(f"Cache creation tokens:     {token_usage.cache_creation_input_tokens:,}")
+                    print(f"Cache read tokens:         {token_usage.cache_read_input_tokens:,}")
+                    print(f"Total cost:                ${token_usage.total_cost_usd:.4f}")
+                    print("=" * 60)
+                    print()
+
                     result_data = {
                         "iterations": self.iteration,
                         "final_response": response,
                         "status_code": status_code.value,
+                        "token_usage": {
+                            "input_tokens": token_usage.input_tokens,
+                            "output_tokens": token_usage.output_tokens,
+                            "cache_creation_input_tokens": token_usage.cache_creation_input_tokens,
+                            "cache_read_input_tokens": token_usage.cache_read_input_tokens,
+                            "total_cost_usd": token_usage.total_cost_usd,
+                        }
                     }
 
                     # Add issue_id if GitHub mode and created new issue
@@ -179,6 +258,7 @@ class SpecPhase(Phase):
                         status=PhaseStatus.COMPLETED,
                         message=f"Requirements clarified in {self.iteration} iteration(s)",
                         data=result_data,
+                        token_usage=token_usage,
                     )
                 elif status_code == PhaseStatusCode.REJECTED:
                     return PhaseResult(
@@ -250,14 +330,33 @@ class SpecPhase(Phase):
                             "status": "NEED_CLARIFICATION",
                         })
                     else:
-                        # Non-interactive mode: save history without user response
+                        # Non-interactive mode: save PM's questions and exit
+                        # User response will be provided in next call via stdin
                         self._save_iteration_history(
                             pm_response=response,
-                            user_response="",
+                            user_response="",  # Will be filled in next call
                             status=PhaseStatusCode.NEED_CLARIFICATION,
                         )
 
-                    # Continue to next iteration
+                        # Add to conversation history (without user response for now)
+                        self.conversation_history.append({
+                            "iteration": self.iteration,
+                            "pm_response": response,
+                            "user_response": "",  # Will be filled in next call
+                            "status": "NEED_CLARIFICATION",
+                        })
+
+                        # Exit and wait for next call with user response
+                        return PhaseResult(
+                            status=PhaseStatus.IN_PROGRESS,
+                            message=f"Iteration {self.iteration}: PM asked clarification questions",
+                            data={
+                                "iterations": self.iteration,
+                                "status_code": PhaseStatusCode.NEED_CLARIFICATION.value,
+                            },
+                        )
+
+                    # Continue to next iteration (interactive mode only)
                     continue
                 else:
                     # No valid status code found, continue iteration
