@@ -202,10 +202,12 @@ class SpecPhase(Phase):
 
                 # Update conversation history in memory with new user response
                 # Note: We append a new conversation entry for the next iteration to process
+                # Mark it as from_resume so we don't ask for user input again after PM responds
                 self.conversation_history.append({
                     "iteration": self.iteration + 1,
                     "pm_response": "",  # Will be filled by next iteration
                     "user_response": user_response,
+                    "from_resume": True,  # Flag to indicate this user response came from resume
                 })
 
                 # Update context file so next iteration can see the user response
@@ -214,6 +216,12 @@ class SpecPhase(Phase):
             # Requirements clarification loop
             while True:
                 self.iteration += 1
+
+                # Check if current iteration's user response came from resume
+                is_from_resume = False
+                if self.iteration <= len(self.conversation_history):
+                    current_conv = self.conversation_history[self.iteration - 1]
+                    is_from_resume = current_conv.get("from_resume", False)
 
                 # In non-interactive mode after iteration 1, read user response from stdin
                 if not self.interactive and self.iteration > 1:
@@ -341,6 +349,32 @@ class SpecPhase(Phase):
 
                     # Save progress to status.json
                     self._save_progress(status_code)
+
+                    # If this iteration's user response came from resume, save and return
+                    # Don't ask for user input again - let next execution of aaf spec handle it
+                    if is_from_resume:
+                        # Get user response from conversation history
+                        user_response_from_resume = self.conversation_history[self.iteration - 1]["user_response"]
+
+                        # Save iteration history
+                        self._save_iteration_history(
+                            pm_response=response,
+                            user_response=user_response_from_resume,
+                            status=PhaseStatusCode.NEED_CLARIFICATION,
+                        )
+
+                        # Update the conversation entry with PM's response
+                        self.conversation_history[self.iteration - 1]["pm_response"] = response
+
+                        # Return IN_PROGRESS to indicate more clarification needed
+                        return PhaseResult(
+                            status=PhaseStatus.IN_PROGRESS,
+                            message=f"Iteration {self.iteration} completed, more clarification needed",
+                            data={
+                                "iterations": self.iteration,
+                                "status_code": status_code.value,
+                            },
+                        )
 
                     if self.interactive:
                         # Interactive mode: Display PM's questions and get user input

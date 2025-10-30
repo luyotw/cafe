@@ -735,12 +735,12 @@ class TestSkipConfirmedSpec:
 class TestResumeFromHistory:
     """Test resuming from existing history."""
 
-    def test_resume_with_completed_iteration_prompts_user(self, tmp_path: Path) -> None:
-        """測試當有已完成的 iteration 時，恢復應該顯示當前 spec 並讓用戶繼續回答"""
+    def test_resume_completes_iteration_without_extra_prompt(self, tmp_path: Path) -> None:
+        """測試恢復時：用戶輸入 + PM 回應 = 完成一輪，不應再次詢問用戶"""
         spec_file = tmp_path / "spec.md"
         # NOTE: spec file does NOT exist
 
-        # Create existing history where iteration 1 is completed (has user response)
+        # Create existing history where iteration 1 is completed
         issue_dir = tmp_path / ".aaf" / "issues" / "spec"
         history_dir = issue_dir / "spec" / "history"
         history_dir.mkdir(parents=True)
@@ -758,7 +758,8 @@ class TestResumeFromHistory:
         (history_dir / "spec.md").write_text("## 使用者故事\n測試需求\n\n## 待釐清的問題\n1. 問題一？")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = "CONFIRMED\n需求已清楚"
+        # PM returns NEED_CLARIFICATION for iteration 2
+        agent_manager.execute.return_value = "NEED_CLARIFICATION\n問題二？"
         agent_manager.get_total_token_usage.return_value = TokenUsage()
         agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
 
@@ -772,20 +773,27 @@ class TestResumeFromHistory:
             interactive=True,
         )
 
-        # Mock user input
+        # Mock user input - should only be called ONCE (for iteration 2 user response)
         mock_input = MagicMock(return_value="繼續回答")
         with patch.object(phase.display, 'get_multiline_input', mock_input):
             result = phase.execute()
 
-        # Should display current spec state
-        # Should prompt user for input (even though iteration 1 already has response)
-        mock_input.assert_called()
+        # Should prompt user ONCE for iteration 2
+        assert mock_input.call_count == 1
 
-        # Agent should be called with the new user response
-        agent_manager.execute.assert_called_once()
+        # Agent should be called ONCE for iteration 2
+        assert agent_manager.execute.call_count == 1
 
-        # Should complete successfully
-        assert result.status == PhaseStatus.COMPLETED
+        # Iteration 2 should be saved
+        iteration_002_file = history_dir / "iteration_002.json"
+        assert iteration_002_file.exists()
+        iteration_002_data = json.loads(iteration_002_file.read_text())
+        assert iteration_002_data["iteration"] == 2
+        assert iteration_002_data["user_response"] == "繼續回答"
+        assert iteration_002_data["status"] == "NEED_CLARIFICATION"
+
+        # Should return IN_PROGRESS (not COMPLETED, because still NEED_CLARIFICATION)
+        assert result.status == PhaseStatus.IN_PROGRESS
 
     def test_resume_needs_user_response_before_agent(self, tmp_path: Path) -> None:
         """測試恢復時，如果上一輪還沒回答，應該先讓用戶回答，再執行 agent"""
