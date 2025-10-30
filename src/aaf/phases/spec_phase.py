@@ -145,8 +145,8 @@ class SpecPhase(Phase):
                 if spec_path.exists():
                     # Backup original spec if exists
                     self._backup_spec(spec_path)
-                else:
-                    # File doesn't exist - get initial user story
+                elif not self.conversation_history:
+                    # File doesn't exist AND no history - get initial user story
                     if self.interactive:
                         self._prompt_for_user_story()
                     else:
@@ -169,6 +169,18 @@ class SpecPhase(Phase):
 
                         # Create spec file with user story
                         spec_path.write_text(user_story, encoding="utf-8")
+
+            # If there's existing history, show current spec state before continuing
+            if self.interactive and self.conversation_history and self.iteration > 0:
+                spec_file = self.history_dir / "spec.md"
+                if spec_file.exists():
+                    print(f"\n{'='*60}")
+                    print(f"目前的需求規格（第 {self.iteration} 輪後的狀態）")
+                    print(f"{'='*60}")
+                    print(spec_file.read_text())
+                    print(f"{'='*60}\n")
+                    print(f"即將開始第 {self.iteration + 1} 輪澄清...")
+                    print()
 
             # Requirements clarification loop
             while True:

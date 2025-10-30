@@ -732,6 +732,142 @@ class TestSkipConfirmedSpec:
         agent_manager.execute.assert_not_called()
 
 
+class TestResumeFromHistory:
+    """Test resuming from existing history."""
+
+    def test_no_initial_prompt_when_history_exists(self, tmp_path: Path) -> None:
+        """測試當有歷史記錄時，不顯示 iteration 1 的提示（即使 spec file 不存在）"""
+        spec_file = tmp_path / "spec.md"
+        # NOTE: spec file does NOT exist
+
+        # Create existing history
+        issue_dir = tmp_path / ".aaf" / "issues" / "spec"
+        history_dir = issue_dir / "spec" / "history"
+        history_dir.mkdir(parents=True)
+
+        # Create iteration history
+        import json
+        (history_dir / "iteration_001.json").write_text(json.dumps({
+            "iteration": 1,
+            "pm_response": "NEED_CLARIFICATION\n問題一？",
+            "user_response": "回答一",
+            "status": "NEED_CLARIFICATION"
+        }))
+
+        # Create current spec.md in history
+        (history_dir / "spec.md").write_text("## 使用者故事\n測試需求")
+
+        agent_manager = MagicMock(spec=AgentManager)
+        agent_manager.execute.return_value = "CONFIRMED\n需求已清楚"
+        agent_manager.get_total_token_usage.return_value = TokenUsage()
+        agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
+
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        phase = SpecPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            spec_file=str(spec_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            interactive=True,
+        )
+
+        # Capture print output
+        captured_output = []
+
+        def capture_print(*args, **kwargs):
+            captured_output.append(' '.join(str(arg) for arg in args))
+
+        with patch.object(phase.display, 'get_multiline_input', return_value="回答"), \
+             patch('builtins.print', side_effect=capture_print):
+            result = phase.execute()
+
+        output = '\n'.join(captured_output)
+
+        # Should NOT display iteration 1 prompt
+        assert "請用使用者故事格式描述你的需求" not in output
+        assert "請輸入你的使用者故事" not in output
+
+        # Should display current spec state
+        assert "目前的需求規格" in output
+        assert "測試需求" in output
+
+        # Should complete successfully
+        assert result.status == PhaseStatus.COMPLETED
+
+    def test_display_current_spec_when_resuming(self, tmp_path: Path) -> None:
+        """測試從暫存資料夾恢復時，顯示目前的 spec 狀態"""
+        spec_file = tmp_path / "spec.md"
+        spec_file.write_text("Initial spec")
+
+        # Create existing history
+        issue_dir = tmp_path / ".aaf" / "issues" / "spec"
+        history_dir = issue_dir / "spec" / "history"
+        history_dir.mkdir(parents=True)
+
+        # Create iteration history
+        import json
+        (history_dir / "iteration_001.json").write_text(json.dumps({
+            "iteration": 1,
+            "pm_response": "NEED_CLARIFICATION\n問題一？",
+            "user_response": "回答一",
+            "status": "NEED_CLARIFICATION"
+        }))
+
+        (history_dir / "iteration_002.json").write_text(json.dumps({
+            "iteration": 2,
+            "pm_response": "NEED_CLARIFICATION\n問題二？",
+            "user_response": "",
+            "status": "NEED_CLARIFICATION"
+        }))
+
+        # Create current spec.md in history
+        (history_dir / "spec.md").write_text("## 使用者故事\n測試\n\n## 待釐清的問題\n1. 問題二？")
+
+        agent_manager = MagicMock(spec=AgentManager)
+        agent_manager.execute.return_value = "CONFIRMED\n需求已清楚"
+        agent_manager.get_total_token_usage.return_value = TokenUsage()
+        agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
+
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        phase = SpecPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            spec_file=str(spec_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            interactive=True,
+        )
+
+        # Capture print output
+        from io import StringIO
+        import sys
+
+        captured_output = []
+        original_print = print
+
+        def capture_print(*args, **kwargs):
+            # Capture to our list
+            captured_output.append(' '.join(str(arg) for arg in args))
+            # Also call original print to avoid breaking the test
+            if 'file' not in kwargs:
+                kwargs['file'] = StringIO()
+
+        with patch.object(phase.display, 'get_multiline_input', return_value="回答二"), \
+             patch('builtins.print', side_effect=capture_print):
+            result = phase.execute()
+
+        output = '\n'.join(captured_output)
+
+        # Should display current spec state before continuing
+        assert "目前的需求規格" in output
+        assert "第 2 輪" in output
+        assert "問題二" in output
+
+        # Should complete successfully
+        assert result.status == PhaseStatus.COMPLETED
+
+
 class TestKeyboardInterrupt:
     """Test Ctrl+C handling."""
 
