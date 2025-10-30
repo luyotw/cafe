@@ -197,19 +197,16 @@ class SpecPhase(Phase):
                         },
                     )
 
-                # Save user response
+                # Save user response for next iteration to read
                 self._save_user_response(user_response)
 
-                # Update conversation history - add new user response to last conversation
-                last_conversation = self.conversation_history[-1]
-                last_conversation["user_response"] = user_response
-
-                # Save iteration history with user response
-                self._save_iteration_history(
-                    pm_response=last_conversation["pm_response"],
-                    user_response=user_response,
-                    status=PhaseStatusCode.NEED_CLARIFICATION,
-                )
+                # Update conversation history in memory with new user response
+                # Note: We append a new conversation entry for the next iteration to process
+                self.conversation_history.append({
+                    "iteration": self.iteration + 1,
+                    "pm_response": "",  # Will be filled by next iteration
+                    "user_response": user_response,
+                })
 
                 # Update context file so next iteration can see the user response
                 self._update_context_file()
