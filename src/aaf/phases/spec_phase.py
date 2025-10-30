@@ -170,17 +170,52 @@ class SpecPhase(Phase):
                         # Create spec file with user story
                         spec_path.write_text(user_story, encoding="utf-8")
 
-            # If there's existing history, show current spec state before continuing
+            # If there's existing history, check if last iteration needs user response
             if self.interactive and self.conversation_history and self.iteration > 0:
-                spec_file = self.history_dir / "spec.md"
-                if spec_file.exists():
-                    print(f"\n{'='*60}")
-                    print(f"目前的需求規格（第 {self.iteration} 輪後的狀態）")
-                    print(f"{'='*60}")
-                    print(spec_file.read_text())
-                    print(f"{'='*60}\n")
-                    print(f"即將開始第 {self.iteration + 1} 輪澄清...")
-                    print()
+                last_conversation = self.conversation_history[-1]
+                # If last iteration has no user response, we need to get it first
+                if not last_conversation.get("user_response"):
+                    spec_file = self.history_dir / "spec.md"
+                    if spec_file.exists():
+                        print(f"\n{'='*60}")
+                        print(f"目前的需求規格（第 {self.iteration} 輪後的狀態）")
+                        print(f"{'='*60}")
+                        print(spec_file.read_text())
+                        print(f"{'='*60}\n")
+
+                    # Get user's response to the last PM question
+                    user_response = self.display.get_multiline_input("請回答 PM 的問題")
+
+                    if user_response.strip():
+                        print()
+                        print("✅ 已收到您的回答，正在發送給 PM 處理...")
+                        print()
+                    else:
+                        print("\n⚠️  沒有輸入內容，Phase 將終止。")
+                        return PhaseResult(
+                            status=PhaseStatus.FAILED,
+                            message="User provided no response to clarification questions",
+                            data={
+                                "iterations": self.iteration,
+                                "last_response": last_conversation["pm_response"],
+                            },
+                        )
+
+                    # Save user response
+                    self._save_user_response(user_response)
+
+                    # Update conversation history
+                    last_conversation["user_response"] = user_response
+
+                    # Save iteration history with user response
+                    self._save_iteration_history(
+                        pm_response=last_conversation["pm_response"],
+                        user_response=user_response,
+                        status=PhaseStatusCode.NEED_CLARIFICATION,
+                    )
+
+                    # Update context file so next iteration can see the user response
+                    self._update_context_file()
 
             # Requirements clarification loop
             while True:

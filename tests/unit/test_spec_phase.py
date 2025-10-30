@@ -788,9 +788,66 @@ class TestResumeFromHistory:
         assert "請用使用者故事格式描述你的需求" not in output
         assert "請輸入你的使用者故事" not in output
 
-        # Should display current spec state
-        assert "目前的需求規格" in output
-        assert "測試需求" in output
+        # Since iteration 1 already has user response, it should NOT ask for user input again
+        # Just proceed to iteration 2 directly
+
+        # Should complete successfully
+        assert result.status == PhaseStatus.COMPLETED
+
+    def test_resume_needs_user_response_before_agent(self, tmp_path: Path) -> None:
+        """測試恢復時，如果上一輪還沒回答，應該先讓用戶回答，再執行 agent"""
+        spec_file = tmp_path / "spec.md"
+        # NOTE: spec file does NOT exist
+
+        # Create existing history
+        issue_dir = tmp_path / ".aaf" / "issues" / "spec"
+        history_dir = issue_dir / "spec" / "history"
+        history_dir.mkdir(parents=True)
+
+        # Create iteration history where iteration 1 has no user response yet
+        import json
+        (history_dir / "iteration_001.json").write_text(json.dumps({
+            "iteration": 1,
+            "pm_response": "NEED_CLARIFICATION\n## 使用者故事\n測試\n\n## 待釐清的問題\n1. 問題一？",
+            "user_response": "",  # No user response yet
+            "status": "NEED_CLARIFICATION"
+        }))
+
+        # Create current spec.md with PM's question
+        (history_dir / "spec.md").write_text("## 使用者故事\n測試\n\n## 待釐清的問題\n1. 問題一？")
+
+        agent_manager = MagicMock(spec=AgentManager)
+        # Agent should be called AFTER user provides response
+        agent_manager.execute.return_value = "CONFIRMED\n需求已清楚"
+        agent_manager.get_total_token_usage.return_value = TokenUsage()
+        agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
+
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        phase = SpecPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            spec_file=str(spec_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            interactive=True,
+        )
+
+        # Mock user input: user answers the question from iteration 1
+        mock_input = MagicMock(return_value="這是我的回答")
+        with patch.object(phase.display, 'get_multiline_input', mock_input):
+            result = phase.execute()
+
+        # Verify user was prompted to answer (get_multiline_input called)
+        mock_input.assert_called()
+
+        # Verify agent was called AFTER user provided response (iteration 2)
+        agent_manager.execute.assert_called_once()
+
+        # Check context.md was updated with user response
+        context_file = history_dir / "context.md"
+        assert context_file.exists()
+        context_content = context_file.read_text()
+        assert "這是我的回答" in context_content
 
         # Should complete successfully
         assert result.status == PhaseStatus.COMPLETED
