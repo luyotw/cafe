@@ -773,16 +773,31 @@ class TestResumeFromHistory:
             interactive=True,
         )
 
-        # Mock user input - should only be called ONCE (for iteration 2 user response)
-        mock_input = MagicMock(return_value="繼續回答")
+        # Mock user input:
+        # - First call: iteration 2 user response (from resume): "繼續回答"
+        # - Second call: iteration 3 user response (normal): "iteration3回答"
+        # - Third call: iteration 4 user response: "iteration4回答"
+        mock_input = MagicMock(side_effect=["繼續回答", "iteration3回答", "iteration4回答"])
+
+        # Mock agent responses:
+        # - iteration 2: NEED_CLARIFICATION (triggers continue to iteration 3)
+        # - iteration 3: NEED_CLARIFICATION (prompts user, then continues to iteration 4)
+        # - iteration 4: CONFIRMED (completes)
+        agent_manager.execute.side_effect = [
+            "NEED_CLARIFICATION\n問題二？",  # iteration 2
+            "NEED_CLARIFICATION\n問題三？",  # iteration 3
+            "CONFIRMED\n需求已清楚"  # iteration 4
+        ]
+
         with patch.object(phase.display, 'get_multiline_input', mock_input):
             result = phase.execute()
 
-        # Should prompt user ONCE for iteration 2
-        assert mock_input.call_count == 1
+        # Should prompt user TWICE (once for resume/iteration 2, once for iteration 3)
+        # Note: iteration 4 returns CONFIRMED so no third prompt
+        assert mock_input.call_count == 2
 
-        # Agent should be called ONCE for iteration 2
-        assert agent_manager.execute.call_count == 1
+        # Agent should be called THREE times (iteration 2, 3, and 4)
+        assert agent_manager.execute.call_count == 3
 
         # Iteration 2 should be saved
         iteration_002_file = history_dir / "iteration_002.json"
@@ -792,8 +807,23 @@ class TestResumeFromHistory:
         assert iteration_002_data["user_response"] == "繼續回答"
         assert iteration_002_data["status"] == "NEED_CLARIFICATION"
 
-        # Should return IN_PROGRESS (not COMPLETED, because still NEED_CLARIFICATION)
-        assert result.status == PhaseStatus.IN_PROGRESS
+        # Iteration 3 should also be saved
+        iteration_003_file = history_dir / "iteration_003.json"
+        assert iteration_003_file.exists()
+        iteration_003_data = json.loads(iteration_003_file.read_text())
+        assert iteration_003_data["iteration"] == 3
+        assert iteration_003_data["user_response"] == "iteration3回答"
+        assert iteration_003_data["status"] == "NEED_CLARIFICATION"
+
+        # Iteration 4 should be saved with CONFIRMED
+        iteration_004_file = history_dir / "iteration_004.json"
+        assert iteration_004_file.exists()
+        iteration_004_data = json.loads(iteration_004_file.read_text())
+        assert iteration_004_data["iteration"] == 4
+        assert iteration_004_data["status"] == "CONFIRMED"
+
+        # Should return COMPLETED (because iteration 4 was CONFIRMED)
+        assert result.status == PhaseStatus.COMPLETED
 
     def test_resume_needs_user_response_before_agent(self, tmp_path: Path) -> None:
         """測試恢復時，如果上一輪還沒回答，應該先讓用戶回答，再執行 agent"""

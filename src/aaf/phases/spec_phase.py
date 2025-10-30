@@ -350,8 +350,8 @@ class SpecPhase(Phase):
                     # Save progress to status.json
                     self._save_progress(status_code)
 
-                    # If this iteration's user response came from resume, save and return
-                    # Don't ask for user input again - let next execution of aaf spec handle it
+                    # If this iteration's user response came from resume, we already have it
+                    # Save the iteration and continue loop (don't ask user again for this iteration)
                     if is_from_resume:
                         # Get user response from conversation history
                         user_response_from_resume = self.conversation_history[self.iteration - 1]["user_response"]
@@ -365,16 +365,11 @@ class SpecPhase(Phase):
 
                         # Update the conversation entry with PM's response
                         self.conversation_history[self.iteration - 1]["pm_response"] = response
+                        # Clear the from_resume flag so next iteration asks for user input normally
+                        self.conversation_history[self.iteration - 1]["from_resume"] = False
 
-                        # Return IN_PROGRESS to indicate more clarification needed
-                        return PhaseResult(
-                            status=PhaseStatus.IN_PROGRESS,
-                            message=f"Iteration {self.iteration} completed, more clarification needed",
-                            data={
-                                "iterations": self.iteration,
-                                "status_code": status_code.value,
-                            },
-                        )
+                        # Continue to next iteration without asking user input
+                        continue
 
                     if self.interactive:
                         # Interactive mode: Display PM's questions and get user input
