@@ -12,7 +12,7 @@ from aaf.core.git import GitOperations
 from aaf.core.permission import PermissionHandler
 from aaf.core.types import AgentConfig, AgentCLI, WorkflowMode
 from aaf.core.workflow import Workflow
-from aaf.phases.analysis_phase import AnalysisPhase
+from aaf.phases.plan_phase import PlanPhase
 from aaf.phases.implementation_phase import ImplementationPhase
 from aaf.phases.pr_phase import PRPhase
 from aaf.phases.spec_phase import SpecPhase
@@ -115,9 +115,9 @@ def _build_workflow(
         )
     )
 
-    # Phase 2: Implementation analysis
+    # Phase 2: Implementation plan
     workflow.add_phase(
-        AnalysisPhase(
+        PlanPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             spec_file=spec_file,

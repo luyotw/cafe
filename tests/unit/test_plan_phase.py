@@ -1,25 +1,25 @@
-"""Tests for AnalysisPhase."""
+"""Tests for PlanPhase."""
 
 import pytest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from aaf.phases.analysis_phase import AnalysisPhase
+from aaf.phases.plan_phase import PlanPhase
 from aaf.agents.manager import AgentManager
 from aaf.core.status_codes import PhaseStatusCode
 from aaf.core.types import PhaseResult, PhaseStatus, WorkflowMode
 from aaf.core.permission import PermissionHandler
 
 
-class TestAnalysisPhaseBasics:
-    """Test basic AnalysisPhase functionality."""
+class TestPlanPhaseBasics:
+    """Test basic PlanPhase functionality."""
 
-    def test_init_analysis_phase(self) -> None:
-        """測試初始化 AnalysisPhase"""
+    def test_init_plan_phase(self) -> None:
+        """測試初始化 PlanPhase"""
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
 
-        phase = AnalysisPhase(
+        phase = PlanPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             spec_file="requirements.md",
@@ -36,7 +36,7 @@ class TestAnalysisPhaseBasics:
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
 
-        phase = AnalysisPhase(
+        phase = PlanPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             spec_file="requirements.md",
@@ -68,7 +68,7 @@ Implementation analysis here
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
-        phase = AnalysisPhase(
+        phase = PlanPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             spec_file=str(requirements_file),
@@ -88,7 +88,7 @@ Implementation analysis here
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
 
-        phase = AnalysisPhase(
+        phase = PlanPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             spec_file=str(requirements_file),
@@ -113,7 +113,7 @@ Implementation analysis here
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
-        phase = AnalysisPhase(
+        phase = PlanPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             spec_file=str(requirements_file),
@@ -136,7 +136,7 @@ class TestGitHubWorkflow:
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
-        phase = AnalysisPhase(
+        phase = PlanPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             spec_file="requirements.md",
@@ -159,7 +159,7 @@ class TestGitHubWorkflow:
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
-        phase = AnalysisPhase(
+        phase = PlanPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             spec_file="requirements.md",
@@ -186,7 +186,7 @@ class TestPromptGeneration:
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
-        phase = AnalysisPhase(
+        phase = PlanPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             spec_file=str(requirements_file),
@@ -213,7 +213,7 @@ class TestPromptGeneration:
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
-        phase = AnalysisPhase(
+        phase = PlanPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             spec_file=str(requirements_file),
@@ -241,7 +241,7 @@ class TestAgentSelection:
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
-        phase = AnalysisPhase(
+        phase = PlanPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             spec_file=str(requirements_file),
@@ -264,7 +264,7 @@ class TestErrorHandling:
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
 
-        phase = AnalysisPhase(
+        phase = PlanPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             spec_file="/nonexistent/requirements.md",
@@ -281,7 +281,7 @@ class TestErrorHandling:
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
 
-        phase = AnalysisPhase(
+        phase = PlanPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             spec_file="requirements.md",
@@ -304,7 +304,7 @@ class TestErrorHandling:
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
-        phase = AnalysisPhase(
+        phase = PlanPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             spec_file=str(requirements_file),
@@ -337,7 +337,7 @@ class TestDevGuideDetection:
             requirements_file = tmp_path / f"req_{formats.index(fmt)}.md"
             requirements_file.write_text(f"# Requirements\n\n{fmt}\nContent")
 
-            phase = AnalysisPhase(
+            phase = PlanPhase(
                 agent_manager=agent_manager,
                 permission_handler=permission_handler,
                 spec_file=str(requirements_file),
@@ -347,7 +347,7 @@ class TestDevGuideDetection:
             assert phase.has_dev_guide(), f"Should detect: {fmt}"
 
 
-class TestAnalysisPhaseHistory:
+class TestPlanPhaseHistory:
     """Test history recording and loading functionality (TDD)."""
 
     def test_init_creates_history_dir_and_attributes(self, tmp_path: Path) -> None:
@@ -359,7 +359,7 @@ class TestAnalysisPhaseHistory:
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
 
-        phase = AnalysisPhase(
+        phase = PlanPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             spec_file=str(spec_file),
@@ -369,7 +369,7 @@ class TestAnalysisPhaseHistory:
 
         # Should have history_dir attribute
         assert hasattr(phase, 'history_dir')
-        assert phase.history_dir == spec_file.parent.parent / "analysis" / "history"
+        assert phase.history_dir == spec_file.parent.parent / "plan" / "history"
 
         # Should have conversation_history attribute
         assert hasattr(phase, 'conversation_history')
@@ -385,7 +385,7 @@ class TestAnalysisPhaseHistory:
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
 
-        phase = AnalysisPhase(
+        phase = PlanPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             spec_file=str(spec_file),
@@ -422,7 +422,7 @@ class TestAnalysisPhaseHistory:
         spec_file.write_text("# Spec\n\n## 開發指南\nGuide")
 
         # Create history files
-        history_dir = spec_file.parent.parent / "analysis" / "history"
+        history_dir = spec_file.parent.parent / "plan" / "history"
         history_dir.mkdir(parents=True)
 
         import json
@@ -440,7 +440,7 @@ class TestAnalysisPhaseHistory:
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
 
-        phase = AnalysisPhase(
+        phase = PlanPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             spec_file=str(spec_file),
@@ -454,7 +454,7 @@ class TestAnalysisPhaseHistory:
         assert phase.iteration == 1
 
 
-class TestAnalysisPhaseProgressTracking:
+class TestPlanPhaseProgressTracking:
     """Test progress tracking functionality (TDD)."""
 
     def test_save_progress_creates_status_json(self, tmp_path: Path) -> None:
@@ -466,7 +466,7 @@ class TestAnalysisPhaseProgressTracking:
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
 
-        phase = AnalysisPhase(
+        phase = PlanPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             spec_file=str(spec_file),
@@ -484,7 +484,7 @@ class TestAnalysisPhaseProgressTracking:
         with open(status_file, 'r', encoding='utf-8') as f:
             data = json.load(f)
 
-        assert data["phase"] == "analysis"
+        assert data["phase"] == "plan"
         assert data["status"] == "in_progress"
         assert data["status_code"] == "NEED_CLARIFICATION"
         assert data["iteration"] == 2
@@ -498,7 +498,7 @@ class TestAnalysisPhaseProgressTracking:
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
 
-        phase = AnalysisPhase(
+        phase = PlanPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             spec_file=str(spec_file),

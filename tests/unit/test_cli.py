@@ -61,7 +61,7 @@ class TestBuildWorkflow:
     """Test workflow building functionality."""
 
     @patch("aaf.ui.cli.SpecPhase")
-    @patch("aaf.ui.cli.AnalysisPhase")
+    @patch("aaf.ui.cli.PlanPhase")
     @patch("aaf.ui.cli.ImplementationPhase")
     @patch("aaf.ui.cli.ReviewPhase")
     @patch("aaf.ui.cli.PRPhase")
@@ -70,7 +70,7 @@ class TestBuildWorkflow:
         mock_pr: Mock,
         mock_review: Mock,
         mock_impl: Mock,
-        mock_analysis: Mock,
+        mock_plan: Mock,
         mock_req: Mock,
         tmp_path: Path,
     ) -> None:
@@ -91,7 +91,7 @@ class TestBuildWorkflow:
 
         # 驗證所有 phase 都被建立
         mock_req.assert_called_once()
-        mock_analysis.assert_called_once()
+        mock_plan.assert_called_once()
         mock_impl.assert_called_once()
         mock_review.assert_called_once()
         mock_pr.assert_called_once()

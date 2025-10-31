@@ -1,4 +1,4 @@
-"""Tests for AnalysisPhase with status codes."""
+"""Tests for PlanPhase with status codes."""
 
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -8,11 +8,11 @@ import pytest
 from aaf.agents.manager import AgentManager
 from aaf.core.permission import PermissionHandler
 from aaf.core.types import PhaseStatus, WorkflowMode
-from aaf.phases.analysis_phase import AnalysisPhase
+from aaf.phases.plan_phase import PlanPhase
 
 
-class TestAnalysisPhaseWithStatusCodes:
-    """Test AnalysisPhase integration with status code system."""
+class TestPlanPhaseWithStatusCodes:
+    """Test PlanPhase integration with status code system."""
 
     def test_confirmed_status_code_completes_phase(self, tmp_path: Path) -> None:
         """測試 CONFIRMED 狀態碼完成 phase"""
@@ -24,7 +24,7 @@ class TestAnalysisPhaseWithStatusCodes:
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
-        phase = AnalysisPhase(
+        phase = PlanPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             spec_file=str(requirements_file),
@@ -47,7 +47,7 @@ class TestAnalysisPhaseWithStatusCodes:
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
-        phase = AnalysisPhase(
+        phase = PlanPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             spec_file=str(requirements_file),
@@ -73,7 +73,7 @@ class TestAnalysisPhaseWithStatusCodes:
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
-        phase = AnalysisPhase(
+        phase = PlanPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             spec_file=str(requirements_file),
@@ -96,7 +96,7 @@ class TestAnalysisPhaseWithStatusCodes:
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
-        phase = AnalysisPhase(
+        phase = PlanPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             spec_file=str(requirements_file),
@@ -122,7 +122,7 @@ class TestAnalysisPhaseWithStatusCodes:
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
-        phase = AnalysisPhase(
+        phase = PlanPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             spec_file=str(requirements_file),
@@ -144,7 +144,7 @@ class TestAnalysisPhaseWithStatusCodes:
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
-        phase = AnalysisPhase(
+        phase = PlanPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             spec_file=str(requirements_file),

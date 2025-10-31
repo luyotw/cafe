@@ -1,4 +1,4 @@
-"""Implementation analysis phase."""
+"""Implementation plan phase."""
 
 import json
 import re
@@ -13,8 +13,8 @@ from aaf.core.status_codes import PhaseStatusCode, StatusCodeParser, generate_st
 from aaf.core.types import PhaseProgress, PhaseResult, PhaseStatus, WorkflowMode
 
 
-class AnalysisPhase(Phase):
-    """Phase 2: Implementation analysis with developer agent."""
+class PlanPhase(Phase):
+    """Phase 2: Implementation plan with developer agent."""
 
     def __init__(
         self,
@@ -26,7 +26,7 @@ class AnalysisPhase(Phase):
         issue_name: Optional[str] = None,
         dev_agent: str = "David",
     ) -> None:
-        """Initialize analysis phase.
+        """Initialize plan phase.
 
         Args:
             agent_manager: Agent manager
@@ -53,11 +53,11 @@ class AnalysisPhase(Phase):
             spec_path = Path(spec_file)
             self.issue_name = spec_path.parent.parent.name
 
-        # History directory for analysis phase
-        # Path: .aaf/issues/{issue_name}/analysis/history
+        # History directory for plan phase
+        # Path: .aaf/issues/{issue_name}/plan/history
         spec_path = Path(self.spec_file)
         issue_dir = spec_path.parent.parent  # .aaf/issues/{issue_name}
-        self.history_dir = issue_dir / "analysis" / "history"
+        self.history_dir = issue_dir / "plan" / "history"
 
         # Track conversation history
         self.conversation_history: List[Dict[str, Any]] = []
@@ -66,7 +66,7 @@ class AnalysisPhase(Phase):
         self._load_history()
 
     def execute(self) -> PhaseResult:
-        """Execute implementation analysis phase.
+        """Execute implementation plan phase.
 
         Returns:
             Phase result
@@ -95,7 +95,7 @@ class AnalysisPhase(Phase):
                         message="需求文件中缺少「開發指南」區塊",
                     )
 
-            # Implementation analysis loop
+            # Implementation plan loop
             while True:
                 self.iteration += 1
 
@@ -119,7 +119,7 @@ class AnalysisPhase(Phase):
                 if status_code == PhaseStatusCode.CONFIRMED:
                     return PhaseResult(
                         status=PhaseStatus.COMPLETED,
-                        message=f"Implementation analysis completed in {self.iteration} iteration(s)",
+                        message=f"Implementation plan completed in {self.iteration} iteration(s)",
                         data={
                             "iterations": self.iteration,
                             "final_response": response,
@@ -129,7 +129,7 @@ class AnalysisPhase(Phase):
                 elif status_code == PhaseStatusCode.REJECTED:
                     return PhaseResult(
                         status=PhaseStatus.FAILED,
-                        message=f"Implementation analysis rejected in iteration {self.iteration}",
+                        message=f"Implementation plan rejected in iteration {self.iteration}",
                         data={
                             "iterations": self.iteration,
                             "final_response": response,
@@ -146,7 +146,7 @@ class AnalysisPhase(Phase):
         except Exception as e:
             return PhaseResult(
                 status=PhaseStatus.FAILED,
-                message=f"Analysis phase failed: {e}",
+                message=f"Plan phase failed: {e}",
             )
 
     def has_dev_guide(self) -> bool:
@@ -345,7 +345,7 @@ class AnalysisPhase(Phase):
         phase_status = PhaseStatus.COMPLETED if status_code == PhaseStatusCode.CONFIRMED else PhaseStatus.IN_PROGRESS
 
         progress = PhaseProgress(
-            phase="analysis",
+            phase="plan",
             status=phase_status,
             status_code=status_code.value,
             timestamp=datetime.now(),
