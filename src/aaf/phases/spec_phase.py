@@ -172,7 +172,7 @@ class SpecPhase(Phase):
 
             # If there's existing history, show current state and get user response before continuing
             if self.interactive and self.conversation_history and self.iteration > 0:
-                spec_file = self.history_dir / "spec.md"
+                spec_file = Path(self.spec_file)
                 if spec_file.exists():
                     print(f"\n{'='*60}")
                     print(f"目前的需求規格（第 {self.iteration} 輪後的狀態）")
@@ -373,8 +373,8 @@ class SpecPhase(Phase):
 
                     if self.interactive:
                         # Interactive mode: Display PM's questions and get user input
-                        # Read the spec file that PM agent wrote in history
-                        spec_file = self.history_dir / "spec.md"
+                        # Read the spec file
+                        spec_file = Path(self.spec_file)
                         pm_content = spec_file.read_text() if spec_file.exists() else "（檔案未產生）"
 
                         # Get CLI info for display
@@ -517,29 +517,22 @@ class SpecPhase(Phase):
             backup_path.write_text(spec_path.read_text())
 
     def _save_spec(self, response: str) -> None:
-        """Copy spec from history to target location and sync to GitHub if needed.
+        """Sync spec to GitHub if needed.
 
-        PM agent writes to history/spec.md. This method:
-        - For local mode: copies history/spec.md to spec_file
-        - For GitHub mode: syncs history/spec.md content to issue
+        PM agent writes directly to spec_file. This method:
+        - For local mode: no action needed (file already written)
+        - For GitHub mode: syncs spec_file content to issue
 
         Args:
             response: Agent response (not used, agent already wrote file)
         """
-        # Read the spec file that PM agent wrote in history
-        spec_history_file = self.history_dir / "spec.md"
-        if not spec_history_file.exists():
+        spec_path = Path(self.spec_file)
+        if not spec_path.exists():
             return  # PM hasn't written the file yet
 
-        content = spec_history_file.read_text()
-
-        if self.workflow_mode == WorkflowMode.LOCAL:
-            # Copy to the target spec file
-            spec_path = Path(self.spec_file)
-            spec_path.parent.mkdir(parents=True, exist_ok=True)
-            spec_path.write_text(content)
-        elif self.workflow_mode == WorkflowMode.GITHUB:
+        if self.workflow_mode == WorkflowMode.GITHUB:
             # Sync to GitHub issue
+            content = spec_path.read_text()
             if not self.issue_id and not hasattr(self, '_created_issue_id'):
                 # Create new issue (only once)
                 self._created_issue_id = create_github_issue(content)
@@ -670,7 +663,7 @@ class SpecPhase(Phase):
 {status_code_prompt}
 
 **如果需要澄清需求（status: NEED_CLARIFICATION）：**
-1. 使用 Write tool 將以下內容寫入 {self.history_dir / "spec.md"}：
+1. 使用 Write tool 將以下內容寫入 {self.spec_file}：
    - 「## 使用者故事」- 原始的使用者故事（保持不變，除非用戶要求變更）
    - 「## 目前的需求規格」- 列出目前已知的所有需求內容
    - 「## 待釐清的問題」- 以 PM 的身份用對話方式向用戶提問
@@ -679,7 +672,7 @@ class SpecPhase(Phase):
 記住：你是 PM，不是工程師，不要提技術細節！
 
 **如果需求已清楚（status: CONFIRMED）：**
-1. 使用 Write tool 將完整需求規格文件寫入 {self.history_dir / "spec.md"}，格式：
+1. 使用 Write tool 將完整需求規格文件寫入 {self.spec_file}，格式：
    - 「## 使用者故事」- 原始的使用者故事
    - 「## 需求規格」- 完整的需求內容，包含：功能描述、使用場景、預期行為、驗收標準
 2. 寫完檔案後，只回傳：CONFIRMED
@@ -699,7 +692,7 @@ class SpecPhase(Phase):
 {status_code_prompt}
 
 **如果需要更多資訊（status: NEED_CLARIFICATION）：**
-1. 使用 Write tool 將以下內容寫入 {self.history_dir / "spec.md"}：
+1. 使用 Write tool 將以下內容寫入 {self.spec_file}：
    - 「## 使用者故事」- 原始的使用者故事（保持不變，除非用戶要求變更）
    - 「## 目前的需求規格」- 整理目前從使用者故事得知的需求
    - 「## 待釐清的問題」- 以 PM 的身份提出具體問題（使用場景、預期行為、驗收標準）
@@ -708,7 +701,7 @@ class SpecPhase(Phase):
 記住：你是 PM，不要問技術實作問題！
 
 **如果資訊已足夠（status: CONFIRMED）：**
-1. 使用 Write tool 將完整需求文件寫入 {self.history_dir / "spec.md"}，格式：
+1. 使用 Write tool 將完整需求文件寫入 {self.spec_file}，格式：
    - 「## 使用者故事」- 原始的使用者故事
    - 「## 需求規格」- 完整的需求內容
 2. 寫完檔案後，只回傳：CONFIRMED
@@ -744,14 +737,14 @@ class SpecPhase(Phase):
 {status_code_prompt}
 {restriction}
 **如果仍需澄清（status: NEED_CLARIFICATION）：**
-1. 使用 Write tool 將以下內容寫入 {self.history_dir / "spec.md"}：
+1. 使用 Write tool 將以下內容寫入 {self.spec_file}：
    - 「## 使用者故事」- 原始的使用者故事（保持不變，除非用戶要求變更）
    - 「## 目前的需求規格」- 整合之前的對話和用戶最新回答，列出目前已知的完整需求
    - 「## 待釐清的問題」- 以 PM 的身份繼續用對話方式提問
 2. 寫完檔案後，只回傳：NEED_CLARIFICATION
 
 **如果需求已清楚（status: CONFIRMED）：**
-1. 使用 Write tool 將完整需求規格文件寫入 {self.history_dir / "spec.md"}，格式：
+1. 使用 Write tool 將完整需求規格文件寫入 {self.spec_file}，格式：
    - 「## 使用者故事」- 原始的使用者故事
    - 「## 需求規格」- 完整需求（整合所有已確認的內容）
 2. 寫完檔案後，只回傳：CONFIRMED

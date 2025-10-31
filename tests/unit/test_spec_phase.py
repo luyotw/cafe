@@ -16,10 +16,10 @@ from aaf.core.status_codes import PhaseStatusCode
 
 
 def create_mock_pm_agent(phase: SpecPhase, content: str, status_code: str = "CONFIRMED") -> Callable:
-    """Create a mock PM agent that writes to history/spec.md before returning status code.
+    """Create a mock PM agent that writes to spec.md before returning status code.
 
     Args:
-        phase: SpecPhase instance to get history_dir from
+        phase: SpecPhase instance to get spec_file from
         content: Content to write to spec.md
         status_code: Status code to return (CONFIRMED, NEED_CLARIFICATION, etc.)
 
@@ -27,8 +27,8 @@ def create_mock_pm_agent(phase: SpecPhase, content: str, status_code: str = "CON
         Mock function that can be used as agent_manager.execute side_effect
     """
     def mock_execute(agent_name: str, prompt: str, **kwargs) -> str:
-        # Write spec content to history/spec.md
-        spec_file = phase.history_dir / "spec.md"
+        # Write spec content to spec.md
+        spec_file = Path(phase.spec_file)
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text(content)
         return status_code
@@ -514,7 +514,7 @@ class TestNonInteractiveModeIteration2Plus:
             "iteration": 1
         }))
 
-        (history_dir / "spec.md").write_text("## 使用者故事\n測試\n\n## 待釐清的問題\n1. 問題一？")
+        spec_file.write_text("## 使用者故事\n測試\n\n## 待釐清的問題\n1. 問題一？")
 
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = "CONFIRMED\n需求已清楚"
@@ -575,7 +575,7 @@ class TestNonInteractiveModeIteration2Plus:
             "iteration": 1
         }))
 
-        (history_dir / "spec.md").write_text("## 使用者故事\n測試")
+        spec_file.write_text("## 使用者故事\n測試")
 
         agent_manager = MagicMock(spec=AgentManager)
         # PM needs more info
@@ -654,7 +654,7 @@ class TestNonInteractiveModeErrorHandling:
             "iteration": 1
         }))
 
-        (history_dir / "spec.md").write_text("Test")
+        spec_file.write_text("Test")
 
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -776,7 +776,7 @@ class TestResumeFromHistory:
         }))
 
         # Create current spec.md in history
-        (history_dir / "spec.md").write_text("## 使用者故事\n測試需求\n\n## 待釐清的問題\n1. 問題一？")
+        spec_file.write_text("## 使用者故事\n測試需求\n\n## 待釐清的問題\n1. 問題一？")
 
         agent_manager = MagicMock(spec=AgentManager)
         # PM returns NEED_CLARIFICATION for iteration 2
@@ -867,7 +867,7 @@ class TestResumeFromHistory:
         }))
 
         # Create current spec.md with PM's question
-        (history_dir / "spec.md").write_text("## 使用者故事\n測試\n\n## 待釐清的問題\n1. 問題一？")
+        spec_file.write_text("## 使用者故事\n測試\n\n## 待釐清的問題\n1. 問題一？")
 
         agent_manager = MagicMock(spec=AgentManager)
         # Agent should be called AFTER user provides response
@@ -933,7 +933,7 @@ class TestResumeFromHistory:
         }))
 
         # Create current spec.md in history
-        (history_dir / "spec.md").write_text("## 使用者故事\n測試\n\n## 待釐清的問題\n1. 問題二？")
+        spec_file.write_text("## 使用者故事\n測試\n\n## 待釐清的問題\n1. 問題二？")
 
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = "CONFIRMED\n需求已清楚"
