@@ -53,15 +53,14 @@ class TestLocalWorkflow:
 
     def test_execute_local_workflow_with_dev_guide(self, tmp_path: Path) -> None:
         """測試執行 local workflow 有開發指南"""
-        requirements_file = tmp_path / "requirements.md"
-        requirements_file.write_text("""# Requirements
+        spec_file = tmp_path / ".aaf" / "issues" / "test-feature" / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
+        spec_file.write_text("# Requirements\n\nSome requirements")
 
-## 開發指南
-Development guide here
-
-## 實作分析
-Implementation analysis here
-""")
+        # Create dev guide file
+        dev_guide_file = spec_file.parent.parent / "plan" / "dev_guide.md"
+        dev_guide_file.parent.mkdir(parents=True, exist_ok=True)
+        dev_guide_file.write_text("# 開發指南\n\nDevelopment guide here")
 
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = "CONFIRMED\n實作分析已完成。"
@@ -71,8 +70,9 @@ Implementation analysis here
         phase = PlanPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
-            spec_file=str(requirements_file),
+            spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
+            issue_name="test-feature",
         )
 
         result = phase.execute()
@@ -80,10 +80,45 @@ Implementation analysis here
         assert result.status == PhaseStatus.COMPLETED
         assert agent_manager.execute.called
 
-    def test_missing_dev_guide_fails(self, tmp_path: Path) -> None:
-        """測試缺少開發指南時失敗"""
-        requirements_file = tmp_path / "requirements.md"
-        requirements_file.write_text("# Requirements\n\nNo dev guide")
+    def test_missing_dev_guide_prompts_user_in_interactive_mode(self, tmp_path: Path) -> None:
+        """測試缺少開發指南時在互動模式下提示用戶輸入"""
+        spec_file = tmp_path / ".aaf" / "issues" / "test-feature" / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
+        spec_file.write_text("# Requirements\n\nNo dev guide")
+
+        agent_manager = MagicMock(spec=AgentManager)
+        agent_manager.execute.return_value = "CONFIRMED\n實作分析已完成。"
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        phase = PlanPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            spec_file=str(spec_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            issue_name="test-feature",
+            interactive=True,
+        )
+
+        # Mock user input for dev guide
+        with patch.object(phase.display, 'get_multiline_input', return_value="這是開發指南內容"):
+            result = phase.execute()
+
+        # Should create dev_guide.md file
+        dev_guide_file = spec_file.parent.parent / "plan" / "dev_guide.md"
+        assert dev_guide_file.exists()
+        content = dev_guide_file.read_text()
+        assert "開發指南" in content
+        assert "這是開發指南內容" in content
+
+        # Should proceed with execution
+        assert result.status == PhaseStatus.COMPLETED
+        assert agent_manager.execute.called
+
+    def test_missing_dev_guide_fails_in_non_interactive_mode(self, tmp_path: Path) -> None:
+        """測試缺少開發指南時在非互動模式下失敗"""
+        spec_file = tmp_path / ".aaf" / "issues" / "test-feature" / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
+        spec_file.write_text("# Requirements\n\nNo dev guide")
 
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -91,8 +126,10 @@ Implementation analysis here
         phase = PlanPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
-            spec_file=str(requirements_file),
+            spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
+            issue_name="test-feature",
+            interactive=False,
         )
 
         result = phase.execute()
@@ -102,8 +139,14 @@ Implementation analysis here
 
     def test_multiple_iterations_until_confirmed(self, tmp_path: Path) -> None:
         """測試多次迭代直到確認"""
-        requirements_file = tmp_path / "requirements.md"
-        requirements_file.write_text("# Requirements\n\n## 開發指南\nGuide")
+        spec_file = tmp_path / ".aaf" / "issues" / "test-feature" / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
+        spec_file.write_text("# Requirements")
+
+        # Create dev guide file
+        dev_guide_file = spec_file.parent.parent / "plan" / "dev_guide.md"
+        dev_guide_file.parent.mkdir(parents=True, exist_ok=True)
+        dev_guide_file.write_text("# 開發指南\n\nGuide")
 
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.side_effect = [
@@ -116,8 +159,9 @@ Implementation analysis here
         phase = PlanPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
-            spec_file=str(requirements_file),
+            spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
+            issue_name="test-feature",
         )
 
         result = phase.execute()
@@ -178,8 +222,14 @@ class TestPromptGeneration:
 
     def test_first_iteration_prompt(self, tmp_path: Path) -> None:
         """測試第一次迭代的 prompt"""
-        requirements_file = tmp_path / "requirements.md"
-        requirements_file.write_text("# Requirements\n\n## 開發指南\nGuide")
+        spec_file = tmp_path / ".aaf" / "issues" / "test-feature" / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
+        spec_file.write_text("# Requirements")
+
+        # Create dev guide file
+        dev_guide_file = spec_file.parent.parent / "plan" / "dev_guide.md"
+        dev_guide_file.parent.mkdir(parents=True, exist_ok=True)
+        dev_guide_file.write_text("# 開發指南\n\nGuide")
 
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = "CONFIRMED\n實作分析已完成。"
@@ -189,21 +239,28 @@ class TestPromptGeneration:
         phase = PlanPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
-            spec_file=str(requirements_file),
+            spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
+            issue_name="test-feature",
         )
 
         phase.execute()
 
         call_args = agent_manager.execute.call_args[0]
         prompt = call_args[1]
-        assert "requirements.md" in prompt
+        assert "spec.md" in prompt
         assert "第 1 輪" in prompt
 
     def test_subsequent_iteration_includes_history(self, tmp_path: Path) -> None:
         """測試後續迭代包含迭代資訊"""
-        requirements_file = tmp_path / "requirements.md"
-        requirements_file.write_text("# Requirements\n\n## 開發指南\nGuide")
+        spec_file = tmp_path / ".aaf" / "issues" / "test-feature" / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
+        spec_file.write_text("# Requirements")
+
+        # Create dev guide file
+        dev_guide_file = spec_file.parent.parent / "plan" / "dev_guide.md"
+        dev_guide_file.parent.mkdir(parents=True, exist_ok=True)
+        dev_guide_file.write_text("# 開發指南\n\nGuide")
 
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.side_effect = [
@@ -216,8 +273,9 @@ class TestPromptGeneration:
         phase = PlanPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
-            spec_file=str(requirements_file),
+            spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
+            issue_name="test-feature",
         )
 
         phase.execute()
@@ -233,8 +291,14 @@ class TestAgentSelection:
 
     def test_uses_dev_agent(self, tmp_path: Path) -> None:
         """測試使用 Dev agent (David)"""
-        requirements_file = tmp_path / "requirements.md"
-        requirements_file.write_text("# Requirements\n\n## 開發指南\nGuide")
+        spec_file = tmp_path / ".aaf" / "issues" / "test-feature" / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
+        spec_file.write_text("# Requirements")
+
+        # Create dev guide file
+        dev_guide_file = spec_file.parent.parent / "plan" / "dev_guide.md"
+        dev_guide_file.parent.mkdir(parents=True, exist_ok=True)
+        dev_guide_file.write_text("# 開發指南\n\nGuide")
 
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = "CONFIRMED\n實作分析已完成。"
@@ -244,8 +308,9 @@ class TestAgentSelection:
         phase = PlanPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
-            spec_file=str(requirements_file),
+            spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
+            issue_name="test-feature",
             dev_agent="David",
         )
 
@@ -296,8 +361,14 @@ class TestErrorHandling:
 
     def test_agent_execution_error_fails_phase(self, tmp_path: Path) -> None:
         """測試 agent 執行錯誤時 phase 失敗"""
-        requirements_file = tmp_path / "requirements.md"
-        requirements_file.write_text("# Requirements\n\n## 開發指南\nGuide")
+        spec_file = tmp_path / ".aaf" / "issues" / "test-feature" / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
+        spec_file.write_text("# Requirements")
+
+        # Create dev guide file
+        dev_guide_file = spec_file.parent.parent / "plan" / "dev_guide.md"
+        dev_guide_file.parent.mkdir(parents=True, exist_ok=True)
+        dev_guide_file.write_text("# 開發指南\n\nGuide")
 
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.side_effect = Exception("Agent error")
@@ -307,44 +378,15 @@ class TestErrorHandling:
         phase = PlanPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
-            spec_file=str(requirements_file),
+            spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
+            issue_name="test-feature",
         )
 
         result = phase.execute()
 
         assert result.status == PhaseStatus.FAILED
         assert "Agent error" in result.message
-
-
-class TestDevGuideDetection:
-    """Test development guide detection."""
-
-    def test_detect_dev_guide_various_formats(self, tmp_path: Path) -> None:
-        """測試偵測各種格式的開發指南"""
-        agent_manager = MagicMock(spec=AgentManager)
-        permission_handler = MagicMock(spec=PermissionHandler)
-
-        # Test different heading formats
-        formats = [
-            "## 開發指南",
-            "## Development Guide",
-            "### 開發指南",
-            "## development guide",
-        ]
-
-        for fmt in formats:
-            requirements_file = tmp_path / f"req_{formats.index(fmt)}.md"
-            requirements_file.write_text(f"# Requirements\n\n{fmt}\nContent")
-
-            phase = PlanPhase(
-                agent_manager=agent_manager,
-                permission_handler=permission_handler,
-                spec_file=str(requirements_file),
-                workflow_mode=WorkflowMode.LOCAL,
-            )
-
-            assert phase.has_dev_guide(), f"Should detect: {fmt}"
 
 
 class TestPlanPhaseHistory:

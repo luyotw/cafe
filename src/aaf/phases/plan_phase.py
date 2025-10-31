@@ -11,6 +11,7 @@ from aaf.core.permission import PermissionHandler
 from aaf.core.phase import Phase
 from aaf.core.status_codes import PhaseStatusCode, StatusCodeParser, generate_status_code_prompt
 from aaf.core.types import PhaseProgress, PhaseResult, PhaseStatus, WorkflowMode
+from aaf.ui.display import Display
 
 
 class PlanPhase(Phase):
@@ -25,6 +26,7 @@ class PlanPhase(Phase):
         issue_id: Optional[str] = None,
         issue_name: Optional[str] = None,
         dev_agent: str = "David",
+        interactive: bool = True,
     ) -> None:
         """Initialize plan phase.
 
@@ -36,6 +38,7 @@ class PlanPhase(Phase):
             issue_id: GitHub issue ID (required for github mode)
             issue_name: Issue name for history tracking (default: derived from spec_file)
             dev_agent: Developer agent name (default: David)
+            interactive: Whether to allow interactive prompts (default: True)
         """
         self.agent_manager = agent_manager
         self.permission_handler = permission_handler
@@ -43,6 +46,8 @@ class PlanPhase(Phase):
         self.workflow_mode = workflow_mode
         self.issue_id = issue_id
         self.dev_agent = dev_agent
+        self.interactive = interactive
+        self.display = Display()
         self.iteration = 0
 
         # Determine issue name for history tracking
@@ -88,12 +93,17 @@ class PlanPhase(Phase):
                         message=f"Spec file not found: {self.spec_file}",
                     )
 
-                # Check for development guide
-                if not self.has_dev_guide():
-                    return PhaseResult(
-                        status=PhaseStatus.FAILED,
-                        message="需求文件中缺少「開發指南」區塊",
-                    )
+                # Check for development guide file
+                dev_guide_path = self.history_dir.parent / "dev_guide.md"
+                if not dev_guide_path.exists():
+                    if self.interactive:
+                        # Prompt user to provide development guide
+                        self._prompt_for_dev_guide()
+                    else:
+                        return PhaseResult(
+                            status=PhaseStatus.FAILED,
+                            message="缺少開發指南文件（dev_guide.md）",
+                        )
 
             # Implementation plan loop
             while True:
@@ -148,31 +158,6 @@ class PlanPhase(Phase):
                 status=PhaseStatus.FAILED,
                 message=f"Plan phase failed: {e}",
             )
-
-    def has_dev_guide(self) -> bool:
-        """Check if requirements file has development guide section.
-
-        Returns:
-            True if development guide exists
-        """
-        req_path = Path(self.spec_file)
-        if not req_path.exists():
-            return False
-
-        content = req_path.read_text()
-        # Check for various heading formats
-        patterns = [
-            r"##\s*開發指南",
-            r"##\s*[Dd]evelopment\s+[Gg]uide",
-            r"###\s*開發指南",
-            r"###\s*[Dd]evelopment\s+[Gg]uide",
-        ]
-
-        for pattern in patterns:
-            if re.search(pattern, content, re.IGNORECASE):
-                return True
-
-        return False
 
     def _generate_prompt(self) -> str:
         """Generate prompt for current iteration.
@@ -370,3 +355,40 @@ class PlanPhase(Phase):
             data = json.load(f)
 
         return PhaseProgress.from_dict(data)
+
+    def _prompt_for_dev_guide(self) -> None:
+        """Prompt user to write development guide when it doesn't exist."""
+        print("\n" + "="*70)
+        print("請提供開發指南，說明實作方向與技術背景資訊：")
+        print("="*70)
+        print()
+        print("開發指南應該包含：")
+        print("  1. 建議的技術方案或實作方向")
+        print("  2. 相關的程式碼位置或模組說明")
+        print("  3. 需要注意的技術限制或依賴關係")
+        print("  4. 其他開發者可能不知道的背景資訊")
+        print()
+        print("範例：")
+        print("  這個功能應該在 src/core/processor.py 中實作，")
+        print("  可以參考現有的 DataProcessor 類別。")
+        print("  注意要保持與現有 API 的向後相容性。")
+        print()
+        print("="*70)
+        print("請輸入開發指南（可多行，單獨一行輸入 END 表示結束）:")
+        print()
+
+        # Get development guide using Display for better Unicode support
+        dev_guide = self.display.get_multiline_input("請輸入開發指南").strip()
+
+        if not dev_guide:
+            raise ValueError("未提供開發指南，無法繼續")
+
+        # Save development guide to plan directory
+        plan_dir = self.history_dir.parent
+        dev_guide_path = plan_dir / "dev_guide.md"
+        dev_guide_path.parent.mkdir(parents=True, exist_ok=True)
+        dev_guide_path.write_text(f"# 開發指南\n\n{dev_guide}\n")
+
+        print()
+        print("✅ 開發指南已記錄，開始實作規劃...")
+        print()
