@@ -76,7 +76,7 @@ class Display:
 
         # Display prompt
         print(f"\033[1m{prompt}\033[0m")
-        print(f"\033[2m（按 Enter 送出，Alt+Enter 換行）\033[0m")
+        print(f"\033[2m（按 Enter 送出，Shift+Enter 或 Alt+Enter 換行）\033[0m")
 
         # Create key bindings
         kb = KeyBindings()
@@ -99,8 +99,13 @@ class Display:
                 sys.stdout.write('\a')
                 sys.stdout.flush()
 
-        @kb.add('escape', 'enter')  # Alt+Enter adds newline
+        @kb.add('c-j')  # Shift+Enter sends \n which is Ctrl+J in terminal codes
         def _(event):
+            """Shift+Enter - insert newline."""
+            event.current_buffer.insert_text('\n')
+
+        @kb.add('escape', 'enter')  # Alt+Enter adds newline
+        def handle_alt_enter(event):
             """Alt+Enter - insert newline."""
             event.current_buffer.insert_text('\n')
 
@@ -111,6 +116,9 @@ class Display:
                 ' ',  # Simple prompt
                 multiline=False,
                 key_bindings=kb,
+                enable_open_in_editor=False,
+                enable_system_prompt=False,
+                enable_suspend=False,
             )
             return user_input.strip()
 
