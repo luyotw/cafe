@@ -32,6 +32,14 @@ class PhaseStatus(str, Enum):
     SKIPPED = "skipped"
 
 
+class SpecRigor(str, Enum):
+    """Specification rigor level."""
+
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+
+
 class PermissionAction(str, Enum):
     """User action on permission request."""
 

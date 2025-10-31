@@ -58,6 +58,7 @@ class SpecPhase(Phase):
         pm_agent: str = "Roger",
         interactive: bool = True,
         issue_name: Optional[str] = None,
+        rigor: Optional["SpecRigor"] = None,
     ) -> None:
         """Initialize requirements phase.
 
@@ -70,7 +71,10 @@ class SpecPhase(Phase):
             pm_agent: PM agent name (default: Roger)
             interactive: Enable interactive mode for user input (default: True)
             issue_name: Issue name for history tracking (default: derived from spec_file)
+            rigor: Specification rigor level (default: medium)
         """
+        from aaf.core.types import SpecRigor
+
         self.agent_manager = agent_manager
         self.permission_handler = permission_handler
         self.spec_file = spec_file
@@ -78,6 +82,7 @@ class SpecPhase(Phase):
         self.issue_id = issue_id
         self.pm_agent = pm_agent
         self.interactive = interactive
+        self.rigor = rigor or SpecRigor.MEDIUM
         self.iteration = 0
 
         # Determine issue name for history tracking
@@ -629,6 +634,37 @@ class SpecPhase(Phase):
             },
         )
 
+    def _get_rigor_guidelines(self) -> str:
+        """Get rigor level guidelines for PM.
+
+        Returns:
+            Rigor guidelines string
+        """
+        from aaf.core.types import SpecRigor
+
+        if self.rigor == SpecRigor.LOW:
+            return """**嚴謹程度：低（快速開發）**
+- 只詢問最關鍵的資訊（核心功能是什麼）
+- 不追問細節，可以讓開發者自行判斷的就不問
+- 允許一些模糊地帶，相信開發者會做出合理選擇
+- 如果使用者故事基本清楚，就可以確認
+- 目標：快速進入開發，邊做邊調整"""
+        elif self.rigor == SpecRigor.HIGH:
+            return """**嚴謹程度：高（精確規格）**
+- 詳細詢問所有細節（包括邊界情況、錯誤處理、特殊場景）
+- 確保每個功能的輸入、輸出、行為都有明確定義
+- 追問驗收標準，確保需求可測試
+- 不允許任何模糊或「看情況」的描述
+- 必須達到可以直接編寫測試案例的程度
+- 目標：規格越清楚越好，減少後續溝通成本"""
+        else:  # MEDIUM (default)
+            return """**嚴謹程度：中（平衡模式）**
+- 詢問重要的細節和關鍵場景
+- 對於明顯需要澄清的地方提問，但不過度追問小細節
+- 確保主要功能和預期行為清楚
+- 對於次要細節可以接受合理的彈性
+- 目標：在速度和精確度之間取得平衡"""
+
     def _generate_local_prompt(self) -> str:
         """Generate prompt for local workflow.
 
@@ -637,6 +673,7 @@ class SpecPhase(Phase):
         """
         non_technical = self._get_non_technical_guidelines()
         status_code_prompt = self._get_status_code_prompt()
+        rigor_guidelines = self._get_rigor_guidelines()
 
         # Check if spec file exists
         spec_path = Path(self.spec_file)
@@ -657,6 +694,8 @@ class SpecPhase(Phase):
 1. 仔細閱讀需求文件，找出所有不清楚、模糊、可能讓開發者自己腦補的地方
 2. **以 PM 的身份**用對話方式向用戶提問，確認所有必要資訊
 3. 如果需求已經很清楚，就說清楚了，不要硬湊問題
+
+{rigor_guidelines}
 
 {non_technical}
 
@@ -686,6 +725,8 @@ class SpecPhase(Phase):
 你不是軟體工程師，你的工作是確保需求清楚。
 
 這是第 {self.iteration} 輪需求澄清。
+
+{rigor_guidelines}
 
 {non_technical}
 
@@ -732,6 +773,8 @@ class SpecPhase(Phase):
 
 這是第 {self.iteration} 輪需求澄清。請檢查需求文件的最新版本。
 {context_reference}
+{rigor_guidelines}
+
 {non_technical}
 
 {status_code_prompt}

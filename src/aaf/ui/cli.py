@@ -309,6 +309,12 @@ def spec(
         "--pm",
         help="PM agent name",
     ),
+    rigor: str = typer.Option(
+        "medium",
+        "--rigor",
+        "-r",
+        help="Specification rigor level: low, medium, or high",
+    ),
     config_file: str = typer.Option(
         ".aaf/config.yaml",
         "--config",
@@ -341,6 +347,9 @@ def spec(
 
         # Use custom PM agent
         aaf spec my-feature --pm CustomPM
+
+        # Specify rigor level
+        aaf spec my-feature --rigor low
     """
     try:
         # Validate mode
@@ -348,6 +357,14 @@ def spec(
             workflow_mode = WorkflowMode(mode)
         except ValueError:
             console.print(f"[red]Error: Invalid mode '{mode}'. Use 'local' or 'github'.[/red]")
+            raise typer.Exit(1)
+
+        # Validate rigor
+        try:
+            from aaf.core.types import SpecRigor
+            spec_rigor = SpecRigor(rigor)
+        except ValueError:
+            console.print(f"[red]Error: Invalid rigor '{rigor}'. Use 'low', 'medium', or 'high'.[/red]")
             raise typer.Exit(1)
 
         # Build spec file path: .aaf/issues/{issue-name}/spec/spec.md
@@ -368,6 +385,7 @@ def spec(
         console.print(f"Mode: {workflow_mode.value}")
         console.print(f"Issue: {issue_name}")
         console.print(f"PM Agent: {pm_agent}")
+        console.print(f"Rigor: {spec_rigor.value}")
         if workflow_mode == WorkflowMode.LOCAL:
             console.print(f"Spec file: {spec_file}")
         elif issue_id:
@@ -387,6 +405,7 @@ def spec(
             issue_id=issue_id,
             pm_agent=pm_agent,
             interactive=is_interactive,
+            rigor=spec_rigor,
         )
 
         console.print("[bold]Starting conversational spec generation...[/bold]")
