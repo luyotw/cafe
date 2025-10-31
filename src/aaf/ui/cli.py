@@ -287,9 +287,9 @@ def version() -> None:
 
 @app.command()
 def spec(
-    spec_file: str = typer.Argument(
-        "spec.md",
-        help="Specification file path (local mode)",
+    issue_name: str = typer.Argument(
+        ...,
+        help="Issue name (will be saved to .aaf/issues/{issue-name}/spec/spec.md)",
     ),
     mode: str = typer.Option(
         "local",
@@ -326,20 +326,20 @@ def spec(
     a complete specification document. No technical details will be discussed.
 
     Examples:
-        # Generate spec through conversation (local, default spec.md)
-        aaf spec
+        # Generate spec through conversation for "user-auth" issue
+        aaf spec user-auth
 
-        # Generate spec with custom file name
-        aaf spec myfeature.md
+        # Generate spec for "new-feature" issue
+        aaf spec new-feature
 
         # Create new GitHub issue with spec
-        aaf spec -m github
+        aaf spec my-feature -m github
 
         # Update existing GitHub issue
-        aaf spec -m github -i 123
+        aaf spec my-feature -m github -i 123
 
         # Use custom PM agent
-        aaf spec custom.md --pm CustomPM
+        aaf spec my-feature --pm CustomPM
     """
     try:
         # Validate mode
@@ -348,6 +348,13 @@ def spec(
         except ValueError:
             console.print(f"[red]Error: Invalid mode '{mode}'. Use 'local' or 'github'.[/red]")
             raise typer.Exit(1)
+
+        # Build spec file path: .aaf/issues/{issue-name}/spec/spec.md
+        spec_file = f".aaf/issues/{issue_name}/spec/spec.md"
+
+        # Create directory if it doesn't exist
+        spec_dir = Path(spec_file).parent
+        spec_dir.mkdir(parents=True, exist_ok=True)
 
         # Initialize components
         config_dir = str(Path(config_file).parent) if config_file != ".aaf/config.yaml" else ".aaf"
@@ -358,11 +365,12 @@ def spec(
         # Display start message
         console.print("[bold blue]🎯 Spec Phase: Specification Clarification[/bold blue]")
         console.print(f"Mode: {workflow_mode.value}")
+        console.print(f"Issue: {issue_name}")
         console.print(f"PM Agent: {pm_agent}")
         if workflow_mode == WorkflowMode.LOCAL:
             console.print(f"Spec file: {spec_file}")
         elif issue_id:
-            console.print(f"Issue: #{issue_id}")
+            console.print(f"GitHub Issue: #{issue_id}")
         console.print()
 
         # Determine if should be interactive
@@ -410,9 +418,9 @@ def spec(
 
 @app.command()
 def plan(
-    spec_file: str = typer.Argument(
-        ".aaf/issues/*/spec/spec.md",
-        help="Specification file path",
+    issue_name: str = typer.Argument(
+        ...,
+        help="Issue name (reads spec from .aaf/issues/{issue-name}/spec/spec.md)",
     ),
     mode: str = typer.Option(
         "local",
@@ -444,14 +452,17 @@ def plan(
     implementation plan with technical considerations and development guide.
 
     Examples:
-        # Analyze spec and create plan (local mode)
-        aaf plan .aaf/issues/my-feature/spec/spec.md
+        # Analyze spec and create plan for "user-auth" issue
+        aaf plan user-auth
+
+        # Analyze spec for "new-feature" issue
+        aaf plan new-feature
 
         # Analyze GitHub issue and create plan
-        aaf plan -m github -i 123
+        aaf plan my-feature -m github -i 123
 
         # Use custom developer agent
-        aaf plan spec.md --dev CustomDev
+        aaf plan my-feature --dev CustomDev
     """
     try:
         # Validate mode
@@ -459,6 +470,15 @@ def plan(
             workflow_mode = WorkflowMode(mode)
         except ValueError:
             console.print(f"[red]Error: Invalid mode '{mode}'. Use 'local' or 'github'.[/red]")
+            raise typer.Exit(1)
+
+        # Build spec file path: .aaf/issues/{issue-name}/spec/spec.md
+        spec_file = f".aaf/issues/{issue_name}/spec/spec.md"
+
+        # Check if spec file exists
+        if not Path(spec_file).exists():
+            console.print(f"[red]Error: Spec file not found: {spec_file}[/red]")
+            console.print(f"[dim]Hint: Run 'aaf spec {issue_name}' first to create the specification.[/dim]")
             raise typer.Exit(1)
 
         # Initialize components
@@ -470,11 +490,12 @@ def plan(
         # Display start message
         console.print("[bold blue]📋 Plan Phase: Implementation Planning[/bold blue]")
         console.print(f"Mode: {workflow_mode.value}")
+        console.print(f"Issue: {issue_name}")
         console.print(f"Developer Agent: {dev_agent}")
         if workflow_mode == WorkflowMode.LOCAL:
             console.print(f"Spec file: {spec_file}")
         elif issue_id:
-            console.print(f"Issue: #{issue_id}")
+            console.print(f"GitHub Issue: #{issue_id}")
         console.print()
 
         # Create and execute plan phase
