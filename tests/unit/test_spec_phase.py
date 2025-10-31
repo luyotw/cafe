@@ -681,6 +681,8 @@ class TestInteractiveModeStillWorks:
 
     def test_interactive_mode_single_iteration(self, tmp_path: Path) -> None:
         """互動模式：單次確認"""
+        from aaf.core.types import SpecRigor
+
         spec_file = tmp_path / ".aaf" / "issues" / "test-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("需求已清楚")
@@ -698,6 +700,7 @@ class TestInteractiveModeStillWorks:
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=True,  # Interactive mode
+            rigor=SpecRigor.MEDIUM,  # Explicitly set rigor to avoid prompting
         )
 
         with patch('builtins.print'):

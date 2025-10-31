@@ -82,7 +82,15 @@ class SpecPhase(Phase):
         self.issue_id = issue_id
         self.pm_agent = pm_agent
         self.interactive = interactive
-        self.rigor = rigor or SpecRigor.MEDIUM
+
+        # Track if rigor was explicitly set (for interactive prompting)
+        if rigor is not None:
+            self.rigor = rigor
+            self._rigor_explicitly_set = True
+        else:
+            self.rigor = SpecRigor.MEDIUM  # Default, will prompt if interactive
+            self._rigor_explicitly_set = False
+
         self.iteration = 0
 
         # Determine issue name for history tracking
@@ -117,6 +125,10 @@ class SpecPhase(Phase):
             Phase result
         """
         try:
+            # Ask for rigor level if interactive and not set
+            if self.interactive and self.iteration == 0:
+                self._prompt_for_rigor()
+
             # Check if already confirmed - skip execution
             status_file = self._get_status_file()
             if status_file.exists():
@@ -474,6 +486,54 @@ class SpecPhase(Phase):
                 status=PhaseStatus.FAILED,
                 message=f"Requirements phase failed: {e}",
             )
+
+    def _prompt_for_rigor(self) -> None:
+        """Prompt user to select rigor level if not already set."""
+        from aaf.core.types import SpecRigor
+
+        # Check if rigor is already explicitly set (not default)
+        # We only prompt if it's still at default value
+        if self._rigor_explicitly_set:
+            return
+
+        print("\n" + "="*70)
+        print("請選擇規格嚴謹程度：")
+        print("="*70)
+        print()
+        print("1. Low (低) - 快速開發模式")
+        print("   • 只問最關鍵的資訊")
+        print("   • 允許模糊地帶，讓開發者自行判斷")
+        print("   • 適合：快速原型、MVP、內部工具")
+        print()
+        print("2. Medium (中) - 平衡模式 [預設]")
+        print("   • 詢問重要細節和關鍵場景")
+        print("   • 在速度和精確度間取得平衡")
+        print("   • 適合：一般功能開發")
+        print()
+        print("3. High (高) - 精確規格模式")
+        print("   • 詳細詢問所有細節和邊界情況")
+        print("   • 確保需求可測試、無模糊")
+        print("   • 適合：核心功能、API 設計、對外產品")
+        print()
+        print("="*70)
+
+        while True:
+            choice = input("請選擇 (1-3, 直接按 Enter 使用預設值 2): ").strip()
+
+            if choice == "" or choice == "2":
+                self.rigor = SpecRigor.MEDIUM
+                print(f"✓ 已選擇：Medium (中) - 平衡模式\n")
+                break
+            elif choice == "1":
+                self.rigor = SpecRigor.LOW
+                print(f"✓ 已選擇：Low (低) - 快速開發模式\n")
+                break
+            elif choice == "3":
+                self.rigor = SpecRigor.HIGH
+                print(f"✓ 已選擇：High (高) - 精確規格模式\n")
+                break
+            else:
+                print("❌ 無效選擇，請輸入 1, 2, 或 3")
 
     def _prompt_for_user_story(self) -> None:
         """Prompt user to write initial user story when no requirements file exists."""

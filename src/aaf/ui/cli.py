@@ -309,11 +309,11 @@ def spec(
         "--pm",
         help="PM agent name",
     ),
-    rigor: str = typer.Option(
-        "medium",
+    rigor: Optional[str] = typer.Option(
+        None,
         "--rigor",
         "-r",
-        help="Specification rigor level: low, medium, or high",
+        help="Specification rigor level: low, medium, or high (will prompt if not specified)",
     ),
     config_file: str = typer.Option(
         ".aaf/config.yaml",
@@ -359,13 +359,15 @@ def spec(
             console.print(f"[red]Error: Invalid mode '{mode}'. Use 'local' or 'github'.[/red]")
             raise typer.Exit(1)
 
-        # Validate rigor
-        try:
-            from aaf.core.types import SpecRigor
-            spec_rigor = SpecRigor(rigor)
-        except ValueError:
-            console.print(f"[red]Error: Invalid rigor '{rigor}'. Use 'low', 'medium', or 'high'.[/red]")
-            raise typer.Exit(1)
+        # Validate rigor (if specified)
+        spec_rigor = None
+        if rigor:
+            try:
+                from aaf.core.types import SpecRigor
+                spec_rigor = SpecRigor(rigor)
+            except ValueError:
+                console.print(f"[red]Error: Invalid rigor '{rigor}'. Use 'low', 'medium', or 'high'.[/red]")
+                raise typer.Exit(1)
 
         # Build spec file path: .aaf/issues/{issue-name}/spec/spec.md
         spec_file = f".aaf/issues/{issue_name}/spec/spec.md"
@@ -385,7 +387,8 @@ def spec(
         console.print(f"Mode: {workflow_mode.value}")
         console.print(f"Issue: {issue_name}")
         console.print(f"PM Agent: {pm_agent}")
-        console.print(f"Rigor: {spec_rigor.value}")
+        if spec_rigor:
+            console.print(f"Rigor: {spec_rigor.value}")
         if workflow_mode == WorkflowMode.LOCAL:
             console.print(f"Spec file: {spec_file}")
         elif issue_id:
