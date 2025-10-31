@@ -1,14 +1,16 @@
 """Implementation analysis phase."""
 
+import json
 import re
+from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional, Dict, Any
 
 from aaf.agents.manager import AgentManager
 from aaf.core.permission import PermissionHandler
 from aaf.core.phase import Phase
 from aaf.core.status_codes import PhaseStatusCode, StatusCodeParser, generate_status_code_prompt
-from aaf.core.types import PhaseResult, PhaseStatus, WorkflowMode
+from aaf.core.types import PhaseProgress, PhaseResult, PhaseStatus, WorkflowMode
 
 
 class AnalysisPhase(Phase):
@@ -21,6 +23,7 @@ class AnalysisPhase(Phase):
         spec_file: str,
         workflow_mode: WorkflowMode,
         issue_id: Optional[str] = None,
+        issue_name: Optional[str] = None,
         dev_agent: str = "David",
     ) -> None:
         """Initialize analysis phase.
@@ -31,6 +34,7 @@ class AnalysisPhase(Phase):
             spec_file: Path to spec file
             workflow_mode: Workflow mode (local or github)
             issue_id: GitHub issue ID (required for github mode)
+            issue_name: Issue name for history tracking (default: derived from spec_file)
             dev_agent: Developer agent name (default: David)
         """
         self.agent_manager = agent_manager
@@ -40,6 +44,26 @@ class AnalysisPhase(Phase):
         self.issue_id = issue_id
         self.dev_agent = dev_agent
         self.iteration = 0
+
+        # Determine issue name for history tracking
+        if issue_name:
+            self.issue_name = issue_name
+        else:
+            # Derive from spec_file path: .aaf/issues/{issue_name}/spec/spec.md
+            spec_path = Path(spec_file)
+            self.issue_name = spec_path.parent.parent.name
+
+        # History directory for analysis phase
+        # Path: .aaf/issues/{issue_name}/analysis/history
+        spec_path = Path(self.spec_file)
+        issue_dir = spec_path.parent.parent  # .aaf/issues/{issue_name}
+        self.history_dir = issue_dir / "analysis" / "history"
+
+        # Track conversation history
+        self.conversation_history: List[Dict[str, Any]] = []
+
+        # Load existing history if available (will create dir if needed)
+        self._load_history()
 
     def execute(self) -> PhaseResult:
         """Execute implementation analysis phase.
@@ -257,3 +281,92 @@ class AnalysisPhase(Phase):
 回應確認訊息。
 """
 
+
+    def _save_history(
+        self,
+        prompt: str,
+        response: str,
+        status_code: PhaseStatusCode,
+    ) -> None:
+        """Save iteration history to JSON file.
+
+        Args:
+            prompt: The prompt sent to agent
+            response: The agent's response
+            status_code: Status code from response
+        """
+        # Create history directory if it doesn't exist
+        self.history_dir.mkdir(parents=True, exist_ok=True)
+
+        history_file = self.history_dir / f"{self.iteration:03d}.json"
+
+        history_data = {
+            "iteration": self.iteration,
+            "timestamp": datetime.now().isoformat(),
+            "dev_agent": self.dev_agent,
+            "prompt": prompt,
+            "response": response,
+            "status_code": status_code.value,
+        }
+
+        with open(history_file, 'w', encoding='utf-8') as f:
+            json.dump(history_data, f, ensure_ascii=False, indent=2)
+
+        # Add to conversation history in memory
+        self.conversation_history.append(history_data)
+
+    def _load_history(self) -> None:
+        """Load existing history from JSON files."""
+        if not self.history_dir.exists():
+            return
+
+        # Load all history files in order
+        history_files = sorted(self.history_dir.glob("*.json"))
+
+        for history_file in history_files:
+            with open(history_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            self.conversation_history.append(data)
+
+            # Update iteration counter
+            if data["iteration"] >= self.iteration:
+                self.iteration = data["iteration"]
+
+    def _save_progress(self, status_code: PhaseStatusCode) -> None:
+        """Save phase progress to status.json.
+
+        Args:
+            status_code: Phase status code (CONFIRMED, NEED_CLARIFICATION, etc.)
+        """
+        status_file = self.history_dir.parent / "status.json"
+        status_file.parent.mkdir(parents=True, exist_ok=True)
+
+        # Determine phase status
+        phase_status = PhaseStatus.COMPLETED if status_code == PhaseStatusCode.CONFIRMED else PhaseStatus.IN_PROGRESS
+
+        progress = PhaseProgress(
+            phase="analysis",
+            status=phase_status,
+            status_code=status_code.value,
+            timestamp=datetime.now(),
+            iteration=self.iteration,
+            message=f"Phase completed with {status_code.value}" if phase_status == PhaseStatus.COMPLETED else f"Iteration {self.iteration}",
+        )
+
+        with open(status_file, 'w', encoding='utf-8') as f:
+            json.dump(progress.to_dict(), f, ensure_ascii=False, indent=2)
+
+    def _load_progress(self) -> Optional[PhaseProgress]:
+        """Load phase progress from status.json.
+
+        Returns:
+            PhaseProgress if file exists, None otherwise
+        """
+        status_file = self.history_dir.parent / "status.json"
+        if not status_file.exists():
+            return None
+
+        with open(status_file, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+
+        return PhaseProgress.from_dict(data)
