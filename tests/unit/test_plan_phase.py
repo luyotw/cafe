@@ -57,10 +57,10 @@ class TestLocalWorkflow:
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements\n\nSome requirements")
 
-        # Create dev guide file
-        dev_guide_file = spec_file.parent.parent / "plan" / "dev_guide.md"
-        dev_guide_file.parent.mkdir(parents=True, exist_ok=True)
-        dev_guide_file.write_text("# 開發指南\n\nDevelopment guide here")
+        # Create plan.md with dev guide section
+        plan_file = spec_file.parent.parent / "plan" / "plan.md"
+        plan_file.parent.mkdir(parents=True, exist_ok=True)
+        plan_file.write_text("## 開發指南\n\nDevelopment guide here")
 
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = "CONFIRMED\n實作分析已完成。"
@@ -103,11 +103,11 @@ class TestLocalWorkflow:
         with patch.object(phase.display, 'get_multiline_input', return_value="這是開發指南內容"):
             result = phase.execute()
 
-        # Should create dev_guide.md file
-        dev_guide_file = spec_file.parent.parent / "plan" / "dev_guide.md"
-        assert dev_guide_file.exists()
-        content = dev_guide_file.read_text()
-        assert "開發指南" in content
+        # Should create plan.md with dev guide section
+        plan_file = spec_file.parent.parent / "plan" / "plan.md"
+        assert plan_file.exists()
+        content = plan_file.read_text()
+        assert "## 開發指南" in content
         assert "這是開發指南內容" in content
 
         # Should proceed with execution
@@ -144,9 +144,9 @@ class TestLocalWorkflow:
         spec_file.write_text("# Requirements")
 
         # Create dev guide file
-        dev_guide_file = spec_file.parent.parent / "plan" / "dev_guide.md"
-        dev_guide_file.parent.mkdir(parents=True, exist_ok=True)
-        dev_guide_file.write_text("# 開發指南\n\nGuide")
+        plan_file = spec_file.parent.parent / "plan" / "plan.md"
+        plan_file.parent.mkdir(parents=True, exist_ok=True)
+        plan_file.write_text("## 開發指南\n\nGuide")
 
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.side_effect = [
@@ -227,9 +227,9 @@ class TestPromptGeneration:
         spec_file.write_text("# Requirements")
 
         # Create dev guide file
-        dev_guide_file = spec_file.parent.parent / "plan" / "dev_guide.md"
-        dev_guide_file.parent.mkdir(parents=True, exist_ok=True)
-        dev_guide_file.write_text("# 開發指南\n\nGuide")
+        plan_file = spec_file.parent.parent / "plan" / "plan.md"
+        plan_file.parent.mkdir(parents=True, exist_ok=True)
+        plan_file.write_text("## 開發指南\n\nGuide")
 
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = "CONFIRMED\n實作分析已完成。"
@@ -258,9 +258,9 @@ class TestPromptGeneration:
         spec_file.write_text("# Requirements")
 
         # Create dev guide file
-        dev_guide_file = spec_file.parent.parent / "plan" / "dev_guide.md"
-        dev_guide_file.parent.mkdir(parents=True, exist_ok=True)
-        dev_guide_file.write_text("# 開發指南\n\nGuide")
+        plan_file = spec_file.parent.parent / "plan" / "plan.md"
+        plan_file.parent.mkdir(parents=True, exist_ok=True)
+        plan_file.write_text("## 開發指南\n\nGuide")
 
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.side_effect = [
@@ -296,9 +296,9 @@ class TestAgentSelection:
         spec_file.write_text("# Requirements")
 
         # Create dev guide file
-        dev_guide_file = spec_file.parent.parent / "plan" / "dev_guide.md"
-        dev_guide_file.parent.mkdir(parents=True, exist_ok=True)
-        dev_guide_file.write_text("# 開發指南\n\nGuide")
+        plan_file = spec_file.parent.parent / "plan" / "plan.md"
+        plan_file.parent.mkdir(parents=True, exist_ok=True)
+        plan_file.write_text("## 開發指南\n\nGuide")
 
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = "CONFIRMED\n實作分析已完成。"
@@ -366,9 +366,9 @@ class TestErrorHandling:
         spec_file.write_text("# Requirements")
 
         # Create dev guide file
-        dev_guide_file = spec_file.parent.parent / "plan" / "dev_guide.md"
-        dev_guide_file.parent.mkdir(parents=True, exist_ok=True)
-        dev_guide_file.write_text("# 開發指南\n\nGuide")
+        plan_file = spec_file.parent.parent / "plan" / "plan.md"
+        plan_file.parent.mkdir(parents=True, exist_ok=True)
+        plan_file.write_text("## 開發指南\n\nGuide")
 
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.side_effect = Exception("Agent error")
@@ -399,9 +399,9 @@ class TestPlanPhaseHistory:
         spec_file.write_text("# Requirements")
 
         # Create dev guide file
-        dev_guide_file = spec_file.parent.parent / "plan" / "dev_guide.md"
-        dev_guide_file.parent.mkdir(parents=True, exist_ok=True)
-        dev_guide_file.write_text("# 開發指南\n\nGuide")
+        plan_file = spec_file.parent.parent / "plan" / "plan.md"
+        plan_file.parent.mkdir(parents=True, exist_ok=True)
+        plan_file.write_text("## 開發指南\n\nGuide")
 
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.side_effect = [
@@ -443,9 +443,9 @@ class TestPlanPhaseHistory:
         spec_file.write_text("# Requirements")
 
         # Create dev guide file
-        dev_guide_file = spec_file.parent.parent / "plan" / "dev_guide.md"
-        dev_guide_file.parent.mkdir(parents=True, exist_ok=True)
-        dev_guide_file.write_text("# 開發指南\n\nGuide")
+        plan_file = spec_file.parent.parent / "plan" / "plan.md"
+        plan_file.parent.mkdir(parents=True, exist_ok=True)
+        plan_file.write_text("## 開發指南\n\nGuide")
 
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = "CONFIRMED\n實作分析已完成。"
@@ -481,9 +481,9 @@ class TestPlanPhaseHistory:
         spec_file.write_text("# Requirements")
 
         # Create dev guide file
-        dev_guide_file = spec_file.parent.parent / "plan" / "dev_guide.md"
-        dev_guide_file.parent.mkdir(parents=True, exist_ok=True)
-        dev_guide_file.write_text("# 開發指南\n\nGuide")
+        plan_file = spec_file.parent.parent / "plan" / "plan.md"
+        plan_file.parent.mkdir(parents=True, exist_ok=True)
+        plan_file.write_text("## 開發指南\n\nGuide")
 
         # Mock agent to write plan.md file
         def mock_agent_writes_plan(agent_name: str, prompt: str) -> str:

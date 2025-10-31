@@ -93,16 +93,16 @@ class PlanPhase(Phase):
                         message=f"Spec file not found: {self.spec_file}",
                     )
 
-                # Check for development guide file
-                dev_guide_path = self.history_dir.parent / "dev_guide.md"
-                if not dev_guide_path.exists():
+                # Check for plan.md with development guide section
+                plan_file_path = self.history_dir.parent / "plan.md"
+                if not plan_file_path.exists() or not self._has_dev_guide_section(plan_file_path):
                     if self.interactive:
                         # Prompt user to provide development guide
                         self._prompt_for_dev_guide()
                     else:
                         return PhaseResult(
                             status=PhaseStatus.FAILED,
-                            message="缺少開發指南文件（dev_guide.md）",
+                            message="plan.md 中缺少「開發指南」區塊",
                         )
 
             # Implementation plan loop
@@ -186,7 +186,6 @@ class PlanPhase(Phase):
             Prompt string
         """
         # Get paths
-        dev_guide_path = self.history_dir.parent / "dev_guide.md"
         plan_file_path = self.history_dir.parent / "plan.md"
 
         status_code_prompt = generate_status_code_prompt(
@@ -207,18 +206,20 @@ class PlanPhase(Phase):
 
 這是第 {self.iteration} 輪實作分析。
 
-請仔細閱讀需求文件（{self.spec_file}）和開發指南（{dev_guide_path}），規劃詳細的實作步驟。
+請仔細閱讀需求文件（{self.spec_file}）和 {plan_file_path} 中的開發指南，規劃詳細的實作步驟。
 
 {status_code_prompt}
 
 **如果需要更多資訊（status: NEED_CLARIFICATION）：**
 1. 使用 Write tool 將以下內容寫入 {plan_file_path}：
+   - 「## 開發指南」- 保留原有的開發指南內容（不要修改）
    - 「## 實作計畫」- 目前的實作分析內容
    - 「## 待確認問題」- 列出需要確認的技術問題
 2. 寫完檔案後，只回傳：NEED_CLARIFICATION
 
 **如果分析完成（status: CONFIRMED）：**
 1. 使用 Write tool 將完整實作計畫寫入 {plan_file_path}，格式：
+   - 「## 開發指南」- 保留原有的開發指南內容（不要修改）
    - 「## 技術分析」- 技術可行性分析
    - 「## 實作步驟」- 詳細的實作步驟
    - 「## 技術細節」- 需要注意的技術細節
@@ -235,12 +236,14 @@ class PlanPhase(Phase):
 
 **如果仍需確認（status: NEED_CLARIFICATION）：**
 1. 使用 Write tool 更新 {plan_file_path}：
+   - 「## 開發指南」- 保留原有的開發指南內容（不要修改）
    - 「## 實作計畫」- 更新的實作分析內容
    - 「## 待確認問題」- 列出需要確認的技術問題
 2. 寫完檔案後，只回傳：NEED_CLARIFICATION
 
 **如果分析完成（status: CONFIRMED）：**
 1. 使用 Write tool 將完整實作計畫寫入 {plan_file_path}，格式：
+   - 「## 開發指南」- 保留原有的開發指南內容（不要修改）
    - 「## 技術分析」- 技術可行性分析
    - 「## 實作步驟」- 詳細的實作步驟
    - 「## 技術細節」- 需要注意的技術細節
@@ -383,6 +386,31 @@ class PlanPhase(Phase):
 
         return PhaseProgress.from_dict(data)
 
+    def _has_dev_guide_section(self, plan_file: Path) -> bool:
+        """Check if plan.md has development guide section.
+
+        Args:
+            plan_file: Path to plan.md
+
+        Returns:
+            True if development guide section exists
+        """
+        if not plan_file.exists():
+            return False
+
+        content = plan_file.read_text()
+        # Check for development guide heading
+        patterns = [
+            r"##\s*開發指南",
+            r"##\s*[Dd]evelopment\s+[Gg]uide",
+        ]
+
+        for pattern in patterns:
+            if re.search(pattern, content, re.IGNORECASE):
+                return True
+
+        return False
+
     def _prompt_for_dev_guide(self) -> None:
         """Prompt user to write development guide when it doesn't exist."""
         print("\n" + "="*70)
@@ -407,11 +435,11 @@ class PlanPhase(Phase):
         if not dev_guide:
             raise ValueError("未提供開發指南，無法繼續")
 
-        # Save development guide to plan directory
+        # Save development guide as initial plan.md
         plan_dir = self.history_dir.parent
-        dev_guide_path = plan_dir / "dev_guide.md"
-        dev_guide_path.parent.mkdir(parents=True, exist_ok=True)
-        dev_guide_path.write_text(f"# 開發指南\n\n{dev_guide}\n")
+        plan_file_path = plan_dir / "plan.md"
+        plan_file_path.parent.mkdir(parents=True, exist_ok=True)
+        plan_file_path.write_text(f"## 開發指南\n\n{dev_guide}\n")
 
         print()
         print("✅ 開發指南已記錄，開始實作規劃...")
