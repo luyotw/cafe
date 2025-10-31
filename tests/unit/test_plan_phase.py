@@ -392,6 +392,130 @@ class TestErrorHandling:
 class TestPlanPhaseHistory:
     """Test history recording and loading functionality (TDD)."""
 
+    def test_saves_history_after_each_iteration(self, tmp_path: Path) -> None:
+        """測試每次迭代後保存歷史記錄"""
+        spec_file = tmp_path / ".aaf" / "issues" / "test-feature" / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
+        spec_file.write_text("# Requirements")
+
+        # Create dev guide file
+        dev_guide_file = spec_file.parent.parent / "plan" / "dev_guide.md"
+        dev_guide_file.parent.mkdir(parents=True, exist_ok=True)
+        dev_guide_file.write_text("# 開發指南\n\nGuide")
+
+        agent_manager = MagicMock(spec=AgentManager)
+        agent_manager.execute.side_effect = [
+            "NEED_CLARIFICATION\n需要更多資訊",
+            "CONFIRMED\n實作分析已完成。",
+        ]
+
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        phase = PlanPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            spec_file=str(spec_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            issue_name="test-feature",
+        )
+
+        result = phase.execute()
+
+        # Should have created history files for both iterations
+        history_dir = spec_file.parent.parent / "plan" / "history"
+        assert history_dir.exists()
+        assert (history_dir / "001.json").exists()
+        assert (history_dir / "002.json").exists()
+
+        # Check first iteration history content
+        import json
+        with open(history_dir / "001.json", 'r', encoding='utf-8') as f:
+            data = json.load(f)
+
+        assert data["iteration"] == 1
+        assert data["status_code"] == "NEED_CLARIFICATION"
+        assert "需要更多資訊" in data["response"]
+
+    def test_saves_progress_to_status_json(self, tmp_path: Path) -> None:
+        """測試保存進度到 status.json"""
+        spec_file = tmp_path / ".aaf" / "issues" / "test-feature" / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
+        spec_file.write_text("# Requirements")
+
+        # Create dev guide file
+        dev_guide_file = spec_file.parent.parent / "plan" / "dev_guide.md"
+        dev_guide_file.parent.mkdir(parents=True, exist_ok=True)
+        dev_guide_file.write_text("# 開發指南\n\nGuide")
+
+        agent_manager = MagicMock(spec=AgentManager)
+        agent_manager.execute.return_value = "CONFIRMED\n實作分析已完成。"
+
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        phase = PlanPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            spec_file=str(spec_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            issue_name="test-feature",
+        )
+
+        result = phase.execute()
+
+        # Should have created status.json
+        status_file = spec_file.parent.parent / "plan" / "status.json"
+        assert status_file.exists()
+
+        import json
+        with open(status_file, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+
+        assert data["phase"] == "plan"
+        assert data["status"] == "completed"
+        assert data["status_code"] == "CONFIRMED"
+
+    def test_creates_plan_md_file(self, tmp_path: Path) -> None:
+        """測試 agent 創建 plan.md 文件"""
+        spec_file = tmp_path / ".aaf" / "issues" / "test-feature" / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
+        spec_file.write_text("# Requirements")
+
+        # Create dev guide file
+        dev_guide_file = spec_file.parent.parent / "plan" / "dev_guide.md"
+        dev_guide_file.parent.mkdir(parents=True, exist_ok=True)
+        dev_guide_file.write_text("# 開發指南\n\nGuide")
+
+        # Mock agent to write plan.md file
+        def mock_agent_writes_plan(agent_name: str, prompt: str) -> str:
+            # Agent writes plan.md
+            plan_file = spec_file.parent.parent / "plan" / "plan.md"
+            plan_file.parent.mkdir(parents=True, exist_ok=True)
+            plan_file.write_text("# 實作計畫\n\n## 技術分析\n分析內容")
+            return "CONFIRMED\n實作分析已完成。"
+
+        agent_manager = MagicMock(spec=AgentManager)
+        agent_manager.execute.side_effect = mock_agent_writes_plan
+
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        phase = PlanPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            spec_file=str(spec_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            issue_name="test-feature",
+        )
+
+        result = phase.execute()
+
+        # Should have created plan.md
+        plan_file = spec_file.parent.parent / "plan" / "plan.md"
+        assert plan_file.exists()
+
+        content = plan_file.read_text()
+        assert "實作計畫" in content
+        assert "技術分析" in content
+
     def test_init_creates_history_dir_and_attributes(self, tmp_path: Path) -> None:
         """測試 __init__ 創建 history_dir 和 conversation_history 屬性"""
         spec_file = tmp_path / ".aaf" / "issues" / "test-issue" / "spec" / "spec.md"

@@ -125,6 +125,15 @@ class PlanPhase(Phase):
                     ],
                 )
 
+                # Save history and progress after each iteration (only if status code found)
+                if status_code:
+                    self._save_history(
+                        prompt=prompt,
+                        response=response,
+                        status_code=status_code,
+                    )
+                    self._save_progress(status_code)
+
                 # Handle status codes
                 if status_code == PhaseStatusCode.CONFIRMED:
                     return PhaseResult(
@@ -176,6 +185,10 @@ class PlanPhase(Phase):
         Returns:
             Prompt string
         """
+        # Get paths
+        dev_guide_path = self.history_dir.parent / "dev_guide.md"
+        plan_file_path = self.history_dir.parent / "plan.md"
+
         status_code_prompt = generate_status_code_prompt(
             valid_codes=[
                 PhaseStatusCode.CONFIRMED,
@@ -194,15 +207,22 @@ class PlanPhase(Phase):
 
 這是第 {self.iteration} 輪實作分析。
 
-請仔細閱讀需求文件和開發指南，規劃詳細的實作步驟。
+請仔細閱讀需求文件（{self.spec_file}）和開發指南（{dev_guide_path}），規劃詳細的實作步驟。
 
 {status_code_prompt}
 
-**如果需要更多資訊：**
-列出需要確認的問題。
+**如果需要更多資訊（status: NEED_CLARIFICATION）：**
+1. 使用 Write tool 將以下內容寫入 {plan_file_path}：
+   - 「## 實作計畫」- 目前的實作分析內容
+   - 「## 待確認問題」- 列出需要確認的技術問題
+2. 寫完檔案後，只回傳：NEED_CLARIFICATION
 
-**如果分析完成：**
-回應確認訊息。
+**如果分析完成（status: CONFIRMED）：**
+1. 使用 Write tool 將完整實作計畫寫入 {plan_file_path}，格式：
+   - 「## 技術分析」- 技術可行性分析
+   - 「## 實作步驟」- 詳細的實作步驟
+   - 「## 技術細節」- 需要注意的技術細節
+2. 寫完檔案後，只回傳：CONFIRMED
 """
         else:
             return f"""Use the {self.dev_agent} subagent to continue analyzing {self.spec_file}.
@@ -213,11 +233,18 @@ class PlanPhase(Phase):
 
 {status_code_prompt}
 
-**如果需要更多資訊：**
-列出需要確認的問題。
+**如果仍需確認（status: NEED_CLARIFICATION）：**
+1. 使用 Write tool 更新 {plan_file_path}：
+   - 「## 實作計畫」- 更新的實作分析內容
+   - 「## 待確認問題」- 列出需要確認的技術問題
+2. 寫完檔案後，只回傳：NEED_CLARIFICATION
 
-**如果分析完成：**
-回應確認訊息。
+**如果分析完成（status: CONFIRMED）：**
+1. 使用 Write tool 將完整實作計畫寫入 {plan_file_path}，格式：
+   - 「## 技術分析」- 技術可行性分析
+   - 「## 實作步驟」- 詳細的實作步驟
+   - 「## 技術細節」- 需要注意的技術細節
+2. 寫完檔案後，只回傳：CONFIRMED
 """
 
     def _generate_github_prompt(self) -> str:
