@@ -123,7 +123,7 @@ class Display:
                 key_bindings=kb,
                 enable_open_in_editor=False,
                 enable_system_prompt=False,
-                enable_suspend=False,
+                enable_suspend=True,  # Allow Ctrl+Z to suspend
                 prompt_continuation=lambda width, line_number, is_soft_wrap: '  ' if not is_soft_wrap else '',
             )
 
