@@ -125,6 +125,7 @@ def _build_workflow(
             workflow_mode=mode,
             issue_id=issue_id,
             dev_agent=dev_name,
+            interactive=True,
         )
     )
 
@@ -414,6 +415,8 @@ def spec(
         console.print("[bold]Starting conversational spec generation...[/bold]")
         console.print("[dim]The PM will ask questions to clarify all necessary information.[/dim]")
         console.print("[dim]Focus on WHAT you want, not HOW to implement it.[/dim]")
+        if is_interactive:
+            console.print("[dim]💡 Tip: Press Ctrl+C anytime to pause and save progress.[/dim]")
         console.print()
 
         result = phase.execute()
@@ -528,7 +531,9 @@ def plan(
             spec_file=spec_file,
             workflow_mode=workflow_mode,
             issue_id=issue_id,
+            issue_name=issue_name,
             dev_agent=dev_agent,
+            interactive=True,
         )
 
         console.print("[bold]Starting implementation planning...[/bold]")

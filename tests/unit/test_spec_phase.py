@@ -1009,9 +1009,9 @@ class TestKeyboardInterrupt:
              patch('builtins.print'):
             result = phase.execute()
 
-        # Should return failed with cancelled message
-        assert result.status == PhaseStatus.FAILED
-        assert result.message == "Cancelled by user"
+        # Should return IN_PROGRESS (paused, can resume)
+        assert result.status == PhaseStatus.IN_PROGRESS
+        assert "Paused by user" in result.message
 
         # No iteration history should be saved
         history_dir = tmp_path / ".aaf" / "issues" / "spec" / "spec" / "history"

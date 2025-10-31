@@ -189,6 +189,10 @@ class SpecPhase(Phase):
 
             # If there's existing history, show current state and get user response before continuing
             if self.interactive and self.conversation_history and self.iteration > 0:
+                print("\n" + "="*70)
+                print(f"🔄 偵測到未完成的對話（已完成 {self.iteration} 輪），繼續執行...")
+                print("="*70)
+
                 spec_file = Path(self.spec_file)
                 if spec_file.exists():
                     print(f"\n{'='*60}")
@@ -474,11 +478,13 @@ class SpecPhase(Phase):
                     continue
 
         except KeyboardInterrupt:
-            # User cancelled with Ctrl+C - don't save anything
-            print("\n\n⚠️  Cancelled by user (Ctrl+C). No changes saved.")
+            # User paused with Ctrl+C - save progress and allow resume
+            print("\n\n⏸️  Paused by user (Ctrl+C).")
+            print(f"💾 Progress saved. Current iteration: {self.iteration}")
+            print(f"📝 To resume, run: aaf spec {self.issue_name}")
             return PhaseResult(
-                status=PhaseStatus.FAILED,
-                message="Cancelled by user",
+                status=PhaseStatus.IN_PROGRESS,
+                message="Paused by user - can resume later",
                 data={"iterations": self.iteration},
             )
         except Exception as e:
