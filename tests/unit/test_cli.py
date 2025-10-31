@@ -336,8 +336,10 @@ class TestPlanCommand:
         tmp_path: Path,
     ) -> None:
         """測試 plan 指令 local mode 成功執行"""
-        # Setup
-        spec_file = tmp_path / "spec.md"
+        # Setup: Create spec file in the expected location
+        issue_name = "test-issue"
+        spec_file = tmp_path / ".aaf" / "issues" / issue_name / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Spec\n\n## 開發指南\nGuide")
         config_file = tmp_path / "config.yaml"
 
@@ -350,11 +352,18 @@ class TestPlanCommand:
         )
         mock_plan_phase.return_value = mock_phase_instance
 
-        # Execute
-        result = runner.invoke(
-            app,
-            ["plan", str(spec_file), "--config", str(config_file)]
-        )
+        # Execute (note: using tmp_path as cwd won't work for our test, so we'll use absolute path checking)
+        # We need to temporarily change directory or mock Path.exists
+        import os
+        old_cwd = os.getcwd()
+        try:
+            os.chdir(tmp_path)
+            result = runner.invoke(
+                app,
+                ["plan", issue_name, "--config", str(config_file)]
+            )
+        finally:
+            os.chdir(old_cwd)
 
         # Verify
         assert result.exit_code == 0
@@ -369,7 +378,11 @@ class TestPlanCommand:
         tmp_path: Path,
     ) -> None:
         """測試 plan 指令 github mode 使用 issue ID"""
-        # Setup
+        # Setup: GitHub mode still checks if spec file exists first
+        issue_name = "test-issue"
+        spec_file = tmp_path / ".aaf" / "issues" / issue_name / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
+        spec_file.write_text("# Spec\n\n## 開發指南\nGuide")
         config_file = tmp_path / "config.yaml"
 
         # Mock phase execution
@@ -382,14 +395,20 @@ class TestPlanCommand:
         mock_plan_phase.return_value = mock_phase_instance
 
         # Execute
-        result = runner.invoke(
-            app,
-            ["plan", "-m", "github", "-i", "123", "--config", str(config_file)]
-        )
+        import os
+        old_cwd = os.getcwd()
+        try:
+            os.chdir(tmp_path)
+            result = runner.invoke(
+                app,
+                ["plan", issue_name, "-m", "github", "-i", "123", "--config", str(config_file)]
+            )
+        finally:
+            os.chdir(old_cwd)
 
         # Verify
         assert result.exit_code == 0
-        assert "Issue: #123" in result.stdout
+        assert "GitHub Issue: #123" in result.stdout
         mock_plan_phase.assert_called_once()
 
     @patch("aaf.ui.cli.PlanPhase")
@@ -399,8 +418,10 @@ class TestPlanCommand:
         tmp_path: Path,
     ) -> None:
         """測試 plan 指令執行失敗"""
-        # Setup
-        spec_file = tmp_path / "spec.md"
+        # Setup: Create spec file in the expected location
+        issue_name = "test-issue"
+        spec_file = tmp_path / ".aaf" / "issues" / issue_name / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Spec")
         config_file = tmp_path / "config.yaml"
 
@@ -413,10 +434,16 @@ class TestPlanCommand:
         mock_plan_phase.return_value = mock_phase_instance
 
         # Execute
-        result = runner.invoke(
-            app,
-            ["plan", str(spec_file), "--config", str(config_file)]
-        )
+        import os
+        old_cwd = os.getcwd()
+        try:
+            os.chdir(tmp_path)
+            result = runner.invoke(
+                app,
+                ["plan", issue_name, "--config", str(config_file)]
+            )
+        finally:
+            os.chdir(old_cwd)
 
         # Verify
         assert result.exit_code == 1
@@ -424,13 +451,12 @@ class TestPlanCommand:
 
     def test_plan_invalid_mode_fails(self, tmp_path: Path) -> None:
         """測試 plan 指令使用無效 mode"""
-        spec_file = tmp_path / "spec.md"
-        spec_file.write_text("# Spec")
+        issue_name = "test-issue"
         config_file = tmp_path / "config.yaml"
 
         result = runner.invoke(
             app,
-            ["plan", str(spec_file), "-m", "invalid", "--config", str(config_file)]
+            ["plan", issue_name, "-m", "invalid", "--config", str(config_file)]
         )
 
         assert result.exit_code == 1

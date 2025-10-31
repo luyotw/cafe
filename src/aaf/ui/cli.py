@@ -27,16 +27,17 @@ app = typer.Typer(
 console = Console()
 
 
-def _setup_agents(config_manager: ConfigManager) -> AgentManager:
+def _setup_agents(config_manager: ConfigManager, issue_name: Optional[str] = None) -> AgentManager:
     """Setup agent manager with default agents.
 
     Args:
         config_manager: Configuration manager
+        issue_name: Issue name for issue-specific sessions
 
     Returns:
         Configured agent manager
     """
-    agent_manager = AgentManager()
+    agent_manager = AgentManager(issue_name=issue_name)
 
     # Get agent configurations from config or use defaults
     pm_config = config_manager.get("agents.pm", {
@@ -359,7 +360,7 @@ def spec(
         # Initialize components
         config_dir = str(Path(config_file).parent) if config_file != ".aaf/config.yaml" else ".aaf"
         config_manager = ConfigManager(config_dir)
-        agent_manager = _setup_agents(config_manager)
+        agent_manager = _setup_agents(config_manager, issue_name=issue_name)
         permission_handler = PermissionHandler()
 
         # Display start message
@@ -484,7 +485,7 @@ def plan(
         # Initialize components
         config_dir = str(Path(config_file).parent) if config_file != ".aaf/config.yaml" else ".aaf"
         config_manager = ConfigManager(config_dir)
-        agent_manager = _setup_agents(config_manager)
+        agent_manager = _setup_agents(config_manager, issue_name=issue_name)
         permission_handler = PermissionHandler()
 
         # Display start message

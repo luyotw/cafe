@@ -175,7 +175,7 @@ class TestSessionManagement:
         executor = manager.get_agent("David")
 
         assert executor.config.session_id == "existing-session-456"
-        session_mgr.load_session.assert_called_once_with("David")
+        session_mgr.load_session.assert_called_once_with("David", None)
 
     def test_session_lazy_creation(self) -> None:
         """測試 session 延遲創建（在首次執行時）"""
@@ -250,7 +250,7 @@ class TestSessionManagement:
 
         manager.delete_session("David")
 
-        session_mgr.delete_session.assert_called_once_with("David")
+        session_mgr.delete_session.assert_called_once_with("David", None)
 
 
 class TestMultipleAgents:

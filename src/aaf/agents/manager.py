@@ -18,13 +18,15 @@ class AgentNotFoundError(Exception):
 class AgentManager:
     """Manages multiple AI agents and their sessions."""
 
-    def __init__(self, session_manager: Optional[SessionManager] = None) -> None:
+    def __init__(self, session_manager: Optional[SessionManager] = None, issue_name: Optional[str] = None) -> None:
         """Initialize agent manager.
 
         Args:
             session_manager: Session manager for handling agent sessions
+            issue_name: Issue name for issue-specific sessions
         """
         self.session_manager = session_manager or SessionManager()
+        self.issue_name = issue_name
         self.agents: Dict[str, AgentExecutor] = {}
         self.current_agent_name: Optional[str] = None
         self._total_token_usage = TokenUsage()
@@ -36,7 +38,8 @@ class AgentManager:
             config: Agent configuration
         """
         # Load existing session for this agent (if any)
-        session_id = self.session_manager.load_session(config.name)
+        # Use issue-specific session if issue_name is provided
+        session_id = self.session_manager.load_session(config.name, self.issue_name)
         # Note: Don't create session here - let executor handle it on first use
 
         # Update config with session ID (may be None)
@@ -106,6 +109,10 @@ class AgentManager:
         executor = self.get_agent(agent_name)
         response, token_usage = executor.execute(prompt, allowed_tools)
 
+        # Save session ID if it was created during execution
+        if executor.config.session_id:
+            self.session_manager.save_session(agent_name, executor.config.session_id, self.issue_name)
+
         # Accumulate token usage
         self._total_token_usage.input_tokens += token_usage.input_tokens
         self._total_token_usage.output_tokens += token_usage.output_tokens
@@ -133,6 +140,10 @@ class AgentManager:
 
         response, token_usage = current.execute(prompt)
 
+        # Save session ID if it was created during execution
+        if current.config.session_id and self.current_agent_name:
+            self.session_manager.save_session(self.current_agent_name, current.config.session_id, self.issue_name)
+
         # Accumulate token usage
         self._total_token_usage.input_tokens += token_usage.input_tokens
         self._total_token_usage.output_tokens += token_usage.output_tokens
@@ -156,7 +167,7 @@ class AgentManager:
         Args:
             agent_name: Agent name
         """
-        self.session_manager.delete_session(agent_name)
+        self.session_manager.delete_session(agent_name, self.issue_name)
 
     def list_agents(self) -> List[str]:
         """List all registered agent names.

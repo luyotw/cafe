@@ -19,48 +19,54 @@ class SessionManager:
         self.sessions_dir = Path(sessions_dir)
         self.sessions_dir.mkdir(parents=True, exist_ok=True)
 
-    def get_session_file(self, agent_name: str) -> Path:
+    def get_session_file(self, agent_name: str, issue_name: Optional[str] = None) -> Path:
         """Get the session file path for an agent.
 
         Args:
             agent_name: Name of the agent
+            issue_name: Name of the issue (for issue-specific sessions)
 
         Returns:
             Path to the session file
         """
+        if issue_name:
+            return self.sessions_dir / f"{issue_name}_{agent_name}_session_id"
         return self.sessions_dir / f"{agent_name}_session_id"
 
-    def load_session(self, agent_name: str) -> Optional[str]:
+    def load_session(self, agent_name: str, issue_name: Optional[str] = None) -> Optional[str]:
         """Load existing session ID for an agent.
 
         Args:
             agent_name: Name of the agent
+            issue_name: Name of the issue (for issue-specific sessions)
 
         Returns:
             Session ID if exists, None otherwise
         """
-        session_file = self.get_session_file(agent_name)
+        session_file = self.get_session_file(agent_name, issue_name)
         if session_file.exists():
             return session_file.read_text().strip()
         return None
 
-    def save_session(self, agent_name: str, session_id: str) -> None:
+    def save_session(self, agent_name: str, session_id: str, issue_name: Optional[str] = None) -> None:
         """Save session ID for an agent.
 
         Args:
             agent_name: Name of the agent
             session_id: Session ID to save
+            issue_name: Name of the issue (for issue-specific sessions)
         """
-        session_file = self.get_session_file(agent_name)
+        session_file = self.get_session_file(agent_name, issue_name)
         session_file.write_text(session_id)
 
-    def delete_session(self, agent_name: str) -> None:
+    def delete_session(self, agent_name: str, issue_name: Optional[str] = None) -> None:
         """Delete session for an agent.
 
         Args:
             agent_name: Name of the agent
+            issue_name: Name of the issue (for issue-specific sessions)
         """
-        session_file = self.get_session_file(agent_name)
+        session_file = self.get_session_file(agent_name, issue_name)
         if session_file.exists():
             session_file.unlink()
 
