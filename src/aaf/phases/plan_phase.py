@@ -373,9 +373,6 @@ class PlanPhase(Phase):
         print("  可以參考現有的 DataProcessor 類別。")
         print("  注意要保持與現有 API 的向後相容性。")
         print()
-        print("="*70)
-        print("請輸入開發指南（可多行，單獨一行輸入 END 表示結束）:")
-        print()
 
         # Get development guide using Display for better Unicode support
         dev_guide = self.display.get_multiline_input("請輸入開發指南").strip()
