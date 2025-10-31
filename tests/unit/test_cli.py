@@ -324,3 +324,114 @@ class TestConfigCommand:
 
         assert result.exit_code == 0
         assert "Use --list" in result.stdout
+
+
+class TestPlanCommand:
+    """Test plan command."""
+
+    @patch("aaf.ui.cli.PlanPhase")
+    def test_plan_local_mode_success(
+        self,
+        mock_plan_phase: Mock,
+        tmp_path: Path,
+    ) -> None:
+        """測試 plan 指令 local mode 成功執行"""
+        # Setup
+        spec_file = tmp_path / "spec.md"
+        spec_file.write_text("# Spec\n\n## 開發指南\nGuide")
+        config_file = tmp_path / "config.yaml"
+
+        # Mock phase execution
+        mock_phase_instance = MagicMock()
+        mock_phase_instance.execute.return_value = PhaseResult(
+            status=PhaseStatus.COMPLETED,
+            message="Plan completed",
+            data={"iterations": 2}
+        )
+        mock_plan_phase.return_value = mock_phase_instance
+
+        # Execute
+        result = runner.invoke(
+            app,
+            ["plan", str(spec_file), "--config", str(config_file)]
+        )
+
+        # Verify
+        assert result.exit_code == 0
+        assert "Implementation plan completed" in result.stdout
+        assert "Iterations: 2" in result.stdout
+        mock_plan_phase.assert_called_once()
+
+    @patch("aaf.ui.cli.PlanPhase")
+    def test_plan_github_mode_with_issue(
+        self,
+        mock_plan_phase: Mock,
+        tmp_path: Path,
+    ) -> None:
+        """測試 plan 指令 github mode 使用 issue ID"""
+        # Setup
+        config_file = tmp_path / "config.yaml"
+
+        # Mock phase execution
+        mock_phase_instance = MagicMock()
+        mock_phase_instance.execute.return_value = PhaseResult(
+            status=PhaseStatus.COMPLETED,
+            message="Plan completed",
+            data={"iterations": 1}
+        )
+        mock_plan_phase.return_value = mock_phase_instance
+
+        # Execute
+        result = runner.invoke(
+            app,
+            ["plan", "-m", "github", "-i", "123", "--config", str(config_file)]
+        )
+
+        # Verify
+        assert result.exit_code == 0
+        assert "Issue: #123" in result.stdout
+        mock_plan_phase.assert_called_once()
+
+    @patch("aaf.ui.cli.PlanPhase")
+    def test_plan_fails_with_error(
+        self,
+        mock_plan_phase: Mock,
+        tmp_path: Path,
+    ) -> None:
+        """測試 plan 指令執行失敗"""
+        # Setup
+        spec_file = tmp_path / "spec.md"
+        spec_file.write_text("# Spec")
+        config_file = tmp_path / "config.yaml"
+
+        # Mock phase execution failure
+        mock_phase_instance = MagicMock()
+        mock_phase_instance.execute.return_value = PhaseResult(
+            status=PhaseStatus.FAILED,
+            message="Missing dev guide"
+        )
+        mock_plan_phase.return_value = mock_phase_instance
+
+        # Execute
+        result = runner.invoke(
+            app,
+            ["plan", str(spec_file), "--config", str(config_file)]
+        )
+
+        # Verify
+        assert result.exit_code == 1
+        assert "Plan phase failed" in result.stdout
+
+    def test_plan_invalid_mode_fails(self, tmp_path: Path) -> None:
+        """測試 plan 指令使用無效 mode"""
+        spec_file = tmp_path / "spec.md"
+        spec_file.write_text("# Spec")
+        config_file = tmp_path / "config.yaml"
+
+        result = runner.invoke(
+            app,
+            ["plan", str(spec_file), "-m", "invalid", "--config", str(config_file)]
+        )
+
+        assert result.exit_code == 1
+        assert "Invalid mode" in result.stdout

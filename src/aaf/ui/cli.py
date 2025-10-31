@@ -409,6 +409,106 @@ def spec(
 
 
 @app.command()
+def plan(
+    spec_file: str = typer.Argument(
+        ".aaf/issues/*/spec/spec.md",
+        help="Specification file path",
+    ),
+    mode: str = typer.Option(
+        "local",
+        "--mode",
+        "-m",
+        help="Workflow mode: local or github",
+    ),
+    issue_id: Optional[str] = typer.Option(
+        None,
+        "--issue",
+        "-i",
+        help="GitHub issue ID (github mode)",
+    ),
+    dev_agent: str = typer.Option(
+        "David",
+        "--dev",
+        help="Developer agent name",
+    ),
+    config_file: str = typer.Option(
+        ".aaf/config.yaml",
+        "--config",
+        "-c",
+        help="Path to configuration file",
+    ),
+) -> None:
+    """Run plan phase: Implementation planning with developer agent.
+
+    The developer agent will analyze the specification and create a detailed
+    implementation plan with technical considerations and development guide.
+
+    Examples:
+        # Analyze spec and create plan (local mode)
+        aaf plan .aaf/issues/my-feature/spec/spec.md
+
+        # Analyze GitHub issue and create plan
+        aaf plan -m github -i 123
+
+        # Use custom developer agent
+        aaf plan spec.md --dev CustomDev
+    """
+    try:
+        # Validate mode
+        try:
+            workflow_mode = WorkflowMode(mode)
+        except ValueError:
+            console.print(f"[red]Error: Invalid mode '{mode}'. Use 'local' or 'github'.[/red]")
+            raise typer.Exit(1)
+
+        # Initialize components
+        config_dir = str(Path(config_file).parent) if config_file != ".aaf/config.yaml" else ".aaf"
+        config_manager = ConfigManager(config_dir)
+        agent_manager = _setup_agents(config_manager)
+        permission_handler = PermissionHandler()
+
+        # Display start message
+        console.print("[bold blue]📋 Plan Phase: Implementation Planning[/bold blue]")
+        console.print(f"Mode: {workflow_mode.value}")
+        console.print(f"Developer Agent: {dev_agent}")
+        if workflow_mode == WorkflowMode.LOCAL:
+            console.print(f"Spec file: {spec_file}")
+        elif issue_id:
+            console.print(f"Issue: #{issue_id}")
+        console.print()
+
+        # Create and execute plan phase
+        phase = PlanPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            spec_file=spec_file,
+            workflow_mode=workflow_mode,
+            issue_id=issue_id,
+            dev_agent=dev_agent,
+        )
+
+        console.print("[bold]Starting implementation planning...[/bold]")
+        console.print("[dim]The developer will analyze technical feasibility and create implementation plan.[/dim]")
+        console.print()
+
+        result = phase.execute()
+
+        # Display result
+        if result.status.value == "completed":
+            console.print()
+            console.print("[bold green]✅ Implementation plan completed![/bold green]")
+            console.print(f"Iterations: {result.data.get('iterations', 'N/A')}")
+        else:
+            console.print()
+            console.print(f"[bold red]❌ Plan phase failed: {result.message}[/bold red]")
+            raise typer.Exit(1)
+
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1)
+
+
+@app.command()
 def config(
     key: Optional[str] = typer.Argument(None, help="Configuration key to get/set"),
     value: Optional[str] = typer.Argument(None, help="Value to set"),
