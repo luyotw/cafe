@@ -461,6 +461,87 @@ def config(
         console.print("[yellow]Use --list, or provide key [value][/yellow]")
 
 
+@app.command(name="ls")
+def list_issues() -> None:
+    """List all issues."""
+    from rich.table import Table
+
+    issues_dir = Path(".aaf/issues")
+
+    if not issues_dir.exists():
+        console.print("[yellow]No issues directory found[/yellow]")
+        console.print("Run 'aaf run <issue-name>' to create your first issue")
+        return
+
+    # Get all issue directories
+    issues = [d for d in issues_dir.iterdir() if d.is_dir()]
+
+    if not issues:
+        console.print("[yellow]No issues found[/yellow]")
+        console.print("Run 'aaf run <issue-name>' to create your first issue")
+        return
+
+    # Create table
+    table = Table(title="AAF Issues", show_header=True, header_style="bold cyan")
+    table.add_column("Issue Name", style="green")
+    table.add_column("Phases", style="dim")
+    table.add_column("Modified", style="dim")
+
+    for issue in sorted(issues, key=lambda x: x.stat().st_mtime, reverse=True):
+        # Check which phases exist
+        phases = []
+        for phase in ["spec", "analysis", "implementation", "review", "pr"]:
+            phase_dir = issue / phase
+            if phase_dir.exists():
+                phases.append(phase)
+
+        phases_str = ", ".join(phases) if phases else "empty"
+
+        # Get last modified time
+        import datetime
+        mtime = datetime.datetime.fromtimestamp(issue.stat().st_mtime)
+        mtime_str = mtime.strftime("%Y-%m-%d %H:%M")
+
+        table.add_row(issue.name, phases_str, mtime_str)
+
+    console.print(table)
+    console.print(f"\n[dim]Total: {len(issues)} issue(s)[/dim]")
+
+
+@app.command(name="rm")
+def remove_issue(
+    issue_name: str = typer.Argument(..., help="Name of the issue to delete"),
+    force: bool = typer.Option(False, "--force", "-f", help="Skip confirmation prompt"),
+) -> None:
+    """Remove an issue and all its data."""
+    import shutil
+
+    issue_path = Path(".aaf/issues") / issue_name
+
+    if not issue_path.exists():
+        console.print(f"[red]Issue '{issue_name}' not found[/red]")
+        console.print("\nRun 'aaf ls' to see available issues")
+        raise typer.Exit(1)
+
+    # Show what will be deleted
+    if not force:
+        console.print(f"[yellow]About to delete issue: {issue_name}[/yellow]")
+        console.print(f"[dim]Path: {issue_path}[/dim]\n")
+
+        confirm = typer.confirm("Are you sure you want to delete this issue?")
+        if not confirm:
+            console.print("[dim]Cancelled[/dim]")
+            raise typer.Exit(0)
+
+    # Delete the issue directory
+    try:
+        shutil.rmtree(issue_path)
+        console.print(f"[green]✓[/green] Issue '{issue_name}' deleted successfully")
+    except Exception as e:
+        console.print(f"[red]Failed to delete issue: {e}[/red]")
+        raise typer.Exit(1)
+
+
 def main() -> None:
     """Entry point for CLI."""
     app()
