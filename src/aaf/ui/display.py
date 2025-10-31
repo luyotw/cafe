@@ -73,10 +73,15 @@ class Display:
             User input as string
         """
         from time import time
+        import shutil
+
+        # Get terminal width
+        terminal_width = shutil.get_terminal_size().columns
 
         # Display prompt
         print(f"\033[1m{prompt}\033[0m")
         print(f"\033[2m（按 Enter 送出，Shift+Enter 或 Alt+Enter 換行）\033[0m")
+        print("─" * terminal_width)
 
         # Create key bindings
         kb = KeyBindings()
@@ -113,17 +118,23 @@ class Display:
             # Get input with prompt_toolkit
             # multiline=False means Enter submits by default (like AI chat tools)
             user_input = pt_prompt(
-                ' ',  # Simple prompt
+                '> ',  # Prompt with > prefix
                 multiline=False,
                 key_bindings=kb,
                 enable_open_in_editor=False,
                 enable_system_prompt=False,
                 enable_suspend=False,
+                prompt_continuation=lambda width, line_number, is_soft_wrap: '  ' if not is_soft_wrap else '',
             )
+
+            # Print bottom border after input
+            print("─" * terminal_width)
+
             return user_input.strip()
 
         except KeyboardInterrupt:
             # Ctrl+C pressed twice - propagate to cancel phase
+            print("─" * terminal_width)
             raise
 
     def format_agent_response(
