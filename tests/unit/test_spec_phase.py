@@ -80,7 +80,8 @@ class TestAgentSelection:
 
     def test_uses_pm_agent(self, tmp_path: Path) -> None:
         """測試使用 PM agent (Roger)"""
-        spec_file = tmp_path / "spec.md"
+        spec_file = tmp_path / ".aaf" / "issues" / "test-feature" / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("Requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
@@ -109,7 +110,9 @@ class TestHistoryTracking:
 
     def test_history_directory_structure(self, tmp_path: Path) -> None:
         """測試歷史記錄目錄結構包含 phase 資訊"""
-        spec_file = tmp_path / "spec.md"
+        spec_file = tmp_path / ".aaf" / "issues" / "test-feature" / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("Initial requirements\n")
 
         agent_manager = MagicMock(spec=AgentManager)
@@ -131,7 +134,9 @@ class TestHistoryTracking:
 
     def test_save_iteration_history_creates_json(self, tmp_path: Path) -> None:
         """測試儲存迭代歷史會建立 JSON 檔案"""
-        spec_file = tmp_path / "spec.md"
+        spec_file = tmp_path / ".aaf" / "issues" / "test-feature" / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("Initial requirements\n")
 
         agent_manager = MagicMock(spec=AgentManager)
@@ -174,7 +179,8 @@ class TestHistoryTracking:
 
     def test_update_context_file_creates_markdown(self, tmp_path: Path) -> None:
         """測試更新 context.md 檔案"""
-        spec_file = tmp_path / "spec.md"
+        spec_file = tmp_path / ".aaf" / "issues" / "test-feature" / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("Initial requirements\n")
 
         agent_manager = MagicMock(spec=AgentManager)
@@ -224,7 +230,8 @@ class TestHistoryTracking:
 
     def test_context_file_shows_restriction_after_iteration_4(self, tmp_path: Path) -> None:
         """測試第 4 輪後 context.md 顯示問題限制"""
-        spec_file = tmp_path / "spec.md"
+        spec_file = tmp_path / ".aaf" / "issues" / "test-feature" / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("Initial requirements\n")
 
         agent_manager = MagicMock(spec=AgentManager)
@@ -250,7 +257,8 @@ class TestHistoryTracking:
 
     def test_load_history_restores_state(self, tmp_path: Path) -> None:
         """測試載入歷史記錄能還原狀態"""
-        spec_file = tmp_path / "spec.md"
+        spec_file = tmp_path / ".aaf" / "issues" / "test-feature" / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("Initial requirements\n")
 
         agent_manager = MagicMock(spec=AgentManager)
@@ -302,7 +310,9 @@ class TestHistoryTracking:
 
     def test_issue_name_derived_from_spec_file(self, tmp_path: Path) -> None:
         """測試 issue_name 從 spec_file 自動推導"""
-        spec_file = tmp_path / "my-feature.md"
+        spec_file = tmp_path / ".aaf" / "issues" / "my-feature" / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("Initial requirements\n")
 
         agent_manager = MagicMock(spec=AgentManager)
@@ -316,13 +326,14 @@ class TestHistoryTracking:
             interactive=False,
         )
 
-        # Verify issue_name is derived from filename
+        # Verify issue_name is derived from directory structure
         assert phase.issue_name == "my-feature"
         assert phase.history_dir == tmp_path / ".aaf" / "issues" / "my-feature" / "spec" / "history"
 
     def test_prompt_includes_context_file_after_iteration_1(self, tmp_path: Path) -> None:
         """測試第 2 輪後 prompt 包含 context 檔案"""
-        spec_file = tmp_path / "spec.md"
+        spec_file = tmp_path / ".aaf" / "issues" / "test-feature" / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("Initial requirements\n")
 
         agent_manager = MagicMock(spec=AgentManager)
@@ -353,7 +364,8 @@ class TestHistoryTracking:
 
     def test_iteration_4_prompt_includes_restriction(self, tmp_path: Path) -> None:
         """測試第 4 輪 prompt 包含問題限制"""
-        spec_file = tmp_path / "spec.md"
+        spec_file = tmp_path / ".aaf" / "issues" / "test-feature" / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("Initial requirements\n")
 
         agent_manager = MagicMock(spec=AgentManager)
@@ -383,7 +395,8 @@ class TestNonInteractiveModeIteration1:
 
     def test_first_call_with_user_story_returns_in_progress(self, tmp_path: Path) -> None:
         """第1次呼叫：提供 user story，PM 提問，回傳 IN_PROGRESS"""
-        spec_file = tmp_path / "spec.md"
+        spec_file = tmp_path / ".aaf" / "issues" / "test-feature" / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
 
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = "NEED_CLARIFICATION\n需要澄清需求。\n\n## 待釐清的問題\n1. 問題一"
@@ -414,7 +427,8 @@ class TestNonInteractiveModeIteration1:
 
     def test_first_call_creates_spec_file_from_stdin(self, tmp_path: Path) -> None:
         """第1次呼叫應該從 stdin 讀取 user story 並建立檔案"""
-        spec_file = tmp_path / "spec.md"
+        spec_file = tmp_path / ".aaf" / "issues" / "test-feature" / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
 
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = "NEED_CLARIFICATION\n需要澄清"
@@ -441,7 +455,8 @@ class TestNonInteractiveModeIteration1:
 
     def test_first_call_pm_confirms_immediately(self, tmp_path: Path) -> None:
         """第1次呼叫：PM 直接確認需求（不提問），回傳 COMPLETED"""
-        spec_file = tmp_path / "spec.md"
+        spec_file = tmp_path / ".aaf" / "issues" / "test-feature" / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
 
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = "CONFIRMED\n需求已清楚。"
@@ -473,11 +488,12 @@ class TestNonInteractiveModeIteration2Plus:
 
     def test_second_call_reads_user_response_from_stdin(self, tmp_path: Path) -> None:
         """第2次呼叫：從 stdin 讀取用戶回答"""
-        spec_file = tmp_path / "spec.md"
+        spec_file = tmp_path / ".aaf" / "issues" / "test-feature" / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("Initial spec")
 
         # Create mock status and history from iteration 1
-        issue_dir = tmp_path / ".aaf" / "issues" / "spec"
+        issue_dir = tmp_path / ".aaf" / "issues" / "test-feature"
         history_dir = issue_dir / "spec" / "history"
         history_dir.mkdir(parents=True)
 
@@ -535,11 +551,12 @@ class TestNonInteractiveModeIteration2Plus:
 
     def test_second_call_pm_needs_more_clarification(self, tmp_path: Path) -> None:
         """第2次呼叫：PM 收到回答後還需要更多澄清"""
-        spec_file = tmp_path / "spec.md"
+        spec_file = tmp_path / ".aaf" / "issues" / "test-feature" / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("Initial spec")
 
         # Setup history from iteration 1
-        issue_dir = tmp_path / ".aaf" / "issues" / "spec"
+        issue_dir = tmp_path / ".aaf" / "issues" / "test-feature"
         history_dir = issue_dir / "spec" / "history"
         history_dir.mkdir(parents=True)
 
@@ -613,11 +630,12 @@ class TestNonInteractiveModeErrorHandling:
 
     def test_no_stdin_input_on_second_call_fails(self, tmp_path: Path) -> None:
         """第2+次呼叫：沒有用戶回答應該失敗"""
-        spec_file = tmp_path / "spec.md"
+        spec_file = tmp_path / ".aaf" / "issues" / "test-feature" / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("Initial")
 
         # Setup history
-        issue_dir = tmp_path / ".aaf" / "issues" / "spec"
+        issue_dir = tmp_path / ".aaf" / "issues" / "test-feature"
         history_dir = issue_dir / "spec" / "history"
         history_dir.mkdir(parents=True)
 
@@ -663,7 +681,8 @@ class TestInteractiveModeStillWorks:
 
     def test_interactive_mode_single_iteration(self, tmp_path: Path) -> None:
         """互動模式：單次確認"""
-        spec_file = tmp_path / "spec.md"
+        spec_file = tmp_path / ".aaf" / "issues" / "test-feature" / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("需求已清楚")
 
         agent_manager = MagicMock(spec=AgentManager)
@@ -693,13 +712,14 @@ class TestSkipConfirmedSpec:
 
     def test_skip_execution_if_already_confirmed(self, tmp_path: Path) -> None:
         """測試如果已經 CONFIRMED 狀態就不再呼叫 agent"""
-        spec_file = tmp_path / "spec.md"
+        spec_file = tmp_path / ".aaf" / "issues" / "test-feature" / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("Initial spec")
 
         # Create status file showing CONFIRMED state
-        issue_dir = tmp_path / ".aaf" / "issues" / "spec"
+        issue_dir = tmp_path / ".aaf" / "issues" / "test-feature"
         status_file = issue_dir / "spec" / "status.json"
-        status_file.parent.mkdir(parents=True)
+        status_file.parent.mkdir(parents=True, exist_ok=True)
 
         import json
         status_file.write_text(json.dumps({
@@ -737,11 +757,12 @@ class TestResumeFromHistory:
 
     def test_resume_completes_iteration_without_extra_prompt(self, tmp_path: Path) -> None:
         """測試恢復時：用戶輸入 + PM 回應 = 完成一輪，不應再次詢問用戶"""
-        spec_file = tmp_path / "spec.md"
+        spec_file = tmp_path / ".aaf" / "issues" / "test-feature" / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
         # NOTE: spec file does NOT exist
 
         # Create existing history where iteration 1 is completed
-        issue_dir = tmp_path / ".aaf" / "issues" / "spec"
+        issue_dir = tmp_path / ".aaf" / "issues" / "test-feature"
         history_dir = issue_dir / "spec" / "history"
         history_dir.mkdir(parents=True)
 
@@ -827,11 +848,12 @@ class TestResumeFromHistory:
 
     def test_resume_needs_user_response_before_agent(self, tmp_path: Path) -> None:
         """測試恢復時，如果上一輪還沒回答，應該先讓用戶回答，再執行 agent"""
-        spec_file = tmp_path / "spec.md"
+        spec_file = tmp_path / ".aaf" / "issues" / "test-feature" / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
         # NOTE: spec file does NOT exist
 
         # Create existing history
-        issue_dir = tmp_path / ".aaf" / "issues" / "spec"
+        issue_dir = tmp_path / ".aaf" / "issues" / "test-feature"
         history_dir = issue_dir / "spec" / "history"
         history_dir.mkdir(parents=True)
 
@@ -885,11 +907,12 @@ class TestResumeFromHistory:
 
     def test_display_current_spec_when_resuming(self, tmp_path: Path) -> None:
         """測試從暫存資料夾恢復時，顯示目前的 spec 狀態"""
-        spec_file = tmp_path / "spec.md"
+        spec_file = tmp_path / ".aaf" / "issues" / "test-feature" / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("Initial spec")
 
         # Create existing history
-        issue_dir = tmp_path / ".aaf" / "issues" / "spec"
+        issue_dir = tmp_path / ".aaf" / "issues" / "test-feature"
         history_dir = issue_dir / "spec" / "history"
         history_dir.mkdir(parents=True)
 
@@ -961,7 +984,8 @@ class TestKeyboardInterrupt:
 
     def test_keyboard_interrupt_does_not_save(self, tmp_path: Path) -> None:
         """測試 Ctrl+C 時不存檔"""
-        spec_file = tmp_path / "spec.md"
+        spec_file = tmp_path / ".aaf" / "issues" / "test-feature" / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("Initial spec")
 
         agent_manager = MagicMock(spec=AgentManager)

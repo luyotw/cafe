@@ -84,15 +84,15 @@ class SpecPhase(Phase):
         if issue_name:
             self.issue_name = issue_name
         else:
-            # Derive from spec_file: spec.md -> spec
-            # Use absolute path to ensure unique issue names for different locations
-            spec_path = Path(spec_file).absolute()
-            self.issue_name = spec_path.stem
+            # Derive from spec_file path: .aaf/issues/{issue_name}/spec/spec.md
+            spec_path = Path(spec_file)
+            self.issue_name = spec_path.parent.parent.name
 
         # History directory for spec phase
-        # Place history alongside spec file to avoid conflicts
-        spec_dir = Path(spec_file).parent.absolute()
-        self.history_dir = spec_dir / ".aaf" / "issues" / self.issue_name / "spec" / "history"
+        # Path: .aaf/issues/{issue_name}/spec/history
+        spec_path = Path(self.spec_file)
+        issue_dir = spec_path.parent.parent  # .aaf/issues/{issue_name}
+        self.history_dir = issue_dir / "spec" / "history"
 
         # Track conversation history
         self.conversation_history = []
