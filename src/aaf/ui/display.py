@@ -3,17 +3,8 @@
 import sys
 from typing import Optional
 
-# Import readline to enable better line editing with Unicode support
-try:
-    import readline
-    # Enable UTF-8 encoding in readline
-    readline.parse_and_bind('set input-meta on')
-    readline.parse_and_bind('set output-meta on')
-    readline.parse_and_bind('set convert-meta off')
-except ImportError:
-    # readline not available on Windows
-    pass
-
+from prompt_toolkit import prompt as pt_prompt
+from prompt_toolkit.key_binding import KeyBindings
 from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Prompt
@@ -66,45 +57,66 @@ class Display:
         end_marker: str = "END",
         show_line_numbers: bool = True
     ) -> str:
-        """Get multiline input from user with proper Unicode support.
+        """Get multiline input from user with Enter to submit, Alt+Enter for newline.
 
-        This method properly handles Chinese and other multi-byte characters
-        with backspace support using Python's built-in input() with readline.
+        Uses prompt_toolkit for better input handling:
+        - Enter: Submit input (like AI chat tools)
+        - Alt+Enter: Add new line
+        - Ctrl+C twice within 1 second: Cancel and raise KeyboardInterrupt
 
         Args:
             prompt: Prompt message to display
-            end_marker: String that marks end of input (case-insensitive)
-            show_line_numbers: Show line numbers as input prompt (default: True)
+            end_marker: Not used anymore (kept for compatibility)
+            show_line_numbers: Not used anymore (kept for compatibility)
 
         Returns:
-            Combined multiline input as string
+            User input as string
         """
-        # Use plain print to avoid Rich compressing empty lines
+        from time import time
+
+        # Display prompt
         print(f"\033[1m{prompt}\033[0m")
-        print(f"\033[2m（單獨一行輸入 {end_marker} 表示結束）\033[0m")
+        print(f"\033[2m（按 Enter 送出，Alt+Enter 換行）\033[0m")
 
-        lines = []
-        line_num = 1
-        while True:
-            try:
-                # Use input() which works with readline for proper Unicode handling
-                # The readline module configuration at the top of this file
-                # ensures proper multi-byte character support
-                if show_line_numbers:
-                    line = input(f"\033[2m{line_num:2d}│\033[0m ")
-                else:
-                    line = input()
+        # Create key bindings
+        kb = KeyBindings()
 
-                if line.strip().upper() == end_marker.upper():
-                    break
+        # Track Ctrl+C presses
+        last_ctrl_c_time = [0]  # Use list to allow modification in closure
 
-                lines.append(line)
-                line_num += 1
+        @kb.add('c-c')
+        def _(event):
+            """Ctrl+C - need to press twice within 1 second to cancel."""
+            current_time = time()
+            if current_time - last_ctrl_c_time[0] < 1.0:
+                # Second press within 1 second - cancel
+                raise KeyboardInterrupt()
+            else:
+                # First press - show hint
+                last_ctrl_c_time[0] = current_time
+                # Ring the bell to get user's attention
+                import sys
+                sys.stdout.write('\a')
+                sys.stdout.flush()
 
-            except (EOFError, KeyboardInterrupt):
-                break
+        @kb.add('escape', 'enter')  # Alt+Enter adds newline
+        def _(event):
+            """Alt+Enter - insert newline."""
+            event.current_buffer.insert_text('\n')
 
-        return '\n'.join(lines)
+        try:
+            # Get input with prompt_toolkit
+            # multiline=False means Enter submits by default (like AI chat tools)
+            user_input = pt_prompt(
+                ' ',  # Simple prompt
+                multiline=False,
+                key_bindings=kb,
+            )
+            return user_input.strip()
+
+        except KeyboardInterrupt:
+            # Ctrl+C pressed twice - propagate to cancel phase
+            raise
 
     def format_agent_response(
         self,

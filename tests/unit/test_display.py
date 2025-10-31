@@ -35,8 +35,7 @@ class TestMultilineInput:
         """測試基本多行輸入"""
         display = Display()
 
-        mock_stdin = StringIO("Line 1\nLine 2\nEND\n")
-        with patch('sys.stdin', mock_stdin):
+        with patch('aaf.ui.display.pt_prompt', return_value="Line 1\nLine 2"):
             result = display.get_multiline_input("Enter text:")
 
         assert result == "Line 1\nLine 2"
@@ -45,8 +44,7 @@ class TestMultilineInput:
         """測試中文多行輸入"""
         display = Display()
 
-        mock_stdin = StringIO("你好世界\n測試中文\nEND\n")
-        with patch('sys.stdin', mock_stdin):
+        with patch('aaf.ui.display.pt_prompt', return_value="你好世界\n測試中文"):
             result = display.get_multiline_input("輸入文字:")
 
         assert result == "你好世界\n測試中文"
@@ -55,18 +53,16 @@ class TestMultilineInput:
         """測試包含空行的輸入"""
         display = Display()
 
-        mock_stdin = StringIO("Line 1\n\nLine 3\nEND\n")
-        with patch('sys.stdin', mock_stdin):
+        with patch('aaf.ui.display.pt_prompt', return_value="Line 1\n\nLine 3"):
             result = display.get_multiline_input("Enter text:")
 
         assert result == "Line 1\n\nLine 3"
 
     def test_get_multiline_input_case_insensitive_end(self) -> None:
-        """測試 END 不區分大小寫"""
+        """測試不需要 END marker"""
         display = Display()
 
-        mock_stdin = StringIO("Line 1\nend\n")
-        with patch('sys.stdin', mock_stdin):
+        with patch('aaf.ui.display.pt_prompt', return_value="Line 1"):
             result = display.get_multiline_input("Enter text:")
 
         assert result == "Line 1"
@@ -75,11 +71,12 @@ class TestMultilineInput:
         """測試 EOF 處理"""
         display = Display()
 
-        mock_stdin = StringIO("Line 1\n")
-        with patch('sys.stdin', mock_stdin):
-            result = display.get_multiline_input("Enter text:")
-
-        assert result == "Line 1"
+        with patch('aaf.ui.display.pt_prompt', side_effect=EOFError()):
+            try:
+                result = display.get_multiline_input("Enter text:")
+                assert False, "Should have raised EOFError"
+            except EOFError:
+                pass  # Expected
 
 
 class TestAgentResponseFormatting:
