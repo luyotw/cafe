@@ -108,50 +108,172 @@ class PlanPhase(Phase):
                             message="plan.md 中缺少「開發指南」區塊",
                         )
 
+            # If there's existing history, show current state and get user response before continuing
+            resume_with_confirmed = False
+            if self.interactive and self.conversation_history and self.iteration > 0:
+                print("\n" + "="*70)
+                print(f"🔄 偵測到未完成的對話（已完成 {self.iteration} 輪），繼續執行...")
+                print("="*70)
+
+                plan_file = self.history_dir.parent / "plan.md"
+                if plan_file.exists():
+                    print(f"\n{'='*60}")
+                    print(f"目前的實作計畫（第 {self.iteration} 輪後的狀態）")
+                    print(f"{'='*60}")
+                    print(plan_file.read_text())
+                    print(f"{'='*60}\n")
+
+                # Check the last iteration's status code
+                last_status_code = self.conversation_history[-1].get("status_code") if self.conversation_history else None
+
+                if last_status_code == "CONFIRMED":
+                    # Last iteration was CONFIRMED - will skip agent execution and go directly to user confirmation
+                    resume_with_confirmed = True
+                else:
+                    # Last iteration was NEED_CLARIFICATION or other - get user's response
+                    user_response = self.display.get_multiline_input("請回答開發者的問題")
+
+                    if user_response.strip():
+                        print()
+                        print("✅ 已收到您的回答，正在發送給開發者處理...")
+                        print()
+                    else:
+                        print("\n⚠️  沒有輸入內容，Phase 將終止。")
+                        return PhaseResult(
+                            status=PhaseStatus.FAILED,
+                            message="User provided no response to clarification questions",
+                            data={
+                                "iterations": self.iteration,
+                            },
+                        )
+
+                    # Save user response for next iteration to read
+                    self._save_user_response(user_response)
+
             # Implementation plan loop
             while True:
-                self.iteration += 1
+                # If resuming with CONFIRMED status, skip agent execution and go directly to user confirmation
+                if resume_with_confirmed:
+                    # Use the last response from history (don't call agent or increment iteration)
+                    response = self.conversation_history[-1].get("response", "")
+                    status_code = PhaseStatusCode.CONFIRMED
+                    resume_with_confirmed = False  # Only use this flag once
+                else:
+                    # Normal flow: increment iteration and execute agent
+                    self.iteration += 1
 
-                # Generate prompt for this iteration
-                prompt = self._generate_prompt()
+                    # Generate prompt for this iteration
+                    prompt = self._generate_prompt()
 
-                # Execute developer agent
-                response = self.agent_manager.execute(
-                    self.dev_agent,
-                    prompt,
-                    allowed_tools=["write", "read"]
-                )
-
-                # Extract status code from response
-                status_code = StatusCodeParser.extract(
-                    response,
-                    valid_codes=[
-                        PhaseStatusCode.CONFIRMED,
-                        PhaseStatusCode.NEED_CLARIFICATION,
-                        PhaseStatusCode.REJECTED,
-                    ],
-                )
-
-                # Save history and progress after each iteration (only if status code found)
-                if status_code:
-                    self._save_history(
-                        prompt=prompt,
-                        response=response,
-                        status_code=status_code,
+                    # Execute developer agent
+                    response = self.agent_manager.execute(
+                        self.dev_agent,
+                        prompt,
+                        allowed_tools=["write", "read"]
                     )
-                    self._save_progress(status_code)
+
+                    # Extract status code from response
+                    status_code = StatusCodeParser.extract(
+                        response,
+                        valid_codes=[
+                            PhaseStatusCode.CONFIRMED,
+                            PhaseStatusCode.NEED_CLARIFICATION,
+                            PhaseStatusCode.REJECTED,
+                        ],
+                    )
+
+                    # Save history and progress after each iteration (only if status code found)
+                    if status_code:
+                        self._save_history(
+                            prompt=prompt,
+                            response=response,
+                            status_code=status_code,
+                        )
+                        self._save_progress(status_code)
 
                 # Handle status codes
                 if status_code == PhaseStatusCode.CONFIRMED:
-                    return PhaseResult(
-                        status=PhaseStatus.COMPLETED,
-                        message=f"Implementation plan completed in {self.iteration} iteration(s)",
-                        data={
-                            "iterations": self.iteration,
-                            "final_response": response,
-                            "status_code": status_code.value,
-                        },
-                    )
+                    # Save progress
+                    self._save_progress(status_code)
+
+                    if self.interactive:
+                        # Interactive mode: Show plan and get user confirmation
+                        plan_file = self.history_dir.parent / "plan.md"
+                        plan_content = plan_file.read_text() if plan_file.exists() else "（檔案未產生）"
+
+                        # Get agent CLI info for display
+                        agent_cli = self.agent_manager.get_agent_config(self.dev_agent).cli.value
+
+                        print(f"\n{'='*60}")
+                        print(f"Dev ({self.dev_agent} by {agent_cli}) - Iteration {self.iteration}:")
+                        print(f"{'='*60}")
+                        print(plan_content)
+                        print(f"{'='*60}\n")
+
+                        # Ask user for confirmation
+                        print("開發者認為實作計畫已完成。請確認：")
+                        print("  [c] confirm - 確認計畫，繼續實作")
+                        print("  [r] reject - 拒絕計畫，終止")
+                        print("  [m] modify - 要求修改（輸入修改意見）")
+
+                        while True:
+                            choice = input("\n請選擇 [c/r/m]: ").strip().lower()
+
+                            if choice == 'c':
+                                # User confirms - complete the phase
+                                return PhaseResult(
+                                    status=PhaseStatus.COMPLETED,
+                                    message=f"Implementation plan confirmed in {self.iteration} iteration(s)",
+                                    data={
+                                        "iterations": self.iteration,
+                                        "final_response": response,
+                                        "status_code": status_code.value,
+                                    },
+                                )
+                            elif choice == 'r':
+                                # User rejects - fail the phase
+                                return PhaseResult(
+                                    status=PhaseStatus.FAILED,
+                                    message=f"Implementation plan rejected by user in iteration {self.iteration}",
+                                    data={
+                                        "iterations": self.iteration,
+                                        "final_response": response,
+                                        "status_code": "USER_REJECTED",
+                                    },
+                                )
+                            elif choice == 'm':
+                                # User wants modifications
+                                modification_request = self.display.get_multiline_input("請輸入修改意見")
+
+                                if not modification_request.strip():
+                                    print("\n⚠️  沒有輸入修改意見，請重新選擇。")
+                                    continue
+
+                                print()
+                                print("✅ 已收到您的修改意見，正在重新規劃...")
+                                print()
+
+                                # Save user's modification request
+                                self._save_user_response(modification_request)
+
+                                # Continue to next iteration
+                                break
+                            else:
+                                print("❌ 無效選擇，請輸入 c, r, 或 m")
+
+                        # If we reach here, user chose 'm' - continue loop
+                        continue
+                    else:
+                        # Non-interactive mode: complete immediately
+                        return PhaseResult(
+                            status=PhaseStatus.COMPLETED,
+                            message=f"Implementation plan completed in {self.iteration} iteration(s)",
+                            data={
+                                "iterations": self.iteration,
+                                "final_response": response,
+                                "status_code": status_code.value,
+                            },
+                        )
                 elif status_code == PhaseStatusCode.REJECTED:
                     return PhaseResult(
                         status=PhaseStatus.FAILED,
@@ -163,8 +285,76 @@ class PlanPhase(Phase):
                         },
                     )
                 elif status_code == PhaseStatusCode.NEED_CLARIFICATION:
-                    # Continue to next iteration for clarification
-                    continue
+                    # Save progress
+                    self._save_progress(status_code)
+
+                    if self.interactive:
+                        # Interactive mode: Display plan content and get user input
+                        # Read the plan file
+                        plan_file = self.history_dir.parent / "plan.md"
+                        plan_content = plan_file.read_text() if plan_file.exists() else "（檔案未產生）"
+
+                        # Get agent CLI info for display
+                        agent_cli = self.agent_manager.get_agent_config(self.dev_agent).cli.value
+
+                        print(f"\n{'='*60}")
+                        print(f"Dev ({self.dev_agent} by {agent_cli}) - Iteration {self.iteration}:")
+                        print(f"{'='*60}")
+                        print(plan_content)
+                        print(f"{'='*60}\n")
+
+                        # Get user's response using Display
+                        user_response = self.display.get_multiline_input("請回答開發者的問題")
+
+                        # Provide feedback after input
+                        if user_response.strip():
+                            print()
+                            print("✅ 已收到您的回答，正在發送給開發者處理...")
+                            print()
+
+                        if not user_response.strip():
+                            print("\n⚠️  沒有輸入內容，Phase 將終止。")
+                            return PhaseResult(
+                                status=PhaseStatus.FAILED,
+                                message="User provided no response to clarification questions",
+                                data={
+                                    "iterations": self.iteration,
+                                    "last_response": response,
+                                },
+                            )
+
+                        # Save user response to file for next iteration
+                        self._save_user_response(user_response)
+
+                        # Update iteration history with user response (like spec_phase does)
+                        # The history was already saved in line 187-191, now update it with user_response
+                        history_file = self.history_dir / f"{self.iteration:03d}.json"
+                        if history_file.exists():
+                            import json
+                            with open(history_file, 'r', encoding='utf-8') as f:
+                                history_data = json.load(f)
+
+                            history_data["user_response"] = user_response
+
+                            with open(history_file, 'w', encoding='utf-8') as f:
+                                json.dump(history_data, f, ensure_ascii=False, indent=2)
+
+                            # Update conversation history in memory
+                            if self.conversation_history and self.conversation_history[-1]["iteration"] == self.iteration:
+                                self.conversation_history[-1]["user_response"] = user_response
+
+                        # Continue to next iteration
+                        continue
+                    else:
+                        # Non-interactive mode: exit and wait for user response
+                        return PhaseResult(
+                            status=PhaseStatus.IN_PROGRESS,
+                            message=f"Iteration {self.iteration}: 開發者需要更多資訊",
+                            data={
+                                "iterations": self.iteration,
+                                "status_code": PhaseStatusCode.NEED_CLARIFICATION.value,
+                            },
+                        )
                 else:
                     # No valid status code found, continue iteration
                     continue
@@ -336,6 +526,7 @@ class PlanPhase(Phase):
         prompt: str,
         response: str,
         status_code: PhaseStatusCode,
+        user_response: str = "",
     ) -> None:
         """Save iteration history to JSON file.
 
@@ -343,6 +534,7 @@ class PlanPhase(Phase):
             prompt: The prompt sent to agent
             response: The agent's response
             status_code: Status code from response
+            user_response: Optional user response (for NEED_CLARIFICATION iterations)
         """
         # Create history directory if it doesn't exist
         self.history_dir.mkdir(parents=True, exist_ok=True)
@@ -357,6 +549,10 @@ class PlanPhase(Phase):
             "response": response,
             "status_code": status_code.value,
         }
+
+        # Add user_response if provided (for NEED_CLARIFICATION iterations)
+        if user_response:
+            history_data["user_response"] = user_response
 
         with open(history_file, 'w', encoding='utf-8') as f:
             json.dump(history_data, f, ensure_ascii=False, indent=2)
@@ -419,6 +615,26 @@ class PlanPhase(Phase):
             data = json.load(f)
 
         return PhaseProgress.from_dict(data)
+
+    def _save_user_response(self, user_response: str) -> None:
+        """Save user's response to plan file for next iteration.
+
+        Args:
+            user_response: User's response to developer's questions
+        """
+        plan_file = self.history_dir.parent / "plan.md"
+
+        # Read existing content if any
+        existing_content = ""
+        if plan_file.exists():
+            existing_content = plan_file.read_text()
+
+        # Append user response
+        updated_content = existing_content + f"\n\n---\n用戶回應（第 {self.iteration} 輪）:\n{user_response}\n"
+
+        # Save updated content
+        plan_file.parent.mkdir(parents=True, exist_ok=True)
+        plan_file.write_text(updated_content)
 
     def _has_dev_guide_section(self, plan_file: Path) -> bool:
         """Check if plan.md has development guide section.
