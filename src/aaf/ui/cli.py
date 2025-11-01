@@ -754,6 +754,7 @@ def template(
         ls   - List all available templates
         rm   - Remove a template
         cat  - View template content
+        edit - Edit a template with $EDITOR
 
     Examples:
         # Add a new template
@@ -764,6 +765,9 @@ def template(
 
         # View template content
         aaf template cat my-template
+
+        # Edit a template
+        aaf template edit my-template
 
         # Remove a template
         aaf template rm my-template
@@ -830,9 +834,36 @@ def template(
                 content = template_path.read_text()
                 console.print(content)
 
+        elif action == "edit":
+            if not source:
+                console.print("[red]Error: 'edit' action requires template name[/red]")
+                console.print("[dim]Usage: aaf template edit <template-name>[/dim]")
+                raise typer.Exit(1)
+
+            template_path = manager.get_template_path(source)
+            if not template_path:
+                console.print(f"[red]Error: Template '{source}' not found[/red]")
+                raise typer.Exit(1)
+
+            # Open template in editor
+            import subprocess
+            import os
+
+            editor = os.environ.get('EDITOR', 'vim')
+            try:
+                subprocess.run([editor, str(template_path)], check=True)
+                console.print(f"[green]✅ Template '{source}' updated[/green]")
+            except subprocess.CalledProcessError:
+                console.print(f"[red]Error: Failed to edit template[/red]")
+                raise typer.Exit(1)
+            except FileNotFoundError:
+                console.print(f"[red]Error: Editor '{editor}' not found[/red]")
+                console.print(f"[dim]Set EDITOR environment variable or install vim[/dim]")
+                raise typer.Exit(1)
+
         else:
             console.print(f"[red]Error: Unknown action '{action}'[/red]")
-            console.print("[dim]Valid actions: add, ls, rm, cat[/dim]")
+            console.print("[dim]Valid actions: add, ls, rm, cat, edit[/dim]")
             raise typer.Exit(1)
 
     except Exception as e:
