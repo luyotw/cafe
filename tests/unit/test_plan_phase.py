@@ -486,7 +486,7 @@ class TestPlanPhaseHistory:
         plan_file.write_text("## 開發指南\n\nGuide")
 
         # Mock agent to write plan.md file
-        def mock_agent_writes_plan(agent_name: str, prompt: str) -> str:
+        def mock_agent_writes_plan(agent_name: str, prompt: str, allowed_tools=None) -> str:
             # Agent writes plan.md
             plan_file = spec_file.parent.parent / "plan" / "plan.md"
             plan_file.parent.mkdir(parents=True, exist_ok=True)

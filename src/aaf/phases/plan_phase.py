@@ -113,7 +113,11 @@ class PlanPhase(Phase):
                 prompt = self._generate_prompt()
 
                 # Execute developer agent
-                response = self.agent_manager.execute(self.dev_agent, prompt)
+                response = self.agent_manager.execute(
+                    self.dev_agent,
+                    prompt,
+                    allowed_tools=["write", "read"]
+                )
 
                 # Extract status code from response
                 status_code = StatusCodeParser.extract(
@@ -202,7 +206,10 @@ class PlanPhase(Phase):
         )
 
         if self.iteration == 1:
-            return f"""Use the {self.dev_agent} subagent to analyze {self.spec_file}.
+            return f"""分析 {self.spec_file} 並規劃實作步驟。
+
+**你的角色：**
+你是一位經驗豐富的 Developer，負責根據需求規格和開發指南，規劃詳細的實作步驟。
 
 這是第 {self.iteration} 輪實作分析。
 
@@ -226,11 +233,14 @@ class PlanPhase(Phase):
 2. 寫完檔案後，只回傳：CONFIRMED
 """
         else:
-            return f"""Use the {self.dev_agent} subagent to continue analyzing {self.spec_file}.
+            return f"""繼續分析 {self.spec_file} 的最新版本。
+
+**你的角色：**
+你是一位經驗豐富的 Developer，負責根據需求規格和開發指南，規劃詳細的實作步驟。
 
 這是第 {self.iteration} 輪實作分析。
 
-請繼續檢查實作計畫。
+請檢查 {plan_file_path} 的最新版本，繼續完善實作計畫。
 
 {status_code_prompt}
 
@@ -270,7 +280,12 @@ class PlanPhase(Phase):
         )
 
         if self.iteration == 1:
-            return f"""Use the {self.dev_agent} subagent. 這是第 {self.iteration} 輪實作分析。
+            return f"""分析 GitHub Issue #{self.issue_id} 並規劃實作步驟。
+
+**你的角色：**
+你是一位經驗豐富的 Developer，負責根據需求規格和開發指南，規劃詳細的實作步驟。
+
+這是第 {self.iteration} 輪實作分析。
 
 請用 `gh issue view {self.issue_id}` 讀取 Issue 內容，根據需求和開發指南規劃詳細的實作步驟。
 
@@ -283,7 +298,12 @@ class PlanPhase(Phase):
 回應確認訊息。
 """
         else:
-            return f"""Use the {self.dev_agent} subagent. 這是第 {self.iteration} 輪實作分析。
+            return f"""繼續分析 GitHub Issue #{self.issue_id}。
+
+**你的角色：**
+你是一位經驗豐富的 Developer，負責根據需求規格和開發指南，規劃詳細的實作步驟。
+
+這是第 {self.iteration} 輪實作分析。
 
 請用 `gh issue view {self.issue_id}` 檢視 Issue 的最新內容。
 
