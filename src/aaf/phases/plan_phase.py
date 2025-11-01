@@ -208,6 +208,15 @@ class PlanPhase(Phase):
             },
         )
 
+        # Add template reference if template is provided
+        template_instruction = ""
+        if self.template_path:
+            template_instruction = f"""
+**輸出格式參考：**
+請參考 {self.template_path} 的格式和結構來撰寫 plan.md。
+模版提供了建議的章節結構和撰寫風格，請依照類似的格式組織你的實作計畫。
+"""
+
         if self.iteration == 1:
             return f"""分析 {self.spec_file} 並規劃實作步驟。
 
@@ -217,7 +226,7 @@ class PlanPhase(Phase):
 這是第 {self.iteration} 輪實作分析。
 
 請仔細閱讀需求文件（{self.spec_file}）和 {plan_file_path} 中的開發指南，規劃詳細的實作步驟。
-
+{template_instruction}
 {status_code_prompt}
 
 **如果需要更多資訊（status: NEED_CLARIFICATION）：**
@@ -244,7 +253,7 @@ class PlanPhase(Phase):
 這是第 {self.iteration} 輪實作分析。
 
 請檢查 {plan_file_path} 的最新版本，繼續完善實作計畫。
-
+{template_instruction}
 {status_code_prompt}
 
 **如果仍需確認（status: NEED_CLARIFICATION）：**
@@ -435,58 +444,34 @@ class PlanPhase(Phase):
         return False
 
     def _prompt_for_dev_guide(self) -> None:
-        """Prompt user to write development guide when it doesn't exist, or use template if provided."""
-        dev_guide = None
+        """Prompt user to write development guide when it doesn't exist."""
+        print("\n" + "="*70)
+        print("請提供開發指南，說明實作方向與技術背景資訊：")
+        print("="*70)
+        print()
+        print("開發指南應該包含：")
+        print("  1. 建議的技術方案或實作方向")
+        print("  2. 相關的程式碼位置或模組說明")
+        print("  3. 需要注意的技術限制或依賴關係")
+        print("  4. 其他開發者可能不知道的背景資訊")
+        print()
+        print("範例：")
+        print("  這個功能應該在 src/core/processor.py 中實作，")
+        print("  可以參考現有的 DataProcessor 類別。")
+        print("  注意要保持與現有 API 的向後相容性。")
+        print()
 
-        # Check if template is provided
-        if self.template_path:
-            template_file = Path(self.template_path)
-            if template_file.exists():
-                print()
-                print(f"✓ 使用模版：{template_file.name}")
-                dev_guide = template_file.read_text()
-            else:
-                print()
-                print(f"⚠ 模版檔案不存在：{self.template_path}")
-                print("  將改為手動輸入開發指南")
+        # Get development guide using Display for better Unicode support
+        dev_guide = self.display.get_multiline_input("請輸入開發指南").strip()
 
-        # If no template or template file doesn't exist, prompt user
         if not dev_guide:
-            print("\n" + "="*70)
-            print("請提供開發指南，說明實作方向與技術背景資訊：")
-            print("="*70)
-            print()
-            print("開發指南應該包含：")
-            print("  1. 建議的技術方案或實作方向")
-            print("  2. 相關的程式碼位置或模組說明")
-            print("  3. 需要注意的技術限制或依賴關係")
-            print("  4. 其他開發者可能不知道的背景資訊")
-            print()
-            print("範例：")
-            print("  這個功能應該在 src/core/processor.py 中實作，")
-            print("  可以參考現有的 DataProcessor 類別。")
-            print("  注意要保持與現有 API 的向後相容性。")
-            print()
-
-            # Get development guide using Display for better Unicode support
-            dev_guide = self.display.get_multiline_input("請輸入開發指南").strip()
-
-            if not dev_guide:
-                raise ValueError("未提供開發指南，無法繼續")
+            raise ValueError("未提供開發指南，無法繼續")
 
         # Save development guide as initial plan.md
         plan_dir = self.history_dir.parent
         plan_file_path = plan_dir / "plan.md"
         plan_file_path.parent.mkdir(parents=True, exist_ok=True)
-
-        # If dev_guide doesn't start with ##, prepend the section header
-        if not dev_guide.startswith("##"):
-            dev_guide = f"## 開發指南\n\n{dev_guide}\n"
-        else:
-            # Template already has headers, use as-is
-            dev_guide = f"{dev_guide}\n" if not dev_guide.endswith("\n") else dev_guide
-
-        plan_file_path.write_text(dev_guide)
+        plan_file_path.write_text(f"## 開發指南\n\n{dev_guide}\n")
 
         print()
         print("✅ 開發指南已記錄，開始實作規劃...")
