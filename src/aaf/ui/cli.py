@@ -538,12 +538,8 @@ def plan(
             if not templates:
                 console.print("[yellow]Warning: No templates found[/yellow]")
                 console.print("[dim]You can add templates with 'aaf template add <source> <name>'[/dim]")
-            elif len(templates) == 1:
-                # Only one template, use it automatically
-                selected_template = templates[0]
-                console.print(f"[dim]Using template: {selected_template}[/dim]")
             else:
-                # Multiple templates, use interactive selector
+                # Always use interactive selector (even with single template)
                 template_paths = {name: template_manager.get_template_path(name) for name in templates}
                 selected_template = select_template(templates, template_paths)
                 if selected_template:

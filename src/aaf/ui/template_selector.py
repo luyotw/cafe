@@ -25,11 +25,13 @@ def select_template(templates: List[str], template_paths: Dict[str, Path]) -> Op
         print(f"  {i}. {name}")
     print()
     print("Tip: Use 'aaf template cat <name>' to preview template content")
+    if len(templates) == 1:
+        print("     Create your own: 'aaf template add <file> <name>' to add custom template")
     print()
 
     while True:
         try:
-            choice = typer.prompt("Select template number")
+            choice = typer.prompt("Select template number", default="1")
             index = int(choice) - 1
             if 0 <= index < len(templates):
                 return templates[index]
