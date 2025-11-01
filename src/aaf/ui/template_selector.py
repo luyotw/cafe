@@ -4,6 +4,9 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 import typer
+from rich.console import Console
+
+console = Console()
 
 
 def select_template(templates: List[str], template_paths: Dict[str, Path]) -> Optional[str]:
@@ -19,15 +22,15 @@ def select_template(templates: List[str], template_paths: Dict[str, Path]) -> Op
     if not templates:
         return None
 
-    print()
-    print("Available templates:")
+    console.print()
+    console.print("[bold cyan]Available templates:[/bold cyan]")
     for i, name in enumerate(templates, 1):
-        print(f"  {i}. {name}")
-    print()
-    print("Tip: Use 'aaf template cat <name>' to preview template content")
+        console.print(f"  [bold green]{i}[/bold green]. [yellow]{name}[/yellow]")
+    console.print()
+    console.print("[dim]Tip: Use 'aaf template cat <name>' to preview template content[/dim]")
     if len(templates) == 1:
-        print("     Create your own: 'aaf template add <file> <name>' to add custom template")
-    print()
+        console.print("[dim]     Create your own: 'aaf template add <file> <name>' to add custom template[/dim]")
+    console.print()
 
     while True:
         try:
@@ -36,10 +39,10 @@ def select_template(templates: List[str], template_paths: Dict[str, Path]) -> Op
             if 0 <= index < len(templates):
                 return templates[index]
             else:
-                print(f"Invalid selection. Please choose 1-{len(templates)}")
+                console.print(f"[red]Invalid selection. Please choose 1-{len(templates)}[/red]")
         except ValueError:
-            print("Invalid input. Please enter a number")
+            console.print("[red]Invalid input. Please enter a number[/red]")
         except (KeyboardInterrupt, EOFError):
             # User pressed Ctrl+C or Ctrl+D, exit
-            print()
+            console.print()
             raise typer.Exit(1)
