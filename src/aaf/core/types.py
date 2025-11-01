@@ -20,6 +20,7 @@ class AgentCLI(str, Enum):
     CLAUDE = "claude"
     GEMINI = "gemini"
     CURSOR = "cursor-agent"
+    COPILOT = "copilot"
 
 
 class PhaseStatus(str, Enum):

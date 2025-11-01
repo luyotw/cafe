@@ -46,6 +46,15 @@ class AgentExecutor:
             "grep": "grep",
             "glob": "glob",
         },
+        AgentCLI.COPILOT: {
+            # GitHub Copilot CLI tool name translations
+            "bash": "bash",
+            "read": "view",
+            "write": "create",
+            "edit": "str_replace",
+            "grep": "bash",
+            "glob": "bash",
+        },
     }
 
     def __init__(self, config: AgentConfig) -> None:
@@ -95,6 +104,8 @@ class AgentExecutor:
                 response, token_usage = self._execute_gemini(prompt, translated_tools)
             elif self.config.cli == AgentCLI.CURSOR:
                 response, token_usage = self._execute_cursor(prompt, translated_tools)
+            elif self.config.cli == AgentCLI.COPILOT:
+                response, token_usage = self._execute_copilot(prompt, translated_tools)
             else:
                 raise AgentExecutionError(f"Unsupported agent CLI: {self.config.cli}")
 
@@ -274,3 +285,48 @@ class AgentExecutor:
         """
         # Placeholder for Cursor implementation
         raise NotImplementedError("Cursor execution not yet implemented")
+
+    def _execute_copilot(self, prompt: str, allowed_tools: Optional[List[str]] = None) -> Tuple[str, TokenUsage]:
+        """Execute GitHub Copilot CLI agent.
+
+        Args:
+            prompt: Prompt to send to Copilot
+            allowed_tools: List of allowed tools (already translated)
+
+        Returns:
+            Tuple of (Copilot's response, token usage)
+        """
+        # Build command: copilot -p "prompt" --allow-all-tools or --allow-tool
+        cmd = ["copilot", "-p", prompt]
+
+        # Add allowed tools if specified
+        if allowed_tools:
+            # Use --allow-tool for each tool
+            for tool in allowed_tools:
+                cmd.extend(["--allow-tool", tool])
+        else:
+            # Use --allow-all-tools for automatic approval
+            cmd.append("--allow-all-tools")
+
+        # Add session if configured
+        if self.config.session_id:
+            cmd.extend(["--resume", self.config.session_id])
+
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        if result.returncode != 0:
+            raise AgentExecutionError(
+                f"Copilot execution failed with code {result.returncode}: {result.stderr}"
+            )
+
+        # Copilot doesn't provide JSON output format yet, return raw output
+        # TODO: Update when Copilot CLI provides structured output
+        response = result.stdout
+        token_usage = TokenUsage()
+
+        return response, token_usage
