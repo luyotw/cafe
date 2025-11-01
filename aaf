@@ -13,5 +13,5 @@ if [ -d "$SCRIPT_DIR/venv" ]; then
     source "$SCRIPT_DIR/venv/bin/activate"
 fi
 
-# Run the Python CLI
-python3 -m aaf.ui.cli "$@"
+# Run the Python CLI with local src directory
+PYTHONPATH="$SCRIPT_DIR/src:$PYTHONPATH" python3 -m aaf.ui.cli "$@"
