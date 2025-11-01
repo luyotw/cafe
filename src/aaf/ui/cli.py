@@ -385,11 +385,15 @@ def spec(
         agent_manager = _setup_agents(config_manager, issue_name=issue_name)
         permission_handler = PermissionHandler()
 
+        # Get PM agent CLI
+        pm_executor = agent_manager.get_agent(pm_agent)
+        pm_cli = pm_executor.config.cli.value
+
         # Display start message
         console.print("[bold blue]🎯 Spec Phase: Specification Clarification[/bold blue]")
         console.print(f"Mode: {workflow_mode.value}")
         console.print(f"Issue: {issue_name}")
-        console.print(f"PM Agent: {pm_agent}")
+        console.print(f"PM Agent: {pm_agent} (by {pm_cli})")
         if spec_rigor:
             console.print(f"Rigor: {spec_rigor.value}")
         if workflow_mode == WorkflowMode.LOCAL:
@@ -521,6 +525,10 @@ def plan(
         agent_manager = _setup_agents(config_manager, issue_name=issue_name)
         permission_handler = PermissionHandler()
 
+        # Get developer agent CLI
+        dev_executor = agent_manager.get_agent(dev_agent)
+        dev_cli = dev_executor.config.cli.value
+
         # Handle template selection
         template_manager = TemplateManager(config_dir)
         selected_template = None
@@ -549,7 +557,7 @@ def plan(
         console.print("[bold blue]📋 Plan Phase: Implementation Planning[/bold blue]")
         console.print(f"Mode: {workflow_mode.value}")
         console.print(f"Issue: {issue_name}")
-        console.print(f"Developer Agent: {dev_agent}")
+        console.print(f"Developer Agent: {dev_agent} (by {dev_cli})")
         if workflow_mode == WorkflowMode.LOCAL:
             console.print(f"Spec file: {spec_file}")
         elif issue_id:
