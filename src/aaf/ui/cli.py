@@ -19,6 +19,7 @@ from aaf.phases.spec_phase import SpecPhase
 from aaf.phases.review_phase import ReviewPhase
 from aaf.utils.config import ConfigManager
 from aaf.utils.template import TemplateManager
+from aaf.ui.template_selector import select_template
 
 app = typer.Typer(
     name="aaf",
@@ -542,26 +543,11 @@ def plan(
                 selected_template = templates[0]
                 console.print(f"[dim]Using template: {selected_template}[/dim]")
             else:
-                # Multiple templates, prompt user to select
-                console.print("[bold]Available templates:[/bold]")
-                for i, tmpl in enumerate(templates, 1):
-                    console.print(f"  {i}. {tmpl}")
-                console.print()
-
-                while True:
-                    choice = typer.prompt("Select template number (or press Enter to skip)")
-                    if not choice:
-                        # User skipped template selection
-                        break
-                    try:
-                        index = int(choice) - 1
-                        if 0 <= index < len(templates):
-                            selected_template = templates[index]
-                            break
-                        else:
-                            console.print(f"[red]Invalid selection. Please choose 1-{len(templates)}[/red]")
-                    except ValueError:
-                        console.print("[red]Invalid input. Please enter a number[/red]")
+                # Multiple templates, use interactive selector
+                template_paths = {name: template_manager.get_template_path(name) for name in templates}
+                selected_template = select_template(templates, template_paths)
+                if selected_template:
+                    console.print(f"[dim]Using template: {selected_template}[/dim]")
 
         # Display start message
         console.print("[bold blue]📋 Plan Phase: Implementation Planning[/bold blue]")
@@ -767,6 +753,7 @@ def template(
         add  - Add a new template from a file
         ls   - List all available templates
         rm   - Remove a template
+        cat  - View template content
 
     Examples:
         # Add a new template
@@ -774,6 +761,9 @@ def template(
 
         # List all templates
         aaf template ls
+
+        # View template content
+        aaf template cat my-template
 
         # Remove a template
         aaf template rm my-template
@@ -820,9 +810,29 @@ def template(
                 console.print(f"[red]Error: {e}[/red]")
                 raise typer.Exit(1)
 
+        elif action == "cat":
+            if not source:
+                console.print("[red]Error: 'cat' action requires template name[/red]")
+                console.print("[dim]Usage: aaf template cat <template-name>[/dim]")
+                raise typer.Exit(1)
+
+            template_path = manager.get_template_path(source)
+            if not template_path:
+                console.print(f"[red]Error: Template '{source}' not found[/red]")
+                raise typer.Exit(1)
+
+            # Display template content using pager
+            import subprocess
+            try:
+                subprocess.run(["less", "-R", str(template_path)], check=False)
+            except FileNotFoundError:
+                # Fallback: print to console
+                content = template_path.read_text()
+                console.print(content)
+
         else:
             console.print(f"[red]Error: Unknown action '{action}'[/red]")
-            console.print("[dim]Valid actions: add, ls, rm[/dim]")
+            console.print("[dim]Valid actions: add, ls, rm, cat[/dim]")
             raise typer.Exit(1)
 
     except Exception as e:
