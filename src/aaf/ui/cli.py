@@ -44,15 +44,15 @@ def _setup_agents(config_manager: ConfigManager, issue_name: Optional[str] = Non
     # Get agent configurations from config or use defaults
     pm_config = config_manager.get("agents.pm", {
         "name": "Roger",
-        "cli": "claude",
+        "cli": "copilot",
     })
     dev_config = config_manager.get("agents.developer", {
         "name": "David",
-        "cli": "claude",
+        "cli": "copilot",
     })
     reviewer_config = config_manager.get("agents.reviewer", {
         "name": "Richard",
-        "cli": "claude",
+        "cli": "copilot",
     })
 
     # Register agents
