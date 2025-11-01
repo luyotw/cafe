@@ -27,6 +27,7 @@ class PlanPhase(Phase):
         issue_name: Optional[str] = None,
         dev_agent: str = "David",
         interactive: bool = True,
+        template_path: Optional[str] = None,
     ) -> None:
         """Initialize plan phase.
 
@@ -38,6 +39,7 @@ class PlanPhase(Phase):
             issue_id: GitHub issue ID (required for github mode)
             issue_name: Issue name for history tracking (default: derived from spec_file)
             dev_agent: Developer agent name (default: David)
+            template_path: Path to plan template file (optional)
             interactive: Whether to allow interactive prompts (default: True)
         """
         self.agent_manager = agent_manager
@@ -47,6 +49,7 @@ class PlanPhase(Phase):
         self.issue_id = issue_id
         self.dev_agent = dev_agent
         self.interactive = interactive
+        self.template_path = template_path
         self.display = Display()
         self.iteration = 0
 
@@ -432,34 +435,58 @@ class PlanPhase(Phase):
         return False
 
     def _prompt_for_dev_guide(self) -> None:
-        """Prompt user to write development guide when it doesn't exist."""
-        print("\n" + "="*70)
-        print("請提供開發指南，說明實作方向與技術背景資訊：")
-        print("="*70)
-        print()
-        print("開發指南應該包含：")
-        print("  1. 建議的技術方案或實作方向")
-        print("  2. 相關的程式碼位置或模組說明")
-        print("  3. 需要注意的技術限制或依賴關係")
-        print("  4. 其他開發者可能不知道的背景資訊")
-        print()
-        print("範例：")
-        print("  這個功能應該在 src/core/processor.py 中實作，")
-        print("  可以參考現有的 DataProcessor 類別。")
-        print("  注意要保持與現有 API 的向後相容性。")
-        print()
+        """Prompt user to write development guide when it doesn't exist, or use template if provided."""
+        dev_guide = None
 
-        # Get development guide using Display for better Unicode support
-        dev_guide = self.display.get_multiline_input("請輸入開發指南").strip()
+        # Check if template is provided
+        if self.template_path:
+            template_file = Path(self.template_path)
+            if template_file.exists():
+                print()
+                print(f"✓ 使用模版：{template_file.name}")
+                dev_guide = template_file.read_text()
+            else:
+                print()
+                print(f"⚠ 模版檔案不存在：{self.template_path}")
+                print("  將改為手動輸入開發指南")
 
+        # If no template or template file doesn't exist, prompt user
         if not dev_guide:
-            raise ValueError("未提供開發指南，無法繼續")
+            print("\n" + "="*70)
+            print("請提供開發指南，說明實作方向與技術背景資訊：")
+            print("="*70)
+            print()
+            print("開發指南應該包含：")
+            print("  1. 建議的技術方案或實作方向")
+            print("  2. 相關的程式碼位置或模組說明")
+            print("  3. 需要注意的技術限制或依賴關係")
+            print("  4. 其他開發者可能不知道的背景資訊")
+            print()
+            print("範例：")
+            print("  這個功能應該在 src/core/processor.py 中實作，")
+            print("  可以參考現有的 DataProcessor 類別。")
+            print("  注意要保持與現有 API 的向後相容性。")
+            print()
+
+            # Get development guide using Display for better Unicode support
+            dev_guide = self.display.get_multiline_input("請輸入開發指南").strip()
+
+            if not dev_guide:
+                raise ValueError("未提供開發指南，無法繼續")
 
         # Save development guide as initial plan.md
         plan_dir = self.history_dir.parent
         plan_file_path = plan_dir / "plan.md"
         plan_file_path.parent.mkdir(parents=True, exist_ok=True)
-        plan_file_path.write_text(f"## 開發指南\n\n{dev_guide}\n")
+
+        # If dev_guide doesn't start with ##, prepend the section header
+        if not dev_guide.startswith("##"):
+            dev_guide = f"## 開發指南\n\n{dev_guide}\n"
+        else:
+            # Template already has headers, use as-is
+            dev_guide = f"{dev_guide}\n" if not dev_guide.endswith("\n") else dev_guide
+
+        plan_file_path.write_text(dev_guide)
 
         print()
         print("✅ 開發指南已記錄，開始實作規劃...")

@@ -18,6 +18,7 @@ from aaf.phases.pr_phase import PRPhase
 from aaf.phases.spec_phase import SpecPhase
 from aaf.phases.review_phase import ReviewPhase
 from aaf.utils.config import ConfigManager
+from aaf.utils.template import TemplateManager
 
 app = typer.Typer(
     name="aaf",
@@ -465,6 +466,12 @@ def plan(
         "--dev",
         help="Developer agent name",
     ),
+    template: Optional[str] = typer.Option(
+        None,
+        "--template",
+        "-t",
+        help="Plan template name (if not specified, will prompt interactively)",
+    ),
     config_file: str = typer.Option(
         ".aaf/config.yaml",
         "--config",
@@ -513,6 +520,49 @@ def plan(
         agent_manager = _setup_agents(config_manager, issue_name=issue_name)
         permission_handler = PermissionHandler()
 
+        # Handle template selection
+        template_manager = TemplateManager(config_dir)
+        selected_template = None
+
+        if template:
+            # Template specified via --template option
+            if not template_manager.template_exists(template):
+                console.print(f"[red]Error: Template '{template}' not found[/red]")
+                console.print("[dim]Use 'aaf template list' to see available templates[/dim]")
+                raise typer.Exit(1)
+            selected_template = template
+        else:
+            # Interactive template selection
+            templates = template_manager.list_templates()
+            if not templates:
+                console.print("[yellow]Warning: No templates found[/yellow]")
+                console.print("[dim]You can add templates with 'aaf template add <source> <name>'[/dim]")
+            elif len(templates) == 1:
+                # Only one template, use it automatically
+                selected_template = templates[0]
+                console.print(f"[dim]Using template: {selected_template}[/dim]")
+            else:
+                # Multiple templates, prompt user to select
+                console.print("[bold]Available templates:[/bold]")
+                for i, tmpl in enumerate(templates, 1):
+                    console.print(f"  {i}. {tmpl}")
+                console.print()
+
+                while True:
+                    choice = typer.prompt("Select template number (or press Enter to skip)")
+                    if not choice:
+                        # User skipped template selection
+                        break
+                    try:
+                        index = int(choice) - 1
+                        if 0 <= index < len(templates):
+                            selected_template = templates[index]
+                            break
+                        else:
+                            console.print(f"[red]Invalid selection. Please choose 1-{len(templates)}[/red]")
+                    except ValueError:
+                        console.print("[red]Invalid input. Please enter a number[/red]")
+
         # Display start message
         console.print("[bold blue]📋 Plan Phase: Implementation Planning[/bold blue]")
         console.print(f"Mode: {workflow_mode.value}")
@@ -524,6 +574,13 @@ def plan(
             console.print(f"GitHub Issue: #{issue_id}")
         console.print()
 
+        # Get template path if selected
+        template_path_str = None
+        if selected_template:
+            template_path_obj = template_manager.get_template_path(selected_template)
+            if template_path_obj:
+                template_path_str = str(template_path_obj)
+
         # Create and execute plan phase
         phase = PlanPhase(
             agent_manager=agent_manager,
@@ -534,6 +591,7 @@ def plan(
             issue_name=issue_name,
             dev_agent=dev_agent,
             interactive=True,
+            template_path=template_path_str,
         )
 
         console.print("[bold]Starting implementation planning...[/bold]")
@@ -688,6 +746,87 @@ def remove_issue(
         console.print(f"[green]✓[/green] Issue '{issue_name}' deleted successfully")
     except Exception as e:
         console.print(f"[red]Failed to delete issue: {e}[/red]")
+        raise typer.Exit(1)
+
+
+@app.command()
+def template(
+    action: str = typer.Argument(..., help="Action: add, list, or remove"),
+    source: Optional[str] = typer.Argument(None, help="Source file path (for 'add' action)"),
+    name: Optional[str] = typer.Argument(None, help="Template name (for 'add' or 'remove' action)"),
+    config_file: str = typer.Option(
+        ".aaf/config.yaml",
+        "--config",
+        "-c",
+        help="Path to configuration file",
+    ),
+) -> None:
+    """Manage plan templates.
+
+    Actions:
+        add  - Add a new template from a file
+        ls   - List all available templates
+        rm   - Remove a template
+
+    Examples:
+        # Add a new template
+        aaf template add path/to/template.md my-template
+
+        # List all templates
+        aaf template ls
+
+        # Remove a template
+        aaf template rm my-template
+    """
+    try:
+        config_dir = str(Path(config_file).parent) if config_file != ".aaf/config.yaml" else ".aaf"
+        manager = TemplateManager(config_dir)
+
+        if action == "add":
+            if not source or not name:
+                console.print("[red]Error: 'add' action requires both source file path and template name[/red]")
+                console.print("[dim]Usage: aaf template add <source-file> <template-name>[/dim]")
+                raise typer.Exit(1)
+
+            try:
+                manager.add_template(source, name)
+                console.print(f"[green]✅ Template '{name}' added successfully[/green]")
+            except FileNotFoundError as e:
+                console.print(f"[red]Error: {e}[/red]")
+                raise typer.Exit(1)
+            except ValueError as e:
+                console.print(f"[red]Error: {e}[/red]")
+                raise typer.Exit(1)
+
+        elif action == "ls":
+            templates = manager.list_templates()
+            if not templates:
+                console.print("[dim]No templates found[/dim]")
+            else:
+                console.print("[bold]Available templates:[/bold]")
+                for tmpl in templates:
+                    console.print(f"  • {tmpl}")
+
+        elif action == "rm":
+            if not name:
+                console.print("[red]Error: 'rm' action requires template name[/red]")
+                console.print("[dim]Usage: aaf template rm <template-name>[/dim]")
+                raise typer.Exit(1)
+
+            try:
+                manager.remove_template(name)
+                console.print(f"[green]✅ Template '{name}' removed successfully[/green]")
+            except FileNotFoundError as e:
+                console.print(f"[red]Error: {e}[/red]")
+                raise typer.Exit(1)
+
+        else:
+            console.print(f"[red]Error: Unknown action '{action}'[/red]")
+            console.print("[dim]Valid actions: add, ls, rm[/dim]")
+            raise typer.Exit(1)
+
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
         raise typer.Exit(1)
 
 
