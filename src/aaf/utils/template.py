@@ -16,6 +16,7 @@ class TemplateManager:
         """
         self.template_dir = Path(config_dir) / "templates" / "plan"
         self.template_dir.mkdir(parents=True, exist_ok=True)
+        self._ensure_default_template()
 
     def add_template(self, source_path: str, template_name: str) -> None:
         """Add a new template from a file.
@@ -105,3 +106,18 @@ class TemplateManager:
             True if template exists, False otherwise
         """
         return self.get_template_path(template_name) is not None
+
+    def _ensure_default_template(self) -> None:
+        """Ensure default template exists by copying from package if needed."""
+        default_template_path = self.template_dir / "default.md"
+
+        # If default template already exists, don't overwrite
+        if default_template_path.exists():
+            return
+
+        # Find the package template directory
+        # The template.py is in src/aaf/utils/, so package templates are in src/aaf/templates/
+        package_template = Path(__file__).parent.parent / "templates" / "plan" / "default.md"
+
+        if package_template.exists():
+            shutil.copy2(package_template, default_template_path)
