@@ -212,9 +212,11 @@ class PlanPhase(Phase):
         template_instruction = ""
         if self.template_path:
             template_instruction = f"""
-**輸出格式參考：**
-請參考 {self.template_path} 的格式和結構來撰寫 plan.md。
-模版提供了建議的章節結構和撰寫風格，請依照類似的格式組織你的實作計畫。
+**重要：必須嚴格按照模版格式撰寫**
+請先閱讀 {self.template_path}，然後嚴格按照模版的格式、章節結構、撰寫風格來撰寫 plan.md。
+- 使用與模版相同的章節標題和結構
+- 參考模版中的內容詳細程度和撰寫風格
+- 保持簡潔，避免過於冗長的說明
 """
 
         if self.iteration == 1:
@@ -237,11 +239,9 @@ class PlanPhase(Phase):
 2. 寫完檔案後，只回傳：NEED_CLARIFICATION
 
 **如果分析完成（status: CONFIRMED）：**
-1. 使用 Write tool 將完整實作計畫寫入 {plan_file_path}，格式：
-   - 「## 開發指南」- 保留原有的開發指南內容（不要修改）
-   - 「## 技術分析」- 技術可行性分析
-   - 「## 實作步驟」- 詳細的實作步驟
-   - 「## 技術細節」- 需要注意的技術細節
+1. 使用 Write tool 將完整實作計畫寫入 {plan_file_path}：
+   - 第一部分：「## 開發指南」- 保留原有的開發指南內容（不要修改）
+   - 第二部分：嚴格按照模版的章節結構和格式撰寫實作計畫
 2. 寫完檔案後，只回傳：CONFIRMED
 """
         else:
@@ -264,11 +264,9 @@ class PlanPhase(Phase):
 2. 寫完檔案後，只回傳：NEED_CLARIFICATION
 
 **如果分析完成（status: CONFIRMED）：**
-1. 使用 Write tool 將完整實作計畫寫入 {plan_file_path}，格式：
-   - 「## 開發指南」- 保留原有的開發指南內容（不要修改）
-   - 「## 技術分析」- 技術可行性分析
-   - 「## 實作步驟」- 詳細的實作步驟
-   - 「## 技術細節」- 需要注意的技術細節
+1. 使用 Write tool 將完整實作計畫寫入 {plan_file_path}：
+   - 第一部分：「## 開發指南」- 保留原有的開發指南內容（不要修改）
+   - 第二部分：嚴格按照模版的章節結構和格式撰寫實作計畫
 2. 寫完檔案後，只回傳：CONFIRMED
 """
 
