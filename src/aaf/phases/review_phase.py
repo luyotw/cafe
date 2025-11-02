@@ -177,12 +177,30 @@ class ReviewPhase(Phase):
 """
         else:
             prompt += """
-**你的審查任務:**
-- **檢查 commit message**：確認 commit message 只有一行。
-- **仔細比對需求**：確認所有需求都已實作，且實作方式符合規劃。
-- **找出潛在問題**：檢查程式碼的正確性、可讀性、效能、安全性、以及是否符合專案既有風格。
-- **簡要說明問題**：列出檔案路徑和行號並說明問題，不要提供任何解決方案。
-- **用繁體中文回應**。
+**你的審查任務（依優先順序）:**
+
+1. **【最優先】檢查 commit message 風格一致性**
+   - 查看本次變更的所有 commit 是否符合專案既有的 commit message 風格
+   - **如果發現跟既有風格不一致：**
+     - 明確指出哪些 commit SHA 的 message 不符合風格
+     - 請 developer 使用以下指令修改：
+       ```
+       git commit --fixup=reword:<COMMIT_SHA> -m "<NEW_MESSAGE>" --allow-empty --only
+       ```
+
+2. **仔細比對需求**
+   - 確認所有需求都已實作，且實作方式符合規劃
+
+3. **找出潛在問題**
+   - 檢查程式碼的正確性、可讀性、效能、安全性
+   - 確認是否符合專案既有 coding style
+
+4. **簡要說明問題**
+   - 列出檔案路徑和行號並說明問題
+   - 對於 commit message 問題，提供具體的修正指令
+   - 不要提供程式碼解決方案（除了 commit message 修改指令）
+
+**重要：** 用繁體中文回應。Commit message 風格問題視為 critical issue，必須修正後才能通過審查。
 """
 
         return prompt
