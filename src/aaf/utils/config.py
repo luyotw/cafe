@@ -54,23 +54,24 @@ class ConfigManager:
             Default configuration dictionary
         """
         return {
-            "workflow_mode": "local",
-            "agents": [
-                {
+            "agents": {
+                "pm": {
                     "name": "Roger",
-                    "tool": "claude",
-                    "allowed_tools": ["Read(*)", "Write(*)", "Bash(git:*)"],
+                    "cli": "copilot",
                 },
-                {
+                "dev": {
                     "name": "David",
-                    "tool": "claude",
-                    "allowed_tools": ["Read(*)", "Write(*)", "Bash(*)"],
+                    "cli": "copilot",
                 },
-            ],
-            "sessions_dir": ".aaf/sessions",
-            "logs_dir": ".aaf/logs",
-            "auto_approve_read": False,
-            "auto_approve_safe_git": True,
+                "reviewer": {
+                    "name": "Alice",
+                    "cli": "copilot",
+                },
+            },
+            "defaults": {
+                "workflow_mode": "local",
+                "interactive": True,
+            },
         }
 
     def save_config(self, config: Dict[str, Any]) -> None:
@@ -155,9 +156,18 @@ class ConfigManager:
         Args:
             key: Configuration key (supports dot notation for nested keys)
             value: Value to set
+
+        Note:
+            Supports aliases for agent CLI shortcuts:
+            - 'pm' → 'agents.pm.cli'
+            - 'dev' → 'agents.dev.cli'
+            - 'reviewer' → 'agents.reviewer.cli'
         """
         if self._config is None:
             self.load_config()
+
+        # Apply alias logic for agent CLI shortcuts
+        key = self._resolve_alias(key)
 
         # Handle nested keys with dot notation
         keys = key.split(".")
@@ -173,6 +183,37 @@ class ConfigManager:
         config[keys[-1]] = value
 
         # Save to file
+        self.save_config(self._config)
+
+    def _resolve_alias(self, key: str) -> str:
+        """Resolve key aliases for convenience.
+
+        Args:
+            key: Original key
+
+        Returns:
+            Resolved key
+
+        Examples:
+            'pm' → 'agents.pm.cli'
+            'dev' → 'agents.dev.cli'
+            'pm.name' → 'agents.pm.name' (no change needed, already has agent prefix)
+        """
+        # Agent CLI shortcuts: pm, dev, reviewer (without dots)
+        if key in ['pm', 'dev', 'reviewer']:
+            return f'agents.{key}.cli'
+
+        # If it starts with agent name but not agents., add agents prefix
+        # e.g., 'pm.cli' → 'agents.pm.cli', 'pm.name' → 'agents.pm.name'
+        for agent in ['pm', 'dev', 'reviewer']:
+            if key.startswith(f'{agent}.'):
+                return f'agents.{key}'
+
+        return key
+
+    def reset(self) -> None:
+        """Reset configuration to default values."""
+        self._config = self.get_default_config()
         self.save_config(self._config)
 
     def merge_config(self, base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:

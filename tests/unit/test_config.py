@@ -61,8 +61,9 @@ class TestLoadConfig:
         config = manager.load_config()
 
         assert config is not None
-        assert "workflow_mode" in config
         assert "agents" in config
+        assert "defaults" in config
+        assert "workflow_mode" in config["defaults"]
 
     def test_load_invalid_yaml_raises_error(self, tmp_path: Path) -> None:
         """測試載入無效的 YAML 拋出錯誤"""
@@ -85,44 +86,37 @@ class TestDefaultConfig:
         manager = ConfigManager()
         config = manager.get_default_config()
 
-        assert config["workflow_mode"] == "local"
         assert "agents" in config
-        assert isinstance(config["agents"], list)
+        assert isinstance(config["agents"], dict)
+        assert "defaults" in config
 
-    def test_default_config_has_required_fields(self) -> None:
-        """測試預設設定包含必要欄位"""
+    def test_default_config_structure(self) -> None:
+        """測試預設設定結構"""
         manager = ConfigManager()
         config = manager.get_default_config()
 
-        required_fields = [
-            "workflow_mode",
-            "agents",
-            "sessions_dir",
-            "logs_dir",
-            "auto_approve_read",
-            "auto_approve_safe_git",
-        ]
+        # Check agents structure
+        assert "pm" in config["agents"]
+        assert "dev" in config["agents"]
+        assert "reviewer" in config["agents"]
 
-        for field in required_fields:
-            assert field in config, f"Missing required field: {field}"
+        # Check each agent has name and cli
+        assert config["agents"]["pm"]["name"] == "Roger"
+        assert "cli" in config["agents"]["pm"]
 
-    def test_default_agents_configuration(self) -> None:
-        """測試預設 agents 設定"""
+        assert config["agents"]["dev"]["name"] == "David"
+        assert "cli" in config["agents"]["dev"]
+
+        assert config["agents"]["reviewer"]["name"] == "Alice"
+        assert "cli" in config["agents"]["reviewer"]
+
+    def test_default_config_defaults_section(self) -> None:
+        """測試預設設定的 defaults 區塊"""
         manager = ConfigManager()
         config = manager.get_default_config()
 
-        agents = config["agents"]
-        assert len(agents) >= 2  # At least Roger and David
-
-        # Check Roger
-        roger = next((a for a in agents if a["name"] == "Roger"), None)
-        assert roger is not None
-        assert roger["tool"] == "claude"
-
-        # Check David
-        david = next((a for a in agents if a["name"] == "David"), None)
-        assert david is not None
-        assert david["tool"] == "claude"
+        assert config["defaults"]["workflow_mode"] == "local"
+        assert config["defaults"]["interactive"] is True
 
 
 class TestSaveConfig:
@@ -290,6 +284,86 @@ class TestSetConfigValue:
         value = manager2.get("workflow_mode")
 
         assert value == "github"
+
+
+class TestResetConfig:
+    """Test config reset."""
+
+    def test_reset_to_defaults(self, tmp_path: Path) -> None:
+        """測試重置為預設值"""
+        manager = ConfigManager(config_dir=str(tmp_path / ".aaf"))
+
+        # Set some custom values
+        manager.set("agents.pm.cli", "gemini")
+        assert manager.get("agents.pm.cli") == "gemini"
+
+        # Reset
+        manager.reset()
+
+        # Should be back to default
+        config = manager.get("agents")
+        assert config["pm"]["cli"] == "copilot"  # Default value
+
+    def test_reset_persists_to_file(self, tmp_path: Path) -> None:
+        """測試重置會持久化到檔案"""
+        config_dir = tmp_path / ".aaf"
+        manager = ConfigManager(config_dir=str(config_dir))
+
+        manager.set("agents.pm.cli", "gemini")
+        manager.reset()
+
+        # Load with new manager
+        manager2 = ConfigManager(config_dir=str(config_dir))
+        config = manager2.load_config()
+
+        assert config["agents"]["pm"]["cli"] == "copilot"
+
+
+class TestAliasResolution:
+    """Test alias resolution for convenience shortcuts."""
+
+    def test_resolve_agent_shortcut(self) -> None:
+        """測試解析 agent CLI 快捷方式"""
+        manager = ConfigManager()
+
+        assert manager._resolve_alias("pm") == "agents.pm.cli"
+        assert manager._resolve_alias("dev") == "agents.dev.cli"
+        assert manager._resolve_alias("reviewer") == "agents.reviewer.cli"
+
+    def test_resolve_agent_with_property(self) -> None:
+        """測試解析帶屬性的 agent key"""
+        manager = ConfigManager()
+
+        assert manager._resolve_alias("pm.cli") == "agents.pm.cli"
+        assert manager._resolve_alias("pm.name") == "agents.pm.name"
+        assert manager._resolve_alias("dev.cli") == "agents.dev.cli"
+
+    def test_resolve_non_agent_key(self) -> None:
+        """測試非 agent key 不做轉換"""
+        manager = ConfigManager()
+
+        assert manager._resolve_alias("defaults.workflow_mode") == "defaults.workflow_mode"
+        assert manager._resolve_alias("other.key") == "other.key"
+
+    def test_set_with_alias(self, tmp_path: Path) -> None:
+        """測試使用 alias 設定值"""
+        manager = ConfigManager(config_dir=str(tmp_path / ".aaf"))
+
+        # Use alias
+        manager.set("pm", "gemini")
+
+        # Should be stored in agents.pm.cli
+        assert manager.get("agents.pm.cli") == "gemini"
+
+    def test_set_with_agent_property_alias(self, tmp_path: Path) -> None:
+        """測試使用 agent.property alias 設定值"""
+        manager = ConfigManager(config_dir=str(tmp_path / ".aaf"))
+
+        # Use shorthand
+        manager.set("pm.name", "NewPM")
+
+        # Should be stored in agents.pm.name
+        assert manager.get("agents.pm.name") == "NewPM"
 
 
 class TestMergeConfig:
