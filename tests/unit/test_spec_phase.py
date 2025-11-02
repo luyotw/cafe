@@ -133,7 +133,7 @@ class TestHistoryTracking:
         assert phase.history_dir == tmp_path / ".aaf" / "issues" / "test-feature" / "spec" / "history"
 
     def test_save_iteration_history_creates_json(self, tmp_path: Path) -> None:
-        """測試儲存迭代歷史會建立 JSON 檔案"""
+        """測試儲存迭代歷史會建立 JSON 檔案，包含 user_input（輪的開始）"""
         spec_file = tmp_path / ".aaf" / "issues" / "test-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.parent.mkdir(parents=True, exist_ok=True)
@@ -156,8 +156,8 @@ class TestHistoryTracking:
         # Manually set iteration and save history
         phase.iteration = 1
         phase._save_iteration_history(
+            user_input="Initial requirements\n",  # 輪的開始：使用者故事
             pm_response="請問使用者是誰？",
-            user_response="一般用戶",
             status=PhaseStatusCode.NEED_CLARIFICATION,
         )
 
@@ -165,14 +165,16 @@ class TestHistoryTracking:
         history_file = phase.history_dir / "iteration_001.json"
         assert history_file.exists()
 
-        # Verify JSON content
+        # Verify JSON content - 一輪 = user_input → pm_response
         with open(history_file, "r", encoding="utf-8") as f:
             data = json.load(f)
 
         assert data["iteration"] == 1
         assert data["status"] == "NEED_CLARIFICATION"
+        assert data["user_input"] == "Initial requirements\n"  # 輪的開始
         assert data["pm_response"] == "請問使用者是誰？"
-        assert data["user_response"] == "一般用戶"
+        # user_response is no longer stored - next iteration's user_input IS the user_response
+        assert "user_response" not in data
         assert "timestamp" in data
         assert "confirmed_requirements" in data
         assert "pending_questions" in data
@@ -284,12 +286,20 @@ class TestHistoryTracking:
 
         # Save iteration 1
         phase1.iteration = 1
-        phase1._save_iteration_history("Q1", "A1", PhaseStatusCode.NEED_CLARIFICATION)
+        phase1._save_iteration_history(
+            user_input="Initial requirements\n",
+            pm_response="Q1",
+            status=PhaseStatusCode.NEED_CLARIFICATION
+        )
 
         # Save iteration 2
         phase1.iteration = 2
         phase1.confirmed_requirements = ["功能1", "功能2"]
-        phase1._save_iteration_history("Q2", "A2", PhaseStatusCode.NEED_CLARIFICATION)
+        phase1._save_iteration_history(
+            user_input="A1",  # Previous user response becomes this iteration's user_input
+            pm_response="Q2",
+            status=PhaseStatusCode.NEED_CLARIFICATION
+        )
 
         # Create new phase - history will be auto-loaded in __init__
         phase2 = SpecPhase(
@@ -828,7 +838,7 @@ class TestResumeFromHistory:
         assert iteration_002_file.exists()
         iteration_002_data = json.loads(iteration_002_file.read_text())
         assert iteration_002_data["iteration"] == 2
-        assert iteration_002_data["user_response"] == "繼續回答"
+        # user_response is no longer stored - next iteration's user_input contains it
         assert iteration_002_data["status"] == "NEED_CLARIFICATION"
 
         # Iteration 3 should also be saved
@@ -836,7 +846,7 @@ class TestResumeFromHistory:
         assert iteration_003_file.exists()
         iteration_003_data = json.loads(iteration_003_file.read_text())
         assert iteration_003_data["iteration"] == 3
-        assert iteration_003_data["user_response"] == "iteration3回答"
+        # user_response is no longer stored - next iteration's user_input contains it
         assert iteration_003_data["status"] == "NEED_CLARIFICATION"
 
         # Iteration 4 should be saved with CONFIRMED

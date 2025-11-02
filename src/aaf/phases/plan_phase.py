@@ -162,6 +162,20 @@ class PlanPhase(Phase):
                     # Normal flow: increment iteration and execute agent
                     self.iteration += 1
 
+                    # Prepare user_input for this iteration
+                    # Iteration 1: user_input is the dev guide content
+                    # Iteration 2+: user_input is the previous iteration's user_response
+                    if self.iteration == 1:
+                        # Read dev guide from plan.md
+                        plan_file = self.history_dir.parent / "plan.md"
+                        current_user_input = plan_file.read_text() if plan_file.exists() else ""
+                    else:
+                        # Get previous iteration's user_response
+                        if self.conversation_history:
+                            current_user_input = self.conversation_history[-1].get("user_response", "")
+                        else:
+                            current_user_input = ""
+
                     # Generate prompt for this iteration
                     prompt = self._generate_prompt()
 
@@ -185,6 +199,7 @@ class PlanPhase(Phase):
                     # Save history and progress after each iteration (only if status code found)
                     if status_code:
                         self._save_history(
+                            user_input=current_user_input,
                             prompt=prompt,
                             response=response,
                             status_code=status_code,
@@ -326,24 +341,17 @@ class PlanPhase(Phase):
                         # Save user response to file for next iteration
                         self._save_user_response(user_response)
 
-                        # Update iteration history with user response (like spec_phase does)
-                        # The history was already saved in line 187-191, now update it with user_response
-                        history_file = self.history_dir / f"{self.iteration:03d}.json"
-                        if history_file.exists():
-                            import json
-                            with open(history_file, 'r', encoding='utf-8') as f:
-                                history_data = json.load(f)
-
-                            history_data["user_response"] = user_response
-
-                            with open(history_file, 'w', encoding='utf-8') as f:
-                                json.dump(history_data, f, ensure_ascii=False, indent=2)
-
-                            # Update conversation history in memory
-                            if self.conversation_history and self.conversation_history[-1]["iteration"] == self.iteration:
-                                self.conversation_history[-1]["user_response"] = user_response
+                        # Update conversation_history so next iteration can access user_response
+                        self.conversation_history.append({
+                            "iteration": self.iteration,
+                            "user_input": current_user_input,
+                            "response": response,
+                            "status_code": status_code.value,
+                            "user_response": user_response,
+                        })
 
                         # Continue to next iteration
+                        # The user_response will become the user_input of next iteration
                         continue
                     else:
                         # Non-interactive mode: exit and wait for user response
@@ -523,18 +531,20 @@ class PlanPhase(Phase):
 
     def _save_history(
         self,
+        user_input: str,
         prompt: str,
         response: str,
         status_code: PhaseStatusCode,
-        user_response: str = "",
     ) -> None:
         """Save iteration history to JSON file.
 
+        Each iteration = user_input (start) → agent response (end)
+
         Args:
+            user_input: User's input at the start of this iteration (dev guide for iteration 1, user response for subsequent iterations)
             prompt: The prompt sent to agent
             response: The agent's response
             status_code: Status code from response
-            user_response: Optional user response (for NEED_CLARIFICATION iterations)
         """
         # Create history directory if it doesn't exist
         self.history_dir.mkdir(parents=True, exist_ok=True)
@@ -545,14 +555,11 @@ class PlanPhase(Phase):
             "iteration": self.iteration,
             "timestamp": datetime.now().isoformat(),
             "dev_agent": self.dev_agent,
+            "user_input": user_input,  # Start of the iteration
             "prompt": prompt,
             "response": response,
             "status_code": status_code.value,
         }
-
-        # Add user_response if provided (for NEED_CLARIFICATION iterations)
-        if user_response:
-            history_data["user_response"] = user_response
 
         with open(history_file, 'w', encoding='utf-8') as f:
             json.dump(history_data, f, ensure_ascii=False, indent=2)

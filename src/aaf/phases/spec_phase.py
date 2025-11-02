@@ -238,6 +238,19 @@ class SpecPhase(Phase):
             while True:
                 self.iteration += 1
 
+                # Prepare user_input for this iteration
+                # Iteration 1: user_input is the initial user story/requirements
+                # Iteration 2+: user_input is the previous iteration's user_response
+                if self.iteration == 1:
+                    spec_file_path = Path(self.spec_file)
+                    current_user_input = spec_file_path.read_text() if spec_file_path.exists() else ""
+                else:
+                    # Get previous iteration's user_response from conversation history
+                    if self.conversation_history:
+                        current_user_input = self.conversation_history[-1].get("user_response", "")
+                    else:
+                        current_user_input = ""
+
                 # Check if current iteration's user response came from resume
                 is_from_resume = False
                 if self.iteration <= len(self.conversation_history):
@@ -268,17 +281,9 @@ class SpecPhase(Phase):
                     # Save user response to spec file
                     self._save_user_response(user_response)
 
-                    # Save to conversation history
+                    # Update conversation history in memory with user response
                     if self.conversation_history:
-                        # Update the last iteration's user response
                         self.conversation_history[-1]["user_response"] = user_response
-
-                        # Save iteration history for previous iteration with user response
-                        self._save_iteration_history(
-                            pm_response=self.conversation_history[-1]["pm_response"],
-                            user_response=user_response,
-                            status=PhaseStatusCode.NEED_CLARIFICATION,
-                        )
 
                 # Generate prompt for this iteration
                 prompt = self._generate_prompt()
@@ -307,8 +312,8 @@ class SpecPhase(Phase):
 
                     # Save final iteration history
                     self._save_iteration_history(
+                        user_input=current_user_input,
                         pm_response=response,
-                        user_response="",
                         status=PhaseStatusCode.CONFIRMED,
                     )
 
@@ -379,8 +384,8 @@ class SpecPhase(Phase):
 
                         # Save iteration history
                         self._save_iteration_history(
+                            user_input=current_user_input,
                             pm_response=response,
-                            user_response=user_response_from_resume,
                             status=PhaseStatusCode.NEED_CLARIFICATION,
                         )
 
@@ -432,8 +437,8 @@ class SpecPhase(Phase):
 
                         # Save iteration history
                         self._save_iteration_history(
+                            user_input=current_user_input,
                             pm_response=response,
-                            user_response=user_response,
                             status=PhaseStatusCode.NEED_CLARIFICATION,
                         )
 
@@ -448,8 +453,8 @@ class SpecPhase(Phase):
                         # Non-interactive mode: save PM's questions and exit
                         # User response will be provided in next call via stdin
                         self._save_iteration_history(
+                            user_input=current_user_input,
                             pm_response=response,
-                            user_response="",  # Will be filled in next call
                             status=PhaseStatusCode.NEED_CLARIFICATION,
                         )
 
@@ -907,15 +912,17 @@ class SpecPhase(Phase):
 
     def _save_iteration_history(
         self,
+        user_input: str,
         pm_response: str,
-        user_response: str,
         status: PhaseStatusCode,
     ) -> None:
         """Save iteration history to JSON file.
 
+        Each iteration = user_input (start) → pm_response (end)
+
         Args:
+            user_input: User's input at the start of this iteration (user story for iteration 1, user response for subsequent iterations)
             pm_response: PM's response (questions or final requirements)
-            user_response: User's response to PM's questions
             status: Status code for this iteration
         """
         # Create history directory
@@ -926,8 +933,8 @@ class SpecPhase(Phase):
             "iteration": self.iteration,
             "timestamp": datetime.now().isoformat(),
             "status": status.value,
+            "user_input": user_input,  # Start of the iteration
             "pm_response": pm_response,
-            "user_response": user_response,
             "confirmed_requirements": self.confirmed_requirements.copy(),
             "pending_questions": self.pending_questions.copy(),
         }
@@ -1000,7 +1007,7 @@ class SpecPhase(Phase):
             self.conversation_history.append({
                 "iteration": data["iteration"],
                 "pm_response": data["pm_response"],
-                "user_response": data["user_response"],
+                "user_response": data.get("user_response", ""),  # For backward compatibility
                 "status": data["status"],
             })
 

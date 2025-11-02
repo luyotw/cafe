@@ -551,7 +551,7 @@ class TestPlanPhaseHistory:
         assert len(phase.conversation_history) == 0
 
     def test_save_history_creates_json_file(self, tmp_path: Path) -> None:
-        """測試 _save_history() 創建 JSON 檔案"""
+        """測試 _save_history() 創建 JSON 檔案，包含 user_input"""
         spec_file = tmp_path / ".aaf" / "issues" / "test-issue" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True)
         spec_file.write_text("# Spec\n\n## 開發指南\nGuide")
@@ -569,6 +569,7 @@ class TestPlanPhaseHistory:
 
         phase.iteration = 1
         phase._save_history(
+            user_input="User's dev guide input",
             prompt="Test prompt",
             response="Test response",
             status_code=PhaseStatusCode.NEED_CLARIFICATION,
@@ -578,12 +579,13 @@ class TestPlanPhaseHistory:
         history_file = phase.history_dir / "001.json"
         assert history_file.exists()
 
-        # Check content
+        # Check content - 一輪 = user_input → agent response
         import json
         with open(history_file, 'r', encoding='utf-8') as f:
             data = json.load(f)
 
         assert data["iteration"] == 1
+        assert data["user_input"] == "User's dev guide input"  # 輪的開始
         assert data["prompt"] == "Test prompt"
         assert data["response"] == "Test response"
         assert data["status_code"] == "NEED_CLARIFICATION"
@@ -710,8 +712,8 @@ class TestPlanPhaseNeedClarification:
         # Should have NEED_CLARIFICATION status code in result data
         assert result.data["status_code"] == PhaseStatusCode.NEED_CLARIFICATION.value
 
-    def test_need_clarification_saves_iteration_history_with_user_response(self, tmp_path: Path) -> None:
-        """測試 NEED_CLARIFICATION 時儲存 iteration history（包含 user response）"""
+    def test_need_clarification_saves_iteration_history_with_user_input_and_response(self, tmp_path: Path) -> None:
+        """測試每輪 history 包含 user_input（輪的開始），下一輪的 user_input 就是上一輪的 user_response"""
         spec_file = tmp_path / ".aaf" / "issues" / "test-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements")
@@ -719,7 +721,7 @@ class TestPlanPhaseNeedClarification:
         # Create dev guide file
         plan_file = spec_file.parent.parent / "plan" / "plan.md"
         plan_file.parent.mkdir(parents=True, exist_ok=True)
-        plan_file.write_text("## 開發指南\n\nGuide")
+        plan_file.write_text("## 開發指南\n\n初始開發指南內容")
 
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.side_effect = [
@@ -743,19 +745,35 @@ class TestPlanPhaseNeedClarification:
             with patch('builtins.input', return_value='c'):
                 result = phase.execute()
 
-        # Should have saved iteration history with user response
+        # Check first iteration history
         history_dir = spec_file.parent.parent / "plan" / "history"
-        history_file = history_dir / "001.json"
-        assert history_file.exists()
+        history_file_1 = history_dir / "001.json"
+        assert history_file_1.exists()
 
         import json
-        with open(history_file, 'r', encoding='utf-8') as f:
-            data = json.load(f)
+        with open(history_file_1, 'r', encoding='utf-8') as f:
+            data1 = json.load(f)
 
-        assert data["iteration"] == 1
-        assert data["status_code"] == "NEED_CLARIFICATION"
-        assert "user_response" in data
-        assert data["user_response"] == "我的回應內容"
+        # 第一輪：user_input（開發指南）→ agent response（NEED_CLARIFICATION）
+        assert data1["iteration"] == 1
+        assert data1["status_code"] == "NEED_CLARIFICATION"
+        assert "user_input" in data1  # 輪的開始：開發指南
+        assert "初始開發指南內容" in data1["user_input"]
+        # user_response is no longer stored - next iteration's user_input IS the user_response
+        assert "user_response" not in data1
+
+        # Check second iteration history
+        history_file_2 = history_dir / "002.json"
+        assert history_file_2.exists()
+
+        with open(history_file_2, 'r', encoding='utf-8') as f:
+            data2 = json.load(f)
+
+        # 第二輪：user_input（上輪的 user_response）→ agent response（CONFIRMED）
+        assert data2["iteration"] == 2
+        assert data2["status_code"] == "CONFIRMED"
+        assert "user_input" in data2  # 輪的開始：上一輪的使用者回應
+        assert data2["user_input"] == "我的回應內容"
 
     def test_need_clarification_saves_progress(self, tmp_path: Path) -> None:
         """測試 NEED_CLARIFICATION 時保存進度"""
