@@ -1,14 +1,18 @@
 """Session management for AI agents."""
 
 import json
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from aaf.core.types import AgentConfig
+from aaf.core.types import AgentCLI, AgentConfig, SessionData
 
 
 class SessionManager:
-    """Manages agent sessions and their persistence."""
+    """Manages agent sessions and their persistence.
+
+    每個 issue 有獨立的 session 目錄，每個 agent+CLI 組合有獨立的 session 檔案。
+    """
 
     def __init__(self, sessions_dir: str = ".aaf/sessions") -> None:
         """Initialize session manager.
@@ -19,54 +23,100 @@ class SessionManager:
         self.sessions_dir = Path(sessions_dir)
         self.sessions_dir.mkdir(parents=True, exist_ok=True)
 
-    def get_session_file(self, agent_name: str, issue_name: Optional[str] = None) -> Path:
+    def get_session_file(
+        self, agent_name: str, cli: AgentCLI, issue_name: Optional[str] = None
+    ) -> Path:
         """Get the session file path for an agent.
 
         Args:
             agent_name: Name of the agent
+            cli: CLI type (claude, gemini, copilot, cursor)
             issue_name: Name of the issue (for issue-specific sessions)
 
         Returns:
             Path to the session file
+
+        Examples:
+            Without issue: .aaf/sessions/Roger_copilot.json
+            With issue: .aaf/issues/myip/sessions/Roger_copilot.json
         """
         if issue_name:
-            return self.sessions_dir / f"{issue_name}_{agent_name}_session_id"
-        return self.sessions_dir / f"{agent_name}_session_id"
+            # Issue-specific sessions go under .aaf/issues/{issue_name}/sessions/
+            issue_sessions_dir = Path(".aaf/issues") / issue_name / "sessions"
+            issue_sessions_dir.mkdir(parents=True, exist_ok=True)
+            return issue_sessions_dir / f"{agent_name}_{cli.value}.json"
 
-    def load_session(self, agent_name: str, issue_name: Optional[str] = None) -> Optional[str]:
-        """Load existing session ID for an agent.
+        # Global sessions (no issue) go under .aaf/sessions/
+        return self.sessions_dir / f"{agent_name}_{cli.value}.json"
+
+    def load_session(
+        self, agent_name: str, cli: AgentCLI, issue_name: Optional[str] = None
+    ) -> Optional[SessionData]:
+        """Load existing session data for an agent.
 
         Args:
             agent_name: Name of the agent
+            cli: CLI type
             issue_name: Name of the issue (for issue-specific sessions)
 
         Returns:
-            Session ID if exists, None otherwise
+            SessionData if exists, None otherwise
         """
-        session_file = self.get_session_file(agent_name, issue_name)
-        if session_file.exists():
-            return session_file.read_text().strip()
-        return None
+        session_file = self.get_session_file(agent_name, cli, issue_name)
+        if not session_file.exists():
+            return None
 
-    def save_session(self, agent_name: str, session_id: str, issue_name: Optional[str] = None) -> None:
-        """Save session ID for an agent.
+        try:
+            with open(session_file, "r") as f:
+                data = json.load(f)
+                return SessionData(**data)
+        except (json.JSONDecodeError, ValueError):
+            # Invalid session file, return None
+            return None
+
+    def save_session(
+        self,
+        agent_name: str,
+        cli: AgentCLI,
+        session_id: str,
+        issue_name: Optional[str] = None,
+    ) -> None:
+        """Save session data for an agent.
 
         Args:
             agent_name: Name of the agent
+            cli: CLI type
             session_id: Session ID to save
             issue_name: Name of the issue (for issue-specific sessions)
         """
-        session_file = self.get_session_file(agent_name, issue_name)
-        session_file.write_text(session_id)
+        session_file = self.get_session_file(agent_name, cli, issue_name)
 
-    def delete_session(self, agent_name: str, issue_name: Optional[str] = None) -> None:
+        # Load existing session to preserve created_at, or create new
+        existing = self.load_session(agent_name, cli, issue_name)
+        now = datetime.now()
+
+        session_data = SessionData(
+            agent_name=agent_name,
+            cli=cli,
+            session_id=session_id,
+            created_at=existing.created_at if existing else now,
+            last_used_at=now,
+        )
+
+        with open(session_file, "w") as f:
+            json.dump(session_data.model_dump(mode="json"), f, indent=2, default=str)
+
+    def delete_session(
+        self, agent_name: str, cli: AgentCLI, issue_name: Optional[str] = None
+    ) -> None:
         """Delete session for an agent.
 
         Args:
             agent_name: Name of the agent
+            cli: CLI type
             issue_name: Name of the issue (for issue-specific sessions)
         """
-        session_file = self.get_session_file(agent_name, issue_name)
+        session_file = self.get_session_file(agent_name, cli, issue_name)
         if session_file.exists():
             session_file.unlink()
 

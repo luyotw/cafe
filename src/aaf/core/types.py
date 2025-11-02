@@ -83,6 +83,16 @@ class PermissionRequest(BaseModel):
     tool_input: Dict[str, Any]
 
 
+class SessionData(BaseModel):
+    """Session data for an agent."""
+
+    agent_name: str
+    cli: AgentCLI
+    session_id: str
+    created_at: datetime
+    last_used_at: datetime
+
+
 class SessionConfig(BaseModel):
     """Session configuration."""
 
