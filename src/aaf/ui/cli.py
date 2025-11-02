@@ -675,14 +675,18 @@ def config(
         if not config_file.exists():
             config_manager.save_config(config_manager.get_default_config())
 
-        # Use EDITOR env var, or fallback to common editors
-        editor = os.environ.get('EDITOR') or os.environ.get('VISUAL') or 'nano'
+        # Use EDITOR env var, or fallback to vim
+        editor = os.environ.get('EDITOR', 'vim')
 
         try:
             subprocess.run([editor, str(config_file)], check=True)
             console.print(f"[green]✓ Config file edited: {config_file}[/green]")
         except subprocess.CalledProcessError:
-            console.print(f"[red]Failed to open editor: {editor}[/red]")
+            console.print(f"[red]Error: Failed to edit config[/red]")
+            raise typer.Exit(1)
+        except FileNotFoundError:
+            console.print(f"[red]Error: Editor '{editor}' not found[/red]")
+            console.print(f"[dim]Set EDITOR environment variable or install vim[/dim]")
             raise typer.Exit(1)
 
     elif action == "reset":
