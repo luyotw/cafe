@@ -607,55 +607,101 @@ def plan(
 
 @app.command()
 def config(
-    key: Optional[str] = typer.Argument(None, help="Configuration key to get/set"),
+    action: Optional[str] = typer.Argument(None, help="Action: set, get, edit, reset, or config key"),
+    key: Optional[str] = typer.Argument(None, help="Configuration key"),
     value: Optional[str] = typer.Argument(None, help="Value to set"),
-    config_file: str = typer.Option(
-        ".aaf/config.yaml",
-        "--config",
-        "-c",
-        help="Path to configuration file",
-    ),
-    list_all: bool = typer.Option(
-        False,
-        "--list",
-        "-l",
-        help="List all configuration",
-    ),
 ) -> None:
     """Manage AAF configuration.
 
     Examples:
-        # List all configuration
-        aaf config --list
+        # Show all configuration
+        aaf config
+
+        # Set a configuration value (with alias support)
+        aaf config set pm gemini
+        aaf config set pm.cli gemini
+        aaf config set agents.pm.cli gemini
 
         # Get a configuration value
-        aaf config agents.pm.name
+        aaf config get pm
+        aaf config get agents.pm.cli
 
-        # Set a configuration value
-        aaf config agents.pm.tool claude
+        # Edit config file in editor
+        aaf config edit
+
+        # Reset to defaults
+        aaf config reset
     """
-    # ConfigManager takes config_dir, so extract the directory
-    config_dir = str(Path(config_file).parent) if config_file != ".aaf/config.yaml" else ".aaf"
-    config_manager = ConfigManager(config_dir)
+    config_manager = ConfigManager()
+    import yaml
+    import subprocess
+    import os
 
-    if list_all:
-        # List all configuration
-        import yaml
+    # No arguments: show all config
+    if not action:
         loaded_config = config_manager.load_config()
+        console.print("[bold cyan]Current Configuration:[/bold cyan]")
         console.print(yaml.dump(loaded_config, default_flow_style=False))
-    elif key and value:
-        # Set configuration
-        config_manager.set(key, value)  # set() already calls save_config()
-        console.print(f"[green]Set {key} = {value}[/green]")
-    elif key:
-        # Get configuration
+        return
+
+    # Sub-commands
+    if action == "set":
+        if not key or not value:
+            console.print("[red]Error: 'set' requires both key and value[/red]")
+            console.print("Usage: aaf config set <key> <value>")
+            raise typer.Exit(1)
+
+        config_manager.set(key, value)
+        console.print(f"[green]✓ Set {key} = {value}[/green]")
+
+    elif action == "get":
+        if not key:
+            console.print("[red]Error: 'get' requires a key[/red]")
+            console.print("Usage: aaf config get <key>")
+            raise typer.Exit(1)
+
         val = config_manager.get(key)
         if val is None:
             console.print(f"[yellow]Key not found: {key}[/yellow]")
         else:
-            console.print(f"{key} = {val}")
+            import json
+            console.print(f"{key} = {json.dumps(val, indent=2)}")
+
+    elif action == "edit":
+        # Open config file in editor
+        config_file = config_manager.config_file
+
+        # Ensure config file exists
+        if not config_file.exists():
+            config_manager.save_config(config_manager.get_default_config())
+
+        # Use EDITOR env var, or fallback to common editors
+        editor = os.environ.get('EDITOR') or os.environ.get('VISUAL') or 'nano'
+
+        try:
+            subprocess.run([editor, str(config_file)], check=True)
+            console.print(f"[green]✓ Config file edited: {config_file}[/green]")
+        except subprocess.CalledProcessError:
+            console.print(f"[red]Failed to open editor: {editor}[/red]")
+            raise typer.Exit(1)
+
+    elif action == "reset":
+        confirm = typer.confirm("Reset configuration to defaults?")
+        if confirm:
+            config_manager.reset()
+            console.print("[green]✓ Configuration reset to defaults[/green]")
+        else:
+            console.print("Cancelled")
+
     else:
-        console.print("[yellow]Use --list, or provide key [value][/yellow]")
+        # Treat action as a key for backward compatibility
+        # e.g., "aaf config pm" -> get pm
+        val = config_manager.get(action)
+        if val is None:
+            console.print(f"[yellow]Key not found: {action}[/yellow]")
+        else:
+            import json
+            console.print(f"{action} = {json.dumps(val, indent=2)}")
 
 
 @app.command(name="ls")
