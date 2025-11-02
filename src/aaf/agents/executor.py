@@ -180,6 +180,10 @@ class AgentExecutor:
             response_data = json.loads(result.stdout)
             response = response_data.get("result", result.stdout)
 
+            # Extract and save session_id if present
+            if "session_id" in response_data and not self.config.session_id:
+                self.config.session_id = response_data["session_id"]
+
             # Parse token usage
             usage_data = response_data.get("usage", {})
             token_usage = TokenUsage(
@@ -297,6 +301,18 @@ class AgentExecutor:
         Returns:
             Tuple of (Copilot's response, token usage)
         """
+        from pathlib import Path
+        import os
+        import time
+
+        # Copilot 的 session 目錄
+        copilot_session_dir = Path.home() / ".copilot" / "session-state"
+
+        # 記錄執行前的 session 檔案（用於偵測新建立的 session）
+        existing_sessions = set()
+        if copilot_session_dir.exists():
+            existing_sessions = {f.name for f in copilot_session_dir.iterdir() if f.is_file()}
+
         # Build command: copilot -p "prompt" --allow-all-tools or --allow-tool
         cmd = ["copilot", "-p", prompt]
 
@@ -324,6 +340,19 @@ class AgentExecutor:
             raise AgentExecutionError(
                 f"Copilot execution failed with code {result.returncode}: {result.stderr}"
             )
+
+        # 如果還沒有 session_id，嘗試從新建立的 session 檔案中提取
+        if not self.config.session_id and copilot_session_dir.exists():
+            # 等待一下讓檔案系統更新
+            time.sleep(0.1)
+            current_sessions = {f.name for f in copilot_session_dir.iterdir() if f.is_file()}
+            new_sessions = current_sessions - existing_sessions
+
+            if new_sessions:
+                # 找到新建立的 session，提取 UUID（檔名去掉 .jsonl）
+                newest_session = sorted(new_sessions)[-1]  # 取最新的
+                session_id = newest_session.replace(".jsonl", "")
+                self.config.session_id = session_id
 
         # Copilot doesn't provide JSON output format yet, return raw output
         # TODO: Update when Copilot CLI provides structured output
