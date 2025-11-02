@@ -43,8 +43,9 @@
 ### Agent 模組 (Agents)
 7. ✅ **executor.py** - Agent 執行器
    - Status: 95% coverage, 15 tests
-   - Commit: c677214
-   - Features: Claude/Gemini/Cursor 執行、session 管理、allowed tools
+   - Commit: 4e7cc73
+   - Features: Claude/Gemini/Copilot/Cursor 執行、session 管理、allowed tools
+   - Recent: 修正 Copilot CLI 工具名稱映射 (write/shell)
 
 8. ✅ **manager.py** - Agent 管理器
    - Status: 100% coverage, 21 tests
@@ -53,32 +54,40 @@
 
 ### Utils 模組 (Utilities)
 9. ✅ **config.py** - 設定管理
-   - Status: 100% coverage, 22 tests
-   - Commit: 372f75d
-   - Features: 載入/儲存設定、驗證、巢狀 key 支援、設定合併
+   - Status: 100% coverage, 29 tests
+   - Commit: 3bb0476
+   - Features: 載入/儲存設定、驗證、巢狀 key 支援、設定合併、alias 支援、reset 功能
+   - Recent: 新增 agent CLI alias (pm/dev/reviewer → agents.*.cli)、reset() 方法
 
 ### Phase 實作 (Workflow Phases)
 
-10. ✅ **requirements_phase.py** - Phase 1: 需求澄清 (對話式生成)
-   - Status: 96% coverage, 18 tests
-   - Commit: 5751ac7
+10. ✅ **spec_phase.py** - Phase 1: 需求澄清 (對話式生成)
+   - Status: 74% coverage, 24 tests
+   - Commit: 43fc8cc
    - Features:
      - **對話式需求生成**: PM agent 透過多輪對話與用戶確認所有必要資訊
      - **強調非技術細節**: 每次 prompt 都強調不涉及技術實作
      - **從無到有生成**: 支援沒有現有需求文件時從對話開始生成
      - **自動儲存**: 完成後自動存到 local 檔案或創建新 GitHub issue
      - **狀態碼控制**: CONFIRMED / NEED_CLARIFICATION / REJECTED
-     - Requirements 備份、Local/GitHub workflow
+     - **Iteration history**: 簡化為 user_input → pm_response (移除冗餘 user_response)
+     - Requirements 備份、Local/GitHub workflow、Interactive/Non-interactive modes
 
-11. ✅ **analysis_phase.py** - Phase 2: 實作分析
-   - Status: 97% coverage, 16 tests
-   - Commit: 1d9a8c3
-   - Features: 開發指南檢測、分析確認、多輪迭代、Local/GitHub workflow
+11. ✅ **plan_phase.py** - Phase 2: 實作計畫
+   - Status: 93% coverage, 32 tests
+   - Commit: 43fc8cc
+   - Features:
+     - 開發指南生成、計畫確認、多輪迭代、Local/GitHub workflow
+     - **User confirmation**: 顯示 plan.md 並提供 confirm/reject/modify 選項
+     - **Resume support**: 偵測中斷的對話並從上次狀態繼續
+     - **Iteration history**: 簡化為 user_input → agent_response (移除冗餘 user_response)
+     - NEED_CLARIFICATION 處理、Interactive/Non-interactive modes
 
-12. ✅ **implementation_phase.py** - Phase 3: 開發實作
+12. ✅ **develop_phase.py** - Phase 3: 開發實作
    - Status: 100% coverage, 14 tests
-   - Commit: 3a9c1f0
+   - Commit: 3653cab
    - Features: Git branch 管理、開發執行、prompt 生成、分支命名
+   - Recent: 從 implementation_phase.py 重新命名
 
 13. ✅ **review_phase.py** - Phase 4: Code Review
    - Status: 98% coverage, 14 tests
@@ -94,8 +103,13 @@
 
 15. ✅ **cli.py** - 命令列介面
    - Status: 95% coverage, 17 tests
-   - Commit: e507d7b
-   - Features: run/version/config commands、Typer 整合、workflow 編排
+   - Commit: 8a83306
+   - Features: spec/plan/config/ls/rm/template commands、Typer 整合、workflow 編排
+   - Recent:
+     - **Config 指令完整實作**: set/get/edit/reset 子命令
+     - **Alias 支援**: `aaf config set pm gemini` 自動轉為 `agents.pm.cli`
+     - **編輯器整合**: config edit 使用 $EDITOR 或 vim
+     - 更新為使用 DevelopPhase (從 ImplementationPhase 重新命名)
 
 ### Utils 模組 (Utilities)
 
@@ -141,16 +155,16 @@
 **Priority: HIGH**
 **Status**: 100% 完成，3 個 phases 已整合
 **Sub-tasks**:
-- ✅ RequirementsPhase: CONFIRMED / NEED_CLARIFICATION / REJECTED (98% coverage, 19 tests)
-- ✅ AnalysisPhase: CONFIRMED / NEED_CLARIFICATION / REJECTED (97% coverage, 20 tests)
+- ✅ SpecPhase: CONFIRMED / NEED_CLARIFICATION / REJECTED (74% coverage, 24 tests)
+- ✅ PlanPhase: CONFIRMED / NEED_CLARIFICATION / REJECTED (93% coverage, 32 tests)
 - ✅ ReviewPhase: APPROVED / LGTM / NEEDS_CHANGES (100% coverage, 18 tests)
-- ⬜ ImplementationPhase: 不需要狀態碼（直接執行，無迴圈）
+- ⬜ DevelopPhase: 不需要狀態碼（直接執行，無迴圈）
 - ✅ 更新所有 phase prompts 要求狀態碼
-**Tests**: 57 tests (19 + 20 + 18)
-**Commits**:
-- c0cebef RequirementsPhase integration
-- e506164 AnalysisPhase integration
-- 4edb6a6 ReviewPhase integration
+**Tests**: 74 tests (24 + 32 + 18)
+**Recent Updates** (2025-11-02):
+- 簡化 iteration history (user_input → response, 移除冗餘 user_response)
+- 新增 user confirmation 與 resume support (PlanPhase)
+- DevelopPhase 從 ImplementationPhase 重新命名
 **Benefits**:
 - ✅ 節省 token（從長句子變成簡短狀態碼）
 - ✅ 更明確的控制流程
@@ -239,10 +253,10 @@ class AAFApp(App):
 - executor.py: 95%
 - workflow.py: 100%
 - manager.py: 100%
-- config.py: 100%
-- requirements_phase.py: 98%
-- analysis_phase.py: 97%
-- implementation_phase.py: 100%
+- config.py: 100% (29 tests)
+- spec_phase.py: 74% (24 tests)
+- plan_phase.py: 93% (32 tests)
+- develop_phase.py: 100% (14 tests)
 - review_phase.py: 100%
 - pr_phase.py: 97%
 - status_codes.py: 100%
@@ -250,12 +264,12 @@ class AAFApp(App):
 - cli.py: 95%
 - github.py: 90%
 
-**整體覆蓋率: 97%**
+**整體覆蓋率: 95%**
 
 ### 測試數量
-- 已寫測試: 313 tests (包含 57 個 status code integration tests + 19 個 phase_cache tests)
+- 已寫測試: 320+ tests (包含 phase 重構測試)
 - 預估需要: 320+ tests
-- 完成度: ~98%
+- 完成度: ~100%
 
 ---
 
@@ -267,11 +281,11 @@ class AAFApp(App):
 3. ✅ config.py - 設定管理
 
 ### 第二階段（Phase 實作）- Week 2-3 ✅ 已完成
-4. ✅ Phase 1: requirements_phase.py
-5. ✅ Phase 2: analysis_phase.py
-6. ✅ Phase 3: implementation_phase.py
-7. ✅ Phase 4: review_phase.py
-8. ✅ Phase 5: pr_phase.py
+4. ✅ Phase 1: spec_phase.py (需求澄清)
+5. ✅ Phase 2: plan_phase.py (實作計畫)
+6. ✅ Phase 3: develop_phase.py (開發實作)
+7. ✅ Phase 4: review_phase.py (Code Review)
+8. ✅ Phase 5: pr_phase.py (PR 建立)
 
 ### 第三階段（CLI & Utils & 增強）- Week 4 ✅ 已完成
 9. ✅ cli.py - 基本命令列
@@ -301,19 +315,26 @@ class AAFApp(App):
 
 ---
 
-**最後更新**: 2025-10-20
+**最後更新**: 2025-11-02
 **當前分支**: refactor-python
-**目前進度**: 19/23 完成 (~83%), 313 tests, 96% 整體覆蓋率
+**目前進度**: 19/23 完成 (~83%), 320+ tests, 95% 整體覆蓋率
 **第一階段**: ✅ 已完成（所有基礎模組完成）
 **第二階段**: ✅ 已完成（所有 Phase 實作完成）
 **第三階段**: ✅ 已完成 - CLI & Utils & 增強
-  - ✅ cli.py (命令列介面, 95% coverage)
+  - ✅ cli.py (命令列介面, 95% coverage) - 新增完整 config 指令
   - ✅ github.py (GitHub 操作, 90% coverage)
   - ✅ status_codes.py (狀態碼系統, 100% coverage)
-  - ✅ Phase 狀態碼整合 (3 phases, 57 tests, 96%+ coverage)
-    - RequirementsPhase: 18 tests, 96% coverage (對話式需求生成)
-    - AnalysisPhase: 20 tests, 97% coverage
-    - ReviewPhase: 18 tests, 100% coverage
-  - ✅ phase_cache.py (Cache 系統, 19 tests, 100% coverage)
+  - ✅ config.py (設定管理, 100% coverage, 29 tests) - 新增 alias 與 reset
+  - ✅ executor.py (Agent 執行器) - 修正 Copilot CLI 工具映射
+  - ✅ Phase 重構:
+    - spec_phase: 24 tests, 74% coverage (簡化 iteration history)
+    - plan_phase: 32 tests, 93% coverage (新增 user confirmation & resume)
+    - develop_phase: 14 tests, 100% coverage (從 implementation_phase 重新命名)
+**最新變更** (2025-11-02):
+  - 簡化 iteration history (移除冗餘 user_response 欄位)
+  - implementation_phase → develop_phase 重新命名
+  - Config 管理增強 (alias, reset, edit)
+  - 修正 Copilot CLI 工具名稱 (write, shell)
+  - Gemini agent 測試通過
 **當前任務**: 無（階段三完成）
 **下一步**: display.py (顯示工具) → Integration tests → Documentation
