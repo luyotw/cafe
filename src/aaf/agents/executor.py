@@ -48,12 +48,13 @@ class AgentExecutor:
         },
         AgentCLI.COPILOT: {
             # GitHub Copilot CLI tool name translations
-            "bash": "bash",
-            "read": "view",
-            "write": "create",
-            "edit": "str_replace",
-            "grep": "bash",
-            "glob": "bash",
+            # Reference: https://docs.github.com/en/copilot/concepts/agents/about-copilot-cli#using-the-approval-options
+            "bash": "shell",
+            "read": "write",  # Copilot uses 'write' for all file operations
+            "write": "write",
+            "edit": "write",
+            "grep": "shell",
+            "glob": "shell",
         },
     }
 
