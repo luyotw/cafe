@@ -1,21 +1,24 @@
 """Tests for DevelopPhase."""
 
+import json
 import pytest
+from datetime import datetime
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 from aaf.phases.develop_phase import DevelopPhase
 from aaf.agents.manager import AgentManager
 from aaf.core.git import GitOperations
-from aaf.core.types import PhaseResult, PhaseStatus, WorkflowMode
+from aaf.core.status_codes import PhaseStatusCode
+from aaf.core.types import PhaseResult, PhaseStatus, WorkflowMode, TokenUsage
 from aaf.core.permission import PermissionHandler
 
 
-class TestDevelopPhaseBasics:
-    """Test basic DevelopPhase functionality."""
+class TestDevelopPhaseInit:
+    """Test DevelopPhase initialization."""
 
-    def test_init_develop_phase(self) -> None:
-        """測試初始化 DevelopPhase"""
+    def test_init_with_all_required_params(self) -> None:
+        """測試使用所有必要參數初始化"""
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
         git_ops = MagicMock(spec=GitOperations)
@@ -24,17 +27,26 @@ class TestDevelopPhaseBasics:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            spec_file="requirements.md",
+            spec_file=".aaf/issues/test/spec/spec.md",
+            plan_file=".aaf/issues/test/plan/plan.md",
             workflow_mode=WorkflowMode.LOCAL,
         )
 
         assert phase.agent_manager == agent_manager
+        assert phase.permission_handler == permission_handler
         assert phase.git_ops == git_ops
-        assert phase.spec_file == "requirements.md"
+        assert phase.spec_file == ".aaf/issues/test/spec/spec.md"
+        assert phase.plan_file == ".aaf/issues/test/plan/plan.md"
         assert phase.workflow_mode == WorkflowMode.LOCAL
+        assert phase.iteration == 0
+        assert phase.issue_name == "test"
+        assert phase.history_dir == Path(".aaf/issues/test/develop/history")
+        assert phase.conversation_history == []
+        assert phase.interactive is True
+        assert phase.dev_agent == "David"
 
-    def test_init_with_github_mode(self) -> None:
-        """測試使用 GitHub mode 初始化"""
+    def test_init_with_issue_name(self) -> None:
+        """測試提供 issue_name 參數"""
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
         git_ops = MagicMock(spec=GitOperations)
@@ -43,129 +55,110 @@ class TestDevelopPhaseBasics:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            spec_file="requirements.md",
-            workflow_mode=WorkflowMode.GITHUB,
-            issue_id="123",
+            spec_file=".aaf/issues/test/spec/spec.md",
+            plan_file=".aaf/issues/test/plan/plan.md",
+            workflow_mode=WorkflowMode.LOCAL,
+            issue_name="custom-name",
         )
 
-        assert phase.workflow_mode == WorkflowMode.GITHUB
-        assert phase.issue_id == "123"
+        assert phase.issue_name == "custom-name"
 
-
-class TestBranchManagement:
-    """Test git branch management."""
-
-    def test_create_new_branch_local_mode(self, tmp_path: Path) -> None:
-        """測試 local mode 建立新分支"""
-        requirements_file = tmp_path / "20250101-feature.md"
-        requirements_file.write_text("Requirements")
-
+    def test_init_derives_issue_name_from_spec_file(self) -> None:
+        """測試從 spec_file 路徑推導 issue_name"""
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = "Development completed"
-
         permission_handler = MagicMock(spec=PermissionHandler)
-
         git_ops = MagicMock(spec=GitOperations)
-        git_ops.branch_exists.return_value = False
 
         phase = DevelopPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            spec_file=str(requirements_file),
+            spec_file=".aaf/issues/myissue/spec/spec.md",
+            plan_file=".aaf/issues/myissue/plan/plan.md",
             workflow_mode=WorkflowMode.LOCAL,
         )
 
-        phase.execute()
+        assert phase.issue_name == "myissue"
+        assert phase.history_dir == Path(".aaf/issues/myissue/develop/history")
 
-        # Should create branch named "feature"
-        git_ops.create_branch.assert_called_once_with("feature")
 
-    def test_switch_to_existing_branch(self, tmp_path: Path) -> None:
-        """測試切換到已存在的分支"""
-        requirements_file = tmp_path / "requirements.md"
-        requirements_file.write_text("Requirements")
+class TestPlanCheck:
+    """Test plan.md existence check."""
 
+    def test_check_plan_exists_returns_true_when_file_exists(self, tmp_path: Path) -> None:
+        """測試當 plan.md 存在時回傳 True"""
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = "Development completed"
-
         permission_handler = MagicMock(spec=PermissionHandler)
-
         git_ops = MagicMock(spec=GitOperations)
-        git_ops.branch_exists.return_value = True
+
+        plan_file = tmp_path / "plan.md"
+        plan_file.write_text("## Plan")
 
         phase = DevelopPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            spec_file=str(requirements_file),
-            workflow_mode=WorkflowMode.GITHUB,
-            issue_id="123",
+            spec_file=".aaf/issues/test/spec/spec.md",
+            plan_file=str(plan_file),
+            workflow_mode=WorkflowMode.LOCAL,
         )
 
-        phase.execute()
+        assert phase._check_plan_exists() is True
 
-        # Should checkout existing branch
-        git_ops.checkout_branch.assert_called_once_with("issue-123")
-
-    def test_github_mode_branch_name(self) -> None:
-        """測試 GitHub mode 分支名稱"""
+    def test_check_plan_exists_returns_false_when_file_missing(self) -> None:
+        """測試當 plan.md 不存在時回傳 False"""
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = "Development completed"
-
         permission_handler = MagicMock(spec=PermissionHandler)
-
         git_ops = MagicMock(spec=GitOperations)
-        git_ops.branch_exists.return_value = False
 
         phase = DevelopPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            spec_file="requirements.md",
-            workflow_mode=WorkflowMode.GITHUB,
-            issue_id="456",
+            spec_file=".aaf/issues/test/spec/spec.md",
+            plan_file="/nonexistent/plan.md",
+            workflow_mode=WorkflowMode.LOCAL,
         )
 
-        phase.execute()
+        assert phase._check_plan_exists() is False
 
-        # Should create branch named "issue-456"
-        git_ops.create_branch.assert_called_once_with("issue-456")
-
-
-class TestDevelopmentExecution:
-    """Test development execution."""
-
-    def test_execute_development_local_mode(self, tmp_path: Path) -> None:
-        """測試執行開發 local mode"""
-        requirements_file = tmp_path / "requirements.md"
-        requirements_file.write_text("Requirements")
-
+    def test_execute_fails_when_plan_missing(self) -> None:
+        """測試當 plan.md 不存在時 execute 失敗"""
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = "Development completed"
-
         permission_handler = MagicMock(spec=PermissionHandler)
-
         git_ops = MagicMock(spec=GitOperations)
-        git_ops.branch_exists.return_value = False
 
         phase = DevelopPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            spec_file=str(requirements_file),
+            spec_file=".aaf/issues/test/spec/spec.md",
+            plan_file="/nonexistent/plan.md",
             workflow_mode=WorkflowMode.LOCAL,
         )
 
         result = phase.execute()
 
-        assert result.status == PhaseStatus.COMPLETED
-        assert agent_manager.execute.called
+        assert result.status == PhaseStatus.FAILED
+        assert "Plan file not found" in result.message
 
-    def test_execute_development_github_mode(self) -> None:
-        """測試執行開發 GitHub mode"""
+
+class TestIterativeFlow:
+    """Test iterative execution flow."""
+
+    def test_execute_with_confirmed_status(self, tmp_path: Path) -> None:
+        """測試收到 CONFIRMED 狀態碼後完成"""
+        spec_file = tmp_path / ".aaf" / "issues" / "test" / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True)
+        spec_file.write_text("# Spec")
+
+        plan_file = tmp_path / ".aaf" / "issues" / "test" / "plan" / "plan.md"
+        plan_file.parent.mkdir(parents=True)
+        plan_file.write_text("## Plan\n- [ ] Task 1")
+
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = "Development completed"
+        agent_manager.execute.return_value = "Development completed. CONFIRMED"
+        agent_manager.get_total_token_usage.return_value = TokenUsage()
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -176,198 +169,371 @@ class TestDevelopmentExecution:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            spec_file="requirements.md",
-            workflow_mode=WorkflowMode.GITHUB,
-            issue_id="123",
+            spec_file=str(spec_file),
+            plan_file=str(plan_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            issue_name="test",
         )
 
         result = phase.execute()
 
         assert result.status == PhaseStatus.COMPLETED
-        # Should use gh issue view in prompt
-        call_args = agent_manager.execute.call_args
-        prompt = call_args[0][1]
-        assert "gh issue view 123" in prompt
+        assert phase.iteration == 1
+        assert "CONFIRMED" in result.data["status_code"]
+
+    def test_execute_saves_history_on_completion(self, tmp_path: Path) -> None:
+        """測試完成時儲存 history"""
+        spec_file = tmp_path / ".aaf" / "issues" / "test" / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True)
+        spec_file.write_text("# Spec")
+
+        plan_file = tmp_path / ".aaf" / "issues" / "test" / "plan" / "plan.md"
+        plan_file.parent.mkdir(parents=True)
+        plan_file.write_text("## Plan")
+
+        agent_manager = MagicMock(spec=AgentManager)
+        agent_manager.execute.return_value = "CONFIRMED"
+        agent_manager.get_total_token_usage.return_value = TokenUsage()
+
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        git_ops = MagicMock(spec=GitOperations)
+        git_ops.branch_exists.return_value = False
+
+        phase = DevelopPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            git_ops=git_ops,
+            spec_file=str(spec_file),
+            plan_file=str(plan_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            issue_name="test",
+        )
+
+        result = phase.execute()
+
+        # History directory should be created
+        history_dir = tmp_path / ".aaf" / "issues" / "test" / "develop" / "history"
+        assert history_dir.exists()
+
+        # Check iteration file was created
+        iteration_file = history_dir / "iteration_001.json"
+        assert iteration_file.exists()
+
+        # Verify history content
+        with open(iteration_file) as f:
+            history_data = json.load(f)
+            assert history_data["iteration"] == 1
+            assert history_data["status_code"] == "CONFIRMED"
+
+
+class TestHistoryAndProgress:
+    """Test history and progress saving."""
+
+    def test_save_history_creates_json_file(self, tmp_path: Path) -> None:
+        """測試 _save_history 建立 JSON 檔案"""
+        agent_manager = MagicMock(spec=AgentManager)
+        permission_handler = MagicMock(spec=PermissionHandler)
+        git_ops = MagicMock(spec=GitOperations)
+
+        phase = DevelopPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            git_ops=git_ops,
+            spec_file=str(tmp_path / ".aaf" / "issues" / "test" / "spec" / "spec.md"),
+            plan_file=str(tmp_path / ".aaf" / "issues" / "test" / "plan" / "plan.md"),
+            workflow_mode=WorkflowMode.LOCAL,
+            issue_name="test",
+        )
+
+        phase.iteration = 1
+        phase._save_history(
+            user_input="test input",
+            response="test response",
+            status_code=PhaseStatusCode.CONFIRMED,
+        )
+
+        history_file = phase.history_dir / "iteration_001.json"
+        assert history_file.exists()
+
+        with open(history_file) as f:
+            data = json.load(f)
+            assert data["iteration"] == 1
+            assert data["user_input"] == "test input"
+            assert data["response"] == "test response"
+            assert data["status_code"] == "CONFIRMED"
+
+    def test_save_progress_creates_status_json(self, tmp_path: Path) -> None:
+        """測試 _save_progress 建立 status.json"""
+        agent_manager = MagicMock(spec=AgentManager)
+        permission_handler = MagicMock(spec=PermissionHandler)
+        git_ops = MagicMock(spec=GitOperations)
+
+        phase = DevelopPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            git_ops=git_ops,
+            spec_file=str(tmp_path / ".aaf" / "issues" / "test" / "spec" / "spec.md"),
+            plan_file=str(tmp_path / ".aaf" / "issues" / "test" / "plan" / "plan.md"),
+            workflow_mode=WorkflowMode.LOCAL,
+            issue_name="test",
+        )
+
+        phase.iteration = 1
+        phase._save_progress(PhaseStatusCode.CONFIRMED)
+
+        status_file = phase.history_dir.parent / "status.json"
+        assert status_file.exists()
+
+        with open(status_file) as f:
+            data = json.load(f)
+            assert data["phase"] == "develop"
+            assert data["status"] == "completed"
+            assert data["status_code"] == "CONFIRMED"
+            assert data["iteration"] == 1
+
+    def test_load_history_restores_iterations(self, tmp_path: Path) -> None:
+        """測試 _load_history 恢復迭代記錄"""
+        agent_manager = MagicMock(spec=AgentManager)
+        permission_handler = MagicMock(spec=PermissionHandler)
+        git_ops = MagicMock(spec=GitOperations)
+
+        history_dir = tmp_path / ".aaf" / "issues" / "test" / "develop" / "history"
+        history_dir.mkdir(parents=True)
+
+        # Create mock history files
+        for i in range(1, 4):
+            history_file = history_dir / f"iteration_{i:03d}.json"
+            with open(history_file, 'w') as f:
+                json.dump({
+                    "iteration": i,
+                    "timestamp": datetime.now().isoformat(),
+                    "user_input": f"input {i}",
+                    "response": f"response {i}",
+                    "status_code": "NEED_PERMISSION",
+                }, f)
+
+        phase = DevelopPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            git_ops=git_ops,
+            spec_file=str(tmp_path / ".aaf" / "issues" / "test" / "spec" / "spec.md"),
+            plan_file=str(tmp_path / ".aaf" / "issues" / "test" / "plan" / "plan.md"),
+            workflow_mode=WorkflowMode.LOCAL,
+            issue_name="test",
+        )
+
+        assert phase.iteration == 3
+        assert len(phase.conversation_history) == 3
+        assert phase.conversation_history[0]["iteration"] == 1
+        assert phase.conversation_history[2]["iteration"] == 3
+
+
+class TestStatusCodeHandling:
+    """Test status code handling."""
+
+    def test_handle_confirmed_completes_phase(self, tmp_path: Path) -> None:
+        """測試 CONFIRMED 狀態碼完成 phase"""
+        spec_file = tmp_path / ".aaf" / "issues" / "test" / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True)
+        spec_file.write_text("# Spec")
+
+        plan_file = tmp_path / ".aaf" / "issues" / "test" / "plan" / "plan.md"
+        plan_file.parent.mkdir(parents=True)
+        plan_file.write_text("## Plan")
+
+        agent_manager = MagicMock(spec=AgentManager)
+        agent_manager.execute.return_value = "All done. CONFIRMED"
+        agent_manager.get_total_token_usage.return_value = TokenUsage()
+
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        git_ops = MagicMock(spec=GitOperations)
+        git_ops.branch_exists.return_value = False
+
+        phase = DevelopPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            git_ops=git_ops,
+            spec_file=str(spec_file),
+            plan_file=str(plan_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            issue_name="test",
+        )
+
+        result = phase.execute()
+
+        assert result.status == PhaseStatus.COMPLETED
+        assert result.data["status_code"] == "CONFIRMED"
+
+    def test_handle_need_permission_in_interactive_mode(self, tmp_path: Path) -> None:
+        """測試在互動模式下處理 NEED_PERMISSION 狀態碼"""
+        spec_file = tmp_path / ".aaf" / "issues" / "test" / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True)
+        spec_file.write_text("# Spec")
+
+        plan_file = tmp_path / ".aaf" / "issues" / "test" / "plan" / "plan.md"
+        plan_file.parent.mkdir(parents=True)
+        plan_file.write_text("## Plan")
+
+        agent_manager = MagicMock(spec=AgentManager)
+        # First call returns NEED_PERMISSION, second returns CONFIRMED
+        agent_manager.execute.side_effect = [
+            "Need permission. NEED_PERMISSION",
+            "Done. CONFIRMED",
+        ]
+        agent_manager.get_total_token_usage.return_value = TokenUsage()
+
+        permission_handler = MagicMock(spec=PermissionHandler)
+        permission_handler.request_permission.return_value = True
+
+        git_ops = MagicMock(spec=GitOperations)
+        git_ops.branch_exists.return_value = False
+
+        phase = DevelopPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            git_ops=git_ops,
+            spec_file=str(spec_file),
+            plan_file=str(plan_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            issue_name="test",
+            interactive=True,
+        )
+
+        result = phase.execute()
+
+        # Should complete after permission granted
+        assert result.status == PhaseStatus.COMPLETED
+        assert permission_handler.request_permission.called
+        assert agent_manager.execute.call_count == 2
+
+    def test_permission_denied_fails_phase(self, tmp_path: Path) -> None:
+        """測試權限被拒絕時 phase 失敗"""
+        spec_file = tmp_path / ".aaf" / "issues" / "test" / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True)
+        spec_file.write_text("# Spec")
+
+        plan_file = tmp_path / ".aaf" / "issues" / "test" / "plan" / "plan.md"
+        plan_file.parent.mkdir(parents=True)
+        plan_file.write_text("## Plan")
+
+        agent_manager = MagicMock(spec=AgentManager)
+        agent_manager.execute.return_value = "NEED_PERMISSION"
+
+        permission_handler = MagicMock(spec=PermissionHandler)
+        permission_handler.request_permission.return_value = False
+
+        git_ops = MagicMock(spec=GitOperations)
+        git_ops.branch_exists.return_value = False
+
+        phase = DevelopPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            git_ops=git_ops,
+            spec_file=str(spec_file),
+            plan_file=str(plan_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            issue_name="test",
+            interactive=True,
+        )
+
+        result = phase.execute()
+
+        assert result.status == PhaseStatus.FAILED
+        assert "Permission denied" in result.message
 
 
 class TestPromptGeneration:
-    """Test development prompt generation."""
+    """Test prompt generation logic."""
 
-    def test_local_mode_prompt(self, tmp_path: Path) -> None:
-        """測試 local mode prompt"""
-        requirements_file = tmp_path / "requirements.md"
-        requirements_file.write_text("Requirements")
-
+    def test_first_iteration_prompt_contains_file_paths(self, tmp_path: Path) -> None:
+        """測試第 1 輪 prompt 包含檔案路徑"""
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = "Development completed"
-
         permission_handler = MagicMock(spec=PermissionHandler)
-
         git_ops = MagicMock(spec=GitOperations)
-        git_ops.branch_exists.return_value = False
 
         phase = DevelopPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            spec_file=str(requirements_file),
+            spec_file=".aaf/issues/test/spec/spec.md",
+            plan_file=".aaf/issues/test/plan/plan.md",
             workflow_mode=WorkflowMode.LOCAL,
         )
 
-        phase.execute()
+        phase.iteration = 1
+        prompt = phase._generate_prompt()
 
-        call_args = agent_manager.execute.call_args[0]
-        prompt = call_args[1]
-        assert "requirements.md" in prompt
-        assert "先不要 push" in prompt
+        assert ".aaf/issues/test/spec/spec.md" in prompt
+        assert ".aaf/issues/test/plan/plan.md" in prompt
+        assert "CONFIRMED" in prompt
+        assert "NEED_PERMISSION" in prompt
 
-    def test_github_mode_prompt(self) -> None:
-        """測試 GitHub mode prompt"""
+    def test_subsequent_iteration_prompt_refers_to_history(self, tmp_path: Path) -> None:
+        """測試第 2+ 輪 prompt 參考歷史記錄"""
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = "Development completed"
-
         permission_handler = MagicMock(spec=PermissionHandler)
-
         git_ops = MagicMock(spec=GitOperations)
-        git_ops.branch_exists.return_value = False
 
         phase = DevelopPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            spec_file="requirements.md",
+            spec_file=".aaf/issues/test/spec/spec.md",
+            plan_file=".aaf/issues/test/plan/plan.md",
+            workflow_mode=WorkflowMode.LOCAL,
+        )
+
+        # Add history
+        phase.conversation_history = [
+            {"iteration": 1, "status_code": "NEED_PERMISSION"},
+            {"iteration": 2, "status_code": "NEED_PERMISSION"},
+        ]
+
+        phase.iteration = 3
+        prompt = phase._generate_prompt()
+
+        assert "第 3 輪" in prompt
+        assert "歷史記錄" in prompt
+
+
+class TestBranchManagement:
+    """Test branch name generation."""
+
+    def test_local_mode_uses_issue_name_as_branch(self) -> None:
+        """測試 local mode 使用 issue_name 作為分支名"""
+        agent_manager = MagicMock(spec=AgentManager)
+        permission_handler = MagicMock(spec=PermissionHandler)
+        git_ops = MagicMock(spec=GitOperations)
+
+        phase = DevelopPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            git_ops=git_ops,
+            spec_file=".aaf/issues/my-feature/spec/spec.md",
+            plan_file=".aaf/issues/my-feature/plan/plan.md",
+            workflow_mode=WorkflowMode.LOCAL,
+        )
+
+        branch_name = phase._get_branch_name()
+        assert branch_name == "my-feature"
+
+    def test_github_mode_uses_issue_id(self) -> None:
+        """測試 GitHub mode 使用 issue-{id} 作為分支名"""
+        agent_manager = MagicMock(spec=AgentManager)
+        permission_handler = MagicMock(spec=PermissionHandler)
+        git_ops = MagicMock(spec=GitOperations)
+
+        phase = DevelopPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            git_ops=git_ops,
+            spec_file=".aaf/issues/test/spec/spec.md",
+            plan_file=".aaf/issues/test/plan/plan.md",
             workflow_mode=WorkflowMode.GITHUB,
             issue_id="123",
         )
 
-        phase.execute()
-
-        call_args = agent_manager.execute.call_args[0]
-        prompt = call_args[1]
-        assert "gh issue view 123" in prompt
-        assert "gh issue comment 123" in prompt
-
-
-class TestAgentSelection:
-    """Test developer agent selection."""
-
-    def test_uses_dev_agent(self, tmp_path: Path) -> None:
-        """測試使用 Dev agent (David)"""
-        requirements_file = tmp_path / "requirements.md"
-        requirements_file.write_text("Requirements")
-
-        agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = "Development completed"
-
-        permission_handler = MagicMock(spec=PermissionHandler)
-
-        git_ops = MagicMock(spec=GitOperations)
-        git_ops.branch_exists.return_value = False
-
-        phase = DevelopPhase(
-            agent_manager=agent_manager,
-            permission_handler=permission_handler,
-            git_ops=git_ops,
-            spec_file=str(requirements_file),
-            workflow_mode=WorkflowMode.LOCAL,
-            dev_agent="David",
-        )
-
-        phase.execute()
-
-        # Check that David was used
-        call_args = agent_manager.execute.call_args[0]
-        assert call_args[0] == "David"
-
-
-class TestErrorHandling:
-    """Test error handling."""
-
-    def test_missing_requirements_file_fails(self) -> None:
-        """測試缺少需求檔案時失敗"""
-        agent_manager = MagicMock(spec=AgentManager)
-        permission_handler = MagicMock(spec=PermissionHandler)
-        git_ops = MagicMock(spec=GitOperations)
-
-        phase = DevelopPhase(
-            agent_manager=agent_manager,
-            permission_handler=permission_handler,
-            git_ops=git_ops,
-            spec_file="/nonexistent/requirements.md",
-            workflow_mode=WorkflowMode.LOCAL,
-        )
-
-        result = phase.execute()
-
-        assert result.status == PhaseStatus.FAILED
-        assert "not found" in result.message.lower()
-
-    def test_github_mode_without_issue_id_fails(self) -> None:
-        """測試 GitHub mode 沒有 issue_id 時失敗"""
-        agent_manager = MagicMock(spec=AgentManager)
-        permission_handler = MagicMock(spec=PermissionHandler)
-        git_ops = MagicMock(spec=GitOperations)
-
-        phase = DevelopPhase(
-            agent_manager=agent_manager,
-            permission_handler=permission_handler,
-            git_ops=git_ops,
-            spec_file="requirements.md",
-            workflow_mode=WorkflowMode.GITHUB,
-            issue_id=None,
-        )
-
-        result = phase.execute()
-
-        assert result.status == PhaseStatus.FAILED
-        assert "issue_id" in result.message.lower()
-
-    def test_agent_execution_error_fails_phase(self, tmp_path: Path) -> None:
-        """測試 agent 執行錯誤時 phase 失敗"""
-        requirements_file = tmp_path / "requirements.md"
-        requirements_file.write_text("Requirements")
-
-        agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.side_effect = Exception("Agent error")
-
-        permission_handler = MagicMock(spec=PermissionHandler)
-
-        git_ops = MagicMock(spec=GitOperations)
-        git_ops.branch_exists.return_value = False
-
-        phase = DevelopPhase(
-            agent_manager=agent_manager,
-            permission_handler=permission_handler,
-            git_ops=git_ops,
-            spec_file=str(requirements_file),
-            workflow_mode=WorkflowMode.LOCAL,
-        )
-
-        result = phase.execute()
-
-        assert result.status == PhaseStatus.FAILED
-        assert "Agent error" in result.message
-
-    def test_git_error_fails_phase(self, tmp_path: Path) -> None:
-        """測試 git 操作錯誤時 phase 失敗"""
-        requirements_file = tmp_path / "requirements.md"
-        requirements_file.write_text("Requirements")
-
-        agent_manager = MagicMock(spec=AgentManager)
-        permission_handler = MagicMock(spec=PermissionHandler)
-
-        git_ops = MagicMock(spec=GitOperations)
-        git_ops.branch_exists.side_effect = Exception("Git error")
-
-        phase = DevelopPhase(
-            agent_manager=agent_manager,
-            permission_handler=permission_handler,
-            git_ops=git_ops,
-            spec_file=str(requirements_file),
-            workflow_mode=WorkflowMode.LOCAL,
-        )
-
-        result = phase.execute()
-
-        assert result.status == PhaseStatus.FAILED
-        assert "Git error" in result.message
+        branch_name = phase._get_branch_name()
+        assert branch_name == "issue-123"

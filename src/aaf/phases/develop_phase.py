@@ -1,14 +1,17 @@
 """Development phase."""
 
-import re
+import json
+from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List, Dict, Any
 
 from aaf.agents.manager import AgentManager
 from aaf.core.git import GitOperations
 from aaf.core.permission import PermissionHandler
 from aaf.core.phase import Phase
-from aaf.core.types import PhaseResult, PhaseStatus, WorkflowMode
+from aaf.core.status_codes import PhaseStatusCode, StatusCodeParser, generate_status_code_prompt
+from aaf.core.types import PhaseProgress, PhaseResult, PhaseStatus, WorkflowMode
+from aaf.ui.display import Display
 
 
 class DevelopPhase(Phase):
@@ -20,9 +23,12 @@ class DevelopPhase(Phase):
         permission_handler: PermissionHandler,
         git_ops: GitOperations,
         spec_file: str,
+        plan_file: str,
         workflow_mode: WorkflowMode,
         issue_id: Optional[str] = None,
+        issue_name: Optional[str] = None,
         dev_agent: str = "David",
+        interactive: bool = True,
     ) -> None:
         """Initialize develop phase.
 
@@ -31,17 +37,214 @@ class DevelopPhase(Phase):
             permission_handler: Permission handler
             git_ops: Git operations
             spec_file: Path to spec file
+            plan_file: Path to plan file
             workflow_mode: Workflow mode (local or github)
             issue_id: GitHub issue ID (required for github mode)
+            issue_name: Issue name for history tracking (default: derived from spec_file)
             dev_agent: Developer agent name (default: David)
+            interactive: Enable interactive mode (default: True)
         """
         self.agent_manager = agent_manager
         self.permission_handler = permission_handler
         self.git_ops = git_ops
         self.spec_file = spec_file
+        self.plan_file = plan_file
         self.workflow_mode = workflow_mode
         self.issue_id = issue_id
         self.dev_agent = dev_agent
+        self.interactive = interactive
+
+        # Iteration tracking
+        self.iteration = 0
+
+        # Determine issue name for history tracking
+        if issue_name:
+            self.issue_name = issue_name
+        else:
+            # Derive from spec_file path: .aaf/issues/{issue_name}/spec/spec.md
+            spec_path = Path(spec_file)
+            self.issue_name = spec_path.parent.parent.name
+
+        # History directory for develop phase
+        # Path: .aaf/issues/{issue_name}/develop/history
+        spec_path = Path(self.spec_file)
+        issue_dir = spec_path.parent.parent  # .aaf/issues/{issue_name}
+        self.history_dir = issue_dir / "develop" / "history"
+
+        # Track conversation history
+        self.conversation_history: List[Dict[str, Any]] = []
+
+        # Initialize display
+        self.display = Display()
+
+        # Load existing history if available
+        self._load_history()
+
+    def _check_plan_exists(self) -> bool:
+        """Check if plan.md exists.
+
+        Returns:
+            True if plan.md exists, False otherwise
+        """
+        plan_path = Path(self.plan_file)
+        return plan_path.exists()
+
+    def _load_history(self) -> None:
+        """Load conversation history from previous iterations."""
+        if not self.history_dir.exists():
+            return
+
+        # Find all iteration files
+        iteration_files = sorted(self.history_dir.glob("iteration_*.json"))
+
+        for iteration_file in iteration_files:
+            with open(iteration_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+
+            # Restore conversation history
+            self.conversation_history.append(data)
+
+            # Update iteration counter
+            if data["iteration"] >= self.iteration:
+                self.iteration = data["iteration"]
+
+    def _save_history(
+        self,
+        user_input: str,
+        response: str,
+        status_code: PhaseStatusCode,
+    ) -> None:
+        """Save iteration history to JSON file.
+
+        Args:
+            user_input: User's input for this iteration
+            response: Agent's response
+            status_code: Status code for this iteration
+        """
+        # Create history directory
+        self.history_dir.mkdir(parents=True, exist_ok=True)
+
+        # Create iteration record
+        iteration_data = {
+            "iteration": self.iteration,
+            "timestamp": datetime.now().isoformat(),
+            "user_input": user_input,
+            "response": response,
+            "status_code": status_code.value,
+        }
+
+        # Save to JSON file
+        iteration_file = self.history_dir / f"iteration_{self.iteration:03d}.json"
+        with open(iteration_file, "w", encoding="utf-8") as f:
+            json.dump(iteration_data, f, ensure_ascii=False, indent=2)
+
+    def _save_progress(self, status_code: PhaseStatusCode) -> None:
+        """Save phase progress to status.json.
+
+        Args:
+            status_code: Phase status code
+        """
+        status_file = self.history_dir.parent / "status.json"
+        status_file.parent.mkdir(parents=True, exist_ok=True)
+
+        # Determine phase status
+        phase_status = PhaseStatus.COMPLETED if status_code == PhaseStatusCode.CONFIRMED else PhaseStatus.IN_PROGRESS
+
+        progress = PhaseProgress(
+            phase="develop",
+            status=phase_status,
+            status_code=status_code.value,
+            timestamp=datetime.now(),
+            iteration=self.iteration,
+            message=f"Phase completed with {status_code.value}" if phase_status == PhaseStatus.COMPLETED else f"Iteration {self.iteration}",
+        )
+
+        with open(status_file, 'w', encoding='utf-8') as f:
+            json.dump(progress.to_dict(), f, ensure_ascii=False, indent=2)
+
+    def _generate_prompt(self) -> str:
+        """Generate prompt for current iteration.
+
+        Returns:
+            Prompt string
+        """
+        if self.iteration == 1:
+            # First iteration: provide spec.md and plan.md paths
+            status_code_prompt = generate_status_code_prompt(
+                valid_codes=[
+                    PhaseStatusCode.CONFIRMED,
+                    PhaseStatusCode.NEED_PERMISSION,
+                ],
+                descriptions={
+                    PhaseStatusCode.CONFIRMED: "開發工作已完成",
+                    PhaseStatusCode.NEED_PERMISSION: "需要請求工具使用權限",
+                },
+            )
+
+            return f"""請按照實作計畫執行開發工作。
+
+**你的角色：**
+你是一位經驗豐富的 Developer，負責根據需求規格和實作計畫進行開發。
+
+**檔案路徑：**
+- 需求規格：{self.spec_file}
+- 實作計畫：{self.plan_file}
+
+**執行步驟：**
+1. 仔細閱讀 {self.spec_file} 和 {self.plan_file}
+2. 嚴格按照計畫中的順序執行開發任務
+3. 使用計畫中指定的 commit message（不要修改）
+4. 完成每個任務後，在 {self.plan_file} 中將該項目打勾（- [ ] 改為 - [x]）
+5. 所有任務完成後回傳狀態碼
+
+{status_code_prompt}
+
+**完成後回傳：CONFIRMED**
+"""
+        else:
+            # Subsequent iterations: refer to history and continue
+            status_code_prompt = generate_status_code_prompt(
+                valid_codes=[
+                    PhaseStatusCode.CONFIRMED,
+                    PhaseStatusCode.NEED_PERMISSION,
+                ],
+                descriptions={
+                    PhaseStatusCode.CONFIRMED: "開發工作已完成",
+                    PhaseStatusCode.NEED_PERMISSION: "需要請求工具使用權限",
+                },
+            )
+
+            # Build history reference
+            history_summary = []
+            for entry in self.conversation_history[-3:]:  # Last 3 iterations
+                history_summary.append(f"第 {entry['iteration']} 輪：{entry['status_code']}")
+            history_text = "\n".join(history_summary) if history_summary else "無歷史記錄"
+
+            return f"""繼續執行開發工作。
+
+**你的角色：**
+你是一位經驗豐富的 Developer，負責根據需求規格和實作計畫進行開發。
+
+這是第 {self.iteration} 輪開發。
+
+**歷史記錄：**
+{history_text}
+
+**檔案路徑：**
+- 需求規格：{self.spec_file}
+- 實作計畫：{self.plan_file}
+
+**執行步驟：**
+1. 檢查 {self.plan_file} 了解哪些任務已完成
+2. 繼續執行未完成的開發任務
+3. 使用計畫中指定的 commit message（不要修改）
+4. 完成每個任務後打勾
+5. 所有任務完成後回傳狀態碼
+
+{status_code_prompt}
+
+**完成後回傳：CONFIRMED**
+"""
 
     def execute(self) -> PhaseResult:
         """Execute development phase.
@@ -50,6 +253,13 @@ class DevelopPhase(Phase):
             Phase result
         """
         try:
+            # Check plan.md exists
+            if not self._check_plan_exists():
+                return PhaseResult(
+                    status=PhaseStatus.FAILED,
+                    message=f"Plan file not found: {self.plan_file}. Please run 'aaf plan' first.",
+                )
+
             # Validate inputs
             if self.workflow_mode == WorkflowMode.GITHUB and not self.issue_id:
                 return PhaseResult(
@@ -73,18 +283,134 @@ class DevelopPhase(Phase):
             else:
                 self.git_ops.create_branch(branch_name)
 
-            # Generate development prompt
-            prompt = self._generate_prompt()
+            # Development loop
+            while True:
+                self.iteration += 1
 
-            # Execute developer agent
-            response = self.agent_manager.execute(self.dev_agent, prompt)
+                # Prepare user_input for this iteration
+                if self.iteration == 1:
+                    # First iteration: read plan.md as user_input
+                    plan_path = Path(self.plan_file)
+                    current_user_input = plan_path.read_text() if plan_path.exists() else ""
+                else:
+                    # Subsequent iterations: empty user_input (continue from previous work)
+                    current_user_input = ""
 
+                # Generate prompt
+                prompt = self._generate_prompt()
+
+                # Execute developer agent with allowed tools
+                response = self.agent_manager.execute(
+                    self.dev_agent,
+                    prompt,
+                    allowed_tools=["write", "read", "shell"]
+                )
+
+                # Extract status code from response
+                status_code = StatusCodeParser.extract(
+                    response,
+                    valid_codes=[
+                        PhaseStatusCode.CONFIRMED,
+                        PhaseStatusCode.NEED_PERMISSION,
+                    ],
+                )
+
+                # Handle status codes
+                if status_code == PhaseStatusCode.CONFIRMED:
+                    # Save history
+                    self._save_history(
+                        user_input=current_user_input,
+                        response=response,
+                        status_code=PhaseStatusCode.CONFIRMED,
+                    )
+
+                    # Save progress
+                    self._save_progress(PhaseStatusCode.CONFIRMED)
+
+                    # Get token usage statistics
+                    token_usage = self.agent_manager.get_total_token_usage()
+
+                    return PhaseResult(
+                        status=PhaseStatus.COMPLETED,
+                        message=f"Development completed on branch {branch_name} in {self.iteration} iteration(s)",
+                        data={
+                            "branch": branch_name,
+                            "iterations": self.iteration,
+                            "final_response": response,
+                            "status_code": status_code.value,
+                        },
+                        token_usage=token_usage,
+                    )
+
+                elif status_code == PhaseStatusCode.NEED_PERMISSION:
+                    # Handle permission request
+                    # Save history
+                    self._save_history(
+                        user_input=current_user_input,
+                        response=response,
+                        status_code=PhaseStatusCode.NEED_PERMISSION,
+                    )
+
+                    # Save progress
+                    self._save_progress(PhaseStatusCode.NEED_PERMISSION)
+
+                    # Request permission from user
+                    if self.interactive:
+                        print(f"\n{'='*60}")
+                        print(f"Agent 請求權限（第 {self.iteration} 輪）")
+                        print(f"{'='*60}")
+                        print(response)
+                        print(f"{'='*60}\n")
+
+                        # Use permission handler
+                        granted = self.permission_handler.request_permission(response)
+
+                        if granted:
+                            print("\n✅ 權限已授予，繼續執行...")
+                            # Continue to next iteration
+                            continue
+                        else:
+                            print("\n❌ 權限被拒絕，Phase 終止。")
+                            return PhaseResult(
+                                status=PhaseStatus.FAILED,
+                                message="Permission denied by user",
+                                data={
+                                    "iterations": self.iteration,
+                                    "last_response": response,
+                                },
+                            )
+                    else:
+                        # Non-interactive mode: cannot handle permission requests
+                        return PhaseResult(
+                            status=PhaseStatus.FAILED,
+                            message="Permission required but running in non-interactive mode",
+                            data={
+                                "iterations": self.iteration,
+                                "last_response": response,
+                            },
+                        )
+                else:
+                    # No valid status code found, continue iteration
+                    # Save what we have so far
+                    if status_code:
+                        self._save_history(
+                            user_input=current_user_input,
+                            response=response,
+                            status=status_code,
+                        )
+                        self._save_progress(status_code)
+                    continue
+
+        except KeyboardInterrupt:
+            # User paused with Ctrl+C - save progress and allow resume
+            print("\n\n⏸️  Paused by user (Ctrl+C).")
+            print(f"💾 Progress saved. Current iteration: {self.iteration}")
+            print(f"📝 To resume, run: aaf develop {self.issue_name}")
             return PhaseResult(
-                status=PhaseStatus.COMPLETED,
-                message=f"Development completed on branch {branch_name}",
-                data={"branch": branch_name, "response": response},
+                status=PhaseStatus.IN_PROGRESS,
+                message="Paused by user - can resume later",
+                data={"iterations": self.iteration},
             )
-
         except Exception as e:
             return PhaseResult(
                 status=PhaseStatus.FAILED,
@@ -100,58 +426,5 @@ class DevelopPhase(Phase):
         if self.workflow_mode == WorkflowMode.GITHUB:
             return f"issue-{self.issue_id}"
         else:
-            # Extract from requirements filename
-            # e.g., "20250101-feature.md" -> "feature"
-            filename = Path(self.spec_file).stem
-            # Remove date prefix if exists
-            match = re.match(r"^\d{8}-(.+)$", filename)
-            if match:
-                return match.group(1)
-            return filename
-
-    def _generate_prompt(self) -> str:
-        """Generate development prompt.
-
-        Returns:
-            Prompt string
-        """
-        if self.workflow_mode == WorkflowMode.GITHUB:
-            return self._generate_github_prompt()
-        else:
-            return self._generate_local_prompt()
-
-    def _generate_local_prompt(self) -> str:
-        """Generate prompt for local workflow.
-
-        Returns:
-            Prompt string
-        """
-        return f"""Use the {self.dev_agent} subagent for development.
-
-需求已經確認清楚，請根據 {self.spec_file} 進行開發。
-
-請執行以下步驟：
-1. 嚴格按照開發任務拆解的順序進行開發及測試
-2. 直接使用開發任務中的 commit message，禁止加入新的內容
-3. commit 完之後在 {self.spec_file} 中將已完成的項目打勾
-
-**注意：先不要 push 到 remote，等 code review 完成後再 push！**
-"""
-
-    def _generate_github_prompt(self) -> str:
-        """Generate prompt for GitHub workflow.
-
-        Returns:
-            Prompt string
-        """
-        return f"""Use the {self.dev_agent} subagent for development.
-
-需求已經確認清楚，請用 `gh issue view {self.issue_id}` 查看 Issue 中的需求和實作分析進行開發。
-
-請執行以下步驟：
-1. 嚴格按照開發任務拆解的順序進行開發及測試
-2. 直接使用開發任務中的 commit message，禁止加入新的內容
-3. commit 完之後使用 `gh issue comment {self.issue_id}` 發 comment，用最簡單的文字說明進度，例如："已完成 Task 3 並 commit。"
-
-**注意：先不要 push 到 remote，等 code review 完成後再 push！**
-"""
+            # Use issue name as branch name
+            return self.issue_name
