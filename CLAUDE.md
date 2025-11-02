@@ -262,7 +262,43 @@ Agent CLIs（至少需要一個）：
 - **Issue**: 使用 `<issue-name>` 作為識別（例如 `aaf spec fix-login-bug`）
 - **Session**: 系統內部管理，每個 issue 會有對應的 session
 - Issue 資料儲存在 `.aaf/issues/<issue-name>/` 目錄
-- Session 資料儲存在 `.aaf/sessions/<issue_name>/` 目錄
+- Session 資料儲存在 `.aaf/issues/<issue-name>/sessions/` 目錄（每個 issue 的 sessions 與該 issue 資料放在一起）
+- Global sessions（無 issue 時）儲存在 `.aaf/sessions/` 目錄
+
+### 目錄結構範例
+
+```
+.aaf/
+├── issues/
+│   └── myip/                   # Issue 名稱
+│       ├── spec/               # 需求文件
+│       │   ├── spec.md
+│       │   └── history/
+│       ├── plan/               # 實作計畫
+│       │   ├── plan.md
+│       │   └── history/
+│       └── sessions/           # Issue 專屬 agent sessions
+│           ├── Roger_copilot.json
+│           ├── David_claude.json
+│           └── Richard_gemini.json
+├── sessions/                   # Global sessions (無 issue)
+│   ├── Roger_copilot.json
+│   └── David_claude.json
+└── config.yaml
+```
+
+### Session 檔案格式
+
+每個 session 檔案是 JSON 格式，包含：
+```json
+{
+  "agent_name": "Roger",
+  "cli": "copilot",
+  "session_id": "session_xxx",
+  "created_at": "2025-11-02T13:00:00",
+  "last_used_at": "2025-11-02T13:05:00"
+}
+```
 
 ### 測試哲學
 
