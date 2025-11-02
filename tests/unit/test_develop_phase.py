@@ -1,26 +1,26 @@
-"""Tests for ImplementationPhase."""
+"""Tests for DevelopPhase."""
 
 import pytest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from aaf.phases.implementation_phase import ImplementationPhase
+from aaf.phases.develop_phase import DevelopPhase
 from aaf.agents.manager import AgentManager
 from aaf.core.git import GitOperations
 from aaf.core.types import PhaseResult, PhaseStatus, WorkflowMode
 from aaf.core.permission import PermissionHandler
 
 
-class TestImplementationPhaseBasics:
-    """Test basic ImplementationPhase functionality."""
+class TestDevelopPhaseBasics:
+    """Test basic DevelopPhase functionality."""
 
-    def test_init_implementation_phase(self) -> None:
-        """測試初始化 ImplementationPhase"""
+    def test_init_develop_phase(self) -> None:
+        """測試初始化 DevelopPhase"""
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
         git_ops = MagicMock(spec=GitOperations)
 
-        phase = ImplementationPhase(
+        phase = DevelopPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
@@ -39,7 +39,7 @@ class TestImplementationPhaseBasics:
         permission_handler = MagicMock(spec=PermissionHandler)
         git_ops = MagicMock(spec=GitOperations)
 
-        phase = ImplementationPhase(
+        phase = DevelopPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
@@ -68,7 +68,7 @@ class TestBranchManagement:
         git_ops = MagicMock(spec=GitOperations)
         git_ops.branch_exists.return_value = False
 
-        phase = ImplementationPhase(
+        phase = DevelopPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
@@ -94,7 +94,7 @@ class TestBranchManagement:
         git_ops = MagicMock(spec=GitOperations)
         git_ops.branch_exists.return_value = True
 
-        phase = ImplementationPhase(
+        phase = DevelopPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
@@ -118,7 +118,7 @@ class TestBranchManagement:
         git_ops = MagicMock(spec=GitOperations)
         git_ops.branch_exists.return_value = False
 
-        phase = ImplementationPhase(
+        phase = DevelopPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
@@ -149,7 +149,7 @@ class TestDevelopmentExecution:
         git_ops = MagicMock(spec=GitOperations)
         git_ops.branch_exists.return_value = False
 
-        phase = ImplementationPhase(
+        phase = DevelopPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
@@ -172,7 +172,7 @@ class TestDevelopmentExecution:
         git_ops = MagicMock(spec=GitOperations)
         git_ops.branch_exists.return_value = False
 
-        phase = ImplementationPhase(
+        phase = DevelopPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
@@ -206,7 +206,7 @@ class TestPromptGeneration:
         git_ops = MagicMock(spec=GitOperations)
         git_ops.branch_exists.return_value = False
 
-        phase = ImplementationPhase(
+        phase = DevelopPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
@@ -231,7 +231,7 @@ class TestPromptGeneration:
         git_ops = MagicMock(spec=GitOperations)
         git_ops.branch_exists.return_value = False
 
-        phase = ImplementationPhase(
+        phase = DevelopPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
@@ -264,7 +264,7 @@ class TestAgentSelection:
         git_ops = MagicMock(spec=GitOperations)
         git_ops.branch_exists.return_value = False
 
-        phase = ImplementationPhase(
+        phase = DevelopPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
@@ -289,7 +289,7 @@ class TestErrorHandling:
         permission_handler = MagicMock(spec=PermissionHandler)
         git_ops = MagicMock(spec=GitOperations)
 
-        phase = ImplementationPhase(
+        phase = DevelopPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
@@ -308,7 +308,7 @@ class TestErrorHandling:
         permission_handler = MagicMock(spec=PermissionHandler)
         git_ops = MagicMock(spec=GitOperations)
 
-        phase = ImplementationPhase(
+        phase = DevelopPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
@@ -335,7 +335,7 @@ class TestErrorHandling:
         git_ops = MagicMock(spec=GitOperations)
         git_ops.branch_exists.return_value = False
 
-        phase = ImplementationPhase(
+        phase = DevelopPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
@@ -359,7 +359,7 @@ class TestErrorHandling:
         git_ops = MagicMock(spec=GitOperations)
         git_ops.branch_exists.side_effect = Exception("Git error")
 
-        phase = ImplementationPhase(
+        phase = DevelopPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
