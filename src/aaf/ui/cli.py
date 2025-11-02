@@ -610,6 +610,181 @@ def plan(
 
 
 @app.command()
+def develop(
+    issue_name: str = typer.Argument(
+        ...,
+        help="Issue name (reads spec & plan from .aaf/issues/{issue-name}/)",
+    ),
+    mode: str = typer.Option(
+        "local",
+        "--mode",
+        "-m",
+        help="Workflow mode: local or github",
+    ),
+    issue_id: Optional[str] = typer.Option(
+        None,
+        "--issue",
+        "-i",
+        help="GitHub issue ID (github mode)",
+    ),
+    dev_agent: str = typer.Option(
+        "David",
+        "--dev",
+        help="Developer agent name",
+    ),
+    config_file: str = typer.Option(
+        ".aaf/config.yaml",
+        "--config",
+        "-c",
+        help="Path to configuration file",
+    ),
+) -> None:
+    """Run develop phase: Execute development work according to plan.
+
+    The developer agent will implement the planned features, running tests and
+    making commits according to the implementation plan.
+
+    Examples:
+        # Execute development for "user-auth" issue
+        aaf develop user-auth
+
+        # Execute development for "new-feature" issue
+        aaf develop new-feature
+
+        # Use custom developer agent
+        aaf develop my-feature --dev CustomDev
+    """
+    try:
+        # Validate mode
+        try:
+            workflow_mode = WorkflowMode(mode)
+        except ValueError:
+            console.print(f"[red]Error: Invalid mode '{mode}'. Use 'local' or 'github'.[/red]")
+            raise typer.Exit(1)
+
+        # Build file paths
+        spec_file = f".aaf/issues/{issue_name}/spec/spec.md"
+        plan_file = f".aaf/issues/{issue_name}/plan/plan.md"
+
+        # Check if spec file exists
+        if not Path(spec_file).exists():
+            console.print(f"[red]Error: Spec file not found: {spec_file}[/red]")
+            console.print(f"[dim]Hint: Run 'aaf spec {issue_name}' first to create the specification.[/dim]")
+            raise typer.Exit(1)
+
+        # Check if plan file exists
+        if not Path(plan_file).exists():
+            console.print(f"[red]Error: Plan file not found: {plan_file}[/red]")
+            console.print(f"[dim]Hint: Run 'aaf plan {issue_name}' first to create the implementation plan.[/dim]")
+            raise typer.Exit(1)
+
+        # Initialize components
+        config_dir = str(Path(config_file).parent) if config_file != ".aaf/config.yaml" else ".aaf"
+        config_manager = ConfigManager(config_dir)
+        agent_manager = _setup_agents(config_manager, issue_name=issue_name)
+        permission_handler = PermissionHandler()
+        git_ops = GitOperations()
+
+        # Get developer agent CLI
+        dev_executor = agent_manager.get_agent(dev_agent)
+        dev_cli = dev_executor.config.cli.value
+
+        # Display start message
+        console.print("[bold blue]🔨 Develop Phase: Development Execution[/bold blue]")
+        console.print(f"Mode: {workflow_mode.value}")
+        console.print(f"Issue: {issue_name}")
+        console.print(f"Developer Agent: {dev_agent} (by {dev_cli})")
+        console.print(f"Spec file: {spec_file}")
+        console.print(f"Plan file: {plan_file}")
+        console.print()
+
+        # Create and execute develop phase
+        phase = DevelopPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            git_ops=git_ops,
+            spec_file=spec_file,
+            plan_file=plan_file,
+            workflow_mode=workflow_mode,
+            issue_id=issue_id,
+            issue_name=issue_name,
+            dev_agent=dev_agent,
+            interactive=True,
+        )
+
+        console.print("[bold]Starting development execution...[/bold]")
+        console.print("[dim]The developer will implement features according to the plan.[/dim]")
+        console.print("[dim]💡 Tip: Press Ctrl+C anytime to pause and save progress.[/dim]")
+        console.print()
+
+        result = phase.execute()
+
+        # Display result
+        if result.status.value == "completed":
+            console.print()
+            console.print("[bold green]✅ Development completed![/bold green]")
+            console.print(f"Branch: {result.data.get('branch', 'N/A')}")
+            console.print(f"Iterations: {result.data.get('iterations', 'N/A')}")
+            console.print()
+            console.print("[dim]Next steps:[/dim]")
+            console.print(f"[dim]  1. Review changes: git diff[/dim]")
+            console.print(f"[dim]  2. Run tests: pytest[/dim]")
+            console.print(f"[dim]  3. Code review: aaf review {issue_name}[/dim]")
+        elif result.status.value == "failed":
+            console.print(f"[red]❌ Development failed: {result.message}[/red]")
+            raise typer.Exit(1)
+        elif result.status.value == "in_progress":
+            console.print(f"[yellow]⏸️  Development paused: {result.message}[/yellow]")
+            console.print(f"[dim]Resume with: aaf develop {issue_name}[/dim]")
+
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1)
+
+
+# Add "dev" as an alias for "develop"
+@app.command(name="dev")
+def dev_alias(
+    issue_name: str = typer.Argument(
+        ...,
+        help="Issue name (reads spec & plan from .aaf/issues/{issue-name}/)",
+    ),
+    mode: str = typer.Option(
+        "local",
+        "--mode",
+        "-m",
+        help="Workflow mode: local or github",
+    ),
+    issue_id: Optional[str] = typer.Option(
+        None,
+        "--issue",
+        "-i",
+        help="GitHub issue ID (github mode)",
+    ),
+    dev_agent: str = typer.Option(
+        "David",
+        "--dev",
+        help="Developer agent name",
+    ),
+    config_file: str = typer.Option(
+        ".aaf/config.yaml",
+        "--config",
+        "-c",
+        help="Path to configuration file",
+    ),
+) -> None:
+    """Alias for 'develop' command."""
+    # Call the develop function with all parameters
+    develop(
+        issue_name=issue_name,
+        mode=mode,
+        issue_id=issue_id,
+        dev_agent=dev_agent,
+        config_file=config_file,
+    )
+
+
+@app.command()
 def config(
     action: Optional[str] = typer.Argument(None, help="Action: set, get, edit, reset, or config key"),
     key: Optional[str] = typer.Argument(None, help="Configuration key"),
