@@ -165,8 +165,19 @@ class TestSessionManagement:
 
     def test_resume_existing_session(self) -> None:
         """測試恢復現有 session"""
+        from aaf.core.types import SessionData
+        from datetime import datetime
+
         session_mgr = MagicMock(spec=SessionManager)
-        session_mgr.load_session.return_value = "existing-session-456"
+        # Return SessionData instead of string
+        session_data = SessionData(
+            agent_name="David",
+            cli=AgentCLI.CLAUDE,
+            session_id="existing-session-456",
+            created_at=datetime.now(),
+            last_used_at=datetime.now(),
+        )
+        session_mgr.load_session.return_value = session_data
 
         manager = AgentManager(session_manager=session_mgr)
         config = AgentConfig(name="David", cli=AgentCLI.CLAUDE)
@@ -175,7 +186,7 @@ class TestSessionManagement:
         executor = manager.get_agent("David")
 
         assert executor.config.session_id == "existing-session-456"
-        session_mgr.load_session.assert_called_once_with("David", None)
+        session_mgr.load_session.assert_called_once_with("David", AgentCLI.CLAUDE, None)
 
     def test_session_lazy_creation(self) -> None:
         """測試 session 延遲創建（在首次執行時）"""
@@ -250,7 +261,7 @@ class TestSessionManagement:
 
         manager.delete_session("David")
 
-        session_mgr.delete_session.assert_called_once_with("David", None)
+        session_mgr.delete_session.assert_called_once_with("David", AgentCLI.CLAUDE, None)
 
 
 class TestMultipleAgents:
