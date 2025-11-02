@@ -595,6 +595,10 @@ def plan(
             console.print()
             console.print("[bold green]✅ Implementation plan completed![/bold green]")
             console.print(f"Iterations: {result.data.get('iterations', 'N/A')}")
+            # Build plan file path
+            plan_file = f".aaf/issues/{issue_name}/plan/plan.md"
+            if Path(plan_file).exists():
+                console.print(f"Saved to: {plan_file}")
         else:
             console.print()
             console.print(f"[bold red]❌ Plan phase failed: {result.message}[/bold red]")
