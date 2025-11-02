@@ -37,9 +37,10 @@ class AgentManager:
         Args:
             config: Agent configuration
         """
-        # Load existing session for this agent (if any)
+        # Load existing session for this agent+CLI combination (if any)
         # Use issue-specific session if issue_name is provided
-        session_id = self.session_manager.load_session(config.name, self.issue_name)
+        session_data = self.session_manager.load_session(config.name, config.cli, self.issue_name)
+        session_id = session_data.session_id if session_data else None
         # Note: Don't create session here - let executor handle it on first use
 
         # Update config with session ID (may be None)
@@ -111,7 +112,9 @@ class AgentManager:
 
         # Save session ID if it was created during execution
         if executor.config.session_id:
-            self.session_manager.save_session(agent_name, executor.config.session_id, self.issue_name)
+            self.session_manager.save_session(
+                agent_name, executor.config.cli, executor.config.session_id, self.issue_name
+            )
 
         # Accumulate token usage
         self._total_token_usage.input_tokens += token_usage.input_tokens
@@ -142,7 +145,9 @@ class AgentManager:
 
         # Save session ID if it was created during execution
         if current.config.session_id and self.current_agent_name:
-            self.session_manager.save_session(self.current_agent_name, current.config.session_id, self.issue_name)
+            self.session_manager.save_session(
+                self.current_agent_name, current.config.cli, current.config.session_id, self.issue_name
+            )
 
         # Accumulate token usage
         self._total_token_usage.input_tokens += token_usage.input_tokens
@@ -167,7 +172,9 @@ class AgentManager:
         Args:
             agent_name: Agent name
         """
-        self.session_manager.delete_session(agent_name, self.issue_name)
+        # Get the agent's CLI type
+        executor = self.get_agent(agent_name)
+        self.session_manager.delete_session(agent_name, executor.config.cli, self.issue_name)
 
     def list_agents(self) -> List[str]:
         """List all registered agent names.
