@@ -1,4 +1,4 @@
-"""Implementation development phase."""
+"""Development phase."""
 
 import re
 from pathlib import Path
@@ -11,8 +11,8 @@ from aaf.core.phase import Phase
 from aaf.core.types import PhaseResult, PhaseStatus, WorkflowMode
 
 
-class ImplementationPhase(Phase):
-    """Phase 3: Development implementation with developer agent."""
+class DevelopPhase(Phase):
+    """Phase 3: Development with developer agent."""
 
     def __init__(
         self,
@@ -24,7 +24,7 @@ class ImplementationPhase(Phase):
         issue_id: Optional[str] = None,
         dev_agent: str = "David",
     ) -> None:
-        """Initialize implementation phase.
+        """Initialize develop phase.
 
         Args:
             agent_manager: Agent manager
@@ -44,7 +44,7 @@ class ImplementationPhase(Phase):
         self.dev_agent = dev_agent
 
     def execute(self) -> PhaseResult:
-        """Execute development implementation phase.
+        """Execute development phase.
 
         Returns:
             Phase result
@@ -88,7 +88,7 @@ class ImplementationPhase(Phase):
         except Exception as e:
             return PhaseResult(
                 status=PhaseStatus.FAILED,
-                message=f"Implementation phase failed: {e}",
+                message=f"Development phase failed: {e}",
             )
 
     def _get_branch_name(self) -> str:
