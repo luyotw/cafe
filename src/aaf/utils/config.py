@@ -64,7 +64,7 @@ class ConfigManager:
                     "cli": "copilot",
                 },
                 "reviewer": {
-                    "name": "Alice",
+                    "name": "Richard",
                     "cli": "copilot",
                 },
             },

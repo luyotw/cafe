@@ -214,7 +214,7 @@ aaf develop <issue-name> --dev David  # 指定開發者
 **Commands**:
 ```bash
 aaf review <issue-name>              # 執行 code review
-aaf review <issue-name> --reviewer Alice  # 指定 reviewer
+aaf review <issue-name> --reviewer Richard  # 指定 reviewer
 ```
 
 **Dependencies**: ReviewPhase, AgentManager

@@ -107,7 +107,7 @@ class TestDefaultConfig:
         assert config["agents"]["dev"]["name"] == "David"
         assert "cli" in config["agents"]["dev"]
 
-        assert config["agents"]["reviewer"]["name"] == "Alice"
+        assert config["agents"]["reviewer"]["name"] == "Richard"
         assert "cli" in config["agents"]["reviewer"]
 
     def test_default_config_defaults_section(self) -> None:
