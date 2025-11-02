@@ -1,13 +1,13 @@
 # Python 重構待辦清單
 
 ## 進度總覽
-- 已完成: 19/23 項目 (~83%)
+- 已完成: 19/28 項目 (~68%)
 - 進行中: 0 項目
-- 待完成: 4 項目
+- 待完成: 9 項目 (3 個 HIGH priority CLI 指令 + 6 個其他)
 
 ---
 
-## ✅ 已完成 (19/23)
+## ✅ 已完成 (19/28)
 
 ### 核心模組 (Core Modules)
 1. ✅ **types.py** - 型別定義
@@ -172,17 +172,78 @@
 
 ---
 
-## 🔄 進行中 (0/23)
+## 🔄 進行中 (0/28)
 
 ---
 
-## ⏳ 待完成 (4/23)
+## ⏳ 待完成 (9/28)
+
+---
+
+### CLI 指令實作 (Command Implementation)
+
+#### 20. ⬜ aaf develop - 開發階段指令
+**Priority: HIGH**
+**Description**: 實作 `aaf develop` 指令，執行開發階段
+**Features**:
+- 讀取 plan.md 並執行開發
+- 使用 DevelopPhase
+- 支援 --dev-agent 參數選擇開發者 agent
+- 支援 interactive/non-interactive 模式
+- 設定指令別名 `aaf dev`
+- 整合 git branch 管理
+
+**Commands**:
+```bash
+aaf develop <issue-name>           # 執行開發階段
+aaf develop <issue-name> --dev David  # 指定開發者
+```
+
+**Dependencies**: DevelopPhase, AgentManager
+**Tests needed**: CLI integration tests
+
+#### 21. ⬜ aaf review - Code Review 指令
+**Priority: HIGH**
+**Description**: 實作 `aaf review` 指令，執行 code review
+**Features**:
+- 使用 ReviewPhase
+- 支援 --reviewer 參數選擇 reviewer agent
+- Review-fix 迴圈直到 LGTM
+- 顯示 review 結果和建議
+
+**Commands**:
+```bash
+aaf review <issue-name>              # 執行 code review
+aaf review <issue-name> --reviewer Alice  # 指定 reviewer
+```
+
+**Dependencies**: ReviewPhase, AgentManager
+**Tests needed**: CLI integration tests
+
+#### 22. ⬜ aaf pr - Pull Request 建立指令
+**Priority: HIGH**
+**Description**: 實作 `aaf pr` 指令，建立 pull request
+**Features**:
+- 使用 PRPhase
+- Push branch to remote
+- 使用 gh CLI 建立 PR
+- 自動生成 PR title 和 description
+- 支援 --base 參數指定 base branch
+
+**Commands**:
+```bash
+aaf pr <issue-name>              # 建立 PR
+aaf pr <issue-name> --base main  # 指定 base branch
+```
+
+**Dependencies**: PRPhase, GitOperations, github.py
+**Tests needed**: CLI integration tests
 
 ---
 
 ### UI 模組 (User Interface)
 
-#### 20. ⬜ display.py - 顯示工具
+#### 23. ⬜ display.py - 顯示工具
 **Priority: MEDIUM**
 ```python
 # 使用 Rich
@@ -195,7 +256,7 @@ class Display:
 **Dependencies**: permission.py
 **Tests needed**: 6+ tests
 
-#### 21. ⬜ tui.py - TUI 介面 (未來功能)
+#### 24. ⬜ tui.py - TUI 介面 (未來功能)
 **Priority: LOW**
 ```python
 # 使用 Textual
@@ -211,13 +272,13 @@ class AAFApp(App):
 
 ### 整合測試 (Integration Tests)
 
-#### 22. ⬜ tests/integration/test_full_workflow.py
+#### 25. ⬜ tests/integration/test_full_workflow.py
 **Priority: LOW**
 - End-to-end workflow testing
 - Mock external dependencies
 - Test all phases together
 
-#### 23. ⬜ tests/integration/test_agent_integration.py
+#### 26. ⬜ tests/integration/test_agent_integration.py
 **Priority: LOW**
 - Test agent manager with real agents
 - Test permission flow
@@ -227,14 +288,14 @@ class AAFApp(App):
 
 ### 文件與部署 (Documentation & Deployment)
 
-#### 24. ⬜ README.md - Python 版本說明文件
+#### 27. ⬜ README.md - Python 版本說明文件
 **Priority: LOW**
 - Installation instructions
 - Usage examples
 - API documentation
 - Migration from bash version
 
-#### 25. ⬜ pyproject.toml 完善 + Migration Guide
+#### 28. ⬜ pyproject.toml 完善 + Migration Guide
 **Priority: LOW**
 - Complete packaging setup
 - Entry points configuration
@@ -295,13 +356,19 @@ class AAFApp(App):
 13. ✅ phase_cache.py - Cache 系統 (19 tests, 100% coverage)
 14. ⬜ display.py - 顯示工具
 
-### 第四階段（測試與文件）- Week 5
-15. ⬜ Integration tests
-16. ⬜ Documentation
-17. ⬜ Migration guide
+### 第四階段（CLI 指令）- Week 5
+15. ⬜ aaf develop - 開發階段指令
+16. ⬜ aaf review - Code Review 指令
+17. ⬜ aaf pr - Pull Request 建立指令
+
+### 第五階段（測試與文件）- Week 6
+18. ⬜ Integration tests
+19. ⬜ Documentation
+20. ⬜ Migration guide
 
 ### 未來（TUI）- Future
-18. ⬜ tui.py - Fancy 對話介面
+21. ⬜ tui.py - Fancy 對話介面
+22. ⬜ display.py - 顯示工具增強
 
 ---
 
@@ -317,7 +384,7 @@ class AAFApp(App):
 
 **最後更新**: 2025-11-02
 **當前分支**: refactor-python
-**目前進度**: 19/23 完成 (~83%), 320+ tests, 95% 整體覆蓋率
+**目前進度**: 19/28 完成 (~68%), 320+ tests, 95% 整體覆蓋率
 **第一階段**: ✅ 已完成（所有基礎模組完成）
 **第二階段**: ✅ 已完成（所有 Phase 實作完成）
 **第三階段**: ✅ 已完成 - CLI & Utils & 增強
@@ -337,4 +404,8 @@ class AAFApp(App):
   - 修正 Copilot CLI 工具名稱 (write, shell)
   - Gemini agent 測試通過
 **當前任務**: 無（階段三完成）
-**下一步**: display.py (顯示工具) → Integration tests → Documentation
+**第四階段**: ⏳ CLI 指令實作 (HIGH priority)
+  - ⬜ aaf develop - 開發階段指令
+  - ⬜ aaf review - Code Review 指令
+  - ⬜ aaf pr - Pull Request 建立指令
+**下一步**: 實作 aaf develop/review/pr 指令 → Integration tests → Documentation
