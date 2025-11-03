@@ -75,9 +75,12 @@ aaf template cat <name>         # 檢視模板內容
 aaf template edit <name>        # 編輯模板
 aaf template rm <name>          # 刪除模板
 
-# 尚未實作（參見 PYTHON_REFACTOR_TODO.md）
+# 已實作
 aaf develop <issue-name>        # Phase 3: 開發實作
 aaf review <issue-name>         # Phase 4: Code Review
+aaf review <issue-name> --commit <sha>  # 審查特定 commit
+
+# 尚未實作（參見 PYTHON_REFACTOR_TODO.md）
 aaf pr <issue-name>             # Phase 5: 建立 PR
 ```
 
@@ -216,9 +219,7 @@ defaults:
 這是一個從 bash 到 Python 的進行中重構。詳細進度請參考 `PYTHON_REFACTOR_TODO.md`（19/28 項目完成，約 68%）。
 
 **下一階段優先事項**（尚未實作）：
-1. `aaf develop` 指令（HIGH priority）
-2. `aaf review` 指令（HIGH priority）
-3. `aaf pr` 指令（HIGH priority）
+1. `aaf pr` 指令（HIGH priority）
 
 ### 程式碼慣例
 

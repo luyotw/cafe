@@ -1,13 +1,13 @@
 # Python 重構待辦清單
 
 ## 進度總覽
-- 已完成: 19/28 項目 (~68%)
+- 已完成: 21/28 項目 (~75%)
 - 進行中: 0 項目
-- 待完成: 9 項目 (3 個 HIGH priority CLI 指令 + 6 個其他)
+- 待完成: 7 項目 (1 個 HIGH priority CLI 指令 + 6 個其他)
 
 ---
 
-## ✅ 已完成 (19/28)
+## ✅ 已完成 (21/28)
 
 ### 核心模組 (Core Modules)
 1. ✅ **types.py** - 型別定義
@@ -90,9 +90,9 @@
    - Recent: 從 implementation_phase.py 重新命名
 
 13. ✅ **review_phase.py** - Phase 4: Code Review
-   - Status: 98% coverage, 14 tests
-   - Commit: d9fddd5
-   - Features: Review-fix 迴圈、LGTM 偵測、多輪 review、diff 檢查
+   - Status: 98% coverage, 30+ tests
+   - Commit: 245c93d
+   - Features: 單輪執行、CONFIRMED 狀態碼、完整/特定 commit 審查、結果儲存、history 機制
 
 14. ✅ **pr_phase.py** - Phase 5: PR 建立
    - Status: 97% coverage, 15 tests
@@ -104,8 +104,9 @@
 15. ✅ **cli.py** - 命令列介面
    - Status: 95% coverage, 17 tests
    - Commit: 8a83306
-   - Features: spec/plan/config/ls/rm/template commands、Typer 整合、workflow 編排
+   - Features: spec/plan/develop/review/config/ls/rm/template commands、Typer 整合、workflow 編排
    - Recent:
+     - **Review 指令實作**: review 子命令支援完整 branch 和特定 commit 審查
      - **Config 指令完整實作**: set/get/edit/reset 子命令
      - **Alias 支援**: `aaf config set pm gemini` 自動轉為 `agents.pm.cli`
      - **編輯器整合**: config edit 使用 $EDITOR 或 vim
@@ -176,22 +177,23 @@
 
 ---
 
-## ⏳ 待完成 (9/28)
+## ⏳ 待完成 (7/28)
 
 ---
 
 ### CLI 指令實作 (Command Implementation)
 
-#### 20. ⬜ aaf develop - 開發階段指令
+#### 20. ✅ aaf develop - 開發階段指令
 **Priority: HIGH**
+**Status**: ✅ 已完成
 **Description**: 實作 `aaf develop` 指令，執行開發階段
 **Features**:
-- 讀取 plan.md 並執行開發
-- 使用 DevelopPhase
-- 支援 --dev-agent 參數選擇開發者 agent
-- 支援 interactive/non-interactive 模式
-- 設定指令別名 `aaf dev`
-- 整合 git branch 管理
+- ✅ 讀取 plan.md 並執行開發
+- ✅ 使用 DevelopPhase
+- ✅ 支援 --dev-agent 參數選擇開發者 agent
+- ✅ 支援 interactive/non-interactive 模式
+- ✅ 設定指令別名 `aaf dev`
+- ✅ 整合 git branch 管理
 
 **Commands**:
 ```bash
@@ -200,25 +202,31 @@ aaf develop <issue-name> --dev David  # 指定開發者
 ```
 
 **Dependencies**: DevelopPhase, AgentManager
-**Tests needed**: CLI integration tests
+**Commit**: edcf9f1
 
-#### 21. ⬜ aaf review - Code Review 指令
+#### 21. ✅ aaf review - Code Review 指令
 **Priority: HIGH**
+**Status**: ✅ 已完成
 **Description**: 實作 `aaf review` 指令，執行 code review
 **Features**:
-- 使用 ReviewPhase
-- 支援 --reviewer 參數選擇 reviewer agent
-- Review-fix 迴圈直到 LGTM
-- 顯示 review 結果和建議
+- ✅ 使用 ReviewPhase (單輪執行模式)
+- ✅ 支援 --reviewer 參數選擇 reviewer agent
+- ✅ 支援 --commit 參數審查特定 commit
+- ✅ 支援完整 branch 審查模式
+- ✅ CONFIRMED 狀態碼系統
+- ✅ 結果儲存至 `.aaf/issues/{issue_name}/review/`
+- ✅ History 機制
 
 **Commands**:
 ```bash
-aaf review <issue-name>              # 執行 code review
+aaf review <issue-name>              # 執行 code review (完整 branch)
+aaf review <issue-name> --commit abc123  # 審查特定 commit
 aaf review <issue-name> --reviewer Richard  # 指定 reviewer
 ```
 
 **Dependencies**: ReviewPhase, AgentManager
-**Tests needed**: CLI integration tests
+**Commit**: 245c93d
+**Tests**: 30+ tests, 98% coverage
 
 #### 22. ⬜ aaf pr - Pull Request 建立指令
 **Priority: HIGH**
@@ -356,9 +364,9 @@ class AAFApp(App):
 13. ✅ phase_cache.py - Cache 系統 (19 tests, 100% coverage)
 14. ⬜ display.py - 顯示工具
 
-### 第四階段（CLI 指令）- Week 5
-15. ⬜ aaf develop - 開發階段指令
-16. ⬜ aaf review - Code Review 指令
+### 第四階段（CLI 指令）- Week 5 ✅ 已完成
+15. ✅ aaf develop - 開發階段指令
+16. ✅ aaf review - Code Review 指令
 17. ⬜ aaf pr - Pull Request 建立指令
 
 ### 第五階段（測試與文件）- Week 6
@@ -382,9 +390,9 @@ class AAFApp(App):
 
 ---
 
-**最後更新**: 2025-11-02
-**當前分支**: refactor-python
-**目前進度**: 19/28 完成 (~68%), 320+ tests, 95% 整體覆蓋率
+**最後更新**: 2025-11-03
+**當前分支**: review-phase
+**目前進度**: 21/28 完成 (~75%), 330+ tests, 95% 整體覆蓋率
 **第一階段**: ✅ 已完成（所有基礎模組完成）
 **第二階段**: ✅ 已完成（所有 Phase 實作完成）
 **第三階段**: ✅ 已完成 - CLI & Utils & 增強
@@ -397,15 +405,16 @@ class AAFApp(App):
     - spec_phase: 24 tests, 74% coverage (簡化 iteration history)
     - plan_phase: 32 tests, 93% coverage (新增 user confirmation & resume)
     - develop_phase: 14 tests, 100% coverage (從 implementation_phase 重新命名)
-**最新變更** (2025-11-02):
-  - 簡化 iteration history (移除冗餘 user_response 欄位)
-  - implementation_phase → develop_phase 重新命名
-  - Config 管理增強 (alias, reset, edit)
-  - 修正 Copilot CLI 工具名稱 (write, shell)
-  - Gemini agent 測試通過
-**當前任務**: 無（階段三完成）
-**第四階段**: ⏳ CLI 指令實作 (HIGH priority)
-  - ⬜ aaf develop - 開發階段指令
-  - ⬜ aaf review - Code Review 指令
-  - ⬜ aaf pr - Pull Request 建立指令
-**下一步**: 實作 aaf develop/review/pr 指令 → Integration tests → Documentation
+    - review_phase: 30+ tests, 98% coverage (重構為單輪執行模式)
+**第四階段**: ✅ 已完成 - CLI 指令實作
+  - ✅ aaf develop - 開發階段指令 (commit: edcf9f1)
+  - ✅ aaf review - Code Review 指令 (commit: 245c93d)
+  - ⬜ aaf pr - Pull Request 建立指令 (HIGH priority)
+**最新變更** (2025-11-03):
+  - ReviewPhase 重構為單輪執行模式
+  - 新增 aaf review CLI 指令支援完整 branch 和特定 commit 審查
+  - 更新狀態碼為 CONFIRMED (替代 APPROVED/LGTM)
+  - 實作 review 結果儲存和 history 機制
+  - 更新文件 (CLAUDE.md, PYTHON_REFACTOR_TODO.md)
+**當前任務**: 無（階段四完成 2/3）
+**下一步**: 實作 aaf pr 指令 → Integration tests → Documentation

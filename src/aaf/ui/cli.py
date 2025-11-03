@@ -785,6 +785,143 @@ def dev_alias(
 
 
 @app.command()
+def review(
+    issue_name: str = typer.Argument(
+        ...,
+        help="Issue name (reads spec from .aaf/issues/{issue-name}/)",
+    ),
+    mode: str = typer.Option(
+        "local",
+        "--mode",
+        "-m",
+        help="Workflow mode: local or github",
+    ),
+    issue_id: Optional[str] = typer.Option(
+        None,
+        "--issue",
+        "-i",
+        help="GitHub issue ID (github mode)",
+    ),
+    commit: Optional[str] = typer.Option(
+        None,
+        "--commit",
+        "-c",
+        help="Specific commit SHA to review (default: review entire branch)",
+    ),
+    reviewer_agent: str = typer.Option(
+        "Richard",
+        "--reviewer",
+        help="Reviewer agent name",
+    ),
+    config_file: str = typer.Option(
+        ".aaf/config.yaml",
+        "--config",
+        help="Path to configuration file",
+    ),
+) -> None:
+    """Run review phase: Code review by reviewer agent.
+
+    The reviewer agent will review code changes and provide feedback.
+    Each execution performs one review iteration.
+
+    Examples:
+        # Review entire feature branch
+        aaf review user-auth
+
+        # Review specific commit
+        aaf review user-auth --commit abc123
+
+        # Use custom reviewer agent
+        aaf review my-feature --reviewer CustomReviewer
+    """
+    try:
+        # Validate mode
+        try:
+            workflow_mode = WorkflowMode(mode)
+        except ValueError:
+            console.print(f"[red]Error: Invalid mode '{mode}'. Use 'local' or 'github'.[/red]")
+            raise typer.Exit(1)
+
+        # Build file paths
+        spec_file = f".aaf/issues/{issue_name}/spec/spec.md"
+
+        # Check if spec file exists
+        if not Path(spec_file).exists():
+            console.print(f"[red]Error: Spec file not found: {spec_file}[/red]")
+            console.print(f"[dim]Hint: Run 'aaf spec {issue_name}' first to create the specification.[/dim]")
+            raise typer.Exit(1)
+
+        # Initialize components
+        config_dir = str(Path(config_file).parent) if config_file != ".aaf/config.yaml" else ".aaf"
+        config_manager = ConfigManager(config_dir)
+        agent_manager = _setup_agents(config_manager, issue_name=issue_name)
+        permission_handler = PermissionHandler()
+        git_ops = GitOperations()
+
+        # Get reviewer agent CLI
+        reviewer_executor = agent_manager.get_agent(reviewer_agent)
+        reviewer_cli = reviewer_executor.config.cli.value
+
+        # Display start message
+        console.print("[bold blue]🔍 Review Phase: Code Review[/bold blue]")
+        console.print(f"Mode: {workflow_mode.value}")
+        console.print(f"Issue: {issue_name}")
+        console.print(f"Reviewer Agent: {reviewer_agent} (by {reviewer_cli})")
+        console.print(f"Spec file: {spec_file}")
+        if commit:
+            console.print(f"Target commit: {commit}")
+        else:
+            console.print("Review scope: entire branch")
+        console.print()
+
+        # Create and execute review phase
+        phase = ReviewPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            git_ops=git_ops,
+            spec_file=spec_file,
+            workflow_mode=workflow_mode,
+            issue_id=issue_id,
+            review_agent=reviewer_agent,
+            target_commit=commit,
+        )
+
+        console.print("[bold]Starting code review...[/bold]")
+        console.print("[dim]The reviewer will analyze code changes and provide feedback.[/dim]")
+        console.print()
+
+        result = phase.execute()
+
+        # Display result
+        if result.status.value == "completed":
+            status_code = result.data.get("status_code")
+            console.print()
+            if status_code == "CONFIRMED":
+                console.print("[bold green]✅ Code review passed![/bold green]")
+                console.print()
+                console.print("[dim]Next steps:[/dim]")
+                console.print(f"[dim]  1. Create PR: aaf pr {issue_name}[/dim]")
+            else:
+                console.print(f"[bold yellow]📝 Code review completed with status: {status_code}[/bold yellow]")
+                console.print()
+                console.print("[dim]Review feedback saved to:[/dim]")
+                console.print(f"[dim]  .aaf/issues/{issue_name}/review/review.md[/dim]")
+                console.print()
+                console.print("[dim]Next steps:[/dim]")
+                console.print(f"[dim]  1. Review feedback: cat .aaf/issues/{issue_name}/review/review.md[/dim]")
+                console.print(f"[dim]  2. Make changes: aaf develop {issue_name}[/dim]")
+                console.print(f"[dim]  3. Review again: aaf review {issue_name}[/dim]")
+        else:
+            console.print()
+            console.print(f"[bold red]❌ Review phase failed: {result.message}[/bold red]")
+            raise typer.Exit(1)
+
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1)
+
+
+@app.command()
 def config(
     action: Optional[str] = typer.Argument(None, help="Action: set, get, edit, reset, or config key"),
     key: Optional[str] = typer.Argument(None, help="Configuration key"),
