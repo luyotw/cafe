@@ -48,6 +48,7 @@ class ReviewPhase(Phase):
         self.review_agent = review_agent
         self.target_commit = target_commit
         self.base_branch = base_branch
+        self.iteration = 1  # Track iteration number for subsequent reviews
 
     def execute(self) -> PhaseResult:
         """Execute code review phase (single iteration).
