@@ -380,7 +380,6 @@ class AgentExecutor:
 
         # Copilot doesn't provide JSON output format yet, return raw output
         # TODO: Update when Copilot CLI provides structured output
-        response = result.stdout
         token_usage = TokenUsage()
 
         return response, token_usage
