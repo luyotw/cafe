@@ -469,7 +469,13 @@ class DevelopPhase(Phase):
 
                 elif status_code == PhaseStatusCode.NEED_PERMISSION:
                     # Handle permission request
-                    # Note: history will be saved after user responds (below)
+                    # Save history BEFORE waiting for user input (in case of Ctrl+C)
+                    self._save_history(
+                        user_input=current_user_input,
+                        response=response,
+                        status_code=PhaseStatusCode.NEED_PERMISSION,
+                        user_response=None,  # Will be updated after user responds
+                    )
 
                     # Save progress
                     self._save_progress(PhaseStatusCode.NEED_PERMISSION)
@@ -500,13 +506,13 @@ class DevelopPhase(Phase):
                                 user_confirm_response = "授權同意"
                                 self.user_responses.append(user_confirm_response)
 
-                                # Update history with user response
-                                self._save_history(
-                                    user_input=current_user_input,
-                                    response=response,
-                                    status_code=PhaseStatusCode.NEED_PERMISSION,
-                                    user_response=user_confirm_response,
-                                )
+                                # Update the existing history file with user response
+                                iteration_file = self.history_dir / f"iteration_{self.iteration:03d}.json"
+                                with open(iteration_file, "r", encoding="utf-8") as f:
+                                    iteration_data = json.load(f)
+                                iteration_data["user_response"] = user_confirm_response
+                                with open(iteration_file, "w", encoding="utf-8") as f:
+                                    json.dump(iteration_data, f, ensure_ascii=False, indent=2)
 
                                 # Continue to next iteration
                                 break
@@ -537,13 +543,13 @@ class DevelopPhase(Phase):
                                 # Save user's modification request for next iteration
                                 self.user_responses.append(modification_request)
 
-                                # Update history with user response
-                                self._save_history(
-                                    user_input=current_user_input,
-                                    response=response,
-                                    status_code=PhaseStatusCode.NEED_PERMISSION,
-                                    user_response=modification_request,
-                                )
+                                # Update the existing history file with user response
+                                iteration_file = self.history_dir / f"iteration_{self.iteration:03d}.json"
+                                with open(iteration_file, "r", encoding="utf-8") as f:
+                                    iteration_data = json.load(f)
+                                iteration_data["user_response"] = modification_request
+                                with open(iteration_file, "w", encoding="utf-8") as f:
+                                    json.dump(iteration_data, f, ensure_ascii=False, indent=2)
 
                                 # Continue to next iteration
                                 break
