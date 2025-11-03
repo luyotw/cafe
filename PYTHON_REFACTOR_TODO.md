@@ -4,6 +4,7 @@
 - 已完成: 21/28 項目 (~75%)
 - 進行中: 0 項目
 - 待完成: 7 項目 (1 個 HIGH priority CLI 指令 + 6 個其他)
+- **最新更新**: 2025-11-04 - review-phase 分支已合併回 refactor-python
 
 ---
 
@@ -390,8 +391,8 @@ class AAFApp(App):
 
 ---
 
-**最後更新**: 2025-11-03
-**當前分支**: review-phase
+**最後更新**: 2025-11-04
+**當前分支**: refactor-python (已合併 review-phase)
 **目前進度**: 21/28 完成 (~75%), 330+ tests, 95% 整體覆蓋率
 **第一階段**: ✅ 已完成（所有基礎模組完成）
 **第二階段**: ✅ 已完成（所有 Phase 實作完成）
@@ -410,11 +411,14 @@ class AAFApp(App):
   - ✅ aaf develop - 開發階段指令 (commit: edcf9f1)
   - ✅ aaf review - Code Review 指令 (commit: 245c93d)
   - ⬜ aaf pr - Pull Request 建立指令 (HIGH priority)
-**最新變更** (2025-11-03):
-  - ReviewPhase 重構為單輪執行模式
-  - 新增 aaf review CLI 指令支援完整 branch 和特定 commit 審查
-  - 更新狀態碼為 CONFIRMED (替代 APPROVED/LGTM)
-  - 實作 review 結果儲存和 history 機制
-  - 更新文件 (CLAUDE.md, PYTHON_REFACTOR_TODO.md)
+**最新變更** (2025-11-04):
+  - DevelopPhase 重構為單輪執行模式（移除 while 迴圈）
+  - 新增 copilot streaming 輸出支援
+  - 修正 config 標準化（agents.dev → agents.developer）
+  - 新增 dependency check 功能（從 pyproject.toml 檢查）
+  - 新增 python_bin config 選項
+  - ReviewPhase 新增 --base 選項指定 base branch
+  - SpecPhase prompt 改為建議而非強制使用者故事格式
+  - review-phase 分支已合併回 refactor-python
 **當前任務**: 無（階段四完成 2/3）
 **下一步**: 實作 aaf pr 指令 → Integration tests → Documentation

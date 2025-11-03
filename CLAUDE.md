@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 AI Agent Flow (AAF) 是一個 AI 驅動的開發工作流程自動化系統，透過協調多個 AI agents (PM、開發者、審查者) 處理從需求分析到 PR 建立的完整開發流程。目前正在從 bash 版本重構為 Python 版本。
 
-**當前分支**: `refactor-python` (Python 重寫，約 68% 完成)
+**當前分支**: `refactor-python` (Python 重寫，約 75% 完成)
 **主要分支**: `main` (bash 版本)
 
 ## 常用指令
@@ -216,10 +216,12 @@ defaults:
 
 ### 遷移狀態
 
-這是一個從 bash 到 Python 的進行中重構。詳細進度請參考 `PYTHON_REFACTOR_TODO.md`（19/28 項目完成，約 68%）。
+這是一個從 bash 到 Python 的進行中重構。詳細進度請參考 `PYTHON_REFACTOR_TODO.md`（21/28 項目完成，約 75%）。
 
-**下一階段優先事項**（尚未實作）：
-1. `aaf pr` 指令（HIGH priority）
+**下一階段優先事項**：
+1. `aaf pr` 指令（HIGH priority - 唯一剩餘的核心 CLI 指令）
+2. Integration tests（MEDIUM priority）
+3. Documentation（LOW priority）
 
 ### 程式碼慣例
 
