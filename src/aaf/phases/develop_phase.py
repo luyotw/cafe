@@ -328,7 +328,9 @@ class DevelopPhase(Phase):
                 self.git_ops.create_branch(branch_name)
 
             # Development loop
-            while True:
+            # Add safety limit to prevent infinite loops
+            MAX_ITERATIONS = 10
+            while self.iteration < MAX_ITERATIONS:
                 # Check if previous iteration has unhandled NEED_PERMISSION
                 if (self.conversation_history and
                     self.conversation_history[-1].get("status_code") == "NEED_PERMISSION" and
@@ -567,10 +569,20 @@ class DevelopPhase(Phase):
                         self._save_history(
                             user_input=current_user_input,
                             response=response,
-                            status=status_code,
+                            status_code=status_code,
                         )
                         self._save_progress(status_code)
                     continue
+
+            # Max iterations reached
+            return PhaseResult(
+                status=PhaseStatus.FAILED,
+                message=f"Development phase reached maximum iterations ({MAX_ITERATIONS})",
+                data={
+                    "iterations": self.iteration,
+                    "message": "Maximum iteration limit reached. Please check the implementation.",
+                },
+            )
 
         except KeyboardInterrupt:
             # User paused with Ctrl+C - save progress and allow resume
