@@ -72,6 +72,7 @@ class ConfigManager:
                 "workflow_mode": "local",
                 "interactive": True,
             },
+            "python_bin": "python3",
         }
 
     def save_config(self, config: Dict[str, Any]) -> None:

@@ -1243,7 +1243,53 @@ def template(
 
 def main() -> None:
     """Entry point for CLI."""
+    # Check if all dependencies are installed
+    _check_dependencies()
     app()
+
+
+def _check_dependencies() -> None:
+    """Check if pyproject.toml dependencies are installed."""
+    try:
+        import tomllib  # Python 3.11+
+    except ImportError:
+        import tomli as tomllib  # Python 3.10
+    from pathlib import Path
+    import importlib.metadata
+
+    # Find pyproject.toml (should be in project root)
+    # Try from current file location
+    project_root = Path(__file__).parent.parent.parent.parent
+    pyproject_file = project_root / "pyproject.toml"
+
+    if not pyproject_file.exists():
+        # If not found, skip check (might be installed as package)
+        return
+
+    try:
+        with open(pyproject_file, "rb") as f:
+            pyproject = tomllib.load(f)
+
+        dependencies = pyproject.get("project", {}).get("dependencies", [])
+        missing = []
+
+        for dep in dependencies:
+            # Parse dependency string (e.g., "typer>=0.9.0" -> "typer")
+            package_name = dep.split("[")[0].split(">")[0].split("=")[0].split("<")[0].strip()
+
+            try:
+                importlib.metadata.version(package_name)
+            except importlib.metadata.PackageNotFoundError:
+                missing.append(package_name)
+
+        if missing:
+            console.print(f"[red]Error: Missing required dependencies: {', '.join(missing)}[/red]")
+            console.print(f"[yellow]Please run: pip install -e .[/yellow]")
+            sys.exit(1)
+
+    except Exception:
+        # If check fails, continue anyway
+        pass
 
 
 if __name__ == "__main__":
