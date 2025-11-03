@@ -74,6 +74,9 @@ class DevelopPhase(Phase):
         # Track conversation history
         self.conversation_history: List[Dict[str, Any]] = []
 
+        # Track user responses for permission requests
+        self.user_responses: List[str] = []
+
         # Initialize display
         self.display = Display()
 
@@ -108,11 +111,16 @@ class DevelopPhase(Phase):
             if data["iteration"] >= self.iteration:
                 self.iteration = data["iteration"]
 
+            # Restore user responses if they exist
+            if "user_response" in data and data["user_response"]:
+                self.user_responses.append(data["user_response"])
+
     def _save_history(
         self,
         user_input: str,
         response: str,
         status_code: PhaseStatusCode,
+        user_response: Optional[str] = None,
     ) -> None:
         """Save iteration history to JSON file.
 
@@ -120,6 +128,7 @@ class DevelopPhase(Phase):
             user_input: User's input for this iteration
             response: Agent's response
             status_code: Status code for this iteration
+            user_response: User's response to agent's request (for NEED_PERMISSION)
         """
         # Create history directory
         self.history_dir.mkdir(parents=True, exist_ok=True)
@@ -132,6 +141,10 @@ class DevelopPhase(Phase):
             "response": response,
             "status_code": status_code.value,
         }
+
+        # Add user response if provided
+        if user_response:
+            iteration_data["user_response"] = user_response
 
         # Save to JSON file
         iteration_file = self.history_dir / f"iteration_{self.iteration:03d}.json"
@@ -293,8 +306,13 @@ class DevelopPhase(Phase):
                     plan_path = Path(self.plan_file)
                     current_user_input = plan_path.read_text() if plan_path.exists() else ""
                 else:
-                    # Subsequent iterations: empty user_input (continue from previous work)
-                    current_user_input = ""
+                    # Subsequent iterations: check if there's a user response from previous iteration
+                    if len(self.user_responses) >= self.iteration - 1 and self.user_responses[self.iteration - 2]:
+                        # Use the user response from previous iteration
+                        current_user_input = self.user_responses[self.iteration - 2]
+                    else:
+                        # No user response, empty input (continue from previous work)
+                        current_user_input = ""
 
                 # Generate prompt
                 prompt = self._generate_prompt()
@@ -344,41 +362,89 @@ class DevelopPhase(Phase):
 
                 elif status_code == PhaseStatusCode.NEED_PERMISSION:
                     # Handle permission request
-                    # Save history
-                    self._save_history(
-                        user_input=current_user_input,
-                        response=response,
-                        status_code=PhaseStatusCode.NEED_PERMISSION,
-                    )
+                    # Note: history will be saved after user responds (below)
 
                     # Save progress
                     self._save_progress(PhaseStatusCode.NEED_PERMISSION)
 
-                    # Request permission from user
+                    # Display permission request and get user input
                     if self.interactive:
                         print(f"\n{'='*60}")
-                        print(f"Agent 請求權限（第 {self.iteration} 輪）")
+                        print(f"Dev ({self.dev_agent}) - Iteration {self.iteration}:")
                         print(f"{'='*60}")
                         print(response)
                         print(f"{'='*60}\n")
 
-                        # Use permission handler
-                        granted = self.permission_handler.request_permission(response)
+                        # Ask user for decision
+                        print("開發者請求工具權限。請選擇：")
+                        print("  [c] confirm - 同意授權，繼續執行")
+                        print("  [r] reject - 拒絕授權，終止開發")
+                        print("  [m] modify - 給予其他提示或建議")
 
-                        if granted:
-                            print("\n✅ 權限已授予，繼續執行...")
-                            # Continue to next iteration
-                            continue
-                        else:
-                            print("\n❌ 權限被拒絕，Phase 終止。")
-                            return PhaseResult(
-                                status=PhaseStatus.FAILED,
-                                message="Permission denied by user",
-                                data={
-                                    "iterations": self.iteration,
-                                    "last_response": response,
-                                },
-                            )
+                        while True:
+                            choice = input("\n請選擇 [c/r/m]: ").strip().lower()
+
+                            if choice == 'c':
+                                # User confirms - save user response and continue
+                                print("\n✅ 權限已授予，繼續執行...")
+                                print()
+
+                                # Save user's confirmation for next iteration
+                                user_confirm_response = "授權同意"
+                                self.user_responses.append(user_confirm_response)
+
+                                # Update history with user response
+                                self._save_history(
+                                    user_input=current_user_input,
+                                    response=response,
+                                    status_code=PhaseStatusCode.NEED_PERMISSION,
+                                    user_response=user_confirm_response,
+                                )
+
+                                # Continue to next iteration
+                                break
+                            elif choice == 'r':
+                                # User rejects - terminate phase
+                                print("\n❌ 權限被拒絕，Phase 終止。")
+                                return PhaseResult(
+                                    status=PhaseStatus.FAILED,
+                                    message=f"Permission denied by user in iteration {self.iteration}",
+                                    data={
+                                        "iterations": self.iteration,
+                                        "last_response": response,
+                                        "status_code": "USER_REJECTED",
+                                    },
+                                )
+                            elif choice == 'm':
+                                # User wants to provide additional guidance
+                                modification_request = self.display.get_multiline_input("請輸入提示或建議")
+
+                                if not modification_request.strip():
+                                    print("\n⚠️  沒有輸入內容，請重新選擇。")
+                                    continue
+
+                                print()
+                                print("✅ 已收到您的建議，正在調整...")
+                                print()
+
+                                # Save user's modification request for next iteration
+                                self.user_responses.append(modification_request)
+
+                                # Update history with user response
+                                self._save_history(
+                                    user_input=current_user_input,
+                                    response=response,
+                                    status_code=PhaseStatusCode.NEED_PERMISSION,
+                                    user_response=modification_request,
+                                )
+
+                                # Continue to next iteration
+                                break
+                            else:
+                                print("❌ 無效選擇，請輸入 c, r, 或 m")
+
+                        # If we reach here, user chose 'c' or 'm' - continue loop
+                        continue
                     else:
                         # Non-interactive mode: cannot handle permission requests
                         return PhaseResult(

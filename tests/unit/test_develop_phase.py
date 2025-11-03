@@ -385,7 +385,6 @@ class TestStatusCodeHandling:
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 
         permission_handler = MagicMock(spec=PermissionHandler)
-        permission_handler.request_permission.return_value = True
 
         git_ops = MagicMock(spec=GitOperations)
         git_ops.branch_exists.return_value = False
@@ -401,12 +400,20 @@ class TestStatusCodeHandling:
             interactive=True,
         )
 
-        result = phase.execute()
+        # Mock user input to grant permission
+        with patch('builtins.input', return_value='c'):
+            result = phase.execute()
 
         # Should complete after permission granted
         assert result.status == PhaseStatus.COMPLETED
-        assert permission_handler.request_permission.called
         assert agent_manager.execute.call_count == 2
+
+        # Check that user response was saved in history
+        history_file = tmp_path / ".aaf" / "issues" / "test" / "develop" / "history" / "iteration_001.json"
+        assert history_file.exists()
+        with open(history_file) as f:
+            history_data = json.load(f)
+            assert history_data["user_response"] == "授權同意"
 
     def test_permission_denied_fails_phase(self, tmp_path: Path) -> None:
         """測試權限被拒絕時 phase 失敗"""
@@ -422,7 +429,6 @@ class TestStatusCodeHandling:
         agent_manager.execute.return_value = "NEED_PERMISSION"
 
         permission_handler = MagicMock(spec=PermissionHandler)
-        permission_handler.request_permission.return_value = False
 
         git_ops = MagicMock(spec=GitOperations)
         git_ops.branch_exists.return_value = False
@@ -438,7 +444,9 @@ class TestStatusCodeHandling:
             interactive=True,
         )
 
-        result = phase.execute()
+        # Mock user input to deny permission
+        with patch('builtins.input', return_value='r'):
+            result = phase.execute()
 
         assert result.status == PhaseStatus.FAILED
         assert "Permission denied" in result.message
