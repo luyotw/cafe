@@ -367,7 +367,7 @@ class TestStatusCodeHandling:
         assert result.data["status_code"] == "CONFIRMED"
 
     def test_handle_need_permission_in_interactive_mode(self, tmp_path: Path) -> None:
-        """測試在互動模式下處理 NEED_PERMISSION 狀態碼"""
+        """測試在互動模式下處理 NEED_PERMISSION 狀態碼（單輪執行）"""
         spec_file = tmp_path / ".aaf" / "issues" / "test" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True)
         spec_file.write_text("# Spec")
@@ -377,11 +377,8 @@ class TestStatusCodeHandling:
         plan_file.write_text("## Plan")
 
         agent_manager = MagicMock(spec=AgentManager)
-        # First call returns NEED_PERMISSION, second returns CONFIRMED
-        agent_manager.execute.side_effect = [
-            "Need permission. NEED_PERMISSION",
-            "Done. CONFIRMED",
-        ]
+        # Agent returns NEED_PERMISSION
+        agent_manager.execute.return_value = "Need permission. NEED_PERMISSION"
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -400,23 +397,23 @@ class TestStatusCodeHandling:
             interactive=True,
         )
 
-        # Mock user input to grant permission
-        with patch('builtins.input', return_value='c'):
-            result = phase.execute()
+        # Execute - should return IN_PROGRESS and save history
+        result = phase.execute()
 
-        # Should complete after permission granted
-        assert result.status == PhaseStatus.COMPLETED
-        assert agent_manager.execute.call_count == 2
+        # Should return IN_PROGRESS (not continue execution)
+        assert result.status == PhaseStatus.IN_PROGRESS
+        assert agent_manager.execute.call_count == 1
 
-        # Check that user response was saved in history
+        # Check that history was saved
         history_file = tmp_path / ".aaf" / "issues" / "test" / "develop" / "history" / "iteration_001.json"
         assert history_file.exists()
         with open(history_file) as f:
             history_data = json.load(f)
-            assert history_data["user_response"] == "授權同意"
+            assert history_data["status_code"] == "NEED_PERMISSION"
+            assert "user_response" not in history_data  # User hasn't responded yet
 
     def test_permission_denied_fails_phase(self, tmp_path: Path) -> None:
-        """測試權限被拒絕時 phase 失敗"""
+        """測試權限被拒絕時 phase 失敗（恢復場景）"""
         spec_file = tmp_path / ".aaf" / "issues" / "test" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True)
         spec_file.write_text("# Spec")
@@ -425,13 +422,25 @@ class TestStatusCodeHandling:
         plan_file.parent.mkdir(parents=True)
         plan_file.write_text("## Plan")
 
-        agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = "NEED_PERMISSION"
+        # Create a pending NEED_PERMISSION history from previous run
+        history_dir = tmp_path / ".aaf" / "issues" / "test" / "develop" / "history"
+        history_dir.mkdir(parents=True)
 
+        pending_permission = {
+            "iteration": 1,
+            "timestamp": "2025-11-03T10:00:00",
+            "user_input": "",
+            "response": "Need permission to write file",
+            "status_code": "NEED_PERMISSION",
+        }
+        with open(history_dir / "iteration_001.json", "w") as f:
+            json.dump(pending_permission, f)
+
+        agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
 
         git_ops = MagicMock(spec=GitOperations)
-        git_ops.branch_exists.return_value = False
+        git_ops.branch_exists.return_value = True
 
         phase = DevelopPhase(
             agent_manager=agent_manager,

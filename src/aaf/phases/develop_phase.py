@@ -277,8 +277,11 @@ class DevelopPhase(Phase):
 """
 
     def execute(self) -> PhaseResult:
-        """Execute development phase.
-
+        """Execute development phase - single iteration only.
+        
+        Each invocation executes ONE iteration of development work.
+        For multiple iterations, the user should run the command multiple times.
+        
         Returns:
             Phase result
         """
@@ -327,271 +330,178 @@ class DevelopPhase(Phase):
             else:
                 self.git_ops.create_branch(branch_name)
 
-            # Development loop
-            # Add safety limit to prevent infinite loops
-            MAX_ITERATIONS = 10
-            while self.iteration < MAX_ITERATIONS:
-                # Check if previous iteration has unhandled NEED_PERMISSION
-                if (self.conversation_history and
-                    self.conversation_history[-1].get("status_code") == "NEED_PERMISSION" and
-                    "user_response" not in self.conversation_history[-1]):
-                    # Handle pending permission request from previous iteration
-                    last_iteration = self.conversation_history[-1]
-
-                    if self.interactive:
-                        print(f"\n{'='*60}")
-                        print(f"Dev ({self.dev_agent}) - Iteration {last_iteration['iteration']}:")
-                        print(f"{'='*60}")
-                        print(last_iteration['response'])
-                        print(f"{'='*60}\n")
-
-                        # Ask user for decision
-                        print("開發者請求工具權限。請選擇：")
-                        print("  [c] confirm - 同意授權，繼續執行")
-                        print("  [r] reject - 拒絕授權，終止開發")
-                        print("  [m] modify - 給予其他提示或建議")
-
-                        while True:
-                            choice = input("\n請選擇 [c/r/m]: ").strip().lower()
-
-                            if choice == 'c':
-                                # User confirms
-                                print("\n✅ 權限已授予，繼續執行...")
-                                print()
-                                user_response = "授權同意"
-                                break
-                            elif choice == 'r':
-                                # User rejects
-                                print("\n❌ 權限被拒絕，Phase 終止。")
-                                return PhaseResult(
-                                    status=PhaseStatus.FAILED,
-                                    message=f"Permission denied by user in iteration {last_iteration['iteration']}",
-                                    data={
-                                        "iterations": last_iteration['iteration'],
-                                        "last_response": last_iteration['response'],
-                                        "status_code": "USER_REJECTED",
-                                    },
-                                )
-                            elif choice == 'm':
-                                # User wants to provide guidance
-                                modification_request = self.display.get_multiline_input("請輸入提示或建議")
-                                if not modification_request.strip():
-                                    print("\n⚠️  沒有輸入內容，請重新選擇。")
-                                    continue
-                                print()
-                                print("✅ 已收到您的建議，正在調整...")
-                                print()
-                                user_response = modification_request
-                                break
-                            else:
-                                print("❌ 無效選擇，請輸入 c, r, 或 m")
-
-                        # Save user response to the previous iteration's history
-                        self.user_responses.append(user_response)
-                        last_iteration['user_response'] = user_response
-
-                        # Update the history file
-                        iteration_file = self.history_dir / f"iteration_{last_iteration['iteration']:03d}.json"
-                        with open(iteration_file, "w", encoding="utf-8") as f:
-                            json.dump(last_iteration, f, ensure_ascii=False, indent=2)
-                    else:
-                        # Non-interactive mode cannot handle pending permission
-                        return PhaseResult(
-                            status=PhaseStatus.FAILED,
-                            message="Permission required but running in non-interactive mode",
-                            data={
-                                "iterations": last_iteration['iteration'],
-                                "last_response": last_iteration['response'],
-                            },
-                        )
-
-                self.iteration += 1
-
-                # Prepare user_input for this iteration
-                if self.iteration == 1:
-                    # First iteration: read plan.md as user_input
-                    plan_path = Path(self.plan_file)
-                    current_user_input = plan_path.read_text() if plan_path.exists() else ""
+            # Single iteration execution
+            # Increment iteration counter
+            self.iteration += 1
+            
+            # Prepare user_input for this iteration
+            # Note: We don't read files - agent will read them using Read tool
+            current_user_input = ""
+            
+            # Check if there's a pending NEED_PERMISSION from previous run
+            if (self.conversation_history and
+                self.conversation_history[-1].get("status_code") == "NEED_PERMISSION" and
+                "user_response" not in self.conversation_history[-1]):
+                # Handle pending permission request
+                last_iteration = self.conversation_history[-1]
+                
+                if self.interactive:
+                    print(f"\n{'='*60}")
+                    print(f"Dev ({self.dev_agent}) - Iteration {last_iteration['iteration']} (resuming):")
+                    print(f"{'='*60}")
+                    print(last_iteration['response'])
+                    print(f"{'='*60}\n")
+                    
+                    # Ask user for decision
+                    print("開發者請求工具權限。請選擇：")
+                    print("  [c] confirm - 同意授權，繼續執行")
+                    print("  [r] reject - 拒絕授權，終止開發")
+                    print("  [m] modify - 給予其他提示或建議")
+                    
+                    while True:
+                        choice = input("\n請選擇 [c/r/m]: ").strip().lower()
+                        
+                        if choice == 'c':
+                            print("\n✅ 權限已授予")
+                            current_user_input = "授權同意"
+                            break
+                        elif choice == 'r':
+                            print("\n❌ 權限被拒絕，Phase 終止。")
+                            return PhaseResult(
+                                status=PhaseStatus.FAILED,
+                                message=f"Permission denied by user in iteration {last_iteration['iteration']}",
+                                data={
+                                    "iterations": last_iteration['iteration'],
+                                    "last_response": last_iteration['response'],
+                                    "status_code": "USER_REJECTED",
+                                },
+                            )
+                        elif choice == 'm':
+                            modification_request = self.display.get_multiline_input("請輸入提示或建議")
+                            if not modification_request.strip():
+                                print("\n⚠️  沒有輸入內容，請重新選擇。")
+                                continue
+                            print("\n✅ 已收到您的建議")
+                            current_user_input = modification_request
+                            break
+                        else:
+                            print("❌ 無效選擇，請輸入 c, r, 或 m")
+                    
+                    # Save user response to the previous iteration
+                    last_iteration['user_response'] = current_user_input
+                    iteration_file = self.history_dir / f"iteration_{last_iteration['iteration']:03d}.json"
+                    with open(iteration_file, "w", encoding="utf-8") as f:
+                        json.dump(last_iteration, f, ensure_ascii=False, indent=2)
                 else:
-                    # Subsequent iterations: check if there's a user response from previous iteration
-                    if len(self.user_responses) >= self.iteration - 1 and self.user_responses[self.iteration - 2]:
-                        # Use the user response from previous iteration
-                        current_user_input = self.user_responses[self.iteration - 2]
-                    else:
-                        # No user response, empty input (continue from previous work)
-                        current_user_input = ""
-
-                # Generate prompt
-                prompt = self._generate_prompt()
-
-                # Execute developer agent with allowed tools
-                response = self.agent_manager.execute(
-                    self.dev_agent,
-                    prompt,
-                    allowed_tools=["write", "read", "shell"]
-                )
-
-                # Extract status code from response
-                status_code = StatusCodeParser.extract(
-                    response,
-                    valid_codes=[
-                        PhaseStatusCode.CONFIRMED,
-                        PhaseStatusCode.NEED_PERMISSION,
-                    ],
-                )
-
-                # Handle status codes
-                if status_code == PhaseStatusCode.CONFIRMED:
-                    # Save history
-                    self._save_history(
-                        user_input=current_user_input,
-                        response=response,
-                        status_code=PhaseStatusCode.CONFIRMED,
-                    )
-
-                    # Save progress
-                    self._save_progress(PhaseStatusCode.CONFIRMED)
-
-                    # Get token usage statistics
-                    token_usage = self.agent_manager.get_total_token_usage()
-
                     return PhaseResult(
-                        status=PhaseStatus.COMPLETED,
-                        message=f"Development completed on branch {branch_name} in {self.iteration} iteration(s)",
+                        status=PhaseStatus.FAILED,
+                        message="Permission required but running in non-interactive mode",
                         data={
-                            "branch": branch_name,
-                            "iterations": self.iteration,
-                            "final_response": response,
-                            "status_code": status_code.value,
+                            "iterations": last_iteration['iteration'],
+                            "last_response": last_iteration['response'],
                         },
-                        token_usage=token_usage,
                     )
 
-                elif status_code == PhaseStatusCode.NEED_PERMISSION:
-                    # Handle permission request
-                    # Save history BEFORE waiting for user input (in case of Ctrl+C)
-                    self._save_history(
-                        user_input=current_user_input,
-                        response=response,
-                        status_code=PhaseStatusCode.NEED_PERMISSION,
-                        user_response=None,  # Will be updated after user responds
-                    )
+            # Generate prompt for this iteration
+            prompt = self._generate_prompt()
 
-                    # Save progress
-                    self._save_progress(PhaseStatusCode.NEED_PERMISSION)
-
-                    # Display permission request and get user input
-                    if self.interactive:
-                        print(f"\n{'='*60}")
-                        print(f"Dev ({self.dev_agent}) - Iteration {self.iteration}:")
-                        print(f"{'='*60}")
-                        print(response)
-                        print(f"{'='*60}\n")
-
-                        # Ask user for decision
-                        print("開發者請求工具權限。請選擇：")
-                        print("  [c] confirm - 同意授權，繼續執行")
-                        print("  [r] reject - 拒絕授權，終止開發")
-                        print("  [m] modify - 給予其他提示或建議")
-
-                        while True:
-                            choice = input("\n請選擇 [c/r/m]: ").strip().lower()
-
-                            if choice == 'c':
-                                # User confirms - save user response and continue
-                                print("\n✅ 權限已授予，繼續執行...")
-                                print()
-
-                                # Save user's confirmation for next iteration
-                                user_confirm_response = "授權同意"
-                                self.user_responses.append(user_confirm_response)
-
-                                # Update the existing history file with user response
-                                iteration_file = self.history_dir / f"iteration_{self.iteration:03d}.json"
-                                with open(iteration_file, "r", encoding="utf-8") as f:
-                                    iteration_data = json.load(f)
-                                iteration_data["user_response"] = user_confirm_response
-                                with open(iteration_file, "w", encoding="utf-8") as f:
-                                    json.dump(iteration_data, f, ensure_ascii=False, indent=2)
-
-                                # Continue to next iteration
-                                break
-                            elif choice == 'r':
-                                # User rejects - terminate phase
-                                print("\n❌ 權限被拒絕，Phase 終止。")
-                                return PhaseResult(
-                                    status=PhaseStatus.FAILED,
-                                    message=f"Permission denied by user in iteration {self.iteration}",
-                                    data={
-                                        "iterations": self.iteration,
-                                        "last_response": response,
-                                        "status_code": "USER_REJECTED",
-                                    },
-                                )
-                            elif choice == 'm':
-                                # User wants to provide additional guidance
-                                modification_request = self.display.get_multiline_input("請輸入提示或建議")
-
-                                if not modification_request.strip():
-                                    print("\n⚠️  沒有輸入內容，請重新選擇。")
-                                    continue
-
-                                print()
-                                print("✅ 已收到您的建議，正在調整...")
-                                print()
-
-                                # Save user's modification request for next iteration
-                                self.user_responses.append(modification_request)
-
-                                # Update the existing history file with user response
-                                iteration_file = self.history_dir / f"iteration_{self.iteration:03d}.json"
-                                with open(iteration_file, "r", encoding="utf-8") as f:
-                                    iteration_data = json.load(f)
-                                iteration_data["user_response"] = modification_request
-                                with open(iteration_file, "w", encoding="utf-8") as f:
-                                    json.dump(iteration_data, f, ensure_ascii=False, indent=2)
-
-                                # Continue to next iteration
-                                break
-                            else:
-                                print("❌ 無效選擇，請輸入 c, r, 或 m")
-
-                        # If we reach here, user chose 'c' or 'm' - continue loop
-                        continue
-                    else:
-                        # Non-interactive mode: cannot handle permission requests
-                        return PhaseResult(
-                            status=PhaseStatus.FAILED,
-                            message="Permission required but running in non-interactive mode",
-                            data={
-                                "iterations": self.iteration,
-                                "last_response": response,
-                            },
-                        )
-                else:
-                    # No valid status code found, continue iteration
-                    # Save what we have so far
-                    if status_code:
-                        self._save_history(
-                            user_input=current_user_input,
-                            response=response,
-                            status_code=status_code,
-                        )
-                        self._save_progress(status_code)
-                    continue
-
-            # Max iterations reached
-            return PhaseResult(
-                status=PhaseStatus.FAILED,
-                message=f"Development phase reached maximum iterations ({MAX_ITERATIONS})",
-                data={
-                    "iterations": self.iteration,
-                    "message": "Maximum iteration limit reached. Please check the implementation.",
-                },
+            # Execute developer agent with allowed tools
+            response = self.agent_manager.execute(
+                self.dev_agent,
+                prompt,
+                allowed_tools=["write", "read", "shell"]
             )
 
+            # Extract status code from response
+            status_code = StatusCodeParser.extract(
+                response,
+                valid_codes=[
+                    PhaseStatusCode.CONFIRMED,
+                    PhaseStatusCode.NEED_PERMISSION,
+                ],
+            )
+
+            # Handle status codes
+            if status_code == PhaseStatusCode.CONFIRMED:
+                # Development completed
+                self._save_history(
+                    user_input=current_user_input,
+                    response=response,
+                    status_code=PhaseStatusCode.CONFIRMED,
+                )
+                self._save_progress(PhaseStatusCode.CONFIRMED)
+                
+                token_usage = self.agent_manager.get_total_token_usage()
+                
+                return PhaseResult(
+                    status=PhaseStatus.COMPLETED,
+                    message=f"Development completed on branch {branch_name} in {self.iteration} iteration(s)",
+                    data={
+                        "branch": branch_name,
+                        "iterations": self.iteration,
+                        "final_response": response,
+                        "status_code": status_code.value,
+                    },
+                    token_usage=token_usage,
+                )
+
+            elif status_code == PhaseStatusCode.NEED_PERMISSION:
+                # Save history BEFORE waiting for user input
+                self._save_history(
+                    user_input=current_user_input,
+                    response=response,
+                    status_code=PhaseStatusCode.NEED_PERMISSION,
+                    user_response=None,
+                )
+                self._save_progress(PhaseStatusCode.NEED_PERMISSION)
+                
+                # Display permission request
+                if self.interactive:
+                    print(f"\n{'='*60}")
+                    print(f"Dev ({self.dev_agent}) - Iteration {self.iteration}:")
+                    print(f"{'='*60}")
+                    print(response)
+                    print(f"{'='*60}\n")
+                    print("💡 開發者請求權限。請再次執行 'aaf develop' 來回應。")
+                    
+                    return PhaseResult(
+                        status=PhaseStatus.IN_PROGRESS,
+                        message=f"Permission requested in iteration {self.iteration}. Run command again to respond.",
+                        data={
+                            "iterations": self.iteration,
+                            "last_response": response,
+                            "status_code": status_code.value,
+                        },
+                    )
+                else:
+                    return PhaseResult(
+                        status=PhaseStatus.FAILED,
+                        message="Permission required but running in non-interactive mode",
+                        data={
+                            "iterations": self.iteration,
+                            "last_response": response,
+                        },
+                    )
+            else:
+                # No valid status code found
+                self._save_history(
+                    user_input=current_user_input,
+                    response=response,
+                    status_code=PhaseStatusCode.CONFIRMED,  # Default to CONFIRMED
+                )
+                self._save_progress(PhaseStatusCode.CONFIRMED)
+                
+                return PhaseResult(
+                    status=PhaseStatus.COMPLETED,
+                    message=f"Development completed (no explicit status code) in iteration {self.iteration}",
+                    data={
+                        "branch": branch_name,
+                        "iterations": self.iteration,
+                        "final_response": response,
+                    },
+                )
+
         except KeyboardInterrupt:
-            # User paused with Ctrl+C - save progress and allow resume
             print("\n\n⏸️  Paused by user (Ctrl+C).")
             print(f"💾 Progress saved. Current iteration: {self.iteration}")
             print(f"📝 To resume, run: aaf develop {self.issue_name}")
