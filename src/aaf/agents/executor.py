@@ -329,17 +329,41 @@ class AgentExecutor:
         if self.config.session_id:
             cmd.extend(["--resume", self.config.session_id])
 
-        result = subprocess.run(
+        # Use Popen for streaming output
+        process = subprocess.Popen(
             cmd,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            check=False,
+            bufsize=1,  # Line buffered
         )
 
-        if result.returncode != 0:
+        # Read and print output in real-time
+        output_lines = []
+        print(f"\n{'='*80}")
+        print(f"Copilot Response (streaming):")
+        print(f"{'='*80}")
+
+        if process.stdout:
+            for line in iter(process.stdout.readline, ''):
+                if not line:
+                    break
+                print(line, end='')  # Print immediately
+                output_lines.append(line)
+
+        print(f"{'='*80}\n")
+
+        # Wait for process to complete
+        stderr_output = process.stderr.read() if process.stderr else ""
+        returncode = process.wait()
+
+        if returncode != 0:
             raise AgentExecutionError(
-                f"Copilot execution failed with code {result.returncode}: {result.stderr}"
+                f"Copilot execution failed with code {returncode}: {stderr_output}"
             )
+
+        # Combine output
+        response = ''.join(output_lines)
 
         # 如果還沒有 session_id，嘗試從新建立的 session 檔案中提取
         if not self.config.session_id and copilot_session_dir.exists():
