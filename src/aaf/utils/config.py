@@ -59,7 +59,7 @@ class ConfigManager:
                     "name": "Roger",
                     "cli": "copilot",
                 },
-                "dev": {
+                "developer": {
                     "name": "David",
                     "cli": "copilot",
                 },
@@ -160,7 +160,7 @@ class ConfigManager:
         Note:
             Supports aliases for agent CLI shortcuts:
             - 'pm' → 'agents.pm.cli'
-            - 'dev' → 'agents.dev.cli'
+            - 'dev' or 'developer' → 'agents.developer.cli'
             - 'reviewer' → 'agents.reviewer.cli'
         """
         if self._config is None:
@@ -196,18 +196,28 @@ class ConfigManager:
 
         Examples:
             'pm' → 'agents.pm.cli'
-            'dev' → 'agents.dev.cli'
+            'dev' → 'agents.developer.cli'
+            'developer' → 'agents.developer.cli'
             'pm.name' → 'agents.pm.name' (no change needed, already has agent prefix)
         """
-        # Agent CLI shortcuts: pm, dev, reviewer (without dots)
-        if key in ['pm', 'dev', 'reviewer']:
-            return f'agents.{key}.cli'
+        # Agent CLI shortcuts: pm, dev/developer, reviewer (without dots)
+        if key == 'pm':
+            return 'agents.pm.cli'
+        if key in ['dev', 'developer']:
+            return 'agents.developer.cli'
+        if key == 'reviewer':
+            return 'agents.reviewer.cli'
 
         # If it starts with agent name but not agents., add agents prefix
         # e.g., 'pm.cli' → 'agents.pm.cli', 'pm.name' → 'agents.pm.name'
-        for agent in ['pm', 'dev', 'reviewer']:
-            if key.startswith(f'{agent}.'):
-                return f'agents.{key}'
+        if key.startswith('pm.'):
+            return f'agents.{key}'
+        if key.startswith('dev.') or key.startswith('developer.'):
+            # Map both 'dev.' and 'developer.' to 'agents.developer.'
+            suffix = key.split('.', 1)[1]
+            return f'agents.developer.{suffix}'
+        if key.startswith('reviewer.'):
+            return f'agents.{key}'
 
         return key
 
