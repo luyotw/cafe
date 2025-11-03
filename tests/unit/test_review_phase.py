@@ -33,8 +33,8 @@ class TestReviewPhaseBasics:
         assert phase.spec_file == "requirements.md"
         assert phase.workflow_mode == WorkflowMode.LOCAL
 
-    def test_init_with_max_iterations(self) -> None:
-        """測試設定最大迭代次數"""
+    def test_init_with_target_commit(self) -> None:
+        """測試設定特定 commit"""
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
         git_ops = MagicMock(spec=GitOperations)
@@ -45,23 +45,23 @@ class TestReviewPhaseBasics:
             git_ops=git_ops,
             spec_file="requirements.md",
             workflow_mode=WorkflowMode.LOCAL,
-            max_iterations=5,
+            target_commit="abc123",
         )
 
-        assert phase.max_iterations == 5
+        assert phase.target_commit == "abc123"
 
 
-class TestReviewLoop:
-    """Test review-fix loop."""
+class TestSingleIterationExecution:
+    """Test single iteration execution."""
 
-    def test_single_review_iteration_lgtm(self, tmp_path: Path) -> None:
+    def test_single_review_iteration_confirmed(self, tmp_path: Path) -> None:
         """測試單次 review 迭代通過"""
         requirements_file = tmp_path / "requirements.md"
         requirements_file.write_text("Requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
         # Review agent approves immediately
-        agent_manager.execute.return_value = "LGTM\nCode looks good!"
+        agent_manager.execute.return_value = "CONFIRMED\nCode looks good!"
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -76,23 +76,20 @@ class TestReviewLoop:
             workflow_mode=WorkflowMode.LOCAL,
         )
 
-        result = phase.execute()
+        with patch.object(phase, "_save_review_result"):
+            result = phase.execute()
 
         assert result.status == PhaseStatus.COMPLETED
-        assert result.data["iterations"] == 1
+        assert "passed" in result.message.lower()
+        assert result.data["status_code"] == "CONFIRMED"
 
-    def test_multiple_review_fix_iterations(self, tmp_path: Path) -> None:
-        """測試多次 review-fix 迭代"""
+    def test_single_review_iteration_needs_changes(self, tmp_path: Path) -> None:
+        """測試單次 review 迭代需要修改"""
         requirements_file = tmp_path / "requirements.md"
         requirements_file.write_text("Requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
-        # First review finds issues, second review approves
-        agent_manager.execute.side_effect = [
-            "問題 1: 需要修正",  # Review 1
-            "已修正",  # Fix 1
-            "LGTM\nCode looks good!",  # Review 2
-        ]
+        agent_manager.execute.return_value = "NEEDS_CHANGES\n問題 1: 需要修正"
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -107,19 +104,19 @@ class TestReviewLoop:
             workflow_mode=WorkflowMode.LOCAL,
         )
 
-        result = phase.execute()
+        with patch.object(phase, "_save_review_result"):
+            result = phase.execute()
 
         assert result.status == PhaseStatus.COMPLETED
-        assert agent_manager.execute.call_count == 3
+        assert result.data["status_code"] == "NEEDS_CHANGES"
 
-    def test_max_iterations_reached(self, tmp_path: Path) -> None:
-        """測試達到最大迭代次數"""
+    def test_only_executes_once(self, tmp_path: Path) -> None:
+        """測試只執行一次（不迴圈）"""
         requirements_file = tmp_path / "requirements.md"
         requirements_file.write_text("Requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
-        # Always find issues, never approve
-        agent_manager.execute.return_value = "還有問題需要修正"
+        agent_manager.execute.return_value = "NEEDS_CHANGES\n需要修正"
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -132,13 +129,14 @@ class TestReviewLoop:
             git_ops=git_ops,
             spec_file=str(requirements_file),
             workflow_mode=WorkflowMode.LOCAL,
-            max_iterations=2,
         )
 
-        result = phase.execute()
+        with patch.object(phase, "_save_review_result"):
+            result = phase.execute()
 
+        # Should call agent exactly once
+        assert agent_manager.execute.call_count == 1
         assert result.status == PhaseStatus.COMPLETED
-        assert result.data["iterations"] == 2
 
 
 class TestDiffChecking:
@@ -168,13 +166,68 @@ class TestDiffChecking:
         assert result.status == PhaseStatus.FAILED
         assert "no changes" in result.message.lower()
 
+    def test_full_branch_diff(self, tmp_path: Path) -> None:
+        """測試完整 branch diff"""
+        requirements_file = tmp_path / "requirements.md"
+        requirements_file.write_text("Requirements")
+
+        agent_manager = MagicMock(spec=AgentManager)
+        agent_manager.execute.return_value = "CONFIRMED\nCode looks good!"
+
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        git_ops = MagicMock(spec=GitOperations)
+        git_ops.get_diff.return_value = "diff content"
+
+        phase = ReviewPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            git_ops=git_ops,
+            spec_file=str(requirements_file),
+            workflow_mode=WorkflowMode.LOCAL,
+        )
+
+        with patch.object(phase, "_save_review_result"):
+            phase.execute()
+
+        # Should get diff from main to HEAD
+        git_ops.get_diff.assert_called_once_with(base="main", head="HEAD")
+
+    def test_commit_specific_diff(self, tmp_path: Path) -> None:
+        """測試特定 commit diff"""
+        requirements_file = tmp_path / "requirements.md"
+        requirements_file.write_text("Requirements")
+
+        agent_manager = MagicMock(spec=AgentManager)
+        agent_manager.execute.return_value = "CONFIRMED\nCode looks good!"
+
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        git_ops = MagicMock(spec=GitOperations)
+        git_ops.get_diff.return_value = "diff content"
+
+        phase = ReviewPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            git_ops=git_ops,
+            spec_file=str(requirements_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            target_commit="abc123",
+        )
+
+        with patch.object(phase, "_save_review_result"):
+            phase.execute()
+
+        # Should get diff for specific commit
+        git_ops.get_diff.assert_called_once_with(base="abc123^", head="abc123")
+
     def test_diff_includes_in_review_prompt(self, tmp_path: Path) -> None:
         """測試 diff 包含在 review prompt 中"""
         requirements_file = tmp_path / "requirements.md"
         requirements_file.write_text("Requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = "LGTM\nCode looks good!"
+        agent_manager.execute.return_value = "CONFIRMED\nCode looks good!"
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -189,7 +242,8 @@ class TestDiffChecking:
             workflow_mode=WorkflowMode.LOCAL,
         )
 
-        phase.execute()
+        with patch.object(phase, "_save_review_result"):
+            phase.execute()
 
         # Check that diff was included in review prompt
         call_args = agent_manager.execute.call_args_list[0][0]
@@ -198,15 +252,15 @@ class TestDiffChecking:
 
 
 class TestAgentSelection:
-    """Test agent selection for review and fix."""
+    """Test agent selection for review."""
 
-    def test_uses_review_agent_and_dev_agent(self, tmp_path: Path) -> None:
-        """測試使用 review agent 和 dev agent"""
+    def test_uses_review_agent(self, tmp_path: Path) -> None:
+        """測試使用 review agent"""
         requirements_file = tmp_path / "requirements.md"
         requirements_file.write_text("Requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.side_effect = ["問題", "已修正", "LGTM\nCode looks good!"]
+        agent_manager.execute.return_value = "CONFIRMED\nCode looks good!"
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -219,29 +273,28 @@ class TestAgentSelection:
             git_ops=git_ops,
             spec_file=str(requirements_file),
             workflow_mode=WorkflowMode.LOCAL,
-            review_agent="Roger",
-            dev_agent="David",
+            review_agent="Richard",
         )
 
-        phase.execute()
+        with patch.object(phase, "_save_review_result"):
+            phase.execute()
 
-        # Check agents were used correctly
+        # Check agent was used correctly
         calls = agent_manager.execute.call_args_list
-        assert calls[0][0][0] == "Roger"  # Review
-        assert calls[1][0][0] == "David"  # Fix
-        assert calls[2][0][0] == "Roger"  # Review again
+        assert len(calls) == 1
+        assert calls[0][0][0] == "Richard"
 
 
 class TestPromptGeneration:
-    """Test prompt generation for review and fix."""
+    """Test prompt generation for review."""
 
-    def test_first_review_prompt(self, tmp_path: Path) -> None:
-        """測試第一次 review 的 prompt"""
+    def test_review_prompt_structure(self, tmp_path: Path) -> None:
+        """測試 review prompt 結構"""
         requirements_file = tmp_path / "requirements.md"
         requirements_file.write_text("Requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = "LGTM\nCode looks good!"
+        agent_manager.execute.return_value = "CONFIRMED\nCode looks good!"
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -256,20 +309,22 @@ class TestPromptGeneration:
             workflow_mode=WorkflowMode.LOCAL,
         )
 
-        phase.execute()
+        with patch.object(phase, "_save_review_result"):
+            phase.execute()
 
         call_args = agent_manager.execute.call_args[0]
         prompt = call_args[1]
-        assert "第 1 輪" in prompt
         assert "程式碼變更" in prompt
+        assert "狀態碼" in prompt
+        assert "審查完成後請回傳狀態碼，指令執行即結束" in prompt
 
-    def test_subsequent_review_includes_history(self, tmp_path: Path) -> None:
-        """測試後續 review 包含歷史記錄提示"""
+    def test_review_prompt_no_iteration_count(self, tmp_path: Path) -> None:
+        """測試 review prompt 不包含迭代次數"""
         requirements_file = tmp_path / "requirements.md"
         requirements_file.write_text("Requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.side_effect = ["問題", "已修正", "LGTM\nCode looks good!"]
+        agent_manager.execute.return_value = "CONFIRMED\nCode looks good!"
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -284,12 +339,98 @@ class TestPromptGeneration:
             workflow_mode=WorkflowMode.LOCAL,
         )
 
-        phase.execute()
+        with patch.object(phase, "_save_review_result"):
+            phase.execute()
 
-        # Check second review includes history hint
-        second_review_call = agent_manager.execute.call_args_list[2][0]
-        prompt = second_review_call[1]
-        assert "第 2 輪" in prompt
+        call_args = agent_manager.execute.call_args[0]
+        prompt = call_args[1]
+        # Should not mention iteration numbers
+        assert "第 1 輪" not in prompt
+        assert "第 2 輪" not in prompt
+
+
+class TestReviewResultSaving:
+    """Test review result saving."""
+
+    def test_saves_review_result(self, tmp_path: Path) -> None:
+        """測試儲存 review 結果"""
+        requirements_file = tmp_path / "spec.md"
+        requirements_file.write_text("Requirements")
+
+        # Create issue structure
+        issue_dir = tmp_path / "myissue"
+        spec_dir = issue_dir / "spec"
+        spec_dir.mkdir(parents=True)
+        spec_file = spec_dir / "spec.md"
+        spec_file.write_text("Requirements")
+
+        agent_manager = MagicMock(spec=AgentManager)
+        agent_manager.execute.return_value = "CONFIRMED\nCode looks good!"
+
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        git_ops = MagicMock(spec=GitOperations)
+        git_ops.get_diff.return_value = "diff content"
+
+        phase = ReviewPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            git_ops=git_ops,
+            spec_file=str(spec_file),
+            workflow_mode=WorkflowMode.LOCAL,
+        )
+
+        with patch("aaf.phases.review_phase.Path.mkdir"):
+            with patch("aaf.phases.review_phase.Path.write_text") as mock_write:
+                with patch("aaf.phases.review_phase.Path.glob", return_value=[]):
+                    phase.execute()
+
+        # Should save review result
+        assert mock_write.called
+
+    def test_saves_to_history(self, tmp_path: Path) -> None:
+        """測試儲存到 history"""
+        requirements_file = tmp_path / "spec.md"
+        requirements_file.write_text("Requirements")
+
+        # Create issue structure
+        issue_dir = tmp_path / "myissue"
+        spec_dir = issue_dir / "spec"
+        spec_dir.mkdir(parents=True)
+        spec_file = spec_dir / "spec.md"
+        spec_file.write_text("Requirements")
+
+        agent_manager = MagicMock(spec=AgentManager)
+        agent_manager.execute.return_value = "CONFIRMED\nCode looks good!"
+
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        git_ops = MagicMock(spec=GitOperations)
+        git_ops.get_diff.return_value = "diff content"
+
+        phase = ReviewPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            git_ops=git_ops,
+            spec_file=str(spec_file),
+            workflow_mode=WorkflowMode.LOCAL,
+        )
+
+        review_dir = tmp_path / "myissue" / "review"
+        review_dir.mkdir(parents=True, exist_ok=True)
+        history_dir = review_dir / "history"
+        history_dir.mkdir(exist_ok=True)
+
+        with patch("aaf.phases.review_phase.Path") as MockPath:
+            # Mock Path to use our temp directory
+            mock_review_path = MagicMock()
+            mock_review_path.parent.parent.name = "myissue"
+            mock_review_path.exists.return_value = True
+            mock_review_path.read_text.return_value = "Requirements"
+
+            MockPath.return_value = mock_review_path
+
+            phase.execute()
 
 
 class TestGitHubWorkflow:
@@ -298,7 +439,7 @@ class TestGitHubWorkflow:
     def test_github_workflow_uses_issue(self) -> None:
         """測試 GitHub workflow 使用 issue"""
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = "LGTM\nCode looks good!"
+        agent_manager.execute.return_value = "CONFIRMED\nCode looks good!"
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -314,7 +455,8 @@ class TestGitHubWorkflow:
             issue_id="123",
         )
 
-        phase.execute()
+        with patch.object(phase, "_save_review_result"):
+            phase.execute()
 
         call_args = agent_manager.execute.call_args[0]
         prompt = call_args[1]

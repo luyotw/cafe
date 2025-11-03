@@ -12,7 +12,7 @@ from aaf.core.types import PhaseResult, PhaseStatus, WorkflowMode
 
 
 class ReviewPhase(Phase):
-    """Phase 4: Code review with reviewer and developer agents."""
+    """Phase 4: Code review with reviewer agent."""
 
     def __init__(
         self,
@@ -22,9 +22,8 @@ class ReviewPhase(Phase):
         spec_file: str,
         workflow_mode: WorkflowMode,
         issue_id: Optional[str] = None,
-        review_agent: str = "Roger",
-        dev_agent: str = "David",
-        max_iterations: int = 3,
+        review_agent: str = "Richard",
+        target_commit: Optional[str] = None,
     ) -> None:
         """Initialize review phase.
 
@@ -35,9 +34,8 @@ class ReviewPhase(Phase):
             spec_file: Path to spec file
             workflow_mode: Workflow mode (local or github)
             issue_id: GitHub issue ID (required for github mode)
-            review_agent: Review agent name (default: Roger)
-            dev_agent: Developer agent name (default: David)
-            max_iterations: Maximum review iterations (default: 3)
+            review_agent: Review agent name (default: Richard)
+            target_commit: Specific commit to review (None for full branch)
         """
         self.agent_manager = agent_manager
         self.permission_handler = permission_handler
@@ -46,76 +44,68 @@ class ReviewPhase(Phase):
         self.workflow_mode = workflow_mode
         self.issue_id = issue_id
         self.review_agent = review_agent
-        self.dev_agent = dev_agent
-        self.max_iterations = max_iterations
-        self.iteration = 0
+        self.target_commit = target_commit
 
     def execute(self) -> PhaseResult:
-        """Execute code review phase.
+        """Execute code review phase (single iteration).
 
         Returns:
             Phase result
         """
         try:
-            # Review-fix loop
-            while self.iteration < self.max_iterations:
-                self.iteration += 1
-
-                # Get diff
+            # Get diff (full branch or specific commit)
+            if self.target_commit:
+                diff = self.git_ops.get_diff(
+                    base=f"{self.target_commit}^", head=self.target_commit
+                )
+            else:
                 diff = self.git_ops.get_diff(base="main", head="HEAD")
-                if not diff:
-                    return PhaseResult(
-                        status=PhaseStatus.FAILED,
-                        message="No changes found in diff",
-                    )
 
-                # Generate review prompt
-                review_prompt = self._generate_review_prompt(diff)
-
-                # Execute review agent
-                review_response = self.agent_manager.execute(
-                    self.review_agent, review_prompt
+            if not diff:
+                return PhaseResult(
+                    status=PhaseStatus.FAILED,
+                    message="No changes found in diff",
                 )
 
-                # Extract status code from review response
-                status_code = StatusCodeParser.extract(
-                    review_response,
-                    valid_codes=[
-                        PhaseStatusCode.APPROVED,
-                        PhaseStatusCode.LGTM,
-                        PhaseStatusCode.NEEDS_CHANGES,
-                    ],
-                )
+            # Generate review prompt
+            review_prompt = self._generate_review_prompt(diff)
 
-                # Check if approved
-                if status_code in [PhaseStatusCode.APPROVED, PhaseStatusCode.LGTM]:
-                    return PhaseResult(
-                        status=PhaseStatus.COMPLETED,
-                        message=f"Code review passed after {self.iteration} iteration(s)",
-                        data={
-                            "iterations": self.iteration,
-                            "review_response": review_response,
-                            "status_code": status_code.value,
-                        },
-                    )
-
-                # If needs changes or no status code, apply fixes and continue
-                if status_code == PhaseStatusCode.NEEDS_CHANGES or status_code is None:
-                    # Generate fix prompt
-                    fix_prompt = self._generate_fix_prompt(review_response)
-
-                    # Execute dev agent to fix issues
-                    self.agent_manager.execute(self.dev_agent, fix_prompt)
-
-                    # Continue to next iteration
-                    continue
-
-            # Max iterations reached
-            return PhaseResult(
-                status=PhaseStatus.COMPLETED,
-                message=f"Code review completed after {self.max_iterations} iterations (max reached)",
-                data={"iterations": self.max_iterations},
+            # Execute review agent
+            review_response = self.agent_manager.execute(
+                self.review_agent, review_prompt
             )
+
+            # Extract status code from review response
+            status_code = StatusCodeParser.extract(
+                review_response,
+                valid_codes=[
+                    PhaseStatusCode.CONFIRMED,
+                    PhaseStatusCode.NEEDS_CHANGES,
+                ],
+            )
+
+            # Save review result
+            self._save_review_result(review_response, status_code)
+
+            # Return result based on status code
+            if status_code == PhaseStatusCode.CONFIRMED:
+                return PhaseResult(
+                    status=PhaseStatus.COMPLETED,
+                    message="Code review passed",
+                    data={
+                        "review_response": review_response,
+                        "status_code": status_code.value,
+                    },
+                )
+            else:
+                return PhaseResult(
+                    status=PhaseStatus.COMPLETED,
+                    message=f"Code review completed with status: {status_code.value if status_code else 'NONE'}",
+                    data={
+                        "review_response": review_response,
+                        "status_code": status_code.value if status_code else None,
+                    },
+                )
 
         except Exception as e:
             return PhaseResult(
@@ -138,21 +128,17 @@ class ReviewPhase(Phase):
         # Generate status code prompt
         status_code_prompt = generate_status_code_prompt(
             valid_codes=[
-                PhaseStatusCode.APPROVED,
-                PhaseStatusCode.LGTM,
+                PhaseStatusCode.CONFIRMED,
                 PhaseStatusCode.NEEDS_CHANGES,
             ],
             descriptions={
-                PhaseStatusCode.APPROVED: "程式碼審查通過，沒有問題",
-                PhaseStatusCode.LGTM: "Looks Good To Me，程式碼審查通過",
+                PhaseStatusCode.CONFIRMED: "程式碼審查通過，沒有問題",
                 PhaseStatusCode.NEEDS_CHANGES: "需要修正問題",
             },
         )
 
-        # Build base prompt
+        # Build prompt
         prompt = f"""你是資深軟體工程師 {self.review_agent}，正在進行程式碼審查 (Code Review)。
-
-這是第 {self.iteration} 輪審查（共 {self.max_iterations} 輪）。
 
 {status_code_prompt}
 
@@ -163,20 +149,7 @@ class ReviewPhase(Phase):
 ---
 {diff}
 ---
-"""
 
-        # Add history hint for subsequent reviews
-        if self.iteration > 1:
-            prompt += """
-**重要審查原則：**
-- 這不是第一次審查，請先參考先前提出的問題
-- **優先檢查：** 先前提出的問題是否已修正
-- **新問題限制：** 只提出 critical 問題（嚴重 bug、安全性問題、功能缺失）
-- **避免：** 不要提出風格、命名、小優化等非必要的建議
-- 如果先前的問題都已解決且沒有 critical 問題，請使用 LGTM 或 APPROVED 狀態碼
-"""
-        else:
-            prompt += """
 **你的審查任務（依優先順序）:**
 
 1. **【最優先】檢查 commit message 風格一致性**
@@ -200,30 +173,57 @@ class ReviewPhase(Phase):
    - 對於 commit message 問題，提供具體的修正指令
    - 不要提供程式碼解決方案（除了 commit message 修改指令）
 
-**重要：** 用繁體中文回應。Commit message 風格問題視為 critical issue，必須修正後才能通過審查。
+**重要：**
+- 用繁體中文回應
+- Commit message 風格問題視為 critical issue，必須修正後才能通過審查
+- 審查完成後請回傳狀態碼，指令執行即結束
 """
 
         return prompt
 
-    def _generate_fix_prompt(self, review_feedback: str) -> str:
-        """Generate fix prompt for developer agent.
+    def _save_review_result(
+        self, review_response: str, status_code: Optional[PhaseStatusCode]
+    ) -> None:
+        """Save review result to file.
 
         Args:
-            review_feedback: Review feedback from review agent
-
-        Returns:
-            Fix prompt string
+            review_response: Review response from agent
+            status_code: Status code from review
         """
-        return f"""Use the {self.dev_agent} subagent to fix review issues.
+        import json
+        from datetime import datetime
 
-Reviewer 提出了以下問題，請修正：
+        # Determine review directory based on workflow mode
+        if self.workflow_mode == WorkflowMode.GITHUB and self.issue_id:
+            review_dir = Path(f".aaf/issues/{self.issue_id}/review")
+        else:
+            # Extract issue name from spec_file path
+            spec_path = Path(self.spec_file)
+            issue_name = spec_path.parent.parent.name
+            review_dir = Path(f".aaf/issues/{issue_name}/review")
 
----
-{review_feedback}
----
+        review_dir.mkdir(parents=True, exist_ok=True)
+        history_dir = review_dir / "history"
+        history_dir.mkdir(exist_ok=True)
 
-請根據 review 意見修正程式碼並 commit。
-"""
+        # Save latest review result
+        result_file = review_dir / "review.md"
+        result_file.write_text(review_response)
+
+        # Save to history with timestamp
+        timestamp = datetime.now().isoformat()
+        iteration_count = len(list(history_dir.glob("iteration_*.json"))) + 1
+        history_file = history_dir / f"iteration_{iteration_count:03d}.json"
+
+        history_data = {
+            "timestamp": timestamp,
+            "iteration": iteration_count,
+            "target_commit": self.target_commit,
+            "review_response": review_response,
+            "status_code": status_code.value if status_code else None,
+        }
+
+        history_file.write_text(json.dumps(history_data, ensure_ascii=False, indent=2))
 
     def _get_requirements_section(self) -> str:
         """Get requirements section for review prompt.
