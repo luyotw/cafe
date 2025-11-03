@@ -547,39 +547,37 @@ class SpecPhase(Phase):
                 print("❌ 無效選擇，請輸入 1, 2, 或 3")
 
     def _prompt_for_user_story(self) -> None:
-        """Prompt user to write initial user story when no requirements file exists."""
+        """Prompt user to write initial requirement when no requirements file exists."""
         print("\n" + "="*70)
-        print("請用使用者故事格式描述你的需求（可以寫多個）：")
+        print("請描述你的需求：")
         print("="*70)
         print()
-        print("格式：身為[角色]，我想要[功能]，以便[目的/價值]")
+        print("💡 建議以使用者故事的方式撰寫：")
+        print("   格式：身為[角色]，我想要[功能]，以便[目的/價值]")
         print()
-        print("範例 1（非技術需求）:")
-        print("  身為產品經理，我想要快速了解專案進度，以便向團隊報告開發狀態")
+        print("   範例：")
+        print("   - 身為產品經理，我想要快速了解專案進度，以便向團隊報告開發狀態")
+        print("   - 身為用戶，我想要看到清楚的錯誤訊息，以便知道哪裡出問題並如何修正")
         print()
-        print("範例 2（非技術需求）:")
-        print("  身為用戶，我想要看到清楚的錯誤訊息，以便知道哪裡出問題並如何修正")
-        print()
-        print("範例 3（技術需求）:")
-        print("  身為開發者，我想要在 CLI 中看到彩色的權限請求提示，以便快速識別哪些操作需要我確認")
-        print()
-        print("="*70)
-        print("請輸入你的使用者故事（可多行，單獨一行輸入 END 表示結束）:")
+        print("也可以用一般方式描述需求：")
+        print("   - 新增一個匯出 CSV 的功能")
+        print("   - 修正登入頁面無法提交的 bug")
+        print("   - 優化首頁載入速度")
         print()
 
-        # Get user's story using Display for better Unicode support
-        user_story = self.display.get_multiline_input("請輸入你的使用者故事").strip()
+        # Get user's requirement using Display for better Unicode support
+        user_requirement = self.display.get_multiline_input("請輸入你的需求").strip()
 
-        if not user_story:
-            raise ValueError("未提供使用者故事，無法繼續")
+        if not user_requirement:
+            raise ValueError("未提供需求，無法繼續")
 
-        # Save user story as initial spec
+        # Save requirement as initial spec
         spec_path = Path(self.spec_file)
         spec_path.parent.mkdir(parents=True, exist_ok=True)
-        spec_path.write_text(f"# 初始需求\n\n{user_story}\n")
+        spec_path.write_text(f"# 初始需求\n\n{user_requirement}\n")
 
         print()
-        print("✅ 使用者故事已記錄，開始需求澄清...")
+        print("✅ 需求已記錄，開始需求澄清...")
         print()
 
     def _backup_spec(self, spec_path: Path) -> None:
