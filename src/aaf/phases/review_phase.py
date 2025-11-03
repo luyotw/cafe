@@ -24,6 +24,7 @@ class ReviewPhase(Phase):
         issue_id: Optional[str] = None,
         review_agent: str = "Richard",
         target_commit: Optional[str] = None,
+        base_branch: str = "main",
     ) -> None:
         """Initialize review phase.
 
@@ -36,6 +37,7 @@ class ReviewPhase(Phase):
             issue_id: GitHub issue ID (required for github mode)
             review_agent: Review agent name (default: Richard)
             target_commit: Specific commit to review (None for full branch)
+            base_branch: Base branch for diff (default: main)
         """
         self.agent_manager = agent_manager
         self.permission_handler = permission_handler
@@ -45,6 +47,7 @@ class ReviewPhase(Phase):
         self.issue_id = issue_id
         self.review_agent = review_agent
         self.target_commit = target_commit
+        self.base_branch = base_branch
 
     def execute(self) -> PhaseResult:
         """Execute code review phase (single iteration).
@@ -59,7 +62,7 @@ class ReviewPhase(Phase):
                     base=f"{self.target_commit}^", head=self.target_commit
                 )
             else:
-                diff = self.git_ops.get_diff(base="main", head="HEAD")
+                diff = self.git_ops.get_diff(base=self.base_branch, head="HEAD")
 
             if not diff:
                 return PhaseResult(

@@ -808,6 +808,12 @@ def review(
         "-c",
         help="Specific commit SHA to review (default: review entire branch)",
     ),
+    base_branch: str = typer.Option(
+        "main",
+        "--base",
+        "-b",
+        help="Base branch for diff (default: main)",
+    ),
     reviewer_agent: str = typer.Option(
         "Richard",
         "--reviewer",
@@ -868,10 +874,11 @@ def review(
         console.print(f"Issue: {issue_name}")
         console.print(f"Reviewer Agent: {reviewer_agent} (by {reviewer_cli})")
         console.print(f"Spec file: {spec_file}")
+        console.print(f"Base branch: {base_branch}")
         if commit:
             console.print(f"Target commit: {commit}")
         else:
-            console.print("Review scope: entire branch")
+            console.print(f"Review scope: {base_branch}..HEAD")
         console.print()
 
         # Create and execute review phase
@@ -884,6 +891,7 @@ def review(
             issue_id=issue_id,
             review_agent=reviewer_agent,
             target_commit=commit,
+            base_branch=base_branch,
         )
 
         console.print("[bold]Starting code review...[/bold]")
