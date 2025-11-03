@@ -175,6 +175,23 @@ class DevelopPhase(Phase):
         with open(status_file, 'w', encoding='utf-8') as f:
             json.dump(progress.to_dict(), f, ensure_ascii=False, indent=2)
 
+    def _load_progress(self) -> Optional[PhaseProgress]:
+        """Load phase progress from status.json.
+
+        Returns:
+            PhaseProgress if exists, None otherwise
+        """
+        status_file = self.history_dir.parent / "status.json"
+        if not status_file.exists():
+            return None
+
+        try:
+            with open(status_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            return PhaseProgress.from_dict(data)
+        except (json.JSONDecodeError, KeyError):
+            return None
+
     def _generate_prompt(self) -> str:
         """Generate prompt for current iteration.
 
@@ -289,6 +306,20 @@ class DevelopPhase(Phase):
                         message=f"Spec file not found: {self.spec_file}",
                     )
 
+            # Check if phase is already completed
+            existing_progress = self._load_progress()
+            if existing_progress and existing_progress.status == PhaseStatus.COMPLETED:
+                # Phase already completed, return existing result
+                return PhaseResult(
+                    status=PhaseStatus.COMPLETED,
+                    message=f"Development already completed in {existing_progress.iteration} iteration(s)",
+                    data={
+                        "branch": self._get_branch_name(),
+                        "iterations": existing_progress.iteration,
+                        "status_code": existing_progress.status_code,
+                    },
+                )
+
             # Create or checkout branch
             branch_name = self._get_branch_name()
             if self.git_ops.branch_exists(branch_name):
@@ -298,6 +329,80 @@ class DevelopPhase(Phase):
 
             # Development loop
             while True:
+                # Check if previous iteration has unhandled NEED_PERMISSION
+                if (self.conversation_history and
+                    self.conversation_history[-1].get("status_code") == "NEED_PERMISSION" and
+                    "user_response" not in self.conversation_history[-1]):
+                    # Handle pending permission request from previous iteration
+                    last_iteration = self.conversation_history[-1]
+
+                    if self.interactive:
+                        print(f"\n{'='*60}")
+                        print(f"Dev ({self.dev_agent}) - Iteration {last_iteration['iteration']}:")
+                        print(f"{'='*60}")
+                        print(last_iteration['response'])
+                        print(f"{'='*60}\n")
+
+                        # Ask user for decision
+                        print("開發者請求工具權限。請選擇：")
+                        print("  [c] confirm - 同意授權，繼續執行")
+                        print("  [r] reject - 拒絕授權，終止開發")
+                        print("  [m] modify - 給予其他提示或建議")
+
+                        while True:
+                            choice = input("\n請選擇 [c/r/m]: ").strip().lower()
+
+                            if choice == 'c':
+                                # User confirms
+                                print("\n✅ 權限已授予，繼續執行...")
+                                print()
+                                user_response = "授權同意"
+                                break
+                            elif choice == 'r':
+                                # User rejects
+                                print("\n❌ 權限被拒絕，Phase 終止。")
+                                return PhaseResult(
+                                    status=PhaseStatus.FAILED,
+                                    message=f"Permission denied by user in iteration {last_iteration['iteration']}",
+                                    data={
+                                        "iterations": last_iteration['iteration'],
+                                        "last_response": last_iteration['response'],
+                                        "status_code": "USER_REJECTED",
+                                    },
+                                )
+                            elif choice == 'm':
+                                # User wants to provide guidance
+                                modification_request = self.display.get_multiline_input("請輸入提示或建議")
+                                if not modification_request.strip():
+                                    print("\n⚠️  沒有輸入內容，請重新選擇。")
+                                    continue
+                                print()
+                                print("✅ 已收到您的建議，正在調整...")
+                                print()
+                                user_response = modification_request
+                                break
+                            else:
+                                print("❌ 無效選擇，請輸入 c, r, 或 m")
+
+                        # Save user response to the previous iteration's history
+                        self.user_responses.append(user_response)
+                        last_iteration['user_response'] = user_response
+
+                        # Update the history file
+                        iteration_file = self.history_dir / f"iteration_{last_iteration['iteration']:03d}.json"
+                        with open(iteration_file, "w", encoding="utf-8") as f:
+                            json.dump(last_iteration, f, ensure_ascii=False, indent=2)
+                    else:
+                        # Non-interactive mode cannot handle pending permission
+                        return PhaseResult(
+                            status=PhaseStatus.FAILED,
+                            message="Permission required but running in non-interactive mode",
+                            data={
+                                "iterations": last_iteration['iteration'],
+                                "last_response": last_iteration['response'],
+                            },
+                        )
+
                 self.iteration += 1
 
                 # Prepare user_input for this iteration
