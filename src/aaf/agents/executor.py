@@ -168,8 +168,8 @@ class AgentExecutor:
                 # Create a new session and retry
                 new_session_id = self._create_new_session()
                 self.config.session_id = new_session_id
-                # Retry with new session
-                return self._execute_claude(prompt)
+                # Retry with new session (preserve allowed_tools)
+                return self._execute_claude(prompt, allowed_tools)
 
             raise AgentExecutionError(
                 f"Claude execution failed with code {result.returncode}: {result.stderr}"
