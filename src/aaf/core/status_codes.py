@@ -8,37 +8,38 @@ class PhaseStatusCode(str, Enum):
     """Status codes that agents can return to control workflow.
 
     These codes are designed to be:
+    - Prefixed with AAF_ to avoid false positives
     - Simple English words
     - Token-efficient
     - Easy for agents to understand and return
     """
 
     # ========== Universal Status Codes ==========
-    COMPLETED = "COMPLETED"           # Phase successfully completed
-    FAILED = "FAILED"                 # Phase failed, stop workflow
-    RETRY = "RETRY"                   # Retry this phase
-    MANUAL_REVIEW = "MANUAL_REVIEW"   # Need human review
-    SKIP = "SKIP"                     # Skip this phase
+    COMPLETED = "AAF_COMPLETED"           # Phase successfully completed
+    FAILED = "AAF_FAILED"                 # Phase failed, stop workflow
+    RETRY = "AAF_RETRY"                   # Retry this phase
+    MANUAL_REVIEW = "AAF_MANUAL_REVIEW"   # Need human review
+    SKIP = "AAF_SKIP"                     # Skip this phase
 
     # ========== Requirements & Analysis Phase ==========
-    CONFIRMED = "CONFIRMED"                   # Requirements/Analysis confirmed
-    NEED_CLARIFICATION = "NEED_CLARIFICATION" # Need more information
-    REJECTED = "REJECTED"                     # Requirements/Analysis rejected
+    CONFIRMED = "AAF_CONFIRMED"                   # Requirements/Analysis confirmed
+    NEED_CLARIFICATION = "AAF_NEED_CLARIFICATION" # Need more information
+    REJECTED = "AAF_REJECTED"                     # Requirements/Analysis rejected
 
     # ========== Review Phase ==========
-    APPROVED = "APPROVED"             # Code review approved
-    LGTM = "LGTM"                     # Looks Good To Me (approved)
-    NEEDS_CHANGES = "NEEDS_CHANGES"   # Code needs changes
-    NEEDS_MAJOR_CHANGES = "NEEDS_MAJOR_CHANGES"  # Major refactoring needed
+    APPROVED = "AAF_APPROVED"             # Code review approved
+    LGTM = "AAF_LGTM"                     # Looks Good To Me (approved)
+    NEEDS_CHANGES = "AAF_NEEDS_CHANGES"   # Code needs changes
+    NEEDS_MAJOR_CHANGES = "AAF_NEEDS_MAJOR_CHANGES"  # Major refactoring needed
 
     # ========== Implementation Phase ==========
-    COMMITTED = "COMMITTED"           # Code committed successfully
-    NO_CHANGES = "NO_CHANGES"         # No code changes needed
+    COMMITTED = "AAF_COMMITTED"           # Code committed successfully
+    NO_CHANGES = "AAF_NO_CHANGES"         # No code changes needed
 
     # ========== Authorization ==========
-    NEED_PERMISSION = "NEED_PERMISSION"       # Need user permission
-    PERMISSION_GRANTED = "PERMISSION_GRANTED" # Permission granted
-    PERMISSION_DENIED = "PERMISSION_DENIED"   # Permission denied
+    NEED_PERMISSION = "AAF_NEED_PERMISSION"       # Need user permission
+    PERMISSION_GRANTED = "AAF_PERMISSION_GRANTED" # Permission granted
+    PERMISSION_DENIED = "AAF_PERMISSION_DENIED"   # Permission denied
 
 
 class StatusCodeParser:
@@ -56,10 +57,10 @@ class StatusCodeParser:
             Extracted status code or None if not found
 
         Examples:
-            >>> extract("CONFIRMED\\nThe requirements are clear.")
+            >>> extract("AAF_CONFIRMED\\nThe requirements are clear.")
             PhaseStatusCode.CONFIRMED
 
-            >>> extract("I think this is good. LGTM!")
+            >>> extract("I think this is good. AAF_LGTM!")
             PhaseStatusCode.LGTM
         """
         if not response:
@@ -186,7 +187,7 @@ def generate_status_code_prompt(valid_codes: List[PhaseStatusCode], descriptions
         >>> print(generate_status_code_prompt(codes, desc))
     """
     lines = [
-        "請在回應的第一行明確標示狀態碼：",
+        "請在回應的第一行明確標示狀態碼（必須包含 AAF_ 前綴）：",
         ""
     ]
 

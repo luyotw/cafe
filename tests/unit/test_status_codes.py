@@ -14,7 +14,7 @@ class TestStatusCodeParser:
 
     def test_extract_from_first_line(self) -> None:
         """測試從第一行提取狀態碼"""
-        response = "CONFIRMED\n需求已經很清楚了。"
+        response = "AAF_CONFIRMED\n需求已經很清楚了。"
 
         code = StatusCodeParser.extract(response)
 
@@ -22,7 +22,7 @@ class TestStatusCodeParser:
 
     def test_extract_case_insensitive(self) -> None:
         """測試大小寫不敏感"""
-        response = "confirmed\n需求已經很清楚了。"
+        response = "aaf_confirmed\n需求已經很清楚了。"
 
         code = StatusCodeParser.extract(response)
 
@@ -30,7 +30,7 @@ class TestStatusCodeParser:
 
     def test_extract_from_middle_of_text(self) -> None:
         """測試從文本中間提取狀態碼"""
-        response = "我仔細審查過程式碼，看起來很好。LGTM！"
+        response = "我仔細審查過程式碼，看起來很好。AAF_LGTM！"
 
         code = StatusCodeParser.extract(response)
 
@@ -38,7 +38,7 @@ class TestStatusCodeParser:
 
     def test_extract_with_valid_codes_filter(self) -> None:
         """測試使用 valid_codes 過濾"""
-        response = "CONFIRMED"
+        response = "AAF_CONFIRMED"
         valid_codes = [
             PhaseStatusCode.NEED_CLARIFICATION,
             PhaseStatusCode.CONFIRMED,
@@ -50,7 +50,7 @@ class TestStatusCodeParser:
 
     def test_extract_with_valid_codes_filter_rejects_invalid(self) -> None:
         """測試 valid_codes 會拒絕不在清單中的狀態碼"""
-        response = "LGTM"
+        response = "AAF_LGTM"
         valid_codes = [
             PhaseStatusCode.CONFIRMED,
             PhaseStatusCode.NEED_CLARIFICATION,
@@ -78,7 +78,7 @@ class TestStatusCodeParser:
     def test_extract_prioritizes_longer_codes(self) -> None:
         """測試優先匹配較長的狀態碼"""
         # NEEDS_MAJOR_CHANGES 包含 NEEDS_CHANGES，應該匹配較長的
-        response = "NEEDS_MAJOR_CHANGES"
+        response = "AAF_NEEDS_MAJOR_CHANGES"
 
         code = StatusCodeParser.extract(response)
 
@@ -86,7 +86,7 @@ class TestStatusCodeParser:
 
     def test_extract_multiple_codes_returns_first_valid(self) -> None:
         """測試多個狀態碼時回傳第一個有效的"""
-        response = "CONFIRMED\n但是可能需要 RETRY"
+        response = "AAF_CONFIRMED\n但是可能需要 AAF_RETRY"
 
         code = StatusCodeParser.extract(response)
 
@@ -95,11 +95,21 @@ class TestStatusCodeParser:
 
     def test_extract_with_whitespace(self) -> None:
         """測試處理空白字元"""
-        response = "  CONFIRMED  \n需求清楚。"
+        response = "  AAF_CONFIRMED  \n需求清楚。"
 
         code = StatusCodeParser.extract(response)
 
         assert code == PhaseStatusCode.CONFIRMED
+
+    def test_extract_avoids_false_positive_in_content(self) -> None:
+        """測試避免內容中的單字誤判為狀態碼"""
+        # 如果沒有 AAF_ 前綴，"CONFIRMED" 這個單字會被誤判
+        response = "The user has CONFIRMED that the feature is working correctly."
+
+        code = StatusCodeParser.extract(response)
+
+        # 應該找不到狀態碼（因為需要 AAF_CONFIRMED 格式）
+        assert code is None
 
 
 class TestStatusCodeClassification:
@@ -163,8 +173,8 @@ class TestGenerateStatusCodePrompt:
 
         prompt = generate_status_code_prompt(codes, descriptions)
 
-        assert "CONFIRMED" in prompt
-        assert "NEED_CLARIFICATION" in prompt
+        assert "AAF_CONFIRMED" in prompt
+        assert "AAF_NEED_CLARIFICATION" in prompt
         assert "需求已確認" in prompt
         assert "需要更多資訊" in prompt
         assert "範例回應格式" in prompt
@@ -216,20 +226,26 @@ class TestPhaseStatusCodeEnum:
         """測試所有狀態碼都是大寫"""
         for code in PhaseStatusCode:
             assert code.value == code.value.upper()
-            assert code.value.isalpha() or '_' in code.value
+            # Check format: AAF_CODE_NAME
+            assert code.value.startswith("AAF_")
+            # Name part should only contain letters and underscores
+            assert all(c.isalpha() or c == '_' for c in code.value)
 
     def test_code_values_are_simple_english(self) -> None:
         """測試狀態碼都是簡單的英文"""
         for code in PhaseStatusCode:
-            # 只包含字母和底線
-            assert all(c.isalpha() or c == '_' for c in code.value)
+            # 格式為 AAF_CODE_NAME
+            assert code.value.startswith("AAF_")
+            # 去掉前綴後只包含字母和底線
+            name_part = code.value[4:]  # Remove "AAF_"
+            assert all(c.isalpha() or c == '_' for c in name_part)
             # 不會太長（節省 token）
-            assert len(code.value) <= 25
+            assert len(code.value) <= 29  # AAF_ (4) + 25
 
     def test_enum_can_be_converted_to_string(self) -> None:
         """測試 enum 可以轉成字串"""
         code = PhaseStatusCode.CONFIRMED
 
         # str(enum) returns the full name, use .value for just the value
-        assert code.value == "CONFIRMED"
+        assert code.value == "AAF_CONFIRMED"
         assert isinstance(code, str)  # PhaseStatusCode inherits from str
