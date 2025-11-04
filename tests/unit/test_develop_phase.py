@@ -554,3 +554,148 @@ class TestBranchManagement:
 
         branch_name = phase._get_branch_name()
         assert branch_name == "issue-123"
+
+
+class TestReviewFeedbackDetection:
+    """Test review feedback detection methods."""
+
+    def test_get_review_file_path(self) -> None:
+        """測試路徑生成正確性"""
+        agent_manager = MagicMock(spec=AgentManager)
+        permission_handler = MagicMock(spec=PermissionHandler)
+        git_ops = MagicMock(spec=GitOperations)
+
+        phase = DevelopPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            git_ops=git_ops,
+            spec_file=".aaf/issues/test-issue/spec/spec.md",
+            plan_file=".aaf/issues/test-issue/plan/plan.md",
+            workflow_mode=WorkflowMode.LOCAL,
+        )
+
+        review_path = phase._get_review_file_path()
+        assert review_path == Path(".aaf/issues/test-issue/review/review.md")
+
+    def test_check_review_feedback_exists_true(self, tmp_path: Path) -> None:
+        """測試檔案存在的情況"""
+        # Create review.md file
+        review_file = tmp_path / ".aaf" / "issues" / "test" / "review" / "review.md"
+        review_file.parent.mkdir(parents=True)
+        review_file.write_text("# Review Feedback\n\nPlease fix the bug.")
+
+        agent_manager = MagicMock(spec=AgentManager)
+        permission_handler = MagicMock(spec=PermissionHandler)
+        git_ops = MagicMock(spec=GitOperations)
+
+        phase = DevelopPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            git_ops=git_ops,
+            spec_file=str(tmp_path / ".aaf" / "issues" / "test" / "spec" / "spec.md"),
+            plan_file=str(tmp_path / ".aaf" / "issues" / "test" / "plan" / "plan.md"),
+            workflow_mode=WorkflowMode.LOCAL,
+        )
+
+        assert phase._check_review_feedback_exists() is True
+
+    def test_check_review_feedback_exists_false(self, tmp_path: Path) -> None:
+        """測試檔案不存在的情況"""
+        agent_manager = MagicMock(spec=AgentManager)
+        permission_handler = MagicMock(spec=PermissionHandler)
+        git_ops = MagicMock(spec=GitOperations)
+
+        phase = DevelopPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            git_ops=git_ops,
+            spec_file=str(tmp_path / ".aaf" / "issues" / "test" / "spec" / "spec.md"),
+            plan_file=str(tmp_path / ".aaf" / "issues" / "test" / "plan" / "plan.md"),
+            workflow_mode=WorkflowMode.LOCAL,
+        )
+
+        assert phase._check_review_feedback_exists() is False
+
+
+class TestPromptGenerationWithReviewFeedback:
+    """Test prompt generation with review feedback."""
+
+    def test_generate_prompt_with_review_feedback(self, tmp_path: Path) -> None:
+        """測試有 review feedback 時的 prompt"""
+        # Create review.md file
+        review_file = tmp_path / ".aaf" / "issues" / "test" / "review" / "review.md"
+        review_file.parent.mkdir(parents=True)
+        review_file.write_text("# Review Feedback\n\nNeed to fix commit messages.")
+
+        agent_manager = MagicMock(spec=AgentManager)
+        permission_handler = MagicMock(spec=PermissionHandler)
+        git_ops = MagicMock(spec=GitOperations)
+
+        phase = DevelopPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            git_ops=git_ops,
+            spec_file=str(tmp_path / ".aaf" / "issues" / "test" / "spec" / "spec.md"),
+            plan_file=str(tmp_path / ".aaf" / "issues" / "test" / "plan" / "plan.md"),
+            workflow_mode=WorkflowMode.LOCAL,
+        )
+
+        phase.iteration = 1
+        prompt = phase._generate_prompt()
+
+        # Verify prompt contains review feedback instructions
+        assert "Review Feedback" in prompt
+        assert "review/review.md" in prompt
+        assert "Code Review" in prompt
+        assert "修正" in prompt
+
+    def test_generate_prompt_without_review_feedback(self, tmp_path: Path) -> None:
+        """測試無 review feedback 時的 prompt"""
+        agent_manager = MagicMock(spec=AgentManager)
+        permission_handler = MagicMock(spec=PermissionHandler)
+        git_ops = MagicMock(spec=GitOperations)
+
+        phase = DevelopPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            git_ops=git_ops,
+            spec_file=str(tmp_path / ".aaf" / "issues" / "test" / "spec" / "spec.md"),
+            plan_file=str(tmp_path / ".aaf" / "issues" / "test" / "plan" / "plan.md"),
+            workflow_mode=WorkflowMode.LOCAL,
+        )
+
+        phase.iteration = 1
+        prompt = phase._generate_prompt()
+
+        # Verify prompt is the original development prompt
+        assert "請按照實作計畫執行開發工作" in prompt
+        assert "需求規格" in prompt
+        assert "實作計畫" in prompt
+        assert "Review Feedback" not in prompt
+
+    def test_prompt_contains_correct_review_file_path(self, tmp_path: Path) -> None:
+        """驗證 prompt 中包含正確的 review.md 路徑"""
+        # Create review.md file
+        review_file = tmp_path / ".aaf" / "issues" / "myissue" / "review" / "review.md"
+        review_file.parent.mkdir(parents=True)
+        review_file.write_text("# Review Feedback")
+
+        agent_manager = MagicMock(spec=AgentManager)
+        permission_handler = MagicMock(spec=PermissionHandler)
+        git_ops = MagicMock(spec=GitOperations)
+
+        phase = DevelopPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            git_ops=git_ops,
+            spec_file=str(tmp_path / ".aaf" / "issues" / "myissue" / "spec" / "spec.md"),
+            plan_file=str(tmp_path / ".aaf" / "issues" / "myissue" / "plan" / "plan.md"),
+            workflow_mode=WorkflowMode.LOCAL,
+        )
+
+        phase.iteration = 1
+        prompt = phase._generate_prompt()
+
+        expected_path = str(tmp_path / ".aaf" / "issues" / "myissue" / "review" / "review.md")
+        assert expected_path in prompt
+
