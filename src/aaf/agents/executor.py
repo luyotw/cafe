@@ -180,6 +180,12 @@ class AgentExecutor:
         # Parse JSON response
         try:
             response_data = json.loads(result.stdout)
+            
+            # Check for errors in response (like limit reached)
+            if response_data.get("is_error"):
+                error_msg = response_data.get("result", "Unknown error")
+                print(f"\n⚠️  Claude API Error: {error_msg}\n")
+            
             response = response_data.get("result", result.stdout)
 
             # Extract and save session_id if present
@@ -221,18 +227,26 @@ class AgentExecutor:
             check=False,
         )
 
-        if result.returncode != 0:
-            raise AgentExecutionError(
-                f"Failed to create new session: {result.stderr}"
-            )
-
         try:
             response_data = json.loads(result.stdout)
+            
+            # Check for errors (like limit reached)
+            if response_data.get("is_error"):
+                error_msg = response_data.get("result", "Unknown error")
+                print(f"\n⚠️  Claude API Error: {error_msg}\n")
+                raise AgentExecutionError(f"Claude API error: {error_msg}")
+            
             session_id = response_data.get("session_id")
             if not session_id:
                 raise AgentExecutionError("No session_id in response")
             return session_id
         except json.JSONDecodeError as e:
+            # If can't parse JSON, check returncode
+            if result.returncode != 0:
+                print(f"\n⚠️  Failed to create Claude session")
+                if result.stderr:
+                    print(f"Error: {result.stderr}\n")
+                raise AgentExecutionError(f"Failed to create new session: {result.stderr}")
             raise AgentExecutionError(
                 f"Failed to parse session creation response: {e}"
             ) from e
