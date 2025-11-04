@@ -157,7 +157,7 @@ class TestIterativeFlow:
         plan_file.write_text("## Plan\n- [ ] Task 1")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = "Development completed. CONFIRMED"
+        agent_manager.execute.return_value = ("Development completed. AAF_CONFIRMED", TokenUsage())
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -192,7 +192,7 @@ class TestIterativeFlow:
         plan_file.write_text("## Plan")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = "CONFIRMED"
+        agent_manager.execute.return_value = ("AAF_CONFIRMED", TokenUsage())
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -224,7 +224,7 @@ class TestIterativeFlow:
         with open(iteration_file) as f:
             history_data = json.load(f)
             assert history_data["iteration"] == 1
-            assert history_data["status_code"] == "CONFIRMED"
+            assert history_data["status_code"] == "AAF_CONFIRMED"
 
 
 class TestHistoryAndProgress:
@@ -261,7 +261,7 @@ class TestHistoryAndProgress:
             assert data["iteration"] == 1
             assert data["user_input"] == "test input"
             assert data["response"] == "test response"
-            assert data["status_code"] == "CONFIRMED"
+            assert data["status_code"] == "AAF_CONFIRMED"
 
     def test_save_progress_creates_status_json(self, tmp_path: Path) -> None:
         """測試 _save_progress 建立 status.json"""
@@ -289,7 +289,7 @@ class TestHistoryAndProgress:
             data = json.load(f)
             assert data["phase"] == "develop"
             assert data["status"] == "completed"
-            assert data["status_code"] == "CONFIRMED"
+            assert data["status_code"] == "AAF_CONFIRMED"
             assert data["iteration"] == 1
 
     def test_load_history_restores_iterations(self, tmp_path: Path) -> None:
@@ -310,7 +310,7 @@ class TestHistoryAndProgress:
                     "timestamp": datetime.now().isoformat(),
                     "user_input": f"input {i}",
                     "response": f"response {i}",
-                    "status_code": "NEED_PERMISSION",
+                    "status_code": "AAF_NEED_PERMISSION",
                 }, f)
 
         phase = DevelopPhase(
@@ -343,7 +343,7 @@ class TestStatusCodeHandling:
         plan_file.write_text("## Plan")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = "All done. CONFIRMED"
+        agent_manager.execute.return_value = ("All done. AAF_CONFIRMED", TokenUsage())
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -364,7 +364,7 @@ class TestStatusCodeHandling:
         result = phase.execute()
 
         assert result.status == PhaseStatus.COMPLETED
-        assert result.data["status_code"] == "CONFIRMED"
+        assert result.data["status_code"] == "AAF_CONFIRMED"
 
     def test_handle_need_permission_in_interactive_mode(self, tmp_path: Path) -> None:
         """測試在互動模式下處理 NEED_PERMISSION 狀態碼（單輪執行）"""
@@ -378,7 +378,7 @@ class TestStatusCodeHandling:
 
         agent_manager = MagicMock(spec=AgentManager)
         # Agent returns NEED_PERMISSION
-        agent_manager.execute.return_value = "Need permission. NEED_PERMISSION"
+        agent_manager.execute.return_value = ("Need permission. AAF_NEED_PERMISSION", TokenUsage())
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -409,7 +409,7 @@ class TestStatusCodeHandling:
         assert history_file.exists()
         with open(history_file) as f:
             history_data = json.load(f)
-            assert history_data["status_code"] == "NEED_PERMISSION"
+            assert history_data["status_code"] == "AAF_NEED_PERMISSION"
             assert "user_response" not in history_data  # User hasn't responded yet
 
     def test_permission_denied_fails_phase(self, tmp_path: Path) -> None:
@@ -431,12 +431,16 @@ class TestStatusCodeHandling:
             "timestamp": "2025-11-03T10:00:00",
             "user_input": "",
             "response": "Need permission to write file",
-            "status_code": "NEED_PERMISSION",
+            "status_code": "AAF_NEED_PERMISSION",
         }
         with open(history_dir / "iteration_001.json", "w") as f:
             json.dump(pending_permission, f)
 
         agent_manager = MagicMock(spec=AgentManager)
+        # Won't be called but set it anyway
+        agent_manager.execute.return_value = ("", TokenUsage())
+        agent_manager.get_total_token_usage.return_value = TokenUsage()
+
         permission_handler = MagicMock(spec=PermissionHandler)
 
         git_ops = MagicMock(spec=GitOperations)
@@ -485,7 +489,7 @@ class TestPromptGeneration:
         assert ".aaf/issues/test/spec/spec.md" in prompt
         assert ".aaf/issues/test/plan/plan.md" in prompt
         assert "CONFIRMED" in prompt
-        assert "NEED_PERMISSION" in prompt
+        assert "AAF_NEED_PERMISSION" in prompt
 
     def test_subsequent_iteration_prompt_refers_to_history(self, tmp_path: Path) -> None:
         """測試第 2+ 輪 prompt 參考歷史記錄"""
@@ -504,8 +508,8 @@ class TestPromptGeneration:
 
         # Add history
         phase.conversation_history = [
-            {"iteration": 1, "status_code": "NEED_PERMISSION"},
-            {"iteration": 2, "status_code": "NEED_PERMISSION"},
+            {"iteration": 1, "status_code": "AAF_NEED_PERMISSION"},
+            {"iteration": 2, "status_code": "AAF_NEED_PERMISSION"},
         ]
 
         phase.iteration = 3
@@ -699,3 +703,140 @@ class TestPromptGenerationWithReviewFeedback:
         expected_path = str(tmp_path / ".aaf" / "issues" / "myissue" / "review" / "review.md")
         assert expected_path in prompt
 
+
+class TestDevelopPhaseReviewFeedback:
+    """測試 develop phase 處理 review feedback 的情況"""
+
+    def test_execute_continues_when_completed_but_review_feedback_exists(self, tmp_path) -> None:
+        """測試當 develop 已完成但有 review feedback 時，應該繼續執行而非直接返回"""
+        # Setup
+        agent_manager = MagicMock(spec=AgentManager)
+        permission_handler = MagicMock(spec=PermissionHandler)
+        git_ops = MagicMock(spec=GitOperations)
+
+        # Create test files
+        issue_dir = tmp_path / ".aaf" / "issues" / "test-issue"
+        spec_dir = issue_dir / "spec"
+        plan_dir = issue_dir / "plan"
+        review_dir = issue_dir / "review"
+        develop_dir = issue_dir / "develop"
+
+        spec_dir.mkdir(parents=True)
+        plan_dir.mkdir(parents=True)
+        review_dir.mkdir(parents=True)
+        develop_dir.mkdir(parents=True)
+
+        spec_file = spec_dir / "spec.md"
+        plan_file = plan_dir / "plan.md"
+        review_file = review_dir / "review.md"
+        status_file = develop_dir / "status.json"
+
+        spec_file.write_text("Test spec")
+        plan_file.write_text("Test plan")
+        review_file.write_text("AAF_NEEDS_CHANGES\n\nPlease fix the bug in function X.")
+
+        # Create iteration history file
+        history_dir = develop_dir / "history"
+        history_dir.mkdir(parents=True)
+        history_file = history_dir / "iteration_001.json"
+        history_data = {
+            "iteration": 1,
+            "user_input": "",
+            "prompt": "Test prompt",
+            "response": "AAF_CONFIRMED\n開發完成",
+            "status_code": "AAF_CONFIRMED",
+            "timestamp": datetime.now().isoformat()
+        }
+        history_file.write_text(json.dumps(history_data, indent=2))
+
+        # Create status.json indicating COMPLETED
+        status_data = {
+            "phase": "develop",
+            "status": "completed",
+            "status_code": "AAF_CONFIRMED",
+            "iteration": 1,
+            "timestamp": datetime.now().isoformat()
+        }
+        status_file.write_text(json.dumps(status_data, indent=2))
+
+        # Mock agent response
+        agent_manager.execute.return_value = ("AAF_CONFIRMED\n修正完成", TokenUsage())
+        agent_manager.get_total_token_usage.return_value = TokenUsage()
+
+        # Mock git operations
+        git_ops.branch_exists.return_value = True
+
+        phase = DevelopPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            git_ops=git_ops,
+            spec_file=str(spec_file),
+            plan_file=str(plan_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            interactive=False,
+        )
+
+        # Execute
+        result = phase.execute()
+
+        # Should NOT return early with "already completed"
+        # Should execute agent to handle review feedback
+        assert agent_manager.execute.called
+        assert result.status == PhaseStatus.COMPLETED, f"Expected COMPLETED but got {result.status}: {result.message}"
+        # Should have incremented iteration
+        assert phase.iteration == 2
+
+    def test_execute_returns_early_when_completed_and_no_review_feedback(self, tmp_path) -> None:
+        """測試當 develop 已完成且沒有 review feedback 時，應該直接返回"""
+        # Setup
+        agent_manager = MagicMock(spec=AgentManager)
+        permission_handler = MagicMock(spec=PermissionHandler)
+        git_ops = MagicMock(spec=GitOperations)
+
+        # Create test files (without review.md)
+        issue_dir = tmp_path / ".aaf" / "issues" / "test-issue"
+        spec_dir = issue_dir / "spec"
+        plan_dir = issue_dir / "plan"
+        develop_dir = issue_dir / "develop"
+
+        spec_dir.mkdir(parents=True)
+        plan_dir.mkdir(parents=True)
+        develop_dir.mkdir(parents=True)
+
+        spec_file = spec_dir / "spec.md"
+        plan_file = plan_dir / "plan.md"
+        status_file = develop_dir / "status.json"
+
+        spec_file.write_text("Test spec")
+        plan_file.write_text("Test plan")
+
+        # Create status.json indicating COMPLETED
+        status_data = {
+            "phase": "develop",
+            "status": "completed",
+            "status_code": "AAF_CONFIRMED",
+            "iteration": 1,
+            "timestamp": datetime.now().isoformat()
+        }
+        status_file.write_text(json.dumps(status_data, indent=2))
+
+        # Mock git operations
+        git_ops.branch_exists.return_value = True
+
+        phase = DevelopPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            git_ops=git_ops,
+            spec_file=str(spec_file),
+            plan_file=str(plan_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            interactive=False,
+        )
+
+        # Execute
+        result = phase.execute()
+
+        # Should return early without calling agent
+        assert not agent_manager.execute.called
+        assert result.status == PhaseStatus.COMPLETED
+        assert "already completed" in result.message.lower()

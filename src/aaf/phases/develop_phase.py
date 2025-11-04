@@ -365,16 +365,23 @@ class DevelopPhase(Phase):
             # Check if phase is already completed
             existing_progress = self._load_progress()
             if existing_progress and existing_progress.status == PhaseStatus.COMPLETED:
-                # Phase already completed, return existing result
-                return PhaseResult(
-                    status=PhaseStatus.COMPLETED,
-                    message=f"Development already completed in {existing_progress.iteration} iteration(s)",
-                    data={
-                        "branch": self._get_branch_name(),
-                        "iterations": existing_progress.iteration,
-                        "status_code": existing_progress.status_code,
-                    },
-                )
+                # Check if there's review feedback that requires handling
+                review_file = self._get_review_file_path()
+                if review_file.exists():
+                    # Review feedback exists, continue to handle it
+                    # (Don't return early)
+                    pass
+                else:
+                    # No review feedback, phase is truly completed
+                    return PhaseResult(
+                        status=PhaseStatus.COMPLETED,
+                        message=f"Development already completed in {existing_progress.iteration} iteration(s)",
+                        data={
+                            "branch": self._get_branch_name(),
+                            "iterations": existing_progress.iteration,
+                            "status_code": existing_progress.status_code,
+                        },
+                    )
 
             # Create or checkout branch
             branch_name = self._get_branch_name()
@@ -393,7 +400,7 @@ class DevelopPhase(Phase):
             
             # Check if there's a pending NEED_PERMISSION from previous run
             if (self.conversation_history and
-                self.conversation_history[-1].get("status_code") == "NEED_PERMISSION" and
+                self.conversation_history[-1].get("status_code") == "AAF_NEED_PERMISSION" and
                 "user_response" not in self.conversation_history[-1]):
                 # Handle pending permission request
                 last_iteration = self.conversation_history[-1]
@@ -459,7 +466,7 @@ class DevelopPhase(Phase):
             prompt = self._generate_prompt()
 
             # Execute developer agent with allowed tools
-            response = self.agent_manager.execute(
+            response, token_usage = self.agent_manager.execute(
                 self.dev_agent,
                 prompt,
                 allowed_tools=["write", "read", "shell"]
