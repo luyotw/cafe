@@ -75,6 +75,29 @@ class TestStatusCodeParser:
 
         assert code is None
 
+    def test_extract_with_prefix_on_first_line(self) -> None:
+        """測試第一行有前綴符號時仍能正確提取"""
+        response = "● AAF_NEEDS_CHANGES\n\n修正建議"
+
+        code = StatusCodeParser.extract(response)
+
+        assert code == PhaseStatusCode.NEEDS_CHANGES
+
+    def test_extract_first_line_code_takes_priority_over_later_mentions(self) -> None:
+        """測試第一行的狀態碼優先於後續出現的狀態碼"""
+        response = """● AAF_NEEDS_CHANGES
+
+## Code Review Feedback
+
+文中提到 AAF_CONFIRMED 作為範例。
+"""
+        valid_codes = [PhaseStatusCode.CONFIRMED, PhaseStatusCode.NEEDS_CHANGES]
+
+        code = StatusCodeParser.extract(response, valid_codes)
+
+        # 應該回傳第一行的 NEEDS_CHANGES，而不是後面的 CONFIRMED
+        assert code == PhaseStatusCode.NEEDS_CHANGES
+
     def test_extract_prioritizes_longer_codes(self) -> None:
         """測試優先匹配較長的狀態碼"""
         # NEEDS_MAJOR_CHANGES 包含 NEEDS_CHANGES，應該匹配較長的

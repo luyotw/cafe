@@ -211,6 +211,24 @@ class DevelopPhase(Phase):
         except (json.JSONDecodeError, KeyError):
             return None
 
+    def _save_issue_config(self, base_branch: str, feature_branch: str) -> None:
+        """Save issue configuration including base branch.
+
+        Args:
+            base_branch: Base branch name (e.g., 'main')
+            feature_branch: Feature branch name (e.g., 'my-feature')
+        """
+        config_file = self.history_dir.parent.parent / "config.json"
+        config_file.parent.mkdir(parents=True, exist_ok=True)
+
+        config_data = {
+            "base_branch": base_branch,
+            "feature_branch": feature_branch,
+        }
+
+        with open(config_file, 'w', encoding='utf-8') as f:
+            json.dump(config_data, f, ensure_ascii=False, indent=2)
+
     def _generate_prompt(self) -> str:
         """Generate prompt for current iteration.
 
@@ -388,7 +406,11 @@ class DevelopPhase(Phase):
             if self.git_ops.branch_exists(branch_name):
                 self.git_ops.checkout_branch(branch_name)
             else:
+                # Get current branch before creating new one (this is the base branch)
+                base_branch = self.git_ops.get_current_branch()
                 self.git_ops.create_branch(branch_name)
+                # Save issue config with base branch info
+                self._save_issue_config(base_branch, branch_name)
 
             # Single iteration execution
             # Increment iteration counter

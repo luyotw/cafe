@@ -164,6 +164,7 @@ class TestIterativeFlow:
 
         git_ops = MagicMock(spec=GitOperations)
         git_ops.branch_exists.return_value = False
+        git_ops.get_current_branch.return_value = "main"
 
         phase = DevelopPhase(
             agent_manager=agent_manager,
@@ -199,6 +200,7 @@ class TestIterativeFlow:
 
         git_ops = MagicMock(spec=GitOperations)
         git_ops.branch_exists.return_value = False
+        git_ops.get_current_branch.return_value = "main"
 
         phase = DevelopPhase(
             agent_manager=agent_manager,
@@ -350,6 +352,7 @@ class TestStatusCodeHandling:
 
         git_ops = MagicMock(spec=GitOperations)
         git_ops.branch_exists.return_value = False
+        git_ops.get_current_branch.return_value = "main"
 
         phase = DevelopPhase(
             agent_manager=agent_manager,
@@ -385,6 +388,7 @@ class TestStatusCodeHandling:
 
         git_ops = MagicMock(spec=GitOperations)
         git_ops.branch_exists.return_value = False
+        git_ops.get_current_branch.return_value = "main"
 
         phase = DevelopPhase(
             agent_manager=agent_manager,
@@ -558,6 +562,53 @@ class TestBranchManagement:
 
         branch_name = phase._get_branch_name()
         assert branch_name == "issue-123"
+
+    def test_saves_base_branch_on_execution(self, tmp_path: Path) -> None:
+        """測試執行時儲存 base branch 資訊"""
+        # Setup files
+        spec_file = tmp_path / ".aaf" / "issues" / "test-issue" / "spec" / "spec.md"
+        plan_file = tmp_path / ".aaf" / "issues" / "test-issue" / "plan" / "plan.md"
+        spec_file.parent.mkdir(parents=True)
+        plan_file.parent.mkdir(parents=True)
+        spec_file.write_text("Test spec")
+        plan_file.write_text("Test plan")
+
+        agent_manager = MagicMock(spec=AgentManager)
+        agent_manager.execute.return_value = ("AAF_CONFIRMED\n開發完成", TokenUsage())
+        agent_manager.get_total_token_usage.return_value = TokenUsage()
+
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        git_ops = MagicMock(spec=GitOperations)
+        git_ops.get_current_branch.return_value = "main"
+        git_ops.branch_exists.return_value = False
+        git_ops.get_current_branch.return_value = "main"
+
+        import os
+        original_cwd = os.getcwd()
+        try:
+            os.chdir(tmp_path)
+
+            phase = DevelopPhase(
+                agent_manager=agent_manager,
+                permission_handler=permission_handler,
+                git_ops=git_ops,
+                spec_file=str(spec_file),
+                plan_file=str(plan_file),
+                workflow_mode=WorkflowMode.LOCAL,
+            )
+
+            result = phase.execute()
+
+            # Should save issue config with base branch
+            config_file = tmp_path / ".aaf" / "issues" / "test-issue" / "config.json"
+            assert config_file.exists()
+
+            config_data = json.loads(config_file.read_text())
+            assert config_data["base_branch"] == "main"
+            assert config_data["feature_branch"] == "test-issue"
+        finally:
+            os.chdir(original_cwd)
 
 
 class TestReviewFeedbackDetection:

@@ -77,6 +77,13 @@ class StatusCodeParser:
         except ValueError:
             pass
 
+        # Try to find status code in first line (with potential prefix/suffix)
+        # Check longer codes first to avoid partial matches
+        for code in sorted(PhaseStatusCode, key=lambda x: len(x.value), reverse=True):
+            if code.value in first_line:
+                if valid_codes is None or code in valid_codes:
+                    return code
+
         # Search in entire response (fallback)
         response_upper = response.upper()
 

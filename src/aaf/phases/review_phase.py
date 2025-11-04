@@ -49,8 +49,11 @@ class ReviewPhase(Phase):
         self.issue_id = issue_id
         self.review_agent = review_agent
         self.target_commit = target_commit
-        self.base_branch = base_branch
         self.iteration = 1  # Track iteration number for subsequent reviews
+
+        # Try to read base branch from issue config
+        config_base_branch = self._read_base_branch_from_config()
+        self.base_branch = config_base_branch if config_base_branch else base_branch
 
     def execute(self) -> PhaseResult:
         """Execute code review phase (single iteration).
@@ -267,6 +270,31 @@ class ReviewPhase(Phase):
 
         with open(status_file, 'w', encoding='utf-8') as f:
             json.dump(progress.to_dict(), f, ensure_ascii=False, indent=2)
+
+    def _read_base_branch_from_config(self) -> Optional[str]:
+        """Read base branch from issue config file.
+
+        Returns:
+            Base branch name if found, None otherwise
+        """
+        # Determine config file path based on workflow mode
+        if self.workflow_mode == WorkflowMode.GITHUB and self.issue_id:
+            config_file = Path(f".aaf/issues/{self.issue_id}/config.json")
+        else:
+            # Extract issue name from spec_file path
+            spec_path = Path(self.spec_file)
+            issue_name = spec_path.parent.parent.name
+            config_file = Path(f".aaf/issues/{issue_name}/config.json")
+
+        if not config_file.exists():
+            return None
+
+        try:
+            with open(config_file, 'r', encoding='utf-8') as f:
+                config_data = json.load(f)
+            return config_data.get("base_branch")
+        except (json.JSONDecodeError, KeyError, IOError):
+            return None
 
     def _get_requirements_section(self) -> str:
         """Get requirements section for review prompt.

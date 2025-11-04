@@ -868,20 +868,7 @@ def review(
         reviewer_executor = agent_manager.get_agent(reviewer_agent)
         reviewer_cli = reviewer_executor.config.cli.value
 
-        # Display start message
-        console.print("[bold blue]🔍 Review Phase: Code Review[/bold blue]")
-        console.print(f"Mode: {workflow_mode.value}")
-        console.print(f"Issue: {issue_name}")
-        console.print(f"Reviewer Agent: {reviewer_agent} (by {reviewer_cli})")
-        console.print(f"Spec file: {spec_file}")
-        console.print(f"Base branch: {base_branch}")
-        if commit:
-            console.print(f"Target commit: {commit}")
-        else:
-            console.print(f"Review scope: {base_branch}..HEAD")
-        console.print()
-
-        # Create and execute review phase
+        # Create review phase (this will read base_branch from config if available)
         phase = ReviewPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
@@ -894,6 +881,19 @@ def review(
             base_branch=base_branch,
         )
 
+        # Display start message (use actual base_branch from phase)
+        console.print("[bold blue]🔍 Review Phase: Code Review[/bold blue]")
+        console.print(f"Mode: {workflow_mode.value}")
+        console.print(f"Issue: {issue_name}")
+        console.print(f"Reviewer Agent: {reviewer_agent} (by {reviewer_cli})")
+        console.print(f"Spec file: {spec_file}")
+        console.print(f"Base branch: {phase.base_branch}")
+        if commit:
+            console.print(f"Target commit: {commit}")
+        else:
+            console.print(f"Review scope: {phase.base_branch}..HEAD")
+        console.print()
+
         console.print("[bold]Starting code review...[/bold]")
         console.print("[dim]The reviewer will analyze code changes and provide feedback.[/dim]")
         console.print()
@@ -904,7 +904,7 @@ def review(
         if result.status.value == "completed":
             status_code = result.data.get("status_code")
             console.print()
-            if status_code == "CONFIRMED":
+            if status_code == "AAF_CONFIRMED":
                 console.print("[bold green]✅ Code review passed![/bold green]")
                 console.print()
                 console.print("[dim]Next steps:[/dim]")

@@ -1,5 +1,6 @@
 """Tests for ReviewPhase."""
 
+import json
 import pytest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -431,6 +432,57 @@ class TestReviewResultSaving:
             MockPath.return_value = mock_review_path
 
             phase.execute()
+
+
+class TestIssueConfigReading:
+    """Test reading issue config for base branch."""
+
+    def test_reads_base_branch_from_issue_config(self, tmp_path: Path) -> None:
+        """測試從 issue config 讀取 base branch"""
+        # Create issue structure with config
+        issue_name = "myissue"
+        issues_dir = tmp_path / ".aaf" / "issues" / issue_name
+        spec_dir = issues_dir / "spec"
+        spec_dir.mkdir(parents=True)
+        spec_file = spec_dir / "spec.md"
+        spec_file.write_text("Requirements")
+
+        # Create config file with base branch
+        config_file = issues_dir / "config.json"
+        config_data = {
+            "base_branch": "develop",
+            "feature_branch": "myissue"
+        }
+        config_file.write_text(json.dumps(config_data))
+
+        agent_manager = MagicMock(spec=AgentManager)
+        agent_manager.execute.return_value = ("AAF_CONFIRMED\nLGTM!", TokenUsage())
+
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        git_ops = MagicMock(spec=GitOperations)
+        git_ops.get_diff.return_value = "diff content"
+
+        import os
+        original_cwd = os.getcwd()
+        try:
+            os.chdir(tmp_path)
+
+            # Don't specify base_branch - should read from config
+            phase = ReviewPhase(
+                agent_manager=agent_manager,
+                permission_handler=permission_handler,
+                git_ops=git_ops,
+                spec_file=str(spec_file),
+                workflow_mode=WorkflowMode.LOCAL,
+            )
+
+            result = phase.execute()
+
+            # Should have called get_diff with base branch from config
+            git_ops.get_diff.assert_called_once_with(base="develop", head="HEAD")
+        finally:
+            os.chdir(original_cwd)
 
 
 class TestReviewPhaseStatus:
