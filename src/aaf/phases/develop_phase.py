@@ -515,7 +515,7 @@ class DevelopPhase(Phase):
             response, token_usage = self.agent_manager.execute(
                 self.dev_agent,
                 prompt,
-                allowed_tools=["write", "read", "shell"]
+                allowed_tools=["write", "read", "bash"]
             )
 
             # Extract status code from response
