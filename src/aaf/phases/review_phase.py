@@ -166,7 +166,7 @@ class ReviewPhase(Phase):
 **你的審查任務（依優先順序）:**
 
 1. **【最優先】檢查 commit message 風格一致性**
-   - 查看本次變更的所有 commit 是否符合專案既有的 commit message 風格
+   - 使用 `git log --oneline -10 main` 當作標準，再使用 `git log --oneline -10`，確認風格是否一致
    - **如果發現跟既有風格不一致：**
      - 明確指出哪些 commit SHA 的 message 不符合風格
      - 請 developer 使用以下指令修改：
@@ -178,16 +178,15 @@ class ReviewPhase(Phase):
    - 確認所有需求都已實作，且實作方式符合規劃
 
 3. **找出潛在問題**
-   - 檢查程式碼的正確性、可讀性、效能、安全性
    - 確認是否符合專案既有 coding style
+   - 檢查是否有大量重複的程式碼
+   - 檢查程式碼的正確性、可讀性、效能、安全性
 
 4. **簡要說明問題**
    - 列出檔案路徑和行號並說明問題
-   - 對於 commit message 問題，提供具體的修正指令
-   - 不要提供程式碼解決方案（除了 commit message 修改指令）
+   - 不要提供程式碼解決方案
 
 **重要：**
-- 用繁體中文回應
 - Commit message 風格問題視為 critical issue，必須修正後才能通過審查
 - 審查完成後請回傳狀態碼，指令執行即結束
 """
