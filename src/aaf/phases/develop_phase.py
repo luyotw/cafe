@@ -92,6 +92,25 @@ class DevelopPhase(Phase):
         plan_path = Path(self.plan_file)
         return plan_path.exists()
 
+    def _get_review_file_path(self) -> Path:
+        """取得 review.md 的完整路徑.
+
+        Returns:
+            review.md 的 Path 物件
+        """
+        spec_path = Path(self.spec_file)
+        issue_dir = spec_path.parent.parent  # .aaf/issues/{issue_name}
+        return issue_dir / "review" / "review.md"
+
+    def _check_review_feedback_exists(self) -> bool:
+        """檢查是否存在 review feedback.
+
+        Returns:
+            True if review.md exists, False otherwise
+        """
+        review_file = self._get_review_file_path()
+        return review_file.exists()
+
     def _load_history(self) -> None:
         """Load conversation history from previous iterations."""
         if not self.history_dir.exists():
