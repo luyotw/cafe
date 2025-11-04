@@ -432,16 +432,16 @@ class TestPlanPhaseHistory:
         # Should have created history files for both iterations
         history_dir = spec_file.parent.parent / "plan" / "history"
         assert history_dir.exists()
-        assert (history_dir / "001.json").exists()
-        assert (history_dir / "002.json").exists()
+        assert (history_dir / "iteration_001.json").exists()
+        assert (history_dir / "iteration_002.json").exists()
 
         # Check first iteration history content
         import json
-        with open(history_dir / "001.json", 'r', encoding='utf-8') as f:
+        with open(history_dir / "iteration_001.json", 'r', encoding='utf-8') as f:
             data = json.load(f)
 
         assert data["iteration"] == 1
-        assert data["status_code"] == "NEED_CLARIFICATION"
+        assert data["status_code"] == "AAF_NEED_CLARIFICATION"
         assert "需要更多資訊" in data["response"]
 
     def test_saves_progress_to_status_json(self, tmp_path: Path) -> None:
@@ -480,7 +480,7 @@ class TestPlanPhaseHistory:
 
         assert data["phase"] == "plan"
         assert data["status"] == "completed"
-        assert data["status_code"] == "CONFIRMED"
+        assert data["status_code"] == "AAF_CONFIRMED"
 
     def test_creates_plan_md_file(self, tmp_path: Path) -> None:
         """測試 agent 創建 plan.md 文件"""
@@ -576,7 +576,7 @@ class TestPlanPhaseHistory:
         )
 
         # Check history file was created
-        history_file = phase.history_dir / "001.json"
+        history_file = phase.history_dir / "iteration_001.json"
         assert history_file.exists()
 
         # Check content - 一輪 = user_input → agent response
@@ -588,7 +588,7 @@ class TestPlanPhaseHistory:
         assert data["user_input"] == "User's dev guide input"  # 輪的開始
         assert data["prompt"] == "Test prompt"
         assert data["response"] == "Test response"
-        assert data["status_code"] == "NEED_CLARIFICATION"
+        assert data["status_code"] == "AAF_NEED_CLARIFICATION"
         assert "timestamp" in data
 
     def test_load_history_reads_existing_files(self, tmp_path: Path) -> None:
@@ -606,11 +606,11 @@ class TestPlanPhaseHistory:
             "iteration": 1,
             "timestamp": "2025-10-31T10:00:00",
             "prompt": "Prompt 1",
-            "response": "Response 1 [STATUS:NEED_CLARIFICATION]",
-            "status_code": "NEED_CLARIFICATION",
+            "response": "Response 1 [STATUS:AAF_NEED_CLARIFICATION]",
+            "status_code": "AAF_NEED_CLARIFICATION",
         }
 
-        with open(history_dir / "001.json", 'w', encoding='utf-8') as f:
+        with open(history_dir / "iteration_001.json", 'w', encoding='utf-8') as f:
             json.dump(history1, f)
 
         agent_manager = MagicMock(spec=AgentManager)
@@ -747,7 +747,7 @@ class TestPlanPhaseNeedClarification:
 
         # Check first iteration history
         history_dir = spec_file.parent.parent / "plan" / "history"
-        history_file_1 = history_dir / "001.json"
+        history_file_1 = history_dir / "iteration_001.json"
         assert history_file_1.exists()
 
         import json
@@ -756,14 +756,14 @@ class TestPlanPhaseNeedClarification:
 
         # 第一輪：user_input（開發指南）→ agent response（NEED_CLARIFICATION）
         assert data1["iteration"] == 1
-        assert data1["status_code"] == "NEED_CLARIFICATION"
+        assert data1["status_code"] == "AAF_NEED_CLARIFICATION"
         assert "user_input" in data1  # 輪的開始：開發指南
         assert "初始開發指南內容" in data1["user_input"]
         # user_response is no longer stored - next iteration's user_input IS the user_response
         assert "user_response" not in data1
 
         # Check second iteration history
-        history_file_2 = history_dir / "002.json"
+        history_file_2 = history_dir / "iteration_002.json"
         assert history_file_2.exists()
 
         with open(history_file_2, 'r', encoding='utf-8') as f:
@@ -771,7 +771,7 @@ class TestPlanPhaseNeedClarification:
 
         # 第二輪：user_input（上輪的 user_response）→ agent response（CONFIRMED）
         assert data2["iteration"] == 2
-        assert data2["status_code"] == "CONFIRMED"
+        assert data2["status_code"] == "AAF_CONFIRMED"
         assert "user_input" in data2  # 輪的開始：上一輪的使用者回應
         assert data2["user_input"] == "我的回應內容"
 
@@ -812,7 +812,7 @@ class TestPlanPhaseNeedClarification:
 
         assert data["phase"] == "plan"
         assert data["status"] == "in_progress"
-        assert data["status_code"] == "NEED_CLARIFICATION"
+        assert data["status_code"] == "AAF_NEED_CLARIFICATION"
 
 
 class TestPlanPhaseUserConfirmation:
@@ -972,18 +972,18 @@ class TestPlanPhaseResume:
         history_dir.mkdir(parents=True, exist_ok=True)
 
         import json
-        history_file = history_dir / "001.json"
+        history_file = history_dir / "iteration_001.json"
         history_data = {
             "iteration": 1,
             "prompt": "test prompt",
-            "response": "NEED_CLARIFICATION\n需要確認",
-            "status_code": "NEED_CLARIFICATION",
+            "response": "AAF_NEED_CLARIFICATION\n需要確認",
+            "status_code": "AAF_NEED_CLARIFICATION",
             "timestamp": "2024-01-01T00:00:00"
         }
         history_file.write_text(json.dumps(history_data, ensure_ascii=False, indent=2))
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = "CONFIRMED\n實作計畫已完成。"
+        agent_manager.execute.return_value = "AAF_CONFIRMED\n實作計畫已完成。"
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -1022,12 +1022,12 @@ class TestPlanPhaseResume:
         history_dir.mkdir(parents=True, exist_ok=True)
 
         import json
-        history_file = history_dir / "001.json"
+        history_file = history_dir / "iteration_001.json"
         history_data = {
             "iteration": 1,
             "prompt": "test prompt",
-            "response": "CONFIRMED\n實作計畫已完成",
-            "status_code": "CONFIRMED",
+            "response": "AAF_CONFIRMED\n實作計畫已完成",
+            "status_code": "AAF_CONFIRMED",
             "timestamp": "2024-01-01T00:00:00"
         }
         history_file.write_text(json.dumps(history_data, ensure_ascii=False, indent=2))
@@ -1090,7 +1090,7 @@ class TestPlanPhaseProgressTracking:
 
         assert data["phase"] == "plan"
         assert data["status"] == "in_progress"
-        assert data["status_code"] == "NEED_CLARIFICATION"
+        assert data["status_code"] == "AAF_NEED_CLARIFICATION"
         assert data["iteration"] == 2
 
     def test_load_progress_returns_none_when_no_file(self, tmp_path: Path) -> None:

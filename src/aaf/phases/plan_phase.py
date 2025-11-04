@@ -549,7 +549,7 @@ class PlanPhase(Phase):
         # Create history directory if it doesn't exist
         self.history_dir.mkdir(parents=True, exist_ok=True)
 
-        history_file = self.history_dir / f"{self.iteration:03d}.json"
+        history_file = self.history_dir / f"iteration_{self.iteration:03d}.json"
 
         history_data = {
             "iteration": self.iteration,
