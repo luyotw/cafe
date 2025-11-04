@@ -63,7 +63,7 @@ class TestLocalWorkflow:
         plan_file.write_text("## 開發指南\n\nDevelopment guide here")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = "CONFIRMED\n實作分析已完成。"
+        agent_manager.execute.return_value = ("CONFIRMED\n實作分析已完成。", TokenUsage())
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -88,7 +88,7 @@ class TestLocalWorkflow:
         spec_file.write_text("# Requirements\n\nNo dev guide")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = "CONFIRMED\n實作分析已完成。"
+        agent_manager.execute.return_value = ("CONFIRMED\n實作分析已完成。", TokenUsage())
         permission_handler = MagicMock(spec=PermissionHandler)
 
         phase = PlanPhase(
@@ -179,7 +179,7 @@ class TestGitHubWorkflow:
     def test_execute_github_workflow(self) -> None:
         """測試執行 GitHub workflow"""
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = "CONFIRMED\n實作分析已完成。"
+        agent_manager.execute.return_value = ("CONFIRMED\n實作分析已完成。", TokenUsage())
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -203,7 +203,7 @@ class TestGitHubWorkflow:
     def test_github_workflow_uses_issue_id(self) -> None:
         """測試 GitHub workflow 使用 issue ID"""
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = "CONFIRMED\n實作分析已完成。"
+        agent_manager.execute.return_value = ("CONFIRMED\n實作分析已完成。", TokenUsage())
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -237,7 +237,7 @@ class TestPromptGeneration:
         plan_file.write_text("## 開發指南\n\nGuide")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = "CONFIRMED\n實作分析已完成。"
+        agent_manager.execute.return_value = ("CONFIRMED\n實作分析已完成。", TokenUsage())
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -306,7 +306,7 @@ class TestAgentSelection:
         plan_file.write_text("## 開發指南\n\nGuide")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = "CONFIRMED\n實作分析已完成。"
+        agent_manager.execute.return_value = ("CONFIRMED\n實作分析已完成。", TokenUsage())
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -456,7 +456,7 @@ class TestPlanPhaseHistory:
         plan_file.write_text("## 開發指南\n\nGuide")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = "CONFIRMED\n實作分析已完成。"
+        agent_manager.execute.return_value = ("CONFIRMED\n實作分析已完成。", TokenUsage())
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -691,7 +691,7 @@ class TestPlanPhaseNeedClarification:
         plan_file.write_text("## 開發指南\n\nGuide")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = "NEED_CLARIFICATION\n需要更多資訊"
+        agent_manager.execute.return_value = ("NEED_CLARIFICATION\n需要更多資訊", TokenUsage())
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -787,7 +787,7 @@ class TestPlanPhaseNeedClarification:
         plan_file.write_text("## 開發指南\n\nGuide")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = "NEED_CLARIFICATION\n需要更多資訊"
+        agent_manager.execute.return_value = ("NEED_CLARIFICATION\n需要更多資訊", TokenUsage())
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -830,7 +830,7 @@ class TestPlanPhaseUserConfirmation:
         plan_file.write_text("## 開發指南\n\nGuide")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = "CONFIRMED\n實作計畫已完成。"
+        agent_manager.execute.return_value = ("CONFIRMED\n實作計畫已完成。", TokenUsage())
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -863,7 +863,7 @@ class TestPlanPhaseUserConfirmation:
         plan_file.write_text("## 開發指南\n\nGuide")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = "CONFIRMED\n實作計畫已完成。"
+        agent_manager.execute.return_value = ("CONFIRMED\n實作計畫已完成。", TokenUsage())
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -934,7 +934,7 @@ class TestPlanPhaseUserConfirmation:
         plan_file.write_text("## 開發指南\n\nGuide")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = "CONFIRMED\n實作計畫已完成。"
+        agent_manager.execute.return_value = ("CONFIRMED\n實作計畫已完成。", TokenUsage())
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -983,7 +983,7 @@ class TestPlanPhaseResume:
         history_file.write_text(json.dumps(history_data, ensure_ascii=False, indent=2))
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = "AAF_CONFIRMED\n實作計畫已完成。"
+        agent_manager.execute.return_value = ("AAF_CONFIRMED\n實作計畫已完成。", TokenUsage())
 
         permission_handler = MagicMock(spec=PermissionHandler)
 

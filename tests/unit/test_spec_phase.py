@@ -85,7 +85,7 @@ class TestAgentSelection:
         spec_file.write_text("Requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = "CONFIRMED\n需求已清楚。"
+        agent_manager.execute.return_value = ("CONFIRMED\n需求已清楚。", TokenUsage())
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -116,7 +116,7 @@ class TestHistoryTracking:
         spec_file.write_text("Initial requirements\n")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = "CONFIRMED\n需求已清楚。"
+        agent_manager.execute.return_value = ("CONFIRMED\n需求已清楚。", TokenUsage())
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -140,7 +140,7 @@ class TestHistoryTracking:
         spec_file.write_text("Initial requirements\n")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = "NEED_CLARIFICATION\n請問使用者是誰？"
+        agent_manager.execute.return_value = ("NEED_CLARIFICATION\n請問使用者是誰？", TokenUsage())
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -347,7 +347,7 @@ class TestHistoryTracking:
         spec_file.write_text("Initial requirements\n")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = "CONFIRMED\n需求已清楚"
+        agent_manager.execute.return_value = ("CONFIRMED\n需求已清楚", TokenUsage())
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -409,7 +409,7 @@ class TestNonInteractiveModeIteration1:
         spec_file.parent.mkdir(parents=True, exist_ok=True)
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = "NEED_CLARIFICATION\n需要澄清需求。\n\n## 待釐清的問題\n1. 問題一"
+        agent_manager.execute.return_value = ("NEED_CLARIFICATION\n需要澄清需求。\n\n## 待釐清的問題\n1. 問題一", TokenUsage())
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -441,7 +441,7 @@ class TestNonInteractiveModeIteration1:
         spec_file.parent.mkdir(parents=True, exist_ok=True)
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = "NEED_CLARIFICATION\n需要澄清"
+        agent_manager.execute.return_value = ("NEED_CLARIFICATION\n需要澄清", TokenUsage())
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -469,7 +469,7 @@ class TestNonInteractiveModeIteration1:
         spec_file.parent.mkdir(parents=True, exist_ok=True)
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = "CONFIRMED\n需求已清楚。"
+        agent_manager.execute.return_value = ("CONFIRMED\n需求已清楚。", TokenUsage())
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -527,7 +527,7 @@ class TestNonInteractiveModeIteration2Plus:
         spec_file.write_text("## 使用者故事\n測試\n\n## 待釐清的問題\n1. 問題一？")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = "CONFIRMED\n需求已清楚"
+        agent_manager.execute.return_value = ("CONFIRMED\n需求已清楚", TokenUsage())
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -589,7 +589,7 @@ class TestNonInteractiveModeIteration2Plus:
 
         agent_manager = MagicMock(spec=AgentManager)
         # PM needs more info
-        agent_manager.execute.return_value = "NEED_CLARIFICATION\n還需要澄清問題二"
+        agent_manager.execute.return_value = ("NEED_CLARIFICATION\n還需要澄清問題二", TokenUsage())
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -698,7 +698,7 @@ class TestInteractiveModeStillWorks:
         spec_file.write_text("需求已清楚")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = "CONFIRMED\n需求確認"
+        agent_manager.execute.return_value = ("CONFIRMED\n需求確認", TokenUsage())
         agent_manager.get_total_token_usage.return_value = TokenUsage()
         agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
 
@@ -713,7 +713,7 @@ class TestInteractiveModeStillWorks:
             rigor=SpecRigor.MEDIUM,  # Explicitly set rigor to avoid prompting
         )
 
-        with patch('builtins.print'):
+        with patch('builtins.print'), patch('builtins.input', return_value=''):
             result = phase.execute()
 
         assert result.status == PhaseStatus.COMPLETED
@@ -793,7 +793,7 @@ class TestResumeFromHistory:
 
         agent_manager = MagicMock(spec=AgentManager)
         # PM returns NEED_CLARIFICATION for iteration 2
-        agent_manager.execute.return_value = "NEED_CLARIFICATION\n問題二？"
+        agent_manager.execute.return_value = ("NEED_CLARIFICATION\n問題二？", TokenUsage())
         agent_manager.get_total_token_usage.return_value = TokenUsage()
         agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
 
@@ -884,7 +884,7 @@ class TestResumeFromHistory:
 
         agent_manager = MagicMock(spec=AgentManager)
         # Agent should be called AFTER user provides response
-        agent_manager.execute.return_value = "CONFIRMED\n需求已清楚"
+        agent_manager.execute.return_value = ("CONFIRMED\n需求已清楚", TokenUsage())
         agent_manager.get_total_token_usage.return_value = TokenUsage()
         agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
 
@@ -949,7 +949,7 @@ class TestResumeFromHistory:
         spec_file.write_text("## 使用者故事\n測試\n\n## 待釐清的問題\n1. 問題二？")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = "CONFIRMED\n需求已清楚"
+        agent_manager.execute.return_value = ("CONFIRMED\n需求已清楚", TokenUsage())
         agent_manager.get_total_token_usage.return_value = TokenUsage()
         agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
 

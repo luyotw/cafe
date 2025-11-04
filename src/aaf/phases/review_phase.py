@@ -2,13 +2,15 @@
 
 from pathlib import Path
 from typing import Optional
+import json
+from datetime import datetime
 
 from aaf.agents.manager import AgentManager
 from aaf.core.git import GitOperations
 from aaf.core.permission import PermissionHandler
 from aaf.core.phase import Phase
 from aaf.core.status_codes import PhaseStatusCode, StatusCodeParser, generate_status_code_prompt
-from aaf.core.types import PhaseResult, PhaseStatus, WorkflowMode
+from aaf.core.types import PhaseProgress, PhaseResult, PhaseStatus, WorkflowMode
 
 
 class ReviewPhase(Phase):
@@ -75,7 +77,7 @@ class ReviewPhase(Phase):
             review_prompt = self._generate_review_prompt(diff)
 
             # Execute review agent
-            review_response = self.agent_manager.execute(
+            review_response, token_usage = self.agent_manager.execute(
                 self.review_agent, review_prompt
             )
 
@@ -90,6 +92,10 @@ class ReviewPhase(Phase):
 
             # Save review result
             self._save_review_result(review_response, status_code)
+
+            # Save progress status
+            if status_code:
+                self._save_progress(status_code)
 
             # Return result based on status code
             if status_code == PhaseStatusCode.CONFIRMED:
@@ -228,6 +234,39 @@ class ReviewPhase(Phase):
         }
 
         history_file.write_text(json.dumps(history_data, ensure_ascii=False, indent=2))
+
+    def _save_progress(self, status_code: PhaseStatusCode) -> None:
+        """Save phase progress to status.json.
+
+        Args:
+            status_code: Phase status code
+        """
+        # Determine review directory based on workflow mode
+        if self.workflow_mode == WorkflowMode.GITHUB and self.issue_id:
+            review_dir = Path(f".aaf/issues/{self.issue_id}/review")
+        else:
+            # Extract issue name from spec_file path
+            spec_path = Path(self.spec_file)
+            issue_name = spec_path.parent.parent.name
+            review_dir = Path(f".aaf/issues/{issue_name}/review")
+
+        status_file = review_dir / "status.json"
+        status_file.parent.mkdir(parents=True, exist_ok=True)
+
+        # Determine phase status
+        phase_status = PhaseStatus.COMPLETED if status_code == PhaseStatusCode.CONFIRMED else PhaseStatus.COMPLETED
+
+        # Create progress object
+        progress = PhaseProgress(
+            phase="review",
+            status=phase_status,
+            status_code=status_code.value,
+            iteration=self.iteration,
+            timestamp=datetime.now().isoformat(),
+        )
+
+        with open(status_file, 'w', encoding='utf-8') as f:
+            json.dump(progress.to_dict(), f, ensure_ascii=False, indent=2)
 
     def _get_requirements_section(self) -> str:
         """Get requirements section for review prompt.

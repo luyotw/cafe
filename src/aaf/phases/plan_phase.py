@@ -180,7 +180,7 @@ class PlanPhase(Phase):
                     prompt = self._generate_prompt()
 
                     # Execute developer agent
-                    response = self.agent_manager.execute(
+                    response, token_usage = self.agent_manager.execute(
                         self.dev_agent,
                         prompt,
                         allowed_tools=["write", "read"]

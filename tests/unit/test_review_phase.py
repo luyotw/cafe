@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 from aaf.phases.review_phase import ReviewPhase
 from aaf.agents.manager import AgentManager
 from aaf.core.git import GitOperations
-from aaf.core.types import PhaseResult, PhaseStatus, WorkflowMode
+from aaf.core.types import PhaseResult, PhaseStatus, TokenUsage, WorkflowMode
 from aaf.core.permission import PermissionHandler
 
 
@@ -61,7 +61,7 @@ class TestSingleIterationExecution:
 
         agent_manager = MagicMock(spec=AgentManager)
         # Review agent approves immediately
-        agent_manager.execute.return_value = "CONFIRMED\nCode looks good!"
+        agent_manager.execute.return_value = ("AAF_CONFIRMED\nCode looks good!", TokenUsage())
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -81,7 +81,7 @@ class TestSingleIterationExecution:
 
         assert result.status == PhaseStatus.COMPLETED
         assert "passed" in result.message.lower()
-        assert result.data["status_code"] == "CONFIRMED"
+        assert result.data["status_code"] == "AAF_CONFIRMED"
 
     def test_single_review_iteration_needs_changes(self, tmp_path: Path) -> None:
         """測試單次 review 迭代需要修改"""
@@ -89,7 +89,7 @@ class TestSingleIterationExecution:
         requirements_file.write_text("Requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = "NEEDS_CHANGES\n問題 1: 需要修正"
+        agent_manager.execute.return_value = ("AAF_NEEDS_CHANGES\n問題 1: 需要修正", TokenUsage())
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -108,7 +108,7 @@ class TestSingleIterationExecution:
             result = phase.execute()
 
         assert result.status == PhaseStatus.COMPLETED
-        assert result.data["status_code"] == "NEEDS_CHANGES"
+        assert result.data["status_code"] == "AAF_NEEDS_CHANGES"
 
     def test_only_executes_once(self, tmp_path: Path) -> None:
         """測試只執行一次（不迴圈）"""
@@ -116,7 +116,7 @@ class TestSingleIterationExecution:
         requirements_file.write_text("Requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = "NEEDS_CHANGES\n需要修正"
+        agent_manager.execute.return_value = ("AAF_NEEDS_CHANGES\n需要修正", TokenUsage())
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -172,7 +172,7 @@ class TestDiffChecking:
         requirements_file.write_text("Requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = "CONFIRMED\nCode looks good!"
+        agent_manager.execute.return_value = ("AAF_CONFIRMED\nCode looks good!", TokenUsage())
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -199,7 +199,7 @@ class TestDiffChecking:
         requirements_file.write_text("Requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = "CONFIRMED\nCode looks good!"
+        agent_manager.execute.return_value = ("AAF_CONFIRMED\nCode looks good!", TokenUsage())
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -227,7 +227,7 @@ class TestDiffChecking:
         requirements_file.write_text("Requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = "CONFIRMED\nCode looks good!"
+        agent_manager.execute.return_value = ("AAF_CONFIRMED\nCode looks good!", TokenUsage())
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -260,7 +260,7 @@ class TestAgentSelection:
         requirements_file.write_text("Requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = "CONFIRMED\nCode looks good!"
+        agent_manager.execute.return_value = ("AAF_CONFIRMED\nCode looks good!", TokenUsage())
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -294,7 +294,7 @@ class TestPromptGeneration:
         requirements_file.write_text("Requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = "CONFIRMED\nCode looks good!"
+        agent_manager.execute.return_value = ("AAF_CONFIRMED\nCode looks good!", TokenUsage())
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -324,7 +324,7 @@ class TestPromptGeneration:
         requirements_file.write_text("Requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = "CONFIRMED\nCode looks good!"
+        agent_manager.execute.return_value = ("AAF_CONFIRMED\nCode looks good!", TokenUsage())
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -365,7 +365,7 @@ class TestReviewResultSaving:
         spec_file.write_text("Requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = "CONFIRMED\nCode looks good!"
+        agent_manager.execute.return_value = ("AAF_CONFIRMED\nCode looks good!", TokenUsage())
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -401,7 +401,7 @@ class TestReviewResultSaving:
         spec_file.write_text("Requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = "CONFIRMED\nCode looks good!"
+        agent_manager.execute.return_value = ("AAF_CONFIRMED\nCode looks good!", TokenUsage())
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -433,13 +433,66 @@ class TestReviewResultSaving:
             phase.execute()
 
 
+class TestReviewPhaseStatus:
+    """Test review phase status tracking."""
+
+    def test_saves_status_json_on_execution(self, tmp_path: Path) -> None:
+        """測試執行後儲存 status.json"""
+        # Create issue structure following AAF convention: .aaf/issues/<name>/spec/spec.md
+        issue_name = "myissue"
+        issues_dir = tmp_path / ".aaf" / "issues" / issue_name
+        spec_dir = issues_dir / "spec"
+        spec_dir.mkdir(parents=True)
+        spec_file = spec_dir / "spec.md"
+        spec_file.write_text("Requirements")
+
+        agent_manager = MagicMock(spec=AgentManager)
+        agent_manager.execute.return_value = ("AAF_CONFIRMED\nCode looks good!", TokenUsage())
+
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        git_ops = MagicMock(spec=GitOperations)
+        git_ops.get_diff.return_value = "diff content"
+
+        # Change working directory to tmp_path for test
+        import os
+        original_cwd = os.getcwd()
+        try:
+            os.chdir(tmp_path)
+
+            phase = ReviewPhase(
+                agent_manager=agent_manager,
+                permission_handler=permission_handler,
+                git_ops=git_ops,
+                spec_file=str(spec_file),
+                workflow_mode=WorkflowMode.LOCAL,
+            )
+
+            result = phase.execute()
+
+            # Should save status.json
+            review_dir = issues_dir / "review"
+            status_file = review_dir / "status.json"
+            assert status_file.exists(), f"status.json not found at {status_file}"
+
+            import json
+            status_data = json.loads(status_file.read_text())
+            assert status_data["phase"] == "review"
+            assert status_data["status"] == "completed"
+            assert status_data["status_code"] == "AAF_CONFIRMED"
+            assert "iteration" in status_data
+            assert "timestamp" in status_data
+        finally:
+            os.chdir(original_cwd)
+
+
 class TestGitHubWorkflow:
     """Test GitHub workflow."""
 
     def test_github_workflow_uses_issue(self) -> None:
         """測試 GitHub workflow 使用 issue"""
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = "CONFIRMED\nCode looks good!"
+        agent_manager.execute.return_value = ("AAF_CONFIRMED\nCode looks good!", TokenUsage())
 
         permission_handler = MagicMock(spec=PermissionHandler)
 

@@ -21,7 +21,7 @@ class TestReviewPhaseWithStatusCodes:
         requirements_file.write_text("Requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = "CONFIRMED\nCode looks good!"
+        agent_manager.execute.return_value = ("CONFIRMED\nCode looks good!", TokenUsage())
 
         git_ops = MagicMock(spec=GitOperations)
         git_ops.get_diff.return_value = "diff content"
@@ -49,7 +49,7 @@ class TestReviewPhaseWithStatusCodes:
         requirements_file.write_text("Requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = "NEEDS_CHANGES\n需要修正問題。"
+        agent_manager.execute.return_value = ("NEEDS_CHANGES\n需要修正問題。", TokenUsage())
 
         git_ops = MagicMock(spec=GitOperations)
         git_ops.get_diff.return_value = "diff content"
@@ -78,7 +78,7 @@ class TestReviewPhaseWithStatusCodes:
         requirements_file.write_text("Requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = "Review result:\nCONFIRMED\nAll checks passed."
+        agent_manager.execute.return_value = ("Review result:\nCONFIRMED\nAll checks passed.", TokenUsage())
 
         git_ops = MagicMock(spec=GitOperations)
         git_ops.get_diff.return_value = "diff content"
@@ -105,7 +105,7 @@ class TestReviewPhaseWithStatusCodes:
         requirements_file.write_text("Requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = "confirmed\nLooks good to me!"
+        agent_manager.execute.return_value = ("confirmed\nLooks good to me!", TokenUsage())
 
         git_ops = MagicMock(spec=GitOperations)
         git_ops.get_diff.return_value = "diff content"

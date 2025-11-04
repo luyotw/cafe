@@ -132,10 +132,31 @@ class TestAgentExecution:
             from aaf.core.types import TokenUsage
             mock_execute.return_value = ("Agent response", TokenUsage())
 
-            response = manager.execute("David", "Test prompt")
+            response, token_usage = manager.execute("David", "Test prompt")
 
             assert response == "Agent response"
             mock_execute.assert_called_once_with("Test prompt", None)
+
+    def test_execute_returns_tuple_with_token_usage(self) -> None:
+        """測試 execute 回傳 tuple (response, token_usage)"""
+        manager = AgentManager()
+        config = AgentConfig(name="David", cli=AgentCLI.CLAUDE)
+        manager.register_agent(config)
+
+        with patch.object(AgentExecutor, "execute") as mock_execute:
+            from aaf.core.types import TokenUsage
+            expected_token_usage = TokenUsage(input_tokens=100, output_tokens=50)
+            mock_execute.return_value = ("Agent response", expected_token_usage)
+
+            result = manager.execute("David", "Test prompt")
+
+            # Should return tuple (response, token_usage)
+            assert isinstance(result, tuple)
+            assert len(result) == 2
+            response, token_usage = result
+            assert response == "Agent response"
+            assert token_usage.input_tokens == 100
+            assert token_usage.output_tokens == 50
 
     def test_execute_current_agent(self) -> None:
         """測試執行當前 agent"""

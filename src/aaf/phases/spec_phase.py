@@ -289,7 +289,7 @@ class SpecPhase(Phase):
                 prompt = self._generate_prompt()
 
                 # Execute PM agent with Write tool access for writing spec.md
-                response = self.agent_manager.execute(
+                response, token_usage = self.agent_manager.execute(
                     self.pm_agent,
                     prompt,
                     allowed_tools=["write", "read"]

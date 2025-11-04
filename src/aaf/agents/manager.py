@@ -93,7 +93,7 @@ class AgentManager:
             return None
         return self.agents.get(self.current_agent_name)
 
-    def execute(self, agent_name: str, prompt: str, allowed_tools: Optional[List[str]] = None) -> str:
+    def execute(self, agent_name: str, prompt: str, allowed_tools: Optional[List[str]] = None) -> Tuple[str, TokenUsage]:
         """Execute prompt with specified agent.
 
         Args:
@@ -102,7 +102,7 @@ class AgentManager:
             allowed_tools: List of allowed tools (using Claude naming convention)
 
         Returns:
-            Agent's response
+            Tuple of (agent's response, token usage)
 
         Raises:
             AgentNotFoundError: If agent not found
@@ -123,7 +123,7 @@ class AgentManager:
         self._total_token_usage.cache_read_input_tokens += token_usage.cache_read_input_tokens
         self._total_token_usage.total_cost_usd += token_usage.total_cost_usd
 
-        return response
+        return response, token_usage
 
     def execute_current(self, prompt: str) -> str:
         """Execute prompt with current agent.
