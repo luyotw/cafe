@@ -131,8 +131,111 @@ class AgentExecutor:
         """
         return self._total_token_usage
 
+    def _execute_with_streaming(
+        self,
+        cmd: List[str],
+        cli_name: str,
+        parse_stream_json: bool = False,
+    ) -> Tuple[str, TokenUsage]:
+        """Execute command with streaming output.
+
+        Args:
+            cmd: Command to execute
+            cli_name: Name of the CLI (for display)
+            parse_stream_json: Whether to parse stream-json format (Claude style)
+
+        Returns:
+            Tuple of (response text, token usage)
+
+        Raises:
+            AgentExecutionError: If execution fails
+        """
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,  # Line buffered
+        )
+
+        # Print header
+        print(f"\n{'='*80}")
+        print(f"{cli_name} Response (streaming):")
+        print(f"{'='*80}")
+
+        output_lines = []
+        response_text = ""
+        token_usage = TokenUsage()
+        session_id = None
+
+        if process.stdout:
+            for line in iter(process.stdout.readline, ''):
+                if not line:
+                    break
+
+                if parse_stream_json:
+                    # Parse stream-json format (Claude)
+                    try:
+                        data = json.loads(line.strip())
+
+                        # Extract content chunks
+                        if "content" in data:
+                            content = data["content"]
+                            print(content, end='', flush=True)
+                            response_text += content
+
+                        # Extract session_id
+                        if "session_id" in data and not session_id:
+                            session_id = data["session_id"]
+
+                        # Extract token usage (usually in final message)
+                        if "usage" in data:
+                            usage_data = data["usage"]
+                            token_usage = TokenUsage(
+                                input_tokens=usage_data.get("input_tokens", 0),
+                                output_tokens=usage_data.get("output_tokens", 0),
+                                cache_creation_input_tokens=usage_data.get("cache_creation_input_tokens", 0),
+                                cache_read_input_tokens=usage_data.get("cache_read_input_tokens", 0),
+                            )
+
+                        if "total_cost_usd" in data:
+                            token_usage.total_cost_usd = data["total_cost_usd"]
+
+                    except json.JSONDecodeError:
+                        # Non-JSON line, just print it
+                        print(line, end='')
+                        output_lines.append(line)
+                else:
+                    # Simple line-by-line streaming (Copilot style)
+                    print(line, end='')
+                    output_lines.append(line)
+
+        print(f"\n{'='*80}\n")
+
+        # Wait for process to complete
+        stderr_output = process.stderr.read() if process.stderr else ""
+        returncode = process.wait()
+
+        if returncode != 0:
+            raise AgentExecutionError(
+                f"{cli_name} execution failed with code {returncode}: {stderr_output}"
+            )
+
+        # Save session_id if extracted
+        if session_id and not self.config.session_id:
+            self.config.session_id = session_id
+
+        # Return response (either from stream-json or combined lines)
+        if parse_stream_json:
+            # If we got JSON content, use that; otherwise fall back to output_lines
+            final_response = response_text if response_text else ''.join(output_lines)
+        else:
+            final_response = ''.join(output_lines)
+
+        return final_response, token_usage
+
     def _execute_claude(self, prompt: str, allowed_tools: Optional[List[str]] = None) -> Tuple[str, TokenUsage]:
-        """Execute Claude agent.
+        """Execute Claude agent with streaming output.
 
         Args:
             prompt: Prompt to send to Claude
@@ -152,52 +255,27 @@ class AgentExecutor:
         if self.config.session_id:
             cmd.extend(["--session-id", self.config.session_id])
 
-        # Add output format last
-        cmd.extend(["--output-format", "json"])
+        # Add streaming output format
+        cmd.extend(["--output-format", "stream-json"])
 
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-
-        if result.returncode != 0:
+        # Execute with streaming
+        try:
+            response, token_usage = self._execute_with_streaming(
+                cmd=cmd,
+                cli_name="Claude",
+                parse_stream_json=True,
+            )
+            return response, token_usage
+        except AgentExecutionError as e:
             # Check if session is already in use
-            if "already in use" in result.stderr:
+            if "already in use" in str(e):
                 # Create a new session and retry
                 new_session_id = self._create_new_session()
                 self.config.session_id = new_session_id
                 # Retry with new session (preserve allowed_tools)
                 return self._execute_claude(prompt, allowed_tools)
-
-            raise AgentExecutionError(
-                f"Claude execution failed with code {result.returncode}: {result.stderr}"
-            )
-
-        # Parse JSON response
-        try:
-            response_data = json.loads(result.stdout)
-            response = response_data.get("result", result.stdout)
-
-            # Extract and save session_id if present
-            if "session_id" in response_data and not self.config.session_id:
-                self.config.session_id = response_data["session_id"]
-
-            # Parse token usage
-            usage_data = response_data.get("usage", {})
-            token_usage = TokenUsage(
-                input_tokens=usage_data.get("input_tokens", 0),
-                output_tokens=usage_data.get("output_tokens", 0),
-                cache_creation_input_tokens=usage_data.get("cache_creation_input_tokens", 0),
-                cache_read_input_tokens=usage_data.get("cache_read_input_tokens", 0),
-                total_cost_usd=response_data.get("total_cost_usd", 0.0)
-            )
-
-            return response, token_usage
-        except json.JSONDecodeError:
-            # If not JSON, return raw output with empty token usage
-            return result.stdout, TokenUsage()
+            # Re-raise if it's a different error
+            raise
 
     def _create_new_session(self) -> str:
         """Create a new Claude session.
@@ -292,7 +370,7 @@ class AgentExecutor:
         raise NotImplementedError("Cursor execution not yet implemented")
 
     def _execute_copilot(self, prompt: str, allowed_tools: Optional[List[str]] = None) -> Tuple[str, TokenUsage]:
-        """Execute GitHub Copilot CLI agent.
+        """Execute GitHub Copilot CLI agent with streaming output.
 
         Args:
             prompt: Prompt to send to Copilot
@@ -302,7 +380,6 @@ class AgentExecutor:
             Tuple of (Copilot's response, token usage)
         """
         from pathlib import Path
-        import os
         import time
 
         # Copilot 的 session 目錄
@@ -329,41 +406,12 @@ class AgentExecutor:
         if self.config.session_id:
             cmd.extend(["--resume", self.config.session_id])
 
-        # Use Popen for streaming output
-        process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            bufsize=1,  # Line buffered
+        # Execute with streaming (line-by-line mode)
+        response, token_usage = self._execute_with_streaming(
+            cmd=cmd,
+            cli_name="Copilot",
+            parse_stream_json=False,
         )
-
-        # Read and print output in real-time
-        output_lines = []
-        print(f"\n{'='*80}")
-        print(f"Copilot Response (streaming):")
-        print(f"{'='*80}")
-
-        if process.stdout:
-            for line in iter(process.stdout.readline, ''):
-                if not line:
-                    break
-                print(line, end='')  # Print immediately
-                output_lines.append(line)
-
-        print(f"{'='*80}\n")
-
-        # Wait for process to complete
-        stderr_output = process.stderr.read() if process.stderr else ""
-        returncode = process.wait()
-
-        if returncode != 0:
-            raise AgentExecutionError(
-                f"Copilot execution failed with code {returncode}: {stderr_output}"
-            )
-
-        # Combine output
-        response = ''.join(output_lines)
 
         # 如果還沒有 session_id，嘗試從新建立的 session 檔案中提取
         if not self.config.session_id and copilot_session_dir.exists():
@@ -377,9 +425,5 @@ class AgentExecutor:
                 newest_session = sorted(new_sessions)[-1]  # 取最新的
                 session_id = newest_session.replace(".jsonl", "")
                 self.config.session_id = session_id
-
-        # Copilot doesn't provide JSON output format yet, return raw output
-        # TODO: Update when Copilot CLI provides structured output
-        token_usage = TokenUsage()
 
         return response, token_usage
