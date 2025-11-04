@@ -169,9 +169,7 @@ class AgentExecutor:
                 new_session_id = self._create_new_session()
                 self.config.session_id = new_session_id
                 # Print session creation message
-                from aaf.ui.display import Display
-                display = Display()
-                display.info(f"Created new session: {new_session_id}")
+                print(f"ℹ️  Created new session: {new_session_id}")
                 # Retry with new session (preserve allowed_tools)
                 return self._execute_claude(prompt, allowed_tools)
 
@@ -188,9 +186,7 @@ class AgentExecutor:
             if "session_id" in response_data and not self.config.session_id:
                 self.config.session_id = response_data["session_id"]
                 # Print session creation message
-                from aaf.ui.display import Display
-                display = Display()
-                display.info(f"Created new session: {self.config.session_id}")
+                print(f"ℹ️  Created new session: {self.config.session_id}")
 
             # Parse token usage
             usage_data = response_data.get("usage", {})
@@ -386,9 +382,7 @@ class AgentExecutor:
                 session_id = newest_session.replace(".jsonl", "")
                 self.config.session_id = session_id
                 # Print session creation message
-                from aaf.ui.display import Display
-                display = Display()
-                display.info(f"Created new session: {session_id}")
+                print(f"ℹ️  Created new session: {session_id}")
 
         # Copilot doesn't provide JSON output format yet, return raw output
         # TODO: Update when Copilot CLI provides structured output
