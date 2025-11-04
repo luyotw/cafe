@@ -230,7 +230,41 @@ class DevelopPhase(Phase):
                 },
             )
 
-            return f"""請按照實作計畫執行開發工作。
+            # Check if review feedback exists
+            has_review_feedback = self._check_review_feedback_exists()
+            review_file_path = self._get_review_file_path()
+
+            if has_review_feedback:
+                # With review feedback -修正模式
+                return f"""請根據 Code Review 反饋進行修正。
+
+**你的角色：**
+你是一位經驗豐富的 Developer，負責根據 Code Review 的建議修正程式碼。
+
+**重要：請先閱讀 Review Feedback**
+- Review Feedback 檔案：{review_file_path}
+- 請仔細閱讀 reviewer 的所有建議和問題
+- 優先處理 critical 等級的問題
+
+**檔案路徑：**
+- Review Feedback：{review_file_path}
+- 需求規格：{self.spec_file}
+- 實作計畫：{self.plan_file}
+
+**執行步驟：**
+1. **首先閱讀** {review_file_path}，了解所有需要修正的問題
+2. 根據 review feedback 逐一修正問題
+3. 如果需要，可參考 {self.spec_file} 和 {self.plan_file}
+4. 使用清晰的 commit message 說明修正內容
+5. 完成所有修正後回傳狀態碼
+
+{status_code_prompt}
+
+**完成後回傳：CONFIRMED**
+"""
+            else:
+                # No review feedback - 首次開發模式
+                return f"""請按照實作計畫執行開發工作。
 
 **你的角色：**
 你是一位經驗豐富的 Developer，負責根據需求規格和實作計畫進行開發。
