@@ -22,6 +22,7 @@ class ReviewPhase(Phase):
         permission_handler: PermissionHandler,
         git_ops: GitOperations,
         spec_file: str,
+        plan_file: str,
         workflow_mode: WorkflowMode,
         issue_id: Optional[str] = None,
         review_agent: str = "Richard",
@@ -35,6 +36,7 @@ class ReviewPhase(Phase):
             permission_handler: Permission handler
             git_ops: Git operations
             spec_file: Path to spec file
+            plan_file: Path to plan file
             workflow_mode: Workflow mode (local or github)
             issue_id: GitHub issue ID (required for github mode)
             review_agent: Review agent name (default: Richard)
@@ -45,6 +47,7 @@ class ReviewPhase(Phase):
         self.permission_handler = permission_handler
         self.git_ops = git_ops
         self.spec_file = spec_file
+        self.plan_file = plan_file
         self.workflow_mode = workflow_mode
         self.issue_id = issue_id
         self.review_agent = review_agent
@@ -155,7 +158,7 @@ class ReviewPhase(Phase):
 
 {status_code_prompt}
 
-**原始需求與實作分析:**
+**需求規格與實作計畫:**
 {requirements_section}
 
 **程式碼變更 (diff):**
@@ -166,15 +169,27 @@ class ReviewPhase(Phase):
 **你的審查任務（依優先順序）:**
 
 1. **【最優先】檢查 commit message 風格一致性**
-   - 使用 `git log --oneline -10 main` 當作標準，再使用 `git log --oneline -10`，確認風格是否一致
-   - **如果發現跟既有風格不一致：**
-     - 明確指出哪些 commit SHA 的 message 不符合風格
-     - 請 developer 使用以下指令修改：
-       ```
-       git commit --fixup=reword:<COMMIT_SHA> -m "<NEW_MESSAGE>" --allow-empty --only
-       ```
+   - 使用 `git --no-pager log --oneline -10 main` 查看基礎分支的 commit 風格（作為標準）
+   - 使用 `git --no-pager log --oneline -10` 查看當前分支的 commit
+   - 確認風格是否一致
+   - **如果發現風格不一致：**
+     - 明確列出哪些 commit SHA 和 message 不符合風格
+     - 說明正確的風格範例（根據基礎分支的實際風格）
+     - **重要：提供完整的 shell 指令讓 developer 直接執行（每個 commit 一條）**
+     - **Developer 可以直接執行這些指令，不需要請求權限，也不要用互動式 rebase**
+     
+     指令範例：
+     ```bash
+     # 修改 commit abc123 的 message
+     echo "Fix login logic" > commit_msg.txt && \\
+     git rebase --onto {self.base_branch} {self.base_branch} HEAD --exec '
+       if test $(git rev-parse HEAD) = abc123 || test $(git rev-parse HEAD) = $(git rev-parse abc123); then
+         git commit --amend -F commit_msg.txt --allow-empty --no-edit;
+       fi
+     ' && rm -f commit_msg.txt
+     ```
 
-2. **仔細比對需求**
+2. **仔細比對需求及實作文件**
    - 確認所有需求都已實作，且實作方式符合規劃
 
 3. **找出潛在問題**
@@ -296,16 +311,29 @@ class ReviewPhase(Phase):
             return None
 
     def _get_requirements_section(self) -> str:
-        """Get requirements section for review prompt.
+        """Get requirements and plan section for review prompt.
 
         Returns:
-            Requirements section string
+            Requirements and plan section string
         """
         if self.workflow_mode == WorkflowMode.GITHUB:
             return f"請用 `gh issue view {self.issue_id}` 查看 Issue 內容（包含需求與實作分析）。"
         else:
-            req_path = Path(self.spec_file)
-            if req_path.exists():
-                return f"---\n{req_path.read_text()}\n---"
-            return f"請參考 {self.spec_file}"
+            sections = []
+            
+            # Add spec
+            spec_path = Path(self.spec_file)
+            if spec_path.exists():
+                sections.append(f"**需求規格 (Spec):**\n---\n{spec_path.read_text()}\n---")
+            else:
+                sections.append(f"**需求規格 (Spec):** 請參考 {self.spec_file}")
+            
+            # Add plan
+            plan_path = Path(self.plan_file)
+            if plan_path.exists():
+                sections.append(f"**實作計畫 (Plan):**\n---\n{plan_path.read_text()}\n---")
+            else:
+                sections.append(f"**實作計畫 (Plan):** 請參考 {self.plan_file}")
+            
+            return "\n\n".join(sections)
 

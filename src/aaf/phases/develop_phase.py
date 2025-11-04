@@ -111,6 +111,25 @@ class DevelopPhase(Phase):
         review_file = self._get_review_file_path()
         return review_file.exists()
 
+    def _load_review_status(self) -> Optional[Dict[str, Any]]:
+        """Load review phase status from status.json.
+
+        Returns:
+            Review status dict if exists, None otherwise
+        """
+        spec_path = Path(self.spec_file)
+        issue_dir = spec_path.parent.parent
+        review_status_file = issue_dir / "review" / "status.json"
+
+        if not review_status_file.exists():
+            return None
+
+        try:
+            with open(review_status_file, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except (json.JSONDecodeError, KeyError):
+            return None
+
     def _load_history(self) -> None:
         """Load conversation history from previous iterations."""
         if not self.history_dir.exists():
@@ -235,26 +254,24 @@ class DevelopPhase(Phase):
         Returns:
             Prompt string
         """
-        if self.iteration == 1:
-            # First iteration: provide spec.md and plan.md paths
-            status_code_prompt = generate_status_code_prompt(
-                valid_codes=[
-                    PhaseStatusCode.CONFIRMED,
-                    PhaseStatusCode.NEED_PERMISSION,
-                ],
-                descriptions={
-                    PhaseStatusCode.CONFIRMED: "開發工作已完成",
-                    PhaseStatusCode.NEED_PERMISSION: "需要請求工具使用權限",
-                },
-            )
+        status_code_prompt = generate_status_code_prompt(
+            valid_codes=[
+                PhaseStatusCode.CONFIRMED,
+                PhaseStatusCode.NEED_PERMISSION,
+            ],
+            descriptions={
+                PhaseStatusCode.CONFIRMED: "開發工作已完成",
+                PhaseStatusCode.NEED_PERMISSION: "需要請求工具使用權限",
+            },
+        )
 
-            # Check if review feedback exists
-            has_review_feedback = self._check_review_feedback_exists()
-            review_file_path = self._get_review_file_path()
+        # Check if review feedback exists (every iteration, not just first)
+        has_review_feedback = self._check_review_feedback_exists()
+        review_file_path = self._get_review_file_path()
 
-            if has_review_feedback:
-                # With review feedback -修正模式
-                return f"""請根據 Code Review 反饋進行修正。
+        if has_review_feedback:
+            # With review feedback - 修正模式
+            return f"""請根據 Code Review 反饋進行修正。
 
 **你的角色：**
 你是一位經驗豐富的 Developer，負責根據 Code Review 的建議修正程式碼。
@@ -280,9 +297,11 @@ class DevelopPhase(Phase):
 
 **完成後回傳：CONFIRMED**
 """
-            else:
-                # No review feedback - 首次開發模式
-                return f"""請按照實作計畫執行開發工作。
+        
+        # No review feedback - normal development mode
+        if self.iteration == 1:
+            # First iteration: provide spec.md and plan.md paths
+            return f"""請按照實作計畫執行開發工作。
 
 **你的角色：**
 你是一位經驗豐富的 Developer，負責根據需求規格和實作計畫進行開發。
@@ -384,13 +403,18 @@ class DevelopPhase(Phase):
             existing_progress = self._load_progress()
             if existing_progress and existing_progress.status == PhaseStatus.COMPLETED:
                 # Check if there's review feedback that requires handling
-                review_file = self._get_review_file_path()
-                if review_file.exists():
-                    # Review feedback exists, continue to handle it
-                    # (Don't return early)
-                    pass
+                review_status = self._load_review_status()
+                if review_status and review_status.get("status_code") == "AAF_NEEDS_CHANGES":
+                    # Review feedback with NEEDS_CHANGES exists
+                    # Reset develop status to allow re-execution
+                    print("ℹ️  Review feedback detected (AAF_NEEDS_CHANGES). Resetting develop phase status...")
+                    # Delete status.json to reset the phase
+                    status_file = self.history_dir.parent / "status.json"
+                    if status_file.exists():
+                        status_file.unlink()
+                    # Continue to execute (don't return early)
                 else:
-                    # No review feedback, phase is truly completed
+                    # No review feedback or review passed, phase is truly completed
                     return PhaseResult(
                         status=PhaseStatus.COMPLETED,
                         message=f"Development already completed in {existing_progress.iteration} iteration(s)",

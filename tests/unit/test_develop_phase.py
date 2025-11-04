@@ -785,6 +785,17 @@ class TestDevelopPhaseReviewFeedback:
         spec_file.write_text("Test spec")
         plan_file.write_text("Test plan")
         review_file.write_text("AAF_NEEDS_CHANGES\n\nPlease fix the bug in function X.")
+        
+        # Create review status.json with NEEDS_CHANGES
+        review_status_file = review_dir / "status.json"
+        review_status_data = {
+            "phase": "review",
+            "status": "completed",
+            "status_code": "AAF_NEEDS_CHANGES",
+            "iteration": 1,
+            "timestamp": datetime.now().isoformat()
+        }
+        review_status_file.write_text(json.dumps(review_status_data, indent=2))
 
         # Create iteration history file
         history_dir = develop_dir / "history"
@@ -888,6 +899,151 @@ class TestDevelopPhaseReviewFeedback:
         result = phase.execute()
 
         # Should return early without calling agent
+        assert not agent_manager.execute.called
+        assert result.status == PhaseStatus.COMPLETED
+        assert "already completed" in result.message.lower()
+
+    def test_execute_continues_when_review_status_is_needs_changes(self, tmp_path) -> None:
+        """測試當 review status 為 NEEDS_CHANGES 時，即使 develop 已完成也應該繼續執行"""
+        # Setup
+        agent_manager = MagicMock(spec=AgentManager)
+        permission_handler = MagicMock(spec=PermissionHandler)
+        git_ops = MagicMock(spec=GitOperations)
+
+        # Create test files
+        issue_dir = tmp_path / ".aaf" / "issues" / "test-issue"
+        spec_dir = issue_dir / "spec"
+        plan_dir = issue_dir / "plan"
+        review_dir = issue_dir / "review"
+        develop_dir = issue_dir / "develop"
+
+        spec_dir.mkdir(parents=True)
+        plan_dir.mkdir(parents=True)
+        review_dir.mkdir(parents=True)
+        develop_dir.mkdir(parents=True)
+
+        spec_file = spec_dir / "spec.md"
+        plan_file = plan_dir / "plan.md"
+        review_file = review_dir / "review.md"
+        review_status_file = review_dir / "status.json"
+        develop_status_file = develop_dir / "status.json"
+
+        spec_file.write_text("Test spec")
+        plan_file.write_text("Test plan")
+        review_file.write_text("AAF_NEEDS_CHANGES\n\nPlease fix commit messages.")
+
+        # Create review status.json with NEEDS_CHANGES
+        review_status_data = {
+            "phase": "review",
+            "status": "completed",
+            "status_code": "AAF_NEEDS_CHANGES",
+            "iteration": 1,
+            "timestamp": datetime.now().isoformat()
+        }
+        review_status_file.write_text(json.dumps(review_status_data, indent=2))
+
+        # Create develop status.json indicating COMPLETED
+        develop_status_data = {
+            "phase": "develop",
+            "status": "completed",
+            "status_code": "AAF_CONFIRMED",
+            "iteration": 1,
+            "timestamp": datetime.now().isoformat()
+        }
+        develop_status_file.write_text(json.dumps(develop_status_data, indent=2))
+
+        # Mock agent response
+        agent_manager.execute.return_value = ("AAF_CONFIRMED\n修正完成", TokenUsage())
+        agent_manager.get_total_token_usage.return_value = TokenUsage()
+
+        # Mock git operations
+        git_ops.branch_exists.return_value = True
+
+        phase = DevelopPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            git_ops=git_ops,
+            spec_file=str(spec_file),
+            plan_file=str(plan_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            interactive=False,
+        )
+
+        # Execute
+        result = phase.execute()
+
+        # Should NOT return early - should execute agent to handle review feedback
+        assert agent_manager.execute.called
+        assert result.status == PhaseStatus.COMPLETED
+        # Iteration increments from 0 to 1 (no history file, only status.json)
+        assert phase.iteration == 1
+
+    def test_execute_returns_early_when_review_status_is_confirmed(self, tmp_path) -> None:
+        """測試當 review status 為 CONFIRMED/APPROVED 時，develop 已完成應該直接返回"""
+        # Setup
+        agent_manager = MagicMock(spec=AgentManager)
+        permission_handler = MagicMock(spec=PermissionHandler)
+        git_ops = MagicMock(spec=GitOperations)
+
+        # Create test files
+        issue_dir = tmp_path / ".aaf" / "issues" / "test-issue"
+        spec_dir = issue_dir / "spec"
+        plan_dir = issue_dir / "plan"
+        review_dir = issue_dir / "review"
+        develop_dir = issue_dir / "develop"
+
+        spec_dir.mkdir(parents=True)
+        plan_dir.mkdir(parents=True)
+        review_dir.mkdir(parents=True)
+        develop_dir.mkdir(parents=True)
+
+        spec_file = spec_dir / "spec.md"
+        plan_file = plan_dir / "plan.md"
+        review_file = review_dir / "review.md"
+        review_status_file = review_dir / "status.json"
+        develop_status_file = develop_dir / "status.json"
+
+        spec_file.write_text("Test spec")
+        plan_file.write_text("Test plan")
+        review_file.write_text("AAF_CONFIRMED\n\nLooks good!")
+
+        # Create review status.json with CONFIRMED
+        review_status_data = {
+            "phase": "review",
+            "status": "completed",
+            "status_code": "AAF_CONFIRMED",
+            "iteration": 1,
+            "timestamp": datetime.now().isoformat()
+        }
+        review_status_file.write_text(json.dumps(review_status_data, indent=2))
+
+        # Create develop status.json indicating COMPLETED
+        develop_status_data = {
+            "phase": "develop",
+            "status": "completed",
+            "status_code": "AAF_CONFIRMED",
+            "iteration": 1,
+            "timestamp": datetime.now().isoformat()
+        }
+        develop_status_file.write_text(json.dumps(develop_status_data, indent=2))
+
+        # Mock git operations
+        git_ops.branch_exists.return_value = True
+
+        phase = DevelopPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            git_ops=git_ops,
+            spec_file=str(spec_file),
+            plan_file=str(plan_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            interactive=False,
+        )
+
+        # Execute
+        result = phase.execute()
+
+        # Should return early without calling agent (review passed)
         assert not agent_manager.execute.called
         assert result.status == PhaseStatus.COMPLETED
         assert "already completed" in result.message.lower()
