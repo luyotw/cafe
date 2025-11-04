@@ -1075,7 +1075,7 @@ def list_issues() -> None:
     for issue in sorted(issues, key=lambda x: x.stat().st_mtime, reverse=True):
         # Check which phases exist
         phases = []
-        for phase in ["spec", "analysis", "implementation", "review", "pr"]:
+        for phase in ["spec", "plan", "develop", "review", "pr"]:
             phase_dir = issue / phase
             if phase_dir.exists():
                 phases.append(phase)

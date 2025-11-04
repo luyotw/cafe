@@ -169,7 +169,7 @@ class ReviewPhase(Phase):
 **你的審查任務（依優先順序）:**
 
 1. **【最優先】檢查 commit message 風格一致性**
-   - 使用 `git --no-pager log --oneline -10 main` 查看基礎分支的 commit 風格（作為標準）
+   - 使用 `git --no-pager log --oneline -10 {self.base_branch}` 查看基礎分支的 commit 風格（作為標準）
    - 使用 `git --no-pager log --oneline -10` 查看當前分支的 commit
    - 確認風格是否一致
    - **如果發現風格不一致：**
