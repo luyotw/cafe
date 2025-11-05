@@ -337,21 +337,89 @@ class TestGeminiExecution:
 class TestCursorExecution:
     """Test Cursor-specific execution."""
 
-    def test_execute_cursor_not_implemented(self) -> None:
-        """測試 Cursor 執行目前尚未實作"""
+    def test_execute_cursor_calls_cli(self) -> None:
+        """測試執行 Cursor 會呼叫 cursor-agent CLI with streaming"""
         config = AgentConfig(name="David", cli=AgentCLI.CURSOR)
         executor = AgentExecutor(config)
 
-        with pytest.raises(NotImplementedError, match="Cursor execution not yet implemented"):
-            executor._execute_cursor("Test prompt")
+        with patch("subprocess.Popen") as mock_popen:
+            # Mock process
+            mock_process = MagicMock()
+            mock_process.stdout.readline.side_effect = [
+                '{"response": "Cursor response"}\n',
+                '',  # EOF
+            ]
+            mock_process.stderr.read.return_value = ""
+            mock_process.wait.return_value = 0
+            mock_popen.return_value = mock_process
+
+            response, token_usage = executor._execute_cursor("Test prompt")
+
+            assert response == "Cursor response"
+            assert isinstance(token_usage, TokenUsage)
+            mock_popen.assert_called_once()
+            # Verify command structure
+            call_args = mock_popen.call_args[0][0]
+            assert "cursor-agent" in call_args
+            assert "-p" in call_args
+            assert "Test prompt" in call_args
+            assert "--output-format" in call_args
+            assert "json" in call_args
 
     def test_execute_with_cursor_tool(self) -> None:
-        """測試使用 Cursor tool 執行會呼叫 _execute_cursor 並拋出 AgentExecutionError"""
+        """測試使用 Cursor tool 執行"""
         config = AgentConfig(name="David", cli=AgentCLI.CURSOR)
         executor = AgentExecutor(config)
 
-        with pytest.raises(AgentExecutionError, match="Cursor execution not yet implemented"):
-            executor.execute("Test prompt")
+        with patch("subprocess.Popen") as mock_popen:
+            mock_process = MagicMock()
+            mock_process.stdout.readline.side_effect = [
+                '{"response": "Hello from Cursor"}\n',
+                '',
+            ]
+            mock_process.stderr.read.return_value = ""
+            mock_process.wait.return_value = 0
+            mock_popen.return_value = mock_process
+
+            response, token_usage = executor.execute("Test prompt")
+
+            assert response == "Hello from Cursor"
+            assert isinstance(token_usage, TokenUsage)
+
+    def test_execute_cursor_failure(self) -> None:
+        """測試 Cursor 執行失敗時拋出錯誤"""
+        config = AgentConfig(name="David", cli=AgentCLI.CURSOR)
+        executor = AgentExecutor(config)
+
+        with patch("subprocess.Popen") as mock_popen:
+            mock_process = MagicMock()
+            mock_process.stdout.readline.return_value = ''
+            mock_process.stderr.read.return_value = "Error: Connection failed"
+            mock_process.wait.return_value = 1
+            mock_popen.return_value = mock_process
+
+            with pytest.raises(AgentExecutionError, match="Cursor execution failed"):
+                executor._execute_cursor("Test prompt")
+
+    def test_execute_cursor_non_json_response(self) -> None:
+        """測試 Cursor 回傳非 JSON 格式時返回原始輸出"""
+        config = AgentConfig(name="David", cli=AgentCLI.CURSOR)
+        executor = AgentExecutor(config)
+
+        with patch("subprocess.Popen") as mock_popen:
+            mock_process = MagicMock()
+            mock_process.stdout.readline.side_effect = [
+                "Plain text from Cursor\n",
+                '',
+            ]
+            mock_process.stderr.read.return_value = ""
+            mock_process.wait.return_value = 0
+            mock_popen.return_value = mock_process
+
+            response, token_usage = executor._execute_cursor("Test prompt")
+
+            assert response == "Plain text from Cursor\n"
+            assert isinstance(token_usage, TokenUsage)
 
 
 class TestTokenUsageTracking:

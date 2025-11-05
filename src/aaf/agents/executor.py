@@ -326,7 +326,7 @@ class AgentExecutor:
             return full_output, TokenUsage()
 
     def _execute_cursor(self, prompt: str, allowed_tools: Optional[List[str]] = None) -> Tuple[str, TokenUsage]:
-        """Execute Cursor agent.
+        """Execute Cursor agent with streaming output.
 
         Args:
             prompt: Prompt to send to Cursor
@@ -335,8 +335,65 @@ class AgentExecutor:
         Returns:
             Tuple of (Cursor's response, token usage)
         """
-        # Placeholder for Cursor implementation
-        raise NotImplementedError("Cursor execution not yet implemented")
+        # Build command: cursor-agent -p "prompt"
+        cmd = ["cursor-agent", "-p", prompt]
+
+        # Add allowed tools if specified
+        if allowed_tools:
+            cmd.extend(["--allowed-tools", ",".join(allowed_tools)])
+
+        # Add JSON output format for parsing
+        cmd.extend(["--output-format", "json"])
+
+        # Use Popen for streaming output
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,  # Line buffered
+        )
+
+        # Read and print output in real-time
+        output_lines = []
+        print(f"\n{'='*80}")
+        print(f"Cursor Response (streaming):")
+        print(f"{'='*80}")
+
+        while True:
+            line = process.stdout.readline()
+            if not line:
+                break
+            print(line, end='', flush=True)
+            output_lines.append(line)
+
+        print(f"{'='*80}\n")
+
+        # Wait for process to complete
+        stderr_output = process.stderr.read() if process.stderr else ""
+        returncode = process.wait()
+
+        if returncode != 0:
+            raise AgentExecutionError(
+                f"Cursor execution failed with code {returncode}: {stderr_output}"
+            )
+
+        # Combine output
+        full_output = ''.join(output_lines)
+
+        # Parse JSON response
+        try:
+            response_data = json.loads(full_output)
+            response = response_data.get("response", full_output)
+
+            # Parse token usage if available
+            # TODO: Update when Cursor CLI provides token usage info
+            token_usage = TokenUsage()
+
+            return response, token_usage
+        except json.JSONDecodeError:
+            # If not JSON, return raw output
+            return full_output, TokenUsage()
 
     def _execute_copilot(self, prompt: str, allowed_tools: Optional[List[str]] = None) -> Tuple[str, TokenUsage]:
         """Execute GitHub Copilot CLI agent.
