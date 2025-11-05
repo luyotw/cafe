@@ -82,6 +82,73 @@ class AgentExecutor:
         tool_map = self.TOOL_NAME_MAP.get(self.config.cli, {})
         return [tool_map.get(tool, tool) for tool in tools]
 
+    def _execute_with_streaming(
+        self,
+        cmd: List[str],
+        cli_name: str,
+        response_parser: Optional[callable] = None,
+    ) -> Tuple[str, TokenUsage]:
+        """通用的 streaming 執行方法。
+
+        Args:
+            cmd: 完整的命令列表
+            cli_name: CLI 名稱（用於錯誤訊息和顯示）
+            response_parser: 可選的回應解析函數，接收 output_lines 回傳 (response, token_usage)
+
+        Returns:
+            Tuple of (response, token usage)
+        """
+        # Use Popen for streaming output
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,  # Line buffered
+        )
+
+        # Read and print output in real-time
+        output_lines = []
+        print(f"\n{'='*80}")
+        print(f"{cli_name} Response (streaming):")
+        print(f"{'='*80}")
+
+        while True:
+            line = process.stdout.readline()
+            if not line:
+                break
+            print(line, end='', flush=True)
+            output_lines.append(line)
+
+        print(f"{'='*80}\n")
+
+        # Wait for process to complete
+        stderr_output = process.stderr.read() if process.stderr else ""
+        returncode = process.wait()
+
+        if returncode != 0:
+            raise AgentExecutionError(
+                f"{cli_name} execution failed with code {returncode}: {stderr_output}"
+            )
+
+        # Use custom parser if provided, otherwise default JSON parsing
+        if response_parser:
+            return response_parser(output_lines)
+        
+        # Default: parse full output as JSON
+        full_output = ''.join(output_lines)
+        try:
+            response_data = json.loads(full_output)
+            response = response_data.get("response", full_output)
+            
+            # Parse token usage if available
+            token_usage = TokenUsage()
+            
+            return response, token_usage
+        except json.JSONDecodeError:
+            # If not JSON, return raw output
+            return full_output, TokenUsage()
+
     def execute(self, prompt: str, allowed_tools: Optional[List[str]] = None) -> Tuple[str, TokenUsage]:
         """Execute the agent with given prompt.
 
@@ -261,7 +328,7 @@ class AgentExecutor:
         Returns:
             Tuple of (Gemini's response, token usage)
         """
-        # Build command: use positional prompt
+        # Build command
         cmd = ["gemini", prompt]
 
         # Add allowed tools if specified
@@ -271,59 +338,28 @@ class AgentExecutor:
         # Add streaming JSON output format
         cmd.extend(["--output-format", "streaming-json"])
 
-        # Use Popen for streaming output
-        process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            bufsize=1,  # Line buffered
-        )
-
-        # Read and print output in real-time
-        output_lines = []
-        print(f"\n{'='*80}")
-        print(f"Gemini Response (streaming):")
-        print(f"{'='*80}")
-
-        while True:
-            line = process.stdout.readline()
-            if not line:
-                break
-            print(line, end='', flush=True)
-            output_lines.append(line)
-
-        print(f"{'='*80}\n")
-
-        # Wait for process to complete
-        stderr_output = process.stderr.read() if process.stderr else ""
-        returncode = process.wait()
-
-        if returncode != 0:
-            raise AgentExecutionError(
-                f"Gemini execution failed with code {returncode}: {stderr_output}"
-            )
-
-        # Combine output and parse last JSON line (final result)
-        full_output = ''.join(output_lines)
-        
-        # Parse the last line as JSON (streaming-json format sends final result on last line)
-        try:
-            lines = [l.strip() for l in output_lines if l.strip()]
-            if not lines:
-                return "", TokenUsage()
+        # Gemini-specific parser: parse last line as final result
+        def parse_gemini_response(output_lines: List[str]) -> Tuple[str, TokenUsage]:
+            full_output = ''.join(output_lines)
             
-            last_json = json.loads(lines[-1])
-            response = last_json.get("response", full_output)
+            # Parse the last line as JSON (streaming-json format sends final result on last line)
+            try:
+                lines = [l.strip() for l in output_lines if l.strip()]
+                if not lines:
+                    return "", TokenUsage()
+                
+                last_json = json.loads(lines[-1])
+                response = last_json.get("response", full_output)
 
-            # Parse token usage if available
-            # TODO: Update when Gemini CLI provides token usage info
-            token_usage = TokenUsage()
+                # Parse token usage if available
+                token_usage = TokenUsage()
 
-            return response, token_usage
-        except json.JSONDecodeError:
-            # If not JSON, return raw output with empty token usage
-            return full_output, TokenUsage()
+                return response, token_usage
+            except json.JSONDecodeError:
+                # If not JSON, return raw output
+                return full_output, TokenUsage()
+
+        return self._execute_with_streaming(cmd, "Gemini", parse_gemini_response)
 
     def _execute_cursor(self, prompt: str, allowed_tools: Optional[List[str]] = None) -> Tuple[str, TokenUsage]:
         """Execute Cursor agent with streaming output.
@@ -335,7 +371,7 @@ class AgentExecutor:
         Returns:
             Tuple of (Cursor's response, token usage)
         """
-        # Build command: cursor-agent -p "prompt"
+        # Build command
         cmd = ["cursor-agent", "-p", prompt]
 
         # Add allowed tools if specified
@@ -345,55 +381,8 @@ class AgentExecutor:
         # Add JSON output format for parsing
         cmd.extend(["--output-format", "json"])
 
-        # Use Popen for streaming output
-        process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            bufsize=1,  # Line buffered
-        )
-
-        # Read and print output in real-time
-        output_lines = []
-        print(f"\n{'='*80}")
-        print(f"Cursor Response (streaming):")
-        print(f"{'='*80}")
-
-        while True:
-            line = process.stdout.readline()
-            if not line:
-                break
-            print(line, end='', flush=True)
-            output_lines.append(line)
-
-        print(f"{'='*80}\n")
-
-        # Wait for process to complete
-        stderr_output = process.stderr.read() if process.stderr else ""
-        returncode = process.wait()
-
-        if returncode != 0:
-            raise AgentExecutionError(
-                f"Cursor execution failed with code {returncode}: {stderr_output}"
-            )
-
-        # Combine output
-        full_output = ''.join(output_lines)
-
-        # Parse JSON response
-        try:
-            response_data = json.loads(full_output)
-            response = response_data.get("response", full_output)
-
-            # Parse token usage if available
-            # TODO: Update when Cursor CLI provides token usage info
-            token_usage = TokenUsage()
-
-            return response, token_usage
-        except json.JSONDecodeError:
-            # If not JSON, return raw output
-            return full_output, TokenUsage()
+        # Use default parser (full JSON output)
+        return self._execute_with_streaming(cmd, "Cursor")
 
     def _execute_copilot(self, prompt: str, allowed_tools: Optional[List[str]] = None) -> Tuple[str, TokenUsage]:
         """Execute GitHub Copilot CLI agent.
@@ -406,7 +395,6 @@ class AgentExecutor:
             Tuple of (Copilot's response, token usage)
         """
         from pathlib import Path
-        import os
         import time
 
         # Copilot 的 session 目錄
@@ -433,59 +421,27 @@ class AgentExecutor:
         if self.config.session_id:
             cmd.extend(["--resume", self.config.session_id])
 
-        # Use Popen for streaming output
-        process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            bufsize=1,  # Line buffered
-        )
+        # Copilot-specific parser: no JSON, just raw output + session detection
+        def parse_copilot_response(output_lines: List[str]) -> Tuple[str, TokenUsage]:
+            response = ''.join(output_lines)
+            
+            # 如果還沒有 session_id，嘗試從新建立的 session 檔案中提取
+            if not self.config.session_id and copilot_session_dir.exists():
+                # 等待一下讓檔案系統更新
+                time.sleep(0.1)
+                current_sessions = {f.name for f in copilot_session_dir.iterdir() if f.is_file()}
+                new_sessions = current_sessions - existing_sessions
 
-        # Read and print output in real-time
-        output_lines = []
-        print(f"\n{'='*80}")
-        print(f"Copilot Response (streaming):")
-        print(f"{'='*80}")
+                if new_sessions:
+                    # 找到新建立的 session，提取 UUID（檔名去掉 .jsonl）
+                    newest_session = sorted(new_sessions)[-1]  # 取最新的
+                    session_id = newest_session.replace(".jsonl", "")
+                    self.config.session_id = session_id
+                    # Print session creation message
+                    print(f"ℹ️  Created new session: {session_id}")
 
-        if process.stdout:
-            for line in iter(process.stdout.readline, ''):
-                if not line:
-                    break
-                print(line, end='')  # Print immediately
-                output_lines.append(line)
+            # Copilot doesn't provide JSON output format yet, return raw output
+            token_usage = TokenUsage()
+            return response, token_usage
 
-        print(f"{'='*80}\n")
-
-        # Wait for process to complete
-        stderr_output = process.stderr.read() if process.stderr else ""
-        returncode = process.wait()
-
-        if returncode != 0:
-            raise AgentExecutionError(
-                f"Copilot execution failed with code {returncode}: {stderr_output}"
-            )
-
-        # Combine output
-        response = ''.join(output_lines)
-
-        # 如果還沒有 session_id，嘗試從新建立的 session 檔案中提取
-        if not self.config.session_id and copilot_session_dir.exists():
-            # 等待一下讓檔案系統更新
-            time.sleep(0.1)
-            current_sessions = {f.name for f in copilot_session_dir.iterdir() if f.is_file()}
-            new_sessions = current_sessions - existing_sessions
-
-            if new_sessions:
-                # 找到新建立的 session，提取 UUID（檔名去掉 .jsonl）
-                newest_session = sorted(new_sessions)[-1]  # 取最新的
-                session_id = newest_session.replace(".jsonl", "")
-                self.config.session_id = session_id
-                # Print session creation message
-                print(f"ℹ️  Created new session: {session_id}")
-
-        # Copilot doesn't provide JSON output format yet, return raw output
-        # TODO: Update when Copilot CLI provides structured output
-        token_usage = TokenUsage()
-
-        return response, token_usage
+        return self._execute_with_streaming(cmd, "Copilot", parse_copilot_response)
