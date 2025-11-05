@@ -249,38 +249,49 @@ class TestGeminiExecution:
     """Test Gemini-specific execution."""
 
     def test_execute_gemini_calls_cli(self) -> None:
-        """測試執行 Gemini 會呼叫 gemini CLI"""
+        """測試執行 Gemini 會呼叫 gemini CLI with streaming"""
         config = AgentConfig(name="Roger", cli=AgentCLI.GEMINI)
         executor = AgentExecutor(config)
 
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(
-                stdout='{"response": "Gemini response"}',
-                returncode=0
-            )
+        with patch("subprocess.Popen") as mock_popen:
+            # Mock process
+            mock_process = MagicMock()
+            mock_process.stdout.readline.side_effect = [
+                '{"chunk": "Gemini "}\n',
+                '{"chunk": "response"}\n',
+                '{"response": "Gemini response"}\n',
+                '',  # EOF
+            ]
+            mock_process.stderr.read.return_value = ""
+            mock_process.wait.return_value = 0
+            mock_popen.return_value = mock_process
 
             response, token_usage = executor._execute_gemini("Test prompt")
 
             assert response == "Gemini response"
             assert isinstance(token_usage, TokenUsage)
-            mock_run.assert_called_once()
+            mock_popen.assert_called_once()
             # Verify command structure
-            call_args = mock_run.call_args[0][0]
+            call_args = mock_popen.call_args[0][0]
             assert "gemini" in call_args
             assert "Test prompt" in call_args
             assert "--output-format" in call_args
-            assert "json" in call_args
+            assert "streaming-json" in call_args
 
     def test_execute_with_gemini_tool(self) -> None:
         """測試使用 Gemini tool 執行"""
         config = AgentConfig(name="Roger", cli=AgentCLI.GEMINI)
         executor = AgentExecutor(config)
 
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(
-                stdout='{"response": "Hi there"}',
-                returncode=0
-            )
+        with patch("subprocess.Popen") as mock_popen:
+            mock_process = MagicMock()
+            mock_process.stdout.readline.side_effect = [
+                '{"response": "Hi there"}\n',
+                '',
+            ]
+            mock_process.stderr.read.return_value = ""
+            mock_process.wait.return_value = 0
+            mock_popen.return_value = mock_process
 
             response, token_usage = executor.execute("Test prompt")
 
@@ -292,12 +303,12 @@ class TestGeminiExecution:
         config = AgentConfig(name="Roger", cli=AgentCLI.GEMINI)
         executor = AgentExecutor(config)
 
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(
-                stdout="",
-                stderr="Error: API key not found",
-                returncode=1
-            )
+        with patch("subprocess.Popen") as mock_popen:
+            mock_process = MagicMock()
+            mock_process.stdout.readline.return_value = ''
+            mock_process.stderr.read.return_value = "Error: API key not found"
+            mock_process.wait.return_value = 1
+            mock_popen.return_value = mock_process
 
             with pytest.raises(AgentExecutionError, match="Gemini execution failed"):
                 executor._execute_gemini("Test prompt")
@@ -307,15 +318,19 @@ class TestGeminiExecution:
         config = AgentConfig(name="Roger", cli=AgentCLI.GEMINI)
         executor = AgentExecutor(config)
 
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(
-                stdout="Plain text response",
-                returncode=0
-            )
+        with patch("subprocess.Popen") as mock_popen:
+            mock_process = MagicMock()
+            mock_process.stdout.readline.side_effect = [
+                "Plain text response\n",
+                '',
+            ]
+            mock_process.stderr.read.return_value = ""
+            mock_process.wait.return_value = 0
+            mock_popen.return_value = mock_process
 
             response, token_usage = executor._execute_gemini("Test prompt")
 
-            assert response == "Plain text response"
+            assert response == "Plain text response\n"
             assert isinstance(token_usage, TokenUsage)
 
 

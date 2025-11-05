@@ -252,7 +252,7 @@ class AgentExecutor:
             ) from e
 
     def _execute_gemini(self, prompt: str, allowed_tools: Optional[List[str]] = None) -> Tuple[str, TokenUsage]:
-        """Execute Gemini agent.
+        """Execute Gemini agent with streaming output.
 
         Args:
             prompt: Prompt to send to Gemini
@@ -268,33 +268,62 @@ class AgentExecutor:
         if allowed_tools:
             cmd.extend(["--allowed-tools", ",".join(allowed_tools)])
 
-        cmd.extend(["--output-format", "json"])
+        # Add streaming JSON output format
+        cmd.extend(["--output-format", "streaming-json"])
 
-        result = subprocess.run(
+        # Use Popen for streaming output
+        process = subprocess.Popen(
             cmd,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            check=False,
+            bufsize=1,  # Line buffered
         )
 
-        if result.returncode != 0:
+        # Read and print output in real-time
+        output_lines = []
+        print(f"\n{'='*80}")
+        print(f"Gemini Response (streaming):")
+        print(f"{'='*80}")
+
+        while True:
+            line = process.stdout.readline()
+            if not line:
+                break
+            print(line, end='', flush=True)
+            output_lines.append(line)
+
+        print(f"{'='*80}\n")
+
+        # Wait for process to complete
+        stderr_output = process.stderr.read() if process.stderr else ""
+        returncode = process.wait()
+
+        if returncode != 0:
             raise AgentExecutionError(
-                f"Gemini execution failed with code {result.returncode}: {result.stderr}"
+                f"Gemini execution failed with code {returncode}: {stderr_output}"
             )
 
-        # Parse JSON response
+        # Combine output and parse last JSON line (final result)
+        full_output = ''.join(output_lines)
+        
+        # Parse the last line as JSON (streaming-json format sends final result on last line)
         try:
-            response_data = json.loads(result.stdout)
-            response = response_data.get("response", result.stdout)
+            lines = [l.strip() for l in output_lines if l.strip()]
+            if not lines:
+                return "", TokenUsage()
+            
+            last_json = json.loads(lines[-1])
+            response = last_json.get("response", full_output)
 
-            # Parse token usage (Gemini format may differ from Claude)
+            # Parse token usage if available
             # TODO: Update when Gemini CLI provides token usage info
             token_usage = TokenUsage()
 
             return response, token_usage
         except json.JSONDecodeError:
             # If not JSON, return raw output with empty token usage
-            return result.stdout, TokenUsage()
+            return full_output, TokenUsage()
 
     def _execute_cursor(self, prompt: str, allowed_tools: Optional[List[str]] = None) -> Tuple[str, TokenUsage]:
         """Execute Cursor agent.
