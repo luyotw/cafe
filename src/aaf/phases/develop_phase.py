@@ -189,11 +189,12 @@ class DevelopPhase(Phase):
         with open(iteration_file, "w", encoding="utf-8") as f:
             json.dump(iteration_data, f, ensure_ascii=False, indent=2)
 
-    def _save_progress(self, status_code: PhaseStatusCode) -> None:
+    def _save_progress(self, status_code: PhaseStatusCode, handled_review_timestamp: Optional[str] = None) -> None:
         """Save phase progress to status.json.
 
         Args:
             status_code: Phase status code
+            handled_review_timestamp: Timestamp of review feedback that was handled (if any)
         """
         status_file = self.history_dir.parent / "status.json"
         status_file.parent.mkdir(parents=True, exist_ok=True)
@@ -209,9 +210,14 @@ class DevelopPhase(Phase):
             iteration=self.iteration,
             message=f"Phase completed with {status_code.value}" if phase_status == PhaseStatus.COMPLETED else f"Iteration {self.iteration}",
         )
+        
+        # Add handled_review_timestamp if provided
+        progress_dict = progress.to_dict()
+        if handled_review_timestamp:
+            progress_dict["handled_review_timestamp"] = handled_review_timestamp
 
         with open(status_file, 'w', encoding='utf-8') as f:
-            json.dump(progress.to_dict(), f, ensure_ascii=False, indent=2)
+            json.dump(progress_dict, f, ensure_ascii=False, indent=2)
 
     def _load_progress(self) -> Optional[PhaseProgress]:
         """Load phase progress from status.json.
@@ -405,29 +411,31 @@ class DevelopPhase(Phase):
                 # Check if there's review feedback that requires handling
                 review_status = self._load_review_status()
                 if review_status and review_status.get("status_code") == "AAF_NEEDS_CHANGES":
-                    # Check timestamps to see if review is newer than develop completion
-                    develop_timestamp = existing_progress.timestamp.isoformat()
+                    # Check if this review has already been handled
                     review_timestamp = review_status.get("timestamp", "")
                     
-                    if review_timestamp > develop_timestamp:
-                        # Review feedback is newer, reset develop status
-                        print("ℹ️  Review feedback detected (AAF_NEEDS_CHANGES). Resetting develop phase status...")
-                        # Delete status.json to reset the phase
-                        status_file = self.history_dir.parent / "status.json"
-                        if status_file.exists():
-                            status_file.unlink()
-                        # Continue to execute (don't return early)
-                    else:
-                        # Develop completion is newer, ignore old review feedback
-                        return PhaseResult(
-                            status=PhaseStatus.COMPLETED,
-                            message=f"Development already completed in {existing_progress.iteration} iteration(s)",
-                            data={
-                                "branch": self._get_branch_name(),
-                                "iterations": existing_progress.iteration,
-                                "status_code": existing_progress.status_code,
-                            },
-                        )
+                    # Load develop status.json to check handled_review_timestamp
+                    status_file = self.history_dir.parent / "status.json"
+                    if status_file.exists():
+                        with open(status_file, 'r', encoding='utf-8') as f:
+                            develop_status = json.load(f)
+                            handled_review_timestamp = develop_status.get("handled_review_timestamp")
+                            
+                            if handled_review_timestamp == review_timestamp:
+                                # This review has already been handled
+                                return PhaseResult(
+                                    status=PhaseStatus.COMPLETED,
+                                    message=f"Development already completed in {existing_progress.iteration} iteration(s)",
+                                    data={
+                                        "branch": self._get_branch_name(),
+                                        "iterations": existing_progress.iteration,
+                                        "status_code": existing_progress.status_code,
+                                    },
+                                )
+                    
+                    # Review exists and hasn't been handled yet, continue execution
+                    print("ℹ️  Review feedback detected (AAF_NEEDS_CHANGES). Continuing development...")
+                    # Don't return early - let execution continue to handle review feedback
                 else:
                     # No review feedback or review passed, phase is truly completed
                     return PhaseResult(
@@ -550,7 +558,14 @@ class DevelopPhase(Phase):
                     response=response,
                     status_code=PhaseStatusCode.CONFIRMED,
                 )
-                self._save_progress(PhaseStatusCode.CONFIRMED)
+                
+                # Record review timestamp if we're responding to review feedback
+                review_status = self._load_review_status()
+                handled_review_timestamp = None
+                if review_status and review_status.get("status_code") == "AAF_NEEDS_CHANGES":
+                    handled_review_timestamp = review_status.get("timestamp")
+                
+                self._save_progress(PhaseStatusCode.CONFIRMED, handled_review_timestamp)
                 
                 token_usage = self.agent_manager.get_total_token_usage()
                 
