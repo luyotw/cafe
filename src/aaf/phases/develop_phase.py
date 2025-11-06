@@ -405,14 +405,29 @@ class DevelopPhase(Phase):
                 # Check if there's review feedback that requires handling
                 review_status = self._load_review_status()
                 if review_status and review_status.get("status_code") == "AAF_NEEDS_CHANGES":
-                    # Review feedback with NEEDS_CHANGES exists
-                    # Reset develop status to allow re-execution
-                    print("ℹ️  Review feedback detected (AAF_NEEDS_CHANGES). Resetting develop phase status...")
-                    # Delete status.json to reset the phase
-                    status_file = self.history_dir.parent / "status.json"
-                    if status_file.exists():
-                        status_file.unlink()
-                    # Continue to execute (don't return early)
+                    # Check timestamps to see if review is newer than develop completion
+                    develop_timestamp = existing_progress.timestamp.isoformat()
+                    review_timestamp = review_status.get("timestamp", "")
+                    
+                    if review_timestamp > develop_timestamp:
+                        # Review feedback is newer, reset develop status
+                        print("ℹ️  Review feedback detected (AAF_NEEDS_CHANGES). Resetting develop phase status...")
+                        # Delete status.json to reset the phase
+                        status_file = self.history_dir.parent / "status.json"
+                        if status_file.exists():
+                            status_file.unlink()
+                        # Continue to execute (don't return early)
+                    else:
+                        # Develop completion is newer, ignore old review feedback
+                        return PhaseResult(
+                            status=PhaseStatus.COMPLETED,
+                            message=f"Development already completed in {existing_progress.iteration} iteration(s)",
+                            data={
+                                "branch": self._get_branch_name(),
+                                "iterations": existing_progress.iteration,
+                                "status_code": existing_progress.status_code,
+                            },
+                        )
                 else:
                     # No review feedback or review passed, phase is truly completed
                     return PhaseResult(

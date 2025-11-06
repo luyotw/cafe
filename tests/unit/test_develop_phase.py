@@ -786,17 +786,6 @@ class TestDevelopPhaseReviewFeedback:
         plan_file.write_text("Test plan")
         review_file.write_text("AAF_NEEDS_CHANGES\n\nPlease fix the bug in function X.")
         
-        # Create review status.json with NEEDS_CHANGES
-        review_status_file = review_dir / "status.json"
-        review_status_data = {
-            "phase": "review",
-            "status": "completed",
-            "status_code": "AAF_NEEDS_CHANGES",
-            "iteration": 1,
-            "timestamp": datetime.now().isoformat()
-        }
-        review_status_file.write_text(json.dumps(review_status_data, indent=2))
-
         # Create iteration history file
         history_dir = develop_dir / "history"
         history_dir.mkdir(parents=True)
@@ -820,6 +809,19 @@ class TestDevelopPhaseReviewFeedback:
             "timestamp": datetime.now().isoformat()
         }
         status_file.write_text(json.dumps(status_data, indent=2))
+        
+        # Create review status.json with NEEDS_CHANGES (after develop completes)
+        import time
+        time.sleep(0.01)  # Ensure review timestamp is after develop
+        review_status_file = review_dir / "status.json"
+        review_status_data = {
+            "phase": "review",
+            "status": "completed",
+            "status_code": "AAF_NEEDS_CHANGES",
+            "iteration": 1,
+            "timestamp": datetime.now().isoformat()
+        }
+        review_status_file.write_text(json.dumps(review_status_data, indent=2))
 
         # Mock agent response
         agent_manager.execute.return_value = ("AAF_CONFIRMED\n修正完成", TokenUsage())
@@ -932,17 +934,7 @@ class TestDevelopPhaseReviewFeedback:
         plan_file.write_text("Test plan")
         review_file.write_text("AAF_NEEDS_CHANGES\n\nPlease fix commit messages.")
 
-        # Create review status.json with NEEDS_CHANGES
-        review_status_data = {
-            "phase": "review",
-            "status": "completed",
-            "status_code": "AAF_NEEDS_CHANGES",
-            "iteration": 1,
-            "timestamp": datetime.now().isoformat()
-        }
-        review_status_file.write_text(json.dumps(review_status_data, indent=2))
-
-        # Create develop status.json indicating COMPLETED
+        # Create develop status.json indicating COMPLETED (first)
         develop_status_data = {
             "phase": "develop",
             "status": "completed",
@@ -951,6 +943,18 @@ class TestDevelopPhaseReviewFeedback:
             "timestamp": datetime.now().isoformat()
         }
         develop_status_file.write_text(json.dumps(develop_status_data, indent=2))
+
+        # Create review status.json with NEEDS_CHANGES (after develop)
+        import time
+        time.sleep(0.01)  # Ensure review is after develop
+        review_status_data = {
+            "phase": "review",
+            "status": "completed",
+            "status_code": "AAF_NEEDS_CHANGES",
+            "iteration": 1,
+            "timestamp": datetime.now().isoformat()
+        }
+        review_status_file.write_text(json.dumps(review_status_data, indent=2))
 
         # Mock agent response
         agent_manager.execute.return_value = ("AAF_CONFIRMED\n修正完成", TokenUsage())
