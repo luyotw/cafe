@@ -161,8 +161,8 @@ class TestClaudeExecution:
             assert isinstance(token_usage, TokenUsage)
             assert token_usage.input_tokens == 0
 
-    def test_execute_claude_session_already_in_use_creates_new_session(self) -> None:
-        """測試當 session 已被使用時，自動創建新 session 並重試"""
+    def test_execute_claude_session_already_in_use_raises_conflict_error(self) -> None:
+        """測試當 session 已被使用時，拋出 SESSION_CONFLICT 錯誤"""
         config = AgentConfig(
             name="Roger",
             cli=AgentCLI.CLAUDE,
@@ -170,44 +170,20 @@ class TestClaudeExecution:
         )
         executor = AgentExecutor(config)
 
-        call_count = 0
+        with patch("subprocess.run") as mock_run:
+            # Session already in use error
+            mock_run.return_value = MagicMock(
+                stdout="",
+                stderr="Error: Session ID old-session-id is already in use.",
+                returncode=1
+            )
 
-        def mock_run_side_effect(*args, **kwargs):
-            nonlocal call_count
-            call_count += 1
-
-            # First call: session already in use error
-            if call_count == 1:
-                return MagicMock(
-                    stdout="",
-                    stderr="Error: Session ID old-session-id is already in use.",
-                    returncode=1
-                )
-            # Second call: create new session
-            elif call_count == 2:
-                return MagicMock(
-                    stdout='{"session_id": "new-session-123", "result": "Hi!"}',
-                    returncode=0
-                )
-            # Third call: retry with new session succeeds
-            else:
-                return MagicMock(
-                    stdout='{"result": "Success with new session"}',
-                    returncode=0
-                )
-
-        with patch("subprocess.run", side_effect=mock_run_side_effect) as mock_run:
-            response, token_usage = executor._execute_claude("Test prompt")
-
-            # Should have called run 3 times:
-            # 1. Initial attempt (fails with "already in use")
-            # 2. Create new session
-            # 3. Retry with new session
-            assert mock_run.call_count == 3
-            assert response == "Success with new session"
-            assert isinstance(token_usage, TokenUsage)
-            # Session ID should be updated
-            assert executor.config.session_id == "new-session-123"
+            # Should raise AgentExecutionError with SESSION_CONFLICT type
+            with pytest.raises(AgentExecutionError) as exc_info:
+                executor._execute_claude("Test prompt")
+            
+            assert exc_info.value.error_type == "SESSION_CONFLICT"
+            assert "already in use" in str(exc_info.value)
 
     def test_create_new_session_success(self) -> None:
         """測試成功創建新 session"""

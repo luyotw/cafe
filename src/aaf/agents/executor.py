@@ -9,8 +9,10 @@ from aaf.core.types import AgentConfig, AgentCLI, TokenUsage
 
 class AgentExecutionError(Exception):
     """Agent execution error."""
-
-    pass
+    
+    def __init__(self, message: str, error_type: Optional[str] = None):
+        super().__init__(message)
+        self.error_type = error_type
 
 
 class AgentExecutor:
@@ -208,9 +210,6 @@ class AgentExecutor:
         Returns:
             Tuple of (Claude's response, token usage)
         """
-        # Reset retry flag at the start of each execution
-        self._session_retry_attempted = False
-        
         # Build command: prompt must come first, then options
         cmd = ["claude", "--print", prompt]
 
@@ -233,22 +232,32 @@ class AgentExecutor:
         )
 
         if result.returncode != 0:
-            # Check if session is already in use
+            # Check for specific error patterns
             if "already in use" in result.stderr:
-                # Only retry once - create a new session and retry
-                if not hasattr(self, '_session_retry_attempted'):
-                    self._session_retry_attempted = True
-                    new_session_id = self._create_new_session()
-                    self.config.session_id = new_session_id
-                    # Print session creation message
-                    print(f"ℹ️  Created new session: {new_session_id}")
-                    # Retry with new session (preserve allowed_tools)
-                    return self._execute_claude(prompt, allowed_tools)
-                else:
-                    # Already retried once, don't retry again
+                # Check if it's the current session that's in conflict
+                # Only raise SESSION_CONFLICT if we have a session_id and it matches the error
+                if self.config.session_id and self.config.session_id in result.stderr:
+                    # Our session is in conflict - let caller handle it
                     raise AgentExecutionError(
-                        f"Claude session conflict persists after retry: {result.stderr}"
+                        f"Claude session already in use",
+                        error_type="SESSION_CONFLICT"
                     )
+                else:
+                    # Different session conflict (e.g., just created session still busy)
+                    # This is a transient error, just fail directly
+                    raise AgentExecutionError(
+                        f"Claude execution failed: {result.stderr}"
+                    )
+            
+            # Check if it's an API error with clear message
+            if "is_error" in result.stdout:
+                try:
+                    error_data = json.loads(result.stdout)
+                    if error_data.get("is_error"):
+                        error_msg = error_data.get("content", result.stderr)
+                        raise AgentExecutionError(f"Claude API error: {error_msg}")
+                except json.JSONDecodeError:
+                    pass
 
             raise AgentExecutionError(
                 f"Claude execution failed with code {result.returncode}: {result.stderr}"
