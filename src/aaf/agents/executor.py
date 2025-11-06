@@ -208,6 +208,9 @@ class AgentExecutor:
         Returns:
             Tuple of (Claude's response, token usage)
         """
+        # Reset retry flag at the start of each execution
+        self._session_retry_attempted = False
+        
         # Build command: prompt must come first, then options
         cmd = ["claude", "--print", prompt]
 
@@ -232,13 +235,20 @@ class AgentExecutor:
         if result.returncode != 0:
             # Check if session is already in use
             if "already in use" in result.stderr:
-                # Create a new session and retry
-                new_session_id = self._create_new_session()
-                self.config.session_id = new_session_id
-                # Print session creation message
-                print(f"ℹ️  Created new session: {new_session_id}")
-                # Retry with new session (preserve allowed_tools)
-                return self._execute_claude(prompt, allowed_tools)
+                # Only retry once - create a new session and retry
+                if not hasattr(self, '_session_retry_attempted'):
+                    self._session_retry_attempted = True
+                    new_session_id = self._create_new_session()
+                    self.config.session_id = new_session_id
+                    # Print session creation message
+                    print(f"ℹ️  Created new session: {new_session_id}")
+                    # Retry with new session (preserve allowed_tools)
+                    return self._execute_claude(prompt, allowed_tools)
+                else:
+                    # Already retried once, don't retry again
+                    raise AgentExecutionError(
+                        f"Claude session conflict persists after retry: {result.stderr}"
+                    )
 
             raise AgentExecutionError(
                 f"Claude execution failed with code {result.returncode}: {result.stderr}"
