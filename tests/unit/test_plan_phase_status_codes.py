@@ -85,6 +85,7 @@ class TestPlanPhaseWithStatusCodes:
         plan_file.write_text("## 開發指南\nSome guide\n\n## 實作計畫\nTODO")
 
         agent_manager = MagicMock(spec=AgentManager)
+        agent_manager.get_agent_config = MagicMock(return_value=MagicMock(cli=MagicMock(value="claude")))
         # First iteration needs clarification, second confirms
         agent_manager.execute.side_effect = [
             ("AAF_NEED_CLARIFICATION\n請補充更多資訊。", TokenUsage()),
@@ -98,10 +99,14 @@ class TestPlanPhaseWithStatusCodes:
             permission_handler=permission_handler,
             spec_file=str(requirements_file),
             workflow_mode=WorkflowMode.LOCAL,
-            interactive=False,
+            interactive=True,
         )
 
-        result = phase.execute()
+        # Mock user input and confirmation
+        from unittest.mock import patch
+        with patch.object(phase.display, 'get_multiline_input', return_value="補充資訊"), \
+             patch('builtins.input', return_value='c'):  # 'c' for confirm
+            result = phase.execute()
 
         assert result.status == PhaseStatus.COMPLETED
         assert result.data.get("iterations") == 2
