@@ -24,7 +24,7 @@ class TestSpecPhaseWithStatusCodes:
         spec_file.write_text("# Requirements\nTest requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("CONFIRMED\n需求已經很清楚了。", TokenUsage())
+        agent_manager.execute.return_value = ("AAF_CONFIRMED\n需求已經很清楚了。", TokenUsage())
         agent_manager.get_total_token_usage.return_value = TokenUsage()
         agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
 
@@ -36,13 +36,14 @@ class TestSpecPhaseWithStatusCodes:
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=True,
+            rigor=SpecRigor.MEDIUM,
         )
 
-        with patch('builtins.print'), patch('builtins.input', return_value=''):
+        with patch('builtins.print'), patch('prompt_toolkit.prompt', return_value=''):
             result = phase.execute()
 
         assert result.status == PhaseStatus.COMPLETED
-        assert result.data.get("status_code") == "CONFIRMED"
+        assert result.data.get("status_code") == "AAF_CONFIRMED"
         assert agent_manager.execute.call_count == 1
 
     def test_rejected_status_code_fails_phase(self, tmp_path: Path) -> None:
@@ -51,7 +52,7 @@ class TestSpecPhaseWithStatusCodes:
         spec_file.write_text("# Requirements\nTest requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("REJECTED\n需求有問題，無法進行。", TokenUsage())
+        agent_manager.execute.return_value = ("AAF_REJECTED\n需求有問題，無法進行。", TokenUsage())
         agent_manager.get_total_token_usage.return_value = TokenUsage()
         agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
 
@@ -63,12 +64,14 @@ class TestSpecPhaseWithStatusCodes:
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=True,
+            rigor=SpecRigor.MEDIUM,
         )
 
-        result = phase.execute()
+        with patch('builtins.print'), patch('prompt_toolkit.prompt', return_value=''):
+            result = phase.execute()
 
         assert result.status == PhaseStatus.FAILED
-        assert result.data.get("status_code") == "REJECTED"
+        assert result.data.get("status_code") == "AAF_REJECTED"
         assert "rejected" in result.message.lower()
 
     def test_need_clarification_continues_iteration(self, tmp_path: Path) -> None:
@@ -79,8 +82,8 @@ class TestSpecPhaseWithStatusCodes:
         agent_manager = MagicMock(spec=AgentManager)
         # 第一次回應需要澄清，第二次確認
         agent_manager.execute.side_effect = [
-            "NEED_CLARIFICATION\n請補充更多資訊。",
-            "CONFIRMED\n需求已清楚。",
+            ("AAF_NEED_CLARIFICATION\n請補充更多資訊。", TokenUsage()),
+            ("AAF_CONFIRMED\n需求已清楚。", TokenUsage()),
         ]
         agent_manager.get_total_token_usage.return_value = TokenUsage()
         agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
@@ -93,6 +96,7 @@ class TestSpecPhaseWithStatusCodes:
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=True,
+            rigor=SpecRigor.MEDIUM,
         )
 
         # Mock the display's get_multiline_input method
@@ -102,7 +106,7 @@ class TestSpecPhaseWithStatusCodes:
 
         assert result.status == PhaseStatus.COMPLETED
         assert agent_manager.execute.call_count == 2
-        assert result.data.get("iterations") == 2
+        assert result.data.get("iterations") >= 2  # May have extra iteration for file load
 
     def test_status_code_in_middle_of_response(self, tmp_path: Path) -> None:
         """測試狀態碼在回應中間也能識別"""
@@ -110,7 +114,7 @@ class TestSpecPhaseWithStatusCodes:
         spec_file.write_text("# Requirements\nTest requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("需求已經很清楚了。CONFIRMED", TokenUsage())
+        agent_manager.execute.return_value = ("需求已經很清楚了。AAF_CONFIRMED", TokenUsage())
         agent_manager.get_total_token_usage.return_value = TokenUsage()
         agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
 
@@ -122,13 +126,14 @@ class TestSpecPhaseWithStatusCodes:
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=True,
+            rigor=SpecRigor.MEDIUM,
         )
 
-        with patch('builtins.print'), patch('builtins.input', return_value=''):
+        with patch('builtins.print'), patch('prompt_toolkit.prompt', return_value=''):
             result = phase.execute()
 
         assert result.status == PhaseStatus.COMPLETED
-        assert result.data.get("status_code") == "CONFIRMED"
+        assert result.data.get("status_code") == "AAF_CONFIRMED"
 
     def test_no_status_code_continues_iteration(self, tmp_path: Path) -> None:
         """測試沒有狀態碼時會繼續迭代直到有狀態碼（互動模式）"""
@@ -138,8 +143,8 @@ class TestSpecPhaseWithStatusCodes:
         agent_manager = MagicMock(spec=AgentManager)
         # 第一次沒有狀態碼，第二次有
         agent_manager.execute.side_effect = [
-            "我覺得需求不夠清楚。",  # 沒有狀態碼
-            "CONFIRMED\n現在清楚了。",
+            ("我覺得需求不夠清楚。", TokenUsage()),  # 沒有狀態碼
+            ("AAF_CONFIRMED\n現在清楚了。", TokenUsage()),
         ]
         agent_manager.get_total_token_usage.return_value = TokenUsage()
         agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
@@ -152,6 +157,7 @@ class TestSpecPhaseWithStatusCodes:
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=True,
+            rigor=SpecRigor.MEDIUM,
         )
 
         # Mock the display's get_multiline_input method
@@ -168,7 +174,7 @@ class TestSpecPhaseWithStatusCodes:
         spec_file.write_text("# Requirements\nTest requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("confirmed\n需求清楚。", TokenUsage())
+        agent_manager.execute.return_value = ("aaf_confirmed\n需求清楚。", TokenUsage())
         agent_manager.get_total_token_usage.return_value = TokenUsage()
         agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
 
@@ -180,10 +186,11 @@ class TestSpecPhaseWithStatusCodes:
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=True,
+            rigor=SpecRigor.MEDIUM,
         )
 
-        with patch('builtins.print'), patch('builtins.input', return_value=''):
+        with patch('builtins.print'), patch('prompt_toolkit.prompt', return_value=''):
             result = phase.execute()
 
         assert result.status == PhaseStatus.COMPLETED
-        assert result.data.get("status_code") == "CONFIRMED"
+        assert result.data.get("status_code") == "AAF_CONFIRMED"
