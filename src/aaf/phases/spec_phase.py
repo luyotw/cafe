@@ -137,7 +137,7 @@ class SpecPhase(Phase):
             if status_file.exists():
                 with open(status_file, "r", encoding="utf-8") as f:
                     status_data = json.load(f)
-                if status_data.get("status") == "completed" and status_data.get("status_code") == "CONFIRMED":
+                if status_data.get("status") == "completed" and status_data.get("status_code") == PhaseStatusCode.CONFIRMED.value:
                     # Already confirmed, return completed result
                     token_usage = self.agent_manager.get_total_token_usage()
                     return PhaseResult(

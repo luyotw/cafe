@@ -605,7 +605,7 @@ class TestNonInteractiveModeIteration2Plus:
         import json
         (history_dir / "iteration_001.json").write_text(json.dumps({
             "iteration": 1,
-            "pm_response": "NEED_CLARIFICATION\n問題一？",
+            "pm_response": "AAF_NEED_CLARIFICATION\n問題一？",
             "user_response": "",
             "status": "AAF_NEED_CLARIFICATION"
         }))
@@ -667,7 +667,7 @@ class TestNonInteractiveModeIteration2Plus:
         import json
         (history_dir / "iteration_001.json").write_text(json.dumps({
             "iteration": 1,
-            "pm_response": "NEED_CLARIFICATION\n問題一？",
+            "pm_response": "AAF_NEED_CLARIFICATION\n問題一？",
             "user_response": "",
             "status": "AAF_NEED_CLARIFICATION"
         }))
@@ -746,7 +746,7 @@ class TestNonInteractiveModeErrorHandling:
         import json
         (history_dir / "iteration_001.json").write_text(json.dumps({
             "iteration": 1,
-            "pm_response": "NEED_CLARIFICATION\n問題",
+            "pm_response": "AAF_NEED_CLARIFICATION\n問題",
             "user_response": "",
             "status": "AAF_NEED_CLARIFICATION"
         }))
@@ -878,7 +878,7 @@ class TestResumeFromHistory:
         import json
         (history_dir / "iteration_001.json").write_text(json.dumps({
             "iteration": 1,
-            "pm_response": "NEED_CLARIFICATION\n問題一？",
+            "pm_response": "AAF_NEED_CLARIFICATION\n問題一？",
             "user_response": "回答一",
             "status": "AAF_NEED_CLARIFICATION"
         }))
@@ -913,9 +913,9 @@ class TestResumeFromHistory:
         # - iteration 3: NEED_CLARIFICATION (prompts user, then continues to iteration 4)
         # - iteration 4: CONFIRMED (completes)
         agent_manager.execute.side_effect = [
-            "NEED_CLARIFICATION\n問題二？",  # iteration 2
-            "NEED_CLARIFICATION\n問題三？",  # iteration 3
-            "CONFIRMED\n需求已清楚"  # iteration 4
+            ("AAF_NEED_CLARIFICATION\n問題二？", TokenUsage()),  # iteration 2
+            ("AAF_NEED_CLARIFICATION\n問題三？", TokenUsage()),  # iteration 3
+            ("AAF_CONFIRMED\n需求已清楚", TokenUsage())  # iteration 4
         ]
 
         with patch.object(phase.display, 'get_multiline_input', mock_input):
@@ -969,7 +969,7 @@ class TestResumeFromHistory:
         import json
         (history_dir / "iteration_001.json").write_text(json.dumps({
             "iteration": 1,
-            "pm_response": "NEED_CLARIFICATION\n## 使用者故事\n測試\n\n## 待釐清的問題\n1. 問題一？",
+            "pm_response": "AAF_NEED_CLARIFICATION\n## 使用者故事\n測試\n\n## 待釐清的問題\n1. 問題一？",
             "user_response": "",  # No user response yet
             "status": "AAF_NEED_CLARIFICATION"
         }))
@@ -1028,14 +1028,14 @@ class TestResumeFromHistory:
         import json
         (history_dir / "iteration_001.json").write_text(json.dumps({
             "iteration": 1,
-            "pm_response": "NEED_CLARIFICATION\n問題一？",
+            "pm_response": "AAF_NEED_CLARIFICATION\n問題一？",
             "user_response": "回答一",
             "status": "AAF_NEED_CLARIFICATION"
         }))
 
         (history_dir / "iteration_002.json").write_text(json.dumps({
             "iteration": 2,
-            "pm_response": "NEED_CLARIFICATION\n問題二？",
+            "pm_response": "AAF_NEED_CLARIFICATION\n問題二？",
             "user_response": "",
             "status": "AAF_NEED_CLARIFICATION"
         }))
