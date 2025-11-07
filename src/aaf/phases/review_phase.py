@@ -129,6 +129,45 @@ class ReviewPhase(Phase):
                 message=f"Review phase failed: {e}",
             )
 
+    def _check_if_develop_is_newer(self) -> bool:
+        """檢查 develop phase 的時間戳記是否比上次 review 更新。
+
+        Returns:
+            True 如果 develop 更新（需要重新執行所有檢查），False 否則
+        """
+        try:
+            # 取得 issue name
+            spec_path = Path(self.spec_file).resolve()
+            issue_name = spec_path.parent.parent.name
+
+            # 讀取 develop/status.json（使用相對於 spec_file 的路徑）
+            issue_dir = spec_path.parent.parent
+            develop_status_file = issue_dir / "develop" / "status.json"
+            if not develop_status_file.exists():
+                return False
+
+            # 讀取 review/status.json
+            review_status_file = issue_dir / "review" / "status.json"
+            if not review_status_file.exists():
+                # 第一次 review，需要重新執行所有檢查
+                return True
+
+            # 比較時間戳記
+            with open(develop_status_file) as f:
+                develop_data = json.load(f)
+            with open(review_status_file) as f:
+                review_data = json.load(f)
+
+            develop_time = datetime.fromisoformat(develop_data["timestamp"])
+            review_time = datetime.fromisoformat(review_data["timestamp"])
+
+            # 如果 develop 的時間比 review 新，說明有新的變更
+            return develop_time > review_time
+
+        except Exception:
+            # 如果出錯，保守起見返回 True（重新執行檢查）
+            return True
+
     def _generate_review_prompt(self, diff: str) -> str:
         """Generate review prompt.
 
@@ -140,6 +179,18 @@ class ReviewPhase(Phase):
         """
         # Get requirements section
         requirements_section = self._get_requirements_section()
+
+        # 檢查是否需要重新執行檢查（develop 比 review 新）
+        develop_is_newer = self._check_if_develop_is_newer()
+        recheck_instruction = ""
+        if develop_is_newer:
+            recheck_instruction = """
+**【重要提示】develop phase 在上次 review 之後有新的變更，請重新執行所有檢查：**
+- **必須重新執行 git log 指令**，不要使用之前的快取結果
+- 檢查最新的 commit messages 和程式碼變更
+- 這是一次全新的審查，請忽略之前的審查記錄
+
+"""
 
         # Generate status code prompt
         status_code_prompt = generate_status_code_prompt(
@@ -157,7 +208,7 @@ class ReviewPhase(Phase):
         prompt = f"""你是資深軟體工程師 {self.review_agent}，正在進行程式碼審查 (Code Review)。
 
 {status_code_prompt}
-
+{recheck_instruction}
 **需求規格與實作計畫:**
 {requirements_section}
 
@@ -175,18 +226,18 @@ class ReviewPhase(Phase):
    - **如果發現風格不一致：**
      - 明確列出哪些 commit SHA 和 message 不符合風格
      - 說明正確的風格範例（根據基礎分支的實際風格）
-     - **重要：提供完整的 shell 指令讓 developer 直接執行（每個 commit 一條）**
+     - **重要：提供完整的 shell 指令讓 developer 直接執行（每個 commit 一條），禁止使用專案目錄外的檔案路徑**
      - **Developer 可以直接執行這些指令，不需要請求權限，也不要用互動式 rebase**
      
      指令範例：
      ```bash
      # 修改 commit abc123 的 message
-     echo "Fix login logic" > commit_msg.txt && \\
+     echo "Fix login logic" > ./commit_msg.txt && \\
      git rebase --onto {self.base_branch} {self.base_branch} HEAD --exec '
        if test $(git rev-parse HEAD) = abc123 || test $(git rev-parse HEAD) = $(git rev-parse abc123); then
-         git commit --amend -F commit_msg.txt --allow-empty --no-edit;
+         git commit --amend -F ./commit_msg.txt --allow-empty --no-edit;
        fi
-     ' && rm -f commit_msg.txt
+     ' && rm -f ./commit_msg.txt
      ```
 
 2. **仔細比對需求及實作文件**
