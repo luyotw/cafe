@@ -2,7 +2,7 @@
 
 import json
 import subprocess
-from typing import List, Optional, Tuple
+from typing import Callable, List, Optional, Tuple
 
 from aaf.core.types import AgentConfig, AgentCLI, TokenUsage
 
@@ -204,6 +204,7 @@ class AgentExecutor:
         self,
         cmd: List[str],
         cli_name: str,
+        response_parser: Optional[Callable[[List[str]], Tuple[str, TokenUsage]]] = None,
         parse_stream_json: bool = False,
     ) -> Tuple[str, TokenUsage]:
         """Execute command with streaming output.
@@ -211,6 +212,7 @@ class AgentExecutor:
         Args:
             cmd: Command to execute
             cli_name: Name of the CLI (for display)
+            response_parser: Optional custom parser for output lines
             parse_stream_json: Whether to parse stream-json format (Claude style)
 
         Returns:
@@ -293,6 +295,10 @@ class AgentExecutor:
         # Save session_id if extracted
         if session_id and not self.config.session_id:
             self.config.session_id = session_id
+
+        # Use custom response parser if provided
+        if response_parser:
+            return response_parser(output_lines)
 
         # Return response (either from stream-json or combined lines)
         if parse_stream_json:
@@ -451,8 +457,21 @@ class AgentExecutor:
         # Add JSON output format for parsing
         cmd.extend(["--output-format", "json"])
 
-        # Use default parser (full JSON output)
-        return self._execute_with_streaming(cmd, "Cursor")
+        # Cursor-specific parser: parse JSON output
+        def parse_cursor_response(output_lines: List[str]) -> Tuple[str, TokenUsage]:
+            full_output = ''.join(output_lines)
+
+            # Parse JSON output
+            try:
+                data = json.loads(full_output.strip())
+                response = data.get("response", full_output)
+                token_usage = TokenUsage()
+                return response, token_usage
+            except json.JSONDecodeError:
+                # If not JSON, return raw output
+                return full_output, TokenUsage()
+
+        return self._execute_with_streaming(cmd, "Cursor", parse_cursor_response)
 
     def _execute_copilot(self, prompt: str, allowed_tools: Optional[List[str]] = None) -> Tuple[str, TokenUsage]:
         """Execute GitHub Copilot CLI agent with streaming output.
