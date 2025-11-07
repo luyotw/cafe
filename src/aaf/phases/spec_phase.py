@@ -499,8 +499,20 @@ class SpecPhase(Phase):
                     # Continue to next iteration (interactive mode only)
                     continue
                 else:
-                    # No valid status code found, continue iteration
-                    continue
+                    # No valid status code found
+                    if self.interactive:
+                        # Interactive mode: continue iteration
+                        continue
+                    else:
+                        # Non-interactive mode: exit and wait for next call
+                        return PhaseResult(
+                            status=PhaseStatus.IN_PROGRESS,
+                            message=f"Iteration {self.iteration}: No status code found, need more iterations",
+                            data={
+                                "iterations": self.iteration,
+                                "status_code": None,
+                            },
+                        )
 
         except KeyboardInterrupt:
             # User paused with Ctrl+C - save progress and allow resume

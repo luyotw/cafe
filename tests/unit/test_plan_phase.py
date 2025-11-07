@@ -164,10 +164,11 @@ class TestLocalWorkflow:
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             issue_name="test-feature",
-            interactive=False,  # Non-interactive for this test
+            interactive=True,  # Must be interactive to continue iterations
         )
 
-        result = phase.execute()
+        with patch('builtins.print'):
+            result = phase.execute()
 
         assert result.status == PhaseStatus.COMPLETED
         assert agent_manager.execute.call_count == 2
@@ -865,144 +866,6 @@ class TestPlanPhaseNeedClarification:
         assert data["status_code"] == "AAF_NEED_CLARIFICATION"
 
 
-class TestPlanPhaseUserConfirmation:
-    """Test user confirmation when agent returns CONFIRMED (TDD)."""
-
-    def test_confirmed_prompts_user_in_interactive_mode(self, tmp_path: Path) -> None:
-        """測試 CONFIRMED 時在互動模式下提示使用者確認"""
-        spec_file = tmp_path / ".aaf" / "issues" / "test-feature" / "spec" / "spec.md"
-        spec_file.parent.mkdir(parents=True, exist_ok=True)
-        spec_file.write_text("# Requirements")
-
-        # Create dev guide file
-        plan_file = spec_file.parent.parent / "plan" / "plan.md"
-        plan_file.parent.mkdir(parents=True, exist_ok=True)
-        plan_file.write_text("## 開發指南\n\nGuide")
-
-        agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("AAF_CONFIRMED\n實作計畫已完成。", TokenUsage())
-
-        permission_handler = MagicMock(spec=PermissionHandler)
-
-        phase = PlanPhase(
-            agent_manager=agent_manager,
-            permission_handler=permission_handler,
-            spec_file=str(spec_file),
-            workflow_mode=WorkflowMode.LOCAL,
-            issue_name="test-feature",
-            interactive=True,
-        )
-
-        # Mock user choosing 'c' (confirm)
-        with patch('builtins.input', return_value='c'):
-            result = phase.execute()
-
-        # Should complete after user confirms
-        assert result.status == PhaseStatus.COMPLETED
-        assert "confirmed" in result.message.lower()
-
-    def test_confirmed_user_rejects(self, tmp_path: Path) -> None:
-        """測試使用者拒絕計畫"""
-        spec_file = tmp_path / ".aaf" / "issues" / "test-feature" / "spec" / "spec.md"
-        spec_file.parent.mkdir(parents=True, exist_ok=True)
-        spec_file.write_text("# Requirements")
-
-        # Create dev guide file
-        plan_file = spec_file.parent.parent / "plan" / "plan.md"
-        plan_file.parent.mkdir(parents=True, exist_ok=True)
-        plan_file.write_text("## 開發指南\n\nGuide")
-
-        agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("AAF_CONFIRMED\n實作計畫已完成。", TokenUsage())
-
-        permission_handler = MagicMock(spec=PermissionHandler)
-
-        phase = PlanPhase(
-            agent_manager=agent_manager,
-            permission_handler=permission_handler,
-            spec_file=str(spec_file),
-            workflow_mode=WorkflowMode.LOCAL,
-            issue_name="test-feature",
-            interactive=True,
-        )
-
-        # Mock user choosing 'r' (reject)
-        with patch('builtins.input', return_value='r'):
-            result = phase.execute()
-
-        # Should fail after user rejects
-        assert result.status == PhaseStatus.FAILED
-        assert "rejected" in result.message.lower()
-
-    def test_confirmed_user_requests_modification(self, tmp_path: Path) -> None:
-        """測試使用者要求修改計畫"""
-        spec_file = tmp_path / ".aaf" / "issues" / "test-feature" / "spec" / "spec.md"
-        spec_file.parent.mkdir(parents=True, exist_ok=True)
-        spec_file.write_text("# Requirements")
-
-        # Create dev guide file
-        plan_file = spec_file.parent.parent / "plan" / "plan.md"
-        plan_file.parent.mkdir(parents=True, exist_ok=True)
-        plan_file.write_text("## 開發指南\n\nGuide")
-
-        agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.side_effect = [
-            ("AAF_CONFIRMED\n實作計畫已完成。", TokenUsage()),
-            ("AAF_CONFIRMED\n實作計畫已修改完成。", TokenUsage()),
-        ]
-
-        permission_handler = MagicMock(spec=PermissionHandler)
-
-        phase = PlanPhase(
-            agent_manager=agent_manager,
-            permission_handler=permission_handler,
-            spec_file=str(spec_file),
-            workflow_mode=WorkflowMode.LOCAL,
-            issue_name="test-feature",
-            interactive=True,
-        )
-
-        # Mock user choosing 'm' (modify) first, then 'c' (confirm)
-        with patch('builtins.input', side_effect=['m', 'c']):
-            with patch.object(phase.display, 'get_multiline_input', return_value="請加上錯誤處理"):
-                result = phase.execute()
-
-        # Should complete after modification and confirmation
-        assert result.status == PhaseStatus.COMPLETED
-        # Should have called agent twice (first plan, then modified plan)
-        assert agent_manager.execute.call_count == 2
-
-    def test_confirmed_non_interactive_mode_completes_immediately(self, tmp_path: Path) -> None:
-        """測試非互動模式下 CONFIRMED 直接完成"""
-        spec_file = tmp_path / ".aaf" / "issues" / "test-feature" / "spec" / "spec.md"
-        spec_file.parent.mkdir(parents=True, exist_ok=True)
-        spec_file.write_text("# Requirements")
-
-        # Create dev guide file
-        plan_file = spec_file.parent.parent / "plan" / "plan.md"
-        plan_file.parent.mkdir(parents=True, exist_ok=True)
-        plan_file.write_text("## 開發指南\n\nGuide")
-
-        agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("AAF_CONFIRMED\n實作計畫已完成。", TokenUsage())
-
-        permission_handler = MagicMock(spec=PermissionHandler)
-
-        phase = PlanPhase(
-            agent_manager=agent_manager,
-            permission_handler=permission_handler,
-            spec_file=str(spec_file),
-            workflow_mode=WorkflowMode.LOCAL,
-            issue_name="test-feature",
-            interactive=False,  # Non-interactive mode
-        )
-
-        result = phase.execute()
-
-        # Should complete immediately without user interaction
-        assert result.status == PhaseStatus.COMPLETED
-
-
 class TestPlanPhaseResume:
     """Test resuming from interrupted phase (TDD)."""
 
@@ -1055,58 +918,6 @@ class TestPlanPhaseResume:
         assert mock_multiline.call_count == 1
         # Should complete successfully
         assert result.status == PhaseStatus.COMPLETED
-
-    def test_resume_with_confirmed_shows_plan_and_asks_confirmation(self, tmp_path: Path) -> None:
-        """測試中斷重跑時，如果上一輪是 CONFIRMED，應該顯示 plan 並讓使用者選擇 c/r/m"""
-        spec_file = tmp_path / ".aaf" / "issues" / "test-feature" / "spec" / "spec.md"
-        spec_file.parent.mkdir(parents=True, exist_ok=True)
-        spec_file.write_text("# Requirements")
-
-        # Create plan.md with completed plan
-        plan_file = spec_file.parent.parent / "plan" / "plan.md"
-        plan_file.parent.mkdir(parents=True, exist_ok=True)
-        plan_file.write_text("## 開發指南\n\nGuide\n\n## 實作步驟\n\n1. 步驟一\n2. 步驟二")
-
-        # Create history to simulate interrupted phase with CONFIRMED
-        history_dir = plan_file.parent / "history"
-        history_dir.mkdir(parents=True, exist_ok=True)
-
-        import json
-        history_file = history_dir / "iteration_001.json"
-        history_data = {
-            "iteration": 1,
-            "prompt": "test prompt",
-            "response": "AAF_CONFIRMED\n實作計畫已完成",
-            "status_code": "AAF_CONFIRMED",
-            "timestamp": "2024-01-01T00:00:00"
-        }
-        history_file.write_text(json.dumps(history_data, ensure_ascii=False, indent=2))
-
-        agent_manager = MagicMock(spec=AgentManager)
-        # Agent shouldn't be called if user confirms on resume
-
-        permission_handler = MagicMock(spec=PermissionHandler)
-
-        phase = PlanPhase(
-            agent_manager=agent_manager,
-            permission_handler=permission_handler,
-            spec_file=str(spec_file),
-            workflow_mode=WorkflowMode.LOCAL,
-            issue_name="test-feature",
-            interactive=True,
-        )
-
-        # Mock user choosing 'c' (confirm) - should NOT ask for multiline input
-        with patch('builtins.input', return_value='c') as mock_input:
-            result = phase.execute()
-
-        # Should complete successfully
-        assert result.status == PhaseStatus.COMPLETED
-        # Should have prompted for confirmation choice
-        assert mock_input.called
-        # Should NOT have called agent again (user confirmed existing plan)
-        assert agent_manager.execute.call_count == 0
-
 
 class TestPlanPhaseProgressTracking:
     """Test progress tracking functionality (TDD)."""

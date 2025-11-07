@@ -1,7 +1,7 @@
 """Tests for PlanPhase with status codes."""
 
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -166,10 +166,11 @@ class TestPlanPhaseWithStatusCodes:
             permission_handler=permission_handler,
             spec_file=str(requirements_file),
             workflow_mode=WorkflowMode.LOCAL,
-            interactive=False,
+            interactive=True,  # Must be interactive to continue iterations
         )
 
-        result = phase.execute()
+        with patch('builtins.print'):
+            result = phase.execute()
 
         assert result.status == PhaseStatus.COMPLETED
         assert agent_manager.execute.call_count == 2

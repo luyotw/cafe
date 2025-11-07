@@ -225,84 +225,16 @@ class PlanPhase(Phase):
                     # Save progress
                     self._save_progress(status_code)
 
-                    if self.interactive:
-                        # Interactive mode: Show plan and get user confirmation
-                        plan_file = self.history_dir.parent / "plan.md"
-                        plan_content = plan_file.read_text() if plan_file.exists() else "（檔案未產生）"
-
-                        # Get agent CLI info for display
-                        agent_cli = self.agent_manager.get_agent_config(self.dev_agent).cli.value
-
-                        print(f"\n{'='*60}")
-                        print(f"Dev ({self.dev_agent} by {agent_cli}) - Iteration {self.iteration}:")
-                        print(f"{'='*60}")
-                        print(plan_content)
-                        print(f"{'='*60}\n")
-
-                        # Ask user for confirmation
-                        print("開發者認為實作計畫已完成。請確認：")
-                        print("  [c] confirm - 確認計畫，繼續實作")
-                        print("  [r] reject - 拒絕計畫，終止")
-                        print("  [m] modify - 要求修改（輸入修改意見）")
-
-                        while True:
-                            choice = input("\n請選擇 [c/r/m]: ").strip().lower()
-
-                            if choice == 'c':
-                                # User confirms - complete the phase
-                                return PhaseResult(
-                                    status=PhaseStatus.COMPLETED,
-                                    message=f"Implementation plan confirmed in {self.iteration} iteration(s)",
-                                    data={
-                                        "iterations": self.iteration,
-                                        "final_response": response,
-                                        "status_code": status_code.value,
-                                    },
-                                )
-                            elif choice == 'r':
-                                # User rejects - fail the phase
-                                return PhaseResult(
-                                    status=PhaseStatus.FAILED,
-                                    message=f"Implementation plan rejected by user in iteration {self.iteration}",
-                                    data={
-                                        "iterations": self.iteration,
-                                        "final_response": response,
-                                        "status_code": "USER_REJECTED",
-                                    },
-                                )
-                            elif choice == 'm':
-                                # User wants modifications
-                                modification_request = self.display.get_multiline_input("請輸入修改意見")
-
-                                if not modification_request.strip():
-                                    print("\n⚠️  沒有輸入修改意見，請重新選擇。")
-                                    continue
-
-                                print()
-                                print("✅ 已收到您的修改意見，正在重新規劃...")
-                                print()
-
-                                # Save user's modification request
-                                self._save_user_response(modification_request)
-
-                                # Continue to next iteration
-                                break
-                            else:
-                                print("❌ 無效選擇，請輸入 c, r, 或 m")
-
-                        # If we reach here, user chose 'm' - continue loop
-                        continue
-                    else:
-                        # Non-interactive mode: complete immediately
-                        return PhaseResult(
-                            status=PhaseStatus.COMPLETED,
-                            message=f"Implementation plan completed in {self.iteration} iteration(s)",
-                            data={
-                                "iterations": self.iteration,
-                                "final_response": response,
-                                "status_code": status_code.value,
-                            },
-                        )
+                    # Both interactive and non-interactive: complete immediately
+                    return PhaseResult(
+                        status=PhaseStatus.COMPLETED,
+                        message=f"Implementation plan completed in {self.iteration} iteration(s)",
+                        data={
+                            "iterations": self.iteration,
+                            "final_response": response,
+                            "status_code": status_code.value,
+                        },
+                    )
                 elif status_code == PhaseStatusCode.REJECTED:
                     return PhaseResult(
                         status=PhaseStatus.FAILED,
@@ -378,8 +310,20 @@ class PlanPhase(Phase):
                             },
                         )
                 else:
-                    # No valid status code found, continue iteration
-                    continue
+                    # No valid status code found
+                    if self.interactive:
+                        # Interactive mode: continue iteration
+                        continue
+                    else:
+                        # Non-interactive mode: exit and wait for next call
+                        return PhaseResult(
+                            status=PhaseStatus.IN_PROGRESS,
+                            message=f"Iteration {self.iteration}: No status code found, need more iterations",
+                            data={
+                                "iterations": self.iteration,
+                                "status_code": None,
+                            },
+                        )
 
         except Exception as e:
             return PhaseResult(
