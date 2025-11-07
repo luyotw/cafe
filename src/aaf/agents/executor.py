@@ -330,8 +330,8 @@ class AgentExecutor:
         if self.config.session_id:
             cmd.extend(["--session-id", self.config.session_id])
 
-        # Add streaming output format
-        cmd.extend(["--output-format", "stream-json"])
+        # Add streaming output format (requires --verbose when using --print)
+        cmd.extend(["--output-format", "stream-json", "--verbose"])
 
         # Execute with streaming
         try:
