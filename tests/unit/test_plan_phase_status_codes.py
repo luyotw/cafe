@@ -16,8 +16,14 @@ class TestPlanPhaseWithStatusCodes:
 
     def test_confirmed_status_code_completes_phase(self, tmp_path: Path) -> None:
         """測試 CONFIRMED 狀態碼完成 phase"""
-        requirements_file = tmp_path / "spec.md"
+        requirements_file = tmp_path / ".aaf" / "issues" / "test-feature" / "spec" / "spec.md"
+        requirements_file.parent.mkdir(parents=True, exist_ok=True)
         requirements_file.write_text("# 需求\n\n## 開發指南\nSome guide")
+
+        # Create plan.md with dev guide
+        plan_file = requirements_file.parent.parent / "plan" / "plan.md"
+        plan_file.parent.mkdir(parents=True, exist_ok=True)
+        plan_file.write_text("## 開發指南\nSome guide\n\n## 實作計畫\nTODO")
 
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = ("AAF_CONFIRMED\n實作分析已完成。", TokenUsage())
@@ -29,6 +35,7 @@ class TestPlanPhaseWithStatusCodes:
             permission_handler=permission_handler,
             spec_file=str(requirements_file),
             workflow_mode=WorkflowMode.LOCAL,
+            interactive=False,
         )
 
         result = phase.execute()
@@ -39,8 +46,14 @@ class TestPlanPhaseWithStatusCodes:
 
     def test_rejected_status_code_fails_phase(self, tmp_path: Path) -> None:
         """測試 REJECTED 狀態碼導致 phase 失敗"""
-        requirements_file = tmp_path / "spec.md"
+        requirements_file = tmp_path / ".aaf" / "issues" / "test-feature" / "spec" / "spec.md"
+        requirements_file.parent.mkdir(parents=True, exist_ok=True)
         requirements_file.write_text("# 需求\n\n## 開發指南\nSome guide")
+
+        # Create plan.md with dev guide
+        plan_file = requirements_file.parent.parent / "plan" / "plan.md"
+        plan_file.parent.mkdir(parents=True, exist_ok=True)
+        plan_file.write_text("## 開發指南\nSome guide\n\n## 實作計畫\nTODO")
 
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = ("AAF_REJECTED\n分析無法進行。", TokenUsage())
@@ -52,6 +65,7 @@ class TestPlanPhaseWithStatusCodes:
             permission_handler=permission_handler,
             spec_file=str(requirements_file),
             workflow_mode=WorkflowMode.LOCAL,
+            interactive=False,
         )
 
         result = phase.execute()
@@ -61,8 +75,14 @@ class TestPlanPhaseWithStatusCodes:
 
     def test_need_clarification_continues_iteration(self, tmp_path: Path) -> None:
         """測試 NEED_CLARIFICATION 繼續迭代"""
-        requirements_file = tmp_path / "spec.md"
+        requirements_file = tmp_path / ".aaf" / "issues" / "test-feature" / "spec" / "spec.md"
+        requirements_file.parent.mkdir(parents=True, exist_ok=True)
         requirements_file.write_text("# 需求\n\n## 開發指南\nSome guide")
+
+        # Create plan.md with dev guide
+        plan_file = requirements_file.parent.parent / "plan" / "plan.md"
+        plan_file.parent.mkdir(parents=True, exist_ok=True)
+        plan_file.write_text("## 開發指南\nSome guide\n\n## 實作計畫\nTODO")
 
         agent_manager = MagicMock(spec=AgentManager)
         # First iteration needs clarification, second confirms
@@ -78,6 +98,7 @@ class TestPlanPhaseWithStatusCodes:
             permission_handler=permission_handler,
             spec_file=str(requirements_file),
             workflow_mode=WorkflowMode.LOCAL,
+            interactive=False,
         )
 
         result = phase.execute()
@@ -88,8 +109,14 @@ class TestPlanPhaseWithStatusCodes:
 
     def test_status_code_in_middle_of_response(self, tmp_path: Path) -> None:
         """測試狀態碼在回應中間也能識別"""
-        requirements_file = tmp_path / "spec.md"
+        requirements_file = tmp_path / ".aaf" / "issues" / "test-feature" / "spec" / "spec.md"
+        requirements_file.parent.mkdir(parents=True, exist_ok=True)
         requirements_file.write_text("# 需求\n\n## 開發指南\nSome guide")
+
+        # Create plan.md with dev guide
+        plan_file = requirements_file.parent.parent / "plan" / "plan.md"
+        plan_file.parent.mkdir(parents=True, exist_ok=True)
+        plan_file.write_text("## 開發指南\nSome guide\n\n## 實作計畫\nTODO")
 
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = ("分析結果：\nAAF_CONFIRMED\n實作分析已完成。", TokenUsage())
@@ -101,6 +128,7 @@ class TestPlanPhaseWithStatusCodes:
             permission_handler=permission_handler,
             spec_file=str(requirements_file),
             workflow_mode=WorkflowMode.LOCAL,
+            interactive=False,
         )
 
         result = phase.execute()
@@ -110,8 +138,14 @@ class TestPlanPhaseWithStatusCodes:
 
     def test_no_status_code_continues_iteration(self, tmp_path: Path) -> None:
         """測試沒有狀態碼時繼續迭代"""
-        requirements_file = tmp_path / "spec.md"
+        requirements_file = tmp_path / ".aaf" / "issues" / "test-feature" / "spec" / "spec.md"
+        requirements_file.parent.mkdir(parents=True, exist_ok=True)
         requirements_file.write_text("# 需求\n\n## 開發指南\nSome guide")
+
+        # Create plan.md with dev guide
+        plan_file = requirements_file.parent.parent / "plan" / "plan.md"
+        plan_file.parent.mkdir(parents=True, exist_ok=True)
+        plan_file.write_text("## 開發指南\nSome guide\n\n## 實作計畫\nTODO")
 
         agent_manager = MagicMock(spec=AgentManager)
         # First has no status code, second has CONFIRMED
@@ -127,6 +161,7 @@ class TestPlanPhaseWithStatusCodes:
             permission_handler=permission_handler,
             spec_file=str(requirements_file),
             workflow_mode=WorkflowMode.LOCAL,
+            interactive=False,
         )
 
         result = phase.execute()
@@ -136,8 +171,14 @@ class TestPlanPhaseWithStatusCodes:
 
     def test_case_insensitive_status_code(self, tmp_path: Path) -> None:
         """測試狀態碼不區分大小寫"""
-        requirements_file = tmp_path / "spec.md"
+        requirements_file = tmp_path / ".aaf" / "issues" / "test-feature" / "spec" / "spec.md"
+        requirements_file.parent.mkdir(parents=True, exist_ok=True)
         requirements_file.write_text("# 需求\n\n## 開發指南\nSome guide")
+
+        # Create plan.md with dev guide
+        plan_file = requirements_file.parent.parent / "plan" / "plan.md"
+        plan_file.parent.mkdir(parents=True, exist_ok=True)
+        plan_file.write_text("## 開發指南\nSome guide\n\n## 實作計畫\nTODO")
 
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = ("aaf_confirmed\n實作分析已完成。", TokenUsage())
@@ -149,6 +190,7 @@ class TestPlanPhaseWithStatusCodes:
             permission_handler=permission_handler,
             spec_file=str(requirements_file),
             workflow_mode=WorkflowMode.LOCAL,
+            interactive=False,
         )
 
         result = phase.execute()
