@@ -28,10 +28,10 @@ class TestSetupAgents:
         assert "David" in agent_manager.agents
         assert "Richard" in agent_manager.agents
 
-        # 驗證預設使用 claude
-        assert agent_manager.agents["Roger"].config.cli == AgentCLI.CLAUDE
-        assert agent_manager.agents["David"].config.cli == AgentCLI.CLAUDE
-        assert agent_manager.agents["Richard"].config.cli == AgentCLI.CLAUDE
+        # 驗證預設使用 copilot
+        assert agent_manager.agents["Roger"].config.cli == AgentCLI.COPILOT
+        assert agent_manager.agents["David"].config.cli == AgentCLI.COPILOT
+        assert agent_manager.agents["Richard"].config.cli == AgentCLI.COPILOT
 
     def test_setup_agents_with_custom_config(self, tmp_path: Path) -> None:
         """測試使用自訂設定建立 agents"""
@@ -62,7 +62,7 @@ class TestBuildWorkflow:
 
     @patch("aaf.ui.cli.SpecPhase")
     @patch("aaf.ui.cli.PlanPhase")
-    @patch("aaf.ui.cli.ImplementationPhase")
+    @patch("aaf.ui.cli.DevelopPhase")
     @patch("aaf.ui.cli.ReviewPhase")
     @patch("aaf.ui.cli.PRPhase")
     def test_build_workflow_creates_all_phases(
@@ -252,14 +252,18 @@ class TestConfigCommand:
 
     def test_config_list_all(self, tmp_path: Path) -> None:
         """測試列出所有設定"""
-        config_file = tmp_path / "config.yaml"
-        config_manager = ConfigManager(str(tmp_path))
-        config_manager.set("test.key", "value")  # set() already calls save_config()
+        # Change to tmp_path directory first, then set config
+        import os
+        old_cwd = os.getcwd()
+        try:
+            os.chdir(tmp_path)
+            # Now ConfigManager will use .aaf in current directory
+            config_manager = ConfigManager()
+            config_manager.set("test.key", "value")  # set() already calls save_config()
 
-        result = runner.invoke(
-            app,
-            ["config", "--list", "--config", str(config_file)]
-        )
+            result = runner.invoke(app, ["config"])
+        finally:
+            os.chdir(old_cwd)
 
         assert result.exit_code == 0
         assert "test:" in result.stdout or "test" in result.stdout
@@ -267,72 +271,80 @@ class TestConfigCommand:
 
     def test_config_get_existing_key(self, tmp_path: Path) -> None:
         """測試取得存在的設定值"""
-        config_file = tmp_path / "config.yaml"
-        # Save custom config with dict structure for agents
-        custom_config = {
-            "agents": {
-                "pm": {"name": "Roger"}
+        import os
+        old_cwd = os.getcwd()
+        try:
+            os.chdir(tmp_path)
+            # Save custom config with dict structure for agents
+            custom_config = {
+                "agents": {
+                    "pm": {"name": "Roger"}
+                }
             }
-        }
-        config_manager = ConfigManager(str(tmp_path))
-        config_manager.save_config(custom_config)
+            config_manager = ConfigManager()
+            config_manager.save_config(custom_config)
 
-        result = runner.invoke(
-            app,
-            ["config", "agents.pm.name", "--config", str(config_file)]
-        )
+            result = runner.invoke(app, ["config", "get", "agents.pm.name"])
+        finally:
+            os.chdir(old_cwd)
 
         assert result.exit_code == 0
         assert "Roger" in result.stdout
 
     def test_config_get_nonexistent_key(self, tmp_path: Path) -> None:
         """測試取得不存在的設定值"""
-        config_file = tmp_path / "config.yaml"
-
-        result = runner.invoke(
-            app,
-            ["config", "nonexistent.key", "--config", str(config_file)]
-        )
+        import os
+        old_cwd = os.getcwd()
+        try:
+            os.chdir(tmp_path)
+            result = runner.invoke(app, ["config", "get", "nonexistent.key"])
+        finally:
+            os.chdir(old_cwd)
 
         assert result.exit_code == 0
         assert "Key not found" in result.stdout
 
     def test_config_set_value(self, tmp_path: Path) -> None:
         """測試設定值"""
-        config_file = tmp_path / "config.yaml"
+        import os
+        old_cwd = os.getcwd()
+        try:
+            os.chdir(tmp_path)
+            result = runner.invoke(app, ["config", "set", "test.key", "test_value"])
 
-        result = runner.invoke(
-            app,
-            ["config", "test.key", "test_value", "--config", str(config_file)]
-        )
+            # 驗證設定已儲存
+            config_manager = ConfigManager()
+            assert config_manager.get("test.key") == "test_value"
+        finally:
+            os.chdir(old_cwd)
 
         assert result.exit_code == 0
         assert "Set test.key = test_value" in result.stdout
 
-        # 驗證設定已儲存 (ConfigManager takes directory, not file)
-        config_manager = ConfigManager(str(tmp_path))
-        assert config_manager.get("test.key") == "test_value"
-
     def test_config_without_args_shows_help(self, tmp_path: Path) -> None:
-        """測試沒有參數時顯示提示"""
-        config_file = tmp_path / "config.yaml"
-
-        result = runner.invoke(
-            app,
-            ["config", "--config", str(config_file)]
-        )
+        """測試沒有參數時顯示所有設定"""
+        import os
+        old_cwd = os.getcwd()
+        try:
+            os.chdir(tmp_path)
+            result = runner.invoke(app, ["config"])
+        finally:
+            os.chdir(old_cwd)
 
         assert result.exit_code == 0
-        assert "Use --list" in result.stdout
+        # Without args, config command shows all configuration
+        assert "agents" in result.stdout or "Configuration" in result.stdout
 
 
 class TestPlanCommand:
     """Test plan command."""
 
+    @patch("aaf.ui.cli.select_template")
     @patch("aaf.ui.cli.PlanPhase")
     def test_plan_local_mode_success(
         self,
         mock_plan_phase: Mock,
+        mock_select_template: Mock,
         tmp_path: Path,
     ) -> None:
         """測試 plan 指令 local mode 成功執行"""
@@ -341,7 +353,14 @@ class TestPlanCommand:
         spec_file = tmp_path / ".aaf" / "issues" / issue_name / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Spec\n\n## 開發指南\nGuide")
-        config_file = tmp_path / "config.yaml"
+
+        # Create a default template
+        template_dir = tmp_path / ".aaf" / "templates" / "plan"
+        template_dir.mkdir(parents=True, exist_ok=True)
+        (template_dir / "default.md").write_text("# Plan Template")
+
+        # Mock template selection
+        mock_select_template.return_value = "default"
 
         # Mock phase execution
         mock_phase_instance = MagicMock()
@@ -352,16 +371,12 @@ class TestPlanCommand:
         )
         mock_plan_phase.return_value = mock_phase_instance
 
-        # Execute (note: using tmp_path as cwd won't work for our test, so we'll use absolute path checking)
-        # We need to temporarily change directory or mock Path.exists
+        # Execute
         import os
         old_cwd = os.getcwd()
         try:
             os.chdir(tmp_path)
-            result = runner.invoke(
-                app,
-                ["plan", issue_name, "--config", str(config_file)]
-            )
+            result = runner.invoke(app, ["plan", issue_name])
         finally:
             os.chdir(old_cwd)
 
@@ -371,10 +386,12 @@ class TestPlanCommand:
         assert "Iterations: 2" in result.stdout
         mock_plan_phase.assert_called_once()
 
+    @patch("aaf.ui.cli.select_template")
     @patch("aaf.ui.cli.PlanPhase")
     def test_plan_github_mode_with_issue(
         self,
         mock_plan_phase: Mock,
+        mock_select_template: Mock,
         tmp_path: Path,
     ) -> None:
         """測試 plan 指令 github mode 使用 issue ID"""
@@ -383,7 +400,14 @@ class TestPlanCommand:
         spec_file = tmp_path / ".aaf" / "issues" / issue_name / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Spec\n\n## 開發指南\nGuide")
-        config_file = tmp_path / "config.yaml"
+
+        # Create a default template
+        template_dir = tmp_path / ".aaf" / "templates" / "plan"
+        template_dir.mkdir(parents=True, exist_ok=True)
+        (template_dir / "default.md").write_text("# Plan Template")
+
+        # Mock template selection
+        mock_select_template.return_value = "default"
 
         # Mock phase execution
         mock_phase_instance = MagicMock()
@@ -399,10 +423,7 @@ class TestPlanCommand:
         old_cwd = os.getcwd()
         try:
             os.chdir(tmp_path)
-            result = runner.invoke(
-                app,
-                ["plan", issue_name, "-m", "github", "-i", "123", "--config", str(config_file)]
-            )
+            result = runner.invoke(app, ["plan", issue_name, "-m", "github", "-i", "123"])
         finally:
             os.chdir(old_cwd)
 
@@ -411,10 +432,12 @@ class TestPlanCommand:
         assert "GitHub Issue: #123" in result.stdout
         mock_plan_phase.assert_called_once()
 
+    @patch("aaf.ui.cli.select_template")
     @patch("aaf.ui.cli.PlanPhase")
     def test_plan_fails_with_error(
         self,
         mock_plan_phase: Mock,
+        mock_select_template: Mock,
         tmp_path: Path,
     ) -> None:
         """測試 plan 指令執行失敗"""
@@ -423,7 +446,14 @@ class TestPlanCommand:
         spec_file = tmp_path / ".aaf" / "issues" / issue_name / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Spec")
-        config_file = tmp_path / "config.yaml"
+
+        # Create a default template
+        template_dir = tmp_path / ".aaf" / "templates" / "plan"
+        template_dir.mkdir(parents=True, exist_ok=True)
+        (template_dir / "default.md").write_text("# Plan Template")
+
+        # Mock template selection
+        mock_select_template.return_value = "default"
 
         # Mock phase execution failure
         mock_phase_instance = MagicMock()
@@ -438,10 +468,7 @@ class TestPlanCommand:
         old_cwd = os.getcwd()
         try:
             os.chdir(tmp_path)
-            result = runner.invoke(
-                app,
-                ["plan", issue_name, "--config", str(config_file)]
-            )
+            result = runner.invoke(app, ["plan", issue_name])
         finally:
             os.chdir(old_cwd)
 

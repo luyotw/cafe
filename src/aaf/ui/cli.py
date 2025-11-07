@@ -131,6 +131,15 @@ def _build_workflow(
         )
     )
 
+    # Determine plan file path from spec file
+    spec_path = Path(spec_file)
+    if ".aaf/issues/" in spec_file:
+        # Extract issue name from spec path: .aaf/issues/{issue-name}/spec/spec.md
+        plan_file = str(spec_path.parent.parent / "plan" / "plan.md")
+    else:
+        # Fallback to simple plan.md
+        plan_file = "plan.md"
+
     # Phase 3: Development
     git_ops = GitOperations()
     workflow.add_phase(
@@ -139,6 +148,7 @@ def _build_workflow(
             permission_handler=permission_handler,
             git_ops=git_ops,
             spec_file=spec_file,
+            plan_file=plan_file,
             workflow_mode=mode,
             issue_id=issue_id,
             dev_agent=dev_name,
@@ -152,10 +162,10 @@ def _build_workflow(
             permission_handler=permission_handler,
             git_ops=git_ops,
             spec_file=spec_file,
+            plan_file=plan_file,
             workflow_mode=mode,
             issue_id=issue_id,
             review_agent=reviewer_name,
-            dev_agent=dev_name,
         )
     )
 
