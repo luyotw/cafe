@@ -594,3 +594,218 @@ class TestErrorHandling:
 
         assert result.status == PhaseStatus.FAILED
         assert "Git error" in result.message
+
+
+class TestDevelopTimestampCheck:
+    """測試檢查 develop 時間戳記的功能。"""
+
+    def test_check_if_develop_is_newer_when_develop_is_newer(
+        self, tmp_path: Path
+    ) -> None:
+        """測試當 develop 時間較新時返回 True"""
+        from datetime import datetime, timedelta
+
+        # 建立測試目錄結構
+        issue_dir = tmp_path / ".aaf" / "issues" / "test-issue"
+        develop_dir = issue_dir / "develop"
+        review_dir = issue_dir / "review"
+        spec_dir = issue_dir / "spec"
+
+        develop_dir.mkdir(parents=True)
+        review_dir.mkdir(parents=True)
+        spec_dir.mkdir(parents=True)
+
+        # 建立 spec 檔案
+        spec_file = spec_dir / "spec.md"
+        spec_file.write_text("Test spec")
+
+        # develop 的時間較新（現在）
+        develop_time = datetime.now()
+        develop_status = {
+            "phase": "develop",
+            "status": "completed",
+            "status_code": "AAF_CONFIRMED",
+            "timestamp": develop_time.isoformat(),
+            "iteration": 1,
+        }
+        (develop_dir / "status.json").write_text(
+            json.dumps(develop_status, ensure_ascii=False)
+        )
+
+        # review 的時間較舊（1 小時前）
+        review_time = develop_time - timedelta(hours=1)
+        review_status = {
+            "phase": "review",
+            "status": "completed",
+            "status_code": "AAF_NEEDS_CHANGES",
+            "timestamp": review_time.isoformat(),
+            "iteration": 1,
+        }
+        (review_dir / "status.json").write_text(
+            json.dumps(review_status, ensure_ascii=False)
+        )
+
+        # 建立 ReviewPhase
+        agent_manager = MagicMock(spec=AgentManager)
+        permission_handler = MagicMock(spec=PermissionHandler)
+        git_ops = MagicMock(spec=GitOperations)
+
+        phase = ReviewPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            git_ops=git_ops,
+            spec_file=str(spec_file),
+            plan_file="plan.md",
+            workflow_mode=WorkflowMode.LOCAL,
+        )
+
+        # 測試
+        result = phase._check_if_develop_is_newer()
+        assert result is True
+
+    def test_check_if_develop_is_newer_when_review_is_newer(
+        self, tmp_path: Path
+    ) -> None:
+        """測試當 review 時間較新時返回 False"""
+        from datetime import datetime, timedelta
+
+        # 建立測試目錄結構
+        issue_dir = tmp_path / ".aaf" / "issues" / "test-issue"
+        develop_dir = issue_dir / "develop"
+        review_dir = issue_dir / "review"
+        spec_dir = issue_dir / "spec"
+
+        develop_dir.mkdir(parents=True)
+        review_dir.mkdir(parents=True)
+        spec_dir.mkdir(parents=True)
+
+        # 建立 spec 檔案
+        spec_file = spec_dir / "spec.md"
+        spec_file.write_text("Test spec")
+
+        # develop 的時間較舊（1 小時前）
+        develop_time = datetime.now() - timedelta(hours=1)
+        develop_status = {
+            "phase": "develop",
+            "status": "completed",
+            "status_code": "AAF_CONFIRMED",
+            "timestamp": develop_time.isoformat(),
+            "iteration": 1,
+        }
+        (develop_dir / "status.json").write_text(
+            json.dumps(develop_status, ensure_ascii=False)
+        )
+
+        # review 的時間較新（現在）
+        review_time = datetime.now()
+        review_status = {
+            "phase": "review",
+            "status": "completed",
+            "status_code": "AAF_NEEDS_CHANGES",
+            "timestamp": review_time.isoformat(),
+            "iteration": 1,
+        }
+        (review_dir / "status.json").write_text(
+            json.dumps(review_status, ensure_ascii=False)
+        )
+
+        # 建立 ReviewPhase
+        agent_manager = MagicMock(spec=AgentManager)
+        permission_handler = MagicMock(spec=PermissionHandler)
+        git_ops = MagicMock(spec=GitOperations)
+
+        phase = ReviewPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            git_ops=git_ops,
+            spec_file=str(spec_file),
+            plan_file="plan.md",
+            workflow_mode=WorkflowMode.LOCAL,
+        )
+
+        # 測試
+        result = phase._check_if_develop_is_newer()
+        assert result is False
+
+    def test_check_if_develop_is_newer_when_no_review_status(
+        self, tmp_path: Path
+    ) -> None:
+        """測試當沒有 review status.json 時返回 True（第一次 review）"""
+        from datetime import datetime
+
+        # 建立測試目錄結構
+        issue_dir = tmp_path / ".aaf" / "issues" / "test-issue"
+        develop_dir = issue_dir / "develop"
+        spec_dir = issue_dir / "spec"
+
+        develop_dir.mkdir(parents=True)
+        spec_dir.mkdir(parents=True)
+
+        # 建立 spec 檔案
+        spec_file = spec_dir / "spec.md"
+        spec_file.write_text("Test spec")
+
+        # 只有 develop status，沒有 review status
+        develop_time = datetime.now()
+        develop_status = {
+            "phase": "develop",
+            "status": "completed",
+            "status_code": "AAF_CONFIRMED",
+            "timestamp": develop_time.isoformat(),
+            "iteration": 1,
+        }
+        (develop_dir / "status.json").write_text(
+            json.dumps(develop_status, ensure_ascii=False)
+        )
+
+        # 建立 ReviewPhase
+        agent_manager = MagicMock(spec=AgentManager)
+        permission_handler = MagicMock(spec=PermissionHandler)
+        git_ops = MagicMock(spec=GitOperations)
+
+        phase = ReviewPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            git_ops=git_ops,
+            spec_file=str(spec_file),
+            plan_file="plan.md",
+            workflow_mode=WorkflowMode.LOCAL,
+        )
+
+        # 測試
+        result = phase._check_if_develop_is_newer()
+        assert result is True
+
+    def test_check_if_develop_is_newer_when_no_develop_status(
+        self, tmp_path: Path
+    ) -> None:
+        """測試當沒有 develop status.json 時返回 False"""
+        # 建立測試目錄結構
+        issue_dir = tmp_path / ".aaf" / "issues" / "test-issue"
+        spec_dir = issue_dir / "spec"
+
+        spec_dir.mkdir(parents=True)
+
+        # 建立 spec 檔案
+        spec_file = spec_dir / "spec.md"
+        spec_file.write_text("Test spec")
+
+        # 沒有 develop status
+
+        # 建立 ReviewPhase
+        agent_manager = MagicMock(spec=AgentManager)
+        permission_handler = MagicMock(spec=PermissionHandler)
+        git_ops = MagicMock(spec=GitOperations)
+
+        phase = ReviewPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            git_ops=git_ops,
+            spec_file=str(spec_file),
+            plan_file="plan.md",
+            workflow_mode=WorkflowMode.LOCAL,
+        )
+
+        # 測試
+        result = phase._check_if_develop_is_newer()
+        assert result is False
