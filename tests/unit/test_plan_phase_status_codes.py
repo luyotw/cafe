@@ -7,7 +7,7 @@ import pytest
 
 from aaf.agents.manager import AgentManager
 from aaf.core.permission import PermissionHandler
-from aaf.core.types import PhaseStatus, WorkflowMode
+from aaf.core.types import PhaseStatus, WorkflowMode, TokenUsage
 from aaf.phases.plan_phase import PlanPhase
 
 
@@ -20,7 +20,7 @@ class TestPlanPhaseWithStatusCodes:
         requirements_file.write_text("# 需求\n\n## 開發指南\nSome guide")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("CONFIRMED\n實作分析已完成。", TokenUsage())
+        agent_manager.execute.return_value = ("AAF_CONFIRMED\n實作分析已完成。", TokenUsage())
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -34,7 +34,7 @@ class TestPlanPhaseWithStatusCodes:
         result = phase.execute()
 
         assert result.status == PhaseStatus.COMPLETED
-        assert result.data.get("status_code") == "CONFIRMED"
+        assert result.data.get("status_code") == "AAF_CONFIRMED"
         assert result.data.get("iterations") == 1
 
     def test_rejected_status_code_fails_phase(self, tmp_path: Path) -> None:
@@ -43,7 +43,7 @@ class TestPlanPhaseWithStatusCodes:
         requirements_file.write_text("# 需求\n\n## 開發指南\nSome guide")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("REJECTED\n分析無法進行。", TokenUsage())
+        agent_manager.execute.return_value = ("AAF_REJECTED\n分析無法進行。", TokenUsage())
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -57,7 +57,7 @@ class TestPlanPhaseWithStatusCodes:
         result = phase.execute()
 
         assert result.status == PhaseStatus.FAILED
-        assert result.data.get("status_code") == "REJECTED"
+        assert result.data.get("status_code") == "AAF_REJECTED"
 
     def test_need_clarification_continues_iteration(self, tmp_path: Path) -> None:
         """測試 NEED_CLARIFICATION 繼續迭代"""
@@ -67,8 +67,8 @@ class TestPlanPhaseWithStatusCodes:
         agent_manager = MagicMock(spec=AgentManager)
         # First iteration needs clarification, second confirms
         agent_manager.execute.side_effect = [
-            "NEED_CLARIFICATION\n請補充更多資訊。",
-            "CONFIRMED\n實作分析已完成。",
+            ("AAF_NEED_CLARIFICATION\n請補充更多資訊。", TokenUsage()),
+            ("AAF_CONFIRMED\n實作分析已完成。", TokenUsage()),
         ]
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -92,7 +92,7 @@ class TestPlanPhaseWithStatusCodes:
         requirements_file.write_text("# 需求\n\n## 開發指南\nSome guide")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("分析結果：\nCONFIRMED\n實作分析已完成。", TokenUsage())
+        agent_manager.execute.return_value = ("分析結果：\nAAF_CONFIRMED\n實作分析已完成。", TokenUsage())
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -106,7 +106,7 @@ class TestPlanPhaseWithStatusCodes:
         result = phase.execute()
 
         assert result.status == PhaseStatus.COMPLETED
-        assert result.data.get("status_code") == "CONFIRMED"
+        assert result.data.get("status_code") == "AAF_CONFIRMED"
 
     def test_no_status_code_continues_iteration(self, tmp_path: Path) -> None:
         """測試沒有狀態碼時繼續迭代"""
@@ -116,8 +116,8 @@ class TestPlanPhaseWithStatusCodes:
         agent_manager = MagicMock(spec=AgentManager)
         # First has no status code, second has CONFIRMED
         agent_manager.execute.side_effect = [
-            "這是一般的回應，沒有狀態碼。",
-            "CONFIRMED\n實作分析已完成。",
+            ("這是一般的回應，沒有狀態碼。", TokenUsage()),
+            ("AAF_CONFIRMED\n實作分析已完成。", TokenUsage()),
         ]
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -140,7 +140,7 @@ class TestPlanPhaseWithStatusCodes:
         requirements_file.write_text("# 需求\n\n## 開發指南\nSome guide")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("confirmed\n實作分析已完成。", TokenUsage())
+        agent_manager.execute.return_value = ("aaf_confirmed\n實作分析已完成。", TokenUsage())
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -154,4 +154,4 @@ class TestPlanPhaseWithStatusCodes:
         result = phase.execute()
 
         assert result.status == PhaseStatus.COMPLETED
-        assert result.data.get("status_code") == "CONFIRMED"
+        assert result.data.get("status_code") == "AAF_CONFIRMED"
