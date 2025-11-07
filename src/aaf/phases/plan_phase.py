@@ -129,7 +129,7 @@ class PlanPhase(Phase):
                 # Check the last iteration's status code
                 last_status_code = self.conversation_history[-1].get("status_code") if self.conversation_history else None
 
-                if last_status_code == "CONFIRMED":
+                if last_status_code == PhaseStatusCode.CONFIRMED.value:
                     # Last iteration was CONFIRMED - will skip agent execution and go directly to user confirmation
                     resume_with_confirmed = True
                 else:
