@@ -41,7 +41,7 @@ class TestCacheEntry:
         data = entry.to_dict()
 
         assert data["phase_name"] == "analysis"
-        assert data["status_code"] == "CONFIRMED"
+        assert data["status_code"] == "AAF_CONFIRMED"  # Status codes have AAF_ prefix
         assert data["response"] == "Analysis complete"
         assert data["content_hash"] == "def456"
         assert data["timestamp"] == timestamp.isoformat()
@@ -51,7 +51,7 @@ class TestCacheEntry:
         timestamp = datetime.now()
         data = {
             "phase_name": "review",
-            "status_code": "LGTM",
+            "status_code": "AAF_LGTM",  # Status codes have AAF_ prefix
             "response": "Code looks good",
             "content_hash": "ghi789",
             "timestamp": timestamp.isoformat()
