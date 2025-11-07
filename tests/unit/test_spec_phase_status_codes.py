@@ -39,7 +39,8 @@ class TestSpecPhaseWithStatusCodes:
             rigor=SpecRigor.MEDIUM,
         )
 
-        with patch('builtins.print'), patch('prompt_toolkit.prompt', return_value=''):
+        with patch('builtins.print'), \
+             patch.object(phase.display, 'get_multiline_input', return_value="需求"):
             result = phase.execute()
 
         assert result.status == PhaseStatus.COMPLETED
@@ -67,7 +68,8 @@ class TestSpecPhaseWithStatusCodes:
             rigor=SpecRigor.MEDIUM,
         )
 
-        with patch('builtins.print'), patch('prompt_toolkit.prompt', return_value=''):
+        with patch('builtins.print'), \
+             patch.object(phase.display, 'get_multiline_input', return_value="需求"):
             result = phase.execute()
 
         assert result.status == PhaseStatus.FAILED
@@ -129,7 +131,8 @@ class TestSpecPhaseWithStatusCodes:
             rigor=SpecRigor.MEDIUM,
         )
 
-        with patch('builtins.print'), patch('prompt_toolkit.prompt', return_value=''):
+        with patch('builtins.print'), \
+             patch.object(phase.display, 'get_multiline_input', return_value="需求"):
             result = phase.execute()
 
         assert result.status == PhaseStatus.COMPLETED
@@ -189,7 +192,8 @@ class TestSpecPhaseWithStatusCodes:
             rigor=SpecRigor.MEDIUM,
         )
 
-        with patch('builtins.print'), patch('prompt_toolkit.prompt', return_value=''):
+        with patch('builtins.print'), \
+             patch.object(phase.display, 'get_multiline_input', return_value="需求"):
             result = phase.execute()
 
         assert result.status == PhaseStatus.COMPLETED
