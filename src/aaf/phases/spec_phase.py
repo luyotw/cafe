@@ -12,6 +12,9 @@ from aaf.core.status_codes import PhaseStatusCode, StatusCodeParser, generate_st
 from aaf.core.types import PhaseProgress, PhaseResult, PhaseStatus, WorkflowMode
 from aaf.ui.display import Display
 
+# Maximum number of clarification iterations to prevent infinite loops
+MAX_CLARIFICATION_ITERATIONS = 10
+
 
 def create_github_issue(content: str) -> str:
     """Create a new GitHub issue with content.
@@ -237,6 +240,17 @@ class SpecPhase(Phase):
             # Requirements clarification loop
             while True:
                 self.iteration += 1
+
+                # Safety check: prevent infinite loops
+                if self.iteration > MAX_CLARIFICATION_ITERATIONS:
+                    return PhaseResult(
+                        status=PhaseStatus.FAILED,
+                        message=f"Exceeded maximum iterations ({MAX_CLARIFICATION_ITERATIONS}). Requirements clarification did not converge.",
+                        data={
+                            "iterations": self.iteration - 1,
+                            "max_iterations": MAX_CLARIFICATION_ITERATIONS,
+                        },
+                    )
 
                 # Prepare user_input for this iteration
                 # Iteration 1: user_input is the initial user story/requirements

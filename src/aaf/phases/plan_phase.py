@@ -13,6 +13,9 @@ from aaf.core.status_codes import PhaseStatusCode, StatusCodeParser, generate_st
 from aaf.core.types import PhaseProgress, PhaseResult, PhaseStatus, WorkflowMode
 from aaf.ui.display import Display
 
+# Maximum number of planning iterations to prevent infinite loops
+MAX_PLANNING_ITERATIONS = 10
+
 
 class PlanPhase(Phase):
     """Phase 2: Implementation plan with developer agent."""
@@ -161,6 +164,17 @@ class PlanPhase(Phase):
                 else:
                     # Normal flow: increment iteration and execute agent
                     self.iteration += 1
+
+                    # Safety check: prevent infinite loops
+                    if self.iteration > MAX_PLANNING_ITERATIONS:
+                        return PhaseResult(
+                            status=PhaseStatus.FAILED,
+                            message=f"Exceeded maximum iterations ({MAX_PLANNING_ITERATIONS}). Plan generation did not converge.",
+                            data={
+                                "iterations": self.iteration - 1,
+                                "max_iterations": MAX_PLANNING_ITERATIONS,
+                            },
+                        )
 
                     # Prepare user_input for this iteration
                     # Iteration 1: user_input is the dev guide content
