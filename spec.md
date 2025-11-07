@@ -1,2 +1,0 @@
-# Requirements
-Test requirements
