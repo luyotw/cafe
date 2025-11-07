@@ -1,7 +1,7 @@
 """Code review phase."""
 
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 import json
 from datetime import datetime
 
@@ -87,6 +87,11 @@ class ReviewPhase(Phase):
                 self.review_agent, review_prompt
             )
 
+            # Get agent executor info for history
+            agent_executor = self.agent_manager.get_agent(self.review_agent)
+            agent_cli = agent_executor.config.cli.value
+            agent_session_id = agent_executor.config.session_id
+
             # Extract status code from review response
             status_code = StatusCodeParser.extract(
                 review_response,
@@ -96,8 +101,13 @@ class ReviewPhase(Phase):
                 ],
             )
 
-            # Save review result
-            self._save_review_result(review_response, status_code)
+            # Save review result with agent info
+            self._save_review_result(
+                review_response,
+                status_code,
+                agent_cli=agent_cli,
+                agent_session_id=agent_session_id
+            )
 
             # Save progress status
             if status_code:
@@ -260,13 +270,23 @@ class ReviewPhase(Phase):
         return prompt
 
     def _save_review_result(
-        self, review_response: str, status_code: Optional[PhaseStatusCode]
+        self,
+        review_response: str,
+        status_code: Optional[PhaseStatusCode],
+        agent_cli: Optional[str] = None,
+        agent_session_id: Optional[str] = None,
+        allowed_tools: Optional[List[str]] = None,
+        denied_tools: Optional[List[str]] = None
     ) -> None:
         """Save review result to file.
 
         Args:
             review_response: Review response from agent
             status_code: Status code from review
+            agent_cli: CLI tool used by the agent (e.g., "copilot", "claude")
+            agent_session_id: Session ID of the agent
+            allowed_tools: List of allowed tools for the agent
+            denied_tools: List of denied tools for the agent
         """
         import json
         from datetime import datetime
@@ -299,6 +319,10 @@ class ReviewPhase(Phase):
             "target_commit": self.target_commit,
             "review_response": review_response,
             "status_code": status_code.value if status_code else None,
+            "cli": agent_cli,
+            "session_id": agent_session_id,
+            "allowed_tools": allowed_tools,
+            "denied_tools": denied_tools,
         }
 
         history_file.write_text(json.dumps(history_data, ensure_ascii=False, indent=2))

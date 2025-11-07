@@ -26,6 +26,7 @@ class TestReviewPhaseBasics:
             permission_handler=permission_handler,
             git_ops=git_ops,
             spec_file="requirements.md",
+            plan_file="plan.md",
             workflow_mode=WorkflowMode.LOCAL,
         )
 
@@ -45,6 +46,7 @@ class TestReviewPhaseBasics:
             permission_handler=permission_handler,
             git_ops=git_ops,
             spec_file="requirements.md",
+            plan_file="plan.md",
             workflow_mode=WorkflowMode.LOCAL,
             target_commit="abc123",
         )
@@ -74,6 +76,7 @@ class TestSingleIterationExecution:
             permission_handler=permission_handler,
             git_ops=git_ops,
             spec_file=str(requirements_file),
+            plan_file="plan.md",
             workflow_mode=WorkflowMode.LOCAL,
         )
 
@@ -102,6 +105,7 @@ class TestSingleIterationExecution:
             permission_handler=permission_handler,
             git_ops=git_ops,
             spec_file=str(requirements_file),
+            plan_file="plan.md",
             workflow_mode=WorkflowMode.LOCAL,
         )
 
@@ -129,6 +133,7 @@ class TestSingleIterationExecution:
             permission_handler=permission_handler,
             git_ops=git_ops,
             spec_file=str(requirements_file),
+            plan_file="plan.md",
             workflow_mode=WorkflowMode.LOCAL,
         )
 
@@ -159,6 +164,7 @@ class TestDiffChecking:
             permission_handler=permission_handler,
             git_ops=git_ops,
             spec_file=str(requirements_file),
+            plan_file="plan.md",
             workflow_mode=WorkflowMode.LOCAL,
         )
 
@@ -185,6 +191,7 @@ class TestDiffChecking:
             permission_handler=permission_handler,
             git_ops=git_ops,
             spec_file=str(requirements_file),
+            plan_file="plan.md",
             workflow_mode=WorkflowMode.LOCAL,
         )
 
@@ -212,6 +219,7 @@ class TestDiffChecking:
             permission_handler=permission_handler,
             git_ops=git_ops,
             spec_file=str(requirements_file),
+            plan_file="plan.md",
             workflow_mode=WorkflowMode.LOCAL,
             target_commit="abc123",
         )
@@ -240,6 +248,7 @@ class TestDiffChecking:
             permission_handler=permission_handler,
             git_ops=git_ops,
             spec_file=str(requirements_file),
+            plan_file="plan.md",
             workflow_mode=WorkflowMode.LOCAL,
         )
 
@@ -273,6 +282,7 @@ class TestAgentSelection:
             permission_handler=permission_handler,
             git_ops=git_ops,
             spec_file=str(requirements_file),
+            plan_file="plan.md",
             workflow_mode=WorkflowMode.LOCAL,
             review_agent="Richard",
         )
@@ -307,6 +317,7 @@ class TestPromptGeneration:
             permission_handler=permission_handler,
             git_ops=git_ops,
             spec_file=str(requirements_file),
+            plan_file="plan.md",
             workflow_mode=WorkflowMode.LOCAL,
         )
 
@@ -337,6 +348,7 @@ class TestPromptGeneration:
             permission_handler=permission_handler,
             git_ops=git_ops,
             spec_file=str(requirements_file),
+            plan_file="plan.md",
             workflow_mode=WorkflowMode.LOCAL,
         )
 
@@ -378,6 +390,7 @@ class TestReviewResultSaving:
             permission_handler=permission_handler,
             git_ops=git_ops,
             spec_file=str(spec_file),
+            plan_file="plan.md",
             workflow_mode=WorkflowMode.LOCAL,
         )
 
@@ -414,6 +427,7 @@ class TestReviewResultSaving:
             permission_handler=permission_handler,
             git_ops=git_ops,
             spec_file=str(spec_file),
+            plan_file="plan.md",
             workflow_mode=WorkflowMode.LOCAL,
         )
 
@@ -432,6 +446,81 @@ class TestReviewResultSaving:
             MockPath.return_value = mock_review_path
 
             phase.execute()
+
+    def test_saves_agent_info_to_history(self, tmp_path: Path) -> None:
+        """測試 history 包含 agent 資訊（cli, session_id, allowed_tools, denied_tools）"""
+        import os
+        from aaf.core.types import AgentCLI, AgentConfig
+
+        # Change to tmp_path so .aaf is created there
+        original_dir = os.getcwd()
+        try:
+            os.chdir(tmp_path)
+
+            # Create issue structure
+            issue_dir = Path(".aaf/issues/myissue")
+            spec_dir = issue_dir / "spec"
+            spec_dir.mkdir(parents=True)
+            spec_file = spec_dir / "spec.md"
+            spec_file.write_text("Requirements")
+
+            plan_dir = issue_dir / "plan"
+            plan_dir.mkdir(parents=True)
+            plan_file = plan_dir / "plan.md"
+            plan_file.write_text("Plan")
+
+            # Mock agent executor with config
+            mock_executor = MagicMock()
+            mock_executor.config = AgentConfig(
+                name="Richard",
+                cli=AgentCLI.COPILOT,
+                session_id="test-session-123"
+            )
+
+            agent_manager = MagicMock(spec=AgentManager)
+            agent_manager.execute.return_value = ("AAF_CONFIRMED\nCode looks good!", TokenUsage())
+            agent_manager.get_agent.return_value = mock_executor
+
+            permission_handler = MagicMock(spec=PermissionHandler)
+
+            git_ops = MagicMock(spec=GitOperations)
+            git_ops.get_diff.return_value = "diff content"
+
+            phase = ReviewPhase(
+                agent_manager=agent_manager,
+                permission_handler=permission_handler,
+                git_ops=git_ops,
+                spec_file=str(spec_file),
+                plan_file=str(plan_file),
+                workflow_mode=WorkflowMode.LOCAL,
+            )
+
+            # Execute phase
+            phase.execute()
+
+            # Check that history file was created with agent info
+            review_dir = issue_dir / "review"
+            history_dir = review_dir / "history"
+            history_file = history_dir / "iteration_001.json"
+
+            assert history_file.exists(), "History file should exist"
+
+            # Read and verify history content
+            history_data = json.loads(history_file.read_text())
+
+            # Verify new fields exist
+            assert "cli" in history_data, "History should contain cli field"
+            assert "session_id" in history_data, "History should contain session_id field"
+            assert "allowed_tools" in history_data, "History should contain allowed_tools field"
+            assert "denied_tools" in history_data, "History should contain denied_tools field"
+
+            # Verify values
+            assert history_data["cli"] == "copilot"
+            assert history_data["session_id"] == "test-session-123"
+            assert history_data["allowed_tools"] is None  # Default when not specified
+            assert history_data["denied_tools"] is None  # Default when not specified
+        finally:
+            os.chdir(original_dir)
 
 
 class TestIssueConfigReading:
@@ -474,6 +563,7 @@ class TestIssueConfigReading:
                 permission_handler=permission_handler,
                 git_ops=git_ops,
                 spec_file=str(spec_file),
+            plan_file="plan.md",
                 workflow_mode=WorkflowMode.LOCAL,
             )
 
@@ -498,8 +588,18 @@ class TestReviewPhaseStatus:
         spec_file = spec_dir / "spec.md"
         spec_file.write_text("Requirements")
 
+        # Mock agent executor with config
+        from aaf.core.types import AgentCLI, AgentConfig
+        mock_executor = MagicMock()
+        mock_executor.config = AgentConfig(
+            name="Richard",
+            cli=AgentCLI.COPILOT,
+            session_id="test-session"
+        )
+
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = ("AAF_CONFIRMED\nCode looks good!", TokenUsage())
+        agent_manager.get_agent.return_value = mock_executor
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -517,6 +617,7 @@ class TestReviewPhaseStatus:
                 permission_handler=permission_handler,
                 git_ops=git_ops,
                 spec_file=str(spec_file),
+            plan_file="plan.md",
                 workflow_mode=WorkflowMode.LOCAL,
             )
 
@@ -556,6 +657,7 @@ class TestGitHubWorkflow:
             permission_handler=permission_handler,
             git_ops=git_ops,
             spec_file="requirements.md",
+            plan_file="plan.md",
             workflow_mode=WorkflowMode.GITHUB,
             issue_id="123",
         )
@@ -587,6 +689,7 @@ class TestErrorHandling:
             permission_handler=permission_handler,
             git_ops=git_ops,
             spec_file=str(requirements_file),
+            plan_file="plan.md",
             workflow_mode=WorkflowMode.LOCAL,
         )
 
