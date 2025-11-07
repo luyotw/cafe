@@ -291,9 +291,6 @@ class ReviewPhase(Phase):
             allowed_tools: List of allowed tools for the agent
             denied_tools: List of denied tools for the agent
         """
-        import json
-        from datetime import datetime
-
         # Determine review directory based on workflow mode
         if self.workflow_mode == WorkflowMode.GITHUB and self.issue_id:
             review_dir = Path(f".aaf/issues/{self.issue_id}/review")
@@ -311,25 +308,35 @@ class ReviewPhase(Phase):
         result_file = review_dir / "review.md"
         result_file.write_text(review_response)
 
-        # Save to history with timestamp
-        timestamp = datetime.now().isoformat()
+        # Calculate iteration count
         iteration_count = len(list(history_dir.glob("iteration_*.json"))) + 1
-        history_file = history_dir / f"iteration_{iteration_count:03d}.json"
 
-        history_data = {
-            "timestamp": timestamp,
-            "iteration": iteration_count,
-            "target_commit": self.target_commit,
-            "prompt": prompt,
-            "review_response": review_response,
-            "status_code": status_code.value if status_code else None,
-            "cli": agent_cli,
-            "session_id": agent_session_id,
-            "allowed_tools": allowed_tools,
-            "denied_tools": denied_tools,
-        }
+        # Temporarily set iteration and history_dir for base class method
+        saved_iteration = getattr(self, 'iteration', None)
+        saved_history_dir = getattr(self, 'history_dir', None)
 
-        history_file.write_text(json.dumps(history_data, ensure_ascii=False, indent=2))
+        self.iteration = iteration_count
+        self.history_dir = history_dir
+
+        # Use base class method with ReviewPhase-specific data
+        super()._save_iteration_history(
+            phase_specific_data={
+                "target_commit": self.target_commit,
+                "review_response": review_response,
+            },
+            prompt=prompt,
+            agent_cli=agent_cli,
+            agent_session_id=agent_session_id,
+            allowed_tools=allowed_tools,
+            denied_tools=denied_tools,
+            status_code=status_code,
+        )
+
+        # Restore original values
+        if saved_iteration is not None:
+            self.iteration = saved_iteration
+        if saved_history_dir is not None:
+            self.history_dir = saved_history_dir
 
     def _save_progress(self, status_code: PhaseStatusCode) -> None:
         """Save phase progress to status.json.
