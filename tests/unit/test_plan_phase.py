@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 from aaf.phases.plan_phase import PlanPhase
 from aaf.agents.manager import AgentManager
 from aaf.core.status_codes import PhaseStatusCode
-from aaf.core.types import PhaseResult, PhaseStatus, WorkflowMode
+from aaf.core.types import PhaseResult, PhaseStatus, WorkflowMode, TokenUsage
 from aaf.core.permission import PermissionHandler
 
 
@@ -152,8 +152,8 @@ class TestLocalWorkflow:
 
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.side_effect = [
-            "分析中...",
-            "CONFIRMED\n實作分析已完成。",
+            ("分析中...", TokenUsage()),
+            ("CONFIRMED\n實作分析已完成。", TokenUsage()),
         ]
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -269,8 +269,8 @@ class TestPromptGeneration:
 
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.side_effect = [
-            "分析中",
-            "CONFIRMED\n實作分析已完成。",
+            ("分析中", TokenUsage()),
+            ("CONFIRMED\n實作分析已完成。", TokenUsage()),
         ]
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -410,8 +410,8 @@ class TestPlanPhaseHistory:
 
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.side_effect = [
-            "NEED_CLARIFICATION\n需要更多資訊",
-            "CONFIRMED\n實作分析已完成。",
+            ("NEED_CLARIFICATION\n需要更多資訊", TokenUsage()),
+            ("CONFIRMED\n實作分析已完成。", TokenUsage()),
         ]
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -494,12 +494,12 @@ class TestPlanPhaseHistory:
         plan_file.write_text("## 開發指南\n\nGuide")
 
         # Mock agent to write plan.md file
-        def mock_agent_writes_plan(agent_name: str, prompt: str, allowed_tools=None) -> str:
+        def mock_agent_writes_plan(agent_name: str, prompt: str, allowed_tools=None):
             # Agent writes plan.md
             plan_file = spec_file.parent.parent / "plan" / "plan.md"
             plan_file.parent.mkdir(parents=True, exist_ok=True)
             plan_file.write_text("# 實作計畫\n\n## 技術分析\n分析內容")
-            return "CONFIRMED\n實作分析已完成。"
+            return ("CONFIRMED\n實作分析已完成。", TokenUsage())
 
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.side_effect = mock_agent_writes_plan
@@ -696,8 +696,8 @@ class TestPlanPhaseNeedClarification:
 
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.side_effect = [
-            "NEED_CLARIFICATION\n需要更多資訊",
-            "CONFIRMED\n實作分析已完成。",
+            ("NEED_CLARIFICATION\n需要更多資訊", TokenUsage()),
+            ("CONFIRMED\n實作分析已完成。", TokenUsage()),
         ]
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -775,8 +775,8 @@ class TestPlanPhaseNeedClarification:
 
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.side_effect = [
-            "NEED_CLARIFICATION\n需要更多資訊",
-            "CONFIRMED\n完成",
+            ("NEED_CLARIFICATION\n需要更多資訊", TokenUsage()),
+            ("CONFIRMED\n完成", TokenUsage()),
         ]
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -947,8 +947,8 @@ class TestPlanPhaseUserConfirmation:
 
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.side_effect = [
-            "CONFIRMED\n實作計畫已完成。",
-            "CONFIRMED\n實作計畫已修改完成。",
+            ("CONFIRMED\n實作計畫已完成。", TokenUsage()),
+            ("CONFIRMED\n實作計畫已修改完成。", TokenUsage()),
         ]
 
         permission_handler = MagicMock(spec=PermissionHandler)
