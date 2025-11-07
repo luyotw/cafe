@@ -568,16 +568,27 @@ class PlanPhase(Phase):
             allowed_tools: List of allowed tools for the agent
             denied_tools: List of denied tools for the agent
         """
-        # Create history directory if it doesn't exist
-        self.history_dir.mkdir(parents=True, exist_ok=True)
+        # Use base class method with PlanPhase-specific data
+        super()._save_iteration_history(
+            phase_specific_data={
+                "dev_agent": self.dev_agent,
+                "user_input": user_input,
+                "response": response,
+            },
+            prompt=prompt,
+            agent_cli=agent_cli,
+            agent_session_id=agent_session_id,
+            allowed_tools=allowed_tools,
+            denied_tools=denied_tools,
+            status_code=status_code,
+        )
 
-        history_file = self.history_dir / f"iteration_{self.iteration:03d}.json"
-
+        # Add to conversation history in memory (preserve old behavior)
         history_data = {
             "iteration": self.iteration,
             "timestamp": datetime.now().isoformat(),
             "dev_agent": self.dev_agent,
-            "user_input": user_input,  # Start of the iteration
+            "user_input": user_input,
             "prompt": prompt,
             "response": response,
             "status_code": status_code.value,
@@ -586,11 +597,6 @@ class PlanPhase(Phase):
             "allowed_tools": allowed_tools,
             "denied_tools": denied_tools,
         }
-
-        with open(history_file, 'w', encoding='utf-8') as f:
-            json.dump(history_data, f, ensure_ascii=False, indent=2)
-
-        # Add to conversation history in memory
         self.conversation_history.append(history_data)
 
     def _load_history(self) -> None:
