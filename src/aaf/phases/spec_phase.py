@@ -415,6 +415,16 @@ class SpecPhase(Phase):
 
                     if self.interactive:
                         # Interactive mode: Display PM's questions and get user input
+
+                        # Save iteration history BEFORE asking user for response
+                        # This ensures we have a record even if user cancels
+                        self._save_iteration_history(
+                            user_input=current_user_input,
+                            prompt=prompt,
+                            pm_response=response,
+                            status=PhaseStatusCode.NEED_CLARIFICATION,
+                        )
+
                         # Read the spec file
                         spec_file = Path(self.spec_file)
                         pm_content = spec_file.read_text() if spec_file.exists() else "（檔案未產生）"
@@ -450,14 +460,6 @@ class SpecPhase(Phase):
 
                         # Save user response to file for next iteration
                         self._save_user_response(user_response)
-
-                        # Save iteration history
-                        self._save_iteration_history(
-                            user_input=current_user_input,
-                            prompt=prompt,
-                            pm_response=response,
-                            status=PhaseStatusCode.NEED_CLARIFICATION,
-                        )
 
                         # Update conversation history
                         self.conversation_history.append({
@@ -951,29 +953,23 @@ class SpecPhase(Phase):
             allowed_tools: List of allowed tools for the agent
             denied_tools: List of denied tools for the agent
         """
-        # Create history directory
-        self.history_dir.mkdir(parents=True, exist_ok=True)
-
-        # Create iteration record
-        iteration_data = {
-            "iteration": self.iteration,
-            "timestamp": datetime.now().isoformat(),
-            "status": status.value,
-            "user_input": user_input,  # Start of the iteration
-            "prompt": prompt,  # The actual prompt sent to agent
-            "pm_response": pm_response,
-            "cli": agent_cli,
-            "session_id": agent_session_id,
-            "allowed_tools": allowed_tools,
-            "denied_tools": denied_tools,
-            "confirmed_requirements": self.confirmed_requirements.copy(),
-            "pending_questions": self.pending_questions.copy(),
-        }
-
-        # Save to JSON file
-        iteration_file = self.history_dir / f"iteration_{self.iteration:03d}.json"
-        with open(iteration_file, "w", encoding="utf-8") as f:
-            json.dump(iteration_data, f, ensure_ascii=False, indent=2)
+        # Use base class method with SpecPhase-specific data
+        # Note: SpecPhase uses "status" field name instead of "status_code" for historical reasons
+        super()._save_iteration_history(
+            phase_specific_data={
+                "status": status.value,  # SpecPhase uses "status" not "status_code"
+                "user_input": user_input,
+                "pm_response": pm_response,
+                "confirmed_requirements": self.confirmed_requirements.copy(),
+                "pending_questions": self.pending_questions.copy(),
+            },
+            prompt=prompt,
+            agent_cli=agent_cli,
+            agent_session_id=agent_session_id,
+            allowed_tools=allowed_tools,
+            denied_tools=denied_tools,
+            status_code=None,  # Don't add status_code since we're using "status"
+        )
 
         # Update context.md for agent
         self._update_context_file()
