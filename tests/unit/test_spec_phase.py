@@ -15,7 +15,7 @@ from aaf.core.permission import PermissionHandler
 from aaf.core.status_codes import PhaseStatusCode
 
 
-def create_mock_pm_agent(phase: SpecPhase, content: str, status_code: str = "CONFIRMED") -> Callable:
+def create_mock_pm_agent(phase: SpecPhase, content: str, status_code: str = "AAF_CONFIRMED") -> Callable:
     """Create a mock PM agent that writes to spec.md before returning status code.
 
     Args:
@@ -85,7 +85,7 @@ class TestAgentSelection:
         spec_file.write_text("Requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("CONFIRMED\n需求已清楚。", TokenUsage())
+        agent_manager.execute.return_value = ("AAF_CONFIRMED\n需求已清楚。", TokenUsage())
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -116,7 +116,7 @@ class TestHistoryTracking:
         spec_file.write_text("Initial requirements\n")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("CONFIRMED\n需求已清楚。", TokenUsage())
+        agent_manager.execute.return_value = ("AAF_CONFIRMED\n需求已清楚。", TokenUsage())
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -140,7 +140,7 @@ class TestHistoryTracking:
         spec_file.write_text("Initial requirements\n")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("NEED_CLARIFICATION\n請問使用者是誰？", TokenUsage())
+        agent_manager.execute.return_value = ("AAF_NEED_CLARIFICATION\n請問使用者是誰？", TokenUsage())
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -300,7 +300,7 @@ class TestHistoryTracking:
                 "iteration": 1,
                 "pm_response": "請問需要哪些功能？",
                 "user_response": "需要登入和註冊",
-                "status": "NEED_CLARIFICATION",
+                "status": "AAF_NEED_CLARIFICATION",
             },
         ]
 
@@ -374,8 +374,8 @@ class TestHistoryTracking:
         phase1.confirmed_requirements = ["功能1", "功能2"]
         phase1.pending_questions = ["問題1", "問題2"]
         phase1.conversation_history = [
-            {"iteration": 1, "pm_response": "Q1", "user_response": "A1", "status": "NEED_CLARIFICATION"},
-            {"iteration": 2, "pm_response": "Q2", "user_response": "A2", "status": "NEED_CLARIFICATION"},
+            {"iteration": 1, "pm_response": "Q1", "user_response": "A1", "status": "AAF_NEED_CLARIFICATION"},
+            {"iteration": 2, "pm_response": "Q2", "user_response": "A2", "status": "AAF_NEED_CLARIFICATION"},
         ]
 
         # Save iteration 1
@@ -441,7 +441,7 @@ class TestHistoryTracking:
         spec_file.write_text("Initial requirements\n")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("CONFIRMED\n需求已清楚", TokenUsage())
+        agent_manager.execute.return_value = ("AAF_CONFIRMED\n需求已清楚", TokenUsage())
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -503,7 +503,7 @@ class TestNonInteractiveModeIteration1:
         spec_file.parent.mkdir(parents=True, exist_ok=True)
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("NEED_CLARIFICATION\n需要澄清需求。\n\n## 待釐清的問題\n1. 問題一", TokenUsage())
+        agent_manager.execute.return_value = ("AAF_NEED_CLARIFICATION\n需要澄清需求。\n\n## 待釐清的問題\n1. 問題一", TokenUsage())
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -535,7 +535,7 @@ class TestNonInteractiveModeIteration1:
         spec_file.parent.mkdir(parents=True, exist_ok=True)
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("NEED_CLARIFICATION\n需要澄清", TokenUsage())
+        agent_manager.execute.return_value = ("AAF_NEED_CLARIFICATION\n需要澄清", TokenUsage())
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -563,7 +563,7 @@ class TestNonInteractiveModeIteration1:
         spec_file.parent.mkdir(parents=True, exist_ok=True)
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("CONFIRMED\n需求已清楚。", TokenUsage())
+        agent_manager.execute.return_value = ("AAF_CONFIRMED\n需求已清楚。", TokenUsage())
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -607,21 +607,21 @@ class TestNonInteractiveModeIteration2Plus:
             "iteration": 1,
             "pm_response": "NEED_CLARIFICATION\n問題一？",
             "user_response": "",
-            "status": "NEED_CLARIFICATION"
+            "status": "AAF_NEED_CLARIFICATION"
         }))
 
         # status.json showing we're in iteration 1
         (issue_dir / "spec" / "status.json").write_text(json.dumps({
             "phase": "spec",
             "status": "in_progress",
-            "status_code": "NEED_CLARIFICATION",
+            "status_code": "AAF_NEED_CLARIFICATION",
             "iteration": 1
         }))
 
         spec_file.write_text("## 使用者故事\n測試\n\n## 待釐清的問題\n1. 問題一？")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("CONFIRMED\n需求已清楚", TokenUsage())
+        agent_manager.execute.return_value = ("AAF_CONFIRMED\n需求已清楚", TokenUsage())
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -669,13 +669,13 @@ class TestNonInteractiveModeIteration2Plus:
             "iteration": 1,
             "pm_response": "NEED_CLARIFICATION\n問題一？",
             "user_response": "",
-            "status": "NEED_CLARIFICATION"
+            "status": "AAF_NEED_CLARIFICATION"
         }))
 
         (issue_dir / "spec" / "status.json").write_text(json.dumps({
             "phase": "spec",
             "status": "in_progress",
-            "status_code": "NEED_CLARIFICATION",
+            "status_code": "AAF_NEED_CLARIFICATION",
             "iteration": 1
         }))
 
@@ -683,7 +683,7 @@ class TestNonInteractiveModeIteration2Plus:
 
         agent_manager = MagicMock(spec=AgentManager)
         # PM needs more info
-        agent_manager.execute.return_value = ("NEED_CLARIFICATION\n還需要澄清問題二", TokenUsage())
+        agent_manager.execute.return_value = ("AAF_NEED_CLARIFICATION\n還需要澄清問題二", TokenUsage())
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -748,13 +748,13 @@ class TestNonInteractiveModeErrorHandling:
             "iteration": 1,
             "pm_response": "NEED_CLARIFICATION\n問題",
             "user_response": "",
-            "status": "NEED_CLARIFICATION"
+            "status": "AAF_NEED_CLARIFICATION"
         }))
 
         (issue_dir / "spec" / "status.json").write_text(json.dumps({
             "phase": "spec",
             "status": "in_progress",
-            "status_code": "NEED_CLARIFICATION",
+            "status_code": "AAF_NEED_CLARIFICATION",
             "iteration": 1
         }))
 
@@ -833,7 +833,7 @@ class TestSkipConfirmedSpec:
         status_file.write_text(json.dumps({
             "phase": "spec",
             "status": "completed",
-            "status_code": "CONFIRMED",
+            "status_code": "AAF_CONFIRMED",
             "iteration": 3
         }))
 
@@ -880,7 +880,7 @@ class TestResumeFromHistory:
             "iteration": 1,
             "pm_response": "NEED_CLARIFICATION\n問題一？",
             "user_response": "回答一",
-            "status": "NEED_CLARIFICATION"
+            "status": "AAF_NEED_CLARIFICATION"
         }))
 
         # Create current spec.md in history
@@ -888,7 +888,7 @@ class TestResumeFromHistory:
 
         agent_manager = MagicMock(spec=AgentManager)
         # PM returns NEED_CLARIFICATION for iteration 2
-        agent_manager.execute.return_value = ("NEED_CLARIFICATION\n問題二？", TokenUsage())
+        agent_manager.execute.return_value = ("AAF_NEED_CLARIFICATION\n問題二？", TokenUsage())
         agent_manager.get_total_token_usage.return_value = TokenUsage()
         agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
 
@@ -934,7 +934,7 @@ class TestResumeFromHistory:
         iteration_002_data = json.loads(iteration_002_file.read_text())
         assert iteration_002_data["iteration"] == 2
         # user_response is no longer stored - next iteration's user_input contains it
-        assert iteration_002_data["status"] == "NEED_CLARIFICATION"
+        assert iteration_002_data["status"] == "AAF_NEED_CLARIFICATION"
 
         # Iteration 3 should also be saved
         iteration_003_file = history_dir / "iteration_003.json"
@@ -942,14 +942,14 @@ class TestResumeFromHistory:
         iteration_003_data = json.loads(iteration_003_file.read_text())
         assert iteration_003_data["iteration"] == 3
         # user_response is no longer stored - next iteration's user_input contains it
-        assert iteration_003_data["status"] == "NEED_CLARIFICATION"
+        assert iteration_003_data["status"] == "AAF_NEED_CLARIFICATION"
 
         # Iteration 4 should be saved with CONFIRMED
         iteration_004_file = history_dir / "iteration_004.json"
         assert iteration_004_file.exists()
         iteration_004_data = json.loads(iteration_004_file.read_text())
         assert iteration_004_data["iteration"] == 4
-        assert iteration_004_data["status"] == "CONFIRMED"
+        assert iteration_004_data["status"] == "AAF_CONFIRMED"
 
         # Should return COMPLETED (because iteration 4 was CONFIRMED)
         assert result.status == PhaseStatus.COMPLETED
@@ -971,7 +971,7 @@ class TestResumeFromHistory:
             "iteration": 1,
             "pm_response": "NEED_CLARIFICATION\n## 使用者故事\n測試\n\n## 待釐清的問題\n1. 問題一？",
             "user_response": "",  # No user response yet
-            "status": "NEED_CLARIFICATION"
+            "status": "AAF_NEED_CLARIFICATION"
         }))
 
         # Create current spec.md with PM's question
@@ -979,7 +979,7 @@ class TestResumeFromHistory:
 
         agent_manager = MagicMock(spec=AgentManager)
         # Agent should be called AFTER user provides response
-        agent_manager.execute.return_value = ("CONFIRMED\n需求已清楚", TokenUsage())
+        agent_manager.execute.return_value = ("AAF_CONFIRMED\n需求已清楚", TokenUsage())
         agent_manager.get_total_token_usage.return_value = TokenUsage()
         agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
 
@@ -1030,21 +1030,21 @@ class TestResumeFromHistory:
             "iteration": 1,
             "pm_response": "NEED_CLARIFICATION\n問題一？",
             "user_response": "回答一",
-            "status": "NEED_CLARIFICATION"
+            "status": "AAF_NEED_CLARIFICATION"
         }))
 
         (history_dir / "iteration_002.json").write_text(json.dumps({
             "iteration": 2,
             "pm_response": "NEED_CLARIFICATION\n問題二？",
             "user_response": "",
-            "status": "NEED_CLARIFICATION"
+            "status": "AAF_NEED_CLARIFICATION"
         }))
 
         # Create current spec.md in history
         spec_file.write_text("## 使用者故事\n測試\n\n## 待釐清的問題\n1. 問題二？")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("CONFIRMED\n需求已清楚", TokenUsage())
+        agent_manager.execute.return_value = ("AAF_CONFIRMED\n需求已清楚", TokenUsage())
         agent_manager.get_total_token_usage.return_value = TokenUsage()
         agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
 
