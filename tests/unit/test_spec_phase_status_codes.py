@@ -20,7 +20,9 @@ class TestSpecPhaseWithStatusCodes:
 
     def test_confirmed_status_code_completes_phase(self, tmp_path: Path) -> None:
         """測試 CONFIRMED 狀態碼會完成 phase"""
-        spec_file = tmp_path / "spec.md"
+        issue_name = "test-confirmed-issue"
+        spec_file = tmp_path / ".aaf" / "issues" / issue_name / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements\nTest requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
@@ -49,7 +51,9 @@ class TestSpecPhaseWithStatusCodes:
 
     def test_rejected_status_code_fails_phase(self, tmp_path: Path) -> None:
         """測試 REJECTED 狀態碼會失敗 phase"""
-        spec_file = tmp_path / "spec.md"
+        issue_name = "test-rejected-issue"
+        spec_file = tmp_path / ".aaf" / "issues" / issue_name / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements\nTest requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
@@ -78,7 +82,9 @@ class TestSpecPhaseWithStatusCodes:
 
     def test_need_clarification_continues_iteration(self, tmp_path: Path) -> None:
         """測試 NEED_CLARIFICATION 狀態碼會繼續迭代（互動模式）"""
-        spec_file = tmp_path / "spec.md"
+        issue_name = "test-clarification-issue"
+        spec_file = tmp_path / ".aaf" / "issues" / issue_name / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements\nTest requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
@@ -112,7 +118,9 @@ class TestSpecPhaseWithStatusCodes:
 
     def test_status_code_in_middle_of_response(self, tmp_path: Path) -> None:
         """測試狀態碼在回應中間也能識別"""
-        spec_file = tmp_path / "spec.md"
+        issue_name = "test-middle-status-issue"
+        spec_file = tmp_path / ".aaf" / "issues" / issue_name / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements\nTest requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
@@ -140,7 +148,9 @@ class TestSpecPhaseWithStatusCodes:
 
     def test_no_status_code_continues_iteration(self, tmp_path: Path) -> None:
         """測試沒有狀態碼時會繼續迭代直到有狀態碼（互動模式）"""
-        spec_file = tmp_path / "spec.md"
+        issue_name = "test-no-status-issue"
+        spec_file = tmp_path / ".aaf" / "issues" / issue_name / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements\nTest requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
@@ -173,7 +183,9 @@ class TestSpecPhaseWithStatusCodes:
 
     def test_case_insensitive_status_code(self, tmp_path: Path) -> None:
         """測試狀態碼不分大小寫"""
-        spec_file = tmp_path / "spec.md"
+        issue_name = "test-case-insensitive-issue"
+        spec_file = tmp_path / ".aaf" / "issues" / issue_name / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements\nTest requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
