@@ -97,12 +97,13 @@ class TestTemplateManager:
         assert sorted(templates) == ["default", "template1", "template2"]
 
     def test_list_templates_empty_directory(self, tmp_path: Path) -> None:
-        """測試空目錄時回傳空列表"""
+        """測試空目錄時回傳 default template"""
         config_dir = tmp_path / ".aaf"
         manager = TemplateManager(str(config_dir))
 
         templates = manager.list_templates()
-        assert templates == []
+        # TemplateManager 自動建立 default template
+        assert templates == ["default"]
 
     def test_list_templates_ignores_non_md_files(self, tmp_path: Path) -> None:
         """測試只列出 .md 檔案"""
@@ -117,7 +118,8 @@ class TestTemplateManager:
         (template_dir / "template3.json").write_text("{}")
 
         templates = manager.list_templates()
-        assert templates == ["template1"]
+        # 包含 default + template1（忽略 .txt 和 .json）
+        assert sorted(templates) == ["default", "template1"]
 
     def test_remove_template_deletes_file(self, tmp_path: Path) -> None:
         """測試刪除模版"""
