@@ -168,26 +168,21 @@ class DevelopPhase(Phase):
             status_code: Status code for this iteration
             user_response: User's response to agent's request (for NEED_PERMISSION)
         """
-        # Create history directory
-        self.history_dir.mkdir(parents=True, exist_ok=True)
-
-        # Create iteration record
-        iteration_data = {
-            "iteration": self.iteration,
-            "timestamp": datetime.now().isoformat(),
+        # Prepare phase-specific data
+        phase_specific_data = {
             "user_input": user_input,
             "response": response,
-            "status_code": status_code.value,
         }
 
         # Add user response if provided
         if user_response:
-            iteration_data["user_response"] = user_response
+            phase_specific_data["user_response"] = user_response
 
-        # Save to JSON file
-        iteration_file = self.history_dir / f"iteration_{self.iteration:03d}.json"
-        with open(iteration_file, "w", encoding="utf-8") as f:
-            json.dump(iteration_data, f, ensure_ascii=False, indent=2)
+        # Use base class method with DevelopPhase-specific data
+        super()._save_iteration_history(
+            phase_specific_data=phase_specific_data,
+            status_code=status_code,
+        )
 
     def _save_progress(self, status_code: PhaseStatusCode, handled_review_timestamp: Optional[str] = None) -> None:
         """Save phase progress to status.json.
