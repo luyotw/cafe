@@ -170,7 +170,7 @@ class TestHistoryTracking:
             data = json.load(f)
 
         assert data["iteration"] == 1
-        assert data["status"] == "NEED_CLARIFICATION"
+        assert data["status"] == "AAF_NEED_CLARIFICATION"
         assert data["user_input"] == "Initial requirements\n"  # 輪的開始
         assert data["pm_response"] == "請問使用者是誰？"
         # user_response is no longer stored - next iteration's user_input IS the user_response
@@ -178,6 +178,100 @@ class TestHistoryTracking:
         assert "timestamp" in data
         assert "confirmed_requirements" in data
         assert "pending_questions" in data
+
+    def test_save_iteration_history_includes_prompt(self, tmp_path: Path) -> None:
+        """測試儲存迭代歷史時會包含 prompt 欄位"""
+        spec_file = tmp_path / ".aaf" / "issues" / "test-feature" / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
+        spec_file.write_text("Initial requirements\n")
+
+        agent_manager = MagicMock(spec=AgentManager)
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        phase = SpecPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            spec_file=str(spec_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            interactive=False,
+            issue_name="test-feature",
+        )
+
+        # Manually set iteration and save history with prompt
+        phase.iteration = 1
+        test_prompt = "這是發送給 PM agent 的完整 prompt 內容\n包含了需求和 context"
+        phase._save_iteration_history(
+            user_input="Initial requirements\n",
+            prompt=test_prompt,
+            pm_response="請問使用者是誰？",
+            status=PhaseStatusCode.NEED_CLARIFICATION,
+        )
+
+        # Check JSON file exists
+        history_file = phase.history_dir / "iteration_001.json"
+        assert history_file.exists()
+
+        # Verify JSON content includes prompt
+        with open(history_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        assert data["iteration"] == 1
+        assert data["user_input"] == "Initial requirements\n"
+        assert data["prompt"] == test_prompt
+        assert data["pm_response"] == "請問使用者是誰？"
+        assert data["status"] == "AAF_NEED_CLARIFICATION"
+
+    def test_save_iteration_history_includes_agent_metadata(self, tmp_path: Path) -> None:
+        """測試儲存迭代歷史時會包含 agent metadata（cli, session_id, allowed_tools, denied_tools）"""
+        from aaf.core.types import AgentCLI, AgentConfig
+
+        spec_file = tmp_path / ".aaf" / "issues" / "test-feature" / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
+        spec_file.write_text("Initial requirements\n")
+
+        agent_manager = MagicMock(spec=AgentManager)
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        phase = SpecPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            spec_file=str(spec_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            interactive=False,
+            issue_name="test-feature",
+        )
+
+        # Manually set iteration and save history with agent metadata
+        phase.iteration = 1
+        test_prompt = "這是發送給 PM agent 的完整 prompt 內容"
+        phase._save_iteration_history(
+            user_input="Initial requirements\n",
+            prompt=test_prompt,
+            pm_response="請問使用者是誰？",
+            status=PhaseStatusCode.NEED_CLARIFICATION,
+            agent_cli="copilot",
+            agent_session_id="test-session-456",
+            allowed_tools=["write", "read"],
+            denied_tools=None,
+        )
+
+        # Check JSON file exists
+        history_file = phase.history_dir / "iteration_001.json"
+        assert history_file.exists()
+
+        # Verify JSON content includes agent metadata
+        with open(history_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        assert data["iteration"] == 1
+        assert data["user_input"] == "Initial requirements\n"
+        assert data["prompt"] == test_prompt
+        assert data["pm_response"] == "請問使用者是誰？"
+        assert data["status"] == "AAF_NEED_CLARIFICATION"
+        assert data["cli"] == "copilot"
+        assert data["session_id"] == "test-session-456"
+        assert data["allowed_tools"] == ["write", "read"]
+        assert data["denied_tools"] is None
 
     def test_update_context_file_creates_markdown(self, tmp_path: Path) -> None:
         """測試更新 context.md 檔案"""

@@ -535,6 +535,10 @@ class PlanPhase(Phase):
         prompt: str,
         response: str,
         status_code: PhaseStatusCode,
+        agent_cli: Optional[str] = None,
+        agent_session_id: Optional[str] = None,
+        allowed_tools: Optional[List[str]] = None,
+        denied_tools: Optional[List[str]] = None,
     ) -> None:
         """Save iteration history to JSON file.
 
@@ -545,6 +549,10 @@ class PlanPhase(Phase):
             prompt: The prompt sent to agent
             response: The agent's response
             status_code: Status code from response
+            agent_cli: CLI tool used by the agent (e.g., "copilot", "claude")
+            agent_session_id: Session ID of the agent
+            allowed_tools: List of allowed tools for the agent
+            denied_tools: List of denied tools for the agent
         """
         # Create history directory if it doesn't exist
         self.history_dir.mkdir(parents=True, exist_ok=True)
@@ -559,6 +567,10 @@ class PlanPhase(Phase):
             "prompt": prompt,
             "response": response,
             "status_code": status_code.value,
+            "cli": agent_cli,
+            "session_id": agent_session_id,
+            "allowed_tools": allowed_tools,
+            "denied_tools": denied_tools,
         }
 
         with open(history_file, 'w', encoding='utf-8') as f:

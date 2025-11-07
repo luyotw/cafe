@@ -522,6 +522,78 @@ class TestReviewResultSaving:
         finally:
             os.chdir(original_dir)
 
+    def test_saves_prompt_to_history(self, tmp_path: Path) -> None:
+        """測試 history 包含發送給 agent 的 prompt"""
+        import os
+        from aaf.core.types import AgentCLI, AgentConfig
+
+        # Change to tmp_path so .aaf is created there
+        original_dir = os.getcwd()
+        try:
+            os.chdir(tmp_path)
+
+            # Create issue structure
+            issue_dir = Path(".aaf/issues/myissue")
+            spec_dir = issue_dir / "spec"
+            spec_dir.mkdir(parents=True)
+            spec_file = spec_dir / "spec.md"
+            spec_file.write_text("Requirements")
+
+            plan_dir = issue_dir / "plan"
+            plan_dir.mkdir(parents=True)
+            plan_file = plan_dir / "plan.md"
+            plan_file.write_text("Plan")
+
+            # Mock agent executor with config
+            mock_executor = MagicMock()
+            mock_executor.config = AgentConfig(
+                name="Richard",
+                cli=AgentCLI.COPILOT,
+                session_id="test-session-123"
+            )
+
+            agent_manager = MagicMock(spec=AgentManager)
+            agent_manager.execute.return_value = ("AAF_CONFIRMED\nCode looks good!", TokenUsage())
+            agent_manager.get_agent.return_value = mock_executor
+
+            permission_handler = MagicMock(spec=PermissionHandler)
+
+            git_ops = MagicMock(spec=GitOperations)
+            git_ops.get_diff.return_value = "diff content"
+
+            phase = ReviewPhase(
+                agent_manager=agent_manager,
+                permission_handler=permission_handler,
+                git_ops=git_ops,
+                spec_file=str(spec_file),
+                plan_file=str(plan_file),
+                workflow_mode=WorkflowMode.LOCAL,
+            )
+
+            # Execute phase
+            phase.execute()
+
+            # Check that history file was created with prompt
+            review_dir = issue_dir / "review"
+            history_dir = review_dir / "history"
+            history_file = history_dir / "iteration_001.json"
+
+            assert history_file.exists(), "History file should exist"
+
+            # Read and verify history content
+            history_data = json.loads(history_file.read_text())
+
+            # Verify prompt field exists
+            assert "prompt" in history_data, "History should contain prompt field"
+
+            # Verify prompt contains expected content (from _generate_review_prompt)
+            prompt = history_data["prompt"]
+            assert "你是資深軟體工程師 Richard" in prompt
+            assert "程式碼審查" in prompt
+            assert "diff content" in prompt
+        finally:
+            os.chdir(original_dir)
+
 
 class TestIssueConfigReading:
     """Test reading issue config for base branch."""

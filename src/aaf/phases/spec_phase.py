@@ -3,7 +3,7 @@
 import json
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 from aaf.agents.manager import AgentManager
 from aaf.core.permission import PermissionHandler
@@ -313,6 +313,7 @@ class SpecPhase(Phase):
                     # Save final iteration history
                     self._save_iteration_history(
                         user_input=current_user_input,
+                        prompt=prompt,
                         pm_response=response,
                         status=PhaseStatusCode.CONFIRMED,
                     )
@@ -385,6 +386,7 @@ class SpecPhase(Phase):
                         # Save iteration history
                         self._save_iteration_history(
                             user_input=current_user_input,
+                            prompt=prompt,
                             pm_response=response,
                             status=PhaseStatusCode.NEED_CLARIFICATION,
                         )
@@ -438,6 +440,7 @@ class SpecPhase(Phase):
                         # Save iteration history
                         self._save_iteration_history(
                             user_input=current_user_input,
+                            prompt=prompt,
                             pm_response=response,
                             status=PhaseStatusCode.NEED_CLARIFICATION,
                         )
@@ -454,6 +457,7 @@ class SpecPhase(Phase):
                         # User response will be provided in next call via stdin
                         self._save_iteration_history(
                             user_input=current_user_input,
+                            prompt=prompt,
                             pm_response=response,
                             status=PhaseStatusCode.NEED_CLARIFICATION,
                         )
@@ -913,6 +917,11 @@ class SpecPhase(Phase):
         user_input: str,
         pm_response: str,
         status: PhaseStatusCode,
+        prompt: Optional[str] = None,
+        agent_cli: Optional[str] = None,
+        agent_session_id: Optional[str] = None,
+        allowed_tools: Optional[List[str]] = None,
+        denied_tools: Optional[List[str]] = None,
     ) -> None:
         """Save iteration history to JSON file.
 
@@ -922,6 +931,11 @@ class SpecPhase(Phase):
             user_input: User's input at the start of this iteration (user story for iteration 1, user response for subsequent iterations)
             pm_response: PM's response (questions or final requirements)
             status: Status code for this iteration
+            prompt: The actual prompt sent to the agent (optional for backwards compatibility)
+            agent_cli: CLI tool used by the agent (e.g., "copilot", "claude")
+            agent_session_id: Session ID of the agent
+            allowed_tools: List of allowed tools for the agent
+            denied_tools: List of denied tools for the agent
         """
         # Create history directory
         self.history_dir.mkdir(parents=True, exist_ok=True)
@@ -932,7 +946,12 @@ class SpecPhase(Phase):
             "timestamp": datetime.now().isoformat(),
             "status": status.value,
             "user_input": user_input,  # Start of the iteration
+            "prompt": prompt,  # The actual prompt sent to agent
             "pm_response": pm_response,
+            "cli": agent_cli,
+            "session_id": agent_session_id,
+            "allowed_tools": allowed_tools,
+            "denied_tools": denied_tools,
             "confirmed_requirements": self.confirmed_requirements.copy(),
             "pending_questions": self.pending_questions.copy(),
         }

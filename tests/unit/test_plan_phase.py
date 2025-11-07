@@ -629,6 +629,56 @@ class TestPlanPhaseHistory:
         assert phase.conversation_history[0]["iteration"] == 1
         assert phase.iteration == 1
 
+    def test_save_history_includes_agent_metadata(self, tmp_path: Path) -> None:
+        """測試 _save_history() 包含 agent metadata（cli, session_id, allowed_tools, denied_tools）"""
+        from aaf.core.types import AgentCLI, AgentConfig
+
+        spec_file = tmp_path / ".aaf" / "issues" / "test-issue" / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True)
+        spec_file.write_text("# Spec\n\n## 開發指南\nGuide")
+
+        agent_manager = MagicMock(spec=AgentManager)
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        phase = PlanPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            spec_file=str(spec_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            issue_name="test-issue",
+        )
+
+        phase.iteration = 1
+        phase._save_history(
+            user_input="User's dev guide input",
+            prompt="Test prompt",
+            response="Test response",
+            status_code=PhaseStatusCode.NEED_CLARIFICATION,
+            agent_cli="claude",
+            agent_session_id="session-789",
+            allowed_tools=["read", "write"],
+            denied_tools=["bash"],
+        )
+
+        # Check history file was created
+        history_file = phase.history_dir / "iteration_001.json"
+        assert history_file.exists()
+
+        # Check content includes agent metadata
+        import json
+        with open(history_file, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+
+        assert data["iteration"] == 1
+        assert data["user_input"] == "User's dev guide input"
+        assert data["prompt"] == "Test prompt"
+        assert data["response"] == "Test response"
+        assert data["status_code"] == "AAF_NEED_CLARIFICATION"
+        assert data["cli"] == "claude"
+        assert data["session_id"] == "session-789"
+        assert data["allowed_tools"] == ["read", "write"]
+        assert data["denied_tools"] == ["bash"]
+
 
 class TestPlanPhaseNeedClarification:
     """Test NEED_CLARIFICATION handling (TDD)."""

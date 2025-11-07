@@ -105,6 +105,7 @@ class ReviewPhase(Phase):
             self._save_review_result(
                 review_response,
                 status_code,
+                prompt=review_prompt,
                 agent_cli=agent_cli,
                 agent_session_id=agent_session_id
             )
@@ -273,6 +274,7 @@ class ReviewPhase(Phase):
         self,
         review_response: str,
         status_code: Optional[PhaseStatusCode],
+        prompt: Optional[str] = None,
         agent_cli: Optional[str] = None,
         agent_session_id: Optional[str] = None,
         allowed_tools: Optional[List[str]] = None,
@@ -283,6 +285,7 @@ class ReviewPhase(Phase):
         Args:
             review_response: Review response from agent
             status_code: Status code from review
+            prompt: The actual prompt sent to the agent
             agent_cli: CLI tool used by the agent (e.g., "copilot", "claude")
             agent_session_id: Session ID of the agent
             allowed_tools: List of allowed tools for the agent
@@ -317,6 +320,7 @@ class ReviewPhase(Phase):
             "timestamp": timestamp,
             "iteration": iteration_count,
             "target_commit": self.target_commit,
+            "prompt": prompt,
             "review_response": review_response,
             "status_code": status_code.value if status_code else None,
             "cli": agent_cli,
