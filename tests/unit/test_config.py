@@ -97,15 +97,15 @@ class TestDefaultConfig:
 
         # Check agents structure
         assert "pm" in config["agents"]
-        assert "dev" in config["agents"]
+        assert "developer" in config["agents"]
         assert "reviewer" in config["agents"]
 
         # Check each agent has name and cli
         assert config["agents"]["pm"]["name"] == "Roger"
         assert "cli" in config["agents"]["pm"]
 
-        assert config["agents"]["dev"]["name"] == "David"
-        assert "cli" in config["agents"]["dev"]
+        assert config["agents"]["developer"]["name"] == "David"
+        assert "cli" in config["agents"]["developer"]
 
         assert config["agents"]["reviewer"]["name"] == "Richard"
         assert "cli" in config["agents"]["reviewer"]
@@ -327,7 +327,7 @@ class TestAliasResolution:
         manager = ConfigManager()
 
         assert manager._resolve_alias("pm") == "agents.pm.cli"
-        assert manager._resolve_alias("dev") == "agents.dev.cli"
+        assert manager._resolve_alias("dev") == "agents.developer.cli"  # dev is alias for developer
         assert manager._resolve_alias("reviewer") == "agents.reviewer.cli"
 
     def test_resolve_agent_with_property(self) -> None:
@@ -336,7 +336,7 @@ class TestAliasResolution:
 
         assert manager._resolve_alias("pm.cli") == "agents.pm.cli"
         assert manager._resolve_alias("pm.name") == "agents.pm.name"
-        assert manager._resolve_alias("dev.cli") == "agents.dev.cli"
+        assert manager._resolve_alias("dev.cli") == "agents.developer.cli"  # dev is alias for developer
 
     def test_resolve_non_agent_key(self) -> None:
         """測試非 agent key 不做轉換"""
