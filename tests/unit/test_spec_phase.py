@@ -792,7 +792,7 @@ class TestInteractiveModeStillWorks:
         spec_file.write_text("需求已清楚")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("CONFIRMED\n需求確認", TokenUsage())
+        agent_manager.execute.return_value = ("AAF_CONFIRMED\n需求確認", TokenUsage())
         agent_manager.get_total_token_usage.return_value = TokenUsage()
         agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
 
@@ -807,7 +807,8 @@ class TestInteractiveModeStillWorks:
             rigor=SpecRigor.MEDIUM,  # Explicitly set rigor to avoid prompting
         )
 
-        with patch('builtins.print'), patch('builtins.input', return_value=''):
+        # Mock display.get_multiline_input instead of builtins.input
+        with patch('builtins.print'), patch.object(phase.display, 'get_multiline_input', return_value=''):
             result = phase.execute()
 
         assert result.status == PhaseStatus.COMPLETED
