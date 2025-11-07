@@ -8,7 +8,7 @@ import pytest
 from aaf.agents.manager import AgentManager
 from aaf.core.git import GitOperations
 from aaf.core.permission import PermissionHandler
-from aaf.core.types import PhaseStatus, WorkflowMode
+from aaf.core.types import PhaseStatus, WorkflowMode, TokenUsage
 from aaf.phases.review_phase import ReviewPhase
 
 
@@ -21,18 +21,22 @@ class TestReviewPhaseWithStatusCodes:
         requirements_file.write_text("Requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("CONFIRMED\nCode looks good!", TokenUsage())
+        agent_manager.execute.return_value = ("AAF_CONFIRMED\nCode looks good!", TokenUsage())
 
         git_ops = MagicMock(spec=GitOperations)
         git_ops.get_diff.return_value = "diff content"
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
+        plan_file = tmp_path / "plan.md"
+        plan_file.write_text("# Plan")
+
         phase = ReviewPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
             spec_file=str(requirements_file),
+            plan_file=str(plan_file),
             workflow_mode=WorkflowMode.LOCAL,
         )
 
@@ -40,7 +44,7 @@ class TestReviewPhaseWithStatusCodes:
             result = phase.execute()
 
         assert result.status == PhaseStatus.COMPLETED
-        assert result.data.get("status_code") == "CONFIRMED"
+        assert result.data.get("status_code") == "AAF_CONFIRMED"
         assert "passed" in result.message.lower()
 
     def test_needs_changes_status_code(self, tmp_path: Path) -> None:
@@ -49,18 +53,22 @@ class TestReviewPhaseWithStatusCodes:
         requirements_file.write_text("Requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("NEEDS_CHANGES\n需要修正問題。", TokenUsage())
+        agent_manager.execute.return_value = ("AAF_NEEDS_CHANGES\n需要修正問題。", TokenUsage())
 
         git_ops = MagicMock(spec=GitOperations)
         git_ops.get_diff.return_value = "diff content"
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
+        plan_file = tmp_path / "plan.md"
+        plan_file.write_text("# Plan")
+
         phase = ReviewPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
             spec_file=str(requirements_file),
+            plan_file=str(plan_file),
             workflow_mode=WorkflowMode.LOCAL,
         )
 
@@ -68,7 +76,7 @@ class TestReviewPhaseWithStatusCodes:
             result = phase.execute()
 
         assert result.status == PhaseStatus.COMPLETED
-        assert result.data.get("status_code") == "NEEDS_CHANGES"
+        assert result.data.get("status_code") == "AAF_NEEDS_CHANGES"
         # Should only execute once (no iteration loop)
         assert agent_manager.execute.call_count == 1
 
@@ -78,18 +86,22 @@ class TestReviewPhaseWithStatusCodes:
         requirements_file.write_text("Requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("Review result:\nCONFIRMED\nAll checks passed.", TokenUsage())
+        agent_manager.execute.return_value = ("Review result:\nAAF_CONFIRMED\nAll checks passed.", TokenUsage())
 
         git_ops = MagicMock(spec=GitOperations)
         git_ops.get_diff.return_value = "diff content"
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
+        plan_file = tmp_path / "plan.md"
+        plan_file.write_text("# Plan")
+
         phase = ReviewPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
             spec_file=str(requirements_file),
+            plan_file=str(plan_file),
             workflow_mode=WorkflowMode.LOCAL,
         )
 
@@ -97,7 +109,7 @@ class TestReviewPhaseWithStatusCodes:
             result = phase.execute()
 
         assert result.status == PhaseStatus.COMPLETED
-        assert result.data.get("status_code") == "CONFIRMED"
+        assert result.data.get("status_code") == "AAF_CONFIRMED"
 
     def test_case_insensitive_status_code(self, tmp_path: Path) -> None:
         """測試狀態碼不區分大小寫"""
@@ -105,18 +117,22 @@ class TestReviewPhaseWithStatusCodes:
         requirements_file.write_text("Requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("confirmed\nLooks good to me!", TokenUsage())
+        agent_manager.execute.return_value = ("aaf_confirmed\nLooks good to me!", TokenUsage())
 
         git_ops = MagicMock(spec=GitOperations)
         git_ops.get_diff.return_value = "diff content"
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
+        plan_file = tmp_path / "plan.md"
+        plan_file.write_text("# Plan")
+
         phase = ReviewPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
             spec_file=str(requirements_file),
+            plan_file=str(plan_file),
             workflow_mode=WorkflowMode.LOCAL,
         )
 
@@ -124,4 +140,4 @@ class TestReviewPhaseWithStatusCodes:
             result = phase.execute()
 
         assert result.status == PhaseStatus.COMPLETED
-        assert result.data.get("status_code") == "CONFIRMED"
+        assert result.data.get("status_code") == "AAF_CONFIRMED"
