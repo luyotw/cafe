@@ -1,5 +1,6 @@
 """Tests for ReviewPhase."""
 
+import json
 import pytest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -7,7 +8,7 @@ from unittest.mock import MagicMock, patch
 from aaf.phases.review_phase import ReviewPhase
 from aaf.agents.manager import AgentManager
 from aaf.core.git import GitOperations
-from aaf.core.types import PhaseResult, PhaseStatus, WorkflowMode
+from aaf.core.types import PhaseResult, PhaseStatus, TokenUsage, WorkflowMode
 from aaf.core.permission import PermissionHandler
 
 
@@ -25,6 +26,7 @@ class TestReviewPhaseBasics:
             permission_handler=permission_handler,
             git_ops=git_ops,
             spec_file="requirements.md",
+            plan_file="plan.md",
             workflow_mode=WorkflowMode.LOCAL,
         )
 
@@ -44,6 +46,7 @@ class TestReviewPhaseBasics:
             permission_handler=permission_handler,
             git_ops=git_ops,
             spec_file="requirements.md",
+            plan_file="plan.md",
             workflow_mode=WorkflowMode.LOCAL,
             target_commit="abc123",
         )
@@ -61,7 +64,7 @@ class TestSingleIterationExecution:
 
         agent_manager = MagicMock(spec=AgentManager)
         # Review agent approves immediately
-        agent_manager.execute.return_value = "CONFIRMED\nCode looks good!"
+        agent_manager.execute.return_value = ("AAF_CONFIRMED\nCode looks good!", TokenUsage())
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -73,6 +76,7 @@ class TestSingleIterationExecution:
             permission_handler=permission_handler,
             git_ops=git_ops,
             spec_file=str(requirements_file),
+            plan_file="plan.md",
             workflow_mode=WorkflowMode.LOCAL,
         )
 
@@ -81,7 +85,7 @@ class TestSingleIterationExecution:
 
         assert result.status == PhaseStatus.COMPLETED
         assert "passed" in result.message.lower()
-        assert result.data["status_code"] == "CONFIRMED"
+        assert result.data["status_code"] == "AAF_CONFIRMED"
 
     def test_single_review_iteration_needs_changes(self, tmp_path: Path) -> None:
         """測試單次 review 迭代需要修改"""
@@ -89,7 +93,7 @@ class TestSingleIterationExecution:
         requirements_file.write_text("Requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = "NEEDS_CHANGES\n問題 1: 需要修正"
+        agent_manager.execute.return_value = ("AAF_NEEDS_CHANGES\n問題 1: 需要修正", TokenUsage())
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -101,6 +105,7 @@ class TestSingleIterationExecution:
             permission_handler=permission_handler,
             git_ops=git_ops,
             spec_file=str(requirements_file),
+            plan_file="plan.md",
             workflow_mode=WorkflowMode.LOCAL,
         )
 
@@ -108,7 +113,7 @@ class TestSingleIterationExecution:
             result = phase.execute()
 
         assert result.status == PhaseStatus.COMPLETED
-        assert result.data["status_code"] == "NEEDS_CHANGES"
+        assert result.data["status_code"] == "AAF_NEEDS_CHANGES"
 
     def test_only_executes_once(self, tmp_path: Path) -> None:
         """測試只執行一次（不迴圈）"""
@@ -116,7 +121,7 @@ class TestSingleIterationExecution:
         requirements_file.write_text("Requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = "NEEDS_CHANGES\n需要修正"
+        agent_manager.execute.return_value = ("AAF_NEEDS_CHANGES\n需要修正", TokenUsage())
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -128,6 +133,7 @@ class TestSingleIterationExecution:
             permission_handler=permission_handler,
             git_ops=git_ops,
             spec_file=str(requirements_file),
+            plan_file="plan.md",
             workflow_mode=WorkflowMode.LOCAL,
         )
 
@@ -158,6 +164,7 @@ class TestDiffChecking:
             permission_handler=permission_handler,
             git_ops=git_ops,
             spec_file=str(requirements_file),
+            plan_file="plan.md",
             workflow_mode=WorkflowMode.LOCAL,
         )
 
@@ -172,7 +179,7 @@ class TestDiffChecking:
         requirements_file.write_text("Requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = "CONFIRMED\nCode looks good!"
+        agent_manager.execute.return_value = ("AAF_CONFIRMED\nCode looks good!", TokenUsage())
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -184,6 +191,7 @@ class TestDiffChecking:
             permission_handler=permission_handler,
             git_ops=git_ops,
             spec_file=str(requirements_file),
+            plan_file="plan.md",
             workflow_mode=WorkflowMode.LOCAL,
         )
 
@@ -199,7 +207,7 @@ class TestDiffChecking:
         requirements_file.write_text("Requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = "CONFIRMED\nCode looks good!"
+        agent_manager.execute.return_value = ("AAF_CONFIRMED\nCode looks good!", TokenUsage())
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -211,6 +219,7 @@ class TestDiffChecking:
             permission_handler=permission_handler,
             git_ops=git_ops,
             spec_file=str(requirements_file),
+            plan_file="plan.md",
             workflow_mode=WorkflowMode.LOCAL,
             target_commit="abc123",
         )
@@ -227,7 +236,7 @@ class TestDiffChecking:
         requirements_file.write_text("Requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = "CONFIRMED\nCode looks good!"
+        agent_manager.execute.return_value = ("AAF_CONFIRMED\nCode looks good!", TokenUsage())
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -239,6 +248,7 @@ class TestDiffChecking:
             permission_handler=permission_handler,
             git_ops=git_ops,
             spec_file=str(requirements_file),
+            plan_file="plan.md",
             workflow_mode=WorkflowMode.LOCAL,
         )
 
@@ -260,7 +270,7 @@ class TestAgentSelection:
         requirements_file.write_text("Requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = "CONFIRMED\nCode looks good!"
+        agent_manager.execute.return_value = ("AAF_CONFIRMED\nCode looks good!", TokenUsage())
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -272,6 +282,7 @@ class TestAgentSelection:
             permission_handler=permission_handler,
             git_ops=git_ops,
             spec_file=str(requirements_file),
+            plan_file="plan.md",
             workflow_mode=WorkflowMode.LOCAL,
             review_agent="Richard",
         )
@@ -294,7 +305,7 @@ class TestPromptGeneration:
         requirements_file.write_text("Requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = "CONFIRMED\nCode looks good!"
+        agent_manager.execute.return_value = ("AAF_CONFIRMED\nCode looks good!", TokenUsage())
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -306,6 +317,7 @@ class TestPromptGeneration:
             permission_handler=permission_handler,
             git_ops=git_ops,
             spec_file=str(requirements_file),
+            plan_file="plan.md",
             workflow_mode=WorkflowMode.LOCAL,
         )
 
@@ -324,7 +336,7 @@ class TestPromptGeneration:
         requirements_file.write_text("Requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = "CONFIRMED\nCode looks good!"
+        agent_manager.execute.return_value = ("AAF_CONFIRMED\nCode looks good!", TokenUsage())
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -336,6 +348,7 @@ class TestPromptGeneration:
             permission_handler=permission_handler,
             git_ops=git_ops,
             spec_file=str(requirements_file),
+            plan_file="plan.md",
             workflow_mode=WorkflowMode.LOCAL,
         )
 
@@ -365,7 +378,7 @@ class TestReviewResultSaving:
         spec_file.write_text("Requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = "CONFIRMED\nCode looks good!"
+        agent_manager.execute.return_value = ("AAF_CONFIRMED\nCode looks good!", TokenUsage())
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -377,6 +390,7 @@ class TestReviewResultSaving:
             permission_handler=permission_handler,
             git_ops=git_ops,
             spec_file=str(spec_file),
+            plan_file="plan.md",
             workflow_mode=WorkflowMode.LOCAL,
         )
 
@@ -401,7 +415,7 @@ class TestReviewResultSaving:
         spec_file.write_text("Requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = "CONFIRMED\nCode looks good!"
+        agent_manager.execute.return_value = ("AAF_CONFIRMED\nCode looks good!", TokenUsage())
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -413,6 +427,7 @@ class TestReviewResultSaving:
             permission_handler=permission_handler,
             git_ops=git_ops,
             spec_file=str(spec_file),
+            plan_file="plan.md",
             workflow_mode=WorkflowMode.LOCAL,
         )
 
@@ -432,6 +447,269 @@ class TestReviewResultSaving:
 
             phase.execute()
 
+    def test_saves_agent_info_to_history(self, tmp_path: Path) -> None:
+        """測試 history 包含 agent 資訊（cli, session_id, allowed_tools, denied_tools）"""
+        import os
+        from aaf.core.types import AgentCLI, AgentConfig
+
+        # Change to tmp_path so .aaf is created there
+        original_dir = os.getcwd()
+        try:
+            os.chdir(tmp_path)
+
+            # Create issue structure
+            issue_dir = Path(".aaf/issues/myissue")
+            spec_dir = issue_dir / "spec"
+            spec_dir.mkdir(parents=True)
+            spec_file = spec_dir / "spec.md"
+            spec_file.write_text("Requirements")
+
+            plan_dir = issue_dir / "plan"
+            plan_dir.mkdir(parents=True)
+            plan_file = plan_dir / "plan.md"
+            plan_file.write_text("Plan")
+
+            # Mock agent executor with config
+            mock_executor = MagicMock()
+            mock_executor.config = AgentConfig(
+                name="Richard",
+                cli=AgentCLI.COPILOT,
+                session_id="test-session-123"
+            )
+
+            agent_manager = MagicMock(spec=AgentManager)
+            agent_manager.execute.return_value = ("AAF_CONFIRMED\nCode looks good!", TokenUsage())
+            agent_manager.get_agent.return_value = mock_executor
+
+            permission_handler = MagicMock(spec=PermissionHandler)
+
+            git_ops = MagicMock(spec=GitOperations)
+            git_ops.get_diff.return_value = "diff content"
+
+            phase = ReviewPhase(
+                agent_manager=agent_manager,
+                permission_handler=permission_handler,
+                git_ops=git_ops,
+                spec_file=str(spec_file),
+                plan_file=str(plan_file),
+                workflow_mode=WorkflowMode.LOCAL,
+            )
+
+            # Execute phase
+            phase.execute()
+
+            # Check that history file was created with agent info
+            review_dir = issue_dir / "review"
+            history_dir = review_dir / "history"
+            history_file = history_dir / "iteration_001.json"
+
+            assert history_file.exists(), "History file should exist"
+
+            # Read and verify history content
+            history_data = json.loads(history_file.read_text())
+
+            # Verify new fields exist
+            assert "cli" in history_data, "History should contain cli field"
+            assert "session_id" in history_data, "History should contain session_id field"
+            assert "allowed_tools" in history_data, "History should contain allowed_tools field"
+            assert "denied_tools" in history_data, "History should contain denied_tools field"
+
+            # Verify values
+            assert history_data["cli"] == "copilot"
+            assert history_data["session_id"] == "test-session-123"
+            assert history_data["allowed_tools"] is None  # Default when not specified
+            assert history_data["denied_tools"] is None  # Default when not specified
+        finally:
+            os.chdir(original_dir)
+
+    def test_saves_prompt_to_history(self, tmp_path: Path) -> None:
+        """測試 history 包含發送給 agent 的 prompt"""
+        import os
+        from aaf.core.types import AgentCLI, AgentConfig
+
+        # Change to tmp_path so .aaf is created there
+        original_dir = os.getcwd()
+        try:
+            os.chdir(tmp_path)
+
+            # Create issue structure
+            issue_dir = Path(".aaf/issues/myissue")
+            spec_dir = issue_dir / "spec"
+            spec_dir.mkdir(parents=True)
+            spec_file = spec_dir / "spec.md"
+            spec_file.write_text("Requirements")
+
+            plan_dir = issue_dir / "plan"
+            plan_dir.mkdir(parents=True)
+            plan_file = plan_dir / "plan.md"
+            plan_file.write_text("Plan")
+
+            # Mock agent executor with config
+            mock_executor = MagicMock()
+            mock_executor.config = AgentConfig(
+                name="Richard",
+                cli=AgentCLI.COPILOT,
+                session_id="test-session-123"
+            )
+
+            agent_manager = MagicMock(spec=AgentManager)
+            agent_manager.execute.return_value = ("AAF_CONFIRMED\nCode looks good!", TokenUsage())
+            agent_manager.get_agent.return_value = mock_executor
+
+            permission_handler = MagicMock(spec=PermissionHandler)
+
+            git_ops = MagicMock(spec=GitOperations)
+            git_ops.get_diff.return_value = "diff content"
+
+            phase = ReviewPhase(
+                agent_manager=agent_manager,
+                permission_handler=permission_handler,
+                git_ops=git_ops,
+                spec_file=str(spec_file),
+                plan_file=str(plan_file),
+                workflow_mode=WorkflowMode.LOCAL,
+            )
+
+            # Execute phase
+            phase.execute()
+
+            # Check that history file was created with prompt
+            review_dir = issue_dir / "review"
+            history_dir = review_dir / "history"
+            history_file = history_dir / "iteration_001.json"
+
+            assert history_file.exists(), "History file should exist"
+
+            # Read and verify history content
+            history_data = json.loads(history_file.read_text())
+
+            # Verify prompt field exists
+            assert "prompt" in history_data, "History should contain prompt field"
+
+            # Verify prompt contains expected content (from _generate_review_prompt)
+            prompt = history_data["prompt"]
+            assert "你是資深軟體工程師 Richard" in prompt
+            assert "程式碼審查" in prompt
+            assert "diff content" in prompt
+        finally:
+            os.chdir(original_dir)
+
+
+class TestIssueConfigReading:
+    """Test reading issue config for base branch."""
+
+    def test_reads_base_branch_from_issue_config(self, tmp_path: Path) -> None:
+        """測試從 issue config 讀取 base branch"""
+        # Create issue structure with config
+        issue_name = "myissue"
+        issues_dir = tmp_path / ".aaf" / "issues" / issue_name
+        spec_dir = issues_dir / "spec"
+        spec_dir.mkdir(parents=True)
+        spec_file = spec_dir / "spec.md"
+        spec_file.write_text("Requirements")
+
+        # Create config file with base branch
+        config_file = issues_dir / "config.json"
+        config_data = {
+            "base_branch": "develop",
+            "feature_branch": "myissue"
+        }
+        config_file.write_text(json.dumps(config_data))
+
+        agent_manager = MagicMock(spec=AgentManager)
+        agent_manager.execute.return_value = ("AAF_CONFIRMED\nLGTM!", TokenUsage())
+
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        git_ops = MagicMock(spec=GitOperations)
+        git_ops.get_diff.return_value = "diff content"
+
+        import os
+        original_cwd = os.getcwd()
+        try:
+            os.chdir(tmp_path)
+
+            # Don't specify base_branch - should read from config
+            phase = ReviewPhase(
+                agent_manager=agent_manager,
+                permission_handler=permission_handler,
+                git_ops=git_ops,
+                spec_file=str(spec_file),
+            plan_file="plan.md",
+                workflow_mode=WorkflowMode.LOCAL,
+            )
+
+            result = phase.execute()
+
+            # Should have called get_diff with base branch from config
+            git_ops.get_diff.assert_called_once_with(base="develop", head="HEAD")
+        finally:
+            os.chdir(original_cwd)
+
+
+class TestReviewPhaseStatus:
+    """Test review phase status tracking."""
+
+    def test_saves_status_json_on_execution(self, tmp_path: Path) -> None:
+        """測試執行後儲存 status.json"""
+        # Create issue structure following AAF convention: .aaf/issues/<name>/spec/spec.md
+        issue_name = "myissue"
+        issues_dir = tmp_path / ".aaf" / "issues" / issue_name
+        spec_dir = issues_dir / "spec"
+        spec_dir.mkdir(parents=True)
+        spec_file = spec_dir / "spec.md"
+        spec_file.write_text("Requirements")
+
+        # Mock agent executor with config
+        from aaf.core.types import AgentCLI, AgentConfig
+        mock_executor = MagicMock()
+        mock_executor.config = AgentConfig(
+            name="Richard",
+            cli=AgentCLI.COPILOT,
+            session_id="test-session"
+        )
+
+        agent_manager = MagicMock(spec=AgentManager)
+        agent_manager.execute.return_value = ("AAF_CONFIRMED\nCode looks good!", TokenUsage())
+        agent_manager.get_agent.return_value = mock_executor
+
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        git_ops = MagicMock(spec=GitOperations)
+        git_ops.get_diff.return_value = "diff content"
+
+        # Change working directory to tmp_path for test
+        import os
+        original_cwd = os.getcwd()
+        try:
+            os.chdir(tmp_path)
+
+            phase = ReviewPhase(
+                agent_manager=agent_manager,
+                permission_handler=permission_handler,
+                git_ops=git_ops,
+                spec_file=str(spec_file),
+            plan_file="plan.md",
+                workflow_mode=WorkflowMode.LOCAL,
+            )
+
+            result = phase.execute()
+
+            # Should save status.json
+            review_dir = issues_dir / "review"
+            status_file = review_dir / "status.json"
+            assert status_file.exists(), f"status.json not found at {status_file}"
+
+            import json
+            status_data = json.loads(status_file.read_text())
+            assert status_data["phase"] == "review"
+            assert status_data["status"] == "completed"
+            assert status_data["status_code"] == "AAF_CONFIRMED"
+            assert "iteration" in status_data
+            assert "timestamp" in status_data
+        finally:
+            os.chdir(original_cwd)
+
 
 class TestGitHubWorkflow:
     """Test GitHub workflow."""
@@ -439,7 +717,7 @@ class TestGitHubWorkflow:
     def test_github_workflow_uses_issue(self) -> None:
         """測試 GitHub workflow 使用 issue"""
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = "CONFIRMED\nCode looks good!"
+        agent_manager.execute.return_value = ("AAF_CONFIRMED\nCode looks good!", TokenUsage())
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -451,6 +729,7 @@ class TestGitHubWorkflow:
             permission_handler=permission_handler,
             git_ops=git_ops,
             spec_file="requirements.md",
+            plan_file="plan.md",
             workflow_mode=WorkflowMode.GITHUB,
             issue_id="123",
         )
@@ -482,6 +761,7 @@ class TestErrorHandling:
             permission_handler=permission_handler,
             git_ops=git_ops,
             spec_file=str(requirements_file),
+            plan_file="plan.md",
             workflow_mode=WorkflowMode.LOCAL,
         )
 
@@ -489,3 +769,218 @@ class TestErrorHandling:
 
         assert result.status == PhaseStatus.FAILED
         assert "Git error" in result.message
+
+
+class TestDevelopTimestampCheck:
+    """測試檢查 develop 時間戳記的功能。"""
+
+    def test_check_if_develop_is_newer_when_develop_is_newer(
+        self, tmp_path: Path
+    ) -> None:
+        """測試當 develop 時間較新時返回 True"""
+        from datetime import datetime, timedelta
+
+        # 建立測試目錄結構
+        issue_dir = tmp_path / ".aaf" / "issues" / "test-issue"
+        develop_dir = issue_dir / "develop"
+        review_dir = issue_dir / "review"
+        spec_dir = issue_dir / "spec"
+
+        develop_dir.mkdir(parents=True)
+        review_dir.mkdir(parents=True)
+        spec_dir.mkdir(parents=True)
+
+        # 建立 spec 檔案
+        spec_file = spec_dir / "spec.md"
+        spec_file.write_text("Test spec")
+
+        # develop 的時間較新（現在）
+        develop_time = datetime.now()
+        develop_status = {
+            "phase": "develop",
+            "status": "completed",
+            "status_code": "AAF_CONFIRMED",
+            "timestamp": develop_time.isoformat(),
+            "iteration": 1,
+        }
+        (develop_dir / "status.json").write_text(
+            json.dumps(develop_status, ensure_ascii=False)
+        )
+
+        # review 的時間較舊（1 小時前）
+        review_time = develop_time - timedelta(hours=1)
+        review_status = {
+            "phase": "review",
+            "status": "completed",
+            "status_code": "AAF_NEEDS_CHANGES",
+            "timestamp": review_time.isoformat(),
+            "iteration": 1,
+        }
+        (review_dir / "status.json").write_text(
+            json.dumps(review_status, ensure_ascii=False)
+        )
+
+        # 建立 ReviewPhase
+        agent_manager = MagicMock(spec=AgentManager)
+        permission_handler = MagicMock(spec=PermissionHandler)
+        git_ops = MagicMock(spec=GitOperations)
+
+        phase = ReviewPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            git_ops=git_ops,
+            spec_file=str(spec_file),
+            plan_file="plan.md",
+            workflow_mode=WorkflowMode.LOCAL,
+        )
+
+        # 測試
+        result = phase._check_if_develop_is_newer()
+        assert result is True
+
+    def test_check_if_develop_is_newer_when_review_is_newer(
+        self, tmp_path: Path
+    ) -> None:
+        """測試當 review 時間較新時返回 False"""
+        from datetime import datetime, timedelta
+
+        # 建立測試目錄結構
+        issue_dir = tmp_path / ".aaf" / "issues" / "test-issue"
+        develop_dir = issue_dir / "develop"
+        review_dir = issue_dir / "review"
+        spec_dir = issue_dir / "spec"
+
+        develop_dir.mkdir(parents=True)
+        review_dir.mkdir(parents=True)
+        spec_dir.mkdir(parents=True)
+
+        # 建立 spec 檔案
+        spec_file = spec_dir / "spec.md"
+        spec_file.write_text("Test spec")
+
+        # develop 的時間較舊（1 小時前）
+        develop_time = datetime.now() - timedelta(hours=1)
+        develop_status = {
+            "phase": "develop",
+            "status": "completed",
+            "status_code": "AAF_CONFIRMED",
+            "timestamp": develop_time.isoformat(),
+            "iteration": 1,
+        }
+        (develop_dir / "status.json").write_text(
+            json.dumps(develop_status, ensure_ascii=False)
+        )
+
+        # review 的時間較新（現在）
+        review_time = datetime.now()
+        review_status = {
+            "phase": "review",
+            "status": "completed",
+            "status_code": "AAF_NEEDS_CHANGES",
+            "timestamp": review_time.isoformat(),
+            "iteration": 1,
+        }
+        (review_dir / "status.json").write_text(
+            json.dumps(review_status, ensure_ascii=False)
+        )
+
+        # 建立 ReviewPhase
+        agent_manager = MagicMock(spec=AgentManager)
+        permission_handler = MagicMock(spec=PermissionHandler)
+        git_ops = MagicMock(spec=GitOperations)
+
+        phase = ReviewPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            git_ops=git_ops,
+            spec_file=str(spec_file),
+            plan_file="plan.md",
+            workflow_mode=WorkflowMode.LOCAL,
+        )
+
+        # 測試
+        result = phase._check_if_develop_is_newer()
+        assert result is False
+
+    def test_check_if_develop_is_newer_when_no_review_status(
+        self, tmp_path: Path
+    ) -> None:
+        """測試當沒有 review status.json 時返回 True（第一次 review）"""
+        from datetime import datetime
+
+        # 建立測試目錄結構
+        issue_dir = tmp_path / ".aaf" / "issues" / "test-issue"
+        develop_dir = issue_dir / "develop"
+        spec_dir = issue_dir / "spec"
+
+        develop_dir.mkdir(parents=True)
+        spec_dir.mkdir(parents=True)
+
+        # 建立 spec 檔案
+        spec_file = spec_dir / "spec.md"
+        spec_file.write_text("Test spec")
+
+        # 只有 develop status，沒有 review status
+        develop_time = datetime.now()
+        develop_status = {
+            "phase": "develop",
+            "status": "completed",
+            "status_code": "AAF_CONFIRMED",
+            "timestamp": develop_time.isoformat(),
+            "iteration": 1,
+        }
+        (develop_dir / "status.json").write_text(
+            json.dumps(develop_status, ensure_ascii=False)
+        )
+
+        # 建立 ReviewPhase
+        agent_manager = MagicMock(spec=AgentManager)
+        permission_handler = MagicMock(spec=PermissionHandler)
+        git_ops = MagicMock(spec=GitOperations)
+
+        phase = ReviewPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            git_ops=git_ops,
+            spec_file=str(spec_file),
+            plan_file="plan.md",
+            workflow_mode=WorkflowMode.LOCAL,
+        )
+
+        # 測試
+        result = phase._check_if_develop_is_newer()
+        assert result is True
+
+    def test_check_if_develop_is_newer_when_no_develop_status(
+        self, tmp_path: Path
+    ) -> None:
+        """測試當沒有 develop status.json 時返回 False"""
+        # 建立測試目錄結構
+        issue_dir = tmp_path / ".aaf" / "issues" / "test-issue"
+        spec_dir = issue_dir / "spec"
+
+        spec_dir.mkdir(parents=True)
+
+        # 建立 spec 檔案
+        spec_file = spec_dir / "spec.md"
+        spec_file.write_text("Test spec")
+
+        # 沒有 develop status
+
+        # 建立 ReviewPhase
+        agent_manager = MagicMock(spec=AgentManager)
+        permission_handler = MagicMock(spec=PermissionHandler)
+        git_ops = MagicMock(spec=GitOperations)
+
+        phase = ReviewPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            git_ops=git_ops,
+            spec_file=str(spec_file),
+            plan_file="plan.md",
+            workflow_mode=WorkflowMode.LOCAL,
+        )
+
+        # 測試
+        result = phase._check_if_develop_is_newer()
+        assert result is False

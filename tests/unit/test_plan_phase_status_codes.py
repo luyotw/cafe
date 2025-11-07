@@ -20,7 +20,7 @@ class TestPlanPhaseWithStatusCodes:
         requirements_file.write_text("# 需求\n\n## 開發指南\nSome guide")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = "CONFIRMED\n實作分析已完成。"
+        agent_manager.execute.return_value = ("CONFIRMED\n實作分析已完成。", TokenUsage())
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -43,7 +43,7 @@ class TestPlanPhaseWithStatusCodes:
         requirements_file.write_text("# 需求\n\n## 開發指南\nSome guide")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = "REJECTED\n分析無法進行。"
+        agent_manager.execute.return_value = ("REJECTED\n分析無法進行。", TokenUsage())
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -92,7 +92,7 @@ class TestPlanPhaseWithStatusCodes:
         requirements_file.write_text("# 需求\n\n## 開發指南\nSome guide")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = "分析結果：\nCONFIRMED\n實作分析已完成。"
+        agent_manager.execute.return_value = ("分析結果：\nCONFIRMED\n實作分析已完成。", TokenUsage())
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -140,7 +140,7 @@ class TestPlanPhaseWithStatusCodes:
         requirements_file.write_text("# 需求\n\n## 開發指南\nSome guide")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = "confirmed\n實作分析已完成。"
+        agent_manager.execute.return_value = ("confirmed\n實作分析已完成。", TokenUsage())
 
         permission_handler = MagicMock(spec=PermissionHandler)
 

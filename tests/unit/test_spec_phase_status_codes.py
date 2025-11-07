@@ -11,7 +11,7 @@ from unittest.mock import MagicMock, patch
 from aaf.agents.manager import AgentManager
 from aaf.core.permission import PermissionHandler
 from aaf.core.status_codes import PhaseStatusCode
-from aaf.core.types import PhaseStatus, WorkflowMode, TokenUsage
+from aaf.core.types import PhaseStatus, WorkflowMode, TokenUsage, SpecRigor
 from aaf.phases.spec_phase import SpecPhase
 
 
@@ -24,7 +24,7 @@ class TestSpecPhaseWithStatusCodes:
         spec_file.write_text("# Requirements\nTest requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = "CONFIRMED\n需求已經很清楚了。"
+        agent_manager.execute.return_value = ("CONFIRMED\n需求已經很清楚了。", TokenUsage())
         agent_manager.get_total_token_usage.return_value = TokenUsage()
         agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
 
@@ -38,7 +38,7 @@ class TestSpecPhaseWithStatusCodes:
             interactive=True,
         )
 
-        with patch('builtins.print'):
+        with patch('builtins.print'), patch('builtins.input', return_value=''):
             result = phase.execute()
 
         assert result.status == PhaseStatus.COMPLETED
@@ -51,7 +51,7 @@ class TestSpecPhaseWithStatusCodes:
         spec_file.write_text("# Requirements\nTest requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = "REJECTED\n需求有問題，無法進行。"
+        agent_manager.execute.return_value = ("REJECTED\n需求有問題，無法進行。", TokenUsage())
         agent_manager.get_total_token_usage.return_value = TokenUsage()
         agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
 
@@ -110,7 +110,7 @@ class TestSpecPhaseWithStatusCodes:
         spec_file.write_text("# Requirements\nTest requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = "需求已經很清楚了。CONFIRMED"
+        agent_manager.execute.return_value = ("需求已經很清楚了。CONFIRMED", TokenUsage())
         agent_manager.get_total_token_usage.return_value = TokenUsage()
         agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
 
@@ -124,7 +124,7 @@ class TestSpecPhaseWithStatusCodes:
             interactive=True,
         )
 
-        with patch('builtins.print'):
+        with patch('builtins.print'), patch('builtins.input', return_value=''):
             result = phase.execute()
 
         assert result.status == PhaseStatus.COMPLETED
@@ -168,7 +168,7 @@ class TestSpecPhaseWithStatusCodes:
         spec_file.write_text("# Requirements\nTest requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = "confirmed\n需求清楚。"
+        agent_manager.execute.return_value = ("confirmed\n需求清楚。", TokenUsage())
         agent_manager.get_total_token_usage.return_value = TokenUsage()
         agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
 
@@ -182,7 +182,7 @@ class TestSpecPhaseWithStatusCodes:
             interactive=True,
         )
 
-        with patch('builtins.print'):
+        with patch('builtins.print'), patch('builtins.input', return_value=''):
             result = phase.execute()
 
         assert result.status == PhaseStatus.COMPLETED

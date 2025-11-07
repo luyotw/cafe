@@ -13,6 +13,9 @@ from aaf.core.status_codes import PhaseStatusCode, StatusCodeParser, generate_st
 from aaf.core.types import PhaseProgress, PhaseResult, PhaseStatus, WorkflowMode
 from aaf.ui.display import Display
 
+# Maximum number of planning iterations to prevent infinite loops
+MAX_PLANNING_ITERATIONS = 10
+
 
 class PlanPhase(Phase):
     """Phase 2: Implementation plan with developer agent."""
@@ -162,6 +165,17 @@ class PlanPhase(Phase):
                     # Normal flow: increment iteration and execute agent
                     self.iteration += 1
 
+                    # Safety check: prevent infinite loops
+                    if self.iteration > MAX_PLANNING_ITERATIONS:
+                        return PhaseResult(
+                            status=PhaseStatus.FAILED,
+                            message=f"Exceeded maximum iterations ({MAX_PLANNING_ITERATIONS}). Plan generation did not converge.",
+                            data={
+                                "iterations": self.iteration - 1,
+                                "max_iterations": MAX_PLANNING_ITERATIONS,
+                            },
+                        )
+
                     # Prepare user_input for this iteration
                     # Iteration 1: user_input is the dev guide content
                     # Iteration 2+: user_input is the previous iteration's user_response
@@ -180,7 +194,7 @@ class PlanPhase(Phase):
                     prompt = self._generate_prompt()
 
                     # Execute developer agent
-                    response = self.agent_manager.execute(
+                    response, token_usage = self.agent_manager.execute(
                         self.dev_agent,
                         prompt,
                         allowed_tools=["write", "read"]
@@ -535,6 +549,10 @@ class PlanPhase(Phase):
         prompt: str,
         response: str,
         status_code: PhaseStatusCode,
+        agent_cli: Optional[str] = None,
+        agent_session_id: Optional[str] = None,
+        allowed_tools: Optional[List[str]] = None,
+        denied_tools: Optional[List[str]] = None,
     ) -> None:
         """Save iteration history to JSON file.
 
@@ -545,6 +563,10 @@ class PlanPhase(Phase):
             prompt: The prompt sent to agent
             response: The agent's response
             status_code: Status code from response
+            agent_cli: CLI tool used by the agent (e.g., "copilot", "claude")
+            agent_session_id: Session ID of the agent
+            allowed_tools: List of allowed tools for the agent
+            denied_tools: List of denied tools for the agent
         """
         # Create history directory if it doesn't exist
         self.history_dir.mkdir(parents=True, exist_ok=True)
@@ -559,6 +581,10 @@ class PlanPhase(Phase):
             "prompt": prompt,
             "response": response,
             "status_code": status_code.value,
+            "cli": agent_cli,
+            "session_id": agent_session_id,
+            "allowed_tools": allowed_tools,
+            "denied_tools": denied_tools,
         }
 
         with open(history_file, 'w', encoding='utf-8') as f:

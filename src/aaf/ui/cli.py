@@ -388,12 +388,15 @@ def spec(
         # Get PM agent CLI
         pm_executor = agent_manager.get_agent(pm_agent)
         pm_cli = pm_executor.config.cli.value
+        pm_session_id = pm_executor.config.session_id or "(will be created)"
 
         # Display start message
         console.print("[bold blue]🎯 Spec Phase: Specification Clarification[/bold blue]")
         console.print(f"Mode: {workflow_mode.value}")
         console.print(f"Issue: {issue_name}")
-        console.print(f"PM Agent: {pm_agent} (by {pm_cli})")
+        console.print(f"PM Agent: {pm_agent}")
+        console.print(f"CLI: {pm_cli}")
+        console.print(f"Session ID: {pm_session_id}")
         if spec_rigor:
             console.print(f"Rigor: {spec_rigor.value}")
         if workflow_mode == WorkflowMode.LOCAL:
@@ -528,6 +531,7 @@ def plan(
         # Get developer agent CLI
         dev_executor = agent_manager.get_agent(dev_agent)
         dev_cli = dev_executor.config.cli.value
+        dev_session_id = dev_executor.config.session_id or "(will be created)"
 
         # Handle template selection
         template_manager = TemplateManager(config_dir)
@@ -557,7 +561,9 @@ def plan(
         console.print("[bold blue]📋 Plan Phase: Implementation Planning[/bold blue]")
         console.print(f"Mode: {workflow_mode.value}")
         console.print(f"Issue: {issue_name}")
-        console.print(f"Developer Agent: {dev_agent} (by {dev_cli})")
+        console.print(f"Developer Agent: {dev_agent}")
+        console.print(f"CLI: {dev_cli}")
+        console.print(f"Session ID: {dev_session_id}")
         if workflow_mode == WorkflowMode.LOCAL:
             console.print(f"Spec file: {spec_file}")
         elif issue_id:
@@ -688,12 +694,15 @@ def develop(
         # Get developer agent CLI
         dev_executor = agent_manager.get_agent(dev_agent)
         dev_cli = dev_executor.config.cli.value
+        dev_session_id = dev_executor.config.session_id or "(will be created)"
 
         # Display start message
         console.print("[bold blue]🔨 Develop Phase: Development Execution[/bold blue]")
         console.print(f"Mode: {workflow_mode.value}")
         console.print(f"Issue: {issue_name}")
-        console.print(f"Developer Agent: {dev_agent} (by {dev_cli})")
+        console.print(f"Developer Agent: {dev_agent}")
+        console.print(f"CLI: {dev_cli}")
+        console.print(f"Session ID: {dev_session_id}")
         console.print(f"Spec file: {spec_file}")
         console.print(f"Plan file: {plan_file}")
         console.print()
@@ -850,6 +859,7 @@ def review(
 
         # Build file paths
         spec_file = f".aaf/issues/{issue_name}/spec/spec.md"
+        plan_file = f".aaf/issues/{issue_name}/plan/plan.md"
 
         # Check if spec file exists
         if not Path(spec_file).exists():
@@ -867,32 +877,36 @@ def review(
         # Get reviewer agent CLI
         reviewer_executor = agent_manager.get_agent(reviewer_agent)
         reviewer_cli = reviewer_executor.config.cli.value
+        reviewer_session_id = reviewer_executor.config.session_id or "(will be created)"
 
-        # Display start message
-        console.print("[bold blue]🔍 Review Phase: Code Review[/bold blue]")
-        console.print(f"Mode: {workflow_mode.value}")
-        console.print(f"Issue: {issue_name}")
-        console.print(f"Reviewer Agent: {reviewer_agent} (by {reviewer_cli})")
-        console.print(f"Spec file: {spec_file}")
-        console.print(f"Base branch: {base_branch}")
-        if commit:
-            console.print(f"Target commit: {commit}")
-        else:
-            console.print(f"Review scope: {base_branch}..HEAD")
-        console.print()
-
-        # Create and execute review phase
+        # Create review phase (this will read base_branch from config if available)
         phase = ReviewPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
             spec_file=spec_file,
+            plan_file=plan_file,
             workflow_mode=workflow_mode,
             issue_id=issue_id,
             review_agent=reviewer_agent,
             target_commit=commit,
             base_branch=base_branch,
         )
+
+        # Display start message (use actual base_branch from phase)
+        console.print("[bold blue]🔍 Review Phase: Code Review[/bold blue]")
+        console.print(f"Mode: {workflow_mode.value}")
+        console.print(f"Issue: {issue_name}")
+        console.print(f"Reviewer Agent: {reviewer_agent}")
+        console.print(f"CLI: {reviewer_cli}")
+        console.print(f"Session ID: {reviewer_session_id}")
+        console.print(f"Spec file: {spec_file}")
+        console.print(f"Base branch: {phase.base_branch}")
+        if commit:
+            console.print(f"Target commit: {commit}")
+        else:
+            console.print(f"Review scope: {phase.base_branch}..HEAD")
+        console.print()
 
         console.print("[bold]Starting code review...[/bold]")
         console.print("[dim]The reviewer will analyze code changes and provide feedback.[/dim]")
@@ -904,7 +918,7 @@ def review(
         if result.status.value == "completed":
             status_code = result.data.get("status_code")
             console.print()
-            if status_code == "CONFIRMED":
+            if status_code == "AAF_CONFIRMED":
                 console.print("[bold green]✅ Code review passed![/bold green]")
                 console.print()
                 console.print("[dim]Next steps:[/dim]")
@@ -1061,7 +1075,7 @@ def list_issues() -> None:
     for issue in sorted(issues, key=lambda x: x.stat().st_mtime, reverse=True):
         # Check which phases exist
         phases = []
-        for phase in ["spec", "analysis", "implementation", "review", "pr"]:
+        for phase in ["spec", "plan", "develop", "review", "pr"]:
             phase_dir = issue / phase
             if phase_dir.exists():
                 phases.append(phase)

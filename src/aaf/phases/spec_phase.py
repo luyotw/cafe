@@ -3,7 +3,7 @@
 import json
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 from aaf.agents.manager import AgentManager
 from aaf.core.permission import PermissionHandler
@@ -11,6 +11,9 @@ from aaf.core.phase import Phase
 from aaf.core.status_codes import PhaseStatusCode, StatusCodeParser, generate_status_code_prompt
 from aaf.core.types import PhaseProgress, PhaseResult, PhaseStatus, WorkflowMode
 from aaf.ui.display import Display
+
+# Maximum number of clarification iterations to prevent infinite loops
+MAX_CLARIFICATION_ITERATIONS = 10
 
 
 def create_github_issue(content: str) -> str:
@@ -238,6 +241,17 @@ class SpecPhase(Phase):
             while True:
                 self.iteration += 1
 
+                # Safety check: prevent infinite loops
+                if self.iteration > MAX_CLARIFICATION_ITERATIONS:
+                    return PhaseResult(
+                        status=PhaseStatus.FAILED,
+                        message=f"Exceeded maximum iterations ({MAX_CLARIFICATION_ITERATIONS}). Requirements clarification did not converge.",
+                        data={
+                            "iterations": self.iteration - 1,
+                            "max_iterations": MAX_CLARIFICATION_ITERATIONS,
+                        },
+                    )
+
                 # Prepare user_input for this iteration
                 # Iteration 1: user_input is the initial user story/requirements
                 # Iteration 2+: user_input is the previous iteration's user_response
@@ -289,7 +303,7 @@ class SpecPhase(Phase):
                 prompt = self._generate_prompt()
 
                 # Execute PM agent with Write tool access for writing spec.md
-                response = self.agent_manager.execute(
+                response, token_usage = self.agent_manager.execute(
                     self.pm_agent,
                     prompt,
                     allowed_tools=["write", "read"]
@@ -313,6 +327,7 @@ class SpecPhase(Phase):
                     # Save final iteration history
                     self._save_iteration_history(
                         user_input=current_user_input,
+                        prompt=prompt,
                         pm_response=response,
                         status=PhaseStatusCode.CONFIRMED,
                     )
@@ -385,6 +400,7 @@ class SpecPhase(Phase):
                         # Save iteration history
                         self._save_iteration_history(
                             user_input=current_user_input,
+                            prompt=prompt,
                             pm_response=response,
                             status=PhaseStatusCode.NEED_CLARIFICATION,
                         )
@@ -438,6 +454,7 @@ class SpecPhase(Phase):
                         # Save iteration history
                         self._save_iteration_history(
                             user_input=current_user_input,
+                            prompt=prompt,
                             pm_response=response,
                             status=PhaseStatusCode.NEED_CLARIFICATION,
                         )
@@ -454,6 +471,7 @@ class SpecPhase(Phase):
                         # User response will be provided in next call via stdin
                         self._save_iteration_history(
                             user_input=current_user_input,
+                            prompt=prompt,
                             pm_response=response,
                             status=PhaseStatusCode.NEED_CLARIFICATION,
                         )
@@ -913,6 +931,11 @@ class SpecPhase(Phase):
         user_input: str,
         pm_response: str,
         status: PhaseStatusCode,
+        prompt: Optional[str] = None,
+        agent_cli: Optional[str] = None,
+        agent_session_id: Optional[str] = None,
+        allowed_tools: Optional[List[str]] = None,
+        denied_tools: Optional[List[str]] = None,
     ) -> None:
         """Save iteration history to JSON file.
 
@@ -922,6 +945,11 @@ class SpecPhase(Phase):
             user_input: User's input at the start of this iteration (user story for iteration 1, user response for subsequent iterations)
             pm_response: PM's response (questions or final requirements)
             status: Status code for this iteration
+            prompt: The actual prompt sent to the agent (optional for backwards compatibility)
+            agent_cli: CLI tool used by the agent (e.g., "copilot", "claude")
+            agent_session_id: Session ID of the agent
+            allowed_tools: List of allowed tools for the agent
+            denied_tools: List of denied tools for the agent
         """
         # Create history directory
         self.history_dir.mkdir(parents=True, exist_ok=True)
@@ -932,7 +960,12 @@ class SpecPhase(Phase):
             "timestamp": datetime.now().isoformat(),
             "status": status.value,
             "user_input": user_input,  # Start of the iteration
+            "prompt": prompt,  # The actual prompt sent to agent
             "pm_response": pm_response,
+            "cli": agent_cli,
+            "session_id": agent_session_id,
+            "allowed_tools": allowed_tools,
+            "denied_tools": denied_tools,
             "confirmed_requirements": self.confirmed_requirements.copy(),
             "pending_questions": self.pending_questions.copy(),
         }

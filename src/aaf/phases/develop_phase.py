@@ -92,6 +92,44 @@ class DevelopPhase(Phase):
         plan_path = Path(self.plan_file)
         return plan_path.exists()
 
+    def _get_review_file_path(self) -> Path:
+        """取得 review.md 的完整路徑.
+
+        Returns:
+            review.md 的 Path 物件
+        """
+        spec_path = Path(self.spec_file)
+        issue_dir = spec_path.parent.parent  # .aaf/issues/{issue_name}
+        return issue_dir / "review" / "review.md"
+
+    def _check_review_feedback_exists(self) -> bool:
+        """檢查是否存在 review feedback.
+
+        Returns:
+            True if review.md exists, False otherwise
+        """
+        review_file = self._get_review_file_path()
+        return review_file.exists()
+
+    def _load_review_status(self) -> Optional[Dict[str, Any]]:
+        """Load review phase status from status.json.
+
+        Returns:
+            Review status dict if exists, None otherwise
+        """
+        spec_path = Path(self.spec_file)
+        issue_dir = spec_path.parent.parent
+        review_status_file = issue_dir / "review" / "status.json"
+
+        if not review_status_file.exists():
+            return None
+
+        try:
+            with open(review_status_file, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except (json.JSONDecodeError, KeyError):
+            return None
+
     def _load_history(self) -> None:
         """Load conversation history from previous iterations."""
         if not self.history_dir.exists():
@@ -151,11 +189,12 @@ class DevelopPhase(Phase):
         with open(iteration_file, "w", encoding="utf-8") as f:
             json.dump(iteration_data, f, ensure_ascii=False, indent=2)
 
-    def _save_progress(self, status_code: PhaseStatusCode) -> None:
+    def _save_progress(self, status_code: PhaseStatusCode, handled_review_timestamp: Optional[str] = None) -> None:
         """Save phase progress to status.json.
 
         Args:
             status_code: Phase status code
+            handled_review_timestamp: Timestamp of review feedback that was handled (if any)
         """
         status_file = self.history_dir.parent / "status.json"
         status_file.parent.mkdir(parents=True, exist_ok=True)
@@ -171,9 +210,14 @@ class DevelopPhase(Phase):
             iteration=self.iteration,
             message=f"Phase completed with {status_code.value}" if phase_status == PhaseStatus.COMPLETED else f"Iteration {self.iteration}",
         )
+        
+        # Add handled_review_timestamp if provided
+        progress_dict = progress.to_dict()
+        if handled_review_timestamp:
+            progress_dict["handled_review_timestamp"] = handled_review_timestamp
 
         with open(status_file, 'w', encoding='utf-8') as f:
-            json.dump(progress.to_dict(), f, ensure_ascii=False, indent=2)
+            json.dump(progress_dict, f, ensure_ascii=False, indent=2)
 
     def _load_progress(self) -> Optional[PhaseProgress]:
         """Load phase progress from status.json.
@@ -192,25 +236,77 @@ class DevelopPhase(Phase):
         except (json.JSONDecodeError, KeyError):
             return None
 
+    def _save_issue_config(self, base_branch: str, feature_branch: str) -> None:
+        """Save issue configuration including base branch.
+
+        Args:
+            base_branch: Base branch name (e.g., 'main')
+            feature_branch: Feature branch name (e.g., 'my-feature')
+        """
+        config_file = self.history_dir.parent.parent / "config.json"
+        config_file.parent.mkdir(parents=True, exist_ok=True)
+
+        config_data = {
+            "base_branch": base_branch,
+            "feature_branch": feature_branch,
+        }
+
+        with open(config_file, 'w', encoding='utf-8') as f:
+            json.dump(config_data, f, ensure_ascii=False, indent=2)
+
     def _generate_prompt(self) -> str:
         """Generate prompt for current iteration.
 
         Returns:
             Prompt string
         """
+        status_code_prompt = generate_status_code_prompt(
+            valid_codes=[
+                PhaseStatusCode.CONFIRMED,
+                PhaseStatusCode.NEED_PERMISSION,
+            ],
+            descriptions={
+                PhaseStatusCode.CONFIRMED: "開發工作已完成",
+                PhaseStatusCode.NEED_PERMISSION: "需要請求工具使用權限",
+            },
+        )
+
+        # Check if review feedback exists (every iteration, not just first)
+        has_review_feedback = self._check_review_feedback_exists()
+        review_file_path = self._get_review_file_path()
+
+        if has_review_feedback:
+            # With review feedback - 修正模式
+            return f"""請根據 Code Review 反饋進行修正。
+
+**你的角色：**
+你是一位經驗豐富的 Developer，負責根據 Code Review 的建議修正程式碼。
+
+**重要：請先閱讀 Review Feedback**
+- Review Feedback 檔案：{review_file_path}
+- 請仔細閱讀 reviewer 的所有建議和問題
+- 優先處理 critical 等級的問題
+
+**檔案路徑：**
+- Review Feedback：{review_file_path}
+- 需求規格：{self.spec_file}
+- 實作計畫：{self.plan_file}
+
+**執行步驟：**
+1. **首先閱讀** {review_file_path}，了解所有需要修正的問題
+2. 根據 review feedback 逐一修正問題
+3. 如果需要，可參考 {self.spec_file} 和 {self.plan_file}
+4. 使用清晰的 commit message 說明修正內容
+5. 完成所有修正後回傳狀態碼
+
+{status_code_prompt}
+
+**完成後回傳：CONFIRMED**
+"""
+        
+        # No review feedback - normal development mode
         if self.iteration == 1:
             # First iteration: provide spec.md and plan.md paths
-            status_code_prompt = generate_status_code_prompt(
-                valid_codes=[
-                    PhaseStatusCode.CONFIRMED,
-                    PhaseStatusCode.NEED_PERMISSION,
-                ],
-                descriptions={
-                    PhaseStatusCode.CONFIRMED: "開發工作已完成",
-                    PhaseStatusCode.NEED_PERMISSION: "需要請求工具使用權限",
-                },
-            )
-
             return f"""請按照實作計畫執行開發工作。
 
 **你的角色：**
@@ -312,23 +408,56 @@ class DevelopPhase(Phase):
             # Check if phase is already completed
             existing_progress = self._load_progress()
             if existing_progress and existing_progress.status == PhaseStatus.COMPLETED:
-                # Phase already completed, return existing result
-                return PhaseResult(
-                    status=PhaseStatus.COMPLETED,
-                    message=f"Development already completed in {existing_progress.iteration} iteration(s)",
-                    data={
-                        "branch": self._get_branch_name(),
-                        "iterations": existing_progress.iteration,
-                        "status_code": existing_progress.status_code,
-                    },
-                )
+                # Check if there's review feedback that requires handling
+                review_status = self._load_review_status()
+                if review_status and review_status.get("status_code") == "AAF_NEEDS_CHANGES":
+                    # Check if this review has already been handled
+                    review_timestamp = review_status.get("timestamp", "")
+                    
+                    # Load develop status.json to check handled_review_timestamp
+                    status_file = self.history_dir.parent / "status.json"
+                    if status_file.exists():
+                        with open(status_file, 'r', encoding='utf-8') as f:
+                            develop_status = json.load(f)
+                            handled_review_timestamp = develop_status.get("handled_review_timestamp")
+                            
+                            if handled_review_timestamp == review_timestamp:
+                                # This review has already been handled
+                                return PhaseResult(
+                                    status=PhaseStatus.COMPLETED,
+                                    message=f"Development already completed in {existing_progress.iteration} iteration(s)",
+                                    data={
+                                        "branch": self._get_branch_name(),
+                                        "iterations": existing_progress.iteration,
+                                        "status_code": existing_progress.status_code,
+                                    },
+                                )
+                    
+                    # Review exists and hasn't been handled yet, continue execution
+                    print("ℹ️  Review feedback detected (AAF_NEEDS_CHANGES). Continuing development...")
+                    # Don't return early - let execution continue to handle review feedback
+                else:
+                    # No review feedback or review passed, phase is truly completed
+                    return PhaseResult(
+                        status=PhaseStatus.COMPLETED,
+                        message=f"Development already completed in {existing_progress.iteration} iteration(s)",
+                        data={
+                            "branch": self._get_branch_name(),
+                            "iterations": existing_progress.iteration,
+                            "status_code": existing_progress.status_code,
+                        },
+                    )
 
             # Create or checkout branch
             branch_name = self._get_branch_name()
             if self.git_ops.branch_exists(branch_name):
                 self.git_ops.checkout_branch(branch_name)
             else:
+                # Get current branch before creating new one (this is the base branch)
+                base_branch = self.git_ops.get_current_branch()
                 self.git_ops.create_branch(branch_name)
+                # Save issue config with base branch info
+                self._save_issue_config(base_branch, branch_name)
 
             # Single iteration execution
             # Increment iteration counter
@@ -340,7 +469,7 @@ class DevelopPhase(Phase):
             
             # Check if there's a pending NEED_PERMISSION from previous run
             if (self.conversation_history and
-                self.conversation_history[-1].get("status_code") == "NEED_PERMISSION" and
+                self.conversation_history[-1].get("status_code") == "AAF_NEED_PERMISSION" and
                 "user_response" not in self.conversation_history[-1]):
                 # Handle pending permission request
                 last_iteration = self.conversation_history[-1]
@@ -406,10 +535,10 @@ class DevelopPhase(Phase):
             prompt = self._generate_prompt()
 
             # Execute developer agent with allowed tools
-            response = self.agent_manager.execute(
+            response, token_usage = self.agent_manager.execute(
                 self.dev_agent,
                 prompt,
-                allowed_tools=["write", "read", "shell"]
+                allowed_tools=["write", "read", "bash"]
             )
 
             # Extract status code from response
@@ -429,7 +558,14 @@ class DevelopPhase(Phase):
                     response=response,
                     status_code=PhaseStatusCode.CONFIRMED,
                 )
-                self._save_progress(PhaseStatusCode.CONFIRMED)
+                
+                # Record review timestamp if we're responding to review feedback
+                review_status = self._load_review_status()
+                handled_review_timestamp = None
+                if review_status and review_status.get("status_code") == "AAF_NEEDS_CHANGES":
+                    handled_review_timestamp = review_status.get("timestamp")
+                
+                self._save_progress(PhaseStatusCode.CONFIRMED, handled_review_timestamp)
                 
                 token_usage = self.agent_manager.get_total_token_usage()
                 

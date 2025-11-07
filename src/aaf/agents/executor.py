@@ -9,8 +9,10 @@ from aaf.core.types import AgentConfig, AgentCLI, TokenUsage
 
 class AgentExecutionError(Exception):
     """Agent execution error."""
-
-    pass
+    
+    def __init__(self, message: str, error_type: Optional[str] = None):
+        super().__init__(message)
+        self.error_type = error_type
 
 
 class AgentExecutor:
@@ -81,6 +83,73 @@ class AgentExecutor:
 
         tool_map = self.TOOL_NAME_MAP.get(self.config.cli, {})
         return [tool_map.get(tool, tool) for tool in tools]
+
+    def _execute_with_streaming(
+        self,
+        cmd: List[str],
+        cli_name: str,
+        response_parser: Optional[callable] = None,
+    ) -> Tuple[str, TokenUsage]:
+        """通用的 streaming 執行方法。
+
+        Args:
+            cmd: 完整的命令列表
+            cli_name: CLI 名稱（用於錯誤訊息和顯示）
+            response_parser: 可選的回應解析函數，接收 output_lines 回傳 (response, token_usage)
+
+        Returns:
+            Tuple of (response, token usage)
+        """
+        # Use Popen for streaming output
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,  # Line buffered
+        )
+
+        # Read and print output in real-time
+        output_lines = []
+        print(f"\n{'='*80}")
+        print(f"{cli_name} Response (streaming):")
+        print(f"{'='*80}")
+
+        while True:
+            line = process.stdout.readline()
+            if not line:
+                break
+            print(line, end='', flush=True)
+            output_lines.append(line)
+
+        print(f"{'='*80}\n")
+
+        # Wait for process to complete
+        stderr_output = process.stderr.read() if process.stderr else ""
+        returncode = process.wait()
+
+        if returncode != 0:
+            raise AgentExecutionError(
+                f"{cli_name} execution failed with code {returncode}: {stderr_output}"
+            )
+
+        # Use custom parser if provided, otherwise default JSON parsing
+        if response_parser:
+            return response_parser(output_lines)
+        
+        # Default: parse full output as JSON
+        full_output = ''.join(output_lines)
+        try:
+            response_data = json.loads(full_output)
+            response = response_data.get("response", full_output)
+            
+            # Parse token usage if available
+            token_usage = TokenUsage()
+            
+            return response, token_usage
+        except json.JSONDecodeError:
+            # If not JSON, return raw output
+            return full_output, TokenUsage()
 
     def execute(self, prompt: str, allowed_tools: Optional[List[str]] = None) -> Tuple[str, TokenUsage]:
         """Execute the agent with given prompt.
@@ -295,24 +364,32 @@ class AgentExecutor:
             check=False,
         )
 
-        if result.returncode != 0:
-            raise AgentExecutionError(
-                f"Failed to create new session: {result.stderr}"
-            )
-
         try:
             response_data = json.loads(result.stdout)
+            
+            # Check for errors (like limit reached)
+            if response_data.get("is_error"):
+                error_msg = response_data.get("result", "Unknown error")
+                print(f"\n⚠️  Claude API Error: {error_msg}\n")
+                raise AgentExecutionError(f"Claude API error: {error_msg}")
+            
             session_id = response_data.get("session_id")
             if not session_id:
                 raise AgentExecutionError("No session_id in response")
             return session_id
         except json.JSONDecodeError as e:
+            # If can't parse JSON, check returncode
+            if result.returncode != 0:
+                print(f"\n⚠️  Failed to create Claude session")
+                if result.stderr:
+                    print(f"Error: {result.stderr}\n")
+                raise AgentExecutionError(f"Failed to create new session: {result.stderr}")
             raise AgentExecutionError(
                 f"Failed to parse session creation response: {e}"
             ) from e
 
     def _execute_gemini(self, prompt: str, allowed_tools: Optional[List[str]] = None) -> Tuple[str, TokenUsage]:
-        """Execute Gemini agent.
+        """Execute Gemini agent with streaming output.
 
         Args:
             prompt: Prompt to send to Gemini
@@ -321,43 +398,41 @@ class AgentExecutor:
         Returns:
             Tuple of (Gemini's response, token usage)
         """
-        # Build command: use positional prompt
+        # Build command
         cmd = ["gemini", prompt]
 
         # Add allowed tools if specified
         if allowed_tools:
             cmd.extend(["--allowed-tools", ",".join(allowed_tools)])
 
-        cmd.extend(["--output-format", "json"])
+        # Add streaming JSON output format
+        cmd.extend(["--output-format", "streaming-json"])
 
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+        # Gemini-specific parser: parse last line as final result
+        def parse_gemini_response(output_lines: List[str]) -> Tuple[str, TokenUsage]:
+            full_output = ''.join(output_lines)
+            
+            # Parse the last line as JSON (streaming-json format sends final result on last line)
+            try:
+                lines = [l.strip() for l in output_lines if l.strip()]
+                if not lines:
+                    return "", TokenUsage()
+                
+                last_json = json.loads(lines[-1])
+                response = last_json.get("response", full_output)
 
-        if result.returncode != 0:
-            raise AgentExecutionError(
-                f"Gemini execution failed with code {result.returncode}: {result.stderr}"
-            )
+                # Parse token usage if available
+                token_usage = TokenUsage()
 
-        # Parse JSON response
-        try:
-            response_data = json.loads(result.stdout)
-            response = response_data.get("response", result.stdout)
+                return response, token_usage
+            except json.JSONDecodeError:
+                # If not JSON, return raw output
+                return full_output, TokenUsage()
 
-            # Parse token usage (Gemini format may differ from Claude)
-            # TODO: Update when Gemini CLI provides token usage info
-            token_usage = TokenUsage()
-
-            return response, token_usage
-        except json.JSONDecodeError:
-            # If not JSON, return raw output with empty token usage
-            return result.stdout, TokenUsage()
+        return self._execute_with_streaming(cmd, "Gemini", parse_gemini_response)
 
     def _execute_cursor(self, prompt: str, allowed_tools: Optional[List[str]] = None) -> Tuple[str, TokenUsage]:
-        """Execute Cursor agent.
+        """Execute Cursor agent with streaming output.
 
         Args:
             prompt: Prompt to send to Cursor
@@ -366,8 +441,18 @@ class AgentExecutor:
         Returns:
             Tuple of (Cursor's response, token usage)
         """
-        # Placeholder for Cursor implementation
-        raise NotImplementedError("Cursor execution not yet implemented")
+        # Build command
+        cmd = ["cursor-agent", "-p", prompt]
+
+        # Add allowed tools if specified
+        if allowed_tools:
+            cmd.extend(["--allowed-tools", ",".join(allowed_tools)])
+
+        # Add JSON output format for parsing
+        cmd.extend(["--output-format", "json"])
+
+        # Use default parser (full JSON output)
+        return self._execute_with_streaming(cmd, "Cursor")
 
     def _execute_copilot(self, prompt: str, allowed_tools: Optional[List[str]] = None) -> Tuple[str, TokenUsage]:
         """Execute GitHub Copilot CLI agent with streaming output.
