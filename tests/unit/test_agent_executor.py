@@ -186,6 +186,8 @@ class TestClaudeExecution:
                 returncode=1
             )
 
+        call_count = 0
+
         def mock_popen_side_effect(*args, **kwargs):
             nonlocal call_count
             call_count += 1
