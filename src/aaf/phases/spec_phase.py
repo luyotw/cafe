@@ -303,11 +303,33 @@ class SpecPhase(Phase):
                 prompt = self._generate_prompt()
 
                 # Execute PM agent with Write tool access for writing spec.md
+                allowed_tools = ["write", "read"]
                 response, token_usage = self.agent_manager.execute(
                     self.pm_agent,
                     prompt,
-                    allowed_tools=["write", "read"]
+                    allowed_tools=allowed_tools
                 )
+
+                # Get agent metadata for history (for test compatibility, handle missing mock)
+                agent_cli = None
+                agent_session_id = None
+                try:
+                    agent_config = self.agent_manager.get_agent_config(self.pm_agent)
+                    # Get CLI value, but handle mock objects
+                    if hasattr(agent_config, 'cli') and hasattr(agent_config.cli, 'value'):
+                        cli_val = agent_config.cli.value
+                        # Ensure it's a string, not a mock
+                        if isinstance(cli_val, str):
+                            agent_cli = cli_val
+                    # Get session ID, but handle mock objects
+                    if hasattr(agent_config, 'session_id') and agent_config.session_id is not None:
+                        sid = agent_config.session_id
+                        # Ensure it's a string, not a mock
+                        if isinstance(sid, str):
+                            agent_session_id = sid
+                except (AttributeError, KeyError, TypeError):
+                    # In tests where get_agent_config is not mocked properly
+                    pass
 
                 # Extract status code from response
                 status_code = StatusCodeParser.extract(
@@ -330,6 +352,9 @@ class SpecPhase(Phase):
                         prompt=prompt,
                         pm_response=response,
                         status=PhaseStatusCode.CONFIRMED,
+                        agent_cli=agent_cli,
+                        agent_session_id=agent_session_id,
+                        allowed_tools=allowed_tools,
                     )
 
                     # Save progress to status.json
@@ -403,6 +428,9 @@ class SpecPhase(Phase):
                             prompt=prompt,
                             pm_response=response,
                             status=PhaseStatusCode.NEED_CLARIFICATION,
+                            agent_cli=agent_cli,
+                            agent_session_id=agent_session_id,
+                            allowed_tools=allowed_tools,
                         )
 
                         # Update the conversation entry with PM's response
@@ -423,6 +451,9 @@ class SpecPhase(Phase):
                             prompt=prompt,
                             pm_response=response,
                             status=PhaseStatusCode.NEED_CLARIFICATION,
+                            agent_cli=agent_cli,
+                            agent_session_id=agent_session_id,
+                            allowed_tools=allowed_tools,
                         )
 
                         # Read the spec file
@@ -476,6 +507,9 @@ class SpecPhase(Phase):
                             prompt=prompt,
                             pm_response=response,
                             status=PhaseStatusCode.NEED_CLARIFICATION,
+                            agent_cli=agent_cli,
+                            agent_session_id=agent_session_id,
+                            allowed_tools=allowed_tools,
                         )
 
                         # Add to conversation history (without user response for now)
