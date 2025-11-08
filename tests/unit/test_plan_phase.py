@@ -180,8 +180,14 @@ class TestLocalWorkflow:
 class TestGitHubWorkflow:
     """Test GitHub workflow implementation analysis."""
 
-    def test_execute_github_workflow(self) -> None:
+    def test_execute_github_workflow(self, tmp_path: Path) -> None:
         """測試執行 GitHub workflow"""
+        # Create requirements file in tmp_path
+        issue_name = "test-github-issue"
+        spec_file = tmp_path / ".aaf" / "issues" / issue_name / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
+        spec_file.write_text("# Requirements\n\n## 開發指南\nDev guide")
+
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = ("AAF_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage())
 
@@ -190,7 +196,7 @@ class TestGitHubWorkflow:
         phase = PlanPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
-            spec_file="requirements.md",
+            spec_file=str(spec_file),
             workflow_mode=WorkflowMode.GITHUB,
             issue_id="123",
             interactive=False,  # Non-interactive for this test
@@ -204,8 +210,14 @@ class TestGitHubWorkflow:
         prompt = call_args[0][1]
         assert "gh issue view 123" in prompt
 
-    def test_github_workflow_uses_issue_id(self) -> None:
+    def test_github_workflow_uses_issue_id(self, tmp_path: Path) -> None:
         """測試 GitHub workflow 使用 issue ID"""
+        # Create requirements file in tmp_path
+        issue_name = "test-github-issue-2"
+        spec_file = tmp_path / ".aaf" / "issues" / issue_name / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
+        spec_file.write_text("# Requirements\n\n## 開發指南\nDev guide")
+
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = ("AAF_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage())
 
@@ -214,7 +226,7 @@ class TestGitHubWorkflow:
         phase = PlanPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
-            spec_file="requirements.md",
+            spec_file=str(spec_file),
             workflow_mode=WorkflowMode.GITHUB,
             issue_id="456",
             interactive=False,  # Non-interactive for this test

@@ -15,8 +15,18 @@ from aaf.core.permission import PermissionHandler
 class TestReviewPhaseBasics:
     """Test basic ReviewPhase functionality."""
 
-    def test_init_review_phase(self) -> None:
+    def test_init_review_phase(self, tmp_path: Path) -> None:
         """測試初始化 ReviewPhase"""
+        # Create temporary spec and plan files with proper issue structure
+        issue_name = "test-review"
+        spec_file = tmp_path / ".aaf" / "issues" / issue_name / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
+        spec_file.write_text("Requirements")
+
+        plan_file = spec_file.parent.parent / "plan" / "plan.md"
+        plan_file.parent.mkdir(parents=True, exist_ok=True)
+        plan_file.write_text("Plan")
+
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
         git_ops = MagicMock(spec=GitOperations)
@@ -25,18 +35,28 @@ class TestReviewPhaseBasics:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            spec_file="requirements.md",
-            plan_file="plan.md",
+            spec_file=str(spec_file),
+            plan_file=str(plan_file),
             workflow_mode=WorkflowMode.LOCAL,
         )
 
         assert phase.agent_manager == agent_manager
         assert phase.git_ops == git_ops
-        assert phase.spec_file == "requirements.md"
+        assert phase.spec_file == str(spec_file)
         assert phase.workflow_mode == WorkflowMode.LOCAL
 
-    def test_init_with_target_commit(self) -> None:
+    def test_init_with_target_commit(self, tmp_path: Path) -> None:
         """測試設定特定 commit"""
+        # Create temporary spec and plan files with proper issue structure
+        issue_name = "test-review-commit"
+        spec_file = tmp_path / ".aaf" / "issues" / issue_name / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
+        spec_file.write_text("Requirements")
+
+        plan_file = spec_file.parent.parent / "plan" / "plan.md"
+        plan_file.parent.mkdir(parents=True, exist_ok=True)
+        plan_file.write_text("Plan")
+
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
         git_ops = MagicMock(spec=GitOperations)
@@ -45,8 +65,8 @@ class TestReviewPhaseBasics:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            spec_file="requirements.md",
-            plan_file="plan.md",
+            spec_file=str(spec_file),
+            plan_file=str(plan_file),
             workflow_mode=WorkflowMode.LOCAL,
             target_commit="abc123",
         )
@@ -714,8 +734,18 @@ class TestReviewPhaseStatus:
 class TestGitHubWorkflow:
     """Test GitHub workflow."""
 
-    def test_github_workflow_uses_issue(self) -> None:
+    def test_github_workflow_uses_issue(self, tmp_path: Path) -> None:
         """測試 GitHub workflow 使用 issue"""
+        # Create temporary spec and plan files with proper issue structure
+        issue_name = "test-github-review"
+        spec_file = tmp_path / ".aaf" / "issues" / issue_name / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
+        spec_file.write_text("Requirements")
+
+        plan_file = spec_file.parent.parent / "plan" / "plan.md"
+        plan_file.parent.mkdir(parents=True, exist_ok=True)
+        plan_file.write_text("Plan")
+
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = ("AAF_CONFIRMED\nCode looks good!", TokenUsage())
 
@@ -728,8 +758,8 @@ class TestGitHubWorkflow:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            spec_file="requirements.md",
-            plan_file="plan.md",
+            spec_file=str(spec_file),
+            plan_file=str(plan_file),
             workflow_mode=WorkflowMode.GITHUB,
             issue_id="123",
         )
