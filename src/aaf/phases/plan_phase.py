@@ -129,8 +129,8 @@ class PlanPhase(Phase):
                 # Check the last iteration's status code
                 last_status_code = self.conversation_history[-1].get("status_code") if self.conversation_history else None
 
-                if last_status_code == PhaseStatusCode.CONFIRMED.value:
-                    # Last iteration was CONFIRMED - will skip agent execution and go directly to user confirmation
+                if last_status_code == PhaseStatusCode.READY_FOR_REVIEW.value:
+                    # Last iteration was READY_FOR_REVIEW - will skip agent execution and go directly to user confirmation
                     resume_with_confirmed = True
                 else:
                     # Last iteration was NEED_CLARIFICATION or other - get user's response
@@ -155,11 +155,11 @@ class PlanPhase(Phase):
 
             # Implementation plan loop
             while True:
-                # If resuming with CONFIRMED status, skip agent execution and go directly to user confirmation
+                # If resuming with READY_FOR_REVIEW status, skip agent execution and go directly to user confirmation
                 if resume_with_confirmed:
                     # Use the last response from history (don't call agent or increment iteration)
                     response = self.conversation_history[-1].get("response", "")
-                    status_code = PhaseStatusCode.CONFIRMED
+                    status_code = PhaseStatusCode.READY_FOR_REVIEW
                     resume_with_confirmed = False  # Only use this flag once
                 else:
                     # Normal flow: increment iteration and execute agent
@@ -204,7 +204,7 @@ class PlanPhase(Phase):
                     status_code = StatusCodeParser.extract(
                         response,
                         valid_codes=[
-                            PhaseStatusCode.CONFIRMED,
+                            PhaseStatusCode.READY_FOR_REVIEW,
                             PhaseStatusCode.NEED_CLARIFICATION,
                             PhaseStatusCode.REJECTED,
                         ],
@@ -221,20 +221,88 @@ class PlanPhase(Phase):
                         self._save_progress(status_code)
 
                 # Handle status codes
-                if status_code == PhaseStatusCode.CONFIRMED:
+                if status_code == PhaseStatusCode.READY_FOR_REVIEW:
                     # Save progress
                     self._save_progress(status_code)
 
-                    # Both interactive and non-interactive: complete immediately
-                    return PhaseResult(
-                        status=PhaseStatus.COMPLETED,
-                        message=f"Implementation plan completed in {self.iteration} iteration(s)",
-                        data={
-                            "iterations": self.iteration,
-                            "final_response": response,
-                            "status_code": status_code.value,
-                        },
-                    )
+                    if self.interactive:
+                        # Interactive mode: Show plan and get user confirmation
+                        plan_file = self.history_dir.parent / "plan.md"
+                        plan_content = plan_file.read_text() if plan_file.exists() else "（檔案未產生）"
+
+                        # Get agent CLI info for display
+                        agent_cli = self.agent_manager.get_agent_config(self.dev_agent).cli.value
+
+                        print(f"\n{'='*60}")
+                        print(f"Dev ({self.dev_agent} by {agent_cli}) - Iteration {self.iteration}:")
+                        print(f"{'='*60}")
+                        print(plan_content)
+                        print(f"{'='*60}\n")
+
+                        # Ask user for confirmation
+                        print("開發者認為實作計畫已完成。請確認：")
+                        print("  [c] confirm - 確認計畫，繼續實作")
+                        print("  [r] reject - 拒絕計畫，終止")
+                        print("  [m] modify - 要求修改（輸入修改意見）")
+
+                        while True:
+                            choice = input("\n請選擇 [c/r/m]: ").strip().lower()
+
+                            if choice == 'c':
+                                # User confirms - complete the phase
+                                return PhaseResult(
+                                    status=PhaseStatus.COMPLETED,
+                                    message=f"Implementation plan confirmed in {self.iteration} iteration(s)",
+                                    data={
+                                        "iterations": self.iteration,
+                                        "final_response": response,
+                                        "status_code": status_code.value,
+                                    },
+                                )
+                            elif choice == 'r':
+                                # User rejects - fail the phase
+                                return PhaseResult(
+                                    status=PhaseStatus.FAILED,
+                                    message=f"Implementation plan rejected by user in iteration {self.iteration}",
+                                    data={
+                                        "iterations": self.iteration,
+                                        "final_response": response,
+                                        "status_code": "USER_REJECTED",
+                                    },
+                                )
+                            elif choice == 'm':
+                                # User wants modifications
+                                modification_request = self.display.get_multiline_input("請輸入修改意見")
+
+                                if not modification_request.strip():
+                                    print("\n⚠️  沒有輸入修改意見，請重新選擇。")
+                                    continue
+
+                                print()
+                                print("✅ 已收到您的修改意見，正在重新規劃...")
+                                print()
+
+                                # Save user's modification request
+                                self._save_user_response(modification_request)
+
+                                # Continue to next iteration
+                                break
+                            else:
+                                print("❌ 無效選擇，請輸入 c, r, 或 m")
+
+                        # If we reach here, user chose 'm' - continue loop
+                        continue
+                    else:
+                        # Non-interactive mode: complete immediately
+                        return PhaseResult(
+                            status=PhaseStatus.COMPLETED,
+                            message=f"Implementation plan completed in {self.iteration} iteration(s)",
+                            data={
+                                "iterations": self.iteration,
+                                "final_response": response,
+                                "status_code": status_code.value,
+                            },
+                        )
                 elif status_code == PhaseStatusCode.REJECTED:
                     return PhaseResult(
                         status=PhaseStatus.FAILED,
@@ -353,12 +421,12 @@ class PlanPhase(Phase):
 
         status_code_prompt = generate_status_code_prompt(
             valid_codes=[
-                PhaseStatusCode.CONFIRMED,
+                PhaseStatusCode.READY_FOR_REVIEW,
                 PhaseStatusCode.NEED_CLARIFICATION,
                 PhaseStatusCode.REJECTED,
             ],
             descriptions={
-                PhaseStatusCode.CONFIRMED: "實作分析已完成，可以開始開發",
+                PhaseStatusCode.READY_FOR_REVIEW: "實作分析已完成，準備好讓使用者確認",
                 PhaseStatusCode.NEED_CLARIFICATION: "需要更多資訊或確認",
                 PhaseStatusCode.REJECTED: "實作分析無法進行",
             },
@@ -397,11 +465,11 @@ class PlanPhase(Phase):
    - 「## 待確認問題」- 列出需要確認的技術問題
 2. 寫完檔案後，只回傳：NEED_CLARIFICATION
 
-**如果分析完成（status: CONFIRMED）：**
+**如果分析完成（status: READY_FOR_REVIEW）：**
 1. 使用 Write tool 將完整實作計畫寫入 {plan_file_path}：
    - 第一部分：「## 開發指南」- 保留原有的開發指南內容（不要修改）
    - 第二部分：嚴格按照模版的章節結構和格式撰寫實作計畫
-2. 寫完檔案後，只回傳：CONFIRMED
+2. 寫完檔案後，只回傳：READY_FOR_REVIEW
 """
         else:
             return f"""繼續分析 {self.spec_file} 的最新版本。
@@ -423,11 +491,11 @@ class PlanPhase(Phase):
    - 「## 待確認問題」- 列出需要確認的技術問題
 2. 寫完檔案後，只回傳：NEED_CLARIFICATION
 
-**如果分析完成（status: CONFIRMED）：**
+**如果分析完成（status: READY_FOR_REVIEW）：**
 1. 使用 Write tool 將完整實作計畫寫入 {plan_file_path}：
    - 第一部分：「## 開發指南」- 保留原有的開發指南內容（不要修改）
    - 第二部分：嚴格按照模版的章節結構和格式撰寫實作計畫
-2. 寫完檔案後，只回傳：CONFIRMED
+2. 寫完檔案後，只回傳：READY_FOR_REVIEW
 """
 
     def _generate_github_prompt(self) -> str:
@@ -438,12 +506,12 @@ class PlanPhase(Phase):
         """
         status_code_prompt = generate_status_code_prompt(
             valid_codes=[
-                PhaseStatusCode.CONFIRMED,
+                PhaseStatusCode.READY_FOR_REVIEW,
                 PhaseStatusCode.NEED_CLARIFICATION,
                 PhaseStatusCode.REJECTED,
             ],
             descriptions={
-                PhaseStatusCode.CONFIRMED: "實作分析已完成，可以開始開發",
+                PhaseStatusCode.READY_FOR_REVIEW: "實作分析已完成，準備好讓使用者確認",
                 PhaseStatusCode.NEED_CLARIFICATION: "需要更多資訊或確認",
                 PhaseStatusCode.REJECTED: "實作分析無法進行",
             },

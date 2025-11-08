@@ -25,6 +25,7 @@ class PhaseStatusCode(str, Enum):
     CONFIRMED = "AAF_CONFIRMED"                   # Requirements/Analysis confirmed
     NEED_CLARIFICATION = "AAF_NEED_CLARIFICATION" # Need more information
     REJECTED = "AAF_REJECTED"                     # Requirements/Analysis rejected
+    READY_FOR_REVIEW = "AAF_READY_FOR_REVIEW"     # Plan ready for user review
 
     # ========== Review Phase ==========
     APPROVED = "AAF_APPROVED"             # Code review approved
@@ -171,6 +172,7 @@ class StatusCodeParser:
             PhaseStatusCode.MANUAL_REVIEW,
             PhaseStatusCode.NEED_PERMISSION,
             PhaseStatusCode.NEED_CLARIFICATION,
+            PhaseStatusCode.READY_FOR_REVIEW,
         }
         return code in human_input_codes
 

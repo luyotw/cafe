@@ -63,7 +63,7 @@ class TestLocalWorkflow:
         plan_file.write_text("## 開發指南\n\nDevelopment guide here")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("AAF_CONFIRMED\n實作分析已完成。", TokenUsage())
+        agent_manager.execute.return_value = ("AAF_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage())
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -88,7 +88,7 @@ class TestLocalWorkflow:
         spec_file.write_text("# Requirements\n\nNo dev guide")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("AAF_CONFIRMED\n實作分析已完成。", TokenUsage())
+        agent_manager.execute.return_value = ("AAF_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage())
         permission_handler = MagicMock(spec=PermissionHandler)
 
         phase = PlanPhase(
@@ -153,7 +153,7 @@ class TestLocalWorkflow:
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.side_effect = [
             ("分析中...", TokenUsage()),
-            ("AAF_CONFIRMED\n實作分析已完成。", TokenUsage()),
+            ("AAF_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage()),
         ]
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -180,7 +180,7 @@ class TestGitHubWorkflow:
     def test_execute_github_workflow(self) -> None:
         """測試執行 GitHub workflow"""
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("AAF_CONFIRMED\n實作分析已完成。", TokenUsage())
+        agent_manager.execute.return_value = ("AAF_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage())
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -204,7 +204,7 @@ class TestGitHubWorkflow:
     def test_github_workflow_uses_issue_id(self) -> None:
         """測試 GitHub workflow 使用 issue ID"""
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("AAF_CONFIRMED\n實作分析已完成。", TokenUsage())
+        agent_manager.execute.return_value = ("AAF_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage())
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -238,7 +238,7 @@ class TestPromptGeneration:
         plan_file.write_text("## 開發指南\n\nGuide")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("AAF_CONFIRMED\n實作分析已完成。", TokenUsage())
+        agent_manager.execute.return_value = ("AAF_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage())
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -271,7 +271,7 @@ class TestPromptGeneration:
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.side_effect = [
             ("分析中", TokenUsage()),
-            ("AAF_CONFIRMED\n實作分析已完成。", TokenUsage()),
+            ("AAF_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage()),
         ]
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -307,7 +307,7 @@ class TestAgentSelection:
         plan_file.write_text("## 開發指南\n\nGuide")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("AAF_CONFIRMED\n實作分析已完成。", TokenUsage())
+        agent_manager.execute.return_value = ("AAF_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage())
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -412,7 +412,7 @@ class TestPlanPhaseHistory:
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.side_effect = [
             ("AAF_NEED_CLARIFICATION\n需要更多資訊", TokenUsage()),
-            ("AAF_CONFIRMED\n實作分析已完成。", TokenUsage()),
+            ("AAF_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage()),
         ]
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -457,7 +457,7 @@ class TestPlanPhaseHistory:
         plan_file.write_text("## 開發指南\n\nGuide")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("AAF_CONFIRMED\n實作分析已完成。", TokenUsage())
+        agent_manager.execute.return_value = ("AAF_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage())
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -481,7 +481,7 @@ class TestPlanPhaseHistory:
 
         assert data["phase"] == "plan"
         assert data["status"] == "completed"
-        assert data["status_code"] == "AAF_CONFIRMED"
+        assert data["status_code"] == "AAF_READY_FOR_REVIEW"
 
     def test_creates_plan_md_file(self, tmp_path: Path) -> None:
         """測試 agent 創建 plan.md 文件"""
@@ -500,7 +500,7 @@ class TestPlanPhaseHistory:
             plan_file = spec_file.parent.parent / "plan" / "plan.md"
             plan_file.parent.mkdir(parents=True, exist_ok=True)
             plan_file.write_text("# 實作計畫\n\n## 技術分析\n分析內容")
-            return ("AAF_CONFIRMED\n實作分析已完成。", TokenUsage())
+            return ("AAF_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage())
 
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.side_effect = mock_agent_writes_plan
@@ -698,7 +698,7 @@ class TestPlanPhaseNeedClarification:
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.side_effect = [
             ("AAF_NEED_CLARIFICATION\n需要更多資訊", TokenUsage()),
-            ("AAF_CONFIRMED\n實作分析已完成。", TokenUsage()),
+            ("AAF_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage()),
         ]
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -777,7 +777,7 @@ class TestPlanPhaseNeedClarification:
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.side_effect = [
             ("AAF_NEED_CLARIFICATION\n需要更多資訊", TokenUsage()),
-            ("AAF_CONFIRMED\n完成", TokenUsage()),
+            ("AAF_READY_FOR_REVIEW\n完成", TokenUsage()),
         ]
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -822,7 +822,7 @@ class TestPlanPhaseNeedClarification:
 
         # 第二輪：user_input（上輪的 user_response）→ agent response（CONFIRMED）
         assert data2["iteration"] == 2
-        assert data2["status_code"] == "AAF_CONFIRMED"
+        assert data2["status_code"] == "AAF_READY_FOR_REVIEW"
         assert "user_input" in data2  # 輪的開始：上一輪的使用者回應
         assert data2["user_input"] == "我的回應內容"
 
@@ -896,7 +896,7 @@ class TestPlanPhaseResume:
         history_file.write_text(json.dumps(history_data, ensure_ascii=False, indent=2))
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("AAF_CONFIRMED\n實作計畫已完成。", TokenUsage())
+        agent_manager.execute.return_value = ("AAF_READY_FOR_REVIEW\n實作計畫已完成。", TokenUsage())
 
         permission_handler = MagicMock(spec=PermissionHandler)
 

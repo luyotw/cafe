@@ -26,7 +26,7 @@ class TestPlanPhaseWithStatusCodes:
         plan_file.write_text("## 開發指南\nSome guide\n\n## 實作計畫\nTODO")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("AAF_CONFIRMED\n實作分析已完成。", TokenUsage())
+        agent_manager.execute.return_value = ("AAF_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage())
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -41,7 +41,7 @@ class TestPlanPhaseWithStatusCodes:
         result = phase.execute()
 
         assert result.status == PhaseStatus.COMPLETED
-        assert result.data.get("status_code") == "AAF_CONFIRMED"
+        assert result.data.get("status_code") == "AAF_READY_FOR_REVIEW"
         assert result.data.get("iterations") == 1
 
     def test_rejected_status_code_fails_phase(self, tmp_path: Path) -> None:
@@ -89,7 +89,7 @@ class TestPlanPhaseWithStatusCodes:
         # First iteration needs clarification, second confirms
         agent_manager.execute.side_effect = [
             ("AAF_NEED_CLARIFICATION\n請補充更多資訊。", TokenUsage()),
-            ("AAF_CONFIRMED\n實作分析已完成。", TokenUsage()),
+            ("AAF_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage()),
         ]
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -124,7 +124,7 @@ class TestPlanPhaseWithStatusCodes:
         plan_file.write_text("## 開發指南\nSome guide\n\n## 實作計畫\nTODO")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("分析結果：\nAAF_CONFIRMED\n實作分析已完成。", TokenUsage())
+        agent_manager.execute.return_value = ("分析結果：\nAAF_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage())
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -139,7 +139,7 @@ class TestPlanPhaseWithStatusCodes:
         result = phase.execute()
 
         assert result.status == PhaseStatus.COMPLETED
-        assert result.data.get("status_code") == "AAF_CONFIRMED"
+        assert result.data.get("status_code") == "AAF_READY_FOR_REVIEW"
 
     def test_no_status_code_continues_iteration(self, tmp_path: Path) -> None:
         """測試沒有狀態碼時繼續迭代"""
@@ -156,7 +156,7 @@ class TestPlanPhaseWithStatusCodes:
         # First has no status code, second has CONFIRMED
         agent_manager.execute.side_effect = [
             ("這是一般的回應，沒有狀態碼。", TokenUsage()),
-            ("AAF_CONFIRMED\n實作分析已完成。", TokenUsage()),
+            ("AAF_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage()),
         ]
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -202,4 +202,4 @@ class TestPlanPhaseWithStatusCodes:
         result = phase.execute()
 
         assert result.status == PhaseStatus.COMPLETED
-        assert result.data.get("status_code") == "AAF_CONFIRMED"
+        assert result.data.get("status_code") == "AAF_READY_FOR_REVIEW"
