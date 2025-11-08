@@ -155,6 +155,7 @@ class TestLocalWorkflow:
             ("分析中...", TokenUsage()),
             ("AAF_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage()),
         ]
+        agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -167,7 +168,9 @@ class TestLocalWorkflow:
             interactive=True,  # Must be interactive to continue iterations
         )
 
-        with patch('builtins.print'):
+        with patch('builtins.print'), \
+             patch.object(phase.display, 'get_multiline_input', return_value="回應"), \
+             patch('builtins.input', return_value='c'):
             result = phase.execute()
 
         assert result.status == PhaseStatus.COMPLETED
@@ -458,6 +461,7 @@ class TestPlanPhaseHistory:
 
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = ("AAF_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage())
+        agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -467,9 +471,11 @@ class TestPlanPhaseHistory:
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             issue_name="test-feature",
+            interactive=False,  # Non-interactive to skip user confirmation
         )
 
-        result = phase.execute()
+        with patch('builtins.print'):
+            result = phase.execute()
 
         # Should have created status.json
         status_file = spec_file.parent.parent / "plan" / "status.json"

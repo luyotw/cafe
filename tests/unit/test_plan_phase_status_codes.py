@@ -153,11 +153,12 @@ class TestPlanPhaseWithStatusCodes:
         plan_file.write_text("## 開發指南\nSome guide\n\n## 實作計畫\nTODO")
 
         agent_manager = MagicMock(spec=AgentManager)
-        # First has no status code, second has CONFIRMED
+        # First has no status code, second has READY_FOR_REVIEW
         agent_manager.execute.side_effect = [
             ("這是一般的回應，沒有狀態碼。", TokenUsage()),
             ("AAF_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage()),
         ]
+        agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -169,7 +170,9 @@ class TestPlanPhaseWithStatusCodes:
             interactive=True,  # Must be interactive to continue iterations
         )
 
-        with patch('builtins.print'):
+        with patch('builtins.print'), \
+             patch.object(phase.display, 'get_multiline_input', return_value="回應"), \
+             patch('builtins.input', return_value='c'):
             result = phase.execute()
 
         assert result.status == PhaseStatus.COMPLETED
@@ -187,7 +190,8 @@ class TestPlanPhaseWithStatusCodes:
         plan_file.write_text("## 開發指南\nSome guide\n\n## 實作計畫\nTODO")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("aaf_confirmed\n實作分析已完成。", TokenUsage())
+        agent_manager.execute.return_value = ("aaf_ready_for_review\n實作分析已完成。", TokenUsage())
+        agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -199,7 +203,8 @@ class TestPlanPhaseWithStatusCodes:
             interactive=False,
         )
 
-        result = phase.execute()
+        with patch('builtins.print'):
+            result = phase.execute()
 
         assert result.status == PhaseStatus.COMPLETED
         assert result.data.get("status_code") == "AAF_READY_FOR_REVIEW"

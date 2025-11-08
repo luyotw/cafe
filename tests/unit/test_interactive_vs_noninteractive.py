@@ -260,7 +260,7 @@ class TestPlanPhaseInteractiveVsNonInteractive:
     """測試 PlanPhase 的 interactive 和 non-interactive 模式差異。"""
 
     def test_confirmed_status_same_behavior_both_modes(self, tmp_path: Path) -> None:
-        """測試 CONFIRMED 狀態在兩種模式下行為相同（都完成）"""
+        """測試 READY_FOR_REVIEW 狀態在兩種模式下行為相同（都完成）"""
         issue_name = "test-plan-confirmed"
         spec_file = tmp_path / ".aaf" / "issues" / issue_name / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
@@ -271,13 +271,13 @@ class TestPlanPhaseInteractiveVsNonInteractive:
         plan_file.write_text("## 開發指南\nDev guide\n\n## 實作計畫\nTODO")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("AAF_CONFIRMED\n計畫已完成", TokenUsage())
+        agent_manager.execute.return_value = ("AAF_READY_FOR_REVIEW\n計畫已完成", TokenUsage())
         agent_manager.get_total_token_usage.return_value = TokenUsage()
         agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
-        # 測試 interactive mode
+        # 測試 interactive mode (需要 mock user confirmation)
         phase_interactive = PlanPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
@@ -286,7 +286,8 @@ class TestPlanPhaseInteractiveVsNonInteractive:
             interactive=True,
         )
 
-        with patch('builtins.print'):
+        with patch('builtins.print'), \
+             patch('builtins.input', return_value='c'):
             result_interactive = phase_interactive.execute()
 
         # 測試 non-interactive mode
@@ -302,11 +303,11 @@ class TestPlanPhaseInteractiveVsNonInteractive:
         with patch('builtins.print'):
             result_noninteractive = phase_noninteractive.execute()
 
-        # 兩種模式都應該返回 COMPLETED（不需要用戶確認）
+        # 兩種模式都應該返回 COMPLETED
         assert result_interactive.status == PhaseStatus.COMPLETED
         assert result_noninteractive.status == PhaseStatus.COMPLETED
-        assert result_interactive.data.get("status_code") == "AAF_CONFIRMED"
-        assert result_noninteractive.data.get("status_code") == "AAF_CONFIRMED"
+        assert result_interactive.data.get("status_code") == "AAF_READY_FOR_REVIEW"
+        assert result_noninteractive.data.get("status_code") == "AAF_READY_FOR_REVIEW"
 
     def test_need_clarification_interactive_continues(self, tmp_path: Path) -> None:
         """測試 NEED_CLARIFICATION 在 interactive 模式會繼續迭代"""
@@ -322,7 +323,7 @@ class TestPlanPhaseInteractiveVsNonInteractive:
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.side_effect = [
             ("AAF_NEED_CLARIFICATION\n需要更多資訊", TokenUsage()),
-            ("AAF_CONFIRMED\n計畫已完成", TokenUsage()),
+            ("AAF_READY_FOR_REVIEW\n計畫已完成", TokenUsage()),
         ]
         agent_manager.get_total_token_usage.return_value = TokenUsage()
         agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
@@ -338,7 +339,8 @@ class TestPlanPhaseInteractiveVsNonInteractive:
         )
 
         with patch('builtins.print'), \
-             patch.object(phase.display, 'get_multiline_input', return_value="補充資訊"):
+             patch.object(phase.display, 'get_multiline_input', return_value="補充資訊"), \
+             patch('builtins.input', return_value='c'):
             result = phase.execute()
 
         # Interactive 模式應該自動進入第二輪並完成

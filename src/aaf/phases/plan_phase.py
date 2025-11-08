@@ -638,7 +638,7 @@ class PlanPhase(Phase):
         status_file.parent.mkdir(parents=True, exist_ok=True)
 
         # Determine phase status
-        phase_status = PhaseStatus.COMPLETED if status_code == PhaseStatusCode.CONFIRMED else PhaseStatus.IN_PROGRESS
+        phase_status = PhaseStatus.COMPLETED if status_code == PhaseStatusCode.READY_FOR_REVIEW else PhaseStatus.IN_PROGRESS
 
         progress = PhaseProgress(
             phase="plan",
