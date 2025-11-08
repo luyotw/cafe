@@ -28,6 +28,12 @@ class TestPlanPhaseWithStatusCodes:
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = ("AAF_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage())
 
+        # Mock get_agent to return agent with config
+        mock_agent = MagicMock()
+        mock_agent.config.cli.value = "copilot"
+        mock_agent.config.session_id = "test_session"
+        agent_manager.get_agent.return_value = mock_agent
+
         permission_handler = MagicMock(spec=PermissionHandler)
 
         phase = PlanPhase(

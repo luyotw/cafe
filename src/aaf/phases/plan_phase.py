@@ -178,7 +178,7 @@ class PlanPhase(Phase):
 
                     # Prepare user_input for this iteration
                     # Iteration 1: user_input is the dev guide content
-                    # Iteration 2+: user_input is the previous iteration's user_response
+                    # Iteration 2+: user_input is the user's modification request from previous iteration
                     if self.iteration == 1:
                         # Read dev guide from plan.md
                         plan_file = self.history_dir.parent / "plan.md"
@@ -198,11 +198,20 @@ class PlanPhase(Phase):
                             print(plan_content)
                             print(f"{'='*60}\n")
 
-                        # Get previous iteration's user_response
-                        if self.conversation_history:
-                            current_user_input = self.conversation_history[-1].get("user_response", "")
+                        # Get user's modification request from previous iteration's history file
+                        prev_iteration_file = self.history_dir / f"iteration_{self.iteration - 1:03d}.json"
+                        if prev_iteration_file.exists():
+                            with open(prev_iteration_file, "r", encoding="utf-8") as f:
+                                prev_data = json.load(f)
+                                current_user_input = prev_data.get("user_response", "")
                         else:
                             current_user_input = ""
+
+                    # Save user_input at the start of this iteration
+                    self._save_user_input(
+                        user_input=current_user_input,
+                        phase_specific_data={"dev_agent": self.dev_agent},
+                    )
 
                     # Generate prompt for this iteration
                     prompt = self._generate_prompt()
@@ -214,6 +223,11 @@ class PlanPhase(Phase):
                         allowed_tools=["write", "read"]
                     )
 
+                    # Get agent metadata
+                    agent_executor = self.agent_manager.get_agent(self.dev_agent)
+                    agent_cli = agent_executor.config.cli.value
+                    agent_session_id = agent_executor.config.session_id
+
                     # Extract status code from response
                     status_code = StatusCodeParser.extract(
                         response,
@@ -224,15 +238,32 @@ class PlanPhase(Phase):
                         ],
                     )
 
-                    # Save history and progress after each iteration (only if status code found)
+                    # Update iteration history with agent response
                     if status_code:
-                        self._save_history(
-                            user_input=current_user_input,
+                        self._update_iteration_history(
+                            phase_specific_data={"response": response},
                             prompt=prompt,
-                            response=response,
+                            agent_cli=agent_cli,
+                            agent_session_id=agent_session_id,
+                            allowed_tools=["write", "read"],
                             status_code=status_code,
                         )
                         self._save_progress(status_code)
+
+                        # Also maintain conversation_history for backward compatibility
+                        history_data = {
+                            "iteration": self.iteration,
+                            "timestamp": datetime.now().isoformat(),
+                            "dev_agent": self.dev_agent,
+                            "user_input": current_user_input,
+                            "prompt": prompt,
+                            "response": response,
+                            "status_code": status_code.value,
+                            "cli": agent_cli,
+                            "session_id": agent_session_id,
+                            "allowed_tools": ["write", "read"],
+                        }
+                        self.conversation_history.append(history_data)
 
                 # Handle status codes
                 if status_code == PhaseStatusCode.READY_FOR_REVIEW:
@@ -296,8 +327,18 @@ class PlanPhase(Phase):
                                 print("✅ 已收到您的修改意見，正在重新規劃...")
                                 print()
 
-                                # Save user's modification request
+                                # Save user's modification request to plan.md (for agent to read)
                                 self._save_user_response(modification_request)
+
+                                # Save user_response to current iteration's history file
+                                # This will be read as user_input for the next iteration
+                                iteration_file = self.history_dir / f"iteration_{self.iteration:03d}.json"
+                                if iteration_file.exists():
+                                    with open(iteration_file, "r", encoding="utf-8") as f:
+                                        history_data = json.load(f)
+                                    history_data["user_response"] = modification_request
+                                    with open(iteration_file, "w", encoding="utf-8") as f:
+                                        json.dump(history_data, f, ensure_ascii=False, indent=2)
 
                                 # Continue to next iteration
                                 break
