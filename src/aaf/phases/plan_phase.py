@@ -184,6 +184,20 @@ class PlanPhase(Phase):
                         plan_file = self.history_dir.parent / "plan.md"
                         current_user_input = plan_file.read_text() if plan_file.exists() else ""
                     else:
+                        # Iteration 2+: Display current plan.md content before continuing
+                        if self.interactive:
+                            plan_file = self.history_dir.parent / "plan.md"
+                            plan_content = plan_file.read_text() if plan_file.exists() else "（檔案未產生）"
+
+                            # Get agent CLI info for display
+                            agent_cli = self.agent_manager.get_agent_config(self.dev_agent).cli.value
+
+                            print(f"\n{'='*60}")
+                            print(f"Dev ({self.dev_agent} by {agent_cli}) - 目前計畫內容 (Iteration {self.iteration - 1}):")
+                            print(f"{'='*60}")
+                            print(plan_content)
+                            print(f"{'='*60}\n")
+
                         # Get previous iteration's user_response
                         if self.conversation_history:
                             current_user_input = self.conversation_history[-1].get("user_response", "")

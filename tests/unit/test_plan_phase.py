@@ -925,6 +925,94 @@ class TestPlanPhaseResume:
         # Should complete successfully
         assert result.status == PhaseStatus.COMPLETED
 
+class TestPlanPhaseIterationDisplay:
+    """Test plan display at iteration start."""
+
+    def test_displays_plan_at_start_of_iteration_2(self, tmp_path: Path) -> None:
+        """測試第二輪開始時顯示 plan.md 內容"""
+        issue_name = "test-display-plan"
+        spec_file = tmp_path / ".aaf" / "issues" / issue_name / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
+        spec_file.write_text("# Requirements\n\n## 開發指南\nDev guide")
+
+        plan_file = spec_file.parent.parent / "plan" / "plan.md"
+        plan_file.parent.mkdir(parents=True, exist_ok=True)
+        plan_file.write_text("## 開發指南\nDev guide\n\n## 實作計畫\n初始計畫")
+
+        agent_manager = MagicMock(spec=AgentManager)
+        # 第一輪：NEED_CLARIFICATION，第二輪：READY_FOR_REVIEW
+        agent_manager.execute.side_effect = [
+            ("AAF_NEED_CLARIFICATION\n需要更多資訊", TokenUsage()),
+            ("AAF_READY_FOR_REVIEW\n計畫完成", TokenUsage()),
+        ]
+        agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
+
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        phase = PlanPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            spec_file=str(spec_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            interactive=True,
+        )
+
+        # 捕獲所有 print 輸出
+        printed_output = []
+        def capture_print(*args, **kwargs):
+            printed_output.append(' '.join(str(arg) for arg in args))
+
+        with patch('builtins.print', side_effect=capture_print), \
+             patch.object(phase.display, 'get_multiline_input', return_value="補充資訊"), \
+             patch('builtins.input', return_value='c'):
+            result = phase.execute()
+
+        # 檢查第二輪開始時有顯示「目前計畫內容」
+        plan_display_headers = [line for line in printed_output if "目前計畫內容" in line]
+
+        assert len(plan_display_headers) >= 1, "應該在第二輪開始時顯示計畫內容"
+        assert any("Iteration 1" in line for line in plan_display_headers), "應該標註是 Iteration 1 的計畫"
+
+    def test_no_plan_display_in_iteration_1(self, tmp_path: Path) -> None:
+        """測試第一輪不應該顯示計畫內容（因為還沒產生）"""
+        issue_name = "test-no-display-iter1"
+        spec_file = tmp_path / ".aaf" / "issues" / issue_name / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
+        spec_file.write_text("# Requirements\n\n## 開發指南\nDev guide")
+
+        plan_file = spec_file.parent.parent / "plan" / "plan.md"
+        plan_file.parent.mkdir(parents=True, exist_ok=True)
+        plan_file.write_text("## 開發指南\nDev guide\n\n## 實作計畫\nTODO")
+
+        agent_manager = MagicMock(spec=AgentManager)
+        # 第一輪就 READY_FOR_REVIEW
+        agent_manager.execute.return_value = ("AAF_READY_FOR_REVIEW\n計畫完成", TokenUsage())
+        agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
+
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        phase = PlanPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            spec_file=str(spec_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            interactive=True,
+        )
+
+        printed_output = []
+        def capture_print(*args, **kwargs):
+            printed_output.append(' '.join(str(arg) for arg in args))
+
+        with patch('builtins.print', side_effect=capture_print), \
+             patch('builtins.input', return_value='c'):
+            result = phase.execute()
+
+        # 第一輪開始時不應該有「目前計畫內容」
+        plan_display_headers = [line for line in printed_output if "目前計畫內容" in line]
+
+        assert len(plan_display_headers) == 0, "第一輪開始時不應該顯示計畫內容"
+
+
 class TestPlanPhaseProgressTracking:
     """Test progress tracking functionality (TDD)."""
 
