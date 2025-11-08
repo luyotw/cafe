@@ -277,6 +277,12 @@ class TestPlanPhaseInteractiveVsNonInteractive:
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
+        # Mock get_agent to return agent with config
+        mock_agent = MagicMock()
+        mock_agent.config.cli.value = "claude"
+        mock_agent.config.session_id = "test_session"
+        agent_manager.get_agent.return_value = mock_agent
+
         # 測試 interactive mode (需要 mock user confirmation)
         phase_interactive = PlanPhase(
             agent_manager=agent_manager,
@@ -330,6 +336,12 @@ class TestPlanPhaseInteractiveVsNonInteractive:
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
+        # Mock get_agent to return agent with config
+        mock_agent = MagicMock()
+        mock_agent.config.cli.value = "claude"
+        mock_agent.config.session_id = "test_session"
+        agent_manager.get_agent.return_value = mock_agent
+
         phase = PlanPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
@@ -366,6 +378,12 @@ class TestPlanPhaseInteractiveVsNonInteractive:
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
+        # Mock get_agent to return agent with config
+        mock_agent = MagicMock()
+        mock_agent.config.cli.value = "claude"
+        mock_agent.config.session_id = "test_session"
+        agent_manager.get_agent.return_value = mock_agent
+
         phase = PlanPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
@@ -400,6 +418,12 @@ class TestPlanPhaseInteractiveVsNonInteractive:
         agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
 
         permission_handler = MagicMock(spec=PermissionHandler)
+
+        # Mock get_agent to return agent with config
+        mock_agent = MagicMock()
+        mock_agent.config.cli.value = "claude"
+        mock_agent.config.session_id = "test_session"
+        agent_manager.get_agent.return_value = mock_agent
 
         phase = PlanPhase(
             agent_manager=agent_manager,

@@ -410,14 +410,15 @@ class PlanPhase(Phase):
                         # Save user response to file for next iteration
                         self._save_user_response(user_response)
 
-                        # Update conversation_history so next iteration can access user_response
-                        self.conversation_history.append({
-                            "iteration": self.iteration,
-                            "user_input": current_user_input,
-                            "response": response,
-                            "status_code": status_code.value,
-                            "user_response": user_response,
-                        })
+                        # Save user_response to current iteration's history file
+                        # This will be read as user_input for the next iteration
+                        iteration_file = self.history_dir / f"iteration_{self.iteration:03d}.json"
+                        if iteration_file.exists():
+                            with open(iteration_file, "r", encoding="utf-8") as f:
+                                history_data = json.load(f)
+                            history_data["user_response"] = user_response
+                            with open(iteration_file, "w", encoding="utf-8") as f:
+                                json.dump(history_data, f, ensure_ascii=False, indent=2)
 
                         # Continue to next iteration
                         # The user_response will become the user_input of next iteration

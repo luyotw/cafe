@@ -64,6 +64,12 @@ class TestPlanPhaseWithStatusCodes:
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = ("AAF_REJECTED\n分析無法進行。", TokenUsage())
 
+        # Mock get_agent to return agent with config
+        mock_agent = MagicMock()
+        mock_agent.config.cli.value = "copilot"
+        mock_agent.config.session_id = "test_session"
+        agent_manager.get_agent.return_value = mock_agent
+
         permission_handler = MagicMock(spec=PermissionHandler)
 
         phase = PlanPhase(
@@ -97,6 +103,12 @@ class TestPlanPhaseWithStatusCodes:
             ("AAF_NEED_CLARIFICATION\n請補充更多資訊。", TokenUsage()),
             ("AAF_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage()),
         ]
+
+        # Mock get_agent to return agent with config
+        mock_agent = MagicMock()
+        mock_agent.config.cli.value = "copilot"
+        mock_agent.config.session_id = "test_session"
+        agent_manager.get_agent.return_value = mock_agent
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -132,6 +144,12 @@ class TestPlanPhaseWithStatusCodes:
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = ("分析結果：\nAAF_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage())
 
+        # Mock get_agent to return agent with config
+        mock_agent = MagicMock()
+        mock_agent.config.cli.value = "copilot"
+        mock_agent.config.session_id = "test_session"
+        agent_manager.get_agent.return_value = mock_agent
+
         permission_handler = MagicMock(spec=PermissionHandler)
 
         phase = PlanPhase(
@@ -166,6 +184,12 @@ class TestPlanPhaseWithStatusCodes:
         ]
         agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
 
+        # Mock get_agent to return agent with config
+        mock_agent = MagicMock()
+        mock_agent.config.cli.value = "claude"
+        mock_agent.config.session_id = "test_session"
+        agent_manager.get_agent.return_value = mock_agent
+
         permission_handler = MagicMock(spec=PermissionHandler)
 
         phase = PlanPhase(
@@ -198,6 +222,12 @@ class TestPlanPhaseWithStatusCodes:
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = ("aaf_ready_for_review\n實作分析已完成。", TokenUsage())
         agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
+
+        # Mock get_agent to return agent with config
+        mock_agent = MagicMock()
+        mock_agent.config.cli.value = "claude"
+        mock_agent.config.session_id = "test_session"
+        agent_manager.get_agent.return_value = mock_agent
 
         permission_handler = MagicMock(spec=PermissionHandler)
 

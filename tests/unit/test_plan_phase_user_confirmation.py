@@ -41,6 +41,12 @@ class TestPlanPhaseUserConfirmation:
         agent_manager.get_total_token_usage.return_value = TokenUsage()
         agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
 
+        # Mock get_agent to return agent with config
+        mock_agent = MagicMock()
+        mock_agent.config.cli.value = "claude"
+        mock_agent.config.session_id = "test_session"
+        agent_manager.get_agent.return_value = mock_agent
+
         permission_handler = MagicMock(spec=PermissionHandler)
 
         phase = PlanPhase(
@@ -78,6 +84,12 @@ class TestPlanPhaseUserConfirmation:
         agent_manager.execute.return_value = ("AAF_READY_FOR_REVIEW\n計畫已完成", TokenUsage())
         agent_manager.get_total_token_usage.return_value = TokenUsage()
         agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
+
+        # Mock get_agent to return agent with config
+        mock_agent = MagicMock()
+        mock_agent.config.cli.value = "claude"
+        mock_agent.config.session_id = "test_session"
+        agent_manager.get_agent.return_value = mock_agent
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -120,6 +132,12 @@ class TestPlanPhaseUserConfirmation:
         agent_manager.get_total_token_usage.return_value = TokenUsage()
         agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
 
+        # Mock get_agent to return agent with config
+        mock_agent = MagicMock()
+        mock_agent.config.cli.value = "claude"
+        mock_agent.config.session_id = "test_session"
+        agent_manager.get_agent.return_value = mock_agent
+
         permission_handler = MagicMock(spec=PermissionHandler)
 
         phase = PlanPhase(
@@ -161,6 +179,12 @@ class TestPlanPhaseUserConfirmation:
         agent_manager.get_total_token_usage.return_value = TokenUsage()
         agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
 
+        # Mock get_agent to return agent with config
+        mock_agent = MagicMock()
+        mock_agent.config.cli.value = "claude"
+        mock_agent.config.session_id = "test_session"
+        agent_manager.get_agent.return_value = mock_agent
+
         permission_handler = MagicMock(spec=PermissionHandler)
 
         phase = PlanPhase(
@@ -196,6 +220,12 @@ class TestPlanPhaseUserConfirmation:
         ]
         agent_manager.get_total_token_usage.return_value = TokenUsage()
         agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
+
+        # Mock get_agent to return agent with config
+        mock_agent = MagicMock()
+        mock_agent.config.cli.value = "claude"
+        mock_agent.config.session_id = "test_session"
+        agent_manager.get_agent.return_value = mock_agent
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
