@@ -213,3 +213,121 @@ class Phase(ABC):
         if not response or not response.strip():
             return PhaseStatusCode.NO_RESPONSE
         return None
+
+    def _execute_agent_iteration(
+        self,
+        agent_name: str,
+        prompt: str,
+        user_input: str,
+        valid_status_codes: List[PhaseStatusCode],
+        allowed_tools: Optional[List[str]] = None,
+        denied_tools: Optional[List[str]] = None,
+        phase_specific_data: Optional[Dict[str, Any]] = None,
+    ) -> tuple[str, Optional[PhaseStatusCode]]:
+        """通用的 agent 執行流程，所有 phases 都可以使用。
+
+        此方法封裝了執行 agent 的標準流程：
+        1. 保存 user_input 到 history
+        2. 獲取 agent metadata
+        3. 保存 prompt 到 history
+        4. 執行 agent
+        5. 檢查空回應
+        6. 提取 status code
+        7. 更新 history
+        8. 保存 progress
+
+        Args:
+            agent_name: Agent 名稱（如 pm_agent, dev_agent）
+            prompt: 要發送給 agent 的 prompt
+            user_input: 用戶在這一輪的輸入
+            valid_status_codes: 此 phase 接受的有效 status codes
+            allowed_tools: Agent 可使用的 tools（預設為 None）
+            denied_tools: Agent 不可使用的 tools（預設為 None）
+            phase_specific_data: Phase 特定的初始資料（預設為 None）
+
+        Returns:
+            tuple[response, status_code]:
+                - response: Agent 的回應內容
+                - status_code: 提取的 status code，如果沒有找到則為 None
+
+        Raises:
+            AttributeError: 如果 phase 缺少必要的屬性（history_dir, iteration, agent_manager）
+        """
+        # 檢查必要的屬性
+        if not hasattr(self, "history_dir"):
+            raise AttributeError("Phase must have 'history_dir' attribute")
+        if not hasattr(self, "iteration"):
+            raise AttributeError("Phase must have 'iteration' attribute")
+        if not hasattr(self, "agent_manager"):
+            raise AttributeError("Phase must have 'agent_manager' attribute")
+
+        # 1. 保存 user_input 到 history
+        self._save_user_input(
+            user_input=user_input,
+            phase_specific_data=phase_specific_data or {},
+        )
+
+        # 2. 獲取 agent metadata
+        agent_executor = self.agent_manager.get_agent(agent_name)
+        agent_cli = agent_executor.config.cli.value
+        agent_session_id = agent_executor.config.session_id
+
+        # 3. 保存 prompt 到 history（在執行 agent 之前）
+        iteration_file = Path(self.history_dir) / f"iteration_{self.iteration:03d}.json"
+        if iteration_file.exists():
+            with open(iteration_file, "r", encoding="utf-8") as f:
+                history_data = json.load(f)
+            history_data["prompt"] = prompt
+            history_data["cli"] = agent_cli
+            history_data["session_id"] = agent_session_id
+            history_data["allowed_tools"] = allowed_tools
+            history_data["denied_tools"] = denied_tools
+            with open(iteration_file, "w", encoding="utf-8") as f:
+                json.dump(history_data, f, ensure_ascii=False, indent=2)
+
+        # 4. 執行 agent
+        response, token_usage = self.agent_manager.execute(
+            agent_name,
+            prompt,
+            allowed_tools=allowed_tools,
+            denied_tools=denied_tools,
+        )
+
+        # 5. 檢查空回應
+        no_response_status = self._check_empty_response(response)
+        if no_response_status:
+            # Agent 返回空回應 - 保存並返回 NO_RESPONSE
+            self._update_iteration_history(
+                phase_specific_data={"response": response},
+                prompt=prompt,
+                agent_cli=agent_cli,
+                agent_session_id=agent_session_id,
+                allowed_tools=allowed_tools,
+                denied_tools=denied_tools,
+                status_code=no_response_status,
+            )
+            return response, no_response_status
+
+        # 6. 提取 status code
+        from aaf.core.status_codes import StatusCodeParser
+        status_code = StatusCodeParser.extract(
+            response,
+            valid_codes=valid_status_codes,
+        )
+
+        # 7. 更新 history（總是保存，即使沒有 status code）
+        self._update_iteration_history(
+            phase_specific_data={"response": response},
+            prompt=prompt,
+            agent_cli=agent_cli,
+            agent_session_id=agent_session_id,
+            allowed_tools=allowed_tools,
+            denied_tools=denied_tools,
+            status_code=status_code,
+        )
+
+        # 8. 保存 progress（如果有 status code 且 phase 有 _save_progress 方法）
+        if status_code and hasattr(self, "_save_progress"):
+            self._save_progress(status_code)  # type: ignore
+
+        return response, status_code

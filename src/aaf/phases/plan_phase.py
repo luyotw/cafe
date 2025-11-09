@@ -287,85 +287,40 @@ class PlanPhase(Phase):
                         else:
                             current_user_input = ""
 
-                # Save user_input at the start of this iteration
-                self._save_user_input(
-                    user_input=current_user_input,
-                    phase_specific_data={"dev_agent": self.dev_agent},
-                )
-
                 # Generate prompt for this iteration
                 prompt = self._generate_prompt(current_user_input)
 
-                # Get agent metadata before execution
-                agent_executor = self.agent_manager.get_agent(self.dev_agent)
-                agent_cli = agent_executor.config.cli.value
-                agent_session_id = agent_executor.config.session_id
-
-                # Save prompt to history BEFORE calling agent
-                # This ensures prompt is preserved even if agent execution fails
-                iteration_file = self.history_dir / f"iteration_{self.iteration:03d}.json"
-                if iteration_file.exists():
-                    with open(iteration_file, "r", encoding="utf-8") as f:
-                        history_data = json.load(f)
-                    history_data["prompt"] = prompt
-                    history_data["cli"] = agent_cli
-                    history_data["session_id"] = agent_session_id
-                    history_data["allowed_tools"] = ["write", "read"]
-                    with open(iteration_file, "w", encoding="utf-8") as f:
-                        json.dump(history_data, f, ensure_ascii=False, indent=2)
-
-                # Execute developer agent
-                response, token_usage = self.agent_manager.execute(
-                    self.dev_agent,
-                    prompt,
-                    allowed_tools=["write", "read"]
+                # Execute agent iteration using common method
+                response, status_code = self._execute_agent_iteration(
+                    agent_name=self.dev_agent,
+                    prompt=prompt,
+                    user_input=current_user_input,
+                    valid_status_codes=[
+                        PhaseStatusCode.READY_FOR_REVIEW,
+                        PhaseStatusCode.NEED_CLARIFICATION,
+                        PhaseStatusCode.REJECTED,
+                    ],
+                    allowed_tools=["write", "read"],
+                    phase_specific_data={"dev_agent": self.dev_agent},
                 )
 
-                # Check if response is empty
-                no_response_status = self._check_empty_response(response)
-                if no_response_status:
-                    # Agent returned empty response - save and fail immediately
-                    self._update_iteration_history(
-                        phase_specific_data={"response": response},
-                        prompt=prompt,
-                        agent_cli=agent_cli,
-                        agent_session_id=agent_session_id,
-                        allowed_tools=["write", "read"],
-                        status_code=no_response_status,
-                    )
+                # Handle NO_RESPONSE status
+                if status_code == PhaseStatusCode.NO_RESPONSE:
                     return PhaseResult(
                         status=PhaseStatus.FAILED,
                         message=f"Agent returned no response in iteration {self.iteration}",
                         data={
                             "iterations": self.iteration,
-                            "status_code": no_response_status.value,
+                            "status_code": status_code.value,
                         },
                     )
 
-                # Extract status code from response
-                status_code = StatusCodeParser.extract(
-                    response,
-                    valid_codes=[
-                        PhaseStatusCode.READY_FOR_REVIEW,
-                        PhaseStatusCode.NEED_CLARIFICATION,
-                        PhaseStatusCode.REJECTED,
-                    ],
-                )
-
-                # Update iteration history with agent response (always save, even if no status code)
-                self._update_iteration_history(
-                    phase_specific_data={"response": response},
-                    prompt=prompt,
-                    agent_cli=agent_cli,
-                    agent_session_id=agent_session_id,
-                    allowed_tools=["write", "read"],
-                    status_code=status_code,
-                )
-
-                if status_code:
-                    self._save_progress(status_code)
-
                 # Also maintain conversation_history for backward compatibility
+                # Get agent metadata for history
+                agent_executor = self.agent_manager.get_agent(self.dev_agent)
+                agent_cli = agent_executor.config.cli.value
+                agent_session_id = agent_executor.config.session_id
+
                 history_data = {
                     "iteration": self.iteration,
                     "timestamp": datetime.now().isoformat(),

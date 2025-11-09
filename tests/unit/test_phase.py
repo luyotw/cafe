@@ -1,11 +1,14 @@
 """Tests for Phase base class."""
 
+import json
 import pytest
 from abc import ABC
-from unittest.mock import MagicMock
+from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 from aaf.core.phase import Phase
-from aaf.core.types import PhaseResult, PhaseStatus
+from aaf.core.status_codes import PhaseStatusCode
+from aaf.core.types import PhaseResult, PhaseStatus, TokenUsage
 
 
 class ConcretePhase(Phase):
@@ -126,3 +129,174 @@ class TestPhaseErrorHandling:
         # Phase 不處理例外，由外層的 workflow 處理
         with pytest.raises(ValueError, match="Test error"):
             phase.execute()
+
+
+class TestExecuteAgentIteration:
+    """測試 Phase._execute_agent_iteration() 通用方法"""
+
+    def test_execute_agent_iteration_success(self, tmp_path: Path) -> None:
+        """測試成功執行 agent iteration 的完整流程"""
+        # Setup
+        history_dir = tmp_path / "history"
+        history_dir.mkdir(parents=True)
+
+        class TestPhase(Phase):
+            def __init__(self, agent_manager: MagicMock, history_dir: Path):
+                self.agent_manager = agent_manager
+                self.history_dir = history_dir
+                self.iteration = 1
+
+            def execute(self) -> PhaseResult:
+                return PhaseResult(status=PhaseStatus.COMPLETED)
+
+            def _save_progress(self, status_code: PhaseStatusCode) -> None:
+                """Mock save progress"""
+                pass
+
+        # Mock agent manager
+        agent_manager = MagicMock()
+        mock_agent = MagicMock()
+        mock_agent.config.cli.value = "claude"
+        mock_agent.config.session_id = "test_session"
+        agent_manager.get_agent.return_value = mock_agent
+        agent_manager.execute.return_value = ("AAF_CONFIRMED\n需求已清楚", TokenUsage())
+
+        phase = TestPhase(agent_manager, history_dir)
+
+        # Execute
+        response, status_code = phase._execute_agent_iteration(
+            agent_name="test_agent",
+            prompt="Test prompt",
+            user_input="Test input",
+            valid_status_codes=[PhaseStatusCode.CONFIRMED, PhaseStatusCode.NEED_CLARIFICATION],
+            allowed_tools=["write", "read"],
+        )
+
+        # Verify
+        assert response == "AAF_CONFIRMED\n需求已清楚"
+        assert status_code == PhaseStatusCode.CONFIRMED
+
+        # Check history file was created
+        iteration_file = history_dir / "iteration_001.json"
+        assert iteration_file.exists()
+
+        with open(iteration_file) as f:
+            history_data = json.load(f)
+
+        assert history_data["iteration"] == 1
+        assert history_data["user_input"] == "Test input"
+        assert history_data["prompt"] == "Test prompt"
+        assert history_data["response"] == "AAF_CONFIRMED\n需求已清楚"
+        assert history_data["status_code"] == "AAF_CONFIRMED"
+        assert history_data["cli"] == "claude"
+        assert history_data["session_id"] == "test_session"
+        assert history_data["allowed_tools"] == ["write", "read"]
+
+    def test_execute_agent_iteration_empty_response(self, tmp_path: Path) -> None:
+        """測試 agent 返回空回應時的處理"""
+        history_dir = tmp_path / "history"
+        history_dir.mkdir(parents=True)
+
+        class TestPhase(Phase):
+            def __init__(self, agent_manager: MagicMock, history_dir: Path):
+                self.agent_manager = agent_manager
+                self.history_dir = history_dir
+                self.iteration = 1
+
+            def execute(self) -> PhaseResult:
+                return PhaseResult(status=PhaseStatus.COMPLETED)
+
+        agent_manager = MagicMock()
+        mock_agent = MagicMock()
+        mock_agent.config.cli.value = "copilot"
+        mock_agent.config.session_id = "test_session"
+        agent_manager.get_agent.return_value = mock_agent
+        agent_manager.execute.return_value = ("", TokenUsage())  # Empty response
+
+        phase = TestPhase(agent_manager, history_dir)
+
+        # Execute
+        response, status_code = phase._execute_agent_iteration(
+            agent_name="test_agent",
+            prompt="Test prompt",
+            user_input="Test input",
+            valid_status_codes=[PhaseStatusCode.CONFIRMED],
+            allowed_tools=["write"],
+        )
+
+        # Verify
+        assert response == ""
+        assert status_code == PhaseStatusCode.NO_RESPONSE
+
+        # Check history was saved with NO_RESPONSE status
+        iteration_file = history_dir / "iteration_001.json"
+        assert iteration_file.exists()
+
+        with open(iteration_file) as f:
+            history_data = json.load(f)
+
+        assert history_data["status_code"] == "AAF_NO_RESPONSE"
+        assert history_data["response"] == ""
+
+    def test_execute_agent_iteration_no_status_code(self, tmp_path: Path) -> None:
+        """測試 agent 回應中沒有 status code 的情況"""
+        history_dir = tmp_path / "history"
+        history_dir.mkdir(parents=True)
+
+        class TestPhase(Phase):
+            def __init__(self, agent_manager: MagicMock, history_dir: Path):
+                self.agent_manager = agent_manager
+                self.history_dir = history_dir
+                self.iteration = 1
+
+            def execute(self) -> PhaseResult:
+                return PhaseResult(status=PhaseStatus.COMPLETED)
+
+        agent_manager = MagicMock()
+        mock_agent = MagicMock()
+        mock_agent.config.cli.value = "claude"
+        mock_agent.config.session_id = "test_session"
+        agent_manager.get_agent.return_value = mock_agent
+        # Response without status code
+        agent_manager.execute.return_value = ("Some response without status code", TokenUsage())
+
+        phase = TestPhase(agent_manager, history_dir)
+
+        # Execute
+        response, status_code = phase._execute_agent_iteration(
+            agent_name="test_agent",
+            prompt="Test prompt",
+            user_input="Test input",
+            valid_status_codes=[PhaseStatusCode.CONFIRMED],
+        )
+
+        # Verify
+        assert response == "Some response without status code"
+        assert status_code is None
+
+        # Check history was saved without status_code
+        iteration_file = history_dir / "iteration_001.json"
+        assert iteration_file.exists()
+
+        with open(iteration_file) as f:
+            history_data = json.load(f)
+
+        assert history_data["status_code"] is None
+        assert history_data["response"] == "Some response without status code"
+
+    def test_execute_agent_iteration_missing_attributes(self, tmp_path: Path) -> None:
+        """測試缺少必要屬性時拋出錯誤"""
+        class IncompletePhase(Phase):
+            def execute(self) -> PhaseResult:
+                return PhaseResult(status=PhaseStatus.COMPLETED)
+
+        phase = IncompletePhase()
+
+        # Should raise AttributeError for missing history_dir
+        with pytest.raises(AttributeError, match="history_dir"):
+            phase._execute_agent_iteration(
+                agent_name="test_agent",
+                prompt="Test prompt",
+                user_input="Test input",
+                valid_status_codes=[PhaseStatusCode.CONFIRMED],
+            )
