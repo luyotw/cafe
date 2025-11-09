@@ -70,9 +70,6 @@ class PlanPhase(Phase):
         issue_dir = spec_path.parent.parent  # .aaf/issues/{issue_name}
         self.history_dir = issue_dir / "plan" / "history"
 
-        # Track conversation history
-        self.conversation_history: List[Dict[str, Any]] = []
-
         # Load existing history if available (will create dir if needed)
         self._load_history()
 
@@ -314,26 +311,6 @@ class PlanPhase(Phase):
                             "status_code": status_code.value,
                         },
                     )
-
-                # Also maintain conversation_history for backward compatibility
-                # Get agent metadata for history
-                agent_executor = self.agent_manager.get_agent(self.dev_agent)
-                agent_cli = agent_executor.config.cli.value
-                agent_session_id = agent_executor.config.session_id
-
-                history_data = {
-                    "iteration": self.iteration,
-                    "timestamp": datetime.now().isoformat(),
-                    "dev_agent": self.dev_agent,
-                    "user_input": current_user_input,
-                    "prompt": prompt,
-                    "response": response,
-                    "status_code": status_code.value if status_code else None,
-                    "cli": agent_cli,
-                    "session_id": agent_session_id,
-                    "allowed_tools": ["write", "read"],
-                }
-                self.conversation_history.append(history_data)
 
                 # Handle status codes
                 # Agent 回應後 iteration 就結束，下一輪開始才處理使用者互動
@@ -594,37 +571,20 @@ class PlanPhase(Phase):
             status_code=status_code,
         )
 
-        # Add to conversation history in memory (preserve old behavior)
-        history_data = {
-            "iteration": self.iteration,
-            "timestamp": datetime.now().isoformat(),
-            "dev_agent": self.dev_agent,
-            "user_input": user_input,
-            "prompt": prompt,
-            "response": response,
-            "status_code": status_code.value,
-            "cli": agent_cli,
-            "session_id": agent_session_id,
-            "allowed_tools": allowed_tools,
-            "denied_tools": denied_tools,
-        }
-        self.conversation_history.append(history_data)
-
     def _load_history(self) -> None:
         """Load existing history from JSON files."""
         if not self.history_dir.exists():
             return
 
-        # Load all history files in order
-        history_files = sorted(self.history_dir.glob("*.json"))
+        # Load all history files in order to determine the latest iteration
+        history_files = sorted(self.history_dir.glob("iteration_*.json"))
 
         for history_file in history_files:
             with open(history_file, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-            self.conversation_history.append(data)
 
             # Update iteration counter
-            if data["iteration"] >= self.iteration:
+            if data.get("iteration", 0) >= self.iteration:
                 self.iteration = data["iteration"]
 
     def _save_progress(self, status_code: PhaseStatusCode) -> None:

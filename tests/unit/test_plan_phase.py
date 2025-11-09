@@ -674,11 +674,6 @@ class TestPlanPhaseHistory:
         assert hasattr(phase, 'history_dir')
         assert phase.history_dir == spec_file.parent.parent / "plan" / "history"
 
-        # Should have conversation_history attribute
-        assert hasattr(phase, 'conversation_history')
-        assert isinstance(phase.conversation_history, list)
-        assert len(phase.conversation_history) == 0
-
     def test_save_history_creates_json_file(self, tmp_path: Path) -> None:
         """測試 _save_history() 創建 JSON 檔案，包含 user_input"""
         spec_file = tmp_path / ".aaf" / "issues" / "test-issue" / "spec" / "spec.md"
@@ -765,9 +760,7 @@ class TestPlanPhaseHistory:
             issue_name="test-issue",
         )
 
-        # _load_history() should be called in __init__
-        assert len(phase.conversation_history) == 1
-        assert phase.conversation_history[0]["iteration"] == 1
+        # _load_history() should be called in __init__ and update iteration counter
         assert phase.iteration == 1
 
     def test_save_history_includes_agent_metadata(self, tmp_path: Path) -> None:
