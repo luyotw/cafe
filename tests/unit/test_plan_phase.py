@@ -1372,3 +1372,124 @@ class TestPlanPhaseEmptyResponse:
         assert data["iteration"] == 1
         assert data["response"] == ""
         assert data["status_code"] == "AAF_NO_RESPONSE"
+
+
+class TestPlanPhasePromptGeneration:
+    """測試 PlanPhase 的 prompt 產生"""
+
+    def test_prompt_includes_user_modification_request_in_iteration_2(self, tmp_path: Path) -> None:
+        """測試 iteration 2 的 prompt 應該包含使用者的修改意見"""
+        spec_file = tmp_path / ".aaf" / "issues" / "test" / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
+        spec_file.write_text("# Requirements\n\n## 開發指南\nGuide")
+
+        plan_file = spec_file.parent.parent / "plan" / "plan.md"
+        plan_file.parent.mkdir(parents=True, exist_ok=True)
+        plan_file.write_text("## 開發指南\nGuide\n\n## 實作計畫\nPlan v1")
+
+        # Create iteration 1 history with READY_FOR_REVIEW
+        history_dir = spec_file.parent.parent / "plan" / "history"
+        history_dir.mkdir(parents=True, exist_ok=True)
+        
+        import json
+        iteration_1 = history_dir / "iteration_001.json"
+        iteration_1.write_text(json.dumps({
+            "iteration": 1,
+            "timestamp": "2025-11-09T12:00:00",
+            "user_input": "開發指南內容",
+            "dev_agent": "David",
+            "response": "AAF_READY_FOR_REVIEW\n計畫已完成",
+            "status_code": "AAF_READY_FOR_REVIEW"
+        }, ensure_ascii=False))
+
+        agent_manager = MagicMock(spec=AgentManager)
+
+        mock_agent = MagicMock()
+        mock_agent.config.cli.value = "copilot"
+        mock_agent.config.session_id = "test_session"
+        agent_manager.get_agent.return_value = mock_agent
+        agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="copilot"))
+        agent_manager.get_total_token_usage.return_value = TokenUsage()
+
+        # Capture the prompt that was sent to agent
+        captured_prompt = None
+        def capture_prompt(agent_name, prompt, allowed_tools=None):
+            nonlocal captured_prompt
+            captured_prompt = prompt
+            return ("AAF_READY_FOR_REVIEW\n修改後的計畫", TokenUsage())
+
+        agent_manager.execute.side_effect = capture_prompt
+
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        phase = PlanPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            spec_file=str(spec_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            interactive=True,
+        )
+
+        # Mock user choosing 'm' (modify) then 'c' (confirm)
+        modification_request = "請加上錯誤處理和測試"
+        with patch('builtins.input', side_effect=['m', 'c']) as mock_input, \
+             patch.object(phase.display, 'get_multiline_input', return_value=modification_request), \
+             patch('builtins.print'):
+            phase.execute()
+
+        # Check that the prompt includes user's modification request
+        assert captured_prompt is not None
+        assert modification_request in captured_prompt, \
+            f"Prompt should include user's modification request.\nPrompt: {captured_prompt}"
+
+    def test_prompt_does_not_include_contradicting_status_code_format(self, tmp_path: Path) -> None:
+        """測試 prompt 不應該包含矛盾的 status code 格式指示"""
+        spec_file = tmp_path / ".aaf" / "issues" / "test" / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
+        spec_file.write_text("# Requirements\n\n## 開發指南\nGuide")
+
+        plan_file = spec_file.parent.parent / "plan" / "plan.md"
+        plan_file.parent.mkdir(parents=True, exist_ok=True)
+        plan_file.write_text("## 開發指南\nGuide\n\n## 實作計畫\nTODO")
+
+        agent_manager = MagicMock(spec=AgentManager)
+
+        mock_agent = MagicMock()
+        mock_agent.config.cli.value = "claude"
+        mock_agent.config.session_id = "test_session"
+        agent_manager.get_agent.return_value = mock_agent
+        agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
+        agent_manager.get_total_token_usage.return_value = TokenUsage()
+
+        # Capture the prompt
+        captured_prompt = None
+        def capture_prompt(agent_name, prompt, allowed_tools=None):
+            nonlocal captured_prompt
+            captured_prompt = prompt
+            return ("AAF_READY_FOR_REVIEW\n計畫完成", TokenUsage())
+
+        agent_manager.execute.side_effect = capture_prompt
+
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        phase = PlanPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            spec_file=str(spec_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            interactive=False,
+        )
+
+        with patch('builtins.print'):
+            phase.execute()
+
+        # Prompt should not contain "只回傳：READY_FOR_REVIEW" (without AAF_ prefix)
+        assert captured_prompt is not None
+        assert "只回傳：READY_FOR_REVIEW" not in captured_prompt, \
+            "Prompt should not instruct agent to return status code without AAF_ prefix"
+        assert "只回傳：NEED_CLARIFICATION" not in captured_prompt, \
+            "Prompt should not instruct agent to return status code without AAF_ prefix"
+        
+        # Should contain proper AAF_ prefixed codes
+        assert "AAF_READY_FOR_REVIEW" in captured_prompt
+        assert "AAF_NEED_CLARIFICATION" in captured_prompt

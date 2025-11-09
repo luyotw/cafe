@@ -258,7 +258,7 @@ class PlanPhase(Phase):
                 )
 
                 # Generate prompt for this iteration
-                prompt = self._generate_prompt()
+                prompt = self._generate_prompt(current_user_input)
 
                 # Get agent metadata before execution
                 agent_executor = self.agent_manager.get_agent(self.dev_agent)
@@ -384,19 +384,25 @@ class PlanPhase(Phase):
                 message=f"Plan phase failed: {e}",
             )
 
-    def _generate_prompt(self) -> str:
+    def _generate_prompt(self, user_input: str) -> str:
         """Generate prompt for current iteration.
+
+        Args:
+            user_input: User's input/feedback for this iteration
 
         Returns:
             Prompt string
         """
         if self.workflow_mode == WorkflowMode.GITHUB:
-            return self._generate_github_prompt()
+            return self._generate_github_prompt(user_input)
         else:
-            return self._generate_local_prompt()
+            return self._generate_local_prompt(user_input)
 
-    def _generate_local_prompt(self) -> str:
+    def _generate_local_prompt(self, user_input: str) -> str:
         """Generate prompt for local workflow.
+
+        Args:
+            user_input: User's input/feedback for this iteration
 
         Returns:
             Prompt string
@@ -443,20 +449,27 @@ class PlanPhase(Phase):
 {template_instruction}
 {status_code_prompt}
 
-**如果需要更多資訊（status: NEED_CLARIFICATION）：**
-1. 使用 Write tool 將以下內容寫入 {plan_file_path}：
+**如果需要更多資訊（status: AAF_NEED_CLARIFICATION）：**
+使用 Write tool 將以下內容寫入 {plan_file_path}：
    - 「## 開發指南」- 保留原有的開發指南內容（不要修改）
    - 「## 實作計畫」- 目前的實作分析內容
    - 「## 待確認問題」- 列出需要確認的技術問題
-2. 寫完檔案後，只回傳：NEED_CLARIFICATION
 
-**如果分析完成（status: READY_FOR_REVIEW）：**
-1. 使用 Write tool 將完整實作計畫寫入 {plan_file_path}：
+**如果分析完成（status: AAF_READY_FOR_REVIEW）：**
+使用 Write tool 將完整實作計畫寫入 {plan_file_path}：
    - 第一部分：「## 開發指南」- 保留原有的開發指南內容（不要修改）
    - 第二部分：嚴格按照模版的章節結構和格式撰寫實作計畫
-2. 寫完檔案後，只回傳：READY_FOR_REVIEW
 """
         else:
+            # Add user's modification request section for iteration 2+
+            user_request_section = ""
+            if user_input:
+                user_request_section = f"""
+**使用者的修改要求：**
+{user_input}
+
+"""
+
             return f"""繼續分析 {self.spec_file} 的最新版本。
 
 **你的角色：**
@@ -465,26 +478,27 @@ class PlanPhase(Phase):
 
 這是第 {self.iteration} 輪實作分析。
 
-請檢查 {plan_file_path} 的最新版本，繼續完善實作計畫。
+{user_request_section}請檢查 {plan_file_path} 的最新版本，繼續完善實作計畫。
 {template_instruction}
 {status_code_prompt}
 
-**如果仍需確認（status: NEED_CLARIFICATION）：**
-1. 使用 Write tool 更新 {plan_file_path}：
+**如果仍需確認（status: AAF_NEED_CLARIFICATION）：**
+使用 Write tool 更新 {plan_file_path}：
    - 「## 開發指南」- 保留原有的開發指南內容（不要修改）
    - 「## 實作計畫」- 更新的實作分析內容
    - 「## 待確認問題」- 列出需要確認的技術問題
-2. 寫完檔案後，只回傳：NEED_CLARIFICATION
 
-**如果分析完成（status: READY_FOR_REVIEW）：**
-1. 使用 Write tool 將完整實作計畫寫入 {plan_file_path}：
+**如果分析完成（status: AAF_READY_FOR_REVIEW）：**
+使用 Write tool 將完整實作計畫寫入 {plan_file_path}：
    - 第一部分：「## 開發指南」- 保留原有的開發指南內容（不要修改）
    - 第二部分：嚴格按照模版的章節結構和格式撰寫實作計畫
-2. 寫完檔案後，只回傳：READY_FOR_REVIEW
 """
 
-    def _generate_github_prompt(self) -> str:
+    def _generate_github_prompt(self, user_input: str) -> str:
         """Generate prompt for GitHub workflow.
+
+        Args:
+            user_input: User's input/feedback for this iteration
 
         Returns:
             Prompt string
@@ -521,6 +535,15 @@ class PlanPhase(Phase):
 回應確認訊息。
 """
         else:
+            # Add user's modification request section for iteration 2+
+            user_request_section = ""
+            if user_input:
+                user_request_section = f"""
+**使用者的修改要求：**
+{user_input}
+
+"""
+
             return f"""繼續分析 GitHub Issue #{self.issue_id}。
 
 **你的角色：**
@@ -528,7 +551,7 @@ class PlanPhase(Phase):
 
 這是第 {self.iteration} 輪實作分析。
 
-請用 `gh issue view {self.issue_id}` 檢視 Issue 的最新內容。
+{user_request_section}請用 `gh issue view {self.issue_id}` 檢視 Issue 的最新內容。
 
 {status_code_prompt}
 
