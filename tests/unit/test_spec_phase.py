@@ -1126,5 +1126,47 @@ class TestKeyboardInterrupt:
             assert len(iteration_files) == 0
 
 
+class TestSpecPhasePromptGeneration:
+    """測試 SpecPhase prompt 生成"""
+
+    def test_prompt_does_not_include_status_code_without_prefix(self, tmp_path: Path) -> None:
+        """測試 prompt 不應該包含沒有 AAF_ 前綴的 status code 指示"""
+        agent_manager = MagicMock(spec=AgentManager)
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        # Capture the prompt
+        captured_prompt = None
+        def capture_prompt(agent_name: str, prompt: str, **kwargs) -> str:
+            nonlocal captured_prompt
+            captured_prompt = prompt
+            # Return AAF_CONFIRMED to end the phase
+            return "AAF_CONFIRMED"
+
+        agent_manager.execute.side_effect = capture_prompt
+
+        spec_file = tmp_path / ".aaf" / "issues" / "test" / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
+
+        phase = SpecPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            spec_file=str(spec_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            interactive=False,
+        )
+
+        with patch('sys.stdin', StringIO("Test requirement\nEND\n")), \
+             patch('builtins.print'):
+            phase.execute()
+
+        # Prompt should NOT contain status codes without AAF_ prefix
+        assert "只回傳：NEED_CLARIFICATION" not in captured_prompt
+        assert "只回傳：CONFIRMED" not in captured_prompt
+        assert "只回傳：REJECTED" not in captured_prompt
+
+        # Prompt should reference AAF_ prefixed codes (either directly or via status_code_prompt)
+        assert "AAF_CONFIRMED" in captured_prompt or "AAF_NEED_CLARIFICATION" in captured_prompt
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

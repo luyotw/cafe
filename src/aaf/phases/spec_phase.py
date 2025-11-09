@@ -497,7 +497,7 @@ class SpecPhase(Phase):
                             "iteration": self.iteration,
                             "pm_response": response,
                             "user_response": user_response,
-                            "status": "NEED_CLARIFICATION",
+                            "status": PhaseStatusCode.NEED_CLARIFICATION.value,
                         })
                     else:
                         # Non-interactive mode: save PM's questions and exit
@@ -517,7 +517,7 @@ class SpecPhase(Phase):
                             "iteration": self.iteration,
                             "pm_response": response,
                             "user_response": "",  # Will be filled in next call
-                            "status": "NEED_CLARIFICATION",
+                            "status": PhaseStatusCode.NEED_CLARIFICATION.value,
                         })
 
                         # Exit and wait for next call with user response
@@ -836,20 +836,18 @@ class SpecPhase(Phase):
 
 {status_code_prompt}
 
-**如果需要澄清需求（status: NEED_CLARIFICATION）：**
-1. 使用 Write tool 將以下內容寫入 {self.spec_file}：
+**如果需要澄清需求（status: AAF_NEED_CLARIFICATION）：**
+使用 Write tool 將以下內容寫入 {self.spec_file}：
    - 「## 使用者故事」- 用戶撰寫的使用者故事或由自動由需求描述產生的使用者故事
    - 「## 目前的需求規格」- 列出目前已知的所有需求內容
    - 「## 待釐清的問題」- 以 PM 的身份用對話方式向用戶提問
-2. 寫完檔案後，只回傳：NEED_CLARIFICATION
 
 記住：你是 PM，不是工程師，不要提技術細節！
 
-**如果需求已清楚（status: CONFIRMED）：**
-1. 使用 Write tool 將完整需求規格文件寫入 {self.spec_file}，格式：
+**如果需求已清楚（status: AAF_CONFIRMED）：**
+使用 Write tool 將完整需求規格文件寫入 {self.spec_file}，格式：
    - 「## 使用者故事」- 用戶撰寫的使用者故事或由自動由需求描述產生的使用者故事
    - 「## 需求規格」- 完整的需求內容，包含：功能描述、使用場景、預期行為、驗收標準
-2. 寫完檔案後，只回傳：CONFIRMED
 """
             else:
                 # File doesn't exist but user story should have been created
@@ -867,20 +865,18 @@ class SpecPhase(Phase):
 
 {status_code_prompt}
 
-**如果需要更多資訊（status: NEED_CLARIFICATION）：**
-1. 使用 Write tool 將以下內容寫入 {self.spec_file}：
+**如果需要更多資訊（status: AAF_NEED_CLARIFICATION）：**
+使用 Write tool 將以下內容寫入 {self.spec_file}：
    - 「## 使用者故事」- 用戶撰寫的使用者故事或由自動由需求描述產生的使用者故事
    - 「## 目前的需求規格」- 整理目前從使用者故事得知的需求
    - 「## 待釐清的問題」- 以 PM 的身份提出具體問題（使用場景、預期行為、驗收標準）
-2. 寫完檔案後，只回傳：NEED_CLARIFICATION
 
 記住：你是 PM，不要問技術實作問題！
 
-**如果資訊已足夠（status: CONFIRMED）：**
-1. 使用 Write tool 將完整需求文件寫入 {self.spec_file}，格式：
+**如果資訊已足夠（status: AAF_CONFIRMED）：**
+使用 Write tool 將完整需求文件寫入 {self.spec_file}，格式：
    - 「## 使用者故事」- 用戶撰寫的使用者故事或由自動由需求描述產生的使用者故事
    - 「## 需求規格」- 完整的需求內容
-2. 寫完檔案後，只回傳：CONFIRMED
 """
         else:
             # Iteration 2+: Include context file reference
@@ -914,18 +910,16 @@ class SpecPhase(Phase):
 
 {status_code_prompt}
 {restriction}
-**如果仍需澄清（status: NEED_CLARIFICATION）：**
-1. 使用 Write tool 將以下內容寫入 {self.spec_file}：
+**如果仍需澄清（status: AAF_NEED_CLARIFICATION）：**
+使用 Write tool 將以下內容寫入 {self.spec_file}：
    - 「## 使用者故事」- 用戶撰寫的使用者故事或由自動由需求描述產生的使用者故事
    - 「## 目前的需求規格」- 整合之前的對話和用戶最新回答，列出目前已知的完整需求
    - 「## 待釐清的問題」- 以 PM 的身份繼續用對話方式提問
-2. 寫完檔案後，只回傳：NEED_CLARIFICATION
 
-**如果需求已清楚（status: CONFIRMED）：**
-1. 使用 Write tool 將完整需求規格文件寫入 {self.spec_file}，格式：
+**如果需求已清楚（status: AAF_CONFIRMED）：**
+使用 Write tool 將完整需求規格文件寫入 {self.spec_file}，格式：
    - 「## 使用者故事」- 用戶撰寫的使用者故事或由自動由需求描述產生的使用者故事
    - 「## 需求規格」- 完整需求（整合所有已確認的內容）
-2. 寫完檔案後，只回傳：CONFIRMED
 """
 
     def _generate_github_prompt(self) -> str:
