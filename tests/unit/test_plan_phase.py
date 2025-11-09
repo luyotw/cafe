@@ -1253,11 +1253,16 @@ class TestPlanPhaseProgressTracking:
         assert progress is None
 
 
-class TestPlanPhaseEmptyResponse:
-    """測試 agent 回傳空字串或沒有 status code 的情況"""
+class TestPlanPhaseNoStatusCode:
+    """測試 agent 回傳內容但沒有 status code 的情況"""
 
-    def test_agent_empty_response_saves_to_history(self, tmp_path: Path) -> None:
-        """測試 agent 回傳空字串時，仍然要儲存到 history"""
+    def test_agent_response_without_status_code_saves_to_history(self, tmp_path: Path) -> None:
+        """測試 agent 回傳內容但沒有 status code 時，仍然要儲存 response 到 history
+
+        這個測試模擬真實情況：agent 回傳了內容，但沒有包含正確的 status code
+        （可能是格式錯誤或 agent 沒照指示做）。在舊版程式碼中，這會導致 response
+        沒有被儲存，進而造成無限迴圈。
+        """
         spec_file = tmp_path / ".aaf" / "issues" / "test" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements\n\n## 開發指南\nGuide")
@@ -1267,7 +1272,7 @@ class TestPlanPhaseEmptyResponse:
         plan_file.write_text("## 開發指南\nGuide\n\n## 實作計畫\nTODO")
 
         agent_manager = MagicMock(spec=AgentManager)
-        
+
         mock_agent = MagicMock()
         mock_agent.config.cli.value = "copilot"
         mock_agent.config.session_id = "test_session"
@@ -1284,26 +1289,86 @@ class TestPlanPhaseEmptyResponse:
             interactive=True,
         )
 
-        # Mock agent to return empty response, then interrupt
+        # Mock agent to return content without status code, then interrupt
         agent_manager.execute.side_effect = [
-            ("", TokenUsage()),  # First call: empty response
+            ("這是計畫內容，但沒有 status code", TokenUsage()),  # First call: response without status code
             KeyboardInterrupt()  # Second call: interrupt to exit
         ]
-        
+
         with patch.object(phase.display, 'get_multiline_input', return_value="user feedback"), \
              patch('builtins.print'):
             with pytest.raises(KeyboardInterrupt):
                 phase.execute()
 
-        # Check that iteration 1 history was saved with empty response
+        # Check that iteration 1 history was saved with response (even without status code)
         history_dir = spec_file.parent.parent / "plan" / "history"
         iteration_1 = history_dir / "iteration_001.json"
         assert iteration_1.exists()
-        
+
         import json
         with open(iteration_1, 'r') as f:
             data = json.load(f)
-        
+
+        assert data["iteration"] == 1
+        assert data["response"] == "這是計畫內容，但沒有 status code"
+        assert data["status_code"] is None
+
+
+class TestPlanPhaseEmptyResponse:
+    """測試 agent 回傳空字串的情況"""
+
+    def test_agent_empty_response_should_fail_with_no_response_status(self, tmp_path: Path) -> None:
+        """測試 agent 回傳空字串時應該失敗並標記為 NO_RESPONSE 狀態
+
+        當 agent 回傳空字串（可能是執行失敗或輸出未正確捕捉），
+        應該立即終止並返回 FAILED 狀態，並在 history 中記錄 AAF_NO_RESPONSE。
+        """
+        spec_file = tmp_path / ".aaf" / "issues" / "test" / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
+        spec_file.write_text("# Requirements\n\n## 開發指南\nGuide")
+
+        plan_file = spec_file.parent.parent / "plan" / "plan.md"
+        plan_file.parent.mkdir(parents=True, exist_ok=True)
+        plan_file.write_text("## 開發指南\nGuide\n\n## 實作計畫\nTODO")
+
+        agent_manager = MagicMock(spec=AgentManager)
+
+        mock_agent = MagicMock()
+        mock_agent.config.cli.value = "copilot"
+        mock_agent.config.session_id = "test_session"
+        agent_manager.get_agent.return_value = mock_agent
+        agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="copilot"))
+
+        # Mock agent to return empty string
+        agent_manager.execute.return_value = ("", TokenUsage())
+        agent_manager.get_total_token_usage.return_value = TokenUsage()
+
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        phase = PlanPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            spec_file=str(spec_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            interactive=True,
+        )
+
+        with patch('builtins.print'):
+            result = phase.execute()
+
+        # Should fail with meaningful message
+        assert result.status == PhaseStatus.FAILED
+        assert "no response" in result.message.lower() or "empty" in result.message.lower()
+
+        # Check history was saved with empty response and NO_RESPONSE status
+        history_dir = spec_file.parent.parent / "plan" / "history"
+        iteration_1 = history_dir / "iteration_001.json"
+        assert iteration_1.exists()
+
+        import json
+        with open(iteration_1, 'r') as f:
+            data = json.load(f)
+
         assert data["iteration"] == 1
         assert data["response"] == ""
-        assert data["status_code"] is None
+        assert data["status_code"] == "AAF_NO_RESPONSE"

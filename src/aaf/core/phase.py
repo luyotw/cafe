@@ -197,3 +197,19 @@ class Phase(ABC):
         iteration_file = history_dir / f"iteration_{self.iteration:03d}.json"
         with open(iteration_file, "w", encoding="utf-8") as f:
             json.dump(history_data, f, ensure_ascii=False, indent=2)
+
+    def _check_empty_response(self, response: str) -> Optional[PhaseStatusCode]:
+        """檢查 agent response 是否為空，如果為空返回 NO_RESPONSE 狀態碼。
+
+        這是一個通用的 helper 方法，所有 phases 都可以使用。
+
+        Args:
+            response: Agent 的回應內容
+
+        Returns:
+            如果 response 為空（空字串或只有空白），返回 PhaseStatusCode.NO_RESPONSE
+            否則返回 None
+        """
+        if not response or not response.strip():
+            return PhaseStatusCode.NO_RESPONSE
+        return None

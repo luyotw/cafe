@@ -285,6 +285,27 @@ class PlanPhase(Phase):
                     allowed_tools=["write", "read"]
                 )
 
+                # Check if response is empty
+                no_response_status = self._check_empty_response(response)
+                if no_response_status:
+                    # Agent returned empty response - save and fail immediately
+                    self._update_iteration_history(
+                        phase_specific_data={"response": response},
+                        prompt=prompt,
+                        agent_cli=agent_cli,
+                        agent_session_id=agent_session_id,
+                        allowed_tools=["write", "read"],
+                        status_code=no_response_status,
+                    )
+                    return PhaseResult(
+                        status=PhaseStatus.FAILED,
+                        message=f"Agent returned no response in iteration {self.iteration}",
+                        data={
+                            "iterations": self.iteration,
+                            "status_code": no_response_status.value,
+                        },
+                    )
+
                 # Extract status code from response
                 status_code = StatusCodeParser.extract(
                     response,

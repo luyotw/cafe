@@ -20,6 +20,7 @@ class PhaseStatusCode(str, Enum):
     RETRY = "AAF_RETRY"                   # Retry this phase
     MANUAL_REVIEW = "AAF_MANUAL_REVIEW"   # Need human review
     SKIP = "AAF_SKIP"                     # Skip this phase
+    NO_RESPONSE = "AAF_NO_RESPONSE"       # Agent returned empty response
 
     # ========== Requirements & Analysis Phase ==========
     CONFIRMED = "AAF_CONFIRMED"                   # Requirements/Analysis confirmed
