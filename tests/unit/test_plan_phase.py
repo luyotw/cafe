@@ -967,14 +967,11 @@ class TestPlanPhaseNeedClarification:
         with open(history_file_1, 'r', encoding='utf-8') as f:
             data1 = json.load(f)
 
-        # 第一輪：user_input（開發指南）→ agent response（NEED_CLARIFICATION）→ user_response（我的回應內容）
+        # 第一輪：user_input（開發指南）→ agent response（NEED_CLARIFICATION）
         assert data1["iteration"] == 1
         assert data1["status_code"] == "AAF_NEED_CLARIFICATION"
         assert "user_input" in data1  # 輪的開始：開發指南
         assert "初始開發指南內容" in data1["user_input"]
-        # user_response should be saved so next iteration can read it
-        assert "user_response" in data1
-        assert data1["user_response"] == "我的回應內容"
 
         # Check second iteration history
         history_file_2 = history_dir / "iteration_002.json"
