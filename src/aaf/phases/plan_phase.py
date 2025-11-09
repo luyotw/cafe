@@ -295,32 +295,33 @@ class PlanPhase(Phase):
                     ],
                 )
 
-                # Update iteration history with agent response
+                # Update iteration history with agent response (always save, even if no status code)
+                self._update_iteration_history(
+                    phase_specific_data={"response": response},
+                    prompt=prompt,
+                    agent_cli=agent_cli,
+                    agent_session_id=agent_session_id,
+                    allowed_tools=["write", "read"],
+                    status_code=status_code,
+                )
+
                 if status_code:
-                    self._update_iteration_history(
-                        phase_specific_data={"response": response},
-                        prompt=prompt,
-                        agent_cli=agent_cli,
-                        agent_session_id=agent_session_id,
-                        allowed_tools=["write", "read"],
-                        status_code=status_code,
-                    )
                     self._save_progress(status_code)
 
-                    # Also maintain conversation_history for backward compatibility
-                    history_data = {
-                        "iteration": self.iteration,
-                        "timestamp": datetime.now().isoformat(),
-                        "dev_agent": self.dev_agent,
-                        "user_input": current_user_input,
-                        "prompt": prompt,
-                        "response": response,
-                        "status_code": status_code.value,
-                        "cli": agent_cli,
-                        "session_id": agent_session_id,
-                        "allowed_tools": ["write", "read"],
-                    }
-                    self.conversation_history.append(history_data)
+                # Also maintain conversation_history for backward compatibility
+                history_data = {
+                    "iteration": self.iteration,
+                    "timestamp": datetime.now().isoformat(),
+                    "dev_agent": self.dev_agent,
+                    "user_input": current_user_input,
+                    "prompt": prompt,
+                    "response": response,
+                    "status_code": status_code.value if status_code else None,
+                    "cli": agent_cli,
+                    "session_id": agent_session_id,
+                    "allowed_tools": ["write", "read"],
+                }
+                self.conversation_history.append(history_data)
 
                 # Handle status codes
                 # Agent 回應後 iteration 就結束，下一輪開始才處理使用者互動

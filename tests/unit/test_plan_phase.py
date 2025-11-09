@@ -1251,3 +1251,59 @@ class TestPlanPhaseProgressTracking:
 
         progress = phase._load_progress()
         assert progress is None
+
+
+class TestPlanPhaseEmptyResponse:
+    """測試 agent 回傳空字串或沒有 status code 的情況"""
+
+    def test_agent_empty_response_saves_to_history(self, tmp_path: Path) -> None:
+        """測試 agent 回傳空字串時，仍然要儲存到 history"""
+        spec_file = tmp_path / ".aaf" / "issues" / "test" / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
+        spec_file.write_text("# Requirements\n\n## 開發指南\nGuide")
+
+        plan_file = spec_file.parent.parent / "plan" / "plan.md"
+        plan_file.parent.mkdir(parents=True, exist_ok=True)
+        plan_file.write_text("## 開發指南\nGuide\n\n## 實作計畫\nTODO")
+
+        agent_manager = MagicMock(spec=AgentManager)
+        
+        mock_agent = MagicMock()
+        mock_agent.config.cli.value = "copilot"
+        mock_agent.config.session_id = "test_session"
+        agent_manager.get_agent.return_value = mock_agent
+        agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="copilot"))
+
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        phase = PlanPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            spec_file=str(spec_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            interactive=True,
+        )
+
+        # Mock agent to return empty response, then interrupt
+        agent_manager.execute.side_effect = [
+            ("", TokenUsage()),  # First call: empty response
+            KeyboardInterrupt()  # Second call: interrupt to exit
+        ]
+        
+        with patch.object(phase.display, 'get_multiline_input', return_value="user feedback"), \
+             patch('builtins.print'):
+            with pytest.raises(KeyboardInterrupt):
+                phase.execute()
+
+        # Check that iteration 1 history was saved with empty response
+        history_dir = spec_file.parent.parent / "plan" / "history"
+        iteration_1 = history_dir / "iteration_001.json"
+        assert iteration_1.exists()
+        
+        import json
+        with open(iteration_1, 'r') as f:
+            data = json.load(f)
+        
+        assert data["iteration"] == 1
+        assert data["response"] == ""
+        assert data["status_code"] is None
