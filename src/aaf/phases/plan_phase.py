@@ -171,13 +171,31 @@ class PlanPhase(Phase):
                                     choice = input("\n請選擇 [c/r/m]: ").strip().lower()
 
                                     if choice == 'c':
+                                        # Save user confirmation as a new iteration
+                                        self._save_user_input(
+                                            user_input="confirm",
+                                            phase_specific_data={"dev_agent": self.dev_agent},
+                                        )
+                                        self._update_iteration_history(
+                                            phase_specific_data={
+                                                "response": "User confirmed the plan",
+                                                "user_action": "confirm",
+                                            },
+                                            prompt="",  # No prompt for user confirmation
+                                            agent_cli=None,
+                                            agent_session_id=None,
+                                            allowed_tools=None,
+                                            status_code=PhaseStatusCode.CONFIRMED,
+                                        )
+                                        self._save_progress(PhaseStatusCode.CONFIRMED)
+
                                         return PhaseResult(
                                             status=PhaseStatus.COMPLETED,
-                                            message=f"Implementation plan confirmed in {self.iteration - 1} iteration(s)",
+                                            message=f"Implementation plan confirmed in {self.iteration} iteration(s)",
                                             data={
-                                                "iterations": self.iteration - 1,
+                                                "iterations": self.iteration,
                                                 "final_response": prev_data.get("response", ""),
-                                                "status_code": "AAF_READY_FOR_REVIEW",
+                                                "status_code": PhaseStatusCode.CONFIRMED.value,
                                             },
                                         )
                                     elif choice == 'r':
@@ -207,13 +225,31 @@ class PlanPhase(Phase):
                                         print("❌ 無效選擇，請輸入 c, r, 或 m")
                             else:
                                 # Non-interactive: auto-confirm
+                                # Save user confirmation as a new iteration
+                                self._save_user_input(
+                                    user_input="confirm",
+                                    phase_specific_data={"dev_agent": self.dev_agent},
+                                )
+                                self._update_iteration_history(
+                                    phase_specific_data={
+                                        "response": "Auto-confirmed (non-interactive mode)",
+                                        "user_action": "confirm",
+                                    },
+                                    prompt="",
+                                    agent_cli=None,
+                                    agent_session_id=None,
+                                    allowed_tools=None,
+                                    status_code=PhaseStatusCode.CONFIRMED,
+                                )
+                                self._save_progress(PhaseStatusCode.CONFIRMED)
+
                                 return PhaseResult(
                                     status=PhaseStatus.COMPLETED,
-                                    message=f"Implementation plan completed in {self.iteration - 1} iteration(s)",
+                                    message=f"Implementation plan completed in {self.iteration} iteration(s)",
                                     data={
-                                        "iterations": self.iteration - 1,
+                                        "iterations": self.iteration,
                                         "final_response": prev_data.get("response", ""),
-                                        "status_code": "AAF_READY_FOR_REVIEW",
+                                        "status_code": PhaseStatusCode.CONFIRMED.value,
                                     },
                                 )
                         elif prev_status == "AAF_NEED_CLARIFICATION":
@@ -646,7 +682,7 @@ class PlanPhase(Phase):
         status_file.parent.mkdir(parents=True, exist_ok=True)
 
         # Determine phase status
-        phase_status = PhaseStatus.COMPLETED if status_code == PhaseStatusCode.READY_FOR_REVIEW else PhaseStatus.IN_PROGRESS
+        phase_status = PhaseStatus.COMPLETED if status_code in [PhaseStatusCode.READY_FOR_REVIEW, PhaseStatusCode.CONFIRMED] else PhaseStatus.IN_PROGRESS
 
         progress = PhaseProgress(
             phase="plan",

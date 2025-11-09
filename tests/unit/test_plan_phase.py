@@ -1,5 +1,6 @@
 """Tests for PlanPhase."""
 
+import json
 import pytest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -595,7 +596,7 @@ class TestPlanPhaseHistory:
 
         assert data["phase"] == "plan"
         assert data["status"] == "completed"
-        assert data["status_code"] == "AAF_READY_FOR_REVIEW"
+        assert data["status_code"] == "AAF_CONFIRMED"  # Auto-confirmed in non-interactive mode
 
     def test_creates_plan_md_file(self, tmp_path: Path) -> None:
         """測試 agent 創建 plan.md 文件"""
@@ -1489,7 +1490,77 @@ class TestPlanPhasePromptGeneration:
             "Prompt should not instruct agent to return status code without AAF_ prefix"
         assert "只回傳：NEED_CLARIFICATION" not in captured_prompt, \
             "Prompt should not instruct agent to return status code without AAF_ prefix"
-        
+
         # Should contain proper AAF_ prefixed codes
         assert "AAF_READY_FOR_REVIEW" in captured_prompt
         assert "AAF_NEED_CLARIFICATION" in captured_prompt
+
+
+class TestPlanPhaseUserConfirmation:
+    """測試用戶確認計畫後的行為"""
+
+    def test_user_confirmation_saves_history_and_updates_status(self, tmp_path: Path) -> None:
+        """測試用戶確認計畫後應該保存 iteration history 並更新 status_code 為 CONFIRMED"""
+        issue_name = "test"
+        spec_file = tmp_path / ".aaf" / "issues" / issue_name / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
+        spec_file.write_text("# Requirements\n\n## 開發指南\nGuide")
+
+        plan_file = spec_file.parent.parent / "plan" / "plan.md"
+        plan_file.parent.mkdir(parents=True, exist_ok=True)
+        plan_file.write_text("## 開發指南\nGuide\n\n## 實作計畫\nPlan")
+
+        agent_manager = MagicMock(spec=AgentManager)
+        # Agent returns READY_FOR_REVIEW
+        agent_manager.execute.return_value = ("AAF_READY_FOR_REVIEW\n計畫完成", TokenUsage())
+
+        mock_agent = MagicMock()
+        mock_agent.config.cli.value = "claude"
+        mock_agent.config.session_id = "test_session"
+        agent_manager.get_agent.return_value = mock_agent
+
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        phase = PlanPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            spec_file=str(spec_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            interactive=True,
+        )
+
+        # User confirms with 'c'
+        with patch('builtins.print'), \
+             patch('builtins.input', return_value='c'):
+            result = phase.execute()
+
+        # Should complete successfully
+        assert result.status == PhaseStatus.COMPLETED
+
+        # Should have 2 iterations: 1 for agent response, 1 for user confirmation
+        history_dir = spec_file.parent.parent / "plan" / "history"
+        assert history_dir.exists()
+
+        iteration_files = sorted(history_dir.glob("iteration_*.json"))
+        assert len(iteration_files) == 2, f"應該有 2 個 iteration 文件，但只有 {len(iteration_files)} 個"
+
+        # Check iteration 1: agent returns READY_FOR_REVIEW
+        with open(iteration_files[0]) as f:
+            iter1 = json.load(f)
+        assert iter1["iteration"] == 1
+        assert iter1["status_code"] == "AAF_READY_FOR_REVIEW"
+
+        # Check iteration 2: user confirms
+        with open(iteration_files[1]) as f:
+            iter2 = json.load(f)
+        assert iter2["iteration"] == 2
+        assert iter2["user_input"] == "confirm"  # or similar indication of user confirmation
+        assert iter2["status_code"] == "AAF_CONFIRMED"
+
+        # Check status.json has final CONFIRMED status
+        status_file = spec_file.parent.parent / "plan" / "status.json"
+        assert status_file.exists()
+        with open(status_file) as f:
+            status_data = json.load(f)
+        assert status_data["status_code"] == "AAF_CONFIRMED"
+        assert status_data["iteration"] == 2
