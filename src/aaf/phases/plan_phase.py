@@ -216,17 +216,30 @@ class PlanPhase(Phase):
                     # Generate prompt for this iteration
                     prompt = self._generate_prompt()
 
+                    # Get agent metadata before execution
+                    agent_executor = self.agent_manager.get_agent(self.dev_agent)
+                    agent_cli = agent_executor.config.cli.value
+                    agent_session_id = agent_executor.config.session_id
+
+                    # Save prompt to history BEFORE calling agent
+                    # This ensures prompt is preserved even if agent execution fails
+                    iteration_file = self.history_dir / f"iteration_{self.iteration:03d}.json"
+                    if iteration_file.exists():
+                        with open(iteration_file, "r", encoding="utf-8") as f:
+                            history_data = json.load(f)
+                        history_data["prompt"] = prompt
+                        history_data["cli"] = agent_cli
+                        history_data["session_id"] = agent_session_id
+                        history_data["allowed_tools"] = ["write", "read"]
+                        with open(iteration_file, "w", encoding="utf-8") as f:
+                            json.dump(history_data, f, ensure_ascii=False, indent=2)
+
                     # Execute developer agent
                     response, token_usage = self.agent_manager.execute(
                         self.dev_agent,
                         prompt,
                         allowed_tools=["write", "read"]
                     )
-
-                    # Get agent metadata
-                    agent_executor = self.agent_manager.get_agent(self.dev_agent)
-                    agent_cli = agent_executor.config.cli.value
-                    agent_session_id = agent_executor.config.session_id
 
                     # Extract status code from response
                     status_code = StatusCodeParser.extract(
