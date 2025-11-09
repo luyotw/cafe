@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from aaf.core.status_codes import PhaseStatusCode
-from aaf.core.types import PhaseResult
+from aaf.core.types import PhaseResult, PhaseStatus
 
 
 class Phase(ABC):
@@ -331,3 +331,88 @@ class Phase(ABC):
             self._save_progress(status_code)  # type: ignore
 
         return response, status_code
+
+    def _handle_standard_status_codes(
+        self,
+        status_code: Optional[PhaseStatusCode],
+        response: str,
+        continue_codes: Optional[List[PhaseStatusCode]] = None,
+        complete_codes: Optional[List[PhaseStatusCode]] = None,
+    ) -> Optional[PhaseResult]:
+        """處理標準的 status codes，返回 PhaseResult 或 None（表示繼續循環）。
+
+        此方法封裝了常見的 status code 處理邏輯：
+        - NO_RESPONSE: 返回 FAILED
+        - REJECTED: 返回 FAILED
+        - continue_codes 中的 codes: 返回 None（繼續循環）
+        - complete_codes 中的 codes: 返回 None（繼續循環，但通常會在下一輪處理完成邏輯）
+        - None (沒有 status code): interactive 模式返回 None，non-interactive 返回 IN_PROGRESS
+
+        Args:
+            status_code: 從 agent 回應中提取的 status code
+            response: Agent 的回應內容
+            continue_codes: 應該繼續循環的 status codes（如 NEED_CLARIFICATION）
+            complete_codes: 表示即將完成的 status codes（如 READY_FOR_REVIEW, CONFIRMED）
+
+        Returns:
+            PhaseResult 如果應該結束 phase，None 如果應該繼續下一輪循環
+        """
+        # 檢查必要的屬性
+        if not hasattr(self, "iteration"):
+            raise AttributeError("Phase must have 'iteration' attribute")
+        if not hasattr(self, "interactive"):
+            raise AttributeError("Phase must have 'interactive' attribute")
+
+        continue_codes = continue_codes or []
+        complete_codes = complete_codes or []
+
+        # Handle NO_RESPONSE
+        if status_code == PhaseStatusCode.NO_RESPONSE:
+            return PhaseResult(
+                status=PhaseStatus.FAILED,
+                message=f"Agent returned no response in iteration {self.iteration}",
+                data={
+                    "iterations": self.iteration,
+                    "status_code": status_code.value,
+                },
+            )
+
+        # Handle REJECTED
+        if status_code == PhaseStatusCode.REJECTED:
+            return PhaseResult(
+                status=PhaseStatus.FAILED,
+                message=f"Phase rejected in iteration {self.iteration}",
+                data={
+                    "iterations": self.iteration,
+                    "final_response": response,
+                    "status_code": status_code.value,
+                },
+            )
+
+        # Handle complete codes (e.g., READY_FOR_REVIEW, CONFIRMED)
+        # These typically trigger user confirmation in next iteration
+        if status_code in complete_codes:
+            return None  # Continue to next iteration
+
+        # Handle continue codes (e.g., NEED_CLARIFICATION)
+        if status_code in continue_codes:
+            return None  # Continue to next iteration
+
+        # Handle no status code found
+        if status_code is None:
+            if self.interactive:
+                # Interactive mode: continue iteration
+                return None
+            else:
+                # Non-interactive mode: exit and wait for next call
+                return PhaseResult(
+                    status=PhaseStatus.IN_PROGRESS,
+                    message=f"Iteration {self.iteration}: No status code found, need more iterations",
+                    data={
+                        "iterations": self.iteration,
+                        "status_code": None,
+                    },
+                )
+
+        # Unknown status code - continue
+        return None

@@ -300,3 +300,162 @@ class TestExecuteAgentIteration:
                 user_input="Test input",
                 valid_status_codes=[PhaseStatusCode.CONFIRMED],
             )
+
+
+class TestHandleStandardStatusCodes:
+    """測試 Phase._handle_standard_status_codes() 通用方法"""
+
+    def test_handle_no_response_returns_failed(self) -> None:
+        """測試 NO_RESPONSE 返回 FAILED 狀態"""
+        class TestPhase(Phase):
+            def __init__(self):
+                self.iteration = 1
+                self.interactive = True
+
+            def execute(self) -> PhaseResult:
+                return PhaseResult(status=PhaseStatus.COMPLETED)
+
+        phase = TestPhase()
+        result = phase._handle_standard_status_codes(
+            status_code=PhaseStatusCode.NO_RESPONSE,
+            response="",
+        )
+
+        assert result is not None
+        assert result.status == PhaseStatus.FAILED
+        assert "no response" in result.message.lower()
+        assert result.data["status_code"] == "AAF_NO_RESPONSE"
+
+    def test_handle_rejected_returns_failed(self) -> None:
+        """測試 REJECTED 返回 FAILED 狀態"""
+        class TestPhase(Phase):
+            def __init__(self):
+                self.iteration = 2
+                self.interactive = True
+
+            def execute(self) -> PhaseResult:
+                return PhaseResult(status=PhaseStatus.COMPLETED)
+
+        phase = TestPhase()
+        result = phase._handle_standard_status_codes(
+            status_code=PhaseStatusCode.REJECTED,
+            response="User rejected the plan",
+        )
+
+        assert result is not None
+        assert result.status == PhaseStatus.FAILED
+        assert "rejected" in result.message.lower()
+        assert result.data["status_code"] == "AAF_REJECTED"
+        assert result.data["final_response"] == "User rejected the plan"
+
+    def test_handle_complete_codes_returns_none(self) -> None:
+        """測試 complete_codes（如 READY_FOR_REVIEW）返回 None（繼續循環）"""
+        class TestPhase(Phase):
+            def __init__(self):
+                self.iteration = 1
+                self.interactive = True
+
+            def execute(self) -> PhaseResult:
+                return PhaseResult(status=PhaseStatus.COMPLETED)
+
+        phase = TestPhase()
+        result = phase._handle_standard_status_codes(
+            status_code=PhaseStatusCode.READY_FOR_REVIEW,
+            response="Plan is ready",
+            complete_codes=[PhaseStatusCode.READY_FOR_REVIEW, PhaseStatusCode.CONFIRMED],
+        )
+
+        assert result is None  # Continue to next iteration
+
+    def test_handle_continue_codes_returns_none(self) -> None:
+        """測試 continue_codes（如 NEED_CLARIFICATION）返回 None（繼續循環）"""
+        class TestPhase(Phase):
+            def __init__(self):
+                self.iteration = 1
+                self.interactive = True
+
+            def execute(self) -> PhaseResult:
+                return PhaseResult(status=PhaseStatus.COMPLETED)
+
+        phase = TestPhase()
+        result = phase._handle_standard_status_codes(
+            status_code=PhaseStatusCode.NEED_CLARIFICATION,
+            response="Need more info",
+            continue_codes=[PhaseStatusCode.NEED_CLARIFICATION],
+        )
+
+        assert result is None  # Continue to next iteration
+
+    def test_handle_no_status_code_interactive_returns_none(self) -> None:
+        """測試沒有 status code 且 interactive 模式返回 None（繼續循環）"""
+        class TestPhase(Phase):
+            def __init__(self):
+                self.iteration = 1
+                self.interactive = True
+
+            def execute(self) -> PhaseResult:
+                return PhaseResult(status=PhaseStatus.COMPLETED)
+
+        phase = TestPhase()
+        result = phase._handle_standard_status_codes(
+            status_code=None,
+            response="Some response without status code",
+        )
+
+        assert result is None  # Continue in interactive mode
+
+    def test_handle_no_status_code_non_interactive_returns_in_progress(self) -> None:
+        """測試沒有 status code 且 non-interactive 模式返回 IN_PROGRESS"""
+        class TestPhase(Phase):
+            def __init__(self):
+                self.iteration = 3
+                self.interactive = False
+
+            def execute(self) -> PhaseResult:
+                return PhaseResult(status=PhaseStatus.COMPLETED)
+
+        phase = TestPhase()
+        result = phase._handle_standard_status_codes(
+            status_code=None,
+            response="Some response without status code",
+        )
+
+        assert result is not None
+        assert result.status == PhaseStatus.IN_PROGRESS
+        assert "No status code found" in result.message
+        assert result.data["status_code"] is None
+        assert result.data["iterations"] == 3
+
+    def test_handle_missing_iteration_raises_error(self) -> None:
+        """測試缺少 iteration 屬性時拋出錯誤"""
+        class IncompletePhase(Phase):
+            def __init__(self):
+                self.interactive = True
+
+            def execute(self) -> PhaseResult:
+                return PhaseResult(status=PhaseStatus.COMPLETED)
+
+        phase = IncompletePhase()
+
+        with pytest.raises(AttributeError, match="iteration"):
+            phase._handle_standard_status_codes(
+                status_code=PhaseStatusCode.CONFIRMED,
+                response="Test",
+            )
+
+    def test_handle_missing_interactive_raises_error(self) -> None:
+        """測試缺少 interactive 屬性時拋出錯誤"""
+        class IncompletePhase(Phase):
+            def __init__(self):
+                self.iteration = 1
+
+            def execute(self) -> PhaseResult:
+                return PhaseResult(status=PhaseStatus.COMPLETED)
+
+        phase = IncompletePhase()
+
+        with pytest.raises(AttributeError, match="interactive"):
+            phase._handle_standard_status_codes(
+                status_code=PhaseStatusCode.CONFIRMED,
+                response="Test",
+            )
