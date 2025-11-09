@@ -1558,3 +1558,189 @@ class TestPlanPhaseUserConfirmation:
             status_data = json.load(f)
         assert status_data["status_code"] == "AAF_CONFIRMED"
         assert status_data["iteration"] == 2
+
+
+class TestExecuteAndHandleAgentResponse:
+    """測試 PlanPhase._execute_and_handle_agent_response() 方法"""
+
+    def test_returns_none_for_ready_for_review(self, tmp_path: Path) -> None:
+        """測試當 agent 返回 READY_FOR_REVIEW 時返回 None（繼續循環）"""
+        # Setup
+        spec_file = tmp_path / "spec.md"
+        spec_file.write_text("Test spec content")
+
+        agent_manager = MagicMock()
+        mock_agent = MagicMock()
+        mock_agent.config.cli.value = "claude"
+        mock_agent.config.session_id = "test_session"
+        agent_manager.get_agent.return_value = mock_agent
+        agent_manager.execute.return_value = ("AAF_READY_FOR_REVIEW\n計畫已完成", TokenUsage())
+
+        phase = PlanPhase(
+            agent_manager=agent_manager,
+            permission_handler=MagicMock(),
+            spec_file=str(spec_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            issue_name="test-issue",
+            interactive=True,
+        )
+        phase.iteration = 1
+
+        # Execute
+        result = phase._execute_and_handle_agent_response("請建立計畫")
+
+        # Verify
+        assert result is None  # Should continue to next iteration
+
+    def test_returns_none_for_need_clarification(self, tmp_path: Path) -> None:
+        """測試當 agent 返回 NEED_CLARIFICATION 時返回 None（繼續循環）"""
+        # Setup
+        spec_file = tmp_path / "spec.md"
+        spec_file.write_text("Test spec content")
+
+        agent_manager = MagicMock()
+        mock_agent = MagicMock()
+        mock_agent.config.cli.value = "claude"
+        mock_agent.config.session_id = "test_session"
+        agent_manager.get_agent.return_value = mock_agent
+        agent_manager.execute.return_value = ("AAF_NEED_CLARIFICATION\n需要更多資訊", TokenUsage())
+
+        phase = PlanPhase(
+            agent_manager=agent_manager,
+            permission_handler=MagicMock(),
+            spec_file=str(spec_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            issue_name="test-issue",
+            interactive=True,
+        )
+        phase.iteration = 1
+
+        # Execute
+        result = phase._execute_and_handle_agent_response("請建立計畫")
+
+        # Verify
+        assert result is None  # Should continue to next iteration
+
+    def test_returns_failed_for_rejected(self, tmp_path: Path) -> None:
+        """測試當 agent 返回 REJECTED 時返回 FAILED 狀態"""
+        # Setup
+        spec_file = tmp_path / "spec.md"
+        spec_file.write_text("Test spec content")
+
+        agent_manager = MagicMock()
+        mock_agent = MagicMock()
+        mock_agent.config.cli.value = "claude"
+        mock_agent.config.session_id = "test_session"
+        agent_manager.get_agent.return_value = mock_agent
+        agent_manager.execute.return_value = ("AAF_REJECTED\n需求不明確", TokenUsage())
+
+        phase = PlanPhase(
+            agent_manager=agent_manager,
+            permission_handler=MagicMock(),
+            spec_file=str(spec_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            issue_name="test-issue",
+            interactive=True,
+        )
+        phase.iteration = 1
+
+        # Execute
+        result = phase._execute_and_handle_agent_response("請建立計畫")
+
+        # Verify
+        assert result is not None
+        assert result.status == PhaseStatus.FAILED
+        assert "rejected" in result.message.lower()
+
+    def test_returns_failed_for_no_response(self, tmp_path: Path) -> None:
+        """測試當 agent 返回空回應時返回 FAILED 狀態"""
+        # Setup
+        spec_file = tmp_path / "spec.md"
+        spec_file.write_text("Test spec content")
+
+        agent_manager = MagicMock()
+        mock_agent = MagicMock()
+        mock_agent.config.cli.value = "claude"
+        mock_agent.config.session_id = "test_session"
+        agent_manager.get_agent.return_value = mock_agent
+        agent_manager.execute.return_value = ("", TokenUsage())  # Empty response
+
+        phase = PlanPhase(
+            agent_manager=agent_manager,
+            permission_handler=MagicMock(),
+            spec_file=str(spec_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            issue_name="test-issue",
+            interactive=True,
+        )
+        phase.iteration = 1
+
+        # Execute
+        result = phase._execute_and_handle_agent_response("請建立計畫")
+
+        # Verify
+        assert result is not None
+        assert result.status == PhaseStatus.FAILED
+        assert "no response" in result.message.lower()
+
+    def test_returns_none_for_no_status_code_interactive(self, tmp_path: Path) -> None:
+        """測試沒有 status code 且 interactive 模式時返回 None（繼續循環）"""
+        # Setup
+        spec_file = tmp_path / "spec.md"
+        spec_file.write_text("Test spec content")
+
+        agent_manager = MagicMock()
+        mock_agent = MagicMock()
+        mock_agent.config.cli.value = "claude"
+        mock_agent.config.session_id = "test_session"
+        agent_manager.get_agent.return_value = mock_agent
+        agent_manager.execute.return_value = ("Some response without status code", TokenUsage())
+
+        phase = PlanPhase(
+            agent_manager=agent_manager,
+            permission_handler=MagicMock(),
+            spec_file=str(spec_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            issue_name="test-issue",
+            interactive=True,
+        )
+        phase.iteration = 1
+
+        # Execute
+        result = phase._execute_and_handle_agent_response("請建立計畫")
+
+        # Verify
+        assert result is None  # Should continue in interactive mode
+
+    def test_returns_in_progress_for_no_status_code_non_interactive(
+        self, tmp_path: Path
+    ) -> None:
+        """測試沒有 status code 且 non-interactive 模式時返回 IN_PROGRESS 狀態"""
+        # Setup
+        spec_file = tmp_path / "spec.md"
+        spec_file.write_text("Test spec content")
+
+        agent_manager = MagicMock()
+        mock_agent = MagicMock()
+        mock_agent.config.cli.value = "claude"
+        mock_agent.config.session_id = "test_session"
+        agent_manager.get_agent.return_value = mock_agent
+        agent_manager.execute.return_value = ("Some response without status code", TokenUsage())
+
+        phase = PlanPhase(
+            agent_manager=agent_manager,
+            permission_handler=MagicMock(),
+            spec_file=str(spec_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            issue_name="test-issue",
+            interactive=False,  # Non-interactive mode
+        )
+        phase.iteration = 1
+
+        # Execute
+        result = phase._execute_and_handle_agent_response("請建立計畫")
+
+        # Verify
+        assert result is not None
+        assert result.status == PhaseStatus.IN_PROGRESS
+        assert "No status code found" in result.message
