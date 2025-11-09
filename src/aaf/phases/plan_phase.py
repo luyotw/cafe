@@ -201,7 +201,6 @@ class PlanPhase(Phase):
                                         print("✅ 已收到您的修改意見，正在重新規劃...")
                                         print()
 
-                                        self._save_user_response(modification_request)
                                         current_user_input = modification_request
                                         break
                                     else:
@@ -237,7 +236,6 @@ class PlanPhase(Phase):
                                 print("✅ 已收到您的回答，正在發送給開發者處理...")
                                 print()
 
-                                self._save_user_response(clarification)
                                 current_user_input = clarification
                             else:
                                 # Non-interactive: pause
@@ -631,26 +629,6 @@ class PlanPhase(Phase):
             data = json.load(f)
 
         return PhaseProgress.from_dict(data)
-
-    def _save_user_response(self, user_response: str) -> None:
-        """Save user's response to plan file for next iteration.
-
-        Args:
-            user_response: User's response to developer's questions
-        """
-        plan_file = self.history_dir.parent / "plan.md"
-
-        # Read existing content if any
-        existing_content = ""
-        if plan_file.exists():
-            existing_content = plan_file.read_text()
-
-        # Append user response
-        updated_content = existing_content + f"\n\n---\n用戶回應（第 {self.iteration} 輪）:\n{user_response}\n"
-
-        # Save updated content
-        plan_file.parent.mkdir(parents=True, exist_ok=True)
-        plan_file.write_text(updated_content)
 
     def _has_dev_guide_section(self, plan_file: Path) -> bool:
         """Check if plan.md has development guide section.
