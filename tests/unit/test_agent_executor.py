@@ -702,6 +702,60 @@ class TestClaudeStreamingExecution:
         captured = capsys.readouterr()
         assert "Claude Response (streaming):" in captured.out
 
+    def test_execute_claude_with_new_message_format(self) -> None:
+        """測試 Claude 新的 message.content[] JSON 格式能正確解析"""
+        config = AgentConfig(
+            name="David",
+            cli=AgentCLI.CLAUDE,
+            session_id="test-session"
+        )
+        executor = AgentExecutor(config)
+
+        # Mock streaming process with new Claude JSON format
+        mock_process = MagicMock()
+        mock_process.stdout.readline.side_effect = [
+            '{"type": "system", "subtype": "init", "session_id": "new-session-123"}\n',
+            '{"type": "assistant", "message": {"content": [{"type": "text", "text": "Hello from Claude"}]}}\n',
+            '{"type": "assistant", "message": {"content": [{"type": "text", "text": " with new format"}]}}\n',
+            '{"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "tool123"}]}}\n',  # Non-text content, should be ignored
+            '{"usage": {"input_tokens": 100, "output_tokens": 50}}\n',
+            "",
+        ]
+        mock_process.stderr.read.return_value = ""
+        mock_process.wait.return_value = 0
+
+        with patch("subprocess.Popen", return_value=mock_process):
+            response, token_usage = executor._execute_claude("Test prompt")
+
+            # Should extract text from message.content[] and concatenate
+            assert response == "Hello from Claude with new format"
+            assert isinstance(token_usage, TokenUsage)
+            assert token_usage.input_tokens == 100
+            assert token_usage.output_tokens == 50
+
+    def test_execute_claude_with_mixed_content_types(self) -> None:
+        """測試 Claude message.content[] 包含多種類型時只提取 text"""
+        config = AgentConfig(
+            name="David",
+            cli=AgentCLI.CLAUDE,
+        )
+        executor = AgentExecutor(config)
+
+        # Mock streaming with mixed content types
+        mock_process = MagicMock()
+        mock_process.stdout.readline.side_effect = [
+            '{"type": "assistant", "message": {"content": [{"type": "text", "text": "Analysis: "}, {"type": "tool_use", "id": "read_file"}, {"type": "text", "text": "Complete"}]}}\n',
+            "",
+        ]
+        mock_process.stderr.read.return_value = ""
+        mock_process.wait.return_value = 0
+
+        with patch("subprocess.Popen", return_value=mock_process):
+            response, token_usage = executor._execute_claude("Analyze file")
+
+            # Should only extract text blocks, skipping tool_use
+            assert response == "Analysis: Complete"
+
 
 class TestCopilotStreamingExecution:
     """測試 Copilot streaming 執行"""
@@ -731,3 +785,5 @@ class TestCopilotStreamingExecution:
         # Verify streaming output was shown
         captured = capsys.readouterr()
         assert "Copilot Response (streaming):" in captured.out
+
+

@@ -249,8 +249,16 @@ class AgentExecutor:
                     try:
                         data = json.loads(line.strip())
 
-                        # Extract content chunks
-                        if "content" in data:
+                        # Extract content from message.content[] (new Claude format)
+                        if "message" in data and "content" in data["message"]:
+                            for content_block in data["message"]["content"]:
+                                if content_block.get("type") == "text":
+                                    text = content_block.get("text", "")
+                                    print(text, end='', flush=True)
+                                    response_text += text
+
+                        # Old format: direct content field
+                        elif "content" in data:
                             content = data["content"]
                             print(content, end='', flush=True)
                             response_text += content
