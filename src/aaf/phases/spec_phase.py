@@ -322,7 +322,7 @@ class SpecPhase(Phase):
 
         # Handle CONFIRMED status - return completed result
         if status_code == PhaseStatusCode.CONFIRMED:
-            self._save_spec(response)
+            self._sync_spec_to_github(response)
             self._save_progress(status_code)
 
             token_usage = self.agent_manager.get_total_token_usage()
@@ -366,7 +366,7 @@ class SpecPhase(Phase):
 
         # Handle NEED_CLARIFICATION - save progress and continue
         elif status_code == PhaseStatusCode.NEED_CLARIFICATION:
-            self._save_spec(response)
+            self._sync_spec_to_github(response)
             self._save_progress(status_code)
             # Fall through to standard handling below
 
@@ -555,31 +555,33 @@ class SpecPhase(Phase):
         if not backup_path.exists():
             backup_path.write_text(spec_path.read_text())
 
-    def _save_spec(self, response: str) -> None:
-        """Sync spec to GitHub if needed.
+    def _sync_spec_to_github(self, response: str) -> None:
+        """同步 spec 檔案到 GitHub issue（僅 GitHub workflow 模式）。
 
-        PM agent writes directly to spec_file. This method:
-        - For local mode: no action needed (file already written)
-        - For GitHub mode: syncs spec_file content to issue
+        注意：此方法**不負責寫入 spec 檔案**。PM agent 已透過 Write tool 直接寫入 spec_file。
+
+        此方法的用途：
+        - Local mode: 無動作（agent 已寫入檔案，無需額外處理）
+        - GitHub mode: 將本地 spec_file 內容同步到 GitHub issue
 
         Args:
-            response: Agent response (not used, agent already wrote file)
+            response: Agent 回應內容（未使用，因為 agent 已透過 Write tool 寫入檔案）
         """
         spec_path = Path(self.spec_file)
         if not spec_path.exists():
-            return  # PM hasn't written the file yet
+            return  # Agent 尚未寫入檔案
 
         if self.workflow_mode == WorkflowMode.GITHUB:
-            # Sync to GitHub issue
+            # 將本地檔案內容同步到 GitHub issue
             content = spec_path.read_text()
             if not self.issue_id and not hasattr(self, '_created_issue_id'):
-                # Create new issue (only once)
+                # 首次建立 GitHub issue
                 self._created_issue_id = create_github_issue(content)
             elif hasattr(self, '_created_issue_id'):
-                # Update the created issue
+                # 更新先前建立的 issue
                 update_github_issue(self._created_issue_id, content)
             else:
-                # Update existing issue
+                # 更新既有的 issue
                 update_github_issue(self.issue_id, content)
 
     def _save_user_response(self, user_response: str) -> None:
