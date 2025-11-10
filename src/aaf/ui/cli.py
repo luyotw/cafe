@@ -1105,35 +1105,56 @@ def list_issues() -> None:
 
 @app.command(name="rm")
 def remove_issue(
-    issue_name: str = typer.Argument(..., help="Name of the issue to delete"),
+    issue_names: list[str] = typer.Argument(..., help="Names of the issues to delete"),
     force: bool = typer.Option(False, "--force", "-f", help="Skip confirmation prompt"),
 ) -> None:
-    """Remove an issue and all its data."""
+    """Remove one or more issues and all their data."""
     import shutil
 
-    issue_path = Path(".aaf/issues") / issue_name
+    # Check all issues exist first
+    missing_issues = []
+    existing_issues = []
+    for issue_name in issue_names:
+        issue_path = Path(".aaf/issues") / issue_name
+        if not issue_path.exists():
+            missing_issues.append(issue_name)
+        else:
+            existing_issues.append((issue_name, issue_path))
 
-    if not issue_path.exists():
-        console.print(f"[red]Issue '{issue_name}' not found[/red]")
+    # Report missing issues
+    if missing_issues:
+        console.print(f"[red]Issue(s) not found: {', '.join(missing_issues)}[/red]")
         console.print("\nRun 'aaf ls' to see available issues")
-        raise typer.Exit(1)
+        if not existing_issues:
+            raise typer.Exit(1)
 
     # Show what will be deleted
-    if not force:
-        console.print(f"[yellow]About to delete issue: {issue_name}[/yellow]")
-        console.print(f"[dim]Path: {issue_path}[/dim]\n")
+    if not force and existing_issues:
+        console.print(f"[yellow]About to delete {len(existing_issues)} issue(s):[/yellow]")
+        for issue_name, issue_path in existing_issues:
+            console.print(f"  • {issue_name} [dim]({issue_path})[/dim]")
+        console.print()
 
-        confirm = typer.confirm("Are you sure you want to delete this issue?")
+        confirm = typer.confirm(f"Are you sure you want to delete {len(existing_issues)} issue(s)?")
         if not confirm:
             console.print("[dim]Cancelled[/dim]")
             raise typer.Exit(0)
 
-    # Delete the issue directory
-    try:
-        shutil.rmtree(issue_path)
-        console.print(f"[green]✓[/green] Issue '{issue_name}' deleted successfully")
-    except Exception as e:
-        console.print(f"[red]Failed to delete issue: {e}[/red]")
+    # Delete the issue directories
+    success_count = 0
+    for issue_name, issue_path in existing_issues:
+        try:
+            shutil.rmtree(issue_path)
+            console.print(f"[green]✓[/green] Issue '{issue_name}' deleted successfully")
+            success_count += 1
+        except Exception as e:
+            console.print(f"[red]✗[/red] Failed to delete issue '{issue_name}': {e}")
+
+    # Summary
+    if len(existing_issues) > 1:
+        console.print(f"\n[green]{success_count}/{len(existing_issues)} issue(s) deleted successfully[/green]")
+
+    if success_count < len(existing_issues):
         raise typer.Exit(1)
 
 

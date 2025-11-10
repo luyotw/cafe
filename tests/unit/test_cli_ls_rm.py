@@ -111,3 +111,83 @@ class TestRmCommand:
         assert result.exit_code == 0
         assert "deleted successfully" in result.stdout
         assert not issue.exists()
+
+    def test_rm_multiple_issues(self, temp_issues_dir):
+        """Test rm with multiple issues."""
+        # Create test issues
+        issue1 = temp_issues_dir / "test-issue-1"
+        issue1.mkdir()
+        issue2 = temp_issues_dir / "test-issue-2"
+        issue2.mkdir()
+        issue3 = temp_issues_dir / "test-issue-3"
+        issue3.mkdir()
+
+        # Delete multiple issues with confirmation
+        result = runner.invoke(app, ["rm", "test-issue-1", "test-issue-2", "test-issue-3"], input="y\n")
+
+        assert result.exit_code == 0
+        assert "About to delete 3 issue(s)" in result.stdout
+        assert "test-issue-1" in result.stdout
+        assert "test-issue-2" in result.stdout
+        assert "test-issue-3" in result.stdout
+        assert "3/3 issue(s) deleted successfully" in result.stdout
+        assert not issue1.exists()
+        assert not issue2.exists()
+        assert not issue3.exists()
+
+    def test_rm_multiple_issues_force(self, temp_issues_dir):
+        """Test rm with multiple issues and --force flag."""
+        # Create test issues
+        issue1 = temp_issues_dir / "test-issue-1"
+        issue1.mkdir()
+        issue2 = temp_issues_dir / "test-issue-2"
+        issue2.mkdir()
+
+        result = runner.invoke(app, ["rm", "-f", "test-issue-1", "test-issue-2"])
+
+        assert result.exit_code == 0
+        assert "deleted successfully" in result.stdout
+        assert "2/2 issue(s) deleted successfully" in result.stdout
+        assert not issue1.exists()
+        assert not issue2.exists()
+
+    def test_rm_multiple_issues_some_missing(self, temp_issues_dir):
+        """Test rm with multiple issues where some don't exist."""
+        # Create only one issue
+        issue1 = temp_issues_dir / "test-issue-1"
+        issue1.mkdir()
+
+        # Try to delete one existing and two non-existing
+        result = runner.invoke(app, ["rm", "test-issue-1", "nonexistent-1", "nonexistent-2"], input="y\n")
+
+        assert result.exit_code == 0  # Still succeeds because at least one was deleted
+        assert "not found" in result.stdout
+        assert "nonexistent-1" in result.stdout
+        assert "nonexistent-2" in result.stdout
+        assert "About to delete 1 issue(s)" in result.stdout
+        assert not issue1.exists()
+
+    def test_rm_multiple_issues_all_missing(self, temp_issues_dir):
+        """Test rm with multiple issues where all don't exist."""
+        result = runner.invoke(app, ["rm", "nonexistent-1", "nonexistent-2"])
+
+        assert result.exit_code == 1
+        assert "not found" in result.stdout
+        assert "nonexistent-1" in result.stdout
+        assert "nonexistent-2" in result.stdout
+
+    def test_rm_multiple_issues_cancel(self, temp_issues_dir):
+        """Test rm with multiple issues when user cancels."""
+        # Create test issues
+        issue1 = temp_issues_dir / "test-issue-1"
+        issue1.mkdir()
+        issue2 = temp_issues_dir / "test-issue-2"
+        issue2.mkdir()
+
+        # Cancel deletion
+        result = runner.invoke(app, ["rm", "test-issue-1", "test-issue-2"], input="n\n")
+
+        assert result.exit_code == 0
+        assert "Cancelled" in result.stdout
+        assert issue1.exists()
+        assert issue2.exists()
