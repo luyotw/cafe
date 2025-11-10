@@ -364,52 +364,20 @@ class SpecPhase(Phase):
                 token_usage=token_usage,
             )
 
-        # Handle REJECTED status - return failed result
-        elif status_code == PhaseStatusCode.REJECTED:
-            return PhaseResult(
-                status=PhaseStatus.FAILED,
-                message=f"Requirements rejected in iteration {self.iteration}",
-                data={
-                    "iterations": self.iteration,
-                    "final_response": response,
-                    "status_code": status_code.value,
-                },
-            )
-
         # Handle NEED_CLARIFICATION - save progress and continue
         elif status_code == PhaseStatusCode.NEED_CLARIFICATION:
             self._save_spec(response)
             self._save_progress(status_code)
+            # Fall through to standard handling below
 
-            if self.interactive:
-                # Interactive mode: continue to next iteration
-                return None
-            else:
-                # Non-interactive mode: exit and wait for next call with user response
-                return PhaseResult(
-                    status=PhaseStatus.IN_PROGRESS,
-                    message=f"Iteration {self.iteration}: PM asked clarification questions",
-                    data={
-                        "iterations": self.iteration,
-                        "status_code": PhaseStatusCode.NEED_CLARIFICATION.value,
-                    },
-                )
-
-        # Handle no status code or other cases
-        else:
-            if self.interactive:
-                # Interactive mode: continue iteration
-                return None
-            else:
-                # Non-interactive mode: exit and wait for next call
-                return PhaseResult(
-                    status=PhaseStatus.IN_PROGRESS,
-                    message=f"Iteration {self.iteration}: No status code found, need more iterations",
-                    data={
-                        "iterations": self.iteration,
-                        "status_code": None,
-                    },
-                )
+        # Use base class method to handle standard status codes
+        # (REJECTED, NO_RESPONSE, NEED_CLARIFICATION continuation, no status code)
+        result = self._handle_standard_status_codes(
+            status_code=status_code,
+            response=response,
+            continue_codes=[PhaseStatusCode.NEED_CLARIFICATION],
+        )
+        return result
 
     def _prepare_user_input_for_iteration(self) -> "PhaseResult | str":
         """準備當前迭代的 user input。
