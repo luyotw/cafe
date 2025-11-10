@@ -12,6 +12,21 @@ from aaf.core.types import PhaseResult, PhaseStatus, WorkflowMode, TokenUsage
 from aaf.core.permission import PermissionHandler
 
 
+def setup_agent_manager_mocks(agent_manager: MagicMock) -> None:
+    """Setup standard mocks for agent_manager used by PlanPhase."""
+    # Mock get_agent for _execute_agent_iteration (from Phase base class)
+    mock_agent = MagicMock()
+    mock_agent.config.cli.value = "copilot"
+    mock_agent.config.session_id = "test_session"
+    agent_manager.get_agent.return_value = mock_agent
+
+    # Mock get_agent_config for other methods
+    agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="copilot"))
+
+    # Mock get_total_token_usage
+    agent_manager.get_total_token_usage.return_value = TokenUsage()
+
+
 class TestPlanPhaseBasics:
     """Test basic PlanPhase functionality."""
 
@@ -19,11 +34,7 @@ class TestPlanPhaseBasics:
         """測試初始化 PlanPhase"""
         agent_manager = MagicMock(spec=AgentManager)
 
-        # Mock get_agent to return agent with config
-        mock_agent = MagicMock()
-        mock_agent.config.cli.value = "copilot"
-        mock_agent.config.session_id = "test_session"
-        agent_manager.get_agent.return_value = mock_agent
+        setup_agent_manager_mocks(agent_manager)
         permission_handler = MagicMock(spec=PermissionHandler)
 
         phase = PlanPhase(
@@ -42,11 +53,7 @@ class TestPlanPhaseBasics:
         """測試使用 GitHub mode 初始化"""
         agent_manager = MagicMock(spec=AgentManager)
 
-        # Mock get_agent to return agent with config
-        mock_agent = MagicMock()
-        mock_agent.config.cli.value = "copilot"
-        mock_agent.config.session_id = "test_session"
-        agent_manager.get_agent.return_value = mock_agent
+        setup_agent_manager_mocks(agent_manager)
         permission_handler = MagicMock(spec=PermissionHandler)
 
         phase = PlanPhase(
@@ -78,11 +85,7 @@ class TestLocalWorkflow:
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = ("AAF_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage())
 
-        # Mock get_agent to return agent with config
-        mock_agent = MagicMock()
-        mock_agent.config.cli.value = "copilot"
-        mock_agent.config.session_id = "test_session"
-        agent_manager.get_agent.return_value = mock_agent
+        setup_agent_manager_mocks(agent_manager)
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -110,11 +113,7 @@ class TestLocalWorkflow:
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = ("AAF_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage())
 
-        # Mock get_agent to return agent with config
-        mock_agent = MagicMock()
-        mock_agent.config.cli.value = "copilot"
-        mock_agent.config.session_id = "test_session"
-        agent_manager.get_agent.return_value = mock_agent
+        setup_agent_manager_mocks(agent_manager)
         permission_handler = MagicMock(spec=PermissionHandler)
 
         phase = PlanPhase(
@@ -150,11 +149,7 @@ class TestLocalWorkflow:
 
         agent_manager = MagicMock(spec=AgentManager)
 
-        # Mock get_agent to return agent with config
-        mock_agent = MagicMock()
-        mock_agent.config.cli.value = "copilot"
-        mock_agent.config.session_id = "test_session"
-        agent_manager.get_agent.return_value = mock_agent
+        setup_agent_manager_mocks(agent_manager)
         permission_handler = MagicMock(spec=PermissionHandler)
 
         phase = PlanPhase(
@@ -189,11 +184,7 @@ class TestLocalWorkflow:
         ]
         agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
 
-        # Mock get_agent to return agent with config
-        mock_agent = MagicMock()
-        mock_agent.config.cli.value = "claude"
-        mock_agent.config.session_id = "test_session"
-        agent_manager.get_agent.return_value = mock_agent
+        setup_agent_manager_mocks(agent_manager)
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -229,11 +220,7 @@ class TestGitHubWorkflow:
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = ("AAF_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage())
 
-        # Mock get_agent to return agent with config
-        mock_agent = MagicMock()
-        mock_agent.config.cli.value = "copilot"
-        mock_agent.config.session_id = "test_session"
-        agent_manager.get_agent.return_value = mock_agent
+        setup_agent_manager_mocks(agent_manager)
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -266,11 +253,7 @@ class TestGitHubWorkflow:
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = ("AAF_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage())
 
-        # Mock get_agent to return agent with config
-        mock_agent = MagicMock()
-        mock_agent.config.cli.value = "copilot"
-        mock_agent.config.session_id = "test_session"
-        agent_manager.get_agent.return_value = mock_agent
+        setup_agent_manager_mocks(agent_manager)
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -306,11 +289,7 @@ class TestPromptGeneration:
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = ("AAF_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage())
 
-        # Mock get_agent to return agent with config
-        mock_agent = MagicMock()
-        mock_agent.config.cli.value = "copilot"
-        mock_agent.config.session_id = "test_session"
-        agent_manager.get_agent.return_value = mock_agent
+        setup_agent_manager_mocks(agent_manager)
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -346,11 +325,7 @@ class TestPromptGeneration:
             ("AAF_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage()),
         ]
 
-        # Mock get_agent to return agent with config
-        mock_agent = MagicMock()
-        mock_agent.config.cli.value = "copilot"
-        mock_agent.config.session_id = "test_session"
-        agent_manager.get_agent.return_value = mock_agent
+        setup_agent_manager_mocks(agent_manager)
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -387,11 +362,7 @@ class TestAgentSelection:
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = ("AAF_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage())
 
-        # Mock get_agent to return agent with config
-        mock_agent = MagicMock()
-        mock_agent.config.cli.value = "copilot"
-        mock_agent.config.session_id = "test_session"
-        agent_manager.get_agent.return_value = mock_agent
+        setup_agent_manager_mocks(agent_manager)
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -418,11 +389,7 @@ class TestErrorHandling:
         """測試缺少需求檔案時失敗"""
         agent_manager = MagicMock(spec=AgentManager)
 
-        # Mock get_agent to return agent with config
-        mock_agent = MagicMock()
-        mock_agent.config.cli.value = "copilot"
-        mock_agent.config.session_id = "test_session"
-        agent_manager.get_agent.return_value = mock_agent
+        setup_agent_manager_mocks(agent_manager)
         permission_handler = MagicMock(spec=PermissionHandler)
 
         phase = PlanPhase(
@@ -441,11 +408,7 @@ class TestErrorHandling:
         """測試 GitHub mode 沒有 issue_id 時失敗"""
         agent_manager = MagicMock(spec=AgentManager)
 
-        # Mock get_agent to return agent with config
-        mock_agent = MagicMock()
-        mock_agent.config.cli.value = "copilot"
-        mock_agent.config.session_id = "test_session"
-        agent_manager.get_agent.return_value = mock_agent
+        setup_agent_manager_mocks(agent_manager)
         permission_handler = MagicMock(spec=PermissionHandler)
 
         phase = PlanPhase(
@@ -475,11 +438,7 @@ class TestErrorHandling:
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.side_effect = Exception("Agent error")
 
-        # Mock get_agent to return agent with config
-        mock_agent = MagicMock()
-        mock_agent.config.cli.value = "copilot"
-        mock_agent.config.session_id = "test_session"
-        agent_manager.get_agent.return_value = mock_agent
+        setup_agent_manager_mocks(agent_manager)
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -517,11 +476,7 @@ class TestPlanPhaseHistory:
             ("AAF_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage()),
         ]
 
-        # Mock get_agent to return agent with config
-        mock_agent = MagicMock()
-        mock_agent.config.cli.value = "copilot"
-        mock_agent.config.session_id = "test_session"
-        agent_manager.get_agent.return_value = mock_agent
+        setup_agent_manager_mocks(agent_manager)
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -568,11 +523,7 @@ class TestPlanPhaseHistory:
         agent_manager.execute.return_value = ("AAF_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage())
         agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
 
-        # Mock get_agent to return agent with config
-        mock_agent = MagicMock()
-        mock_agent.config.cli.value = "claude"
-        mock_agent.config.session_id = "test_session"
-        agent_manager.get_agent.return_value = mock_agent
+        setup_agent_manager_mocks(agent_manager)
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -624,11 +575,7 @@ class TestPlanPhaseHistory:
         # Only one call expected since non-interactive auto-confirms without calling agent again
         agent_manager.execute.side_effect = mock_agent_writes_plan
 
-        # Mock get_agent to return agent with config
-        mock_agent = MagicMock()
-        mock_agent.config.cli.value = "copilot"
-        mock_agent.config.session_id = "test_session"
-        agent_manager.get_agent.return_value = mock_agent
+        setup_agent_manager_mocks(agent_manager)
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -658,11 +605,7 @@ class TestPlanPhaseHistory:
 
         agent_manager = MagicMock(spec=AgentManager)
 
-        # Mock get_agent to return agent with config
-        mock_agent = MagicMock()
-        mock_agent.config.cli.value = "copilot"
-        mock_agent.config.session_id = "test_session"
-        agent_manager.get_agent.return_value = mock_agent
+        setup_agent_manager_mocks(agent_manager)
         permission_handler = MagicMock(spec=PermissionHandler)
 
         phase = PlanPhase(
@@ -685,11 +628,7 @@ class TestPlanPhaseHistory:
 
         agent_manager = MagicMock(spec=AgentManager)
 
-        # Mock get_agent to return agent with config
-        mock_agent = MagicMock()
-        mock_agent.config.cli.value = "copilot"
-        mock_agent.config.session_id = "test_session"
-        agent_manager.get_agent.return_value = mock_agent
+        setup_agent_manager_mocks(agent_manager)
         permission_handler = MagicMock(spec=PermissionHandler)
 
         phase = PlanPhase(
@@ -748,11 +687,7 @@ class TestPlanPhaseHistory:
 
         agent_manager = MagicMock(spec=AgentManager)
 
-        # Mock get_agent to return agent with config
-        mock_agent = MagicMock()
-        mock_agent.config.cli.value = "copilot"
-        mock_agent.config.session_id = "test_session"
-        agent_manager.get_agent.return_value = mock_agent
+        setup_agent_manager_mocks(agent_manager)
         permission_handler = MagicMock(spec=PermissionHandler)
 
         phase = PlanPhase(
@@ -776,11 +711,7 @@ class TestPlanPhaseHistory:
 
         agent_manager = MagicMock(spec=AgentManager)
 
-        # Mock get_agent to return agent with config
-        mock_agent = MagicMock()
-        mock_agent.config.cli.value = "copilot"
-        mock_agent.config.session_id = "test_session"
-        agent_manager.get_agent.return_value = mock_agent
+        setup_agent_manager_mocks(agent_manager)
         permission_handler = MagicMock(spec=PermissionHandler)
 
         phase = PlanPhase(
@@ -843,11 +774,7 @@ class TestPlanPhaseNeedClarification:
             ("AAF_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage()),
         ]
 
-        # Mock get_agent to return agent with config
-        mock_agent = MagicMock()
-        mock_agent.config.cli.value = "copilot"
-        mock_agent.config.session_id = "test_session"
-        agent_manager.get_agent.return_value = mock_agent
+        setup_agent_manager_mocks(agent_manager)
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -892,11 +819,7 @@ class TestPlanPhaseNeedClarification:
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = ("AAF_NEED_CLARIFICATION\n需要更多資訊", TokenUsage())
 
-        # Mock get_agent to return agent with config
-        mock_agent = MagicMock()
-        mock_agent.config.cli.value = "copilot"
-        mock_agent.config.session_id = "test_session"
-        agent_manager.get_agent.return_value = mock_agent
+        setup_agent_manager_mocks(agent_manager)
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -934,11 +857,7 @@ class TestPlanPhaseNeedClarification:
             ("AAF_READY_FOR_REVIEW\n完成", TokenUsage()),
         ]
 
-        # Mock get_agent to return agent with config
-        mock_agent = MagicMock()
-        mock_agent.config.cli.value = "copilot"
-        mock_agent.config.session_id = "test_session"
-        agent_manager.get_agent.return_value = mock_agent
+        setup_agent_manager_mocks(agent_manager)
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -998,11 +917,7 @@ class TestPlanPhaseNeedClarification:
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = ("AAF_NEED_CLARIFICATION\n需要更多資訊", TokenUsage())
 
-        # Mock get_agent to return agent with config
-        mock_agent = MagicMock()
-        mock_agent.config.cli.value = "copilot"
-        mock_agent.config.session_id = "test_session"
-        agent_manager.get_agent.return_value = mock_agent
+        setup_agent_manager_mocks(agent_manager)
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -1062,11 +977,7 @@ class TestPlanPhaseResume:
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = ("AAF_READY_FOR_REVIEW\n實作計畫已完成。", TokenUsage())
 
-        # Mock get_agent to return agent with config
-        mock_agent = MagicMock()
-        mock_agent.config.cli.value = "copilot"
-        mock_agent.config.session_id = "test_session"
-        agent_manager.get_agent.return_value = mock_agent
+        setup_agent_manager_mocks(agent_manager)
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -1111,11 +1022,7 @@ class TestPlanPhaseIterationDisplay:
         ]
         agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
 
-        # Mock get_agent to return agent with config
-        mock_agent = MagicMock()
-        mock_agent.config.cli.value = "claude"
-        mock_agent.config.session_id = "test_session"
-        agent_manager.get_agent.return_value = mock_agent
+        setup_agent_manager_mocks(agent_manager)
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -1194,11 +1101,7 @@ class TestPlanPhaseProgressTracking:
 
         agent_manager = MagicMock(spec=AgentManager)
 
-        # Mock get_agent to return agent with config
-        mock_agent = MagicMock()
-        mock_agent.config.cli.value = "copilot"
-        mock_agent.config.session_id = "test_session"
-        agent_manager.get_agent.return_value = mock_agent
+        setup_agent_manager_mocks(agent_manager)
         permission_handler = MagicMock(spec=PermissionHandler)
 
         phase = PlanPhase(
@@ -1232,11 +1135,7 @@ class TestPlanPhaseProgressTracking:
 
         agent_manager = MagicMock(spec=AgentManager)
 
-        # Mock get_agent to return agent with config
-        mock_agent = MagicMock()
-        mock_agent.config.cli.value = "copilot"
-        mock_agent.config.session_id = "test_session"
-        agent_manager.get_agent.return_value = mock_agent
+        setup_agent_manager_mocks(agent_manager)
         permission_handler = MagicMock(spec=PermissionHandler)
 
         phase = PlanPhase(
