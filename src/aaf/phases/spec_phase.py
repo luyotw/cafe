@@ -121,8 +121,18 @@ class SpecPhase(Phase):
         # Initialize display for better input handling
         self.display = Display()
 
-        # Load existing history if available
-        self._load_history()
+        # Restore state from last iteration file (if resuming)
+        if self.history_dir.exists():
+            iteration_files = sorted(self.history_dir.glob("iteration_*.json"))
+            if iteration_files:
+                last_iteration_file = iteration_files[-1]
+                with open(last_iteration_file, "r", encoding="utf-8") as f:
+                    last_data = json.load(f)
+                self.iteration = last_data.get("iteration", 0)
+                if "confirmed_requirements" in last_data:
+                    self.confirmed_requirements = last_data["confirmed_requirements"]
+                if "pending_questions" in last_data:
+                    self.pending_questions = last_data["pending_questions"]
 
     def execute(self) -> PhaseResult:
         """Execute requirements clarification phase.
@@ -256,300 +266,18 @@ class SpecPhase(Phase):
                     )
 
                 # Prepare user_input for this iteration
-                # Iteration 1: user_input is the initial user story/requirements
-                # Iteration 2+: user_input is the previous iteration's user_response
-                if self.iteration == 1:
-                    spec_file_path = Path(self.spec_file)
-                    current_user_input = spec_file_path.read_text() if spec_file_path.exists() else ""
-                else:
-                    # Get previous iteration's user_response from conversation history
-                    if self.conversation_history:
-                        current_user_input = self.conversation_history[-1].get("user_response", "")
-                    else:
-                        current_user_input = ""
+                result_or_input = self._prepare_user_input_for_iteration()
+                if isinstance(result_or_input, PhaseResult):
+                    # Method returned a PhaseResult (completion/failure/pause)
+                    return result_or_input
+                # Otherwise, it's the user input string
+                current_user_input = result_or_input
 
-                # Check if current iteration's user response came from resume
-                is_from_resume = False
-                if self.iteration <= len(self.conversation_history):
-                    current_conv = self.conversation_history[self.iteration - 1]
-                    is_from_resume = current_conv.get("from_resume", False)
-
-                # In non-interactive mode after iteration 1, read user response from stdin
-                if not self.interactive and self.iteration > 1:
-                    import sys
-                    user_response = sys.stdin.read().strip()
-
-                    # Remove END marker if present
-                    if user_response.upper().endswith("END"):
-                        lines = user_response.split('\n')
-                        if lines[-1].strip().upper() == "END":
-                            user_response = '\n'.join(lines[:-1]).strip()
-
-                    if not user_response:
-                        return PhaseResult(
-                            status=PhaseStatus.FAILED,
-                            message=f"No user response provided for iteration {self.iteration}",
-                            data={
-                                "iterations": self.iteration - 1,
-                                "last_iteration": self.iteration - 1,
-                            },
-                        )
-
-                    # Save user response to spec file
-                    self._save_user_response(user_response)
-
-                    # Update conversation history in memory with user response
-                    if self.conversation_history:
-                        self.conversation_history[-1]["user_response"] = user_response
-
-                # Generate prompt for this iteration
-                prompt = self._generate_prompt()
-
-                # Execute PM agent with Write tool access for writing spec.md
-                allowed_tools = ["write", "read"]
-                response, token_usage = self.agent_manager.execute(
-                    self.pm_agent,
-                    prompt,
-                    allowed_tools=allowed_tools
-                )
-
-                # Get agent metadata for history (for test compatibility, handle missing mock)
-                agent_cli = None
-                agent_session_id = None
-                try:
-                    agent_config = self.agent_manager.get_agent_config(self.pm_agent)
-                    # Get CLI value, but handle mock objects
-                    if hasattr(agent_config, 'cli') and hasattr(agent_config.cli, 'value'):
-                        cli_val = agent_config.cli.value
-                        # Ensure it's a string, not a mock
-                        if isinstance(cli_val, str):
-                            agent_cli = cli_val
-                    # Get session ID, but handle mock objects
-                    if hasattr(agent_config, 'session_id') and agent_config.session_id is not None:
-                        sid = agent_config.session_id
-                        # Ensure it's a string, not a mock
-                        if isinstance(sid, str):
-                            agent_session_id = sid
-                except (AttributeError, KeyError, TypeError):
-                    # In tests where get_agent_config is not mocked properly
-                    pass
-
-                # Extract status code from response
-                status_code = StatusCodeParser.extract(
-                    response,
-                    valid_codes=[
-                        PhaseStatusCode.CONFIRMED,
-                        PhaseStatusCode.NEED_CLARIFICATION,
-                        PhaseStatusCode.REJECTED,
-                    ],
-                )
-
-                # Handle status codes
-                if status_code == PhaseStatusCode.CONFIRMED:
-                    # Save generated requirements
-                    self._save_spec(response)
-
-                    # Save final iteration history
-                    self._save_iteration_history(
-                        user_input=current_user_input,
-                        prompt=prompt,
-                        pm_response=response,
-                        status=PhaseStatusCode.CONFIRMED,
-                        agent_cli=agent_cli,
-                        agent_session_id=agent_session_id,
-                        allowed_tools=allowed_tools,
-                    )
-
-                    # Save progress to status.json
-                    self._save_progress(status_code)
-
-                    # Get token usage statistics
-                    token_usage = self.agent_manager.get_total_token_usage()
-
-                    # Print token usage summary
-                    print()
-                    print("=" * 60)
-                    print("📊 Token Usage Summary")
-                    print("=" * 60)
-                    print(f"Input tokens:              {token_usage.input_tokens:,}")
-                    print(f"Output tokens:             {token_usage.output_tokens:,}")
-                    print(f"Cache creation tokens:     {token_usage.cache_creation_input_tokens:,}")
-                    print(f"Cache read tokens:         {token_usage.cache_read_input_tokens:,}")
-                    print(f"Total cost:                ${token_usage.total_cost_usd:.4f}")
-                    print("=" * 60)
-                    print()
-
-                    result_data = {
-                        "iterations": self.iteration,
-                        "final_response": response,
-                        "status_code": status_code.value,
-                        "token_usage": {
-                            "input_tokens": token_usage.input_tokens,
-                            "output_tokens": token_usage.output_tokens,
-                            "cache_creation_input_tokens": token_usage.cache_creation_input_tokens,
-                            "cache_read_input_tokens": token_usage.cache_read_input_tokens,
-                            "total_cost_usd": token_usage.total_cost_usd,
-                        }
-                    }
-
-                    # Add issue_id if GitHub mode and created new issue
-                    if self.workflow_mode == WorkflowMode.GITHUB and hasattr(self, '_created_issue_id'):
-                        result_data["issue_id"] = self._created_issue_id
-
-                    return PhaseResult(
-                        status=PhaseStatus.COMPLETED,
-                        message=f"Requirements clarified in {self.iteration} iteration(s)",
-                        data=result_data,
-                        token_usage=token_usage,
-                    )
-                elif status_code == PhaseStatusCode.REJECTED:
-                    return PhaseResult(
-                        status=PhaseStatus.FAILED,
-                        message=f"Requirements rejected in iteration {self.iteration}",
-                        data={
-                            "iterations": self.iteration,
-                            "final_response": response,
-                            "status_code": status_code.value,
-                        },
-                    )
-                elif status_code == PhaseStatusCode.NEED_CLARIFICATION:
-                    # Copy spec from history and sync to target (local file or GitHub issue)
-                    self._save_spec(response)
-
-                    # Save progress to status.json
-                    self._save_progress(status_code)
-
-                    # If this iteration's user response came from resume, we already have it
-                    # Save the iteration and continue loop (don't ask user again for this iteration)
-                    if is_from_resume:
-                        # Get user response from conversation history
-                        user_response_from_resume = self.conversation_history[self.iteration - 1]["user_response"]
-
-                        # Save iteration history
-                        self._save_iteration_history(
-                            user_input=current_user_input,
-                            prompt=prompt,
-                            pm_response=response,
-                            status=PhaseStatusCode.NEED_CLARIFICATION,
-                            agent_cli=agent_cli,
-                            agent_session_id=agent_session_id,
-                            allowed_tools=allowed_tools,
-                        )
-
-                        # Update the conversation entry with PM's response
-                        self.conversation_history[self.iteration - 1]["pm_response"] = response
-                        # Clear the from_resume flag so next iteration asks for user input normally
-                        self.conversation_history[self.iteration - 1]["from_resume"] = False
-
-                        # Continue to next iteration without asking user input
-                        continue
-
-                    if self.interactive:
-                        # Interactive mode: Display PM's questions and get user input
-
-                        # Save iteration history BEFORE asking user for response
-                        # This ensures we have a record even if user cancels
-                        self._save_iteration_history(
-                            user_input=current_user_input,
-                            prompt=prompt,
-                            pm_response=response,
-                            status=PhaseStatusCode.NEED_CLARIFICATION,
-                            agent_cli=agent_cli,
-                            agent_session_id=agent_session_id,
-                            allowed_tools=allowed_tools,
-                        )
-
-                        # Read the spec file
-                        spec_file = Path(self.spec_file)
-                        pm_content = spec_file.read_text() if spec_file.exists() else "（檔案未產生）"
-
-                        # Get CLI info for display
-                        pm_cli = self.agent_manager.get_agent_config(self.pm_agent).cli.value
-
-                        print(f"\n{'='*60}")
-                        print(f"PM ({self.pm_agent} by {pm_cli}) - Iteration {self.iteration}:")
-                        print(f"{'='*60}")
-                        print(pm_content)
-                        print(f"{'='*60}\n")
-
-                        # Get user's response using Display for better Unicode support
-                        user_response = self.display.get_multiline_input("請回答 PM 的問題")
-
-                        # Provide feedback after END input
-                        if user_response.strip():
-                            print()
-                            print("✅ 已收到您的回答，正在發送給 PM 處理...")
-                            print()
-
-                        if not user_response.strip():
-                            print("\n⚠️  沒有輸入內容，Phase 將終止。")
-                            return PhaseResult(
-                                status=PhaseStatus.FAILED,
-                                message="User provided no response to clarification questions",
-                                data={
-                                    "iterations": self.iteration,
-                                    "last_response": response,
-                                },
-                            )
-
-                        # Save user response to file for next iteration
-                        self._save_user_response(user_response)
-
-                        # Update conversation history
-                        self.conversation_history.append({
-                            "iteration": self.iteration,
-                            "pm_response": response,
-                            "user_response": user_response,
-                            "status": PhaseStatusCode.NEED_CLARIFICATION.value,
-                        })
-                    else:
-                        # Non-interactive mode: save PM's questions and exit
-                        # User response will be provided in next call via stdin
-                        self._save_iteration_history(
-                            user_input=current_user_input,
-                            prompt=prompt,
-                            pm_response=response,
-                            status=PhaseStatusCode.NEED_CLARIFICATION,
-                            agent_cli=agent_cli,
-                            agent_session_id=agent_session_id,
-                            allowed_tools=allowed_tools,
-                        )
-
-                        # Add to conversation history (without user response for now)
-                        self.conversation_history.append({
-                            "iteration": self.iteration,
-                            "pm_response": response,
-                            "user_response": "",  # Will be filled in next call
-                            "status": PhaseStatusCode.NEED_CLARIFICATION.value,
-                        })
-
-                        # Exit and wait for next call with user response
-                        return PhaseResult(
-                            status=PhaseStatus.IN_PROGRESS,
-                            message=f"Iteration {self.iteration}: PM asked clarification questions",
-                            data={
-                                "iterations": self.iteration,
-                                "status_code": PhaseStatusCode.NEED_CLARIFICATION.value,
-                            },
-                        )
-
-                    # Continue to next iteration (interactive mode only)
-                    continue
-                else:
-                    # No valid status code found
-                    if self.interactive:
-                        # Interactive mode: continue iteration
-                        continue
-                    else:
-                        # Non-interactive mode: exit and wait for next call
-                        return PhaseResult(
-                            status=PhaseStatus.IN_PROGRESS,
-                            message=f"Iteration {self.iteration}: No status code found, need more iterations",
-                            data={
-                                "iterations": self.iteration,
-                                "status_code": None,
-                            },
-                        )
+                # Execute full agent interaction cycle (generate prompt, execute, handle status)
+                result = self._execute_and_handle_agent_response(current_user_input)
+                if result:
+                    return result
+                # If result is None, continue to next iteration
 
         except KeyboardInterrupt:
             # User paused with Ctrl+C - save progress and allow resume

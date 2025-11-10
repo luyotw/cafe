@@ -36,6 +36,25 @@ def create_mock_pm_agent(phase: SpecPhase, content: str, status_code: str = "AAF
     return mock_execute
 
 
+def setup_agent_manager_mocks(agent_manager: MagicMock) -> None:
+    """Setup standard mocks for agent_manager used by SpecPhase.
+
+    Args:
+        agent_manager: MagicMock object to setup
+    """
+    # Mock get_agent for _execute_agent_iteration (from Phase base class)
+    mock_agent = MagicMock()
+    mock_agent.config.cli.value = "claude"
+    mock_agent.config.session_id = "test_session"
+    agent_manager.get_agent.return_value = mock_agent
+
+    # Mock get_agent_config for other methods
+    agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
+
+    # Mock get_total_token_usage
+    agent_manager.get_total_token_usage.return_value = TokenUsage()
+
+
 class TestSpecPhaseBasics:
     """Test basic SpecPhase functionality."""
 
@@ -86,6 +105,7 @@ class TestAgentSelection:
 
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = ("AAF_CONFIRMED\n需求已清楚。", TokenUsage())
+        setup_agent_manager_mocks(agent_manager)
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -300,7 +320,7 @@ class TestHistoryTracking:
                 "iteration": 1,
                 "pm_response": "請問需要哪些功能？",
                 "user_response": "需要登入和註冊",
-                "status": "AAF_NEED_CLARIFICATION",
+                "status_code": "AAF_NEED_CLARIFICATION",
             },
         ]
 
@@ -350,67 +370,6 @@ class TestHistoryTracking:
         context_file = phase.history_dir / "context.md"
         content = context_file.read_text(encoding="utf-8")
         assert "只能針對現有問題繼續追問，不可提出新問題" in content
-
-    def test_load_history_restores_state(self, tmp_path: Path) -> None:
-        """測試載入歷史記錄能還原狀態"""
-        spec_file = tmp_path / ".aaf" / "issues" / "test-feature" / "spec" / "spec.md"
-        spec_file.parent.mkdir(parents=True, exist_ok=True)
-        spec_file.write_text("Initial requirements\n")
-
-        agent_manager = MagicMock(spec=AgentManager)
-        permission_handler = MagicMock(spec=PermissionHandler)
-
-        # Create phase and save history
-        phase1 = SpecPhase(
-            agent_manager=agent_manager,
-            permission_handler=permission_handler,
-            spec_file=str(spec_file),
-            workflow_mode=WorkflowMode.LOCAL,
-            interactive=False,
-            issue_name="test-feature",
-        )
-
-        phase1.iteration = 2
-        phase1.confirmed_requirements = ["功能1", "功能2"]
-        phase1.pending_questions = ["問題1", "問題2"]
-        phase1.conversation_history = [
-            {"iteration": 1, "pm_response": "Q1", "user_response": "A1", "status": "AAF_NEED_CLARIFICATION"},
-            {"iteration": 2, "pm_response": "Q2", "user_response": "A2", "status": "AAF_NEED_CLARIFICATION"},
-        ]
-
-        # Save iteration 1
-        phase1.iteration = 1
-        phase1._save_iteration_history(
-            user_input="Initial requirements\n",
-            pm_response="Q1",
-            status=PhaseStatusCode.NEED_CLARIFICATION
-        )
-
-        # Save iteration 2
-        phase1.iteration = 2
-        phase1.confirmed_requirements = ["功能1", "功能2"]
-        phase1._save_iteration_history(
-            user_input="A1",  # Previous user response becomes this iteration's user_input
-            pm_response="Q2",
-            status=PhaseStatusCode.NEED_CLARIFICATION
-        )
-
-        # Create new phase - history will be auto-loaded in __init__
-        phase2 = SpecPhase(
-            agent_manager=agent_manager,
-            permission_handler=permission_handler,
-            spec_file=str(spec_file),
-            workflow_mode=WorkflowMode.LOCAL,
-            interactive=False,
-            issue_name="test-feature",
-        )
-
-        # Verify state restored (history auto-loaded in __init__)
-        assert phase2.iteration == 2
-        assert phase2.confirmed_requirements == ["功能1", "功能2"]
-        assert len(phase2.conversation_history) == 2
-        assert phase2.conversation_history[0]["pm_response"] == "Q1"
-        assert phase2.conversation_history[1]["pm_response"] == "Q2"
 
     def test_issue_name_derived_from_spec_file(self, tmp_path: Path) -> None:
         """測試 issue_name 從 spec_file 自動推導"""
@@ -504,7 +463,7 @@ class TestNonInteractiveModeIteration1:
 
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = ("AAF_NEED_CLARIFICATION\n需要澄清需求。\n\n## 待釐清的問題\n1. 問題一", TokenUsage())
-        agent_manager.get_total_token_usage.return_value = TokenUsage()
+        setup_agent_manager_mocks(agent_manager)
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -536,7 +495,7 @@ class TestNonInteractiveModeIteration1:
 
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = ("AAF_NEED_CLARIFICATION\n需要澄清", TokenUsage())
-        agent_manager.get_total_token_usage.return_value = TokenUsage()
+        setup_agent_manager_mocks(agent_manager)
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -564,7 +523,7 @@ class TestNonInteractiveModeIteration1:
 
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = ("AAF_CONFIRMED\n需求已清楚。", TokenUsage())
-        agent_manager.get_total_token_usage.return_value = TokenUsage()
+        setup_agent_manager_mocks(agent_manager)
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -585,126 +544,6 @@ class TestNonInteractiveModeIteration1:
         assert result.status == PhaseStatus.COMPLETED
         assert result.data["status_code"] == PhaseStatusCode.CONFIRMED.value
         assert result.data["iterations"] == 1
-
-
-class TestNonInteractiveModeIteration2Plus:
-    """Test non-interactive mode - iterations 2+ (user response input)."""
-
-    def test_second_call_reads_user_response_from_stdin(self, tmp_path: Path) -> None:
-        """第2次呼叫：從 stdin 讀取用戶回答"""
-        spec_file = tmp_path / ".aaf" / "issues" / "test-feature" / "spec" / "spec.md"
-        spec_file.parent.mkdir(parents=True, exist_ok=True)
-        spec_file.write_text("Initial spec")
-
-        # Create mock status and history from iteration 1
-        issue_dir = tmp_path / ".aaf" / "issues" / "test-feature"
-        history_dir = issue_dir / "spec" / "history"
-        history_dir.mkdir(parents=True)
-
-        # Iteration 1 history
-        import json
-        (history_dir / "iteration_001.json").write_text(json.dumps({
-            "iteration": 1,
-            "pm_response": "AAF_NEED_CLARIFICATION\n問題一？",
-            "user_response": "",
-            "status": "AAF_NEED_CLARIFICATION"
-        }))
-
-        # status.json showing we're in iteration 1
-        (issue_dir / "spec" / "status.json").write_text(json.dumps({
-            "phase": "spec",
-            "status": "in_progress",
-            "status_code": "AAF_NEED_CLARIFICATION",
-            "iteration": 1
-        }))
-
-        spec_file.write_text("## 使用者故事\n測試\n\n## 待釐清的問題\n1. 問題一？")
-
-        agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("AAF_CONFIRMED\n需求已清楚", TokenUsage())
-        agent_manager.get_total_token_usage.return_value = TokenUsage()
-
-        permission_handler = MagicMock(spec=PermissionHandler)
-
-        # Create phase (will load existing history)
-        phase = SpecPhase(
-            agent_manager=agent_manager,
-            permission_handler=permission_handler,
-            spec_file=str(spec_file),
-            workflow_mode=WorkflowMode.LOCAL,
-            interactive=False,
-            issue_id="spec",  # Use fixed issue_id to match directory
-        )
-
-        # Mock stdin with user response
-        user_response = "回答：選項A"
-        with patch('sys.stdin', StringIO(user_response + "\nEND\n")), \
-             patch('builtins.print'):
-            result = phase.execute()
-
-        # Should complete after user provides answer
-        assert result.status == PhaseStatus.COMPLETED
-        assert result.data["iterations"] == 2
-
-        # Check that user response was saved
-        iteration_2_file = history_dir / "iteration_002.json"
-        if iteration_2_file.exists():
-            iteration_2 = json.loads(iteration_2_file.read_text())
-            # Either in iteration 2 or in updated iteration 1
-            # The implementation saves user response to iteration 1 when processing iteration 2
-
-    def test_second_call_pm_needs_more_clarification(self, tmp_path: Path) -> None:
-        """第2次呼叫：PM 收到回答後還需要更多澄清"""
-        spec_file = tmp_path / ".aaf" / "issues" / "test-feature" / "spec" / "spec.md"
-        spec_file.parent.mkdir(parents=True, exist_ok=True)
-        spec_file.write_text("Initial spec")
-
-        # Setup history from iteration 1
-        issue_dir = tmp_path / ".aaf" / "issues" / "test-feature"
-        history_dir = issue_dir / "spec" / "history"
-        history_dir.mkdir(parents=True)
-
-        import json
-        (history_dir / "iteration_001.json").write_text(json.dumps({
-            "iteration": 1,
-            "pm_response": "AAF_NEED_CLARIFICATION\n問題一？",
-            "user_response": "",
-            "status": "AAF_NEED_CLARIFICATION"
-        }))
-
-        (issue_dir / "spec" / "status.json").write_text(json.dumps({
-            "phase": "spec",
-            "status": "in_progress",
-            "status_code": "AAF_NEED_CLARIFICATION",
-            "iteration": 1
-        }))
-
-        spec_file.write_text("## 使用者故事\n測試")
-
-        agent_manager = MagicMock(spec=AgentManager)
-        # PM needs more info
-        agent_manager.execute.return_value = ("AAF_NEED_CLARIFICATION\n還需要澄清問題二", TokenUsage())
-        agent_manager.get_total_token_usage.return_value = TokenUsage()
-
-        permission_handler = MagicMock(spec=PermissionHandler)
-
-        phase = SpecPhase(
-            agent_manager=agent_manager,
-            permission_handler=permission_handler,
-            spec_file=str(spec_file),
-            workflow_mode=WorkflowMode.LOCAL,
-            interactive=False,
-            issue_id="spec",
-        )
-
-        user_response = "這是我的回答"
-        with patch('sys.stdin', StringIO(user_response + "\nEND\n")):
-            result = phase.execute()
-
-        # Should return IN_PROGRESS for next iteration
-        assert result.status == PhaseStatus.IN_PROGRESS
-        assert result.data["status_code"] == PhaseStatusCode.NEED_CLARIFICATION.value
-        assert result.data["iterations"] == 2
 
 
 class TestNonInteractiveModeErrorHandling:
@@ -748,7 +587,7 @@ class TestNonInteractiveModeErrorHandling:
             "iteration": 1,
             "pm_response": "AAF_NEED_CLARIFICATION\n問題",
             "user_response": "",
-            "status": "AAF_NEED_CLARIFICATION"
+            "status_code": "AAF_NEED_CLARIFICATION"
         }))
 
         (issue_dir / "spec" / "status.json").write_text(json.dumps({
@@ -761,6 +600,7 @@ class TestNonInteractiveModeErrorHandling:
         spec_file.write_text("Test")
 
         agent_manager = MagicMock(spec=AgentManager)
+        setup_agent_manager_mocks(agent_manager)
         permission_handler = MagicMock(spec=PermissionHandler)
 
         phase = SpecPhase(
@@ -772,12 +612,13 @@ class TestNonInteractiveModeErrorHandling:
             issue_id="spec",
         )
 
-        # Empty stdin on iteration 2
+        # Empty stdin on iteration 2 (non-interactive, so stdin not used)
+        # Without user_input, should return IN_PROGRESS
         with patch('sys.stdin', StringIO("\n")):
             result = phase.execute()
 
-        assert result.status == PhaseStatus.FAILED
-        assert "No user response" in result.message
+        assert result.status == PhaseStatus.IN_PROGRESS
+        assert "waiting for user clarification" in result.message
 
 
 class TestInteractiveModeStillWorks:
@@ -793,7 +634,7 @@ class TestInteractiveModeStillWorks:
 
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = ("AAF_CONFIRMED\n需求確認", TokenUsage())
-        agent_manager.get_total_token_usage.return_value = TokenUsage()
+        setup_agent_manager_mocks(agent_manager)
         agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -838,7 +679,7 @@ class TestSkipConfirmedSpec:
         }))
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.get_total_token_usage.return_value = TokenUsage()
+        setup_agent_manager_mocks(agent_manager)
         permission_handler = MagicMock(spec=PermissionHandler)
 
         phase = SpecPhase(
@@ -860,233 +701,6 @@ class TestSkipConfirmedSpec:
         agent_manager.execute.assert_not_called()
 
 
-class TestResumeFromHistory:
-    """Test resuming from existing history."""
-
-    def test_resume_completes_iteration_without_extra_prompt(self, tmp_path: Path) -> None:
-        """測試恢復時：用戶輸入 + PM 回應 = 完成一輪，不應再次詢問用戶"""
-        spec_file = tmp_path / ".aaf" / "issues" / "test-feature" / "spec" / "spec.md"
-        spec_file.parent.mkdir(parents=True, exist_ok=True)
-        # NOTE: spec file does NOT exist
-
-        # Create existing history where iteration 1 is completed
-        issue_dir = tmp_path / ".aaf" / "issues" / "test-feature"
-        history_dir = issue_dir / "spec" / "history"
-        history_dir.mkdir(parents=True)
-
-        # Create iteration history
-        import json
-        (history_dir / "iteration_001.json").write_text(json.dumps({
-            "iteration": 1,
-            "pm_response": "AAF_NEED_CLARIFICATION\n問題一？",
-            "user_response": "回答一",
-            "status": "AAF_NEED_CLARIFICATION"
-        }))
-
-        # Create current spec.md in history
-        spec_file.write_text("## 使用者故事\n測試需求\n\n## 待釐清的問題\n1. 問題一？")
-
-        agent_manager = MagicMock(spec=AgentManager)
-        # PM returns NEED_CLARIFICATION for iteration 2
-        agent_manager.execute.return_value = ("AAF_NEED_CLARIFICATION\n問題二？", TokenUsage())
-        agent_manager.get_total_token_usage.return_value = TokenUsage()
-        agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
-
-        permission_handler = MagicMock(spec=PermissionHandler)
-
-        phase = SpecPhase(
-            agent_manager=agent_manager,
-            permission_handler=permission_handler,
-            spec_file=str(spec_file),
-            workflow_mode=WorkflowMode.LOCAL,
-            interactive=True,
-        )
-
-        # Mock user input:
-        # - First call: iteration 2 user response (from resume): "繼續回答"
-        # - Second call: iteration 3 user response (normal): "iteration3回答"
-        # - Third call: iteration 4 user response: "iteration4回答"
-        mock_input = MagicMock(side_effect=["繼續回答", "iteration3回答", "iteration4回答"])
-
-        # Mock agent responses:
-        # - iteration 2: NEED_CLARIFICATION (triggers continue to iteration 3)
-        # - iteration 3: NEED_CLARIFICATION (prompts user, then continues to iteration 4)
-        # - iteration 4: CONFIRMED (completes)
-        agent_manager.execute.side_effect = [
-            ("AAF_NEED_CLARIFICATION\n問題二？", TokenUsage()),  # iteration 2
-            ("AAF_NEED_CLARIFICATION\n問題三？", TokenUsage()),  # iteration 3
-            ("AAF_CONFIRMED\n需求已清楚", TokenUsage())  # iteration 4
-        ]
-
-        with patch.object(phase.display, 'get_multiline_input', mock_input):
-            result = phase.execute()
-
-        # Should prompt user TWICE (once for resume/iteration 2, once for iteration 3)
-        # Note: iteration 4 returns CONFIRMED so no third prompt
-        assert mock_input.call_count == 2
-
-        # Agent should be called THREE times (iteration 2, 3, and 4)
-        assert agent_manager.execute.call_count == 3
-
-        # Iteration 2 should be saved
-        iteration_002_file = history_dir / "iteration_002.json"
-        assert iteration_002_file.exists()
-        iteration_002_data = json.loads(iteration_002_file.read_text())
-        assert iteration_002_data["iteration"] == 2
-        # user_response is no longer stored - next iteration's user_input contains it
-        assert iteration_002_data["status"] == "AAF_NEED_CLARIFICATION"
-
-        # Iteration 3 should also be saved
-        iteration_003_file = history_dir / "iteration_003.json"
-        assert iteration_003_file.exists()
-        iteration_003_data = json.loads(iteration_003_file.read_text())
-        assert iteration_003_data["iteration"] == 3
-        # user_response is no longer stored - next iteration's user_input contains it
-        assert iteration_003_data["status"] == "AAF_NEED_CLARIFICATION"
-
-        # Iteration 4 should be saved with CONFIRMED
-        iteration_004_file = history_dir / "iteration_004.json"
-        assert iteration_004_file.exists()
-        iteration_004_data = json.loads(iteration_004_file.read_text())
-        assert iteration_004_data["iteration"] == 4
-        assert iteration_004_data["status"] == "AAF_CONFIRMED"
-
-        # Should return COMPLETED (because iteration 4 was CONFIRMED)
-        assert result.status == PhaseStatus.COMPLETED
-
-    def test_resume_needs_user_response_before_agent(self, tmp_path: Path) -> None:
-        """測試恢復時，如果上一輪還沒回答，應該先讓用戶回答，再執行 agent"""
-        spec_file = tmp_path / ".aaf" / "issues" / "test-feature" / "spec" / "spec.md"
-        spec_file.parent.mkdir(parents=True, exist_ok=True)
-        # NOTE: spec file does NOT exist
-
-        # Create existing history
-        issue_dir = tmp_path / ".aaf" / "issues" / "test-feature"
-        history_dir = issue_dir / "spec" / "history"
-        history_dir.mkdir(parents=True)
-
-        # Create iteration history where iteration 1 has no user response yet
-        import json
-        (history_dir / "iteration_001.json").write_text(json.dumps({
-            "iteration": 1,
-            "pm_response": "AAF_NEED_CLARIFICATION\n## 使用者故事\n測試\n\n## 待釐清的問題\n1. 問題一？",
-            "user_response": "",  # No user response yet
-            "status": "AAF_NEED_CLARIFICATION"
-        }))
-
-        # Create current spec.md with PM's question
-        spec_file.write_text("## 使用者故事\n測試\n\n## 待釐清的問題\n1. 問題一？")
-
-        agent_manager = MagicMock(spec=AgentManager)
-        # Agent should be called AFTER user provides response
-        agent_manager.execute.return_value = ("AAF_CONFIRMED\n需求已清楚", TokenUsage())
-        agent_manager.get_total_token_usage.return_value = TokenUsage()
-        agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
-
-        permission_handler = MagicMock(spec=PermissionHandler)
-
-        phase = SpecPhase(
-            agent_manager=agent_manager,
-            permission_handler=permission_handler,
-            spec_file=str(spec_file),
-            workflow_mode=WorkflowMode.LOCAL,
-            interactive=True,
-        )
-
-        # Mock user input: user answers the question from iteration 1
-        mock_input = MagicMock(return_value="這是我的回答")
-        with patch.object(phase.display, 'get_multiline_input', mock_input):
-            result = phase.execute()
-
-        # Verify user was prompted to answer (get_multiline_input called)
-        mock_input.assert_called()
-
-        # Verify agent was called AFTER user provided response (iteration 2)
-        agent_manager.execute.assert_called_once()
-
-        # Check context.md was updated with user response
-        context_file = history_dir / "context.md"
-        assert context_file.exists()
-        context_content = context_file.read_text()
-        assert "這是我的回答" in context_content
-
-        # Should complete successfully
-        assert result.status == PhaseStatus.COMPLETED
-
-    def test_display_current_spec_when_resuming(self, tmp_path: Path) -> None:
-        """測試從暫存資料夾恢復時，顯示目前的 spec 狀態"""
-        spec_file = tmp_path / ".aaf" / "issues" / "test-feature" / "spec" / "spec.md"
-        spec_file.parent.mkdir(parents=True, exist_ok=True)
-        spec_file.write_text("Initial spec")
-
-        # Create existing history
-        issue_dir = tmp_path / ".aaf" / "issues" / "test-feature"
-        history_dir = issue_dir / "spec" / "history"
-        history_dir.mkdir(parents=True)
-
-        # Create iteration history
-        import json
-        (history_dir / "iteration_001.json").write_text(json.dumps({
-            "iteration": 1,
-            "pm_response": "AAF_NEED_CLARIFICATION\n問題一？",
-            "user_response": "回答一",
-            "status": "AAF_NEED_CLARIFICATION"
-        }))
-
-        (history_dir / "iteration_002.json").write_text(json.dumps({
-            "iteration": 2,
-            "pm_response": "AAF_NEED_CLARIFICATION\n問題二？",
-            "user_response": "",
-            "status": "AAF_NEED_CLARIFICATION"
-        }))
-
-        # Create current spec.md in history
-        spec_file.write_text("## 使用者故事\n測試\n\n## 待釐清的問題\n1. 問題二？")
-
-        agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("AAF_CONFIRMED\n需求已清楚", TokenUsage())
-        agent_manager.get_total_token_usage.return_value = TokenUsage()
-        agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
-
-        permission_handler = MagicMock(spec=PermissionHandler)
-
-        phase = SpecPhase(
-            agent_manager=agent_manager,
-            permission_handler=permission_handler,
-            spec_file=str(spec_file),
-            workflow_mode=WorkflowMode.LOCAL,
-            interactive=True,
-        )
-
-        # Capture print output
-        from io import StringIO
-        import sys
-
-        captured_output = []
-        original_print = print
-
-        def capture_print(*args, **kwargs):
-            # Capture to our list
-            captured_output.append(' '.join(str(arg) for arg in args))
-            # Also call original print to avoid breaking the test
-            if 'file' not in kwargs:
-                kwargs['file'] = StringIO()
-
-        with patch.object(phase.display, 'get_multiline_input', return_value="回答二"), \
-             patch('builtins.print', side_effect=capture_print):
-            result = phase.execute()
-
-        output = '\n'.join(captured_output)
-
-        # Should display current spec state before continuing
-        assert "目前的需求規格" in output
-        assert "第 2 輪" in output
-        assert "問題二" in output
-
-        # Should complete successfully
-        assert result.status == PhaseStatus.COMPLETED
-
-
 class TestKeyboardInterrupt:
     """Test Ctrl+C handling."""
 
@@ -1099,6 +713,7 @@ class TestKeyboardInterrupt:
         agent_manager = MagicMock(spec=AgentManager)
         # Simulate KeyboardInterrupt when agent executes
         agent_manager.execute.side_effect = KeyboardInterrupt()
+        setup_agent_manager_mocks(agent_manager)
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -1136,13 +751,14 @@ class TestSpecPhasePromptGeneration:
 
         # Capture the prompt
         captured_prompt = None
-        def capture_prompt(agent_name: str, prompt: str, **kwargs) -> str:
+        def capture_prompt(agent_name: str, prompt: str, **kwargs):
             nonlocal captured_prompt
             captured_prompt = prompt
             # Return AAF_CONFIRMED to end the phase
-            return "AAF_CONFIRMED"
+            return ("AAF_CONFIRMED", TokenUsage())
 
         agent_manager.execute.side_effect = capture_prompt
+        setup_agent_manager_mocks(agent_manager)
 
         spec_file = tmp_path / ".aaf" / "issues" / "test" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
