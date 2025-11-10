@@ -332,6 +332,125 @@ class Phase(ABC):
 
         return response, status_code
 
+    def _ask_user_for_review_decision(self, item_name: str = "內容") -> str:
+        """詢問用戶對 READY_FOR_REVIEW 的決定（interactive 模式）。
+
+        Args:
+            item_name: 要確認的項目名稱（如「計畫」、「程式碼」、「需求」）
+
+        Returns:
+            str: "confirm", "reject", 或修改意見內容
+        """
+        # Use phase's display if available, otherwise create new one
+        if hasattr(self, 'display'):
+            display = self.display  # type: ignore
+        else:
+            from aaf.ui.display import Display
+            display = Display()
+
+        print(f"開發者認為{item_name}已完成。請確認：")
+        print("  [c] confirm - 確認，繼續")
+        print("  [r] reject - 拒絕，終止")
+        print("  [m] modify - 要求修改（輸入修改意見）")
+
+        while True:
+            choice = input("\n請選擇 [c/r/m]: ").strip().lower()
+
+            if choice == 'c':
+                return "confirm"
+            elif choice == 'r':
+                return "reject"
+            elif choice == 'm':
+                modification_request = display.get_multiline_input("請輸入修改意見")
+
+                if not modification_request.strip():
+                    print("\n⚠️  沒有輸入修改意見，請重新選擇。")
+                    continue
+
+                print()
+                print("✅ 已收到您的修改意見...")
+                print()
+
+                return modification_request
+            else:
+                print("❌ 無效選擇，請輸入 c, r, 或 m")
+
+    def _ask_user_for_clarification(self) -> str:
+        """詢問用戶對 NEED_CLARIFICATION 的回答（interactive 模式）。
+
+        Returns:
+            str: 用戶的回答
+        """
+        # Use phase's display if available, otherwise create new one
+        if hasattr(self, 'display'):
+            display = self.display  # type: ignore
+        else:
+            from aaf.ui.display import Display
+            display = Display()
+
+        return display.get_multiline_input("請回答問題")
+
+    def _process_review_decision(
+        self,
+        choice: str,
+        prev_data: Dict[str, Any],
+        phase_name: str,
+        phase_specific_data: Optional[Dict[str, Any]] = None,
+    ) -> "PhaseResult | str":
+        """處理用戶對 READY_FOR_REVIEW 的決定。
+
+        Args:
+            choice: "confirm", "reject", 或修改意見內容
+            prev_data: 上一輪的 iteration data
+            phase_name: Phase 名稱（用於訊息，如 "Implementation plan", "Requirements"）
+            phase_specific_data: Phase 特定的資料（用於保存 history）
+
+        Returns:
+            PhaseResult: 如果 confirm 或 reject
+            str: 如果要求修改，返回修改意見
+        """
+        if choice == "confirm":
+            # Save user confirmation as a new iteration
+            self._save_user_input(
+                user_input="confirm",
+                phase_specific_data=phase_specific_data or {},
+            )
+            self._update_iteration_history(
+                phase_specific_data={
+                    "response": "User confirmed",
+                    "user_action": "confirm",
+                },
+                prompt="",
+                agent_cli=None,
+                agent_session_id=None,
+                allowed_tools=None,
+                status_code=PhaseStatusCode.CONFIRMED,
+            )
+            self._save_progress(PhaseStatusCode.CONFIRMED)
+
+            return PhaseResult(
+                status=PhaseStatus.COMPLETED,
+                message=f"{phase_name} completed in {self.iteration} iteration(s)",
+                data={
+                    "iterations": self.iteration,
+                    "final_response": prev_data.get("response", ""),
+                    "status_code": PhaseStatusCode.CONFIRMED.value,
+                },
+            )
+        elif choice == "reject":
+            return PhaseResult(
+                status=PhaseStatus.FAILED,
+                message=f"{phase_name} rejected by user in iteration {self.iteration - 1}",
+                data={
+                    "iterations": self.iteration - 1,
+                    "final_response": prev_data.get("response", ""),
+                    "status_code": "USER_REJECTED",
+                },
+            )
+        else:
+            # choice is the modification request
+            return choice
+
     def _handle_standard_status_codes(
         self,
         status_code: Optional[PhaseStatusCode],

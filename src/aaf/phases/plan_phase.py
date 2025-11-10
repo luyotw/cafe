@@ -549,7 +549,7 @@ class PlanPhase(Phase):
         if prev_status == "AAF_READY_FOR_REVIEW":
             # 需要用戶選擇：confirm/reject/modify
             if self.interactive:
-                choice = self._ask_user_for_review_decision()
+                choice = self._ask_user_for_review_decision("實作計畫")
             else:
                 choice = self.user_input
                 if not choice:
@@ -565,7 +565,12 @@ class PlanPhase(Phase):
                     )
 
             # 處理用戶選擇（不再區分 interactive/non-interactive）
-            return self._process_review_decision(choice, prev_data)
+            return self._process_review_decision(
+                choice,
+                prev_data,
+                "Implementation plan",
+                {"dev_agent": self.dev_agent},
+            )
 
         elif prev_status == "AAF_NEED_CLARIFICATION":
             # 需要用戶回答問題
@@ -619,99 +624,4 @@ class PlanPhase(Phase):
         print(plan_content)
         print(f"{'='*60}\n")
 
-    def _ask_user_for_review_decision(self) -> str:
-        """詢問用戶對 READY_FOR_REVIEW 的決定（interactive 模式）。
-
-        Returns:
-            str: "confirm", "reject", 或修改意見內容
-        """
-        print("開發者認為實作計畫已完成。請確認：")
-        print("  [c] confirm - 確認計畫，繼續實作")
-        print("  [r] reject - 拒絕計畫，終止")
-        print("  [m] modify - 要求修改（輸入修改意見）")
-
-        while True:
-            choice = input("\n請選擇 [c/r/m]: ").strip().lower()
-
-            if choice == 'c':
-                return "confirm"
-            elif choice == 'r':
-                return "reject"
-            elif choice == 'm':
-                modification_request = self.display.get_multiline_input("請輸入修改意見")
-
-                if not modification_request.strip():
-                    print("\n⚠️  沒有輸入修改意見，請重新選擇。")
-                    continue
-
-                print()
-                print("✅ 已收到您的修改意見，正在重新規劃...")
-                print()
-
-                return modification_request
-            else:
-                print("❌ 無效選擇，請輸入 c, r, 或 m")
-
-    def _ask_user_for_clarification(self) -> str:
-        """詢問用戶對 NEED_CLARIFICATION 的回答（interactive 模式）。
-
-        Returns:
-            str: 用戶的回答
-        """
-        return self.display.get_multiline_input("請回答開發者的問題")
-
-    def _process_review_decision(
-        self, choice: str, prev_data: Dict[str, Any]
-    ) -> "PhaseResult | str":
-        """處理用戶對 READY_FOR_REVIEW 的決定。
-
-        Args:
-            choice: "confirm", "reject", 或修改意見內容
-            prev_data: 上一輪的 iteration data
-
-        Returns:
-            PhaseResult: 如果 confirm 或 reject
-            str: 如果要求修改，返回修改意見
-        """
-        if choice == "confirm":
-            # Save user confirmation as a new iteration
-            self._save_user_input(
-                user_input="confirm",
-                phase_specific_data={"dev_agent": self.dev_agent},
-            )
-            self._update_iteration_history(
-                phase_specific_data={
-                    "response": "User confirmed the plan",
-                    "user_action": "confirm",
-                },
-                prompt="",
-                agent_cli=None,
-                agent_session_id=None,
-                allowed_tools=None,
-                status_code=PhaseStatusCode.CONFIRMED,
-            )
-            self._save_progress(PhaseStatusCode.CONFIRMED)
-
-            return PhaseResult(
-                status=PhaseStatus.COMPLETED,
-                message=f"Implementation plan completed in {self.iteration} iteration(s)",
-                data={
-                    "iterations": self.iteration,
-                    "final_response": prev_data.get("response", ""),
-                    "status_code": PhaseStatusCode.CONFIRMED.value,
-                },
-            )
-        elif choice == "reject":
-            return PhaseResult(
-                status=PhaseStatus.FAILED,
-                message=f"Implementation plan rejected by user in iteration {self.iteration - 1}",
-                data={
-                    "iterations": self.iteration - 1,
-                    "final_response": prev_data.get("response", ""),
-                    "status_code": "USER_REJECTED",
-                },
-            )
-        else:
-            # choice is the modification request
-            return choice
 
