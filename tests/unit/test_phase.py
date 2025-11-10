@@ -301,6 +301,51 @@ class TestExecuteAgentIteration:
                 valid_status_codes=[PhaseStatusCode.CONFIRMED],
             )
 
+    def test_execute_agent_iteration_only_passes_allowed_tools(self, tmp_path: Path) -> None:
+        """測試 _execute_agent_iteration 只傳遞 allowed_tools 給 agent_manager.execute()"""
+        history_dir = tmp_path / "history"
+        history_dir.mkdir(parents=True)
+
+        class TestPhase(Phase):
+            def __init__(self, agent_manager: MagicMock, history_dir: Path):
+                self.agent_manager = agent_manager
+                self.history_dir = history_dir
+                self.iteration = 1
+
+            def execute(self) -> PhaseResult:
+                return PhaseResult(status=PhaseStatus.COMPLETED)
+
+            def _save_progress(self, status_code: PhaseStatusCode) -> None:
+                """Mock save progress"""
+                pass
+
+        # Mock agent manager
+        agent_manager = MagicMock()
+        mock_agent = MagicMock()
+        mock_agent.config.cli.value = "claude"
+        mock_agent.config.session_id = "test_session"
+        agent_manager.get_agent.return_value = mock_agent
+        agent_manager.execute.return_value = ("AAF_CONFIRMED\n測試完成", TokenUsage())
+
+        phase = TestPhase(agent_manager, history_dir)
+
+        # Execute with allowed_tools
+        phase._execute_agent_iteration(
+            agent_name="test_agent",
+            prompt="Test prompt",
+            user_input="Test input",
+            valid_status_codes=[PhaseStatusCode.CONFIRMED],
+            allowed_tools=["write", "read", "bash"],
+        )
+
+        # Verify agent_manager.execute was called with correct parameters
+        # Should only have: agent_name, prompt, allowed_tools (NO denied_tools)
+        agent_manager.execute.assert_called_once_with(
+            "test_agent",
+            "Test prompt",
+            allowed_tools=["write", "read", "bash"],
+        )
+
 
 class TestHandleStandardStatusCodes:
     """測試 Phase._handle_standard_status_codes() 通用方法"""

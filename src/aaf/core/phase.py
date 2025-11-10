@@ -290,7 +290,6 @@ class Phase(ABC):
             agent_name,
             prompt,
             allowed_tools=allowed_tools,
-            denied_tools=denied_tools,
         )
 
         # 5. 檢查空回應
