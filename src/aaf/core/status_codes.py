@@ -15,33 +15,19 @@ class PhaseStatusCode(str, Enum):
     """
 
     # ========== Universal Status Codes ==========
-    COMPLETED = "AAF_COMPLETED"           # Phase successfully completed
-    FAILED = "AAF_FAILED"                 # Phase failed, stop workflow
-    RETRY = "AAF_RETRY"                   # Retry this phase
-    MANUAL_REVIEW = "AAF_MANUAL_REVIEW"   # Need human review
-    SKIP = "AAF_SKIP"                     # Skip this phase
     NO_RESPONSE = "AAF_NO_RESPONSE"       # Agent returned empty response
 
     # ========== Requirements & Analysis Phase ==========
-    CONFIRMED = "AAF_CONFIRMED"                   # Requirements/Analysis confirmed
+    CONFIRMED = "AAF_CONFIRMED"                   # Requirements/Analysis/Review confirmed
     NEED_CLARIFICATION = "AAF_NEED_CLARIFICATION" # Need more information
-    REJECTED = "AAF_REJECTED"                     # Requirements/Analysis rejected
+    REJECTED = "AAF_REJECTED"                     # Requirements/Analysis/Review rejected
     READY_FOR_REVIEW = "AAF_READY_FOR_REVIEW"     # Plan ready for user review
 
     # ========== Review Phase ==========
-    APPROVED = "AAF_APPROVED"             # Code review approved
-    LGTM = "AAF_LGTM"                     # Looks Good To Me (approved)
     NEEDS_CHANGES = "AAF_NEEDS_CHANGES"   # Code needs changes
-    NEEDS_MAJOR_CHANGES = "AAF_NEEDS_MAJOR_CHANGES"  # Major refactoring needed
-
-    # ========== Implementation Phase ==========
-    COMMITTED = "AAF_COMMITTED"           # Code committed successfully
-    NO_CHANGES = "AAF_NO_CHANGES"         # No code changes needed
 
     # ========== Authorization ==========
     NEED_PERMISSION = "AAF_NEED_PERMISSION"       # Need user permission
-    PERMISSION_GRANTED = "AAF_PERMISSION_GRANTED" # Permission granted
-    PERMISSION_DENIED = "AAF_PERMISSION_DENIED"   # Permission denied
 
 
 class StatusCodeParser:
@@ -115,11 +101,7 @@ class StatusCodeParser:
             True if code indicates success
         """
         success_codes = {
-            PhaseStatusCode.COMPLETED,
             PhaseStatusCode.CONFIRMED,
-            PhaseStatusCode.APPROVED,
-            PhaseStatusCode.LGTM,
-            PhaseStatusCode.COMMITTED,
         }
         return code in success_codes
 
@@ -134,9 +116,7 @@ class StatusCodeParser:
             True if code indicates failure
         """
         failure_codes = {
-            PhaseStatusCode.FAILED,
             PhaseStatusCode.REJECTED,
-            PhaseStatusCode.PERMISSION_DENIED,
         }
         return code in failure_codes
 
@@ -151,10 +131,8 @@ class StatusCodeParser:
             True if code indicates retry/continue
         """
         retry_codes = {
-            PhaseStatusCode.RETRY,
             PhaseStatusCode.NEED_CLARIFICATION,
             PhaseStatusCode.NEEDS_CHANGES,
-            PhaseStatusCode.NEEDS_MAJOR_CHANGES,
             PhaseStatusCode.NEED_PERMISSION,
         }
         return code in retry_codes
@@ -170,7 +148,6 @@ class StatusCodeParser:
             True if human input needed
         """
         human_input_codes = {
-            PhaseStatusCode.MANUAL_REVIEW,
             PhaseStatusCode.NEED_PERMISSION,
             PhaseStatusCode.NEED_CLARIFICATION,
             PhaseStatusCode.READY_FOR_REVIEW,

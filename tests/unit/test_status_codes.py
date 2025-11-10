@@ -30,11 +30,11 @@ class TestStatusCodeParser:
 
     def test_extract_from_middle_of_text(self) -> None:
         """測試從文本中間提取狀態碼"""
-        response = "我仔細審查過程式碼，看起來很好。AAF_LGTM！"
+        response = "我仔細審查過需求，確認沒問題。AAF_CONFIRMED！"
 
         code = StatusCodeParser.extract(response)
 
-        assert code == PhaseStatusCode.LGTM
+        assert code == PhaseStatusCode.CONFIRMED
 
     def test_extract_with_valid_codes_filter(self) -> None:
         """測試使用 valid_codes 過濾"""
@@ -98,15 +98,6 @@ class TestStatusCodeParser:
         # 應該回傳第一行的 NEEDS_CHANGES，而不是後面的 CONFIRMED
         assert code == PhaseStatusCode.NEEDS_CHANGES
 
-    def test_extract_prioritizes_longer_codes(self) -> None:
-        """測試優先匹配較長的狀態碼"""
-        # NEEDS_MAJOR_CHANGES 包含 NEEDS_CHANGES，應該匹配較長的
-        response = "AAF_NEEDS_MAJOR_CHANGES"
-
-        code = StatusCodeParser.extract(response)
-
-        assert code == PhaseStatusCode.NEEDS_MAJOR_CHANGES
-
     def test_extract_multiple_codes_returns_first_valid(self) -> None:
         """測試多個狀態碼時回傳第一個有效的"""
         response = "AAF_CONFIRMED\n但是可能需要 AAF_RETRY"
@@ -140,46 +131,38 @@ class TestStatusCodeClassification:
 
     def test_is_success(self) -> None:
         """測試成功狀態碼判斷"""
-        assert StatusCodeParser.is_success(PhaseStatusCode.COMPLETED) is True
         assert StatusCodeParser.is_success(PhaseStatusCode.CONFIRMED) is True
-        assert StatusCodeParser.is_success(PhaseStatusCode.APPROVED) is True
-        assert StatusCodeParser.is_success(PhaseStatusCode.LGTM) is True
-        assert StatusCodeParser.is_success(PhaseStatusCode.COMMITTED) is True
 
-        assert StatusCodeParser.is_success(PhaseStatusCode.FAILED) is False
-        assert StatusCodeParser.is_success(PhaseStatusCode.RETRY) is False
+        assert StatusCodeParser.is_success(PhaseStatusCode.REJECTED) is False
+        assert StatusCodeParser.is_success(PhaseStatusCode.NEED_CLARIFICATION) is False
         assert StatusCodeParser.is_success(None) is False
 
     def test_is_failure(self) -> None:
         """測試失敗狀態碼判斷"""
-        assert StatusCodeParser.is_failure(PhaseStatusCode.FAILED) is True
         assert StatusCodeParser.is_failure(PhaseStatusCode.REJECTED) is True
-        assert StatusCodeParser.is_failure(PhaseStatusCode.PERMISSION_DENIED) is True
 
-        assert StatusCodeParser.is_failure(PhaseStatusCode.COMPLETED) is False
-        assert StatusCodeParser.is_failure(PhaseStatusCode.RETRY) is False
+        assert StatusCodeParser.is_failure(PhaseStatusCode.CONFIRMED) is False
+        assert StatusCodeParser.is_failure(PhaseStatusCode.NEED_CLARIFICATION) is False
         assert StatusCodeParser.is_failure(None) is False
 
     def test_is_retry(self) -> None:
         """測試重試狀態碼判斷"""
-        assert StatusCodeParser.is_retry(PhaseStatusCode.RETRY) is True
         assert StatusCodeParser.is_retry(PhaseStatusCode.NEED_CLARIFICATION) is True
         assert StatusCodeParser.is_retry(PhaseStatusCode.NEEDS_CHANGES) is True
-        assert StatusCodeParser.is_retry(PhaseStatusCode.NEEDS_MAJOR_CHANGES) is True
         assert StatusCodeParser.is_retry(PhaseStatusCode.NEED_PERMISSION) is True
 
-        assert StatusCodeParser.is_retry(PhaseStatusCode.COMPLETED) is False
-        assert StatusCodeParser.is_retry(PhaseStatusCode.FAILED) is False
+        assert StatusCodeParser.is_retry(PhaseStatusCode.CONFIRMED) is False
+        assert StatusCodeParser.is_retry(PhaseStatusCode.REJECTED) is False
         assert StatusCodeParser.is_retry(None) is False
 
     def test_needs_human_input(self) -> None:
         """測試需要人工介入的狀態碼判斷"""
-        assert StatusCodeParser.needs_human_input(PhaseStatusCode.MANUAL_REVIEW) is True
         assert StatusCodeParser.needs_human_input(PhaseStatusCode.NEED_PERMISSION) is True
         assert StatusCodeParser.needs_human_input(PhaseStatusCode.NEED_CLARIFICATION) is True
+        assert StatusCodeParser.needs_human_input(PhaseStatusCode.READY_FOR_REVIEW) is True
 
-        assert StatusCodeParser.needs_human_input(PhaseStatusCode.COMPLETED) is False
-        assert StatusCodeParser.needs_human_input(PhaseStatusCode.RETRY) is False
+        assert StatusCodeParser.needs_human_input(PhaseStatusCode.CONFIRMED) is False
+        assert StatusCodeParser.needs_human_input(PhaseStatusCode.NEEDS_CHANGES) is False
         assert StatusCodeParser.needs_human_input(None) is False
 
 
@@ -205,14 +188,14 @@ class TestGenerateStatusCodePrompt:
     def test_prompt_includes_all_codes(self) -> None:
         """測試提示包含所有狀態碼"""
         codes = [
-            PhaseStatusCode.APPROVED,
+            PhaseStatusCode.CONFIRMED,
             PhaseStatusCode.NEEDS_CHANGES,
-            PhaseStatusCode.NEEDS_MAJOR_CHANGES,
+            PhaseStatusCode.REJECTED,
         ]
         descriptions = {
-            PhaseStatusCode.APPROVED: "審核通過",
+            PhaseStatusCode.CONFIRMED: "審核通過",
             PhaseStatusCode.NEEDS_CHANGES: "需要小幅修改",
-            PhaseStatusCode.NEEDS_MAJOR_CHANGES: "需要大幅重構",
+            PhaseStatusCode.REJECTED: "需要拒絕",
         }
 
         prompt = generate_status_code_prompt(codes, descriptions)

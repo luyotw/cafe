@@ -51,7 +51,7 @@ class TestCacheEntry:
         timestamp = datetime.now()
         data = {
             "phase_name": "review",
-            "status_code": "AAF_LGTM",  # Status codes have AAF_ prefix
+            "status_code": "AAF_CONFIRMED",  # Status codes have AAF_ prefix
             "response": "Code looks good",
             "content_hash": "ghi789",
             "timestamp": timestamp.isoformat()
@@ -60,7 +60,7 @@ class TestCacheEntry:
         entry = CacheEntry.from_dict(data)
 
         assert entry.phase_name == "review"
-        assert entry.status_code == PhaseStatusCode.LGTM
+        assert entry.status_code == PhaseStatusCode.CONFIRMED
         assert entry.response == "Code looks good"
         assert entry.content_hash == "ghi789"
         assert entry.timestamp.isoformat() == timestamp.isoformat()
@@ -194,7 +194,7 @@ class TestPhaseCache:
         # Create multiple cache files
         cache.save("requirements", PhaseStatusCode.CONFIRMED, "OK", "h1")
         cache.save("analysis", PhaseStatusCode.CONFIRMED, "OK", "h2")
-        cache.save("review", PhaseStatusCode.LGTM, "OK", "h3")
+        cache.save("review", PhaseStatusCode.CONFIRMED, "OK", "h3")
 
         cache_dir = tmp_path / "session_test_clear_all"
         assert len(list(cache_dir.glob("*.json"))) == 3
