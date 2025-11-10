@@ -62,6 +62,7 @@ class SpecPhase(Phase):
         interactive: bool = True,
         issue_name: Optional[str] = None,
         rigor: Optional["SpecRigor"] = None,
+        user_input: str = "",
     ) -> None:
         """Initialize requirements phase.
 
@@ -75,6 +76,7 @@ class SpecPhase(Phase):
             interactive: Enable interactive mode for user input (default: True)
             issue_name: Issue name for history tracking (default: derived from spec_file)
             rigor: Specification rigor level (default: medium)
+            user_input: User input for non-interactive mode (default: "")
         """
         from aaf.core.types import SpecRigor
 
@@ -85,6 +87,7 @@ class SpecPhase(Phase):
         self.issue_id = issue_id
         self.pm_agent = pm_agent
         self.interactive = interactive
+        self.user_input = user_input
 
         # Track if rigor was explicitly set (for interactive prompting)
         if rigor is not None:
@@ -563,6 +566,206 @@ class SpecPhase(Phase):
                 status=PhaseStatus.FAILED,
                 message=f"Requirements phase failed: {e}",
             )
+
+    def _execute_and_handle_agent_response(self, user_input: str) -> Optional[PhaseResult]:
+        """執行完整的 agent 互動循環：生成 prompt、執行 agent、處理 status code。
+
+        Args:
+            user_input: 用戶在這一輪的輸入
+
+        Returns:
+            PhaseResult 如果應該結束 phase，None 如果應該繼續下一輪循環
+        """
+        # Generate prompt for this iteration
+        prompt = self._generate_prompt()
+
+        # Execute agent iteration using common method
+        response, status_code = self._execute_agent_iteration(
+            agent_name=self.pm_agent,
+            prompt=prompt,
+            user_input=user_input,
+            valid_status_codes=[
+                PhaseStatusCode.CONFIRMED,
+                PhaseStatusCode.NEED_CLARIFICATION,
+                PhaseStatusCode.REJECTED,
+            ],
+            allowed_tools=["write", "read"],
+        )
+
+        # Handle CONFIRMED status - return completed result
+        if status_code == PhaseStatusCode.CONFIRMED:
+            self._save_spec(response)
+            self._save_progress(status_code)
+
+            token_usage = self.agent_manager.get_total_token_usage()
+
+            # Print token usage summary
+            print()
+            print("=" * 60)
+            print("📊 Token Usage Summary")
+            print("=" * 60)
+            print(f"Input tokens:              {token_usage.input_tokens:,}")
+            print(f"Output tokens:             {token_usage.output_tokens:,}")
+            print(f"Cache creation tokens:     {token_usage.cache_creation_input_tokens:,}")
+            print(f"Cache read tokens:         {token_usage.cache_read_input_tokens:,}")
+            print(f"Total cost:                ${token_usage.total_cost_usd:.4f}")
+            print("=" * 60)
+            print()
+
+            result_data = {
+                "iterations": self.iteration,
+                "final_response": response,
+                "status_code": status_code.value,
+                "token_usage": {
+                    "input_tokens": token_usage.input_tokens,
+                    "output_tokens": token_usage.output_tokens,
+                    "cache_creation_input_tokens": token_usage.cache_creation_input_tokens,
+                    "cache_read_input_tokens": token_usage.cache_read_input_tokens,
+                    "total_cost_usd": token_usage.total_cost_usd,
+                }
+            }
+
+            # Add issue_id if GitHub mode and created new issue
+            if self.workflow_mode == WorkflowMode.GITHUB and hasattr(self, '_created_issue_id'):
+                result_data["issue_id"] = self._created_issue_id
+
+            return PhaseResult(
+                status=PhaseStatus.COMPLETED,
+                message=f"Requirements clarified in {self.iteration} iteration(s)",
+                data=result_data,
+                token_usage=token_usage,
+            )
+
+        # Handle REJECTED status - return failed result
+        elif status_code == PhaseStatusCode.REJECTED:
+            return PhaseResult(
+                status=PhaseStatus.FAILED,
+                message=f"Requirements rejected in iteration {self.iteration}",
+                data={
+                    "iterations": self.iteration,
+                    "final_response": response,
+                    "status_code": status_code.value,
+                },
+            )
+
+        # Handle NEED_CLARIFICATION - save progress and continue
+        elif status_code == PhaseStatusCode.NEED_CLARIFICATION:
+            self._save_spec(response)
+            self._save_progress(status_code)
+
+            if self.interactive:
+                # Interactive mode: continue to next iteration
+                return None
+            else:
+                # Non-interactive mode: exit and wait for next call with user response
+                return PhaseResult(
+                    status=PhaseStatus.IN_PROGRESS,
+                    message=f"Iteration {self.iteration}: PM asked clarification questions",
+                    data={
+                        "iterations": self.iteration,
+                        "status_code": PhaseStatusCode.NEED_CLARIFICATION.value,
+                    },
+                )
+
+        # Handle no status code or other cases
+        else:
+            if self.interactive:
+                # Interactive mode: continue iteration
+                return None
+            else:
+                # Non-interactive mode: exit and wait for next call
+                return PhaseResult(
+                    status=PhaseStatus.IN_PROGRESS,
+                    message=f"Iteration {self.iteration}: No status code found, need more iterations",
+                    data={
+                        "iterations": self.iteration,
+                        "status_code": None,
+                    },
+                )
+
+    def _prepare_user_input_for_iteration(self) -> "PhaseResult | str":
+        """準備當前迭代的 user input。
+
+        在最開始就取得所有需要的用戶輸入：
+        - Interactive: 從 stdin 詢問用戶
+        - Non-interactive: 從 self.user_input 取得
+
+        之後的處理邏輯完全相同，不再區分 interactive/non-interactive。
+
+        Returns:
+            PhaseResult: 如果需要結束/暫停 phase
+            str: 用戶輸入內容（供 agent 使用）
+        """
+        # Iteration 1: user_input is the initial user story from spec file
+        if self.iteration == 1:
+            spec_file_path = Path(self.spec_file)
+            return spec_file_path.read_text() if spec_file_path.exists() else ""
+
+        # Iteration 2+: Display current spec content (interactive only)
+        if self.interactive:
+            self._display_current_spec()
+
+        # Iteration 2+: Check previous iteration's status and get user input
+        prev_iteration_file = self.history_dir / f"iteration_{self.iteration - 1:03d}.json"
+        if not prev_iteration_file.exists():
+            return ""
+
+        with open(prev_iteration_file, "r", encoding="utf-8") as f:
+            prev_data = json.load(f)
+        prev_status = prev_data.get("status_code", "")
+
+        # 根據上一輪狀態，取得用戶輸入
+        if prev_status == "AAF_NEED_CLARIFICATION":
+            # 需要用戶回答問題
+            if self.interactive:
+                clarification = self._ask_user_for_clarification()
+            else:
+                clarification = self.user_input
+                if not clarification:
+                    # Non-interactive 但沒提供輸入 → 暫停
+                    return PhaseResult(
+                        status=PhaseStatus.IN_PROGRESS,
+                        message=f"Spec phase paused after iteration {self.iteration - 1}, waiting for user clarification",
+                        data={
+                            "iterations": self.iteration - 1,
+                            "last_response": prev_data.get("pm_response", prev_data.get("response", "")),
+                            "status_code": "AAF_NEED_CLARIFICATION",
+                        },
+                    )
+
+            # 處理用戶回答（不再區分 interactive/non-interactive）
+            if not clarification.strip():
+                return PhaseResult(
+                    status=PhaseStatus.FAILED,
+                    message="User provided no response to clarification questions",
+                    data={
+                        "iterations": self.iteration - 1,
+                        "last_response": prev_data.get("pm_response", prev_data.get("response", "")),
+                    },
+                )
+
+            if self.interactive:
+                print()
+                print("✅ 已收到您的回答，正在發送給 PM 處理...")
+                print()
+
+            return clarification
+        else:
+            return ""
+
+    def _display_current_spec(self) -> None:
+        """顯示目前的 spec.md 內容（僅 interactive 模式）。"""
+        spec_file = Path(self.spec_file)
+        spec_content = spec_file.read_text() if spec_file.exists() else "（檔案未產生）"
+
+        # Get PM CLI info for display
+        pm_cli = self.agent_manager.get_agent_config(self.pm_agent).cli.value
+
+        print(f"\n{'='*60}")
+        print(f"PM ({self.pm_agent} by {pm_cli}) - 目前規格內容 (Iteration {self.iteration - 1}):")
+        print(f"{'='*60}")
+        print(spec_content)
+        print(f"{'='*60}\n")
 
     def _prompt_for_rigor(self) -> None:
         """Prompt user to select rigor level if not already set."""
