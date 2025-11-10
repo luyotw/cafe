@@ -323,7 +323,6 @@ class SpecPhase(Phase):
         # Handle CONFIRMED status - return completed result
         if status_code == PhaseStatusCode.CONFIRMED:
             self._sync_spec_to_github(response)
-            self._save_progress(status_code)
 
             token_usage = self.agent_manager.get_total_token_usage()
 
@@ -364,10 +363,10 @@ class SpecPhase(Phase):
                 token_usage=token_usage,
             )
 
-        # Handle NEED_CLARIFICATION - save progress and continue
+        # Handle NEED_CLARIFICATION - sync to GitHub and continue
         elif status_code == PhaseStatusCode.NEED_CLARIFICATION:
             self._sync_spec_to_github(response)
-            self._save_progress(status_code)
+            # Note: _save_progress already called by _execute_agent_iteration
             # Fall through to standard handling below
 
         # Use base class method to handle standard status codes
