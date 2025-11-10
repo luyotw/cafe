@@ -15,9 +15,20 @@ import pytest
 
 from aaf.agents.manager import AgentManager
 from aaf.core.permission import PermissionHandler
-from aaf.core.types import PhaseStatus, WorkflowMode, TokenUsage, SpecRigor
+from aaf.core.types import PhaseStatus, WorkflowMode, TokenUsage, SpecRigor, AgentConfig, AgentCLI
 from aaf.phases.spec_phase import SpecPhase
 from aaf.phases.plan_phase import PlanPhase
+
+
+def setup_agent_manager_mock_for_spec(agent_manager: MagicMock) -> None:
+    """Setup agent_manager.get_agent() mock for SpecPhase tests."""
+    mock_agent = MagicMock()
+    mock_agent.config = AgentConfig(
+        name="Roger",
+        cli=AgentCLI.CLAUDE,
+        session_id="test-session"
+    )
+    agent_manager.get_agent.return_value = mock_agent
 
 
 class TestSpecPhaseInteractiveVsNonInteractive:
@@ -32,9 +43,9 @@ class TestSpecPhaseInteractiveVsNonInteractive:
         spec_file.write_text("# Requirements\nTest requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
+        setup_agent_manager_mock_for_spec(agent_manager)
         agent_manager.execute.return_value = ("AAF_CONFIRMED\n需求已清楚", TokenUsage())
         agent_manager.get_total_token_usage.return_value = TokenUsage()
-        agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -80,9 +91,9 @@ class TestSpecPhaseInteractiveVsNonInteractive:
         spec_file.write_text("# Requirements\nTest requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
+        setup_agent_manager_mock_for_spec(agent_manager)
         agent_manager.execute.return_value = ("AAF_REJECTED\n需求有問題", TokenUsage())
         agent_manager.get_total_token_usage.return_value = TokenUsage()
-        agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -128,13 +139,13 @@ class TestSpecPhaseInteractiveVsNonInteractive:
         spec_file.write_text("# Requirements\nTest requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
+        setup_agent_manager_mock_for_spec(agent_manager)
         # 第一次需要澄清，第二次確認
         agent_manager.execute.side_effect = [
             ("AAF_NEED_CLARIFICATION\n請補充資訊", TokenUsage()),
             ("AAF_CONFIRMED\n需求已清楚", TokenUsage()),
         ]
         agent_manager.get_total_token_usage.return_value = TokenUsage()
-        agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -164,9 +175,9 @@ class TestSpecPhaseInteractiveVsNonInteractive:
         spec_file.write_text("# Requirements\nTest requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
+        setup_agent_manager_mock_for_spec(agent_manager)
         agent_manager.execute.return_value = ("AAF_NEED_CLARIFICATION\n請補充資訊", TokenUsage())
         agent_manager.get_total_token_usage.return_value = TokenUsage()
-        agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -196,13 +207,13 @@ class TestSpecPhaseInteractiveVsNonInteractive:
         spec_file.write_text("# Requirements\nTest requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
+        setup_agent_manager_mock_for_spec(agent_manager)
         # 第一次沒有狀態碼，第二次確認
         agent_manager.execute.side_effect = [
             ("這是回應但沒有狀態碼", TokenUsage()),
             ("AAF_CONFIRMED\n需求已清楚", TokenUsage()),
         ]
         agent_manager.get_total_token_usage.return_value = TokenUsage()
-        agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -231,9 +242,9 @@ class TestSpecPhaseInteractiveVsNonInteractive:
         spec_file.write_text("# Requirements\nTest requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
+        setup_agent_manager_mock_for_spec(agent_manager)
         agent_manager.execute.return_value = ("這是回應但沒有狀態碼", TokenUsage())
         agent_manager.get_total_token_usage.return_value = TokenUsage()
-        agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -271,9 +282,9 @@ class TestPlanPhaseInteractiveVsNonInteractive:
         plan_file.write_text("## 開發指南\nDev guide\n\n## 實作計畫\nTODO")
 
         agent_manager = MagicMock(spec=AgentManager)
+        setup_agent_manager_mock_for_spec(agent_manager)
         agent_manager.execute.return_value = ("AAF_READY_FOR_REVIEW\n計畫已完成", TokenUsage())
         agent_manager.get_total_token_usage.return_value = TokenUsage()
-        agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -327,12 +338,12 @@ class TestPlanPhaseInteractiveVsNonInteractive:
         plan_file.write_text("## 開發指南\nDev guide\n\n## 實作計畫\nTODO")
 
         agent_manager = MagicMock(spec=AgentManager)
+        setup_agent_manager_mock_for_spec(agent_manager)
         agent_manager.execute.side_effect = [
             ("AAF_NEED_CLARIFICATION\n需要更多資訊", TokenUsage()),
             ("AAF_READY_FOR_REVIEW\n計畫已完成", TokenUsage()),
         ]
         agent_manager.get_total_token_usage.return_value = TokenUsage()
-        agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -372,9 +383,9 @@ class TestPlanPhaseInteractiveVsNonInteractive:
         plan_file.write_text("## 開發指南\nDev guide\n\n## 實作計畫\nTODO")
 
         agent_manager = MagicMock(spec=AgentManager)
+        setup_agent_manager_mock_for_spec(agent_manager)
         agent_manager.execute.return_value = ("AAF_NEED_CLARIFICATION\n需要更多資訊", TokenUsage())
         agent_manager.get_total_token_usage.return_value = TokenUsage()
-        agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -413,9 +424,9 @@ class TestPlanPhaseInteractiveVsNonInteractive:
         plan_file.write_text("## 開發指南\nDev guide\n\n## 實作計畫\nTODO")
 
         agent_manager = MagicMock(spec=AgentManager)
+        setup_agent_manager_mock_for_spec(agent_manager)
         agent_manager.execute.return_value = ("這是回應但沒有狀態碼", TokenUsage())
         agent_manager.get_total_token_usage.return_value = TokenUsage()
-        agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
 
         permission_handler = MagicMock(spec=PermissionHandler)
 

@@ -16,8 +16,19 @@ import pytest
 
 from aaf.agents.manager import AgentManager
 from aaf.core.permission import PermissionHandler
-from aaf.core.types import WorkflowMode, TokenUsage, SpecRigor, AgentCLI
+from aaf.core.types import WorkflowMode, TokenUsage, SpecRigor, AgentCLI, AgentConfig
 from aaf.phases.spec_phase import SpecPhase
+
+
+def setup_agent_manager_mock_for_spec(agent_manager: MagicMock, cli: str = "copilot", session_id: str = "test-session") -> None:
+    """Setup agent_manager.get_agent() mock with specified CLI and session ID."""
+    mock_agent = MagicMock()
+    mock_agent.config = AgentConfig(
+        name="Roger",
+        cli=AgentCLI[cli.upper()],
+        session_id=session_id
+    )
+    agent_manager.get_agent.return_value = mock_agent
 
 
 class TestSpecPhaseIterationHistoryMetadata:
@@ -31,14 +42,9 @@ class TestSpecPhaseIterationHistoryMetadata:
         spec_file.write_text("# Requirements\nTest requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
+        setup_agent_manager_mock_for_spec(agent_manager, cli="copilot", session_id="test-session-123")
         agent_manager.execute.return_value = ("AAF_CONFIRMED\n需求已清楚", TokenUsage())
         agent_manager.get_total_token_usage.return_value = TokenUsage()
-
-        # Mock agent config with CLI and session ID
-        mock_config = MagicMock()
-        mock_config.cli.value = "copilot"
-        mock_config.session_id = "test-session-123"
-        agent_manager.get_agent_config.return_value = mock_config
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -78,7 +84,7 @@ class TestSpecPhaseIterationHistoryMetadata:
         assert len(history_data["prompt"]) > 0, "Prompt should not be empty"
 
         # Should include status code
-        assert history_data["status"] == "AAF_CONFIRMED", "Should record status"
+        assert history_data["status_code"] == "AAF_CONFIRMED", "Should record status"
 
     def test_multiple_iterations_preserve_metadata(self, tmp_path: Path) -> None:
         """測試多次迭代時每次都記錄完整 metadata"""
@@ -88,17 +94,12 @@ class TestSpecPhaseIterationHistoryMetadata:
         spec_file.write_text("# Requirements\nTest requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
+        setup_agent_manager_mock_for_spec(agent_manager, cli="claude", session_id="session-456")
         agent_manager.execute.side_effect = [
             ("AAF_NEED_CLARIFICATION\n請補充資訊", TokenUsage()),
             ("AAF_CONFIRMED\n需求已清楚", TokenUsage()),
         ]
         agent_manager.get_total_token_usage.return_value = TokenUsage()
-
-        # Mock agent config
-        mock_config = MagicMock()
-        mock_config.cli.value = "claude"
-        mock_config.session_id = "session-456"
-        agent_manager.get_agent_config.return_value = mock_config
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -128,11 +129,11 @@ class TestSpecPhaseIterationHistoryMetadata:
         assert history_1["cli"] == "claude"
         assert history_1["session_id"] == "session-456"
         assert history_1["allowed_tools"] == ["write", "read"]
-        assert history_1["status"] == "AAF_NEED_CLARIFICATION"
+        assert history_1["status_code"] == "AAF_NEED_CLARIFICATION"
 
         # Check second iteration
         history_2 = json.loads(history_file_2.read_text())
         assert history_2["cli"] == "claude"
         assert history_2["session_id"] == "session-456"
         assert history_2["allowed_tools"] == ["write", "read"]
-        assert history_2["status"] == "AAF_CONFIRMED"
+        assert history_2["status_code"] == "AAF_CONFIRMED"

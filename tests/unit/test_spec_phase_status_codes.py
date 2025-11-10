@@ -11,8 +11,24 @@ from unittest.mock import MagicMock, patch
 from aaf.agents.manager import AgentManager
 from aaf.core.permission import PermissionHandler
 from aaf.core.status_codes import PhaseStatusCode
-from aaf.core.types import PhaseStatus, WorkflowMode, TokenUsage, SpecRigor
+from aaf.core.types import PhaseStatus, WorkflowMode, TokenUsage, SpecRigor, AgentConfig, AgentCLI
 from aaf.phases.spec_phase import SpecPhase
+
+
+def setup_agent_manager_mock_for_spec(agent_manager: MagicMock) -> None:
+    """Setup agent_manager mocks for SpecPhase tests.
+
+    SpecPhase calls agent_manager.get_agent() to get agent metadata,
+    so we need to mock it to return an object with proper config.
+    """
+    # Create a mock agent with proper config
+    mock_agent = MagicMock()
+    mock_agent.config = AgentConfig(
+        name="Roger",
+        cli=AgentCLI.CLAUDE,
+        session_id="test-session"
+    )
+    agent_manager.get_agent.return_value = mock_agent
 
 
 class TestSpecPhaseWithStatusCodes:
@@ -26,9 +42,9 @@ class TestSpecPhaseWithStatusCodes:
         spec_file.write_text("# Requirements\nTest requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
+        setup_agent_manager_mock_for_spec(agent_manager)
         agent_manager.execute.return_value = ("AAF_CONFIRMED\n需求已經很清楚了。", TokenUsage())
         agent_manager.get_total_token_usage.return_value = TokenUsage()
-        agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -57,9 +73,9 @@ class TestSpecPhaseWithStatusCodes:
         spec_file.write_text("# Requirements\nTest requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
+        setup_agent_manager_mock_for_spec(agent_manager)
         agent_manager.execute.return_value = ("AAF_REJECTED\n需求有問題，無法進行。", TokenUsage())
         agent_manager.get_total_token_usage.return_value = TokenUsage()
-        agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -88,13 +104,13 @@ class TestSpecPhaseWithStatusCodes:
         spec_file.write_text("# Requirements\nTest requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
+        setup_agent_manager_mock_for_spec(agent_manager)
         # 第一次回應需要澄清，第二次確認
         agent_manager.execute.side_effect = [
             ("AAF_NEED_CLARIFICATION\n請補充更多資訊。", TokenUsage()),
             ("AAF_CONFIRMED\n需求已清楚。", TokenUsage()),
         ]
         agent_manager.get_total_token_usage.return_value = TokenUsage()
-        agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -124,9 +140,9 @@ class TestSpecPhaseWithStatusCodes:
         spec_file.write_text("# Requirements\nTest requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
+        setup_agent_manager_mock_for_spec(agent_manager)
         agent_manager.execute.return_value = ("需求已經很清楚了。AAF_CONFIRMED", TokenUsage())
         agent_manager.get_total_token_usage.return_value = TokenUsage()
-        agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -154,13 +170,13 @@ class TestSpecPhaseWithStatusCodes:
         spec_file.write_text("# Requirements\nTest requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
+        setup_agent_manager_mock_for_spec(agent_manager)
         # 第一次沒有狀態碼，第二次有
         agent_manager.execute.side_effect = [
             ("我覺得需求不夠清楚。", TokenUsage()),  # 沒有狀態碼
             ("AAF_CONFIRMED\n現在清楚了。", TokenUsage()),
         ]
         agent_manager.get_total_token_usage.return_value = TokenUsage()
-        agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -189,9 +205,9 @@ class TestSpecPhaseWithStatusCodes:
         spec_file.write_text("# Requirements\nTest requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
+        setup_agent_manager_mock_for_spec(agent_manager)
         agent_manager.execute.return_value = ("aaf_confirmed\n需求清楚。", TokenUsage())
         agent_manager.get_total_token_usage.return_value = TokenUsage()
-        agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
