@@ -315,6 +315,7 @@ class TestPlanPhaseInteractiveVsNonInteractive:
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
+            user_input="confirm",  # Provide confirmation in non-interactive mode
         )
 
         with patch('builtins.print'):
@@ -323,8 +324,8 @@ class TestPlanPhaseInteractiveVsNonInteractive:
         # 兩種模式都應該返回 COMPLETED
         assert result_interactive.status == PhaseStatus.COMPLETED
         assert result_noninteractive.status == PhaseStatus.COMPLETED
-        assert result_interactive.data.get("status_code") == "AAF_READY_FOR_REVIEW"
-        assert result_noninteractive.data.get("status_code") == "AAF_READY_FOR_REVIEW"
+        assert result_interactive.data.get("status_code") == "AAF_CONFIRMED"
+        assert result_noninteractive.data.get("status_code") == "AAF_CONFIRMED"
 
     def test_need_clarification_interactive_continues(self, tmp_path: Path) -> None:
         """測試 NEED_CLARIFICATION 在 interactive 模式會繼續迭代"""
@@ -368,8 +369,8 @@ class TestPlanPhaseInteractiveVsNonInteractive:
 
         # Interactive 模式應該自動進入第二輪並完成
         assert result.status == PhaseStatus.COMPLETED
-        assert result.data.get("iterations") == 2
-        assert agent_manager.execute.call_count == 2
+        assert result.data.get("iterations") == 3  # 1st: NEED_CLARIFICATION, 2nd: READY_FOR_REVIEW, 3rd: user confirms
+        assert agent_manager.execute.call_count == 2  # Agent executes twice (not counting user confirmation)
 
     def test_need_clarification_noninteractive_stops(self, tmp_path: Path) -> None:
         """測試 NEED_CLARIFICATION 在 non-interactive 模式會停止並返回 IN_PROGRESS"""

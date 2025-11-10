@@ -193,12 +193,13 @@ class TestPlanPhaseUserConfirmation:
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,  # Non-interactive mode
+            user_input="confirm",  # Provide user confirmation via parameter
         )
 
         with patch('builtins.print'):
             result = phase.execute()
 
-        # Should complete immediately without user interaction
+        # Should complete with user confirmation provided via parameter
         assert result.status == PhaseStatus.COMPLETED
         assert agent_manager.execute.call_count == 1
 
