@@ -93,6 +93,7 @@ class TestLocalWorkflow:
             workflow_mode=WorkflowMode.LOCAL,
             issue_name="test-feature",
             interactive=False,  # Non-interactive for this test
+            user_input="confirm",  # Provide user decision
         )
 
         result = phase.execute()
@@ -243,6 +244,7 @@ class TestGitHubWorkflow:
             workflow_mode=WorkflowMode.GITHUB,
             issue_id="123",
             interactive=False,  # Non-interactive for this test
+            user_input="confirm",  # Provide user decision
         )
 
         result = phase.execute()
@@ -581,6 +583,7 @@ class TestPlanPhaseHistory:
             workflow_mode=WorkflowMode.LOCAL,
             issue_name="test-feature",
             interactive=False,  # Non-interactive to skip user confirmation
+            user_input="confirm",  # Provide user decision
         )
 
         with patch('builtins.print'):
@@ -596,7 +599,7 @@ class TestPlanPhaseHistory:
 
         assert data["phase"] == "plan"
         assert data["status"] == "completed"
-        assert data["status_code"] == "AAF_CONFIRMED"  # Auto-confirmed in non-interactive mode
+        assert data["status_code"] == "AAF_CONFIRMED"  # Confirmed via user_input parameter
 
     def test_creates_plan_md_file(self, tmp_path: Path) -> None:
         """測試 agent 創建 plan.md 文件"""

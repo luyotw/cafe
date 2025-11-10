@@ -31,6 +31,7 @@ class PlanPhase(Phase):
         dev_agent: str = "David",
         interactive: bool = True,
         template_path: Optional[str] = None,
+        user_input: str = "",
     ) -> None:
         """Initialize plan phase.
 
@@ -44,6 +45,7 @@ class PlanPhase(Phase):
             dev_agent: Developer agent name (default: David)
             template_path: Path to plan template file (optional)
             interactive: Whether to allow interactive prompts (default: True)
+            user_input: User input for non-interactive mode (default: "")
         """
         self.agent_manager = agent_manager
         self.permission_handler = permission_handler
@@ -53,6 +55,7 @@ class PlanPhase(Phase):
         self.dev_agent = dev_agent
         self.interactive = interactive
         self.template_path = template_path
+        self.user_input = user_input
         self.display = Display()
         self.iteration = 0
 
@@ -514,6 +517,12 @@ class PlanPhase(Phase):
     def _prepare_user_input_for_iteration(self) -> "PhaseResult | str":
         """準備當前迭代的 user input。
 
+        在最開始就取得所有需要的用戶輸入：
+        - Interactive: 從 stdin 詢問用戶
+        - Non-interactive: 從 self.user_input 取得
+
+        之後的處理邏輯完全相同，不再區分 interactive/non-interactive。
+
         Returns:
             PhaseResult: 如果需要結束/暫停 phase（完成、失敗、或等待用戶輸入）
             str: 用戶輸入內容（供 agent 使用）
@@ -528,7 +537,73 @@ class PlanPhase(Phase):
             self._display_current_plan()
 
         # Iteration 2+: Check previous iteration's status and get user input
-        return self._handle_previous_iteration_status()
+        prev_iteration_file = self.history_dir / f"iteration_{self.iteration - 1:03d}.json"
+        if not prev_iteration_file.exists():
+            return ""
+
+        with open(prev_iteration_file, "r", encoding="utf-8") as f:
+            prev_data = json.load(f)
+        prev_status = prev_data.get("status_code", "")
+
+        # 根據上一輪狀態，取得用戶輸入
+        if prev_status == "AAF_READY_FOR_REVIEW":
+            # 需要用戶選擇：confirm/reject/modify
+            if self.interactive:
+                choice = self._ask_user_for_review_decision()
+            else:
+                choice = self.user_input
+                if not choice:
+                    # Non-interactive 但沒提供輸入 → 暫停
+                    return PhaseResult(
+                        status=PhaseStatus.IN_PROGRESS,
+                        message=f"Plan phase paused after iteration {self.iteration - 1}, waiting for user decision on READY_FOR_REVIEW",
+                        data={
+                            "iterations": self.iteration - 1,
+                            "last_response": prev_data.get("response", ""),
+                            "status_code": "AAF_READY_FOR_REVIEW",
+                        },
+                    )
+
+            # 處理用戶選擇（不再區分 interactive/non-interactive）
+            return self._process_review_decision(choice, prev_data)
+
+        elif prev_status == "AAF_NEED_CLARIFICATION":
+            # 需要用戶回答問題
+            if self.interactive:
+                clarification = self._ask_user_for_clarification()
+            else:
+                clarification = self.user_input
+                if not clarification:
+                    # Non-interactive 但沒提供輸入 → 暫停
+                    return PhaseResult(
+                        status=PhaseStatus.IN_PROGRESS,
+                        message=f"Plan phase paused after iteration {self.iteration - 1}, waiting for user clarification",
+                        data={
+                            "iterations": self.iteration - 1,
+                            "last_response": prev_data.get("response", ""),
+                            "status_code": "AAF_NEED_CLARIFICATION",
+                        },
+                    )
+
+            # 處理用戶回答（不再區分 interactive/non-interactive）
+            if not clarification.strip():
+                return PhaseResult(
+                    status=PhaseStatus.FAILED,
+                    message="User provided no response to clarification questions",
+                    data={
+                        "iterations": self.iteration - 1,
+                        "last_response": prev_data.get("response", ""),
+                    },
+                )
+
+            if self.interactive:
+                print()
+                print("✅ 已收到您的回答，正在發送給開發者處理...")
+                print()
+
+            return clarification
+        else:
+            return ""
 
     def _display_current_plan(self) -> None:
         """顯示目前的 plan.md 內容（僅 interactive 模式）。"""
@@ -544,54 +619,11 @@ class PlanPhase(Phase):
         print(plan_content)
         print(f"{'='*60}\n")
 
-    def _handle_previous_iteration_status(self) -> "PhaseResult | str":
-        """根據上一輪的 status code 處理用戶輸入。
+    def _ask_user_for_review_decision(self) -> str:
+        """詢問用戶對 READY_FOR_REVIEW 的決定（interactive 模式）。
 
         Returns:
-            PhaseResult: 如果需要結束/暫停 phase
-            str: 用戶輸入內容
-        """
-        prev_iteration_file = self.history_dir / f"iteration_{self.iteration - 1:03d}.json"
-        if not prev_iteration_file.exists():
-            return ""
-
-        with open(prev_iteration_file, "r", encoding="utf-8") as f:
-            prev_data = json.load(f)
-        prev_status = prev_data.get("status_code", "")
-
-        if prev_status == "AAF_READY_FOR_REVIEW":
-            return self._handle_ready_for_review(prev_data)
-        elif prev_status == "AAF_NEED_CLARIFICATION":
-            return self._handle_need_clarification(prev_data)
-        else:
-            return ""
-
-    def _handle_ready_for_review(self, prev_data: Dict[str, Any]) -> "PhaseResult | str":
-        """處理 READY_FOR_REVIEW 狀態。
-
-        Args:
-            prev_data: 上一輪的 iteration data
-
-        Returns:
-            PhaseResult: 如果用戶 confirm 或 reject
-            str: 如果用戶要求修改，返回修改意見
-        """
-        if self.interactive:
-            # Interactive: 詢問用戶
-            return self._ask_user_confirmation(prev_data)
-        else:
-            # Non-interactive: 自動 confirm
-            return self._auto_confirm_plan(prev_data)
-
-    def _ask_user_confirmation(self, prev_data: Dict[str, Any]) -> "PhaseResult | str":
-        """詢問用戶確認計畫（interactive 模式）。
-
-        Args:
-            prev_data: 上一輪的 iteration data
-
-        Returns:
-            PhaseResult: 如果用戶 confirm 或 reject
-            str: 如果用戶要求修改，返回修改意見
+            str: "confirm", "reject", 或修改意見內容
         """
         print("開發者認為實作計畫已完成。請確認：")
         print("  [c] confirm - 確認計畫，繼續實作")
@@ -602,17 +634,9 @@ class PlanPhase(Phase):
             choice = input("\n請選擇 [c/r/m]: ").strip().lower()
 
             if choice == 'c':
-                return self._confirm_plan(prev_data, "User confirmed the plan")
+                return "confirm"
             elif choice == 'r':
-                return PhaseResult(
-                    status=PhaseStatus.FAILED,
-                    message=f"Implementation plan rejected by user in iteration {self.iteration - 1}",
-                    data={
-                        "iterations": self.iteration - 1,
-                        "final_response": prev_data.get("response", ""),
-                        "status_code": "USER_REJECTED",
-                    },
-                )
+                return "reject"
             elif choice == 'm':
                 modification_request = self.display.get_multiline_input("請輸入修改意見")
 
@@ -628,93 +652,66 @@ class PlanPhase(Phase):
             else:
                 print("❌ 無效選擇，請輸入 c, r, 或 m")
 
-    def _auto_confirm_plan(self, prev_data: Dict[str, Any]) -> PhaseResult:
-        """自動確認計畫（non-interactive 模式）。
-
-        Args:
-            prev_data: 上一輪的 iteration data
+    def _ask_user_for_clarification(self) -> str:
+        """詢問用戶對 NEED_CLARIFICATION 的回答（interactive 模式）。
 
         Returns:
-            PhaseResult: COMPLETED 狀態
-        """
-        return self._confirm_plan(prev_data, "Auto-confirmed (non-interactive mode)")
-
-    def _confirm_plan(self, prev_data: Dict[str, Any], response_message: str) -> PhaseResult:
-        """確認計畫並返回完成狀態。
-
-        Args:
-            prev_data: 上一輪的 iteration data
-            response_message: 回應訊息（用戶確認 或 自動確認）
-
-        Returns:
-            PhaseResult: COMPLETED 狀態
-        """
-        # Save user confirmation as a new iteration
-        self._save_user_input(
-            user_input="confirm",
-            phase_specific_data={"dev_agent": self.dev_agent},
-        )
-        self._update_iteration_history(
-            phase_specific_data={
-                "response": response_message,
-                "user_action": "confirm",
-            },
-            prompt="",  # No prompt for user confirmation
-            agent_cli=None,
-            agent_session_id=None,
-            allowed_tools=None,
-            status_code=PhaseStatusCode.CONFIRMED,
-        )
-        self._save_progress(PhaseStatusCode.CONFIRMED)
-
-        return PhaseResult(
-            status=PhaseStatus.COMPLETED,
-            message=f"Implementation plan completed in {self.iteration} iteration(s)",
-            data={
-                "iterations": self.iteration,
-                "final_response": prev_data.get("response", ""),
-                "status_code": PhaseStatusCode.CONFIRMED.value,
-            },
-        )
-
-    def _handle_need_clarification(self, prev_data: Dict[str, Any]) -> "PhaseResult | str":
-        """處理 NEED_CLARIFICATION 狀態。
-
-        Args:
-            prev_data: 上一輪的 iteration data
-
-        Returns:
-            PhaseResult: 如果 non-interactive 模式（暫停）或用戶未輸入（失敗）
             str: 用戶的回答
         """
-        if self.interactive:
-            # Interactive: 詢問用戶
-            clarification = self.display.get_multiline_input("請回答開發者的問題")
+        return self.display.get_multiline_input("請回答開發者的問題")
 
-            if not clarification.strip():
-                print("\n⚠️  沒有輸入內容，Phase 將終止。")
-                return PhaseResult(
-                    status=PhaseStatus.FAILED,
-                    message="User provided no response to clarification questions",
-                    data={
-                        "iterations": self.iteration - 1,
-                        "last_response": prev_data.get("response", ""),
-                    },
-                )
+    def _process_review_decision(
+        self, choice: str, prev_data: Dict[str, Any]
+    ) -> "PhaseResult | str":
+        """處理用戶對 READY_FOR_REVIEW 的決定。
 
-            print()
-            print("✅ 已收到您的回答，正在發送給開發者處理...")
-            print()
+        Args:
+            choice: "confirm", "reject", 或修改意見內容
+            prev_data: 上一輪的 iteration data
 
-            return clarification
-        else:
-            # Non-interactive: 暫停並等待用戶輸入
+        Returns:
+            PhaseResult: 如果 confirm 或 reject
+            str: 如果要求修改，返回修改意見
+        """
+        if choice == "confirm":
+            # Save user confirmation as a new iteration
+            self._save_user_input(
+                user_input="confirm",
+                phase_specific_data={"dev_agent": self.dev_agent},
+            )
+            self._update_iteration_history(
+                phase_specific_data={
+                    "response": "User confirmed the plan",
+                    "user_action": "confirm",
+                },
+                prompt="",
+                agent_cli=None,
+                agent_session_id=None,
+                allowed_tools=None,
+                status_code=PhaseStatusCode.CONFIRMED,
+            )
+            self._save_progress(PhaseStatusCode.CONFIRMED)
+
             return PhaseResult(
-                status=PhaseStatus.IN_PROGRESS,
-                message=f"Plan phase paused after iteration {self.iteration - 1}, waiting for user clarification",
+                status=PhaseStatus.COMPLETED,
+                message=f"Implementation plan completed in {self.iteration} iteration(s)",
                 data={
-                    "iterations": self.iteration - 1,
-                    "last_response": prev_data.get("response", ""),
-                    "status_code": "AAF_NEED_CLARIFICATION",
+                    "iterations": self.iteration,
+                    "final_response": prev_data.get("response", ""),
+                    "status_code": PhaseStatusCode.CONFIRMED.value,
                 },
             )
+        elif choice == "reject":
+            return PhaseResult(
+                status=PhaseStatus.FAILED,
+                message=f"Implementation plan rejected by user in iteration {self.iteration - 1}",
+                data={
+                    "iterations": self.iteration - 1,
+                    "final_response": prev_data.get("response", ""),
+                    "status_code": "USER_REJECTED",
+                },
+            )
+        else:
+            # choice is the modification request
+            return choice
+
