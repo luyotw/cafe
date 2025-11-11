@@ -320,25 +320,15 @@ class SpecPhase(Phase):
             allowed_tools=["write", "read"],
         )
 
-        # Handle CONFIRMED status - return completed result
+        # Sync spec to GitHub (no-op in local mode)
+        # Do this for all status codes since agent already wrote the file
+        self._sync_spec_to_github(response)
+
+        # Handle CONFIRMED status - print token usage and return completed result
         if status_code == PhaseStatusCode.CONFIRMED:
-            self._sync_spec_to_github(response)
+            self._print_token_usage_summary()
 
             token_usage = self.agent_manager.get_total_token_usage()
-
-            # Print token usage summary
-            print()
-            print("=" * 60)
-            print("📊 Token Usage Summary")
-            print("=" * 60)
-            print(f"Input tokens:              {token_usage.input_tokens:,}")
-            print(f"Output tokens:             {token_usage.output_tokens:,}")
-            print(f"Cache creation tokens:     {token_usage.cache_creation_input_tokens:,}")
-            print(f"Cache read tokens:         {token_usage.cache_read_input_tokens:,}")
-            print(f"Total cost:                ${token_usage.total_cost_usd:.4f}")
-            print("=" * 60)
-            print()
-
             result_data = {
                 "iterations": self.iteration,
                 "final_response": response,
@@ -363,20 +353,13 @@ class SpecPhase(Phase):
                 token_usage=token_usage,
             )
 
-        # Handle NEED_CLARIFICATION - sync to GitHub and continue
-        elif status_code == PhaseStatusCode.NEED_CLARIFICATION:
-            self._sync_spec_to_github(response)
-            # Note: _save_progress already called by _execute_agent_iteration
-            # Fall through to standard handling below
-
         # Use base class method to handle standard status codes
-        # (REJECTED, NO_RESPONSE, NEED_CLARIFICATION continuation, no status code)
-        result = self._handle_standard_status_codes(
+        # (REJECTED, NO_RESPONSE, NEED_CLARIFICATION, no status code)
+        return self._handle_standard_status_codes(
             status_code=status_code,
             response=response,
             continue_codes=[PhaseStatusCode.NEED_CLARIFICATION],
         )
-        return result
 
     def _prepare_user_input_for_iteration(self) -> "PhaseResult | str":
         """準備當前迭代的 user input。

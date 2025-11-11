@@ -450,6 +450,29 @@ class Phase(ABC):
             # choice is the modification request
             return choice
 
+    def _print_token_usage_summary(self) -> None:
+        """顯示 token usage 摘要（通用方法）。
+
+        此方法會從 agent_manager 取得總 token usage 並顯示摘要。
+        適用於 phase 完成時顯示成本統計。
+        """
+        if not hasattr(self, "agent_manager"):
+            return
+
+        token_usage = self.agent_manager.get_total_token_usage()
+
+        print()
+        print("=" * 60)
+        print("📊 Token Usage Summary")
+        print("=" * 60)
+        print(f"Input tokens:              {token_usage.input_tokens:,}")
+        print(f"Output tokens:             {token_usage.output_tokens:,}")
+        print(f"Cache creation tokens:     {token_usage.cache_creation_input_tokens:,}")
+        print(f"Cache read tokens:         {token_usage.cache_read_input_tokens:,}")
+        print(f"Total cost:                ${token_usage.total_cost_usd:.4f}")
+        print("=" * 60)
+        print()
+
     def _handle_standard_status_codes(
         self,
         status_code: Optional[PhaseStatusCode],
