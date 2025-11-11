@@ -616,6 +616,174 @@ class Phase(ABC):
         with open(prev_iteration_file, "r", encoding="utf-8") as f:
             return json.load(f)
 
+    def _load_iteration_counter(self) -> int:
+        """從 history 檔案載入最新的 iteration 數字（通用方法）。
+
+        Returns:
+            最新的 iteration 數字，如果沒有 history 則返回 0
+        """
+        if not hasattr(self, "history_dir"):
+            raise AttributeError("Phase must have 'history_dir' attribute")
+
+        history_dir = Path(self.history_dir)
+        if not history_dir.exists():
+            return 0
+
+        iteration_files = sorted(history_dir.glob("iteration_*.json"))
+        if not iteration_files:
+            return 0
+
+        # 讀取最新的 iteration 檔案
+        last_iteration_file = iteration_files[-1]
+        with open(last_iteration_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        return data.get("iteration", 0)
+
+    def _check_if_already_completed(
+        self,
+        complete_status_codes: List[PhaseStatusCode],
+    ) -> Optional[PhaseResult]:
+        """檢查 phase 是否已經完成（通用方法）。
+
+        如果 status.json 顯示 phase 已完成且狀態碼在 complete_status_codes 中，
+        則返回 COMPLETED 結果，否則返回 None。
+
+        Args:
+            complete_status_codes: 表示完成的狀態碼列表（如 [CONFIRMED] 或 [READY_FOR_REVIEW]）
+
+        Returns:
+            PhaseResult 如果已完成，None 如果未完成
+        """
+        if not hasattr(self, "agent_manager"):
+            raise AttributeError("Phase must have 'agent_manager' attribute")
+
+        status_file = self._get_status_file()
+        if not status_file.exists():
+            return None
+
+        with open(status_file, "r", encoding="utf-8") as f:
+            status_data = json.load(f)
+
+        # 檢查是否已完成且狀態碼符合
+        if status_data.get("status") != "completed":
+            return None
+
+        status_code_value = status_data.get("status_code", "")
+        for complete_code in complete_status_codes:
+            if status_code_value == complete_code.value:
+                # 已完成，返回結果
+                token_usage = self.agent_manager.get_total_token_usage()
+                return PhaseResult(
+                    status=PhaseStatus.COMPLETED,
+                    message=f"Phase already completed with status {status_code_value}",
+                    data={
+                        "iterations": status_data.get("iteration", 0),
+                        "status_code": status_code_value,
+                        "token_usage": {
+                            "input_tokens": token_usage.input_tokens,
+                            "output_tokens": token_usage.output_tokens,
+                            "cache_creation_input_tokens": token_usage.cache_creation_input_tokens,
+                            "cache_read_input_tokens": token_usage.cache_read_input_tokens,
+                            "total_cost_usd": token_usage.total_cost_usd,
+                        },
+                    },
+                )
+
+        return None
+
+    def _check_max_iterations(
+        self,
+        max_iterations: int,
+        phase_name: str = "Phase",
+    ) -> Optional[PhaseResult]:
+        """檢查是否超過最大迭代次數（通用方法）。
+
+        Args:
+            max_iterations: 最大迭代次數
+            phase_name: Phase 名稱（用於錯誤訊息）
+
+        Returns:
+            PhaseResult 如果超過最大次數，None 如果未超過
+        """
+        if not hasattr(self, "iteration"):
+            raise AttributeError("Phase must have 'iteration' attribute")
+
+        if self.iteration > max_iterations:
+            return PhaseResult(
+                status=PhaseStatus.FAILED,
+                message=f"{phase_name} exceeded maximum iterations ({max_iterations}). Did not converge.",
+                data={
+                    "iterations": self.iteration - 1,
+                    "max_iterations": max_iterations,
+                },
+            )
+
+        return None
+
+    def _execute_and_handle_agent_response(
+        self,
+        agent_name: str,
+        user_input: str,
+        valid_status_codes: List[PhaseStatusCode],
+        allowed_tools: Optional[List[str]] = None,
+        continue_codes: Optional[List[PhaseStatusCode]] = None,
+        complete_codes: Optional[List[PhaseStatusCode]] = None,
+        phase_specific_data: Optional[Dict[str, Any]] = None,
+    ) -> tuple[Optional[PhaseResult], str]:
+        """執行完整的 agent 互動循環：生成 prompt、執行 agent、處理 status code（通用方法）。
+
+        此方法封裝了標準的 agent 執行流程，供所有 phases 使用。
+        Phase-specific 邏輯應該透過：
+        1. _generate_prompt() - 生成 phase-specific 的 prompt
+        2. _get_completion_data() - 提供 phase-specific 的完成資料
+        3. 在呼叫後執行 phase-specific 的後處理（如 sync to GitHub）
+
+        Args:
+            agent_name: Agent 名稱
+            user_input: 用戶在這一輪的輸入
+            valid_status_codes: 有效的狀態碼列表
+            allowed_tools: 允許的工具列表
+            continue_codes: 應該繼續循環的 status codes
+            complete_codes: 表示即將完成的 status codes
+            phase_specific_data: Phase-specific 資料（傳給 _execute_agent_iteration）
+
+        Returns:
+            (PhaseResult 如果應該結束 phase，None 如果應該繼續下一輪循環, agent response)
+        """
+        # Generate prompt for this iteration (subclass implements this)
+        if not hasattr(self, '_generate_prompt'):
+            raise AttributeError("Phase must implement '_generate_prompt' method")
+
+        # Call _generate_prompt with or without user_input parameter
+        # Try with user_input first, fall back to no parameter
+        import inspect
+        sig = inspect.signature(self._generate_prompt)
+        if len(sig.parameters) > 0:
+            prompt = self._generate_prompt(user_input)
+        else:
+            prompt = self._generate_prompt()
+
+        # Execute agent iteration using common method
+        response, status_code = self._execute_agent_iteration(
+            agent_name=agent_name,
+            prompt=prompt,
+            user_input=user_input,
+            valid_status_codes=valid_status_codes,
+            allowed_tools=allowed_tools or ["write", "read"],
+            phase_specific_data=phase_specific_data,
+        )
+
+        # Use base class method to handle standard status codes
+        result = self._handle_standard_status_codes(
+            status_code=status_code,
+            response=response,
+            complete_codes=complete_codes or [],
+            continue_codes=continue_codes or [],
+        )
+
+        return result, response
+
     def _handle_standard_status_codes(
         self,
         status_code: Optional[PhaseStatusCode],

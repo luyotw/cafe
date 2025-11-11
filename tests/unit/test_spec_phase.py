@@ -698,7 +698,7 @@ class TestSkipConfirmedSpec:
 
         # Should skip execution and return completed
         assert result.status == PhaseStatus.COMPLETED
-        assert result.message == "Spec already confirmed"
+        assert "already completed" in result.message or "already confirmed" in result.message
         assert result.data["iterations"] == 3
 
         # Agent should NOT be called

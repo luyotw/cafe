@@ -75,7 +75,7 @@ class PlanPhase(Phase):
         self.history_dir = issue_dir / "plan" / "history"
 
         # Load existing history if available (will create dir if needed)
-        self._load_history()
+        self.iteration = self._load_iteration_counter()
 
     def execute(self) -> PhaseResult:
         """Execute implementation plan phase.
@@ -118,15 +118,12 @@ class PlanPhase(Phase):
                 self.iteration += 1
 
                 # Safety check: prevent infinite loops
-                if self.iteration > MAX_PLANNING_ITERATIONS:
-                    return PhaseResult(
-                        status=PhaseStatus.FAILED,
-                        message=f"Exceeded maximum iterations ({MAX_PLANNING_ITERATIONS}). Plan generation did not converge.",
-                        data={
-                            "iterations": self.iteration - 1,
-                            "max_iterations": MAX_PLANNING_ITERATIONS,
-                        },
-                    )
+                max_iterations_result = self._check_max_iterations(
+                    MAX_PLANNING_ITERATIONS,
+                    "Implementation plan"
+                )
+                if max_iterations_result:
+                    return max_iterations_result
 
                 # Prepare user_input for this iteration
                 result_or_input = self._prepare_user_input_for_iteration()
@@ -376,13 +373,9 @@ class PlanPhase(Phase):
         Returns:
             PhaseResult 如果應該結束 phase，None 如果應該繼續下一輪循環
         """
-        # Generate prompt for this iteration
-        prompt = self._generate_prompt(user_input)
-
-        # Execute agent iteration using common method
-        response, status_code = self._execute_agent_iteration(
+        # Use base class method to execute agent and handle status codes
+        result, _ = super()._execute_and_handle_agent_response(
             agent_name=self.dev_agent,
-            prompt=prompt,
             user_input=user_input,
             valid_status_codes=[
                 PhaseStatusCode.READY_FOR_REVIEW,
@@ -390,33 +383,12 @@ class PlanPhase(Phase):
                 PhaseStatusCode.REJECTED,
             ],
             allowed_tools=["write", "read"],
+            complete_codes=[PhaseStatusCode.READY_FOR_REVIEW],
+            continue_codes=[PhaseStatusCode.NEED_CLARIFICATION],
             phase_specific_data={"dev_agent": self.dev_agent},
         )
 
-        # Handle status codes using common method
-        return self._handle_standard_status_codes(
-            status_code=status_code,
-            response=response,
-            complete_codes=[PhaseStatusCode.READY_FOR_REVIEW],
-            continue_codes=[PhaseStatusCode.NEED_CLARIFICATION],
-        )
-
-    def _load_history(self) -> None:
-        """Load existing history from JSON files."""
-        if not self.history_dir.exists():
-            return
-
-        # Load all history files in order to determine the latest iteration
-        history_files = sorted(self.history_dir.glob("iteration_*.json"))
-
-        for history_file in history_files:
-            with open(history_file, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-
-            # Update iteration counter
-            if data.get("iteration", 0) >= self.iteration:
-                self.iteration = data["iteration"]
-
+        return result
 
     def _has_dev_guide_section(self, plan_file: Path) -> bool:
         """Check if plan.md has development guide section.

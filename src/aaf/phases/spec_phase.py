@@ -122,13 +122,15 @@ class SpecPhase(Phase):
         self.display = Display()
 
         # Restore state from last iteration file (if resuming)
-        if self.history_dir.exists():
+        self.iteration = self._load_iteration_counter()
+
+        # Load phase-specific data from last iteration
+        if self.iteration > 0 and self.history_dir.exists():
             iteration_files = sorted(self.history_dir.glob("iteration_*.json"))
             if iteration_files:
                 last_iteration_file = iteration_files[-1]
                 with open(last_iteration_file, "r", encoding="utf-8") as f:
                     last_data = json.load(f)
-                self.iteration = last_data.get("iteration", 0)
                 if "confirmed_requirements" in last_data:
                     self.confirmed_requirements = last_data["confirmed_requirements"]
                 if "pending_questions" in last_data:
@@ -146,28 +148,9 @@ class SpecPhase(Phase):
                 self._prompt_for_rigor()
 
             # Check if already confirmed - skip execution
-            status_file = self._get_status_file()
-            if status_file.exists():
-                with open(status_file, "r", encoding="utf-8") as f:
-                    status_data = json.load(f)
-                if status_data.get("status") == "completed" and status_data.get("status_code") == PhaseStatusCode.CONFIRMED.value:
-                    # Already confirmed, return completed result
-                    token_usage = self.agent_manager.get_total_token_usage()
-                    return PhaseResult(
-                        status=PhaseStatus.COMPLETED,
-                        message="Spec already confirmed",
-                        data={
-                            "iterations": status_data.get("iteration", self.iteration),
-                            "status_code": PhaseStatusCode.CONFIRMED.value,
-                            "token_usage": {
-                                "input_tokens": token_usage.input_tokens,
-                                "output_tokens": token_usage.output_tokens,
-                                "cache_creation_input_tokens": token_usage.cache_creation_input_tokens,
-                                "cache_read_input_tokens": token_usage.cache_read_input_tokens,
-                                "total_cost_usd": token_usage.total_cost_usd,
-                            },
-                        },
-                    )
+            already_completed = self._check_if_already_completed([PhaseStatusCode.CONFIRMED])
+            if already_completed:
+                return already_completed
 
             # Validate inputs
             # Note: GitHub mode can now work without issue_id (will create new issue)
@@ -208,15 +191,12 @@ class SpecPhase(Phase):
                 self.iteration += 1
 
                 # Safety check: prevent infinite loops
-                if self.iteration > MAX_CLARIFICATION_ITERATIONS:
-                    return PhaseResult(
-                        status=PhaseStatus.FAILED,
-                        message=f"Exceeded maximum iterations ({MAX_CLARIFICATION_ITERATIONS}). Requirements clarification did not converge.",
-                        data={
-                            "iterations": self.iteration - 1,
-                            "max_iterations": MAX_CLARIFICATION_ITERATIONS,
-                        },
-                    )
+                max_iterations_result = self._check_max_iterations(
+                    MAX_CLARIFICATION_ITERATIONS,
+                    "Requirements clarification"
+                )
+                if max_iterations_result:
+                    return max_iterations_result
 
                 # Prepare user_input for this iteration
                 result_or_input = self._prepare_user_input_for_iteration()
@@ -257,13 +237,9 @@ class SpecPhase(Phase):
         Returns:
             PhaseResult 如果應該結束 phase，None 如果應該繼續下一輪循環
         """
-        # Generate prompt for this iteration
-        prompt = self._generate_prompt()
-
-        # Execute agent iteration using common method
-        response, status_code = self._execute_agent_iteration(
+        # Use base class method to execute agent and handle status codes
+        result, response = super()._execute_and_handle_agent_response(
             agent_name=self.pm_agent,
-            prompt=prompt,
             user_input=user_input,
             valid_status_codes=[
                 PhaseStatusCode.CONFIRMED,
@@ -271,19 +247,13 @@ class SpecPhase(Phase):
                 PhaseStatusCode.REJECTED,
             ],
             allowed_tools=["write", "read"],
-        )
-
-        # Sync spec to GitHub (no-op in local mode)
-        # Do this for all status codes since agent already wrote the file
-        self._sync_spec_to_github(response)
-
-        # Use base class method to handle standard status codes
-        # (CONFIRMED, REJECTED, NO_RESPONSE, NEED_CLARIFICATION, no status code)
-        return self._handle_standard_status_codes(
-            status_code=status_code,
-            response=response,
             continue_codes=[PhaseStatusCode.NEED_CLARIFICATION],
         )
+
+        # Phase-specific post-processing: Sync spec to GitHub (no-op in local mode)
+        self._sync_spec_to_github(response)
+
+        return result
 
     def _get_completion_data(self) -> dict:
         """取得 phase 完成時的額外資料（提供給 base class 的 _handle_standard_status_codes）。
