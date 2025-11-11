@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from aaf.core.status_codes import PhaseStatusCode
-from aaf.core.types import PhaseResult, PhaseStatus
+from aaf.core.types import PhaseProgress, PhaseResult, PhaseStatus
 
 
 class Phase(ABC):
@@ -450,6 +450,62 @@ class Phase(ABC):
             # choice is the modification request
             return choice
 
+    def _get_status_file(self) -> Path:
+        """Get the path to status.json file.
+
+        Returns:
+            Path to status.json in {history_dir}/status.json
+        """
+        if not hasattr(self, "history_dir"):
+            raise AttributeError("Phase must have 'history_dir' attribute")
+        return Path(self.history_dir).parent / "status.json"
+
+    def _save_progress(self, status_code: PhaseStatusCode) -> None:
+        """Save phase progress to status.json（通用方法）。
+
+        Args:
+            status_code: Phase status code (CONFIRMED, READY_FOR_REVIEW, NEED_CLARIFICATION, etc.)
+        """
+        if not hasattr(self, "iteration"):
+            raise AttributeError("Phase must have 'iteration' attribute")
+        if not hasattr(self, "phase_name"):
+            raise AttributeError("Phase must have 'phase_name' attribute (e.g., 'spec', 'plan')")
+
+        status_file = self._get_status_file()
+        status_file.parent.mkdir(parents=True, exist_ok=True)
+
+        # Determine phase status based on status code
+        complete_codes = [PhaseStatusCode.CONFIRMED, PhaseStatusCode.READY_FOR_REVIEW]
+        phase_status = PhaseStatus.COMPLETED if status_code in complete_codes else PhaseStatus.IN_PROGRESS
+
+        progress = PhaseProgress(
+            phase=self.phase_name,
+            status=phase_status,
+            status_code=status_code.value,
+            timestamp=datetime.now(),
+            iteration=self.iteration,
+            message=f"Phase completed with {status_code.value}" if phase_status == PhaseStatus.COMPLETED else f"Iteration {self.iteration}",
+        )
+
+        with open(status_file, 'w', encoding='utf-8') as f:
+            json.dump(progress.to_dict(), f, ensure_ascii=False, indent=2)
+
+    def _load_progress(self) -> Optional["PhaseProgress"]:
+        """Load phase progress from status.json（通用方法）。
+
+        Returns:
+            PhaseProgress if file exists, None otherwise
+        """
+        status_file = self._get_status_file()
+        if not status_file.exists():
+            return None
+
+        with open(status_file, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+
+        from aaf.core.types import PhaseProgress
+        return PhaseProgress.from_dict(data)
+
     def _print_token_usage_summary(self) -> None:
         """顯示 token usage 摘要（通用方法）。
 
@@ -472,6 +528,93 @@ class Phase(ABC):
         print(f"Total cost:                ${token_usage.total_cost_usd:.4f}")
         print("=" * 60)
         print()
+
+    def _handle_need_clarification_input(
+        self,
+        prev_data: dict,
+        agent_display_name: str = "agent",
+    ) -> Any:
+        """處理 NEED_CLARIFICATION 狀態的用戶輸入（通用方法）。
+
+        此方法封裝了 NEED_CLARIFICATION 狀態的標準處理流程：
+        1. Interactive 模式：呼叫 _ask_user_for_clarification() 提示用戶輸入
+        2. Non-interactive 模式：使用 self.user_input
+        3. 驗證用戶輸入不為空
+        4. 返回用戶輸入或 PhaseResult（錯誤/暫停狀態）
+
+        Args:
+            prev_data: 上一輪 iteration 的資料（從 history JSON 讀取）
+            agent_display_name: Agent 顯示名稱（如 "PM"、"開發者"），用於確認訊息
+
+        Returns:
+            str: 用戶輸入的 clarification
+            PhaseResult: 如果需要暫停或失敗（IN_PROGRESS 或 FAILED）
+        """
+        # 檢查必要的屬性
+        if not hasattr(self, "iteration"):
+            raise AttributeError("Phase must have 'iteration' attribute")
+        if not hasattr(self, "interactive"):
+            raise AttributeError("Phase must have 'interactive' attribute")
+        if not hasattr(self, "user_input"):
+            raise AttributeError("Phase must have 'user_input' attribute")
+
+        # 需要用戶回答問題
+        if self.interactive:
+            if not hasattr(self, "_ask_user_for_clarification"):
+                raise AttributeError("Phase must implement '_ask_user_for_clarification' method")
+            clarification = self._ask_user_for_clarification()
+        else:
+            clarification = self.user_input
+            if not clarification:
+                # Non-interactive 但沒提供輸入 → 暫停
+                return PhaseResult(
+                    status=PhaseStatus.IN_PROGRESS,
+                    message=f"{self.phase_name.capitalize()} phase paused after iteration {self.iteration - 1}, waiting for user clarification",
+                    data={
+                        "iterations": self.iteration - 1,
+                        "last_response": prev_data.get("response", ""),
+                        "status_code": "AAF_NEED_CLARIFICATION",
+                    },
+                )
+
+        # 處理用戶回答（不再區分 interactive/non-interactive）
+        if not clarification.strip():
+            return PhaseResult(
+                status=PhaseStatus.FAILED,
+                message="User provided no response to clarification questions",
+                data={
+                    "iterations": self.iteration - 1,
+                    "last_response": prev_data.get("response", ""),
+                },
+            )
+
+        if self.interactive:
+            print()
+            print(f"✅ 已收到您的回答，正在發送給{agent_display_name}處理...")
+            print()
+
+        return clarification
+
+    def _load_previous_iteration_data(self) -> Optional[dict]:
+        """載入上一輪 iteration 的資料（通用方法）。
+
+        Returns:
+            dict: 上一輪 iteration 的資料，如果不存在則返回 None
+        """
+        if not hasattr(self, "iteration"):
+            raise AttributeError("Phase must have 'iteration' attribute")
+        if not hasattr(self, "history_dir"):
+            raise AttributeError("Phase must have 'history_dir' attribute")
+
+        if self.iteration == 1:
+            return None
+
+        prev_iteration_file = Path(self.history_dir) / f"iteration_{self.iteration - 1:03d}.json"
+        if not prev_iteration_file.exists():
+            return None
+
+        with open(prev_iteration_file, "r", encoding="utf-8") as f:
+            return json.load(f)
 
     def _handle_standard_status_codes(
         self,

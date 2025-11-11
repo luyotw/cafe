@@ -58,6 +58,7 @@ class PlanPhase(Phase):
         self.user_input = user_input
         self.display = Display()
         self.iteration = 0
+        self.phase_name = "plan"  # For base class progress tracking
 
         # Determine issue name for history tracking
         if issue_name:
@@ -416,44 +417,6 @@ class PlanPhase(Phase):
             if data.get("iteration", 0) >= self.iteration:
                 self.iteration = data["iteration"]
 
-    def _save_progress(self, status_code: PhaseStatusCode) -> None:
-        """Save phase progress to status.json.
-
-        Args:
-            status_code: Phase status code (CONFIRMED, NEED_CLARIFICATION, etc.)
-        """
-        status_file = self.history_dir.parent / "status.json"
-        status_file.parent.mkdir(parents=True, exist_ok=True)
-
-        # Determine phase status
-        phase_status = PhaseStatus.COMPLETED if status_code in [PhaseStatusCode.READY_FOR_REVIEW, PhaseStatusCode.CONFIRMED] else PhaseStatus.IN_PROGRESS
-
-        progress = PhaseProgress(
-            phase="plan",
-            status=phase_status,
-            status_code=status_code.value,
-            timestamp=datetime.now(),
-            iteration=self.iteration,
-            message=f"Phase completed with {status_code.value}" if phase_status == PhaseStatus.COMPLETED else f"Iteration {self.iteration}",
-        )
-
-        with open(status_file, 'w', encoding='utf-8') as f:
-            json.dump(progress.to_dict(), f, ensure_ascii=False, indent=2)
-
-    def _load_progress(self) -> Optional[PhaseProgress]:
-        """Load phase progress from status.json.
-
-        Returns:
-            PhaseProgress if file exists, None otherwise
-        """
-        status_file = self.history_dir.parent / "status.json"
-        if not status_file.exists():
-            return None
-
-        with open(status_file, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-
-        return PhaseProgress.from_dict(data)
 
     def _has_dev_guide_section(self, plan_file: Path) -> bool:
         """Check if plan.md has development guide section.
@@ -536,13 +499,11 @@ class PlanPhase(Phase):
         if self.interactive:
             self._display_current_plan()
 
-        # Iteration 2+: Check previous iteration's status and get user input
-        prev_iteration_file = self.history_dir / f"iteration_{self.iteration - 1:03d}.json"
-        if not prev_iteration_file.exists():
+        # Iteration 2+: Load previous iteration data
+        prev_data = self._load_previous_iteration_data()
+        if not prev_data:
             return ""
 
-        with open(prev_iteration_file, "r", encoding="utf-8") as f:
-            prev_data = json.load(f)
         prev_status = prev_data.get("status_code", "")
 
         # 根據上一輪狀態，取得用戶輸入
@@ -573,40 +534,7 @@ class PlanPhase(Phase):
             )
 
         elif prev_status == "AAF_NEED_CLARIFICATION":
-            # 需要用戶回答問題
-            if self.interactive:
-                clarification = self._ask_user_for_clarification()
-            else:
-                clarification = self.user_input
-                if not clarification:
-                    # Non-interactive 但沒提供輸入 → 暫停
-                    return PhaseResult(
-                        status=PhaseStatus.IN_PROGRESS,
-                        message=f"Plan phase paused after iteration {self.iteration - 1}, waiting for user clarification",
-                        data={
-                            "iterations": self.iteration - 1,
-                            "last_response": prev_data.get("response", ""),
-                            "status_code": "AAF_NEED_CLARIFICATION",
-                        },
-                    )
-
-            # 處理用戶回答（不再區分 interactive/non-interactive）
-            if not clarification.strip():
-                return PhaseResult(
-                    status=PhaseStatus.FAILED,
-                    message="User provided no response to clarification questions",
-                    data={
-                        "iterations": self.iteration - 1,
-                        "last_response": prev_data.get("response", ""),
-                    },
-                )
-
-            if self.interactive:
-                print()
-                print("✅ 已收到您的回答，正在發送給開發者處理...")
-                print()
-
-            return clarification
+            return self._handle_need_clarification_input(prev_data, agent_display_name="開發者")
         else:
             return ""
 

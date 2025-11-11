@@ -88,6 +88,7 @@ class SpecPhase(Phase):
         self.pm_agent = pm_agent
         self.interactive = interactive
         self.user_input = user_input
+        self.phase_name = "spec"  # For base class progress tracking
 
         # Track if rigor was explicitly set (for interactive prompting)
         if rigor is not None:
@@ -113,8 +114,7 @@ class SpecPhase(Phase):
         issue_dir = spec_path.parent.parent  # .aaf/issues/{issue_name}
         self.history_dir = issue_dir / "spec" / "history"
 
-        # Track conversation history
-        self.conversation_history = []
+        # Track requirements and questions
         self.confirmed_requirements = []
         self.pending_questions = []
 
@@ -178,7 +178,7 @@ class SpecPhase(Phase):
                 if spec_path.exists():
                     # Backup original spec if exists
                     self._backup_spec(spec_path)
-                elif not self.conversation_history:
+                elif self.iteration == 0:
                     # File doesn't exist AND no history - get initial user story
                     if self.interactive:
                         self._prompt_for_user_story()
@@ -202,53 +202,6 @@ class SpecPhase(Phase):
 
                         # Create spec file with user story
                         spec_path.write_text(user_story, encoding="utf-8")
-
-            # If there's existing history, show current state and get user response before continuing
-            if self.interactive and self.conversation_history and self.iteration > 0:
-                print("\n" + "="*70)
-                print(f"🔄 偵測到未完成的對話（已完成 {self.iteration} 輪），繼續執行...")
-                print("="*70)
-
-                spec_file = Path(self.spec_file)
-                if spec_file.exists():
-                    print(f"\n{'='*60}")
-                    print(f"目前的需求規格（第 {self.iteration} 輪後的狀態）")
-                    print(f"{'='*60}")
-                    print(spec_file.read_text())
-                    print(f"{'='*60}\n")
-
-                # Get user's response to continue the conversation
-                user_response = self.display.get_multiline_input("請回答 PM 的問題")
-
-                if user_response.strip():
-                    print()
-                    print("✅ 已收到您的回答，正在發送給 PM 處理...")
-                    print()
-                else:
-                    print("\n⚠️  沒有輸入內容，Phase 將終止。")
-                    return PhaseResult(
-                        status=PhaseStatus.FAILED,
-                        message="User provided no response to clarification questions",
-                        data={
-                            "iterations": self.iteration,
-                        },
-                    )
-
-                # Save user response for next iteration to read
-                self._save_user_response(user_response)
-
-                # Update conversation history in memory with new user response
-                # Note: We append a new conversation entry for the next iteration to process
-                # Mark it as from_resume so we don't ask for user input again after PM responds
-                self.conversation_history.append({
-                    "iteration": self.iteration + 1,
-                    "pm_response": "",  # Will be filled by next iteration
-                    "user_response": user_response,
-                    "from_resume": True,  # Flag to indicate this user response came from resume
-                })
-
-                # Update context file so next iteration can see the user response
-                self._update_context_file()
 
             # Requirements clarification loop
             while True:
@@ -366,51 +319,16 @@ class SpecPhase(Phase):
         if self.interactive:
             self._display_current_spec()
 
-        # Iteration 2+: Check previous iteration's status and get user input
-        prev_iteration_file = self.history_dir / f"iteration_{self.iteration - 1:03d}.json"
-        if not prev_iteration_file.exists():
+        # Iteration 2+: Load previous iteration data
+        prev_data = self._load_previous_iteration_data()
+        if not prev_data:
             return ""
 
-        with open(prev_iteration_file, "r", encoding="utf-8") as f:
-            prev_data = json.load(f)
         prev_status = prev_data.get("status_code", "")
 
         # 根據上一輪狀態，取得用戶輸入
         if prev_status == "AAF_NEED_CLARIFICATION":
-            # 需要用戶回答問題
-            if self.interactive:
-                clarification = self._ask_user_for_clarification()
-            else:
-                clarification = self.user_input
-                if not clarification:
-                    # Non-interactive 但沒提供輸入 → 暫停
-                    return PhaseResult(
-                        status=PhaseStatus.IN_PROGRESS,
-                        message=f"Spec phase paused after iteration {self.iteration - 1}, waiting for user clarification",
-                        data={
-                            "iterations": self.iteration - 1,
-                            "last_response": prev_data.get("pm_response", prev_data.get("response", "")),
-                            "status_code": "AAF_NEED_CLARIFICATION",
-                        },
-                    )
-
-            # 處理用戶回答（不再區分 interactive/non-interactive）
-            if not clarification.strip():
-                return PhaseResult(
-                    status=PhaseStatus.FAILED,
-                    message="User provided no response to clarification questions",
-                    data={
-                        "iterations": self.iteration - 1,
-                        "last_response": prev_data.get("pm_response", prev_data.get("response", "")),
-                    },
-                )
-
-            if self.interactive:
-                print()
-                print("✅ 已收到您的回答，正在發送給 PM 處理...")
-                print()
-
-            return clarification
+            return self._handle_need_clarification_input(prev_data, agent_display_name="PM")
         else:
             return ""
 
@@ -548,31 +466,6 @@ class SpecPhase(Phase):
             else:
                 # 更新既有的 issue
                 update_github_issue(self.issue_id, content)
-
-    def _save_user_response(self, user_response: str) -> None:
-        """Save user's response to spec file for next iteration.
-
-        Args:
-            user_response: User's response to PM's questions
-        """
-        if self.workflow_mode == WorkflowMode.LOCAL:
-            spec_path = Path(self.spec_file)
-
-            # Read existing content if any
-            existing_content = ""
-            if spec_path.exists():
-                existing_content = spec_path.read_text()
-
-            # Append user response
-            updated_content = existing_content + f"\n\n---\n用戶回應（第 {self.iteration} 輪）:\n{user_response}\n"
-
-            # Save updated content
-            spec_path.parent.mkdir(parents=True, exist_ok=True)
-            spec_path.write_text(updated_content)
-        elif self.workflow_mode == WorkflowMode.GITHUB:
-            # For GitHub mode, add comment to issue
-            # TODO: Implement gh issue comment
-            pass
 
     def _create_github_issue(self, content: str) -> str:
         """Create a new GitHub issue with requirements.
@@ -905,13 +798,21 @@ class SpecPhase(Phase):
             context_lines.append("(無待解答問題)\n")
         context_lines.append("\n")
 
-        # Conversation history
+        # Conversation history - read from history files
         context_lines.append("## 對話歷史\n")
-        for entry in self.conversation_history:
-            context_lines.append(f"### 第 {entry['iteration']} 輪\n")
-            context_lines.append(f"**PM 問題：**\n{entry['pm_response']}\n\n")
-            if entry.get('user_response'):
-                context_lines.append(f"**用戶回答：**\n{entry['user_response']}\n\n")
+        if self.history_dir.exists():
+            iteration_files = sorted(self.history_dir.glob("iteration_*.json"))
+            for iteration_file in iteration_files:
+                with open(iteration_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                iteration_num = data.get("iteration", 0)
+                pm_response = data.get("pm_response", "") or data.get("response", "")
+                user_input = data.get("user_input", "")
+
+                context_lines.append(f"### 第 {iteration_num} 輪\n")
+                context_lines.append(f"**PM 問題：**\n{pm_response}\n\n")
+                if user_input:
+                    context_lines.append(f"**用戶回答：**\n{user_input}\n\n")
         context_lines.append("\n")
 
         # Important notes
@@ -924,47 +825,6 @@ class SpecPhase(Phase):
         context_file = self.history_dir / "context.md"
         context_file.write_text("".join(context_lines), encoding="utf-8")
 
-    def _load_history(self) -> None:
-        """Load conversation history from previous iterations."""
-        if not self.history_dir.exists():
-            return
-
-        # Find all iteration files
-        iteration_files = sorted(self.history_dir.glob("iteration_*.json"))
-
-        for iteration_file in iteration_files:
-            with open(iteration_file, "r", encoding="utf-8") as f:
-                data = json.load(f)
-
-            # Restore conversation history
-            self.conversation_history.append({
-                "iteration": data["iteration"],
-                "pm_response": data["pm_response"],
-                "user_response": data.get("user_response", ""),  # For backward compatibility
-                "status": data["status"],
-            })
-
-            # Restore confirmed requirements
-            if data.get("confirmed_requirements"):
-                self.confirmed_requirements = data["confirmed_requirements"]
-
-            # Restore pending questions
-            if data.get("pending_questions"):
-                self.pending_questions = data["pending_questions"]
-
-            # Update iteration counter
-            if data["iteration"] >= self.iteration:
-                self.iteration = data["iteration"]
-
-
-    def _get_status_file(self) -> Path:
-        """Get the path to status.json file.
-
-        Returns:
-            Path to status.json in .aaf/issues/{issue_name}/spec/status.json
-        """
-        return self.history_dir.parent / "status.json"
-
     def get_status_file(self) -> Path:
         """Public method to get status file path for workflow integration.
 
@@ -972,42 +832,3 @@ class SpecPhase(Phase):
             Path to status.json
         """
         return self._get_status_file()
-
-    def _save_progress(self, status_code: PhaseStatusCode) -> None:
-        """Save phase progress to status.json.
-        
-        Args:
-            status_code: Phase status code (CONFIRMED, NEED_CLARIFICATION, etc.)
-        """
-        status_file = self._get_status_file()
-        status_file.parent.mkdir(parents=True, exist_ok=True)
-        
-        # Determine phase status
-        phase_status = PhaseStatus.COMPLETED if status_code == PhaseStatusCode.CONFIRMED else PhaseStatus.IN_PROGRESS
-        
-        progress = PhaseProgress(
-            phase="spec",
-            status=phase_status,
-            status_code=status_code.value,
-            timestamp=datetime.now(),
-            iteration=self.iteration,
-            message=f"Phase completed with {status_code.value}" if phase_status == PhaseStatus.COMPLETED else f"Iteration {self.iteration}",
-        )
-        
-        with open(status_file, 'w', encoding='utf-8') as f:
-            json.dump(progress.to_dict(), f, ensure_ascii=False, indent=2)
-
-    def _load_progress(self) -> Optional[PhaseProgress]:
-        """Load phase progress from status.json.
-        
-        Returns:
-            PhaseProgress if file exists, None otherwise
-        """
-        status_file = self._get_status_file()
-        if not status_file.exists():
-            return None
-        
-        with open(status_file, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        
-        return PhaseProgress.from_dict(data)

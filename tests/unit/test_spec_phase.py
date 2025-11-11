@@ -315,14 +315,18 @@ class TestHistoryTracking:
         phase.iteration = 2
         phase.confirmed_requirements = ["功能1: 用戶登入", "功能2: 用戶註冊"]
         phase.pending_questions = ["密碼規則是什麼？", "是否需要 email 驗證？"]
-        phase.conversation_history = [
-            {
-                "iteration": 1,
-                "pm_response": "請問需要哪些功能？",
-                "user_response": "需要登入和註冊",
-                "status_code": "AAF_NEED_CLARIFICATION",
-            },
-        ]
+
+        # Create history file for iteration 1
+        phase.history_dir.mkdir(parents=True, exist_ok=True)
+        import json
+        iteration_1_file = phase.history_dir / "iteration_001.json"
+        iteration_1_file.write_text(json.dumps({
+            "iteration": 1,
+            "pm_response": "請問需要哪些功能？",
+            "user_input": "需要登入和註冊",
+            "response": "請問需要哪些功能？",
+            "status_code": "AAF_NEED_CLARIFICATION",
+        }, ensure_ascii=False, indent=2))
 
         # Update context file
         phase._update_context_file()
