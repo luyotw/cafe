@@ -324,42 +324,25 @@ class SpecPhase(Phase):
         # Do this for all status codes since agent already wrote the file
         self._sync_spec_to_github(response)
 
-        # Handle CONFIRMED status - print token usage and return completed result
-        if status_code == PhaseStatusCode.CONFIRMED:
-            self._print_token_usage_summary()
-
-            token_usage = self.agent_manager.get_total_token_usage()
-            result_data = {
-                "iterations": self.iteration,
-                "final_response": response,
-                "status_code": status_code.value,
-                "token_usage": {
-                    "input_tokens": token_usage.input_tokens,
-                    "output_tokens": token_usage.output_tokens,
-                    "cache_creation_input_tokens": token_usage.cache_creation_input_tokens,
-                    "cache_read_input_tokens": token_usage.cache_read_input_tokens,
-                    "total_cost_usd": token_usage.total_cost_usd,
-                }
-            }
-
-            # Add issue_id if GitHub mode and created new issue
-            if self.workflow_mode == WorkflowMode.GITHUB and hasattr(self, '_created_issue_id'):
-                result_data["issue_id"] = self._created_issue_id
-
-            return PhaseResult(
-                status=PhaseStatus.COMPLETED,
-                message=f"Requirements clarified in {self.iteration} iteration(s)",
-                data=result_data,
-                token_usage=token_usage,
-            )
-
         # Use base class method to handle standard status codes
-        # (REJECTED, NO_RESPONSE, NEED_CLARIFICATION, no status code)
+        # (CONFIRMED, REJECTED, NO_RESPONSE, NEED_CLARIFICATION, no status code)
         return self._handle_standard_status_codes(
             status_code=status_code,
             response=response,
             continue_codes=[PhaseStatusCode.NEED_CLARIFICATION],
         )
+
+    def _get_completion_data(self) -> dict:
+        """取得 phase 完成時的額外資料（提供給 base class 的 _handle_standard_status_codes）。
+
+        Returns:
+            包含 phase-specific 資料的 dict，會被合併到 PhaseResult.data 中
+        """
+        data = {}
+        # Add issue_id if GitHub mode and created new issue
+        if self.workflow_mode == WorkflowMode.GITHUB and hasattr(self, '_created_issue_id'):
+            data["issue_id"] = self._created_issue_id
+        return data
 
     def _prepare_user_input_for_iteration(self) -> "PhaseResult | str":
         """準備當前迭代的 user input。

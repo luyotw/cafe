@@ -530,7 +530,38 @@ class Phase(ABC):
                 },
             )
 
-        # Handle complete codes (e.g., READY_FOR_REVIEW, CONFIRMED)
+        # Handle complete codes (e.g., CONFIRMED)
+        # For CONFIRMED status, print token usage and return completed result
+        if status_code == PhaseStatusCode.CONFIRMED:
+            self._print_token_usage_summary()
+
+            token_usage = self.agent_manager.get_total_token_usage()
+            result_data = {
+                "iterations": self.iteration,
+                "final_response": response,
+                "status_code": status_code.value,
+                "token_usage": {
+                    "input_tokens": token_usage.input_tokens,
+                    "output_tokens": token_usage.output_tokens,
+                    "cache_creation_input_tokens": token_usage.cache_creation_input_tokens,
+                    "cache_read_input_tokens": token_usage.cache_read_input_tokens,
+                    "total_cost_usd": token_usage.total_cost_usd,
+                }
+            }
+
+            # Allow phases to add phase-specific data
+            if hasattr(self, '_get_completion_data'):
+                phase_data = self._get_completion_data()
+                result_data.update(phase_data)
+
+            return PhaseResult(
+                status=PhaseStatus.COMPLETED,
+                message=f"Phase completed in {self.iteration} iteration(s)",
+                data=result_data,
+                token_usage=token_usage,
+            )
+
+        # Handle other complete codes (e.g., READY_FOR_REVIEW)
         # These typically trigger user confirmation in next iteration
         if status_code in complete_codes:
             return None  # Continue to next iteration
