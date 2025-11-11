@@ -684,52 +684,6 @@ class SpecPhase(Phase):
 回應確認訊息。
 """
 
-    def _save_iteration_history(
-        self,
-        user_input: str,
-        pm_response: str,
-        status: PhaseStatusCode,
-        prompt: Optional[str] = None,
-        agent_cli: Optional[str] = None,
-        agent_session_id: Optional[str] = None,
-        allowed_tools: Optional[List[str]] = None,
-        denied_tools: Optional[List[str]] = None,
-    ) -> None:
-        """Save iteration history to JSON file.
-
-        Each iteration = user_input (start) → pm_response (end)
-
-        Args:
-            user_input: User's input at the start of this iteration (user story for iteration 1, user response for subsequent iterations)
-            pm_response: PM's response (questions or final requirements)
-            status: Status code for this iteration
-            prompt: The actual prompt sent to the agent (optional for backwards compatibility)
-            agent_cli: CLI tool used by the agent (e.g., "copilot", "claude")
-            agent_session_id: Session ID of the agent
-            allowed_tools: List of allowed tools for the agent
-            denied_tools: List of denied tools for the agent
-        """
-        # Use base class method with SpecPhase-specific data
-        # Note: SpecPhase uses "status" field name instead of "status_code" for historical reasons
-        super()._save_iteration_history(
-            phase_specific_data={
-                "status": status.value,  # SpecPhase uses "status" not "status_code"
-                "user_input": user_input,
-                "pm_response": pm_response,
-                "confirmed_requirements": self.confirmed_requirements.copy(),
-                "pending_questions": self.pending_questions.copy(),
-            },
-            prompt=prompt,
-            agent_cli=agent_cli,
-            agent_session_id=agent_session_id,
-            allowed_tools=allowed_tools,
-            denied_tools=denied_tools,
-            status_code=None,  # Don't add status_code since we're using "status"
-        )
-
-        # Update context.md for agent
-        self._update_context_file()
-
     def _update_context_file(self) -> None:
         """Update context.md with conversation history for agent."""
         # Ensure history directory exists

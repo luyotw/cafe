@@ -173,12 +173,16 @@ class TestHistoryTracking:
             issue_name="test-feature",
         )
 
-        # Manually set iteration and save history
+        # Manually set iteration and save history using base class method
         phase.iteration = 1
         phase._save_iteration_history(
-            user_input="Initial requirements\n",  # 輪的開始：使用者故事
-            pm_response="請問使用者是誰？",
-            status=PhaseStatusCode.NEED_CLARIFICATION,
+            phase_specific_data={
+                "status": PhaseStatusCode.NEED_CLARIFICATION.value,
+                "user_input": "Initial requirements\n",  # 輪的開始：使用者故事
+                "pm_response": "請問使用者是誰？",
+                "confirmed_requirements": phase.confirmed_requirements.copy(),
+                "pending_questions": phase.pending_questions.copy(),
+            },
         )
 
         # Check JSON file exists
@@ -217,14 +221,18 @@ class TestHistoryTracking:
             issue_name="test-feature",
         )
 
-        # Manually set iteration and save history with prompt
+        # Manually set iteration and save history with prompt using base class method
         phase.iteration = 1
         test_prompt = "這是發送給 PM agent 的完整 prompt 內容\n包含了需求和 context"
         phase._save_iteration_history(
-            user_input="Initial requirements\n",
+            phase_specific_data={
+                "status": PhaseStatusCode.NEED_CLARIFICATION.value,
+                "user_input": "Initial requirements\n",
+                "pm_response": "請問使用者是誰？",
+                "confirmed_requirements": phase.confirmed_requirements.copy(),
+                "pending_questions": phase.pending_questions.copy(),
+            },
             prompt=test_prompt,
-            pm_response="請問使用者是誰？",
-            status=PhaseStatusCode.NEED_CLARIFICATION,
         )
 
         # Check JSON file exists
@@ -261,14 +269,18 @@ class TestHistoryTracking:
             issue_name="test-feature",
         )
 
-        # Manually set iteration and save history with agent metadata
+        # Manually set iteration and save history with agent metadata using base class method
         phase.iteration = 1
         test_prompt = "這是發送給 PM agent 的完整 prompt 內容"
         phase._save_iteration_history(
-            user_input="Initial requirements\n",
+            phase_specific_data={
+                "status": PhaseStatusCode.NEED_CLARIFICATION.value,
+                "user_input": "Initial requirements\n",
+                "pm_response": "請問使用者是誰？",
+                "confirmed_requirements": phase.confirmed_requirements.copy(),
+                "pending_questions": phase.pending_questions.copy(),
+            },
             prompt=test_prompt,
-            pm_response="請問使用者是誰？",
-            status=PhaseStatusCode.NEED_CLARIFICATION,
             agent_cli="copilot",
             agent_session_id="test-session-456",
             allowed_tools=["write", "read"],
@@ -417,9 +429,17 @@ class TestHistoryTracking:
             issue_name="test-feature",
         )
 
-        # Create history
+        # Create history using base class method
         phase.iteration = 1
-        phase._save_iteration_history("Q1", "A1", PhaseStatusCode.NEED_CLARIFICATION)
+        phase._save_iteration_history(
+            phase_specific_data={
+                "status": PhaseStatusCode.NEED_CLARIFICATION.value,
+                "user_input": "Q1",
+                "pm_response": "A1",
+                "confirmed_requirements": phase.confirmed_requirements.copy(),
+                "pending_questions": phase.pending_questions.copy(),
+            },
+        )
         phase.iteration = 2
 
         # Generate prompt for iteration 2

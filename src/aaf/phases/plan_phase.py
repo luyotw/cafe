@@ -336,46 +336,6 @@ class PlanPhase(Phase):
 """
 
 
-    def _save_history(
-        self,
-        user_input: str,
-        prompt: str,
-        response: str,
-        status_code: PhaseStatusCode,
-        agent_cli: Optional[str] = None,
-        agent_session_id: Optional[str] = None,
-        allowed_tools: Optional[List[str]] = None,
-        denied_tools: Optional[List[str]] = None,
-    ) -> None:
-        """Save iteration history to JSON file.
-
-        Each iteration = user_input (start) → agent response (end)
-
-        Args:
-            user_input: User's input at the start of this iteration (dev guide for iteration 1, user response for subsequent iterations)
-            prompt: The prompt sent to agent
-            response: The agent's response
-            status_code: Status code from response
-            agent_cli: CLI tool used by the agent (e.g., "copilot", "claude")
-            agent_session_id: Session ID of the agent
-            allowed_tools: List of allowed tools for the agent
-            denied_tools: List of denied tools for the agent
-        """
-        # Use base class method with PlanPhase-specific data
-        super()._save_iteration_history(
-            phase_specific_data={
-                "dev_agent": self.dev_agent,
-                "user_input": user_input,
-                "response": response,
-            },
-            prompt=prompt,
-            agent_cli=agent_cli,
-            agent_session_id=agent_session_id,
-            allowed_tools=allowed_tools,
-            denied_tools=denied_tools,
-            status_code=status_code,
-        )
-
     def _has_dev_guide_section(self, plan_file: Path) -> bool:
         """Check if plan.md has development guide section.
 

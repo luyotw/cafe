@@ -640,10 +640,14 @@ class TestPlanPhaseHistory:
         )
 
         phase.iteration = 1
-        phase._save_history(
-            user_input="User's dev guide input",
+        # Use base class method directly
+        phase._save_iteration_history(
+            phase_specific_data={
+                "dev_agent": phase.dev_agent,
+                "user_input": "User's dev guide input",
+                "response": "Test response",
+            },
             prompt="Test prompt",
-            response="Test response",
             status_code=PhaseStatusCode.NEED_CLARIFICATION,
         )
 
@@ -723,10 +727,14 @@ class TestPlanPhaseHistory:
         )
 
         phase.iteration = 1
-        phase._save_history(
-            user_input="User's dev guide input",
+        # Use base class method directly
+        phase._save_iteration_history(
+            phase_specific_data={
+                "dev_agent": phase.dev_agent,
+                "user_input": "User's dev guide input",
+                "response": "Test response",
+            },
             prompt="Test prompt",
-            response="Test response",
             status_code=PhaseStatusCode.NEED_CLARIFICATION,
             agent_cli="claude",
             agent_session_id="session-789",
