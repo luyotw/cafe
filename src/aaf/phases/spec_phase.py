@@ -207,7 +207,21 @@ class SpecPhase(Phase):
                 current_user_input = result_or_input
 
                 # Execute full agent interaction cycle (generate prompt, execute, handle status)
-                result = self._execute_and_handle_agent_response(current_user_input)
+                result, _ = self._execute_and_handle_agent_response(
+                    agent_name=self.pm_agent,
+                    user_input=current_user_input,
+                    valid_status_codes=[
+                        PhaseStatusCode.CONFIRMED,
+                        PhaseStatusCode.NEED_CLARIFICATION,
+                        PhaseStatusCode.REJECTED,
+                    ],
+                    allowed_tools=["write", "read"],
+                    continue_codes=[PhaseStatusCode.NEED_CLARIFICATION],
+                )
+
+                # Phase-specific post-processing: Sync spec to GitHub (no-op in local mode)
+                self._sync_spec_to_github("")
+
                 if result:
                     return result
                 # If result is None, continue to next iteration
@@ -227,33 +241,6 @@ class SpecPhase(Phase):
                 status=PhaseStatus.FAILED,
                 message=f"Requirements phase failed: {e}",
             )
-
-    def _execute_and_handle_agent_response(self, user_input: str) -> Optional[PhaseResult]:
-        """執行完整的 agent 互動循環：生成 prompt、執行 agent、處理 status code。
-
-        Args:
-            user_input: 用戶在這一輪的輸入
-
-        Returns:
-            PhaseResult 如果應該結束 phase，None 如果應該繼續下一輪循環
-        """
-        # Use base class method to execute agent and handle status codes
-        result, response = super()._execute_and_handle_agent_response(
-            agent_name=self.pm_agent,
-            user_input=user_input,
-            valid_status_codes=[
-                PhaseStatusCode.CONFIRMED,
-                PhaseStatusCode.NEED_CLARIFICATION,
-                PhaseStatusCode.REJECTED,
-            ],
-            allowed_tools=["write", "read"],
-            continue_codes=[PhaseStatusCode.NEED_CLARIFICATION],
-        )
-
-        # Phase-specific post-processing: Sync spec to GitHub (no-op in local mode)
-        self._sync_spec_to_github(response)
-
-        return result
 
     def _get_completion_data(self) -> dict:
         """取得 phase 完成時的額外資料（提供給 base class 的 _handle_standard_status_codes）。

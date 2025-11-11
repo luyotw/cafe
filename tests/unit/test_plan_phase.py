@@ -1463,7 +1463,7 @@ class TestPlanPhaseUserConfirmation:
 
 
 class TestExecuteAndHandleAgentResponse:
-    """測試 PlanPhase._execute_and_handle_agent_response() 方法"""
+    """測試 PlanPhase._execute_and_handle_agent_response() 方法（透過 base class）"""
 
     def test_returns_none_for_ready_for_review(self, tmp_path: Path) -> None:
         """測試當 agent 返回 READY_FOR_REVIEW 時返回 None（繼續循環）"""
@@ -1488,8 +1488,20 @@ class TestExecuteAndHandleAgentResponse:
         )
         phase.iteration = 1
 
-        # Execute
-        result = phase._execute_and_handle_agent_response("請建立計畫")
+        # Execute - call base class method with all required parameters
+        result, _ = phase._execute_and_handle_agent_response(
+            agent_name=phase.dev_agent,
+            user_input="請建立計畫",
+            valid_status_codes=[
+                PhaseStatusCode.READY_FOR_REVIEW,
+                PhaseStatusCode.NEED_CLARIFICATION,
+                PhaseStatusCode.REJECTED,
+            ],
+            allowed_tools=["write", "read"],
+            complete_codes=[PhaseStatusCode.READY_FOR_REVIEW],
+            continue_codes=[PhaseStatusCode.NEED_CLARIFICATION],
+            phase_specific_data={"dev_agent": phase.dev_agent},
+        )
 
         # Verify
         assert result is None  # Should continue to next iteration
@@ -1517,8 +1529,20 @@ class TestExecuteAndHandleAgentResponse:
         )
         phase.iteration = 1
 
-        # Execute
-        result = phase._execute_and_handle_agent_response("請建立計畫")
+        # Execute - call base class method with all required parameters
+        result, _ = phase._execute_and_handle_agent_response(
+            agent_name=phase.dev_agent,
+            user_input="請建立計畫",
+            valid_status_codes=[
+                PhaseStatusCode.READY_FOR_REVIEW,
+                PhaseStatusCode.NEED_CLARIFICATION,
+                PhaseStatusCode.REJECTED,
+            ],
+            allowed_tools=["write", "read"],
+            complete_codes=[PhaseStatusCode.READY_FOR_REVIEW],
+            continue_codes=[PhaseStatusCode.NEED_CLARIFICATION],
+            phase_specific_data={"dev_agent": phase.dev_agent},
+        )
 
         # Verify
         assert result is None  # Should continue to next iteration
@@ -1546,8 +1570,20 @@ class TestExecuteAndHandleAgentResponse:
         )
         phase.iteration = 1
 
-        # Execute
-        result = phase._execute_and_handle_agent_response("請建立計畫")
+        # Execute - call base class method with all required parameters
+        result, _ = phase._execute_and_handle_agent_response(
+            agent_name=phase.dev_agent,
+            user_input="請建立計畫",
+            valid_status_codes=[
+                PhaseStatusCode.READY_FOR_REVIEW,
+                PhaseStatusCode.NEED_CLARIFICATION,
+                PhaseStatusCode.REJECTED,
+            ],
+            allowed_tools=["write", "read"],
+            complete_codes=[PhaseStatusCode.READY_FOR_REVIEW],
+            continue_codes=[PhaseStatusCode.NEED_CLARIFICATION],
+            phase_specific_data={"dev_agent": phase.dev_agent},
+        )
 
         # Verify
         assert result is not None
@@ -1577,8 +1613,20 @@ class TestExecuteAndHandleAgentResponse:
         )
         phase.iteration = 1
 
-        # Execute
-        result = phase._execute_and_handle_agent_response("請建立計畫")
+        # Execute - call base class method with all required parameters
+        result, _ = phase._execute_and_handle_agent_response(
+            agent_name=phase.dev_agent,
+            user_input="請建立計畫",
+            valid_status_codes=[
+                PhaseStatusCode.READY_FOR_REVIEW,
+                PhaseStatusCode.NEED_CLARIFICATION,
+                PhaseStatusCode.REJECTED,
+            ],
+            allowed_tools=["write", "read"],
+            complete_codes=[PhaseStatusCode.READY_FOR_REVIEW],
+            continue_codes=[PhaseStatusCode.NEED_CLARIFICATION],
+            phase_specific_data={"dev_agent": phase.dev_agent},
+        )
 
         # Verify
         assert result is not None
@@ -1608,8 +1656,20 @@ class TestExecuteAndHandleAgentResponse:
         )
         phase.iteration = 1
 
-        # Execute
-        result = phase._execute_and_handle_agent_response("請建立計畫")
+        # Execute - call base class method with all required parameters
+        result, _ = phase._execute_and_handle_agent_response(
+            agent_name=phase.dev_agent,
+            user_input="請建立計畫",
+            valid_status_codes=[
+                PhaseStatusCode.READY_FOR_REVIEW,
+                PhaseStatusCode.NEED_CLARIFICATION,
+                PhaseStatusCode.REJECTED,
+            ],
+            allowed_tools=["write", "read"],
+            complete_codes=[PhaseStatusCode.READY_FOR_REVIEW],
+            continue_codes=[PhaseStatusCode.NEED_CLARIFICATION],
+            phase_specific_data={"dev_agent": phase.dev_agent},
+        )
 
         # Verify
         assert result is None  # Should continue in interactive mode
@@ -1639,8 +1699,20 @@ class TestExecuteAndHandleAgentResponse:
         )
         phase.iteration = 1
 
-        # Execute
-        result = phase._execute_and_handle_agent_response("請建立計畫")
+        # Execute - call base class method with all required parameters
+        result, _ = phase._execute_and_handle_agent_response(
+            agent_name=phase.dev_agent,
+            user_input="請建立計畫",
+            valid_status_codes=[
+                PhaseStatusCode.READY_FOR_REVIEW,
+                PhaseStatusCode.NEED_CLARIFICATION,
+                PhaseStatusCode.REJECTED,
+            ],
+            allowed_tools=["write", "read"],
+            complete_codes=[PhaseStatusCode.READY_FOR_REVIEW],
+            continue_codes=[PhaseStatusCode.NEED_CLARIFICATION],
+            phase_specific_data={"dev_agent": phase.dev_agent},
+        )
 
         # Verify
         assert result is not None
