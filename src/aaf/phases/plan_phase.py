@@ -142,7 +142,7 @@ class PlanPhase(Phase):
                         PhaseStatusCode.NEED_CLARIFICATION,
                         PhaseStatusCode.REJECTED,
                     ],
-                    allowed_tools=["write", "read"],
+                    allowed_tools=["write", "read", "edit"],
                     complete_codes=[PhaseStatusCode.READY_FOR_REVIEW],
                     continue_codes=[PhaseStatusCode.NEED_CLARIFICATION],
                     phase_specific_data={"dev_agent": self.dev_agent},
@@ -251,20 +251,22 @@ class PlanPhase(Phase):
 
 這是第 {self.iteration} 輪實作分析。
 
-{user_request_section}請檢查 {plan_file_path} 的最新版本，繼續完善實作計畫。
+{user_request_section}
+請先使用 Read tool 讀取 {plan_file_path} 的最新版本，然後根據使用者的修改要求，使用 Edit tool **更新**現有的實作計畫（不要全部重寫）。
 {template_instruction}
 {status_code_prompt}
 
+**重要：使用 Edit tool 更新檔案**
+- 使用 Edit tool 的 old_string/new_string 方式更新特定段落
+- 不要使用 Write tool 重寫整個檔案
+- 保留「## 開發指南」區塊不變
+- 只修改需要變更的部分
+
 **如果仍需確認（status: AAF_NEED_CLARIFICATION）：**
-使用 Write tool 更新 {plan_file_path}：
-   - 「## 開發指南」- 保留原有的開發指南內容（不要修改）
-   - 「## 實作計畫」- 更新的實作分析內容
-   - 「## 待確認問題」- 列出需要確認的技術問題
+使用 Edit tool 更新 {plan_file_path} 中的相關段落，並在「## 待確認問題」區塊列出需要確認的技術問題。
 
 **如果分析完成（status: AAF_READY_FOR_REVIEW）：**
-使用 Write tool 將完整實作計畫寫入 {plan_file_path}：
-   - 第一部分：「## 開發指南」- 保留原有的開發指南內容（不要修改）
-   - 第二部分：嚴格按照模版的章節結構和格式撰寫實作計畫
+使用 Edit tool 更新 {plan_file_path} 中需要修改的段落，確保實作計畫符合使用者的要求。
 """
 
     def _generate_github_prompt(self, user_input: str) -> str:
