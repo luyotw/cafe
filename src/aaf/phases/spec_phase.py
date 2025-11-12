@@ -167,9 +167,12 @@ class SpecPhase(Phase):
                     if self.interactive:
                         self._prompt_for_user_story()
                     else:
-                        # Non-interactive mode: read user story from stdin
-                        import sys
-                        user_story = sys.stdin.read().strip()
+                        # Non-interactive mode: use user_input if provided, otherwise read from stdin
+                        if self.user_input:
+                            user_story = self.user_input.strip()
+                        else:
+                            import sys
+                            user_story = sys.stdin.read().strip()
 
                         # Remove END marker if present
                         if user_story.upper().endswith("END"):
@@ -208,7 +211,7 @@ class SpecPhase(Phase):
                 current_user_input = result_or_input
 
                 # Execute full agent interaction cycle (generate prompt, execute, handle status)
-                result, _ = self._execute_and_handle_agent_response(
+                result, response = self._execute_and_handle_agent_response(
                     agent_name=self.pm_agent,
                     user_input=current_user_input,
                     valid_status_codes=[
@@ -219,6 +222,9 @@ class SpecPhase(Phase):
                     allowed_tools=["write", "read"],
                     continue_codes=[PhaseStatusCode.NEED_CLARIFICATION],
                 )
+
+                # In mock mode or if agent doesn't use write tool, write spec from response
+                self._ensure_spec_file_written(response)
 
                 # Phase-specific post-processing: Sync spec to GitHub (no-op in local mode)
                 self._sync_spec_to_github("")
@@ -395,6 +401,43 @@ class SpecPhase(Phase):
         backup_path = Path(f"{spec_path}.backup")
         if not backup_path.exists():
             backup_path.write_text(spec_path.read_text())
+
+    def _ensure_spec_file_written(self, response: str) -> None:
+        """確保 spec 檔案已寫入（用於 mock 模式或 agent 未使用 write tool）。
+        
+        在 mock 模式下，agent 不會實際呼叫 write tool，所以需要從 response 中提取內容並寫入。
+        
+        Args:
+            response: Agent 回應內容
+        """
+        import os
+        
+        # 只在 mock 模式下處理
+        if not os.getenv("AAF_MOCK_AGENTS"):
+            return
+            
+        # 提取狀態碼後的內容
+        lines = response.strip().split("\n")
+        if not lines:
+            return
+            
+        # 跳過第一行（狀態碼）和空行
+        content_lines = []
+        skip_first = True
+        for line in lines:
+            if skip_first and line.startswith("AAF_"):
+                continue
+            skip_first = False
+            content_lines.append(line)
+        
+        content = "\n".join(content_lines).strip()
+        if not content:
+            return
+            
+        # 寫入檔案
+        spec_path = Path(self.spec_file)
+        spec_path.parent.mkdir(parents=True, exist_ok=True)
+        spec_path.write_text(content, encoding="utf-8")
 
     def _sync_spec_to_github(self, response: str) -> None:
         """同步 spec 檔案到 GitHub issue（僅 GitHub workflow 模式）。

@@ -1,6 +1,7 @@
 """Agent management for AAF."""
 
 import json
+import os
 import subprocess
 from typing import Dict, List, Optional, Tuple
 
@@ -31,6 +32,7 @@ class AgentManager:
         self.current_agent_name: Optional[str] = None
         self._total_token_usage = TokenUsage()
         self.show_prompt = False  # CLI can set this to True to show prompts
+        self._use_mock = os.getenv("AAF_MOCK_AGENTS", "").lower() in ("true", "1", "yes")
 
     def register_agent(self, config: AgentConfig) -> None:
         """Register an agent with configuration.
@@ -38,6 +40,18 @@ class AgentManager:
         Args:
             config: Agent configuration
         """
+        # Check if we should use mock agent
+        if self._use_mock:
+            from aaf.agents.mock_executor import MockAgentExecutor
+            
+            # Get mock response from env var (default: AAF_CONFIRMED with empty spec)
+            mock_response = os.getenv("AAF_MOCK_RESPONSE", "AAF_CONFIRMED\n\n# Mock Spec\n\nThis is a mock specification.")
+            self.agents[config.name] = MockAgentExecutor(
+                config=config,
+                response=mock_response
+            )
+            return
+        
         # Load existing session for this agent+CLI combination (if any)
         # Use issue-specific session if issue_name is provided
         session_data = self.session_manager.load_session(config.name, config.cli, self.issue_name)

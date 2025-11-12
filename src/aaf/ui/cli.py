@@ -334,15 +334,21 @@ def spec(
         "-c",
         help="Path to configuration file",
     ),
-    non_interactive: bool = typer.Option(
-        False,
-        "--non-interactive",
-        help="Detect if stdin is redirected and use it for input",
+    interactive: bool = typer.Option(
+        True,
+        "--interactive/--no-interactive",
+        help="Allow interactive prompts (default: True)",
     ),
     show_prompt: bool = typer.Option(
         False,
         "--show-prompt",
         help="Show the prompt sent to agent",
+    ),
+    user_input: Optional[str] = typer.Option(
+        None,
+        "--user-input",
+        "-u",
+        help="User input for non-interactive mode (required when --no-interactive)",
     ),
 ) -> None:
     """Run specification phase: Spec clarification with conversational generation.
@@ -425,7 +431,12 @@ def spec(
 
         # Determine if should be interactive
         import sys
-        is_interactive = not non_interactive and sys.stdin.isatty()
+        is_interactive = interactive and sys.stdin.isatty()
+
+        # Validate user_input in non-interactive mode
+        if not is_interactive and not user_input:
+            console.print("[red]Error: --user-input is required when using --no-interactive[/red]")
+            raise typer.Exit(1)
 
         # Create and execute spec phase
         phase = SpecPhase(
@@ -437,6 +448,7 @@ def spec(
             pm_agent=pm_agent,
             interactive=is_interactive,
             rigor=spec_rigor,
+            user_input=user_input or "",
         )
 
         console.print("[bold]Starting conversational spec generation...[/bold]")
@@ -550,6 +562,10 @@ def plan(
             console.print(f"[dim]Hint: Run 'aaf spec {issue_name}' first to create the specification.[/dim]")
             raise typer.Exit(1)
 
+        # Check if plan already exists
+        plan_file = f".aaf/issues/{issue_name}/plan/plan.md"
+        is_resume = Path(plan_file).exists()
+
         # Initialize components
         config_dir = str(Path(config_file).parent) if config_file != ".aaf/config.yaml" else ".aaf"
         config_manager = ConfigManager(config_dir)
@@ -575,18 +591,31 @@ def plan(
                 console.print("[dim]Use 'aaf template list' to see available templates[/dim]")
                 raise typer.Exit(1)
             selected_template = template
+        elif is_resume:
+            # Resuming existing plan - no template needed
+            console.print(f"[dim]Resuming existing plan from: {plan_file}[/dim]")
+            selected_template = None
         else:
-            # Interactive template selection
+            # New plan - template selection required
             templates = template_manager.list_templates()
             if not templates:
                 console.print("[yellow]Warning: No templates found[/yellow]")
                 console.print("[dim]You can add templates with 'aaf template add <source> <name>'[/dim]")
             else:
-                # Always use interactive selector (even with single template)
-                template_paths = {name: template_manager.get_template_path(name) for name in templates}
-                selected_template = select_template(templates, template_paths)
-                if selected_template:
-                    console.print(f"[dim]Using template: {selected_template}[/dim]")
+                if interactive:
+                    # Interactive template selection
+                    template_paths = {name: template_manager.get_template_path(name) for name in templates}
+                    selected_template = select_template(templates, template_paths)
+                    if selected_template:
+                        console.print(f"[dim]Using template: {selected_template}[/dim]")
+                else:
+                    # Non-interactive mode requires explicit template
+                    console.print("[red]Error: --template is required in non-interactive mode for new plans[/red]")
+                    console.print("[dim]Available templates:[/dim]")
+                    for t in templates:
+                        console.print(f"  - {t}")
+                    console.print(f"[dim]Usage: aaf plan {issue_name} --no-interactive --template <name>[/dim]")
+                    raise typer.Exit(1)
 
         # Display start message
         console.print("[bold blue]📋 Plan Phase: Implementation Planning[/bold blue]")
