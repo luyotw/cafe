@@ -1182,11 +1182,39 @@ def list_issues() -> None:
 
 @app.command(name="rm")
 def remove_issue(
-    issue_names: list[str] = typer.Argument(..., help="Names of the issues to delete"),
+    issue_names: list[str] = typer.Argument(..., help="Names of the issues to delete (supports wildcards like 'test-*')"),
     force: bool = typer.Option(False, "--force", "-f", help="Skip confirmation prompt"),
 ) -> None:
     """Remove one or more issues and all their data."""
     import shutil
+    import fnmatch
+
+    # Expand wildcards
+    issues_dir = Path(".aaf/issues")
+    expanded_issues = []
+    for pattern in issue_names:
+        if '*' in pattern or '?' in pattern:
+            # Wildcard pattern - find matching issues
+            if not issues_dir.exists():
+                continue
+            matches = [d.name for d in issues_dir.iterdir() if d.is_dir() and fnmatch.fnmatch(d.name, pattern)]
+            expanded_issues.extend(matches)
+        else:
+            # Literal issue name
+            expanded_issues.append(pattern)
+
+    # Remove duplicates while preserving order
+    seen = set()
+    issue_names = []
+    for name in expanded_issues:
+        if name not in seen:
+            seen.add(name)
+            issue_names.append(name)
+
+    if not issue_names:
+        console.print("[red]No issues matched the given patterns[/red]")
+        console.print("\nRun 'aaf ls' to see available issues")
+        raise typer.Exit(1)
 
     # Check all issues exist first
     missing_issues = []
