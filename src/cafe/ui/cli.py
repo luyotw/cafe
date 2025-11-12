@@ -1,4 +1,4 @@
-"""Command-line interface for AAF."""
+"""Command-line interface for CAFE."""
 
 import sys
 from pathlib import Path
@@ -7,22 +7,22 @@ from typing import Optional
 import typer
 from rich.console import Console
 
-from aaf.agents.manager import AgentManager
-from aaf.core.git import GitOperations
-from aaf.core.permission import PermissionHandler
-from aaf.core.types import AgentConfig, AgentCLI, WorkflowMode
-from aaf.core.workflow import Workflow
-from aaf.phases.plan_phase import PlanPhase
-from aaf.phases.develop_phase import DevelopPhase
-from aaf.phases.pr_phase import PRPhase
-from aaf.phases.spec_phase import SpecPhase
-from aaf.phases.review_phase import ReviewPhase
-from aaf.utils.config import ConfigManager
-from aaf.utils.template import TemplateManager
-from aaf.ui.template_selector import select_template
+from cafe.agents.manager import AgentManager
+from cafe.core.git import GitOperations
+from cafe.core.permission import PermissionHandler
+from cafe.core.types import AgentConfig, AgentCLI, WorkflowMode
+from cafe.core.workflow import Workflow
+from cafe.phases.plan_phase import PlanPhase
+from cafe.phases.develop_phase import DevelopPhase
+from cafe.phases.pr_phase import PRPhase
+from cafe.phases.spec_phase import SpecPhase
+from cafe.phases.review_phase import ReviewPhase
+from cafe.utils.config import ConfigManager
+from cafe.utils.template import TemplateManager
+from cafe.ui.template_selector import select_template
 
 app = typer.Typer(
-    name="aaf",
+    name="cafe",
     help="AI Agent Flow - Automated development workflow with AI agents",
     no_args_is_help=True,
 )
@@ -133,8 +133,8 @@ def _build_workflow(
 
     # Determine plan file path from spec file
     spec_path = Path(spec_file)
-    if ".aaf/issues/" in spec_file:
-        # Extract issue name from spec path: .aaf/issues/{issue-name}/spec/spec.md
+    if ".cafe/issues/" in spec_file:
+        # Extract issue name from spec path: .cafe/issues/{issue-name}/spec/spec.md
         plan_file = str(spec_path.parent.parent / "plan" / "plan.md")
     else:
         # Fallback to simple plan.md
@@ -205,20 +205,20 @@ def run(
         help="GitHub issue ID (required for github mode)",
     ),
     config_file: str = typer.Option(
-        ".aaf/config.yaml",
+        ".cafe/config.yaml",
         "--config",
         "-c",
         help="Path to configuration file",
     ),
 ) -> None:
-    """Run the AAF workflow.
+    """Run the CAFE workflow.
 
     Examples:
         # Local mode with spec file
-        aaf run -m local -s spec.md
+        cafe run -m local -s spec.md
 
         # GitHub mode with issue
-        aaf run -m github -i 123
+        cafe run -m github -i 123
     """
     try:
         # Validate mode
@@ -242,13 +242,13 @@ def run(
 
         # Initialize components
         # ConfigManager takes config_dir, so extract the directory
-        config_dir = str(Path(config_file).parent) if config_file != ".aaf/config.yaml" else ".aaf"
+        config_dir = str(Path(config_file).parent) if config_file != ".cafe/config.yaml" else ".cafe"
         config_manager = ConfigManager(config_dir)
         agent_manager = _setup_agents(config_manager)
         permission_handler = PermissionHandler()
 
         # Build and execute workflow
-        console.print("[bold blue]Starting AAF workflow...[/bold blue]")
+        console.print("[bold blue]Starting CAFE workflow...[/bold blue]")
         console.print(f"Mode: {workflow_mode.value}")
         if workflow_mode == WorkflowMode.GITHUB:
             console.print(f"Issue: #{issue_id}")
@@ -295,15 +295,15 @@ def run(
 
 @app.command()
 def version() -> None:
-    """Show AAF version."""
-    console.print("AAF version 0.1.0")
+    """Show CAFE version."""
+    console.print("CAFE version 0.1.0")
 
 
 @app.command()
 def spec(
     issue_name: str = typer.Argument(
         ...,
-        help="Issue name (will be saved to .aaf/issues/{issue-name}/spec/spec.md)",
+        help="Issue name (will be saved to .cafe/issues/{issue-name}/spec/spec.md)",
     ),
     mode: str = typer.Option(
         "local",
@@ -329,7 +329,7 @@ def spec(
         help="Specification rigor level: low, medium, or high (will prompt if not specified)",
     ),
     config_file: str = typer.Option(
-        ".aaf/config.yaml",
+        ".cafe/config.yaml",
         "--config",
         "-c",
         help="Path to configuration file",
@@ -358,22 +358,22 @@ def spec(
 
     Examples:
         # Generate spec through conversation for "user-auth" issue
-        aaf spec user-auth
+        cafe spec user-auth
 
         # Generate spec for "new-feature" issue
-        aaf spec new-feature
+        cafe spec new-feature
 
         # Create new GitHub issue with spec
-        aaf spec my-feature -m github
+        cafe spec my-feature -m github
 
         # Update existing GitHub issue
-        aaf spec my-feature -m github -i 123
+        cafe spec my-feature -m github -i 123
 
         # Use custom PM agent
-        aaf spec my-feature --pm CustomPM
+        cafe spec my-feature --pm CustomPM
 
         # Specify rigor level
-        aaf spec my-feature --rigor low
+        cafe spec my-feature --rigor low
     """
     try:
         # Validate mode
@@ -387,21 +387,21 @@ def spec(
         spec_rigor = None
         if rigor:
             try:
-                from aaf.core.types import SpecRigor
+                from cafe.core.types import SpecRigor
                 spec_rigor = SpecRigor(rigor)
             except ValueError:
                 console.print(f"[red]Error: Invalid rigor '{rigor}'. Use 'low', 'medium', or 'high'.[/red]")
                 raise typer.Exit(1)
 
-        # Build spec file path: .aaf/issues/{issue-name}/spec/spec.md
-        spec_file = f".aaf/issues/{issue_name}/spec/spec.md"
+        # Build spec file path: .cafe/issues/{issue-name}/spec/spec.md
+        spec_file = f".cafe/issues/{issue_name}/spec/spec.md"
 
         # Create directory if it doesn't exist
         spec_dir = Path(spec_file).parent
         spec_dir.mkdir(parents=True, exist_ok=True)
 
         # Initialize components
-        config_dir = str(Path(config_file).parent) if config_file != ".aaf/config.yaml" else ".aaf"
+        config_dir = str(Path(config_file).parent) if config_file != ".cafe/config.yaml" else ".cafe"
         config_manager = ConfigManager(config_dir)
         agent_manager = _setup_agents(config_manager, issue_name=issue_name)
         permission_handler = PermissionHandler()
@@ -485,7 +485,7 @@ def spec(
 def plan(
     issue_name: str = typer.Argument(
         ...,
-        help="Issue name (reads spec from .aaf/issues/{issue-name}/spec/spec.md)",
+        help="Issue name (reads spec from .cafe/issues/{issue-name}/spec/spec.md)",
     ),
     mode: str = typer.Option(
         "local",
@@ -511,7 +511,7 @@ def plan(
         help="Plan template name (if not specified, will prompt interactively)",
     ),
     config_file: str = typer.Option(
-        ".aaf/config.yaml",
+        ".cafe/config.yaml",
         "--config",
         "-c",
         help="Path to configuration file",
@@ -534,16 +534,16 @@ def plan(
 
     Examples:
         # Analyze spec and create plan for "user-auth" issue
-        aaf plan user-auth
+        cafe plan user-auth
 
         # Analyze spec for "new-feature" issue
-        aaf plan new-feature
+        cafe plan new-feature
 
         # Analyze GitHub issue and create plan
-        aaf plan my-feature -m github -i 123
+        cafe plan my-feature -m github -i 123
 
         # Use custom developer agent
-        aaf plan my-feature --dev CustomDev
+        cafe plan my-feature --dev CustomDev
     """
     try:
         # Validate mode
@@ -553,21 +553,21 @@ def plan(
             console.print(f"[red]Error: Invalid mode '{mode}'. Use 'local' or 'github'.[/red]")
             raise typer.Exit(1)
 
-        # Build spec file path: .aaf/issues/{issue-name}/spec/spec.md
-        spec_file = f".aaf/issues/{issue_name}/spec/spec.md"
+        # Build spec file path: .cafe/issues/{issue-name}/spec/spec.md
+        spec_file = f".cafe/issues/{issue_name}/spec/spec.md"
 
         # Check if spec file exists
         if not Path(spec_file).exists():
             console.print(f"[red]Error: Spec file not found: {spec_file}[/red]")
-            console.print(f"[dim]Hint: Run 'aaf spec {issue_name}' first to create the specification.[/dim]")
+            console.print(f"[dim]Hint: Run 'cafe spec {issue_name}' first to create the specification.[/dim]")
             raise typer.Exit(1)
 
         # Check if plan already exists
-        plan_file = f".aaf/issues/{issue_name}/plan/plan.md"
+        plan_file = f".cafe/issues/{issue_name}/plan/plan.md"
         is_resume = Path(plan_file).exists()
 
         # Initialize components
-        config_dir = str(Path(config_file).parent) if config_file != ".aaf/config.yaml" else ".aaf"
+        config_dir = str(Path(config_file).parent) if config_file != ".cafe/config.yaml" else ".cafe"
         config_manager = ConfigManager(config_dir)
         agent_manager = _setup_agents(config_manager, issue_name=issue_name)
         permission_handler = PermissionHandler()
@@ -588,7 +588,7 @@ def plan(
             # Template specified via --template option
             if not template_manager.template_exists(template):
                 console.print(f"[red]Error: Template '{template}' not found[/red]")
-                console.print("[dim]Use 'aaf template list' to see available templates[/dim]")
+                console.print("[dim]Use 'cafe template list' to see available templates[/dim]")
                 raise typer.Exit(1)
             selected_template = template
         elif is_resume:
@@ -600,7 +600,7 @@ def plan(
             templates = template_manager.list_templates()
             if not templates:
                 console.print("[yellow]Warning: No templates found[/yellow]")
-                console.print("[dim]You can add templates with 'aaf template add <source> <name>'[/dim]")
+                console.print("[dim]You can add templates with 'cafe template add <source> <name>'[/dim]")
             else:
                 if interactive:
                     # Interactive template selection
@@ -614,7 +614,7 @@ def plan(
                     console.print("[dim]Available templates:[/dim]")
                     for t in templates:
                         console.print(f"  - {t}")
-                    console.print(f"[dim]Usage: aaf plan {issue_name} --no-interactive --template <name>[/dim]")
+                    console.print(f"[dim]Usage: cafe plan {issue_name} --no-interactive --template <name>[/dim]")
                     raise typer.Exit(1)
 
         # Display start message
@@ -662,7 +662,7 @@ def plan(
             console.print("[bold green]✅ Implementation plan completed![/bold green]")
             console.print(f"Iterations: {result.data.get('iterations', 'N/A')}")
             # Build plan file path
-            plan_file = f".aaf/issues/{issue_name}/plan/plan.md"
+            plan_file = f".cafe/issues/{issue_name}/plan/plan.md"
             if Path(plan_file).exists():
                 console.print(f"Saved to: {plan_file}")
         else:
@@ -679,7 +679,7 @@ def plan(
 def develop(
     issue_name: str = typer.Argument(
         ...,
-        help="Issue name (reads spec & plan from .aaf/issues/{issue-name}/)",
+        help="Issue name (reads spec & plan from .cafe/issues/{issue-name}/)",
     ),
     mode: str = typer.Option(
         "local",
@@ -699,7 +699,7 @@ def develop(
         help="Developer agent name",
     ),
     config_file: str = typer.Option(
-        ".aaf/config.yaml",
+        ".cafe/config.yaml",
         "--config",
         "-c",
         help="Path to configuration file",
@@ -722,13 +722,13 @@ def develop(
 
     Examples:
         # Execute development for "user-auth" issue
-        aaf develop user-auth
+        cafe develop user-auth
 
         # Execute development for "new-feature" issue
-        aaf develop new-feature
+        cafe develop new-feature
 
         # Use custom developer agent
-        aaf develop my-feature --dev CustomDev
+        cafe develop my-feature --dev CustomDev
     """
     try:
         # Validate mode
@@ -739,23 +739,23 @@ def develop(
             raise typer.Exit(1)
 
         # Build file paths
-        spec_file = f".aaf/issues/{issue_name}/spec/spec.md"
-        plan_file = f".aaf/issues/{issue_name}/plan/plan.md"
+        spec_file = f".cafe/issues/{issue_name}/spec/spec.md"
+        plan_file = f".cafe/issues/{issue_name}/plan/plan.md"
 
         # Check if spec file exists
         if not Path(spec_file).exists():
             console.print(f"[red]Error: Spec file not found: {spec_file}[/red]")
-            console.print(f"[dim]Hint: Run 'aaf spec {issue_name}' first to create the specification.[/dim]")
+            console.print(f"[dim]Hint: Run 'cafe spec {issue_name}' first to create the specification.[/dim]")
             raise typer.Exit(1)
 
         # Check if plan file exists
         if not Path(plan_file).exists():
             console.print(f"[red]Error: Plan file not found: {plan_file}[/red]")
-            console.print(f"[dim]Hint: Run 'aaf plan {issue_name}' first to create the implementation plan.[/dim]")
+            console.print(f"[dim]Hint: Run 'cafe plan {issue_name}' first to create the implementation plan.[/dim]")
             raise typer.Exit(1)
 
         # Initialize components
-        config_dir = str(Path(config_file).parent) if config_file != ".aaf/config.yaml" else ".aaf"
+        config_dir = str(Path(config_file).parent) if config_file != ".cafe/config.yaml" else ".cafe"
         config_manager = ConfigManager(config_dir)
         agent_manager = _setup_agents(config_manager, issue_name=issue_name)
         permission_handler = PermissionHandler()
@@ -811,13 +811,13 @@ def develop(
             console.print("[dim]Next steps:[/dim]")
             console.print(f"[dim]  1. Review changes: git diff[/dim]")
             console.print(f"[dim]  2. Run tests: pytest[/dim]")
-            console.print(f"[dim]  3. Code review: aaf review {issue_name}[/dim]")
+            console.print(f"[dim]  3. Code review: cafe review {issue_name}[/dim]")
         elif result.status.value == "failed":
             console.print(f"[red]❌ Development failed: {result.message}[/red]")
             raise typer.Exit(1)
         elif result.status.value == "in_progress":
             console.print(f"[yellow]⏸️  Development paused: {result.message}[/yellow]")
-            console.print(f"[dim]Resume with: aaf develop {issue_name}[/dim]")
+            console.print(f"[dim]Resume with: cafe develop {issue_name}[/dim]")
 
     except Exception as e:
         console.print(f"[red]Error: {e}[/red]")
@@ -829,7 +829,7 @@ def develop(
 def dev_alias(
     issue_name: str = typer.Argument(
         ...,
-        help="Issue name (reads spec & plan from .aaf/issues/{issue-name}/)",
+        help="Issue name (reads spec & plan from .cafe/issues/{issue-name}/)",
     ),
     mode: str = typer.Option(
         "local",
@@ -849,7 +849,7 @@ def dev_alias(
         help="Developer agent name",
     ),
     config_file: str = typer.Option(
-        ".aaf/config.yaml",
+        ".cafe/config.yaml",
         "--config",
         "-c",
         help="Path to configuration file",
@@ -870,7 +870,7 @@ def dev_alias(
 def review(
     issue_name: str = typer.Argument(
         ...,
-        help="Issue name (reads spec from .aaf/issues/{issue-name}/)",
+        help="Issue name (reads spec from .cafe/issues/{issue-name}/)",
     ),
     mode: str = typer.Option(
         "local",
@@ -902,7 +902,7 @@ def review(
         help="Reviewer agent name",
     ),
     config_file: str = typer.Option(
-        ".aaf/config.yaml",
+        ".cafe/config.yaml",
         "--config",
         help="Path to configuration file",
     ),
@@ -924,13 +924,13 @@ def review(
 
     Examples:
         # Review entire feature branch
-        aaf review user-auth
+        cafe review user-auth
 
         # Review specific commit
-        aaf review user-auth --commit abc123
+        cafe review user-auth --commit abc123
 
         # Use custom reviewer agent
-        aaf review my-feature --reviewer CustomReviewer
+        cafe review my-feature --reviewer CustomReviewer
     """
     try:
         # Validate mode
@@ -941,17 +941,17 @@ def review(
             raise typer.Exit(1)
 
         # Build file paths
-        spec_file = f".aaf/issues/{issue_name}/spec/spec.md"
-        plan_file = f".aaf/issues/{issue_name}/plan/plan.md"
+        spec_file = f".cafe/issues/{issue_name}/spec/spec.md"
+        plan_file = f".cafe/issues/{issue_name}/plan/plan.md"
 
         # Check if spec file exists
         if not Path(spec_file).exists():
             console.print(f"[red]Error: Spec file not found: {spec_file}[/red]")
-            console.print(f"[dim]Hint: Run 'aaf spec {issue_name}' first to create the specification.[/dim]")
+            console.print(f"[dim]Hint: Run 'cafe spec {issue_name}' first to create the specification.[/dim]")
             raise typer.Exit(1)
 
         # Initialize components
-        config_dir = str(Path(config_file).parent) if config_file != ".aaf/config.yaml" else ".aaf"
+        config_dir = str(Path(config_file).parent) if config_file != ".cafe/config.yaml" else ".cafe"
         config_manager = ConfigManager(config_dir)
         agent_manager = _setup_agents(config_manager, issue_name=issue_name)
         permission_handler = PermissionHandler()
@@ -1005,21 +1005,21 @@ def review(
         if result.status.value == "completed":
             status_code = result.data.get("status_code")
             console.print()
-            if status_code == "AAF_CONFIRMED":
+            if status_code == "CAFE_CONFIRMED":
                 console.print("[bold green]✅ Code review passed![/bold green]")
                 console.print()
                 console.print("[dim]Next steps:[/dim]")
-                console.print(f"[dim]  1. Create PR: aaf pr {issue_name}[/dim]")
+                console.print(f"[dim]  1. Create PR: cafe pr {issue_name}[/dim]")
             else:
                 console.print(f"[bold yellow]📝 Code review completed with status: {status_code}[/bold yellow]")
                 console.print()
                 console.print("[dim]Review feedback saved to:[/dim]")
-                console.print(f"[dim]  .aaf/issues/{issue_name}/review/review.md[/dim]")
+                console.print(f"[dim]  .cafe/issues/{issue_name}/review/review.md[/dim]")
                 console.print()
                 console.print("[dim]Next steps:[/dim]")
-                console.print(f"[dim]  1. Review feedback: cat .aaf/issues/{issue_name}/review/review.md[/dim]")
-                console.print(f"[dim]  2. Make changes: aaf develop {issue_name}[/dim]")
-                console.print(f"[dim]  3. Review again: aaf review {issue_name}[/dim]")
+                console.print(f"[dim]  1. Review feedback: cat .cafe/issues/{issue_name}/review/review.md[/dim]")
+                console.print(f"[dim]  2. Make changes: cafe develop {issue_name}[/dim]")
+                console.print(f"[dim]  3. Review again: cafe review {issue_name}[/dim]")
         else:
             console.print()
             console.print(f"[bold red]❌ Review phase failed: {result.message}[/bold red]")
@@ -1036,26 +1036,26 @@ def config(
     key: Optional[str] = typer.Argument(None, help="Configuration key"),
     value: Optional[str] = typer.Argument(None, help="Value to set"),
 ) -> None:
-    """Manage AAF configuration.
+    """Manage CAFE configuration.
 
     Examples:
         # Show all configuration
-        aaf config
+        cafe config
 
         # Set a configuration value (with alias support)
-        aaf config set pm gemini
-        aaf config set pm.cli gemini
-        aaf config set agents.pm.cli gemini
+        cafe config set pm gemini
+        cafe config set pm.cli gemini
+        cafe config set agents.pm.cli gemini
 
         # Get a configuration value
-        aaf config get pm
-        aaf config get agents.pm.cli
+        cafe config get pm
+        cafe config get agents.pm.cli
 
         # Edit config file in editor
-        aaf config edit
+        cafe config edit
 
         # Reset to defaults
-        aaf config reset
+        cafe config reset
     """
     config_manager = ConfigManager()
     import yaml
@@ -1073,7 +1073,7 @@ def config(
     if action == "set":
         if not key or not value:
             console.print("[red]Error: 'set' requires both key and value[/red]")
-            console.print("Usage: aaf config set <key> <value>")
+            console.print("Usage: cafe config set <key> <value>")
             raise typer.Exit(1)
 
         config_manager.set(key, value)
@@ -1082,7 +1082,7 @@ def config(
     elif action == "get":
         if not key:
             console.print("[red]Error: 'get' requires a key[/red]")
-            console.print("Usage: aaf config get <key>")
+            console.print("Usage: cafe config get <key>")
             raise typer.Exit(1)
 
         val = config_manager.get(key)
@@ -1124,7 +1124,7 @@ def config(
 
     else:
         # Treat action as a key for backward compatibility
-        # e.g., "aaf config pm" -> get pm
+        # e.g., "cafe config pm" -> get pm
         val = config_manager.get(action)
         if val is None:
             console.print(f"[yellow]Key not found: {action}[/yellow]")
@@ -1138,11 +1138,11 @@ def list_issues() -> None:
     """List all issues."""
     from rich.table import Table
 
-    issues_dir = Path(".aaf/issues")
+    issues_dir = Path(".cafe/issues")
 
     if not issues_dir.exists():
         console.print("[yellow]No issues directory found[/yellow]")
-        console.print("Run 'aaf run <issue-name>' to create your first issue")
+        console.print("Run 'cafe run <issue-name>' to create your first issue")
         return
 
     # Get all issue directories
@@ -1150,11 +1150,11 @@ def list_issues() -> None:
 
     if not issues:
         console.print("[yellow]No issues found[/yellow]")
-        console.print("Run 'aaf run <issue-name>' to create your first issue")
+        console.print("Run 'cafe run <issue-name>' to create your first issue")
         return
 
     # Create table
-    table = Table(title="AAF Issues", show_header=True, header_style="bold cyan")
+    table = Table(title="CAFE Issues", show_header=True, header_style="bold cyan")
     table.add_column("Issue Name", style="green")
     table.add_column("Phases", style="dim")
     table.add_column("Modified", style="dim")
@@ -1190,7 +1190,7 @@ def remove_issue(
     import fnmatch
 
     # Expand wildcards
-    issues_dir = Path(".aaf/issues")
+    issues_dir = Path(".cafe/issues")
     expanded_issues = []
     for pattern in issue_names:
         if '*' in pattern or '?' in pattern:
@@ -1213,14 +1213,14 @@ def remove_issue(
 
     if not issue_names:
         console.print("[red]No issues matched the given patterns[/red]")
-        console.print("\nRun 'aaf ls' to see available issues")
+        console.print("\nRun 'cafe ls' to see available issues")
         raise typer.Exit(1)
 
     # Check all issues exist first
     missing_issues = []
     existing_issues = []
     for issue_name in issue_names:
-        issue_path = Path(".aaf/issues") / issue_name
+        issue_path = Path(".cafe/issues") / issue_name
         if not issue_path.exists():
             missing_issues.append(issue_name)
         else:
@@ -1229,7 +1229,7 @@ def remove_issue(
     # Report missing issues
     if missing_issues:
         console.print(f"[red]Issue(s) not found: {', '.join(missing_issues)}[/red]")
-        console.print("\nRun 'aaf ls' to see available issues")
+        console.print("\nRun 'cafe ls' to see available issues")
         if not existing_issues:
             raise typer.Exit(1)
 
@@ -1269,7 +1269,7 @@ def template(
     source: Optional[str] = typer.Argument(None, help="Source file path (for 'add' action)"),
     name: Optional[str] = typer.Argument(None, help="Template name (for 'add' or 'remove' action)"),
     config_file: str = typer.Option(
-        ".aaf/config.yaml",
+        ".cafe/config.yaml",
         "--config",
         "-c",
         help="Path to configuration file",
@@ -1286,28 +1286,28 @@ def template(
 
     Examples:
         # Add a new template
-        aaf template add path/to/template.md my-template
+        cafe template add path/to/template.md my-template
 
         # List all templates
-        aaf template ls
+        cafe template ls
 
         # View template content
-        aaf template cat my-template
+        cafe template cat my-template
 
         # Edit a template
-        aaf template edit my-template
+        cafe template edit my-template
 
         # Remove a template
-        aaf template rm my-template
+        cafe template rm my-template
     """
     try:
-        config_dir = str(Path(config_file).parent) if config_file != ".aaf/config.yaml" else ".aaf"
+        config_dir = str(Path(config_file).parent) if config_file != ".cafe/config.yaml" else ".cafe"
         manager = TemplateManager(config_dir)
 
         if action == "add":
             if not source or not name:
                 console.print("[red]Error: 'add' action requires both source file path and template name[/red]")
-                console.print("[dim]Usage: aaf template add <source-file> <template-name>[/dim]")
+                console.print("[dim]Usage: cafe template add <source-file> <template-name>[/dim]")
                 raise typer.Exit(1)
 
             try:
@@ -1332,7 +1332,7 @@ def template(
         elif action == "rm":
             if not name:
                 console.print("[red]Error: 'rm' action requires template name[/red]")
-                console.print("[dim]Usage: aaf template rm <template-name>[/dim]")
+                console.print("[dim]Usage: cafe template rm <template-name>[/dim]")
                 raise typer.Exit(1)
 
             try:
@@ -1345,7 +1345,7 @@ def template(
         elif action == "cat":
             if not source:
                 console.print("[red]Error: 'cat' action requires template name[/red]")
-                console.print("[dim]Usage: aaf template cat <template-name>[/dim]")
+                console.print("[dim]Usage: cafe template cat <template-name>[/dim]")
                 raise typer.Exit(1)
 
             template_path = manager.get_template_path(source)
@@ -1365,7 +1365,7 @@ def template(
         elif action == "edit":
             if not source:
                 console.print("[red]Error: 'edit' action requires template name[/red]")
-                console.print("[dim]Usage: aaf template edit <template-name>[/dim]")
+                console.print("[dim]Usage: cafe template edit <template-name>[/dim]")
                 raise typer.Exit(1)
 
             template_path = manager.get_template_path(source)

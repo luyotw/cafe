@@ -1,4 +1,4 @@
-"""Template management utilities for AAF."""
+"""Template management utilities for CAFE."""
 
 import shutil
 from pathlib import Path
@@ -8,11 +8,11 @@ from typing import List, Optional
 class TemplateManager:
     """Manage plan templates."""
 
-    def __init__(self, config_dir: str = ".aaf"):
+    def __init__(self, config_dir: str = ".cafe"):
         """Initialize template manager.
 
         Args:
-            config_dir: AAF configuration directory
+            config_dir: CAFE configuration directory
         """
         self.template_dir = Path(config_dir) / "templates" / "plan"
         self.template_dir.mkdir(parents=True, exist_ok=True)
@@ -116,7 +116,7 @@ class TemplateManager:
             return
 
         # Find the package template directory
-        # The template.py is in src/aaf/utils/, so package templates are in src/aaf/templates/
+        # The template.py is in src/cafe/utils/, so package templates are in src/cafe/templates/
         package_template = Path(__file__).parent.parent / "templates" / "plan" / "default.md"
 
         if package_template.exists():

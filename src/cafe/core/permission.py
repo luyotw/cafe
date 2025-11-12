@@ -3,7 +3,7 @@
 import re
 from typing import Any, Dict, List, Optional
 
-from aaf.core.types import PermissionAction, PermissionRequest
+from cafe.core.types import PermissionAction, PermissionRequest
 
 
 class PermissionDeniedError(Exception):

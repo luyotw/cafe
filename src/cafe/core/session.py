@@ -5,7 +5,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from aaf.core.types import AgentCLI, AgentConfig, SessionData
+from cafe.core.types import AgentCLI, AgentConfig, SessionData
 
 
 class SessionManager:
@@ -14,7 +14,7 @@ class SessionManager:
     每個 issue 有獨立的 session 目錄，每個 agent+CLI 組合有獨立的 session 檔案。
     """
 
-    def __init__(self, sessions_dir: str = ".aaf/sessions") -> None:
+    def __init__(self, sessions_dir: str = ".cafe/sessions") -> None:
         """Initialize session manager.
 
         Args:
@@ -37,16 +37,16 @@ class SessionManager:
             Path to the session file
 
         Examples:
-            Without issue: .aaf/sessions/Roger_copilot.json
-            With issue: .aaf/issues/myip/sessions/Roger_copilot.json
+            Without issue: .cafe/sessions/Roger_copilot.json
+            With issue: .cafe/issues/myip/sessions/Roger_copilot.json
         """
         if issue_name:
-            # Issue-specific sessions go under .aaf/issues/{issue_name}/sessions/
-            issue_sessions_dir = Path(".aaf/issues") / issue_name / "sessions"
+            # Issue-specific sessions go under .cafe/issues/{issue_name}/sessions/
+            issue_sessions_dir = Path(".cafe/issues") / issue_name / "sessions"
             issue_sessions_dir.mkdir(parents=True, exist_ok=True)
             return issue_sessions_dir / f"{agent_name}_{cli.value}.json"
 
-        # Global sessions (no issue) go under .aaf/sessions/
+        # Global sessions (no issue) go under .cafe/sessions/
         return self.sessions_dir / f"{agent_name}_{cli.value}.json"
 
     def load_session(

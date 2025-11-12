@@ -3,9 +3,9 @@
 import pytest
 from unittest.mock import MagicMock, patch
 
-from aaf.core.workflow import Workflow, WorkflowError
-from aaf.core.phase import Phase
-from aaf.core.types import PhaseResult, PhaseStatus
+from cafe.core.workflow import Workflow, WorkflowError
+from cafe.core.phase import Phase
+from cafe.core.types import PhaseResult, PhaseStatus
 
 
 class MockPhase(Phase):
@@ -291,7 +291,7 @@ class TestWorkflowAutoSkipCompleted:
         """測試自動跳過已完成的 phase"""
         from pathlib import Path
         from datetime import datetime
-        from aaf.core.types import PhaseProgress
+        from cafe.core.types import PhaseProgress
         import json
 
         # Create a phase with status.json indicating completion
@@ -338,7 +338,7 @@ class TestWorkflowAutoSkipCompleted:
         """測試不跳過未完成的 phase"""
         from pathlib import Path
         from datetime import datetime
-        from aaf.core.types import PhaseProgress
+        from cafe.core.types import PhaseProgress
         import json
 
         # Create a phase with status.json indicating IN_PROGRESS

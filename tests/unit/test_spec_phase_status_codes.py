@@ -8,11 +8,11 @@ import pytest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from aaf.agents.manager import AgentManager
-from aaf.core.permission import PermissionHandler
-from aaf.core.status_codes import PhaseStatusCode
-from aaf.core.types import PhaseStatus, WorkflowMode, TokenUsage, SpecRigor, AgentConfig, AgentCLI
-from aaf.phases.spec_phase import SpecPhase
+from cafe.agents.manager import AgentManager
+from cafe.core.permission import PermissionHandler
+from cafe.core.status_codes import PhaseStatusCode
+from cafe.core.types import PhaseStatus, WorkflowMode, TokenUsage, SpecRigor, AgentConfig, AgentCLI
+from cafe.phases.spec_phase import SpecPhase
 
 
 def setup_agent_manager_mock_for_spec(agent_manager: MagicMock) -> None:
@@ -37,13 +37,13 @@ class TestSpecPhaseWithStatusCodes:
     def test_confirmed_status_code_completes_phase(self, tmp_path: Path) -> None:
         """測試 CONFIRMED 狀態碼會完成 phase"""
         issue_name = "test-confirmed-issue"
-        spec_file = tmp_path / ".aaf" / "issues" / issue_name / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements\nTest requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
         setup_agent_manager_mock_for_spec(agent_manager)
-        agent_manager.execute.return_value = ("AAF_CONFIRMED\n需求已經很清楚了。", TokenUsage())
+        agent_manager.execute.return_value = ("CAFE_CONFIRMED\n需求已經很清楚了。", TokenUsage())
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -62,19 +62,19 @@ class TestSpecPhaseWithStatusCodes:
             result = phase.execute()
 
         assert result.status == PhaseStatus.COMPLETED
-        assert result.data.get("status_code") == "AAF_CONFIRMED"
+        assert result.data.get("status_code") == "CAFE_CONFIRMED"
         assert agent_manager.execute.call_count == 1
 
     def test_rejected_status_code_fails_phase(self, tmp_path: Path) -> None:
         """測試 REJECTED 狀態碼會失敗 phase"""
         issue_name = "test-rejected-issue"
-        spec_file = tmp_path / ".aaf" / "issues" / issue_name / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements\nTest requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
         setup_agent_manager_mock_for_spec(agent_manager)
-        agent_manager.execute.return_value = ("AAF_REJECTED\n需求有問題，無法進行。", TokenUsage())
+        agent_manager.execute.return_value = ("CAFE_REJECTED\n需求有問題，無法進行。", TokenUsage())
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -93,13 +93,13 @@ class TestSpecPhaseWithStatusCodes:
             result = phase.execute()
 
         assert result.status == PhaseStatus.FAILED
-        assert result.data.get("status_code") == "AAF_REJECTED"
+        assert result.data.get("status_code") == "CAFE_REJECTED"
         assert "rejected" in result.message.lower()
 
     def test_need_clarification_continues_iteration(self, tmp_path: Path) -> None:
         """測試 NEED_CLARIFICATION 狀態碼會繼續迭代（互動模式）"""
         issue_name = "test-clarification-issue"
-        spec_file = tmp_path / ".aaf" / "issues" / issue_name / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements\nTest requirements")
 
@@ -107,8 +107,8 @@ class TestSpecPhaseWithStatusCodes:
         setup_agent_manager_mock_for_spec(agent_manager)
         # 第一次回應需要澄清，第二次確認
         agent_manager.execute.side_effect = [
-            ("AAF_NEED_CLARIFICATION\n請補充更多資訊。", TokenUsage()),
-            ("AAF_CONFIRMED\n需求已清楚。", TokenUsage()),
+            ("CAFE_NEED_CLARIFICATION\n請補充更多資訊。", TokenUsage()),
+            ("CAFE_CONFIRMED\n需求已清楚。", TokenUsage()),
         ]
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 
@@ -135,13 +135,13 @@ class TestSpecPhaseWithStatusCodes:
     def test_status_code_in_middle_of_response(self, tmp_path: Path) -> None:
         """測試狀態碼在回應中間也能識別"""
         issue_name = "test-middle-status-issue"
-        spec_file = tmp_path / ".aaf" / "issues" / issue_name / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements\nTest requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
         setup_agent_manager_mock_for_spec(agent_manager)
-        agent_manager.execute.return_value = ("需求已經很清楚了。AAF_CONFIRMED", TokenUsage())
+        agent_manager.execute.return_value = ("需求已經很清楚了。CAFE_CONFIRMED", TokenUsage())
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -160,12 +160,12 @@ class TestSpecPhaseWithStatusCodes:
             result = phase.execute()
 
         assert result.status == PhaseStatus.COMPLETED
-        assert result.data.get("status_code") == "AAF_CONFIRMED"
+        assert result.data.get("status_code") == "CAFE_CONFIRMED"
 
     def test_no_status_code_continues_iteration(self, tmp_path: Path) -> None:
         """測試沒有狀態碼時會繼續迭代直到有狀態碼（互動模式）"""
         issue_name = "test-no-status-issue"
-        spec_file = tmp_path / ".aaf" / "issues" / issue_name / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements\nTest requirements")
 
@@ -174,7 +174,7 @@ class TestSpecPhaseWithStatusCodes:
         # 第一次沒有狀態碼，第二次有
         agent_manager.execute.side_effect = [
             ("我覺得需求不夠清楚。", TokenUsage()),  # 沒有狀態碼
-            ("AAF_CONFIRMED\n現在清楚了。", TokenUsage()),
+            ("CAFE_CONFIRMED\n現在清楚了。", TokenUsage()),
         ]
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 
@@ -200,13 +200,13 @@ class TestSpecPhaseWithStatusCodes:
     def test_case_insensitive_status_code(self, tmp_path: Path) -> None:
         """測試狀態碼不分大小寫"""
         issue_name = "test-case-insensitive-issue"
-        spec_file = tmp_path / ".aaf" / "issues" / issue_name / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements\nTest requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
         setup_agent_manager_mock_for_spec(agent_manager)
-        agent_manager.execute.return_value = ("aaf_confirmed\n需求清楚。", TokenUsage())
+        agent_manager.execute.return_value = ("cafe_confirmed\n需求清楚。", TokenUsage())
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -225,4 +225,4 @@ class TestSpecPhaseWithStatusCodes:
             result = phase.execute()
 
         assert result.status == PhaseStatus.COMPLETED
-        assert result.data.get("status_code") == "AAF_CONFIRMED"
+        assert result.data.get("status_code") == "CAFE_CONFIRMED"

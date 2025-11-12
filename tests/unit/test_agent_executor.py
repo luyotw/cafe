@@ -3,8 +3,8 @@
 import pytest
 from unittest.mock import MagicMock, patch
 
-from aaf.agents.executor import AgentExecutor, AgentExecutionError
-from aaf.core.types import AgentConfig, AgentCLI, TokenUsage
+from cafe.agents.executor import AgentExecutor, AgentExecutionError
+from cafe.core.types import AgentConfig, AgentCLI, TokenUsage
 
 
 class TestAgentExecutorBasics:

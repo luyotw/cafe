@@ -1,10 +1,10 @@
-"""Configuration management for AAF."""
+"""Configuration management for CAFE."""
 
 from pathlib import Path
 from typing import Any, Dict, Optional
 import yaml
 
-from aaf.core.types import WorkflowMode, AgentCLI
+from cafe.core.types import WorkflowMode, AgentCLI
 
 
 class ConfigError(Exception):
@@ -14,9 +14,9 @@ class ConfigError(Exception):
 
 
 class ConfigManager:
-    """Manages AAF configuration."""
+    """Manages CAFE configuration."""
 
-    def __init__(self, config_dir: str = ".aaf") -> None:
+    def __init__(self, config_dir: str = ".cafe") -> None:
         """Initialize config manager.
 
         Args:

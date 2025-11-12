@@ -5,11 +5,11 @@ import pytest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from aaf.phases.plan_phase import PlanPhase
-from aaf.agents.manager import AgentManager
-from aaf.core.status_codes import PhaseStatusCode
-from aaf.core.types import PhaseResult, PhaseStatus, WorkflowMode, TokenUsage
-from aaf.core.permission import PermissionHandler
+from cafe.phases.plan_phase import PlanPhase
+from cafe.agents.manager import AgentManager
+from cafe.core.status_codes import PhaseStatusCode
+from cafe.core.types import PhaseResult, PhaseStatus, WorkflowMode, TokenUsage
+from cafe.core.permission import PermissionHandler
 
 
 def setup_agent_manager_mocks(agent_manager: MagicMock) -> None:
@@ -73,7 +73,7 @@ class TestLocalWorkflow:
 
     def test_execute_local_workflow_with_dev_guide(self, tmp_path: Path) -> None:
         """測試執行 local workflow 有開發指南"""
-        spec_file = tmp_path / ".aaf" / "issues" / "test-feature" / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements\n\nSome requirements")
 
@@ -83,7 +83,7 @@ class TestLocalWorkflow:
         plan_file.write_text("## 開發指南\n\nDevelopment guide here")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("AAF_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage())
+        agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage())
 
         setup_agent_manager_mocks(agent_manager)
 
@@ -106,12 +106,12 @@ class TestLocalWorkflow:
 
     def test_missing_dev_guide_prompts_user_in_interactive_mode(self, tmp_path: Path) -> None:
         """測試缺少開發指南時在互動模式下提示用戶輸入"""
-        spec_file = tmp_path / ".aaf" / "issues" / "test-feature" / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements\n\nNo dev guide")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("AAF_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage())
+        agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage())
 
         setup_agent_manager_mocks(agent_manager)
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -143,7 +143,7 @@ class TestLocalWorkflow:
 
     def test_missing_dev_guide_fails_in_non_interactive_mode(self, tmp_path: Path) -> None:
         """測試缺少開發指南時在非互動模式下失敗"""
-        spec_file = tmp_path / ".aaf" / "issues" / "test-feature" / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements\n\nNo dev guide")
 
@@ -168,7 +168,7 @@ class TestLocalWorkflow:
 
     def test_multiple_iterations_until_confirmed(self, tmp_path: Path) -> None:
         """測試多次迭代直到確認"""
-        spec_file = tmp_path / ".aaf" / "issues" / "test-feature" / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements")
 
@@ -180,7 +180,7 @@ class TestLocalWorkflow:
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.side_effect = [
             ("分析中...", TokenUsage()),
-            ("AAF_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage()),
+            ("CAFE_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage()),
         ]
         agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
 
@@ -213,12 +213,12 @@ class TestGitHubWorkflow:
         """測試執行 GitHub workflow"""
         # Create requirements file in tmp_path
         issue_name = "test-github-issue"
-        spec_file = tmp_path / ".aaf" / "issues" / issue_name / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements\n\n## 開發指南\nDev guide")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("AAF_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage())
+        agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage())
 
         setup_agent_manager_mocks(agent_manager)
 
@@ -246,12 +246,12 @@ class TestGitHubWorkflow:
         """測試 GitHub workflow 使用 issue ID"""
         # Create requirements file in tmp_path
         issue_name = "test-github-issue-2"
-        spec_file = tmp_path / ".aaf" / "issues" / issue_name / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements\n\n## 開發指南\nDev guide")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("AAF_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage())
+        agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage())
 
         setup_agent_manager_mocks(agent_manager)
 
@@ -277,7 +277,7 @@ class TestPromptGeneration:
 
     def test_first_iteration_prompt(self, tmp_path: Path) -> None:
         """測試第一次迭代的 prompt"""
-        spec_file = tmp_path / ".aaf" / "issues" / "test-feature" / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements")
 
@@ -287,7 +287,7 @@ class TestPromptGeneration:
         plan_file.write_text("## 開發指南\n\nGuide")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("AAF_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage())
+        agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage())
 
         setup_agent_manager_mocks(agent_manager)
 
@@ -310,7 +310,7 @@ class TestPromptGeneration:
 
     def test_subsequent_iteration_includes_history(self, tmp_path: Path) -> None:
         """測試後續迭代包含迭代資訊"""
-        spec_file = tmp_path / ".aaf" / "issues" / "test-feature" / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements")
 
@@ -322,7 +322,7 @@ class TestPromptGeneration:
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.side_effect = [
             ("分析中", TokenUsage()),
-            ("AAF_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage()),
+            ("CAFE_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage()),
         ]
 
         setup_agent_manager_mocks(agent_manager)
@@ -350,7 +350,7 @@ class TestAgentSelection:
 
     def test_uses_dev_agent(self, tmp_path: Path) -> None:
         """測試使用 Dev agent (David)"""
-        spec_file = tmp_path / ".aaf" / "issues" / "test-feature" / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements")
 
@@ -360,7 +360,7 @@ class TestAgentSelection:
         plan_file.write_text("## 開發指南\n\nGuide")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("AAF_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage())
+        agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage())
 
         setup_agent_manager_mocks(agent_manager)
 
@@ -426,7 +426,7 @@ class TestErrorHandling:
 
     def test_agent_execution_error_fails_phase(self, tmp_path: Path) -> None:
         """測試 agent 執行錯誤時 phase 失敗"""
-        spec_file = tmp_path / ".aaf" / "issues" / "test-feature" / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements")
 
@@ -461,7 +461,7 @@ class TestPlanPhaseHistory:
 
     def test_saves_history_after_each_iteration(self, tmp_path: Path) -> None:
         """測試每次迭代後保存歷史記錄"""
-        spec_file = tmp_path / ".aaf" / "issues" / "test-feature" / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements")
 
@@ -472,8 +472,8 @@ class TestPlanPhaseHistory:
 
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.side_effect = [
-            ("AAF_NEED_CLARIFICATION\n需要更多資訊", TokenUsage()),
-            ("AAF_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage()),
+            ("CAFE_NEED_CLARIFICATION\n需要更多資訊", TokenUsage()),
+            ("CAFE_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage()),
         ]
 
         setup_agent_manager_mocks(agent_manager)
@@ -505,12 +505,12 @@ class TestPlanPhaseHistory:
             data = json.load(f)
 
         assert data["iteration"] == 1
-        assert data["status_code"] == "AAF_NEED_CLARIFICATION"
+        assert data["status_code"] == "CAFE_NEED_CLARIFICATION"
         assert "需要更多資訊" in data["response"]
 
     def test_saves_progress_to_status_json(self, tmp_path: Path) -> None:
         """測試保存進度到 status.json"""
-        spec_file = tmp_path / ".aaf" / "issues" / "test-feature" / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements")
 
@@ -520,7 +520,7 @@ class TestPlanPhaseHistory:
         plan_file.write_text("## 開發指南\n\nGuide")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("AAF_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage())
+        agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage())
         agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
 
         setup_agent_manager_mocks(agent_manager)
@@ -550,11 +550,11 @@ class TestPlanPhaseHistory:
 
         assert data["phase"] == "plan"
         assert data["status"] == "completed"
-        assert data["status_code"] == "AAF_CONFIRMED"  # Confirmed via user_input parameter
+        assert data["status_code"] == "CAFE_CONFIRMED"  # Confirmed via user_input parameter
 
     def test_creates_plan_md_file(self, tmp_path: Path) -> None:
         """測試 agent 創建 plan.md 文件"""
-        spec_file = tmp_path / ".aaf" / "issues" / "test-feature" / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements")
 
@@ -569,7 +569,7 @@ class TestPlanPhaseHistory:
             plan_file = spec_file.parent.parent / "plan" / "plan.md"
             plan_file.parent.mkdir(parents=True, exist_ok=True)
             plan_file.write_text("# 實作計畫\n\n## 技術分析\n分析內容")
-            return ("AAF_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage())
+            return ("CAFE_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage())
 
         agent_manager = MagicMock(spec=AgentManager)
         # Only one call expected since non-interactive auto-confirms without calling agent again
@@ -599,7 +599,7 @@ class TestPlanPhaseHistory:
 
     def test_init_creates_history_dir_and_attributes(self, tmp_path: Path) -> None:
         """測試 __init__ 創建 history_dir 和 conversation_history 屬性"""
-        spec_file = tmp_path / ".aaf" / "issues" / "test-issue" / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / "test-issue" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True)
         spec_file.write_text("# Spec\n\n## 開發指南\nGuide")
 
@@ -622,7 +622,7 @@ class TestPlanPhaseHistory:
 
     def test_save_history_creates_json_file(self, tmp_path: Path) -> None:
         """測試 _save_history() 創建 JSON 檔案，包含 user_input"""
-        spec_file = tmp_path / ".aaf" / "issues" / "test-issue" / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / "test-issue" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True)
         spec_file.write_text("# Spec\n\n## 開發指南\nGuide")
 
@@ -664,12 +664,12 @@ class TestPlanPhaseHistory:
         assert data["user_input"] == "User's dev guide input"  # 輪的開始
         assert data["prompt"] == "Test prompt"
         assert data["response"] == "Test response"
-        assert data["status_code"] == "AAF_NEED_CLARIFICATION"
+        assert data["status_code"] == "CAFE_NEED_CLARIFICATION"
         assert "timestamp" in data
 
     def test_load_history_reads_existing_files(self, tmp_path: Path) -> None:
         """測試 _load_history() 讀取現有歷史檔案"""
-        spec_file = tmp_path / ".aaf" / "issues" / "test-issue" / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / "test-issue" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True)
         spec_file.write_text("# Spec\n\n## 開發指南\nGuide")
 
@@ -682,8 +682,8 @@ class TestPlanPhaseHistory:
             "iteration": 1,
             "timestamp": "2025-10-31T10:00:00",
             "prompt": "Prompt 1",
-            "response": "Response 1 [STATUS:AAF_NEED_CLARIFICATION]",
-            "status_code": "AAF_NEED_CLARIFICATION",
+            "response": "Response 1 [STATUS:CAFE_NEED_CLARIFICATION]",
+            "status_code": "CAFE_NEED_CLARIFICATION",
         }
 
         with open(history_dir / "iteration_001.json", 'w', encoding='utf-8') as f:
@@ -707,9 +707,9 @@ class TestPlanPhaseHistory:
 
     def test_save_history_includes_agent_metadata(self, tmp_path: Path) -> None:
         """測試 _save_history() 包含 agent metadata（cli, session_id, allowed_tools, denied_tools）"""
-        from aaf.core.types import AgentCLI, AgentConfig
+        from cafe.core.types import AgentCLI, AgentConfig
 
-        spec_file = tmp_path / ".aaf" / "issues" / "test-issue" / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / "test-issue" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True)
         spec_file.write_text("# Spec\n\n## 開發指南\nGuide")
 
@@ -755,7 +755,7 @@ class TestPlanPhaseHistory:
         assert data["user_input"] == "User's dev guide input"
         assert data["prompt"] == "Test prompt"
         assert data["response"] == "Test response"
-        assert data["status_code"] == "AAF_NEED_CLARIFICATION"
+        assert data["status_code"] == "CAFE_NEED_CLARIFICATION"
         assert data["cli"] == "claude"
         assert data["session_id"] == "session-789"
         assert data["allowed_tools"] == ["read", "write"]
@@ -767,7 +767,7 @@ class TestPlanPhaseNeedClarification:
 
     def test_need_clarification_prompts_user_in_interactive_mode(self, tmp_path: Path) -> None:
         """測試 NEED_CLARIFICATION 時在互動模式下提示使用者輸入"""
-        spec_file = tmp_path / ".aaf" / "issues" / "test-feature" / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements")
 
@@ -778,8 +778,8 @@ class TestPlanPhaseNeedClarification:
 
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.side_effect = [
-            ("AAF_NEED_CLARIFICATION\n需要更多資訊", TokenUsage()),
-            ("AAF_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage()),
+            ("CAFE_NEED_CLARIFICATION\n需要更多資訊", TokenUsage()),
+            ("CAFE_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage()),
         ]
 
         setup_agent_manager_mocks(agent_manager)
@@ -815,7 +815,7 @@ class TestPlanPhaseNeedClarification:
 
     def test_need_clarification_exits_in_non_interactive_mode(self, tmp_path: Path) -> None:
         """測試 NEED_CLARIFICATION 時在非互動模式下退出並等待"""
-        spec_file = tmp_path / ".aaf" / "issues" / "test-feature" / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements")
 
@@ -825,7 +825,7 @@ class TestPlanPhaseNeedClarification:
         plan_file.write_text("## 開發指南\n\nGuide")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("AAF_NEED_CLARIFICATION\n需要更多資訊", TokenUsage())
+        agent_manager.execute.return_value = ("CAFE_NEED_CLARIFICATION\n需要更多資訊", TokenUsage())
 
         setup_agent_manager_mocks(agent_manager)
 
@@ -850,7 +850,7 @@ class TestPlanPhaseNeedClarification:
 
     def test_need_clarification_saves_iteration_history_with_user_input_and_response(self, tmp_path: Path) -> None:
         """測試每輪 history 包含 user_input（輪的開始），下一輪的 user_input 就是上一輪的 user_response"""
-        spec_file = tmp_path / ".aaf" / "issues" / "test-feature" / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements")
 
@@ -861,8 +861,8 @@ class TestPlanPhaseNeedClarification:
 
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.side_effect = [
-            ("AAF_NEED_CLARIFICATION\n需要更多資訊", TokenUsage()),
-            ("AAF_READY_FOR_REVIEW\n完成", TokenUsage()),
+            ("CAFE_NEED_CLARIFICATION\n需要更多資訊", TokenUsage()),
+            ("CAFE_READY_FOR_REVIEW\n完成", TokenUsage()),
         ]
 
         setup_agent_manager_mocks(agent_manager)
@@ -894,7 +894,7 @@ class TestPlanPhaseNeedClarification:
 
         # 第一輪：user_input（開發指南）→ agent response（NEED_CLARIFICATION）
         assert data1["iteration"] == 1
-        assert data1["status_code"] == "AAF_NEED_CLARIFICATION"
+        assert data1["status_code"] == "CAFE_NEED_CLARIFICATION"
         assert "user_input" in data1  # 輪的開始：開發指南
         assert "初始開發指南內容" in data1["user_input"]
 
@@ -907,13 +907,13 @@ class TestPlanPhaseNeedClarification:
 
         # 第二輪：user_input（上輪的 user_response）→ agent response（CONFIRMED）
         assert data2["iteration"] == 2
-        assert data2["status_code"] == "AAF_READY_FOR_REVIEW"
+        assert data2["status_code"] == "CAFE_READY_FOR_REVIEW"
         assert "user_input" in data2  # 輪的開始：上一輪的使用者回應
         assert data2["user_input"] == "我的回應內容"
 
     def test_need_clarification_saves_progress(self, tmp_path: Path) -> None:
         """測試 NEED_CLARIFICATION 時保存進度"""
-        spec_file = tmp_path / ".aaf" / "issues" / "test-feature" / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements")
 
@@ -923,7 +923,7 @@ class TestPlanPhaseNeedClarification:
         plan_file.write_text("## 開發指南\n\nGuide")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("AAF_NEED_CLARIFICATION\n需要更多資訊", TokenUsage())
+        agent_manager.execute.return_value = ("CAFE_NEED_CLARIFICATION\n需要更多資訊", TokenUsage())
 
         setup_agent_manager_mocks(agent_manager)
 
@@ -950,7 +950,7 @@ class TestPlanPhaseNeedClarification:
 
         assert data["phase"] == "plan"
         assert data["status"] == "in_progress"
-        assert data["status_code"] == "AAF_NEED_CLARIFICATION"
+        assert data["status_code"] == "CAFE_NEED_CLARIFICATION"
 
 
 class TestPlanPhaseResume:
@@ -958,7 +958,7 @@ class TestPlanPhaseResume:
 
     def test_resume_shows_previous_plan_and_asks_user(self, tmp_path: Path) -> None:
         """測試中斷重跑時顯示上一輪的 plan.md 並詢問使用者"""
-        spec_file = tmp_path / ".aaf" / "issues" / "test-feature" / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements")
 
@@ -976,14 +976,14 @@ class TestPlanPhaseResume:
         history_data = {
             "iteration": 1,
             "prompt": "test prompt",
-            "response": "AAF_NEED_CLARIFICATION\n需要確認",
-            "status_code": "AAF_NEED_CLARIFICATION",
+            "response": "CAFE_NEED_CLARIFICATION\n需要確認",
+            "status_code": "CAFE_NEED_CLARIFICATION",
             "timestamp": "2024-01-01T00:00:00"
         }
         history_file.write_text(json.dumps(history_data, ensure_ascii=False, indent=2))
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("AAF_READY_FOR_REVIEW\n實作計畫已完成。", TokenUsage())
+        agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n實作計畫已完成。", TokenUsage())
 
         setup_agent_manager_mocks(agent_manager)
 
@@ -1014,7 +1014,7 @@ class TestPlanPhaseIterationDisplay:
     def test_displays_plan_at_start_of_iteration_2(self, tmp_path: Path) -> None:
         """測試第二輪開始時顯示 plan.md 內容"""
         issue_name = "test-display-plan"
-        spec_file = tmp_path / ".aaf" / "issues" / issue_name / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements\n\n## 開發指南\nDev guide")
 
@@ -1025,8 +1025,8 @@ class TestPlanPhaseIterationDisplay:
         agent_manager = MagicMock(spec=AgentManager)
         # 第一輪：NEED_CLARIFICATION，第二輪：READY_FOR_REVIEW
         agent_manager.execute.side_effect = [
-            ("AAF_NEED_CLARIFICATION\n需要更多資訊", TokenUsage()),
-            ("AAF_READY_FOR_REVIEW\n計畫完成", TokenUsage()),
+            ("CAFE_NEED_CLARIFICATION\n需要更多資訊", TokenUsage()),
+            ("CAFE_READY_FOR_REVIEW\n計畫完成", TokenUsage()),
         ]
         agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
 
@@ -1061,7 +1061,7 @@ class TestPlanPhaseIterationDisplay:
     def test_no_plan_display_in_iteration_1(self, tmp_path: Path) -> None:
         """測試第一輪不應該顯示計畫內容（因為還沒產生）"""
         issue_name = "test-no-display-iter1"
-        spec_file = tmp_path / ".aaf" / "issues" / issue_name / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements\n\n## 開發指南\nDev guide")
 
@@ -1071,7 +1071,7 @@ class TestPlanPhaseIterationDisplay:
 
         agent_manager = MagicMock(spec=AgentManager)
         # 第一輪就 READY_FOR_REVIEW
-        agent_manager.execute.return_value = ("AAF_READY_FOR_REVIEW\n計畫完成", TokenUsage())
+        agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n計畫完成", TokenUsage())
         agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -1103,7 +1103,7 @@ class TestPlanPhaseProgressTracking:
 
     def test_save_progress_creates_status_json(self, tmp_path: Path) -> None:
         """測試 _save_progress() 創建 status.json"""
-        spec_file = tmp_path / ".aaf" / "issues" / "test-issue" / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / "test-issue" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True)
         spec_file.write_text("# Spec\n\n## 開發指南\nGuide")
 
@@ -1132,12 +1132,12 @@ class TestPlanPhaseProgressTracking:
 
         assert data["phase"] == "plan"
         assert data["status"] == "in_progress"
-        assert data["status_code"] == "AAF_NEED_CLARIFICATION"
+        assert data["status_code"] == "CAFE_NEED_CLARIFICATION"
         assert data["iteration"] == 2
 
     def test_load_progress_returns_none_when_no_file(self, tmp_path: Path) -> None:
         """測試 _load_progress() 在沒有檔案時返回 None"""
-        spec_file = tmp_path / ".aaf" / "issues" / "test-issue" / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / "test-issue" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True)
         spec_file.write_text("# Spec\n\n## 開發指南\nGuide")
 
@@ -1168,7 +1168,7 @@ class TestPlanPhaseNoStatusCode:
         （可能是格式錯誤或 agent 沒照指示做）。在舊版程式碼中，這會導致 response
         沒有被儲存，進而造成無限迴圈。
         """
-        spec_file = tmp_path / ".aaf" / "issues" / "test" / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / "test" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements\n\n## 開發指南\nGuide")
 
@@ -1226,9 +1226,9 @@ class TestPlanPhaseEmptyResponse:
         """測試 agent 回傳空字串時應該失敗並標記為 NO_RESPONSE 狀態
 
         當 agent 回傳空字串（可能是執行失敗或輸出未正確捕捉），
-        應該立即終止並返回 FAILED 狀態，並在 history 中記錄 AAF_NO_RESPONSE。
+        應該立即終止並返回 FAILED 狀態，並在 history 中記錄 CAFE_NO_RESPONSE。
         """
-        spec_file = tmp_path / ".aaf" / "issues" / "test" / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / "test" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements\n\n## 開發指南\nGuide")
 
@@ -1276,7 +1276,7 @@ class TestPlanPhaseEmptyResponse:
 
         assert data["iteration"] == 1
         assert data["response"] == ""
-        assert data["status_code"] == "AAF_NO_RESPONSE"
+        assert data["status_code"] == "CAFE_NO_RESPONSE"
 
 
 class TestPlanPhasePromptGeneration:
@@ -1284,7 +1284,7 @@ class TestPlanPhasePromptGeneration:
 
     def test_prompt_includes_user_modification_request_in_iteration_2(self, tmp_path: Path) -> None:
         """測試 iteration 2 的 prompt 應該包含使用者的修改意見"""
-        spec_file = tmp_path / ".aaf" / "issues" / "test" / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / "test" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements\n\n## 開發指南\nGuide")
 
@@ -1303,8 +1303,8 @@ class TestPlanPhasePromptGeneration:
             "timestamp": "2025-11-09T12:00:00",
             "user_input": "開發指南內容",
             "dev_agent": "David",
-            "response": "AAF_READY_FOR_REVIEW\n計畫已完成",
-            "status_code": "AAF_READY_FOR_REVIEW"
+            "response": "CAFE_READY_FOR_REVIEW\n計畫已完成",
+            "status_code": "CAFE_READY_FOR_REVIEW"
         }, ensure_ascii=False))
 
         agent_manager = MagicMock(spec=AgentManager)
@@ -1321,7 +1321,7 @@ class TestPlanPhasePromptGeneration:
         def capture_prompt(agent_name, prompt, allowed_tools=None, denied_tools=None):
             nonlocal captured_prompt
             captured_prompt = prompt
-            return ("AAF_READY_FOR_REVIEW\n修改後的計畫", TokenUsage())
+            return ("CAFE_READY_FOR_REVIEW\n修改後的計畫", TokenUsage())
 
         agent_manager.execute.side_effect = capture_prompt
 
@@ -1349,7 +1349,7 @@ class TestPlanPhasePromptGeneration:
 
     def test_prompt_does_not_include_contradicting_status_code_format(self, tmp_path: Path) -> None:
         """測試 prompt 不應該包含矛盾的 status code 格式指示"""
-        spec_file = tmp_path / ".aaf" / "issues" / "test" / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / "test" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements\n\n## 開發指南\nGuide")
 
@@ -1371,7 +1371,7 @@ class TestPlanPhasePromptGeneration:
         def capture_prompt(agent_name, prompt, allowed_tools=None, denied_tools=None):
             nonlocal captured_prompt
             captured_prompt = prompt
-            return ("AAF_READY_FOR_REVIEW\n計畫完成", TokenUsage())
+            return ("CAFE_READY_FOR_REVIEW\n計畫完成", TokenUsage())
 
         agent_manager.execute.side_effect = capture_prompt
 
@@ -1388,16 +1388,16 @@ class TestPlanPhasePromptGeneration:
         with patch('builtins.print'):
             phase.execute()
 
-        # Prompt should not contain "只回傳：READY_FOR_REVIEW" (without AAF_ prefix)
+        # Prompt should not contain "只回傳：READY_FOR_REVIEW" (without CAFE_ prefix)
         assert captured_prompt is not None
         assert "只回傳：READY_FOR_REVIEW" not in captured_prompt, \
-            "Prompt should not instruct agent to return status code without AAF_ prefix"
+            "Prompt should not instruct agent to return status code without CAFE_ prefix"
         assert "只回傳：NEED_CLARIFICATION" not in captured_prompt, \
-            "Prompt should not instruct agent to return status code without AAF_ prefix"
+            "Prompt should not instruct agent to return status code without CAFE_ prefix"
 
-        # Should contain proper AAF_ prefixed codes
-        assert "AAF_READY_FOR_REVIEW" in captured_prompt
-        assert "AAF_NEED_CLARIFICATION" in captured_prompt
+        # Should contain proper CAFE_ prefixed codes
+        assert "CAFE_READY_FOR_REVIEW" in captured_prompt
+        assert "CAFE_NEED_CLARIFICATION" in captured_prompt
 
 
 class TestPlanPhaseUserConfirmation:
@@ -1406,7 +1406,7 @@ class TestPlanPhaseUserConfirmation:
     def test_user_confirmation_saves_history_and_updates_status(self, tmp_path: Path) -> None:
         """測試用戶確認計畫後應該保存 iteration history 並更新 status_code 為 CONFIRMED"""
         issue_name = "test"
-        spec_file = tmp_path / ".aaf" / "issues" / issue_name / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements\n\n## 開發指南\nGuide")
 
@@ -1416,7 +1416,7 @@ class TestPlanPhaseUserConfirmation:
 
         agent_manager = MagicMock(spec=AgentManager)
         # Agent returns READY_FOR_REVIEW
-        agent_manager.execute.return_value = ("AAF_READY_FOR_REVIEW\n計畫完成", TokenUsage())
+        agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n計畫完成", TokenUsage())
 
         mock_agent = MagicMock()
         mock_agent.config.cli.value = "claude"
@@ -1452,21 +1452,21 @@ class TestPlanPhaseUserConfirmation:
         with open(iteration_files[0]) as f:
             iter1 = json.load(f)
         assert iter1["iteration"] == 1
-        assert iter1["status_code"] == "AAF_READY_FOR_REVIEW"
+        assert iter1["status_code"] == "CAFE_READY_FOR_REVIEW"
 
         # Check iteration 2: user confirms
         with open(iteration_files[1]) as f:
             iter2 = json.load(f)
         assert iter2["iteration"] == 2
         assert iter2["user_input"] == "confirm"  # or similar indication of user confirmation
-        assert iter2["status_code"] == "AAF_CONFIRMED"
+        assert iter2["status_code"] == "CAFE_CONFIRMED"
 
         # Check status.json has final CONFIRMED status
         status_file = spec_file.parent.parent / "plan" / "status.json"
         assert status_file.exists()
         with open(status_file) as f:
             status_data = json.load(f)
-        assert status_data["status_code"] == "AAF_CONFIRMED"
+        assert status_data["status_code"] == "CAFE_CONFIRMED"
         assert status_data["iteration"] == 2
 
 
@@ -1484,7 +1484,7 @@ class TestExecuteAndHandleAgentResponse:
         mock_agent.config.cli.value = "claude"
         mock_agent.config.session_id = "test_session"
         agent_manager.get_agent.return_value = mock_agent
-        agent_manager.execute.return_value = ("AAF_READY_FOR_REVIEW\n計畫已完成", TokenUsage())
+        agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n計畫已完成", TokenUsage())
 
         phase = PlanPhase(
             agent_manager=agent_manager,
@@ -1525,7 +1525,7 @@ class TestExecuteAndHandleAgentResponse:
         mock_agent.config.cli.value = "claude"
         mock_agent.config.session_id = "test_session"
         agent_manager.get_agent.return_value = mock_agent
-        agent_manager.execute.return_value = ("AAF_NEED_CLARIFICATION\n需要更多資訊", TokenUsage())
+        agent_manager.execute.return_value = ("CAFE_NEED_CLARIFICATION\n需要更多資訊", TokenUsage())
 
         phase = PlanPhase(
             agent_manager=agent_manager,
@@ -1566,7 +1566,7 @@ class TestExecuteAndHandleAgentResponse:
         mock_agent.config.cli.value = "claude"
         mock_agent.config.session_id = "test_session"
         agent_manager.get_agent.return_value = mock_agent
-        agent_manager.execute.return_value = ("AAF_REJECTED\n需求不明確", TokenUsage())
+        agent_manager.execute.return_value = ("CAFE_REJECTED\n需求不明確", TokenUsage())
 
         phase = PlanPhase(
             agent_manager=agent_manager,

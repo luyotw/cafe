@@ -5,9 +5,9 @@ from pathlib import Path
 
 import pytest
 
-from aaf.core.phase import Phase
-from aaf.core.status_codes import PhaseStatusCode
-from aaf.core.types import PhaseResult, PhaseStatus
+from cafe.core.phase import Phase
+from cafe.core.status_codes import PhaseStatusCode
+from cafe.core.types import PhaseResult, PhaseStatus
 
 
 class ConcretePhase(Phase):
@@ -116,7 +116,7 @@ class TestUpdateIterationHistory:
         assert data["response"] == "Agent 回應"
         assert data["prompt"] == "Test prompt"
         assert data["cli"] == "copilot"
-        assert data["status_code"] == "AAF_READY_FOR_REVIEW"
+        assert data["status_code"] == "CAFE_READY_FOR_REVIEW"
 
     def test_update_nonexistent_file_creates_new(self, tmp_path: Path) -> None:
         """測試更新不存在的檔案時會建立新檔案"""
@@ -186,13 +186,13 @@ class TestTwoPhaseWorkflow:
         assert data1["iteration"] == 1
         assert data1["user_input"] == "第 1 輪使用者輸入"
         assert data1["response"] == "第 1 輪 Agent 回應"
-        assert data1["status_code"] == "AAF_NEED_CLARIFICATION"
+        assert data1["status_code"] == "CAFE_NEED_CLARIFICATION"
 
         # 第 2 輪
         assert data2["iteration"] == 2
         assert data2["user_input"] == "第 2 輪使用者修改意見"
         assert data2["response"] == "第 2 輪 Agent 回應"
-        assert data2["status_code"] == "AAF_READY_FOR_REVIEW"
+        assert data2["status_code"] == "CAFE_READY_FOR_REVIEW"
 
     def test_user_input_preserved_on_agent_failure(self, tmp_path: Path) -> None:
         """測試 agent 執行失敗時，user_input 仍然被保存"""

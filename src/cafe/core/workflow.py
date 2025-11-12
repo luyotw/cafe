@@ -1,11 +1,11 @@
-"""Workflow orchestration for AAF."""
+"""Workflow orchestration for CAFE."""
 
 import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from aaf.core.phase import Phase
-from aaf.core.types import PhaseProgress, PhaseResult, PhaseStatus
+from cafe.core.phase import Phase
+from cafe.core.types import PhaseProgress, PhaseResult, PhaseStatus
 
 
 class WorkflowError(Exception):

@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# AAF - AI Agent Flow
+# CAFE - AI Agent Flow
 # Simplified wrapper for the Python CLI
 
 set -e
@@ -14,4 +14,4 @@ if [ -d "$SCRIPT_DIR/venv" ]; then
 fi
 
 # Run the Python CLI with local src directory
-PYTHONPATH="$SCRIPT_DIR/src:$PYTHONPATH" python3 -m aaf.ui.cli "$@"
+PYTHONPATH="$SCRIPT_DIR/src:$PYTHONPATH" python3 -m cafe.ui.cli "$@"

@@ -109,7 +109,7 @@
    - Recent:
      - **Review 指令實作**: review 子命令支援完整 branch 和特定 commit 審查
      - **Config 指令完整實作**: set/get/edit/reset 子命令
-     - **Alias 支援**: `aaf config set pm gemini` 自動轉為 `agents.pm.cli`
+     - **Alias 支援**: `cafe config set pm gemini` 自動轉為 `agents.pm.cli`
      - **編輯器整合**: config edit 使用 $EDITOR 或 vim
      - 更新為使用 DevelopPhase (從 ImplementationPhase 重新命名)
 
@@ -143,7 +143,7 @@
      - PhaseCache.load() - 載入 cache 並反序列化
      - PhaseCache.is_valid() - 驗證 hash 是否匹配
      - PhaseCache.clear() / clear_all() - 清除單一/所有 cache
-     - Cache 檔案結構：.aaf/cache/session_{id}/phase_{num}_{name}.json
+     - Cache 檔案結構：.cafe/cache/session_{id}/phase_{num}_{name}.json
    - Benefits:
      - 重跑 workflow 時跳過已完成的 phase
      - 節省時間和 API 成本
@@ -184,54 +184,54 @@
 
 ### CLI 指令實作 (Command Implementation)
 
-#### 20. ✅ aaf develop - 開發階段指令
+#### 20. ✅ cafe develop - 開發階段指令
 **Priority: HIGH**
 **Status**: ✅ 已完成
-**Description**: 實作 `aaf develop` 指令，執行開發階段
+**Description**: 實作 `cafe develop` 指令，執行開發階段
 **Features**:
 - ✅ 讀取 plan.md 並執行開發
 - ✅ 使用 DevelopPhase
 - ✅ 支援 --dev-agent 參數選擇開發者 agent
 - ✅ 支援 interactive/non-interactive 模式
-- ✅ 設定指令別名 `aaf dev`
+- ✅ 設定指令別名 `cafe dev`
 - ✅ 整合 git branch 管理
 
 **Commands**:
 ```bash
-aaf develop <issue-name>           # 執行開發階段
-aaf develop <issue-name> --dev David  # 指定開發者
+cafe develop <issue-name>           # 執行開發階段
+cafe develop <issue-name> --dev David  # 指定開發者
 ```
 
 **Dependencies**: DevelopPhase, AgentManager
 **Commit**: edcf9f1
 
-#### 21. ✅ aaf review - Code Review 指令
+#### 21. ✅ cafe review - Code Review 指令
 **Priority: HIGH**
 **Status**: ✅ 已完成
-**Description**: 實作 `aaf review` 指令，執行 code review
+**Description**: 實作 `cafe review` 指令，執行 code review
 **Features**:
 - ✅ 使用 ReviewPhase (單輪執行模式)
 - ✅ 支援 --reviewer 參數選擇 reviewer agent
 - ✅ 支援 --commit 參數審查特定 commit
 - ✅ 支援完整 branch 審查模式
 - ✅ CONFIRMED 狀態碼系統
-- ✅ 結果儲存至 `.aaf/issues/{issue_name}/review/`
+- ✅ 結果儲存至 `.cafe/issues/{issue_name}/review/`
 - ✅ History 機制
 
 **Commands**:
 ```bash
-aaf review <issue-name>              # 執行 code review (完整 branch)
-aaf review <issue-name> --commit abc123  # 審查特定 commit
-aaf review <issue-name> --reviewer Richard  # 指定 reviewer
+cafe review <issue-name>              # 執行 code review (完整 branch)
+cafe review <issue-name> --commit abc123  # 審查特定 commit
+cafe review <issue-name> --reviewer Richard  # 指定 reviewer
 ```
 
 **Dependencies**: ReviewPhase, AgentManager
 **Commit**: 245c93d
 **Tests**: 30+ tests, 98% coverage
 
-#### 22. ⬜ aaf pr - Pull Request 建立指令
+#### 22. ⬜ cafe pr - Pull Request 建立指令
 **Priority: HIGH**
-**Description**: 實作 `aaf pr` 指令，建立 pull request
+**Description**: 實作 `cafe pr` 指令，建立 pull request
 **Features**:
 - 使用 PRPhase
 - Push branch to remote
@@ -241,8 +241,8 @@ aaf review <issue-name> --reviewer Richard  # 指定 reviewer
 
 **Commands**:
 ```bash
-aaf pr <issue-name>              # 建立 PR
-aaf pr <issue-name> --base main  # 指定 base branch
+cafe pr <issue-name>              # 建立 PR
+cafe pr <issue-name> --base main  # 指定 base branch
 ```
 
 **Dependencies**: PRPhase, GitOperations, github.py
@@ -269,7 +269,7 @@ class Display:
 **Priority: LOW**
 ```python
 # 使用 Textual
-class AAFApp(App):
+class CAFEApp(App):
     - Interactive chat interface
     - Real-time status updates
     - Fancy UI like Claude Code
@@ -366,9 +366,9 @@ class AAFApp(App):
 14. ⬜ display.py - 顯示工具
 
 ### 第四階段（CLI 指令）- Week 5 ✅ 已完成
-15. ✅ aaf develop - 開發階段指令
-16. ✅ aaf review - Code Review 指令
-17. ⬜ aaf pr - Pull Request 建立指令
+15. ✅ cafe develop - 開發階段指令
+16. ✅ cafe review - Code Review 指令
+17. ⬜ cafe pr - Pull Request 建立指令
 
 ### 第五階段（測試與文件）- Week 6
 18. ⬜ Integration tests
@@ -408,9 +408,9 @@ class AAFApp(App):
     - develop_phase: 14 tests, 100% coverage (從 implementation_phase 重新命名)
     - review_phase: 30+ tests, 98% coverage (重構為單輪執行模式)
 **第四階段**: ✅ 已完成 - CLI 指令實作
-  - ✅ aaf develop - 開發階段指令 (commit: edcf9f1)
-  - ✅ aaf review - Code Review 指令 (commit: 245c93d)
-  - ⬜ aaf pr - Pull Request 建立指令 (HIGH priority)
+  - ✅ cafe develop - 開發階段指令 (commit: edcf9f1)
+  - ✅ cafe review - Code Review 指令 (commit: 245c93d)
+  - ⬜ cafe pr - Pull Request 建立指令 (HIGH priority)
 **最新變更** (2025-11-04):
   - DevelopPhase 重構為單輪執行模式（移除 while 迴圈）
   - 新增 copilot streaming 輸出支援
@@ -421,4 +421,4 @@ class AAFApp(App):
   - SpecPhase prompt 改為建議而非強制使用者故事格式
   - review-phase 分支已合併回 refactor-python
 **當前任務**: 無（階段四完成 2/3）
-**下一步**: 實作 aaf pr 指令 → Integration tests → Documentation
+**下一步**: 實作 cafe pr 指令 → Integration tests → Documentation

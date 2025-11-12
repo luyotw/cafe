@@ -4,8 +4,8 @@ import json
 import pytest
 from pathlib import Path
 from datetime import datetime
-from aaf.core.phase_cache import PhaseCache, CacheEntry
-from aaf.core.status_codes import PhaseStatusCode
+from cafe.core.phase_cache import PhaseCache, CacheEntry
+from cafe.core.status_codes import PhaseStatusCode
 
 
 class TestCacheEntry:
@@ -41,7 +41,7 @@ class TestCacheEntry:
         data = entry.to_dict()
 
         assert data["phase_name"] == "analysis"
-        assert data["status_code"] == "AAF_CONFIRMED"  # Status codes have AAF_ prefix
+        assert data["status_code"] == "CAFE_CONFIRMED"  # Status codes have CAFE_ prefix
         assert data["response"] == "Analysis complete"
         assert data["content_hash"] == "def456"
         assert data["timestamp"] == timestamp.isoformat()
@@ -51,7 +51,7 @@ class TestCacheEntry:
         timestamp = datetime.now()
         data = {
             "phase_name": "review",
-            "status_code": "AAF_CONFIRMED",  # Status codes have AAF_ prefix
+            "status_code": "CAFE_CONFIRMED",  # Status codes have CAFE_ prefix
             "response": "Code looks good",
             "content_hash": "ghi789",
             "timestamp": timestamp.isoformat()

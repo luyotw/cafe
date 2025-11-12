@@ -5,7 +5,7 @@ from datetime import datetime
 import pytest
 from pydantic import ValidationError
 
-from aaf.core.types import (
+from cafe.core.types import (
     AgentConfig,
     AgentCLI,
     PermissionAction,
@@ -135,7 +135,7 @@ class TestSessionConfig:
         assert config.workflow_mode == WorkflowMode.GITHUB
         assert config.issue_id == "123"
         assert config.spec_file is None
-        assert config.sessions_dir == ".aaf/sessions"
+        assert config.sessions_dir == ".cafe/sessions"
 
     def test_create_session_config_local_mode(self) -> None:
         """測試可以成功建立 Local 工作流程的 SessionConfig"""

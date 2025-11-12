@@ -1,13 +1,13 @@
-"""Agent management for AAF."""
+"""Agent management for CAFE."""
 
 import json
 import os
 import subprocess
 from typing import Dict, List, Optional, Tuple
 
-from aaf.agents.executor import AgentExecutor, AgentExecutionError
-from aaf.core.session import SessionManager
-from aaf.core.types import AgentConfig, TokenUsage
+from cafe.agents.executor import AgentExecutor, AgentExecutionError
+from cafe.core.session import SessionManager
+from cafe.core.types import AgentConfig, TokenUsage
 
 
 class AgentNotFoundError(Exception):
@@ -32,7 +32,7 @@ class AgentManager:
         self.current_agent_name: Optional[str] = None
         self._total_token_usage = TokenUsage()
         self.show_prompt = False  # CLI can set this to True to show prompts
-        self._use_mock = os.getenv("AAF_MOCK_AGENTS", "").lower() in ("true", "1", "yes")
+        self._use_mock = os.getenv("CAFE_MOCK_AGENTS", "").lower() in ("true", "1", "yes")
 
     def register_agent(self, config: AgentConfig) -> None:
         """Register an agent with configuration.
@@ -42,10 +42,10 @@ class AgentManager:
         """
         # Check if we should use mock agent
         if self._use_mock:
-            from aaf.agents.mock_executor import MockAgentExecutor
+            from cafe.agents.mock_executor import MockAgentExecutor
             
-            # Get mock response from env var (default: AAF_CONFIRMED with empty spec)
-            mock_response = os.getenv("AAF_MOCK_RESPONSE", "AAF_CONFIRMED\n\n# Mock Spec\n\nThis is a mock specification.")
+            # Get mock response from env var (default: CAFE_CONFIRMED with empty spec)
+            mock_response = os.getenv("CAFE_MOCK_RESPONSE", "CAFE_CONFIRMED\n\n# Mock Spec\n\nThis is a mock specification.")
             self.agents[config.name] = MockAgentExecutor(
                 config=config,
                 response=mock_response

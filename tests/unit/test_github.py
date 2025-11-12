@@ -4,7 +4,7 @@ import pytest
 import subprocess
 from unittest.mock import MagicMock, Mock, patch, call
 
-from aaf.utils.github import GitHubOps, GitHubError
+from cafe.utils.github import GitHubOps, GitHubError
 
 
 class TestGitHubOpsInit:

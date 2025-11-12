@@ -1,4 +1,4 @@
-"""Integration tests for 'aaf spec --no-interactive' command.
+"""Integration tests for 'cafe spec --no-interactive' command.
 
 使用 MockAgentExecutor 測試完整的 spec command flow，不呼叫真實 LLM API。
 """
@@ -8,24 +8,24 @@ import pytest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from aaf.agents.manager import AgentManager
-from aaf.agents.mock_executor import MockAgentExecutor
-from aaf.core.permission import PermissionHandler
-from aaf.core.types import AgentConfig, AgentCLI, WorkflowMode, PhaseStatus
-from aaf.phases.spec_phase import SpecPhase
+from cafe.agents.manager import AgentManager
+from cafe.agents.mock_executor import MockAgentExecutor
+from cafe.core.permission import PermissionHandler
+from cafe.core.types import AgentConfig, AgentCLI, WorkflowMode, PhaseStatus
+from cafe.phases.spec_phase import SpecPhase
 
 
 @pytest.fixture
 def mock_env(monkeypatch):
     """啟用 mock agent mode"""
-    monkeypatch.setenv("AAF_MOCK_AGENTS", "true")
+    monkeypatch.setenv("CAFE_MOCK_AGENTS", "true")
 
 
 @pytest.fixture
 def temp_spec_dir(tmp_path):
     """創建臨時 spec 目錄結構"""
-    # 創建完整的目錄結構: {tmp_path}/.aaf/issues/test-issue/spec/
-    spec_dir = tmp_path / ".aaf" / "issues" / "test-issue" / "spec"
+    # 創建完整的目錄結構: {tmp_path}/.cafe/issues/test-issue/spec/
+    spec_dir = tmp_path / ".cafe" / "issues" / "test-issue" / "spec"
     spec_dir.mkdir(parents=True)
     # 不要創建 history 目錄，讓 phase 自己創建
     return spec_dir
@@ -43,8 +43,8 @@ class TestSpecCommandNonInteractiveBasic:
         user_input = "我想要一個登入功能"
         
         monkeypatch.setenv(
-            "AAF_MOCK_RESPONSE",
-            "AAF_CONFIRMED\n\n# 登入功能需求規格\n\n這是測試規格。"
+            "CAFE_MOCK_RESPONSE",
+            "CAFE_CONFIRMED\n\n# 登入功能需求規格\n\n這是測試規格。"
         )
         
         # 創建 mock agent manager
@@ -84,8 +84,8 @@ class TestSpecCommandNonInteractiveBasic:
         user_input = "我想要一個功能"
         
         monkeypatch.setenv(
-            "AAF_MOCK_RESPONSE",
-            "AAF_NEED_CLARIFICATION\n\n請問這個功能的使用者是誰？"
+            "CAFE_MOCK_RESPONSE",
+            "CAFE_NEED_CLARIFICATION\n\n請問這個功能的使用者是誰？"
         )
         
         agent_manager = AgentManager()
@@ -120,8 +120,8 @@ class TestSpecCommandNonInteractiveBasic:
         user_input = "不合理的需求"
         
         monkeypatch.setenv(
-            "AAF_MOCK_RESPONSE",
-            "AAF_REJECTED\n\n這個需求不符合專案方向。"
+            "CAFE_MOCK_RESPONSE",
+            "CAFE_REJECTED\n\n這個需求不符合專案方向。"
         )
         
         agent_manager = AgentManager()
@@ -189,8 +189,8 @@ class TestSpecCommandNonInteractiveFiles:
         spec_file = str(temp_spec_dir / "spec.md")
         
         monkeypatch.setenv(
-            "AAF_MOCK_RESPONSE",
-            "AAF_CONFIRMED\n\n# 測試規格"
+            "CAFE_MOCK_RESPONSE",
+            "CAFE_CONFIRMED\n\n# 測試規格"
         )
         
         agent_manager = AgentManager()
@@ -225,8 +225,8 @@ class TestSpecCommandNonInteractiveFiles:
         history_dir = temp_spec_dir / "history"
         
         monkeypatch.setenv(
-            "AAF_MOCK_RESPONSE",
-            "AAF_CONFIRMED\n\n# 測試規格"
+            "CAFE_MOCK_RESPONSE",
+            "CAFE_CONFIRMED\n\n# 測試規格"
         )
         
         agent_manager = AgentManager()
@@ -268,8 +268,8 @@ class TestSpecCommandNonInteractiveErrorHandling:
         spec_file = str(temp_spec_dir / "spec.md")
         
         monkeypatch.setenv(
-            "AAF_MOCK_RESPONSE",
-            "AAF_INVALID_STATUS\n\n這是無效的狀態碼"
+            "CAFE_MOCK_RESPONSE",
+            "CAFE_INVALID_STATUS\n\n這是無效的狀態碼"
         )
         
         agent_manager = AgentManager()
@@ -355,7 +355,7 @@ class TestSpecCommandNonInteractiveCLIValidation:
         assert Path(spec_file).exists()
         content = Path(spec_file).read_text()
         assert "Mock Spec" in content or "Mock Response" in content
-        assert "AAF_CONFIRMED" not in content  # 狀態碼不應該在檔案內容中
+        assert "CAFE_CONFIRMED" not in content  # 狀態碼不應該在檔案內容中
 
 
 class TestSpecCommandNonInteractiveAgentTracking:
@@ -370,8 +370,8 @@ class TestSpecCommandNonInteractiveAgentTracking:
         user_input = "我想要一個特殊的登入功能"
         
         monkeypatch.setenv(
-            "AAF_MOCK_RESPONSE",
-            "AAF_CONFIRMED\n\n# 測試規格"
+            "CAFE_MOCK_RESPONSE",
+            "CAFE_CONFIRMED\n\n# 測試規格"
         )
         
         agent_manager = AgentManager()
@@ -410,8 +410,8 @@ class TestSpecCommandNonInteractiveAgentTracking:
         spec_file = str(temp_spec_dir / "spec.md")
         
         monkeypatch.setenv(
-            "AAF_MOCK_RESPONSE",
-            "AAF_CONFIRMED\n\n# 測試規格"
+            "CAFE_MOCK_RESPONSE",
+            "CAFE_CONFIRMED\n\n# 測試規格"
         )
         
         agent_manager = AgentManager()

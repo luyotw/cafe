@@ -3,8 +3,8 @@
 import pytest
 from unittest.mock import MagicMock, patch
 
-from aaf.core.permission import PermissionHandler, PermissionDeniedError
-from aaf.core.types import PermissionRequest, PermissionAction
+from cafe.core.permission import PermissionHandler, PermissionDeniedError
+from cafe.core.types import PermissionRequest, PermissionAction
 
 
 class TestPermissionHandlerBasics:

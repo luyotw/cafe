@@ -5,13 +5,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 
-from aaf.agents.manager import AgentManager
-from aaf.core.git import GitOperations
-from aaf.core.permission import PermissionHandler
-from aaf.core.phase import Phase
-from aaf.core.status_codes import PhaseStatusCode, StatusCodeParser, generate_status_code_prompt
-from aaf.core.types import PhaseProgress, PhaseResult, PhaseStatus, WorkflowMode
-from aaf.ui.display import Display
+from cafe.agents.manager import AgentManager
+from cafe.core.git import GitOperations
+from cafe.core.permission import PermissionHandler
+from cafe.core.phase import Phase
+from cafe.core.status_codes import PhaseStatusCode, StatusCodeParser, generate_status_code_prompt
+from cafe.core.types import PhaseProgress, PhaseResult, PhaseStatus, WorkflowMode
+from cafe.ui.display import Display
 
 
 class DevelopPhase(Phase):
@@ -62,14 +62,14 @@ class DevelopPhase(Phase):
         if issue_name:
             self.issue_name = issue_name
         else:
-            # Derive from spec_file path: .aaf/issues/{issue_name}/spec/spec.md
+            # Derive from spec_file path: .cafe/issues/{issue_name}/spec/spec.md
             spec_path = Path(spec_file)
             self.issue_name = spec_path.parent.parent.name
 
         # History directory for develop phase
-        # Path: .aaf/issues/{issue_name}/develop/history
+        # Path: .cafe/issues/{issue_name}/develop/history
         spec_path = Path(self.spec_file)
-        issue_dir = spec_path.parent.parent  # .aaf/issues/{issue_name}
+        issue_dir = spec_path.parent.parent  # .cafe/issues/{issue_name}
         self.history_dir = issue_dir / "develop" / "history"
 
         # Track conversation history
@@ -100,7 +100,7 @@ class DevelopPhase(Phase):
             review.md 的 Path 物件
         """
         spec_path = Path(self.spec_file)
-        issue_dir = spec_path.parent.parent  # .aaf/issues/{issue_name}
+        issue_dir = spec_path.parent.parent  # .cafe/issues/{issue_name}
         return issue_dir / "review" / "review.md"
 
     def _check_review_feedback_exists(self) -> bool:
@@ -382,7 +382,7 @@ class DevelopPhase(Phase):
             if not self._check_plan_exists():
                 return PhaseResult(
                     status=PhaseStatus.FAILED,
-                    message=f"Plan file not found: {self.plan_file}. Please run 'aaf plan' first.",
+                    message=f"Plan file not found: {self.plan_file}. Please run 'cafe plan' first.",
                 )
 
             # Validate inputs
@@ -406,7 +406,7 @@ class DevelopPhase(Phase):
             if existing_progress and existing_progress.status == PhaseStatus.COMPLETED:
                 # Check if there's review feedback that requires handling
                 review_status = self._load_review_status()
-                if review_status and review_status.get("status_code") == "AAF_NEEDS_CHANGES":
+                if review_status and review_status.get("status_code") == "CAFE_NEEDS_CHANGES":
                     # Check if this review has already been handled
                     review_timestamp = review_status.get("timestamp", "")
                     
@@ -430,7 +430,7 @@ class DevelopPhase(Phase):
                                 )
                     
                     # Review exists and hasn't been handled yet, continue execution
-                    print("ℹ️  Review feedback detected (AAF_NEEDS_CHANGES). Continuing development...")
+                    print("ℹ️  Review feedback detected (CAFE_NEEDS_CHANGES). Continuing development...")
                     # Don't return early - let execution continue to handle review feedback
                 else:
                     # No review feedback or review passed, phase is truly completed
@@ -465,7 +465,7 @@ class DevelopPhase(Phase):
             
             # Check if there's a pending NEED_PERMISSION from previous run
             if (self.conversation_history and
-                self.conversation_history[-1].get("status_code") == "AAF_NEED_PERMISSION" and
+                self.conversation_history[-1].get("status_code") == "CAFE_NEED_PERMISSION" and
                 "user_response" not in self.conversation_history[-1]):
                 # Handle pending permission request
                 last_iteration = self.conversation_history[-1]
@@ -558,7 +558,7 @@ class DevelopPhase(Phase):
                 # Record review timestamp if we're responding to review feedback
                 review_status = self._load_review_status()
                 handled_review_timestamp = None
-                if review_status and review_status.get("status_code") == "AAF_NEEDS_CHANGES":
+                if review_status and review_status.get("status_code") == "CAFE_NEEDS_CHANGES":
                     handled_review_timestamp = review_status.get("timestamp")
                 
                 self._save_progress(PhaseStatusCode.CONFIRMED, handled_review_timestamp)
@@ -594,7 +594,7 @@ class DevelopPhase(Phase):
                     print(f"{'='*60}")
                     print(response)
                     print(f"{'='*60}\n")
-                    print("💡 開發者請求權限。請再次執行 'aaf develop' 來回應。")
+                    print("💡 開發者請求權限。請再次執行 'cafe develop' 來回應。")
                     
                     return PhaseResult(
                         status=PhaseStatus.IN_PROGRESS,
@@ -636,7 +636,7 @@ class DevelopPhase(Phase):
         except KeyboardInterrupt:
             print("\n\n⏸️  Paused by user (Ctrl+C).")
             print(f"💾 Progress saved. Current iteration: {self.iteration}")
-            print(f"📝 To resume, run: aaf develop {self.issue_name}")
+            print(f"📝 To resume, run: cafe develop {self.issue_name}")
             return PhaseResult(
                 status=PhaseStatus.IN_PROGRESS,
                 message="Paused by user - can resume later",

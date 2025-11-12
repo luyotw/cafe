@@ -5,11 +5,11 @@ import subprocess
 from pathlib import Path
 from typing import Optional
 
-from aaf.agents.manager import AgentManager
-from aaf.core.git import GitOperations
-from aaf.core.permission import PermissionHandler
-from aaf.core.phase import Phase
-from aaf.core.types import PhaseResult, PhaseStatus, WorkflowMode
+from cafe.agents.manager import AgentManager
+from cafe.core.git import GitOperations
+from cafe.core.permission import PermissionHandler
+from cafe.core.phase import Phase
+from cafe.core.types import PhaseResult, PhaseStatus, WorkflowMode
 
 
 class PRPhase(Phase):

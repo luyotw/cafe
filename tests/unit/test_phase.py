@@ -6,9 +6,9 @@ from abc import ABC
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from aaf.core.phase import Phase
-from aaf.core.status_codes import PhaseStatusCode
-from aaf.core.types import PhaseResult, PhaseStatus, TokenUsage
+from cafe.core.phase import Phase
+from cafe.core.status_codes import PhaseStatusCode
+from cafe.core.types import PhaseResult, PhaseStatus, TokenUsage
 
 
 class ConcretePhase(Phase):
@@ -159,7 +159,7 @@ class TestExecuteAgentIteration:
         mock_agent.config.cli.value = "claude"
         mock_agent.config.session_id = "test_session"
         agent_manager.get_agent.return_value = mock_agent
-        agent_manager.execute.return_value = ("AAF_CONFIRMED\n需求已清楚", TokenUsage())
+        agent_manager.execute.return_value = ("CAFE_CONFIRMED\n需求已清楚", TokenUsage())
 
         phase = TestPhase(agent_manager, history_dir)
 
@@ -173,7 +173,7 @@ class TestExecuteAgentIteration:
         )
 
         # Verify
-        assert response == "AAF_CONFIRMED\n需求已清楚"
+        assert response == "CAFE_CONFIRMED\n需求已清楚"
         assert status_code == PhaseStatusCode.CONFIRMED
 
         # Check history file was created
@@ -186,8 +186,8 @@ class TestExecuteAgentIteration:
         assert history_data["iteration"] == 1
         assert history_data["user_input"] == "Test input"
         assert history_data["prompt"] == "Test prompt"
-        assert history_data["response"] == "AAF_CONFIRMED\n需求已清楚"
-        assert history_data["status_code"] == "AAF_CONFIRMED"
+        assert history_data["response"] == "CAFE_CONFIRMED\n需求已清楚"
+        assert history_data["status_code"] == "CAFE_CONFIRMED"
         assert history_data["cli"] == "claude"
         assert history_data["session_id"] == "test_session"
         assert history_data["allowed_tools"] == ["write", "read"]
@@ -235,7 +235,7 @@ class TestExecuteAgentIteration:
         with open(iteration_file) as f:
             history_data = json.load(f)
 
-        assert history_data["status_code"] == "AAF_NO_RESPONSE"
+        assert history_data["status_code"] == "CAFE_NO_RESPONSE"
         assert history_data["response"] == ""
 
     def test_execute_agent_iteration_no_status_code(self, tmp_path: Path) -> None:
@@ -325,7 +325,7 @@ class TestExecuteAgentIteration:
         mock_agent.config.cli.value = "claude"
         mock_agent.config.session_id = "test_session"
         agent_manager.get_agent.return_value = mock_agent
-        agent_manager.execute.return_value = ("AAF_CONFIRMED\n測試完成", TokenUsage())
+        agent_manager.execute.return_value = ("CAFE_CONFIRMED\n測試完成", TokenUsage())
 
         phase = TestPhase(agent_manager, history_dir)
 
@@ -369,7 +369,7 @@ class TestHandleStandardStatusCodes:
         assert result is not None
         assert result.status == PhaseStatus.FAILED
         assert "no response" in result.message.lower()
-        assert result.data["status_code"] == "AAF_NO_RESPONSE"
+        assert result.data["status_code"] == "CAFE_NO_RESPONSE"
 
     def test_handle_rejected_returns_failed(self) -> None:
         """測試 REJECTED 返回 FAILED 狀態"""
@@ -390,7 +390,7 @@ class TestHandleStandardStatusCodes:
         assert result is not None
         assert result.status == PhaseStatus.FAILED
         assert "rejected" in result.message.lower()
-        assert result.data["status_code"] == "AAF_REJECTED"
+        assert result.data["status_code"] == "CAFE_REJECTED"
         assert result.data["final_response"] == "User rejected the plan"
 
     def test_handle_complete_codes_returns_none(self) -> None:

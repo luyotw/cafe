@@ -4,15 +4,15 @@ import pytest
 from unittest.mock import MagicMock, patch
 from pathlib import Path
 
-from aaf.agents.manager import AgentManager
-from aaf.core.permission import PermissionHandler
-from aaf.core.git import GitOperations
-from aaf.core.types import WorkflowMode
-from aaf.phases.spec_phase import SpecPhase
-from aaf.phases.plan_phase import PlanPhase
-from aaf.phases.develop_phase import DevelopPhase
-from aaf.phases.review_phase import ReviewPhase
-from aaf.phases.pr_phase import PRPhase
+from cafe.agents.manager import AgentManager
+from cafe.core.permission import PermissionHandler
+from cafe.core.git import GitOperations
+from cafe.core.types import WorkflowMode
+from cafe.phases.spec_phase import SpecPhase
+from cafe.phases.plan_phase import PlanPhase
+from cafe.phases.develop_phase import DevelopPhase
+from cafe.phases.review_phase import ReviewPhase
+from cafe.phases.pr_phase import PRPhase
 
 
 class TestSpecPhaseInteractive:
@@ -28,7 +28,7 @@ class TestSpecPhaseInteractive:
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
-            spec_file=".aaf/issues/test/spec/spec.md",
+            spec_file=".cafe/issues/test/spec/spec.md",
             workflow_mode=WorkflowMode.LOCAL,
         )
         
@@ -45,7 +45,7 @@ class TestSpecPhaseInteractive:
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
-            spec_file=".aaf/issues/test/spec/spec.md",
+            spec_file=".cafe/issues/test/spec/spec.md",
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
         )
@@ -67,7 +67,7 @@ class TestPlanPhaseInteractive:
         phase = PlanPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
-            spec_file=".aaf/issues/test/spec/spec.md",
+            spec_file=".cafe/issues/test/spec/spec.md",
             workflow_mode=WorkflowMode.LOCAL,
         )
         
@@ -84,7 +84,7 @@ class TestPlanPhaseInteractive:
         phase = PlanPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
-            spec_file=".aaf/issues/test/spec/spec.md",
+            spec_file=".cafe/issues/test/spec/spec.md",
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
         )
@@ -108,8 +108,8 @@ class TestDevelopPhaseInteractive:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            spec_file=".aaf/issues/test/spec/spec.md",
-            plan_file=".aaf/issues/test/plan/plan.md",
+            spec_file=".cafe/issues/test/spec/spec.md",
+            plan_file=".cafe/issues/test/plan/plan.md",
             workflow_mode=WorkflowMode.LOCAL,
         )
         
@@ -128,8 +128,8 @@ class TestDevelopPhaseInteractive:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            spec_file=".aaf/issues/test/spec/spec.md",
-            plan_file=".aaf/issues/test/plan/plan.md",
+            spec_file=".cafe/issues/test/spec/spec.md",
+            plan_file=".cafe/issues/test/plan/plan.md",
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
         )
@@ -153,8 +153,8 @@ class TestReviewPhaseInteractive:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            spec_file=".aaf/issues/test/spec/spec.md",
-            plan_file=".aaf/issues/test/plan/plan.md",
+            spec_file=".cafe/issues/test/spec/spec.md",
+            plan_file=".cafe/issues/test/plan/plan.md",
             workflow_mode=WorkflowMode.LOCAL,
         )
         
@@ -173,8 +173,8 @@ class TestReviewPhaseInteractive:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            spec_file=".aaf/issues/test/spec/spec.md",
-            plan_file=".aaf/issues/test/plan/plan.md",
+            spec_file=".cafe/issues/test/spec/spec.md",
+            plan_file=".cafe/issues/test/plan/plan.md",
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
         )
@@ -198,7 +198,7 @@ class TestPRPhaseInteractive:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            spec_file=".aaf/issues/test/spec/spec.md",
+            spec_file=".cafe/issues/test/spec/spec.md",
             workflow_mode=WorkflowMode.LOCAL,
         )
         
@@ -217,7 +217,7 @@ class TestPRPhaseInteractive:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            spec_file=".aaf/issues/test/spec/spec.md",
+            spec_file=".cafe/issues/test/spec/spec.md",
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
         )

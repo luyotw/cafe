@@ -1,7 +1,7 @@
 """Tests for Gemini content extractor filtering."""
 
 import pytest
-from aaf.core.types import AgentConfig, AgentCLI
+from cafe.core.types import AgentConfig, AgentCLI
 
 
 class TestGeminiContentExtractor:

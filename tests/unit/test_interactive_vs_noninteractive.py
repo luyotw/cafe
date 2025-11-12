@@ -13,11 +13,11 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from aaf.agents.manager import AgentManager
-from aaf.core.permission import PermissionHandler
-from aaf.core.types import PhaseStatus, WorkflowMode, TokenUsage, SpecRigor, AgentConfig, AgentCLI
-from aaf.phases.spec_phase import SpecPhase
-from aaf.phases.plan_phase import PlanPhase
+from cafe.agents.manager import AgentManager
+from cafe.core.permission import PermissionHandler
+from cafe.core.types import PhaseStatus, WorkflowMode, TokenUsage, SpecRigor, AgentConfig, AgentCLI
+from cafe.phases.spec_phase import SpecPhase
+from cafe.phases.plan_phase import PlanPhase
 
 
 def setup_agent_manager_mock_for_spec(agent_manager: MagicMock) -> None:
@@ -38,13 +38,13 @@ class TestSpecPhaseInteractiveVsNonInteractive:
         """測試 CONFIRMED 狀態在兩種模式下行為相同（都完成）"""
         # 準備測試環境
         issue_name = "test-confirmed"
-        spec_file = tmp_path / ".aaf" / "issues" / issue_name / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements\nTest requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
         setup_agent_manager_mock_for_spec(agent_manager)
-        agent_manager.execute.return_value = ("AAF_CONFIRMED\n需求已清楚", TokenUsage())
+        agent_manager.execute.return_value = ("CAFE_CONFIRMED\n需求已清楚", TokenUsage())
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -80,19 +80,19 @@ class TestSpecPhaseInteractiveVsNonInteractive:
         # 兩種模式都應該返回 COMPLETED
         assert result_interactive.status == PhaseStatus.COMPLETED
         assert result_noninteractive.status == PhaseStatus.COMPLETED
-        assert result_interactive.data.get("status_code") == "AAF_CONFIRMED"
-        assert result_noninteractive.data.get("status_code") == "AAF_CONFIRMED"
+        assert result_interactive.data.get("status_code") == "CAFE_CONFIRMED"
+        assert result_noninteractive.data.get("status_code") == "CAFE_CONFIRMED"
 
     def test_rejected_status_same_behavior_both_modes(self, tmp_path: Path) -> None:
         """測試 REJECTED 狀態在兩種模式下行為相同（都失敗）"""
         issue_name = "test-rejected"
-        spec_file = tmp_path / ".aaf" / "issues" / issue_name / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements\nTest requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
         setup_agent_manager_mock_for_spec(agent_manager)
-        agent_manager.execute.return_value = ("AAF_REJECTED\n需求有問題", TokenUsage())
+        agent_manager.execute.return_value = ("CAFE_REJECTED\n需求有問題", TokenUsage())
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -128,13 +128,13 @@ class TestSpecPhaseInteractiveVsNonInteractive:
         # 兩種模式都應該返回 FAILED
         assert result_interactive.status == PhaseStatus.FAILED
         assert result_noninteractive.status == PhaseStatus.FAILED
-        assert result_interactive.data.get("status_code") == "AAF_REJECTED"
-        assert result_noninteractive.data.get("status_code") == "AAF_REJECTED"
+        assert result_interactive.data.get("status_code") == "CAFE_REJECTED"
+        assert result_noninteractive.data.get("status_code") == "CAFE_REJECTED"
 
     def test_need_clarification_interactive_continues(self, tmp_path: Path) -> None:
         """測試 NEED_CLARIFICATION 在 interactive 模式會繼續迭代"""
         issue_name = "test-clarification-interactive"
-        spec_file = tmp_path / ".aaf" / "issues" / issue_name / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements\nTest requirements")
 
@@ -142,8 +142,8 @@ class TestSpecPhaseInteractiveVsNonInteractive:
         setup_agent_manager_mock_for_spec(agent_manager)
         # 第一次需要澄清，第二次確認
         agent_manager.execute.side_effect = [
-            ("AAF_NEED_CLARIFICATION\n請補充資訊", TokenUsage()),
-            ("AAF_CONFIRMED\n需求已清楚", TokenUsage()),
+            ("CAFE_NEED_CLARIFICATION\n請補充資訊", TokenUsage()),
+            ("CAFE_CONFIRMED\n需求已清楚", TokenUsage()),
         ]
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 
@@ -170,13 +170,13 @@ class TestSpecPhaseInteractiveVsNonInteractive:
     def test_need_clarification_noninteractive_stops(self, tmp_path: Path) -> None:
         """測試 NEED_CLARIFICATION 在 non-interactive 模式會停止並返回 IN_PROGRESS"""
         issue_name = "test-clarification-noninteractive"
-        spec_file = tmp_path / ".aaf" / "issues" / issue_name / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements\nTest requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
         setup_agent_manager_mock_for_spec(agent_manager)
-        agent_manager.execute.return_value = ("AAF_NEED_CLARIFICATION\n請補充資訊", TokenUsage())
+        agent_manager.execute.return_value = ("CAFE_NEED_CLARIFICATION\n請補充資訊", TokenUsage())
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -196,13 +196,13 @@ class TestSpecPhaseInteractiveVsNonInteractive:
         # Non-interactive 模式應該停止在第一輪
         assert result.status == PhaseStatus.IN_PROGRESS
         assert result.data.get("iterations") == 1
-        assert result.data.get("status_code") == "AAF_NEED_CLARIFICATION"
+        assert result.data.get("status_code") == "CAFE_NEED_CLARIFICATION"
         assert agent_manager.execute.call_count == 1
 
     def test_no_status_code_interactive_continues(self, tmp_path: Path) -> None:
         """測試沒有狀態碼時 interactive 模式會繼續迭代"""
         issue_name = "test-no-code-interactive"
-        spec_file = tmp_path / ".aaf" / "issues" / issue_name / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements\nTest requirements")
 
@@ -211,7 +211,7 @@ class TestSpecPhaseInteractiveVsNonInteractive:
         # 第一次沒有狀態碼，第二次確認
         agent_manager.execute.side_effect = [
             ("這是回應但沒有狀態碼", TokenUsage()),
-            ("AAF_CONFIRMED\n需求已清楚", TokenUsage()),
+            ("CAFE_CONFIRMED\n需求已清楚", TokenUsage()),
         ]
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 
@@ -237,7 +237,7 @@ class TestSpecPhaseInteractiveVsNonInteractive:
     def test_no_status_code_noninteractive_stops(self, tmp_path: Path) -> None:
         """測試沒有狀態碼時 non-interactive 模式會停止並返回 IN_PROGRESS"""
         issue_name = "test-no-code-noninteractive"
-        spec_file = tmp_path / ".aaf" / "issues" / issue_name / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements\nTest requirements")
 
@@ -273,7 +273,7 @@ class TestPlanPhaseInteractiveVsNonInteractive:
     def test_confirmed_status_same_behavior_both_modes(self, tmp_path: Path) -> None:
         """測試 READY_FOR_REVIEW 狀態在兩種模式下行為相同（都完成）"""
         issue_name = "test-plan-confirmed"
-        spec_file = tmp_path / ".aaf" / "issues" / issue_name / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements\nTest requirements\n\n## 開發指南\nDev guide")
 
@@ -283,7 +283,7 @@ class TestPlanPhaseInteractiveVsNonInteractive:
 
         agent_manager = MagicMock(spec=AgentManager)
         setup_agent_manager_mock_for_spec(agent_manager)
-        agent_manager.execute.return_value = ("AAF_READY_FOR_REVIEW\n計畫已完成", TokenUsage())
+        agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n計畫已完成", TokenUsage())
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -324,13 +324,13 @@ class TestPlanPhaseInteractiveVsNonInteractive:
         # 兩種模式都應該返回 COMPLETED
         assert result_interactive.status == PhaseStatus.COMPLETED
         assert result_noninteractive.status == PhaseStatus.COMPLETED
-        assert result_interactive.data.get("status_code") == "AAF_CONFIRMED"
-        assert result_noninteractive.data.get("status_code") == "AAF_CONFIRMED"
+        assert result_interactive.data.get("status_code") == "CAFE_CONFIRMED"
+        assert result_noninteractive.data.get("status_code") == "CAFE_CONFIRMED"
 
     def test_need_clarification_interactive_continues(self, tmp_path: Path) -> None:
         """測試 NEED_CLARIFICATION 在 interactive 模式會繼續迭代"""
         issue_name = "test-plan-clarification-interactive"
-        spec_file = tmp_path / ".aaf" / "issues" / issue_name / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements\nTest requirements\n\n## 開發指南\nDev guide")
 
@@ -341,8 +341,8 @@ class TestPlanPhaseInteractiveVsNonInteractive:
         agent_manager = MagicMock(spec=AgentManager)
         setup_agent_manager_mock_for_spec(agent_manager)
         agent_manager.execute.side_effect = [
-            ("AAF_NEED_CLARIFICATION\n需要更多資訊", TokenUsage()),
-            ("AAF_READY_FOR_REVIEW\n計畫已完成", TokenUsage()),
+            ("CAFE_NEED_CLARIFICATION\n需要更多資訊", TokenUsage()),
+            ("CAFE_READY_FOR_REVIEW\n計畫已完成", TokenUsage()),
         ]
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 
@@ -375,7 +375,7 @@ class TestPlanPhaseInteractiveVsNonInteractive:
     def test_need_clarification_noninteractive_stops(self, tmp_path: Path) -> None:
         """測試 NEED_CLARIFICATION 在 non-interactive 模式會停止並返回 IN_PROGRESS"""
         issue_name = "test-plan-clarification-noninteractive"
-        spec_file = tmp_path / ".aaf" / "issues" / issue_name / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements\nTest requirements\n\n## 開發指南\nDev guide")
 
@@ -385,7 +385,7 @@ class TestPlanPhaseInteractiveVsNonInteractive:
 
         agent_manager = MagicMock(spec=AgentManager)
         setup_agent_manager_mock_for_spec(agent_manager)
-        agent_manager.execute.return_value = ("AAF_NEED_CLARIFICATION\n需要更多資訊", TokenUsage())
+        agent_manager.execute.return_value = ("CAFE_NEED_CLARIFICATION\n需要更多資訊", TokenUsage())
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -410,13 +410,13 @@ class TestPlanPhaseInteractiveVsNonInteractive:
         # Non-interactive 模式應該停止在第一輪
         assert result.status == PhaseStatus.IN_PROGRESS
         assert result.data.get("iterations") == 1
-        assert result.data.get("status_code") == "AAF_NEED_CLARIFICATION"
+        assert result.data.get("status_code") == "CAFE_NEED_CLARIFICATION"
         assert agent_manager.execute.call_count == 1
 
     def test_no_status_code_noninteractive_stops(self, tmp_path: Path) -> None:
         """測試沒有狀態碼時 non-interactive 模式會停止並返回 IN_PROGRESS"""
         issue_name = "test-plan-no-code-noninteractive"
-        spec_file = tmp_path / ".aaf" / "issues" / issue_name / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements\nTest requirements\n\n## 開發指南\nDev guide")
 

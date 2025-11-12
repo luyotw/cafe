@@ -7,7 +7,7 @@ from typing import Optional
 
 from pydantic import BaseModel
 
-from aaf.core.status_codes import PhaseStatusCode
+from cafe.core.status_codes import PhaseStatusCode
 
 
 class CacheEntry(BaseModel):
@@ -55,7 +55,7 @@ class CacheEntry(BaseModel):
 class PhaseCache:
     """Manages caching of phase execution results.
 
-    Cache files are stored in: .aaf/cache/session_{id}/phase_{num}_{name}.json
+    Cache files are stored in: .cafe/cache/session_{id}/phase_{num}_{name}.json
 
     This allows workflows to:
     - Skip already-completed phases on re-run
@@ -72,7 +72,7 @@ class PhaseCache:
         "pr": 4,
     }
 
-    def __init__(self, session_id: str, cache_dir: str = ".aaf/cache") -> None:
+    def __init__(self, session_id: str, cache_dir: str = ".cafe/cache") -> None:
         """Initialize phase cache.
 
         Args:

@@ -1,7 +1,7 @@
 [project]
-name = "aaf"
+name = "cafe"
 version = "0.1.0"
-description = "AI Agent Flow - Automated development workflow with AI agents"
+description = "CLI Agent Flow Engine - Automated development workflow with AI agents"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
@@ -26,21 +26,21 @@ dev = [
 ]
 
 [project.scripts]
-aaf = "aaf.ui.cli:main"
+cafe = "cafe.ui.cli:main"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/aaf"]
+packages = ["src/cafe"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
-addopts = "-v --cov=aaf --cov-report=term-missing"
+addopts = "-v --cov=cafe --cov-report=term-missing"
 markers = [
     "integration: Integration tests that use real components but may mock external dependencies",
     "e2e: End-to-end tests that run the full system including CLI commands",

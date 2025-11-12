@@ -6,12 +6,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Dict, Any
 
-from aaf.agents.manager import AgentManager
-from aaf.core.permission import PermissionHandler
-from aaf.core.phase import Phase
-from aaf.core.status_codes import PhaseStatusCode, StatusCodeParser, generate_status_code_prompt
-from aaf.core.types import PhaseProgress, PhaseResult, PhaseStatus, WorkflowMode
-from aaf.ui.display import Display
+from cafe.agents.manager import AgentManager
+from cafe.core.permission import PermissionHandler
+from cafe.core.phase import Phase
+from cafe.core.status_codes import PhaseStatusCode, StatusCodeParser, generate_status_code_prompt
+from cafe.core.types import PhaseProgress, PhaseResult, PhaseStatus, WorkflowMode
+from cafe.ui.display import Display
 
 # Maximum number of planning iterations to prevent infinite loops
 MAX_PLANNING_ITERATIONS = 10
@@ -65,14 +65,14 @@ class PlanPhase(Phase):
         if issue_name:
             self.issue_name = issue_name
         else:
-            # Derive from spec_file path: .aaf/issues/{issue_name}/spec/spec.md
+            # Derive from spec_file path: .cafe/issues/{issue_name}/spec/spec.md
             spec_path = Path(spec_file)
             self.issue_name = spec_path.parent.parent.name
 
         # History directory for plan phase
-        # Path: .aaf/issues/{issue_name}/plan/history
+        # Path: .cafe/issues/{issue_name}/plan/history
         spec_path = Path(self.spec_file)
-        issue_dir = spec_path.parent.parent  # .aaf/issues/{issue_name}
+        issue_dir = spec_path.parent.parent  # .cafe/issues/{issue_name}
         self.history_dir = issue_dir / "plan" / "history"
 
         # Load existing history if available (will create dir if needed)
@@ -238,13 +238,13 @@ class PlanPhase(Phase):
 {template_instruction}
 {status_code_prompt}
 
-**如果需要更多資訊（status: AAF_NEED_CLARIFICATION）：**
+**如果需要更多資訊（status: CAFE_NEED_CLARIFICATION）：**
 使用 Write tool 將以下內容寫入 {plan_file_path}：
    - 「## 開發指南」- 保留原有的開發指南內容（不要修改）
    - 「## 實作計畫」- 目前的實作分析內容
    - 「## 待確認問題」- 列出需要確認的技術問題
 
-**如果分析完成（status: AAF_READY_FOR_REVIEW）：**
+**如果分析完成（status: CAFE_READY_FOR_REVIEW）：**
 使用 Write tool 將完整實作計畫寫入 {plan_file_path}：
    - 第一部分：「## 開發指南」- 保留原有的開發指南內容（不要修改）
    - 第二部分：嚴格按照模版的章節結構和格式撰寫實作計畫
@@ -278,10 +278,10 @@ class PlanPhase(Phase):
 - 保留「## 開發指南」區塊不變
 - 只修改需要變更的部分
 
-**如果仍需確認（status: AAF_NEED_CLARIFICATION）：**
+**如果仍需確認（status: CAFE_NEED_CLARIFICATION）：**
 使用 Edit tool 更新 {plan_file_path} 中的相關段落，並在「## 待確認問題」區塊列出需要確認的技術問題。
 
-**如果分析完成（status: AAF_READY_FOR_REVIEW）：**
+**如果分析完成（status: CAFE_READY_FOR_REVIEW）：**
 使用 Edit tool 更新 {plan_file_path} 中需要修改的段落，確保實作計畫符合使用者的要求。
 """
 
@@ -391,7 +391,7 @@ class PlanPhase(Phase):
         
         for line in lines:
             # Skip status code lines
-            if line.strip().startswith("AAF_"):
+            if line.strip().startswith("CAFE_"):
                 continue
             content_lines.append(line)
         
@@ -470,7 +470,7 @@ class PlanPhase(Phase):
         prev_status = prev_data.get("status_code", "")
 
         # 根據上一輪狀態，取得用戶輸入
-        if prev_status == "AAF_READY_FOR_REVIEW":
+        if prev_status == "CAFE_READY_FOR_REVIEW":
             # 需要用戶選擇：confirm/reject/modify
             if self.interactive:
                 choice = self._ask_user_for_review_decision("實作計畫")
@@ -487,7 +487,7 @@ class PlanPhase(Phase):
                         data={
                             "iterations": self.iteration - 1,
                             "last_response": prev_data.get("response", ""),
-                            "status_code": "AAF_READY_FOR_REVIEW",
+                            "status_code": "CAFE_READY_FOR_REVIEW",
                         },
                     )
 
@@ -499,7 +499,7 @@ class PlanPhase(Phase):
                 {"dev_agent": self.dev_agent},
             )
 
-        elif prev_status == "AAF_NEED_CLARIFICATION":
+        elif prev_status == "CAFE_NEED_CLARIFICATION":
             return self._handle_need_clarification_input(prev_data, agent_display_name="開發者")
         else:
             return ""

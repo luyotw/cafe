@@ -5,9 +5,9 @@ from pathlib import Path
 from typer.testing import CliRunner
 from unittest.mock import MagicMock, Mock, patch
 
-from aaf.ui.cli import app, _setup_agents, _build_workflow
-from aaf.core.types import AgentCLI, PhaseResult, PhaseStatus, WorkflowMode
-from aaf.utils.config import ConfigManager
+from cafe.ui.cli import app, _setup_agents, _build_workflow
+from cafe.core.types import AgentCLI, PhaseResult, PhaseStatus, WorkflowMode
+from cafe.utils.config import ConfigManager
 
 
 runner = CliRunner()
@@ -60,11 +60,11 @@ class TestSetupAgents:
 class TestBuildWorkflow:
     """Test workflow building functionality."""
 
-    @patch("aaf.ui.cli.SpecPhase")
-    @patch("aaf.ui.cli.PlanPhase")
-    @patch("aaf.ui.cli.DevelopPhase")
-    @patch("aaf.ui.cli.ReviewPhase")
-    @patch("aaf.ui.cli.PRPhase")
+    @patch("cafe.ui.cli.SpecPhase")
+    @patch("cafe.ui.cli.PlanPhase")
+    @patch("cafe.ui.cli.DevelopPhase")
+    @patch("cafe.ui.cli.ReviewPhase")
+    @patch("cafe.ui.cli.PRPhase")
     def test_build_workflow_creates_all_phases(
         self,
         mock_pr: Mock,
@@ -99,7 +99,7 @@ class TestBuildWorkflow:
         # 驗證 workflow 有 5 個 phases
         assert len(workflow.phases) == 5
 
-    @patch("aaf.ui.cli.SpecPhase")
+    @patch("cafe.ui.cli.SpecPhase")
     def test_build_workflow_passes_correct_mode(
         self,
         mock_req: Mock,
@@ -136,7 +136,7 @@ class TestRunCommand:
         req_file.write_text("Test requirements")
         config_file = tmp_path / "config.yaml"
 
-        with patch("aaf.ui.cli._build_workflow") as mock_build:
+        with patch("cafe.ui.cli._build_workflow") as mock_build:
             # Mock workflow execution
             mock_workflow = MagicMock()
             mock_workflow.execute.return_value = [
@@ -156,7 +156,7 @@ class TestRunCommand:
             )
 
             assert result.exit_code == 0
-            assert "Starting AAF workflow" in result.stdout
+            assert "Starting CAFE workflow" in result.stdout
             assert "Mode: local" in result.stdout
 
     def test_run_github_mode_without_issue_fails(self, tmp_path: Path) -> None:
@@ -214,7 +214,7 @@ class TestRunCommand:
         req_file.write_text("Test requirements")
         config_file = tmp_path / "config.yaml"
 
-        with patch("aaf.ui.cli._build_workflow") as mock_build:
+        with patch("cafe.ui.cli._build_workflow") as mock_build:
             mock_workflow = MagicMock()
             mock_workflow.execute.return_value = [
                 PhaseResult(status=PhaseStatus.COMPLETED, message="Done"),
@@ -257,7 +257,7 @@ class TestConfigCommand:
         old_cwd = os.getcwd()
         try:
             os.chdir(tmp_path)
-            # Now ConfigManager will use .aaf in current directory
+            # Now ConfigManager will use .cafe in current directory
             config_manager = ConfigManager()
             config_manager.set("test.key", "value")  # set() already calls save_config()
 
@@ -339,8 +339,8 @@ class TestConfigCommand:
 class TestPlanCommand:
     """Test plan command."""
 
-    @patch("aaf.ui.cli.select_template")
-    @patch("aaf.ui.cli.PlanPhase")
+    @patch("cafe.ui.cli.select_template")
+    @patch("cafe.ui.cli.PlanPhase")
     def test_plan_local_mode_success(
         self,
         mock_plan_phase: Mock,
@@ -350,12 +350,12 @@ class TestPlanCommand:
         """測試 plan 指令 local mode 成功執行"""
         # Setup: Create spec file in the expected location
         issue_name = "test-issue"
-        spec_file = tmp_path / ".aaf" / "issues" / issue_name / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Spec\n\n## 開發指南\nGuide")
 
         # Create a default template
-        template_dir = tmp_path / ".aaf" / "templates" / "plan"
+        template_dir = tmp_path / ".cafe" / "templates" / "plan"
         template_dir.mkdir(parents=True, exist_ok=True)
         (template_dir / "default.md").write_text("# Plan Template")
 
@@ -386,8 +386,8 @@ class TestPlanCommand:
         assert "Iterations: 2" in result.stdout
         mock_plan_phase.assert_called_once()
 
-    @patch("aaf.ui.cli.select_template")
-    @patch("aaf.ui.cli.PlanPhase")
+    @patch("cafe.ui.cli.select_template")
+    @patch("cafe.ui.cli.PlanPhase")
     def test_plan_github_mode_with_issue(
         self,
         mock_plan_phase: Mock,
@@ -397,12 +397,12 @@ class TestPlanCommand:
         """測試 plan 指令 github mode 使用 issue ID"""
         # Setup: GitHub mode still checks if spec file exists first
         issue_name = "test-issue"
-        spec_file = tmp_path / ".aaf" / "issues" / issue_name / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Spec\n\n## 開發指南\nGuide")
 
         # Create a default template
-        template_dir = tmp_path / ".aaf" / "templates" / "plan"
+        template_dir = tmp_path / ".cafe" / "templates" / "plan"
         template_dir.mkdir(parents=True, exist_ok=True)
         (template_dir / "default.md").write_text("# Plan Template")
 
@@ -432,8 +432,8 @@ class TestPlanCommand:
         assert "GitHub Issue: #123" in result.stdout
         mock_plan_phase.assert_called_once()
 
-    @patch("aaf.ui.cli.select_template")
-    @patch("aaf.ui.cli.PlanPhase")
+    @patch("cafe.ui.cli.select_template")
+    @patch("cafe.ui.cli.PlanPhase")
     def test_plan_fails_with_error(
         self,
         mock_plan_phase: Mock,
@@ -443,12 +443,12 @@ class TestPlanCommand:
         """測試 plan 指令執行失敗"""
         # Setup: Create spec file in the expected location
         issue_name = "test-issue"
-        spec_file = tmp_path / ".aaf" / "issues" / issue_name / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Spec")
 
         # Create a default template
-        template_dir = tmp_path / ".aaf" / "templates" / "plan"
+        template_dir = tmp_path / ".cafe" / "templates" / "plan"
         template_dir.mkdir(parents=True, exist_ok=True)
         (template_dir / "default.md").write_text("# Plan Template")
 

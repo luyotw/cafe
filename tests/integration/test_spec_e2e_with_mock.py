@@ -1,6 +1,6 @@
-"""E2E tests for 'aaf spec' command with mock agents.
+"""E2E tests for 'cafe spec' command with mock agents.
 
-使用 subprocess.run() 測試實際 CLI 命令執行，但用 AAF_MOCK_AGENTS=true 避免真實 LLM 呼叫。
+使用 subprocess.run() 測試實際 CLI 命令執行，但用 CAFE_MOCK_AGENTS=true 避免真實 LLM 呼叫。
 """
 
 import subprocess
@@ -10,11 +10,11 @@ from pathlib import Path
 import pytest
 
 
-def run_aaf_spec(tmp_path: Path, issue_name: str, mock_response: str, user_input: str = None, extra_args: list = None):
-    """Helper function to run aaf spec command with mock"""
-    # Use installed aaf command or fall back to local script
-    aaf_cmd = "aaf" if subprocess.run(["which", "aaf"], capture_output=True).returncode == 0 else "./aaf"
-    args = [aaf_cmd, "spec", issue_name, "--no-interactive"]
+def run_cafe_spec(tmp_path: Path, issue_name: str, mock_response: str, user_input: str = None, extra_args: list = None):
+    """Helper function to run cafe spec command with mock"""
+    # Use installed cafe command or fall back to local script
+    cafe_cmd = "cafe" if subprocess.run(["which", "cafe"], capture_output=True).returncode == 0 else "./cafe"
+    args = [cafe_cmd, "spec", issue_name, "--no-interactive"]
     
     # Add user input as CLI argument
     if user_input:
@@ -24,9 +24,9 @@ def run_aaf_spec(tmp_path: Path, issue_name: str, mock_response: str, user_input
         args.extend(extra_args)
     
     env = os.environ.copy()
-    env["AAF_MOCK_AGENTS"] = "true"
+    env["CAFE_MOCK_AGENTS"] = "true"
     if mock_response:
-        env["AAF_MOCK_RESPONSE"] = mock_response
+        env["CAFE_MOCK_RESPONSE"] = mock_response
     
     return subprocess.run(
         args,
@@ -46,7 +46,7 @@ class TestSpecE2EMockStatusCodes:
         issue_name = "test-issue"
         user_input = "我想要一個登入功能"
         
-        result = run_aaf_spec(tmp_path, issue_name, "AAF_INVALID_CODE\n\n# 登入功能需求", user_input)
+        result = run_cafe_spec(tmp_path, issue_name, "CAFE_INVALID_CODE\n\n# 登入功能需求", user_input)
         
         assert result.returncode != 0
         output = result.stdout + result.stderr
@@ -57,7 +57,7 @@ class TestSpecE2EMockStatusCodes:
         issue_name = "test-issue"
         user_input = "我想要一個登入功能"
         
-        result = run_aaf_spec(tmp_path, issue_name, "# 登入功能需求\n\n沒有狀態碼的內容", user_input)
+        result = run_cafe_spec(tmp_path, issue_name, "# 登入功能需求\n\n沒有狀態碼的內容", user_input)
         
         assert result.returncode != 0
         output = result.stdout + result.stderr
@@ -68,7 +68,7 @@ class TestSpecE2EMockStatusCodes:
         issue_name = "test-issue"
         user_input = "我想要一個登入功能"
         
-        result = run_aaf_spec(tmp_path, issue_name, "", user_input)
+        result = run_cafe_spec(tmp_path, issue_name, "", user_input)
         
         # MockAgentExecutor treats empty response as valid and generates mock content
         # This test documents current behavior - empty mock response still succeeds
@@ -91,7 +91,7 @@ class TestSpecE2EMockUserInputErrors:
         issue_name = "test-issue"
         
         # Don't provide user_input (None)
-        result = run_aaf_spec(tmp_path, issue_name, "AAF_CONFIRMED\n\n# 需求", user_input=None)
+        result = run_cafe_spec(tmp_path, issue_name, "CAFE_CONFIRMED\n\n# 需求", user_input=None)
         
         assert result.returncode != 0
         output = result.stdout + result.stderr
@@ -102,7 +102,7 @@ class TestSpecE2EMockUserInputErrors:
         issue_name = "test-issue"
         
         # Empty string is treated as "no user input" by CLI parser
-        result = run_aaf_spec(tmp_path, issue_name, "AAF_CONFIRMED\n\n# 需求", user_input="")
+        result = run_cafe_spec(tmp_path, issue_name, "CAFE_CONFIRMED\n\n# 需求", user_input="")
         
         assert result.returncode != 0
         output = result.stdout + result.stderr
@@ -119,19 +119,19 @@ class TestSpecE2EMockContentValidation:
         issue_name = "test-issue"
         user_input = "我想要一個登入功能"
         
-        result = run_aaf_spec(
+        result = run_cafe_spec(
             tmp_path, issue_name,
-            "AAF_CONFIRMED\n\n# 登入功能需求規格\n\n這是測試需求。",
+            "CAFE_CONFIRMED\n\n# 登入功能需求規格\n\n這是測試需求。",
             user_input
         )
         
         assert result.returncode == 0
         
-        spec_file = tmp_path / ".aaf" / "issues" / issue_name / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
         assert spec_file.exists()
         
         content = spec_file.read_text()
-        assert "AAF_CONFIRMED" not in content
+        assert "CAFE_CONFIRMED" not in content
         assert "登入功能需求規格" in content
         assert "測試需求" in content
 
@@ -140,15 +140,15 @@ class TestSpecE2EMockContentValidation:
         issue_name = "test-issue"
         user_input = "我想要一個功能"
         
-        result = run_aaf_spec(
+        result = run_cafe_spec(
             tmp_path, issue_name,
-            "AAF_CONFIRMED\n\n# 測試需求",
+            "CAFE_CONFIRMED\n\n# 測試需求",
             user_input
         )
         
         assert result.returncode == 0
         
-        spec_file = tmp_path / ".aaf" / "issues" / issue_name / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
         assert spec_file.exists()
         assert spec_file.is_file()
 
@@ -157,15 +157,15 @@ class TestSpecE2EMockContentValidation:
         issue_name = "test-issue"
         user_input = "我想要一個功能"
         
-        result = run_aaf_spec(
+        result = run_cafe_spec(
             tmp_path, issue_name,
-            "AAF_CONFIRMED\n\n# 功能需求\n\n## 目標\n內容",
+            "CAFE_CONFIRMED\n\n# 功能需求\n\n## 目標\n內容",
             user_input
         )
         
         assert result.returncode == 0
         
-        spec_file = tmp_path / ".aaf" / "issues" / issue_name / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
         content = spec_file.read_text()
         
         assert content.startswith("#")

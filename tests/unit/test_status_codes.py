@@ -2,7 +2,7 @@
 
 import pytest
 
-from aaf.core.status_codes import (
+from cafe.core.status_codes import (
     PhaseStatusCode,
     StatusCodeParser,
     generate_status_code_prompt,
@@ -14,7 +14,7 @@ class TestStatusCodeParser:
 
     def test_extract_from_first_line(self) -> None:
         """測試從第一行提取狀態碼"""
-        response = "AAF_CONFIRMED\n需求已經很清楚了。"
+        response = "CAFE_CONFIRMED\n需求已經很清楚了。"
 
         code = StatusCodeParser.extract(response)
 
@@ -22,7 +22,7 @@ class TestStatusCodeParser:
 
     def test_extract_case_insensitive(self) -> None:
         """測試大小寫不敏感"""
-        response = "aaf_confirmed\n需求已經很清楚了。"
+        response = "cafe_confirmed\n需求已經很清楚了。"
 
         code = StatusCodeParser.extract(response)
 
@@ -30,7 +30,7 @@ class TestStatusCodeParser:
 
     def test_extract_from_middle_of_text(self) -> None:
         """測試從文本中間提取狀態碼"""
-        response = "我仔細審查過需求，確認沒問題。AAF_CONFIRMED！"
+        response = "我仔細審查過需求，確認沒問題。CAFE_CONFIRMED！"
 
         code = StatusCodeParser.extract(response)
 
@@ -38,7 +38,7 @@ class TestStatusCodeParser:
 
     def test_extract_with_valid_codes_filter(self) -> None:
         """測試使用 valid_codes 過濾"""
-        response = "AAF_CONFIRMED"
+        response = "CAFE_CONFIRMED"
         valid_codes = [
             PhaseStatusCode.NEED_CLARIFICATION,
             PhaseStatusCode.CONFIRMED,
@@ -50,7 +50,7 @@ class TestStatusCodeParser:
 
     def test_extract_with_valid_codes_filter_rejects_invalid(self) -> None:
         """測試 valid_codes 會拒絕不在清單中的狀態碼"""
-        response = "AAF_LGTM"
+        response = "CAFE_LGTM"
         valid_codes = [
             PhaseStatusCode.CONFIRMED,
             PhaseStatusCode.NEED_CLARIFICATION,
@@ -77,7 +77,7 @@ class TestStatusCodeParser:
 
     def test_extract_with_prefix_on_first_line(self) -> None:
         """測試第一行有前綴符號時仍能正確提取"""
-        response = "● AAF_NEEDS_CHANGES\n\n修正建議"
+        response = "● CAFE_NEEDS_CHANGES\n\n修正建議"
 
         code = StatusCodeParser.extract(response)
 
@@ -85,11 +85,11 @@ class TestStatusCodeParser:
 
     def test_extract_first_line_code_takes_priority_over_later_mentions(self) -> None:
         """測試第一行的狀態碼優先於後續出現的狀態碼"""
-        response = """● AAF_NEEDS_CHANGES
+        response = """● CAFE_NEEDS_CHANGES
 
 ## Code Review Feedback
 
-文中提到 AAF_CONFIRMED 作為範例。
+文中提到 CAFE_CONFIRMED 作為範例。
 """
         valid_codes = [PhaseStatusCode.CONFIRMED, PhaseStatusCode.NEEDS_CHANGES]
 
@@ -100,7 +100,7 @@ class TestStatusCodeParser:
 
     def test_extract_multiple_codes_returns_first_valid(self) -> None:
         """測試多個狀態碼時回傳第一個有效的"""
-        response = "AAF_CONFIRMED\n但是可能需要 AAF_RETRY"
+        response = "CAFE_CONFIRMED\n但是可能需要 CAFE_RETRY"
 
         code = StatusCodeParser.extract(response)
 
@@ -109,7 +109,7 @@ class TestStatusCodeParser:
 
     def test_extract_with_whitespace(self) -> None:
         """測試處理空白字元"""
-        response = "  AAF_CONFIRMED  \n需求清楚。"
+        response = "  CAFE_CONFIRMED  \n需求清楚。"
 
         code = StatusCodeParser.extract(response)
 
@@ -117,12 +117,12 @@ class TestStatusCodeParser:
 
     def test_extract_avoids_false_positive_in_content(self) -> None:
         """測試避免內容中的單字誤判為狀態碼"""
-        # 如果沒有 AAF_ 前綴，"CONFIRMED" 這個單字會被誤判
+        # 如果沒有 CAFE_ 前綴，"CONFIRMED" 這個單字會被誤判
         response = "The user has CONFIRMED that the feature is working correctly."
 
         code = StatusCodeParser.extract(response)
 
-        # 應該找不到狀態碼（因為需要 AAF_CONFIRMED 格式）
+        # 應該找不到狀態碼（因為需要 CAFE_CONFIRMED 格式）
         assert code is None
 
 
@@ -179,8 +179,8 @@ class TestGenerateStatusCodePrompt:
 
         prompt = generate_status_code_prompt(codes, descriptions)
 
-        assert "AAF_CONFIRMED" in prompt
-        assert "AAF_NEED_CLARIFICATION" in prompt
+        assert "CAFE_CONFIRMED" in prompt
+        assert "CAFE_NEED_CLARIFICATION" in prompt
         assert "需求已確認" in prompt
         assert "需要更多資訊" in prompt
         assert "範例回應格式" in prompt
@@ -232,26 +232,26 @@ class TestPhaseStatusCodeEnum:
         """測試所有狀態碼都是大寫"""
         for code in PhaseStatusCode:
             assert code.value == code.value.upper()
-            # Check format: AAF_CODE_NAME
-            assert code.value.startswith("AAF_")
+            # Check format: CAFE_CODE_NAME
+            assert code.value.startswith("CAFE_")
             # Name part should only contain letters and underscores
             assert all(c.isalpha() or c == '_' for c in code.value)
 
     def test_code_values_are_simple_english(self) -> None:
         """測試狀態碼都是簡單的英文"""
         for code in PhaseStatusCode:
-            # 格式為 AAF_CODE_NAME
-            assert code.value.startswith("AAF_")
+            # 格式為 CAFE_CODE_NAME
+            assert code.value.startswith("CAFE_")
             # 去掉前綴後只包含字母和底線
-            name_part = code.value[4:]  # Remove "AAF_"
+            name_part = code.value[4:]  # Remove "CAFE_"
             assert all(c.isalpha() or c == '_' for c in name_part)
             # 不會太長（節省 token）
-            assert len(code.value) <= 29  # AAF_ (4) + 25
+            assert len(code.value) <= 29  # CAFE_ (4) + 25
 
     def test_enum_can_be_converted_to_string(self) -> None:
         """測試 enum 可以轉成字串"""
         code = PhaseStatusCode.CONFIRMED
 
         # str(enum) returns the full name, use .value for just the value
-        assert code.value == "AAF_CONFIRMED"
+        assert code.value == "CAFE_CONFIRMED"
         assert isinstance(code, str)  # PhaseStatusCode inherits from str

@@ -4,8 +4,8 @@ import json
 import pytest
 from pathlib import Path
 from datetime import datetime
-from aaf.core.session import SessionManager
-from aaf.core.types import AgentConfig, AgentCLI, SessionData
+from cafe.core.session import SessionManager
+from cafe.core.types import AgentConfig, AgentCLI, SessionData
 
 
 class TestSessionManager:
@@ -35,8 +35,8 @@ class TestSessionManager:
 
         session_file = manager.get_session_file("David", AgentCLI.CLAUDE, "myip")
 
-        # Issue-specific sessions 應該在 .aaf/issues/{issue_name}/sessions/
-        expected_path = Path(".aaf/issues") / "myip" / "sessions" / "David_claude.json"
+        # Issue-specific sessions 應該在 .cafe/issues/{issue_name}/sessions/
+        expected_path = Path(".cafe/issues") / "myip" / "sessions" / "David_claude.json"
         assert session_file == expected_path
 
     def test_load_session_returns_none_when_file_not_exists(self, tmp_path: Path) -> None:

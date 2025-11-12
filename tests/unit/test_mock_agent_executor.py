@@ -1,8 +1,8 @@
 """Tests for MockAgentExecutor."""
 
 import pytest
-from aaf.agents.mock_executor import MockAgentExecutor
-from aaf.core.types import AgentConfig, AgentCLI, TokenUsage
+from cafe.agents.mock_executor import MockAgentExecutor
+from cafe.core.types import AgentConfig, AgentCLI, TokenUsage
 
 
 class TestMockAgentExecutor:

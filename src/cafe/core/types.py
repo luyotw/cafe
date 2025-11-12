@@ -1,4 +1,4 @@
-"""Core type definitions for AAF."""
+"""Core type definitions for CAFE."""
 
 from datetime import datetime
 from enum import Enum
@@ -99,8 +99,8 @@ class SessionConfig(BaseModel):
     workflow_mode: WorkflowMode
     issue_id: Optional[str] = None
     spec_file: Optional[str] = None
-    sessions_dir: str = ".aaf/sessions"
-    issue_dir: str = ".aaf/issues"
+    sessions_dir: str = ".cafe/sessions"
+    issue_dir: str = ".cafe/issues"
 
 
 class PhaseProgress(BaseModel):

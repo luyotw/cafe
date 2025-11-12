@@ -1,4 +1,4 @@
-"""Git operations for AAF."""
+"""Git operations for CAFE."""
 
 import subprocess
 from pathlib import Path

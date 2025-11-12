@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch, mock_open
 
 import pytest
 
-from aaf.utils.git_utils import rewrite_commit_message
+from cafe.utils.git_utils import rewrite_commit_message
 
 
 class TestRewriteCommitMessage:
@@ -15,7 +15,7 @@ class TestRewriteCommitMessage:
     def test_rewrite_commit_message_success(self, tmp_path):
         """測試成功修改 commit message"""
         # Mock subprocess.run
-        with patch('aaf.utils.git_utils.subprocess.run') as mock_run:
+        with patch('cafe.utils.git_utils.subprocess.run') as mock_run:
             # 設定 rebase 成功
             mock_run.return_value = MagicMock(returncode=0, stderr='', stdout='')
             
@@ -33,7 +33,7 @@ class TestRewriteCommitMessage:
 
     def test_rewrite_commit_message_with_custom_base_branch(self, tmp_path):
         """測試使用自訂 base branch"""
-        with patch('aaf.utils.git_utils.subprocess.run') as mock_run:
+        with patch('cafe.utils.git_utils.subprocess.run') as mock_run:
             mock_run.return_value = MagicMock(returncode=0, stderr='', stdout='')
             
             success, msg = rewrite_commit_message("abc123", "fix: new", base_branch="develop")
@@ -46,7 +46,7 @@ class TestRewriteCommitMessage:
 
     def test_rewrite_commit_message_rebase_fails(self, tmp_path):
         """測試 rebase 失敗的情況"""
-        with patch('aaf.utils.git_utils.subprocess.run') as mock_run:
+        with patch('cafe.utils.git_utils.subprocess.run') as mock_run:
             # 第一次呼叫 (rebase) 失敗
             # 第二次呼叫 (rebase --abort) 成功
             mock_run.side_effect = [
@@ -68,7 +68,7 @@ class TestRewriteCommitMessage:
 
     def test_rewrite_commit_message_creates_temp_file(self, tmp_path):
         """測試有建立暫存檔"""
-        with patch('aaf.utils.git_utils.subprocess.run') as mock_run:
+        with patch('cafe.utils.git_utils.subprocess.run') as mock_run:
             mock_run.return_value = MagicMock(returncode=0, stderr='', stdout='')
             
             with patch('tempfile.NamedTemporaryFile') as mock_temp:
@@ -89,7 +89,7 @@ class TestRewriteCommitMessage:
 
     def test_rewrite_commit_message_exception_handling(self):
         """測試異常處理"""
-        with patch('aaf.utils.git_utils.subprocess.run') as mock_run:
+        with patch('cafe.utils.git_utils.subprocess.run') as mock_run:
             # 拋出異常
             mock_run.side_effect = Exception("Git command failed")
             
@@ -101,7 +101,7 @@ class TestRewriteCommitMessage:
 
     def test_rewrite_commit_message_exec_command_format(self):
         """測試 exec 指令格式正確"""
-        with patch('aaf.utils.git_utils.subprocess.run') as mock_run:
+        with patch('cafe.utils.git_utils.subprocess.run') as mock_run:
             mock_run.return_value = MagicMock(returncode=0, stderr='', stdout='')
             
             with patch('tempfile.NamedTemporaryFile') as mock_temp:
@@ -126,7 +126,7 @@ class TestRewriteCommitMessage:
 
     def test_rewrite_commit_message_short_sha_in_result(self):
         """測試結果訊息包含短 SHA (前7碼)"""
-        with patch('aaf.utils.git_utils.subprocess.run') as mock_run:
+        with patch('cafe.utils.git_utils.subprocess.run') as mock_run:
             mock_run.return_value = MagicMock(returncode=0, stderr='', stdout='')
             
             success, msg = rewrite_commit_message("abcdef1234567890", "fix: message")

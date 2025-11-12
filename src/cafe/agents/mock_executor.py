@@ -2,7 +2,7 @@
 
 from typing import Callable, List, Optional, Tuple
 
-from aaf.core.types import AgentConfig, TokenUsage
+from cafe.core.types import AgentConfig, TokenUsage
 
 
 class MockAgentExecutor:
@@ -24,14 +24,14 @@ class MockAgentExecutor:
     def __init__(
         self,
         config: AgentConfig,
-        response: str = "AAF_CONFIRMED\n\n# Mock Response\n\nThis is a mock response.",
+        response: str = "CAFE_CONFIRMED\n\n# Mock Response\n\nThis is a mock response.",
         token_usage: Optional[TokenUsage] = None,
     ):
         """Initialize mock executor.
         
         Args:
             config: Agent configuration
-            response: Predefined response (default: AAF_CONFIRMED with mock content)
+            response: Predefined response (default: CAFE_CONFIRMED with mock content)
             token_usage: Predefined token usage (default: empty)
         """
         self.config = config

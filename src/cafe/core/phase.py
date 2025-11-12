@@ -6,14 +6,14 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from aaf.core.status_codes import PhaseStatusCode
-from aaf.core.types import PhaseProgress, PhaseResult, PhaseStatus
+from cafe.core.status_codes import PhaseStatusCode
+from cafe.core.types import PhaseProgress, PhaseResult, PhaseStatus
 
 
 class Phase(ABC):
     """Abstract base class for all workflow phases.
 
-    Each phase represents a step in the AAF workflow (e.g., requirements clarification,
+    Each phase represents a step in the CAFE workflow (e.g., requirements clarification,
     implementation analysis, development, code review, etc.).
 
     Subclasses must implement the execute() method to define the phase's behavior.
@@ -319,7 +319,7 @@ class Phase(ABC):
             return response, no_response_status
 
         # 6. 提取 status code
-        from aaf.core.status_codes import StatusCodeParser
+        from cafe.core.status_codes import StatusCodeParser
         status_code = StatusCodeParser.extract(
             response,
             valid_codes=valid_status_codes,
@@ -355,7 +355,7 @@ class Phase(ABC):
         if hasattr(self, 'display'):
             display = self.display  # type: ignore
         else:
-            from aaf.ui.display import Display
+            from cafe.ui.display import Display
             display = Display()
 
         print(f"開發者認為{item_name}已完成。請確認：")
@@ -395,7 +395,7 @@ class Phase(ABC):
         if hasattr(self, 'display'):
             display = self.display  # type: ignore
         else:
-            from aaf.ui.display import Display
+            from cafe.ui.display import Display
             display = Display()
 
         return display.get_multiline_input("請回答問題")
@@ -514,7 +514,7 @@ class Phase(ABC):
         with open(status_file, 'r', encoding='utf-8') as f:
             data = json.load(f)
 
-        from aaf.core.types import PhaseProgress
+        from cafe.core.types import PhaseProgress
         return PhaseProgress.from_dict(data)
 
     def _print_token_usage_summary(self) -> None:
@@ -587,7 +587,7 @@ class Phase(ABC):
                     data={
                         "iterations": self.iteration - 1,
                         "last_response": prev_data.get("response", ""),
-                        "status_code": "AAF_NEED_CLARIFICATION",
+                        "status_code": "CAFE_NEED_CLARIFICATION",
                     },
                 )
 

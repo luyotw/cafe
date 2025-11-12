@@ -7,7 +7,7 @@ from unittest.mock import patch
 import pytest
 from typer.testing import CliRunner
 
-from aaf.ui.cli import app
+from cafe.ui.cli import app
 
 runner = CliRunner()
 
@@ -15,7 +15,7 @@ runner = CliRunner()
 @pytest.fixture
 def temp_issues_dir(tmp_path, monkeypatch):
     """Create a temporary issues directory."""
-    issues_dir = tmp_path / ".aaf" / "issues"
+    issues_dir = tmp_path / ".cafe" / "issues"
     issues_dir.mkdir(parents=True)
 
     # Change to temp directory

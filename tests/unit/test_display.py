@@ -4,7 +4,7 @@ import pytest
 from io import StringIO
 from unittest.mock import MagicMock, patch
 
-from aaf.ui.display import Display
+from cafe.ui.display import Display
 
 
 class TestDisplayBasics:
@@ -35,7 +35,7 @@ class TestMultilineInput:
         """測試基本多行輸入"""
         display = Display()
 
-        with patch('aaf.ui.display.pt_prompt', return_value="Line 1\nLine 2"):
+        with patch('cafe.ui.display.pt_prompt', return_value="Line 1\nLine 2"):
             result = display.get_multiline_input("Enter text:")
 
         assert result == "Line 1\nLine 2"
@@ -44,7 +44,7 @@ class TestMultilineInput:
         """測試中文多行輸入"""
         display = Display()
 
-        with patch('aaf.ui.display.pt_prompt', return_value="你好世界\n測試中文"):
+        with patch('cafe.ui.display.pt_prompt', return_value="你好世界\n測試中文"):
             result = display.get_multiline_input("輸入文字:")
 
         assert result == "你好世界\n測試中文"
@@ -53,7 +53,7 @@ class TestMultilineInput:
         """測試包含空行的輸入"""
         display = Display()
 
-        with patch('aaf.ui.display.pt_prompt', return_value="Line 1\n\nLine 3"):
+        with patch('cafe.ui.display.pt_prompt', return_value="Line 1\n\nLine 3"):
             result = display.get_multiline_input("Enter text:")
 
         assert result == "Line 1\n\nLine 3"
@@ -62,7 +62,7 @@ class TestMultilineInput:
         """測試不需要 END marker"""
         display = Display()
 
-        with patch('aaf.ui.display.pt_prompt', return_value="Line 1"):
+        with patch('cafe.ui.display.pt_prompt', return_value="Line 1"):
             result = display.get_multiline_input("Enter text:")
 
         assert result == "Line 1"
@@ -71,7 +71,7 @@ class TestMultilineInput:
         """測試 EOF 處理"""
         display = Display()
 
-        with patch('aaf.ui.display.pt_prompt', side_effect=EOFError()):
+        with patch('cafe.ui.display.pt_prompt', side_effect=EOFError()):
             try:
                 result = display.get_multiline_input("Enter text:")
                 assert False, "Should have raised EOFError"

@@ -4,11 +4,11 @@ import pytest
 from pathlib import Path
 from unittest.mock import MagicMock, patch, call
 
-from aaf.phases.pr_phase import PRPhase
-from aaf.agents.manager import AgentManager
-from aaf.core.git import GitOperations
-from aaf.core.types import PhaseResult, PhaseStatus, WorkflowMode
-from aaf.core.permission import PermissionHandler
+from cafe.phases.pr_phase import PRPhase
+from cafe.agents.manager import AgentManager
+from cafe.core.git import GitOperations
+from cafe.core.types import PhaseResult, PhaseStatus, WorkflowMode
+from cafe.core.permission import PermissionHandler
 
 
 class TestPRPhaseBasics:

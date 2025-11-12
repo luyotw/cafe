@@ -3,10 +3,10 @@
 import pytest
 from unittest.mock import MagicMock, patch
 
-from aaf.agents.manager import AgentManager, AgentNotFoundError
-from aaf.agents.executor import AgentExecutor
-from aaf.core.types import AgentConfig, AgentCLI
-from aaf.core.session import SessionManager
+from cafe.agents.manager import AgentManager, AgentNotFoundError
+from cafe.agents.executor import AgentExecutor
+from cafe.core.types import AgentConfig, AgentCLI
+from cafe.core.session import SessionManager
 
 
 class TestAgentManagerBasics:
@@ -129,7 +129,7 @@ class TestAgentExecution:
         manager.register_agent(config)
 
         with patch.object(AgentExecutor, "execute") as mock_execute:
-            from aaf.core.types import TokenUsage
+            from cafe.core.types import TokenUsage
             mock_execute.return_value = ("Agent response", TokenUsage())
 
             response, token_usage = manager.execute("David", "Test prompt")
@@ -144,7 +144,7 @@ class TestAgentExecution:
         manager.register_agent(config)
 
         with patch.object(AgentExecutor, "execute") as mock_execute:
-            from aaf.core.types import TokenUsage
+            from cafe.core.types import TokenUsage
             expected_token_usage = TokenUsage(input_tokens=100, output_tokens=50)
             mock_execute.return_value = ("Agent response", expected_token_usage)
 
@@ -166,7 +166,7 @@ class TestAgentExecution:
         manager.switch_agent("Roger")
 
         with patch.object(AgentExecutor, "execute") as mock_execute:
-            from aaf.core.types import TokenUsage
+            from cafe.core.types import TokenUsage
             mock_execute.return_value = ("Current agent response", TokenUsage())
 
             response = manager.execute_current("Test prompt")
@@ -186,7 +186,7 @@ class TestSessionManagement:
 
     def test_resume_existing_session(self) -> None:
         """測試恢復現有 session"""
-        from aaf.core.types import SessionData
+        from cafe.core.types import SessionData
         from datetime import datetime
 
         session_mgr = MagicMock(spec=SessionManager)

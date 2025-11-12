@@ -7,33 +7,33 @@ import os
 import pytest
 from pathlib import Path
 
-from aaf.agents.manager import AgentManager
-from aaf.core.permission import PermissionHandler
-from aaf.core.status_codes import PhaseStatusCode
-from aaf.core.types import AgentConfig, AgentCLI, PhaseStatus, WorkflowMode
-from aaf.phases.plan_phase import PlanPhase
+from cafe.agents.manager import AgentManager
+from cafe.core.permission import PermissionHandler
+from cafe.core.status_codes import PhaseStatusCode
+from cafe.core.types import AgentConfig, AgentCLI, PhaseStatus, WorkflowMode
+from cafe.phases.plan_phase import PlanPhase
 
 
 @pytest.fixture
 def mock_env(monkeypatch):
     """啟用 mock agent mode"""
-    monkeypatch.setenv("AAF_MOCK_AGENTS", "true")
+    monkeypatch.setenv("CAFE_MOCK_AGENTS", "true")
 
 
 @pytest.fixture
 def setup_plan_phase(tmp_path, monkeypatch):
     """設置 plan phase 測試環境"""
     # 創建必要的目錄結構
-    plan_dir = tmp_path / ".aaf" / "issues" / "test" / "plan"
+    plan_dir = tmp_path / ".cafe" / "issues" / "test" / "plan"
     plan_dir.mkdir(parents=True)
     
-    spec_dir = tmp_path / ".aaf" / "issues" / "test" / "spec"
+    spec_dir = tmp_path / ".cafe" / "issues" / "test" / "spec"
     spec_dir.mkdir(parents=True)
     spec_file = spec_dir / "spec.md"
     spec_file.write_text("# 測試需求\n\n這是測試內容。")
     
     # 創建 template
-    template_dir = tmp_path / ".aaf" / "templates" / "plan"
+    template_dir = tmp_path / ".cafe" / "templates" / "plan"
     template_dir.mkdir(parents=True)
     template_file = template_dir / "default.md"
     template_file.write_text("# 實作計畫\n\n## 概要\n{summary}")
@@ -59,8 +59,8 @@ class TestNonInteractiveModeWithNeedClarification:
         setup = setup_plan_phase
         
         monkeypatch.setenv(
-            "AAF_MOCK_RESPONSE",
-            "AAF_NEED_CLARIFICATION\n\n請確認技術選型是否正確？"
+            "CAFE_MOCK_RESPONSE",
+            "CAFE_NEED_CLARIFICATION\n\n請確認技術選型是否正確？"
         )
         
         agent_manager = AgentManager()
@@ -96,8 +96,8 @@ class TestNonInteractiveModeWithNeedClarification:
         setup = setup_plan_phase
         
         monkeypatch.setenv(
-            "AAF_MOCK_RESPONSE",
-            "AAF_NEED_CLARIFICATION\n\n請確認技術選型是否正確？"
+            "CAFE_MOCK_RESPONSE",
+            "CAFE_NEED_CLARIFICATION\n\n請確認技術選型是否正確？"
         )
         
         agent_manager = AgentManager()
@@ -138,8 +138,8 @@ class TestNonInteractiveModeCompleteImmediately:
         setup = setup_plan_phase
         
         monkeypatch.setenv(
-            "AAF_MOCK_RESPONSE",
-            "AAF_READY_FOR_REVIEW\n\n# 實作計畫\n\n完整的計畫內容。"
+            "CAFE_MOCK_RESPONSE",
+            "CAFE_READY_FOR_REVIEW\n\n# 實作計畫\n\n完整的計畫內容。"
         )
         
         agent_manager = AgentManager()
@@ -160,4 +160,4 @@ class TestNonInteractiveModeCompleteImmediately:
         
         # Assert - 應該立即完成
         assert result.status == PhaseStatus.COMPLETED
-        assert result.data["status_code"] == "AAF_READY_FOR_REVIEW"
+        assert result.data["status_code"] == "CAFE_READY_FOR_REVIEW"

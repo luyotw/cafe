@@ -1,8 +1,8 @@
 """Tests for Phase base class interactive parameter."""
 
 import pytest
-from aaf.core.phase import Phase
-from aaf.core.types import PhaseResult, PhaseStatus
+from cafe.core.phase import Phase
+from cafe.core.types import PhaseResult, PhaseStatus
 
 
 class DummyPhase(Phase):

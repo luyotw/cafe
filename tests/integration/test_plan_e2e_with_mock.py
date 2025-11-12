@@ -1,6 +1,6 @@
-"""E2E tests for 'aaf plan' command with mock agents.
+"""E2E tests for 'cafe plan' command with mock agents.
 
-使用 subprocess.run() 測試實際 CLI 命令執行，但用 AAF_MOCK_AGENTS=true 避免真實 LLM 呼叫。
+使用 subprocess.run() 測試實際 CLI 命令執行，但用 CAFE_MOCK_AGENTS=true 避免真實 LLM 呼叫。
 """
 
 import subprocess
@@ -12,7 +12,7 @@ import pytest
 
 def setup_test_environment(tmp_path: Path, issue_name: str):
     """設置測試環境：創建 spec.md"""
-    spec_dir = tmp_path / ".aaf" / "issues" / issue_name / "spec"
+    spec_dir = tmp_path / ".cafe" / "issues" / issue_name / "spec"
     spec_dir.mkdir(parents=True, exist_ok=True)
     spec_file = spec_dir / "spec.md"
     spec_file.write_text("# 測試功能需求\n\n這是一個測試需求規格。")
@@ -20,7 +20,7 @@ def setup_test_environment(tmp_path: Path, issue_name: str):
 
 def create_default_template(tmp_path: Path):
     """創建 default template"""
-    template_dir = tmp_path / ".aaf" / "templates" / "plan"
+    template_dir = tmp_path / ".cafe" / "templates" / "plan"
     template_dir.mkdir(parents=True, exist_ok=True)
     template_file = template_dir / "default.md"
     template_file.write_text("""# 實作計畫
@@ -36,20 +36,20 @@ def create_default_template(tmp_path: Path):
 """)
 
 
-def run_aaf_plan(tmp_path: Path, issue_name: str, mock_response: str, extra_args: list = None, template: str = "default"):
-    """Helper function to run aaf plan command with mock"""
-    # Use installed aaf command or fall back to local script
-    aaf_cmd = "aaf" if subprocess.run(["which", "aaf"], capture_output=True).returncode == 0 else "./aaf"
-    args = [aaf_cmd, "plan", issue_name, "--no-interactive"]
+def run_cafe_plan(tmp_path: Path, issue_name: str, mock_response: str, extra_args: list = None, template: str = "default"):
+    """Helper function to run cafe plan command with mock"""
+    # Use installed cafe command or fall back to local script
+    cafe_cmd = "cafe" if subprocess.run(["which", "cafe"], capture_output=True).returncode == 0 else "./cafe"
+    args = [cafe_cmd, "plan", issue_name, "--no-interactive"]
     if template:
         args.extend(["--template", template])
     if extra_args:
         args.extend(extra_args)
     
     env = os.environ.copy()
-    env["AAF_MOCK_AGENTS"] = "true"
+    env["CAFE_MOCK_AGENTS"] = "true"
     if mock_response:
-        env["AAF_MOCK_RESPONSE"] = mock_response
+        env["CAFE_MOCK_RESPONSE"] = mock_response
     
     return subprocess.run(
         args,
@@ -70,7 +70,7 @@ class TestPlanE2EMockStatusCodes:
         setup_test_environment(tmp_path, issue_name)
         create_default_template(tmp_path)
         
-        result = run_aaf_plan(tmp_path, issue_name, "AAF_INVALID_CODE\n\n# 實作計畫")
+        result = run_cafe_plan(tmp_path, issue_name, "CAFE_INVALID_CODE\n\n# 實作計畫")
         
         assert result.returncode != 0
         output = result.stdout + result.stderr
@@ -83,7 +83,7 @@ class TestPlanE2EMockStatusCodes:
         setup_test_environment(tmp_path, issue_name)
         create_default_template(tmp_path)
         
-        result = run_aaf_plan(tmp_path, issue_name, "# 實作計畫\n\n這是計畫內容但沒有狀態碼")
+        result = run_cafe_plan(tmp_path, issue_name, "# 實作計畫\n\n這是計畫內容但沒有狀態碼")
         
         assert result.returncode != 0
         output = result.stdout + result.stderr
@@ -95,7 +95,7 @@ class TestPlanE2EMockStatusCodes:
         setup_test_environment(tmp_path, issue_name)
         create_default_template(tmp_path)
         
-        result = run_aaf_plan(tmp_path, issue_name, "")
+        result = run_cafe_plan(tmp_path, issue_name, "")
         
         assert result.returncode != 0
         output = result.stdout + result.stderr
@@ -111,14 +111,14 @@ class TestPlanE2EMockTemplateErrors:
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
         
-        result = run_aaf_plan(tmp_path, issue_name, None, template="nonexistent-template")
+        result = run_cafe_plan(tmp_path, issue_name, None, template="nonexistent-template")
         
         assert result.returncode != 0
         output = result.stdout + result.stderr
         assert "template" in output.lower()
         assert "not found" in output.lower() or "does not exist" in output.lower()
         
-        plan_file = tmp_path / ".aaf" / "issues" / issue_name / "plan" / "plan.md"
+        plan_file = tmp_path / ".cafe" / "issues" / issue_name / "plan" / "plan.md"
         assert not plan_file.exists()
 
     def test_first_round_without_template_should_fail(self, tmp_path):
@@ -126,11 +126,11 @@ class TestPlanE2EMockTemplateErrors:
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
         
-        plan_file = tmp_path / ".aaf" / "issues" / issue_name / "plan" / "plan.md"
+        plan_file = tmp_path / ".cafe" / "issues" / issue_name / "plan" / "plan.md"
         if plan_file.exists():
             plan_file.unlink()
         
-        result = run_aaf_plan(tmp_path, issue_name, None, template=None)
+        result = run_cafe_plan(tmp_path, issue_name, None, template=None)
         
         assert result.returncode != 0
         output = result.stdout + result.stderr
@@ -148,15 +148,15 @@ class TestPlanE2EMockContentValidation:
         setup_test_environment(tmp_path, issue_name)
         create_default_template(tmp_path)
         
-        result = run_aaf_plan(tmp_path, issue_name, "AAF_READY_FOR_REVIEW\n\n# 實作計畫\n\n計畫內容")
+        result = run_cafe_plan(tmp_path, issue_name, "CAFE_READY_FOR_REVIEW\n\n# 實作計畫\n\n計畫內容")
         
         assert result.returncode == 0
         
-        plan_file = tmp_path / ".aaf" / "issues" / issue_name / "plan" / "plan.md"
+        plan_file = tmp_path / ".cafe" / "issues" / issue_name / "plan" / "plan.md"
         assert plan_file.exists()
         
         content = plan_file.read_text()
-        assert "AAF_READY_FOR_REVIEW" not in content
+        assert "CAFE_READY_FOR_REVIEW" not in content
         assert "# 實作計畫" in content
         assert "計畫內容" in content
 
@@ -165,13 +165,13 @@ class TestPlanE2EMockContentValidation:
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
         
-        plan_file = tmp_path / ".aaf" / "issues" / issue_name / "plan" / "plan.md"
+        plan_file = tmp_path / ".cafe" / "issues" / issue_name / "plan" / "plan.md"
         plan_file.parent.mkdir(parents=True, exist_ok=True)
         plan_file.write_text("## 開發指南\n\n原始開發指南內容\n\n## 實作計畫\n\n初版計畫")
         
-        result = run_aaf_plan(
+        result = run_cafe_plan(
             tmp_path, issue_name, 
-            "AAF_READY_FOR_REVIEW\n\n## 開發指南\n\n原始開發指南內容\n\n## 實作計畫\n\n更新後的計畫",
+            "CAFE_READY_FOR_REVIEW\n\n## 開發指南\n\n原始開發指南內容\n\n## 實作計畫\n\n更新後的計畫",
             template=None
         )
         
@@ -187,11 +187,11 @@ class TestPlanE2EMockContentValidation:
         setup_test_environment(tmp_path, issue_name)
         create_default_template(tmp_path)
         
-        result = run_aaf_plan(tmp_path, issue_name, "AAF_READY_FOR_REVIEW\n\n# 實作計畫\n\n## 步驟一\n內容")
+        result = run_cafe_plan(tmp_path, issue_name, "CAFE_READY_FOR_REVIEW\n\n# 實作計畫\n\n## 步驟一\n內容")
         
         assert result.returncode == 0
         
-        plan_file = tmp_path / ".aaf" / "issues" / issue_name / "plan" / "plan.md"
+        plan_file = tmp_path / ".cafe" / "issues" / issue_name / "plan" / "plan.md"
         content = plan_file.read_text()
         
         assert content.startswith("#")

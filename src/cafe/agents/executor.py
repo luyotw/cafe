@@ -4,7 +4,7 @@ import json
 import subprocess
 from typing import Callable, List, Optional, Tuple
 
-from aaf.core.types import AgentConfig, AgentCLI, TokenUsage
+from cafe.core.types import AgentConfig, AgentCLI, TokenUsage
 
 
 class AgentExecutionError(Exception):
@@ -376,8 +376,8 @@ class AgentExecutor:
         # Add streaming output format
         cmd.extend(["--output-format", "stream-json", "--verbose"])
 
-        # Include .aaf directory for tool access
-        cmd.extend(["--add-dir", ".aaf"])
+        # Include .cafe directory for tool access
+        cmd.extend(["--add-dir", ".cafe"])
 
         # Execute with streaming
         response, token_usage = self._execute_with_streaming(
@@ -453,8 +453,8 @@ class AgentExecutor:
         # Add streaming JSON output format
         cmd.extend(["--output-format", "stream-json"])
 
-        # Include .aaf directory for tool access
-        cmd.extend(["--include-directories", ".aaf"])
+        # Include .cafe directory for tool access
+        cmd.extend(["--include-directories", ".cafe"])
 
         # Gemini-specific parser: parse last line as final result
         def parse_gemini_response(output_lines: List[str]) -> Tuple[str, TokenUsage]:
@@ -569,8 +569,8 @@ class AgentExecutor:
         if self.config.session_id:
             cmd.extend(["--resume", self.config.session_id])
 
-        # Include .aaf directory for tool access
-        cmd.extend(["--add-dir", ".aaf"])
+        # Include .cafe directory for tool access
+        cmd.extend(["--add-dir", ".cafe"])
 
         # Execute with streaming (line-by-line mode)
         response, token_usage = self._execute_with_streaming(

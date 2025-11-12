@@ -5,12 +5,12 @@ from typing import List, Optional
 import json
 from datetime import datetime
 
-from aaf.agents.manager import AgentManager
-from aaf.core.git import GitOperations
-from aaf.core.permission import PermissionHandler
-from aaf.core.phase import Phase
-from aaf.core.status_codes import PhaseStatusCode, StatusCodeParser, generate_status_code_prompt
-from aaf.core.types import PhaseProgress, PhaseResult, PhaseStatus, WorkflowMode
+from cafe.agents.manager import AgentManager
+from cafe.core.git import GitOperations
+from cafe.core.permission import PermissionHandler
+from cafe.core.phase import Phase
+from cafe.core.status_codes import PhaseStatusCode, StatusCodeParser, generate_status_code_prompt
+from cafe.core.types import PhaseProgress, PhaseResult, PhaseStatus, WorkflowMode
 
 
 class ReviewPhase(Phase):
@@ -297,12 +297,12 @@ class ReviewPhase(Phase):
         """
         # Determine review directory based on workflow mode
         if self.workflow_mode == WorkflowMode.GITHUB and self.issue_id:
-            review_dir = Path(f".aaf/issues/{self.issue_id}/review")
+            review_dir = Path(f".cafe/issues/{self.issue_id}/review")
         else:
             # Extract issue name from spec_file path
             spec_path = Path(self.spec_file)
             issue_name = spec_path.parent.parent.name
-            review_dir = Path(f".aaf/issues/{issue_name}/review")
+            review_dir = Path(f".cafe/issues/{issue_name}/review")
 
         review_dir.mkdir(parents=True, exist_ok=True)
         history_dir = review_dir / "history"
@@ -350,12 +350,12 @@ class ReviewPhase(Phase):
         """
         # Determine review directory based on workflow mode
         if self.workflow_mode == WorkflowMode.GITHUB and self.issue_id:
-            review_dir = Path(f".aaf/issues/{self.issue_id}/review")
+            review_dir = Path(f".cafe/issues/{self.issue_id}/review")
         else:
             # Extract issue name from spec_file path
             spec_path = Path(self.spec_file)
             issue_name = spec_path.parent.parent.name
-            review_dir = Path(f".aaf/issues/{issue_name}/review")
+            review_dir = Path(f".cafe/issues/{issue_name}/review")
 
         status_file = review_dir / "status.json"
         status_file.parent.mkdir(parents=True, exist_ok=True)
@@ -383,12 +383,12 @@ class ReviewPhase(Phase):
         """
         # Determine config file path based on workflow mode
         if self.workflow_mode == WorkflowMode.GITHUB and self.issue_id:
-            config_file = Path(f".aaf/issues/{self.issue_id}/config.json")
+            config_file = Path(f".cafe/issues/{self.issue_id}/config.json")
         else:
             # Extract issue name from spec_file path
             spec_path = Path(self.spec_file)
             issue_name = spec_path.parent.parent.name
-            config_file = Path(f".aaf/issues/{issue_name}/config.json")
+            config_file = Path(f".cafe/issues/{issue_name}/config.json")
 
         if not config_file.exists():
             return None

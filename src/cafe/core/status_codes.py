@@ -8,26 +8,26 @@ class PhaseStatusCode(str, Enum):
     """Status codes that agents can return to control workflow.
 
     These codes are designed to be:
-    - Prefixed with AAF_ to avoid false positives
+    - Prefixed with CAFE_ to avoid false positives
     - Simple English words
     - Token-efficient
     - Easy for agents to understand and return
     """
 
     # ========== Universal Status Codes ==========
-    NO_RESPONSE = "AAF_NO_RESPONSE"       # Agent returned empty response
+    NO_RESPONSE = "CAFE_NO_RESPONSE"       # Agent returned empty response
 
     # ========== Requirements & Analysis Phase ==========
-    CONFIRMED = "AAF_CONFIRMED"                   # Requirements/Analysis/Review confirmed
-    NEED_CLARIFICATION = "AAF_NEED_CLARIFICATION" # Need more information
-    REJECTED = "AAF_REJECTED"                     # Requirements/Analysis/Review rejected
-    READY_FOR_REVIEW = "AAF_READY_FOR_REVIEW"     # Plan ready for user review
+    CONFIRMED = "CAFE_CONFIRMED"                   # Requirements/Analysis/Review confirmed
+    NEED_CLARIFICATION = "CAFE_NEED_CLARIFICATION" # Need more information
+    REJECTED = "CAFE_REJECTED"                     # Requirements/Analysis/Review rejected
+    READY_FOR_REVIEW = "CAFE_READY_FOR_REVIEW"     # Plan ready for user review
 
     # ========== Review Phase ==========
-    NEEDS_CHANGES = "AAF_NEEDS_CHANGES"   # Code needs changes
+    NEEDS_CHANGES = "CAFE_NEEDS_CHANGES"   # Code needs changes
 
     # ========== Authorization ==========
-    NEED_PERMISSION = "AAF_NEED_PERMISSION"       # Need user permission
+    NEED_PERMISSION = "CAFE_NEED_PERMISSION"       # Need user permission
 
 
 class StatusCodeParser:
@@ -45,10 +45,10 @@ class StatusCodeParser:
             Extracted status code or None if not found
 
         Examples:
-            >>> extract("AAF_CONFIRMED\\nThe requirements are clear.")
+            >>> extract("CAFE_CONFIRMED\\nThe requirements are clear.")
             PhaseStatusCode.CONFIRMED
 
-            >>> extract("I think this is good. AAF_LGTM!")
+            >>> extract("I think this is good. CAFE_LGTM!")
             PhaseStatusCode.LGTM
         """
         if not response:
@@ -174,7 +174,7 @@ def generate_status_code_prompt(valid_codes: List[PhaseStatusCode], descriptions
         >>> print(generate_status_code_prompt(codes, desc))
     """
     lines = [
-        "請在回應的第一行明確標示狀態碼（必須包含 AAF_ 前綴）：",
+        "請在回應的第一行明確標示狀態碼（必須包含 CAFE_ 前綴）：",
         ""
     ]
 

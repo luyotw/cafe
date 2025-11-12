@@ -27,9 +27,9 @@ def select_template(templates: List[str], template_paths: Dict[str, Path]) -> Op
     for i, name in enumerate(templates, 1):
         console.print(f"  [bold green]{i}[/bold green]. [yellow]{name}[/yellow]")
     console.print()
-    console.print("[dim]Tip: Use 'aaf template cat <name>' to preview template content[/dim]")
+    console.print("[dim]Tip: Use 'cafe template cat <name>' to preview template content[/dim]")
     if len(templates) == 1:
-        console.print("[dim]     Create your own: 'aaf template add <file> <name>' to add custom template[/dim]")
+        console.print("[dim]     Create your own: 'cafe template add <file> <name>' to add custom template[/dim]")
     console.print()
 
     while True:

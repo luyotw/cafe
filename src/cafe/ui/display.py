@@ -1,4 +1,4 @@
-"""Display utilities for AAF UI."""
+"""Display utilities for CAFE UI."""
 
 import sys
 from typing import Optional

@@ -8,14 +8,14 @@ from typing import Callable
 from unittest.mock import MagicMock, patch, call
 from io import StringIO
 
-from aaf.phases.spec_phase import SpecPhase
-from aaf.agents.manager import AgentManager
-from aaf.core.types import PhaseProgress, PhaseResult, PhaseStatus, WorkflowMode, TokenUsage
-from aaf.core.permission import PermissionHandler
-from aaf.core.status_codes import PhaseStatusCode
+from cafe.phases.spec_phase import SpecPhase
+from cafe.agents.manager import AgentManager
+from cafe.core.types import PhaseProgress, PhaseResult, PhaseStatus, WorkflowMode, TokenUsage
+from cafe.core.permission import PermissionHandler
+from cafe.core.status_codes import PhaseStatusCode
 
 
-def create_mock_pm_agent(phase: SpecPhase, content: str, status_code: str = "AAF_CONFIRMED") -> Callable:
+def create_mock_pm_agent(phase: SpecPhase, content: str, status_code: str = "CAFE_CONFIRMED") -> Callable:
     """Create a mock PM agent that writes to spec.md before returning status code.
 
     Args:
@@ -99,12 +99,12 @@ class TestAgentSelection:
 
     def test_uses_pm_agent(self, tmp_path: Path) -> None:
         """測試使用 PM agent (Roger)"""
-        spec_file = tmp_path / ".aaf" / "issues" / "test-feature" / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("Requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("AAF_CONFIRMED\n需求已清楚。", TokenUsage())
+        agent_manager.execute.return_value = ("CAFE_CONFIRMED\n需求已清楚。", TokenUsage())
         setup_agent_manager_mocks(agent_manager)
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -130,13 +130,13 @@ class TestHistoryTracking:
 
     def test_history_directory_structure(self, tmp_path: Path) -> None:
         """測試歷史記錄目錄結構包含 phase 資訊"""
-        spec_file = tmp_path / ".aaf" / "issues" / "test-feature" / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("Initial requirements\n")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("AAF_CONFIRMED\n需求已清楚。", TokenUsage())
+        agent_manager.execute.return_value = ("CAFE_CONFIRMED\n需求已清楚。", TokenUsage())
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -150,17 +150,17 @@ class TestHistoryTracking:
         )
 
         # Verify history directory path includes phase1 and is alongside requirements file
-        assert phase.history_dir == tmp_path / ".aaf" / "issues" / "test-feature" / "spec" / "history"
+        assert phase.history_dir == tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "history"
 
     def test_save_iteration_history_creates_json(self, tmp_path: Path) -> None:
         """測試儲存迭代歷史會建立 JSON 檔案，包含 user_input（輪的開始）"""
-        spec_file = tmp_path / ".aaf" / "issues" / "test-feature" / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("Initial requirements\n")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("AAF_NEED_CLARIFICATION\n請問使用者是誰？", TokenUsage())
+        agent_manager.execute.return_value = ("CAFE_NEED_CLARIFICATION\n請問使用者是誰？", TokenUsage())
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -194,7 +194,7 @@ class TestHistoryTracking:
             data = json.load(f)
 
         assert data["iteration"] == 1
-        assert data["status"] == "AAF_NEED_CLARIFICATION"
+        assert data["status"] == "CAFE_NEED_CLARIFICATION"
         assert data["user_input"] == "Initial requirements\n"  # 輪的開始
         assert data["pm_response"] == "請問使用者是誰？"
         # user_response is no longer stored - next iteration's user_input IS the user_response
@@ -205,7 +205,7 @@ class TestHistoryTracking:
 
     def test_save_iteration_history_includes_prompt(self, tmp_path: Path) -> None:
         """測試儲存迭代歷史時會包含 prompt 欄位"""
-        spec_file = tmp_path / ".aaf" / "issues" / "test-feature" / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("Initial requirements\n")
 
@@ -247,13 +247,13 @@ class TestHistoryTracking:
         assert data["user_input"] == "Initial requirements\n"
         assert data["prompt"] == test_prompt
         assert data["pm_response"] == "請問使用者是誰？"
-        assert data["status"] == "AAF_NEED_CLARIFICATION"
+        assert data["status"] == "CAFE_NEED_CLARIFICATION"
 
     def test_save_iteration_history_includes_agent_metadata(self, tmp_path: Path) -> None:
         """測試儲存迭代歷史時會包含 agent metadata（cli, session_id, allowed_tools, denied_tools）"""
-        from aaf.core.types import AgentCLI, AgentConfig
+        from cafe.core.types import AgentCLI, AgentConfig
 
-        spec_file = tmp_path / ".aaf" / "issues" / "test-feature" / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("Initial requirements\n")
 
@@ -299,7 +299,7 @@ class TestHistoryTracking:
         assert data["user_input"] == "Initial requirements\n"
         assert data["prompt"] == test_prompt
         assert data["pm_response"] == "請問使用者是誰？"
-        assert data["status"] == "AAF_NEED_CLARIFICATION"
+        assert data["status"] == "CAFE_NEED_CLARIFICATION"
         assert data["cli"] == "copilot"
         assert data["session_id"] == "test-session-456"
         assert data["allowed_tools"] == ["write", "read"]
@@ -307,7 +307,7 @@ class TestHistoryTracking:
 
     def test_update_context_file_creates_markdown(self, tmp_path: Path) -> None:
         """測試更新 context.md 檔案"""
-        spec_file = tmp_path / ".aaf" / "issues" / "test-feature" / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("Initial requirements\n")
 
@@ -337,7 +337,7 @@ class TestHistoryTracking:
             "pm_response": "請問需要哪些功能？",
             "user_input": "需要登入和註冊",
             "response": "請問需要哪些功能？",
-            "status_code": "AAF_NEED_CLARIFICATION",
+            "status_code": "CAFE_NEED_CLARIFICATION",
         }, ensure_ascii=False, indent=2))
 
         # Update context file
@@ -362,7 +362,7 @@ class TestHistoryTracking:
 
     def test_context_file_shows_restriction_after_iteration_4(self, tmp_path: Path) -> None:
         """測試第 4 輪後 context.md 顯示問題限制"""
-        spec_file = tmp_path / ".aaf" / "issues" / "test-feature" / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("Initial requirements\n")
 
@@ -389,7 +389,7 @@ class TestHistoryTracking:
 
     def test_issue_name_derived_from_spec_file(self, tmp_path: Path) -> None:
         """測試 issue_name 從 spec_file 自動推導"""
-        spec_file = tmp_path / ".aaf" / "issues" / "my-feature" / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / "my-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("Initial requirements\n")
@@ -407,16 +407,16 @@ class TestHistoryTracking:
 
         # Verify issue_name is derived from directory structure
         assert phase.issue_name == "my-feature"
-        assert phase.history_dir == tmp_path / ".aaf" / "issues" / "my-feature" / "spec" / "history"
+        assert phase.history_dir == tmp_path / ".cafe" / "issues" / "my-feature" / "spec" / "history"
 
     def test_prompt_includes_context_file_after_iteration_1(self, tmp_path: Path) -> None:
         """測試第 2 輪後 prompt 包含 context 檔案"""
-        spec_file = tmp_path / ".aaf" / "issues" / "test-feature" / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("Initial requirements\n")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("AAF_CONFIRMED\n需求已清楚", TokenUsage())
+        agent_manager.execute.return_value = ("CAFE_CONFIRMED\n需求已清楚", TokenUsage())
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -446,12 +446,12 @@ class TestHistoryTracking:
         prompt = phase._generate_prompt()
 
         # Should include reference to context file
-        expected_path = str(tmp_path / ".aaf" / "issues" / "test-feature" / "spec" / "history" / "context.md")
+        expected_path = str(tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "history" / "context.md")
         assert "context.md" in prompt or expected_path in prompt
 
     def test_iteration_4_prompt_includes_restriction(self, tmp_path: Path) -> None:
         """測試第 4 輪 prompt 包含問題限制"""
-        spec_file = tmp_path / ".aaf" / "issues" / "test-feature" / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("Initial requirements\n")
 
@@ -482,11 +482,11 @@ class TestNonInteractiveModeIteration1:
 
     def test_first_call_with_user_story_returns_in_progress(self, tmp_path: Path) -> None:
         """第1次呼叫：提供 user story，PM 提問，回傳 IN_PROGRESS"""
-        spec_file = tmp_path / ".aaf" / "issues" / "test-feature" / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("AAF_NEED_CLARIFICATION\n需要澄清需求。\n\n## 待釐清的問題\n1. 問題一", TokenUsage())
+        agent_manager.execute.return_value = ("CAFE_NEED_CLARIFICATION\n需要澄清需求。\n\n## 待釐清的問題\n1. 問題一", TokenUsage())
         setup_agent_manager_mocks(agent_manager)
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -514,11 +514,11 @@ class TestNonInteractiveModeIteration1:
 
     def test_first_call_creates_spec_file_from_stdin(self, tmp_path: Path) -> None:
         """第1次呼叫應該從 stdin 讀取 user story 並建立檔案"""
-        spec_file = tmp_path / ".aaf" / "issues" / "test-feature" / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("AAF_NEED_CLARIFICATION\n需要澄清", TokenUsage())
+        agent_manager.execute.return_value = ("CAFE_NEED_CLARIFICATION\n需要澄清", TokenUsage())
         setup_agent_manager_mocks(agent_manager)
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -542,11 +542,11 @@ class TestNonInteractiveModeIteration1:
 
     def test_first_call_pm_confirms_immediately(self, tmp_path: Path) -> None:
         """第1次呼叫：PM 直接確認需求（不提問），回傳 COMPLETED"""
-        spec_file = tmp_path / ".aaf" / "issues" / "test-feature" / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("AAF_CONFIRMED\n需求已清楚。", TokenUsage())
+        agent_manager.execute.return_value = ("CAFE_CONFIRMED\n需求已清楚。", TokenUsage())
         setup_agent_manager_mocks(agent_manager)
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -597,27 +597,27 @@ class TestNonInteractiveModeErrorHandling:
 
     def test_no_stdin_input_on_second_call_fails(self, tmp_path: Path) -> None:
         """第2+次呼叫：沒有用戶回答應該失敗"""
-        spec_file = tmp_path / ".aaf" / "issues" / "test-feature" / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("Initial")
 
         # Setup history
-        issue_dir = tmp_path / ".aaf" / "issues" / "test-feature"
+        issue_dir = tmp_path / ".cafe" / "issues" / "test-feature"
         history_dir = issue_dir / "spec" / "history"
         history_dir.mkdir(parents=True)
 
         import json
         (history_dir / "iteration_001.json").write_text(json.dumps({
             "iteration": 1,
-            "pm_response": "AAF_NEED_CLARIFICATION\n問題",
+            "pm_response": "CAFE_NEED_CLARIFICATION\n問題",
             "user_response": "",
-            "status_code": "AAF_NEED_CLARIFICATION"
+            "status_code": "CAFE_NEED_CLARIFICATION"
         }))
 
         (issue_dir / "spec" / "status.json").write_text(json.dumps({
             "phase": "spec",
             "status": "in_progress",
-            "status_code": "AAF_NEED_CLARIFICATION",
+            "status_code": "CAFE_NEED_CLARIFICATION",
             "iteration": 1
         }))
 
@@ -650,14 +650,14 @@ class TestInteractiveModeStillWorks:
 
     def test_interactive_mode_single_iteration(self, tmp_path: Path) -> None:
         """互動模式：單次確認"""
-        from aaf.core.types import SpecRigor
+        from cafe.core.types import SpecRigor
 
-        spec_file = tmp_path / ".aaf" / "issues" / "test-feature" / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("需求已清楚")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("AAF_CONFIRMED\n需求確認", TokenUsage())
+        agent_manager.execute.return_value = ("CAFE_CONFIRMED\n需求確認", TokenUsage())
         setup_agent_manager_mocks(agent_manager)
         agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
 
@@ -685,12 +685,12 @@ class TestSkipConfirmedSpec:
 
     def test_skip_execution_if_already_confirmed(self, tmp_path: Path) -> None:
         """測試如果已經 CONFIRMED 狀態就不再呼叫 agent"""
-        spec_file = tmp_path / ".aaf" / "issues" / "test-feature" / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("Initial spec")
 
         # Create status file showing CONFIRMED state
-        issue_dir = tmp_path / ".aaf" / "issues" / "test-feature"
+        issue_dir = tmp_path / ".cafe" / "issues" / "test-feature"
         status_file = issue_dir / "spec" / "status.json"
         status_file.parent.mkdir(parents=True, exist_ok=True)
 
@@ -698,7 +698,7 @@ class TestSkipConfirmedSpec:
         status_file.write_text(json.dumps({
             "phase": "spec",
             "status": "completed",
-            "status_code": "AAF_CONFIRMED",
+            "status_code": "CAFE_CONFIRMED",
             "iteration": 3
         }))
 
@@ -730,7 +730,7 @@ class TestKeyboardInterrupt:
 
     def test_keyboard_interrupt_does_not_save(self, tmp_path: Path) -> None:
         """測試 Ctrl+C 時不存檔"""
-        spec_file = tmp_path / ".aaf" / "issues" / "test-feature" / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("Initial spec")
 
@@ -758,7 +758,7 @@ class TestKeyboardInterrupt:
         assert "Paused by user" in result.message
 
         # No iteration history should be saved
-        history_dir = tmp_path / ".aaf" / "issues" / "spec" / "spec" / "history"
+        history_dir = tmp_path / ".cafe" / "issues" / "spec" / "spec" / "history"
         if history_dir.exists():
             iteration_files = list(history_dir.glob("iteration_*.json"))
             # Should have no new iteration files (only existing ones if any)
@@ -769,7 +769,7 @@ class TestSpecPhasePromptGeneration:
     """測試 SpecPhase prompt 生成"""
 
     def test_prompt_does_not_include_status_code_without_prefix(self, tmp_path: Path) -> None:
-        """測試 prompt 不應該包含沒有 AAF_ 前綴的 status code 指示"""
+        """測試 prompt 不應該包含沒有 CAFE_ 前綴的 status code 指示"""
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -778,13 +778,13 @@ class TestSpecPhasePromptGeneration:
         def capture_prompt(agent_name: str, prompt: str, **kwargs):
             nonlocal captured_prompt
             captured_prompt = prompt
-            # Return AAF_CONFIRMED to end the phase
-            return ("AAF_CONFIRMED", TokenUsage())
+            # Return CAFE_CONFIRMED to end the phase
+            return ("CAFE_CONFIRMED", TokenUsage())
 
         agent_manager.execute.side_effect = capture_prompt
         setup_agent_manager_mocks(agent_manager)
 
-        spec_file = tmp_path / ".aaf" / "issues" / "test" / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / "test" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
 
         phase = SpecPhase(
@@ -799,13 +799,13 @@ class TestSpecPhasePromptGeneration:
              patch('builtins.print'):
             phase.execute()
 
-        # Prompt should NOT contain status codes without AAF_ prefix
+        # Prompt should NOT contain status codes without CAFE_ prefix
         assert "只回傳：NEED_CLARIFICATION" not in captured_prompt
         assert "只回傳：CONFIRMED" not in captured_prompt
         assert "只回傳：REJECTED" not in captured_prompt
 
-        # Prompt should reference AAF_ prefixed codes (either directly or via status_code_prompt)
-        assert "AAF_CONFIRMED" in captured_prompt or "AAF_NEED_CLARIFICATION" in captured_prompt
+        # Prompt should reference CAFE_ prefixed codes (either directly or via status_code_prompt)
+        assert "CAFE_CONFIRMED" in captured_prompt or "CAFE_NEED_CLARIFICATION" in captured_prompt
 
 
 if __name__ == "__main__":

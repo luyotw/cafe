@@ -5,11 +5,11 @@ import pytest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from aaf.phases.review_phase import ReviewPhase
-from aaf.agents.manager import AgentManager
-from aaf.core.git import GitOperations
-from aaf.core.types import PhaseResult, PhaseStatus, TokenUsage, WorkflowMode
-from aaf.core.permission import PermissionHandler
+from cafe.phases.review_phase import ReviewPhase
+from cafe.agents.manager import AgentManager
+from cafe.core.git import GitOperations
+from cafe.core.types import PhaseResult, PhaseStatus, TokenUsage, WorkflowMode
+from cafe.core.permission import PermissionHandler
 
 
 class TestReviewPhaseBasics:
@@ -19,7 +19,7 @@ class TestReviewPhaseBasics:
         """測試初始化 ReviewPhase"""
         # Create temporary spec and plan files with proper issue structure
         issue_name = "test-review"
-        spec_file = tmp_path / ".aaf" / "issues" / issue_name / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("Requirements")
 
@@ -49,7 +49,7 @@ class TestReviewPhaseBasics:
         """測試設定特定 commit"""
         # Create temporary spec and plan files with proper issue structure
         issue_name = "test-review-commit"
-        spec_file = tmp_path / ".aaf" / "issues" / issue_name / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("Requirements")
 
@@ -84,7 +84,7 @@ class TestSingleIterationExecution:
 
         agent_manager = MagicMock(spec=AgentManager)
         # Review agent approves immediately
-        agent_manager.execute.return_value = ("AAF_CONFIRMED\nCode looks good!", TokenUsage())
+        agent_manager.execute.return_value = ("CAFE_CONFIRMED\nCode looks good!", TokenUsage())
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -105,7 +105,7 @@ class TestSingleIterationExecution:
 
         assert result.status == PhaseStatus.COMPLETED
         assert "passed" in result.message.lower()
-        assert result.data["status_code"] == "AAF_CONFIRMED"
+        assert result.data["status_code"] == "CAFE_CONFIRMED"
 
     def test_single_review_iteration_needs_changes(self, tmp_path: Path) -> None:
         """測試單次 review 迭代需要修改"""
@@ -113,7 +113,7 @@ class TestSingleIterationExecution:
         requirements_file.write_text("Requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("AAF_NEEDS_CHANGES\n問題 1: 需要修正", TokenUsage())
+        agent_manager.execute.return_value = ("CAFE_NEEDS_CHANGES\n問題 1: 需要修正", TokenUsage())
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -133,7 +133,7 @@ class TestSingleIterationExecution:
             result = phase.execute()
 
         assert result.status == PhaseStatus.COMPLETED
-        assert result.data["status_code"] == "AAF_NEEDS_CHANGES"
+        assert result.data["status_code"] == "CAFE_NEEDS_CHANGES"
 
     def test_only_executes_once(self, tmp_path: Path) -> None:
         """測試只執行一次（不迴圈）"""
@@ -141,7 +141,7 @@ class TestSingleIterationExecution:
         requirements_file.write_text("Requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("AAF_NEEDS_CHANGES\n需要修正", TokenUsage())
+        agent_manager.execute.return_value = ("CAFE_NEEDS_CHANGES\n需要修正", TokenUsage())
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -199,7 +199,7 @@ class TestDiffChecking:
         requirements_file.write_text("Requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("AAF_CONFIRMED\nCode looks good!", TokenUsage())
+        agent_manager.execute.return_value = ("CAFE_CONFIRMED\nCode looks good!", TokenUsage())
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -227,7 +227,7 @@ class TestDiffChecking:
         requirements_file.write_text("Requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("AAF_CONFIRMED\nCode looks good!", TokenUsage())
+        agent_manager.execute.return_value = ("CAFE_CONFIRMED\nCode looks good!", TokenUsage())
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -256,7 +256,7 @@ class TestDiffChecking:
         requirements_file.write_text("Requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("AAF_CONFIRMED\nCode looks good!", TokenUsage())
+        agent_manager.execute.return_value = ("CAFE_CONFIRMED\nCode looks good!", TokenUsage())
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -290,7 +290,7 @@ class TestAgentSelection:
         requirements_file.write_text("Requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("AAF_CONFIRMED\nCode looks good!", TokenUsage())
+        agent_manager.execute.return_value = ("CAFE_CONFIRMED\nCode looks good!", TokenUsage())
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -325,7 +325,7 @@ class TestPromptGeneration:
         requirements_file.write_text("Requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("AAF_CONFIRMED\nCode looks good!", TokenUsage())
+        agent_manager.execute.return_value = ("CAFE_CONFIRMED\nCode looks good!", TokenUsage())
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -356,7 +356,7 @@ class TestPromptGeneration:
         requirements_file.write_text("Requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("AAF_CONFIRMED\nCode looks good!", TokenUsage())
+        agent_manager.execute.return_value = ("CAFE_CONFIRMED\nCode looks good!", TokenUsage())
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -398,7 +398,7 @@ class TestReviewResultSaving:
         spec_file.write_text("Requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("AAF_CONFIRMED\nCode looks good!", TokenUsage())
+        agent_manager.execute.return_value = ("CAFE_CONFIRMED\nCode looks good!", TokenUsage())
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -414,9 +414,9 @@ class TestReviewResultSaving:
             workflow_mode=WorkflowMode.LOCAL,
         )
 
-        with patch("aaf.phases.review_phase.Path.mkdir"):
-            with patch("aaf.phases.review_phase.Path.write_text") as mock_write:
-                with patch("aaf.phases.review_phase.Path.glob", return_value=[]):
+        with patch("cafe.phases.review_phase.Path.mkdir"):
+            with patch("cafe.phases.review_phase.Path.write_text") as mock_write:
+                with patch("cafe.phases.review_phase.Path.glob", return_value=[]):
                     phase.execute()
 
         # Should save review result
@@ -435,7 +435,7 @@ class TestReviewResultSaving:
         spec_file.write_text("Requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("AAF_CONFIRMED\nCode looks good!", TokenUsage())
+        agent_manager.execute.return_value = ("CAFE_CONFIRMED\nCode looks good!", TokenUsage())
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -456,7 +456,7 @@ class TestReviewResultSaving:
         history_dir = review_dir / "history"
         history_dir.mkdir(exist_ok=True)
 
-        with patch("aaf.phases.review_phase.Path") as MockPath:
+        with patch("cafe.phases.review_phase.Path") as MockPath:
             # Mock Path to use our temp directory
             mock_review_path = MagicMock()
             mock_review_path.parent.parent.name = "myissue"
@@ -470,15 +470,15 @@ class TestReviewResultSaving:
     def test_saves_agent_info_to_history(self, tmp_path: Path) -> None:
         """測試 history 包含 agent 資訊（cli, session_id, allowed_tools, denied_tools）"""
         import os
-        from aaf.core.types import AgentCLI, AgentConfig
+        from cafe.core.types import AgentCLI, AgentConfig
 
-        # Change to tmp_path so .aaf is created there
+        # Change to tmp_path so .cafe is created there
         original_dir = os.getcwd()
         try:
             os.chdir(tmp_path)
 
             # Create issue structure
-            issue_dir = Path(".aaf/issues/myissue")
+            issue_dir = Path(".cafe/issues/myissue")
             spec_dir = issue_dir / "spec"
             spec_dir.mkdir(parents=True)
             spec_file = spec_dir / "spec.md"
@@ -498,7 +498,7 @@ class TestReviewResultSaving:
             )
 
             agent_manager = MagicMock(spec=AgentManager)
-            agent_manager.execute.return_value = ("AAF_CONFIRMED\nCode looks good!", TokenUsage())
+            agent_manager.execute.return_value = ("CAFE_CONFIRMED\nCode looks good!", TokenUsage())
             agent_manager.get_agent.return_value = mock_executor
 
             permission_handler = MagicMock(spec=PermissionHandler)
@@ -545,15 +545,15 @@ class TestReviewResultSaving:
     def test_saves_prompt_to_history(self, tmp_path: Path) -> None:
         """測試 history 包含發送給 agent 的 prompt"""
         import os
-        from aaf.core.types import AgentCLI, AgentConfig
+        from cafe.core.types import AgentCLI, AgentConfig
 
-        # Change to tmp_path so .aaf is created there
+        # Change to tmp_path so .cafe is created there
         original_dir = os.getcwd()
         try:
             os.chdir(tmp_path)
 
             # Create issue structure
-            issue_dir = Path(".aaf/issues/myissue")
+            issue_dir = Path(".cafe/issues/myissue")
             spec_dir = issue_dir / "spec"
             spec_dir.mkdir(parents=True)
             spec_file = spec_dir / "spec.md"
@@ -573,7 +573,7 @@ class TestReviewResultSaving:
             )
 
             agent_manager = MagicMock(spec=AgentManager)
-            agent_manager.execute.return_value = ("AAF_CONFIRMED\nCode looks good!", TokenUsage())
+            agent_manager.execute.return_value = ("CAFE_CONFIRMED\nCode looks good!", TokenUsage())
             agent_manager.get_agent.return_value = mock_executor
 
             permission_handler = MagicMock(spec=PermissionHandler)
@@ -622,7 +622,7 @@ class TestIssueConfigReading:
         """測試從 issue config 讀取 base branch"""
         # Create issue structure with config
         issue_name = "myissue"
-        issues_dir = tmp_path / ".aaf" / "issues" / issue_name
+        issues_dir = tmp_path / ".cafe" / "issues" / issue_name
         spec_dir = issues_dir / "spec"
         spec_dir.mkdir(parents=True)
         spec_file = spec_dir / "spec.md"
@@ -637,7 +637,7 @@ class TestIssueConfigReading:
         config_file.write_text(json.dumps(config_data))
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("AAF_CONFIRMED\nLGTM!", TokenUsage())
+        agent_manager.execute.return_value = ("CAFE_CONFIRMED\nLGTM!", TokenUsage())
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -672,16 +672,16 @@ class TestReviewPhaseStatus:
 
     def test_saves_status_json_on_execution(self, tmp_path: Path) -> None:
         """測試執行後儲存 status.json"""
-        # Create issue structure following AAF convention: .aaf/issues/<name>/spec/spec.md
+        # Create issue structure following CAFE convention: .cafe/issues/<name>/spec/spec.md
         issue_name = "myissue"
-        issues_dir = tmp_path / ".aaf" / "issues" / issue_name
+        issues_dir = tmp_path / ".cafe" / "issues" / issue_name
         spec_dir = issues_dir / "spec"
         spec_dir.mkdir(parents=True)
         spec_file = spec_dir / "spec.md"
         spec_file.write_text("Requirements")
 
         # Mock agent executor with config
-        from aaf.core.types import AgentCLI, AgentConfig
+        from cafe.core.types import AgentCLI, AgentConfig
         mock_executor = MagicMock()
         mock_executor.config = AgentConfig(
             name="Richard",
@@ -690,7 +690,7 @@ class TestReviewPhaseStatus:
         )
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("AAF_CONFIRMED\nCode looks good!", TokenUsage())
+        agent_manager.execute.return_value = ("CAFE_CONFIRMED\nCode looks good!", TokenUsage())
         agent_manager.get_agent.return_value = mock_executor
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -724,7 +724,7 @@ class TestReviewPhaseStatus:
             status_data = json.loads(status_file.read_text())
             assert status_data["phase"] == "review"
             assert status_data["status"] == "completed"
-            assert status_data["status_code"] == "AAF_CONFIRMED"
+            assert status_data["status_code"] == "CAFE_CONFIRMED"
             assert "iteration" in status_data
             assert "timestamp" in status_data
         finally:
@@ -738,7 +738,7 @@ class TestGitHubWorkflow:
         """測試 GitHub workflow 使用 issue"""
         # Create temporary spec and plan files with proper issue structure
         issue_name = "test-github-review"
-        spec_file = tmp_path / ".aaf" / "issues" / issue_name / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("Requirements")
 
@@ -747,7 +747,7 @@ class TestGitHubWorkflow:
         plan_file.write_text("Plan")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("AAF_CONFIRMED\nCode looks good!", TokenUsage())
+        agent_manager.execute.return_value = ("CAFE_CONFIRMED\nCode looks good!", TokenUsage())
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -811,7 +811,7 @@ class TestDevelopTimestampCheck:
         from datetime import datetime, timedelta
 
         # 建立測試目錄結構
-        issue_dir = tmp_path / ".aaf" / "issues" / "test-issue"
+        issue_dir = tmp_path / ".cafe" / "issues" / "test-issue"
         develop_dir = issue_dir / "develop"
         review_dir = issue_dir / "review"
         spec_dir = issue_dir / "spec"
@@ -829,7 +829,7 @@ class TestDevelopTimestampCheck:
         develop_status = {
             "phase": "develop",
             "status": "completed",
-            "status_code": "AAF_CONFIRMED",
+            "status_code": "CAFE_CONFIRMED",
             "timestamp": develop_time.isoformat(),
             "iteration": 1,
         }
@@ -842,7 +842,7 @@ class TestDevelopTimestampCheck:
         review_status = {
             "phase": "review",
             "status": "completed",
-            "status_code": "AAF_NEEDS_CHANGES",
+            "status_code": "CAFE_NEEDS_CHANGES",
             "timestamp": review_time.isoformat(),
             "iteration": 1,
         }
@@ -875,7 +875,7 @@ class TestDevelopTimestampCheck:
         from datetime import datetime, timedelta
 
         # 建立測試目錄結構
-        issue_dir = tmp_path / ".aaf" / "issues" / "test-issue"
+        issue_dir = tmp_path / ".cafe" / "issues" / "test-issue"
         develop_dir = issue_dir / "develop"
         review_dir = issue_dir / "review"
         spec_dir = issue_dir / "spec"
@@ -893,7 +893,7 @@ class TestDevelopTimestampCheck:
         develop_status = {
             "phase": "develop",
             "status": "completed",
-            "status_code": "AAF_CONFIRMED",
+            "status_code": "CAFE_CONFIRMED",
             "timestamp": develop_time.isoformat(),
             "iteration": 1,
         }
@@ -906,7 +906,7 @@ class TestDevelopTimestampCheck:
         review_status = {
             "phase": "review",
             "status": "completed",
-            "status_code": "AAF_NEEDS_CHANGES",
+            "status_code": "CAFE_NEEDS_CHANGES",
             "timestamp": review_time.isoformat(),
             "iteration": 1,
         }
@@ -939,7 +939,7 @@ class TestDevelopTimestampCheck:
         from datetime import datetime
 
         # 建立測試目錄結構
-        issue_dir = tmp_path / ".aaf" / "issues" / "test-issue"
+        issue_dir = tmp_path / ".cafe" / "issues" / "test-issue"
         develop_dir = issue_dir / "develop"
         spec_dir = issue_dir / "spec"
 
@@ -955,7 +955,7 @@ class TestDevelopTimestampCheck:
         develop_status = {
             "phase": "develop",
             "status": "completed",
-            "status_code": "AAF_CONFIRMED",
+            "status_code": "CAFE_CONFIRMED",
             "timestamp": develop_time.isoformat(),
             "iteration": 1,
         }
@@ -986,7 +986,7 @@ class TestDevelopTimestampCheck:
     ) -> None:
         """測試當沒有 develop status.json 時返回 False"""
         # 建立測試目錄結構
-        issue_dir = tmp_path / ".aaf" / "issues" / "test-issue"
+        issue_dir = tmp_path / ".cafe" / "issues" / "test-issue"
         spec_dir = issue_dir / "spec"
 
         spec_dir.mkdir(parents=True)

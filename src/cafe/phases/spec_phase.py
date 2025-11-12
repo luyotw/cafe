@@ -5,12 +5,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
-from aaf.agents.manager import AgentManager
-from aaf.core.permission import PermissionHandler
-from aaf.core.phase import Phase
-from aaf.core.status_codes import PhaseStatusCode, StatusCodeParser, generate_status_code_prompt
-from aaf.core.types import PhaseProgress, PhaseResult, PhaseStatus, WorkflowMode
-from aaf.ui.display import Display
+from cafe.agents.manager import AgentManager
+from cafe.core.permission import PermissionHandler
+from cafe.core.phase import Phase
+from cafe.core.status_codes import PhaseStatusCode, StatusCodeParser, generate_status_code_prompt
+from cafe.core.types import PhaseProgress, PhaseResult, PhaseStatus, WorkflowMode
+from cafe.ui.display import Display
 
 # Maximum number of clarification iterations to prevent infinite loops
 MAX_CLARIFICATION_ITERATIONS = 10
@@ -80,7 +80,7 @@ class SpecPhase(Phase):
         """
         super().__init__(interactive=interactive)
         
-        from aaf.core.types import SpecRigor
+        from cafe.core.types import SpecRigor
 
         self.agent_manager = agent_manager
         self.permission_handler = permission_handler
@@ -105,14 +105,14 @@ class SpecPhase(Phase):
         if issue_name:
             self.issue_name = issue_name
         else:
-            # Derive from spec_file path: .aaf/issues/{issue_name}/spec/spec.md
+            # Derive from spec_file path: .cafe/issues/{issue_name}/spec/spec.md
             spec_path = Path(spec_file)
             self.issue_name = spec_path.parent.parent.name
 
         # History directory for spec phase
-        # Path: .aaf/issues/{issue_name}/spec/history
+        # Path: .cafe/issues/{issue_name}/spec/history
         spec_path = Path(self.spec_file)
-        issue_dir = spec_path.parent.parent  # .aaf/issues/{issue_name}
+        issue_dir = spec_path.parent.parent  # .cafe/issues/{issue_name}
         self.history_dir = issue_dir / "spec" / "history"
 
         # Track requirements and questions
@@ -237,7 +237,7 @@ class SpecPhase(Phase):
             # User paused with Ctrl+C - save progress and allow resume
             print("\n\n⏸️  Paused by user (Ctrl+C).")
             print(f"💾 Progress saved. Current iteration: {self.iteration}")
-            print(f"📝 To resume, run: aaf spec {self.issue_name}")
+            print(f"📝 To resume, run: cafe spec {self.issue_name}")
             return PhaseResult(
                 status=PhaseStatus.IN_PROGRESS,
                 message="Paused by user - can resume later",
@@ -291,7 +291,7 @@ class SpecPhase(Phase):
         prev_status = prev_data.get("status_code", "")
 
         # 根據上一輪狀態，取得用戶輸入
-        if prev_status == "AAF_NEED_CLARIFICATION":
+        if prev_status == "CAFE_NEED_CLARIFICATION":
             return self._handle_need_clarification_input(prev_data, agent_display_name="PM")
         else:
             return ""
@@ -312,7 +312,7 @@ class SpecPhase(Phase):
 
     def _prompt_for_rigor(self) -> None:
         """Prompt user to select rigor level if not already set."""
-        from aaf.core.types import SpecRigor
+        from cafe.core.types import SpecRigor
 
         # Check if rigor is already explicitly set (not default)
         # We only prompt if it's still at default value
@@ -413,7 +413,7 @@ class SpecPhase(Phase):
         import os
         
         # 只在 mock 模式下處理
-        if not os.getenv("AAF_MOCK_AGENTS"):
+        if not os.getenv("CAFE_MOCK_AGENTS"):
             return
             
         # 提取狀態碼後的內容
@@ -425,7 +425,7 @@ class SpecPhase(Phase):
         content_lines = []
         skip_first = True
         for line in lines:
-            if skip_first and line.startswith("AAF_"):
+            if skip_first and line.startswith("CAFE_"):
                 continue
             skip_first = False
             content_lines.append(line)
@@ -535,7 +535,7 @@ class SpecPhase(Phase):
         Returns:
             Rigor guidelines string
         """
-        from aaf.core.types import SpecRigor
+        from cafe.core.types import SpecRigor
 
         if self.rigor == SpecRigor.LOW:
             return """**嚴謹程度：低（快速開發）**
@@ -596,7 +596,7 @@ class SpecPhase(Phase):
 
 {status_code_prompt}
 
-**如果需要澄清需求（status: AAF_NEED_CLARIFICATION）：**
+**如果需要澄清需求（status: CAFE_NEED_CLARIFICATION）：**
 使用 Write tool 將以下內容寫入 {self.spec_file}：
    - 「## 使用者故事」- 用戶撰寫的使用者故事或由自動由需求描述產生的使用者故事
    - 「## 目前的需求規格」- 列出目前已知的所有需求內容
@@ -604,7 +604,7 @@ class SpecPhase(Phase):
 
 記住：你是 PM，不是工程師，不要提技術細節！
 
-**如果需求已清楚（status: AAF_CONFIRMED）：**
+**如果需求已清楚（status: CAFE_CONFIRMED）：**
 使用 Write tool 將完整需求規格文件寫入 {self.spec_file}，格式：
    - 「## 使用者故事」- 用戶撰寫的使用者故事或由自動由需求描述產生的使用者故事
    - 「## 需求規格」- 完整的需求內容，包含：功能描述、使用場景、預期行為、驗收標準
@@ -625,7 +625,7 @@ class SpecPhase(Phase):
 
 {status_code_prompt}
 
-**如果需要更多資訊（status: AAF_NEED_CLARIFICATION）：**
+**如果需要更多資訊（status: CAFE_NEED_CLARIFICATION）：**
 使用 Write tool 將以下內容寫入 {self.spec_file}：
    - 「## 使用者故事」- 用戶撰寫的使用者故事或由自動由需求描述產生的使用者故事
    - 「## 目前的需求規格」- 整理目前從使用者故事得知的需求
@@ -633,7 +633,7 @@ class SpecPhase(Phase):
 
 記住：你是 PM，不要問技術實作問題！
 
-**如果資訊已足夠（status: AAF_CONFIRMED）：**
+**如果資訊已足夠（status: CAFE_CONFIRMED）：**
 使用 Write tool 將完整需求文件寫入 {self.spec_file}，格式：
    - 「## 使用者故事」- 用戶撰寫的使用者故事或由自動由需求描述產生的使用者故事
    - 「## 需求規格」- 完整的需求內容
@@ -670,13 +670,13 @@ class SpecPhase(Phase):
 
 {status_code_prompt}
 {restriction}
-**如果仍需澄清（status: AAF_NEED_CLARIFICATION）：**
+**如果仍需澄清（status: CAFE_NEED_CLARIFICATION）：**
 使用 Write tool 將以下內容寫入 {self.spec_file}：
    - 「## 使用者故事」- 用戶撰寫的使用者故事或由自動由需求描述產生的使用者故事
    - 「## 目前的需求規格」- 整合之前的對話和用戶最新回答，列出目前已知的完整需求
    - 「## 待釐清的問題」- 以 PM 的身份繼續用對話方式提問
 
-**如果需求已清楚（status: AAF_CONFIRMED）：**
+**如果需求已清楚（status: CAFE_CONFIRMED）：**
 使用 Write tool 將完整需求規格文件寫入 {self.spec_file}，格式：
    - 「## 使用者故事」- 用戶撰寫的使用者故事或由自動由需求描述產生的使用者故事
    - 「## 需求規格」- 完整需求（整合所有已確認的內容）

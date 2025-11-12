@@ -5,7 +5,7 @@ import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from aaf.core.git import GitError, GitOperations
+from cafe.core.git import GitError, GitOperations
 
 
 class TestGitOperations:

@@ -6,9 +6,9 @@ from typing import Any, Dict, Optional
 
 import pytest
 
-from aaf.core.phase import Phase
-from aaf.core.status_codes import PhaseStatusCode
-from aaf.core.types import PhaseResult, PhaseStatus
+from cafe.core.phase import Phase
+from cafe.core.status_codes import PhaseStatusCode
+from cafe.core.types import PhaseResult, PhaseStatus
 
 
 class ConcretePhase(Phase):
@@ -99,7 +99,7 @@ class TestSaveIterationHistory:
         with open(history_file, 'r', encoding='utf-8') as f:
             data = json.load(f)
 
-        assert data["status_code"] == "AAF_CONFIRMED"
+        assert data["status_code"] == "CAFE_CONFIRMED"
 
     def test_save_history_with_optional_fields(self, tmp_path: Path) -> None:
         """測試儲存時 optional 欄位可以是 None."""

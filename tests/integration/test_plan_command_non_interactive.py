@@ -1,4 +1,4 @@
-"""Integration tests for 'aaf plan --no-interactive' command.
+"""Integration tests for 'cafe plan --no-interactive' command.
 
 使用 MockAgentExecutor 測試完整的 plan command flow，不呼叫真實 LLM API。
 """
@@ -8,28 +8,28 @@ import pytest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from aaf.agents.manager import AgentManager
-from aaf.agents.mock_executor import MockAgentExecutor
-from aaf.core.permission import PermissionHandler
-from aaf.core.types import AgentConfig, AgentCLI, WorkflowMode, PhaseStatus
-from aaf.phases.plan_phase import PlanPhase
+from cafe.agents.manager import AgentManager
+from cafe.agents.mock_executor import MockAgentExecutor
+from cafe.core.permission import PermissionHandler
+from cafe.core.types import AgentConfig, AgentCLI, WorkflowMode, PhaseStatus
+from cafe.phases.plan_phase import PlanPhase
 
 
 @pytest.fixture
 def mock_env(monkeypatch):
     """啟用 mock agent mode"""
-    monkeypatch.setenv("AAF_MOCK_AGENTS", "true")
+    monkeypatch.setenv("CAFE_MOCK_AGENTS", "true")
 
 
 @pytest.fixture
 def temp_plan_dir(tmp_path):
     """創建臨時 plan 目錄結構"""
-    # 創建完整的目錄結構: {tmp_path}/.aaf/issues/test-issue/plan/
-    plan_dir = tmp_path / ".aaf" / "issues" / "test-issue" / "plan"
+    # 創建完整的目錄結構: {tmp_path}/.cafe/issues/test-issue/plan/
+    plan_dir = tmp_path / ".cafe" / "issues" / "test-issue" / "plan"
     plan_dir.mkdir(parents=True)
     
     # 創建 spec 目錄和 spec.md（plan 需要 spec 已存在）
-    spec_dir = tmp_path / ".aaf" / "issues" / "test-issue" / "spec"
+    spec_dir = tmp_path / ".cafe" / "issues" / "test-issue" / "spec"
     spec_dir.mkdir(parents=True)
     spec_file = spec_dir / "spec.md"
     spec_file.write_text("# 測試功能需求\n\n這是一個測試需求規格。")
@@ -41,17 +41,17 @@ def temp_plan_dir(tmp_path):
 def temp_plan_with_template(tmp_path):
     """創建包含 template 的臨時環境"""
     # 創建 plan 目錄
-    plan_dir = tmp_path / ".aaf" / "issues" / "test-issue" / "plan"
+    plan_dir = tmp_path / ".cafe" / "issues" / "test-issue" / "plan"
     plan_dir.mkdir(parents=True)
     
     # 創建 spec
-    spec_dir = tmp_path / ".aaf" / "issues" / "test-issue" / "spec"
+    spec_dir = tmp_path / ".cafe" / "issues" / "test-issue" / "spec"
     spec_dir.mkdir(parents=True)
     spec_file = spec_dir / "spec.md"
     spec_file.write_text("# 測試功能需求\n\n這是一個測試需求規格。")
     
     # 創建 template 目錄和預設 template
-    template_dir = tmp_path / ".aaf" / "templates" / "plan"
+    template_dir = tmp_path / ".cafe" / "templates" / "plan"
     template_dir.mkdir(parents=True)
     default_template = template_dir / "default.md"
     default_template.write_text("""# 實作計畫
@@ -112,8 +112,8 @@ class TestPlanCommandNonInteractiveFirstRound:
         spec_file = str(plan_dir.parent / "spec" / "spec.md")
         
         monkeypatch.setenv(
-            "AAF_MOCK_RESPONSE",
-            "AAF_READY_FOR_REVIEW\n\n# 實作計畫\n\n這是測試計畫內容。"
+            "CAFE_MOCK_RESPONSE",
+            "CAFE_READY_FOR_REVIEW\n\n# 實作計畫\n\n這是測試計畫內容。"
         )
         
         agent_manager = AgentManager()
@@ -154,8 +154,8 @@ class TestPlanCommandNonInteractiveFirstRound:
         spec_file = str(plan_dir.parent / "spec" / "spec.md")
         
         monkeypatch.setenv(
-            "AAF_MOCK_RESPONSE",
-            "AAF_NEED_CLARIFICATION\n\n請確認技術選型是否正確？"
+            "CAFE_MOCK_RESPONSE",
+            "CAFE_NEED_CLARIFICATION\n\n請確認技術選型是否正確？"
         )
         
         agent_manager = AgentManager()
@@ -199,8 +199,8 @@ class TestPlanCommandNonInteractiveSubsequentRounds:
         Path(plan_file).write_text("## 開發指南\n\n原始開發指南\n\n## 實作計畫\n\n初版計畫內容")
         
         monkeypatch.setenv(
-            "AAF_MOCK_RESPONSE",
-            "AAF_READY_FOR_REVIEW\n\n# 實作計畫\n\n更新後的計畫內容。"
+            "CAFE_MOCK_RESPONSE",
+            "CAFE_READY_FOR_REVIEW\n\n# 實作計畫\n\n更新後的計畫內容。"
         )
         
         agent_manager = AgentManager()
@@ -242,8 +242,8 @@ class TestPlanCommandNonInteractiveSubsequentRounds:
         Path(plan_file).write_text("## 開發指南\n\n原始開發指南\n\n## 實作計畫\n\n初版計畫內容")
         
         monkeypatch.setenv(
-            "AAF_MOCK_RESPONSE",
-            "AAF_READY_FOR_REVIEW\n\n# 實作計畫\n\n更新後的計畫內容。"
+            "CAFE_MOCK_RESPONSE",
+            "CAFE_READY_FOR_REVIEW\n\n# 實作計畫\n\n更新後的計畫內容。"
         )
         
         agent_manager = AgentManager()
@@ -287,8 +287,8 @@ class TestPlanCommandNonInteractiveFiles:
         spec_file = str(plan_dir.parent / "spec" / "spec.md")
         
         monkeypatch.setenv(
-            "AAF_MOCK_RESPONSE",
-            "AAF_READY_FOR_REVIEW\n\n# 測試計畫"
+            "CAFE_MOCK_RESPONSE",
+            "CAFE_READY_FOR_REVIEW\n\n# 測試計畫"
         )
         
         agent_manager = AgentManager()
@@ -326,8 +326,8 @@ class TestPlanCommandNonInteractiveFiles:
         history_dir = plan_dir / "history"
         
         monkeypatch.setenv(
-            "AAF_MOCK_RESPONSE",
-            "AAF_READY_FOR_REVIEW\n\n# 測試計畫"
+            "CAFE_MOCK_RESPONSE",
+            "CAFE_READY_FOR_REVIEW\n\n# 測試計畫"
         )
         
         agent_manager = AgentManager()
@@ -372,8 +372,8 @@ class TestPlanCommandNonInteractiveErrorHandling:
         spec_file = str(plan_dir.parent / "spec" / "spec.md")
         
         monkeypatch.setenv(
-            "AAF_MOCK_RESPONSE",
-            "AAF_REJECTED\n\n這個實作方案不可行。"
+            "CAFE_MOCK_RESPONSE",
+            "CAFE_REJECTED\n\n這個實作方案不可行。"
         )
         
         agent_manager = AgentManager()
@@ -447,8 +447,8 @@ class TestPlanCommandNonInteractiveAgentTracking:
         spec_file = str(plan_dir.parent / "spec" / "spec.md")
         
         monkeypatch.setenv(
-            "AAF_MOCK_RESPONSE",
-            "AAF_READY_FOR_REVIEW\n\n# 測試計畫"
+            "CAFE_MOCK_RESPONSE",
+            "CAFE_READY_FOR_REVIEW\n\n# 測試計畫"
         )
         
         agent_manager = AgentManager()
@@ -486,8 +486,8 @@ class TestPlanCommandNonInteractiveAgentTracking:
         spec_file = str(plan_dir.parent / "spec" / "spec.md")
         
         monkeypatch.setenv(
-            "AAF_MOCK_RESPONSE",
-            "AAF_READY_FOR_REVIEW\n\n# 測試計畫"
+            "CAFE_MOCK_RESPONSE",
+            "CAFE_READY_FOR_REVIEW\n\n# 測試計畫"
         )
         
         agent_manager = AgentManager()

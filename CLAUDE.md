@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 專案概述
 
-AI Agent Flow (AAF) 是一個 AI 驅動的開發工作流程自動化系統，透過協調多個 AI agents (PM、開發者、審查者) 處理從需求分析到 PR 建立的完整開發流程。目前正在從 bash 版本重構為 Python 版本。
+AI Agent Flow (CAFE) 是一個 AI 驅動的開發工作流程自動化系統，透過協調多個 AI agents (PM、開發者、審查者) 處理從需求分析到 PR 建立的完整開發流程。目前正在從 bash 版本重構為 Python 版本。
 
 **當前分支**: `refactor-python` (Python 重寫，約 75% 完成)
 **主要分支**: `main` (bash 版本)
@@ -18,9 +18,9 @@ AI Agent Flow (AAF) 是一個 AI 驅動的開發工作流程自動化系統，�
 pip install -e ".[dev]"
 
 # 執行 CLI（開發階段）
-./aaf <command>
+./cafe <command>
 # 或透過 Python 模組
-PYTHONPATH="src:$PYTHONPATH" python3 -m aaf.ui.cli <command>
+PYTHONPATH="src:$PYTHONPATH" python3 -m cafe.ui.cli <command>
 ```
 
 ### 測試
@@ -41,7 +41,7 @@ pytest -m slow         # 慢速測試（涉及 LLM API 呼叫）
 pytest tests/unit/test_<module>.py::test_function_name
 
 # 產生 HTML 覆蓋率報告
-pytest --cov=aaf --cov-report=html
+pytest --cov=cafe --cov-report=html
 ```
 
 ### 程式碼品質
@@ -61,27 +61,27 @@ mypy src/
 
 ```bash
 # 已實作的指令
-aaf spec <issue-name>           # Phase 1: 需求澄清（issue-name 是 issue 識別名稱）
-aaf plan <issue-name>           # Phase 2: 實作計畫
-aaf config set <key> <value>    # 設定配置值（支援 alias）
-aaf config get <key>            # 取得配置值
-aaf config edit                 # 使用 $EDITOR 編輯配置檔
-aaf config reset                # 重置為預設值
-aaf ls                          # 列出所有 sessions
-aaf rm <session-name>           # 刪除 session
-aaf template ls                 # 列出所有 plan 模板
-aaf template add <source> <name>  # 新增模板
-aaf template cat <name>         # 檢視模板內容
-aaf template edit <name>        # 編輯模板
-aaf template rm <name>          # 刪除模板
+cafe spec <issue-name>           # Phase 1: 需求澄清（issue-name 是 issue 識別名稱）
+cafe plan <issue-name>           # Phase 2: 實作計畫
+cafe config set <key> <value>    # 設定配置值（支援 alias）
+cafe config get <key>            # 取得配置值
+cafe config edit                 # 使用 $EDITOR 編輯配置檔
+cafe config reset                # 重置為預設值
+cafe ls                          # 列出所有 sessions
+cafe rm <session-name>           # 刪除 session
+cafe template ls                 # 列出所有 plan 模板
+cafe template add <source> <name>  # 新增模板
+cafe template cat <name>         # 檢視模板內容
+cafe template edit <name>        # 編輯模板
+cafe template rm <name>          # 刪除模板
 
 # 已實作
-aaf develop <issue-name>        # Phase 3: 開發實作
-aaf review <issue-name>         # Phase 4: Code Review
-aaf review <issue-name> --commit <sha>  # 審查特定 commit
+cafe develop <issue-name>        # Phase 3: 開發實作
+cafe review <issue-name>         # Phase 4: Code Review
+cafe review <issue-name> --commit <sha>  # 審查特定 commit
 
 # 尚未實作（參見 PYTHON_REFACTOR_TODO.md）
-aaf pr <issue-name>             # Phase 5: 建立 PR
+cafe pr <issue-name>             # Phase 5: 建立 PR
 ```
 
 ## 架構設計
@@ -114,7 +114,7 @@ aaf pr <issue-name>             # Phase 5: 建立 PR
 ### 模組組織
 
 ```
-src/aaf/
+src/cafe/
 ├── core/               # 核心抽象與工具
 │   ├── types.py       # Pydantic models 和 enums
 │   ├── phase.py       # Phase 抽象基礎類別
@@ -160,13 +160,13 @@ agents/                # Agent 角色定義
 
 **多 Agent 支援**: `AgentExecutor` 抽象化不同 CLI（Claude/Gemini/Cursor/Copilot）間的差異，進行工具名稱轉換。
 
-**Session 管理**: 每個 issue 在 `.aaf/sessions/<issue_name>/` 中有獨立的 session 儲存空間，存放對話歷史和狀態。
+**Session 管理**: 每個 issue 在 `.cafe/sessions/<issue_name>/` 中有獨立的 session 儲存空間，存放對話歷史和狀態。
 
 **Phase 快取**: `PhaseCache` 儲存 phase 結果並進行內容雜湊，以便重跑 workflow 時跳過重複的工作。
 
 ### 配置檔
 
-配置檔位置：`.aaf/config.yaml`
+配置檔位置：`.cafe/config.yaml`
 
 ```yaml
 agents:
@@ -185,7 +185,7 @@ defaults:
   interactive: true
 ```
 
-**配置 Alias**: `aaf config set pm gemini` 會自動轉換為 `agents.pm.cli: gemini`
+**配置 Alias**: `cafe config set pm gemini` 會自動轉換為 `agents.pm.cli: gemini`
 
 ### Agent CLI 工具名稱轉換
 
@@ -219,7 +219,7 @@ defaults:
 這是一個從 bash 到 Python 的進行中重構。詳細進度請參考 `PYTHON_REFACTOR_TODO.md`（21/28 項目完成，約 75%）。
 
 **下一階段優先事項**：
-1. `aaf pr` 指令（HIGH priority - 唯一剩餘的核心 CLI 指令）
+1. `cafe pr` 指令（HIGH priority - 唯一剩餘的核心 CLI 指令）
 2. Integration tests（MEDIUM priority）
 3. Documentation（LOW priority）
 
@@ -254,24 +254,24 @@ Agent CLIs（至少需要一個）：
 ### 重要檔案
 
 - `pyproject.toml` - 專案 metadata、依賴、工具配置
-- `.aaf/config.yaml` - 使用者配置
-- `.aaf/sessions/<issue_name>/` - Issue 特定的狀態與歷史
-- `.aaf/cache/session_<id>/phase_*.json` - 快取的 phase 結果
+- `.cafe/config.yaml` - 使用者配置
+- `.cafe/sessions/<issue_name>/` - Issue 特定的狀態與歷史
+- `.cafe/cache/session_<id>/phase_*.json` - 快取的 phase 結果
 - `agents/*.md` - Agent 角色 prompts（Roger, David, Richard）
-- `src/aaf/templates/plan/` - Plan 模板
+- `src/cafe/templates/plan/` - Plan 模板
 
 ### Issue 與 Session
 
-- **Issue**: 使用 `<issue-name>` 作為識別（例如 `aaf spec fix-login-bug`）
+- **Issue**: 使用 `<issue-name>` 作為識別（例如 `cafe spec fix-login-bug`）
 - **Session**: 系統內部管理，每個 issue 會有對應的 session
-- Issue 資料儲存在 `.aaf/issues/<issue-name>/` 目錄
-- Session 資料儲存在 `.aaf/issues/<issue-name>/sessions/` 目錄（每個 issue 的 sessions 與該 issue 資料放在一起）
-- Global sessions（無 issue 時）儲存在 `.aaf/sessions/` 目錄
+- Issue 資料儲存在 `.cafe/issues/<issue-name>/` 目錄
+- Session 資料儲存在 `.cafe/issues/<issue-name>/sessions/` 目錄（每個 issue 的 sessions 與該 issue 資料放在一起）
+- Global sessions（無 issue 時）儲存在 `.cafe/sessions/` 目錄
 
 ### 目錄結構範例
 
 ```
-.aaf/
+.cafe/
 ├── issues/
 │   └── myip/                   # Issue 名稱
 │       ├── spec/               # 需求文件

@@ -5,8 +5,8 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 import yaml
 
-from aaf.utils.config import ConfigManager, ConfigError
-from aaf.core.types import WorkflowMode, AgentCLI
+from cafe.utils.config import ConfigManager, ConfigError
+from cafe.core.types import WorkflowMode, AgentCLI
 
 
 class TestConfigManagerBasics:
@@ -14,7 +14,7 @@ class TestConfigManagerBasics:
 
     def test_init_config_manager(self, tmp_path: Path) -> None:
         """測試初始化 ConfigManager"""
-        config_dir = tmp_path / ".aaf"
+        config_dir = tmp_path / ".cafe"
         manager = ConfigManager(config_dir=str(config_dir))
 
         assert manager.config_dir == config_dir
@@ -22,7 +22,7 @@ class TestConfigManagerBasics:
 
     def test_init_creates_config_dir(self, tmp_path: Path) -> None:
         """測試初始化時建立設定目錄"""
-        config_dir = tmp_path / ".aaf"
+        config_dir = tmp_path / ".cafe"
         assert not config_dir.exists()
 
         ConfigManager(config_dir=str(config_dir))
@@ -35,7 +35,7 @@ class TestLoadConfig:
 
     def test_load_existing_config(self, tmp_path: Path) -> None:
         """測試載入現有設定檔"""
-        config_dir = tmp_path / ".aaf"
+        config_dir = tmp_path / ".cafe"
         config_dir.mkdir()
         config_file = config_dir / "config.yaml"
 
@@ -55,7 +55,7 @@ class TestLoadConfig:
 
     def test_load_nonexistent_config_returns_defaults(self, tmp_path: Path) -> None:
         """測試載入不存在的設定檔回傳預設值"""
-        config_dir = tmp_path / ".aaf"
+        config_dir = tmp_path / ".cafe"
         manager = ConfigManager(config_dir=str(config_dir))
 
         config = manager.load_config()
@@ -67,7 +67,7 @@ class TestLoadConfig:
 
     def test_load_invalid_yaml_raises_error(self, tmp_path: Path) -> None:
         """測試載入無效的 YAML 拋出錯誤"""
-        config_dir = tmp_path / ".aaf"
+        config_dir = tmp_path / ".cafe"
         config_dir.mkdir()
         config_file = config_dir / "config.yaml"
         config_file.write_text("invalid: yaml: content: [")
@@ -124,7 +124,7 @@ class TestSaveConfig:
 
     def test_save_config(self, tmp_path: Path) -> None:
         """測試儲存設定"""
-        config_dir = tmp_path / ".aaf"
+        config_dir = tmp_path / ".cafe"
         manager = ConfigManager(config_dir=str(config_dir))
 
         config = {
@@ -145,7 +145,7 @@ class TestSaveConfig:
 
     def test_save_overwrites_existing_config(self, tmp_path: Path) -> None:
         """測試儲存會覆寫現有設定"""
-        config_dir = tmp_path / ".aaf"
+        config_dir = tmp_path / ".cafe"
         config_dir.mkdir()
         config_file = config_dir / "config.yaml"
         config_file.write_text("old: value")
@@ -218,7 +218,7 @@ class TestGetConfigValue:
 
     def test_get_existing_value(self, tmp_path: Path) -> None:
         """測試取得存在的設定值"""
-        config_dir = tmp_path / ".aaf"
+        config_dir = tmp_path / ".cafe"
         config_dir.mkdir()
         config_file = config_dir / "config.yaml"
         config_file.write_text(yaml.dump({"workflow_mode": "github"}))
@@ -230,14 +230,14 @@ class TestGetConfigValue:
 
     def test_get_nonexistent_value_returns_default(self, tmp_path: Path) -> None:
         """測試取得不存在的值回傳預設"""
-        manager = ConfigManager(config_dir=str(tmp_path / ".aaf"))
+        manager = ConfigManager(config_dir=str(tmp_path / ".cafe"))
         value = manager.get("nonexistent_key", default="default_value")
 
         assert value == "default_value"
 
     def test_get_nested_value(self, tmp_path: Path) -> None:
         """測試取得巢狀設定值"""
-        config_dir = tmp_path / ".aaf"
+        config_dir = tmp_path / ".cafe"
         config_dir.mkdir()
         config_file = config_dir / "config.yaml"
         config_data = {
@@ -259,7 +259,7 @@ class TestSetConfigValue:
 
     def test_set_value(self, tmp_path: Path) -> None:
         """測試設定值"""
-        manager = ConfigManager(config_dir=str(tmp_path / ".aaf"))
+        manager = ConfigManager(config_dir=str(tmp_path / ".cafe"))
         manager.set("workflow_mode", "github")
 
         value = manager.get("workflow_mode")
@@ -267,7 +267,7 @@ class TestSetConfigValue:
 
     def test_set_nested_value(self, tmp_path: Path) -> None:
         """測試設定巢狀值"""
-        manager = ConfigManager(config_dir=str(tmp_path / ".aaf"))
+        manager = ConfigManager(config_dir=str(tmp_path / ".cafe"))
         manager.set("database.host", "localhost")
 
         value = manager.get("database.host")
@@ -275,7 +275,7 @@ class TestSetConfigValue:
 
     def test_set_persists_to_file(self, tmp_path: Path) -> None:
         """測試設定會持久化到檔案"""
-        config_dir = tmp_path / ".aaf"
+        config_dir = tmp_path / ".cafe"
         manager = ConfigManager(config_dir=str(config_dir))
         manager.set("workflow_mode", "github")
 
@@ -291,7 +291,7 @@ class TestResetConfig:
 
     def test_reset_to_defaults(self, tmp_path: Path) -> None:
         """測試重置為預設值"""
-        manager = ConfigManager(config_dir=str(tmp_path / ".aaf"))
+        manager = ConfigManager(config_dir=str(tmp_path / ".cafe"))
 
         # Set some custom values
         manager.set("agents.pm.cli", "gemini")
@@ -306,7 +306,7 @@ class TestResetConfig:
 
     def test_reset_persists_to_file(self, tmp_path: Path) -> None:
         """測試重置會持久化到檔案"""
-        config_dir = tmp_path / ".aaf"
+        config_dir = tmp_path / ".cafe"
         manager = ConfigManager(config_dir=str(config_dir))
 
         manager.set("agents.pm.cli", "gemini")
@@ -347,7 +347,7 @@ class TestAliasResolution:
 
     def test_set_with_alias(self, tmp_path: Path) -> None:
         """測試使用 alias 設定值"""
-        manager = ConfigManager(config_dir=str(tmp_path / ".aaf"))
+        manager = ConfigManager(config_dir=str(tmp_path / ".cafe"))
 
         # Use alias
         manager.set("pm", "gemini")
@@ -357,7 +357,7 @@ class TestAliasResolution:
 
     def test_set_with_agent_property_alias(self, tmp_path: Path) -> None:
         """測試使用 agent.property alias 設定值"""
-        manager = ConfigManager(config_dir=str(tmp_path / ".aaf"))
+        manager = ConfigManager(config_dir=str(tmp_path / ".cafe"))
 
         # Use shorthand
         manager.set("pm.name", "NewPM")

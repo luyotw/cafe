@@ -4,5 +4,5 @@
 *.pyc
 .pytest_cache/
 .coverage
-.aaf/
+.cafe/
 MagicMock
