@@ -884,9 +884,38 @@ class Phase(ABC):
             )
 
         # Handle other complete codes (e.g., READY_FOR_REVIEW)
-        # These typically trigger user confirmation in next iteration
+        # In interactive mode: continue to next iteration for user confirmation
+        # In non-interactive mode: complete immediately
         if status_code in complete_codes:
-            return None  # Continue to next iteration
+            if not self.interactive:
+                # Non-interactive: complete immediately
+                self._print_token_usage_summary()
+                token_usage = self.agent_manager.get_total_token_usage()
+                result_data = {
+                    "iterations": self.iteration,
+                    "final_response": response,
+                    "status_code": status_code.value,
+                    "token_usage": {
+                        "input_tokens": token_usage.input_tokens,
+                        "output_tokens": token_usage.output_tokens,
+                        "cache_creation_input_tokens": token_usage.cache_creation_input_tokens,
+                        "cache_read_input_tokens": token_usage.cache_read_input_tokens,
+                        "total_cost_usd": token_usage.total_cost_usd,
+                    }
+                }
+                if hasattr(self, '_get_completion_data'):
+                    phase_data = self._get_completion_data()
+                    result_data.update(phase_data)
+
+                return PhaseResult(
+                    status=PhaseStatus.COMPLETED,
+                    message=f"Phase completed in {self.iteration} iteration(s)",
+                    data=result_data,
+                    token_usage=token_usage,
+                )
+            else:
+                # Interactive: continue to next iteration for user confirmation
+                return None
 
         # Handle continue codes (e.g., NEED_CLARIFICATION)
         if status_code in continue_codes:

@@ -103,7 +103,17 @@ class PlanPhase(Phase):
 
                 # Check for plan.md with development guide section
                 plan_file_path = self.history_dir.parent / "plan.md"
-                if not plan_file_path.exists() or not self._has_dev_guide_section(plan_file_path):
+                plan_exists = plan_file_path.exists()
+                
+                # First round: plan.md doesn't exist
+                if not plan_exists:
+                    if not self.template_path:
+                        return PhaseResult(
+                            status=PhaseStatus.FAILED,
+                            message="First round requires template. Use --template option.",
+                        )
+                # Subsequent rounds: plan.md exists but may lack dev guide section
+                elif not self._has_dev_guide_section(plan_file_path):
                     if self.interactive:
                         # Prompt user to provide development guide
                         self._prompt_for_dev_guide()
@@ -135,7 +145,7 @@ class PlanPhase(Phase):
                 current_user_input = result_or_input
 
                 # Execute full agent interaction cycle (generate prompt, execute, handle status)
-                result, _ = self._execute_and_handle_agent_response(
+                result, response = self._execute_and_handle_agent_response(
                     agent_name=self.dev_agent,
                     user_input=current_user_input,
                     valid_status_codes=[
@@ -148,6 +158,11 @@ class PlanPhase(Phase):
                     continue_codes=[PhaseStatusCode.NEED_CLARIFICATION],
                     phase_specific_data={"dev_agent": self.dev_agent},
                 )
+                
+                # Write agent response to plan.md (if not failed)
+                if result is None or result.status != PhaseStatus.FAILED:
+                    self._write_plan_from_response(response)
+                
                 if result:
                     return result
                 # If result is None, continue to next iteration
@@ -363,6 +378,33 @@ class PlanPhase(Phase):
                 return True
 
         return False
+
+    def _write_plan_from_response(self, response: str) -> None:
+        """從 agent 回應中提取內容並寫入 plan.md。
+        
+        Args:
+            response: Agent 回應（可能包含狀態碼和內容）
+        """
+        # Remove status code from response
+        lines = response.split("\n")
+        content_lines = []
+        
+        for line in lines:
+            # Skip status code lines
+            if line.strip().startswith("AAF_"):
+                continue
+            content_lines.append(line)
+        
+        content = "\n".join(content_lines).strip()
+        
+        # Skip if no content
+        if not content:
+            return
+            
+        # Write to plan.md
+        plan_file_path = self.history_dir.parent / "plan.md"
+        plan_file_path.parent.mkdir(parents=True, exist_ok=True)
+        plan_file_path.write_text(content, encoding="utf-8")
 
     def _prompt_for_dev_guide(self) -> None:
         """Prompt user to write development guide when it doesn't exist."""
