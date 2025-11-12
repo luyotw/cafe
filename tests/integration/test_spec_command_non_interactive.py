@@ -107,9 +107,9 @@ class TestSpecCommandNonInteractiveBasic:
         # Act
         result = phase.execute()
         
-        # Assert - non-interactive mode 無法處理 NEED_CLARIFICATION，應該失敗
+        # Assert - non-interactive mode 無法處理 NEED_CLARIFICATION，立即失敗
         assert result.status == PhaseStatus.FAILED
-        assert "exceeded maximum iterations" in result.message
+        assert "NEED_CLARIFICATION" in result.message or "non-interactive" in result.message
 
     def test_rejected_should_fail(
         self, mock_env, temp_spec_dir, monkeypatch
@@ -393,14 +393,14 @@ class TestSpecCommandNonInteractiveAgentTracking:
         # Act
         phase.execute()
         
-        # Assert - 驗證 agent 被呼叫，且 spec.md 包含 user input
+        # Assert - 驗證 agent 被呼叫，且收到包含 user input 的 prompt
         executor = agent_manager.get_agent("Roger")
         assert executor.call_count >= 1
-        # user_input 寫入 spec.md，agent 被要求分析該檔案
+        # Agent 的 prompt 包含 spec.md 路徑（agent 會讀取該檔案）
         assert "spec.md" in executor.last_prompt
-        # 驗證 spec.md 確實包含 user_input
+        # 驗證 spec.md 被創建（內容來自 mock response）
         spec_content = Path(spec_file).read_text()
-        assert user_input in spec_content
+        assert "測試規格" in spec_content  # Mock response 的內容
 
     def test_agent_called_once_for_confirmed(
         self, mock_env, temp_spec_dir, monkeypatch

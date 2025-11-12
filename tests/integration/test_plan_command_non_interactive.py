@@ -178,9 +178,9 @@ class TestPlanCommandNonInteractiveFirstRound:
         # Act
         result = phase.execute()
         
-        # Assert - non-interactive 無法處理 NEED_MODIFICATION
+        # Assert - non-interactive 無法處理 NEED_CLARIFICATION，立即失敗
         assert result.status == PhaseStatus.FAILED
-        assert "exceeded maximum iterations" in result.message
+        assert "NEED_CLARIFICATION" in result.message or "non-interactive" in result.message
 
 
 class TestPlanCommandNonInteractiveSubsequentRounds:
@@ -195,8 +195,8 @@ class TestPlanCommandNonInteractiveSubsequentRounds:
         plan_file = str(plan_dir / "plan.md")
         spec_file = str(plan_dir.parent / "spec" / "spec.md")
         
-        # 先創建 plan.md（模擬第一輪已完成）
-        Path(plan_file).write_text("# 實作計畫\n\n初版計畫內容")
+        # 先創建 plan.md（模擬第一輪已完成，包含開發指南）
+        Path(plan_file).write_text("## 開發指南\n\n原始開發指南\n\n## 實作計畫\n\n初版計畫內容")
         
         monkeypatch.setenv(
             "AAF_MOCK_RESPONSE",
@@ -238,8 +238,8 @@ class TestPlanCommandNonInteractiveSubsequentRounds:
         plan_file = str(plan_dir / "plan.md")
         spec_file = str(plan_dir.parent / "spec" / "spec.md")
         
-        # 先創建 plan.md
-        Path(plan_file).write_text("# 實作計畫\n\n初版計畫內容")
+        # 先創建 plan.md（包含開發指南）
+        Path(plan_file).write_text("## 開發指南\n\n原始開發指南\n\n## 實作計畫\n\n初版計畫內容")
         
         monkeypatch.setenv(
             "AAF_MOCK_RESPONSE",
