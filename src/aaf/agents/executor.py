@@ -274,6 +274,9 @@ class AgentExecutor:
                     try:
                         data = json.loads(line.strip())
 
+                        # Always collect the line for response_parser (e.g., Gemini needs last line)
+                        output_lines.append(line)
+
                         # Extract content using custom extractor or default Claude extractor
                         if json_content_extractor:
                             content = json_content_extractor(data)
