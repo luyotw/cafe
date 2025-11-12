@@ -30,6 +30,7 @@ class AgentManager:
         self.agents: Dict[str, AgentExecutor] = {}
         self.current_agent_name: Optional[str] = None
         self._total_token_usage = TokenUsage()
+        self.show_prompt = False  # CLI can set this to True to show prompts
 
     def register_agent(self, config: AgentConfig) -> None:
         """Register an agent with configuration.
@@ -108,6 +109,14 @@ class AgentManager:
             AgentNotFoundError: If agent not found
         """
         executor = self.get_agent(agent_name)
+        
+        # Show prompt if enabled
+        if self.show_prompt:
+            print(f"\n{'='*80}")
+            print(f"📝 Prompt for {agent_name}:")
+            print(f"{'='*80}")
+            print(prompt)
+            print(f"{'='*80}\n")
         
         # Track if we've already retried for session conflict
         retried = False

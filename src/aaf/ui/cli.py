@@ -339,6 +339,11 @@ def spec(
         "--non-interactive",
         help="Detect if stdin is redirected and use it for input",
     ),
+    show_prompt: bool = typer.Option(
+        False,
+        "--show-prompt",
+        help="Show the prompt sent to agent",
+    ),
 ) -> None:
     """Run specification phase: Spec clarification with conversational generation.
 
@@ -394,6 +399,9 @@ def spec(
         config_manager = ConfigManager(config_dir)
         agent_manager = _setup_agents(config_manager, issue_name=issue_name)
         permission_handler = PermissionHandler()
+
+        # Set show_prompt flag
+        agent_manager.show_prompt = show_prompt
 
         # Get PM agent CLI
         pm_executor = agent_manager.get_agent(pm_agent)
@@ -496,6 +504,11 @@ def plan(
         "-c",
         help="Path to configuration file",
     ),
+    show_prompt: bool = typer.Option(
+        False,
+        "--show-prompt",
+        help="Show the prompt sent to agent",
+    ),
 ) -> None:
     """Run plan phase: Implementation planning with developer agent.
 
@@ -537,6 +550,9 @@ def plan(
         config_manager = ConfigManager(config_dir)
         agent_manager = _setup_agents(config_manager, issue_name=issue_name)
         permission_handler = PermissionHandler()
+
+        # Set show_prompt flag
+        agent_manager.show_prompt = show_prompt
 
         # Get developer agent CLI
         dev_executor = agent_manager.get_agent(dev_agent)
@@ -654,6 +670,11 @@ def develop(
         "-c",
         help="Path to configuration file",
     ),
+    show_prompt: bool = typer.Option(
+        False,
+        "--show-prompt",
+        help="Show the prompt sent to agent",
+    ),
 ) -> None:
     """Run develop phase: Execute development work according to plan.
 
@@ -700,6 +721,9 @@ def develop(
         agent_manager = _setup_agents(config_manager, issue_name=issue_name)
         permission_handler = PermissionHandler()
         git_ops = GitOperations()
+
+        # Set show_prompt flag
+        agent_manager.show_prompt = show_prompt
 
         # Get developer agent CLI
         dev_executor = agent_manager.get_agent(dev_agent)
@@ -843,6 +867,11 @@ def review(
         "--config",
         help="Path to configuration file",
     ),
+    show_prompt: bool = typer.Option(
+        False,
+        "--show-prompt",
+        help="Show the prompt sent to agent",
+    ),
 ) -> None:
     """Run review phase: Code review by reviewer agent.
 
@@ -883,6 +912,9 @@ def review(
         agent_manager = _setup_agents(config_manager, issue_name=issue_name)
         permission_handler = PermissionHandler()
         git_ops = GitOperations()
+
+        # Set show_prompt flag
+        agent_manager.show_prompt = show_prompt
 
         # Get reviewer agent CLI
         reviewer_executor = agent_manager.get_agent(reviewer_agent)

@@ -206,6 +206,7 @@ class AgentExecutor:
         cli_name: str,
         response_parser: Optional[Callable[[List[str]], Tuple[str, TokenUsage]]] = None,
         parse_stream_json: bool = False,
+        json_content_extractor: Optional[Callable[[dict], Optional[str]]] = None,
     ) -> Tuple[str, TokenUsage]:
         """Execute command with streaming output.
 
@@ -213,7 +214,9 @@ class AgentExecutor:
             cmd: Command to execute
             cli_name: Name of the CLI (for display)
             response_parser: Optional custom parser for output lines
-            parse_stream_json: Whether to parse stream-json format (Claude style)
+            parse_stream_json: Whether to parse stream-json format
+            json_content_extractor: Optional function to extract content from parsed JSON.
+                                   If None and parse_stream_json=True, uses default Claude extractor.
 
         Returns:
             Tuple of (response text, token usage)
@@ -228,6 +231,28 @@ class AgentExecutor:
             text=True,
             bufsize=1,  # Line buffered
         )
+
+        # Check stderr first for immediate errors (e.g., session locked)
+        import select
+        import sys
+        
+        stderr_check_timeout = 0.5  # 500ms to check for immediate errors
+        
+        if sys.platform != 'win32' and process.stderr:
+            # Use select on Unix-like systems to check for immediate stderr output
+            ready, _, _ = select.select([process.stderr], [], [], stderr_check_timeout)
+            
+            if process.stderr in ready:
+                # Read first line of stderr if available (non-blocking)
+                stderr_line = process.stderr.readline()
+                if stderr_line and ("already in use" in stderr_line.lower() or "error:" in stderr_line.lower()):
+                    # Likely a fatal error, read rest and terminate
+                    process.kill()
+                    remaining_stderr = process.stderr.read()
+                    full_stderr = stderr_line + remaining_stderr
+                    raise AgentExecutionError(
+                        f"{cli_name} execution failed: {full_stderr}"
+                    )
 
         # Print header
         print(f"\n{'='*80}")
@@ -245,23 +270,31 @@ class AgentExecutor:
                     break
 
                 if parse_stream_json:
-                    # Parse stream-json format (Claude)
+                    # Parse stream-json format
                     try:
                         data = json.loads(line.strip())
 
-                        # Extract content from message.content[] (new Claude format)
-                        if "message" in data and "content" in data["message"]:
-                            for content_block in data["message"]["content"]:
-                                if content_block.get("type") == "text":
-                                    text = content_block.get("text", "")
-                                    print(text, end='', flush=True)
-                                    response_text += text
+                        # Extract content using custom extractor or default Claude extractor
+                        if json_content_extractor:
+                            content = json_content_extractor(data)
+                            if content:
+                                print(content, end='', flush=True)
+                                response_text += content
+                        else:
+                            # Default Claude format extractor
+                            # Extract content from message.content[] (new Claude format)
+                            if "message" in data and "content" in data["message"]:
+                                for content_block in data["message"]["content"]:
+                                    if content_block.get("type") == "text":
+                                        text = content_block.get("text", "")
+                                        print(text, end='', flush=True)
+                                        response_text += text
 
-                        # Old format: direct content field
-                        elif "content" in data:
-                            content = data["content"]
-                            print(content, end='', flush=True)
-                            response_text += content
+                            # Old format: direct content field
+                            elif "content" in data:
+                                content = data["content"]
+                                print(content, end='', flush=True)
+                                response_text += content
 
                         # Extract session_id
                         if "session_id" in data and not session_id:
@@ -340,6 +373,9 @@ class AgentExecutor:
         # Add streaming output format
         cmd.extend(["--output-format", "stream-json", "--verbose"])
 
+        # Include .aaf directory for tool access
+        cmd.extend(["--add-dir", ".aaf"])
+
         # Execute with streaming
         response, token_usage = self._execute_with_streaming(
             cmd=cmd,
@@ -414,6 +450,9 @@ class AgentExecutor:
         # Add streaming JSON output format
         cmd.extend(["--output-format", "stream-json"])
 
+        # Include .aaf directory for tool access
+        cmd.extend(["--include-directories", ".aaf"])
+
         # Gemini-specific parser: parse last line as final result
         def parse_gemini_response(output_lines: List[str]) -> Tuple[str, TokenUsage]:
             full_output = ''.join(output_lines)
@@ -435,7 +474,18 @@ class AgentExecutor:
                 # If not JSON, return raw output
                 return full_output, TokenUsage()
 
-        return self._execute_with_streaming(cmd, "Gemini", parse_gemini_response)
+        # Gemini content extractor function
+        def extract_gemini_content(data: dict) -> Optional[str]:
+            """Extract content from Gemini stream-json format."""
+            return data.get("content")
+
+        return self._execute_with_streaming(
+            cmd, 
+            "Gemini", 
+            parse_gemini_response,
+            parse_stream_json=True,
+            json_content_extractor=extract_gemini_content
+        )
 
     def _execute_cursor(self, prompt: str, allowed_tools: Optional[List[str]] = None) -> Tuple[str, TokenUsage]:
         """Execute Cursor agent with streaming output.
@@ -509,6 +559,9 @@ class AgentExecutor:
         # Add session if configured
         if self.config.session_id:
             cmd.extend(["--resume", self.config.session_id])
+
+        # Include .aaf directory for tool access
+        cmd.extend(["--add-dir", ".aaf"])
 
         # Execute with streaming (line-by-line mode)
         response, token_usage = self._execute_with_streaming(
