@@ -476,11 +476,14 @@ class PlanPhase(Phase):
                 choice = self._ask_user_for_review_decision("實作計畫")
             else:
                 choice = self.user_input
+                # Non-interactive 模式：用完後清空，確保不重複使用
+                self.user_input = ""
+                
                 if not choice:
-                    # Non-interactive 但沒提供輸入 → 暫停
+                    # Non-interactive 但沒提供輸入 → 立即失敗
                     return PhaseResult(
-                        status=PhaseStatus.IN_PROGRESS,
-                        message=f"Plan phase paused after iteration {self.iteration - 1}, waiting for user decision on READY_FOR_REVIEW",
+                        status=PhaseStatus.FAILED,
+                        message=f"Plan phase failed after iteration {self.iteration - 1}: received READY_FOR_REVIEW in non-interactive mode without user input",
                         data={
                             "iterations": self.iteration - 1,
                             "last_response": prev_data.get("response", ""),

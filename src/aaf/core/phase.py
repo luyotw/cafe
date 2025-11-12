@@ -549,9 +549,9 @@ class Phase(ABC):
 
         此方法封裝了 NEED_CLARIFICATION 狀態的標準處理流程：
         1. Interactive 模式：呼叫 _ask_user_for_clarification() 提示用戶輸入
-        2. Non-interactive 模式：使用 self.user_input
+        2. Non-interactive 模式：使用 self.user_input（用完後清空）
         3. 驗證用戶輸入不為空
-        4. 返回用戶輸入或 PhaseResult（錯誤/暫停狀態）
+        4. 返回用戶輸入或 PhaseResult（錯誤狀態）
 
         Args:
             prev_data: 上一輪 iteration 的資料（從 history JSON 讀取）
@@ -559,7 +559,7 @@ class Phase(ABC):
 
         Returns:
             str: 用戶輸入的 clarification
-            PhaseResult: 如果需要暫停或失敗（IN_PROGRESS 或 FAILED）
+            PhaseResult: 如果失敗（FAILED）
         """
         # 檢查必要的屬性
         if not hasattr(self, "iteration"):
@@ -576,11 +576,14 @@ class Phase(ABC):
             clarification = self._ask_user_for_clarification()
         else:
             clarification = self.user_input
+            # Non-interactive 模式：用完後清空，確保不重複使用
+            self.user_input = ""
+            
             if not clarification:
-                # Non-interactive 但沒提供輸入 → 暫停
+                # Non-interactive 但沒提供輸入 → 立即失敗
                 return PhaseResult(
-                    status=PhaseStatus.IN_PROGRESS,
-                    message=f"{self.phase_name.capitalize()} phase paused after iteration {self.iteration - 1}, waiting for user clarification",
+                    status=PhaseStatus.FAILED,
+                    message=f"{self.phase_name.capitalize()} phase failed after iteration {self.iteration - 1}: received NEED_CLARIFICATION in non-interactive mode without user input",
                     data={
                         "iterations": self.iteration - 1,
                         "last_response": prev_data.get("response", ""),
