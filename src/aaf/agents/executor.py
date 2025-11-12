@@ -420,13 +420,13 @@ class AgentExecutor:
             cmd.extend(["--allowed-tools", ",".join(allowed_tools)])
 
         # Add streaming JSON output format
-        cmd.extend(["--output-format", "streaming-json"])
+        cmd.extend(["--output-format", "stream-json"])
 
         # Gemini-specific parser: parse last line as final result
         def parse_gemini_response(output_lines: List[str]) -> Tuple[str, TokenUsage]:
             full_output = ''.join(output_lines)
             
-            # Parse the last line as JSON (streaming-json format sends final result on last line)
+            # Parse the last line as JSON (stream-json format sends final result on last line)
             try:
                 lines = [l.strip() for l in output_lines if l.strip()]
                 if not lines:

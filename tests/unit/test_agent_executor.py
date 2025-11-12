@@ -293,7 +293,7 @@ class TestGeminiExecution:
             assert "gemini" in call_args
             assert "Test prompt" in call_args
             assert "--output-format" in call_args
-            assert "streaming-json" in call_args
+            assert "stream-json" in call_args
 
     def test_execute_with_gemini_tool(self) -> None:
         """測試使用 Gemini tool 執行"""
