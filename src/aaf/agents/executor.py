@@ -327,38 +327,30 @@ class AgentExecutor:
         Returns:
             Tuple of (Claude's response, token usage)
         """
-        # Build command: prompt must come first, then options
-        cmd = ["claude", "--print", prompt]
+        # Step 1: Always warmup/create session first
+        session_id = self._create_new_session()
+
+        # Step 2: Use resume with actual prompt
+        cmd = ["claude", "--resume", session_id, "-p", prompt]
 
         # Add allowed tools if specified
         if allowed_tools:
             cmd.extend(["--allowed-tools", ",".join(allowed_tools)])
 
-        # Add session if available
-        if self.config.session_id:
-            cmd.extend(["--session-id", self.config.session_id])
-
-        # Add streaming output format (requires --verbose when using --print)
+        # Add streaming output format
         cmd.extend(["--output-format", "stream-json", "--verbose"])
 
         # Execute with streaming
-        try:
-            response, token_usage = self._execute_with_streaming(
-                cmd=cmd,
-                cli_name="Claude",
-                parse_stream_json=True,
-            )
-            return response, token_usage
-        except AgentExecutionError as e:
-            # Check if session is already in use
-            if "already in use" in str(e):
-                # Create a new session and retry
-                new_session_id = self._create_new_session()
-                self.config.session_id = new_session_id
-                # Retry with new session (preserve allowed_tools)
-                return self._execute_claude(prompt, allowed_tools)
-            # Re-raise if it's a different error
-            raise
+        response, token_usage = self._execute_with_streaming(
+            cmd=cmd,
+            cli_name="Claude",
+            parse_stream_json=True,
+        )
+
+        # Update session_id in config for future use
+        self.config.session_id = session_id
+
+        return response, token_usage
 
     def _create_new_session(self) -> str:
         """Create a new Claude session.
