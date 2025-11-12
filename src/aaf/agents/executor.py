@@ -479,8 +479,14 @@ class AgentExecutor:
 
         # Gemini content extractor function
         def extract_gemini_content(data: dict) -> Optional[str]:
-            """Extract content from Gemini stream-json format."""
-            return data.get("content")
+            """Extract content from Gemini stream-json format.
+            
+            Only extract content from assistant messages, not user messages (prompt echo).
+            """
+            # Only extract content if it's from the assistant
+            if data.get("role") == "assistant":
+                return data.get("content")
+            return None
 
         return self._execute_with_streaming(
             cmd, 
