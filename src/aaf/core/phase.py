@@ -17,7 +17,18 @@ class Phase(ABC):
     implementation analysis, development, code review, etc.).
 
     Subclasses must implement the execute() method to define the phase's behavior.
+    
+    Attributes:
+        interactive: Whether to allow interactive user prompts (default: True)
     """
+
+    def __init__(self, interactive: bool = True):
+        """Initialize phase with common attributes.
+        
+        Args:
+            interactive: Whether to allow interactive user prompts
+        """
+        self.interactive = interactive
 
     @abstractmethod
     def execute(self) -> PhaseResult:

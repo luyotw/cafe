@@ -47,13 +47,14 @@ class PlanPhase(Phase):
             interactive: Whether to allow interactive prompts (default: True)
             user_input: User input for non-interactive mode (default: "")
         """
+        super().__init__(interactive=interactive)
+        
         self.agent_manager = agent_manager
         self.permission_handler = permission_handler
         self.spec_file = spec_file
         self.workflow_mode = workflow_mode
         self.issue_id = issue_id
         self.dev_agent = dev_agent
-        self.interactive = interactive
         self.template_path = template_path
         self.user_input = user_input
         self.display = Display()

@@ -509,6 +509,11 @@ def plan(
         "--show-prompt",
         help="Show the prompt sent to agent",
     ),
+    interactive: bool = typer.Option(
+        True,
+        "--interactive/--no-interactive",
+        help="Allow interactive prompts (default: True)",
+    ),
 ) -> None:
     """Run plan phase: Implementation planning with developer agent.
 
@@ -612,7 +617,7 @@ def plan(
             issue_id=issue_id,
             issue_name=issue_name,
             dev_agent=dev_agent,
-            interactive=True,
+            interactive=interactive,
             template_path=template_path_str,
         )
 
@@ -674,6 +679,11 @@ def develop(
         False,
         "--show-prompt",
         help="Show the prompt sent to agent",
+    ),
+    interactive: bool = typer.Option(
+        True,
+        "--interactive/--no-interactive",
+        help="Allow interactive prompts (default: True)",
     ),
 ) -> None:
     """Run develop phase: Execute development work according to plan.
@@ -752,7 +762,7 @@ def develop(
             issue_id=issue_id,
             issue_name=issue_name,
             dev_agent=dev_agent,
-            interactive=True,
+            interactive=interactive,
         )
 
         console.print("[bold]Starting development execution...[/bold]")
@@ -872,6 +882,11 @@ def review(
         "--show-prompt",
         help="Show the prompt sent to agent",
     ),
+    interactive: bool = typer.Option(
+        True,
+        "--interactive/--no-interactive",
+        help="Allow interactive prompts (default: True)",
+    ),
 ) -> None:
     """Run review phase: Code review by reviewer agent.
 
@@ -933,6 +948,7 @@ def review(
             review_agent=reviewer_agent,
             target_commit=commit,
             base_branch=base_branch,
+            interactive=interactive,
         )
 
         # Display start message (use actual base_branch from phase)

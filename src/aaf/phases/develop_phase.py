@@ -44,6 +44,8 @@ class DevelopPhase(Phase):
             dev_agent: Developer agent name (default: David)
             interactive: Enable interactive mode (default: True)
         """
+        super().__init__(interactive=interactive)
+        
         self.agent_manager = agent_manager
         self.permission_handler = permission_handler
         self.git_ops = git_ops
@@ -52,7 +54,6 @@ class DevelopPhase(Phase):
         self.workflow_mode = workflow_mode
         self.issue_id = issue_id
         self.dev_agent = dev_agent
-        self.interactive = interactive
 
         # Iteration tracking
         self.iteration = 0

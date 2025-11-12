@@ -78,6 +78,8 @@ class SpecPhase(Phase):
             rigor: Specification rigor level (default: medium)
             user_input: User input for non-interactive mode (default: "")
         """
+        super().__init__(interactive=interactive)
+        
         from aaf.core.types import SpecRigor
 
         self.agent_manager = agent_manager
@@ -86,7 +88,6 @@ class SpecPhase(Phase):
         self.workflow_mode = workflow_mode
         self.issue_id = issue_id
         self.pm_agent = pm_agent
-        self.interactive = interactive
         self.user_input = user_input
         self.phase_name = "spec"  # For base class progress tracking
 

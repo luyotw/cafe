@@ -28,6 +28,7 @@ class ReviewPhase(Phase):
         review_agent: str = "Richard",
         target_commit: Optional[str] = None,
         base_branch: str = "main",
+        interactive: bool = True,
     ) -> None:
         """Initialize review phase.
 
@@ -42,7 +43,10 @@ class ReviewPhase(Phase):
             review_agent: Review agent name (default: Richard)
             target_commit: Specific commit to review (None for full branch)
             base_branch: Base branch for diff (default: main)
+            interactive: Enable interactive mode (default: True)
         """
+        super().__init__(interactive=interactive)
+        
         self.agent_manager = agent_manager
         self.permission_handler = permission_handler
         self.git_ops = git_ops

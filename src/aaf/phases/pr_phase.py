@@ -23,6 +23,7 @@ class PRPhase(Phase):
         spec_file: str,
         workflow_mode: WorkflowMode,
         issue_id: Optional[str] = None,
+        interactive: bool = True,
     ) -> None:
         """Initialize PR phase.
 
@@ -33,7 +34,10 @@ class PRPhase(Phase):
             spec_file: Path to spec file
             workflow_mode: Workflow mode (local or github)
             issue_id: GitHub issue ID (required for github mode)
+            interactive: Enable interactive mode (default: True)
         """
+        super().__init__(interactive=interactive)
+        
         self.agent_manager = agent_manager
         self.permission_handler = permission_handler
         self.git_ops = git_ops
