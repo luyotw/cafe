@@ -104,13 +104,22 @@ class PlanPhase(Phase):
                 # Check for plan.md with development guide section
                 plan_file_path = self.history_dir.parent / "plan.md"
                 plan_exists = plan_file_path.exists()
-                
+
                 # First round: plan.md doesn't exist
                 if not plan_exists:
                     if not self.template_path:
                         return PhaseResult(
                             status=PhaseStatus.FAILED,
                             message="First round requires template. Use --template option.",
+                        )
+                    # Template exists, but need to check/prompt for dev guide
+                    if self.interactive:
+                        # Prompt user to provide development guide
+                        self._prompt_for_dev_guide()
+                    else:
+                        return PhaseResult(
+                            status=PhaseStatus.FAILED,
+                            message="First round requires development guide in interactive mode",
                         )
                 # Subsequent rounds: plan.md exists but may lack dev guide section
                 elif not self._has_dev_guide_section(plan_file_path):
