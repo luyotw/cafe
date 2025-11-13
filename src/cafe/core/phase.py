@@ -633,8 +633,11 @@ class Phase(ABC):
     def _load_iteration_counter(self) -> int:
         """從 history 檔案載入最新的 iteration 數字（通用方法）。
 
+        如果最後一個 iteration 沒有 response（被中斷），則返回前一個完整 iteration 的數字，
+        這樣下次執行時會重用被中斷的 iteration 編號。
+
         Returns:
-            最新的 iteration 數字，如果沒有 history 則返回 0
+            最新完整 iteration 的數字，如果沒有 history 則返回 0
         """
         if not hasattr(self, "history_dir"):
             raise AttributeError("Phase must have 'history_dir' attribute")
@@ -647,12 +650,17 @@ class Phase(ABC):
         if not iteration_files:
             return 0
 
-        # 讀取最新的 iteration 檔案
-        last_iteration_file = iteration_files[-1]
-        with open(last_iteration_file, "r", encoding="utf-8") as f:
-            data = json.load(f)
+        # 從後往前尋找第一個完整的 iteration（有 response）
+        for iteration_file in reversed(iteration_files):
+            with open(iteration_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
 
-        return data.get("iteration", 0)
+            # 檢查是否有 response（完整的 iteration）
+            if "response" in data and data["response"]:
+                return data.get("iteration", 0)
+
+        # 所有 iteration 都不完整，返回 0
+        return 0
 
     def _check_if_already_completed(
         self,
