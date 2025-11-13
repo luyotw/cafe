@@ -12,9 +12,6 @@ from cafe.core.phase import Phase
 from cafe.core.status_codes import PhaseStatusCode, StatusCodeParser, generate_status_code_prompt
 from cafe.core.types import PhaseProgress, PhaseResult, PhaseStatus, WorkflowMode
 
-# Max iterations for review (each review is independent, so this is mostly for safety)
-MAX_REVIEW_ITERATIONS = 1
-
 
 class ReviewPhase(Phase):
     """Phase 4: Code review with reviewer agent.

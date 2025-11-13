@@ -13,9 +13,6 @@ from cafe.core.status_codes import PhaseStatusCode, StatusCodeParser, generate_s
 from cafe.core.types import PhaseProgress, PhaseResult, PhaseStatus, WorkflowMode
 from cafe.ui.display import Display
 
-# Maximum number of development iterations to prevent infinite loops
-MAX_DEVELOP_ITERATIONS = 10
-
 
 class DevelopPhase(Phase):
     """Phase 3: Development with developer agent."""
@@ -519,88 +516,85 @@ class DevelopPhase(Phase):
                 # Save issue config with base branch info
                 self._save_issue_config(base_branch, branch_name)
 
-            # Development iteration loop
-            while True:
-                self.iteration += 1
+            # Single development execution (no loop - workflow layer handles iterations)
+            self.iteration = 1
 
-                # Safety check: prevent infinite loops
-                max_iterations_result = self._check_max_iterations(
-                    MAX_DEVELOP_ITERATIONS,
-                    "Development"
+            # Prepare user_input for this iteration
+            result_or_input = self._prepare_user_input_for_iteration()
+            if isinstance(result_or_input, PhaseResult):
+                # Method returned a PhaseResult (completion/failure/pause)
+                return result_or_input
+            # Otherwise, it's the user input string
+            current_user_input = result_or_input
+
+            # Execute full agent interaction cycle (generate prompt, execute, handle status)
+            result, response = self._execute_and_handle_agent_response(
+                agent_name=self.dev_agent,
+                user_input=current_user_input,
+                valid_status_codes=[
+                    PhaseStatusCode.CONFIRMED,
+                    PhaseStatusCode.NEED_PERMISSION,
+                ],
+                allowed_tools=["write", "read", "bash"],
+                complete_codes=[PhaseStatusCode.CONFIRMED],
+                continue_codes=[],  # No automatic continue codes
+            )
+
+            # Handle NEED_PERMISSION specially - return and wait for next invocation
+            if response:
+                response_status = StatusCodeParser.extract(
+                    response,
+                    valid_codes=[PhaseStatusCode.CONFIRMED, PhaseStatusCode.NEED_PERMISSION],
                 )
-                if max_iterations_result:
-                    return max_iterations_result
+                if response_status == PhaseStatusCode.NEED_PERMISSION:
+                    # Display permission request and return IN_PROGRESS
+                    if self.interactive:
+                        print(f"\n{'='*60}")
+                        print(f"Dev ({self.dev_agent}) - Iteration {self.iteration}:")
+                        print(f"{'='*60}")
+                        print(response)
+                        print(f"{'='*60}\n")
+                        print("💡 開發者請求權限。請再次執行 'cafe develop' 來回應。")
 
-                # Prepare user_input for this iteration
-                result_or_input = self._prepare_user_input_for_iteration()
-                if isinstance(result_or_input, PhaseResult):
-                    # Method returned a PhaseResult (completion/failure/pause)
-                    return result_or_input
-                # Otherwise, it's the user input string
-                current_user_input = result_or_input
-
-                # Execute full agent interaction cycle (generate prompt, execute, handle status)
-                result, response = self._execute_and_handle_agent_response(
-                    agent_name=self.dev_agent,
-                    user_input=current_user_input,
-                    valid_status_codes=[
-                        PhaseStatusCode.CONFIRMED,
-                        PhaseStatusCode.NEED_PERMISSION,
-                    ],
-                    allowed_tools=["write", "read", "bash"],
-                    complete_codes=[PhaseStatusCode.CONFIRMED],
-                    continue_codes=[],  # No automatic continue codes
-                )
-
-                # Handle NEED_PERMISSION specially - return and wait for next invocation
-                if response:
-                    response_status = StatusCodeParser.extract(
-                        response,
-                        valid_codes=[PhaseStatusCode.CONFIRMED, PhaseStatusCode.NEED_PERMISSION],
-                    )
-                    if response_status == PhaseStatusCode.NEED_PERMISSION:
-                        # Display permission request and return IN_PROGRESS
-                        if self.interactive:
-                            print(f"\n{'='*60}")
-                            print(f"Dev ({self.dev_agent}) - Iteration {self.iteration}:")
-                            print(f"{'='*60}")
-                            print(response)
-                            print(f"{'='*60}\n")
-                            print("💡 開發者請求權限。請再次執行 'cafe develop' 來回應。")
-
-                            return PhaseResult(
-                                status=PhaseStatus.IN_PROGRESS,
-                                message=f"Permission requested in iteration {self.iteration}. Run command again to respond.",
-                                data={
-                                    "iterations": self.iteration,
-                                    "last_response": response,
-                                    "status_code": response_status.value,
-                                },
-                            )
-                        else:
-                            return PhaseResult(
-                                status=PhaseStatus.FAILED,
-                                message="Permission required but running in non-interactive mode",
-                                data={
-                                    "iterations": self.iteration,
-                                    "last_response": response,
-                                },
-                            )
-
-                # Phase-specific post-processing: Handle review feedback timestamp
-                if result and result.status == PhaseStatus.COMPLETED:
-                    review_status = self._load_review_status()
-                    if review_status and review_status.get("status_code") == "CAFE_NEEDS_CHANGES":
-                        handled_review_timestamp = review_status.get("timestamp")
-                        # Update status.json with handled_review_timestamp
-                        self._save_progress_with_review_timestamp(
-                            PhaseStatusCode.CONFIRMED,
-                            handled_review_timestamp
+                        return PhaseResult(
+                            status=PhaseStatus.IN_PROGRESS,
+                            message=f"Permission requested in iteration {self.iteration}. Run command again to respond.",
+                            data={
+                                "iterations": self.iteration,
+                                "last_response": response,
+                                "status_code": response_status.value,
+                            },
+                        )
+                    else:
+                        return PhaseResult(
+                            status=PhaseStatus.FAILED,
+                            message="Permission required but running in non-interactive mode",
+                            data={
+                                "iterations": self.iteration,
+                                "last_response": response,
+                            },
                         )
 
-                if result:
-                    return result
-                # If result is None, continue to next iteration
+            # Phase-specific post-processing: Handle review feedback timestamp
+            if result and result.status == PhaseStatus.COMPLETED:
+                review_status = self._load_review_status()
+                if review_status and review_status.get("status_code") == "CAFE_NEEDS_CHANGES":
+                    handled_review_timestamp = review_status.get("timestamp")
+                    # Update status.json with handled_review_timestamp
+                    self._save_progress_with_review_timestamp(
+                        PhaseStatusCode.CONFIRMED,
+                        handled_review_timestamp
+                    )
+
+            if result:
+                return result
+
+            # No result means agent didn't return a status code - return IN_PROGRESS
+            return PhaseResult(
+                status=PhaseStatus.IN_PROGRESS,
+                message=f"Iteration {self.iteration}: No status code found, need more work",
+                data={"iterations": self.iteration},
+            )
 
         except KeyboardInterrupt:
             print("\n\n⏸️  Paused by user (Ctrl+C).")
