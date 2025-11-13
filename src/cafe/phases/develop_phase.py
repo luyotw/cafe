@@ -13,6 +13,9 @@ from cafe.core.status_codes import PhaseStatusCode, StatusCodeParser, generate_s
 from cafe.core.types import PhaseProgress, PhaseResult, PhaseStatus, WorkflowMode
 from cafe.ui.display import Display
 
+# Maximum number of development iterations to prevent infinite loops
+MAX_DEVELOP_ITERATIONS = 10
+
 
 class DevelopPhase(Phase):
     """Phase 3: Development with developer agent."""
@@ -29,6 +32,7 @@ class DevelopPhase(Phase):
         issue_name: Optional[str] = None,
         dev_agent: str = "David",
         interactive: bool = True,
+        user_input: str = "",
     ) -> None:
         """Initialize develop phase.
 
@@ -43,9 +47,10 @@ class DevelopPhase(Phase):
             issue_name: Issue name for history tracking (default: derived from spec_file)
             dev_agent: Developer agent name (default: David)
             interactive: Enable interactive mode (default: True)
+            user_input: User input for non-interactive mode (default: "")
         """
         super().__init__(interactive=interactive)
-        
+
         self.agent_manager = agent_manager
         self.permission_handler = permission_handler
         self.git_ops = git_ops
@@ -54,6 +59,8 @@ class DevelopPhase(Phase):
         self.workflow_mode = workflow_mode
         self.issue_id = issue_id
         self.dev_agent = dev_agent
+        self.user_input = user_input
+        self.phase_name = "develop"  # For base class progress tracking
 
         # Iteration tracking
         self.iteration = 0
@@ -81,8 +88,11 @@ class DevelopPhase(Phase):
         # Initialize display
         self.display = Display()
 
-        # Load existing history if available
-        self._load_history()
+        # Restore state from last iteration file (if resuming)
+        self.iteration = self._load_iteration_counter()
+
+        # Load existing conversation history if available
+        self._load_conversation_history()
 
     def _check_plan_exists(self) -> bool:
         """Check if plan.md exists.
@@ -131,13 +141,14 @@ class DevelopPhase(Phase):
         except (json.JSONDecodeError, KeyError):
             return None
 
-    def _load_history(self) -> None:
+    def _load_conversation_history(self) -> None:
         """Load conversation history from previous iterations."""
-        if not self.history_dir.exists():
+        history_dir = Path(self.history_dir)
+        if not history_dir.exists():
             return
 
         # Find all iteration files
-        iteration_files = sorted(self.history_dir.glob("iteration_*.json"))
+        iteration_files = sorted(history_dir.glob("iteration_*.json"))
 
         for iteration_file in iteration_files:
             with open(iteration_file, "r", encoding="utf-8") as f:
@@ -146,91 +157,33 @@ class DevelopPhase(Phase):
             # Restore conversation history
             self.conversation_history.append(data)
 
-            # Update iteration counter
-            if data["iteration"] >= self.iteration:
-                self.iteration = data["iteration"]
-
             # Restore user responses if they exist
             if "user_response" in data and data["user_response"]:
                 self.user_responses.append(data["user_response"])
 
-    def _save_history(
+    def _save_progress_with_review_timestamp(
         self,
-        user_input: str,
-        response: str,
         status_code: PhaseStatusCode,
-        user_response: Optional[str] = None,
+        handled_review_timestamp: Optional[str] = None,
     ) -> None:
-        """Save iteration history to JSON file.
-
-        Args:
-            user_input: User's input for this iteration
-            response: Agent's response
-            status_code: Status code for this iteration
-            user_response: User's response to agent's request (for NEED_PERMISSION)
-        """
-        # Prepare phase-specific data
-        phase_specific_data = {
-            "user_input": user_input,
-            "response": response,
-        }
-
-        # Add user response if provided
-        if user_response:
-            phase_specific_data["user_response"] = user_response
-
-        # Use base class method with DevelopPhase-specific data
-        super()._save_iteration_history(
-            phase_specific_data=phase_specific_data,
-            status_code=status_code,
-        )
-
-    def _save_progress(self, status_code: PhaseStatusCode, handled_review_timestamp: Optional[str] = None) -> None:
-        """Save phase progress to status.json.
+        """Save phase progress to status.json with review timestamp tracking.
 
         Args:
             status_code: Phase status code
             handled_review_timestamp: Timestamp of review feedback that was handled (if any)
         """
-        status_file = self.history_dir.parent / "status.json"
-        status_file.parent.mkdir(parents=True, exist_ok=True)
+        # Call base class method first
+        self._save_progress(status_code)
 
-        # Determine phase status
-        phase_status = PhaseStatus.COMPLETED if status_code == PhaseStatusCode.CONFIRMED else PhaseStatus.IN_PROGRESS
-
-        progress = PhaseProgress(
-            phase="develop",
-            status=phase_status,
-            status_code=status_code.value,
-            timestamp=datetime.now(),
-            iteration=self.iteration,
-            message=f"Phase completed with {status_code.value}" if phase_status == PhaseStatus.COMPLETED else f"Iteration {self.iteration}",
-        )
-        
         # Add handled_review_timestamp if provided
-        progress_dict = progress.to_dict()
         if handled_review_timestamp:
-            progress_dict["handled_review_timestamp"] = handled_review_timestamp
-
-        with open(status_file, 'w', encoding='utf-8') as f:
-            json.dump(progress_dict, f, ensure_ascii=False, indent=2)
-
-    def _load_progress(self) -> Optional[PhaseProgress]:
-        """Load phase progress from status.json.
-
-        Returns:
-            PhaseProgress if exists, None otherwise
-        """
-        status_file = self.history_dir.parent / "status.json"
-        if not status_file.exists():
-            return None
-
-        try:
+            status_file = self._get_status_file()
             with open(status_file, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-            return PhaseProgress.from_dict(data)
-        except (json.JSONDecodeError, KeyError):
-            return None
+                progress_dict = json.load(f)
+            progress_dict["handled_review_timestamp"] = handled_review_timestamp
+            with open(status_file, 'w', encoding='utf-8') as f:
+                json.dump(progress_dict, f, ensure_ascii=False, indent=2)
+
 
     def _save_issue_config(self, base_branch: str, feature_branch: str) -> None:
         """Save issue configuration including base branch.
@@ -250,8 +203,160 @@ class DevelopPhase(Phase):
         with open(config_file, 'w', encoding='utf-8') as f:
             json.dump(config_data, f, ensure_ascii=False, indent=2)
 
-    def _generate_prompt(self) -> str:
+    def _check_if_already_completed_with_review(self) -> Optional[PhaseResult]:
+        """檢查 phase 是否已完成，考慮 review feedback 的特殊邏輯。
+
+        Returns:
+            PhaseResult 如果已完成且無需處理 review feedback，None 如果需要繼續執行
+        """
+        existing_progress = self._load_progress()
+        if not existing_progress or existing_progress.status != PhaseStatus.COMPLETED:
+            return None
+
+        # Check if there's review feedback that requires handling
+        review_status = self._load_review_status()
+        if review_status and review_status.get("status_code") == "CAFE_NEEDS_CHANGES":
+            # Check if this review has already been handled
+            review_timestamp = review_status.get("timestamp", "")
+
+            # Load develop status.json to check handled_review_timestamp
+            status_file = self.history_dir.parent / "status.json"
+            if status_file.exists():
+                with open(status_file, 'r', encoding='utf-8') as f:
+                    develop_status = json.load(f)
+                    handled_review_timestamp = develop_status.get("handled_review_timestamp")
+
+                    if handled_review_timestamp == review_timestamp:
+                        # This review has already been handled
+                        return PhaseResult(
+                            status=PhaseStatus.COMPLETED,
+                            message=f"Development already completed in {existing_progress.iteration} iteration(s)",
+                            data={
+                                "branch": self._get_branch_name(),
+                                "iterations": existing_progress.iteration,
+                                "status_code": existing_progress.status_code,
+                            },
+                        )
+
+            # Review exists and hasn't been handled yet, continue execution
+            print("ℹ️  Review feedback detected (CAFE_NEEDS_CHANGES). Continuing development...")
+            return None  # Don't return early - let execution continue to handle review feedback
+
+        # No review feedback or review passed, phase is truly completed
+        return PhaseResult(
+            status=PhaseStatus.COMPLETED,
+            message=f"Development already completed in {existing_progress.iteration} iteration(s)",
+            data={
+                "branch": self._get_branch_name(),
+                "iterations": existing_progress.iteration,
+                "status_code": existing_progress.status_code,
+            },
+        )
+
+    def _get_completion_data(self) -> dict:
+        """取得 phase 完成時的額外資料（提供給 base class 的 _handle_standard_status_codes）。
+
+        Returns:
+            包含 phase-specific 資料的 dict，會被合併到 PhaseResult.data 中
+        """
+        data = {
+            "branch": self._get_branch_name(),
+        }
+        return data
+
+    def _prepare_user_input_for_iteration(self) -> "PhaseResult | str":
+        """準備當前迭代的 user input。
+
+        Develop phase 的特殊邏輯：
+        - Iteration 1: 空字串（agent 自主執行）
+        - Iteration 2+: 檢查是否有待處理的 NEED_PERMISSION
+
+        Returns:
+            PhaseResult: 如果需要結束/暫停 phase
+            str: 用戶輸入內容（通常為空，除非處理 NEED_PERMISSION）
+        """
+        # Iteration 1: No user input needed, agent starts autonomously
+        if self.iteration == 1:
+            return ""
+
+        # Iteration 2+: Check for pending NEED_PERMISSION
+        prev_data = self._load_previous_iteration_data()
+        if not prev_data:
+            return ""
+
+        prev_status = prev_data.get("status_code", "")
+
+        # Handle pending NEED_PERMISSION from previous run
+        if prev_status == "CAFE_NEED_PERMISSION" and "user_response" not in prev_data:
+            if self.interactive:
+                # Display the permission request
+                print(f"\n{'='*60}")
+                print(f"Dev ({self.dev_agent}) - Iteration {prev_data['iteration']} (resuming):")
+                print(f"{'='*60}")
+                print(prev_data.get('response', ''))
+                print(f"{'='*60}\n")
+
+                # Ask user for decision
+                print("開發者請求工具權限。請選擇：")
+                print("  [c] confirm - 同意授權，繼續執行")
+                print("  [r] reject - 拒絕授權，終止開發")
+                print("  [m] modify - 給予其他提示或建議")
+
+                while True:
+                    choice = input("\n請選擇 [c/r/m]: ").strip().lower()
+
+                    if choice == 'c':
+                        print("\n✅ 權限已授予")
+                        user_response = "授權同意"
+                        break
+                    elif choice == 'r':
+                        print("\n❌ 權限被拒絕，Phase 終止。")
+                        return PhaseResult(
+                            status=PhaseStatus.FAILED,
+                            message=f"Permission denied by user in iteration {prev_data['iteration']}",
+                            data={
+                                "iterations": prev_data['iteration'],
+                                "last_response": prev_data.get('response', ''),
+                                "status_code": "USER_REJECTED",
+                            },
+                        )
+                    elif choice == 'm':
+                        modification_request = self.display.get_multiline_input("請輸入提示或建議")
+                        if not modification_request.strip():
+                            print("\n⚠️  沒有輸入內容，請重新選擇。")
+                            continue
+                        print("\n✅ 已收到您的建議")
+                        user_response = modification_request
+                        break
+                    else:
+                        print("❌ 無效選擇，請輸入 c, r, 或 m")
+
+                # Save user response to the previous iteration
+                iteration_file = self.history_dir / f"iteration_{prev_data['iteration']:03d}.json"
+                prev_data['user_response'] = user_response
+                with open(iteration_file, "w", encoding="utf-8") as f:
+                    json.dump(prev_data, f, ensure_ascii=False, indent=2)
+
+                return user_response
+            else:
+                # Non-interactive mode with pending permission
+                return PhaseResult(
+                    status=PhaseStatus.FAILED,
+                    message="Permission required but running in non-interactive mode",
+                    data={
+                        "iterations": prev_data['iteration'],
+                        "last_response": prev_data.get('response', ''),
+                    },
+                )
+
+        # No special handling needed
+        return ""
+
+    def _generate_prompt(self, user_input: str = "") -> str:
         """Generate prompt for current iteration.
+
+        Args:
+            user_input: User input for this iteration (not used in develop phase)
 
         Returns:
             Prompt string
@@ -369,11 +474,8 @@ class DevelopPhase(Phase):
 """
 
     def execute(self) -> PhaseResult:
-        """Execute development phase - single iteration only.
-        
-        Each invocation executes ONE iteration of development work.
-        For multiple iterations, the user should run the command multiple times.
-        
+        """Execute development phase with iterative loop.
+
         Returns:
             Phase result
         """
@@ -401,48 +503,10 @@ class DevelopPhase(Phase):
                         message=f"Spec file not found: {self.spec_file}",
                     )
 
-            # Check if phase is already completed
-            existing_progress = self._load_progress()
-            if existing_progress and existing_progress.status == PhaseStatus.COMPLETED:
-                # Check if there's review feedback that requires handling
-                review_status = self._load_review_status()
-                if review_status and review_status.get("status_code") == "CAFE_NEEDS_CHANGES":
-                    # Check if this review has already been handled
-                    review_timestamp = review_status.get("timestamp", "")
-                    
-                    # Load develop status.json to check handled_review_timestamp
-                    status_file = self.history_dir.parent / "status.json"
-                    if status_file.exists():
-                        with open(status_file, 'r', encoding='utf-8') as f:
-                            develop_status = json.load(f)
-                            handled_review_timestamp = develop_status.get("handled_review_timestamp")
-                            
-                            if handled_review_timestamp == review_timestamp:
-                                # This review has already been handled
-                                return PhaseResult(
-                                    status=PhaseStatus.COMPLETED,
-                                    message=f"Development already completed in {existing_progress.iteration} iteration(s)",
-                                    data={
-                                        "branch": self._get_branch_name(),
-                                        "iterations": existing_progress.iteration,
-                                        "status_code": existing_progress.status_code,
-                                    },
-                                )
-                    
-                    # Review exists and hasn't been handled yet, continue execution
-                    print("ℹ️  Review feedback detected (CAFE_NEEDS_CHANGES). Continuing development...")
-                    # Don't return early - let execution continue to handle review feedback
-                else:
-                    # No review feedback or review passed, phase is truly completed
-                    return PhaseResult(
-                        status=PhaseStatus.COMPLETED,
-                        message=f"Development already completed in {existing_progress.iteration} iteration(s)",
-                        data={
-                            "branch": self._get_branch_name(),
-                            "iterations": existing_progress.iteration,
-                            "status_code": existing_progress.status_code,
-                        },
-                    )
+            # Check if already completed (with review feedback awareness)
+            already_completed = self._check_if_already_completed_with_review()
+            if already_completed:
+                return already_completed
 
             # Create or checkout branch
             branch_name = self._get_branch_name()
@@ -455,183 +519,88 @@ class DevelopPhase(Phase):
                 # Save issue config with base branch info
                 self._save_issue_config(base_branch, branch_name)
 
-            # Single iteration execution
-            # Increment iteration counter
-            self.iteration += 1
-            
-            # Prepare user_input for this iteration
-            # Note: We don't read files - agent will read them using Read tool
-            current_user_input = ""
-            
-            # Check if there's a pending NEED_PERMISSION from previous run
-            if (self.conversation_history and
-                self.conversation_history[-1].get("status_code") == "CAFE_NEED_PERMISSION" and
-                "user_response" not in self.conversation_history[-1]):
-                # Handle pending permission request
-                last_iteration = self.conversation_history[-1]
-                
-                if self.interactive:
-                    print(f"\n{'='*60}")
-                    print(f"Dev ({self.dev_agent}) - Iteration {last_iteration['iteration']} (resuming):")
-                    print(f"{'='*60}")
-                    print(last_iteration['response'])
-                    print(f"{'='*60}\n")
-                    
-                    # Ask user for decision
-                    print("開發者請求工具權限。請選擇：")
-                    print("  [c] confirm - 同意授權，繼續執行")
-                    print("  [r] reject - 拒絕授權，終止開發")
-                    print("  [m] modify - 給予其他提示或建議")
-                    
-                    while True:
-                        choice = input("\n請選擇 [c/r/m]: ").strip().lower()
-                        
-                        if choice == 'c':
-                            print("\n✅ 權限已授予")
-                            current_user_input = "授權同意"
-                            break
-                        elif choice == 'r':
-                            print("\n❌ 權限被拒絕，Phase 終止。")
+            # Development iteration loop
+            while True:
+                self.iteration += 1
+
+                # Safety check: prevent infinite loops
+                max_iterations_result = self._check_max_iterations(
+                    MAX_DEVELOP_ITERATIONS,
+                    "Development"
+                )
+                if max_iterations_result:
+                    return max_iterations_result
+
+                # Prepare user_input for this iteration
+                result_or_input = self._prepare_user_input_for_iteration()
+                if isinstance(result_or_input, PhaseResult):
+                    # Method returned a PhaseResult (completion/failure/pause)
+                    return result_or_input
+                # Otherwise, it's the user input string
+                current_user_input = result_or_input
+
+                # Execute full agent interaction cycle (generate prompt, execute, handle status)
+                result, response = self._execute_and_handle_agent_response(
+                    agent_name=self.dev_agent,
+                    user_input=current_user_input,
+                    valid_status_codes=[
+                        PhaseStatusCode.CONFIRMED,
+                        PhaseStatusCode.NEED_PERMISSION,
+                    ],
+                    allowed_tools=["write", "read", "bash"],
+                    complete_codes=[PhaseStatusCode.CONFIRMED],
+                    continue_codes=[],  # No automatic continue codes
+                )
+
+                # Handle NEED_PERMISSION specially - return and wait for next invocation
+                if response:
+                    response_status = StatusCodeParser.extract(
+                        response,
+                        valid_codes=[PhaseStatusCode.CONFIRMED, PhaseStatusCode.NEED_PERMISSION],
+                    )
+                    if response_status == PhaseStatusCode.NEED_PERMISSION:
+                        # Display permission request and return IN_PROGRESS
+                        if self.interactive:
+                            print(f"\n{'='*60}")
+                            print(f"Dev ({self.dev_agent}) - Iteration {self.iteration}:")
+                            print(f"{'='*60}")
+                            print(response)
+                            print(f"{'='*60}\n")
+                            print("💡 開發者請求權限。請再次執行 'cafe develop' 來回應。")
+
                             return PhaseResult(
-                                status=PhaseStatus.FAILED,
-                                message=f"Permission denied by user in iteration {last_iteration['iteration']}",
+                                status=PhaseStatus.IN_PROGRESS,
+                                message=f"Permission requested in iteration {self.iteration}. Run command again to respond.",
                                 data={
-                                    "iterations": last_iteration['iteration'],
-                                    "last_response": last_iteration['response'],
-                                    "status_code": "USER_REJECTED",
+                                    "iterations": self.iteration,
+                                    "last_response": response,
+                                    "status_code": response_status.value,
                                 },
                             )
-                        elif choice == 'm':
-                            modification_request = self.display.get_multiline_input("請輸入提示或建議")
-                            if not modification_request.strip():
-                                print("\n⚠️  沒有輸入內容，請重新選擇。")
-                                continue
-                            print("\n✅ 已收到您的建議")
-                            current_user_input = modification_request
-                            break
                         else:
-                            print("❌ 無效選擇，請輸入 c, r, 或 m")
-                    
-                    # Save user response to the previous iteration
-                    last_iteration['user_response'] = current_user_input
-                    iteration_file = self.history_dir / f"iteration_{last_iteration['iteration']:03d}.json"
-                    with open(iteration_file, "w", encoding="utf-8") as f:
-                        json.dump(last_iteration, f, ensure_ascii=False, indent=2)
-                else:
-                    return PhaseResult(
-                        status=PhaseStatus.FAILED,
-                        message="Permission required but running in non-interactive mode",
-                        data={
-                            "iterations": last_iteration['iteration'],
-                            "last_response": last_iteration['response'],
-                        },
-                    )
+                            return PhaseResult(
+                                status=PhaseStatus.FAILED,
+                                message="Permission required but running in non-interactive mode",
+                                data={
+                                    "iterations": self.iteration,
+                                    "last_response": response,
+                                },
+                            )
 
-            # Generate prompt for this iteration
-            prompt = self._generate_prompt()
+                # Phase-specific post-processing: Handle review feedback timestamp
+                if result and result.status == PhaseStatus.COMPLETED:
+                    review_status = self._load_review_status()
+                    if review_status and review_status.get("status_code") == "CAFE_NEEDS_CHANGES":
+                        handled_review_timestamp = review_status.get("timestamp")
+                        # Update status.json with handled_review_timestamp
+                        self._save_progress_with_review_timestamp(
+                            PhaseStatusCode.CONFIRMED,
+                            handled_review_timestamp
+                        )
 
-            # Execute developer agent with allowed tools
-            response, token_usage = self.agent_manager.execute(
-                self.dev_agent,
-                prompt,
-                allowed_tools=["write", "read", "bash"]
-            )
-
-            # Extract status code from response
-            status_code = StatusCodeParser.extract(
-                response,
-                valid_codes=[
-                    PhaseStatusCode.CONFIRMED,
-                    PhaseStatusCode.NEED_PERMISSION,
-                ],
-            )
-
-            # Handle status codes
-            if status_code == PhaseStatusCode.CONFIRMED:
-                # Development completed
-                self._save_history(
-                    user_input=current_user_input,
-                    response=response,
-                    status_code=PhaseStatusCode.CONFIRMED,
-                )
-                
-                # Record review timestamp if we're responding to review feedback
-                review_status = self._load_review_status()
-                handled_review_timestamp = None
-                if review_status and review_status.get("status_code") == "CAFE_NEEDS_CHANGES":
-                    handled_review_timestamp = review_status.get("timestamp")
-                
-                self._save_progress(PhaseStatusCode.CONFIRMED, handled_review_timestamp)
-                
-                token_usage = self.agent_manager.get_total_token_usage()
-                
-                return PhaseResult(
-                    status=PhaseStatus.COMPLETED,
-                    message=f"Development completed on branch {branch_name} in {self.iteration} iteration(s)",
-                    data={
-                        "branch": branch_name,
-                        "iterations": self.iteration,
-                        "final_response": response,
-                        "status_code": status_code.value,
-                    },
-                    token_usage=token_usage,
-                )
-
-            elif status_code == PhaseStatusCode.NEED_PERMISSION:
-                # Save history BEFORE waiting for user input
-                self._save_history(
-                    user_input=current_user_input,
-                    response=response,
-                    status_code=PhaseStatusCode.NEED_PERMISSION,
-                    user_response=None,
-                )
-                self._save_progress(PhaseStatusCode.NEED_PERMISSION)
-                
-                # Display permission request
-                if self.interactive:
-                    print(f"\n{'='*60}")
-                    print(f"Dev ({self.dev_agent}) - Iteration {self.iteration}:")
-                    print(f"{'='*60}")
-                    print(response)
-                    print(f"{'='*60}\n")
-                    print("💡 開發者請求權限。請再次執行 'cafe develop' 來回應。")
-                    
-                    return PhaseResult(
-                        status=PhaseStatus.IN_PROGRESS,
-                        message=f"Permission requested in iteration {self.iteration}. Run command again to respond.",
-                        data={
-                            "iterations": self.iteration,
-                            "last_response": response,
-                            "status_code": status_code.value,
-                        },
-                    )
-                else:
-                    return PhaseResult(
-                        status=PhaseStatus.FAILED,
-                        message="Permission required but running in non-interactive mode",
-                        data={
-                            "iterations": self.iteration,
-                            "last_response": response,
-                        },
-                    )
-            else:
-                # No valid status code found
-                self._save_history(
-                    user_input=current_user_input,
-                    response=response,
-                    status_code=PhaseStatusCode.CONFIRMED,  # Default to CONFIRMED
-                )
-                self._save_progress(PhaseStatusCode.CONFIRMED)
-                
-                return PhaseResult(
-                    status=PhaseStatus.COMPLETED,
-                    message=f"Development completed (no explicit status code) in iteration {self.iteration}",
-                    data={
-                        "branch": branch_name,
-                        "iterations": self.iteration,
-                        "final_response": response,
-                    },
-                )
+                if result:
+                    return result
+                # If result is None, continue to next iteration
 
         except KeyboardInterrupt:
             print("\n\n⏸️  Paused by user (Ctrl+C).")
