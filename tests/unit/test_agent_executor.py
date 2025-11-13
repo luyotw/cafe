@@ -270,7 +270,8 @@ class TestGeminiExecution:
         config = AgentConfig(name="Roger", cli=AgentCLI.GEMINI)
         executor = AgentExecutor(config)
 
-        with patch("subprocess.Popen") as mock_popen:
+        with patch("subprocess.Popen") as mock_popen, \
+             patch("sys.platform", "win32"):  # Skip select() on Windows
             # Mock process
             mock_process = MagicMock()
             mock_process.stdout.readline.side_effect = [
@@ -300,7 +301,8 @@ class TestGeminiExecution:
         config = AgentConfig(name="Roger", cli=AgentCLI.GEMINI)
         executor = AgentExecutor(config)
 
-        with patch("subprocess.Popen") as mock_popen:
+        with patch("subprocess.Popen") as mock_popen, \
+             patch("sys.platform", "win32"):  # Skip select() on Windows
             mock_process = MagicMock()
             mock_process.stdout.readline.side_effect = [
                 '{"response": "Hi there"}\n',
@@ -320,7 +322,8 @@ class TestGeminiExecution:
         config = AgentConfig(name="Roger", cli=AgentCLI.GEMINI)
         executor = AgentExecutor(config)
 
-        with patch("subprocess.Popen") as mock_popen:
+        with patch("subprocess.Popen") as mock_popen, \
+             patch("sys.platform", "win32"):  # Skip select() on Windows
             mock_process = MagicMock()
             mock_process.stdout.readline.return_value = ''
             mock_process.stderr.read.return_value = "Error: API key not found"
@@ -335,7 +338,8 @@ class TestGeminiExecution:
         config = AgentConfig(name="Roger", cli=AgentCLI.GEMINI)
         executor = AgentExecutor(config)
 
-        with patch("subprocess.Popen") as mock_popen:
+        with patch("subprocess.Popen") as mock_popen, \
+             patch("sys.platform", "win32"):  # Skip select() on Windows
             mock_process = MagicMock()
             mock_process.stdout.readline.side_effect = [
                 "Plain text response\n",
@@ -348,6 +352,36 @@ class TestGeminiExecution:
             response, token_usage = executor._execute_gemini("Test prompt")
 
             assert response == "Plain text response\n"
+            assert isinstance(token_usage, TokenUsage)
+
+    def test_execute_gemini_extracts_only_assistant_messages(self) -> None:
+        """測試 Gemini 只提取 assistant 的 messages，過濾掉 tool output 和 user messages"""
+        config = AgentConfig(name="Roger", cli=AgentCLI.GEMINI)
+        executor = AgentExecutor(config)
+
+        with patch("subprocess.Popen") as mock_popen, \
+             patch("sys.platform", "win32"):  # Skip select() on Windows
+            mock_process = MagicMock()
+            # Simulate Gemini stream-json output with user message, tool output, and assistant messages
+            mock_process.stdout.readline.side_effect = [
+                '{"type":"message","role":"user","content":"User prompt"}\n',
+                '{"type":"tool_result","output":"File content with CAFE_CONFIRMED in history"}\n',
+                '{"type":"message","role":"assistant","content":"CAFE_NEED_CLARIFICATION\\n"}\n',
+                '{"type":"message","role":"assistant","content":"Here is my response"}\n',
+                '{"response": "Full response including tool output"}\n',  # Last line (final result)
+                '',
+            ]
+            mock_process.stderr.read.return_value = ""
+            mock_process.wait.return_value = 0
+            mock_popen.return_value = mock_process
+
+            response, token_usage = executor._execute_gemini("Test prompt")
+
+            # Should only contain assistant messages, not user message or tool output
+            assert response == "CAFE_NEED_CLARIFICATION\nHere is my response"
+            assert "User prompt" not in response
+            assert "File content" not in response
+            assert "CAFE_CONFIRMED" not in response  # Should not pick up status from history
             assert isinstance(token_usage, TokenUsage)
 
 

@@ -459,15 +459,30 @@ class AgentExecutor:
         # Gemini-specific parser: parse last line as final result
         def parse_gemini_response(output_lines: List[str]) -> Tuple[str, TokenUsage]:
             full_output = ''.join(output_lines)
-            
+
             # Parse the last line as JSON (stream-json format sends final result on last line)
             try:
                 lines = [l.strip() for l in output_lines if l.strip()]
                 if not lines:
                     return "", TokenUsage()
-                
+
                 last_json = json.loads(lines[-1])
-                response = last_json.get("response", full_output)
+
+                # Extract only assistant messages from the full response
+                # The response field contains the entire conversation, but we only want the assistant's messages
+                assistant_messages = []
+                for line in lines:
+                    try:
+                        data = json.loads(line)
+                        if data.get("type") == "message" and data.get("role") == "assistant":
+                            content = data.get("content", "")
+                            if content:
+                                assistant_messages.append(content)
+                    except (json.JSONDecodeError, KeyError):
+                        continue
+
+                # If we extracted assistant messages, use those; otherwise fall back to full response
+                response = "".join(assistant_messages) if assistant_messages else last_json.get("response", full_output)
 
                 # Parse token usage if available
                 token_usage = TokenUsage()
