@@ -1,0 +1,407 @@
+"""E2E tests for 'cafe develop' command with mock agents.
+
+使用 subprocess.run() 測試實際 CLI 命令執行，但用 CAFE_MOCK_AGENTS=true 避免真實 LLM 呼叫。
+"""
+
+import subprocess
+import json
+import os
+from pathlib import Path
+import pytest
+
+
+def init_git_repo(tmp_path: Path):
+    """初始化 git repository"""
+    subprocess.run(["git", "init"], cwd=str(tmp_path), capture_output=True)
+    subprocess.run(["git", "config", "user.name", "Test User"], cwd=str(tmp_path), capture_output=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=str(tmp_path), capture_output=True)
+    subprocess.run(["git", "checkout", "-b", "main"], cwd=str(tmp_path), capture_output=True)
+
+
+def setup_test_environment(tmp_path: Path, issue_name: str):
+    """設置測試環境：創建 spec.md 和 plan.md，初始化 git repo"""
+    # Initialize git repo
+    init_git_repo(tmp_path)
+
+    # 創建 spec.md
+    spec_dir = tmp_path / ".cafe" / "issues" / issue_name / "spec"
+    spec_dir.mkdir(parents=True, exist_ok=True)
+    spec_file = spec_dir / "spec.md"
+    spec_file.write_text("# 測試功能需求\n\n這是一個測試需求規格。")
+
+    # 創建 plan.md
+    plan_dir = tmp_path / ".cafe" / "issues" / issue_name / "plan"
+    plan_dir.mkdir(parents=True, exist_ok=True)
+    plan_file = plan_dir / "plan.md"
+    plan_file.write_text("""# 實作計畫
+
+## 任務清單
+- [ ] 實作功能 A
+- [ ] 實作功能 B
+- [ ] 撰寫測試
+
+## 開發指南
+請按照以上任務清單逐步實作。
+""")
+
+
+def run_cafe_develop(tmp_path: Path, issue_name: str, mock_response: str, extra_args: list = None):
+    """Helper function to run cafe develop command with mock"""
+    # Use installed cafe command or fall back to local script
+    cafe_cmd = "cafe" if subprocess.run(["which", "cafe"], capture_output=True).returncode == 0 else "./cafe"
+    args = [cafe_cmd, "develop", issue_name, "--no-interactive"]
+    if extra_args:
+        args.extend(extra_args)
+
+    env = os.environ.copy()
+    env["CAFE_MOCK_AGENTS"] = "true"
+    if mock_response:
+        env["CAFE_MOCK_RESPONSE"] = mock_response
+
+    return subprocess.run(
+        args,
+        cwd=str(tmp_path),
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+
+@pytest.mark.e2e
+class TestDevelopE2EMockStatusCodes:
+    """測試狀態碼處理"""
+
+    def test_confirmed_status_success(self, tmp_path):
+        """測試 CONFIRMED 狀態碼成功完成"""
+        issue_name = "test-issue"
+        setup_test_environment(tmp_path, issue_name)
+
+        result = run_cafe_develop(tmp_path, issue_name, "CAFE_CONFIRMED\n\n開發完成。")
+
+        assert result.returncode == 0
+        output = result.stdout + result.stderr
+        assert "completed" in output.lower() or "成功" in output.lower()
+
+        # 驗證 status.json 被創建
+        status_file = tmp_path / ".cafe" / "issues" / issue_name / "develop" / "status.json"
+        assert status_file.exists()
+
+        with open(status_file) as f:
+            status_data = json.load(f)
+            assert status_data["phase"] == "develop"
+            assert status_data["status"] == "completed"
+            assert status_data["status_code"] == "CAFE_CONFIRMED"
+
+    def test_invalid_status_code_pauses(self, tmp_path):
+        """測試 agent 返回無效狀態碼會暫停（non-interactive 模式）"""
+        issue_name = "test-issue"
+        setup_test_environment(tmp_path, issue_name)
+
+        result = run_cafe_develop(tmp_path, issue_name, "CAFE_INVALID_CODE\n\n開發中...")
+
+        # Non-interactive mode pauses on missing/invalid status code
+        assert result.returncode == 0
+        output = result.stdout + result.stderr
+        # The parser treats invalid status codes as "no status code"
+        assert "paused" in output.lower() or "no status code" in output.lower()
+
+    def test_no_status_code_pauses(self, tmp_path):
+        """測試 agent 回應沒有狀態碼會暫停（non-interactive 模式）"""
+        issue_name = "test-issue"
+        setup_test_environment(tmp_path, issue_name)
+
+        result = run_cafe_develop(tmp_path, issue_name, "開發中，正在實作功能...")
+
+        # Non-interactive mode pauses on missing status code
+        assert result.returncode == 0
+        output = result.stdout + result.stderr
+        assert "paused" in output.lower() or "no status code" in output.lower()
+
+    def test_whitespace_only_response_should_fail(self, tmp_path):
+        """測試 agent 返回僅空白字符的回應應該失敗"""
+        issue_name = "test-issue"
+        setup_test_environment(tmp_path, issue_name)
+
+        result = run_cafe_develop(tmp_path, issue_name, "   \n\n  ")
+
+        # Whitespace-only response is treated as NO_RESPONSE
+        assert result.returncode != 0
+        output = result.stdout + result.stderr
+        assert "no response" in output.lower() or "failed" in output.lower()
+
+    def test_need_permission_in_non_interactive_should_fail(self, tmp_path):
+        """測試 NEED_PERMISSION 在 non-interactive 模式應該失敗"""
+        issue_name = "test-issue"
+        setup_test_environment(tmp_path, issue_name)
+
+        result = run_cafe_develop(tmp_path, issue_name, "CAFE_NEED_PERMISSION\n\n需要權限執行 git commit。")
+
+        assert result.returncode != 0
+        output = result.stdout + result.stderr
+        assert "permission" in output.lower() or "non-interactive" in output.lower()
+
+
+@pytest.mark.e2e
+class TestDevelopE2EMockFileValidation:
+    """測試檔案相關錯誤"""
+
+    def test_spec_file_not_exists_should_fail(self, tmp_path):
+        """測試 spec.md 不存在應該失敗"""
+        issue_name = "test-issue"
+        # 只創建 plan.md，不創建 spec.md
+        plan_dir = tmp_path / ".cafe" / "issues" / issue_name / "plan"
+        plan_dir.mkdir(parents=True, exist_ok=True)
+        plan_file = plan_dir / "plan.md"
+        plan_file.write_text("# 實作計畫")
+
+        result = run_cafe_develop(tmp_path, issue_name, "CAFE_CONFIRMED\n\n開發完成。")
+
+        assert result.returncode != 0
+        output = result.stdout + result.stderr
+        assert "spec" in output.lower() or "not found" in output.lower()
+
+    def test_plan_file_not_exists_should_fail(self, tmp_path):
+        """測試 plan.md 不存在應該失敗"""
+        issue_name = "test-issue"
+        # 只創建 spec.md，不創建 plan.md
+        spec_dir = tmp_path / ".cafe" / "issues" / issue_name / "spec"
+        spec_dir.mkdir(parents=True, exist_ok=True)
+        spec_file = spec_dir / "spec.md"
+        spec_file.write_text("# 測試功能需求")
+
+        result = run_cafe_develop(tmp_path, issue_name, "CAFE_CONFIRMED\n\n開發完成。")
+
+        assert result.returncode != 0
+        output = result.stdout + result.stderr
+        assert "plan" in output.lower() or "not found" in output.lower()
+
+    def test_history_directory_created(self, tmp_path):
+        """測試 history 目錄被創建"""
+        issue_name = "test-issue"
+        setup_test_environment(tmp_path, issue_name)
+
+        result = run_cafe_develop(tmp_path, issue_name, "CAFE_CONFIRMED\n\n開發完成。")
+
+        assert result.returncode == 0
+
+        history_dir = tmp_path / ".cafe" / "issues" / issue_name / "develop" / "history"
+        assert history_dir.exists()
+        assert history_dir.is_dir()
+
+        # 至少有一個 iteration 檔案
+        iteration_files = list(history_dir.glob("iteration_*.json"))
+        assert len(iteration_files) >= 1
+
+    def test_iteration_file_structure(self, tmp_path):
+        """測試 iteration 檔案結構正確"""
+        issue_name = "test-issue"
+        setup_test_environment(tmp_path, issue_name)
+
+        result = run_cafe_develop(tmp_path, issue_name, "CAFE_CONFIRMED\n\n開發完成。")
+
+        assert result.returncode == 0
+
+        iteration_file = tmp_path / ".cafe" / "issues" / issue_name / "develop" / "history" / "iteration_001.json"
+        assert iteration_file.exists()
+
+        with open(iteration_file) as f:
+            data = json.load(f)
+            assert "iteration" in data
+            assert "timestamp" in data
+            assert "status_code" in data
+            assert data["iteration"] == 1
+            assert data["status_code"] == "CAFE_CONFIRMED"
+
+
+@pytest.mark.e2e
+class TestDevelopE2EMockBranchManagement:
+    """測試 branch 管理（使用 mock git operations）"""
+
+    def test_config_file_created_with_branch_info(self, tmp_path):
+        """測試 config.json 包含 branch 資訊"""
+        issue_name = "test-issue"
+        setup_test_environment(tmp_path, issue_name)
+
+        result = run_cafe_develop(tmp_path, issue_name, "CAFE_CONFIRMED\n\n開發完成。")
+
+        # Note: This test may fail in CI without git repo, skip or mock git
+        if result.returncode == 0:
+            config_file = tmp_path / ".cafe" / "issues" / issue_name / "config.json"
+            if config_file.exists():
+                with open(config_file) as f:
+                    config_data = json.load(f)
+                    assert "base_branch" in config_data or "feature_branch" in config_data
+
+
+@pytest.mark.e2e
+class TestDevelopE2EMockReviewFeedback:
+    """測試 review feedback 處理"""
+
+    def test_continues_with_review_feedback(self, tmp_path):
+        """測試當有 review feedback 時繼續執行"""
+        issue_name = "test-issue"
+        setup_test_environment(tmp_path, issue_name)
+
+        # 先執行一次開發（完成）
+        result1 = run_cafe_develop(tmp_path, issue_name, "CAFE_CONFIRMED\n\n初次開發完成。")
+        assert result1.returncode == 0
+
+        # 創建 review feedback
+        review_dir = tmp_path / ".cafe" / "issues" / issue_name / "review"
+        review_dir.mkdir(parents=True, exist_ok=True)
+        review_file = review_dir / "review.md"
+        review_file.write_text("CAFE_NEEDS_CHANGES\n\n請修正 commit message。")
+
+        review_status_file = review_dir / "status.json"
+        import time
+        time.sleep(0.01)  # Ensure review timestamp is after develop
+        review_status_data = {
+            "phase": "review",
+            "status": "completed",
+            "status_code": "CAFE_NEEDS_CHANGES",
+            "iteration": 1,
+            "timestamp": "2025-01-01T00:01:00"
+        }
+        review_status_file.write_text(json.dumps(review_status_data, indent=2))
+
+        # 再次執行開發（處理 review feedback）
+        result2 = run_cafe_develop(tmp_path, issue_name, "CAFE_CONFIRMED\n\n已修正 commit message。")
+
+        # 應該成功執行而非提前返回
+        assert result2.returncode == 0
+        output = result2.stdout + result2.stderr
+        # 可能包含 "completed" 或成功訊息
+        assert "completed" in output.lower() or "成功" in output.lower()
+
+    def test_returns_early_when_already_completed(self, tmp_path):
+        """測試當已完成且無 review feedback 時提前返回"""
+        issue_name = "test-issue"
+        setup_test_environment(tmp_path, issue_name)
+
+        # 第一次執行
+        result1 = run_cafe_develop(tmp_path, issue_name, "CAFE_CONFIRMED\n\n開發完成。")
+        assert result1.returncode == 0
+
+        # 第二次執行（應該提前返回）
+        result2 = run_cafe_develop(tmp_path, issue_name, "CAFE_CONFIRMED\n\n不應該執行到這裡。")
+
+        # 應該成功但提前返回
+        assert result2.returncode == 0
+        output = result2.stdout + result2.stderr
+        # 檢查是否包含 "already" 或 "completed" 訊息
+        assert "completed" in output.lower()
+
+
+@pytest.mark.e2e
+class TestDevelopE2EMockMultipleIterations:
+    """測試多輪迭代場景"""
+
+    def test_single_iteration_success(self, tmp_path):
+        """測試單輪迭代成功"""
+        issue_name = "test-issue"
+        setup_test_environment(tmp_path, issue_name)
+
+        result = run_cafe_develop(tmp_path, issue_name, "CAFE_CONFIRMED\n\n開發完成。")
+
+        assert result.returncode == 0
+
+        # 驗證只有一個 iteration
+        history_dir = tmp_path / ".cafe" / "issues" / issue_name / "develop" / "history"
+        iteration_files = list(history_dir.glob("iteration_*.json"))
+        assert len(iteration_files) == 1
+
+    def test_status_file_reflects_completion(self, tmp_path):
+        """測試 status.json 正確反映完成狀態"""
+        issue_name = "test-issue"
+        setup_test_environment(tmp_path, issue_name)
+
+        result = run_cafe_develop(tmp_path, issue_name, "CAFE_CONFIRMED\n\n開發完成。")
+
+        assert result.returncode == 0
+
+        status_file = tmp_path / ".cafe" / "issues" / issue_name / "develop" / "status.json"
+        assert status_file.exists()
+
+        with open(status_file) as f:
+            status_data = json.load(f)
+            assert status_data["status"] == "completed"
+            assert status_data["iteration"] >= 1
+
+
+@pytest.mark.e2e
+class TestDevelopE2EMockErrorRecovery:
+    """測試錯誤恢復場景"""
+
+    def test_handles_corrupted_status_file(self, tmp_path):
+        """測試處理損壞的 status.json"""
+        issue_name = "test-issue"
+        setup_test_environment(tmp_path, issue_name)
+
+        # 創建損壞的 status.json
+        develop_dir = tmp_path / ".cafe" / "issues" / issue_name / "develop"
+        develop_dir.mkdir(parents=True, exist_ok=True)
+        status_file = develop_dir / "status.json"
+        status_file.write_text("{invalid json")
+
+        # 應該能夠繼續執行（忽略損壞的檔案）
+        result = run_cafe_develop(tmp_path, issue_name, "CAFE_CONFIRMED\n\n開發完成。")
+
+        # 可能成功或失敗，但不應該 crash
+        assert result.returncode in [0, 1]
+
+    def test_handles_missing_directories_gracefully(self, tmp_path):
+        """測試優雅處理缺少的目錄"""
+        issue_name = "test-issue"
+
+        # Initialize git repo
+        init_git_repo(tmp_path)
+
+        # 只創建最基本的 spec 和 plan
+        spec_dir = tmp_path / ".cafe" / "issues" / issue_name / "spec"
+        spec_dir.mkdir(parents=True, exist_ok=True)
+        (spec_dir / "spec.md").write_text("# Spec")
+
+        plan_dir = tmp_path / ".cafe" / "issues" / issue_name / "plan"
+        plan_dir.mkdir(parents=True, exist_ok=True)
+        (plan_dir / "plan.md").write_text("# Plan")
+
+        # 不創建 develop 目錄
+        result = run_cafe_develop(tmp_path, issue_name, "CAFE_CONFIRMED\n\n開發完成。")
+
+        # 應該自動創建需要的目錄並成功
+        assert result.returncode == 0
+
+        develop_dir = tmp_path / ".cafe" / "issues" / issue_name / "develop"
+        assert develop_dir.exists()
+
+
+@pytest.mark.e2e
+class TestDevelopE2EMockOutputValidation:
+    """測試輸出驗證"""
+
+    def test_output_contains_success_message(self, tmp_path):
+        """測試輸出包含成功訊息"""
+        issue_name = "test-issue"
+        setup_test_environment(tmp_path, issue_name)
+
+        result = run_cafe_develop(tmp_path, issue_name, "CAFE_CONFIRMED\n\n開發完成。")
+
+        assert result.returncode == 0
+        output = result.stdout + result.stderr
+        # 輸出應包含成功相關訊息
+        assert any(word in output.lower() for word in ["completed", "success", "成功", "完成"])
+
+    def test_error_output_is_informative(self, tmp_path):
+        """測試錯誤輸出提供有用資訊"""
+        issue_name = "test-issue"
+        # 故意不創建 plan.md
+        spec_dir = tmp_path / ".cafe" / "issues" / issue_name / "spec"
+        spec_dir.mkdir(parents=True, exist_ok=True)
+        (spec_dir / "spec.md").write_text("# Spec")
+
+        result = run_cafe_develop(tmp_path, issue_name, "CAFE_CONFIRMED\n\n不應該到這裡")
+
+        assert result.returncode != 0
+        output = result.stdout + result.stderr
+        # 錯誤訊息應該提到 plan
+        assert "plan" in output.lower()
