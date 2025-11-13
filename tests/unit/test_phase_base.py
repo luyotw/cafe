@@ -171,6 +171,64 @@ class TestSaveIterationHistory:
         assert data2["input"] == "second"
 
 
+class TestLoadCurrentIterationData:
+    """測試 _load_current_iteration_data 共用方法."""
+
+    def test_load_current_iteration_data_not_exists(self, tmp_path: Path) -> None:
+        """測試當前 iteration 檔案不存在時返回 None."""
+        history_dir = tmp_path / "history"
+        phase = ConcretePhase(history_dir=history_dir)
+        phase.iteration = 2
+
+        data = phase._load_current_iteration_data()
+
+        assert data is None
+
+    def test_load_current_iteration_data_exists(self, tmp_path: Path) -> None:
+        """測試載入當前 iteration 的資料."""
+        history_dir = tmp_path / "history"
+        history_dir.mkdir(parents=True)
+
+        # 創建當前 iteration 檔案
+        iteration2 = history_dir / "iteration_002.json"
+        iteration2.write_text(json.dumps({
+            "iteration": 2,
+            "user_input": "Current iteration input",
+            "response": None
+        }))
+
+        phase = ConcretePhase(history_dir=history_dir)
+        phase.iteration = 2
+
+        data = phase._load_current_iteration_data()
+
+        assert data is not None
+        assert data["iteration"] == 2
+        assert data["user_input"] == "Current iteration input"
+        assert data["response"] is None
+
+    def test_load_current_iteration_data_with_response(self, tmp_path: Path) -> None:
+        """測試載入已完成的當前 iteration（有 response）."""
+        history_dir = tmp_path / "history"
+        history_dir.mkdir(parents=True)
+
+        # 創建完整的 iteration 檔案
+        iteration2 = history_dir / "iteration_002.json"
+        iteration2.write_text(json.dumps({
+            "iteration": 2,
+            "user_input": "Input",
+            "response": "Response"
+        }))
+
+        phase = ConcretePhase(history_dir=history_dir)
+        phase.iteration = 2
+
+        data = phase._load_current_iteration_data()
+
+        assert data is not None
+        assert data["response"] == "Response"
+
+
 class TestLoadIterationCounter:
     """測試 _load_iteration_counter 共用方法."""
 

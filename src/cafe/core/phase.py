@@ -630,6 +630,26 @@ class Phase(ABC):
         with open(prev_iteration_file, "r", encoding="utf-8") as f:
             return json.load(f)
 
+    def _load_current_iteration_data(self) -> Optional[dict]:
+        """載入當前 iteration 的資料（通用方法）。
+
+        用於恢復被中斷的 iteration（有 user_input 但沒有 response）。
+
+        Returns:
+            dict: 當前 iteration 的資料，如果不存在則返回 None
+        """
+        if not hasattr(self, "iteration"):
+            raise AttributeError("Phase must have 'iteration' attribute")
+        if not hasattr(self, "history_dir"):
+            raise AttributeError("Phase must have 'history_dir' attribute")
+
+        current_iteration_file = Path(self.history_dir) / f"iteration_{self.iteration:03d}.json"
+        if not current_iteration_file.exists():
+            return None
+
+        with open(current_iteration_file, "r", encoding="utf-8") as f:
+            return json.load(f)
+
     def _load_iteration_counter(self) -> int:
         """從 history 檔案載入最新的 iteration 數字（通用方法）。
 

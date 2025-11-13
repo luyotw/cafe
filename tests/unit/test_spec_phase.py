@@ -718,5 +718,77 @@ class TestSpecPhasePromptGeneration:
         assert "CAFE_CONFIRMED" in captured_prompt or "CAFE_NEED_CLARIFICATION" in captured_prompt
 
 
+class TestInterruptedIterationResume:
+    """測試中斷後恢復的完整流程."""
+
+    def test_resume_interrupted_iteration_uses_saved_user_input(self, tmp_path: Path) -> None:
+        """測試中斷後恢復時，直接使用已儲存的 user_input，不再詢問用戶."""
+        import json
+        from io import StringIO
+
+        spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
+        spec_file.write_text("Initial spec")
+
+        history_dir = spec_file.parent / "history"
+        history_dir.mkdir(parents=True, exist_ok=True)
+
+        # 創建 iteration 1 的完整歷史（已完成，有 response）
+        iteration1 = history_dir / "iteration_001.json"
+        iteration1.write_text(json.dumps({
+            "iteration": 1,
+            "user_input": "Initial user story",
+            "response": "CAFE_NEED_CLARIFICATION\n需要更多資訊",
+            "status_code": "CAFE_NEED_CLARIFICATION"
+        }))
+
+        # 創建 iteration 2 的不完整歷史（被中斷，有 user_input 但沒有 response）
+        iteration2 = history_dir / "iteration_002.json"
+        saved_user_input = "1. 功能A\n2. 功能B\n3. 功能C"
+        iteration2.write_text(json.dumps({
+            "iteration": 2,
+            "user_input": saved_user_input,
+            "response": None  # 被中斷，沒有 response
+        }))
+
+        # Setup mocks
+        agent_manager = MagicMock(spec=AgentManager)
+        # 這次應該得到完成的回應
+        agent_manager.execute.return_value = ("CAFE_CONFIRMED\n需求已確認", TokenUsage())
+        setup_agent_manager_mocks(agent_manager)
+
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        # Create phase
+        phase = SpecPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            spec_file=str(spec_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            interactive=False,
+        )
+
+        # Execute phase - 應該直接使用已儲存的 user_input，不會要求用戶輸入
+        with patch('sys.stdin', StringIO("")):  # 不提供任何輸入
+            result = phase.execute()
+
+        # 驗證結果
+        assert result.status == PhaseStatus.COMPLETED
+
+        # 驗證 agent 被呼叫時使用了已儲存的 user_input
+        agent_manager.execute.assert_called_once()
+        call_args = agent_manager.execute.call_args
+        # execute 的參數是 (agent_name, prompt, ...)
+        prompt = call_args[0][1]  # 第二個位置參數是 prompt
+
+        # Prompt 應該包含已儲存的 user_input
+        assert saved_user_input in prompt
+
+        # 驗證 iteration 2 的 history 被更新（有 response 了）
+        iteration2_data = json.loads(iteration2.read_text())
+        assert iteration2_data["response"] is not None
+        assert "CAFE_CONFIRMED" in iteration2_data["response"]
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

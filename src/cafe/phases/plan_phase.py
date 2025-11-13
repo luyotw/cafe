@@ -458,6 +458,12 @@ class PlanPhase(Phase):
             plan_file = self.history_dir.parent / "plan.md"
             return plan_file.read_text() if plan_file.exists() else ""
 
+        # Iteration 2+: Check if current iteration was interrupted (has user_input but no response)
+        current_data = self._load_current_iteration_data()
+        if current_data and current_data.get("user_input") and not current_data.get("response"):
+            # 恢復被中斷的 iteration，直接使用已儲存的 user_input
+            return current_data["user_input"]
+
         # Iteration 2+: Display current plan.md content (interactive only)
         if self.interactive:
             self._display_current_plan()
