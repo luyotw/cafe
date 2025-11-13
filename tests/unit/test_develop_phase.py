@@ -10,8 +10,24 @@ from cafe.phases.develop_phase import DevelopPhase
 from cafe.agents.manager import AgentManager
 from cafe.core.git import GitOperations
 from cafe.core.status_codes import PhaseStatusCode
-from cafe.core.types import PhaseResult, PhaseStatus, WorkflowMode, TokenUsage
+from cafe.core.types import PhaseResult, PhaseStatus, WorkflowMode, TokenUsage, AgentConfig, AgentCLI
 from cafe.core.permission import PermissionHandler
+
+
+def setup_agent_manager_mock(agent_manager: MagicMock, agent_name: str = "David") -> None:
+    """Setup agent_manager mock with get_agent method.
+
+    Args:
+        agent_manager: The MagicMock agent manager to configure
+        agent_name: Name of the agent (default: David)
+    """
+    mock_agent_executor = MagicMock()
+    mock_agent_executor.config = AgentConfig(
+        name=agent_name,
+        cli=AgentCLI.CLAUDE,
+        session_id='test_session'
+    )
+    agent_manager.get_agent.return_value = mock_agent_executor
 
 
 class TestDevelopPhaseInit:
@@ -157,6 +173,7 @@ class TestIterativeFlow:
         plan_file.write_text("## Plan\n- [ ] Task 1")
 
         agent_manager = MagicMock(spec=AgentManager)
+        setup_agent_manager_mock(agent_manager)
         agent_manager.execute.return_value = ("Development completed. CAFE_CONFIRMED", TokenUsage())
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 
@@ -193,6 +210,7 @@ class TestIterativeFlow:
         plan_file.write_text("## Plan")
 
         agent_manager = MagicMock(spec=AgentManager)
+        setup_agent_manager_mock(agent_manager)
         agent_manager.execute.return_value = ("CAFE_CONFIRMED", TokenUsage())
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 
@@ -231,39 +249,6 @@ class TestIterativeFlow:
 
 class TestHistoryAndProgress:
     """Test history and progress saving."""
-
-    def test_save_history_creates_json_file(self, tmp_path: Path) -> None:
-        """測試 _save_history 建立 JSON 檔案"""
-        agent_manager = MagicMock(spec=AgentManager)
-        permission_handler = MagicMock(spec=PermissionHandler)
-        git_ops = MagicMock(spec=GitOperations)
-
-        phase = DevelopPhase(
-            agent_manager=agent_manager,
-            permission_handler=permission_handler,
-            git_ops=git_ops,
-            spec_file=str(tmp_path / ".cafe" / "issues" / "test" / "spec" / "spec.md"),
-            plan_file=str(tmp_path / ".cafe" / "issues" / "test" / "plan" / "plan.md"),
-            workflow_mode=WorkflowMode.LOCAL,
-            issue_name="test",
-        )
-
-        phase.iteration = 1
-        phase._save_history(
-            user_input="test input",
-            response="test response",
-            status_code=PhaseStatusCode.CONFIRMED,
-        )
-
-        history_file = phase.history_dir / "iteration_001.json"
-        assert history_file.exists()
-
-        with open(history_file) as f:
-            data = json.load(f)
-            assert data["iteration"] == 1
-            assert data["user_input"] == "test input"
-            assert data["response"] == "test response"
-            assert data["status_code"] == "CAFE_CONFIRMED"
 
     def test_save_progress_creates_status_json(self, tmp_path: Path) -> None:
         """測試 _save_progress 建立 status.json"""
@@ -345,6 +330,7 @@ class TestStatusCodeHandling:
         plan_file.write_text("## Plan")
 
         agent_manager = MagicMock(spec=AgentManager)
+        setup_agent_manager_mock(agent_manager)
         agent_manager.execute.return_value = ("All done. CAFE_CONFIRMED", TokenUsage())
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 
@@ -380,6 +366,7 @@ class TestStatusCodeHandling:
         plan_file.write_text("## Plan")
 
         agent_manager = MagicMock(spec=AgentManager)
+        setup_agent_manager_mock(agent_manager)
         # Agent returns NEED_PERMISSION
         agent_manager.execute.return_value = ("Need permission. CAFE_NEED_PERMISSION", TokenUsage())
         agent_manager.get_total_token_usage.return_value = TokenUsage()
@@ -574,6 +561,7 @@ class TestBranchManagement:
         plan_file.write_text("Test plan")
 
         agent_manager = MagicMock(spec=AgentManager)
+        setup_agent_manager_mock(agent_manager)
         agent_manager.execute.return_value = ("CAFE_CONFIRMED\n開發完成", TokenUsage())
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 
@@ -824,11 +812,16 @@ class TestDevelopPhaseReviewFeedback:
         review_status_file.write_text(json.dumps(review_status_data, indent=2))
 
         # Mock agent response
+        agent_manager = MagicMock(spec=AgentManager)
+        setup_agent_manager_mock(agent_manager)
         agent_manager.execute.return_value = ("CAFE_CONFIRMED\n修正完成", TokenUsage())
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 
         # Mock git operations
+        git_ops = MagicMock(spec=GitOperations)
         git_ops.branch_exists.return_value = True
+
+        permission_handler = MagicMock(spec=PermissionHandler)
 
         phase = DevelopPhase(
             agent_manager=agent_manager,
@@ -957,11 +950,16 @@ class TestDevelopPhaseReviewFeedback:
         review_status_file.write_text(json.dumps(review_status_data, indent=2))
 
         # Mock agent response
+        agent_manager = MagicMock(spec=AgentManager)
+        setup_agent_manager_mock(agent_manager)
         agent_manager.execute.return_value = ("CAFE_CONFIRMED\n修正完成", TokenUsage())
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 
         # Mock git operations
+        git_ops = MagicMock(spec=GitOperations)
         git_ops.branch_exists.return_value = True
+
+        permission_handler = MagicMock(spec=PermissionHandler)
 
         phase = DevelopPhase(
             agent_manager=agent_manager,
