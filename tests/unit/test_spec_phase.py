@@ -305,88 +305,6 @@ class TestHistoryTracking:
         assert data["allowed_tools"] == ["write", "read"]
         assert data["denied_tools"] is None
 
-    def test_update_context_file_creates_markdown(self, tmp_path: Path) -> None:
-        """測試更新 context.md 檔案"""
-        spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
-        spec_file.parent.mkdir(parents=True, exist_ok=True)
-        spec_file.write_text("Initial requirements\n")
-
-        agent_manager = MagicMock(spec=AgentManager)
-        permission_handler = MagicMock(spec=PermissionHandler)
-
-        phase = SpecPhase(
-            agent_manager=agent_manager,
-            permission_handler=permission_handler,
-            spec_file=str(spec_file),
-            workflow_mode=WorkflowMode.LOCAL,
-            interactive=False,
-            issue_name="test-feature",
-        )
-
-        # Set up conversation state
-        phase.iteration = 2
-        phase.confirmed_requirements = ["功能1: 用戶登入", "功能2: 用戶註冊"]
-        phase.pending_questions = ["密碼規則是什麼？", "是否需要 email 驗證？"]
-
-        # Create history file for iteration 1
-        phase.history_dir.mkdir(parents=True, exist_ok=True)
-        import json
-        iteration_1_file = phase.history_dir / "iteration_001.json"
-        iteration_1_file.write_text(json.dumps({
-            "iteration": 1,
-            "pm_response": "請問需要哪些功能？",
-            "user_input": "需要登入和註冊",
-            "response": "請問需要哪些功能？",
-            "status_code": "CAFE_NEED_CLARIFICATION",
-        }, ensure_ascii=False, indent=2))
-
-        # Update context file
-        phase._update_context_file()
-
-        # Check context file exists
-        context_file = phase.history_dir / "context.md"
-        assert context_file.exists()
-
-        # Verify content
-        content = context_file.read_text(encoding="utf-8")
-        assert "# 需求澄清歷史" in content
-        assert "## 已確定的需求" in content
-        assert "功能1: 用戶登入" in content
-        assert "功能2: 用戶註冊" in content
-        assert "## 待解答的問題" in content
-        assert "密碼規則是什麼？" in content
-        assert "是否需要 email 驗證？" in content
-        assert "## 對話歷史" in content
-        assert "第 1 輪" in content
-        assert "目前是第 2 輪" in content
-
-    def test_context_file_shows_restriction_after_iteration_4(self, tmp_path: Path) -> None:
-        """測試第 4 輪後 context.md 顯示問題限制"""
-        spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
-        spec_file.parent.mkdir(parents=True, exist_ok=True)
-        spec_file.write_text("Initial requirements\n")
-
-        agent_manager = MagicMock(spec=AgentManager)
-        permission_handler = MagicMock(spec=PermissionHandler)
-
-        phase = SpecPhase(
-            agent_manager=agent_manager,
-            permission_handler=permission_handler,
-            spec_file=str(spec_file),
-            workflow_mode=WorkflowMode.LOCAL,
-            interactive=False,
-            issue_name="test-feature",
-        )
-
-        # Set iteration to 4
-        phase.iteration = 4
-        phase._update_context_file()
-
-        # Check restriction message
-        context_file = phase.history_dir / "context.md"
-        content = context_file.read_text(encoding="utf-8")
-        assert "只能針對現有問題繼續追問，不可提出新問題" in content
-
     def test_issue_name_derived_from_spec_file(self, tmp_path: Path) -> None:
         """測試 issue_name 從 spec_file 自動推導"""
         spec_file = tmp_path / ".cafe" / "issues" / "my-feature" / "spec" / "spec.md"
@@ -409,15 +327,13 @@ class TestHistoryTracking:
         assert phase.issue_name == "my-feature"
         assert phase.history_dir == tmp_path / ".cafe" / "issues" / "my-feature" / "spec" / "history"
 
-    def test_prompt_includes_context_file_after_iteration_1(self, tmp_path: Path) -> None:
-        """測試第 2 輪後 prompt 包含 context 檔案"""
+    def test_iteration_2_prompt_includes_user_input(self, tmp_path: Path) -> None:
+        """測試第 2 輪後 prompt 應該包含 user_input 而不是 context.md"""
         spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("Initial requirements\n")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("CAFE_CONFIRMED\n需求已清楚", TokenUsage())
-
         permission_handler = MagicMock(spec=PermissionHandler)
 
         phase = SpecPhase(
@@ -429,25 +345,19 @@ class TestHistoryTracking:
             issue_name="test-feature",
         )
 
-        # Create history using base class method
-        phase.iteration = 1
-        phase._save_iteration_history(
-            phase_specific_data={
-                "status": PhaseStatusCode.NEED_CLARIFICATION.value,
-                "user_input": "Q1",
-                "pm_response": "A1",
-                "confirmed_requirements": phase.confirmed_requirements.copy(),
-                "pending_questions": phase.pending_questions.copy(),
-            },
-        )
         phase.iteration = 2
+        user_response = "1. 議題是人工定義的\n2. 同一組織共享議題列表\n3. 在新頁面選擇議題"
 
-        # Generate prompt for iteration 2
-        prompt = phase._generate_prompt()
+        # Generate prompt with user input
+        prompt = phase._generate_prompt(user_input=user_response)
 
-        # Should include reference to context file
-        expected_path = str(tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "history" / "context.md")
-        assert "context.md" in prompt or expected_path in prompt
+        # Should include user's response directly in prompt
+        assert "議題是人工定義的" in prompt
+        assert "同一組織共享議題列表" in prompt
+        assert "在新頁面選擇議題" in prompt
+
+        # Should have a section header for user response
+        assert "使用者的回答" in prompt or "使用者回覆" in prompt
 
     def test_iteration_4_prompt_includes_restriction(self, tmp_path: Path) -> None:
         """測試第 4 輪 prompt 包含問題限制"""

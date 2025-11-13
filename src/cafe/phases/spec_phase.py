@@ -487,16 +487,19 @@ class SpecPhase(Phase):
         """
         update_github_issue(self.issue_id, content)
 
-    def _generate_prompt(self) -> str:
+    def _generate_prompt(self, user_input: str = "") -> str:
         """Generate prompt for current iteration.
+
+        Args:
+            user_input: User's response/clarification for this iteration
 
         Returns:
             Prompt string
         """
         if self.workflow_mode == WorkflowMode.GITHUB:
-            return self._generate_github_prompt()
+            return self._generate_github_prompt(user_input)
         else:
-            return self._generate_local_prompt()
+            return self._generate_local_prompt(user_input)
 
     def _get_non_technical_guidelines(self) -> str:
         """Get non-technical guidelines for PM.
@@ -560,8 +563,11 @@ class SpecPhase(Phase):
 - 對於次要細節可以接受合理的彈性
 - 目標：在速度和精確度之間取得平衡"""
 
-    def _generate_local_prompt(self) -> str:
+    def _generate_local_prompt(self, user_input: str = "") -> str:
         """Generate prompt for local workflow.
+
+        Args:
+            user_input: User's response/clarification for this iteration
 
         Returns:
             Prompt string
@@ -639,11 +645,13 @@ class SpecPhase(Phase):
    - 「## 需求規格」- 完整的需求內容
 """
         else:
-            # Iteration 2+: Include context file reference
-            context_path = self.history_dir / "context.md"
-            context_reference = f"""
-**對話歷史：**
-請先閱讀 {context_path} 了解之前的對話記錄和已確定的需求。
+            # Iteration 2+: Include user's response
+            user_response_section = ""
+            if user_input:
+                user_response_section = f"""
+**使用者的回答：**
+{user_input}
+
 """
 
             # Add restriction for iteration 4+
@@ -663,7 +671,7 @@ class SpecPhase(Phase):
 你不是軟體工程師，不要提技術實作細節。
 
 這是第 {self.iteration} 輪需求澄清。請檢查需求文件的最新版本。
-{context_reference}
+{user_response_section}
 {rigor_guidelines}
 
 {non_technical}
@@ -682,8 +690,11 @@ class SpecPhase(Phase):
    - 「## 需求規格」- 完整需求（整合所有已確認的內容）
 """
 
-    def _generate_github_prompt(self) -> str:
+    def _generate_github_prompt(self, user_input: str = "") -> str:
         """Generate prompt for GitHub workflow.
+
+        Args:
+            user_input: User's response/clarification for this iteration
 
         Returns:
             Prompt string
@@ -727,58 +738,6 @@ class SpecPhase(Phase):
 **如果需求已經很清楚，確認完成：**
 回應確認訊息。
 """
-
-    def _update_context_file(self) -> None:
-        """Update context.md with conversation history for agent."""
-        # Ensure history directory exists
-        self.history_dir.mkdir(parents=True, exist_ok=True)
-
-        context_lines = ["# 需求澄清歷史\n"]
-
-        # Confirmed requirements section
-        context_lines.append("## 已確定的需求\n")
-        if self.confirmed_requirements:
-            for req in self.confirmed_requirements:
-                context_lines.append(f"{req}\n")
-        else:
-            context_lines.append("(尚無已確定的需求)\n")
-        context_lines.append("\n")
-
-        # Pending questions section
-        context_lines.append("## 待解答的問題\n")
-        if self.pending_questions:
-            for i, question in enumerate(self.pending_questions, 1):
-                context_lines.append(f"{i}. {question}\n")
-        else:
-            context_lines.append("(無待解答問題)\n")
-        context_lines.append("\n")
-
-        # Conversation history - read from history files
-        context_lines.append("## 對話歷史\n")
-        if self.history_dir.exists():
-            iteration_files = sorted(self.history_dir.glob("iteration_*.json"))
-            for iteration_file in iteration_files:
-                with open(iteration_file, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                iteration_num = data.get("iteration", 0)
-                pm_response = data.get("pm_response", "") or data.get("response", "")
-                user_input = data.get("user_input", "")
-
-                context_lines.append(f"### 第 {iteration_num} 輪\n")
-                context_lines.append(f"**PM 問題：**\n{pm_response}\n\n")
-                if user_input:
-                    context_lines.append(f"**用戶回答：**\n{user_input}\n\n")
-        context_lines.append("\n")
-
-        # Important notes
-        context_lines.append("## 重要提示\n")
-        context_lines.append(f"- 目前是第 {self.iteration} 輪\n")
-        if self.iteration >= 4:
-            context_lines.append("- ⚠️ **限制：只能針對現有問題繼續追問，不可提出新問題**\n")
-
-        # Save context file
-        context_file = self.history_dir / "context.md"
-        context_file.write_text("".join(context_lines), encoding="utf-8")
 
     def get_status_file(self) -> Path:
         """Public method to get status file path for workflow integration.
