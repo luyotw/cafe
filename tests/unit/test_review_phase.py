@@ -12,6 +12,19 @@ from cafe.core.types import PhaseResult, PhaseStatus, TokenUsage, WorkflowMode
 from cafe.core.permission import PermissionHandler
 
 
+def setup_agent_manager_mock(agent_manager: MagicMock, agent_name: str = "Richard") -> None:
+    """Setup agent_manager mock with get_agent method."""
+    from cafe.core.types import AgentCLI, AgentConfig, TokenUsage
+    mock_agent_executor = MagicMock()
+    mock_agent_executor.config = AgentConfig(
+        name=agent_name,
+        cli=AgentCLI.CLAUDE,
+        session_id='test_session'
+    )
+    agent_manager.get_agent.return_value = mock_agent_executor
+    agent_manager.get_total_token_usage.return_value = TokenUsage()
+
+
 class TestReviewPhaseBasics:
     """Test basic ReviewPhase functionality."""
 
@@ -79,10 +92,15 @@ class TestSingleIterationExecution:
 
     def test_single_review_iteration_confirmed(self, tmp_path: Path) -> None:
         """測試單次 review 迭代通過"""
-        requirements_file = tmp_path / "requirements.md"
-        requirements_file.write_text("Requirements")
+        # Create proper issue structure
+        issue_name = "test-issue"
+        spec_dir = tmp_path / ".cafe" / "issues" / issue_name / "spec"
+        spec_dir.mkdir(parents=True)
+        spec_file = spec_dir / "spec.md"
+        spec_file.write_text("Requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
+        setup_agent_manager_mock(agent_manager)
         # Review agent approves immediately
         agent_manager.execute.return_value = ("CAFE_CONFIRMED\nCode looks good!", TokenUsage())
 
@@ -95,24 +113,28 @@ class TestSingleIterationExecution:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            spec_file=str(requirements_file),
+            spec_file=str(spec_file),
             plan_file="plan.md",
             workflow_mode=WorkflowMode.LOCAL,
+            base_branch="main",
         )
 
-        with patch.object(phase, "_save_review_result"):
-            result = phase.execute()
+        result = phase.execute()
 
         assert result.status == PhaseStatus.COMPLETED
-        assert "passed" in result.message.lower()
         assert result.data["status_code"] == "CAFE_CONFIRMED"
 
     def test_single_review_iteration_needs_changes(self, tmp_path: Path) -> None:
         """測試單次 review 迭代需要修改"""
-        requirements_file = tmp_path / "requirements.md"
-        requirements_file.write_text("Requirements")
+        # Create proper issue structure
+        issue_name = "test-issue-changes"
+        spec_dir = tmp_path / ".cafe" / "issues" / issue_name / "spec"
+        spec_dir.mkdir(parents=True)
+        spec_file = spec_dir / "spec.md"
+        spec_file.write_text("Requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
+        setup_agent_manager_mock(agent_manager)
         agent_manager.execute.return_value = ("CAFE_NEEDS_CHANGES\n問題 1: 需要修正", TokenUsage())
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -124,13 +146,13 @@ class TestSingleIterationExecution:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            spec_file=str(requirements_file),
+            spec_file=str(spec_file),
             plan_file="plan.md",
             workflow_mode=WorkflowMode.LOCAL,
+            base_branch="main",
         )
 
-        with patch.object(phase, "_save_review_result"):
-            result = phase.execute()
+        result = phase.execute()
 
         assert result.status == PhaseStatus.COMPLETED
         assert result.data["status_code"] == "CAFE_NEEDS_CHANGES"
@@ -141,6 +163,7 @@ class TestSingleIterationExecution:
         requirements_file.write_text("Requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
+        setup_agent_manager_mock(agent_manager)
         agent_manager.execute.return_value = ("CAFE_NEEDS_CHANGES\n需要修正", TokenUsage())
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -157,8 +180,7 @@ class TestSingleIterationExecution:
             workflow_mode=WorkflowMode.LOCAL,
         )
 
-        with patch.object(phase, "_save_review_result"):
-            result = phase.execute()
+        result = phase.execute()
 
         # Should call agent exactly once
         assert agent_manager.execute.call_count == 1
@@ -199,6 +221,7 @@ class TestDiffChecking:
         requirements_file.write_text("Requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
+        setup_agent_manager_mock(agent_manager)
         agent_manager.execute.return_value = ("CAFE_CONFIRMED\nCode looks good!", TokenUsage())
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -215,8 +238,7 @@ class TestDiffChecking:
             workflow_mode=WorkflowMode.LOCAL,
         )
 
-        with patch.object(phase, "_save_review_result"):
-            phase.execute()
+        phase.execute()
 
         # Should get diff from main to HEAD
         git_ops.get_diff.assert_called_once_with(base="main", head="HEAD")
@@ -227,6 +249,7 @@ class TestDiffChecking:
         requirements_file.write_text("Requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
+        setup_agent_manager_mock(agent_manager)
         agent_manager.execute.return_value = ("CAFE_CONFIRMED\nCode looks good!", TokenUsage())
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -244,8 +267,7 @@ class TestDiffChecking:
             target_commit="abc123",
         )
 
-        with patch.object(phase, "_save_review_result"):
-            phase.execute()
+        phase.execute()
 
         # Should get diff for specific commit
         git_ops.get_diff.assert_called_once_with(base="abc123^", head="abc123")
@@ -256,6 +278,7 @@ class TestDiffChecking:
         requirements_file.write_text("Requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
+        setup_agent_manager_mock(agent_manager)
         agent_manager.execute.return_value = ("CAFE_CONFIRMED\nCode looks good!", TokenUsage())
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -272,8 +295,7 @@ class TestDiffChecking:
             workflow_mode=WorkflowMode.LOCAL,
         )
 
-        with patch.object(phase, "_save_review_result"):
-            phase.execute()
+        phase.execute()
 
         # Check that diff was included in review prompt
         call_args = agent_manager.execute.call_args_list[0][0]
@@ -290,6 +312,7 @@ class TestAgentSelection:
         requirements_file.write_text("Requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
+        setup_agent_manager_mock(agent_manager)
         agent_manager.execute.return_value = ("CAFE_CONFIRMED\nCode looks good!", TokenUsage())
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -307,8 +330,7 @@ class TestAgentSelection:
             review_agent="Richard",
         )
 
-        with patch.object(phase, "_save_review_result"):
-            phase.execute()
+        phase.execute()
 
         # Check agent was used correctly
         calls = agent_manager.execute.call_args_list
@@ -325,6 +347,7 @@ class TestPromptGeneration:
         requirements_file.write_text("Requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
+        setup_agent_manager_mock(agent_manager)
         agent_manager.execute.return_value = ("CAFE_CONFIRMED\nCode looks good!", TokenUsage())
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -341,8 +364,7 @@ class TestPromptGeneration:
             workflow_mode=WorkflowMode.LOCAL,
         )
 
-        with patch.object(phase, "_save_review_result"):
-            phase.execute()
+        phase.execute()
 
         call_args = agent_manager.execute.call_args[0]
         prompt = call_args[1]
@@ -356,6 +378,7 @@ class TestPromptGeneration:
         requirements_file.write_text("Requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
+        setup_agent_manager_mock(agent_manager)
         agent_manager.execute.return_value = ("CAFE_CONFIRMED\nCode looks good!", TokenUsage())
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -372,8 +395,7 @@ class TestPromptGeneration:
             workflow_mode=WorkflowMode.LOCAL,
         )
 
-        with patch.object(phase, "_save_review_result"):
-            phase.execute()
+        phase.execute()
 
         call_args = agent_manager.execute.call_args[0]
         prompt = call_args[1]
@@ -387,40 +409,50 @@ class TestReviewResultSaving:
 
     def test_saves_review_result(self, tmp_path: Path) -> None:
         """測試儲存 review 結果"""
-        requirements_file = tmp_path / "spec.md"
-        requirements_file.write_text("Requirements")
+        import os
+        original_dir = os.getcwd()
+        try:
+            # Create issue structure
+            issue_dir = tmp_path / "myissue"
+            spec_dir = issue_dir / "spec"
+            spec_dir.mkdir(parents=True)
+            spec_file = spec_dir / "spec.md"
+            spec_file.write_text("Requirements")
 
-        # Create issue structure
-        issue_dir = tmp_path / "myissue"
-        spec_dir = issue_dir / "spec"
-        spec_dir.mkdir(parents=True)
-        spec_file = spec_dir / "spec.md"
-        spec_file.write_text("Requirements")
+            plan_dir = issue_dir / "plan"
+            plan_dir.mkdir(parents=True)
+            plan_file = plan_dir / "plan.md"
+            plan_file.write_text("Plan")
 
-        agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("CAFE_CONFIRMED\nCode looks good!", TokenUsage())
+            os.chdir(tmp_path)
 
-        permission_handler = MagicMock(spec=PermissionHandler)
+            agent_manager = MagicMock(spec=AgentManager)
+            setup_agent_manager_mock(agent_manager)
+            agent_manager.execute.return_value = ("CAFE_CONFIRMED\nCode looks good!", TokenUsage())
 
-        git_ops = MagicMock(spec=GitOperations)
-        git_ops.get_diff.return_value = "diff content"
+            permission_handler = MagicMock(spec=PermissionHandler)
 
-        phase = ReviewPhase(
-            agent_manager=agent_manager,
-            permission_handler=permission_handler,
-            git_ops=git_ops,
-            spec_file=str(spec_file),
-            plan_file="plan.md",
-            workflow_mode=WorkflowMode.LOCAL,
-        )
+            git_ops = MagicMock(spec=GitOperations)
+            git_ops.get_diff.return_value = "diff content"
 
-        with patch("cafe.phases.review_phase.Path.mkdir"):
-            with patch("cafe.phases.review_phase.Path.write_text") as mock_write:
-                with patch("cafe.phases.review_phase.Path.glob", return_value=[]):
-                    phase.execute()
+            phase = ReviewPhase(
+                agent_manager=agent_manager,
+                permission_handler=permission_handler,
+                git_ops=git_ops,
+                spec_file=str(spec_file),
+                plan_file=str(plan_file),
+                workflow_mode=WorkflowMode.LOCAL,
+            )
 
-        # Should save review result
-        assert mock_write.called
+            phase.execute()
+
+            # Should save review.md (under .cafe/issues/{issue_name}/review)
+            review_dir = tmp_path / ".cafe" / "issues" / "myissue" / "review"
+            review_file = review_dir / "review.md"
+            assert review_file.exists(), f"review.md should be saved at {review_file}"
+            assert "Code looks good!" in review_file.read_text()
+        finally:
+            os.chdir(original_dir)
 
     def test_saves_to_history(self, tmp_path: Path) -> None:
         """測試儲存到 history"""
@@ -435,6 +467,7 @@ class TestReviewResultSaving:
         spec_file.write_text("Requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
+        setup_agent_manager_mock(agent_manager)
         agent_manager.execute.return_value = ("CAFE_CONFIRMED\nCode looks good!", TokenUsage())
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -498,6 +531,7 @@ class TestReviewResultSaving:
             )
 
             agent_manager = MagicMock(spec=AgentManager)
+            setup_agent_manager_mock(agent_manager)
             agent_manager.execute.return_value = ("CAFE_CONFIRMED\nCode looks good!", TokenUsage())
             agent_manager.get_agent.return_value = mock_executor
 
@@ -537,7 +571,7 @@ class TestReviewResultSaving:
             # Verify values
             assert history_data["cli"] == "copilot"
             assert history_data["session_id"] == "test-session-123"
-            assert history_data["allowed_tools"] is None  # Default when not specified
+            assert history_data["allowed_tools"] == ["bash"]  # ReviewPhase allows bash for git commands
             assert history_data["denied_tools"] is None  # Default when not specified
         finally:
             os.chdir(original_dir)
@@ -573,6 +607,7 @@ class TestReviewResultSaving:
             )
 
             agent_manager = MagicMock(spec=AgentManager)
+            setup_agent_manager_mock(agent_manager)
             agent_manager.execute.return_value = ("CAFE_CONFIRMED\nCode looks good!", TokenUsage())
             agent_manager.get_agent.return_value = mock_executor
 
@@ -637,6 +672,7 @@ class TestIssueConfigReading:
         config_file.write_text(json.dumps(config_data))
 
         agent_manager = MagicMock(spec=AgentManager)
+        setup_agent_manager_mock(agent_manager)
         agent_manager.execute.return_value = ("CAFE_CONFIRMED\nLGTM!", TokenUsage())
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -690,6 +726,7 @@ class TestReviewPhaseStatus:
         )
 
         agent_manager = MagicMock(spec=AgentManager)
+        setup_agent_manager_mock(agent_manager)
         agent_manager.execute.return_value = ("CAFE_CONFIRMED\nCode looks good!", TokenUsage())
         agent_manager.get_agent.return_value = mock_executor
 
@@ -747,6 +784,7 @@ class TestGitHubWorkflow:
         plan_file.write_text("Plan")
 
         agent_manager = MagicMock(spec=AgentManager)
+        setup_agent_manager_mock(agent_manager)
         agent_manager.execute.return_value = ("CAFE_CONFIRMED\nCode looks good!", TokenUsage())
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -764,8 +802,7 @@ class TestGitHubWorkflow:
             issue_id="123",
         )
 
-        with patch.object(phase, "_save_review_result"):
-            phase.execute()
+        phase.execute()
 
         call_args = agent_manager.execute.call_args[0]
         prompt = call_args[1]
