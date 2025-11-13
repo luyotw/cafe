@@ -12,9 +12,18 @@ from cafe.core.phase import Phase
 from cafe.core.status_codes import PhaseStatusCode, StatusCodeParser, generate_status_code_prompt
 from cafe.core.types import PhaseProgress, PhaseResult, PhaseStatus, WorkflowMode
 
+# Max iterations for review (each review is independent, so this is mostly for safety)
+MAX_REVIEW_ITERATIONS = 1
+
 
 class ReviewPhase(Phase):
-    """Phase 4: Code review with reviewer agent."""
+    """Phase 4: Code review with reviewer agent.
+
+    Review phase is non-iterative: each execution is a single, independent code review.
+    Unlike spec/plan/develop phases, there's no conversational loop.
+    """
+
+    phase_name = "review"
 
     def __init__(
         self,
@@ -65,84 +74,179 @@ class ReviewPhase(Phase):
     def execute(self) -> PhaseResult:
         """Execute code review phase (single iteration).
 
+        Review phase is non-iterative: executes once and returns result.
+
         Returns:
             Phase result
         """
         try:
-            # Get diff (full branch or specific commit)
-            if self.target_commit:
-                diff = self.git_ops.get_diff(
-                    base=f"{self.target_commit}^", head=self.target_commit
-                )
-            else:
-                diff = self.git_ops.get_diff(base=self.base_branch, head="HEAD")
+            # Initialize history directory
+            self._initialize_history_dir()
 
+            # Get diff (full branch or specific commit)
+            diff = self._get_diff()
             if not diff:
                 return PhaseResult(
                     status=PhaseStatus.FAILED,
                     message="No changes found in diff",
                 )
 
-            # Generate review prompt
-            review_prompt = self._generate_review_prompt(diff)
+            # Store diff for use in prompt generation
+            self.current_diff = diff
 
-            # Execute review agent
-            review_response, token_usage = self.agent_manager.execute(
-                self.review_agent, review_prompt
+            # Single iteration (no loop for review phase)
+            self.iteration = 1
+
+            # Execute review using base class method
+            result, response = self._execute_and_handle_agent_response(
+                agent_name=self.review_agent,
+                user_input="",  # Review doesn't need user input
+                valid_status_codes=[
+                    PhaseStatusCode.CONFIRMED,
+                    PhaseStatusCode.NEEDS_CHANGES,
+                ],
+                allowed_tools=["bash"],  # Review can use bash for git commands
+                complete_codes=[PhaseStatusCode.CONFIRMED, PhaseStatusCode.NEEDS_CHANGES],
+                continue_codes=[],  # No continue codes - single iteration only
             )
 
-            # Get agent executor info for history
-            agent_executor = self.agent_manager.get_agent(self.review_agent)
-            agent_cli = agent_executor.config.cli.value
-            agent_session_id = agent_executor.config.session_id
+            # Save review.md (latest review result)
+            if response:
+                self._save_latest_review(response)
 
-            # Extract status code from review response
+            # If base class returned a result, use it
+            if result:
+                return result
+
+            # Fallback: In interactive mode, base class may return None for complete_codes
+            # Extract status code from response and return completion result
+            from cafe.core.status_codes import StatusCodeParser
             status_code = StatusCodeParser.extract(
-                review_response,
+                response,
                 valid_codes=[
                     PhaseStatusCode.CONFIRMED,
                     PhaseStatusCode.NEEDS_CHANGES,
                 ],
             )
 
-            # Save review result with agent info
-            self._save_review_result(
-                review_response,
-                status_code,
-                prompt=review_prompt,
-                agent_cli=agent_cli,
-                agent_session_id=agent_session_id
+            self._print_token_usage_summary()
+            token_usage = self.agent_manager.get_total_token_usage()
+
+            return PhaseResult(
+                status=PhaseStatus.COMPLETED,
+                message="Code review completed",
+                data={
+                    "iterations": self.iteration,
+                    "final_response": response,
+                    "status_code": status_code.value if status_code else None,
+                    "target_commit": self.target_commit,
+                    "base_branch": self.base_branch,
+                    "token_usage": {
+                        "input_tokens": token_usage.input_tokens,
+                        "output_tokens": token_usage.output_tokens,
+                        "cache_creation_input_tokens": token_usage.cache_creation_input_tokens,
+                        "cache_read_input_tokens": token_usage.cache_read_input_tokens,
+                        "total_cost_usd": token_usage.total_cost_usd,
+                    }
+                },
+                token_usage=token_usage,
             )
-
-            # Save progress status
-            if status_code:
-                self._save_progress(status_code)
-
-            # Return result based on status code
-            if status_code == PhaseStatusCode.CONFIRMED:
-                return PhaseResult(
-                    status=PhaseStatus.COMPLETED,
-                    message="Code review passed",
-                    data={
-                        "review_response": review_response,
-                        "status_code": status_code.value,
-                    },
-                )
-            else:
-                return PhaseResult(
-                    status=PhaseStatus.COMPLETED,
-                    message=f"Code review completed with status: {status_code.value if status_code else 'NONE'}",
-                    data={
-                        "review_response": review_response,
-                        "status_code": status_code.value if status_code else None,
-                    },
-                )
 
         except Exception as e:
             return PhaseResult(
                 status=PhaseStatus.FAILED,
                 message=f"Review phase failed: {e}",
             )
+
+    def _initialize_history_dir(self) -> None:
+        """Initialize history directory for review."""
+        # Determine review directory based on workflow mode
+        if self.workflow_mode == WorkflowMode.GITHUB and self.issue_id:
+            review_dir = Path(f".cafe/issues/{self.issue_id}/review")
+        else:
+            # Extract issue name from spec_file path
+            spec_path = Path(self.spec_file)
+            issue_name = spec_path.parent.parent.name
+            review_dir = Path(f".cafe/issues/{issue_name}/review")
+
+        self.history_dir = review_dir / "history"
+        self.history_dir.mkdir(parents=True, exist_ok=True)
+
+    def _get_diff(self) -> str:
+        """Get git diff (full branch or specific commit).
+
+        Returns:
+            Git diff content
+        """
+        if self.target_commit:
+            return self.git_ops.get_diff(
+                base=f"{self.target_commit}^", head=self.target_commit
+            )
+        else:
+            return self.git_ops.get_diff(base=self.base_branch, head="HEAD")
+
+    def _generate_prompt(self, user_input: str) -> str:
+        """Generate review prompt (implements abstract method from Phase).
+
+        Args:
+            user_input: Not used for review phase
+
+        Returns:
+            Review prompt string
+        """
+        return self._generate_review_prompt(self.current_diff)
+
+    def _get_completion_data(self) -> dict:
+        """Get phase-specific completion data (implements abstract method from Phase).
+
+        Returns:
+            Dictionary with review-specific data
+        """
+        return {
+            "target_commit": self.target_commit,
+            "base_branch": self.base_branch,
+        }
+
+    def _save_progress(self, status_code: PhaseStatusCode) -> None:
+        """Save phase progress to status.json (overrides base class).
+
+        For ReviewPhase, both CONFIRMED and NEEDS_CHANGES are completion codes.
+
+        Args:
+            status_code: Phase status code
+        """
+        import json
+        from datetime import datetime
+        from cafe.core.types import PhaseStatus, PhaseProgress
+
+        status_file = self._get_status_file()
+        status_file.parent.mkdir(parents=True, exist_ok=True)
+
+        # Both CONFIRMED and NEEDS_CHANGES are completion statuses for review
+        complete_codes = [PhaseStatusCode.CONFIRMED, PhaseStatusCode.NEEDS_CHANGES]
+        phase_status = PhaseStatus.COMPLETED if status_code in complete_codes else PhaseStatus.IN_PROGRESS
+
+        progress = PhaseProgress(
+            phase=self.phase_name,
+            status=phase_status,
+            status_code=status_code.value,
+            timestamp=datetime.now(),
+            iteration=self.iteration,
+            message=f"Code review completed with {status_code.value}" if phase_status == PhaseStatus.COMPLETED else f"Iteration {self.iteration}",
+        )
+
+        with open(status_file, 'w', encoding='utf-8') as f:
+            json.dump(progress.to_dict(), f, ensure_ascii=False, indent=2)
+
+    def _save_latest_review(self, review_response: str) -> None:
+        """Save latest review result to review.md.
+
+        Args:
+            review_response: Review response from agent
+        """
+        review_dir = self.history_dir.parent
+        result_file = review_dir / "review.md"
+        result_file.write_text(review_response)
 
     def _check_if_develop_is_newer(self) -> bool:
         """檢查 develop phase 的時間戳記是否比上次 review 更新。
@@ -193,7 +297,10 @@ class ReviewPhase(Phase):
             Review prompt string
         """
         # Get requirements section
-        requirements_section = self._get_requirements_section()
+        try:
+            requirements_section = self._get_requirements_section()
+        except Exception as e:
+            raise RuntimeError(f"Error in _get_requirements_section: {e}") from e
 
         # 檢查是否需要重新執行檢查（develop 比 review 新）
         develop_is_newer = self._check_if_develop_is_newer()
@@ -220,7 +327,8 @@ class ReviewPhase(Phase):
         )
 
         # Build prompt
-        prompt = f"""你是資深軟體工程師 {self.review_agent}，正在進行程式碼審查 (Code Review)。
+        try:
+            prompt = f"""你是資深軟體工程師 {self.review_agent}，正在進行程式碼審查 (Code Review)。
 
 {status_code_prompt}
 {recheck_instruction}
@@ -271,109 +379,11 @@ class ReviewPhase(Phase):
 - Commit message 風格問題視為 critical issue，必須修正後才能通過審查
 - 審查完成後請回傳狀態碼，指令執行即結束
 """
+        except Exception as e:
+            raise RuntimeError(f"Error building prompt: {e}") from e
 
         return prompt
 
-    def _save_review_result(
-        self,
-        review_response: str,
-        status_code: Optional[PhaseStatusCode],
-        prompt: Optional[str] = None,
-        agent_cli: Optional[str] = None,
-        agent_session_id: Optional[str] = None,
-        allowed_tools: Optional[List[str]] = None,
-        denied_tools: Optional[List[str]] = None
-    ) -> None:
-        """Save review result to file.
-
-        Args:
-            review_response: Review response from agent
-            status_code: Status code from review
-            prompt: The actual prompt sent to the agent
-            agent_cli: CLI tool used by the agent (e.g., "copilot", "claude")
-            agent_session_id: Session ID of the agent
-            allowed_tools: List of allowed tools for the agent
-            denied_tools: List of denied tools for the agent
-        """
-        # Determine review directory based on workflow mode
-        if self.workflow_mode == WorkflowMode.GITHUB and self.issue_id:
-            review_dir = Path(f".cafe/issues/{self.issue_id}/review")
-        else:
-            # Extract issue name from spec_file path
-            spec_path = Path(self.spec_file)
-            issue_name = spec_path.parent.parent.name
-            review_dir = Path(f".cafe/issues/{issue_name}/review")
-
-        review_dir.mkdir(parents=True, exist_ok=True)
-        history_dir = review_dir / "history"
-        history_dir.mkdir(exist_ok=True)
-
-        # Save latest review result
-        result_file = review_dir / "review.md"
-        result_file.write_text(review_response)
-
-        # Calculate iteration count
-        iteration_count = len(list(history_dir.glob("iteration_*.json"))) + 1
-
-        # Temporarily set iteration and history_dir for base class method
-        saved_iteration = getattr(self, 'iteration', None)
-        saved_history_dir = getattr(self, 'history_dir', None)
-
-        self.iteration = iteration_count
-        self.history_dir = history_dir
-
-        # Use base class method with ReviewPhase-specific data
-        super()._save_iteration_history(
-            phase_specific_data={
-                "target_commit": self.target_commit,
-                "review_response": review_response,
-            },
-            prompt=prompt,
-            agent_cli=agent_cli,
-            agent_session_id=agent_session_id,
-            allowed_tools=allowed_tools,
-            denied_tools=denied_tools,
-            status_code=status_code,
-        )
-
-        # Restore original values
-        if saved_iteration is not None:
-            self.iteration = saved_iteration
-        if saved_history_dir is not None:
-            self.history_dir = saved_history_dir
-
-    def _save_progress(self, status_code: PhaseStatusCode) -> None:
-        """Save phase progress to status.json.
-
-        Args:
-            status_code: Phase status code
-        """
-        # Determine review directory based on workflow mode
-        if self.workflow_mode == WorkflowMode.GITHUB and self.issue_id:
-            review_dir = Path(f".cafe/issues/{self.issue_id}/review")
-        else:
-            # Extract issue name from spec_file path
-            spec_path = Path(self.spec_file)
-            issue_name = spec_path.parent.parent.name
-            review_dir = Path(f".cafe/issues/{issue_name}/review")
-
-        status_file = review_dir / "status.json"
-        status_file.parent.mkdir(parents=True, exist_ok=True)
-
-        # Determine phase status
-        phase_status = PhaseStatus.COMPLETED if status_code == PhaseStatusCode.CONFIRMED else PhaseStatus.COMPLETED
-
-        # Create progress object
-        progress = PhaseProgress(
-            phase="review",
-            status=phase_status,
-            status_code=status_code.value,
-            iteration=self.iteration,
-            timestamp=datetime.now().isoformat(),
-        )
-
-        with open(status_file, 'w', encoding='utf-8') as f:
-            json.dump(progress.to_dict(), f, ensure_ascii=False, indent=2)
 
     def _read_base_branch_from_config(self) -> Optional[str]:
         """Read base branch from issue config file.
