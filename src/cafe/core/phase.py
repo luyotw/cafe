@@ -310,7 +310,7 @@ class Phase(ABC):
             self._update_iteration_history(
                 phase_specific_data={
                     "response": response,
-                    "permission_denials": [denial.dict() for denial in permission_denials]
+                    "permission_denials": [denial.model_dump() for denial in permission_denials]
                 },
                 prompt=prompt,
                 agent_cli=agent_cli,
@@ -332,7 +332,7 @@ class Phase(ABC):
         self._update_iteration_history(
             phase_specific_data={
                 "response": response,
-                "permission_denials": [denial.dict() for denial in permission_denials]
+                "permission_denials": [denial.model_dump() for denial in permission_denials]
             },
             prompt=prompt,
             agent_cli=agent_cli,
