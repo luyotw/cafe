@@ -636,6 +636,88 @@ class Phase(ABC):
         with open(prev_iteration_file, "r", encoding="utf-8") as f:
             return json.load(f)
 
+    def _handle_previous_permission_denials(self) -> tuple[List[str], str]:
+        """處理上一輪的 permission denials，返回批准的工具和用戶輸入。
+
+        這個方法處理兩種模式：
+        1. Interactive 模式：逐一詢問用戶是否批准每個被拒絕的工具
+        2. Non-interactive 模式：使用 self.approved_denial_indices 批准工具
+
+        Returns:
+            tuple[List[str], str]: (批准的工具列表, 用戶關於權限的額外說明)
+        """
+        from cafe.core.types import PermissionDenial
+
+        # 載入上一輪的 iteration 資料
+        prev_data = self._load_previous_iteration_data()
+        if not prev_data:
+            return ([], "")
+
+        # 檢查是否有 permission_denials
+        permission_denials_data = prev_data.get("permission_denials", [])
+        if not permission_denials_data:
+            return ([], "")
+
+        # 將 dict 轉換為 PermissionDenial 物件
+        permission_denials = [
+            PermissionDenial(**denial_data) for denial_data in permission_denials_data
+        ]
+
+        # 收集被批准的 indices
+        approved_indices: List[int] = []
+
+        if self.interactive:
+            # Interactive 模式：先顯示所有權限請求，然後逐一詢問
+            print("\n上一輪執行中有以下權限請求被拒絕：\n")
+            for idx, denial in enumerate(permission_denials):
+                # 顯示工具名稱和主要參數
+                if "file_path" in denial.tool_input:
+                    print(f"[{idx}] {denial.tool_name}({denial.tool_input['file_path']})")
+                elif "command" in denial.tool_input:
+                    print(f"[{idx}] {denial.tool_name}({denial.tool_input['command']})")
+                else:
+                    print(f"[{idx}] {denial.tool_name}(...)")
+
+            print()  # 空行分隔
+
+            # 逐一詢問每個權限
+            for idx, denial in enumerate(permission_denials):
+                # 顯示要授權的工具
+                if "file_path" in denial.tool_input:
+                    tool_desc = f"{denial.tool_name}({denial.tool_input['file_path']})"
+                elif "command" in denial.tool_input:
+                    tool_desc = f"{denial.tool_name}({denial.tool_input['command']})"
+                else:
+                    tool_desc = f"{denial.tool_name}"
+
+                response = input(f"是否批准 [{idx}] {tool_desc}？(y/n): ").strip().lower()
+                if response == 'y':
+                    approved_indices.append(idx)
+
+            # 詢問用戶是否有額外說明
+            print()
+            user_input = self.display.get_multiline_input(
+                "關於這些權限，是否有額外的說明或指示要給 agent？（按 Ctrl+D 或輸入空行結束）"
+            )
+        else:
+            # Non-interactive 模式：使用預設的 approved_denial_indices
+            if not hasattr(self, "approved_denial_indices"):
+                raise AttributeError("Phase must have 'approved_denial_indices' attribute in non-interactive mode")
+            if not hasattr(self, "user_input"):
+                raise AttributeError("Phase must have 'user_input' attribute in non-interactive mode")
+
+            approved_indices = self.approved_denial_indices
+            user_input = self.user_input
+
+        # 將批准的 indices 轉換為 allowed_tools 格式
+        approved_tools: List[str] = []
+        for idx in approved_indices:
+            if idx < len(permission_denials):
+                denial = permission_denials[idx]
+                approved_tools.append(denial.to_allowed_tool_pattern())
+
+        return (approved_tools, user_input)
+
     def _load_current_iteration_data(self) -> Optional[dict]:
         """載入當前 iteration 的資料（通用方法）。
 
