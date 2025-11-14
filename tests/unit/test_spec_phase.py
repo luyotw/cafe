@@ -104,7 +104,7 @@ class TestAgentSelection:
         spec_file.write_text("Requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("CAFE_CONFIRMED\n需求已清楚。", TokenUsage())
+        agent_manager.execute.return_value = ("CAFE_CONFIRMED\n需求已清楚。", TokenUsage(), [])
         setup_agent_manager_mocks(agent_manager)
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -136,7 +136,7 @@ class TestHistoryTracking:
         spec_file.write_text("Initial requirements\n")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("CAFE_CONFIRMED\n需求已清楚。", TokenUsage())
+        agent_manager.execute.return_value = ("CAFE_CONFIRMED\n需求已清楚。", TokenUsage(), [])
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -160,7 +160,7 @@ class TestHistoryTracking:
         spec_file.write_text("Initial requirements\n")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("CAFE_NEED_CLARIFICATION\n請問使用者是誰？", TokenUsage())
+        agent_manager.execute.return_value = ("CAFE_NEED_CLARIFICATION\n請問使用者是誰？", TokenUsage(), [])
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -396,7 +396,7 @@ class TestNonInteractiveModeIteration1:
         spec_file.parent.mkdir(parents=True, exist_ok=True)
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("CAFE_NEED_CLARIFICATION\n需要澄清需求。\n\n## 待釐清的問題\n1. 問題一", TokenUsage())
+        agent_manager.execute.return_value = ("CAFE_NEED_CLARIFICATION\n需要澄清需求。\n\n## 待釐清的問題\n1. 問題一", TokenUsage(), [])
         setup_agent_manager_mocks(agent_manager)
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -428,7 +428,7 @@ class TestNonInteractiveModeIteration1:
         spec_file.parent.mkdir(parents=True, exist_ok=True)
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("CAFE_NEED_CLARIFICATION\n需要澄清", TokenUsage())
+        agent_manager.execute.return_value = ("CAFE_NEED_CLARIFICATION\n需要澄清", TokenUsage(), [])
         setup_agent_manager_mocks(agent_manager)
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -456,7 +456,7 @@ class TestNonInteractiveModeIteration1:
         spec_file.parent.mkdir(parents=True, exist_ok=True)
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("CAFE_CONFIRMED\n需求已清楚。", TokenUsage())
+        agent_manager.execute.return_value = ("CAFE_CONFIRMED\n需求已清楚。", TokenUsage(), [])
         setup_agent_manager_mocks(agent_manager)
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -567,7 +567,7 @@ class TestInteractiveModeStillWorks:
         spec_file.write_text("需求已清楚")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("CAFE_CONFIRMED\n需求確認", TokenUsage())
+        agent_manager.execute.return_value = ("CAFE_CONFIRMED\n需求確認", TokenUsage(), [])
         setup_agent_manager_mocks(agent_manager)
         agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
 
@@ -754,7 +754,7 @@ class TestInterruptedIterationResume:
         # Setup mocks
         agent_manager = MagicMock(spec=AgentManager)
         # 這次應該得到完成的回應
-        agent_manager.execute.return_value = ("CAFE_CONFIRMED\n需求已確認", TokenUsage())
+        agent_manager.execute.return_value = ("CAFE_CONFIRMED\n需求已確認", TokenUsage(), [])
         setup_agent_manager_mocks(agent_manager)
 
         permission_handler = MagicMock(spec=PermissionHandler)

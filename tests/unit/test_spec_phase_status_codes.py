@@ -43,7 +43,7 @@ class TestSpecPhaseWithStatusCodes:
 
         agent_manager = MagicMock(spec=AgentManager)
         setup_agent_manager_mock_for_spec(agent_manager)
-        agent_manager.execute.return_value = ("CAFE_CONFIRMED\n需求已經很清楚了。", TokenUsage())
+        agent_manager.execute.return_value = ("CAFE_CONFIRMED\n需求已經很清楚了。", TokenUsage(), [])
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -74,7 +74,7 @@ class TestSpecPhaseWithStatusCodes:
 
         agent_manager = MagicMock(spec=AgentManager)
         setup_agent_manager_mock_for_spec(agent_manager)
-        agent_manager.execute.return_value = ("CAFE_REJECTED\n需求有問題，無法進行。", TokenUsage())
+        agent_manager.execute.return_value = ("CAFE_REJECTED\n需求有問題，無法進行。", TokenUsage(), [])
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -141,7 +141,7 @@ class TestSpecPhaseWithStatusCodes:
 
         agent_manager = MagicMock(spec=AgentManager)
         setup_agent_manager_mock_for_spec(agent_manager)
-        agent_manager.execute.return_value = ("需求已經很清楚了。CAFE_CONFIRMED", TokenUsage())
+        agent_manager.execute.return_value = ("需求已經很清楚了。CAFE_CONFIRMED", TokenUsage(), [])
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -206,7 +206,7 @@ class TestSpecPhaseWithStatusCodes:
 
         agent_manager = MagicMock(spec=AgentManager)
         setup_agent_manager_mock_for_spec(agent_manager)
-        agent_manager.execute.return_value = ("cafe_confirmed\n需求清楚。", TokenUsage())
+        agent_manager.execute.return_value = ("cafe_confirmed\n需求清楚。", TokenUsage(), [])
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 
         permission_handler = MagicMock(spec=PermissionHandler)
