@@ -265,19 +265,17 @@ class DevelopPhase(Phase):
         """準備當前迭代的 user input。
 
         Develop phase 的特殊邏輯：
-        - Iteration 1: 空字串（agent 自主執行）
-        - Iteration 2+: 檢查是否有待處理的 NEED_PERMISSION
+        - Iteration 1（沒有 previous data）: 空字串（agent 自主執行）
+        - Iteration 2+（有 previous data）: 檢查是否有待處理的 NEED_PERMISSION
 
         Returns:
             PhaseResult: 如果需要結束/暫停 phase
             str: 用戶輸入內容（通常為空，除非處理 NEED_PERMISSION）
         """
-        # Iteration 1: No user input needed, agent starts autonomously
-        if self.iteration == 1:
-            return ""
-
-        # Iteration 2+: Check for pending NEED_PERMISSION
+        # Check for previous iteration data
         prev_data = self._load_previous_iteration_data()
+
+        # No previous data: first execution, agent starts autonomously
         if not prev_data:
             return ""
 
@@ -516,8 +514,11 @@ class DevelopPhase(Phase):
                 # Save issue config with base branch info
                 self._save_issue_config(base_branch, branch_name)
 
-            # Single development execution (no loop - workflow layer handles iterations)
-            self.iteration = 1
+            # Load current iteration counter (will be 0 if starting fresh, or last iteration if resuming)
+            self.iteration = self._load_iteration_counter()
+
+            # Increment for next execution
+            self.iteration += 1
 
             # Prepare user_input for this iteration
             result_or_input = self._prepare_user_input_for_iteration()

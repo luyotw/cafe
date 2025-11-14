@@ -1002,3 +1002,113 @@ class TestDevelopPhaseReviewFeedback:
         assert not agent_manager.execute.called
         assert result.status == PhaseStatus.COMPLETED
         assert "already completed" in result.message.lower()
+
+
+class TestDevelopPhaseIterationCounter:
+    """Test DevelopPhase iteration counter behavior to prevent overwriting previous iterations."""
+
+    def test_second_execution_creates_iteration_002_not_overwrite_001(self, tmp_path: Path):
+        """測試第二次執行創建 iteration_002.json，而不是覆蓋 iteration_001.json
+
+        這是一個 regression test，確保 DevelopPhase 使用 _load_iteration_counter()
+        而不是總是設定 self.iteration = 1，否則會覆蓋之前的 iteration history。
+
+        測試場景：
+        1. 第一次執行：agent 完成工作 (iteration_001.json)
+        2. 手動刪除 status.json 模擬未完成狀態
+        3. 第二次執行：agent 繼續工作 (應創建 iteration_002.json)
+        """
+        issue_name = "test-iteration-not-overwrite"
+        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
+        plan_file = tmp_path / ".cafe" / "issues" / issue_name / "plan" / "plan.md"
+        history_dir = tmp_path / ".cafe" / "issues" / issue_name / "develop" / "history"
+        status_file = tmp_path / ".cafe" / "issues" / issue_name / "develop" / "status.json"
+
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
+        plan_file.parent.mkdir(parents=True, exist_ok=True)
+        history_dir.mkdir(parents=True, exist_ok=True)
+
+        spec_file.write_text("# Requirements\nTest")
+        plan_file.write_text("# Plan\nTest")
+
+        # Setup mocks
+        agent_manager = MagicMock(spec=AgentManager)
+        setup_agent_manager_mock(agent_manager)
+        agent_manager.get_total_token_usage.return_value = TokenUsage()
+
+        permission_handler = MagicMock(spec=PermissionHandler)
+        git_ops = MagicMock(spec=GitOperations)
+        git_ops.branch_exists.return_value = False
+        git_ops.get_current_branch.return_value = "main"
+
+        # First execution - agent completes work
+        phase = DevelopPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            git_ops=git_ops,
+            spec_file=str(spec_file),
+            plan_file=str(plan_file),
+            issue_name=issue_name,
+            workflow_mode=WorkflowMode.LOCAL,
+            interactive=False,
+        )
+
+        agent_manager.execute.return_value = ("CAFE_CONFIRMED\n第一次開發完成", TokenUsage(), [])
+        result1 = phase.execute()
+
+        assert result1.status == PhaseStatus.COMPLETED
+
+        # Verify iteration_001.json was created
+        iteration_001_file = history_dir / "iteration_001.json"
+        assert iteration_001_file.exists()
+
+        with open(iteration_001_file, "r") as f:
+            saved_001 = json.load(f)
+
+        assert saved_001["iteration"] == 1
+        assert "第一次開發完成" in saved_001["response"]
+        original_content_001 = saved_001.copy()
+
+        # Delete status.json to simulate incomplete state
+        if status_file.exists():
+            status_file.unlink()
+
+        # Create a NEW phase object for second execution
+        phase2 = DevelopPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            git_ops=git_ops,
+            spec_file=str(spec_file),
+            plan_file=str(plan_file),
+            issue_name=issue_name,
+            workflow_mode=WorkflowMode.LOCAL,
+            interactive=False,
+        )
+
+        # Branch already exists for second run
+        git_ops.branch_exists.return_value = True
+
+        # Second execution - agent does more work
+        agent_manager.execute.return_value = ("CAFE_CONFIRMED\n第二次開發完成", TokenUsage(), [])
+        result2 = phase2.execute()
+
+        assert result2.status == PhaseStatus.COMPLETED
+
+        # CRITICAL: Verify iteration_001.json was NOT overwritten
+        with open(iteration_001_file, "r") as f:
+            saved_001_after = json.load(f)
+
+        assert saved_001_after["iteration"] == 1, "iteration_001 should still be 1"
+        assert "第一次開發完成" in saved_001_after["response"], "原始 response 應保持不變"
+        assert saved_001_after == original_content_001, "iteration_001.json should be completely unchanged"
+
+        # CRITICAL: Verify iteration_002.json was created
+        iteration_002_file = history_dir / "iteration_002.json"
+        assert iteration_002_file.exists(), \
+            "iteration_002.json should be created, not overwrite iteration_001.json"
+
+        with open(iteration_002_file, "r") as f:
+            saved_002 = json.load(f)
+
+        assert saved_002["iteration"] == 2, "第二輪應該是 iteration 2"
+        assert "第二次開發完成" in saved_002["response"]
