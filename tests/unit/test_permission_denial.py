@@ -1,10 +1,15 @@
 """Tests for permission denial functionality."""
 
+import json
 import pytest
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from cafe.agents.executor import AgentExecutor
-from cafe.core.types import AgentConfig, AgentCLI, PermissionDenial, TokenUsage
+from cafe.agents.manager import AgentManager
+from cafe.core.permission import PermissionHandler
+from cafe.core.phase import Phase
+from cafe.core.types import AgentConfig, AgentCLI, PermissionDenial, TokenUsage, PhaseResult, PhaseStatus
 
 
 class TestPermissionDenialParsing:
@@ -123,3 +128,225 @@ class TestPermissionDenialModel:
 
         pattern = denial.to_allowed_tool_pattern()
         assert pattern == "SomeTool"
+
+
+class TestPermissionDenialStorage:
+    """測試 permission denial 儲存功能"""
+
+    def test_permission_denials_saved_to_iteration_json(self, tmp_path: Path):
+        """測試 permission_denials 被儲存到 iteration JSON"""
+        # 創建測試 phase
+        class TestPhase(Phase):
+            def __init__(self, agent_manager: MagicMock, permission_handler: MagicMock, history_dir: str):
+                self.agent_manager = agent_manager
+                self.permission_handler = permission_handler
+                self.history_dir = Path(history_dir)
+                self.iteration = 1
+
+            def execute(self) -> PhaseResult:
+                # 模擬 agent 返回 permission denials
+                response, token_usage, permission_denials = self.agent_manager.execute(
+                    "David", "Test prompt"
+                )
+
+                self._update_iteration_history(
+                    phase_specific_data={
+                        "response": response,
+                        "permission_denials": [denial.model_dump() for denial in permission_denials]
+                    }
+                )
+
+                return PhaseResult(
+                    status=PhaseStatus.COMPLETED,
+                    message="Test completed"
+                )
+
+            def _save_progress(self, status_code) -> None:
+                """Mock save progress"""
+                pass
+
+        # 設置 mock
+        agent_manager = MagicMock(spec=AgentManager)
+        permission_denials = [
+            PermissionDenial(
+                tool_name="Read",
+                tool_input={"file_path": "/etc/passwd"}
+            )
+        ]
+        agent_manager.execute.return_value = (
+            "I need permission to read /etc/passwd",
+            TokenUsage(),
+            permission_denials
+        )
+        agent_manager.get_total_token_usage.return_value = TokenUsage()
+
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        # 創建 history 目錄
+        history_dir = tmp_path / "history"
+        history_dir.mkdir(parents=True)
+
+        phase = TestPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            history_dir=str(history_dir)
+        )
+
+        # 執行 phase
+        result = phase.execute()
+
+        # 檢查結果
+        assert result.status == PhaseStatus.COMPLETED
+
+        # 檢查 iteration JSON 是否包含 permission_denials
+        iteration_file = history_dir / "iteration_001.json"
+        assert iteration_file.exists()
+
+        with open(iteration_file, "r") as f:
+            iteration_data = json.load(f)
+
+        assert "permission_denials" in iteration_data
+        assert len(iteration_data["permission_denials"]) == 1
+        assert iteration_data["permission_denials"][0]["tool_name"] == "Read"
+        assert iteration_data["permission_denials"][0]["tool_input"]["file_path"] == "/etc/passwd"
+
+    def test_empty_permission_denials_saved(self, tmp_path: Path):
+        """測試沒有 permission denials 時儲存空列表"""
+        class TestPhase(Phase):
+            def __init__(self, agent_manager: MagicMock, permission_handler: MagicMock, history_dir: str):
+                self.agent_manager = agent_manager
+                self.permission_handler = permission_handler
+                self.history_dir = Path(history_dir)
+                self.iteration = 1
+
+            def execute(self) -> PhaseResult:
+                response, token_usage, permission_denials = self.agent_manager.execute(
+                    "David", "Test prompt"
+                )
+
+                self._update_iteration_history(
+                    phase_specific_data={
+                        "response": response,
+                        "permission_denials": [denial.model_dump() for denial in permission_denials]
+                    }
+                )
+
+                return PhaseResult(
+                    status=PhaseStatus.COMPLETED,
+                    message="Test completed"
+                )
+
+            def _save_progress(self, status_code) -> None:
+                """Mock save progress"""
+                pass
+
+        agent_manager = MagicMock(spec=AgentManager)
+        agent_manager.execute.return_value = (
+            "Normal response without denials",
+            TokenUsage(),
+            []  # No permission denials
+        )
+        agent_manager.get_total_token_usage.return_value = TokenUsage()
+
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        history_dir = tmp_path / "history"
+        history_dir.mkdir(parents=True)
+
+        phase = TestPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            history_dir=str(history_dir)
+        )
+
+        result = phase.execute()
+
+        assert result.status == PhaseStatus.COMPLETED
+
+        iteration_file = history_dir / "iteration_001.json"
+        assert iteration_file.exists()
+
+        with open(iteration_file, "r") as f:
+            iteration_data = json.load(f)
+
+        assert "permission_denials" in iteration_data
+        assert iteration_data["permission_denials"] == []
+
+    def test_multiple_permission_denials_storage(self, tmp_path: Path):
+        """測試多個 permission denials 的儲存"""
+        class TestPhase(Phase):
+            def __init__(self, agent_manager: MagicMock, permission_handler: MagicMock, history_dir: str):
+                self.agent_manager = agent_manager
+                self.permission_handler = permission_handler
+                self.history_dir = Path(history_dir)
+                self.iteration = 1
+
+            def execute(self) -> PhaseResult:
+                response, token_usage, permission_denials = self.agent_manager.execute(
+                    "David", "Test prompt"
+                )
+
+                self._update_iteration_history(
+                    phase_specific_data={
+                        "response": response,
+                        "permission_denials": [denial.model_dump() for denial in permission_denials]
+                    }
+                )
+
+                return PhaseResult(
+                    status=PhaseStatus.COMPLETED,
+                    message="Test completed"
+                )
+
+            def _save_progress(self, status_code) -> None:
+                """Mock save progress"""
+                pass
+
+        agent_manager = MagicMock(spec=AgentManager)
+        permission_denials = [
+            PermissionDenial(
+                tool_name="Read",
+                tool_input={"file_path": "/etc/passwd"}
+            ),
+            PermissionDenial(
+                tool_name="Bash",
+                tool_input={"command": "rm -rf /"}
+            ),
+            PermissionDenial(
+                tool_name="Write",
+                tool_input={"file_path": "/etc/hosts"}
+            )
+        ]
+        agent_manager.execute.return_value = (
+            "I need multiple permissions",
+            TokenUsage(),
+            permission_denials
+        )
+        agent_manager.get_total_token_usage.return_value = TokenUsage()
+
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        history_dir = tmp_path / "history"
+        history_dir.mkdir(parents=True)
+
+        phase = TestPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            history_dir=str(history_dir)
+        )
+
+        result = phase.execute()
+
+        assert result.status == PhaseStatus.COMPLETED
+
+        iteration_file = history_dir / "iteration_001.json"
+        assert iteration_file.exists()
+
+        with open(iteration_file, "r") as f:
+            iteration_data = json.load(f)
+
+        assert "permission_denials" in iteration_data
+        assert len(iteration_data["permission_denials"]) == 3
+        assert iteration_data["permission_denials"][0]["tool_name"] == "Read"
+        assert iteration_data["permission_denials"][1]["tool_name"] == "Bash"
+        assert iteration_data["permission_denials"][2]["tool_name"] == "Write"
