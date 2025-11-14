@@ -451,3 +451,228 @@ class TestErrorHandling:
 
         assert result.status == PhaseStatus.FAILED
         assert "failed" in result.message.lower()
+
+
+class TestIssueNameBranchNaming:
+    """Test issue_name parameter for branch naming."""
+
+    def test_branch_name_from_issue_name(self, tmp_path: Path) -> None:
+        """測試使用 issue_name 參數產生 branch name"""
+        requirements_file = tmp_path / "spec.md"
+        requirements_file.write_text("# Feature\n")
+
+        agent_manager = MagicMock(spec=AgentManager)
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        git_ops = MagicMock(spec=GitOperations)
+        git_ops.get_main_branch.return_value = "main"
+        git_ops.get_commits_between.return_value = "commit1"
+
+        phase = PRPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            git_ops=git_ops,
+            spec_file=str(requirements_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            issue_name="my-feature",
+        )
+
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value.stdout = "https://github.com/user/repo/pull/1"
+            mock_run.return_value.returncode = 0
+            result = phase.execute()
+
+        # Should push branch named "my-feature" (from issue_name)
+        git_ops.push.assert_called_once_with("my-feature", set_upstream=True)
+        assert result.status == PhaseStatus.COMPLETED
+
+    def test_branch_name_fallback_to_filename(self, tmp_path: Path) -> None:
+        """測試當沒有 issue_name 時回退到從檔名提取"""
+        requirements_file = tmp_path / "20250101-feature.md"
+        requirements_file.write_text("# Feature\n")
+
+        agent_manager = MagicMock(spec=AgentManager)
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        git_ops = MagicMock(spec=GitOperations)
+        git_ops.get_main_branch.return_value = "main"
+        git_ops.get_commits_between.return_value = "commit1"
+
+        phase = PRPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            git_ops=git_ops,
+            spec_file=str(requirements_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            # No issue_name provided
+        )
+
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value.stdout = "https://github.com/user/repo/pull/1"
+            mock_run.return_value.returncode = 0
+            result = phase.execute()
+
+        # Should push branch named "feature" (from filename)
+        git_ops.push.assert_called_once_with("feature", set_upstream=True)
+        assert result.status == PhaseStatus.COMPLETED
+
+
+class TestDraftPRCreation:
+    """Test draft PR creation."""
+
+    def test_draft_pr_default_true(self, tmp_path: Path) -> None:
+        """測試預設創建 draft PR (draft=True)"""
+        requirements_file = tmp_path / "spec.md"
+        requirements_file.write_text("# Feature\n")
+
+        agent_manager = MagicMock(spec=AgentManager)
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        git_ops = MagicMock(spec=GitOperations)
+        git_ops.get_main_branch.return_value = "main"
+        git_ops.get_commits_between.return_value = "commit1"
+
+        phase = PRPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            git_ops=git_ops,
+            spec_file=str(requirements_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            issue_name="test-feature",
+            draft=True,  # Default value
+        )
+
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value.stdout = "https://github.com/user/repo/pull/1"
+            mock_run.return_value.returncode = 0
+            result = phase.execute()
+
+        # Check that gh pr create was called with --draft flag
+        mock_run.assert_called_once()
+        cmd = mock_run.call_args[0][0]
+        assert "gh" in cmd
+        assert "pr" in cmd
+        assert "create" in cmd
+        assert "--draft" in cmd
+        assert result.status == PhaseStatus.COMPLETED
+
+    def test_non_draft_pr(self, tmp_path: Path) -> None:
+        """測試創建非 draft PR (draft=False)"""
+        requirements_file = tmp_path / "spec.md"
+        requirements_file.write_text("# Feature\n")
+
+        agent_manager = MagicMock(spec=AgentManager)
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        git_ops = MagicMock(spec=GitOperations)
+        git_ops.get_main_branch.return_value = "main"
+        git_ops.get_commits_between.return_value = "commit1"
+
+        phase = PRPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            git_ops=git_ops,
+            spec_file=str(requirements_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            issue_name="test-feature",
+            draft=False,
+        )
+
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value.stdout = "https://github.com/user/repo/pull/1"
+            mock_run.return_value.returncode = 0
+            result = phase.execute()
+
+        # Check that gh pr create was called WITHOUT --draft flag
+        mock_run.assert_called_once()
+        cmd = mock_run.call_args[0][0]
+        assert "gh" in cmd
+        assert "pr" in cmd
+        assert "create" in cmd
+        assert "--draft" not in cmd
+        assert result.status == PhaseStatus.COMPLETED
+
+
+class TestCustomTitleAndBody:
+    """Test custom title and body parameters."""
+
+    def test_custom_title_and_body(self, tmp_path: Path) -> None:
+        """測試使用自訂 title 和 body"""
+        requirements_file = tmp_path / "spec.md"
+        requirements_file.write_text("# Feature\n")
+
+        agent_manager = MagicMock(spec=AgentManager)
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        git_ops = MagicMock(spec=GitOperations)
+        git_ops.get_main_branch.return_value = "main"
+        git_ops.get_commits_between.return_value = "commit1"
+
+        custom_title = "Custom PR Title"
+        custom_body = "Custom PR Body\nWith multiple lines"
+
+        phase = PRPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            git_ops=git_ops,
+            spec_file=str(requirements_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            issue_name="test-feature",
+            custom_title=custom_title,
+            custom_body=custom_body,
+        )
+
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value.stdout = "https://github.com/user/repo/pull/1"
+            mock_run.return_value.returncode = 0
+            result = phase.execute()
+
+        # Check that gh pr create was called with custom title and body
+        mock_run.assert_called_once()
+        cmd = mock_run.call_args[0][0]
+        assert "gh" in cmd
+        assert "pr" in cmd
+        assert "create" in cmd
+        assert "--title" in cmd
+        assert custom_title in cmd
+        assert "--body" in cmd
+        assert custom_body in cmd
+        assert result.status == PhaseStatus.COMPLETED
+
+    def test_auto_generate_title_and_body(self, tmp_path: Path) -> None:
+        """測試自動產生 title 和 body (custom_title=None, custom_body=None)"""
+        requirements_file = tmp_path / "spec.md"
+        requirements_file.write_text("# Auto Generated Title\n")
+
+        agent_manager = MagicMock(spec=AgentManager)
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        git_ops = MagicMock(spec=GitOperations)
+        git_ops.get_main_branch.return_value = "main"
+        git_ops.get_commits_between.return_value = "commit1\ncommit2"
+
+        phase = PRPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            git_ops=git_ops,
+            spec_file=str(requirements_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            issue_name="test-feature",
+            custom_title=None,  # Auto-generate
+            custom_body=None,   # Auto-generate
+        )
+
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value.stdout = "https://github.com/user/repo/pull/1"
+            mock_run.return_value.returncode = 0
+            result = phase.execute()
+
+        # Check that title was auto-generated from spec file
+        mock_run.assert_called_once()
+        cmd = mock_run.call_args[0][0]
+        assert "Auto Generated Title" in cmd
+        # Check that body contains commits (body is in the --body argument value)
+        body_index = cmd.index("--body") + 1
+        body_value = cmd[body_index]
+        assert "commit1" in body_value and "commit2" in body_value
+        assert result.status == PhaseStatus.COMPLETED

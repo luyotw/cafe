@@ -23,6 +23,10 @@ class PRPhase(Phase):
         spec_file: str,
         workflow_mode: WorkflowMode,
         issue_id: Optional[str] = None,
+        issue_name: Optional[str] = None,
+        draft: bool = True,
+        custom_title: Optional[str] = None,
+        custom_body: Optional[str] = None,
         interactive: bool = True,
     ) -> None:
         """Initialize PR phase.
@@ -34,16 +38,24 @@ class PRPhase(Phase):
             spec_file: Path to spec file
             workflow_mode: Workflow mode (local or github)
             issue_id: GitHub issue ID (required for github mode)
+            issue_name: Issue name (for local mode branch naming)
+            draft: Create as draft PR (default: True)
+            custom_title: Custom PR title (None for auto-generation)
+            custom_body: Custom PR body (None for auto-generation)
             interactive: Enable interactive mode (default: True)
         """
         super().__init__(interactive=interactive)
-        
+
         self.agent_manager = agent_manager
         self.permission_handler = permission_handler
         self.git_ops = git_ops
         self.spec_file = spec_file
         self.workflow_mode = workflow_mode
         self.issue_id = issue_id
+        self.issue_name = issue_name
+        self.draft = draft
+        self.custom_title = custom_title
+        self.custom_body = custom_body
 
     def execute(self) -> PhaseResult:
         """Execute PR creation phase.
@@ -74,11 +86,11 @@ class PRPhase(Phase):
             # Push branch to remote
             self.git_ops.push(branch_name, set_upstream=True)
 
-            # Get PR title
-            pr_title = self._get_pr_title()
+            # Get PR title (use custom or auto-generate)
+            pr_title = self.custom_title if self.custom_title else self._get_pr_title()
 
-            # Get PR body (commit list)
-            pr_body = self._get_pr_body()
+            # Get PR body (use custom or auto-generate)
+            pr_body = self.custom_body if self.custom_body else self._get_pr_body()
 
             # Create PR using gh CLI
             pr_number = self._create_pr(pr_title, pr_body, branch_name)
@@ -109,7 +121,11 @@ class PRPhase(Phase):
         if self.workflow_mode == WorkflowMode.GITHUB:
             return f"issue-{self.issue_id}"
         else:
-            # Extract from requirements filename
+            # Use issue_name directly if provided
+            if self.issue_name:
+                return self.issue_name
+
+            # Fallback: Extract from requirements filename
             # e.g., "20250101-feature.md" -> "feature"
             filename = Path(self.spec_file).stem
             # Remove date prefix if exists
@@ -174,9 +190,16 @@ class PRPhase(Phase):
         Raises:
             subprocess.CalledProcessError: If gh pr create fails
         """
+        # Build gh pr create command
+        cmd = ["gh", "pr", "create", "--title", title, "--body", body]
+
+        # Add --draft flag if draft mode is enabled
+        if self.draft:
+            cmd.append("--draft")
+
         # Create PR
         result = subprocess.run(
-            ["gh", "pr", "create", "--title", title, "--body", body],
+            cmd,
             capture_output=True,
             text=True,
             check=False,

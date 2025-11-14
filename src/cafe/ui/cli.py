@@ -1031,6 +1031,174 @@ def review(
 
 
 @app.command()
+def pr(
+    issue_name: str = typer.Argument(
+        ...,
+        help="Issue name (reads spec from .cafe/issues/{issue-name}/)",
+    ),
+    base: str = typer.Option(
+        "main",
+        "--base",
+        "-b",
+        help="Base branch for PR (default: main)",
+    ),
+    draft: Optional[bool] = typer.Option(
+        None,
+        "--draft/--no-draft",
+        help="Create as draft PR (default: ask in interactive mode, True in non-interactive)",
+    ),
+    title: Optional[str] = typer.Option(
+        None,
+        "--title",
+        "-t",
+        help="Custom PR title (leave empty for auto-generation)",
+    ),
+    body: Optional[str] = typer.Option(
+        None,
+        "--body",
+        help="Custom PR body (leave empty for auto-generation)",
+    ),
+    config_file: str = typer.Option(
+        ".cafe/config.yaml",
+        "--config",
+        help="Path to configuration file",
+    ),
+    interactive: bool = typer.Option(
+        True,
+        "--interactive/--no-interactive",
+        help="Allow interactive prompts (default: True)",
+    ),
+) -> None:
+    """Create pull request for the issue.
+
+    The PR phase will push the feature branch and create a GitHub Pull Request.
+
+    Examples:
+        # Create draft PR (interactive mode will ask for confirmation)
+        cafe pr user-auth
+
+        # Create non-draft PR
+        cafe pr user-auth --no-draft
+
+        # Create PR with custom title and body
+        cafe pr user-auth --title "Add user authentication" --body "Implements login/logout"
+
+        # Non-interactive mode (creates draft PR by default)
+        cafe pr user-auth --no-interactive
+    """
+    try:
+        # Build file paths
+        spec_file = f".cafe/issues/{issue_name}/spec/spec.md"
+        plan_file = f".cafe/issues/{issue_name}/plan/plan.md"
+
+        # Check if spec file exists
+        if not Path(spec_file).exists():
+            console.print(f"[red]Error: Spec file not found: {spec_file}[/red]")
+            console.print(f"[dim]Hint: Run 'cafe spec {issue_name}' first to create the specification.[/dim]")
+            raise typer.Exit(1)
+
+        # Check if plan file exists
+        if not Path(plan_file).exists():
+            console.print(f"[red]Error: Plan file not found: {plan_file}[/red]")
+            console.print(f"[dim]Hint: Run 'cafe plan {issue_name}' first to create the plan.[/dim]")
+            raise typer.Exit(1)
+
+        # Initialize components
+        config_dir = str(Path(config_file).parent) if config_file != ".cafe/config.yaml" else ".cafe"
+        config_manager = ConfigManager(config_dir)
+        agent_manager = _setup_agents(config_manager, issue_name=issue_name)
+        permission_handler = PermissionHandler()
+        git_ops = GitOperations()
+
+        # Interactive mode: ask for draft/title/body if not provided
+        final_draft = draft
+        final_title = title
+        final_body = body
+
+        if interactive:
+            # Ask for draft if not provided via CLI
+            if draft is None:
+                draft_response = typer.confirm("Create as draft PR?", default=True)
+                final_draft = draft_response
+
+            # Ask for custom title if not provided via CLI
+            if title is None:
+                console.print()
+                console.print("[dim]Custom PR title (press Enter for auto-generation):[/dim]")
+                title_input = input().strip()
+                final_title = title_input if title_input else None
+
+            # Ask for custom body if not provided via CLI
+            if body is None:
+                console.print()
+                console.print("[dim]Custom PR body (multi-line, Ctrl+D to finish, or press Enter on empty line for auto-generation):[/dim]")
+                body_lines = []
+                try:
+                    while True:
+                        line = input()
+                        if not line and not body_lines:  # First line is empty -> auto-generation
+                            break
+                        body_lines.append(line)
+                except EOFError:
+                    pass
+                final_body = "\n".join(body_lines) if body_lines else None
+        else:
+            # Non-interactive mode: use defaults
+            if final_draft is None:
+                final_draft = True  # Default to draft in non-interactive mode
+
+        # Create PR phase
+        phase = PRPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            git_ops=git_ops,
+            spec_file=spec_file,
+            workflow_mode=WorkflowMode.LOCAL,  # Always use local mode (no --mode flag)
+            issue_name=issue_name,
+            draft=final_draft,
+            custom_title=final_title,
+            custom_body=final_body,
+            interactive=interactive,
+        )
+
+        # Display start message
+        console.print("[bold blue]🚀 PR Phase: Create Pull Request[/bold blue]")
+        console.print(f"Issue: {issue_name}")
+        console.print(f"Base branch: {base}")
+        console.print(f"Draft PR: {final_draft}")
+        if final_title:
+            console.print(f"Custom title: {final_title}")
+        if final_body:
+            console.print(f"Custom body: (provided)")
+        console.print()
+
+        console.print("[bold]Creating pull request...[/bold]")
+        console.print()
+
+        result = phase.execute()
+
+        # Display result
+        if result.status.value == "completed":
+            pr_number = result.data.get("pr_number")
+            console.print()
+            console.print(f"[bold green]✅ Pull Request #{pr_number} created successfully![/bold green]")
+            console.print()
+            console.print("[dim]Next steps:[/dim]")
+            console.print(f"[dim]  1. View PR: gh pr view {pr_number}[/dim]")
+            console.print(f"[dim]  2. Edit PR: gh pr edit {pr_number}[/dim]")
+            if final_draft:
+                console.print(f"[dim]  3. Mark as ready: gh pr ready {pr_number}[/dim]")
+        else:
+            console.print()
+            console.print(f"[bold red]❌ PR phase failed: {result.message}[/bold red]")
+            raise typer.Exit(1)
+
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1)
+
+
+@app.command()
 def config(
     action: Optional[str] = typer.Argument(None, help="Action: set, get, edit, reset, or config key"),
     key: Optional[str] = typer.Argument(None, help="Configuration key"),
