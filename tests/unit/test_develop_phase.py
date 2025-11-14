@@ -793,8 +793,8 @@ class TestDevelopPhaseReviewFeedback:
         # Should execute agent to handle review feedback
         assert agent_manager.execute.called
         assert result.status == PhaseStatus.COMPLETED, f"Expected COMPLETED but got {result.status}: {result.message}"
-        # Phase is now non-iterative, so iteration stays at 1
-        assert phase.iteration == 1
+        # Iteration counter should be 2 (loaded 1 from history, then incremented)
+        assert phase.iteration == 2
 
     def test_execute_returns_early_when_completed_and_no_review_feedback(self, tmp_path) -> None:
         """測試當 develop 已完成且沒有 review feedback 時，應該直接返回"""

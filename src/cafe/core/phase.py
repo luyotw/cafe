@@ -697,7 +697,7 @@ class Phase(ABC):
             # 詢問用戶是否有額外說明
             print()
             user_input = self.display.get_multiline_input(
-                "關於這些權限，是否有額外的說明或指示要給 agent？（按 Ctrl+D 或輸入空行結束）"
+                "關於這些權限，是否有額外的說明或指示要給 agent？（可留空）"
             )
         else:
             # Non-interactive 模式：使用預設的 approved_denial_indices
