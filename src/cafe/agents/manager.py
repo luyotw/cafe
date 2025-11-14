@@ -7,7 +7,7 @@ from typing import Dict, List, Optional, Tuple
 
 from cafe.agents.executor import AgentExecutor, AgentExecutionError
 from cafe.core.session import SessionManager
-from cafe.core.types import AgentConfig, TokenUsage
+from cafe.core.types import AgentConfig, PermissionDenial, TokenUsage
 
 
 class AgentNotFoundError(Exception):
@@ -108,7 +108,7 @@ class AgentManager:
             return None
         return self.agents.get(self.current_agent_name)
 
-    def execute(self, agent_name: str, prompt: str, allowed_tools: Optional[List[str]] = None) -> Tuple[str, TokenUsage]:
+    def execute(self, agent_name: str, prompt: str, allowed_tools: Optional[List[str]] = None) -> Tuple[str, TokenUsage, List]:
         """Execute prompt with specified agent.
 
         Args:
@@ -117,7 +117,7 @@ class AgentManager:
             allowed_tools: List of allowed tools (using Claude naming convention)
 
         Returns:
-            Tuple of (agent's response, token usage)
+            Tuple of (agent's response, token usage, permission denials)
 
         Raises:
             AgentNotFoundError: If agent not found
@@ -134,10 +134,10 @@ class AgentManager:
         
         # Track if we've already retried for session conflict
         retried = False
-        
+
         while True:
             try:
-                response, token_usage = executor.execute(prompt, allowed_tools)
+                agent_response = executor.execute(prompt, allowed_tools)
                 break  # Success, exit loop
             except AgentExecutionError as e:
                 # Handle session conflict (only retry once)
@@ -146,11 +146,16 @@ class AgentManager:
                     # Clear session ID to force creation of new session on next execution
                     print(f"⚠️  Session conflict detected, will create new session on retry...")
                     executor.config.session_id = None
-                    
+
                     # Loop will retry (with no session ID, a new one will be created)
                 else:
                     # Not a session conflict, or already retried - re-raise
                     raise
+
+        # Extract response components
+        response = agent_response.response
+        token_usage = agent_response.token_usage
+        permission_denials = agent_response.permission_denials
 
         # Save session ID if it was created during execution
         if executor.config.session_id:
@@ -165,7 +170,7 @@ class AgentManager:
         self._total_token_usage.cache_read_input_tokens += token_usage.cache_read_input_tokens
         self._total_token_usage.total_cost_usd += token_usage.total_cost_usd
 
-        return response, token_usage
+        return response, token_usage, permission_denials
 
     def execute_current(self, prompt: str) -> str:
         """Execute prompt with current agent.
