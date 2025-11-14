@@ -361,7 +361,7 @@ class TestGeminiExecution:
             assert agent_response.response == "CAFE_NEED_CLARIFICATION\nHere is my response"
             assert "User prompt" not in agent_response.response
             assert "File content" not in agent_response.response
-            assert "CAFE_CONFIRMED" not in response  # Should not pick up status from history
+            assert "CAFE_CONFIRMED" not in agent_response.response  # Should not pick up status from history
             assert isinstance(agent_response.token_usage, TokenUsage)
 
 
@@ -558,7 +558,11 @@ class TestTokenUsageTracking:
         mock_process.stderr.read.return_value = ""
         mock_process.wait.return_value = 0
 
-        with patch("subprocess.Popen", return_value=mock_process):
+        mock_run_result = MagicMock(stdout='{"session_id": "test-session"}', returncode=0)
+
+        with patch("subprocess.run", return_value=mock_run_result), \
+             patch("subprocess.Popen", return_value=mock_process), \
+             patch("sys.platform", "win32"):
             executor.execute("First prompt")
             executor.execute("Second prompt")
 
@@ -815,15 +819,16 @@ class TestCopilotStreamingExecution:
         mock_process.stderr.read.return_value = ""
         mock_process.wait.return_value = 0
 
-        with patch("subprocess.Popen", return_value=mock_process):
-            with patch("pathlib.Path.exists", return_value=False):
-                agent_response = executor._execute_copilot("Test prompt")
+        with patch("subprocess.Popen", return_value=mock_process), \
+             patch("pathlib.Path.exists", return_value=False), \
+             patch("sys.platform", "win32"):
+            agent_response = executor._execute_copilot("Test prompt")
 
-        assert "Copilot response line 1" in agent_response.response
-        assert "Copilot response line 2" in agent_response.response
+            assert "Copilot response line 1" in agent_response.response
+            assert "Copilot response line 2" in agent_response.response
 
-        # Verify streaming output was shown
-        captured = capsys.readouterr()
-        assert "Copilot Response (streaming):" in captured.out
+            # Verify streaming output was shown
+            captured = capsys.readouterr()
+            assert "Copilot Response (streaming):" in captured.out
 
 
