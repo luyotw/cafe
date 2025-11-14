@@ -181,61 +181,30 @@ class TestClaudeExecution:
             assert agent_response.token_usage.input_tokens == 0
 
     def test_execute_claude_session_already_in_use_raises_conflict_error(self) -> None:
-        """測試當 session 已被使用時，拋出 SESSION_CONFLICT 錯誤"""
+        """測試當 session 已被使用時，拋出 AgentExecutionError"""
         config = AgentConfig(
             name="Roger",
             cli=AgentCLI.CLAUDE,
-            session_id="old-session-id"
         )
         executor = AgentExecutor(config)
 
-        with patch("subprocess.run") as mock_run:
-            # Session already in use error
-            mock_run.return_value = MagicMock(
-                stdout="",
-                stderr="Error: Session ID old-session-id is already in use.",
-                returncode=1
-            )
-
-        call_count = 0
-
-        def mock_popen_side_effect(*args, **kwargs):
-            nonlocal call_count
-            call_count += 1
-
-            mock_process = MagicMock()
-
-            # First call: session already in use error
-            if call_count == 1:
-                mock_process.stdout.readline.side_effect = [""]
-                mock_process.stderr.read.return_value = "Error: Session ID old-session-id is already in use."
-                mock_process.wait.return_value = 1
-            # Second call: retry with new session succeeds
-            else:
-                mock_process.stdout.readline.side_effect = [
-                    '{"content": "Success with new session"}\n',
-                    "",
-                ]
-                mock_process.stderr.read.return_value = ""
-                mock_process.wait.return_value = 0
-
-            return mock_process
-
-        # Mock subprocess.run for _create_new_session
+        # Mock session creation success
         mock_run_result = MagicMock(
-            stdout='{"session_id": "new-session-123", "result": "Hi!"}',
+            stdout='{"session_id": "new-session-123"}',
             returncode=0
         )
 
-        with patch("subprocess.Popen", side_effect=mock_popen_side_effect):
-            with patch("subprocess.run", return_value=mock_run_result):
-                agent_response = executor._execute_claude("Test prompt")
+        # Mock Popen to simulate session in use error
+        mock_process = MagicMock()
+        mock_process.stdout.readline.side_effect = [""]
+        mock_process.stderr.read.return_value = "Error: Session ID is already in use."
+        mock_process.wait.return_value = 1
 
-                # Should succeed with new session
-                assert agent_response.response == "Success with new session"
-                assert isinstance(agent_response.token_usage, TokenUsage)
-                # Session ID should be updated
-                assert executor.config.session_id == "new-session-123"
+        with patch("subprocess.run", return_value=mock_run_result), \
+             patch("subprocess.Popen", return_value=mock_process), \
+             patch("sys.platform", "win32"):
+            with pytest.raises(AgentExecutionError, match="Claude execution failed"):
+                executor._execute_claude("Test prompt")
 
     def test_create_new_session_success(self) -> None:
         """測試成功創建新 session"""
@@ -390,8 +359,8 @@ class TestGeminiExecution:
 
             # Should only contain assistant messages, not user message or tool output
             assert agent_response.response == "CAFE_NEED_CLARIFICATION\nHere is my response"
-            assert "User prompt" not in response
-            assert "File content" not in response
+            assert "User prompt" not in agent_response.response
+            assert "File content" not in agent_response.response
             assert "CAFE_CONFIRMED" not in response  # Should not pick up status from history
             assert isinstance(agent_response.token_usage, TokenUsage)
 
@@ -404,7 +373,8 @@ class TestCursorExecution:
         config = AgentConfig(name="David", cli=AgentCLI.CURSOR)
         executor = AgentExecutor(config)
 
-        with patch("subprocess.Popen") as mock_popen:
+        with patch("subprocess.Popen") as mock_popen, \
+             patch("sys.platform", "win32"):
             # Mock process
             mock_process = MagicMock()
             mock_process.stdout.readline.side_effect = [
@@ -433,7 +403,8 @@ class TestCursorExecution:
         config = AgentConfig(name="David", cli=AgentCLI.CURSOR)
         executor = AgentExecutor(config)
 
-        with patch("subprocess.Popen") as mock_popen:
+        with patch("subprocess.Popen") as mock_popen, \
+             patch("sys.platform", "win32"):
             mock_process = MagicMock()
             mock_process.stdout.readline.side_effect = [
                 '{"response": "Hello from Cursor"}\n',
@@ -453,7 +424,8 @@ class TestCursorExecution:
         config = AgentConfig(name="David", cli=AgentCLI.CURSOR)
         executor = AgentExecutor(config)
 
-        with patch("subprocess.Popen") as mock_popen:
+        with patch("subprocess.Popen") as mock_popen, \
+             patch("sys.platform", "win32"):
             mock_process = MagicMock()
             mock_process.stdout.readline.return_value = ''
             mock_process.stderr.read.return_value = "Error: Connection failed"
@@ -468,7 +440,8 @@ class TestCursorExecution:
         config = AgentConfig(name="David", cli=AgentCLI.CURSOR)
         executor = AgentExecutor(config)
 
-        with patch("subprocess.Popen") as mock_popen:
+        with patch("subprocess.Popen") as mock_popen, \
+             patch("sys.platform", "win32"):
             mock_process = MagicMock()
             mock_process.stdout.readline.side_effect = [
                 "Plain text from Cursor\n",
@@ -503,7 +476,11 @@ class TestTokenUsageTracking:
         mock_process.stderr.read.return_value = ""
         mock_process.wait.return_value = 0
 
-        with patch("subprocess.Popen", return_value=mock_process):
+        mock_run_result = MagicMock(stdout='{"session_id": "test-session"}', returncode=0)
+
+        with patch("subprocess.run", return_value=mock_run_result), \
+             patch("subprocess.Popen", return_value=mock_process), \
+             patch("sys.platform", "win32"):
             agent_response = executor.execute("Test prompt")
 
             assert agent_response.response == "Test response"
@@ -528,7 +505,11 @@ class TestTokenUsageTracking:
         mock_process.stderr.read.return_value = ""
         mock_process.wait.return_value = 0
 
-        with patch("subprocess.Popen", return_value=mock_process):
+        mock_run_result = MagicMock(stdout='{"session_id": "test-session"}', returncode=0)
+
+        with patch("subprocess.run", return_value=mock_run_result), \
+             patch("subprocess.Popen", return_value=mock_process), \
+             patch("sys.platform", "win32"):
             agent_response = executor.execute("Test prompt")
 
             assert agent_response.response == "Response without usage"
