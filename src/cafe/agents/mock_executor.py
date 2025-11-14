@@ -2,7 +2,7 @@
 
 from typing import Callable, List, Optional, Tuple
 
-from cafe.core.types import AgentConfig, TokenUsage
+from cafe.core.types import AgentConfig, AgentResponse, TokenUsage
 
 
 class MockAgentExecutor:
@@ -46,21 +46,25 @@ class MockAgentExecutor:
         prompt: str,
         tools: Optional[List[str]] = None,
         json_content_extractor: Optional[Callable] = None,
-    ) -> Tuple[str, TokenUsage]:
+    ) -> AgentResponse:
         """Execute with predefined response.
-        
+
         Args:
             prompt: Prompt text (saved but not used)
             tools: Tool names (saved but not used)
             json_content_extractor: JSON extractor (not used)
-            
+
         Returns:
-            Tuple of (response, token_usage)
+            AgentResponse with response, token_usage, and permission_denials
         """
         self.call_count += 1
         self.last_prompt = prompt
         self.last_tools = tools
-        return self._response, self._token_usage
+        return AgentResponse(
+            response=self._response,
+            token_usage=self._token_usage,
+            permission_denials=[]
+        )
 
     def set_response(self, response: str):
         """Set response for next execution."""

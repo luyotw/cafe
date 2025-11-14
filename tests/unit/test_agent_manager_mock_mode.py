@@ -77,10 +77,10 @@ class TestAgentManagerMockMode:
         
         # Act
         executor = manager.get_agent("TestAgent")
-        response, _ = executor.execute("test prompt")
-        
+        agent_response = executor.execute("test prompt")
+
         # Assert
-        assert response == "CONFIRMED"
+        assert "CAFE_CONFIRMED" in agent_response.response
 
     def test_mock_executor_uses_custom_response_from_env(self, monkeypatch):
         """測試 mock executor 可以從環境變數自訂回應"""
@@ -93,11 +93,11 @@ class TestAgentManagerMockMode:
         
         # Act
         executor = manager.get_agent("TestAgent")
-        response, _ = executor.execute("test prompt")
-        
+        agent_response = executor.execute("test prompt")
+
         # Assert
-        assert "NEED_CLARIFICATION" in response
-        assert "請提供更多資訊" in response
+        assert "NEED_CLARIFICATION" in agent_response.response
+        assert "請提供更多資訊" in agent_response.response
 
     def test_mock_mode_does_not_create_real_executor(self, monkeypatch):
         """測試 mock mode 不會創建真實的 AgentExecutor"""
