@@ -44,7 +44,7 @@ class TestSpecPhaseInteractiveVsNonInteractive:
 
         agent_manager = MagicMock(spec=AgentManager)
         setup_agent_manager_mock_for_spec(agent_manager)
-        agent_manager.execute.return_value = ("CAFE_CONFIRMED\n需求已清楚", TokenUsage())
+        agent_manager.execute.return_value = ("CAFE_CONFIRMED\n需求已清楚", TokenUsage(), [])
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -92,7 +92,7 @@ class TestSpecPhaseInteractiveVsNonInteractive:
 
         agent_manager = MagicMock(spec=AgentManager)
         setup_agent_manager_mock_for_spec(agent_manager)
-        agent_manager.execute.return_value = ("CAFE_REJECTED\n需求有問題", TokenUsage())
+        agent_manager.execute.return_value = ("CAFE_REJECTED\n需求有問題", TokenUsage(), [])
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -176,7 +176,7 @@ class TestSpecPhaseInteractiveVsNonInteractive:
 
         agent_manager = MagicMock(spec=AgentManager)
         setup_agent_manager_mock_for_spec(agent_manager)
-        agent_manager.execute.return_value = ("CAFE_NEED_CLARIFICATION\n請補充資訊", TokenUsage())
+        agent_manager.execute.return_value = ("CAFE_NEED_CLARIFICATION\n請補充資訊", TokenUsage(), [])
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -243,7 +243,7 @@ class TestSpecPhaseInteractiveVsNonInteractive:
 
         agent_manager = MagicMock(spec=AgentManager)
         setup_agent_manager_mock_for_spec(agent_manager)
-        agent_manager.execute.return_value = ("這是回應但沒有狀態碼", TokenUsage())
+        agent_manager.execute.return_value = ("這是回應但沒有狀態碼", TokenUsage(), [])
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -283,7 +283,7 @@ class TestPlanPhaseInteractiveVsNonInteractive:
 
         agent_manager = MagicMock(spec=AgentManager)
         setup_agent_manager_mock_for_spec(agent_manager)
-        agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n計畫已完成", TokenUsage())
+        agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n計畫已完成", TokenUsage(), [])
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -385,7 +385,7 @@ class TestPlanPhaseInteractiveVsNonInteractive:
 
         agent_manager = MagicMock(spec=AgentManager)
         setup_agent_manager_mock_for_spec(agent_manager)
-        agent_manager.execute.return_value = ("CAFE_NEED_CLARIFICATION\n需要更多資訊", TokenUsage())
+        agent_manager.execute.return_value = ("CAFE_NEED_CLARIFICATION\n需要更多資訊", TokenUsage(), [])
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -426,7 +426,7 @@ class TestPlanPhaseInteractiveVsNonInteractive:
 
         agent_manager = MagicMock(spec=AgentManager)
         setup_agent_manager_mock_for_spec(agent_manager)
-        agent_manager.execute.return_value = ("這是回應但沒有狀態碼", TokenUsage())
+        agent_manager.execute.return_value = ("這是回應但沒有狀態碼", TokenUsage(), [])
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 
         permission_handler = MagicMock(spec=PermissionHandler)

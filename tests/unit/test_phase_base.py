@@ -169,3 +169,126 @@ class TestSaveIterationHistory:
         assert data2["iteration"] == 2
         assert data1["input"] == "first"
         assert data2["input"] == "second"
+
+
+class TestLoadCurrentIterationData:
+    """測試 _load_current_iteration_data 共用方法."""
+
+    def test_load_current_iteration_data_not_exists(self, tmp_path: Path) -> None:
+        """測試當前 iteration 檔案不存在時返回 None."""
+        history_dir = tmp_path / "history"
+        phase = ConcretePhase(history_dir=history_dir)
+        phase.iteration = 2
+
+        data = phase._load_current_iteration_data()
+
+        assert data is None
+
+    def test_load_current_iteration_data_exists(self, tmp_path: Path) -> None:
+        """測試載入當前 iteration 的資料."""
+        history_dir = tmp_path / "history"
+        history_dir.mkdir(parents=True)
+
+        # 創建當前 iteration 檔案
+        iteration2 = history_dir / "iteration_002.json"
+        iteration2.write_text(json.dumps({
+            "iteration": 2,
+            "user_input": "Current iteration input",
+            "response": None
+        }))
+
+        phase = ConcretePhase(history_dir=history_dir)
+        phase.iteration = 2
+
+        data = phase._load_current_iteration_data()
+
+        assert data is not None
+        assert data["iteration"] == 2
+        assert data["user_input"] == "Current iteration input"
+        assert data["response"] is None
+
+    def test_load_current_iteration_data_with_response(self, tmp_path: Path) -> None:
+        """測試載入已完成的當前 iteration（有 response）."""
+        history_dir = tmp_path / "history"
+        history_dir.mkdir(parents=True)
+
+        # 創建完整的 iteration 檔案
+        iteration2 = history_dir / "iteration_002.json"
+        iteration2.write_text(json.dumps({
+            "iteration": 2,
+            "user_input": "Input",
+            "response": "Response"
+        }))
+
+        phase = ConcretePhase(history_dir=history_dir)
+        phase.iteration = 2
+
+        data = phase._load_current_iteration_data()
+
+        assert data is not None
+        assert data["response"] == "Response"
+
+
+class TestLoadIterationCounter:
+    """測試 _load_iteration_counter 共用方法."""
+
+    def test_load_counter_with_no_history(self, tmp_path: Path) -> None:
+        """測試當沒有 history 時返回 0."""
+        phase = ConcretePhase(history_dir=tmp_path / "history")
+
+        counter = phase._load_iteration_counter()
+
+        assert counter == 0
+
+    def test_load_counter_with_complete_iterations(self, tmp_path: Path) -> None:
+        """測試載入完整 iteration 的 counter（有 response）."""
+        history_dir = tmp_path / "history"
+        history_dir.mkdir(parents=True)
+
+        # 創建兩個完整的 iteration（都有 response）
+        iteration1 = history_dir / "iteration_001.json"
+        iteration1.write_text(json.dumps({
+            "iteration": 1,
+            "user_input": "Input 1",
+            "response": "Response 1"
+        }))
+
+        iteration2 = history_dir / "iteration_002.json"
+        iteration2.write_text(json.dumps({
+            "iteration": 2,
+            "user_input": "Input 2",
+            "response": "Response 2"
+        }))
+
+        phase = ConcretePhase(history_dir=history_dir)
+        counter = phase._load_iteration_counter()
+
+        # 應該返回最後一個完整 iteration 的數字
+        assert counter == 2
+
+    def test_load_counter_with_incomplete_iteration(self, tmp_path: Path) -> None:
+        """測試當最後一個 iteration 沒有 response（被中斷），應該重用該 iteration 編號."""
+        history_dir = tmp_path / "history"
+        history_dir.mkdir(parents=True)
+
+        # iteration 1: 完整（有 response）
+        iteration1 = history_dir / "iteration_001.json"
+        iteration1.write_text(json.dumps({
+            "iteration": 1,
+            "user_input": "Input 1",
+            "response": "Response 1"
+        }))
+
+        # iteration 2: 不完整（沒有 response - 被中斷）
+        iteration2 = history_dir / "iteration_002.json"
+        iteration2.write_text(json.dumps({
+            "iteration": 2,
+            "user_input": "Input 2"
+            # 注意：沒有 "response" 欄位
+        }))
+
+        phase = ConcretePhase(history_dir=history_dir)
+        counter = phase._load_iteration_counter()
+
+        # 應該返回 1（前一個完整的 iteration），這樣下次執行時會重用 iteration 2
+        assert counter == 1

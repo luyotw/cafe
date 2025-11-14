@@ -67,6 +67,14 @@ class TokenUsage(BaseModel):
     total_cost_usd: float = 0.0
 
 
+class AgentResponse(BaseModel):
+    """Response from agent execution."""
+
+    response: str
+    token_usage: TokenUsage
+    permission_denials: List["PermissionDenial"] = Field(default_factory=list)
+
+
 class PhaseResult(BaseModel):
     """Result of a phase execution."""
 
@@ -81,6 +89,36 @@ class PermissionRequest(BaseModel):
 
     tool_name: str
     tool_input: Dict[str, Any]
+
+
+class PermissionDenial(BaseModel):
+    """Permission denial from agent CLI."""
+
+    tool_name: str
+    tool_input: Dict[str, Any]
+
+    def to_allowed_tool_pattern(self) -> str:
+        """Convert permission denial to allowed_tools pattern.
+
+        Returns:
+            Pattern like "Read", "Write(file_path)", or "Bash(git status)"
+        """
+        # Extract common parameters
+        file_path = self.tool_input.get("file_path")
+        command = self.tool_input.get("command")
+
+        if file_path:
+            return f"{self.tool_name}({file_path})"
+        elif command:
+            # For bash commands, use first two words as pattern
+            cmd_parts = command.split()
+            if len(cmd_parts) >= 2:
+                return f"{self.tool_name}({cmd_parts[0]} {cmd_parts[1]})"
+            else:
+                return f"{self.tool_name}({cmd_parts[0]})"
+        else:
+            # If no specific params, just allow the tool
+            return self.tool_name
 
 
 class SessionData(BaseModel):

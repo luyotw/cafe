@@ -104,7 +104,7 @@ class TestAgentSelection:
         spec_file.write_text("Requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("CAFE_CONFIRMED\n需求已清楚。", TokenUsage())
+        agent_manager.execute.return_value = ("CAFE_CONFIRMED\n需求已清楚。", TokenUsage(), [])
         setup_agent_manager_mocks(agent_manager)
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -136,7 +136,7 @@ class TestHistoryTracking:
         spec_file.write_text("Initial requirements\n")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("CAFE_CONFIRMED\n需求已清楚。", TokenUsage())
+        agent_manager.execute.return_value = ("CAFE_CONFIRMED\n需求已清楚。", TokenUsage(), [])
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -160,7 +160,7 @@ class TestHistoryTracking:
         spec_file.write_text("Initial requirements\n")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("CAFE_NEED_CLARIFICATION\n請問使用者是誰？", TokenUsage())
+        agent_manager.execute.return_value = ("CAFE_NEED_CLARIFICATION\n請問使用者是誰？", TokenUsage(), [])
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -305,88 +305,6 @@ class TestHistoryTracking:
         assert data["allowed_tools"] == ["write", "read"]
         assert data["denied_tools"] is None
 
-    def test_update_context_file_creates_markdown(self, tmp_path: Path) -> None:
-        """測試更新 context.md 檔案"""
-        spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
-        spec_file.parent.mkdir(parents=True, exist_ok=True)
-        spec_file.write_text("Initial requirements\n")
-
-        agent_manager = MagicMock(spec=AgentManager)
-        permission_handler = MagicMock(spec=PermissionHandler)
-
-        phase = SpecPhase(
-            agent_manager=agent_manager,
-            permission_handler=permission_handler,
-            spec_file=str(spec_file),
-            workflow_mode=WorkflowMode.LOCAL,
-            interactive=False,
-            issue_name="test-feature",
-        )
-
-        # Set up conversation state
-        phase.iteration = 2
-        phase.confirmed_requirements = ["功能1: 用戶登入", "功能2: 用戶註冊"]
-        phase.pending_questions = ["密碼規則是什麼？", "是否需要 email 驗證？"]
-
-        # Create history file for iteration 1
-        phase.history_dir.mkdir(parents=True, exist_ok=True)
-        import json
-        iteration_1_file = phase.history_dir / "iteration_001.json"
-        iteration_1_file.write_text(json.dumps({
-            "iteration": 1,
-            "pm_response": "請問需要哪些功能？",
-            "user_input": "需要登入和註冊",
-            "response": "請問需要哪些功能？",
-            "status_code": "CAFE_NEED_CLARIFICATION",
-        }, ensure_ascii=False, indent=2))
-
-        # Update context file
-        phase._update_context_file()
-
-        # Check context file exists
-        context_file = phase.history_dir / "context.md"
-        assert context_file.exists()
-
-        # Verify content
-        content = context_file.read_text(encoding="utf-8")
-        assert "# 需求澄清歷史" in content
-        assert "## 已確定的需求" in content
-        assert "功能1: 用戶登入" in content
-        assert "功能2: 用戶註冊" in content
-        assert "## 待解答的問題" in content
-        assert "密碼規則是什麼？" in content
-        assert "是否需要 email 驗證？" in content
-        assert "## 對話歷史" in content
-        assert "第 1 輪" in content
-        assert "目前是第 2 輪" in content
-
-    def test_context_file_shows_restriction_after_iteration_4(self, tmp_path: Path) -> None:
-        """測試第 4 輪後 context.md 顯示問題限制"""
-        spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
-        spec_file.parent.mkdir(parents=True, exist_ok=True)
-        spec_file.write_text("Initial requirements\n")
-
-        agent_manager = MagicMock(spec=AgentManager)
-        permission_handler = MagicMock(spec=PermissionHandler)
-
-        phase = SpecPhase(
-            agent_manager=agent_manager,
-            permission_handler=permission_handler,
-            spec_file=str(spec_file),
-            workflow_mode=WorkflowMode.LOCAL,
-            interactive=False,
-            issue_name="test-feature",
-        )
-
-        # Set iteration to 4
-        phase.iteration = 4
-        phase._update_context_file()
-
-        # Check restriction message
-        context_file = phase.history_dir / "context.md"
-        content = context_file.read_text(encoding="utf-8")
-        assert "只能針對現有問題繼續追問，不可提出新問題" in content
-
     def test_issue_name_derived_from_spec_file(self, tmp_path: Path) -> None:
         """測試 issue_name 從 spec_file 自動推導"""
         spec_file = tmp_path / ".cafe" / "issues" / "my-feature" / "spec" / "spec.md"
@@ -409,15 +327,13 @@ class TestHistoryTracking:
         assert phase.issue_name == "my-feature"
         assert phase.history_dir == tmp_path / ".cafe" / "issues" / "my-feature" / "spec" / "history"
 
-    def test_prompt_includes_context_file_after_iteration_1(self, tmp_path: Path) -> None:
-        """測試第 2 輪後 prompt 包含 context 檔案"""
+    def test_iteration_2_prompt_includes_user_input(self, tmp_path: Path) -> None:
+        """測試第 2 輪後 prompt 應該包含 user_input 而不是 context.md"""
         spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("Initial requirements\n")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("CAFE_CONFIRMED\n需求已清楚", TokenUsage())
-
         permission_handler = MagicMock(spec=PermissionHandler)
 
         phase = SpecPhase(
@@ -429,25 +345,19 @@ class TestHistoryTracking:
             issue_name="test-feature",
         )
 
-        # Create history using base class method
-        phase.iteration = 1
-        phase._save_iteration_history(
-            phase_specific_data={
-                "status": PhaseStatusCode.NEED_CLARIFICATION.value,
-                "user_input": "Q1",
-                "pm_response": "A1",
-                "confirmed_requirements": phase.confirmed_requirements.copy(),
-                "pending_questions": phase.pending_questions.copy(),
-            },
-        )
         phase.iteration = 2
+        user_response = "1. 議題是人工定義的\n2. 同一組織共享議題列表\n3. 在新頁面選擇議題"
 
-        # Generate prompt for iteration 2
-        prompt = phase._generate_prompt()
+        # Generate prompt with user input
+        prompt = phase._generate_prompt(user_input=user_response)
 
-        # Should include reference to context file
-        expected_path = str(tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "history" / "context.md")
-        assert "context.md" in prompt or expected_path in prompt
+        # Should include user's response directly in prompt
+        assert "議題是人工定義的" in prompt
+        assert "同一組織共享議題列表" in prompt
+        assert "在新頁面選擇議題" in prompt
+
+        # Should have a section header for user response
+        assert "使用者的回答" in prompt or "使用者回覆" in prompt
 
     def test_iteration_4_prompt_includes_restriction(self, tmp_path: Path) -> None:
         """測試第 4 輪 prompt 包含問題限制"""
@@ -486,7 +396,7 @@ class TestNonInteractiveModeIteration1:
         spec_file.parent.mkdir(parents=True, exist_ok=True)
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("CAFE_NEED_CLARIFICATION\n需要澄清需求。\n\n## 待釐清的問題\n1. 問題一", TokenUsage())
+        agent_manager.execute.return_value = ("CAFE_NEED_CLARIFICATION\n需要澄清需求。\n\n## 待釐清的問題\n1. 問題一", TokenUsage(), [])
         setup_agent_manager_mocks(agent_manager)
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -518,7 +428,7 @@ class TestNonInteractiveModeIteration1:
         spec_file.parent.mkdir(parents=True, exist_ok=True)
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("CAFE_NEED_CLARIFICATION\n需要澄清", TokenUsage())
+        agent_manager.execute.return_value = ("CAFE_NEED_CLARIFICATION\n需要澄清", TokenUsage(), [])
         setup_agent_manager_mocks(agent_manager)
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -546,7 +456,7 @@ class TestNonInteractiveModeIteration1:
         spec_file.parent.mkdir(parents=True, exist_ok=True)
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("CAFE_CONFIRMED\n需求已清楚。", TokenUsage())
+        agent_manager.execute.return_value = ("CAFE_CONFIRMED\n需求已清楚。", TokenUsage(), [])
         setup_agent_manager_mocks(agent_manager)
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -657,7 +567,7 @@ class TestInteractiveModeStillWorks:
         spec_file.write_text("需求已清楚")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("CAFE_CONFIRMED\n需求確認", TokenUsage())
+        agent_manager.execute.return_value = ("CAFE_CONFIRMED\n需求確認", TokenUsage(), [])
         setup_agent_manager_mocks(agent_manager)
         agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
 
@@ -806,6 +716,78 @@ class TestSpecPhasePromptGeneration:
 
         # Prompt should reference CAFE_ prefixed codes (either directly or via status_code_prompt)
         assert "CAFE_CONFIRMED" in captured_prompt or "CAFE_NEED_CLARIFICATION" in captured_prompt
+
+
+class TestInterruptedIterationResume:
+    """測試中斷後恢復的完整流程."""
+
+    def test_resume_interrupted_iteration_uses_saved_user_input(self, tmp_path: Path) -> None:
+        """測試中斷後恢復時，直接使用已儲存的 user_input，不再詢問用戶."""
+        import json
+        from io import StringIO
+
+        spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
+        spec_file.write_text("Initial spec")
+
+        history_dir = spec_file.parent / "history"
+        history_dir.mkdir(parents=True, exist_ok=True)
+
+        # 創建 iteration 1 的完整歷史（已完成，有 response）
+        iteration1 = history_dir / "iteration_001.json"
+        iteration1.write_text(json.dumps({
+            "iteration": 1,
+            "user_input": "Initial user story",
+            "response": "CAFE_NEED_CLARIFICATION\n需要更多資訊",
+            "status_code": "CAFE_NEED_CLARIFICATION"
+        }))
+
+        # 創建 iteration 2 的不完整歷史（被中斷，有 user_input 但沒有 response）
+        iteration2 = history_dir / "iteration_002.json"
+        saved_user_input = "1. 功能A\n2. 功能B\n3. 功能C"
+        iteration2.write_text(json.dumps({
+            "iteration": 2,
+            "user_input": saved_user_input,
+            "response": None  # 被中斷，沒有 response
+        }))
+
+        # Setup mocks
+        agent_manager = MagicMock(spec=AgentManager)
+        # 這次應該得到完成的回應
+        agent_manager.execute.return_value = ("CAFE_CONFIRMED\n需求已確認", TokenUsage(), [])
+        setup_agent_manager_mocks(agent_manager)
+
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        # Create phase
+        phase = SpecPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            spec_file=str(spec_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            interactive=False,
+        )
+
+        # Execute phase - 應該直接使用已儲存的 user_input，不會要求用戶輸入
+        with patch('sys.stdin', StringIO("")):  # 不提供任何輸入
+            result = phase.execute()
+
+        # 驗證結果
+        assert result.status == PhaseStatus.COMPLETED
+
+        # 驗證 agent 被呼叫時使用了已儲存的 user_input
+        agent_manager.execute.assert_called_once()
+        call_args = agent_manager.execute.call_args
+        # execute 的參數是 (agent_name, prompt, ...)
+        prompt = call_args[0][1]  # 第二個位置參數是 prompt
+
+        # Prompt 應該包含已儲存的 user_input
+        assert saved_user_input in prompt
+
+        # 驗證 iteration 2 的 history 被更新（有 response 了）
+        iteration2_data = json.loads(iteration2.read_text())
+        assert iteration2_data["response"] is not None
+        assert "CAFE_CONFIRMED" in iteration2_data["response"]
 
 
 if __name__ == "__main__":

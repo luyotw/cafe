@@ -104,13 +104,22 @@ class PlanPhase(Phase):
                 # Check for plan.md with development guide section
                 plan_file_path = self.history_dir.parent / "plan.md"
                 plan_exists = plan_file_path.exists()
-                
+
                 # First round: plan.md doesn't exist
                 if not plan_exists:
                     if not self.template_path:
                         return PhaseResult(
                             status=PhaseStatus.FAILED,
                             message="First round requires template. Use --template option.",
+                        )
+                    # Template exists, but need to check/prompt for dev guide
+                    if self.interactive:
+                        # Prompt user to provide development guide
+                        self._prompt_for_dev_guide()
+                    else:
+                        return PhaseResult(
+                            status=PhaseStatus.FAILED,
+                            message="First round requires development guide in interactive mode",
                         )
                 # Subsequent rounds: plan.md exists but may lack dev guide section
                 elif not self._has_dev_guide_section(plan_file_path):
@@ -158,11 +167,7 @@ class PlanPhase(Phase):
                     continue_codes=[PhaseStatusCode.NEED_CLARIFICATION],
                     phase_specific_data={"dev_agent": self.dev_agent},
                 )
-                
-                # Write agent response to plan.md (if not failed)
-                if result is None or result.status != PhaseStatus.FAILED:
-                    self._write_plan_from_response(response)
-                
+
                 if result:
                     return result
                 # If result is None, continue to next iteration
@@ -234,20 +239,22 @@ class PlanPhase(Phase):
 
 這是第 {self.iteration} 輪實作分析。
 
-請仔細閱讀需求文件（{self.spec_file}）和 {plan_file_path} 中的開發指南，規劃詳細的實作步驟。
+請先使用 Read tool 讀取 {plan_file_path} 的開發指南，然後閱讀需求文件（{self.spec_file}），規劃詳細的實作步驟。
 {template_instruction}
 {status_code_prompt}
 
+**重要：使用 Edit tool 將實作計畫附加到檔案**
+- 使用 Edit tool 在「## 開發指南」區塊**之後**附加實作計畫
+- 不要使用 Write tool（會覆寫開發指南）
+- 保留「## 開發指南」區塊不變
+
 **如果需要更多資訊（status: CAFE_NEED_CLARIFICATION）：**
-使用 Write tool 將以下內容寫入 {plan_file_path}：
-   - 「## 開發指南」- 保留原有的開發指南內容（不要修改）
+使用 Edit tool 在開發指南之後附加：
    - 「## 實作計畫」- 目前的實作分析內容
    - 「## 待確認問題」- 列出需要確認的技術問題
 
 **如果分析完成（status: CAFE_READY_FOR_REVIEW）：**
-使用 Write tool 將完整實作計畫寫入 {plan_file_path}：
-   - 第一部分：「## 開發指南」- 保留原有的開發指南內容（不要修改）
-   - 第二部分：嚴格按照模版的章節結構和格式撰寫實作計畫
+使用 Edit tool 在開發指南之後附加完整實作計畫，嚴格按照模版的章節結構和格式撰寫。
 """
         else:
             # Add user's modification request section for iteration 2+
@@ -379,33 +386,6 @@ class PlanPhase(Phase):
 
         return False
 
-    def _write_plan_from_response(self, response: str) -> None:
-        """從 agent 回應中提取內容並寫入 plan.md。
-        
-        Args:
-            response: Agent 回應（可能包含狀態碼和內容）
-        """
-        # Remove status code from response
-        lines = response.split("\n")
-        content_lines = []
-        
-        for line in lines:
-            # Skip status code lines
-            if line.strip().startswith("CAFE_"):
-                continue
-            content_lines.append(line)
-        
-        content = "\n".join(content_lines).strip()
-        
-        # Skip if no content
-        if not content:
-            return
-            
-        # Write to plan.md
-        plan_file_path = self.history_dir.parent / "plan.md"
-        plan_file_path.parent.mkdir(parents=True, exist_ok=True)
-        plan_file_path.write_text(content, encoding="utf-8")
-
     def _prompt_for_dev_guide(self) -> None:
         """Prompt user to write development guide when it doesn't exist."""
         print("\n" + "="*70)
@@ -457,6 +437,12 @@ class PlanPhase(Phase):
         if self.iteration == 1:
             plan_file = self.history_dir.parent / "plan.md"
             return plan_file.read_text() if plan_file.exists() else ""
+
+        # Iteration 2+: Check if current iteration was interrupted (has user_input but no response)
+        current_data = self._load_current_iteration_data()
+        if current_data and current_data.get("user_input") and not current_data.get("response"):
+            # 恢復被中斷的 iteration，直接使用已儲存的 user_input
+            return current_data["user_input"]
 
         # Iteration 2+: Display current plan.md content (interactive only)
         if self.interactive:

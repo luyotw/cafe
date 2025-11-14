@@ -297,7 +297,7 @@ class Phase(ABC):
                 json.dump(history_data, f, ensure_ascii=False, indent=2)
 
         # 4. 執行 agent
-        response, token_usage = self.agent_manager.execute(
+        response, token_usage, permission_denials = self.agent_manager.execute(
             agent_name,
             prompt,
             allowed_tools=allowed_tools,
@@ -308,7 +308,10 @@ class Phase(ABC):
         if no_response_status:
             # Agent 返回空回應 - 保存並返回 NO_RESPONSE
             self._update_iteration_history(
-                phase_specific_data={"response": response},
+                phase_specific_data={
+                    "response": response,
+                    "permission_denials": [denial.model_dump() for denial in permission_denials]
+                },
                 prompt=prompt,
                 agent_cli=agent_cli,
                 agent_session_id=agent_session_id,
@@ -327,7 +330,10 @@ class Phase(ABC):
 
         # 7. 更新 history（總是保存，即使沒有 status code）
         self._update_iteration_history(
-            phase_specific_data={"response": response},
+            phase_specific_data={
+                "response": response,
+                "permission_denials": [denial.model_dump() for denial in permission_denials]
+            },
             prompt=prompt,
             agent_cli=agent_cli,
             agent_session_id=agent_session_id,
@@ -630,11 +636,34 @@ class Phase(ABC):
         with open(prev_iteration_file, "r", encoding="utf-8") as f:
             return json.load(f)
 
+    def _load_current_iteration_data(self) -> Optional[dict]:
+        """載入當前 iteration 的資料（通用方法）。
+
+        用於恢復被中斷的 iteration（有 user_input 但沒有 response）。
+
+        Returns:
+            dict: 當前 iteration 的資料，如果不存在則返回 None
+        """
+        if not hasattr(self, "iteration"):
+            raise AttributeError("Phase must have 'iteration' attribute")
+        if not hasattr(self, "history_dir"):
+            raise AttributeError("Phase must have 'history_dir' attribute")
+
+        current_iteration_file = Path(self.history_dir) / f"iteration_{self.iteration:03d}.json"
+        if not current_iteration_file.exists():
+            return None
+
+        with open(current_iteration_file, "r", encoding="utf-8") as f:
+            return json.load(f)
+
     def _load_iteration_counter(self) -> int:
         """從 history 檔案載入最新的 iteration 數字（通用方法）。
 
+        如果最後一個 iteration 沒有 response（被中斷），則返回前一個完整 iteration 的數字，
+        這樣下次執行時會重用被中斷的 iteration 編號。
+
         Returns:
-            最新的 iteration 數字，如果沒有 history 則返回 0
+            最新完整 iteration 的數字，如果沒有 history 則返回 0
         """
         if not hasattr(self, "history_dir"):
             raise AttributeError("Phase must have 'history_dir' attribute")
@@ -647,12 +676,17 @@ class Phase(ABC):
         if not iteration_files:
             return 0
 
-        # 讀取最新的 iteration 檔案
-        last_iteration_file = iteration_files[-1]
-        with open(last_iteration_file, "r", encoding="utf-8") as f:
-            data = json.load(f)
+        # 從後往前尋找第一個完整的 iteration（有 response）
+        for iteration_file in reversed(iteration_files):
+            with open(iteration_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
 
-        return data.get("iteration", 0)
+            # 檢查是否有 response（完整的 iteration）
+            if "response" in data and data["response"]:
+                return data.get("iteration", 0)
+
+        # 所有 iteration 都不完整，返回 0
+        return 0
 
     def _check_if_already_completed(
         self,

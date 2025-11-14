@@ -4,7 +4,7 @@ import pytest
 from unittest.mock import MagicMock, patch
 
 from cafe.agents.executor import AgentExecutor, AgentExecutionError
-from cafe.core.types import AgentConfig, AgentCLI, TokenUsage
+from cafe.core.types import AgentConfig, AgentCLI, AgentResponse, TokenUsage
 
 
 class TestAgentExecutorBasics:
@@ -25,12 +25,16 @@ class TestAgentExecutorBasics:
         executor = AgentExecutor(config)
 
         with patch.object(executor, "_execute_claude") as mock_execute:
-            mock_execute.return_value = ("Agent response", TokenUsage())
+            mock_execute.return_value = AgentResponse(
+                response="Agent response",
+                token_usage=TokenUsage()
+            )
 
-            response, token_usage = executor.execute("Test prompt")
+            agent_response = executor.execute("Test prompt")
 
-            assert response == "Agent response"
-            assert isinstance(token_usage, TokenUsage)
+            assert agent_response.response == "Agent response"
+            assert isinstance(agent_response.token_usage, TokenUsage)
+            assert agent_response.permission_denials == []
             mock_execute.assert_called_once_with("Test prompt", None)
 
 
@@ -58,12 +62,12 @@ class TestAgentExecutorWithSession:
         executor = AgentExecutor(config)
 
         with patch.object(executor, "_execute_claude") as mock_execute:
-            mock_execute.return_value = ("Response with session", TokenUsage())
+            mock_execute.return_value = AgentResponse(response="Response with session", token_usage=TokenUsage())
 
-            response, token_usage = executor.execute("Prompt with session")
+            agent_response = executor.execute("Prompt with session")
 
-            assert response == "Response with session"
-            assert isinstance(token_usage, TokenUsage)
+            assert agent_response.response == "Response with session"
+            assert isinstance(agent_response.token_usage, TokenUsage)
             # Verify session was used in execution
             mock_execute.assert_called_once()
 
@@ -105,9 +109,13 @@ class TestClaudeExecution:
         config = AgentConfig(
             name="Roger",
             cli=AgentCLI.CLAUDE,
-            session_id="test-session"
         )
         executor = AgentExecutor(config)
+
+        # Mock session creation
+        mock_run_result = MagicMock()
+        mock_run_result.stdout = '{"session_id": "new-session-123"}'
+        mock_run_result.returncode = 0
 
         # Mock streaming process
         mock_process = MagicMock()
@@ -118,18 +126,19 @@ class TestClaudeExecution:
         mock_process.stderr.read.return_value = ""
         mock_process.wait.return_value = 0
 
-        with patch("subprocess.Popen", return_value=mock_process):
-            response, token_usage = executor._execute_claude("Test prompt")
+        with patch("subprocess.run", return_value=mock_run_result), \
+             patch("subprocess.Popen", return_value=mock_process), \
+             patch("sys.platform", "win32"):  # Skip select() on Windows
+            agent_response = executor._execute_claude("Test prompt")
 
-            assert response == "Claude response"
-            assert isinstance(token_usage, TokenUsage)
+            assert agent_response.response == "Claude response"
+            assert isinstance(agent_response.token_usage, TokenUsage)
 
     def test_execute_claude_failure(self) -> None:
         """測試 Claude 執行失敗時拋出錯誤"""
         config = AgentConfig(
             name="Roger",
             cli=AgentCLI.CLAUDE,
-            session_id="test-session"
         )
         executor = AgentExecutor(config)
 
@@ -140,7 +149,7 @@ class TestClaudeExecution:
                 returncode=1
             )
 
-            with pytest.raises(AgentExecutionError, match="Claude execution failed"):
+            with pytest.raises(AgentExecutionError, match="Failed to create new session"):
                 executor._execute_claude("Test prompt")
 
     def test_execute_claude_non_json_response(self) -> None:
@@ -161,70 +170,41 @@ class TestClaudeExecution:
         mock_process.stderr.read.return_value = ""
         mock_process.wait.return_value = 0
 
-        with patch("subprocess.Popen", return_value=mock_process):
-            response, token_usage = executor._execute_claude("Test prompt")
+        with patch("subprocess.run", return_value=MagicMock(stdout='{"session_id": "test-session"}', returncode=0)), \
+             patch("subprocess.Popen", return_value=mock_process), \
+             patch("sys.platform", "win32"):
+            agent_response = executor._execute_claude("Test prompt")
 
             # With streaming, non-JSON is treated as plain lines
-            assert "Plain text response" in response
-            assert isinstance(token_usage, TokenUsage)
-            assert token_usage.input_tokens == 0
+            assert "Plain text response" in agent_response.response
+            assert isinstance(agent_response.token_usage, TokenUsage)
+            assert agent_response.token_usage.input_tokens == 0
 
     def test_execute_claude_session_already_in_use_raises_conflict_error(self) -> None:
-        """測試當 session 已被使用時，拋出 SESSION_CONFLICT 錯誤"""
+        """測試當 session 已被使用時，拋出 AgentExecutionError"""
         config = AgentConfig(
             name="Roger",
             cli=AgentCLI.CLAUDE,
-            session_id="old-session-id"
         )
         executor = AgentExecutor(config)
 
-        with patch("subprocess.run") as mock_run:
-            # Session already in use error
-            mock_run.return_value = MagicMock(
-                stdout="",
-                stderr="Error: Session ID old-session-id is already in use.",
-                returncode=1
-            )
-
-        call_count = 0
-
-        def mock_popen_side_effect(*args, **kwargs):
-            nonlocal call_count
-            call_count += 1
-
-            mock_process = MagicMock()
-
-            # First call: session already in use error
-            if call_count == 1:
-                mock_process.stdout.readline.side_effect = [""]
-                mock_process.stderr.read.return_value = "Error: Session ID old-session-id is already in use."
-                mock_process.wait.return_value = 1
-            # Second call: retry with new session succeeds
-            else:
-                mock_process.stdout.readline.side_effect = [
-                    '{"content": "Success with new session"}\n',
-                    "",
-                ]
-                mock_process.stderr.read.return_value = ""
-                mock_process.wait.return_value = 0
-
-            return mock_process
-
-        # Mock subprocess.run for _create_new_session
+        # Mock session creation success
         mock_run_result = MagicMock(
-            stdout='{"session_id": "new-session-123", "result": "Hi!"}',
+            stdout='{"session_id": "new-session-123"}',
             returncode=0
         )
 
-        with patch("subprocess.Popen", side_effect=mock_popen_side_effect):
-            with patch("subprocess.run", return_value=mock_run_result):
-                response, token_usage = executor._execute_claude("Test prompt")
+        # Mock Popen to simulate session in use error
+        mock_process = MagicMock()
+        mock_process.stdout.readline.side_effect = [""]
+        mock_process.stderr.read.return_value = "Error: Session ID is already in use."
+        mock_process.wait.return_value = 1
 
-                # Should succeed with new session
-                assert response == "Success with new session"
-                assert isinstance(token_usage, TokenUsage)
-                # Session ID should be updated
-                assert executor.config.session_id == "new-session-123"
+        with patch("subprocess.run", return_value=mock_run_result), \
+             patch("subprocess.Popen", return_value=mock_process), \
+             patch("sys.platform", "win32"):
+            with pytest.raises(AgentExecutionError, match="Claude execution failed"):
+                executor._execute_claude("Test prompt")
 
     def test_create_new_session_success(self) -> None:
         """測試成功創建新 session"""
@@ -270,7 +250,8 @@ class TestGeminiExecution:
         config = AgentConfig(name="Roger", cli=AgentCLI.GEMINI)
         executor = AgentExecutor(config)
 
-        with patch("subprocess.Popen") as mock_popen:
+        with patch("subprocess.Popen") as mock_popen, \
+             patch("sys.platform", "win32"):  # Skip select() on Windows
             # Mock process
             mock_process = MagicMock()
             mock_process.stdout.readline.side_effect = [
@@ -283,10 +264,10 @@ class TestGeminiExecution:
             mock_process.wait.return_value = 0
             mock_popen.return_value = mock_process
 
-            response, token_usage = executor._execute_gemini("Test prompt")
+            agent_response = executor._execute_gemini("Test prompt")
 
-            assert response == "Gemini response"
-            assert isinstance(token_usage, TokenUsage)
+            assert agent_response.response == "Gemini response"
+            assert isinstance(agent_response.token_usage, TokenUsage)
             mock_popen.assert_called_once()
             # Verify command structure
             call_args = mock_popen.call_args[0][0]
@@ -300,7 +281,8 @@ class TestGeminiExecution:
         config = AgentConfig(name="Roger", cli=AgentCLI.GEMINI)
         executor = AgentExecutor(config)
 
-        with patch("subprocess.Popen") as mock_popen:
+        with patch("subprocess.Popen") as mock_popen, \
+             patch("sys.platform", "win32"):  # Skip select() on Windows
             mock_process = MagicMock()
             mock_process.stdout.readline.side_effect = [
                 '{"response": "Hi there"}\n',
@@ -310,17 +292,18 @@ class TestGeminiExecution:
             mock_process.wait.return_value = 0
             mock_popen.return_value = mock_process
 
-            response, token_usage = executor.execute("Test prompt")
+            agent_response = executor.execute("Test prompt")
 
-            assert response == "Hi there"
-            assert isinstance(token_usage, TokenUsage)
+            assert agent_response.response == "Hi there"
+            assert isinstance(agent_response.token_usage, TokenUsage)
 
     def test_execute_gemini_failure(self) -> None:
         """測試 Gemini 執行失敗時拋出錯誤"""
         config = AgentConfig(name="Roger", cli=AgentCLI.GEMINI)
         executor = AgentExecutor(config)
 
-        with patch("subprocess.Popen") as mock_popen:
+        with patch("subprocess.Popen") as mock_popen, \
+             patch("sys.platform", "win32"):  # Skip select() on Windows
             mock_process = MagicMock()
             mock_process.stdout.readline.return_value = ''
             mock_process.stderr.read.return_value = "Error: API key not found"
@@ -335,7 +318,8 @@ class TestGeminiExecution:
         config = AgentConfig(name="Roger", cli=AgentCLI.GEMINI)
         executor = AgentExecutor(config)
 
-        with patch("subprocess.Popen") as mock_popen:
+        with patch("subprocess.Popen") as mock_popen, \
+             patch("sys.platform", "win32"):  # Skip select() on Windows
             mock_process = MagicMock()
             mock_process.stdout.readline.side_effect = [
                 "Plain text response\n",
@@ -345,10 +329,40 @@ class TestGeminiExecution:
             mock_process.wait.return_value = 0
             mock_popen.return_value = mock_process
 
-            response, token_usage = executor._execute_gemini("Test prompt")
+            agent_response = executor._execute_gemini("Test prompt")
 
-            assert response == "Plain text response\n"
-            assert isinstance(token_usage, TokenUsage)
+            assert agent_response.response == "Plain text response\n"
+            assert isinstance(agent_response.token_usage, TokenUsage)
+
+    def test_execute_gemini_extracts_only_assistant_messages(self) -> None:
+        """測試 Gemini 只提取 assistant 的 messages，過濾掉 tool output 和 user messages"""
+        config = AgentConfig(name="Roger", cli=AgentCLI.GEMINI)
+        executor = AgentExecutor(config)
+
+        with patch("subprocess.Popen") as mock_popen, \
+             patch("sys.platform", "win32"):  # Skip select() on Windows
+            mock_process = MagicMock()
+            # Simulate Gemini stream-json output with user message, tool output, and assistant messages
+            mock_process.stdout.readline.side_effect = [
+                '{"type":"message","role":"user","content":"User prompt"}\n',
+                '{"type":"tool_result","output":"File content with CAFE_CONFIRMED in history"}\n',
+                '{"type":"message","role":"assistant","content":"CAFE_NEED_CLARIFICATION\\n"}\n',
+                '{"type":"message","role":"assistant","content":"Here is my response"}\n',
+                '{"response": "Full response including tool output"}\n',  # Last line (final result)
+                '',
+            ]
+            mock_process.stderr.read.return_value = ""
+            mock_process.wait.return_value = 0
+            mock_popen.return_value = mock_process
+
+            agent_response = executor._execute_gemini("Test prompt")
+
+            # Should only contain assistant messages, not user message or tool output
+            assert agent_response.response == "CAFE_NEED_CLARIFICATION\nHere is my response"
+            assert "User prompt" not in agent_response.response
+            assert "File content" not in agent_response.response
+            assert "CAFE_CONFIRMED" not in agent_response.response  # Should not pick up status from history
+            assert isinstance(agent_response.token_usage, TokenUsage)
 
 
 class TestCursorExecution:
@@ -359,7 +373,8 @@ class TestCursorExecution:
         config = AgentConfig(name="David", cli=AgentCLI.CURSOR)
         executor = AgentExecutor(config)
 
-        with patch("subprocess.Popen") as mock_popen:
+        with patch("subprocess.Popen") as mock_popen, \
+             patch("sys.platform", "win32"):
             # Mock process
             mock_process = MagicMock()
             mock_process.stdout.readline.side_effect = [
@@ -370,10 +385,10 @@ class TestCursorExecution:
             mock_process.wait.return_value = 0
             mock_popen.return_value = mock_process
 
-            response, token_usage = executor._execute_cursor("Test prompt")
+            agent_response = executor._execute_cursor("Test prompt")
 
-            assert response == "Cursor response"
-            assert isinstance(token_usage, TokenUsage)
+            assert agent_response.response == "Cursor response"
+            assert isinstance(agent_response.token_usage, TokenUsage)
             mock_popen.assert_called_once()
             # Verify command structure
             call_args = mock_popen.call_args[0][0]
@@ -388,7 +403,8 @@ class TestCursorExecution:
         config = AgentConfig(name="David", cli=AgentCLI.CURSOR)
         executor = AgentExecutor(config)
 
-        with patch("subprocess.Popen") as mock_popen:
+        with patch("subprocess.Popen") as mock_popen, \
+             patch("sys.platform", "win32"):
             mock_process = MagicMock()
             mock_process.stdout.readline.side_effect = [
                 '{"response": "Hello from Cursor"}\n',
@@ -398,17 +414,18 @@ class TestCursorExecution:
             mock_process.wait.return_value = 0
             mock_popen.return_value = mock_process
 
-            response, token_usage = executor.execute("Test prompt")
+            agent_response = executor.execute("Test prompt")
 
-            assert response == "Hello from Cursor"
-            assert isinstance(token_usage, TokenUsage)
+            assert agent_response.response == "Hello from Cursor"
+            assert isinstance(agent_response.token_usage, TokenUsage)
 
     def test_execute_cursor_failure(self) -> None:
         """測試 Cursor 執行失敗時拋出錯誤"""
         config = AgentConfig(name="David", cli=AgentCLI.CURSOR)
         executor = AgentExecutor(config)
 
-        with patch("subprocess.Popen") as mock_popen:
+        with patch("subprocess.Popen") as mock_popen, \
+             patch("sys.platform", "win32"):
             mock_process = MagicMock()
             mock_process.stdout.readline.return_value = ''
             mock_process.stderr.read.return_value = "Error: Connection failed"
@@ -423,7 +440,8 @@ class TestCursorExecution:
         config = AgentConfig(name="David", cli=AgentCLI.CURSOR)
         executor = AgentExecutor(config)
 
-        with patch("subprocess.Popen") as mock_popen:
+        with patch("subprocess.Popen") as mock_popen, \
+             patch("sys.platform", "win32"):
             mock_process = MagicMock()
             mock_process.stdout.readline.side_effect = [
                 "Plain text from Cursor\n",
@@ -433,10 +451,10 @@ class TestCursorExecution:
             mock_process.wait.return_value = 0
             mock_popen.return_value = mock_process
 
-            response, token_usage = executor._execute_cursor("Test prompt")
+            agent_response = executor._execute_cursor("Test prompt")
 
-            assert response == "Plain text from Cursor\n"
-            assert isinstance(token_usage, TokenUsage)
+            assert agent_response.response == "Plain text from Cursor\n"
+            assert isinstance(agent_response.token_usage, TokenUsage)
 
 
 class TestTokenUsageTracking:
@@ -458,16 +476,20 @@ class TestTokenUsageTracking:
         mock_process.stderr.read.return_value = ""
         mock_process.wait.return_value = 0
 
-        with patch("subprocess.Popen", return_value=mock_process):
-            response, token_usage = executor.execute("Test prompt")
+        mock_run_result = MagicMock(stdout='{"session_id": "test-session"}', returncode=0)
 
-            assert response == "Test response"
-            assert isinstance(token_usage, TokenUsage)
-            assert token_usage.input_tokens == 100
-            assert token_usage.output_tokens == 50
-            assert token_usage.cache_creation_input_tokens == 200
-            assert token_usage.cache_read_input_tokens == 300
-            assert token_usage.total_cost_usd == 0.05
+        with patch("subprocess.run", return_value=mock_run_result), \
+             patch("subprocess.Popen", return_value=mock_process), \
+             patch("sys.platform", "win32"):
+            agent_response = executor.execute("Test prompt")
+
+            assert agent_response.response == "Test response"
+            assert isinstance(agent_response.token_usage, TokenUsage)
+            assert agent_response.token_usage.input_tokens == 100
+            assert agent_response.token_usage.output_tokens == 50
+            assert agent_response.token_usage.cache_creation_input_tokens == 200
+            assert agent_response.token_usage.cache_read_input_tokens == 300
+            assert agent_response.token_usage.total_cost_usd == 0.05
 
     def test_execute_without_usage_data_returns_empty_token_usage(self) -> None:
         """測試當 CLI 沒有回傳 usage 資料時，回傳空的 TokenUsage"""
@@ -483,14 +505,18 @@ class TestTokenUsageTracking:
         mock_process.stderr.read.return_value = ""
         mock_process.wait.return_value = 0
 
-        with patch("subprocess.Popen", return_value=mock_process):
-            response, token_usage = executor.execute("Test prompt")
+        mock_run_result = MagicMock(stdout='{"session_id": "test-session"}', returncode=0)
 
-            assert response == "Response without usage"
-            assert isinstance(token_usage, TokenUsage)
-            assert token_usage.input_tokens == 0
-            assert token_usage.output_tokens == 0
-            assert token_usage.total_cost_usd == 0.0
+        with patch("subprocess.run", return_value=mock_run_result), \
+             patch("subprocess.Popen", return_value=mock_process), \
+             patch("sys.platform", "win32"):
+            agent_response = executor.execute("Test prompt")
+
+            assert agent_response.response == "Response without usage"
+            assert isinstance(agent_response.token_usage, TokenUsage)
+            assert agent_response.token_usage.input_tokens == 0
+            assert agent_response.token_usage.output_tokens == 0
+            assert agent_response.token_usage.total_cost_usd == 0.0
 
     def test_get_total_token_usage_sums_across_calls(self) -> None:
         """測試 get_total_token_usage 會累計所有呼叫的 token usage"""
@@ -532,7 +558,11 @@ class TestTokenUsageTracking:
         mock_process.stderr.read.return_value = ""
         mock_process.wait.return_value = 0
 
-        with patch("subprocess.Popen", return_value=mock_process):
+        mock_run_result = MagicMock(stdout='{"session_id": "test-session"}', returncode=0)
+
+        with patch("subprocess.run", return_value=mock_run_result), \
+             patch("subprocess.Popen", return_value=mock_process), \
+             patch("sys.platform", "win32"):
             executor.execute("First prompt")
             executor.execute("Second prompt")
 
@@ -562,16 +592,18 @@ class TestStreamingExecution:
         mock_process.stderr.read.return_value = ""
         mock_process.wait.return_value = 0
 
-        with patch("subprocess.Popen", return_value=mock_process):
-            response, token_usage = executor._execute_with_streaming(
+        with patch("subprocess.run", return_value=MagicMock(stdout='{"session_id": "test-session"}', returncode=0)), \
+             patch("subprocess.Popen", return_value=mock_process), \
+             patch("sys.platform", "win32"):
+            agent_response = executor._execute_with_streaming(
                 cmd=["test", "cmd"],
                 cli_name="TestCLI",
                 parse_stream_json=False,
             )
 
         # Check response
-        assert response == "Line 1\nLine 2\nLine 3\n"
-        assert isinstance(token_usage, TokenUsage)
+        assert agent_response.response == "Line 1\nLine 2\nLine 3\n"
+        assert isinstance(agent_response.token_usage, TokenUsage)
 
         # Check output was printed
         captured = capsys.readouterr()
@@ -598,20 +630,22 @@ class TestStreamingExecution:
         mock_process.stderr.read.return_value = ""
         mock_process.wait.return_value = 0
 
-        with patch("subprocess.Popen", return_value=mock_process):
-            response, token_usage = executor._execute_with_streaming(
+        with patch("subprocess.run", return_value=MagicMock(stdout='{"session_id": "test-session"}', returncode=0)), \
+             patch("subprocess.Popen", return_value=mock_process), \
+             patch("sys.platform", "win32"):
+            agent_response = executor._execute_with_streaming(
                 cmd=["claude", "--print", "test"],
                 cli_name="Claude",
                 parse_stream_json=True,
             )
 
         # Check response content
-        assert response == "Hello world"
+        assert agent_response.response == "Hello world"
 
         # Check token usage
-        assert token_usage.input_tokens == 10
-        assert token_usage.output_tokens == 5
-        assert token_usage.total_cost_usd == 0.01
+        assert agent_response.token_usage.input_tokens == 10
+        assert agent_response.token_usage.output_tokens == 5
+        assert agent_response.token_usage.total_cost_usd == 0.01
 
         # Check session_id was saved
         assert executor.config.session_id == "test-session-123"
@@ -632,7 +666,9 @@ class TestStreamingExecution:
         mock_process.stderr.read.return_value = "Error: command failed"
         mock_process.wait.return_value = 1
 
-        with patch("subprocess.Popen", return_value=mock_process):
+        with patch("subprocess.run", return_value=MagicMock(stdout='{"session_id": "test-session"}', returncode=0)), \
+             patch("subprocess.Popen", return_value=mock_process), \
+             patch("sys.platform", "win32"):
             with pytest.raises(AgentExecutionError, match="Claude execution failed with code 1"):
                 executor._execute_with_streaming(
                     cmd=["claude", "test"],
@@ -656,16 +692,18 @@ class TestStreamingExecution:
         mock_process.stderr.read.return_value = ""
         mock_process.wait.return_value = 0
 
-        with patch("subprocess.Popen", return_value=mock_process):
-            response, token_usage = executor._execute_with_streaming(
+        with patch("subprocess.run", return_value=MagicMock(stdout='{"session_id": "test-session"}', returncode=0)), \
+             patch("subprocess.Popen", return_value=mock_process), \
+             patch("sys.platform", "win32"):
+            agent_response = executor._execute_with_streaming(
                 cmd=["claude", "test"],
                 cli_name="Claude",
                 parse_stream_json=True,
             )
 
         # Should extract content from valid JSON, skip invalid
-        assert "Valid JSON" in response
-        assert " more valid" in response
+        assert "Valid JSON" in agent_response.response
+        assert " more valid" in agent_response.response
 
         # Check that invalid line was still printed
         captured = capsys.readouterr()
@@ -691,12 +729,14 @@ class TestClaudeStreamingExecution:
         mock_process.stderr.read.return_value = ""
         mock_process.wait.return_value = 0
 
-        with patch("subprocess.Popen", return_value=mock_process):
-            response, token_usage = executor._execute_claude("Test prompt")
+        with patch("subprocess.run", return_value=MagicMock(stdout='{"session_id": "test-session"}', returncode=0)), \
+             patch("subprocess.Popen", return_value=mock_process), \
+             patch("sys.platform", "win32"):
+            agent_response = executor._execute_claude("Test prompt")
 
-        assert response == "Response text"
-        assert token_usage.input_tokens == 5
-        assert token_usage.output_tokens == 2
+        assert agent_response.response == "Response text"
+        assert agent_response.token_usage.input_tokens == 5
+        assert agent_response.token_usage.output_tokens == 2
 
         # Verify streaming output was shown
         captured = capsys.readouterr()
@@ -724,14 +764,16 @@ class TestClaudeStreamingExecution:
         mock_process.stderr.read.return_value = ""
         mock_process.wait.return_value = 0
 
-        with patch("subprocess.Popen", return_value=mock_process):
-            response, token_usage = executor._execute_claude("Test prompt")
+        with patch("subprocess.run", return_value=MagicMock(stdout='{"session_id": "test-session"}', returncode=0)), \
+             patch("subprocess.Popen", return_value=mock_process), \
+             patch("sys.platform", "win32"):
+            agent_response = executor._execute_claude("Test prompt")
 
             # Should extract text from message.content[] and concatenate
-            assert response == "Hello from Claude with new format"
-            assert isinstance(token_usage, TokenUsage)
-            assert token_usage.input_tokens == 100
-            assert token_usage.output_tokens == 50
+            assert agent_response.response == "Hello from Claude with new format"
+            assert isinstance(agent_response.token_usage, TokenUsage)
+            assert agent_response.token_usage.input_tokens == 100
+            assert agent_response.token_usage.output_tokens == 50
 
     def test_execute_claude_with_mixed_content_types(self) -> None:
         """測試 Claude message.content[] 包含多種類型時只提取 text"""
@@ -750,11 +792,13 @@ class TestClaudeStreamingExecution:
         mock_process.stderr.read.return_value = ""
         mock_process.wait.return_value = 0
 
-        with patch("subprocess.Popen", return_value=mock_process):
-            response, token_usage = executor._execute_claude("Analyze file")
+        with patch("subprocess.run", return_value=MagicMock(stdout='{"session_id": "test-session"}', returncode=0)), \
+             patch("subprocess.Popen", return_value=mock_process), \
+             patch("sys.platform", "win32"):
+            agent_response = executor._execute_claude("Analyze file")
 
             # Should only extract text blocks, skipping tool_use
-            assert response == "Analysis: Complete"
+            assert agent_response.response == "Analysis: Complete"
 
 
 class TestCopilotStreamingExecution:
@@ -775,15 +819,16 @@ class TestCopilotStreamingExecution:
         mock_process.stderr.read.return_value = ""
         mock_process.wait.return_value = 0
 
-        with patch("subprocess.Popen", return_value=mock_process):
-            with patch("pathlib.Path.exists", return_value=False):
-                response, token_usage = executor._execute_copilot("Test prompt")
+        with patch("subprocess.Popen", return_value=mock_process), \
+             patch("pathlib.Path.exists", return_value=False), \
+             patch("sys.platform", "win32"):
+            agent_response = executor._execute_copilot("Test prompt")
 
-        assert "Copilot response line 1" in response
-        assert "Copilot response line 2" in response
+            assert "Copilot response line 1" in agent_response.response
+            assert "Copilot response line 2" in agent_response.response
 
-        # Verify streaming output was shown
-        captured = capsys.readouterr()
-        assert "Copilot Response (streaming):" in captured.out
+            # Verify streaming output was shown
+            captured = capsys.readouterr()
+            assert "Copilot Response (streaming):" in captured.out
 
 
