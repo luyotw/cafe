@@ -13,13 +13,13 @@ class TestMockAgentExecutor:
         # Arrange
         config = AgentConfig(name="TestAgent", cli=AgentCLI.CLAUDE)
         executor = MockAgentExecutor(config=config)
-        
+
         # Act
-        response, usage = executor.execute("test prompt")
-        
+        agent_response = executor.execute("test prompt")
+
         # Assert
-        assert response == "CONFIRMED"
-        assert isinstance(usage, TokenUsage)
+        assert "CAFE_CONFIRMED" in agent_response.response
+        assert isinstance(agent_response.token_usage, TokenUsage)
 
     def test_custom_response(self):
         """測試自訂回應"""
@@ -29,13 +29,13 @@ class TestMockAgentExecutor:
             config=config,
             response="NEED_CLARIFICATION\n請提供更多資訊"
         )
-        
+
         # Act
-        response, usage = executor.execute("test prompt")
-        
+        agent_response = executor.execute("test prompt")
+
         # Assert
-        assert "NEED_CLARIFICATION" in response
-        assert "請提供更多資訊" in response
+        assert "NEED_CLARIFICATION" in agent_response.response
+        assert "請提供更多資訊" in agent_response.response
 
     def test_tracks_call_count(self):
         """測試追蹤呼叫次數"""
@@ -81,15 +81,15 @@ class TestMockAgentExecutor:
         # Arrange
         config = AgentConfig(name="TestAgent", cli=AgentCLI.CLAUDE)
         executor = MockAgentExecutor(config=config, response="first")
-        
+
         # Act
-        response1, _ = executor.execute("prompt")
+        agent_response1 = executor.execute("prompt")
         executor.set_response("second")
-        response2, _ = executor.execute("prompt")
-        
+        agent_response2 = executor.execute("prompt")
+
         # Assert
-        assert response1 == "first"
-        assert response2 == "second"
+        assert agent_response1.response == "first"
+        assert agent_response2.response == "second"
 
     def test_custom_token_usage(self):
         """測試自訂 token usage"""
@@ -97,13 +97,13 @@ class TestMockAgentExecutor:
         config = AgentConfig(name="TestAgent", cli=AgentCLI.CLAUDE)
         custom_usage = TokenUsage(input_tokens=100, output_tokens=50)
         executor = MockAgentExecutor(config=config, token_usage=custom_usage)
-        
+
         # Act
-        _, usage = executor.execute("prompt")
-        
+        agent_response = executor.execute("prompt")
+
         # Assert
-        assert usage.input_tokens == 100
-        assert usage.output_tokens == 50
+        assert agent_response.token_usage.input_tokens == 100
+        assert agent_response.token_usage.output_tokens == 50
 
     def test_reset_clears_tracking(self):
         """測試 reset 清除追蹤資料"""
