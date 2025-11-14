@@ -2,7 +2,7 @@
 
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 import typer
 from rich.console import Console
@@ -714,6 +714,16 @@ def develop(
         "--interactive/--no-interactive",
         help="Allow interactive prompts (default: True)",
     ),
+    approve_denied_tools: Optional[str] = typer.Option(
+        None,
+        "--approve-denied-tools",
+        help="Comma-separated indices of permission denials to approve (non-interactive mode)",
+    ),
+    user_input: Optional[str] = typer.Option(
+        None,
+        "--user-input",
+        help="Additional user instructions or context (non-interactive mode)",
+    ),
 ) -> None:
     """Run develop phase: Execute development work according to plan.
 
@@ -729,6 +739,9 @@ def develop(
 
         # Use custom developer agent
         cafe develop my-feature --dev CustomDev
+
+        # Non-interactive mode with permission approval
+        cafe develop my-feature --no-interactive --approve-denied-tools 0,2 --user-input "請小心處理"
     """
     try:
         # Validate mode
@@ -780,6 +793,15 @@ def develop(
         console.print(f"Plan file: {plan_file}")
         console.print()
 
+        # Parse approve_denied_tools if provided
+        approved_denial_indices: List[int] = []
+        if approve_denied_tools:
+            try:
+                approved_denial_indices = [int(idx.strip()) for idx in approve_denied_tools.split(",")]
+            except ValueError:
+                console.print("[red]Error: --approve-denied-tools must be comma-separated integers (e.g., '0,1,3')[/red]")
+                raise typer.Exit(1)
+
         # Create and execute develop phase
         phase = DevelopPhase(
             agent_manager=agent_manager,
@@ -792,6 +814,8 @@ def develop(
             issue_name=issue_name,
             dev_agent=dev_agent,
             interactive=interactive,
+            approved_denial_indices=approved_denial_indices if approved_denial_indices else None,
+            user_input=user_input or "",
         )
 
         console.print("[bold]Starting development execution...[/bold]")
