@@ -606,11 +606,11 @@ class TestHandlePreviousPermissionDenials:
 
         approved_tools, user_input = phase._handle_previous_permission_denials()
 
-        # Should return approved tools based on indices
+        # Should return approved tools based on indices (lowercase)
         assert len(approved_tools) == 2
-        assert "Read(/home/user/test.txt)" in approved_tools
-        assert "Edit(/home/user/config.php)" in approved_tools
-        assert "Bash(git status)" not in approved_tools
+        assert "read(/home/user/test.txt)" in approved_tools
+        assert "edit(/home/user/config.php)" in approved_tools
+        assert "bash(git status)" not in approved_tools
 
         # Should return user_input
         assert user_input == "請小心修改"
@@ -656,9 +656,9 @@ class TestHandlePreviousPermissionDenials:
         with patch('builtins.input', side_effect=['y', 'n']):
             approved_tools, user_input = phase._handle_previous_permission_denials()
 
-        # Should only approve first one
+        # Should only approve first one (lowercase)
         assert len(approved_tools) == 1
-        assert "Read(/home/user/test.txt)" in approved_tools
+        assert "read(/home/user/test.txt)" in approved_tools
 
         # Should have user_input from get_multiline_input
         assert user_input == "請注意安全"
@@ -694,5 +694,5 @@ class TestHandlePreviousPermissionDenials:
 
         approved_tools, _ = phase._handle_previous_permission_denials()
 
-        # Should use "git --no-pager" as pattern (first two words)
-        assert approved_tools == ["Bash(git --no-pager)"]
+        # Should use "git --no-pager" as pattern (first two words, lowercase)
+        assert approved_tools == ["bash(git --no-pager)"]

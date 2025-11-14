@@ -101,24 +101,28 @@ class PermissionDenial(BaseModel):
         """Convert permission denial to allowed_tools pattern.
 
         Returns:
-            Pattern like "Read", "Write(file_path)", or "Bash(git status)"
+            Pattern like "read", "write(file_path)", or "bash(git status)"
+            Note: Tool names are lowercase to match CLI conventions
         """
         # Extract common parameters
         file_path = self.tool_input.get("file_path")
         command = self.tool_input.get("command")
 
+        # Convert tool name to lowercase to match CLI conventions
+        tool_name_lower = self.tool_name.lower()
+
         if file_path:
-            return f"{self.tool_name}({file_path})"
+            return f"{tool_name_lower}({file_path})"
         elif command:
             # For bash commands, use first two words as pattern
             cmd_parts = command.split()
             if len(cmd_parts) >= 2:
-                return f"{self.tool_name}({cmd_parts[0]} {cmd_parts[1]})"
+                return f"{tool_name_lower}({cmd_parts[0]} {cmd_parts[1]})"
             else:
-                return f"{self.tool_name}({cmd_parts[0]})"
+                return f"{tool_name_lower}({cmd_parts[0]})"
         else:
             # If no specific params, just allow the tool
-            return self.tool_name
+            return tool_name_lower
 
 
 class SessionData(BaseModel):

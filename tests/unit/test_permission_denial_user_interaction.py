@@ -127,8 +127,8 @@ class TestPermissionDenialUserInteraction:
         assert "write" in called_allowed_tools
         assert "read" in called_allowed_tools
         assert "bash" in called_allowed_tools
-        assert "Edit(/home/user/app/config.php)" in called_allowed_tools
-        assert "Bash(git status)" in called_allowed_tools
+        assert "edit(/home/user/app/config.php)" in called_allowed_tools
+        assert "bash(git status)" in called_allowed_tools
 
     def test_user_rejects_some_tools_only_approved_ones_added_to_allowed_tools(self, tmp_path: Path):
         """測試用戶只批准部分工具，只有被批准的工具被加入 allowed_tools"""
@@ -197,9 +197,9 @@ class TestPermissionDenialUserInteraction:
         second_call = agent_manager.execute.call_args_list[1]
         called_allowed_tools = second_call[1]['allowed_tools']
 
-        assert "Edit(/etc/passwd)" not in called_allowed_tools
-        assert "Bash(rm -rf /)" not in called_allowed_tools
-        assert "Read(/home/user/safe_file.txt)" in called_allowed_tools
+        assert "edit(/etc/passwd)" not in called_allowed_tools
+        assert "bash(rm -rf /)" not in called_allowed_tools
+        assert "read(/home/user/safe_file.txt)" in called_allowed_tools
 
     def test_user_rejects_all_tools_phase_fails(self, tmp_path: Path):
         """測試用戶拒絕所有工具，phase 失敗"""
