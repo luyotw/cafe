@@ -297,7 +297,7 @@ class Phase(ABC):
                 json.dump(history_data, f, ensure_ascii=False, indent=2)
 
         # 4. 執行 agent
-        response, token_usage = self.agent_manager.execute(
+        response, token_usage, permission_denials = self.agent_manager.execute(
             agent_name,
             prompt,
             allowed_tools=allowed_tools,
@@ -308,7 +308,10 @@ class Phase(ABC):
         if no_response_status:
             # Agent 返回空回應 - 保存並返回 NO_RESPONSE
             self._update_iteration_history(
-                phase_specific_data={"response": response},
+                phase_specific_data={
+                    "response": response,
+                    "permission_denials": [denial.dict() for denial in permission_denials]
+                },
                 prompt=prompt,
                 agent_cli=agent_cli,
                 agent_session_id=agent_session_id,
@@ -327,7 +330,10 @@ class Phase(ABC):
 
         # 7. 更新 history（總是保存，即使沒有 status code）
         self._update_iteration_history(
-            phase_specific_data={"response": response},
+            phase_specific_data={
+                "response": response,
+                "permission_denials": [denial.dict() for denial in permission_denials]
+            },
             prompt=prompt,
             agent_cli=agent_cli,
             agent_session_id=agent_session_id,
