@@ -159,7 +159,7 @@ class TestExecuteAgentIteration:
         mock_agent.config.cli.value = "claude"
         mock_agent.config.session_id = "test_session"
         agent_manager.get_agent.return_value = mock_agent
-        agent_manager.execute.return_value = ("CAFE_CONFIRMED\n需求已清楚", TokenUsage())
+        agent_manager.execute.return_value = ("CAFE_CONFIRMED\n需求已清楚", TokenUsage(), [])
 
         phase = TestPhase(agent_manager, history_dir)
 
@@ -211,7 +211,7 @@ class TestExecuteAgentIteration:
         mock_agent.config.cli.value = "copilot"
         mock_agent.config.session_id = "test_session"
         agent_manager.get_agent.return_value = mock_agent
-        agent_manager.execute.return_value = ("", TokenUsage())  # Empty response
+        agent_manager.execute.return_value = ("", TokenUsage(), [])  # Empty response
 
         phase = TestPhase(agent_manager, history_dir)
 
@@ -258,7 +258,7 @@ class TestExecuteAgentIteration:
         mock_agent.config.session_id = "test_session"
         agent_manager.get_agent.return_value = mock_agent
         # Response without status code
-        agent_manager.execute.return_value = ("Some response without status code", TokenUsage())
+        agent_manager.execute.return_value = ("Some response without status code", TokenUsage(), [])
 
         phase = TestPhase(agent_manager, history_dir)
 
@@ -325,7 +325,7 @@ class TestExecuteAgentIteration:
         mock_agent.config.cli.value = "claude"
         mock_agent.config.session_id = "test_session"
         agent_manager.get_agent.return_value = mock_agent
-        agent_manager.execute.return_value = ("CAFE_CONFIRMED\n測試完成", TokenUsage())
+        agent_manager.execute.return_value = ("CAFE_CONFIRMED\n測試完成", TokenUsage(), [])
 
         phase = TestPhase(agent_manager, history_dir)
 
