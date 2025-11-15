@@ -73,7 +73,7 @@ class AgentExecutor:
         """Translate tool names from Claude convention to current CLI convention.
 
         Args:
-            tools: List of tool names in Claude convention
+            tools: List of tool names in Claude convention (e.g. ["read", "edit(/path/file)"])
 
         Returns:
             List of tool names translated for current CLI, or None if no tools
@@ -82,7 +82,23 @@ class AgentExecutor:
             return None
 
         tool_map = self.TOOL_NAME_MAP.get(self.config.cli, {})
-        return [tool_map.get(tool, tool) for tool in tools]
+        translated = []
+
+        for tool in tools:
+            # Check if tool has parameters (e.g. "edit(/path/file)")
+            if "(" in tool:
+                # Extract tool name and parameters
+                tool_name = tool.split("(")[0]
+                tool_params = tool[len(tool_name):]  # Get "(params)"
+
+                # Translate tool name and append parameters
+                translated_name = tool_map.get(tool_name, tool_name)
+                translated.append(translated_name + tool_params)
+            else:
+                # Simple tool name without parameters
+                translated.append(tool_map.get(tool, tool))
+
+        return translated
 
     def execute(self, prompt: str, allowed_tools: Optional[List[str]] = None) -> AgentResponse:
         """Execute the agent with given prompt.

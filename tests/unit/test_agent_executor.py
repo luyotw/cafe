@@ -832,3 +832,111 @@ class TestCopilotStreamingExecution:
             assert "Copilot Response (streaming):" in captured.out
 
 
+class TestToolNameTranslation:
+    """測試工具名稱轉換邏輯"""
+
+    def test_translate_simple_tool_names_for_claude(self):
+        """測試轉換簡單工具名給 Claude"""
+        config = AgentConfig(
+            name="test",
+            cli=AgentCLI.CLAUDE,
+            agent_dir="agents"
+        )
+        executor = AgentExecutor(config)
+
+        tools = ["write", "read", "bash", "edit"]
+        translated = executor._translate_tool_names(tools)
+
+        assert translated == ["Write", "Read", "Bash", "Edit"]
+
+    def test_translate_tool_names_with_file_patterns_for_claude(self):
+        """測試轉換帶檔案 pattern 的工具名給 Claude"""
+        config = AgentConfig(
+            name="test",
+            cli=AgentCLI.CLAUDE,
+            agent_dir="agents"
+        )
+        executor = AgentExecutor(config)
+
+        tools = [
+            "write",
+            "read",
+            "bash",
+            "edit(/home/user/test.php)"
+        ]
+        translated = executor._translate_tool_names(tools)
+
+        assert translated == [
+            "Write",
+            "Read",
+            "Bash",
+            "Edit(/home/user/test.php)"
+        ]
+
+    def test_translate_tool_names_with_command_patterns_for_claude(self):
+        """測試轉換帶命令 pattern 的工具名給 Claude"""
+        config = AgentConfig(
+            name="test",
+            cli=AgentCLI.CLAUDE,
+            agent_dir="agents"
+        )
+        executor = AgentExecutor(config)
+
+        tools = [
+            "bash(git status)",
+            "read(/path/to/file.txt)"
+        ]
+        translated = executor._translate_tool_names(tools)
+
+        assert translated == [
+            "Bash(git status)",
+            "Read(/path/to/file.txt)"
+        ]
+
+    def test_translate_tool_names_for_gemini(self):
+        """測試轉換工具名給 Gemini"""
+        config = AgentConfig(
+            name="test",
+            cli=AgentCLI.GEMINI,
+            agent_dir="agents"
+        )
+        executor = AgentExecutor(config)
+
+        tools = ["write", "read", "edit"]
+        translated = executor._translate_tool_names(tools)
+
+        assert translated == ["write_file", "read_file", "replace"]
+
+    def test_translate_tool_names_with_patterns_for_gemini(self):
+        """測試轉換帶 pattern 的工具名給 Gemini"""
+        config = AgentConfig(
+            name="test",
+            cli=AgentCLI.GEMINI,
+            agent_dir="agents"
+        )
+        executor = AgentExecutor(config)
+
+        tools = [
+            "edit(/home/user/test.php)",
+            "bash(git status)"
+        ]
+        translated = executor._translate_tool_names(tools)
+
+        assert translated == [
+            "replace(/home/user/test.php)",
+            "bash(git status)"
+        ]
+
+    def test_translate_returns_none_for_empty_tools(self):
+        """測試空工具列表返回 None"""
+        config = AgentConfig(
+            name="test",
+            cli=AgentCLI.CLAUDE,
+            agent_dir="agents"
+        )
+        executor = AgentExecutor(config)
+
+        assert executor._translate_tool_names(None) is None
+        assert executor._translate_tool_names([]) is None
+
+

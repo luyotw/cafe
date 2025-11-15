@@ -723,7 +723,7 @@ def develop(
         None,
         "--user-input",
         help="Additional user instructions or context (non-interactive mode)",
-    ),
+    )
 ) -> None:
     """Run develop phase: Execute development work according to plan.
 
@@ -795,11 +795,14 @@ def develop(
 
         # Parse approve_denied_tools if provided
         approved_denial_indices: List[int] = []
-        if approve_denied_tools:
+        if approve_denied_tools is not None:
             try:
-                approved_denial_indices = [int(idx.strip()) for idx in approve_denied_tools.split(",")]
-            except ValueError:
-                console.print("[red]Error: --approve-denied-tools must be comma-separated integers (e.g., '0,1,3')[/red]")
+                # Ensure it's a string (defensive programming)
+                tools_str = str(approve_denied_tools)
+                approved_denial_indices = [int(idx.strip()) for idx in tools_str.split(",")]
+            except (ValueError, AttributeError) as e:
+                console.print(f"[red]Error: --approve-denied-tools must be comma-separated integers (e.g., '0,1,3'). Got: {approve_denied_tools}[/red]")
+                console.print(f"[dim]Debug: type={type(approve_denied_tools)}, error={e}[/dim]")
                 raise typer.Exit(1)
 
         # Create and execute develop phase
@@ -878,6 +881,26 @@ def dev_alias(
         "-c",
         help="Path to configuration file",
     ),
+    show_prompt: bool = typer.Option(
+        False,
+        "--show-prompt",
+        help="Show the prompt sent to agent",
+    ),
+    interactive: bool = typer.Option(
+        True,
+        "--interactive/--no-interactive",
+        help="Allow interactive prompts (default: True)",
+    ),
+    approve_denied_tools: Optional[str] = typer.Option(
+        None,
+        "--approve-denied-tools",
+        help="Comma-separated indices of permission denials to approve (non-interactive mode)",
+    ),
+    user_input: Optional[str] = typer.Option(
+        None,
+        "--user-input",
+        help="Additional user instructions or context (non-interactive mode)",
+    )
 ) -> None:
     """Alias for 'develop' command."""
     # Call the develop function with all parameters
@@ -887,6 +910,10 @@ def dev_alias(
         issue_id=issue_id,
         dev_agent=dev_agent,
         config_file=config_file,
+        show_prompt=show_prompt,
+        interactive=interactive,
+        approve_denied_tools=approve_denied_tools,
+        user_input=user_input,
     )
 
 
