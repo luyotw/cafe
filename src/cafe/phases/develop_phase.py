@@ -361,7 +361,7 @@ class DevelopPhase(Phase):
 
 {status_code_prompt}
 
-**完成後回傳：CONFIRMED**
+**完成後回傳狀態碼就好，不要做任何總結**
 """
         
         # No review feedback - normal development mode
@@ -386,7 +386,7 @@ class DevelopPhase(Phase):
 
 {status_code_prompt}
 
-**完成後回傳：CONFIRMED**
+**完成後回傳狀態碼就好，不要做任何總結**
 """
         else:
             # Subsequent iterations: refer to history and continue
@@ -431,7 +431,7 @@ class DevelopPhase(Phase):
 
 {status_code_prompt}
 
-**完成後回傳：CONFIRMED**
+**完成後回傳狀態碼就好，不要做任何總結**
 """
 
     def execute(self) -> PhaseResult:
