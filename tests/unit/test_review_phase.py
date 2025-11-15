@@ -102,7 +102,7 @@ class TestSingleIterationExecution:
         agent_manager = MagicMock(spec=AgentManager)
         setup_agent_manager_mock(agent_manager)
         # Review agent approves immediately
-        agent_manager.execute.return_value = ("CAFE_CONFIRMED\nCode looks good!", TokenUsage(), [])
+        agent_manager.execute.return_value = ("CAFE_CONFIRMED\nCode looks good!", TokenUsage(), [], None)
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -135,7 +135,7 @@ class TestSingleIterationExecution:
 
         agent_manager = MagicMock(spec=AgentManager)
         setup_agent_manager_mock(agent_manager)
-        agent_manager.execute.return_value = ("CAFE_NEEDS_CHANGES\n問題 1: 需要修正", TokenUsage(), [])
+        agent_manager.execute.return_value = ("CAFE_NEEDS_CHANGES\n問題 1: 需要修正", TokenUsage(), [], None)
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -164,7 +164,7 @@ class TestSingleIterationExecution:
 
         agent_manager = MagicMock(spec=AgentManager)
         setup_agent_manager_mock(agent_manager)
-        agent_manager.execute.return_value = ("CAFE_NEEDS_CHANGES\n需要修正", TokenUsage(), [])
+        agent_manager.execute.return_value = ("CAFE_NEEDS_CHANGES\n需要修正", TokenUsage(), [], None)
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -222,7 +222,7 @@ class TestDiffChecking:
 
         agent_manager = MagicMock(spec=AgentManager)
         setup_agent_manager_mock(agent_manager)
-        agent_manager.execute.return_value = ("CAFE_CONFIRMED\nCode looks good!", TokenUsage(), [])
+        agent_manager.execute.return_value = ("CAFE_CONFIRMED\nCode looks good!", TokenUsage(), [], None)
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -250,7 +250,7 @@ class TestDiffChecking:
 
         agent_manager = MagicMock(spec=AgentManager)
         setup_agent_manager_mock(agent_manager)
-        agent_manager.execute.return_value = ("CAFE_CONFIRMED\nCode looks good!", TokenUsage(), [])
+        agent_manager.execute.return_value = ("CAFE_CONFIRMED\nCode looks good!", TokenUsage(), [], None)
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -279,7 +279,7 @@ class TestDiffChecking:
 
         agent_manager = MagicMock(spec=AgentManager)
         setup_agent_manager_mock(agent_manager)
-        agent_manager.execute.return_value = ("CAFE_CONFIRMED\nCode looks good!", TokenUsage(), [])
+        agent_manager.execute.return_value = ("CAFE_CONFIRMED\nCode looks good!", TokenUsage(), [], None)
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -313,7 +313,7 @@ class TestAgentSelection:
 
         agent_manager = MagicMock(spec=AgentManager)
         setup_agent_manager_mock(agent_manager)
-        agent_manager.execute.return_value = ("CAFE_CONFIRMED\nCode looks good!", TokenUsage(), [])
+        agent_manager.execute.return_value = ("CAFE_CONFIRMED\nCode looks good!", TokenUsage(), [], None)
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -348,7 +348,7 @@ class TestPromptGeneration:
 
         agent_manager = MagicMock(spec=AgentManager)
         setup_agent_manager_mock(agent_manager)
-        agent_manager.execute.return_value = ("CAFE_CONFIRMED\nCode looks good!", TokenUsage(), [])
+        agent_manager.execute.return_value = ("CAFE_CONFIRMED\nCode looks good!", TokenUsage(), [], None)
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -379,7 +379,7 @@ class TestPromptGeneration:
 
         agent_manager = MagicMock(spec=AgentManager)
         setup_agent_manager_mock(agent_manager)
-        agent_manager.execute.return_value = ("CAFE_CONFIRMED\nCode looks good!", TokenUsage(), [])
+        agent_manager.execute.return_value = ("CAFE_CONFIRMED\nCode looks good!", TokenUsage(), [], None)
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -428,7 +428,7 @@ class TestReviewResultSaving:
 
             agent_manager = MagicMock(spec=AgentManager)
             setup_agent_manager_mock(agent_manager)
-            agent_manager.execute.return_value = ("CAFE_CONFIRMED\nCode looks good!", TokenUsage(), [])
+            agent_manager.execute.return_value = ("CAFE_CONFIRMED\nCode looks good!", TokenUsage(), [], None)
 
             permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -468,7 +468,7 @@ class TestReviewResultSaving:
 
         agent_manager = MagicMock(spec=AgentManager)
         setup_agent_manager_mock(agent_manager)
-        agent_manager.execute.return_value = ("CAFE_CONFIRMED\nCode looks good!", TokenUsage(), [])
+        agent_manager.execute.return_value = ("CAFE_CONFIRMED\nCode looks good!", TokenUsage(), [], None)
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -532,7 +532,7 @@ class TestReviewResultSaving:
 
             agent_manager = MagicMock(spec=AgentManager)
             setup_agent_manager_mock(agent_manager)
-            agent_manager.execute.return_value = ("CAFE_CONFIRMED\nCode looks good!", TokenUsage(), [])
+            agent_manager.execute.return_value = ("CAFE_CONFIRMED\nCode looks good!", TokenUsage(), [], None)
             agent_manager.get_agent.return_value = mock_executor
 
             permission_handler = MagicMock(spec=PermissionHandler)
@@ -608,7 +608,7 @@ class TestReviewResultSaving:
 
             agent_manager = MagicMock(spec=AgentManager)
             setup_agent_manager_mock(agent_manager)
-            agent_manager.execute.return_value = ("CAFE_CONFIRMED\nCode looks good!", TokenUsage(), [])
+            agent_manager.execute.return_value = ("CAFE_CONFIRMED\nCode looks good!", TokenUsage(), [], None)
             agent_manager.get_agent.return_value = mock_executor
 
             permission_handler = MagicMock(spec=PermissionHandler)
@@ -673,7 +673,7 @@ class TestIssueConfigReading:
 
         agent_manager = MagicMock(spec=AgentManager)
         setup_agent_manager_mock(agent_manager)
-        agent_manager.execute.return_value = ("CAFE_CONFIRMED\nLGTM!", TokenUsage(), [])
+        agent_manager.execute.return_value = ("CAFE_CONFIRMED\nLGTM!", TokenUsage(), [], None)
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -727,7 +727,7 @@ class TestReviewPhaseStatus:
 
         agent_manager = MagicMock(spec=AgentManager)
         setup_agent_manager_mock(agent_manager)
-        agent_manager.execute.return_value = ("CAFE_CONFIRMED\nCode looks good!", TokenUsage(), [])
+        agent_manager.execute.return_value = ("CAFE_CONFIRMED\nCode looks good!", TokenUsage(), [], None)
         agent_manager.get_agent.return_value = mock_executor
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -785,7 +785,7 @@ class TestGitHubWorkflow:
 
         agent_manager = MagicMock(spec=AgentManager)
         setup_agent_manager_mock(agent_manager)
-        agent_manager.execute.return_value = ("CAFE_CONFIRMED\nCode looks good!", TokenUsage(), [])
+        agent_manager.execute.return_value = ("CAFE_CONFIRMED\nCode looks good!", TokenUsage(), [], None)
 
         permission_handler = MagicMock(spec=PermissionHandler)
 

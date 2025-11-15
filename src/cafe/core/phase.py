@@ -97,6 +97,7 @@ class Phase(ABC):
         agent_session_id: Optional[str] = None,
         allowed_tools: Optional[List[str]] = None,
         denied_tools: Optional[List[str]] = None,
+        cli_command_args: Optional[List[str]] = None,
         status_code: Optional[PhaseStatusCode] = None,
     ) -> None:
         """Update iteration history with agent response and metadata.
@@ -110,6 +111,7 @@ class Phase(ABC):
             agent_session_id: Agent 的 session ID
             allowed_tools: Agent 可使用的 tools 列表
             denied_tools: Agent 不可使用的 tools 列表
+            cli_command_args: CLI 命令參數 list（除了 prompt）
             status_code: Phase 狀態碼（如 CONFIRMED, NEED_CLARIFICATION）
         """
         # 確保 history_dir 存在
@@ -142,6 +144,7 @@ class Phase(ABC):
         history_data["session_id"] = agent_session_id
         history_data["allowed_tools"] = allowed_tools
         history_data["denied_tools"] = denied_tools
+        history_data["cli_command_args"] = cli_command_args
         history_data["status_code"] = status_code.value if status_code is not None else None
 
         # 儲存更新後的 JSON 檔案
@@ -297,7 +300,7 @@ class Phase(ABC):
                 json.dump(history_data, f, ensure_ascii=False, indent=2)
 
         # 4. 執行 agent
-        response, token_usage, permission_denials = self.agent_manager.execute(
+        response, token_usage, permission_denials, cli_command_args = self.agent_manager.execute(
             agent_name,
             prompt,
             allowed_tools=allowed_tools,
@@ -317,6 +320,7 @@ class Phase(ABC):
                 agent_session_id=agent_session_id,
                 allowed_tools=allowed_tools,
                 denied_tools=denied_tools,
+                cli_command_args=cli_command_args,
                 status_code=no_response_status,
             )
             return response, no_response_status
@@ -339,6 +343,7 @@ class Phase(ABC):
             agent_session_id=agent_session_id,
             allowed_tools=allowed_tools,
             denied_tools=denied_tools,
+            cli_command_args=cli_command_args,
             status_code=status_code,
         )
 

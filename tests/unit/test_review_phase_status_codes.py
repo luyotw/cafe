@@ -21,7 +21,7 @@ class TestReviewPhaseWithStatusCodes:
         requirements_file.write_text("Requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("CAFE_CONFIRMED\nCode looks good!", TokenUsage())
+        agent_manager.execute.return_value = ("CAFE_CONFIRMED\nCode looks good!", TokenUsage(), [], None)
 
         git_ops = MagicMock(spec=GitOperations)
         git_ops.get_diff.return_value = "diff content"
@@ -53,7 +53,7 @@ class TestReviewPhaseWithStatusCodes:
         requirements_file.write_text("Requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("CAFE_NEEDS_CHANGES\n需要修正問題。", TokenUsage())
+        agent_manager.execute.return_value = ("CAFE_NEEDS_CHANGES\n需要修正問題。", TokenUsage(), [], None)
 
         git_ops = MagicMock(spec=GitOperations)
         git_ops.get_diff.return_value = "diff content"
@@ -86,7 +86,7 @@ class TestReviewPhaseWithStatusCodes:
         requirements_file.write_text("Requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("Review result:\nCAFE_CONFIRMED\nAll checks passed.", TokenUsage())
+        agent_manager.execute.return_value = ("Review result:\nCAFE_CONFIRMED\nAll checks passed.", TokenUsage(), [], None)
 
         git_ops = MagicMock(spec=GitOperations)
         git_ops.get_diff.return_value = "diff content"
@@ -117,7 +117,7 @@ class TestReviewPhaseWithStatusCodes:
         requirements_file.write_text("Requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("cafe_confirmed\nLooks good to me!", TokenUsage())
+        agent_manager.execute.return_value = ("cafe_confirmed\nLooks good to me!", TokenUsage(), [], None)
 
         git_ops = MagicMock(spec=GitOperations)
         git_ops.get_diff.return_value = "diff content"

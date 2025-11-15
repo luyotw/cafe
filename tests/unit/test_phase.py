@@ -159,7 +159,7 @@ class TestExecuteAgentIteration:
         mock_agent.config.cli.value = "claude"
         mock_agent.config.session_id = "test_session"
         agent_manager.get_agent.return_value = mock_agent
-        agent_manager.execute.return_value = ("CAFE_CONFIRMED\n需求已清楚", TokenUsage(), [])
+        agent_manager.execute.return_value = ("CAFE_CONFIRMED\n需求已清楚", TokenUsage(), [], None)
 
         phase = TestPhase(agent_manager, history_dir)
 
@@ -211,7 +211,7 @@ class TestExecuteAgentIteration:
         mock_agent.config.cli.value = "copilot"
         mock_agent.config.session_id = "test_session"
         agent_manager.get_agent.return_value = mock_agent
-        agent_manager.execute.return_value = ("", TokenUsage(), [])  # Empty response
+        agent_manager.execute.return_value = ("", TokenUsage(), [], None)  # Empty response
 
         phase = TestPhase(agent_manager, history_dir)
 
@@ -258,7 +258,7 @@ class TestExecuteAgentIteration:
         mock_agent.config.session_id = "test_session"
         agent_manager.get_agent.return_value = mock_agent
         # Response without status code
-        agent_manager.execute.return_value = ("Some response without status code", TokenUsage(), [])
+        agent_manager.execute.return_value = ("Some response without status code", TokenUsage(), [], None)
 
         phase = TestPhase(agent_manager, history_dir)
 
@@ -325,7 +325,7 @@ class TestExecuteAgentIteration:
         mock_agent.config.cli.value = "claude"
         mock_agent.config.session_id = "test_session"
         agent_manager.get_agent.return_value = mock_agent
-        agent_manager.execute.return_value = ("CAFE_CONFIRMED\n測試完成", TokenUsage(), [])
+        agent_manager.execute.return_value = ("CAFE_CONFIRMED\n測試完成", TokenUsage(), [], None)
 
         phase = TestPhase(agent_manager, history_dir)
 
@@ -696,3 +696,88 @@ class TestHandlePreviousPermissionDenials:
 
         # Should use "git --no-pager" as pattern (first two words, lowercase)
         assert approved_tools == ["bash(git --no-pager)"]
+
+
+class TestIterationHistoryCLICommandArgs:
+    """測試 iteration history 記錄實際的 CLI 命令參數"""
+
+    def test_records_cli_command_args_in_iteration_history(self, tmp_path: Path) -> None:
+        """測試記錄實際的 CLI 命令參數到 iteration history"""
+        history_dir = tmp_path / "history"
+        history_dir.mkdir(parents=True)
+
+        class TestPhase(Phase):
+            def __init__(self, agent_manager: MagicMock, history_dir: Path):
+                self.agent_manager = agent_manager
+                self.history_dir = history_dir
+                self.iteration = 1
+
+            def execute(self) -> PhaseResult:
+                return PhaseResult(status=PhaseStatus.COMPLETED)
+
+            def _save_progress(self, status_code: PhaseStatusCode) -> None:
+                pass
+
+        # Mock agent manager
+        agent_manager = MagicMock()
+        mock_agent = MagicMock()
+        mock_agent.config.cli.value = "claude"
+        mock_agent.config.session_id = "test-session-123"
+        agent_manager.get_agent.return_value = mock_agent
+
+        # Mock agent_manager.execute() 返回包含 cli_command_args 的 AgentResponse
+        from cafe.core.types import AgentResponse
+        mock_response = AgentResponse(
+            response="CAFE_CONFIRMED\n完成",
+            token_usage=TokenUsage(),
+            permission_denials=[],
+            cli_command_args=[
+                "--resume", "test-session-123",
+                "--output-format", "stream-json",
+                "--verbose",
+                "--add-dir", ".cafe",
+                "--allowed-tools", '"Write,Read,Edit(/home/user/test.php)"'
+            ]
+        )
+        agent_manager.execute.return_value = (
+            mock_response.response,
+            mock_response.token_usage,
+            mock_response.permission_denials,
+            mock_response.cli_command_args  # 新增返回值
+        )
+
+        phase = TestPhase(agent_manager, history_dir)
+
+        # Execute
+        allowed_tools = ["write", "read", "edit(/home/user/test.php)"]
+        phase._execute_agent_iteration(
+            agent_name="TestAgent",
+            prompt="Test prompt",
+            user_input="",
+            valid_status_codes=[PhaseStatusCode.CONFIRMED],
+            allowed_tools=allowed_tools,
+        )
+
+        # Read saved iteration history
+        iteration_file = history_dir / "iteration_001.json"
+        with open(iteration_file, "r", encoding="utf-8") as f:
+            saved_data = json.load(f)
+
+        # Should record cli_command_args as list (實際的 CLI 參數)
+        assert "cli_command_args" in saved_data
+        cli_args = saved_data["cli_command_args"]
+
+        # Should be a list
+        assert isinstance(cli_args, list)
+
+        # Should include all CLI parameters
+        assert "--resume" in cli_args
+        assert "test-session-123" in cli_args
+        assert "--allowed-tools" in cli_args
+        # allowed-tools 的值必須有雙引號，否則授權無效
+        assert '"Write,Read,Edit(/home/user/test.php)"' in cli_args
+        assert "--output-format" in cli_args
+        assert "stream-json" in cli_args
+        assert "--verbose" in cli_args
+        assert "--add-dir" in cli_args
+        assert ".cafe" in cli_args

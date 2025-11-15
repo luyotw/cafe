@@ -3,7 +3,7 @@
 import json
 import os
 import subprocess
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from cafe.agents.executor import AgentExecutor, AgentExecutionError
 from cafe.core.session import SessionManager
@@ -108,7 +108,7 @@ class AgentManager:
             return None
         return self.agents.get(self.current_agent_name)
 
-    def execute(self, agent_name: str, prompt: str, allowed_tools: Optional[List[str]] = None) -> Tuple[str, TokenUsage, List]:
+    def execute(self, agent_name: str, prompt: str, allowed_tools: Optional[List[str]] = None) -> Tuple[str, TokenUsage, List, Optional[List[str]]]:
         """Execute prompt with specified agent.
 
         Args:
@@ -117,13 +117,13 @@ class AgentManager:
             allowed_tools: List of allowed tools (using Claude naming convention)
 
         Returns:
-            Tuple of (agent's response, token usage, permission denials)
+            Tuple of (agent's response, token usage, permission denials, cli_command_args)
 
         Raises:
             AgentNotFoundError: If agent not found
         """
         executor = self.get_agent(agent_name)
-        
+
         # Show prompt if enabled
         if self.show_prompt:
             print(f"\n{'='*80}")
@@ -131,7 +131,7 @@ class AgentManager:
             print(f"{'='*80}")
             print(prompt)
             print(f"{'='*80}\n")
-        
+
         # Track if we've already retried for session conflict
         retried = False
 
@@ -156,6 +156,7 @@ class AgentManager:
         response = agent_response.response
         token_usage = agent_response.token_usage
         permission_denials = agent_response.permission_denials
+        cli_command_args = agent_response.cli_command_args
 
         # Save session ID if it was created during execution
         if executor.config.session_id:
@@ -170,7 +171,7 @@ class AgentManager:
         self._total_token_usage.cache_read_input_tokens += token_usage.cache_read_input_tokens
         self._total_token_usage.total_cost_usd += token_usage.total_cost_usd
 
-        return response, token_usage, permission_denials
+        return response, token_usage, permission_denials, cli_command_args
 
     def execute_current(self, prompt: str) -> str:
         """Execute prompt with current agent.
