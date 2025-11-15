@@ -1060,6 +1060,124 @@ class TestCLICommandArgsGeneration:
             assert "edit(/test.php)" in agent_response.cli_command_args
 
 
+class TestDefaultEditPermission:
+    """測試預設加入 edit 權限"""
+
+    def test_adds_edit_permission_for_claude(self):
+        """測試 Claude 自動加入 Edit 權限"""
+        config = AgentConfig(name="test", cli=AgentCLI.CLAUDE)
+        executor = AgentExecutor(config)
+
+        # Mock streaming process
+        mock_process = MagicMock()
+        mock_process.stdout.readline.side_effect = [
+            '{"content": "Test"}\n',
+            "",
+        ]
+        mock_process.stderr.read.return_value = ""
+        mock_process.wait.return_value = 0
+
+        with patch("subprocess.run", return_value=MagicMock(stdout='{"session_id": "test"}', returncode=0)), \
+             patch("subprocess.Popen", return_value=mock_process), \
+             patch("sys.platform", "win32"):
+            # Provide tools without 'edit'
+            agent_response = executor.execute("Test", allowed_tools=["read", "write"])
+
+            # Should automatically add Edit
+            assert agent_response.cli_command_args is not None
+            assert "--allowed-tools" in agent_response.cli_command_args
+            allowed_tools_idx = agent_response.cli_command_args.index("--allowed-tools")
+            allowed_tools_value = agent_response.cli_command_args[allowed_tools_idx + 1]
+            # Should contain Read, Write, and Edit (auto-added)
+            assert "Read" in allowed_tools_value
+            assert "Write" in allowed_tools_value
+            assert "Edit" in allowed_tools_value
+
+    def test_does_not_duplicate_edit_permission_for_claude(self):
+        """測試 Claude 不會重複加入 Edit 權限"""
+        config = AgentConfig(name="test", cli=AgentCLI.CLAUDE)
+        executor = AgentExecutor(config)
+
+        # Mock streaming process
+        mock_process = MagicMock()
+        mock_process.stdout.readline.side_effect = [
+            '{"content": "Test"}\n',
+            "",
+        ]
+        mock_process.stderr.read.return_value = ""
+        mock_process.wait.return_value = 0
+
+        with patch("subprocess.run", return_value=MagicMock(stdout='{"session_id": "test"}', returncode=0)), \
+             patch("subprocess.Popen", return_value=mock_process), \
+             patch("sys.platform", "win32"):
+            # Provide tools already including 'edit'
+            agent_response = executor.execute("Test", allowed_tools=["read", "edit", "write"])
+
+            # Should not duplicate Edit
+            assert agent_response.cli_command_args is not None
+            assert "--allowed-tools" in agent_response.cli_command_args
+            allowed_tools_idx = agent_response.cli_command_args.index("--allowed-tools")
+            allowed_tools_value = agent_response.cli_command_args[allowed_tools_idx + 1]
+            # Count occurrences of "Edit"
+            assert allowed_tools_value.count("Edit") == 1
+
+    def test_adds_replace_permission_for_gemini(self):
+        """測試 Gemini 自動加入 replace 權限"""
+        config = AgentConfig(name="test", cli=AgentCLI.GEMINI)
+        executor = AgentExecutor(config)
+
+        # Mock streaming process
+        mock_process = MagicMock()
+        mock_process.stdout.readline.side_effect = [
+            '{"response": "Test"}\n',
+            "",
+        ]
+        mock_process.stderr.read.return_value = ""
+        mock_process.wait.return_value = 0
+
+        with patch("subprocess.Popen", return_value=mock_process), \
+             patch("sys.platform", "win32"):
+            # Provide tools without 'edit'
+            agent_response = executor.execute("Test", allowed_tools=["read", "write"])
+
+            # Should automatically add replace (translated from edit)
+            assert agent_response.cli_command_args is not None
+            assert "--allowed-tools" in agent_response.cli_command_args
+            allowed_tools_idx = agent_response.cli_command_args.index("--allowed-tools")
+            allowed_tools_value = agent_response.cli_command_args[allowed_tools_idx + 1]
+            # Should contain read_file, write_file, and replace (auto-added from edit)
+            assert "read_file" in allowed_tools_value
+            assert "write_file" in allowed_tools_value
+            assert "replace" in allowed_tools_value
+
+    def test_adds_write_permission_for_copilot(self):
+        """測試 Copilot 自動加入 write 權限（對應 edit）"""
+        config = AgentConfig(name="test", cli=AgentCLI.COPILOT)
+        executor = AgentExecutor(config)
+
+        # Mock streaming process
+        mock_process = MagicMock()
+        mock_process.stdout.readline.side_effect = [
+            "Test response\n",
+            "",
+        ]
+        mock_process.stderr.read.return_value = ""
+        mock_process.wait.return_value = 0
+
+        with patch("subprocess.Popen", return_value=mock_process), \
+             patch("pathlib.Path.exists", return_value=False), \
+             patch("sys.platform", "win32"):
+            # Provide tools without 'edit'
+            agent_response = executor.execute("Test", allowed_tools=["read", "bash"])
+
+            # Should automatically add write (translated from edit)
+            # Note: Copilot uses 'write' for both Write and Edit
+            assert agent_response.cli_command_args is not None
+            # Count --allow-tool flags (should have read, bash, and write from edit)
+            allow_tool_count = agent_response.cli_command_args.count("--allow-tool")
+            assert allow_tool_count == 3  # read, bash, write(from edit)
+
+
 class TestToolNameTranslation:
     """測試工具名稱轉換邏輯"""
 
