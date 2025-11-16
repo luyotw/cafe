@@ -32,7 +32,7 @@ class AgentExecutor:
         },
         AgentCLI.GEMINI: {
             # Gemini tool name translations
-            "bash": "bash",
+            "bash": "run_shell_command",
             "read": "read_file",
             "write": "write_file",
             "edit": "replace",
