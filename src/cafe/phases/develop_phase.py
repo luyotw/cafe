@@ -523,8 +523,14 @@ class DevelopPhase(Phase):
                     },
                 )
 
-            # Merge approved tools with base tools
-            allowed_tools = base_allowed_tools + approved_tools_from_denials
+            # Inherit previously approved tools from last iteration
+            prev_allowed_tools = []
+            if prev_data and prev_data.get("allowed_tools"):
+                prev_allowed_tools = prev_data.get("allowed_tools", [])
+
+            # Merge: base tools + previous iteration's tools + newly approved tools from denials
+            # Use set to avoid duplicates, then convert back to list
+            allowed_tools = list(set(base_allowed_tools + prev_allowed_tools + approved_tools_from_denials))
 
             # If user provided additional input about permissions, append to current_user_input
             if permission_user_input:

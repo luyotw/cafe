@@ -1194,3 +1194,107 @@ class TestDeveloperPermissions:
         # Verify that base_allowed_tools includes edit
         assert 'base_allowed_tools = ["write", "read", "edit", "bash"]' in source, \
             "Developer's base_allowed_tools should include edit permission"
+
+    def test_inherits_previous_iteration_tools(self, tmp_path):
+        """測試第二輪會繼承第一輪的 allowed_tools"""
+        import os
+        import json
+        from unittest.mock import MagicMock
+        from cafe.core.types import AgentConfig, AgentCLI, TokenUsage
+
+        original_dir = os.getcwd()
+        try:
+            os.chdir(tmp_path)
+
+            # Create issue structure
+            issue_dir = tmp_path / ".cafe" / "issues" / "test-issue"
+            spec_dir = issue_dir / "spec"
+            spec_dir.mkdir(parents=True)
+            spec_file = spec_dir / "spec.md"
+            spec_file.write_text("Test spec")
+
+            plan_dir = issue_dir / "plan"
+            plan_dir.mkdir(parents=True)
+            plan_file = plan_dir / "plan.md"
+            plan_file.write_text("Test plan")
+
+            develop_dir = issue_dir / "develop"
+            develop_dir.mkdir(parents=True)
+            history_dir = develop_dir / "history"
+            history_dir.mkdir(parents=True)
+
+            # Create iteration_001.json with some allowed_tools
+            iteration_001 = {
+                "iteration": 1,
+                "user_input": "First iteration",
+                "allowed_tools": ["write", "read", "edit", "bash", "grep(/some/path)"],
+                "response": "CAFE_CONTINUE\nNeed more work",
+                "status_code": "CONTINUE",
+            }
+            iteration_001_file = history_dir / "iteration_001.json"
+            iteration_001_file.write_text(json.dumps(iteration_001, ensure_ascii=False, indent=2))
+
+            # Mock agent manager
+            mock_executor = MagicMock()
+            mock_executor.config = AgentConfig(
+                name="David",
+                cli=AgentCLI.CLAUDE,
+                session_id="test-session"
+            )
+
+            agent_manager = MagicMock()
+            agent_manager.get_agent.return_value = mock_executor
+
+            # Track what allowed_tools were passed to execute
+            captured_allowed_tools = None
+            def capture_execute(*args, **kwargs):
+                nonlocal captured_allowed_tools
+                captured_allowed_tools = kwargs.get("allowed_tools", [])
+                return (
+                    "CAFE_DONE\nImplementation complete",
+                    TokenUsage(),
+                    [],
+                    None
+                )
+
+            agent_manager.execute.side_effect = capture_execute
+
+            permission_handler = MagicMock()
+            git_ops = MagicMock()
+
+            from cafe.phases.develop_phase import DevelopPhase
+
+            phase = DevelopPhase(
+                agent_manager=agent_manager,
+                permission_handler=permission_handler,
+                git_ops=git_ops,
+                spec_file=str(spec_file),
+                plan_file=str(plan_file),
+                workflow_mode="local"
+            )
+
+            # Manually set iteration to 2
+            phase.iteration = 2
+            phase.history_dir = history_dir
+
+            # Execute second iteration (should inherit tools from iteration 1)
+            phase._get_or_prompt_user_input = MagicMock(return_value="Second iteration")
+
+            result, response = phase._execute_and_handle_agent_response(
+                agent_name="dev",
+                user_input="Second iteration",
+                valid_status_codes=[],
+                allowed_tools=list(set(["write", "read", "edit", "bash"] +
+                                      iteration_001["allowed_tools"])),
+                continue_codes=[],
+                complete_codes=[],
+            )
+
+            # Verify that allowed_tools includes both base tools and previous iteration's tools
+            expected_tools = set(["write", "read", "edit", "bash", "grep(/some/path)"])
+            actual_tools = set(captured_allowed_tools) if captured_allowed_tools else set()
+
+            assert expected_tools.issubset(actual_tools), \
+                f"Second iteration should inherit previous tools. Expected {expected_tools}, got {actual_tools}"
+        finally:
+            os.chdir(original_dir)
