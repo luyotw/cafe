@@ -155,6 +155,53 @@ class TestReviewIterationNumbering:
         assert "review_001.md" in prompt
         assert ".cafe/issues/test-review-path/review/review_001.md" in prompt
 
+    def test_prompt_contains_file_paths_not_content(self, tmp_path: Path) -> None:
+        """測試 prompt 只包含檔案路徑，不包含完整內容"""
+        issue_name = "test-prompt-paths"
+        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
+        spec_file.write_text("這是很長的需求內容" * 100)
+
+        plan_file = spec_file.parent.parent / "plan" / "plan.md"
+        plan_file.parent.mkdir(parents=True, exist_ok=True)
+        plan_file.write_text("這是很長的計畫內容" * 100)
+
+        agent_manager = MagicMock(spec=AgentManager)
+        setup_agent_manager_mock(agent_manager)
+        agent_manager.execute.return_value = (
+            "CAFE_CONFIRMED\nReview done",
+            TokenUsage(),
+            [],
+            None
+        )
+
+        permission_handler = MagicMock(spec=PermissionHandler)
+        git_ops = MagicMock(spec=GitOperations)
+        git_ops.get_diff.return_value = "diff content"
+
+        phase = ReviewPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            git_ops=git_ops,
+            spec_file=str(spec_file),
+            plan_file=str(plan_file),
+            workflow_mode=WorkflowMode.LOCAL,
+        )
+
+        result = phase.execute()
+
+        # Get the prompt argument
+        call_args = agent_manager.execute.call_args
+        prompt = call_args[0][1]
+
+        # Should contain file paths
+        assert str(spec_file) in prompt
+        assert str(plan_file) in prompt
+
+        # Should NOT contain the full content
+        assert "這是很長的需求內容" not in prompt
+        assert "這是很長的計畫內容" not in prompt
+
 
 class TestReviewPhaseBasics:
     """Test basic ReviewPhase functionality."""

@@ -267,14 +267,25 @@ class ReviewPhase(Phase):
             json.dump(progress.to_dict(), f, ensure_ascii=False, indent=2)
 
     def _save_latest_review(self, review_response: str) -> None:
-        """Save latest review result to review.md.
+        """Save latest review result to review.md (for backward compatibility).
+
+        Note: Since reviewer now writes to review_XXX.md directly,
+        this method is kept for backward compatibility but should not
+        overwrite agent-generated content.
 
         Args:
             review_response: Review response from agent
         """
+        # Agent now writes to review_XXX.md directly via Write tool
+        # We keep review.md as a fallback/compatibility layer
+        # Only write if it doesn't exist (avoid overwriting agent's work)
         review_dir = self.history_dir.parent
         result_file = review_dir / "review.md"
-        result_file.write_text(review_response)
+
+        # Only create review.md if it doesn't exist
+        # (this preserves any content agent wrote, or creates a simple status file)
+        if not result_file.exists():
+            result_file.write_text(review_response)
 
     def _check_if_develop_is_newer(self) -> bool:
         """檢查 develop phase 的時間戳記是否比上次 review 更新。
@@ -456,21 +467,9 @@ class ReviewPhase(Phase):
         if self.workflow_mode == WorkflowMode.GITHUB:
             return f"請用 `gh issue view {self.issue_id}` 查看 Issue 內容（包含需求與實作分析）。"
         else:
-            sections = []
-            
-            # Add spec
-            spec_path = Path(self.spec_file)
-            if spec_path.exists():
-                sections.append(f"**需求規格 (Spec):**\n---\n{spec_path.read_text()}\n---")
-            else:
-                sections.append(f"**需求規格 (Spec):** 請參考 {self.spec_file}")
-            
-            # Add plan
-            plan_path = Path(self.plan_file)
-            if plan_path.exists():
-                sections.append(f"**實作計畫 (Plan):**\n---\n{plan_path.read_text()}\n---")
-            else:
-                sections.append(f"**實作計畫 (Plan):** 請參考 {self.plan_file}")
-            
-            return "\n\n".join(sections)
+            # 只提供檔案路徑，讓 agent 自己去讀取
+            # 避免 prompt 過長
+            return f"""請閱讀以下檔案來了解需求與實作計畫：
+- 需求規格 (Spec): {self.spec_file}
+- 實作計畫 (Plan): {self.plan_file}"""
 
