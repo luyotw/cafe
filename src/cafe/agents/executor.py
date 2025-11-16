@@ -113,13 +113,6 @@ class AgentExecutor:
         Raises:
             AgentExecutionError: If agent execution fails
         """
-        # Add default edit permission if allowed_tools is provided
-        # (edit is required for basic file operations)
-        if allowed_tools is not None:
-            # Use lowercase 'edit' as it follows Claude convention (will be translated later)
-            if 'edit' not in allowed_tools:
-                allowed_tools = allowed_tools + ['edit']
-
         # Translate tool names to the appropriate CLI convention
         translated_tools = self._translate_tool_names(allowed_tools)
 

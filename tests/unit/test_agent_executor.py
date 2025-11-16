@@ -1061,10 +1061,10 @@ class TestCLICommandArgsGeneration:
 
 
 class TestDefaultEditPermission:
-    """測試預設加入 edit 權限"""
+    """測試 edit 權限不會自動加入（phases 需要明確指定）"""
 
-    def test_adds_edit_permission_for_claude(self):
-        """測試 Claude 自動加入 Edit 權限"""
+    def test_does_not_add_edit_permission_for_claude(self):
+        """測試 Claude 不會自動加入 Edit 權限"""
         config = AgentConfig(name="test", cli=AgentCLI.CLAUDE)
         executor = AgentExecutor(config)
 
@@ -1083,18 +1083,18 @@ class TestDefaultEditPermission:
             # Provide tools without 'edit'
             agent_response = executor.execute("Test", allowed_tools=["read", "write"])
 
-            # Should automatically add Edit
+            # Should NOT automatically add Edit
             assert agent_response.cli_command_args is not None
             assert "--allowed-tools" in agent_response.cli_command_args
             allowed_tools_idx = agent_response.cli_command_args.index("--allowed-tools")
             allowed_tools_value = agent_response.cli_command_args[allowed_tools_idx + 1]
-            # Should contain Read, Write, and Edit (auto-added)
+            # Should only contain Read and Write
             assert "Read" in allowed_tools_value
             assert "Write" in allowed_tools_value
-            assert "Edit" in allowed_tools_value
+            assert "Edit" not in allowed_tools_value
 
-    def test_does_not_duplicate_edit_permission_for_claude(self):
-        """測試 Claude 不會重複加入 Edit 權限"""
+    def test_respects_explicit_edit_permission_for_claude(self):
+        """測試 Claude 會保留明確指定的 Edit 權限"""
         config = AgentConfig(name="test", cli=AgentCLI.CLAUDE)
         executor = AgentExecutor(config)
 
@@ -1110,19 +1110,23 @@ class TestDefaultEditPermission:
         with patch("subprocess.run", return_value=MagicMock(stdout='{"session_id": "test"}', returncode=0)), \
              patch("subprocess.Popen", return_value=mock_process), \
              patch("sys.platform", "win32"):
-            # Provide tools already including 'edit'
+            # Explicitly provide edit permission
             agent_response = executor.execute("Test", allowed_tools=["read", "edit", "write"])
 
-            # Should not duplicate Edit
+            # Should keep Edit as specified
             assert agent_response.cli_command_args is not None
             assert "--allowed-tools" in agent_response.cli_command_args
             allowed_tools_idx = agent_response.cli_command_args.index("--allowed-tools")
             allowed_tools_value = agent_response.cli_command_args[allowed_tools_idx + 1]
-            # Count occurrences of "Edit"
+            # Should contain Read, Write, and Edit
+            assert "Read" in allowed_tools_value
+            assert "Write" in allowed_tools_value
+            assert "Edit" in allowed_tools_value
+            # Count occurrences of "Edit" - should be exactly 1
             assert allowed_tools_value.count("Edit") == 1
 
-    def test_adds_replace_permission_for_gemini(self):
-        """測試 Gemini 自動加入 replace 權限"""
+    def test_does_not_add_replace_permission_for_gemini(self):
+        """測試 Gemini 不會自動加入 replace 權限"""
         config = AgentConfig(name="test", cli=AgentCLI.GEMINI)
         executor = AgentExecutor(config)
 
@@ -1140,18 +1144,18 @@ class TestDefaultEditPermission:
             # Provide tools without 'edit'
             agent_response = executor.execute("Test", allowed_tools=["read", "write"])
 
-            # Should automatically add replace (translated from edit)
+            # Should NOT automatically add replace
             assert agent_response.cli_command_args is not None
             assert "--allowed-tools" in agent_response.cli_command_args
             allowed_tools_idx = agent_response.cli_command_args.index("--allowed-tools")
             allowed_tools_value = agent_response.cli_command_args[allowed_tools_idx + 1]
-            # Should contain read_file, write_file, and replace (auto-added from edit)
+            # Should only contain read_file and write_file
             assert "read_file" in allowed_tools_value
             assert "write_file" in allowed_tools_value
-            assert "replace" in allowed_tools_value
+            assert "replace" not in allowed_tools_value
 
-    def test_adds_write_permission_for_copilot(self):
-        """測試 Copilot 自動加入 write 權限（對應 edit）"""
+    def test_does_not_add_write_permission_for_copilot(self):
+        """測試 Copilot 不會自動加入額外的 write 權限"""
         config = AgentConfig(name="test", cli=AgentCLI.COPILOT)
         executor = AgentExecutor(config)
 
@@ -1170,12 +1174,11 @@ class TestDefaultEditPermission:
             # Provide tools without 'edit'
             agent_response = executor.execute("Test", allowed_tools=["read", "bash"])
 
-            # Should automatically add write (translated from edit)
-            # Note: Copilot uses 'write' for both Write and Edit
+            # Should NOT automatically add write
             assert agent_response.cli_command_args is not None
-            # Count --allow-tool flags (should have read, bash, and write from edit)
+            # Count --allow-tool flags (should only have read and bash)
             allow_tool_count = agent_response.cli_command_args.count("--allow-tool")
-            assert allow_tool_count == 3  # read, bash, write(from edit)
+            assert allow_tool_count == 2  # read, bash only
 
 
 class TestToolNameTranslation:
