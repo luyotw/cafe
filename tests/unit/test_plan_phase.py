@@ -1726,3 +1726,59 @@ class TestExecuteAndHandleAgentResponse:
         assert result is not None
         assert result.status == PhaseStatus.IN_PROGRESS
         assert "No status code found" in result.message
+
+
+class TestPlanPhaseFilePermissions:
+    """測試 PlanPhase 的檔案權限設定"""
+
+    def test_uses_precise_file_permissions_for_plan_file(self, tmp_path: Path) -> None:
+        """測試使用精細的檔案路徑授權 (write/edit plan.md)"""
+        # Setup
+        spec_file = tmp_path / ".cafe" / "issues" / "test-issue" / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
+        spec_file.write_text("# Requirements\n\nSome requirements")
+
+        # Create plan.md with dev guide section
+        plan_file = spec_file.parent.parent / "plan" / "plan.md"
+        plan_file.parent.mkdir(parents=True, exist_ok=True)
+        plan_file.write_text("## 開發指南\n\nDevelopment guide here")
+
+        agent_manager = MagicMock(spec=AgentManager)
+        agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n完成", TokenUsage(), [], None)
+        agent_manager.get_total_token_usage.return_value = TokenUsage()
+        setup_agent_manager_mocks(agent_manager)
+
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        phase = PlanPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            spec_file=str(spec_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            issue_name="test-issue",
+            interactive=False,
+            user_input="confirm",
+        )
+
+        # Execute
+        result = phase.execute()
+
+        # Verify allowed_tools includes precise file paths
+        assert agent_manager.execute.called
+        call_kwargs = agent_manager.execute.call_args
+        allowed_tools = call_kwargs[1].get("allowed_tools")
+
+        # Should have read, write(plan.md), edit(plan.md)
+        assert "read" in allowed_tools
+        # Check for write and edit with plan file path
+        write_tools = [t for t in allowed_tools if t.startswith("write(")]
+        edit_tools = [t for t in allowed_tools if t.startswith("edit(")]
+
+        assert len(write_tools) >= 1, "Should have at least one write permission"
+        assert len(edit_tools) >= 1, "Should have at least one edit permission"
+
+        # Verify the paths point to plan.md
+        assert any("plan.md" in tool for tool in write_tools), \
+            f"Write permission should include plan.md path, got: {write_tools}"
+        assert any("plan.md" in tool for tool in edit_tools), \
+            f"Edit permission should include plan.md path, got: {edit_tools}"

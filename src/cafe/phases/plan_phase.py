@@ -153,8 +153,25 @@ class PlanPhase(Phase):
                 # Otherwise, it's the user input string
                 current_user_input = result_or_input
 
+                # Prepare allowed tools with write/edit permission for plan file
+                plan_file_path = self.history_dir.parent / "plan.md"
+
+                # Convert to project-relative path (git ignore format: / prefix)
+                import os
+                project_root = Path(os.getcwd())
+                try:
+                    relative_plan_path = plan_file_path.relative_to(project_root)
+                    plan_file_pattern = f"/{relative_plan_path}"
+                except ValueError:
+                    # If path is not relative to cwd, use absolute path
+                    plan_file_pattern = str(plan_file_path)
+
                 # Merge base tools with previous iteration's tools (if any)
-                base_allowed_tools = ["write", "read", "edit"]
+                base_allowed_tools = [
+                    "read",
+                    f"write({plan_file_pattern})",
+                    f"edit({plan_file_pattern})",
+                ]
                 allowed_tools = self._merge_allowed_tools(base_allowed_tools)
 
                 # Execute full agent interaction cycle (generate prompt, execute, handle status)

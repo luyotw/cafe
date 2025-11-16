@@ -790,5 +790,55 @@ class TestInterruptedIterationResume:
         assert "CAFE_CONFIRMED" in iteration2_data["response"]
 
 
+class TestSpecPhaseFilePermissions:
+    """測試 SpecPhase 的檔案權限設定"""
+
+    def test_uses_precise_file_permissions_for_spec_file(self, tmp_path: Path) -> None:
+        """測試使用精細的檔案路徑授權 (write/edit spec.md)"""
+        # Setup
+        spec_file = tmp_path / ".cafe" / "issues" / "test-issue" / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
+        spec_file.write_text("Test spec")
+
+        agent_manager = MagicMock(spec=AgentManager)
+        agent_manager.execute.return_value = ("CAFE_CONFIRMED\n完成", TokenUsage(), [], None)
+        agent_manager.get_total_token_usage.return_value = TokenUsage()
+        setup_agent_manager_mocks(agent_manager)
+
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        phase = SpecPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            spec_file=str(spec_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            interactive=False,
+        )
+
+        # Execute
+        result = phase.execute()
+
+        # Verify allowed_tools includes precise file paths
+        assert agent_manager.execute.called
+        call_kwargs = agent_manager.execute.call_args
+        allowed_tools = call_kwargs[1].get("allowed_tools")
+
+        # Should have read, write(spec.md), edit(spec.md)
+        assert "read" in allowed_tools
+        # Check for write and edit with spec file path
+        write_tools = [t for t in allowed_tools if t.startswith("write(")]
+        edit_tools = [t for t in allowed_tools if t.startswith("edit(")]
+
+        assert len(write_tools) >= 1, "Should have at least one write permission"
+        assert len(edit_tools) >= 1, "Should have at least one edit permission"
+
+        # Verify the paths point to spec.md
+        spec_path_str = str(spec_file)
+        assert any(spec_path_str in tool or "spec.md" in tool for tool in write_tools), \
+            f"Write permission should include spec.md path, got: {write_tools}"
+        assert any(spec_path_str in tool or "spec.md" in tool for tool in edit_tools), \
+            f"Edit permission should include spec.md path, got: {edit_tools}"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
