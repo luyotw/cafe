@@ -98,7 +98,9 @@ class ReviewPhase(Phase):
                 review_file_pattern = str(review_file_path)
 
             allowed_tools = [
-                "bash(git --no-pager *)",  # Allow git commands with --no-pager (log, diff, show, etc.)
+                "bash(git --no-pager log *)",   # View commit history and messages
+                "bash(git --no-pager diff *)",  # View code changes
+                "bash(git --no-pager show *)",  # View specific commit details
                 f"write({review_file_pattern})",  # Allow writing to specific review file
             ]
 
