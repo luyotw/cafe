@@ -588,9 +588,9 @@ class TestReviewResultSaving:
             assert history_data["session_id"] == "test-session-123"
             # ReviewPhase allows read, specific git commands, and write for review file
             assert "read" in history_data["allowed_tools"]
-            assert "bash(git log *)" in history_data["allowed_tools"]
-            assert "bash(git diff *)" in history_data["allowed_tools"]
-            assert "bash(git show *)" in history_data["allowed_tools"]
+            assert "bash(git log)" in history_data["allowed_tools"]
+            assert "bash(git diff)" in history_data["allowed_tools"]
+            assert "bash(git show)" in history_data["allowed_tools"]
             assert any("write(/.cafe/issues/myissue/review/review_" in tool for tool in history_data["allowed_tools"])
             assert history_data["denied_tools"] is None  # Default when not specified
             # ReviewPhase should NOT allow edit/replace - agent should only write new file, not modify existing ones

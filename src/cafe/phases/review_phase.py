@@ -99,9 +99,9 @@ class ReviewPhase(Phase):
 
             allowed_tools = [
                 "read",                         # Read spec and plan files
-                "bash(git log *)",              # View commit history and messages
-                "bash(git diff *)",             # View code changes
-                "bash(git show *)",             # View specific commit details
+                "bash(git log)",                # View commit history and messages
+                "bash(git diff)",               # View code changes
+                "bash(git show)",               # View specific commit details
                 f"write({review_file_pattern})",  # Allow writing to specific review file
             ]
 
