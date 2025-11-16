@@ -104,14 +104,26 @@ class DevelopPhase(Phase):
         return plan_path.exists()
 
     def _get_review_file_path(self) -> Path:
-        """取得 review.md 的完整路徑.
+        """取得 review 檔案的完整路徑.
+
+        優先返回最新的 review_XXX.md 檔案。如果沒有編號檔案，則 fallback 到 review.md（向後兼容）。
 
         Returns:
-            review.md 的 Path 物件
+            review 檔案的 Path 物件
         """
         spec_path = Path(self.spec_file)
         issue_dir = spec_path.parent.parent  # .cafe/issues/{issue_name}
-        return issue_dir / "review" / "review.md"
+        review_dir = issue_dir / "review"
+
+        # Find all review_XXX.md files
+        if review_dir.exists():
+            numbered_reviews = sorted(review_dir.glob("review_*.md"))
+            if numbered_reviews:
+                # Return the latest numbered review file
+                return numbered_reviews[-1]
+
+        # Fallback to review.md for backward compatibility
+        return review_dir / "review.md"
 
     def _check_review_feedback_exists(self) -> bool:
         """檢查是否存在 review feedback.
@@ -356,7 +368,7 @@ class DevelopPhase(Phase):
 1. **首先閱讀** {review_file_path}，了解所有需要修正的問題
 2. 根據 review feedback 逐一修正問題
 3. 如果需要，可參考 {self.spec_file} 和 {self.plan_file}
-4. 使用清晰的 commit message 說明修正內容
+4. 嚴格按照既有的 commit message 風格撰寫 commit 訊息，可分多次 commit
 5. 完成所有修正後回傳狀態碼
 
 {status_code_prompt}

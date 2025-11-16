@@ -555,8 +555,58 @@ class TestBranchManagement:
 class TestReviewFeedbackDetection:
     """Test review feedback detection methods."""
 
-    def test_get_review_file_path(self) -> None:
-        """測試路徑生成正確性"""
+    def test_get_review_file_path_returns_latest_numbered_file(self, tmp_path: Path) -> None:
+        """測試當有多個 review_XXX.md 檔案時，返回最新的"""
+        # Create multiple review files
+        review_dir = tmp_path / ".cafe" / "issues" / "test-issue" / "review"
+        review_dir.mkdir(parents=True)
+        (review_dir / "review_001.md").write_text("First review")
+        (review_dir / "review_002.md").write_text("Second review")
+        (review_dir / "review_003.md").write_text("Latest review")
+
+        agent_manager = MagicMock(spec=AgentManager)
+        permission_handler = MagicMock(spec=PermissionHandler)
+        git_ops = MagicMock(spec=GitOperations)
+
+        phase = DevelopPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            git_ops=git_ops,
+            spec_file=str(tmp_path / ".cafe" / "issues" / "test-issue" / "spec" / "spec.md"),
+            plan_file=str(tmp_path / ".cafe" / "issues" / "test-issue" / "plan" / "plan.md"),
+            workflow_mode=WorkflowMode.LOCAL,
+        )
+
+        review_path = phase._get_review_file_path()
+        # Should return the latest numbered review file
+        assert review_path == tmp_path / ".cafe" / "issues" / "test-issue" / "review" / "review_003.md"
+
+    def test_get_review_file_path_fallback_to_review_md(self, tmp_path: Path) -> None:
+        """測試當沒有 review_XXX.md 時，返回 review.md（向後兼容）"""
+        # Create only review.md
+        review_dir = tmp_path / ".cafe" / "issues" / "test-issue" / "review"
+        review_dir.mkdir(parents=True)
+        (review_dir / "review.md").write_text("Old style review")
+
+        agent_manager = MagicMock(spec=AgentManager)
+        permission_handler = MagicMock(spec=PermissionHandler)
+        git_ops = MagicMock(spec=GitOperations)
+
+        phase = DevelopPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            git_ops=git_ops,
+            spec_file=str(tmp_path / ".cafe" / "issues" / "test-issue" / "spec" / "spec.md"),
+            plan_file=str(tmp_path / ".cafe" / "issues" / "test-issue" / "plan" / "plan.md"),
+            workflow_mode=WorkflowMode.LOCAL,
+        )
+
+        review_path = phase._get_review_file_path()
+        # Should fallback to review.md
+        assert review_path == tmp_path / ".cafe" / "issues" / "test-issue" / "review" / "review.md"
+
+    def test_get_review_file_path_no_review_files(self) -> None:
+        """測試沒有任何 review 檔案時的路徑"""
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
         git_ops = MagicMock(spec=GitOperations)
@@ -571,6 +621,7 @@ class TestReviewFeedbackDetection:
         )
 
         review_path = phase._get_review_file_path()
+        # Should default to review.md when no files exist
         assert review_path == Path(".cafe/issues/test-issue/review/review.md")
 
     def test_check_review_feedback_exists_true(self, tmp_path: Path) -> None:
