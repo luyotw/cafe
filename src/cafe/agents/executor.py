@@ -414,6 +414,30 @@ class AgentExecutor:
                 f"Failed to parse session creation response: {e}"
             ) from e
 
+    def _ensure_geminiignore(self) -> None:
+        """Ensure .geminiignore file exists with proper configuration.
+
+        Gemini CLI needs .geminiignore to exclude .cafe directory from indexing.
+        """
+        from pathlib import Path
+
+        geminiignore_path = Path(".geminiignore")
+        required_pattern = "!/.cafe"
+
+        # Check if file exists and has the required pattern
+        if geminiignore_path.exists():
+            content = geminiignore_path.read_text()
+            if required_pattern in content:
+                return  # Already configured correctly
+            # File exists but missing pattern - append it
+            with open(geminiignore_path, "a") as f:
+                if not content.endswith("\n"):
+                    f.write("\n")
+                f.write(f"{required_pattern}\n")
+        else:
+            # Create new .geminiignore file
+            geminiignore_path.write_text(f"{required_pattern}\n")
+
     def _execute_gemini(self, prompt: str, allowed_tools: Optional[List[str]] = None) -> AgentResponse:
         """Execute Gemini agent with streaming output.
 
@@ -424,6 +448,9 @@ class AgentExecutor:
         Returns:
             AgentResponse with response text, token usage, and permission denials
         """
+        # Ensure .geminiignore exists with proper configuration
+        self._ensure_geminiignore()
+
         # Build command
         cmd = ["gemini", prompt]
 

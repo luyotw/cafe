@@ -1289,3 +1289,77 @@ class TestToolNameTranslation:
         assert executor._translate_tool_names([]) is None
 
 
+class TestGeminiIgnoreSetup:
+    """測試 Gemini .geminiignore 自動設定"""
+
+    def test_creates_geminiignore_if_not_exists(self, tmp_path):
+        """測試不存在時建立 .geminiignore"""
+        import os
+        original_cwd = os.getcwd()
+        try:
+            os.chdir(tmp_path)
+
+            config = AgentConfig(name="test", cli=AgentCLI.GEMINI)
+            executor = AgentExecutor(config)
+
+            # Should not exist initially
+            geminiignore = tmp_path / ".geminiignore"
+            assert not geminiignore.exists()
+
+            # Call ensure method
+            executor._ensure_geminiignore()
+
+            # Should now exist with correct content
+            assert geminiignore.exists()
+            content = geminiignore.read_text()
+            assert "!/.cafe" in content
+        finally:
+            os.chdir(original_cwd)
+
+    def test_appends_pattern_if_missing(self, tmp_path):
+        """測試檔案存在但缺少 pattern 時追加"""
+        import os
+        original_cwd = os.getcwd()
+        try:
+            os.chdir(tmp_path)
+
+            # Create existing .geminiignore without the required pattern
+            geminiignore = tmp_path / ".geminiignore"
+            geminiignore.write_text("*.log\n*.tmp\n")
+
+            config = AgentConfig(name="test", cli=AgentCLI.GEMINI)
+            executor = AgentExecutor(config)
+
+            executor._ensure_geminiignore()
+
+            # Should append the pattern
+            content = geminiignore.read_text()
+            assert "*.log" in content
+            assert "*.tmp" in content
+            assert "!/.cafe" in content
+        finally:
+            os.chdir(original_cwd)
+
+    def test_does_nothing_if_already_configured(self, tmp_path):
+        """測試已正確配置時不修改"""
+        import os
+        original_cwd = os.getcwd()
+        try:
+            os.chdir(tmp_path)
+
+            # Create .geminiignore with required pattern
+            geminiignore = tmp_path / ".geminiignore"
+            original_content = "*.log\n!/.cafe\n*.tmp\n"
+            geminiignore.write_text(original_content)
+
+            config = AgentConfig(name="test", cli=AgentCLI.GEMINI)
+            executor = AgentExecutor(config)
+
+            executor._ensure_geminiignore()
+
+            # Content should remain unchanged
+            assert geminiignore.read_text() == original_content
+        finally:
+            os.chdir(original_cwd)
+
+
