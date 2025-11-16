@@ -586,10 +586,11 @@ class TestReviewResultSaving:
             # Verify values
             assert history_data["cli"] == "copilot"
             assert history_data["session_id"] == "test-session-123"
-            # ReviewPhase allows specific git commands and write for review file
-            assert "bash(git --no-pager log *)" in history_data["allowed_tools"]
-            assert "bash(git --no-pager diff *)" in history_data["allowed_tools"]
-            assert "bash(git --no-pager show *)" in history_data["allowed_tools"]
+            # ReviewPhase allows read, specific git commands, and write for review file
+            assert "read" in history_data["allowed_tools"]
+            assert "bash(git log *)" in history_data["allowed_tools"]
+            assert "bash(git diff *)" in history_data["allowed_tools"]
+            assert "bash(git show *)" in history_data["allowed_tools"]
             assert any("write(/.cafe/issues/myissue/review/review_" in tool for tool in history_data["allowed_tools"])
             assert history_data["denied_tools"] is None  # Default when not specified
             # ReviewPhase should NOT allow edit/replace - agent should only write new file, not modify existing ones
@@ -668,9 +669,10 @@ class TestReviewResultSaving:
             prompt = history_data["prompt"]
             assert "你是資深軟體工程師 Richard" in prompt
             assert "程式碼審查" in prompt
-            # Prompt should instruct agent to use git commands, not include diff directly
-            assert "git --no-pager diff" in prompt
-            assert "查看程式碼變更" in prompt
+            # Prompt should list available git commands, not include diff directly
+            assert "git log" in prompt
+            assert "git diff" in prompt
+            assert "git show" in prompt
         finally:
             os.chdir(original_dir)
 
@@ -725,10 +727,10 @@ class TestIssueConfigReading:
             # Verify base_branch was read from config and used in prompt
             assert phase.base_branch == "develop"
 
-            # Check that prompt includes correct git diff command with base branch from config
+            # Check that prompt includes base branch reference
             call_args = agent_manager.execute.call_args
             prompt = call_args[0][1]
-            assert "git --no-pager diff develop" in prompt
+            assert "develop" in prompt  # base_branch should be mentioned in prompt
         finally:
             os.chdir(original_cwd)
 

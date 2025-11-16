@@ -98,9 +98,10 @@ class ReviewPhase(Phase):
                 review_file_pattern = str(review_file_path)
 
             allowed_tools = [
-                "bash(git --no-pager log *)",   # View commit history and messages
-                "bash(git --no-pager diff *)",  # View code changes
-                "bash(git --no-pager show *)",  # View specific commit details
+                "read",                         # Read spec and plan files
+                "bash(git log *)",              # View commit history and messages
+                "bash(git diff *)",             # View code changes
+                "bash(git show *)",             # View specific commit details
                 f"write({review_file_pattern})",  # Allow writing to specific review file
             ]
 
@@ -336,16 +337,15 @@ class ReviewPhase(Phase):
 **需求規格與實作計畫:**
 {requirements_section}
 
-**查看程式碼變更:**
-請使用以下指令查看程式碼變更：
-- 查看完整 diff: `git --no-pager diff {self.base_branch}`
-- 查看特定 commit: `git --no-pager show <commit-sha>`
+**可用的 Git 指令:**
+- `git log` - 查看 commit history
+- `git diff` - 查看程式碼變更
+- `git show` - 查看特定 commit 詳細資訊
 
 **你的審查任務（依優先順序）:**
 
 1. **【最優先】檢查 commit message 風格一致性**
-   - 使用 `git --no-pager log --oneline -10 {self.base_branch}` 查看基礎分支的 commit 風格（作為標準）
-   - 使用 `git --no-pager log --oneline -10` 查看當前分支的 commit
+   - 比較基礎分支 ({self.base_branch}) 和當前分支的 commit message 風格
    - 確認風格是否一致
    - **如果發現風格不一致：**
      - 明確列出哪些 commit SHA 和 message 不符合風格
