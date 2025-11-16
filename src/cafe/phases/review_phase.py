@@ -83,17 +83,6 @@ class ReviewPhase(Phase):
             # Calculate iteration number based on existing review files
             self.iteration = self._get_next_iteration_number()
 
-            # Get diff (full branch or specific commit)
-            diff = self._get_diff()
-            if not diff:
-                return PhaseResult(
-                    status=PhaseStatus.FAILED,
-                    message="No changes found in diff",
-                )
-
-            # Store diff for use in prompt generation
-            self.current_diff = diff
-
             # Prepare allowed tools with write permission for review file
             review_file_name = f"review_{self.iteration:03d}.md"
             review_file_path = self.review_dir / review_file_name
@@ -109,7 +98,7 @@ class ReviewPhase(Phase):
                 review_file_pattern = str(review_file_path)
 
             allowed_tools = [
-                "bash",  # Review can use bash for git commands
+                "bash(git --no-pager *)",  # Allow git commands with --no-pager (log, diff, show, etc.)
                 f"write({review_file_pattern})",  # Allow writing to specific review file
             ]
 
@@ -126,9 +115,8 @@ class ReviewPhase(Phase):
                 continue_codes=[],  # No continue codes - single iteration only
             )
 
-            # Save review.md (latest review result)
-            if response:
-                self._save_latest_review(response)
+            # Agent writes review_XXX.md directly via Write tool
+            # No need to save review.md separately
 
             # If base class returned a result, use it
             if result:
@@ -200,19 +188,6 @@ class ReviewPhase(Phase):
         existing_reviews = list(self.review_dir.glob("review_*.md"))
         return len(existing_reviews) + 1
 
-    def _get_diff(self) -> str:
-        """Get git diff (full branch or specific commit).
-
-        Returns:
-            Git diff content
-        """
-        if self.target_commit:
-            return self.git_ops.get_diff(
-                base=f"{self.target_commit}^", head=self.target_commit
-            )
-        else:
-            return self.git_ops.get_diff(base=self.base_branch, head="HEAD")
-
     def _generate_prompt(self, user_input: str) -> str:
         """Generate review prompt (implements abstract method from Phase).
 
@@ -222,7 +197,7 @@ class ReviewPhase(Phase):
         Returns:
             Review prompt string
         """
-        return self._generate_review_prompt(self.current_diff)
+        return self._generate_review_prompt()
 
     def _get_completion_data(self) -> dict:
         """Get phase-specific completion data (implements abstract method from Phase).
@@ -266,27 +241,6 @@ class ReviewPhase(Phase):
         with open(status_file, 'w', encoding='utf-8') as f:
             json.dump(progress.to_dict(), f, ensure_ascii=False, indent=2)
 
-    def _save_latest_review(self, review_response: str) -> None:
-        """Save latest review result to review.md (for backward compatibility).
-
-        Note: Since reviewer now writes to review_XXX.md directly,
-        this method is kept for backward compatibility but should not
-        overwrite agent-generated content.
-
-        Args:
-            review_response: Review response from agent
-        """
-        # Agent now writes to review_XXX.md directly via Write tool
-        # We keep review.md as a fallback/compatibility layer
-        # Only write if it doesn't exist (avoid overwriting agent's work)
-        review_dir = self.history_dir.parent
-        result_file = review_dir / "review.md"
-
-        # Only create review.md if it doesn't exist
-        # (this preserves any content agent wrote, or creates a simple status file)
-        if not result_file.exists():
-            result_file.write_text(review_response)
-
     def _check_if_develop_is_newer(self) -> bool:
         """檢查 develop phase 的時間戳記是否比上次 review 更新。
 
@@ -326,11 +280,8 @@ class ReviewPhase(Phase):
             # 如果出錯，保守起見返回 True（重新執行檢查）
             return True
 
-    def _generate_review_prompt(self, diff: str) -> str:
+    def _generate_review_prompt(self) -> str:
         """Generate review prompt.
-
-        Args:
-            diff: Git diff content
 
         Returns:
             Review prompt string
@@ -383,10 +334,10 @@ class ReviewPhase(Phase):
 **需求規格與實作計畫:**
 {requirements_section}
 
-**程式碼變更 (diff):**
----
-{diff}
----
+**查看程式碼變更:**
+請使用以下指令查看程式碼變更：
+- 查看完整 diff: `git --no-pager diff {self.base_branch}`
+- 查看特定 commit: `git --no-pager show <commit-sha>`
 
 **你的審查任務（依優先順序）:**
 

@@ -365,122 +365,6 @@ class TestSingleIterationExecution:
         assert result.status == PhaseStatus.COMPLETED
 
 
-class TestDiffChecking:
-    """Test diff checking."""
-
-    def test_no_diff_fails(self, tmp_path: Path) -> None:
-        """測試沒有 diff 時失敗"""
-        requirements_file = tmp_path / "requirements.md"
-        requirements_file.write_text("Requirements")
-
-        agent_manager = MagicMock(spec=AgentManager)
-        permission_handler = MagicMock(spec=PermissionHandler)
-
-        git_ops = MagicMock(spec=GitOperations)
-        git_ops.get_diff.return_value = ""  # No diff
-
-        phase = ReviewPhase(
-            agent_manager=agent_manager,
-            permission_handler=permission_handler,
-            git_ops=git_ops,
-            spec_file=str(requirements_file),
-            plan_file="plan.md",
-            workflow_mode=WorkflowMode.LOCAL,
-        )
-
-        result = phase.execute()
-
-        assert result.status == PhaseStatus.FAILED
-        assert "no changes" in result.message.lower()
-
-    def test_full_branch_diff(self, tmp_path: Path) -> None:
-        """測試完整 branch diff"""
-        requirements_file = tmp_path / "requirements.md"
-        requirements_file.write_text("Requirements")
-
-        agent_manager = MagicMock(spec=AgentManager)
-        setup_agent_manager_mock(agent_manager)
-        agent_manager.execute.return_value = ("CAFE_CONFIRMED\nCode looks good!", TokenUsage(), [], None)
-
-        permission_handler = MagicMock(spec=PermissionHandler)
-
-        git_ops = MagicMock(spec=GitOperations)
-        git_ops.get_diff.return_value = "diff content"
-
-        phase = ReviewPhase(
-            agent_manager=agent_manager,
-            permission_handler=permission_handler,
-            git_ops=git_ops,
-            spec_file=str(requirements_file),
-            plan_file="plan.md",
-            workflow_mode=WorkflowMode.LOCAL,
-        )
-
-        phase.execute()
-
-        # Should get diff from main to HEAD
-        git_ops.get_diff.assert_called_once_with(base="main", head="HEAD")
-
-    def test_commit_specific_diff(self, tmp_path: Path) -> None:
-        """測試特定 commit diff"""
-        requirements_file = tmp_path / "requirements.md"
-        requirements_file.write_text("Requirements")
-
-        agent_manager = MagicMock(spec=AgentManager)
-        setup_agent_manager_mock(agent_manager)
-        agent_manager.execute.return_value = ("CAFE_CONFIRMED\nCode looks good!", TokenUsage(), [], None)
-
-        permission_handler = MagicMock(spec=PermissionHandler)
-
-        git_ops = MagicMock(spec=GitOperations)
-        git_ops.get_diff.return_value = "diff content"
-
-        phase = ReviewPhase(
-            agent_manager=agent_manager,
-            permission_handler=permission_handler,
-            git_ops=git_ops,
-            spec_file=str(requirements_file),
-            plan_file="plan.md",
-            workflow_mode=WorkflowMode.LOCAL,
-            target_commit="abc123",
-        )
-
-        phase.execute()
-
-        # Should get diff for specific commit
-        git_ops.get_diff.assert_called_once_with(base="abc123^", head="abc123")
-
-    def test_diff_includes_in_review_prompt(self, tmp_path: Path) -> None:
-        """測試 diff 包含在 review prompt 中"""
-        requirements_file = tmp_path / "requirements.md"
-        requirements_file.write_text("Requirements")
-
-        agent_manager = MagicMock(spec=AgentManager)
-        setup_agent_manager_mock(agent_manager)
-        agent_manager.execute.return_value = ("CAFE_CONFIRMED\nCode looks good!", TokenUsage(), [], None)
-
-        permission_handler = MagicMock(spec=PermissionHandler)
-
-        git_ops = MagicMock(spec=GitOperations)
-        git_ops.get_diff.return_value = "diff --git a/file.py"
-
-        phase = ReviewPhase(
-            agent_manager=agent_manager,
-            permission_handler=permission_handler,
-            git_ops=git_ops,
-            spec_file=str(requirements_file),
-            plan_file="plan.md",
-            workflow_mode=WorkflowMode.LOCAL,
-        )
-
-        phase.execute()
-
-        # Check that diff was included in review prompt
-        call_args = agent_manager.execute.call_args_list[0][0]
-        prompt = call_args[1]
-        assert "diff --git a/file.py" in prompt
-
-
 class TestAgentSelection:
     """Test agent selection for review."""
 
@@ -584,53 +468,6 @@ class TestPromptGeneration:
 
 class TestReviewResultSaving:
     """Test review result saving."""
-
-    def test_saves_review_result(self, tmp_path: Path) -> None:
-        """測試儲存 review 結果"""
-        import os
-        original_dir = os.getcwd()
-        try:
-            # Create issue structure (.cafe/issues/myissue/...)
-            issue_dir = tmp_path / ".cafe" / "issues" / "myissue"
-            spec_dir = issue_dir / "spec"
-            spec_dir.mkdir(parents=True)
-            spec_file = spec_dir / "spec.md"
-            spec_file.write_text("Requirements")
-
-            plan_dir = issue_dir / "plan"
-            plan_dir.mkdir(parents=True)
-            plan_file = plan_dir / "plan.md"
-            plan_file.write_text("Plan")
-
-            os.chdir(tmp_path)
-
-            agent_manager = MagicMock(spec=AgentManager)
-            setup_agent_manager_mock(agent_manager)
-            agent_manager.execute.return_value = ("CAFE_CONFIRMED\nCode looks good!", TokenUsage(), [], None)
-
-            permission_handler = MagicMock(spec=PermissionHandler)
-
-            git_ops = MagicMock(spec=GitOperations)
-            git_ops.get_diff.return_value = "diff content"
-
-            phase = ReviewPhase(
-                agent_manager=agent_manager,
-                permission_handler=permission_handler,
-                git_ops=git_ops,
-                spec_file=str(spec_file),
-                plan_file=str(plan_file),
-                workflow_mode=WorkflowMode.LOCAL,
-            )
-
-            phase.execute()
-
-            # Should save review.md (under .cafe/issues/{issue_name}/review)
-            review_dir = tmp_path / ".cafe" / "issues" / "myissue" / "review"
-            review_file = review_dir / "review.md"
-            assert review_file.exists(), f"review.md should be saved at {review_file}"
-            assert "Code looks good!" in review_file.read_text()
-        finally:
-            os.chdir(original_dir)
 
     def test_saves_to_history(self, tmp_path: Path) -> None:
         """測試儲存到 history"""
@@ -749,8 +586,8 @@ class TestReviewResultSaving:
             # Verify values
             assert history_data["cli"] == "copilot"
             assert history_data["session_id"] == "test-session-123"
-            # ReviewPhase allows bash for git commands and write for review file
-            assert "bash" in history_data["allowed_tools"]
+            # ReviewPhase allows bash(git --no-pager *) for git commands and write for review file
+            assert any("bash(git --no-pager" in tool for tool in history_data["allowed_tools"])
             assert any("write(/.cafe/issues/myissue/review/review_" in tool for tool in history_data["allowed_tools"])
             assert history_data["denied_tools"] is None  # Default when not specified
             # ReviewPhase should NOT allow edit/replace - agent should only write new file, not modify existing ones
@@ -829,7 +666,9 @@ class TestReviewResultSaving:
             prompt = history_data["prompt"]
             assert "你是資深軟體工程師 Richard" in prompt
             assert "程式碼審查" in prompt
-            assert "diff content" in prompt
+            # Prompt should instruct agent to use git commands, not include diff directly
+            assert "git --no-pager diff" in prompt
+            assert "查看程式碼變更" in prompt
         finally:
             os.chdir(original_dir)
 
@@ -881,8 +720,13 @@ class TestIssueConfigReading:
 
             result = phase.execute()
 
-            # Should have called get_diff with base branch from config
-            git_ops.get_diff.assert_called_once_with(base="develop", head="HEAD")
+            # Verify base_branch was read from config and used in prompt
+            assert phase.base_branch == "develop"
+
+            # Check that prompt includes correct git diff command with base branch from config
+            call_args = agent_manager.execute.call_args
+            prompt = call_args[0][1]
+            assert "git --no-pager diff develop" in prompt
         finally:
             os.chdir(original_cwd)
 
@@ -991,35 +835,6 @@ class TestGitHubWorkflow:
         call_args = agent_manager.execute.call_args[0]
         prompt = call_args[1]
         assert "gh issue view 123" in prompt
-
-
-class TestErrorHandling:
-    """Test error handling."""
-
-    def test_git_error_fails_phase(self, tmp_path: Path) -> None:
-        """測試 git 錯誤時 phase 失敗"""
-        requirements_file = tmp_path / "requirements.md"
-        requirements_file.write_text("Requirements")
-
-        agent_manager = MagicMock(spec=AgentManager)
-        permission_handler = MagicMock(spec=PermissionHandler)
-
-        git_ops = MagicMock(spec=GitOperations)
-        git_ops.get_diff.side_effect = Exception("Git error")
-
-        phase = ReviewPhase(
-            agent_manager=agent_manager,
-            permission_handler=permission_handler,
-            git_ops=git_ops,
-            spec_file=str(requirements_file),
-            plan_file="plan.md",
-            workflow_mode=WorkflowMode.LOCAL,
-        )
-
-        result = phase.execute()
-
-        assert result.status == PhaseStatus.FAILED
-        assert "Git error" in result.message
 
 
 class TestDevelopTimestampCheck:

@@ -430,7 +430,17 @@ class AgentExecutor:
         # Add allowed tools if specified
         tools_arg_value = None
         if allowed_tools:
-            tools_arg_value = ",".join(allowed_tools)
+            # Special handling for Gemini: write_file doesn't support path restrictions
+            # write_file(/path) is treated as "no write permission", so we strip the path
+            processed_tools = []
+            for tool in allowed_tools:
+                if tool.startswith("write_file("):
+                    # Strip path parameter: write_file(/path) -> write_file
+                    processed_tools.append("write_file")
+                else:
+                    processed_tools.append(tool)
+
+            tools_arg_value = ",".join(processed_tools)
             cmd.extend(["--allowed-tools", tools_arg_value])
 
         # Add streaming JSON output format

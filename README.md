@@ -22,5 +22,16 @@ AI 驅動的開發工作流程自動化系統，透過協調多個 AI agents (PM
 - **Developer**：實作分析、寫程式
 - **Reviewer**：程式碼品質審查
 
+## 重要注意事項
+
+### Gemini CLI 的 write_file 限制
+
+Gemini CLI 的 `write_file` 工具**不支援路徑限制**。如果在 `--allowed-tools` 中指定 `write_file(/path/to/file)`，Gemini 會將其視為「沒有寫入權限」而無法寫入任何檔案。
+
+**解決方案**: 系統會自動將 `write_file(/path)` 轉換為 `write_file`，給予完整的檔案寫入權限。請在 agent prompt 中明確指示 agent 應該寫入的檔案路徑。
+
+**影響的 phases**:
+- ReviewPhase: Prompt 中會明確告知 reviewer 應寫入 `review_XXX.md` 的完整路徑
+
 ## 使用說明
 > TODO
