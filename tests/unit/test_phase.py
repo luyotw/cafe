@@ -159,7 +159,7 @@ class TestExecuteAgentIteration:
         mock_agent.config.cli.value = "claude"
         mock_agent.config.session_id = "test_session"
         agent_manager.get_agent.return_value = mock_agent
-        agent_manager.execute.return_value = ("CAFE_CONFIRMED\n需求已清楚", TokenUsage(), [])
+        agent_manager.execute.return_value = ("CAFE_CONFIRMED\n需求已清楚", TokenUsage(), [], None)
 
         phase = TestPhase(agent_manager, history_dir)
 
@@ -211,7 +211,7 @@ class TestExecuteAgentIteration:
         mock_agent.config.cli.value = "copilot"
         mock_agent.config.session_id = "test_session"
         agent_manager.get_agent.return_value = mock_agent
-        agent_manager.execute.return_value = ("", TokenUsage(), [])  # Empty response
+        agent_manager.execute.return_value = ("", TokenUsage(), [], None)  # Empty response
 
         phase = TestPhase(agent_manager, history_dir)
 
@@ -258,7 +258,7 @@ class TestExecuteAgentIteration:
         mock_agent.config.session_id = "test_session"
         agent_manager.get_agent.return_value = mock_agent
         # Response without status code
-        agent_manager.execute.return_value = ("Some response without status code", TokenUsage(), [])
+        agent_manager.execute.return_value = ("Some response without status code", TokenUsage(), [], None)
 
         phase = TestPhase(agent_manager, history_dir)
 
@@ -325,7 +325,7 @@ class TestExecuteAgentIteration:
         mock_agent.config.cli.value = "claude"
         mock_agent.config.session_id = "test_session"
         agent_manager.get_agent.return_value = mock_agent
-        agent_manager.execute.return_value = ("CAFE_CONFIRMED\n測試完成", TokenUsage(), [])
+        agent_manager.execute.return_value = ("CAFE_CONFIRMED\n測試完成", TokenUsage(), [], None)
 
         phase = TestPhase(agent_manager, history_dir)
 
@@ -504,3 +504,280 @@ class TestHandleStandardStatusCodes:
                 status_code=PhaseStatusCode.CONFIRMED,
                 response="Test",
             )
+
+
+class TestHandlePreviousPermissionDenials:
+    """測試 Phase._handle_previous_permission_denials() 處理上一輪的權限請求"""
+
+    def test_no_previous_iteration_returns_empty(self, tmp_path: Path) -> None:
+        """測試沒有上一輪 iteration 時返回空的 approved tools 和 user_input"""
+        history_dir = tmp_path / "history"
+        history_dir.mkdir(parents=True)
+
+        class TestPhase(Phase):
+            def __init__(self, history_dir: Path):
+                self.history_dir = history_dir
+                self.iteration = 1  # First iteration, no previous
+                self.interactive = False
+                self.approved_denial_indices = []
+                self.user_input = ""
+
+            def execute(self) -> PhaseResult:
+                return PhaseResult(status=PhaseStatus.COMPLETED)
+
+        phase = TestPhase(history_dir)
+
+        approved_tools, user_input = phase._handle_previous_permission_denials()
+
+        assert approved_tools == []
+        assert user_input == ""
+
+    def test_previous_iteration_no_permission_denials_returns_empty(self, tmp_path: Path) -> None:
+        """測試上一輪沒有 permission_denials 時返回空"""
+        history_dir = tmp_path / "history"
+        history_dir.mkdir(parents=True)
+
+        # Create iteration_001.json without permission_denials
+        iteration_001 = {
+            "iteration": 1,
+            "timestamp": "2025-11-14T10:00:00",
+            "user_input": "",
+            "prompt": "Test prompt",
+            "response": "CAFE_CONFIRMED\n完成",
+            "status_code": "CAFE_CONFIRMED"
+        }
+
+        with open(history_dir / "iteration_001.json", "w") as f:
+            json.dump(iteration_001, f)
+
+        class TestPhase(Phase):
+            def __init__(self, history_dir: Path):
+                self.history_dir = history_dir
+                self.iteration = 2  # Second iteration, check iteration_001.json
+                self.interactive = False
+                self.approved_denial_indices = []
+                self.user_input = ""
+
+            def execute(self) -> PhaseResult:
+                return PhaseResult(status=PhaseStatus.COMPLETED)
+
+        phase = TestPhase(history_dir)
+
+        approved_tools, user_input = phase._handle_previous_permission_denials()
+
+        assert approved_tools == []
+        assert user_input == ""
+
+    def test_non_interactive_with_approved_indices_returns_tools(self, tmp_path: Path) -> None:
+        """測試 non-interactive 模式，使用 approved_denial_indices 批准權限"""
+        history_dir = tmp_path / "history"
+        history_dir.mkdir(parents=True)
+
+        # Create iteration_001.json with permission_denials
+        iteration_001 = {
+            "iteration": 1,
+            "timestamp": "2025-11-14T10:00:00",
+            "user_input": "",
+            "prompt": "Test prompt",
+            "response": "CAFE_NEED_PERMISSION\n需要權限",
+            "status_code": "CAFE_NEED_PERMISSION",
+            "permission_denials": [
+                {"tool_name": "Read", "tool_input": {"file_path": "/home/user/test.txt"}},
+                {"tool_name": "Bash", "tool_input": {"command": "git status"}},
+                {"tool_name": "Edit", "tool_input": {"file_path": "/home/user/config.php"}},
+            ]
+        }
+
+        with open(history_dir / "iteration_001.json", "w") as f:
+            json.dump(iteration_001, f)
+
+        class TestPhase(Phase):
+            def __init__(self, history_dir: Path):
+                self.history_dir = history_dir
+                self.iteration = 2  # Second iteration
+                self.interactive = False
+                self.approved_denial_indices = [0, 2]  # Approve indices 0 and 2
+                self.user_input = "請小心修改"
+
+            def execute(self) -> PhaseResult:
+                return PhaseResult(status=PhaseStatus.COMPLETED)
+
+        phase = TestPhase(history_dir)
+
+        approved_tools, user_input = phase._handle_previous_permission_denials()
+
+        # Should return approved tools based on indices (lowercase)
+        assert len(approved_tools) == 2
+        assert "read(/home/user/test.txt)" in approved_tools
+        assert "edit(/home/user/config.php)" in approved_tools
+        assert "bash(git status)" not in approved_tools
+
+        # Should return user_input
+        assert user_input == "請小心修改"
+
+    def test_interactive_mode_asks_user_for_each_denial(self, tmp_path: Path) -> None:
+        """測試 interactive 模式逐一詢問用戶是否批准權限"""
+        history_dir = tmp_path / "history"
+        history_dir.mkdir(parents=True)
+
+        # Create iteration_001.json with permission_denials
+        iteration_001 = {
+            "iteration": 1,
+            "timestamp": "2025-11-14T10:00:00",
+            "user_input": "",
+            "prompt": "Test prompt",
+            "response": "CAFE_NEED_PERMISSION\n需要權限",
+            "status_code": "CAFE_NEED_PERMISSION",
+            "permission_denials": [
+                {"tool_name": "Read", "tool_input": {"file_path": "/home/user/test.txt"}},
+                {"tool_name": "Bash", "tool_input": {"command": "git --no-pager log --oneline -n 10"}},
+            ]
+        }
+
+        with open(history_dir / "iteration_001.json", "w") as f:
+            json.dump(iteration_001, f)
+
+        class TestPhase(Phase):
+            def __init__(self, history_dir: Path, display: MagicMock):
+                self.history_dir = history_dir
+                self.iteration = 2  # Second iteration
+                self.interactive = True
+                self.display = display
+
+            def execute(self) -> PhaseResult:
+                return PhaseResult(status=PhaseStatus.COMPLETED)
+
+        mock_display = MagicMock()
+        mock_display.get_multiline_input.return_value = "請注意安全"
+
+        phase = TestPhase(history_dir, mock_display)
+
+        # Mock user input: approve first (y), reject second (n)
+        with patch('builtins.input', side_effect=['y', 'n']):
+            approved_tools, user_input = phase._handle_previous_permission_denials()
+
+        # Should only approve first one (lowercase)
+        assert len(approved_tools) == 1
+        assert "read(/home/user/test.txt)" in approved_tools
+
+        # Should have user_input from get_multiline_input
+        assert user_input == "請注意安全"
+        mock_display.get_multiline_input.assert_called_once()
+
+    def test_bash_command_pattern_uses_first_two_words(self, tmp_path: Path) -> None:
+        """測試 Bash 命令的 pattern 使用前兩個詞"""
+        history_dir = tmp_path / "history"
+        history_dir.mkdir(parents=True)
+
+        iteration_001 = {
+            "iteration": 1,
+            "permission_denials": [
+                {"tool_name": "Bash", "tool_input": {"command": "git --no-pager log --oneline -n 10"}},
+            ]
+        }
+
+        with open(history_dir / "iteration_001.json", "w") as f:
+            json.dump(iteration_001, f)
+
+        class TestPhase(Phase):
+            def __init__(self, history_dir: Path):
+                self.history_dir = history_dir
+                self.iteration = 2  # Second iteration
+                self.interactive = False
+                self.approved_denial_indices = [0]
+                self.user_input = ""
+
+            def execute(self) -> PhaseResult:
+                return PhaseResult(status=PhaseStatus.COMPLETED)
+
+        phase = TestPhase(history_dir)
+
+        approved_tools, _ = phase._handle_previous_permission_denials()
+
+        # Should use "git --no-pager" as pattern (first two words, lowercase)
+        assert approved_tools == ["bash(git --no-pager)"]
+
+
+class TestIterationHistoryCLICommandArgs:
+    """測試 iteration history 記錄實際的 CLI 命令參數"""
+
+    def test_records_cli_command_args_in_iteration_history(self, tmp_path: Path) -> None:
+        """測試記錄實際的 CLI 命令參數到 iteration history"""
+        history_dir = tmp_path / "history"
+        history_dir.mkdir(parents=True)
+
+        class TestPhase(Phase):
+            def __init__(self, agent_manager: MagicMock, history_dir: Path):
+                self.agent_manager = agent_manager
+                self.history_dir = history_dir
+                self.iteration = 1
+
+            def execute(self) -> PhaseResult:
+                return PhaseResult(status=PhaseStatus.COMPLETED)
+
+            def _save_progress(self, status_code: PhaseStatusCode) -> None:
+                pass
+
+        # Mock agent manager
+        agent_manager = MagicMock()
+        mock_agent = MagicMock()
+        mock_agent.config.cli.value = "claude"
+        mock_agent.config.session_id = "test-session-123"
+        agent_manager.get_agent.return_value = mock_agent
+
+        # Mock agent_manager.execute() 返回包含 cli_command_args 的 AgentResponse
+        from cafe.core.types import AgentResponse
+        mock_response = AgentResponse(
+            response="CAFE_CONFIRMED\n完成",
+            token_usage=TokenUsage(),
+            permission_denials=[],
+            cli_command_args=[
+                "--resume", "test-session-123",
+                "--output-format", "stream-json",
+                "--verbose",
+                "--add-dir", ".cafe",
+                "--allowed-tools", '"Write,Read,Edit(/home/user/test.php)"'
+            ]
+        )
+        agent_manager.execute.return_value = (
+            mock_response.response,
+            mock_response.token_usage,
+            mock_response.permission_denials,
+            mock_response.cli_command_args  # 新增返回值
+        )
+
+        phase = TestPhase(agent_manager, history_dir)
+
+        # Execute
+        allowed_tools = ["write", "read", "edit(/home/user/test.php)"]
+        phase._execute_agent_iteration(
+            agent_name="TestAgent",
+            prompt="Test prompt",
+            user_input="",
+            valid_status_codes=[PhaseStatusCode.CONFIRMED],
+            allowed_tools=allowed_tools,
+        )
+
+        # Read saved iteration history
+        iteration_file = history_dir / "iteration_001.json"
+        with open(iteration_file, "r", encoding="utf-8") as f:
+            saved_data = json.load(f)
+
+        # Should record cli_command_args as list (實際的 CLI 參數)
+        assert "cli_command_args" in saved_data
+        cli_args = saved_data["cli_command_args"]
+
+        # Should be a list
+        assert isinstance(cli_args, list)
+
+        # Should include all CLI parameters
+        assert "--resume" in cli_args
+        assert "test-session-123" in cli_args
+        assert "--allowed-tools" in cli_args
+        # allowed-tools 的值必須有雙引號，否則授權無效
+        assert '"Write,Read,Edit(/home/user/test.php)"' in cli_args
+        assert "--output-format" in cli_args
+        assert "stream-json" in cli_args
+        assert "--verbose" in cli_args
+        assert "--add-dir" in cli_args
+        assert ".cafe" in cli_args

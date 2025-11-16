@@ -832,3 +832,457 @@ class TestCopilotStreamingExecution:
             assert "Copilot Response (streaming):" in captured.out
 
 
+class TestCLICommandArgsGeneration:
+    """測試 CLI command args 生成功能"""
+
+    def test_execute_claude_generates_cli_command_args_without_allowed_tools(self) -> None:
+        """測試 Claude 在沒有 allowed_tools 時生成正確的 cli_command_args"""
+        config = AgentConfig(
+            name="Roger",
+            cli=AgentCLI.CLAUDE,
+            session_id="test-session-123"
+        )
+        executor = AgentExecutor(config)
+
+        # Mock streaming process
+        mock_process = MagicMock()
+        mock_process.stdout.readline.side_effect = [
+            '{"content": "Test response"}\n',
+            "",
+        ]
+        mock_process.stderr.read.return_value = ""
+        mock_process.wait.return_value = 0
+
+        with patch("subprocess.run", return_value=MagicMock(stdout='{"session_id": "test-session-123"}', returncode=0)), \
+             patch("subprocess.Popen", return_value=mock_process), \
+             patch("sys.platform", "win32"):
+            agent_response = executor._execute_claude("Test prompt")
+
+            # Verify cli_command_args is set
+            assert agent_response.cli_command_args is not None
+            assert isinstance(agent_response.cli_command_args, list)
+
+            # Check basic args
+            assert "--resume" in agent_response.cli_command_args
+            assert "test-session-123" in agent_response.cli_command_args
+            assert "--output-format" in agent_response.cli_command_args
+            assert "stream-json" in agent_response.cli_command_args
+            assert "--verbose" in agent_response.cli_command_args
+            assert "--add-dir" in agent_response.cli_command_args
+            assert ".cafe" in agent_response.cli_command_args
+
+            # No allowed-tools when not specified
+            assert "--allowed-tools" not in agent_response.cli_command_args
+
+    def test_execute_claude_generates_cli_command_args_with_allowed_tools(self) -> None:
+        """測試 Claude 在有 allowed_tools 時生成正確的 cli_command_args（含雙引號）"""
+        config = AgentConfig(
+            name="Roger",
+            cli=AgentCLI.CLAUDE,
+            session_id="test-session-123"
+        )
+        executor = AgentExecutor(config)
+
+        # Mock streaming process
+        mock_process = MagicMock()
+        mock_process.stdout.readline.side_effect = [
+            '{"content": "Test response"}\n',
+            "",
+        ]
+        mock_process.stderr.read.return_value = ""
+        mock_process.wait.return_value = 0
+
+        allowed_tools = ["Write", "Read", "Edit(/views/admin/topics.php)"]
+
+        with patch("subprocess.run", return_value=MagicMock(stdout='{"session_id": "test-session-123"}', returncode=0)), \
+             patch("subprocess.Popen", return_value=mock_process), \
+             patch("sys.platform", "win32"):
+            agent_response = executor._execute_claude("Test prompt", allowed_tools=allowed_tools)
+
+            # Verify cli_command_args contains allowed-tools with quotes
+            assert agent_response.cli_command_args is not None
+            assert "--allowed-tools" in agent_response.cli_command_args
+
+            # Find the allowed-tools value
+            allowed_tools_idx = agent_response.cli_command_args.index("--allowed-tools")
+            allowed_tools_value = agent_response.cli_command_args[allowed_tools_idx + 1]
+
+            # Must have double quotes (required for authorization)
+            assert allowed_tools_value.startswith('"')
+            assert allowed_tools_value.endswith('"')
+            assert "Write,Read,Edit(/views/admin/topics.php)" in allowed_tools_value
+
+    def test_execute_gemini_generates_cli_command_args_without_allowed_tools(self) -> None:
+        """測試 Gemini 在沒有 allowed_tools 時生成正確的 cli_command_args"""
+        config = AgentConfig(
+            name="Roger",
+            cli=AgentCLI.GEMINI,
+            session_id="test-session-456"
+        )
+        executor = AgentExecutor(config)
+
+        # Mock streaming process
+        mock_process = MagicMock()
+        mock_process.stdout.readline.side_effect = [
+            '{"response": "Gemini response"}\n',
+            "",
+        ]
+        mock_process.stderr.read.return_value = ""
+        mock_process.wait.return_value = 0
+
+        with patch("subprocess.Popen", return_value=mock_process), \
+             patch("sys.platform", "win32"):
+            agent_response = executor._execute_gemini("Test prompt")
+
+            # Verify cli_command_args is set
+            assert agent_response.cli_command_args is not None
+            assert isinstance(agent_response.cli_command_args, list)
+
+            # Check basic args (Gemini doesn't use --session parameter)
+            assert "--output-format" in agent_response.cli_command_args
+            assert "stream-json" in agent_response.cli_command_args
+            assert "--include-directories" in agent_response.cli_command_args
+            assert ".cafe" in agent_response.cli_command_args
+
+            # No allowed-tools when not specified
+            assert "--allowed-tools" not in agent_response.cli_command_args
+
+    def test_execute_gemini_generates_cli_command_args_with_allowed_tools(self) -> None:
+        """測試 Gemini 在有 allowed_tools 時生成正確的 cli_command_args（含雙引號）"""
+        config = AgentConfig(
+            name="Roger",
+            cli=AgentCLI.GEMINI,
+            session_id="test-session-456"
+        )
+        executor = AgentExecutor(config)
+
+        # Mock streaming process
+        mock_process = MagicMock()
+        mock_process.stdout.readline.side_effect = [
+            '{"response": "Gemini response"}\n',
+            "",
+        ]
+        mock_process.stderr.read.return_value = ""
+        mock_process.wait.return_value = 0
+
+        allowed_tools = ["write_file", "read_file", "replace(/views/admin/topics.php)"]
+
+        with patch("subprocess.Popen", return_value=mock_process), \
+             patch("sys.platform", "win32"):
+            agent_response = executor._execute_gemini("Test prompt", allowed_tools=allowed_tools)
+
+            # Verify cli_command_args contains allowed-tools with quotes
+            assert agent_response.cli_command_args is not None
+            assert "--allowed-tools" in agent_response.cli_command_args
+
+            # Find the allowed-tools value
+            allowed_tools_idx = agent_response.cli_command_args.index("--allowed-tools")
+            allowed_tools_value = agent_response.cli_command_args[allowed_tools_idx + 1]
+
+            # Must have double quotes (required for authorization)
+            assert allowed_tools_value.startswith('"')
+            assert allowed_tools_value.endswith('"')
+            assert "write_file,read_file,replace(/views/admin/topics.php)" in allowed_tools_value
+
+    def test_execute_cursor_generates_cli_command_args(self) -> None:
+        """測試 Cursor 生成正確的 cli_command_args"""
+        config = AgentConfig(
+            name="David",
+            cli=AgentCLI.CURSOR,
+            session_id="cursor-session-789"
+        )
+        executor = AgentExecutor(config)
+
+        # Mock streaming process
+        mock_process = MagicMock()
+        mock_process.stdout.readline.side_effect = [
+            '{"response": "Cursor response"}\n',
+            "",
+        ]
+        mock_process.stderr.read.return_value = ""
+        mock_process.wait.return_value = 0
+
+        allowed_tools = ["Write", "Read", "Edit(/test.php)"]
+
+        with patch("subprocess.Popen", return_value=mock_process), \
+             patch("sys.platform", "win32"):
+            agent_response = executor._execute_cursor("Test prompt", allowed_tools=allowed_tools)
+
+            # Verify cli_command_args is set
+            assert agent_response.cli_command_args is not None
+            assert isinstance(agent_response.cli_command_args, list)
+
+            # Check basic args (Cursor doesn't use --session parameter)
+            assert "--output-format" in agent_response.cli_command_args
+            assert "json" in agent_response.cli_command_args
+
+            # Check allowed-tools (Cursor format: comma-separated, no quotes needed based on impl)
+            assert "--allowed-tools" in agent_response.cli_command_args
+            allowed_tools_idx = agent_response.cli_command_args.index("--allowed-tools")
+            allowed_tools_value = agent_response.cli_command_args[allowed_tools_idx + 1]
+            assert "Write,Read,Edit(/test.php)" in allowed_tools_value
+
+    def test_execute_copilot_generates_cli_command_args_with_multiple_allow_tool_flags(self) -> None:
+        """測試 Copilot 使用多個 --allow-tool flags 生成 cli_command_args"""
+        config = AgentConfig(
+            name="David",
+            cli=AgentCLI.COPILOT,
+        )
+        executor = AgentExecutor(config)
+
+        # Mock streaming process
+        mock_process = MagicMock()
+        mock_process.stdout.readline.side_effect = [
+            "Copilot response\n",
+            "",
+        ]
+        mock_process.stderr.read.return_value = ""
+        mock_process.wait.return_value = 0
+
+        allowed_tools = ["write", "shell", "edit(/test.php)"]
+
+        with patch("subprocess.Popen", return_value=mock_process), \
+             patch("pathlib.Path.exists", return_value=False), \
+             patch("sys.platform", "win32"):
+            agent_response = executor._execute_copilot("Test prompt", allowed_tools=allowed_tools)
+
+            # Verify cli_command_args is set
+            assert agent_response.cli_command_args is not None
+            assert isinstance(agent_response.cli_command_args, list)
+
+            # Count --allow-tool flags
+            allow_tool_count = agent_response.cli_command_args.count("--allow-tool")
+            assert allow_tool_count == 3  # One for each tool
+
+            # Verify each tool is present (no quotes needed for Copilot)
+            assert "write" in agent_response.cli_command_args
+            assert "shell" in agent_response.cli_command_args
+            assert "edit(/test.php)" in agent_response.cli_command_args
+
+
+class TestDefaultEditPermission:
+    """測試預設加入 edit 權限"""
+
+    def test_adds_edit_permission_for_claude(self):
+        """測試 Claude 自動加入 Edit 權限"""
+        config = AgentConfig(name="test", cli=AgentCLI.CLAUDE)
+        executor = AgentExecutor(config)
+
+        # Mock streaming process
+        mock_process = MagicMock()
+        mock_process.stdout.readline.side_effect = [
+            '{"content": "Test"}\n',
+            "",
+        ]
+        mock_process.stderr.read.return_value = ""
+        mock_process.wait.return_value = 0
+
+        with patch("subprocess.run", return_value=MagicMock(stdout='{"session_id": "test"}', returncode=0)), \
+             patch("subprocess.Popen", return_value=mock_process), \
+             patch("sys.platform", "win32"):
+            # Provide tools without 'edit'
+            agent_response = executor.execute("Test", allowed_tools=["read", "write"])
+
+            # Should automatically add Edit
+            assert agent_response.cli_command_args is not None
+            assert "--allowed-tools" in agent_response.cli_command_args
+            allowed_tools_idx = agent_response.cli_command_args.index("--allowed-tools")
+            allowed_tools_value = agent_response.cli_command_args[allowed_tools_idx + 1]
+            # Should contain Read, Write, and Edit (auto-added)
+            assert "Read" in allowed_tools_value
+            assert "Write" in allowed_tools_value
+            assert "Edit" in allowed_tools_value
+
+    def test_does_not_duplicate_edit_permission_for_claude(self):
+        """測試 Claude 不會重複加入 Edit 權限"""
+        config = AgentConfig(name="test", cli=AgentCLI.CLAUDE)
+        executor = AgentExecutor(config)
+
+        # Mock streaming process
+        mock_process = MagicMock()
+        mock_process.stdout.readline.side_effect = [
+            '{"content": "Test"}\n',
+            "",
+        ]
+        mock_process.stderr.read.return_value = ""
+        mock_process.wait.return_value = 0
+
+        with patch("subprocess.run", return_value=MagicMock(stdout='{"session_id": "test"}', returncode=0)), \
+             patch("subprocess.Popen", return_value=mock_process), \
+             patch("sys.platform", "win32"):
+            # Provide tools already including 'edit'
+            agent_response = executor.execute("Test", allowed_tools=["read", "edit", "write"])
+
+            # Should not duplicate Edit
+            assert agent_response.cli_command_args is not None
+            assert "--allowed-tools" in agent_response.cli_command_args
+            allowed_tools_idx = agent_response.cli_command_args.index("--allowed-tools")
+            allowed_tools_value = agent_response.cli_command_args[allowed_tools_idx + 1]
+            # Count occurrences of "Edit"
+            assert allowed_tools_value.count("Edit") == 1
+
+    def test_adds_replace_permission_for_gemini(self):
+        """測試 Gemini 自動加入 replace 權限"""
+        config = AgentConfig(name="test", cli=AgentCLI.GEMINI)
+        executor = AgentExecutor(config)
+
+        # Mock streaming process
+        mock_process = MagicMock()
+        mock_process.stdout.readline.side_effect = [
+            '{"response": "Test"}\n',
+            "",
+        ]
+        mock_process.stderr.read.return_value = ""
+        mock_process.wait.return_value = 0
+
+        with patch("subprocess.Popen", return_value=mock_process), \
+             patch("sys.platform", "win32"):
+            # Provide tools without 'edit'
+            agent_response = executor.execute("Test", allowed_tools=["read", "write"])
+
+            # Should automatically add replace (translated from edit)
+            assert agent_response.cli_command_args is not None
+            assert "--allowed-tools" in agent_response.cli_command_args
+            allowed_tools_idx = agent_response.cli_command_args.index("--allowed-tools")
+            allowed_tools_value = agent_response.cli_command_args[allowed_tools_idx + 1]
+            # Should contain read_file, write_file, and replace (auto-added from edit)
+            assert "read_file" in allowed_tools_value
+            assert "write_file" in allowed_tools_value
+            assert "replace" in allowed_tools_value
+
+    def test_adds_write_permission_for_copilot(self):
+        """測試 Copilot 自動加入 write 權限（對應 edit）"""
+        config = AgentConfig(name="test", cli=AgentCLI.COPILOT)
+        executor = AgentExecutor(config)
+
+        # Mock streaming process
+        mock_process = MagicMock()
+        mock_process.stdout.readline.side_effect = [
+            "Test response\n",
+            "",
+        ]
+        mock_process.stderr.read.return_value = ""
+        mock_process.wait.return_value = 0
+
+        with patch("subprocess.Popen", return_value=mock_process), \
+             patch("pathlib.Path.exists", return_value=False), \
+             patch("sys.platform", "win32"):
+            # Provide tools without 'edit'
+            agent_response = executor.execute("Test", allowed_tools=["read", "bash"])
+
+            # Should automatically add write (translated from edit)
+            # Note: Copilot uses 'write' for both Write and Edit
+            assert agent_response.cli_command_args is not None
+            # Count --allow-tool flags (should have read, bash, and write from edit)
+            allow_tool_count = agent_response.cli_command_args.count("--allow-tool")
+            assert allow_tool_count == 3  # read, bash, write(from edit)
+
+
+class TestToolNameTranslation:
+    """測試工具名稱轉換邏輯"""
+
+    def test_translate_simple_tool_names_for_claude(self):
+        """測試轉換簡單工具名給 Claude"""
+        config = AgentConfig(
+            name="test",
+            cli=AgentCLI.CLAUDE,
+            agent_dir="agents"
+        )
+        executor = AgentExecutor(config)
+
+        tools = ["write", "read", "bash", "edit"]
+        translated = executor._translate_tool_names(tools)
+
+        assert translated == ["Write", "Read", "Bash", "Edit"]
+
+    def test_translate_tool_names_with_file_patterns_for_claude(self):
+        """測試轉換帶檔案 pattern 的工具名給 Claude"""
+        config = AgentConfig(
+            name="test",
+            cli=AgentCLI.CLAUDE,
+            agent_dir="agents"
+        )
+        executor = AgentExecutor(config)
+
+        tools = [
+            "write",
+            "read",
+            "bash",
+            "edit(/home/user/test.php)"
+        ]
+        translated = executor._translate_tool_names(tools)
+
+        assert translated == [
+            "Write",
+            "Read",
+            "Bash",
+            "Edit(/home/user/test.php)"
+        ]
+
+    def test_translate_tool_names_with_command_patterns_for_claude(self):
+        """測試轉換帶命令 pattern 的工具名給 Claude"""
+        config = AgentConfig(
+            name="test",
+            cli=AgentCLI.CLAUDE,
+            agent_dir="agents"
+        )
+        executor = AgentExecutor(config)
+
+        tools = [
+            "bash(git status)",
+            "read(/path/to/file.txt)"
+        ]
+        translated = executor._translate_tool_names(tools)
+
+        assert translated == [
+            "Bash(git status)",
+            "Read(/path/to/file.txt)"
+        ]
+
+    def test_translate_tool_names_for_gemini(self):
+        """測試轉換工具名給 Gemini"""
+        config = AgentConfig(
+            name="test",
+            cli=AgentCLI.GEMINI,
+            agent_dir="agents"
+        )
+        executor = AgentExecutor(config)
+
+        tools = ["write", "read", "edit"]
+        translated = executor._translate_tool_names(tools)
+
+        assert translated == ["write_file", "read_file", "replace"]
+
+    def test_translate_tool_names_with_patterns_for_gemini(self):
+        """測試轉換帶 pattern 的工具名給 Gemini"""
+        config = AgentConfig(
+            name="test",
+            cli=AgentCLI.GEMINI,
+            agent_dir="agents"
+        )
+        executor = AgentExecutor(config)
+
+        tools = [
+            "edit(/home/user/test.php)",
+            "bash(git status)"
+        ]
+        translated = executor._translate_tool_names(tools)
+
+        assert translated == [
+            "replace(/home/user/test.php)",
+            "bash(git status)"
+        ]
+
+    def test_translate_returns_none_for_empty_tools(self):
+        """測試空工具列表返回 None"""
+        config = AgentConfig(
+            name="test",
+            cli=AgentCLI.CLAUDE,
+            agent_dir="agents"
+        )
+        executor = AgentExecutor(config)
+
+        assert executor._translate_tool_names(None) is None
+        assert executor._translate_tool_names([]) is None
+
+

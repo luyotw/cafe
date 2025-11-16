@@ -30,6 +30,7 @@ class DevelopPhase(Phase):
         dev_agent: str = "David",
         interactive: bool = True,
         user_input: str = "",
+        approved_denial_indices: Optional[List[int]] = None,
     ) -> None:
         """Initialize develop phase.
 
@@ -45,6 +46,7 @@ class DevelopPhase(Phase):
             dev_agent: Developer agent name (default: David)
             interactive: Enable interactive mode (default: True)
             user_input: User input for non-interactive mode (default: "")
+            approved_denial_indices: Indices of approved permission denials (for non-interactive mode)
         """
         super().__init__(interactive=interactive)
 
@@ -57,6 +59,7 @@ class DevelopPhase(Phase):
         self.issue_id = issue_id
         self.dev_agent = dev_agent
         self.user_input = user_input
+        self.approved_denial_indices = approved_denial_indices if approved_denial_indices is not None else []
         self.phase_name = "develop"  # For base class progress tracking
 
         # Iteration tracking
@@ -265,86 +268,44 @@ class DevelopPhase(Phase):
         """準備當前迭代的 user input。
 
         Develop phase 的特殊邏輯：
-        - Iteration 1: 空字串（agent 自主執行）
-        - Iteration 2+: 檢查是否有待處理的 NEED_PERMISSION
+        - Iteration 1（沒有 previous data）: 空字串（agent 自主執行）
+        - Iteration 2+（有 previous data）: 檢查是否有待處理的 NEED_PERMISSION
 
         Returns:
             PhaseResult: 如果需要結束/暫停 phase
             str: 用戶輸入內容（通常為空，除非處理 NEED_PERMISSION）
         """
-        # Iteration 1: No user input needed, agent starts autonomously
-        if self.iteration == 1:
-            return ""
-
-        # Iteration 2+: Check for pending NEED_PERMISSION
+        # Check for previous iteration data
         prev_data = self._load_previous_iteration_data()
+
+        # No previous data: first execution, agent starts autonomously
         if not prev_data:
             return ""
 
         prev_status = prev_data.get("status_code", "")
 
         # Handle pending NEED_PERMISSION from previous run
-        if prev_status == "CAFE_NEED_PERMISSION" and "user_response" not in prev_data:
-            if self.interactive:
-                # Display the permission request
-                print(f"\n{'='*60}")
-                print(f"Dev ({self.dev_agent}) - Iteration {prev_data['iteration']} (resuming):")
-                print(f"{'='*60}")
-                print(prev_data.get('response', ''))
-                print(f"{'='*60}\n")
+        if prev_status == "CAFE_NEED_PERMISSION":
+            # Check if has permission_denials
+            if not prev_data.get("permission_denials"):
+                # Old format without permission_denials, return empty
+                return ""
 
-                # Ask user for decision
-                print("開發者請求工具權限。請選擇：")
-                print("  [c] confirm - 同意授權，繼續執行")
-                print("  [r] reject - 拒絕授權，終止開發")
-                print("  [m] modify - 給予其他提示或建議")
+            # In non-interactive mode, check if user provided approved_denial_indices
+            if not self.interactive:
+                if not hasattr(self, "approved_denial_indices") or not self.approved_denial_indices:
+                    return PhaseResult(
+                        status=PhaseStatus.FAILED,
+                        message="Permission required but running in non-interactive mode without --approve-denied-tools",
+                        data={
+                            "iterations": prev_data['iteration'],
+                            "last_response": prev_data.get('response', ''),
+                            "permission_denials": prev_data.get("permission_denials", []),
+                        },
+                    )
 
-                while True:
-                    choice = input("\n請選擇 [c/r/m]: ").strip().lower()
-
-                    if choice == 'c':
-                        print("\n✅ 權限已授予")
-                        user_response = "授權同意"
-                        break
-                    elif choice == 'r':
-                        print("\n❌ 權限被拒絕，Phase 終止。")
-                        return PhaseResult(
-                            status=PhaseStatus.FAILED,
-                            message=f"Permission denied by user in iteration {prev_data['iteration']}",
-                            data={
-                                "iterations": prev_data['iteration'],
-                                "last_response": prev_data.get('response', ''),
-                                "status_code": "USER_REJECTED",
-                            },
-                        )
-                    elif choice == 'm':
-                        modification_request = self.display.get_multiline_input("請輸入提示或建議")
-                        if not modification_request.strip():
-                            print("\n⚠️  沒有輸入內容，請重新選擇。")
-                            continue
-                        print("\n✅ 已收到您的建議")
-                        user_response = modification_request
-                        break
-                    else:
-                        print("❌ 無效選擇，請輸入 c, r, 或 m")
-
-                # Save user response to the previous iteration
-                iteration_file = self.history_dir / f"iteration_{prev_data['iteration']:03d}.json"
-                prev_data['user_response'] = user_response
-                with open(iteration_file, "w", encoding="utf-8") as f:
-                    json.dump(prev_data, f, ensure_ascii=False, indent=2)
-
-                return user_response
-            else:
-                # Non-interactive mode with pending permission
-                return PhaseResult(
-                    status=PhaseStatus.FAILED,
-                    message="Permission required but running in non-interactive mode",
-                    data={
-                        "iterations": prev_data['iteration'],
-                        "last_response": prev_data.get('response', ''),
-                    },
-                )
+            # Note: The actual permission handling (calling _handle_previous_permission_denials)
+            # will be done in execute() method when constructing allowed_tools
 
         # No special handling needed
         return ""
@@ -353,7 +314,7 @@ class DevelopPhase(Phase):
         """Generate prompt for current iteration.
 
         Args:
-            user_input: User input for this iteration (not used in develop phase)
+            user_input: User input for this iteration (additional instructions from user)
 
         Returns:
             Prompt string
@@ -375,6 +336,7 @@ class DevelopPhase(Phase):
 
         if has_review_feedback:
             # With review feedback - 修正模式
+            user_input_section = f"\n\n**用戶的額外說明：**\n{user_input}\n" if user_input else ""
             return f"""請根據 Code Review 反饋進行修正。
 
 **你的角色：**
@@ -389,7 +351,7 @@ class DevelopPhase(Phase):
 - Review Feedback：{review_file_path}
 - 需求規格：{self.spec_file}
 - 實作計畫：{self.plan_file}
-
+{user_input_section}
 **執行步驟：**
 1. **首先閱讀** {review_file_path}，了解所有需要修正的問題
 2. 根據 review feedback 逐一修正問題
@@ -399,12 +361,13 @@ class DevelopPhase(Phase):
 
 {status_code_prompt}
 
-**完成後回傳：CONFIRMED**
+**完成後回傳狀態碼就好，不要做任何總結**
 """
         
         # No review feedback - normal development mode
         if self.iteration == 1:
             # First iteration: provide spec.md and plan.md paths
+            user_input_section = f"\n\n**用戶的額外說明：**\n{user_input}\n" if user_input else ""
             return f"""請按照實作計畫執行開發工作。
 
 **你的角色：**
@@ -413,7 +376,7 @@ class DevelopPhase(Phase):
 **檔案路徑：**
 - 需求規格：{self.spec_file}
 - 實作計畫：{self.plan_file}
-
+{user_input_section}
 **執行步驟：**
 1. 仔細閱讀 {self.spec_file} 和 {self.plan_file}
 2. 嚴格按照計畫中的順序執行開發任務
@@ -423,7 +386,7 @@ class DevelopPhase(Phase):
 
 {status_code_prompt}
 
-**完成後回傳：CONFIRMED**
+**完成後回傳狀態碼就好，不要做任何總結**
 """
         else:
             # Subsequent iterations: refer to history and continue
@@ -444,6 +407,7 @@ class DevelopPhase(Phase):
                 history_summary.append(f"第 {entry['iteration']} 輪：{entry['status_code']}")
             history_text = "\n".join(history_summary) if history_summary else "無歷史記錄"
 
+            user_input_section = f"\n\n**用戶的額外說明：**\n{user_input}\n" if user_input else ""
             return f"""繼續執行開發工作。
 
 **你的角色：**
@@ -457,7 +421,7 @@ class DevelopPhase(Phase):
 **檔案路徑：**
 - 需求規格：{self.spec_file}
 - 實作計畫：{self.plan_file}
-
+{user_input_section}
 **執行步驟：**
 1. 檢查 {self.plan_file} 了解哪些任務已完成
 2. 繼續執行未完成的開發任務
@@ -467,7 +431,7 @@ class DevelopPhase(Phase):
 
 {status_code_prompt}
 
-**完成後回傳：CONFIRMED**
+**完成後回傳狀態碼就好，不要做任何總結**
 """
 
     def execute(self) -> PhaseResult:
@@ -516,8 +480,11 @@ class DevelopPhase(Phase):
                 # Save issue config with base branch info
                 self._save_issue_config(base_branch, branch_name)
 
-            # Single development execution (no loop - workflow layer handles iterations)
-            self.iteration = 1
+            # Load current iteration counter (will be 0 if starting fresh, or last iteration if resuming)
+            self.iteration = self._load_iteration_counter()
+
+            # Increment for next execution
+            self.iteration += 1
 
             # Prepare user_input for this iteration
             result_or_input = self._prepare_user_input_for_iteration()
@@ -527,6 +494,33 @@ class DevelopPhase(Phase):
             # Otherwise, it's the user input string
             current_user_input = result_or_input
 
+            # Handle previous permission denials and construct allowed_tools
+            base_allowed_tools = ["write", "read", "bash"]
+            approved_tools_from_denials, permission_user_input = self._handle_previous_permission_denials()
+
+            # Check if user rejected all tools (no approvals)
+            prev_data = self._load_previous_iteration_data()
+            if prev_data and prev_data.get("permission_denials") and not approved_tools_from_denials:
+                return PhaseResult(
+                    status=PhaseStatus.FAILED,
+                    message="No tools approved - all permission requests were rejected.",
+                    data={
+                        "iterations": self.iteration,
+                        "last_response": prev_data.get('response', ''),
+                        "permission_denials": prev_data.get("permission_denials", []),
+                    },
+                )
+
+            # Merge approved tools with base tools
+            allowed_tools = base_allowed_tools + approved_tools_from_denials
+
+            # If user provided additional input about permissions, append to current_user_input
+            if permission_user_input:
+                if current_user_input:
+                    current_user_input = f"{current_user_input}\n\n{permission_user_input}"
+                else:
+                    current_user_input = permission_user_input
+
             # Execute full agent interaction cycle (generate prompt, execute, handle status)
             result, response = self._execute_and_handle_agent_response(
                 agent_name=self.dev_agent,
@@ -535,7 +529,7 @@ class DevelopPhase(Phase):
                     PhaseStatusCode.CONFIRMED,
                     PhaseStatusCode.NEED_PERMISSION,
                 ],
-                allowed_tools=["write", "read", "bash"],
+                allowed_tools=allowed_tools,
                 complete_codes=[PhaseStatusCode.CONFIRMED],
                 continue_codes=[],  # No automatic continue codes
             )

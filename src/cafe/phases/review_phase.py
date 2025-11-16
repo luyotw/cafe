@@ -374,7 +374,7 @@ class ReviewPhase(Phase):
 
 **重要：**
 - Commit message 風格問題視為 critical issue，必須修正後才能通過審查
-- 審查完成後請回傳狀態碼，指令執行即結束
+- 審查完成後請回傳狀態碼，不要做任何總結或額外說明
 """
         except Exception as e:
             raise RuntimeError(f"Error building prompt: {e}") from e

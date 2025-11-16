@@ -73,7 +73,7 @@ class AgentExecutor:
         """Translate tool names from Claude convention to current CLI convention.
 
         Args:
-            tools: List of tool names in Claude convention
+            tools: List of tool names in Claude convention (e.g. ["read", "edit(/path/file)"])
 
         Returns:
             List of tool names translated for current CLI, or None if no tools
@@ -82,7 +82,23 @@ class AgentExecutor:
             return None
 
         tool_map = self.TOOL_NAME_MAP.get(self.config.cli, {})
-        return [tool_map.get(tool, tool) for tool in tools]
+        translated = []
+
+        for tool in tools:
+            # Check if tool has parameters (e.g. "edit(/path/file)")
+            if "(" in tool:
+                # Extract tool name and parameters
+                tool_name = tool.split("(")[0]
+                tool_params = tool[len(tool_name):]  # Get "(params)"
+
+                # Translate tool name and append parameters
+                translated_name = tool_map.get(tool_name, tool_name)
+                translated.append(translated_name + tool_params)
+            else:
+                # Simple tool name without parameters
+                translated.append(tool_map.get(tool, tool))
+
+        return translated
 
     def execute(self, prompt: str, allowed_tools: Optional[List[str]] = None) -> AgentResponse:
         """Execute the agent with given prompt.
@@ -97,6 +113,13 @@ class AgentExecutor:
         Raises:
             AgentExecutionError: If agent execution fails
         """
+        # Add default edit permission if allowed_tools is provided
+        # (edit is required for basic file operations)
+        if allowed_tools is not None:
+            # Use lowercase 'edit' as it follows Claude convention (will be translated later)
+            if 'edit' not in allowed_tools:
+                allowed_tools = allowed_tools + ['edit']
+
         # Translate tool names to the appropriate CLI convention
         translated_tools = self._translate_tool_names(allowed_tools)
 
@@ -318,14 +341,28 @@ class AgentExecutor:
         cmd = ["claude", "--resume", session_id, "-p", prompt]
 
         # Add allowed tools if specified
+        # Claude 的 --allowed-tools 需要雙引號，否則授權無效
+        tools_arg_value = None
         if allowed_tools:
-            cmd.extend(["--allowed-tools", ",".join(allowed_tools)])
+            tools_arg_value = ",".join(allowed_tools)
+            cmd.extend(["--allowed-tools", tools_arg_value])
 
         # Add streaming output format
         cmd.extend(["--output-format", "stream-json", "--verbose"])
 
         # Include .cafe directory for tool access
         cmd.extend(["--add-dir", ".cafe"])
+
+        # Record CLI command arguments (除了 prompt) - 用於 debug
+        # Claude 的 allowed-tools 必須加雙引號
+        cli_command_args = [
+            "--resume", session_id,
+            "--output-format", "stream-json",
+            "--verbose",
+            "--add-dir", ".cafe"
+        ]
+        if tools_arg_value:
+            cli_command_args.extend(["--allowed-tools", f'"{tools_arg_value}"'])
 
         # Execute with streaming
         agent_response = self._execute_with_streaming(
@@ -336,6 +373,9 @@ class AgentExecutor:
 
         # Update session_id in config for future use
         self.config.session_id = session_id
+
+        # Add CLI command args to response
+        agent_response.cli_command_args = cli_command_args
 
         return agent_response
 
@@ -395,14 +435,25 @@ class AgentExecutor:
         cmd = ["gemini", prompt]
 
         # Add allowed tools if specified
+        tools_arg_value = None
         if allowed_tools:
-            cmd.extend(["--allowed-tools", ",".join(allowed_tools)])
+            tools_arg_value = ",".join(allowed_tools)
+            cmd.extend(["--allowed-tools", tools_arg_value])
 
         # Add streaming JSON output format
         cmd.extend(["--output-format", "stream-json"])
 
         # Include .cafe directory for tool access
         cmd.extend(["--include-directories", ".cafe"])
+
+        # Record CLI command arguments (除了 prompt) - 用於 debug
+        # Gemini 的 allowed-tools 也需要引號（跟 Claude 一樣）
+        cli_command_args = [
+            "--output-format", "stream-json",
+            "--include-directories", ".cafe"
+        ]
+        if tools_arg_value:
+            cli_command_args.extend(["--allowed-tools", f'"{tools_arg_value}"'])
 
         # Gemini-specific parser: parse last line as final result
         def parse_gemini_response(output_lines: List[str]) -> AgentResponse:
@@ -469,13 +520,19 @@ class AgentExecutor:
                 return data.get("content")
             return None
 
-        return self._execute_with_streaming(
-            cmd, 
-            "Gemini", 
+        # Execute Gemini
+        agent_response = self._execute_with_streaming(
+            cmd,
+            "Gemini",
             parse_gemini_response,
             parse_stream_json=True,
             json_content_extractor=extract_gemini_content
         )
+
+        # Add CLI command args to response
+        agent_response.cli_command_args = cli_command_args
+
+        return agent_response
 
     def _execute_cursor(self, prompt: str, allowed_tools: Optional[List[str]] = None) -> AgentResponse:
         """Execute Cursor agent with streaming output.
@@ -491,11 +548,18 @@ class AgentExecutor:
         cmd = ["cursor-agent", "-p", prompt]
 
         # Add allowed tools if specified
+        tools_arg_value = None
         if allowed_tools:
-            cmd.extend(["--allowed-tools", ",".join(allowed_tools)])
+            tools_arg_value = ",".join(allowed_tools)
+            cmd.extend(["--allowed-tools", tools_arg_value])
 
         # Add JSON output format for parsing
         cmd.extend(["--output-format", "json"])
+
+        # Record CLI command arguments (除了 prompt) - 用於 debug
+        cli_command_args = ["--output-format", "json"]
+        if tools_arg_value:
+            cli_command_args.extend(["--allowed-tools", tools_arg_value])
 
         # Cursor-specific parser: parse JSON output
         def parse_cursor_response(output_lines: List[str]) -> AgentResponse:
@@ -512,7 +576,13 @@ class AgentExecutor:
                 # If not JSON, return raw output
                 return AgentResponse(response=full_output, token_usage=TokenUsage())
 
-        return self._execute_with_streaming(cmd, "Cursor", parse_cursor_response)
+        # Execute Cursor
+        agent_response = self._execute_with_streaming(cmd, "Cursor", parse_cursor_response)
+
+        # Add CLI command args to response
+        agent_response.cli_command_args = cli_command_args
+
+        return agent_response
 
     def _execute_copilot(self, prompt: str, allowed_tools: Optional[List[str]] = None) -> AgentResponse:
         """Execute GitHub Copilot CLI agent with streaming output.
@@ -554,6 +624,17 @@ class AgentExecutor:
         # Include .cafe directory for tool access
         cmd.extend(["--add-dir", ".cafe"])
 
+        # Record CLI command arguments (除了 prompt) - 用於 debug
+        # Copilot 使用 --allow-tool (多個) 而不是 --allowed-tools
+        cli_command_args = ["--add-dir", ".cafe"]
+        if self.config.session_id:
+            cli_command_args.extend(["--resume", self.config.session_id])
+        if allowed_tools:
+            for tool in allowed_tools:
+                cli_command_args.extend(["--allow-tool", tool])
+        else:
+            cli_command_args.append("--allow-all-tools")
+
         # Execute with streaming (line-by-line mode)
         agent_response = self._execute_with_streaming(
             cmd=cmd,
@@ -573,5 +654,8 @@ class AgentExecutor:
                 newest_session = sorted(new_sessions)[-1]  # 取最新的
                 session_id = newest_session.replace(".jsonl", "")
                 self.config.session_id = session_id
+
+        # Add CLI command args to response
+        agent_response.cli_command_args = cli_command_args
 
         return agent_response

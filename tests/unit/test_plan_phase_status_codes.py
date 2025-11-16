@@ -26,7 +26,7 @@ class TestPlanPhaseWithStatusCodes:
         plan_file.write_text("## 開發指南\nSome guide\n\n## 實作計畫\nTODO")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage())
+        agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage(), [], None)
 
         # Mock get_agent to return agent with config
         mock_agent = MagicMock()
@@ -63,7 +63,7 @@ class TestPlanPhaseWithStatusCodes:
         plan_file.write_text("## 開發指南\nSome guide\n\n## 實作計畫\nTODO")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("CAFE_REJECTED\n分析無法進行。", TokenUsage())
+        agent_manager.execute.return_value = ("CAFE_REJECTED\n分析無法進行。", TokenUsage(), [], None)
 
         # Mock get_agent to return agent with config
         mock_agent = MagicMock()
@@ -142,7 +142,7 @@ class TestPlanPhaseWithStatusCodes:
         plan_file.write_text("## 開發指南\nSome guide\n\n## 實作計畫\nTODO")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("分析結果：\nCAFE_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage())
+        agent_manager.execute.return_value = ("分析結果：\nCAFE_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage(), [], None)
 
         # Mock get_agent to return agent with config
         mock_agent = MagicMock()
@@ -220,7 +220,7 @@ class TestPlanPhaseWithStatusCodes:
         plan_file.write_text("## 開發指南\nSome guide\n\n## 實作計畫\nTODO")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("cafe_ready_for_review\n實作分析已完成。", TokenUsage())
+        agent_manager.execute.return_value = ("cafe_ready_for_review\n實作分析已完成。", TokenUsage(), [], None)
 
         # Mock get_agent to return agent with config
         mock_agent = MagicMock()

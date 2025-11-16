@@ -129,33 +129,41 @@ class TestAgentExecution:
         manager.register_agent(config)
 
         with patch.object(AgentExecutor, "execute") as mock_execute:
-            from cafe.core.types import TokenUsage
-            mock_execute.return_value = ("Agent response", TokenUsage())
+            from cafe.core.types import TokenUsage, AgentResponse
+            mock_execute.return_value = AgentResponse(
+                response="Agent response",
+                token_usage=TokenUsage()
+            )
 
-            response, token_usage = manager.execute("David", "Test prompt")
+            response, token_usage, permission_denials, cli_command_args = manager.execute("David", "Test prompt")
 
             assert response == "Agent response"
             mock_execute.assert_called_once_with("Test prompt", None)
 
     def test_execute_returns_tuple_with_token_usage(self) -> None:
-        """測試 execute 回傳 tuple (response, token_usage)"""
+        """測試 execute 回傳 4-tuple (response, token_usage, permission_denials, cli_command_args)"""
         manager = AgentManager()
         config = AgentConfig(name="David", cli=AgentCLI.CLAUDE)
         manager.register_agent(config)
 
         with patch.object(AgentExecutor, "execute") as mock_execute:
-            from cafe.core.types import TokenUsage
+            from cafe.core.types import TokenUsage, AgentResponse
             expected_token_usage = TokenUsage(input_tokens=100, output_tokens=50)
-            mock_execute.return_value = ("Agent response", expected_token_usage)
+            mock_execute.return_value = AgentResponse(
+                response="Agent response",
+                token_usage=expected_token_usage
+            )
 
             result = manager.execute("David", "Test prompt")
 
-            # Should return tuple (response, token_usage)
+            # Should return 4-tuple (response, token_usage, permission_denials, cli_command_args)
             assert isinstance(result, tuple)
-            assert len(result) == 2
-            response, token_usage = result
+            assert len(result) == 4
+            response, token_usage, permission_denials, cli_command_args = result
             assert response == "Agent response"
             assert token_usage.input_tokens == 100
+            assert permission_denials == []
+            assert cli_command_args is None
             assert token_usage.output_tokens == 50
 
     def test_execute_current_agent(self) -> None:

@@ -1,6 +1,8 @@
 """Tests for core type definitions."""
 
+import os
 from datetime import datetime
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
@@ -9,6 +11,7 @@ from cafe.core.types import (
     AgentConfig,
     AgentCLI,
     PermissionAction,
+    PermissionDenial,
     PermissionRequest,
     PhaseProgress,
     PhaseResult,
@@ -250,3 +253,61 @@ class TestPhaseProgress:
         assert restored.status_code == original.status_code
         assert restored.timestamp == original.timestamp
         assert restored.iteration == original.iteration
+
+
+class TestPermissionDenial:
+    """Test PermissionDenial model."""
+
+    def test_to_allowed_tool_pattern_with_absolute_path(self, tmp_path: Path) -> None:
+        """測試絕對路徑應轉換成相對於專案根目錄的路徑"""
+        # 模擬專案根目錄
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+
+        # 切換到專案目錄
+        original_cwd = os.getcwd()
+        try:
+            os.chdir(project_root)
+
+            # 測試絕對路徑
+            file_path = str(project_root / "views" / "admin" / "topics.php")
+            denial = PermissionDenial(
+                tool_name="Edit",
+                tool_input={"file_path": file_path}
+            )
+
+            # 應該轉換成相對路徑並加上 / 前綴（git ignore 規則）
+            pattern = denial.to_allowed_tool_pattern()
+            assert pattern == "edit(/views/admin/topics.php)"
+        finally:
+            os.chdir(original_cwd)
+
+    def test_to_allowed_tool_pattern_with_relative_path(self, tmp_path: Path) -> None:
+        """測試相對路徑應該保持原樣並加上 / 前綴"""
+        denial = PermissionDenial(
+            tool_name="Write",
+            tool_input={"file_path": "src/main.py"}
+        )
+
+        pattern = denial.to_allowed_tool_pattern()
+        assert pattern == "write(/src/main.py)"
+
+    def test_to_allowed_tool_pattern_with_bash_command(self) -> None:
+        """測試 bash 命令使用前兩個詞作為 pattern"""
+        denial = PermissionDenial(
+            tool_name="Bash",
+            tool_input={"command": "git --no-pager diff HEAD"}
+        )
+
+        pattern = denial.to_allowed_tool_pattern()
+        assert pattern == "bash(git --no-pager)"
+
+    def test_to_allowed_tool_pattern_without_params(self) -> None:
+        """測試沒有參數時只返回工具名"""
+        denial = PermissionDenial(
+            tool_name="Read",
+            tool_input={}
+        )
+
+        pattern = denial.to_allowed_tool_pattern()
+        assert pattern == "read"
