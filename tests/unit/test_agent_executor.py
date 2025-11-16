@@ -1273,7 +1273,7 @@ class TestToolNameTranslation:
 
         assert translated == [
             "replace(/home/user/test.php)",
-            "bash(git status)"
+            "run_shell_command(git status)"
         ]
 
     def test_translate_returns_none_for_empty_tools(self):
