@@ -1163,3 +1163,34 @@ class TestDevelopPhaseIterationCounter:
 
         assert saved_002["iteration"] == 2, "第二輪應該是 iteration 2"
         assert "第二次開發完成" in saved_002["response"]
+
+
+class TestDeveloperPermissions:
+    """測試 developer 的權限配置"""
+
+    def test_developer_has_edit_permission(self):
+        """測試 developer 的 base_allowed_tools 包含 edit"""
+        from cafe.phases.develop_phase import DevelopPhase
+        from unittest.mock import MagicMock
+
+        # Create a minimal phase instance (we don't need to execute, just check the code)
+        agent_manager = MagicMock()
+        permission_handler = MagicMock()
+        git_ops = MagicMock()
+
+        phase = DevelopPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            git_ops=git_ops,
+            spec_file="spec.md",
+            plan_file="plan.md",
+            workflow_mode="local"
+        )
+
+        # Check the source code directly - base_allowed_tools should include edit
+        import inspect
+        source = inspect.getsource(DevelopPhase.execute)
+
+        # Verify that base_allowed_tools includes edit
+        assert 'base_allowed_tools = ["write", "read", "edit", "bash"]' in source, \
+            "Developer's base_allowed_tools should include edit permission"

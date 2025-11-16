@@ -507,7 +507,7 @@ class DevelopPhase(Phase):
             current_user_input = result_or_input
 
             # Handle previous permission denials and construct allowed_tools
-            base_allowed_tools = ["write", "read", "bash"]
+            base_allowed_tools = ["write", "read", "edit", "bash"]
             approved_tools_from_denials, permission_user_input = self._handle_previous_permission_denials()
 
             # Check if user rejected all tools (no approvals)
