@@ -641,6 +641,37 @@ class Phase(ABC):
         with open(prev_iteration_file, "r", encoding="utf-8") as f:
             return json.load(f)
 
+    def _merge_allowed_tools(
+        self,
+        base_allowed_tools: List[str],
+        approved_tools_from_denials: Optional[List[str]] = None,
+    ) -> List[str]:
+        """合併 base allowed tools 和前一輪的 allowed tools（通用方法）。
+
+        這個方法會：
+        1. 從前一輪 iteration 讀取 allowed_tools
+        2. 合併 base_allowed_tools + 前一輪的 allowed_tools + 新批准的 tools
+        3. 去除重複項目
+
+        Args:
+            base_allowed_tools: 此 phase 的基礎工具列表
+            approved_tools_from_denials: 從這一輪 permission denials 新批准的工具（預設為空列表）
+
+        Returns:
+            合併且去重後的工具列表
+        """
+        approved_tools_from_denials = approved_tools_from_denials or []
+
+        # Load previous iteration's allowed tools
+        prev_allowed_tools: List[str] = []
+        prev_data = self._load_previous_iteration_data()
+        if prev_data and prev_data.get("allowed_tools"):
+            prev_allowed_tools = prev_data.get("allowed_tools", [])
+
+        # Merge: base tools + previous iteration's tools + newly approved tools from denials
+        # Use set to avoid duplicates, then convert back to list
+        return list(set(base_allowed_tools + prev_allowed_tools + approved_tools_from_denials))
+
     def _handle_previous_permission_denials(self) -> tuple[List[str], str]:
         """處理上一輪的 permission denials，返回批准的工具和用戶輸入。
 

@@ -781,3 +781,137 @@ class TestIterationHistoryCLICommandArgs:
         assert "--verbose" in cli_args
         assert "--add-dir" in cli_args
         assert ".cafe" in cli_args
+
+
+class TestMergeAllowedTools:
+    """測試 _merge_allowed_tools 方法"""
+
+    def test_merge_with_no_previous_iteration(self, tmp_path: Path) -> None:
+        """測試第一次 iteration 時，只返回 base_allowed_tools"""
+        # Setup
+        phase = ConcretePhase()
+        phase.iteration = 1
+        phase.history_dir = tmp_path / "history"
+        phase.history_dir.mkdir(parents=True)
+
+        base_tools = ["write", "read", "bash"]
+
+        # Execute
+        result = phase._merge_allowed_tools(base_tools)
+
+        # Verify - should only have base tools
+        assert set(result) == set(base_tools)
+
+    def test_merge_with_previous_iteration_tools(self, tmp_path: Path) -> None:
+        """測試繼承上一輪的 allowed_tools"""
+        # Setup
+        history_dir = tmp_path / "history"
+        history_dir.mkdir(parents=True)
+
+        # Create previous iteration with allowed_tools
+        prev_iteration = history_dir / "iteration_001.json"
+        prev_data = {
+            "iteration": 1,
+            "allowed_tools": ["write", "read", "bash", "grep"],
+            "response": "Test",
+            "status_code": "CAFE_CONFIRMED",
+        }
+        prev_iteration.write_text(json.dumps(prev_data, indent=2))
+
+        phase = ConcretePhase()
+        phase.iteration = 2
+        phase.history_dir = history_dir
+
+        base_tools = ["write", "read"]  # Less tools than previous
+
+        # Execute
+        result = phase._merge_allowed_tools(base_tools)
+
+        # Verify - should have base + previous tools
+        assert set(result) == {"write", "read", "bash", "grep"}
+
+    def test_merge_with_approved_tools_from_denials(self, tmp_path: Path) -> None:
+        """測試加入新批准的 tools"""
+        # Setup
+        history_dir = tmp_path / "history"
+        history_dir.mkdir(parents=True)
+
+        # Create previous iteration
+        prev_iteration = history_dir / "iteration_001.json"
+        prev_data = {
+            "iteration": 1,
+            "allowed_tools": ["write", "read"],
+            "response": "Test",
+            "status_code": "CAFE_NEED_PERMISSION",
+        }
+        prev_iteration.write_text(json.dumps(prev_data, indent=2))
+
+        phase = ConcretePhase()
+        phase.iteration = 2
+        phase.history_dir = history_dir
+
+        base_tools = ["write", "read"]
+        approved_tools = ["bash", "grep"]
+
+        # Execute
+        result = phase._merge_allowed_tools(base_tools, approved_tools)
+
+        # Verify - should have all three sets of tools
+        assert set(result) == {"write", "read", "bash", "grep"}
+
+    def test_merge_removes_duplicates(self, tmp_path: Path) -> None:
+        """測試去除重複的工具"""
+        # Setup
+        history_dir = tmp_path / "history"
+        history_dir.mkdir(parents=True)
+
+        # Create previous iteration with overlapping tools
+        prev_iteration = history_dir / "iteration_001.json"
+        prev_data = {
+            "iteration": 1,
+            "allowed_tools": ["write", "read", "bash"],
+            "response": "Test",
+            "status_code": "CAFE_CONFIRMED",
+        }
+        prev_iteration.write_text(json.dumps(prev_data, indent=2))
+
+        phase = ConcretePhase()
+        phase.iteration = 2
+        phase.history_dir = history_dir
+
+        base_tools = ["write", "read", "edit"]  # write and read overlap
+        approved_tools = ["bash", "grep"]  # bash overlaps
+
+        # Execute
+        result = phase._merge_allowed_tools(base_tools, approved_tools)
+
+        # Verify - should have no duplicates
+        assert set(result) == {"write", "read", "bash", "edit", "grep"}
+        assert len(result) == 5  # Exactly 5 unique tools
+
+    def test_merge_with_no_previous_allowed_tools(self, tmp_path: Path) -> None:
+        """測試前一輪沒有 allowed_tools 欄位"""
+        # Setup
+        history_dir = tmp_path / "history"
+        history_dir.mkdir(parents=True)
+
+        # Create previous iteration without allowed_tools field
+        prev_iteration = history_dir / "iteration_001.json"
+        prev_data = {
+            "iteration": 1,
+            "response": "Test",
+            "status_code": "CAFE_CONFIRMED",
+        }
+        prev_iteration.write_text(json.dumps(prev_data, indent=2))
+
+        phase = ConcretePhase()
+        phase.iteration = 2
+        phase.history_dir = history_dir
+
+        base_tools = ["write", "read"]
+
+        # Execute
+        result = phase._merge_allowed_tools(base_tools)
+
+        # Verify - should only have base tools
+        assert set(result) == set(base_tools)

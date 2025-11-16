@@ -251,7 +251,8 @@ class DevelopPhase(Phase):
                         )
 
             # Review exists and hasn't been handled yet, continue execution
-            print("ℹ️  Review feedback detected (CAFE_NEEDS_CHANGES). Continuing development...")
+            review_file = self._get_review_file_path()
+            print(f"ℹ️  Review feedback detected: {review_file}")
             return None  # Don't return early - let execution continue to handle review feedback
 
         # No review feedback or review passed, phase is truly completed
@@ -368,7 +369,7 @@ class DevelopPhase(Phase):
 1. **首先閱讀** {review_file_path}，了解所有需要修正的問題
 2. 根據 review feedback 逐一修正問題
 3. 如果需要，可參考 {self.spec_file} 和 {self.plan_file}
-4. 嚴格按照既有的 commit message 風格撰寫 commit 訊息，可分多次 commit
+4. **嚴格按照既有的 commit message 風格撰寫 commit 訊息**，可分多次 commit
 5. 完成所有修正後回傳狀態碼
 
 {status_code_prompt}
@@ -523,14 +524,8 @@ class DevelopPhase(Phase):
                     },
                 )
 
-            # Inherit previously approved tools from last iteration
-            prev_allowed_tools = []
-            if prev_data and prev_data.get("allowed_tools"):
-                prev_allowed_tools = prev_data.get("allowed_tools", [])
-
-            # Merge: base tools + previous iteration's tools + newly approved tools from denials
-            # Use set to avoid duplicates, then convert back to list
-            allowed_tools = list(set(base_allowed_tools + prev_allowed_tools + approved_tools_from_denials))
+            # Merge base tools + previous iteration's tools + newly approved tools
+            allowed_tools = self._merge_allowed_tools(base_allowed_tools, approved_tools_from_denials)
 
             # If user provided additional input about permissions, append to current_user_input
             if permission_user_input:

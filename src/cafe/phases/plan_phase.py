@@ -153,6 +153,10 @@ class PlanPhase(Phase):
                 # Otherwise, it's the user input string
                 current_user_input = result_or_input
 
+                # Merge base tools with previous iteration's tools (if any)
+                base_allowed_tools = ["write", "read", "edit"]
+                allowed_tools = self._merge_allowed_tools(base_allowed_tools)
+
                 # Execute full agent interaction cycle (generate prompt, execute, handle status)
                 result, response = self._execute_and_handle_agent_response(
                     agent_name=self.dev_agent,
@@ -162,7 +166,7 @@ class PlanPhase(Phase):
                         PhaseStatusCode.NEED_CLARIFICATION,
                         PhaseStatusCode.REJECTED,
                     ],
-                    allowed_tools=["write", "read", "edit"],
+                    allowed_tools=allowed_tools,
                     complete_codes=[PhaseStatusCode.READY_FOR_REVIEW],
                     continue_codes=[PhaseStatusCode.NEED_CLARIFICATION],
                     phase_specific_data={"dev_agent": self.dev_agent},

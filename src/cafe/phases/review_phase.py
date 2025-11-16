@@ -97,13 +97,16 @@ class ReviewPhase(Phase):
                 # If path is not relative to cwd, use absolute path
                 review_file_pattern = str(review_file_path)
 
-            allowed_tools = [
+            base_allowed_tools = [
                 "read",                         # Read spec and plan files
                 "bash(git log)",                # View commit history and messages
                 "bash(git diff)",               # View code changes
                 "bash(git show)",               # View specific commit details
                 f"write({review_file_pattern})",  # Allow writing to specific review file
             ]
+
+            # Merge base tools with previous iteration's tools (if any)
+            allowed_tools = self._merge_allowed_tools(base_allowed_tools)
 
             # Execute review using base class method
             result, response = self._execute_and_handle_agent_response(

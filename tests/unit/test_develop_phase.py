@@ -1054,6 +1054,100 @@ class TestDevelopPhaseReviewFeedback:
         assert result.status == PhaseStatus.COMPLETED
         assert "already completed" in result.message.lower()
 
+    def test_prints_review_file_when_detected(self, tmp_path, capsys) -> None:
+        """測試當檢測到 review feedback 時，應該 print 出 review 檔案路徑"""
+        # Setup
+        agent_manager = MagicMock(spec=AgentManager)
+        setup_agent_manager_mock(agent_manager)
+        agent_manager.execute.return_value = ("CAFE_CONFIRMED\n修正完成", TokenUsage(), [], None)
+        agent_manager.get_total_token_usage.return_value = TokenUsage()
+
+        permission_handler = MagicMock(spec=PermissionHandler)
+        git_ops = MagicMock(spec=GitOperations)
+        git_ops.branch_exists.return_value = True
+
+        # Create test files
+        issue_dir = tmp_path / ".cafe" / "issues" / "test-issue"
+        spec_dir = issue_dir / "spec"
+        plan_dir = issue_dir / "plan"
+        review_dir = issue_dir / "review"
+        develop_dir = issue_dir / "develop"
+
+        spec_dir.mkdir(parents=True)
+        plan_dir.mkdir(parents=True)
+        review_dir.mkdir(parents=True)
+        develop_dir.mkdir(parents=True)
+
+        spec_file = spec_dir / "spec.md"
+        plan_file = plan_dir / "plan.md"
+        review_status_file = review_dir / "status.json"
+        develop_status_file = develop_dir / "status.json"
+
+        spec_file.write_text("Test spec")
+        plan_file.write_text("Test plan")
+
+        # Create numbered review files
+        (review_dir / "review_001.md").write_text("First review")
+        (review_dir / "review_002.md").write_text("CAFE_NEEDS_CHANGES\n\nPlease fix the bug.")
+
+        # Create develop status.json indicating COMPLETED (first)
+        develop_status_data = {
+            "phase": "develop",
+            "status": "completed",
+            "status_code": "CAFE_CONFIRMED",
+            "iteration": 1,
+            "timestamp": datetime.now().isoformat()
+        }
+        develop_status_file.write_text(json.dumps(develop_status_data, indent=2))
+
+        # Create review status.json with NEEDS_CHANGES (after develop)
+        import time
+        time.sleep(0.01)  # Ensure review is after develop
+        review_status_data = {
+            "phase": "review",
+            "status": "completed",
+            "status_code": "CAFE_NEEDS_CHANGES",
+            "iteration": 2,
+            "timestamp": datetime.now().isoformat()
+        }
+        review_status_file.write_text(json.dumps(review_status_data, indent=2))
+
+        # Create iteration history
+        history_dir = develop_dir / "history"
+        history_dir.mkdir(parents=True)
+        history_file = history_dir / "iteration_001.json"
+        history_data = {
+            "iteration": 1,
+            "user_input": "",
+            "prompt": "Test prompt",
+            "response": "CAFE_CONFIRMED\n開發完成",
+            "status_code": "CAFE_CONFIRMED",
+            "timestamp": datetime.now().isoformat()
+        }
+        history_file.write_text(json.dumps(history_data, indent=2))
+
+        phase = DevelopPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            git_ops=git_ops,
+            spec_file=str(spec_file),
+            plan_file=str(plan_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            interactive=False,
+        )
+
+        # Execute
+        result = phase.execute()
+
+        # Verify print output includes review file path
+        captured = capsys.readouterr()
+        expected_review_file = str(review_dir / "review_002.md")
+        assert expected_review_file in captured.out, f"Expected '{expected_review_file}' in output, got: {captured.out}"
+
+        # Should continue execution (not return early)
+        assert agent_manager.execute.called
+        assert result.status == PhaseStatus.COMPLETED
+
 
 class TestDevelopPhaseIterationCounter:
     """Test DevelopPhase iteration counter behavior to prevent overwriting previous iterations."""
