@@ -1064,11 +1064,22 @@ def review(
             else:
                 console.print(f"[bold yellow]📝 Code review completed with status: {status_code}[/bold yellow]")
                 console.print()
+
+                # Find latest review file (review_XXX.md)
+                review_dir = Path(f".cafe/issues/{issue_name}/review")
+                review_files = sorted(review_dir.glob("review_*.md"))
+                if review_files:
+                    latest_review = review_files[-1]
+                    review_path = f".cafe/issues/{issue_name}/review/{latest_review.name}"
+                else:
+                    # Fallback to review.md if no numbered files found
+                    review_path = f".cafe/issues/{issue_name}/review/review.md"
+
                 console.print("[dim]Review feedback saved to:[/dim]")
-                console.print(f"[dim]  .cafe/issues/{issue_name}/review/review.md[/dim]")
+                console.print(f"[dim]  {review_path}[/dim]")
                 console.print()
                 console.print("[dim]Next steps:[/dim]")
-                console.print(f"[dim]  1. Review feedback: cat .cafe/issues/{issue_name}/review/review.md[/dim]")
+                console.print(f"[dim]  1. Review feedback: cat {review_path}[/dim]")
                 console.print(f"[dim]  2. Make changes: cafe develop {issue_name}[/dim]")
                 console.print(f"[dim]  3. Review again: cafe review {issue_name}[/dim]")
         else:
