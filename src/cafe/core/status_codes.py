@@ -186,7 +186,7 @@ def generate_status_code_prompt(valid_codes: List[PhaseStatusCode], descriptions
         "",
         "範例回應格式：",
         f"{valid_codes[0].value}",
-        "（接著是詳細說明...）"
+        "（只回應狀態碼，不要做何任總結及說明...）"
     ])
 
     return "\n".join(lines)
