@@ -1054,3 +1054,103 @@ class TestDevelopTimestampCheck:
         # 測試
         result = phase._check_if_develop_is_newer()
         assert result is False
+
+
+class TestReviewPhaseIterationRestriction:
+    """測試 ReviewPhase 從第 4 輪開始的限制"""
+
+    def test_iteration_4_includes_restriction_in_prompt(self, tmp_path: Path) -> None:
+        """測試第 4 輪審查的 prompt 包含限制說明"""
+        # Setup
+        spec_file = tmp_path / ".cafe" / "issues" / "test-issue" / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
+        spec_file.write_text("# Spec\n\nTest spec content")
+
+        plan_file = tmp_path / ".cafe" / "issues" / "test-issue" / "plan" / "plan.md"
+        plan_file.parent.mkdir(parents=True, exist_ok=True)
+        plan_file.write_text("# Plan\n\nTest plan content")
+
+        # Create review history to simulate iteration 4
+        review_dir = tmp_path / ".cafe" / "issues" / "test-issue" / "review"
+        review_dir.mkdir(parents=True, exist_ok=True)
+        for i in range(1, 4):
+            review_file = review_dir / f"review_{i:03d}.md"
+            review_file.write_text(f"Review {i}")
+
+        agent_manager = MagicMock(spec=AgentManager)
+        agent_manager.execute.return_value = ("CAFE_CONFIRMED\n審查通過", TokenUsage(), [], None)
+        agent_manager.get_total_token_usage.return_value = TokenUsage()
+        setup_agent_manager_mock(agent_manager)
+
+        permission_handler = MagicMock(spec=PermissionHandler)
+        git_ops = MagicMock(spec=GitOperations)
+
+        phase = ReviewPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            git_ops=git_ops,
+            spec_file=str(spec_file),
+            plan_file=str(plan_file),
+            workflow_mode=WorkflowMode.LOCAL,
+        )
+
+        # Execute (will be iteration 4)
+        result = phase.execute()
+
+        # Verify prompt includes restriction
+        assert agent_manager.execute.called
+        call_args = agent_manager.execute.call_args
+        prompt = call_args[0][1]  # Second positional argument is the prompt
+
+        # Check for restriction text
+        assert "重要限制" in prompt
+        assert "第 4 輪" in prompt
+        assert "不可以提出新的問題" in prompt
+        assert "critical" in prompt.lower()
+
+    def test_iteration_3_no_restriction_in_prompt(self, tmp_path: Path) -> None:
+        """測試第 3 輪審查的 prompt 不包含限制說明"""
+        # Setup
+        spec_file = tmp_path / ".cafe" / "issues" / "test-issue" / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
+        spec_file.write_text("# Spec\n\nTest spec content")
+
+        plan_file = tmp_path / ".cafe" / "issues" / "test-issue" / "plan" / "plan.md"
+        plan_file.parent.mkdir(parents=True, exist_ok=True)
+        plan_file.write_text("# Plan\n\nTest plan content")
+
+        # Create review history to simulate iteration 3
+        review_dir = tmp_path / ".cafe" / "issues" / "test-issue" / "review"
+        review_dir.mkdir(parents=True, exist_ok=True)
+        for i in range(1, 3):
+            review_file = review_dir / f"review_{i:03d}.md"
+            review_file.write_text(f"Review {i}")
+
+        agent_manager = MagicMock(spec=AgentManager)
+        agent_manager.execute.return_value = ("CAFE_CONFIRMED\n審查通過", TokenUsage(), [], None)
+        agent_manager.get_total_token_usage.return_value = TokenUsage()
+        setup_agent_manager_mock(agent_manager)
+
+        permission_handler = MagicMock(spec=PermissionHandler)
+        git_ops = MagicMock(spec=GitOperations)
+
+        phase = ReviewPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            git_ops=git_ops,
+            spec_file=str(spec_file),
+            plan_file=str(plan_file),
+            workflow_mode=WorkflowMode.LOCAL,
+        )
+
+        # Execute (will be iteration 3)
+        result = phase.execute()
+
+        # Verify prompt does NOT include restriction
+        assert agent_manager.execute.called
+        call_args = agent_manager.execute.call_args
+        prompt = call_args[0][1]  # Second positional argument is the prompt
+
+        # Check that restriction text is NOT present
+        assert "重要限制" not in prompt
+        assert "不可以提出新的問題" not in prompt

@@ -322,16 +322,27 @@ class ReviewPhase(Phase):
             },
         )
 
+        # Add restriction for iteration 4+
+        restriction = ""
+        if self.iteration >= 4:
+            restriction = f"""
+⚠️ **重要限制：**
+- 你現在是第 {self.iteration} 輪審查，只能針對「上一輪提出的問題」繼續追問
+- **不可以提出新的問題**（除非是 critical 的問題，如安全性漏洞、資料損毀等）
+- 只能深入釐清已經提出的問題
+"""
+
         # Generate review file path
         review_file_name = f"review_{self.iteration:03d}.md"
         review_file_path = self.review_dir / review_file_name
 
         # Build prompt
         try:
-            prompt = f"""你是資深軟體工程師 {self.review_agent}，正在進行程式碼審查 (Code Review)。
+            prompt = f"""你是資深軟體工程師 {self.review_agent}，正在進行第 {self.iteration} 輪程式碼審查 (Code Review)。
 
 {status_code_prompt}
 {recheck_instruction}
+{restriction}
 **審查結果儲存:**
 - **必須**將完整的審查結果寫入檔案：`{review_file_path}`
 - 檔案格式為 Markdown
