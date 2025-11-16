@@ -80,6 +80,9 @@ class ReviewPhase(Phase):
             # Initialize history directory
             self._initialize_history_dir()
 
+            # Calculate iteration number based on existing review files
+            self.iteration = self._get_next_iteration_number()
+
             # Get diff (full branch or specific commit)
             diff = self._get_diff()
             if not diff:
@@ -91,8 +94,24 @@ class ReviewPhase(Phase):
             # Store diff for use in prompt generation
             self.current_diff = diff
 
-            # Single iteration (no loop for review phase)
-            self.iteration = 1
+            # Prepare allowed tools with write permission for review file
+            review_file_name = f"review_{self.iteration:03d}.md"
+            review_file_path = self.review_dir / review_file_name
+
+            # Convert to project-relative path (git ignore format: / prefix)
+            import os
+            project_root = Path(os.getcwd())
+            try:
+                relative_path = review_file_path.relative_to(project_root)
+                review_file_pattern = f"/{relative_path}"
+            except ValueError:
+                # If path is not relative to cwd, use absolute path
+                review_file_pattern = str(review_file_path)
+
+            allowed_tools = [
+                "bash",  # Review can use bash for git commands
+                f"write({review_file_pattern})",  # Allow writing to specific review file
+            ]
 
             # Execute review using base class method
             result, response = self._execute_and_handle_agent_response(
@@ -102,7 +121,7 @@ class ReviewPhase(Phase):
                     PhaseStatusCode.CONFIRMED,
                     PhaseStatusCode.NEEDS_CHANGES,
                 ],
-                allowed_tools=["bash"],  # Review can use bash for git commands
+                allowed_tools=allowed_tools,
                 complete_codes=[PhaseStatusCode.CONFIRMED, PhaseStatusCode.NEEDS_CHANGES],
                 continue_codes=[],  # No continue codes - single iteration only
             )
@@ -161,13 +180,25 @@ class ReviewPhase(Phase):
         if self.workflow_mode == WorkflowMode.GITHUB and self.issue_id:
             review_dir = Path(f".cafe/issues/{self.issue_id}/review")
         else:
-            # Extract issue name from spec_file path
-            spec_path = Path(self.spec_file)
-            issue_name = spec_path.parent.parent.name
-            review_dir = Path(f".cafe/issues/{issue_name}/review")
+            # Extract issue name from spec_file path and use its parent structure
+            spec_path = Path(self.spec_file).resolve()  # Use absolute path
+            # spec_file is like /path/.cafe/issues/<issue-name>/spec/spec.md
+            # review_dir should be /path/.cafe/issues/<issue-name>/review
+            review_dir = spec_path.parent.parent / "review"
 
+        self.review_dir = review_dir  # Store for use in other methods
         self.history_dir = review_dir / "history"
         self.history_dir.mkdir(parents=True, exist_ok=True)
+
+    def _get_next_iteration_number(self) -> int:
+        """Get next iteration number based on existing review files.
+
+        Returns:
+            Next iteration number (1-based)
+        """
+        # Count existing review_*.md files in review directory
+        existing_reviews = list(self.review_dir.glob("review_*.md"))
+        return len(existing_reviews) + 1
 
     def _get_diff(self) -> str:
         """Get git diff (full branch or specific commit).
@@ -323,12 +354,21 @@ class ReviewPhase(Phase):
             },
         )
 
+        # Generate review file path
+        review_file_name = f"review_{self.iteration:03d}.md"
+        review_file_path = self.review_dir / review_file_name
+
         # Build prompt
         try:
             prompt = f"""你是資深軟體工程師 {self.review_agent}，正在進行程式碼審查 (Code Review)。
 
 {status_code_prompt}
 {recheck_instruction}
+**審查結果儲存:**
+- **必須**將完整的審查結果寫入檔案：`{review_file_path}`
+- 檔案格式為 Markdown
+- 內容包含所有審查發現的問題和建議
+
 **需求規格與實作計畫:**
 {requirements_section}
 

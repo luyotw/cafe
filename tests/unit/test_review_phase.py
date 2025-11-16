@@ -25,6 +25,137 @@ def setup_agent_manager_mock(agent_manager: MagicMock, agent_name: str = "Richar
     agent_manager.get_total_token_usage.return_value = TokenUsage()
 
 
+class TestReviewIterationNumbering:
+    """測試 review iteration 編號功能"""
+
+    def test_first_review_gets_iteration_1(self, tmp_path: Path) -> None:
+        """測試第一次 review 時 iteration 為 1"""
+        issue_name = "test-first-review"
+        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
+        spec_file.write_text("Requirements")
+
+        plan_file = spec_file.parent.parent / "plan" / "plan.md"
+        plan_file.parent.mkdir(parents=True, exist_ok=True)
+        plan_file.write_text("Plan")
+
+        agent_manager = MagicMock(spec=AgentManager)
+        setup_agent_manager_mock(agent_manager)
+        agent_manager.execute.return_value = (
+            "CAFE_CONFIRMED\nReview passed",
+            TokenUsage(),
+            [],
+            None
+        )
+
+        permission_handler = MagicMock(spec=PermissionHandler)
+        git_ops = MagicMock(spec=GitOperations)
+        git_ops.get_diff.return_value = "diff content"
+
+        phase = ReviewPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            git_ops=git_ops,
+            spec_file=str(spec_file),
+            plan_file=str(plan_file),
+            workflow_mode=WorkflowMode.LOCAL,
+        )
+
+        result = phase.execute()
+
+        # Should be iteration 1 (first review)
+        assert phase.iteration == 1
+
+    def test_second_review_gets_iteration_2(self, tmp_path: Path) -> None:
+        """測試當已有 review_001.md 時，下次 review iteration 為 2"""
+        issue_name = "test-second-review"
+        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
+        spec_file.write_text("Requirements")
+
+        plan_file = spec_file.parent.parent / "plan" / "plan.md"
+        plan_file.parent.mkdir(parents=True, exist_ok=True)
+        plan_file.write_text("Plan")
+
+        # Create existing review file
+        review_dir = spec_file.parent.parent / "review"
+        review_dir.mkdir(parents=True, exist_ok=True)
+        (review_dir / "review_001.md").write_text("First review")
+
+        agent_manager = MagicMock(spec=AgentManager)
+        setup_agent_manager_mock(agent_manager)
+        agent_manager.execute.return_value = (
+            "CAFE_CONFIRMED\nSecond review passed",
+            TokenUsage(),
+            [],
+            None
+        )
+
+        permission_handler = MagicMock(spec=PermissionHandler)
+        git_ops = MagicMock(spec=GitOperations)
+        git_ops.get_diff.return_value = "diff content"
+
+        phase = ReviewPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            git_ops=git_ops,
+            spec_file=str(spec_file),
+            plan_file=str(plan_file),
+            workflow_mode=WorkflowMode.LOCAL,
+        )
+
+        result = phase.execute()
+
+        # Should be iteration 2 (second review)
+        assert phase.iteration == 2
+
+    def test_prompt_includes_review_file_path(self, tmp_path: Path) -> None:
+        """測試 prompt 包含正確的 review 檔案路徑"""
+        issue_name = "test-review-path"
+        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
+        spec_file.write_text("Requirements")
+
+        plan_file = spec_file.parent.parent / "plan" / "plan.md"
+        plan_file.parent.mkdir(parents=True, exist_ok=True)
+        plan_file.write_text("Plan")
+
+        agent_manager = MagicMock(spec=AgentManager)
+        setup_agent_manager_mock(agent_manager)
+        agent_manager.execute.return_value = (
+            "CAFE_CONFIRMED\nReview done",
+            TokenUsage(),
+            [],
+            None
+        )
+
+        permission_handler = MagicMock(spec=PermissionHandler)
+        git_ops = MagicMock(spec=GitOperations)
+        git_ops.get_diff.return_value = "diff content"
+
+        phase = ReviewPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            git_ops=git_ops,
+            spec_file=str(spec_file),
+            plan_file=str(plan_file),
+            workflow_mode=WorkflowMode.LOCAL,
+        )
+
+        result = phase.execute()
+
+        # Check that execute was called
+        agent_manager.execute.assert_called_once()
+
+        # Get the prompt argument
+        call_args = agent_manager.execute.call_args
+        prompt = call_args[0][1]  # Second positional argument is the prompt
+
+        # Verify prompt contains the review file path instruction
+        assert "review_001.md" in prompt
+        assert ".cafe/issues/test-review-path/review/review_001.md" in prompt
+
+
 class TestReviewPhaseBasics:
     """Test basic ReviewPhase functionality."""
 
@@ -370,7 +501,7 @@ class TestPromptGeneration:
         prompt = call_args[1]
         assert "程式碼變更" in prompt
         assert "狀態碼" in prompt
-        assert "審查完成後請回傳狀態碼，指令執行即結束" in prompt
+        assert "審查完成後請回傳狀態碼，不要做任何總結或額外說明" in prompt
 
     def test_review_prompt_no_iteration_count(self, tmp_path: Path) -> None:
         """測試 review prompt 不包含迭代次數"""
@@ -412,8 +543,8 @@ class TestReviewResultSaving:
         import os
         original_dir = os.getcwd()
         try:
-            # Create issue structure
-            issue_dir = tmp_path / "myissue"
+            # Create issue structure (.cafe/issues/myissue/...)
+            issue_dir = tmp_path / ".cafe" / "issues" / "myissue"
             spec_dir = issue_dir / "spec"
             spec_dir.mkdir(parents=True)
             spec_file = spec_dir / "spec.md"
@@ -571,7 +702,9 @@ class TestReviewResultSaving:
             # Verify values
             assert history_data["cli"] == "copilot"
             assert history_data["session_id"] == "test-session-123"
-            assert history_data["allowed_tools"] == ["bash"]  # ReviewPhase allows bash for git commands
+            # ReviewPhase allows bash for git commands and write for review file
+            assert "bash" in history_data["allowed_tools"]
+            assert any("write(/.cafe/issues/myissue/review/review_" in tool for tool in history_data["allowed_tools"])
             assert history_data["denied_tools"] is None  # Default when not specified
         finally:
             os.chdir(original_dir)
