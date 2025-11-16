@@ -93,12 +93,12 @@ class PRPhase(Phase):
             pr_body = self.custom_body if self.custom_body else self._get_pr_body()
 
             # Create PR using gh CLI
-            pr_number = self._create_pr(pr_title, pr_body, branch_name)
+            pr_number, pr_url = self._create_pr(pr_title, pr_body, branch_name)
 
             return PhaseResult(
                 status=PhaseStatus.COMPLETED,
                 message=f"Pull Request #{pr_number} created successfully",
-                data={"pr_number": pr_number, "branch": branch_name},
+                data={"pr_number": pr_number, "pr_url": pr_url, "branch": branch_name},
             )
 
         except FileNotFoundError as e:
@@ -176,7 +176,7 @@ class PRPhase(Phase):
 
         return body
 
-    def _create_pr(self, title: str, body: str, branch_name: str) -> str:
+    def _create_pr(self, title: str, body: str, branch_name: str) -> tuple[str, str]:
         """Create PR using gh CLI.
 
         Args:
@@ -185,7 +185,7 @@ class PRPhase(Phase):
             branch_name: Branch name
 
         Returns:
-            PR number
+            Tuple of (PR number, PR URL)
 
         Raises:
             subprocess.CalledProcessError: If gh pr create fails
@@ -213,6 +213,6 @@ class PRPhase(Phase):
         pr_url = result.stdout.strip()
         match = re.search(r"/pull/(\d+)", pr_url)
         if match:
-            return match.group(1)
+            return match.group(1), pr_url
 
         raise RuntimeError(f"Failed to extract PR number from: {pr_url}")

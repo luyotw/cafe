@@ -676,3 +676,41 @@ class TestCustomTitleAndBody:
         body_value = cmd[body_index]
         assert "commit1" in body_value and "commit2" in body_value
         assert result.status == PhaseStatus.COMPLETED
+
+
+class TestPRURLInResult:
+    """測試 PR URL 是否包含在結果中"""
+
+    def test_pr_url_included_in_result(self, tmp_path: Path) -> None:
+        """測試 PR 建立成功後，結果中包含 PR URL"""
+        spec_file = tmp_path / ".cafe" / "issues" / "test-issue" / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
+        spec_file.write_text("# Feature\n\nAdd new feature")
+
+        agent_manager = MagicMock(spec=AgentManager)
+        permission_handler = MagicMock(spec=PermissionHandler)
+        
+        git_ops = MagicMock(spec=GitOperations)
+        git_ops.get_main_branch.return_value = "main"
+        git_ops.get_commits_between.return_value = "commit1\ncommit2"
+
+        phase = PRPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            git_ops=git_ops,
+            spec_file=str(spec_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            issue_name="test-issue",
+        )
+
+        # Mock gh pr create to return a URL
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value.stdout = "https://github.com/user/repo/pull/42"
+            mock_run.return_value.returncode = 0
+
+            result = phase.execute()
+
+        # Verify result includes both PR number and URL
+        assert result.status == PhaseStatus.COMPLETED
+        assert result.data["pr_number"] == "42"
+        assert result.data["pr_url"] == "https://github.com/user/repo/pull/42"

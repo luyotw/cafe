@@ -1242,9 +1242,13 @@ def pr(
         # Display result
         if result.status.value == "completed":
             pr_number = result.data.get("pr_number")
+            pr_url = result.data.get("pr_url")
             console.print()
             console.print(f"[bold green]✅ Pull Request #{pr_number} created successfully![/bold green]")
             console.print()
+            if pr_url:
+                console.print(f"[bold cyan]{pr_url}[/bold cyan]")
+                console.print()
             console.print("[dim]Next steps:[/dim]")
             console.print(f"[dim]  1. View PR: gh pr view {pr_number}[/dim]")
             console.print(f"[dim]  2. Edit PR: gh pr edit {pr_number}[/dim]")
