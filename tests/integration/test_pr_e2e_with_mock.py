@@ -493,3 +493,155 @@ class TestPRE2EMockErrorHandling:
             assert "failed" in result.message.lower()
         finally:
             os.chdir(original_cwd)
+
+
+@pytest.mark.e2e
+class TestPRE2EMockExistingFiles:
+    """測試 PR 檔案已存在的情境"""
+
+    @patch("cafe.core.git.subprocess.run")
+    def test_pr_exists_non_interactive_without_update_fails(self, mock_git_run, tmp_path):
+        """測試 PR 檔案已存在且非互動模式沒有 --update 會失敗"""
+        issue_name = "test-issue"
+        setup_test_environment(tmp_path, issue_name)
+
+        # Create existing PR files
+        pr_dir = tmp_path / ".cafe" / "issues" / issue_name / "pr"
+        pr_dir.mkdir(parents=True, exist_ok=True)
+        (pr_dir / "title.txt").write_text("Existing Title")
+        (pr_dir / "body.md").write_text("Existing Body")
+
+        # Mock git operations
+        def git_side_effect(*args, **kwargs):
+            result = MagicMock()
+            result.returncode = 0
+            result.stdout = "main"
+            result.stderr = ""
+            return result
+
+        mock_git_run.side_effect = git_side_effect
+
+        # Import here to use patched subprocess
+        from cafe.agents.manager import AgentManager
+        from cafe.core.permission import PermissionHandler
+        from cafe.core.git import GitOperations
+        from cafe.core.types import WorkflowMode
+        from cafe.phases.pr_phase import PRPhase
+
+        original_cwd = os.getcwd()
+        try:
+            os.chdir(tmp_path)
+
+            spec_file = f".cafe/issues/{issue_name}/spec/spec.md"
+
+            agent_manager = AgentManager()
+            permission_handler = PermissionHandler()
+            git_ops = GitOperations()
+
+            phase = PRPhase(
+                agent_manager=agent_manager,
+                permission_handler=permission_handler,
+                git_ops=git_ops,
+                spec_file=spec_file,
+                workflow_mode=WorkflowMode.LOCAL,
+                issue_name=issue_name,
+                draft=True,
+                custom_title=None,
+                custom_body=None,
+                update=False,  # No update flag
+                interactive=False,  # Non-interactive
+            )
+
+            result = phase.execute()
+
+            # Should fail with message about using --update
+            assert result.status.value == "failed"
+            assert "--update" in result.message
+        finally:
+            os.chdir(original_cwd)
+
+    @patch("cafe.agents.manager.AgentManager.execute")
+    @patch("cafe.phases.pr_phase.subprocess.run")
+    @patch("cafe.core.git.subprocess.run")
+    def test_pr_exists_with_update_flag_regenerates(self, mock_git_run, mock_gh_run, mock_agent_execute, tmp_path):
+        """測試 PR 檔案已存在且使用 --update 會重新生成"""
+        issue_name = "test-issue"
+        setup_test_environment(tmp_path, issue_name)
+
+        # Create existing PR files
+        pr_dir = tmp_path / ".cafe" / "issues" / issue_name / "pr"
+        pr_dir.mkdir(parents=True, exist_ok=True)
+        (pr_dir / "title.txt").write_text("Old Title")
+        (pr_dir / "body.md").write_text("Old Body")
+
+        # Mock subprocess calls
+        def git_side_effect(*args, **kwargs):
+            result = MagicMock()
+            result.returncode = 0
+            result.stdout = "main"
+            result.stderr = ""
+            return result
+
+        def gh_side_effect(*args, **kwargs):
+            result = MagicMock()
+            result.returncode = 0
+            result.stdout = "https://github.com/user/repo/pull/1"
+            result.stderr = ""
+            return result
+
+        mock_git_run.side_effect = git_side_effect
+        mock_gh_run.side_effect = gh_side_effect
+
+        # Mock agent to write new files
+        def agent_execute_side_effect(agent_name, prompt, allowed_tools):
+            (pr_dir / "title.txt").write_text("New Generated Title")
+            (pr_dir / "body.md").write_text("New Generated Body")
+            return "CAFE_CONFIRMED", [], [], []
+
+        mock_agent_execute.side_effect = agent_execute_side_effect
+
+        # Import here to use patched subprocess
+        from cafe.agents.manager import AgentManager
+        from cafe.core.permission import PermissionHandler
+        from cafe.core.git import GitOperations
+        from cafe.core.types import WorkflowMode
+        from cafe.phases.pr_phase import PRPhase
+
+        original_cwd = os.getcwd()
+        try:
+            os.chdir(tmp_path)
+
+            spec_file = f".cafe/issues/{issue_name}/spec/spec.md"
+
+            agent_manager = AgentManager()
+            permission_handler = PermissionHandler()
+            git_ops = GitOperations()
+
+            phase = PRPhase(
+                agent_manager=agent_manager,
+                permission_handler=permission_handler,
+                git_ops=git_ops,
+                spec_file=spec_file,
+                workflow_mode=WorkflowMode.LOCAL,
+                issue_name=issue_name,
+                draft=True,
+                custom_title=None,
+                custom_body=None,
+                update=True,  # Force update
+                interactive=False,
+            )
+
+            result = phase.execute()
+
+            # Should succeed and regenerate
+            assert result.status.value == "completed"
+            assert result.data["pr_number"] == "1"
+
+            # Verify files were updated
+            assert (pr_dir / "title.txt").read_text() == "New Generated Title"
+            assert (pr_dir / "body.md").read_text() == "New Generated Body"
+
+            # Verify agent was called
+            mock_agent_execute.assert_called_once()
+        finally:
+            os.chdir(original_cwd)

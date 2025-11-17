@@ -7,8 +7,9 @@ from unittest.mock import MagicMock, patch, call
 from cafe.phases.pr_phase import PRPhase
 from cafe.agents.manager import AgentManager
 from cafe.core.git import GitOperations
-from cafe.core.types import PhaseResult, PhaseStatus, WorkflowMode
+from cafe.core.types import PhaseResult, PhaseStatus, WorkflowMode, TokenUsage
 from cafe.core.permission import PermissionHandler
+from cafe.utils.github import GitHubOps
 
 
 class TestPRPhaseBasics:
@@ -17,13 +18,21 @@ class TestPRPhaseBasics:
     def test_init_pr_phase(self) -> None:
         """測試初始化 PRPhase"""
         agent_manager = MagicMock(spec=AgentManager)
+        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
+        mock_executor = MagicMock()
+        mock_executor.config.cli = "copilot"
+        mock_executor.config.session_id = "session_123"
+        agent_manager.get_agent.return_value = mock_executor
         permission_handler = MagicMock(spec=PermissionHandler)
         git_ops = MagicMock(spec=GitOperations)
+        github_ops = MagicMock(spec=GitHubOps)
+        github_ops.get_pr_for_branch.return_value = None  # No existing PR
 
         phase = PRPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
+            github_ops=github_ops,
             spec_file="spec.md",
             workflow_mode=WorkflowMode.LOCAL,
         )
@@ -36,13 +45,21 @@ class TestPRPhaseBasics:
     def test_init_with_github_mode(self) -> None:
         """測試使用 GitHub mode 初始化"""
         agent_manager = MagicMock(spec=AgentManager)
+        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
+        mock_executor = MagicMock()
+        mock_executor.config.cli = "copilot"
+        mock_executor.config.session_id = "session_123"
+        agent_manager.get_agent.return_value = mock_executor
         permission_handler = MagicMock(spec=PermissionHandler)
         git_ops = MagicMock(spec=GitOperations)
+        github_ops = MagicMock(spec=GitHubOps)
+        github_ops.get_pr_for_branch.return_value = None  # No existing PR
 
         phase = PRPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
+            github_ops=github_ops,
             spec_file="spec.md",
             workflow_mode=WorkflowMode.GITHUB,
             issue_id="123",
@@ -63,9 +80,16 @@ class TestBranchPushing:
         spec_file.write_text("# Feature\n")
 
         agent_manager = MagicMock(spec=AgentManager)
+        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
+        mock_executor = MagicMock()
+        mock_executor.config.cli = "copilot"
+        mock_executor.config.session_id = "session_123"
+        agent_manager.get_agent.return_value = mock_executor
         permission_handler = MagicMock(spec=PermissionHandler)
 
         git_ops = MagicMock(spec=GitOperations)
+        github_ops = MagicMock(spec=GitHubOps)
+        github_ops.get_pr_for_branch.return_value = None  # No existing PR
         git_ops.get_main_branch.return_value = "main"
         git_ops.get_commits_between.return_value = "commit1\ncommit2"
 
@@ -73,6 +97,7 @@ class TestBranchPushing:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
+            github_ops=github_ops,
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.GITHUB,
             issue_id="123",
@@ -95,9 +120,16 @@ class TestBranchPushing:
         requirements_file.write_text("# Feature Title\n")
 
         agent_manager = MagicMock(spec=AgentManager)
+        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
+        mock_executor = MagicMock()
+        mock_executor.config.cli = "copilot"
+        mock_executor.config.session_id = "session_123"
+        agent_manager.get_agent.return_value = mock_executor
         permission_handler = MagicMock(spec=PermissionHandler)
 
         git_ops = MagicMock(spec=GitOperations)
+        github_ops = MagicMock(spec=GitHubOps)
+        github_ops.get_pr_for_branch.return_value = None  # No existing PR
         git_ops.get_main_branch.return_value = "main"
         git_ops.get_commits_between.return_value = "commit1"
 
@@ -105,6 +137,7 @@ class TestBranchPushing:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
+            github_ops=github_ops,
             spec_file=str(requirements_file),
             workflow_mode=WorkflowMode.LOCAL,
         )
@@ -120,15 +153,23 @@ class TestBranchPushing:
     def test_push_failure_fails_phase(self) -> None:
         """測試 push 失敗時 phase 失敗"""
         agent_manager = MagicMock(spec=AgentManager)
+        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
+        mock_executor = MagicMock()
+        mock_executor.config.cli = "copilot"
+        mock_executor.config.session_id = "session_123"
+        agent_manager.get_agent.return_value = mock_executor
         permission_handler = MagicMock(spec=PermissionHandler)
 
         git_ops = MagicMock(spec=GitOperations)
+        github_ops = MagicMock(spec=GitHubOps)
+        github_ops.get_pr_for_branch.return_value = None  # No existing PR
         git_ops.push.side_effect = Exception("Push failed")
 
         phase = PRPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
+            github_ops=github_ops,
             spec_file="spec.md",
             workflow_mode=WorkflowMode.GITHUB,
             issue_id="123",
@@ -151,9 +192,16 @@ class TestPRCreation:
         spec_file.write_text("# Feature\n")
 
         agent_manager = MagicMock(spec=AgentManager)
+        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
+        mock_executor = MagicMock()
+        mock_executor.config.cli = "copilot"
+        mock_executor.config.session_id = "session_123"
+        agent_manager.get_agent.return_value = mock_executor
         permission_handler = MagicMock(spec=PermissionHandler)
 
         git_ops = MagicMock(spec=GitOperations)
+        github_ops = MagicMock(spec=GitHubOps)
+        github_ops.get_pr_for_branch.return_value = None  # No existing PR
         git_ops.get_main_branch.return_value = "main"
         git_ops.get_commits_between.return_value = "commit1\ncommit2"
 
@@ -161,6 +209,7 @@ class TestPRCreation:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
+            github_ops=github_ops,
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.GITHUB,
             issue_id="123",
@@ -189,9 +238,16 @@ class TestPRCreation:
         spec_file.write_text("# Feature Title\n")
 
         agent_manager = MagicMock(spec=AgentManager)
+        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
+        mock_executor = MagicMock()
+        mock_executor.config.cli = "copilot"
+        mock_executor.config.session_id = "session_123"
+        agent_manager.get_agent.return_value = mock_executor
         permission_handler = MagicMock(spec=PermissionHandler)
 
         git_ops = MagicMock(spec=GitOperations)
+        github_ops = MagicMock(spec=GitHubOps)
+        github_ops.get_pr_for_branch.return_value = None  # No existing PR
         git_ops.get_main_branch.return_value = "main"
         git_ops.get_commits_between.return_value = "commit1"
 
@@ -199,6 +255,7 @@ class TestPRCreation:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
+            github_ops=github_ops,
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             custom_title="Feature Title",
@@ -220,9 +277,16 @@ class TestPRCreation:
     def test_gh_not_available_fails(self) -> None:
         """測試 gh 不可用時失敗"""
         agent_manager = MagicMock(spec=AgentManager)
+        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
+        mock_executor = MagicMock()
+        mock_executor.config.cli = "copilot"
+        mock_executor.config.session_id = "session_123"
+        agent_manager.get_agent.return_value = mock_executor
         permission_handler = MagicMock(spec=PermissionHandler)
 
         git_ops = MagicMock(spec=GitOperations)
+        github_ops = MagicMock(spec=GitHubOps)
+        github_ops.get_pr_for_branch.return_value = None  # No existing PR
         git_ops.get_main_branch.return_value = "main"
         git_ops.get_commits_between.return_value = "commits"
 
@@ -230,6 +294,7 @@ class TestPRCreation:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
+            github_ops=github_ops,
             spec_file="spec.md",
             workflow_mode=WorkflowMode.LOCAL,
         )
@@ -255,9 +320,16 @@ class TestPRTitleGeneration:
         spec_file.write_text("# Feature\n")
 
         agent_manager = MagicMock(spec=AgentManager)
+        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
+        mock_executor = MagicMock()
+        mock_executor.config.cli = "copilot"
+        mock_executor.config.session_id = "session_123"
+        agent_manager.get_agent.return_value = mock_executor
         permission_handler = MagicMock(spec=PermissionHandler)
 
         git_ops = MagicMock(spec=GitOperations)
+        github_ops = MagicMock(spec=GitHubOps)
+        github_ops.get_pr_for_branch.return_value = None  # No existing PR
         git_ops.get_main_branch.return_value = "main"
         git_ops.get_commits_between.return_value = "commits"
 
@@ -265,6 +337,7 @@ class TestPRTitleGeneration:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
+            github_ops=github_ops,
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.GITHUB,
             issue_id="456",
@@ -288,9 +361,16 @@ class TestPRTitleGeneration:
         spec_file.write_text("# Add User Authentication\n\nDetails...")
 
         agent_manager = MagicMock(spec=AgentManager)
+        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
+        mock_executor = MagicMock()
+        mock_executor.config.cli = "copilot"
+        mock_executor.config.session_id = "session_123"
+        agent_manager.get_agent.return_value = mock_executor
         permission_handler = MagicMock(spec=PermissionHandler)
 
         git_ops = MagicMock(spec=GitOperations)
+        github_ops = MagicMock(spec=GitHubOps)
+        github_ops.get_pr_for_branch.return_value = None  # No existing PR
         git_ops.get_main_branch.return_value = "main"
         git_ops.get_commits_between.return_value = "commits"
 
@@ -298,6 +378,7 @@ class TestPRTitleGeneration:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
+            github_ops=github_ops,
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             custom_title="Add User Authentication",
@@ -327,9 +408,16 @@ class TestPRBodyGeneration:
         spec_file.write_text("# Feature Title\n")
 
         agent_manager = MagicMock(spec=AgentManager)
+        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
+        mock_executor = MagicMock()
+        mock_executor.config.cli = "copilot"
+        mock_executor.config.session_id = "session_123"
+        agent_manager.get_agent.return_value = mock_executor
         permission_handler = MagicMock(spec=PermissionHandler)
 
         git_ops = MagicMock(spec=GitOperations)
+        github_ops = MagicMock(spec=GitHubOps)
+        github_ops.get_pr_for_branch.return_value = None  # No existing PR
         git_ops.get_main_branch.return_value = "main"
         git_ops.get_commits_between.return_value = (
             "abc123 Add feature A\ndef456 Fix bug B"
@@ -339,6 +427,7 @@ class TestPRBodyGeneration:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
+            github_ops=github_ops,
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             custom_title="Feature Title",
@@ -364,13 +453,21 @@ class TestErrorHandling:
     def test_github_mode_without_issue_id_fails(self) -> None:
         """測試 GitHub mode 沒有 issue_id 時失敗"""
         agent_manager = MagicMock(spec=AgentManager)
+        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
+        mock_executor = MagicMock()
+        mock_executor.config.cli = "copilot"
+        mock_executor.config.session_id = "session_123"
+        agent_manager.get_agent.return_value = mock_executor
         permission_handler = MagicMock(spec=PermissionHandler)
         git_ops = MagicMock(spec=GitOperations)
+        github_ops = MagicMock(spec=GitHubOps)
+        github_ops.get_pr_for_branch.return_value = None  # No existing PR
 
         phase = PRPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
+            github_ops=github_ops,
             spec_file="spec.md",
             workflow_mode=WorkflowMode.GITHUB,
             issue_id=None,
@@ -384,13 +481,21 @@ class TestErrorHandling:
     def test_missing_requirements_file_fails(self) -> None:
         """測試缺少需求檔案時失敗"""
         agent_manager = MagicMock(spec=AgentManager)
+        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
+        mock_executor = MagicMock()
+        mock_executor.config.cli = "copilot"
+        mock_executor.config.session_id = "session_123"
+        agent_manager.get_agent.return_value = mock_executor
         permission_handler = MagicMock(spec=PermissionHandler)
         git_ops = MagicMock(spec=GitOperations)
+        github_ops = MagicMock(spec=GitHubOps)
+        github_ops.get_pr_for_branch.return_value = None  # No existing PR
 
         phase = PRPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
+            github_ops=github_ops,
             spec_file="/nonexistent/spec.md",
             workflow_mode=WorkflowMode.LOCAL,
         )
@@ -403,15 +508,23 @@ class TestErrorHandling:
     def test_git_error_fails_phase(self) -> None:
         """測試 git 操作錯誤時 phase 失敗"""
         agent_manager = MagicMock(spec=AgentManager)
+        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
+        mock_executor = MagicMock()
+        mock_executor.config.cli = "copilot"
+        mock_executor.config.session_id = "session_123"
+        agent_manager.get_agent.return_value = mock_executor
         permission_handler = MagicMock(spec=PermissionHandler)
 
         git_ops = MagicMock(spec=GitOperations)
+        github_ops = MagicMock(spec=GitHubOps)
+        github_ops.get_pr_for_branch.return_value = None  # No existing PR
         git_ops.push.side_effect = Exception("Git push error")
 
         phase = PRPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
+            github_ops=github_ops,
             spec_file="spec.md",
             workflow_mode=WorkflowMode.GITHUB,
             issue_id="123",
@@ -425,9 +538,16 @@ class TestErrorHandling:
     def test_gh_pr_create_error_fails_phase(self) -> None:
         """測試 gh pr create 失敗時 phase 失敗"""
         agent_manager = MagicMock(spec=AgentManager)
+        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
+        mock_executor = MagicMock()
+        mock_executor.config.cli = "copilot"
+        mock_executor.config.session_id = "session_123"
+        agent_manager.get_agent.return_value = mock_executor
         permission_handler = MagicMock(spec=PermissionHandler)
 
         git_ops = MagicMock(spec=GitOperations)
+        github_ops = MagicMock(spec=GitHubOps)
+        github_ops.get_pr_for_branch.return_value = None  # No existing PR
         git_ops.get_main_branch.return_value = "main"
         git_ops.get_commits_between.return_value = "commits"
 
@@ -435,6 +555,7 @@ class TestErrorHandling:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
+            github_ops=github_ops,
             spec_file="spec.md",
             workflow_mode=WorkflowMode.GITHUB,
             issue_id="123",
@@ -473,9 +594,16 @@ class TestIssueNameBranchNaming:
         spec_file.write_text("# Feature\n")
 
         agent_manager = MagicMock(spec=AgentManager)
+        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
+        mock_executor = MagicMock()
+        mock_executor.config.cli = "copilot"
+        mock_executor.config.session_id = "session_123"
+        agent_manager.get_agent.return_value = mock_executor
         permission_handler = MagicMock(spec=PermissionHandler)
 
         git_ops = MagicMock(spec=GitOperations)
+        github_ops = MagicMock(spec=GitHubOps)
+        github_ops.get_pr_for_branch.return_value = None  # No existing PR
         git_ops.get_main_branch.return_value = "main"
         git_ops.get_commits_between.return_value = "commit1"
 
@@ -483,6 +611,7 @@ class TestIssueNameBranchNaming:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
+            github_ops=github_ops,
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             issue_name="my-feature",
@@ -507,9 +636,16 @@ class TestIssueNameBranchNaming:
         spec_file.write_text("# Feature\n")
 
         agent_manager = MagicMock(spec=AgentManager)
+        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
+        mock_executor = MagicMock()
+        mock_executor.config.cli = "copilot"
+        mock_executor.config.session_id = "session_123"
+        agent_manager.get_agent.return_value = mock_executor
         permission_handler = MagicMock(spec=PermissionHandler)
 
         git_ops = MagicMock(spec=GitOperations)
+        github_ops = MagicMock(spec=GitHubOps)
+        github_ops.get_pr_for_branch.return_value = None  # No existing PR
         git_ops.get_main_branch.return_value = "main"
         git_ops.get_commits_between.return_value = "commit1"
 
@@ -517,6 +653,7 @@ class TestIssueNameBranchNaming:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
+            github_ops=github_ops,
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             custom_title="Test PR",
@@ -545,9 +682,16 @@ class TestDraftPRCreation:
         spec_file.write_text("# Feature\n")
 
         agent_manager = MagicMock(spec=AgentManager)
+        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
+        mock_executor = MagicMock()
+        mock_executor.config.cli = "copilot"
+        mock_executor.config.session_id = "session_123"
+        agent_manager.get_agent.return_value = mock_executor
         permission_handler = MagicMock(spec=PermissionHandler)
 
         git_ops = MagicMock(spec=GitOperations)
+        github_ops = MagicMock(spec=GitHubOps)
+        github_ops.get_pr_for_branch.return_value = None  # No existing PR
         git_ops.get_main_branch.return_value = "main"
         git_ops.get_commits_between.return_value = "commit1"
 
@@ -555,6 +699,7 @@ class TestDraftPRCreation:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
+            github_ops=github_ops,
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             issue_name="test-feature",
@@ -585,9 +730,16 @@ class TestDraftPRCreation:
         spec_file.write_text("# Feature\n")
 
         agent_manager = MagicMock(spec=AgentManager)
+        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
+        mock_executor = MagicMock()
+        mock_executor.config.cli = "copilot"
+        mock_executor.config.session_id = "session_123"
+        agent_manager.get_agent.return_value = mock_executor
         permission_handler = MagicMock(spec=PermissionHandler)
 
         git_ops = MagicMock(spec=GitOperations)
+        github_ops = MagicMock(spec=GitHubOps)
+        github_ops.get_pr_for_branch.return_value = None  # No existing PR
         git_ops.get_main_branch.return_value = "main"
         git_ops.get_commits_between.return_value = "commit1"
 
@@ -595,6 +747,7 @@ class TestDraftPRCreation:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
+            github_ops=github_ops,
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             issue_name="test-feature",
@@ -629,9 +782,16 @@ class TestCustomTitleAndBody:
         spec_file.write_text("# Feature\n")
 
         agent_manager = MagicMock(spec=AgentManager)
+        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
+        mock_executor = MagicMock()
+        mock_executor.config.cli = "copilot"
+        mock_executor.config.session_id = "session_123"
+        agent_manager.get_agent.return_value = mock_executor
         permission_handler = MagicMock(spec=PermissionHandler)
 
         git_ops = MagicMock(spec=GitOperations)
+        github_ops = MagicMock(spec=GitHubOps)
+        github_ops.get_pr_for_branch.return_value = None  # No existing PR
         git_ops.get_main_branch.return_value = "main"
         git_ops.get_commits_between.return_value = "commit1"
 
@@ -642,6 +802,7 @@ class TestCustomTitleAndBody:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
+            github_ops=github_ops,
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             issue_name="test-feature",
@@ -688,9 +849,16 @@ class TestCustomTitleAndBody:
         plan_file.write_text("# Implementation Plan\n")
 
         agent_manager = MagicMock(spec=AgentManager)
+        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
+        mock_executor = MagicMock()
+        mock_executor.config.cli = "copilot"
+        mock_executor.config.session_id = "session_123"
+        agent_manager.get_agent.return_value = mock_executor
         permission_handler = MagicMock(spec=PermissionHandler)
 
         git_ops = MagicMock(spec=GitOperations)
+        github_ops = MagicMock(spec=GitHubOps)
+        github_ops.get_pr_for_branch.return_value = None  # No existing PR
         git_ops.get_main_branch.return_value = "main"
         git_ops.get_commits_between.return_value = "commit1\ncommit2"
 
@@ -708,6 +876,7 @@ class TestCustomTitleAndBody:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
+            github_ops=github_ops,
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             issue_name="test-feature",
@@ -755,9 +924,16 @@ class TestPartialCustomTitleOrBody:
         plan_file.write_text("# Implementation Plan\n")
 
         agent_manager = MagicMock(spec=AgentManager)
+        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
+        mock_executor = MagicMock()
+        mock_executor.config.cli = "copilot"
+        mock_executor.config.session_id = "session_123"
+        agent_manager.get_agent.return_value = mock_executor
         permission_handler = MagicMock(spec=PermissionHandler)
 
         git_ops = MagicMock(spec=GitOperations)
+        github_ops = MagicMock(spec=GitHubOps)
+        github_ops.get_pr_for_branch.return_value = None  # No existing PR
         git_ops.get_main_branch.return_value = "main"
         git_ops.get_commits_between.return_value = "commit1\ncommit2"
 
@@ -774,6 +950,7 @@ class TestPartialCustomTitleOrBody:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
+            github_ops=github_ops,
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             issue_name="test-feature",
@@ -819,9 +996,16 @@ class TestPartialCustomTitleOrBody:
         plan_file.write_text("# Implementation Plan\n")
 
         agent_manager = MagicMock(spec=AgentManager)
+        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
+        mock_executor = MagicMock()
+        mock_executor.config.cli = "copilot"
+        mock_executor.config.session_id = "session_123"
+        agent_manager.get_agent.return_value = mock_executor
         permission_handler = MagicMock(spec=PermissionHandler)
 
         git_ops = MagicMock(spec=GitOperations)
+        github_ops = MagicMock(spec=GitHubOps)
+        github_ops.get_pr_for_branch.return_value = None  # No existing PR
         git_ops.get_main_branch.return_value = "main"
         git_ops.get_commits_between.return_value = "commit1\ncommit2"
 
@@ -838,6 +1022,7 @@ class TestPartialCustomTitleOrBody:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
+            github_ops=github_ops,
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             issue_name="test-feature",
@@ -889,15 +1074,23 @@ class TestPRExistingFiles:
         (pr_dir / "body.md").write_text("Existing Body")
 
         agent_manager = MagicMock(spec=AgentManager)
+        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
+        mock_executor = MagicMock()
+        mock_executor.config.cli = "copilot"
+        mock_executor.config.session_id = "session_123"
+        agent_manager.get_agent.return_value = mock_executor
         permission_handler = MagicMock(spec=PermissionHandler)
 
         git_ops = MagicMock(spec=GitOperations)
+        github_ops = MagicMock(spec=GitHubOps)
+        github_ops.get_pr_for_branch.return_value = None  # No existing PR
         git_ops.get_main_branch.return_value = "main"
 
         phase = PRPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
+            github_ops=github_ops,
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             issue_name="test-feature",
@@ -931,9 +1124,16 @@ class TestPRExistingFiles:
         (pr_dir / "body.md").write_text("Old Body")
 
         agent_manager = MagicMock(spec=AgentManager)
+        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
+        mock_executor = MagicMock()
+        mock_executor.config.cli = "copilot"
+        mock_executor.config.session_id = "session_123"
+        agent_manager.get_agent.return_value = mock_executor
         permission_handler = MagicMock(spec=PermissionHandler)
 
         git_ops = MagicMock(spec=GitOperations)
+        github_ops = MagicMock(spec=GitHubOps)
+        github_ops.get_pr_for_branch.return_value = None  # No existing PR
         git_ops.get_main_branch.return_value = "main"
         git_ops.get_commits_between.return_value = "commit1\ncommit2"
 
@@ -949,6 +1149,7 @@ class TestPRExistingFiles:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
+            github_ops=github_ops,
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             issue_name="test-feature",
@@ -982,15 +1183,23 @@ class TestPRExistingFiles:
         (pr_dir / "body.md").write_text("Old Body")
 
         agent_manager = MagicMock(spec=AgentManager)
+        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
+        mock_executor = MagicMock()
+        mock_executor.config.cli = "copilot"
+        mock_executor.config.session_id = "session_123"
+        agent_manager.get_agent.return_value = mock_executor
         permission_handler = MagicMock(spec=PermissionHandler)
 
         git_ops = MagicMock(spec=GitOperations)
+        github_ops = MagicMock(spec=GitHubOps)
+        github_ops.get_pr_for_branch.return_value = None  # No existing PR
         git_ops.get_main_branch.return_value = "main"
 
         phase = PRPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
+            github_ops=github_ops,
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             issue_name="test-feature",
@@ -1032,9 +1241,16 @@ class TestPRURLInResult:
         spec_file.write_text("# Feature\n\nAdd new feature")
 
         agent_manager = MagicMock(spec=AgentManager)
+        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
+        mock_executor = MagicMock()
+        mock_executor.config.cli = "copilot"
+        mock_executor.config.session_id = "session_123"
+        agent_manager.get_agent.return_value = mock_executor
         permission_handler = MagicMock(spec=PermissionHandler)
 
         git_ops = MagicMock(spec=GitOperations)
+        github_ops = MagicMock(spec=GitHubOps)
+        github_ops.get_pr_for_branch.return_value = None  # No existing PR
         git_ops.get_main_branch.return_value = "main"
         git_ops.get_commits_between.return_value = "commit1\ncommit2"
 
@@ -1042,6 +1258,7 @@ class TestPRURLInResult:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
+            github_ops=github_ops,
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             issue_name="test-issue",
