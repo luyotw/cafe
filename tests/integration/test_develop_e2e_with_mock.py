@@ -541,30 +541,39 @@ class TestDevelopE2EMockPRComments:
         assert "completed" in output.lower() or "成功" in output.lower()
 
     def test_pr_comments_with_real_gh_data(self, tmp_path):
-        """測試使用真實 PR #10 comments 資料（模擬 gh CLI）
+        """測試使用簡化的 PR comments 資料（模擬 gh CLI）
 
-        情境：執行 develop 時提供 PR number，模擬 gh CLI 返回真實的 PR comments
-        指令：cafe develop org-topics --pr-number 10 --no-interactive
+        情境：執行 develop 時提供 PR number，模擬 gh CLI 返回 PR comments
+        指令：cafe develop test-issue --pr-number 10 --no-interactive
         預期：成功執行，PR comments 被載入（通過創建 fake gh script）
         """
-        from pathlib import Path
-
-        # 讀取真實的 PR comments (從 10.json)
-        pr_10_json_path = Path("/home/luyotw/local/pub/10.json")
-
-        if not pr_10_json_path.exists():
-            pytest.skip(f"找不到 {pr_10_json_path}，跳過測試")
-
-        with open(pr_10_json_path) as f:
-            raw_comments = json.load(f)
+        # 簡化的 PR comments 資料（基於真實 PR #10）
+        raw_comments = [
+            {
+                "id": 2532554495,
+                "body": "這邊應該要用 bulkInsert() 批次寫入",
+                "user": {"login": "reviewer1"},
+                "created_at": "2025-11-17T03:28:30Z",
+                "path": "controllers/AdminController.php",
+                "line": 530
+            },
+            {
+                "id": 2532555684,
+                "body": "建議加上錯誤處理",
+                "user": {"login": "reviewer2"},
+                "created_at": "2025-11-17T03:29:36Z",
+                "path": "controllers/AdminController.php",
+                "line": 699
+            }
+        ]
 
         # 準備 gh repo view 的輸出（返回 repo 資訊）
         repo_info = {
-            "owner": {"login": "openfunltd"},
-            "name": "iorgpubdb"
+            "owner": {"login": "testowner"},
+            "name": "testrepo"
         }
 
-        issue_name = "org-topics"
+        issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
 
         # 創建一個假的 gh script 來返回 PR comments
@@ -580,7 +589,7 @@ EOF
     exit 0
 fi
 
-# Handle: gh api /repos/openfunltd/iorgpubdb/pulls/10/comments
+# Handle: gh api /repos/testowner/testrepo/pulls/10/comments
 if [ "$1" = "api" ] && [[ "$2" == *"/pulls/10/comments" ]]; then
     cat << 'EOF'
 {json.dumps(raw_comments)}
