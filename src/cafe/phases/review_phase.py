@@ -67,6 +67,7 @@ class ReviewPhase(Phase):
         self.target_commit = target_commit
         self.iteration = 1  # Track iteration number for subsequent reviews
         self.pr_number = pr_number
+        self._pr_comments_cache = None  # Cache for PR comments to avoid duplicate loading
 
         # Try to read base branch from issue config
         config_base_branch = self._read_base_branch_from_config()
@@ -225,6 +226,10 @@ class ReviewPhase(Phase):
         if not self.pr_number:
             return "", 0
 
+        # Return cached result if already loaded
+        if self._pr_comments_cache is not None:
+            return self._pr_comments_cache
+
         try:
             print(f"  → Calling get_pr_comments({self.pr_number})")
             comments = get_pr_comments(self.pr_number)
@@ -236,13 +241,17 @@ class ReviewPhase(Phase):
             result = format_comments_for_prompt(unresolved)
             if result:
                 print(f"  → Formatted result length: {len(result)} chars")
-            return result, len(unresolved)
+
+            # Cache the result
+            self._pr_comments_cache = (result, len(unresolved))
+            return self._pr_comments_cache
         except (ValueError, Exception) as e:
             # Log error but don't fail - PR comments are optional context
             print(f"⚠️  Failed to load PR comments: {e}")
             import traceback
             traceback.print_exc()
-            return "", 0
+            self._pr_comments_cache = ("", 0)
+            return self._pr_comments_cache
 
     def _generate_prompt(self, user_input: str) -> str:
         """Generate review prompt (implements abstract method from Phase).
