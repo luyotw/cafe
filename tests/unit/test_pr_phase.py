@@ -55,8 +55,13 @@ class TestPRPhaseBasics:
 class TestBranchPushing:
     """Test pushing branch to remote."""
 
-    def test_push_branch_github_mode(self) -> None:
+    def test_push_branch_github_mode(self, tmp_path: Path) -> None:
         """測試推送 GitHub mode 分支到 remote"""
+        # Setup issue directory structure
+        spec_file = tmp_path / ".cafe" / "issues" / "issue-123" / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
+        spec_file.write_text("# Feature\n")
+
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -68,9 +73,11 @@ class TestBranchPushing:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            spec_file="spec.md",
+            spec_file=str(spec_file),
             workflow_mode=WorkflowMode.GITHUB,
             issue_id="123",
+            custom_title="Test PR",
+            custom_body="Test body",
         )
 
         with patch("subprocess.run") as mock_run:
@@ -136,8 +143,13 @@ class TestBranchPushing:
 class TestPRCreation:
     """Test PR creation."""
 
-    def test_create_pr_github_mode(self) -> None:
-        """測試 GitHub mode 建立 PR"""
+    def test_create_pr_github_mode(self, tmp_path: Path) -> None:
+        """測試 GitHub mode 建立 PR（使用 custom title/body）"""
+        # Setup issue directory structure
+        spec_file = tmp_path / ".cafe" / "issues" / "issue-123" / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
+        spec_file.write_text("# Feature\n")
+
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -149,27 +161,16 @@ class TestPRCreation:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            spec_file="spec.md",
+            spec_file=str(spec_file),
             workflow_mode=WorkflowMode.GITHUB,
             issue_id="123",
+            custom_title="Issue Title",
+            custom_body="Closes #123\n\ncommit1\ncommit2",
         )
 
         with patch("subprocess.run") as mock_run:
-            # Mock gh issue view (called from _get_pr_title)
-            # Mock gh pr create (called from _create_pr)
-            def side_effect(*args, **kwargs):
-                result = MagicMock()
-                result.returncode = 0
-                cmd = " ".join(args[0]) if args else ""
-                if "gh issue view" in cmd:
-                    result.stdout = "Issue Title"
-                elif "gh pr create" in cmd:
-                    result.stdout = "https://github.com/user/repo/pull/1"
-                else:
-                    result.stdout = ""
-                return result
-
-            mock_run.side_effect = side_effect
+            mock_run.return_value.stdout = "https://github.com/user/repo/pull/1"
+            mock_run.return_value.returncode = 0
 
             result = phase.execute()
 
@@ -181,9 +182,11 @@ class TestPRCreation:
         assert result.data.get("pr_number") == "1"
 
     def test_create_pr_local_mode(self, tmp_path: Path) -> None:
-        """測試 local mode 建立 PR"""
-        requirements_file = tmp_path / "20250101-feature.md"
-        requirements_file.write_text("# Feature Title\n")
+        """測試 local mode 建立 PR（使用 custom title/body）"""
+        # Setup issue directory structure
+        spec_file = tmp_path / ".cafe" / "issues" / "feature" / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
+        spec_file.write_text("# Feature Title\n")
 
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -196,8 +199,10 @@ class TestPRCreation:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            spec_file=str(requirements_file),
+            spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
+            custom_title="Feature Title",
+            custom_body="commit1",
         )
 
         with patch("subprocess.run") as mock_run:
@@ -206,7 +211,7 @@ class TestPRCreation:
 
             result = phase.execute()
 
-            # Check PR title comes from requirements file
+            # Check PR title comes from custom title
             call_str = str(mock_run.call_args_list)
             assert "Feature Title" in call_str
 
@@ -240,10 +245,15 @@ class TestPRCreation:
 
 
 class TestPRTitleGeneration:
-    """Test PR title generation."""
+    """Test PR title generation (now from files, not directly from GitHub issue or spec.md)."""
 
-    def test_pr_title_from_github_issue(self) -> None:
-        """測試從 GitHub issue 取得 PR title"""
+    def test_pr_title_from_github_issue_via_custom(self, tmp_path: Path) -> None:
+        """測試 GitHub mode 使用 custom title"""
+        # Setup issue directory structure
+        spec_file = tmp_path / ".cafe" / "issues" / "issue-456" / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
+        spec_file.write_text("# Feature\n")
+
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -255,34 +265,27 @@ class TestPRTitleGeneration:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            spec_file="spec.md",
+            spec_file=str(spec_file),
             workflow_mode=WorkflowMode.GITHUB,
             issue_id="456",
+            custom_title="Add new feature",
+            custom_body="Closes #456\n\ncommits",
         )
 
         with patch("subprocess.run") as mock_run:
-            # Mock gh issue view and gh pr create
-            def side_effect(*args, **kwargs):
-                cmd = " ".join(args[0]) if isinstance(args[0], list) else args[0]
-                mock_result = MagicMock()
-                mock_result.returncode = 0
-
-                if "gh issue view" in cmd:
-                    mock_result.stdout = "Add new feature"
-                elif "gh pr create" in cmd:
-                    mock_result.stdout = "https://github.com/user/repo/pull/3"
-                return mock_result
-
-            mock_run.side_effect = side_effect
+            mock_run.return_value.stdout = "https://github.com/user/repo/pull/3"
+            mock_run.return_value.returncode = 0
 
             result = phase.execute()
 
         assert result.status == PhaseStatus.COMPLETED
 
-    def test_pr_title_from_requirements_file(self, tmp_path: Path) -> None:
-        """測試從需求檔案第一行取得 PR title"""
-        requirements_file = tmp_path / "spec.md"
-        requirements_file.write_text("# Add User Authentication\n\nDetails...")
+    def test_pr_title_from_requirements_file_via_custom(self, tmp_path: Path) -> None:
+        """測試 local mode 使用 custom title（模擬從 spec.md 提取的內容）"""
+        # Setup issue directory structure
+        spec_file = tmp_path / ".cafe" / "issues" / "auth" / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
+        spec_file.write_text("# Add User Authentication\n\nDetails...")
 
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -295,8 +298,10 @@ class TestPRTitleGeneration:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            spec_file=str(requirements_file),
+            spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
+            custom_title="Add User Authentication",
+            custom_body="commits",
         )
 
         with patch("subprocess.run") as mock_run:
@@ -312,12 +317,14 @@ class TestPRTitleGeneration:
 
 
 class TestPRBodyGeneration:
-    """Test PR body generation."""
+    """Test PR body generation (now from files, not directly from commits)."""
 
-    def test_pr_body_includes_commits(self, tmp_path: Path) -> None:
-        """測試 PR body 包含 commit 列表"""
-        requirements_file = tmp_path / "spec.md"
-        requirements_file.write_text("# Feature Title\n")
+    def test_pr_body_includes_commits_via_custom(self, tmp_path: Path) -> None:
+        """測試 PR body 包含 commit 列表（透過 custom body）"""
+        # Setup issue directory structure
+        spec_file = tmp_path / ".cafe" / "issues" / "feature" / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
+        spec_file.write_text("# Feature Title\n")
 
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -332,8 +339,10 @@ class TestPRBodyGeneration:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            spec_file=str(requirements_file),
+            spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
+            custom_title="Feature Title",
+            custom_body="abc123 Add feature A\ndef456 Fix bug B",
         )
 
         with patch("subprocess.run") as mock_run:
@@ -458,8 +467,10 @@ class TestIssueNameBranchNaming:
 
     def test_branch_name_from_issue_name(self, tmp_path: Path) -> None:
         """測試使用 issue_name 參數產生 branch name"""
-        requirements_file = tmp_path / "spec.md"
-        requirements_file.write_text("# Feature\n")
+        # Setup issue directory structure
+        spec_file = tmp_path / ".cafe" / "issues" / "my-feature" / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
+        spec_file.write_text("# Feature\n")
 
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -472,9 +483,11 @@ class TestIssueNameBranchNaming:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            spec_file=str(requirements_file),
+            spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             issue_name="my-feature",
+            custom_title="Test PR",
+            custom_body="Test body",
         )
 
         with patch("subprocess.run") as mock_run:
@@ -488,8 +501,10 @@ class TestIssueNameBranchNaming:
 
     def test_branch_name_fallback_to_filename(self, tmp_path: Path) -> None:
         """測試當沒有 issue_name 時回退到從檔名提取"""
-        requirements_file = tmp_path / "20250101-feature.md"
-        requirements_file.write_text("# Feature\n")
+        # Setup directory structure with dated filename
+        spec_file = tmp_path / ".cafe" / "issues" / "feature" / "spec" / "20250101-feature.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
+        spec_file.write_text("# Feature\n")
 
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -502,8 +517,10 @@ class TestIssueNameBranchNaming:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            spec_file=str(requirements_file),
+            spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
+            custom_title="Test PR",
+            custom_body="Test body",
             # No issue_name provided
         )
 
@@ -512,7 +529,7 @@ class TestIssueNameBranchNaming:
             mock_run.return_value.returncode = 0
             result = phase.execute()
 
-        # Should push branch named "feature" (from filename)
+        # Should push branch named "feature" (from issue directory name, not filename)
         git_ops.push.assert_called_once_with("feature", set_upstream=True)
         assert result.status == PhaseStatus.COMPLETED
 
@@ -522,8 +539,10 @@ class TestDraftPRCreation:
 
     def test_draft_pr_default_true(self, tmp_path: Path) -> None:
         """測試預設創建 draft PR (draft=True)"""
-        requirements_file = tmp_path / "spec.md"
-        requirements_file.write_text("# Feature\n")
+        # Setup issue directory structure
+        spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
+        spec_file.write_text("# Feature\n")
 
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -536,10 +555,12 @@ class TestDraftPRCreation:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            spec_file=str(requirements_file),
+            spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             issue_name="test-feature",
             draft=True,  # Default value
+            custom_title="Test PR",
+            custom_body="Test body",
         )
 
         with patch("subprocess.run") as mock_run:
@@ -558,8 +579,10 @@ class TestDraftPRCreation:
 
     def test_non_draft_pr(self, tmp_path: Path) -> None:
         """測試創建非 draft PR (draft=False)"""
-        requirements_file = tmp_path / "spec.md"
-        requirements_file.write_text("# Feature\n")
+        # Setup issue directory structure
+        spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
+        spec_file.write_text("# Feature\n")
 
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -572,10 +595,12 @@ class TestDraftPRCreation:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            spec_file=str(requirements_file),
+            spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             issue_name="test-feature",
             draft=False,
+            custom_title="Test PR",
+            custom_body="Test body",
         )
 
         with patch("subprocess.run") as mock_run:
@@ -597,9 +622,11 @@ class TestCustomTitleAndBody:
     """Test custom title and body parameters."""
 
     def test_custom_title_and_body(self, tmp_path: Path) -> None:
-        """測試使用自訂 title 和 body"""
-        requirements_file = tmp_path / "spec.md"
-        requirements_file.write_text("# Feature\n")
+        """測試使用自訂 title 和 body（會寫入檔案後再讀取）"""
+        # Setup issue directory structure
+        spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
+        spec_file.write_text("# Feature\n")
 
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -615,7 +642,7 @@ class TestCustomTitleAndBody:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            spec_file=str(requirements_file),
+            spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             issue_name="test-feature",
             custom_title=custom_title,
@@ -626,6 +653,15 @@ class TestCustomTitleAndBody:
             mock_run.return_value.stdout = "https://github.com/user/repo/pull/1"
             mock_run.return_value.returncode = 0
             result = phase.execute()
+
+        # Verify that custom title and body were written to files
+        pr_dir = spec_file.parent.parent / "pr"
+        title_file = pr_dir / "title.txt"
+        body_file = pr_dir / "body.md"
+        assert title_file.exists()
+        assert body_file.exists()
+        assert title_file.read_text() == custom_title
+        assert body_file.read_text() == custom_body
 
         # Check that gh pr create was called with custom title and body
         mock_run.assert_called_once()
@@ -641,8 +677,15 @@ class TestCustomTitleAndBody:
 
     def test_auto_generate_title_and_body(self, tmp_path: Path) -> None:
         """測試自動產生 title 和 body (custom_title=None, custom_body=None)"""
-        requirements_file = tmp_path / "spec.md"
-        requirements_file.write_text("# Auto Generated Title\n")
+        # Setup issue directory structure
+        spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
+        spec_file.write_text("# Auto Generated Title\n")
+
+        # Setup plan file
+        plan_file = spec_file.parent.parent / "plan" / "plan.md"
+        plan_file.parent.mkdir(parents=True, exist_ok=True)
+        plan_file.write_text("# Implementation Plan\n")
 
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -651,11 +694,21 @@ class TestCustomTitleAndBody:
         git_ops.get_main_branch.return_value = "main"
         git_ops.get_commits_between.return_value = "commit1\ncommit2"
 
+        # Mock agent to write title and body files
+        def mock_agent_execute(agent_name, prompt, allowed_tools):
+            pr_dir = spec_file.parent.parent / "pr"
+            pr_dir.mkdir(parents=True, exist_ok=True)
+            (pr_dir / "title.txt").write_text("Auto Generated Title")
+            (pr_dir / "body.md").write_text("## Summary\nAuto-generated PR body\n\n## Changes\n- commit1\n- commit2")
+            return "CAFE_CONFIRMED", [], [], []
+
+        agent_manager.execute.side_effect = mock_agent_execute
+
         phase = PRPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            spec_file=str(requirements_file),
+            spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             issue_name="test-feature",
             custom_title=None,  # Auto-generate
@@ -667,14 +720,156 @@ class TestCustomTitleAndBody:
             mock_run.return_value.returncode = 0
             result = phase.execute()
 
-        # Check that title was auto-generated from spec file
+        # Verify agent was called to generate PR content
+        agent_manager.execute.assert_called_once()
+
+        # Verify files were created
+        pr_dir = spec_file.parent.parent / "pr"
+        assert (pr_dir / "title.txt").exists()
+        assert (pr_dir / "body.md").exists()
+
+        # Check that title was auto-generated
         mock_run.assert_called_once()
         cmd = mock_run.call_args[0][0]
         assert "Auto Generated Title" in cmd
-        # Check that body contains commits (body is in the --body argument value)
+        # Check that body contains auto-generated content
         body_index = cmd.index("--body") + 1
         body_value = cmd[body_index]
-        assert "commit1" in body_value and "commit2" in body_value
+        assert "Auto-generated PR body" in body_value
+        assert result.status == PhaseStatus.COMPLETED
+
+
+class TestPartialCustomTitleOrBody:
+    """Test partial custom title or body (one provided, one generated)."""
+
+    def test_custom_title_only_body_generated(self, tmp_path: Path) -> None:
+        """測試只提供 custom title，body 由 agent 生成"""
+        # Setup issue directory structure
+        spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
+        spec_file.write_text("# Feature\n")
+
+        # Setup plan file
+        plan_file = spec_file.parent.parent / "plan" / "plan.md"
+        plan_file.parent.mkdir(parents=True, exist_ok=True)
+        plan_file.write_text("# Implementation Plan\n")
+
+        agent_manager = MagicMock(spec=AgentManager)
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        git_ops = MagicMock(spec=GitOperations)
+        git_ops.get_main_branch.return_value = "main"
+        git_ops.get_commits_between.return_value = "commit1\ncommit2"
+
+        # Mock agent to write only body file (title is custom)
+        def mock_agent_execute(agent_name, prompt, allowed_tools):
+            pr_dir = spec_file.parent.parent / "pr"
+            # Agent should only generate body
+            (pr_dir / "body.md").write_text("## Summary\nGenerated body content")
+            return "CAFE_CONFIRMED", [], [], []
+
+        agent_manager.execute.side_effect = mock_agent_execute
+
+        phase = PRPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            git_ops=git_ops,
+            spec_file=str(spec_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            issue_name="test-feature",
+            custom_title="Custom Title",  # Provided
+            custom_body=None,  # Will be generated
+        )
+
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value.stdout = "https://github.com/user/repo/pull/1"
+            mock_run.return_value.returncode = 0
+            result = phase.execute()
+
+        # Verify agent was called to generate only body
+        agent_manager.execute.assert_called_once()
+        call_args = agent_manager.execute.call_args
+        allowed_tools = call_args[1]["allowed_tools"]
+
+        # Should only have write permission for body, not title
+        pr_dir = spec_file.parent.parent / "pr"
+        assert f"write({pr_dir / 'body.md'})" in allowed_tools
+        assert f"write({pr_dir / 'title.txt'})" not in allowed_tools
+
+        # Verify custom title was written directly
+        assert (pr_dir / "title.txt").read_text() == "Custom Title"
+        # Verify body was generated by agent
+        assert (pr_dir / "body.md").exists()
+
+        # Verify PR was created with custom title
+        cmd = mock_run.call_args[0][0]
+        assert "Custom Title" in cmd
+        assert result.status == PhaseStatus.COMPLETED
+
+    def test_custom_body_only_title_generated(self, tmp_path: Path) -> None:
+        """測試只提供 custom body，title 由 agent 生成"""
+        # Setup issue directory structure
+        spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
+        spec_file.write_text("# Feature\n")
+
+        # Setup plan file
+        plan_file = spec_file.parent.parent / "plan" / "plan.md"
+        plan_file.parent.mkdir(parents=True, exist_ok=True)
+        plan_file.write_text("# Implementation Plan\n")
+
+        agent_manager = MagicMock(spec=AgentManager)
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        git_ops = MagicMock(spec=GitOperations)
+        git_ops.get_main_branch.return_value = "main"
+        git_ops.get_commits_between.return_value = "commit1\ncommit2"
+
+        # Mock agent to write only title file (body is custom)
+        def mock_agent_execute(agent_name, prompt, allowed_tools):
+            pr_dir = spec_file.parent.parent / "pr"
+            # Agent should only generate title
+            (pr_dir / "title.txt").write_text("Generated PR Title")
+            return "CAFE_CONFIRMED", [], [], []
+
+        agent_manager.execute.side_effect = mock_agent_execute
+
+        phase = PRPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            git_ops=git_ops,
+            spec_file=str(spec_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            issue_name="test-feature",
+            custom_title=None,  # Will be generated
+            custom_body="Custom body content",  # Provided
+        )
+
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value.stdout = "https://github.com/user/repo/pull/1"
+            mock_run.return_value.returncode = 0
+            result = phase.execute()
+
+        # Verify agent was called to generate only title
+        agent_manager.execute.assert_called_once()
+        call_args = agent_manager.execute.call_args
+        allowed_tools = call_args[1]["allowed_tools"]
+
+        # Should only have write permission for title, not body
+        pr_dir = spec_file.parent.parent / "pr"
+        assert f"write({pr_dir / 'title.txt'})" in allowed_tools
+        assert f"write({pr_dir / 'body.md'})" not in allowed_tools
+
+        # Verify custom body was written directly
+        assert (pr_dir / "body.md").read_text() == "Custom body content"
+        # Verify title was generated by agent
+        assert (pr_dir / "title.txt").exists()
+
+        # Verify PR was created with generated title and custom body
+        cmd = mock_run.call_args[0][0]
+        assert "Generated PR Title" in cmd
+        body_index = cmd.index("--body") + 1
+        assert "Custom body content" == cmd[body_index]
         assert result.status == PhaseStatus.COMPLETED
 
 
@@ -689,7 +884,7 @@ class TestPRURLInResult:
 
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
-        
+
         git_ops = MagicMock(spec=GitOperations)
         git_ops.get_main_branch.return_value = "main"
         git_ops.get_commits_between.return_value = "commit1\ncommit2"
@@ -701,6 +896,8 @@ class TestPRURLInResult:
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             issue_name="test-issue",
+            custom_title="Test PR",
+            custom_body="Test body",
         )
 
         # Mock gh pr create to return a URL

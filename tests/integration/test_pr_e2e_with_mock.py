@@ -109,6 +109,8 @@ class TestPRE2EMockDraftFlag:
                 workflow_mode=WorkflowMode.LOCAL,
                 issue_name=issue_name,
                 draft=True,  # Default
+                custom_title="Test PR",
+                custom_body="Test body",
                 interactive=False,
             )
 
@@ -183,6 +185,8 @@ class TestPRE2EMockDraftFlag:
                 workflow_mode=WorkflowMode.LOCAL,
                 issue_name=issue_name,
                 draft=False,
+                custom_title="Test PR",
+                custom_body="Test body",
                 interactive=False,
             )
 
@@ -292,9 +296,10 @@ class TestPRE2EMockCustomTitleAndBody:
         finally:
             os.chdir(original_cwd)
 
+    @patch("cafe.agents.manager.AgentManager.execute")
     @patch("cafe.phases.pr_phase.subprocess.run")
     @patch("cafe.core.git.subprocess.run")
-    def test_auto_generate_title_and_body(self, mock_git_run, mock_gh_run, tmp_path):
+    def test_auto_generate_title_and_body(self, mock_git_run, mock_gh_run, mock_agent_execute, tmp_path):
         """測試自動產生 title 和 body"""
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
@@ -316,6 +321,16 @@ class TestPRE2EMockCustomTitleAndBody:
 
         mock_git_run.side_effect = git_side_effect
         mock_gh_run.side_effect = gh_side_effect
+
+        # Mock agent to write title and body files
+        def agent_execute_side_effect(agent_name, prompt, allowed_tools):
+            pr_dir = tmp_path / ".cafe" / "issues" / issue_name / "pr"
+            pr_dir.mkdir(parents=True, exist_ok=True)
+            (pr_dir / "title.txt").write_text("測試功能需求")
+            (pr_dir / "body.md").write_text("## Summary\nAuto-generated PR description\n\n## Changes\n- Feature implementation")
+            return "CAFE_CONFIRMED", [], [], []
+
+        mock_agent_execute.side_effect = agent_execute_side_effect
 
         # Import here to use patched subprocess
         from cafe.agents.manager import AgentManager
@@ -342,8 +357,8 @@ class TestPRE2EMockCustomTitleAndBody:
                 workflow_mode=WorkflowMode.LOCAL,
                 issue_name=issue_name,
                 draft=True,
-                custom_title=None,  # Auto-generate from spec
-                custom_body=None,   # Auto-generate from commits
+                custom_title=None,  # Auto-generate
+                custom_body=None,   # Auto-generate
                 interactive=False,
             )
 
@@ -353,7 +368,10 @@ class TestPRE2EMockCustomTitleAndBody:
             assert result.status.value == "completed"
             assert result.data["pr_number"] == "4"
 
-            # Check title was auto-generated from spec.md
+            # Verify agent was called
+            mock_agent_execute.assert_called_once()
+
+            # Check title was auto-generated
             gh_calls = [call for call in mock_gh_run.call_args_list]
             assert len(gh_calls) > 0
             # Find the gh pr create call
