@@ -10,6 +10,7 @@ from cafe.core.git import GitOperations
 from cafe.core.permission import PermissionHandler
 from cafe.core.phase import Phase
 from cafe.core.types import PhaseResult, PhaseStatus, WorkflowMode
+from cafe.utils.github import GitHubOps
 
 
 class PRPhase(Phase):
@@ -20,6 +21,7 @@ class PRPhase(Phase):
         agent_manager: AgentManager,
         permission_handler: PermissionHandler,
         git_ops: GitOperations,
+        github_ops: GitHubOps,
         spec_file: str,
         workflow_mode: WorkflowMode,
         issue_id: Optional[str] = None,
@@ -36,6 +38,7 @@ class PRPhase(Phase):
             agent_manager: Agent manager
             permission_handler: Permission handler
             git_ops: Git operations
+            github_ops: GitHub operations
             spec_file: Path to spec file
             workflow_mode: Workflow mode (local or github)
             issue_id: GitHub issue ID (required for github mode)
@@ -51,6 +54,7 @@ class PRPhase(Phase):
         self.agent_manager = agent_manager
         self.permission_handler = permission_handler
         self.git_ops = git_ops
+        self.github_ops = github_ops
         self.spec_file = spec_file
         self.workflow_mode = workflow_mode
         self.issue_id = issue_id
@@ -59,6 +63,13 @@ class PRPhase(Phase):
         self.custom_title = custom_title
         self.custom_body = custom_body
         self.update = update
+
+        # Set up history tracking (like other phases)
+        spec_path = Path(spec_file)
+        pr_dir = spec_path.parent.parent / "pr"
+        self.history_dir = pr_dir / "history"
+        self.phase_name = "pr"
+        self.iteration = self._load_iteration_counter()
 
     def execute(self) -> PhaseResult:
         """Execute PR creation phase.
@@ -89,72 +100,74 @@ class PRPhase(Phase):
             # Push branch to remote
             self.git_ops.push(branch_name, set_upstream=True)
 
-            # Prepare PR directory
-            spec_path = Path(self.spec_file)
-            issue_name = spec_path.parent.parent.name
-            pr_dir = spec_path.parent.parent / "pr"
-            pr_dir.mkdir(parents=True, exist_ok=True)
+            # Check if PR already exists on GitHub
+            existing_pr = self.github_ops.get_pr_for_branch(branch_name)
 
-            title_file = pr_dir / "title.txt"
-            body_file = pr_dir / "body.md"
+            if existing_pr:
+                # PR already exists on GitHub
+                pr_number = str(existing_pr["number"])
+                pr_url = existing_pr["url"]
 
-            # Check if PR files already exist
-            pr_exists = title_file.exists() and body_file.exists()
+                if not self.update:
+                    # Ask user if they want to update
+                    if self.interactive:
+                        from rich.console import Console
+                        console = Console()
+                        console.print(f"\n[yellow]⚠️  PR #{pr_number} already exists for branch '{branch_name}'.[/yellow]")
+                        console.print(f"  URL: {pr_url}")
+                        console.print()
+                        choice = input("Do you want to update it? [y/N]: ").strip().lower()
 
-            if pr_exists and not self.update:
-                # PR already exists, ask user if they want to update
-                if self.interactive:
-                    from cafe.ui.display import console
-                    console.print("\n[yellow]⚠️  PR title and body already exist.[/yellow]")
-                    console.print(f"  Title: {title_file}")
-                    console.print(f"  Body: {body_file}")
-
-                    import questionary
-                    should_update = questionary.confirm(
-                        "Do you want to regenerate them?",
-                        default=False
-                    ).ask()
-
-                    if not should_update:
-                        # Use existing files
-                        pr_title = self._get_pr_title()
-                        pr_body = self._get_pr_body()
-
-                        # Create PR using gh CLI
-                        pr_number, pr_url = self._create_pr(pr_title, pr_body, branch_name)
-
+                        if choice not in ['y', 'yes']:
+                            return PhaseResult(
+                                status=PhaseStatus.COMPLETED,
+                                message=f"Pull Request #{pr_number} already exists (no update)",
+                                data={"pr_number": pr_number, "pr_url": pr_url, "branch": branch_name},
+                            )
+                    else:
+                        # Non-interactive mode without --update flag, fail
                         return PhaseResult(
-                            status=PhaseStatus.COMPLETED,
-                            message=f"Pull Request #{pr_number} created successfully (using existing title/body)",
-                            data={"pr_number": pr_number, "pr_url": pr_url, "branch": branch_name},
+                            status=PhaseStatus.FAILED,
+                            message=f"PR #{pr_number} already exists for branch '{branch_name}'. Use --update to update it.",
                         )
-                else:
-                    # Non-interactive mode without --update flag, fail
-                    return PhaseResult(
-                        status=PhaseStatus.FAILED,
-                        message=f"PR title and body already exist. Use --update to regenerate them.",
-                    )
 
-            # Determine what needs to be generated by agent
-            need_title = self.custom_title is None
-            need_body = self.custom_body is None
+                # User wants to update or --update flag is set
+                pr_title, pr_body = self._prepare_pr_content()
 
-            # Write custom values if provided
-            if self.custom_title:
-                title_file.write_text(self.custom_title)
-            if self.custom_body:
-                body_file.write_text(self.custom_body)
+                # Display updating message
+                from rich.console import Console
+                console = Console()
+                console.print()
+                console.print("[bold]Updating pull request...[/bold]")
+                console.print()
 
-            # Generate missing content using agent
-            if need_title or need_body:
-                self._generate_pr_content(generate_title=need_title, generate_body=need_body)
+                # Update existing PR
+                self.github_ops.update_pr(pr_number, title=pr_title, body=pr_body)
 
-            # Read PR title and body from files (unified approach)
-            pr_title = self._get_pr_title()
-            pr_body = self._get_pr_body()
+                return PhaseResult(
+                    status=PhaseStatus.COMPLETED,
+                    message=f"Pull Request #{pr_number} updated successfully",
+                    data={"pr_number": pr_number, "pr_url": pr_url, "branch": branch_name},
+                )
 
-            # Create PR using gh CLI
-            pr_number, pr_url = self._create_pr(pr_title, pr_body, branch_name)
+            # PR doesn't exist, create new one
+            pr_title, pr_body = self._prepare_pr_content()
+
+            # Display creating message
+            from rich.console import Console
+            console = Console()
+            console.print()
+            console.print("[bold]Creating pull request...[/bold]")
+            console.print()
+
+            # Create PR using GitHub operations
+            pr_url = self.github_ops.create_pr(title=pr_title, body=pr_body, draft=self.draft)
+
+            # Extract PR number from URL
+            match = re.search(r"/pull/(\d+)", pr_url)
+            if not match:
+                raise RuntimeError(f"Failed to extract PR number from: {pr_url}")
+            pr_number = match.group(1)
 
             return PhaseResult(
                 status=PhaseStatus.COMPLETED,
@@ -195,6 +208,81 @@ class PRPhase(Phase):
                 return match.group(1)
             return filename
 
+    def _prepare_pr_content(self) -> tuple[str, str]:
+        """Prepare PR title and body.
+
+        Returns:
+            Tuple of (title, body)
+        """
+        # Prepare PR directory
+        spec_path = Path(self.spec_file)
+        pr_dir = spec_path.parent.parent / "pr"
+        pr_dir.mkdir(parents=True, exist_ok=True)
+
+        title_file = pr_dir / "title.txt"
+        body_file = pr_dir / "body.md"
+
+        # Ask for custom title/body in interactive mode if not provided via CLI
+        final_title = self.custom_title
+        final_body = self.custom_body
+
+        if self.interactive:
+            from rich.console import Console
+            console = Console()
+
+            # Ask for custom title if not provided via CLI
+            if self.custom_title is None:
+                console.print()
+                console.print("[dim]Custom PR title (press Enter for auto-generation):[/dim]")
+                title_input = input().strip()
+                final_title = title_input if title_input else None
+
+            # Ask for custom body if not provided via CLI
+            if self.custom_body is None:
+                console.print()
+                console.print("[dim]Custom PR body (multi-line, Ctrl+D to finish, or press Enter on empty line for auto-generation):[/dim]")
+                body_lines = []
+                try:
+                    while True:
+                        line = input()
+                        if not line and not body_lines:  # First line is empty -> auto-generation
+                            break
+                        body_lines.append(line)
+                except EOFError:
+                    pass
+                final_body = "\n".join(body_lines) if body_lines else None
+
+        # Determine what needs to be generated by agent
+        need_title = final_title is None
+        need_body = final_body is None
+
+        # Write custom values if provided
+        if final_title:
+            title_file.write_text(final_title)
+        if final_body:
+            body_file.write_text(final_body)
+
+        # Generate missing content using agent
+        if need_title or need_body:
+            self._generate_pr_content(generate_title=need_title, generate_body=need_body)
+
+        # Read PR title and body from files (unified approach)
+        pr_title = self._get_pr_title()
+        pr_body = self._get_pr_body()
+
+        return pr_title, pr_body
+
+    def _generate_prompt(self, user_input: str = "") -> str:
+        """Generate prompt for agent (required by _execute_and_handle_agent_response).
+
+        Args:
+            user_input: Not used for PR phase
+
+        Returns:
+            The prompt stored in _current_prompt
+        """
+        return self._current_prompt
+
     def _generate_pr_content(self, generate_title: bool = True, generate_body: bool = True) -> None:
         """Generate PR title and/or body using agent.
 
@@ -215,14 +303,20 @@ class PRPhase(Phase):
         pr_dir = spec_path.parent.parent / "pr"
         pr_dir.mkdir(parents=True, exist_ok=True)
 
-        title_file = pr_dir / "title.txt"
-        body_file = pr_dir / "body.md"
-
-        # Convert to project-relative paths (git ignore format: / prefix)
+        # IMPORTANT: allowed_tools 使用 gitignore 格式的路徑規則：
+        #   - 以 / 開頭表示從專案根目錄開始的路徑
+        #   - 例如：/.cafe/issues/myissue/pr/title.txt
+        #   - 這樣可以精確匹配，避免誤配其他目錄下的同名檔案
         import os
-        project_root = Path(os.getcwd())
+        project_root = Path(os.getcwd()).resolve()
+
+        # 使用 resolve() 確保是絕對路徑，才能正確使用 relative_to()
+        title_file = (pr_dir / "title.txt").resolve()
+        body_file = (pr_dir / "body.md").resolve()
+
         try:
             relative_title_path = title_file.relative_to(project_root)
+            # 加上 / 前綴表示從專案根目錄開始（gitignore 格式）
             title_file_pattern = f"/{relative_title_path}"
         except ValueError:
             # If path is not relative to cwd, use absolute path
@@ -230,6 +324,7 @@ class PRPhase(Phase):
 
         try:
             relative_body_path = body_file.relative_to(project_root)
+            # 加上 / 前綴表示從專案根目錄開始（gitignore 格式）
             body_file_pattern = f"/{relative_body_path}"
         except ValueError:
             # If path is not relative to cwd, use absolute path
@@ -302,6 +397,9 @@ class PRPhase(Phase):
 
         full_prompt = prompt + "\n\n" + status_code_prompt
 
+        # Increment iteration counter before agent execution
+        self.iteration += 1
+
         # Set allowed tools for writing
         allowed_tools = ["read"]
         if generate_title:
@@ -309,11 +407,21 @@ class PRPhase(Phase):
         if generate_body:
             allowed_tools.append(f"write({body_file_pattern})")
 
-        response, _, _, _ = self.agent_manager.execute(
+        # Store prompt for _generate_prompt method
+        self._current_prompt = full_prompt
+
+        # Use common agent execution method (handles all history saving automatically)
+        result, response = self._execute_and_handle_agent_response(
             agent_name="David",
-            prompt=full_prompt,
+            user_input="",  # No user input for PR generation
+            valid_status_codes=[PhaseStatusCode.CONFIRMED],
             allowed_tools=allowed_tools,
+            complete_codes=[PhaseStatusCode.CONFIRMED],
         )
+
+        # Check if we should return early (error or completion)
+        if result:
+            return result
 
         # Verify requested files were created
         if generate_title and not title_file.exists():
@@ -344,44 +452,3 @@ class PRPhase(Phase):
         body_file = spec_path.parent.parent / "pr" / "body.md"
 
         return body_file.read_text().strip()
-
-    def _create_pr(self, title: str, body: str, branch_name: str) -> tuple[str, str]:
-        """Create PR using gh CLI.
-
-        Args:
-            title: PR title
-            body: PR body
-            branch_name: Branch name
-
-        Returns:
-            Tuple of (PR number, PR URL)
-
-        Raises:
-            subprocess.CalledProcessError: If gh pr create fails
-        """
-        # Build gh pr create command
-        cmd = ["gh", "pr", "create", "--title", title, "--body", body]
-
-        # Add --draft flag if draft mode is enabled
-        if self.draft:
-            cmd.append("--draft")
-
-        # Create PR
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-
-        if result.returncode != 0:
-            raise RuntimeError(f"gh pr create failed: {result.stderr}")
-
-        # Extract PR number from URL
-        # Expected format: https://github.com/user/repo/pull/123
-        pr_url = result.stdout.strip()
-        match = re.search(r"/pull/(\d+)", pr_url)
-        if match:
-            return match.group(1), pr_url
-
-        raise RuntimeError(f"Failed to extract PR number from: {pr_url}")
