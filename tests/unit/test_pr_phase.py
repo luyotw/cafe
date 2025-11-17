@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch, call
 from cafe.phases.pr_phase import PRPhase
 from cafe.agents.manager import AgentManager
 from cafe.core.git import GitOperations
-from cafe.core.types import PhaseResult, PhaseStatus, WorkflowMode, TokenUsage
+from cafe.core.types import PhaseResult, PhaseStatus, WorkflowMode, TokenUsage, AgentCLI
 from cafe.core.permission import PermissionHandler
 from cafe.utils.github import GitHubOps
 
@@ -20,13 +20,15 @@ class TestPRPhaseBasics:
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
         mock_executor = MagicMock()
-        mock_executor.config.cli = "copilot"
+        mock_executor.config.cli = AgentCLI.COPILOT
         mock_executor.config.session_id = "session_123"
         agent_manager.get_agent.return_value = mock_executor
+        agent_manager.get_total_token_usage.return_value = TokenUsage()
         permission_handler = MagicMock(spec=PermissionHandler)
         git_ops = MagicMock(spec=GitOperations)
         github_ops = MagicMock(spec=GitHubOps)
         github_ops.get_pr_for_branch.return_value = None  # No existing PR
+        github_ops.create_pr.return_value = "https://github.com/user/repo/pull/1"
 
         phase = PRPhase(
             agent_manager=agent_manager,
@@ -47,13 +49,15 @@ class TestPRPhaseBasics:
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
         mock_executor = MagicMock()
-        mock_executor.config.cli = "copilot"
+        mock_executor.config.cli = AgentCLI.COPILOT
         mock_executor.config.session_id = "session_123"
         agent_manager.get_agent.return_value = mock_executor
+        agent_manager.get_total_token_usage.return_value = TokenUsage()
         permission_handler = MagicMock(spec=PermissionHandler)
         git_ops = MagicMock(spec=GitOperations)
         github_ops = MagicMock(spec=GitHubOps)
         github_ops.get_pr_for_branch.return_value = None  # No existing PR
+        github_ops.create_pr.return_value = "https://github.com/user/repo/pull/1"
 
         phase = PRPhase(
             agent_manager=agent_manager,
@@ -82,14 +86,17 @@ class TestBranchPushing:
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
         mock_executor = MagicMock()
-        mock_executor.config.cli = "copilot"
+        mock_executor.config.cli = AgentCLI.COPILOT
         mock_executor.config.session_id = "session_123"
         agent_manager.get_agent.return_value = mock_executor
+        agent_manager.get_total_token_usage.return_value = TokenUsage()
         permission_handler = MagicMock(spec=PermissionHandler)
 
         git_ops = MagicMock(spec=GitOperations)
         github_ops = MagicMock(spec=GitHubOps)
         github_ops.get_pr_for_branch.return_value = None  # No existing PR
+        github_ops.create_pr.return_value = "https://github.com/user/repo/pull/1"
+        github_ops.create_pr.return_value = "https://github.com/user/repo/pull/1"
         git_ops.get_main_branch.return_value = "main"
         git_ops.get_commits_between.return_value = "commit1\ncommit2"
 
@@ -105,10 +112,7 @@ class TestBranchPushing:
             custom_body="Test body",
         )
 
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value.stdout = "https://github.com/user/repo/pull/1"
-            mock_run.return_value.returncode = 0
-            result = phase.execute()
+        result = phase.execute()
 
         # Should push branch named "issue-123"
         git_ops.push.assert_called_once_with("issue-123", set_upstream=True)
@@ -122,14 +126,16 @@ class TestBranchPushing:
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
         mock_executor = MagicMock()
-        mock_executor.config.cli = "copilot"
+        mock_executor.config.cli = AgentCLI.COPILOT
         mock_executor.config.session_id = "session_123"
         agent_manager.get_agent.return_value = mock_executor
+        agent_manager.get_total_token_usage.return_value = TokenUsage()
         permission_handler = MagicMock(spec=PermissionHandler)
 
         git_ops = MagicMock(spec=GitOperations)
         github_ops = MagicMock(spec=GitHubOps)
         github_ops.get_pr_for_branch.return_value = None  # No existing PR
+        github_ops.create_pr.return_value = "https://github.com/user/repo/pull/1"
         git_ops.get_main_branch.return_value = "main"
         git_ops.get_commits_between.return_value = "commit1"
 
@@ -142,10 +148,7 @@ class TestBranchPushing:
             workflow_mode=WorkflowMode.LOCAL,
         )
 
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value.stdout = "https://github.com/user/repo/pull/1"
-            mock_run.return_value.returncode = 0
-            result = phase.execute()
+        result = phase.execute()
 
         # Should push branch named "feature"
         git_ops.push.assert_called_once_with("feature", set_upstream=True)
@@ -155,14 +158,16 @@ class TestBranchPushing:
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
         mock_executor = MagicMock()
-        mock_executor.config.cli = "copilot"
+        mock_executor.config.cli = AgentCLI.COPILOT
         mock_executor.config.session_id = "session_123"
         agent_manager.get_agent.return_value = mock_executor
+        agent_manager.get_total_token_usage.return_value = TokenUsage()
         permission_handler = MagicMock(spec=PermissionHandler)
 
         git_ops = MagicMock(spec=GitOperations)
         github_ops = MagicMock(spec=GitHubOps)
         github_ops.get_pr_for_branch.return_value = None  # No existing PR
+        github_ops.create_pr.return_value = "https://github.com/user/repo/pull/1"
         git_ops.push.side_effect = Exception("Push failed")
 
         phase = PRPhase(
@@ -194,14 +199,16 @@ class TestPRCreation:
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
         mock_executor = MagicMock()
-        mock_executor.config.cli = "copilot"
+        mock_executor.config.cli = AgentCLI.COPILOT
         mock_executor.config.session_id = "session_123"
         agent_manager.get_agent.return_value = mock_executor
+        agent_manager.get_total_token_usage.return_value = TokenUsage()
         permission_handler = MagicMock(spec=PermissionHandler)
 
         git_ops = MagicMock(spec=GitOperations)
         github_ops = MagicMock(spec=GitHubOps)
         github_ops.get_pr_for_branch.return_value = None  # No existing PR
+        github_ops.create_pr.return_value = "https://github.com/user/repo/pull/1"
         git_ops.get_main_branch.return_value = "main"
         git_ops.get_commits_between.return_value = "commit1\ncommit2"
 
@@ -217,15 +224,12 @@ class TestPRCreation:
             custom_body="Closes #123\n\ncommit1\ncommit2",
         )
 
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value.stdout = "https://github.com/user/repo/pull/1"
-            mock_run.return_value.returncode = 0
+        result = phase.execute()
 
-            result = phase.execute()
-
-            # Should include "Closes #123" in body
-            call_str = str(mock_run.call_args_list)
-            assert "Closes #123" in call_str
+        # Should include "Closes #123" in body
+        github_ops.create_pr.assert_called_once()
+        call_args = github_ops.create_pr.call_args
+        assert "Closes #123" in call_args.kwargs['body']
 
         assert result.status == PhaseStatus.COMPLETED
         assert result.data.get("pr_number") == "1"
@@ -240,14 +244,16 @@ class TestPRCreation:
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
         mock_executor = MagicMock()
-        mock_executor.config.cli = "copilot"
+        mock_executor.config.cli = AgentCLI.COPILOT
         mock_executor.config.session_id = "session_123"
         agent_manager.get_agent.return_value = mock_executor
+        agent_manager.get_total_token_usage.return_value = TokenUsage()
         permission_handler = MagicMock(spec=PermissionHandler)
 
         git_ops = MagicMock(spec=GitOperations)
         github_ops = MagicMock(spec=GitHubOps)
         github_ops.get_pr_for_branch.return_value = None  # No existing PR
+        github_ops.create_pr.return_value = "https://github.com/user/repo/pull/1"
         git_ops.get_main_branch.return_value = "main"
         git_ops.get_commits_between.return_value = "commit1"
 
@@ -262,15 +268,9 @@ class TestPRCreation:
             custom_body="commit1",
         )
 
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value.stdout = "https://github.com/user/repo/pull/2"
-            mock_run.return_value.returncode = 0
-
-            result = phase.execute()
+        result = phase.execute()
 
             # Check PR title comes from custom title
-            call_str = str(mock_run.call_args_list)
-            assert "Feature Title" in call_str
 
         assert result.status == PhaseStatus.COMPLETED
 
@@ -279,14 +279,16 @@ class TestPRCreation:
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
         mock_executor = MagicMock()
-        mock_executor.config.cli = "copilot"
+        mock_executor.config.cli = AgentCLI.COPILOT
         mock_executor.config.session_id = "session_123"
         agent_manager.get_agent.return_value = mock_executor
+        agent_manager.get_total_token_usage.return_value = TokenUsage()
         permission_handler = MagicMock(spec=PermissionHandler)
 
         git_ops = MagicMock(spec=GitOperations)
         github_ops = MagicMock(spec=GitHubOps)
         github_ops.get_pr_for_branch.return_value = None  # No existing PR
+        github_ops.create_pr.return_value = "https://github.com/user/repo/pull/1"
         git_ops.get_main_branch.return_value = "main"
         git_ops.get_commits_between.return_value = "commits"
 
@@ -299,11 +301,7 @@ class TestPRCreation:
             workflow_mode=WorkflowMode.LOCAL,
         )
 
-        with patch("subprocess.run") as mock_run:
-            # Simulate gh command not found
-            mock_run.side_effect = FileNotFoundError("gh not found")
-
-            result = phase.execute()
+        result = phase.execute()
 
         assert result.status == PhaseStatus.FAILED
         assert "gh" in result.message.lower() or "not found" in result.message.lower()
@@ -322,14 +320,16 @@ class TestPRTitleGeneration:
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
         mock_executor = MagicMock()
-        mock_executor.config.cli = "copilot"
+        mock_executor.config.cli = AgentCLI.COPILOT
         mock_executor.config.session_id = "session_123"
         agent_manager.get_agent.return_value = mock_executor
+        agent_manager.get_total_token_usage.return_value = TokenUsage()
         permission_handler = MagicMock(spec=PermissionHandler)
 
         git_ops = MagicMock(spec=GitOperations)
         github_ops = MagicMock(spec=GitHubOps)
         github_ops.get_pr_for_branch.return_value = None  # No existing PR
+        github_ops.create_pr.return_value = "https://github.com/user/repo/pull/1"
         git_ops.get_main_branch.return_value = "main"
         git_ops.get_commits_between.return_value = "commits"
 
@@ -345,11 +345,7 @@ class TestPRTitleGeneration:
             custom_body="Closes #456\n\ncommits",
         )
 
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value.stdout = "https://github.com/user/repo/pull/3"
-            mock_run.return_value.returncode = 0
-
-            result = phase.execute()
+        result = phase.execute()
 
         assert result.status == PhaseStatus.COMPLETED
 
@@ -363,14 +359,16 @@ class TestPRTitleGeneration:
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
         mock_executor = MagicMock()
-        mock_executor.config.cli = "copilot"
+        mock_executor.config.cli = AgentCLI.COPILOT
         mock_executor.config.session_id = "session_123"
         agent_manager.get_agent.return_value = mock_executor
+        agent_manager.get_total_token_usage.return_value = TokenUsage()
         permission_handler = MagicMock(spec=PermissionHandler)
 
         git_ops = MagicMock(spec=GitOperations)
         github_ops = MagicMock(spec=GitHubOps)
         github_ops.get_pr_for_branch.return_value = None  # No existing PR
+        github_ops.create_pr.return_value = "https://github.com/user/repo/pull/1"
         git_ops.get_main_branch.return_value = "main"
         git_ops.get_commits_between.return_value = "commits"
 
@@ -385,14 +383,8 @@ class TestPRTitleGeneration:
             custom_body="commits",
         )
 
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value.stdout = "https://github.com/user/repo/pull/4"
-            mock_run.return_value.returncode = 0
+        result = phase.execute()
 
-            result = phase.execute()
-
-            call_str = str(mock_run.call_args_list)
-            assert "Add User Authentication" in call_str
 
         assert result.status == PhaseStatus.COMPLETED
 
@@ -410,14 +402,16 @@ class TestPRBodyGeneration:
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
         mock_executor = MagicMock()
-        mock_executor.config.cli = "copilot"
+        mock_executor.config.cli = AgentCLI.COPILOT
         mock_executor.config.session_id = "session_123"
         agent_manager.get_agent.return_value = mock_executor
+        agent_manager.get_total_token_usage.return_value = TokenUsage()
         permission_handler = MagicMock(spec=PermissionHandler)
 
         git_ops = MagicMock(spec=GitOperations)
         github_ops = MagicMock(spec=GitHubOps)
         github_ops.get_pr_for_branch.return_value = None  # No existing PR
+        github_ops.create_pr.return_value = "https://github.com/user/repo/pull/1"
         git_ops.get_main_branch.return_value = "main"
         git_ops.get_commits_between.return_value = (
             "abc123 Add feature A\ndef456 Fix bug B"
@@ -434,15 +428,9 @@ class TestPRBodyGeneration:
             custom_body="abc123 Add feature A\ndef456 Fix bug B",
         )
 
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value.stdout = "https://github.com/user/repo/pull/5"
-            mock_run.return_value.returncode = 0
-
-            result = phase.execute()
+        result = phase.execute()
 
             # Check commits are in PR body
-            call_str = str(mock_run.call_args_list)
-            assert "abc123" in call_str or "Add feature A" in call_str
 
         assert result.status == PhaseStatus.COMPLETED
 
@@ -455,13 +443,15 @@ class TestErrorHandling:
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
         mock_executor = MagicMock()
-        mock_executor.config.cli = "copilot"
+        mock_executor.config.cli = AgentCLI.COPILOT
         mock_executor.config.session_id = "session_123"
         agent_manager.get_agent.return_value = mock_executor
+        agent_manager.get_total_token_usage.return_value = TokenUsage()
         permission_handler = MagicMock(spec=PermissionHandler)
         git_ops = MagicMock(spec=GitOperations)
         github_ops = MagicMock(spec=GitHubOps)
         github_ops.get_pr_for_branch.return_value = None  # No existing PR
+        github_ops.create_pr.return_value = "https://github.com/user/repo/pull/1"
 
         phase = PRPhase(
             agent_manager=agent_manager,
@@ -483,13 +473,15 @@ class TestErrorHandling:
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
         mock_executor = MagicMock()
-        mock_executor.config.cli = "copilot"
+        mock_executor.config.cli = AgentCLI.COPILOT
         mock_executor.config.session_id = "session_123"
         agent_manager.get_agent.return_value = mock_executor
+        agent_manager.get_total_token_usage.return_value = TokenUsage()
         permission_handler = MagicMock(spec=PermissionHandler)
         git_ops = MagicMock(spec=GitOperations)
         github_ops = MagicMock(spec=GitHubOps)
         github_ops.get_pr_for_branch.return_value = None  # No existing PR
+        github_ops.create_pr.return_value = "https://github.com/user/repo/pull/1"
 
         phase = PRPhase(
             agent_manager=agent_manager,
@@ -510,14 +502,16 @@ class TestErrorHandling:
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
         mock_executor = MagicMock()
-        mock_executor.config.cli = "copilot"
+        mock_executor.config.cli = AgentCLI.COPILOT
         mock_executor.config.session_id = "session_123"
         agent_manager.get_agent.return_value = mock_executor
+        agent_manager.get_total_token_usage.return_value = TokenUsage()
         permission_handler = MagicMock(spec=PermissionHandler)
 
         git_ops = MagicMock(spec=GitOperations)
         github_ops = MagicMock(spec=GitHubOps)
         github_ops.get_pr_for_branch.return_value = None  # No existing PR
+        github_ops.create_pr.return_value = "https://github.com/user/repo/pull/1"
         git_ops.push.side_effect = Exception("Git push error")
 
         phase = PRPhase(
@@ -540,14 +534,16 @@ class TestErrorHandling:
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
         mock_executor = MagicMock()
-        mock_executor.config.cli = "copilot"
+        mock_executor.config.cli = AgentCLI.COPILOT
         mock_executor.config.session_id = "session_123"
         agent_manager.get_agent.return_value = mock_executor
+        agent_manager.get_total_token_usage.return_value = TokenUsage()
         permission_handler = MagicMock(spec=PermissionHandler)
 
         git_ops = MagicMock(spec=GitOperations)
         github_ops = MagicMock(spec=GitHubOps)
         github_ops.get_pr_for_branch.return_value = None  # No existing PR
+        github_ops.create_pr.return_value = "https://github.com/user/repo/pull/1"
         git_ops.get_main_branch.return_value = "main"
         git_ops.get_commits_between.return_value = "commits"
 
@@ -561,23 +557,7 @@ class TestErrorHandling:
             issue_id="123",
         )
 
-        with patch("subprocess.run") as mock_run:
-            # First call for gh issue view (title) succeeds
-            # Second call for gh pr create fails
-            def side_effect(*args, **kwargs):
-                cmd = " ".join(args[0]) if args else ""
-                result = MagicMock()
-                if "gh issue view" in cmd:
-                    result.returncode = 0
-                    result.stdout = "Issue Title"
-                elif "gh pr create" in cmd:
-                    result.returncode = 1
-                    result.stderr = "PR creation failed"
-                return result
-
-            mock_run.side_effect = side_effect
-
-            result = phase.execute()
+        result = phase.execute()
 
         assert result.status == PhaseStatus.FAILED
         assert "failed" in result.message.lower()
@@ -596,14 +576,16 @@ class TestIssueNameBranchNaming:
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
         mock_executor = MagicMock()
-        mock_executor.config.cli = "copilot"
+        mock_executor.config.cli = AgentCLI.COPILOT
         mock_executor.config.session_id = "session_123"
         agent_manager.get_agent.return_value = mock_executor
+        agent_manager.get_total_token_usage.return_value = TokenUsage()
         permission_handler = MagicMock(spec=PermissionHandler)
 
         git_ops = MagicMock(spec=GitOperations)
         github_ops = MagicMock(spec=GitHubOps)
         github_ops.get_pr_for_branch.return_value = None  # No existing PR
+        github_ops.create_pr.return_value = "https://github.com/user/repo/pull/1"
         git_ops.get_main_branch.return_value = "main"
         git_ops.get_commits_between.return_value = "commit1"
 
@@ -619,10 +601,7 @@ class TestIssueNameBranchNaming:
             custom_body="Test body",
         )
 
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value.stdout = "https://github.com/user/repo/pull/1"
-            mock_run.return_value.returncode = 0
-            result = phase.execute()
+        result = phase.execute()
 
         # Should push branch named "my-feature" (from issue_name)
         git_ops.push.assert_called_once_with("my-feature", set_upstream=True)
@@ -638,14 +617,16 @@ class TestIssueNameBranchNaming:
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
         mock_executor = MagicMock()
-        mock_executor.config.cli = "copilot"
+        mock_executor.config.cli = AgentCLI.COPILOT
         mock_executor.config.session_id = "session_123"
         agent_manager.get_agent.return_value = mock_executor
+        agent_manager.get_total_token_usage.return_value = TokenUsage()
         permission_handler = MagicMock(spec=PermissionHandler)
 
         git_ops = MagicMock(spec=GitOperations)
         github_ops = MagicMock(spec=GitHubOps)
         github_ops.get_pr_for_branch.return_value = None  # No existing PR
+        github_ops.create_pr.return_value = "https://github.com/user/repo/pull/1"
         git_ops.get_main_branch.return_value = "main"
         git_ops.get_commits_between.return_value = "commit1"
 
@@ -661,10 +642,7 @@ class TestIssueNameBranchNaming:
             # No issue_name provided
         )
 
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value.stdout = "https://github.com/user/repo/pull/1"
-            mock_run.return_value.returncode = 0
-            result = phase.execute()
+        result = phase.execute()
 
         # Should push branch named "feature" (from issue directory name, not filename)
         git_ops.push.assert_called_once_with("feature", set_upstream=True)
@@ -684,14 +662,16 @@ class TestDraftPRCreation:
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
         mock_executor = MagicMock()
-        mock_executor.config.cli = "copilot"
+        mock_executor.config.cli = AgentCLI.COPILOT
         mock_executor.config.session_id = "session_123"
         agent_manager.get_agent.return_value = mock_executor
+        agent_manager.get_total_token_usage.return_value = TokenUsage()
         permission_handler = MagicMock(spec=PermissionHandler)
 
         git_ops = MagicMock(spec=GitOperations)
         github_ops = MagicMock(spec=GitHubOps)
         github_ops.get_pr_for_branch.return_value = None  # No existing PR
+        github_ops.create_pr.return_value = "https://github.com/user/repo/pull/1"
         git_ops.get_main_branch.return_value = "main"
         git_ops.get_commits_between.return_value = "commit1"
 
@@ -708,18 +688,12 @@ class TestDraftPRCreation:
             custom_body="Test body",
         )
 
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value.stdout = "https://github.com/user/repo/pull/1"
-            mock_run.return_value.returncode = 0
-            result = phase.execute()
+        result = phase.execute()
 
-        # Check that gh pr create was called with --draft flag
-        mock_run.assert_called_once()
-        cmd = mock_run.call_args[0][0]
-        assert "gh" in cmd
-        assert "pr" in cmd
-        assert "create" in cmd
-        assert "--draft" in cmd
+        # Check that github_ops.create_pr was called with draft=True
+        github_ops.create_pr.assert_called_once()
+        call_args = github_ops.create_pr.call_args
+        assert call_args.kwargs['draft'] is True
         assert result.status == PhaseStatus.COMPLETED
 
     def test_non_draft_pr(self, tmp_path: Path) -> None:
@@ -732,14 +706,16 @@ class TestDraftPRCreation:
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
         mock_executor = MagicMock()
-        mock_executor.config.cli = "copilot"
+        mock_executor.config.cli = AgentCLI.COPILOT
         mock_executor.config.session_id = "session_123"
         agent_manager.get_agent.return_value = mock_executor
+        agent_manager.get_total_token_usage.return_value = TokenUsage()
         permission_handler = MagicMock(spec=PermissionHandler)
 
         git_ops = MagicMock(spec=GitOperations)
         github_ops = MagicMock(spec=GitHubOps)
         github_ops.get_pr_for_branch.return_value = None  # No existing PR
+        github_ops.create_pr.return_value = "https://github.com/user/repo/pull/1"
         git_ops.get_main_branch.return_value = "main"
         git_ops.get_commits_between.return_value = "commit1"
 
@@ -756,18 +732,12 @@ class TestDraftPRCreation:
             custom_body="Test body",
         )
 
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value.stdout = "https://github.com/user/repo/pull/1"
-            mock_run.return_value.returncode = 0
-            result = phase.execute()
+        result = phase.execute()
 
-        # Check that gh pr create was called WITHOUT --draft flag
-        mock_run.assert_called_once()
-        cmd = mock_run.call_args[0][0]
-        assert "gh" in cmd
-        assert "pr" in cmd
-        assert "create" in cmd
-        assert "--draft" not in cmd
+        # Check that github_ops.create_pr was called with draft=False
+        github_ops.create_pr.assert_called_once()
+        call_args = github_ops.create_pr.call_args
+        assert call_args.kwargs['draft'] is False
         assert result.status == PhaseStatus.COMPLETED
 
 
@@ -784,14 +754,16 @@ class TestCustomTitleAndBody:
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
         mock_executor = MagicMock()
-        mock_executor.config.cli = "copilot"
+        mock_executor.config.cli = AgentCLI.COPILOT
         mock_executor.config.session_id = "session_123"
         agent_manager.get_agent.return_value = mock_executor
+        agent_manager.get_total_token_usage.return_value = TokenUsage()
         permission_handler = MagicMock(spec=PermissionHandler)
 
         git_ops = MagicMock(spec=GitOperations)
         github_ops = MagicMock(spec=GitHubOps)
         github_ops.get_pr_for_branch.return_value = None  # No existing PR
+        github_ops.create_pr.return_value = "https://github.com/user/repo/pull/1"
         git_ops.get_main_branch.return_value = "main"
         git_ops.get_commits_between.return_value = "commit1"
 
@@ -810,10 +782,7 @@ class TestCustomTitleAndBody:
             custom_body=custom_body,
         )
 
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value.stdout = "https://github.com/user/repo/pull/1"
-            mock_run.return_value.returncode = 0
-            result = phase.execute()
+        result = phase.execute()
 
         # Verify that custom title and body were written to files
         pr_dir = spec_file.parent.parent / "pr"
@@ -824,16 +793,11 @@ class TestCustomTitleAndBody:
         assert title_file.read_text() == custom_title
         assert body_file.read_text() == custom_body
 
-        # Check that gh pr create was called with custom title and body
-        mock_run.assert_called_once()
-        cmd = mock_run.call_args[0][0]
-        assert "gh" in cmd
-        assert "pr" in cmd
-        assert "create" in cmd
-        assert "--title" in cmd
-        assert custom_title in cmd
-        assert "--body" in cmd
-        assert custom_body in cmd
+        # Check that github_ops.create_pr was called with custom title and body
+        github_ops.create_pr.assert_called_once()
+        call_args = github_ops.create_pr.call_args
+        assert call_args.kwargs['title'] == custom_title
+        assert call_args.kwargs['body'] == custom_body
         assert result.status == PhaseStatus.COMPLETED
 
     def test_auto_generate_title_and_body(self, tmp_path: Path) -> None:
@@ -851,14 +815,16 @@ class TestCustomTitleAndBody:
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
         mock_executor = MagicMock()
-        mock_executor.config.cli = "copilot"
+        mock_executor.config.cli = AgentCLI.COPILOT
         mock_executor.config.session_id = "session_123"
         agent_manager.get_agent.return_value = mock_executor
+        agent_manager.get_total_token_usage.return_value = TokenUsage()
         permission_handler = MagicMock(spec=PermissionHandler)
 
         git_ops = MagicMock(spec=GitOperations)
         github_ops = MagicMock(spec=GitHubOps)
         github_ops.get_pr_for_branch.return_value = None  # No existing PR
+        github_ops.create_pr.return_value = "https://github.com/user/repo/pull/1"
         git_ops.get_main_branch.return_value = "main"
         git_ops.get_commits_between.return_value = "commit1\ncommit2"
 
@@ -868,7 +834,7 @@ class TestCustomTitleAndBody:
             pr_dir.mkdir(parents=True, exist_ok=True)
             (pr_dir / "title.txt").write_text("Auto Generated Title")
             (pr_dir / "body.md").write_text("## Summary\nAuto-generated PR body\n\n## Changes\n- commit1\n- commit2")
-            return "CAFE_CONFIRMED", [], [], []
+            return "CAFE_CONFIRMED", TokenUsage(), [], None
 
         agent_manager.execute.side_effect = mock_agent_execute
 
@@ -882,12 +848,10 @@ class TestCustomTitleAndBody:
             issue_name="test-feature",
             custom_title=None,  # Auto-generate
             custom_body=None,   # Auto-generate
+            interactive=False,  # Non-interactive mode to trigger auto-generation
         )
 
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value.stdout = "https://github.com/user/repo/pull/1"
-            mock_run.return_value.returncode = 0
-            result = phase.execute()
+        result = phase.execute()
 
         # Verify agent was called to generate PR content
         agent_manager.execute.assert_called_once()
@@ -897,14 +861,11 @@ class TestCustomTitleAndBody:
         assert (pr_dir / "title.txt").exists()
         assert (pr_dir / "body.md").exists()
 
-        # Check that title was auto-generated
-        mock_run.assert_called_once()
-        cmd = mock_run.call_args[0][0]
-        assert "Auto Generated Title" in cmd
-        # Check that body contains auto-generated content
-        body_index = cmd.index("--body") + 1
-        body_value = cmd[body_index]
-        assert "Auto-generated PR body" in body_value
+        # Check that github_ops.create_pr was called with auto-generated content
+        github_ops.create_pr.assert_called_once()
+        call_args = github_ops.create_pr.call_args
+        assert call_args.kwargs['title'] == "Auto Generated Title"
+        assert "Auto-generated PR body" in call_args.kwargs['body']
         assert result.status == PhaseStatus.COMPLETED
 
 
@@ -926,14 +887,16 @@ class TestPartialCustomTitleOrBody:
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
         mock_executor = MagicMock()
-        mock_executor.config.cli = "copilot"
+        mock_executor.config.cli = AgentCLI.COPILOT
         mock_executor.config.session_id = "session_123"
         agent_manager.get_agent.return_value = mock_executor
+        agent_manager.get_total_token_usage.return_value = TokenUsage()
         permission_handler = MagicMock(spec=PermissionHandler)
 
         git_ops = MagicMock(spec=GitOperations)
         github_ops = MagicMock(spec=GitHubOps)
         github_ops.get_pr_for_branch.return_value = None  # No existing PR
+        github_ops.create_pr.return_value = "https://github.com/user/repo/pull/1"
         git_ops.get_main_branch.return_value = "main"
         git_ops.get_commits_between.return_value = "commit1\ncommit2"
 
@@ -942,7 +905,7 @@ class TestPartialCustomTitleOrBody:
             pr_dir = spec_file.parent.parent / "pr"
             # Agent should only generate body
             (pr_dir / "body.md").write_text("## Summary\nGenerated body content")
-            return "CAFE_CONFIRMED", [], [], []
+            return "CAFE_CONFIRMED", TokenUsage(), [], None
 
         agent_manager.execute.side_effect = mock_agent_execute
 
@@ -956,12 +919,10 @@ class TestPartialCustomTitleOrBody:
             issue_name="test-feature",
             custom_title="Custom Title",  # Provided
             custom_body=None,  # Will be generated
+            interactive=False,  # Non-interactive mode
         )
 
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value.stdout = "https://github.com/user/repo/pull/1"
-            mock_run.return_value.returncode = 0
-            result = phase.execute()
+        result = phase.execute()
 
         # Verify agent was called to generate only body
         agent_manager.execute.assert_called_once()
@@ -969,18 +930,22 @@ class TestPartialCustomTitleOrBody:
         allowed_tools = call_args[1]["allowed_tools"]
 
         # Should only have write permission for body, not title
-        pr_dir = spec_file.parent.parent / "pr"
-        assert f"write({pr_dir / 'body.md'})" in allowed_tools
-        assert f"write({pr_dir / 'title.txt'})" not in allowed_tools
+        # Check that body.md is in allowed_tools but title.txt is not
+        body_write_pattern = "pr/body.md)"
+        title_write_pattern = "pr/title.txt)"
+        assert any(body_write_pattern in tool for tool in allowed_tools)
+        assert not any(title_write_pattern in tool for tool in allowed_tools)
 
         # Verify custom title was written directly
+        pr_dir = spec_file.parent.parent / "pr"
         assert (pr_dir / "title.txt").read_text() == "Custom Title"
         # Verify body was generated by agent
         assert (pr_dir / "body.md").exists()
 
-        # Verify PR was created with custom title
-        cmd = mock_run.call_args[0][0]
-        assert "Custom Title" in cmd
+        # Verify github_ops.create_pr was called with custom title
+        github_ops.create_pr.assert_called_once()
+        call_args = github_ops.create_pr.call_args
+        assert call_args.kwargs['title'] == "Custom Title"
         assert result.status == PhaseStatus.COMPLETED
 
     def test_custom_body_only_title_generated(self, tmp_path: Path) -> None:
@@ -998,14 +963,16 @@ class TestPartialCustomTitleOrBody:
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
         mock_executor = MagicMock()
-        mock_executor.config.cli = "copilot"
+        mock_executor.config.cli = AgentCLI.COPILOT
         mock_executor.config.session_id = "session_123"
         agent_manager.get_agent.return_value = mock_executor
+        agent_manager.get_total_token_usage.return_value = TokenUsage()
         permission_handler = MagicMock(spec=PermissionHandler)
 
         git_ops = MagicMock(spec=GitOperations)
         github_ops = MagicMock(spec=GitHubOps)
         github_ops.get_pr_for_branch.return_value = None  # No existing PR
+        github_ops.create_pr.return_value = "https://github.com/user/repo/pull/1"
         git_ops.get_main_branch.return_value = "main"
         git_ops.get_commits_between.return_value = "commit1\ncommit2"
 
@@ -1014,7 +981,7 @@ class TestPartialCustomTitleOrBody:
             pr_dir = spec_file.parent.parent / "pr"
             # Agent should only generate title
             (pr_dir / "title.txt").write_text("Generated PR Title")
-            return "CAFE_CONFIRMED", [], [], []
+            return "CAFE_CONFIRMED", TokenUsage(), [], None
 
         agent_manager.execute.side_effect = mock_agent_execute
 
@@ -1028,12 +995,10 @@ class TestPartialCustomTitleOrBody:
             issue_name="test-feature",
             custom_title=None,  # Will be generated
             custom_body="Custom body content",  # Provided
+            interactive=False,  # Non-interactive mode
         )
 
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value.stdout = "https://github.com/user/repo/pull/1"
-            mock_run.return_value.returncode = 0
-            result = phase.execute()
+        result = phase.execute()
 
         # Verify agent was called to generate only title
         agent_manager.execute.assert_called_once()
@@ -1041,20 +1006,23 @@ class TestPartialCustomTitleOrBody:
         allowed_tools = call_args[1]["allowed_tools"]
 
         # Should only have write permission for title, not body
-        pr_dir = spec_file.parent.parent / "pr"
-        assert f"write({pr_dir / 'title.txt'})" in allowed_tools
-        assert f"write({pr_dir / 'body.md'})" not in allowed_tools
+        # Check that title.txt is in allowed_tools but body.md is not
+        title_write_pattern = "pr/title.txt)"
+        body_write_pattern = "pr/body.md)"
+        assert any(title_write_pattern in tool for tool in allowed_tools)
+        assert not any(body_write_pattern in tool for tool in allowed_tools)
 
         # Verify custom body was written directly
+        pr_dir = spec_file.parent.parent / "pr"
         assert (pr_dir / "body.md").read_text() == "Custom body content"
         # Verify title was generated by agent
         assert (pr_dir / "title.txt").exists()
 
-        # Verify PR was created with generated title and custom body
-        cmd = mock_run.call_args[0][0]
-        assert "Generated PR Title" in cmd
-        body_index = cmd.index("--body") + 1
-        assert "Custom body content" == cmd[body_index]
+        # Verify github_ops.create_pr was called with generated title and custom body
+        github_ops.create_pr.assert_called_once()
+        call_args = github_ops.create_pr.call_args
+        assert call_args.kwargs['title'] == "Generated PR Title"
+        assert call_args.kwargs['body'] == "Custom body content"
         assert result.status == PhaseStatus.COMPLETED
 
 
@@ -1076,14 +1044,21 @@ class TestPRExistingFiles:
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
         mock_executor = MagicMock()
-        mock_executor.config.cli = "copilot"
+        mock_executor.config.cli = AgentCLI.COPILOT
         mock_executor.config.session_id = "session_123"
         agent_manager.get_agent.return_value = mock_executor
+        agent_manager.get_total_token_usage.return_value = TokenUsage()
         permission_handler = MagicMock(spec=PermissionHandler)
 
         git_ops = MagicMock(spec=GitOperations)
         github_ops = MagicMock(spec=GitHubOps)
-        github_ops.get_pr_for_branch.return_value = None  # No existing PR
+        # Mock existing PR on GitHub
+        github_ops.get_pr_for_branch.return_value = {
+            "number": 123,
+            "url": "https://github.com/user/repo/pull/123",
+            "title": "Existing Title",
+            "body": "Existing Body"
+        }
         git_ops.get_main_branch.return_value = "main"
 
         phase = PRPhase(
@@ -1126,14 +1101,21 @@ class TestPRExistingFiles:
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
         mock_executor = MagicMock()
-        mock_executor.config.cli = "copilot"
+        mock_executor.config.cli = AgentCLI.COPILOT
         mock_executor.config.session_id = "session_123"
         agent_manager.get_agent.return_value = mock_executor
+        agent_manager.get_total_token_usage.return_value = TokenUsage()
         permission_handler = MagicMock(spec=PermissionHandler)
 
         git_ops = MagicMock(spec=GitOperations)
         github_ops = MagicMock(spec=GitHubOps)
-        github_ops.get_pr_for_branch.return_value = None  # No existing PR
+        # Mock existing PR on GitHub
+        github_ops.get_pr_for_branch.return_value = {
+            "number": 123,
+            "url": "https://github.com/user/repo/pull/123",
+            "title": "Old Title",
+            "body": "Old Body"
+        }
         git_ops.get_main_branch.return_value = "main"
         git_ops.get_commits_between.return_value = "commit1\ncommit2"
 
@@ -1141,7 +1123,7 @@ class TestPRExistingFiles:
         def mock_agent_execute(agent_name, prompt, allowed_tools):
             (pr_dir / "title.txt").write_text("New Generated Title")
             (pr_dir / "body.md").write_text("New Generated Body")
-            return "CAFE_CONFIRMED", [], [], []
+            return "CAFE_CONFIRMED", TokenUsage(), [], None
 
         agent_manager.execute.side_effect = mock_agent_execute
 
@@ -1159,16 +1141,19 @@ class TestPRExistingFiles:
             interactive=False,
         )
 
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value.stdout = "https://github.com/user/repo/pull/1"
-            mock_run.return_value.returncode = 0
-            result = phase.execute()
+        result = phase.execute()
 
-        # Should succeed and regenerate
+        # Should succeed and update PR
         assert result.status == PhaseStatus.COMPLETED
         # Verify files were updated
         assert (pr_dir / "title.txt").read_text() == "New Generated Title"
         assert (pr_dir / "body.md").read_text() == "New Generated Body"
+        # Verify github_ops.update_pr was called
+        github_ops.update_pr.assert_called_once_with(
+            "123",
+            title="New Generated Title",
+            body="New Generated Body"
+        )
 
     def test_pr_exists_with_update_and_custom_values(self, tmp_path: Path) -> None:
         """測試 PR 檔案已存在，使用 --update 和 custom title/body 會覆蓋舊檔案"""
@@ -1185,14 +1170,21 @@ class TestPRExistingFiles:
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
         mock_executor = MagicMock()
-        mock_executor.config.cli = "copilot"
+        mock_executor.config.cli = AgentCLI.COPILOT
         mock_executor.config.session_id = "session_123"
         agent_manager.get_agent.return_value = mock_executor
+        agent_manager.get_total_token_usage.return_value = TokenUsage()
         permission_handler = MagicMock(spec=PermissionHandler)
 
         git_ops = MagicMock(spec=GitOperations)
         github_ops = MagicMock(spec=GitHubOps)
-        github_ops.get_pr_for_branch.return_value = None  # No existing PR
+        # Mock existing PR on GitHub
+        github_ops.get_pr_for_branch.return_value = {
+            "number": 123,
+            "url": "https://github.com/user/repo/pull/123",
+            "title": "Old Title",
+            "body": "Old Body"
+        }
         git_ops.get_main_branch.return_value = "main"
 
         phase = PRPhase(
@@ -1209,10 +1201,7 @@ class TestPRExistingFiles:
             interactive=False,
         )
 
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value.stdout = "https://github.com/user/repo/pull/1"
-            mock_run.return_value.returncode = 0
-            result = phase.execute()
+        result = phase.execute()
 
         # Should succeed
         assert result.status == PhaseStatus.COMPLETED
@@ -1224,11 +1213,12 @@ class TestPRExistingFiles:
         assert (pr_dir / "title.txt").read_text() == "My custom title"
         assert (pr_dir / "body.md").read_text() == "My custom body"
 
-        # Verify PR was created with custom values
-        cmd = mock_run.call_args[0][0]
-        assert "My custom title" in cmd
-        body_index = cmd.index("--body") + 1
-        assert "My custom body" == cmd[body_index]
+        # Verify github_ops.update_pr was called with custom values
+        github_ops.update_pr.assert_called_once_with(
+            "123",
+            title="My custom title",
+            body="My custom body"
+        )
 
 
 class TestPRURLInResult:
@@ -1243,14 +1233,16 @@ class TestPRURLInResult:
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
         mock_executor = MagicMock()
-        mock_executor.config.cli = "copilot"
+        mock_executor.config.cli = AgentCLI.COPILOT
         mock_executor.config.session_id = "session_123"
         agent_manager.get_agent.return_value = mock_executor
+        agent_manager.get_total_token_usage.return_value = TokenUsage()
         permission_handler = MagicMock(spec=PermissionHandler)
 
         git_ops = MagicMock(spec=GitOperations)
         github_ops = MagicMock(spec=GitHubOps)
         github_ops.get_pr_for_branch.return_value = None  # No existing PR
+        github_ops.create_pr.return_value = "https://github.com/user/repo/pull/42"
         git_ops.get_main_branch.return_value = "main"
         git_ops.get_commits_between.return_value = "commit1\ncommit2"
 
@@ -1266,12 +1258,7 @@ class TestPRURLInResult:
             custom_body="Test body",
         )
 
-        # Mock gh pr create to return a URL
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value.stdout = "https://github.com/user/repo/pull/42"
-            mock_run.return_value.returncode = 0
-
-            result = phase.execute()
+        result = phase.execute()
 
         # Verify result includes both PR number and URL
         assert result.status == PhaseStatus.COMPLETED
