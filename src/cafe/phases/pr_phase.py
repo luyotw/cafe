@@ -401,7 +401,7 @@ class PRPhase(Phase):
         self.iteration += 1
 
         # Set allowed tools for writing
-        allowed_tools = ["read"]
+        allowed_tools = ["read", "grep", "glob", "ls", "web_fetch", "web_search"]
         if generate_title:
             allowed_tools.append(f"write({title_file_pattern})")
         if generate_body:

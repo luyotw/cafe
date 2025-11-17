@@ -99,6 +99,11 @@ class ReviewPhase(Phase):
 
             base_allowed_tools = [
                 "read",                         # Read spec and plan files
+                "grep",                         # Search file content
+                "glob",                         # Find files by pattern
+                "ls",                           # List directory contents
+                "web_fetch",                    # Fetch web content
+                "web_search",                   # Search the web
                 "bash(git log)",                # View commit history and messages
                 "bash(git diff)",               # View code changes
                 "bash(git show)",               # View specific commit details

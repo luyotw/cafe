@@ -226,6 +226,11 @@ class SpecPhase(Phase):
                 # Merge base tools with previous iteration's tools (if any)
                 base_allowed_tools = [
                     "read",
+                    "grep",
+                    "glob",
+                    "ls",
+                    "web_fetch",
+                    "web_search",
                     f"write({spec_file_pattern})",
                     f"edit({spec_file_pattern})",
                 ]
