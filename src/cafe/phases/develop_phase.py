@@ -12,6 +12,7 @@ from cafe.core.phase import Phase
 from cafe.core.status_codes import PhaseStatusCode, StatusCodeParser, generate_status_code_prompt
 from cafe.core.types import PhaseProgress, PhaseResult, PhaseStatus, WorkflowMode
 from cafe.ui.display import Display
+from cafe.utils.github import get_pr_comments, filter_unresolved_comments, format_comments_for_prompt
 
 
 class DevelopPhase(Phase):
@@ -31,6 +32,7 @@ class DevelopPhase(Phase):
         interactive: bool = True,
         user_input: str = "",
         approved_denial_indices: Optional[List[int]] = None,
+        pr_number: Optional[int] = None,
     ) -> None:
         """Initialize develop phase.
 
@@ -47,6 +49,7 @@ class DevelopPhase(Phase):
             interactive: Enable interactive mode (default: True)
             user_input: User input for non-interactive mode (default: "")
             approved_denial_indices: Indices of approved permission denials (for non-interactive mode)
+            pr_number: PR number to fetch unresolved comments from (optional)
         """
         super().__init__(interactive=interactive)
 
@@ -60,6 +63,7 @@ class DevelopPhase(Phase):
         self.dev_agent = dev_agent
         self.user_input = user_input
         self.approved_denial_indices = approved_denial_indices if approved_denial_indices is not None else []
+        self.pr_number = pr_number
         self.phase_name = "develop"  # For base class progress tracking
 
         # Iteration tracking
@@ -216,13 +220,18 @@ class DevelopPhase(Phase):
             json.dump(config_data, f, ensure_ascii=False, indent=2)
 
     def _check_if_already_completed_with_review(self) -> Optional[PhaseResult]:
-        """檢查 phase 是否已完成，考慮 review feedback 的特殊邏輯。
+        """檢查 phase 是否已完成，考慮 review feedback 和 PR comments 的特殊邏輯。
 
         Returns:
-            PhaseResult 如果已完成且無需處理 review feedback，None 如果需要繼續執行
+            PhaseResult 如果已完成且無需處理 review feedback/PR comments，None 如果需要繼續執行
         """
         existing_progress = self._load_progress()
         if not existing_progress or existing_progress.status != PhaseStatus.COMPLETED:
+            return None
+
+        # If pr_number is provided, always continue execution (user wants to address PR comments)
+        if self.pr_number:
+            print(f"ℹ️  PR #{self.pr_number} comments will be addressed")
             return None
 
         # Check if there's review feedback that requires handling
@@ -323,6 +332,34 @@ class DevelopPhase(Phase):
         # No special handling needed
         return ""
 
+    def _load_pr_comments(self) -> tuple[str, int]:
+        """Load PR comments if pr_number is provided.
+
+        Returns:
+            Tuple of (formatted comments string, unresolved count)
+        """
+        if not self.pr_number:
+            return "", 0
+
+        try:
+            print(f"  → Calling get_pr_comments({self.pr_number})")
+            comments = get_pr_comments(self.pr_number)
+            print(f"  → Got {len(comments)} total comments")
+
+            unresolved = filter_unresolved_comments(comments)
+            print(f"  → {len(unresolved)} unresolved comments")
+
+            result = format_comments_for_prompt(unresolved)
+            if result:
+                print(f"  → Formatted result length: {len(result)} chars")
+            return result, len(unresolved)
+        except (ValueError, Exception) as e:
+            # Log error but don't fail - PR comments are optional context
+            print(f"⚠️  Failed to load PR comments: {e}")
+            import traceback
+            traceback.print_exc()
+            return "", 0
+
     def _generate_prompt(self, user_input: str = "") -> str:
         """Generate prompt for current iteration.
 
@@ -342,6 +379,10 @@ class DevelopPhase(Phase):
                 PhaseStatusCode.NEED_PERMISSION: "需要請求工具使用權限",
             },
         )
+
+        # Load PR comments if available
+        pr_comments, _ = self._load_pr_comments()
+        pr_comments_section = f"\n\n{pr_comments}\n" if pr_comments else ""
 
         # Check if review feedback exists (every iteration, not just first)
         has_review_feedback = self._check_review_feedback_exists()
@@ -364,7 +405,7 @@ class DevelopPhase(Phase):
 - Review Feedback：{review_file_path}
 - 需求規格：{self.spec_file}
 - 實作計畫：{self.plan_file}
-{user_input_section}
+{pr_comments_section}{user_input_section}
 **執行步驟：**
 1. **首先閱讀** {review_file_path}，了解所有需要修正的問題
 2. 根據 review feedback 逐一修正問題
@@ -389,7 +430,7 @@ class DevelopPhase(Phase):
 **檔案路徑：**
 - 需求規格：{self.spec_file}
 - 實作計畫：{self.plan_file}
-{user_input_section}
+{pr_comments_section}{user_input_section}
 **執行步驟：**
 1. 仔細閱讀 {self.spec_file} 和 {self.plan_file}
 2. 嚴格按照計畫中的順序執行開發任務
@@ -434,7 +475,7 @@ class DevelopPhase(Phase):
 **檔案路徑：**
 - 需求規格：{self.spec_file}
 - 實作計畫：{self.plan_file}
-{user_input_section}
+{pr_comments_section}{user_input_section}
 **執行步驟：**
 1. 檢查 {self.plan_file} 了解哪些任務已完成
 2. 繼續執行未完成的開發任務
@@ -481,6 +522,19 @@ class DevelopPhase(Phase):
             already_completed = self._check_if_already_completed_with_review()
             if already_completed:
                 return already_completed
+
+            # Check PR comments if pr_number is provided
+            if self.pr_number:
+                _, unresolved_count = self._load_pr_comments()
+                if unresolved_count == 0:
+                    return PhaseResult(
+                        status=PhaseStatus.COMPLETED,
+                        message=f"PR #{self.pr_number} has no unresolved comments. Nothing to do.",
+                        data={
+                            "branch": self._get_branch_name(),
+                            "pr_number": self.pr_number,
+                        },
+                    )
 
             # Create or checkout branch
             branch_name = self._get_branch_name()
