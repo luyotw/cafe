@@ -873,6 +873,155 @@ class TestPartialCustomTitleOrBody:
         assert result.status == PhaseStatus.COMPLETED
 
 
+class TestPRExistingFiles:
+    """Test behavior when PR files already exist."""
+
+    def test_pr_exists_non_interactive_without_update_fails(self, tmp_path: Path) -> None:
+        """測試 PR 檔案已存在且非互動模式下沒有 --update 會失敗"""
+        # Setup issue directory structure with existing PR files
+        spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
+        spec_file.write_text("# Feature\n")
+
+        pr_dir = spec_file.parent.parent / "pr"
+        pr_dir.mkdir(parents=True, exist_ok=True)
+        (pr_dir / "title.txt").write_text("Existing Title")
+        (pr_dir / "body.md").write_text("Existing Body")
+
+        agent_manager = MagicMock(spec=AgentManager)
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        git_ops = MagicMock(spec=GitOperations)
+        git_ops.get_main_branch.return_value = "main"
+
+        phase = PRPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            git_ops=git_ops,
+            spec_file=str(spec_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            issue_name="test-feature",
+            custom_title=None,
+            custom_body=None,
+            update=False,  # No update flag
+            interactive=False,  # Non-interactive
+        )
+
+        result = phase.execute()
+
+        # Should fail with message about using --update
+        assert result.status == PhaseStatus.FAILED
+        assert "--update" in result.message
+
+    def test_pr_exists_with_update_flag_regenerates(self, tmp_path: Path) -> None:
+        """測試 PR 檔案已存在且使用 --update 會重新生成"""
+        # Setup issue directory structure with existing PR files
+        spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
+        spec_file.write_text("# Feature\n")
+
+        # Setup plan file
+        plan_file = spec_file.parent.parent / "plan" / "plan.md"
+        plan_file.parent.mkdir(parents=True, exist_ok=True)
+        plan_file.write_text("# Implementation Plan\n")
+
+        pr_dir = spec_file.parent.parent / "pr"
+        pr_dir.mkdir(parents=True, exist_ok=True)
+        (pr_dir / "title.txt").write_text("Old Title")
+        (pr_dir / "body.md").write_text("Old Body")
+
+        agent_manager = MagicMock(spec=AgentManager)
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        git_ops = MagicMock(spec=GitOperations)
+        git_ops.get_main_branch.return_value = "main"
+        git_ops.get_commits_between.return_value = "commit1\ncommit2"
+
+        # Mock agent to write new files
+        def mock_agent_execute(agent_name, prompt, allowed_tools):
+            (pr_dir / "title.txt").write_text("New Generated Title")
+            (pr_dir / "body.md").write_text("New Generated Body")
+            return "CAFE_CONFIRMED", [], [], []
+
+        agent_manager.execute.side_effect = mock_agent_execute
+
+        phase = PRPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            git_ops=git_ops,
+            spec_file=str(spec_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            issue_name="test-feature",
+            custom_title=None,
+            custom_body=None,
+            update=True,  # Force update
+            interactive=False,
+        )
+
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value.stdout = "https://github.com/user/repo/pull/1"
+            mock_run.return_value.returncode = 0
+            result = phase.execute()
+
+        # Should succeed and regenerate
+        assert result.status == PhaseStatus.COMPLETED
+        # Verify files were updated
+        assert (pr_dir / "title.txt").read_text() == "New Generated Title"
+        assert (pr_dir / "body.md").read_text() == "New Generated Body"
+
+    def test_pr_exists_with_update_and_custom_values(self, tmp_path: Path) -> None:
+        """測試 PR 檔案已存在，使用 --update 和 custom title/body 會覆蓋舊檔案"""
+        # Setup issue directory structure with existing PR files
+        spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
+        spec_file.write_text("# Feature\n")
+
+        pr_dir = spec_file.parent.parent / "pr"
+        pr_dir.mkdir(parents=True, exist_ok=True)
+        (pr_dir / "title.txt").write_text("Old Title")
+        (pr_dir / "body.md").write_text("Old Body")
+
+        agent_manager = MagicMock(spec=AgentManager)
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        git_ops = MagicMock(spec=GitOperations)
+        git_ops.get_main_branch.return_value = "main"
+
+        phase = PRPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            git_ops=git_ops,
+            spec_file=str(spec_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            issue_name="test-feature",
+            custom_title="My custom title",  # Custom values
+            custom_body="My custom body",
+            update=True,  # Force update
+            interactive=False,
+        )
+
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value.stdout = "https://github.com/user/repo/pull/1"
+            mock_run.return_value.returncode = 0
+            result = phase.execute()
+
+        # Should succeed
+        assert result.status == PhaseStatus.COMPLETED
+
+        # Verify agent was NOT called (because custom values were provided)
+        agent_manager.execute.assert_not_called()
+
+        # Verify files were updated with custom values
+        assert (pr_dir / "title.txt").read_text() == "My custom title"
+        assert (pr_dir / "body.md").read_text() == "My custom body"
+
+        # Verify PR was created with custom values
+        cmd = mock_run.call_args[0][0]
+        assert "My custom title" in cmd
+        body_index = cmd.index("--body") + 1
+        assert "My custom body" == cmd[body_index]
+
+
 class TestPRURLInResult:
     """測試 PR URL 是否包含在結果中"""
 

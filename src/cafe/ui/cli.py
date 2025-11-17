@@ -1120,6 +1120,11 @@ def pr(
         "--body",
         help="Custom PR body (leave empty for auto-generation)",
     ),
+    update: bool = typer.Option(
+        False,
+        "--update",
+        help="Force regenerate PR title/body even if they already exist",
+    ),
     config_file: str = typer.Option(
         ".cafe/config.yaml",
         "--config",
@@ -1220,6 +1225,7 @@ def pr(
             draft=final_draft,
             custom_title=final_title,
             custom_body=final_body,
+            update=update,
             interactive=interactive,
         )
 
