@@ -1363,3 +1363,114 @@ class TestGeminiIgnoreSetup:
             os.chdir(original_cwd)
 
 
+class TestWriteToolPathStripping:
+    """Test Write/write_file tool path parameter stripping for Claude and Gemini."""
+
+    def test_claude_write_path_stripping(self) -> None:
+        """測試 Claude Write(/path) 會被轉換為 Write"""
+        executor = AgentExecutor(
+            AgentConfig(name="test", cli=AgentCLI.CLAUDE, session_id="test123")
+        )
+
+        # Mock streaming process
+        mock_process = MagicMock()
+        mock_process.stdout.readline.side_effect = [
+            '{"content": "Done"}\n',
+            "",
+        ]
+        mock_process.stderr.read.return_value = ""
+        mock_process.wait.return_value = 0
+
+        # Mock subprocess.run for session creation (not used since session_id is provided, but needed for safety)
+        mock_run_result = MagicMock(stdout='{"session_id": "test123"}', returncode=0)
+
+        with patch("subprocess.run", return_value=mock_run_result), \
+             patch("subprocess.Popen", return_value=mock_process), \
+             patch("sys.platform", "win32"):
+            allowed_tools = ["Read", "Write(/.cafe/test.txt)", "Write(/.cafe/test2.txt)"]
+            response = executor.execute("test prompt", allowed_tools)
+
+            # Check the command args that were constructed
+            assert response.cli_command_args is not None
+            tools_index = response.cli_command_args.index("--allowed-tools")
+            tools_value = response.cli_command_args[tools_index + 1]
+
+            # Should only contain Read and Write (no duplicates, no paths)
+            assert "Read" in tools_value
+            assert "Write" in tools_value
+            # Should not contain paths
+            assert "/.cafe" not in tools_value
+            # Should not have duplicate Write
+            tools_list = tools_value.strip('"').split(",")
+            assert tools_list.count("Write") == 1
+
+    def test_gemini_write_path_stripping(self) -> None:
+        """測試 Gemini write_file(/path) 會被轉換為 write_file"""
+        executor = AgentExecutor(
+            AgentConfig(name="test", cli=AgentCLI.GEMINI)
+        )
+
+        # Mock streaming process
+        mock_process = MagicMock()
+        mock_process.stdout.readline.side_effect = [
+            '{"response": "Done"}\n',
+            "",
+        ]
+        mock_process.stderr.read.return_value = ""
+        mock_process.wait.return_value = 0
+
+        with patch("subprocess.Popen", return_value=mock_process), \
+             patch("sys.platform", "win32"):
+            allowed_tools = ["read_file", "write_file(/.cafe/test.txt)", "write_file(/.cafe/test2.txt)"]
+            response = executor.execute("test prompt", allowed_tools)
+
+            # Check the command args that were constructed
+            assert response.cli_command_args is not None
+            tools_index = response.cli_command_args.index("--allowed-tools")
+            tools_value = response.cli_command_args[tools_index + 1]
+
+            # Should only contain read_file and write_file (no duplicates, no paths)
+            assert "read_file" in tools_value
+            assert "write_file" in tools_value
+            # Should not contain paths
+            assert "/.cafe" not in tools_value
+            # Should not have duplicate write_file
+            tools_list = tools_value.strip('"').split(",")
+            assert tools_list.count("write_file") == 1
+
+    def test_write_deduplication_with_mixed_tools(self) -> None:
+        """測試混合使用 Write 和 Write(/path) 時的去重"""
+        executor = AgentExecutor(
+            AgentConfig(name="test", cli=AgentCLI.CLAUDE, session_id="test123")
+        )
+
+        # Mock streaming process
+        mock_process = MagicMock()
+        mock_process.stdout.readline.side_effect = [
+            '{"content": "Done"}\n',
+            "",
+        ]
+        mock_process.stderr.read.return_value = ""
+        mock_process.wait.return_value = 0
+
+        # Mock subprocess.run for session creation (not used since session_id is provided, but needed for safety)
+        mock_run_result = MagicMock(stdout='{"session_id": "test123"}', returncode=0)
+
+        with patch("subprocess.run", return_value=mock_run_result), \
+             patch("subprocess.Popen", return_value=mock_process), \
+             patch("sys.platform", "win32"):
+            allowed_tools = ["Read", "Write", "Write(/.cafe/test.txt)", "Edit"]
+            response = executor.execute("test prompt", allowed_tools)
+
+            # Check deduplication
+            assert response.cli_command_args is not None
+            tools_index = response.cli_command_args.index("--allowed-tools")
+            tools_value = response.cli_command_args[tools_index + 1]
+            tools_list = tools_value.strip('"').split(",")
+
+            # Should have exactly one Write
+            assert tools_list.count("Write") == 1
+            assert "Read" in tools_value
+            assert "Edit" in tools_value
+
+

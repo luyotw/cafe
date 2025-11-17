@@ -137,7 +137,6 @@ class TestCreatePR:
             title="Fix #123",
             body="Fixes issue #123",
             head="issue-123",
-            issue_id="123",
         )
 
         assert pr_url == "https://github.com/owner/repo/pull/456"
@@ -323,3 +322,125 @@ class TestExtractPRNumber:
         )
 
         assert pr_number == "456"
+
+
+class TestGetPRForBranch:
+    """Test get_pr_for_branch functionality."""
+
+    @patch("subprocess.run")
+    def test_get_pr_for_branch_exists(self, mock_run: Mock) -> None:
+        """測試找到 PR 的情況"""
+        mock_run.return_value = Mock(
+            returncode=0,
+            stdout='[{"number":10,"url":"https://github.com/owner/repo/pull/10","title":"Test PR","body":"Test body"}]',
+        )
+
+        gh_ops = GitHubOps()
+        pr = gh_ops.get_pr_for_branch("feature-branch")
+
+        assert pr is not None
+        assert pr["number"] == 10
+        assert pr["url"] == "https://github.com/owner/repo/pull/10"
+        # Should be called twice: once for --version check, once for actual call
+        assert mock_run.call_count == 2
+        # Check the actual call (last one)
+        args = mock_run.call_args[0][0]
+        assert "gh" in args
+        assert "pr" in args
+        assert "list" in args
+        assert "--head" in args
+        assert "feature-branch" in args
+
+    @patch("subprocess.run")
+    def test_get_pr_for_branch_not_exists(self, mock_run: Mock) -> None:
+        """測試沒有 PR 的情況"""
+        mock_run.return_value = Mock(
+            returncode=0,
+            stdout='[]',
+        )
+
+        gh_ops = GitHubOps()
+        pr = gh_ops.get_pr_for_branch("feature-branch")
+
+        assert pr is None
+
+    @patch("subprocess.run")
+    def test_get_pr_for_branch_error(self, mock_run: Mock) -> None:
+        """測試錯誤處理"""
+        mock_run.side_effect = subprocess.CalledProcessError(
+            1, ["gh", "pr", "list"], stderr="Error"
+        )
+
+        gh_ops = GitHubOps()
+
+        with pytest.raises(GitHubError, match="Failed to check PR for branch"):
+            gh_ops.get_pr_for_branch("feature-branch")
+
+
+class TestUpdatePR:
+    """Test update_pr functionality."""
+
+    @patch("subprocess.run")
+    def test_update_pr_title_only(self, mock_run: Mock) -> None:
+        """測試只更新 title"""
+        mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
+
+        gh_ops = GitHubOps()
+        gh_ops.update_pr("10", title="New Title")
+
+        # Should be called twice: once for --version check, once for actual call
+        assert mock_run.call_count == 2
+        # Check the actual call (last one)
+        args = mock_run.call_args[0][0]
+        assert "gh" in args
+        assert "pr" in args
+        assert "edit" in args
+        assert "10" in args
+        assert "--title" in args
+        assert "New Title" in args
+        assert "--body" not in args
+
+    @patch("subprocess.run")
+    def test_update_pr_body_only(self, mock_run: Mock) -> None:
+        """測試只更新 body"""
+        mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
+
+        gh_ops = GitHubOps()
+        gh_ops.update_pr("10", body="New Body")
+
+        # Should be called twice: once for --version check, once for actual call
+        assert mock_run.call_count == 2
+        # Check the actual call (last one)
+        args = mock_run.call_args[0][0]
+        assert "--body" in args
+        assert "New Body" in args
+        assert "--title" not in args
+
+    @patch("subprocess.run")
+    def test_update_pr_both(self, mock_run: Mock) -> None:
+        """測試同時更新 title 和 body"""
+        mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
+
+        gh_ops = GitHubOps()
+        gh_ops.update_pr("10", title="New Title", body="New Body")
+
+        # Should be called twice: once for --version check, once for actual call
+        assert mock_run.call_count == 2
+        # Check the actual call (last one)
+        args = mock_run.call_args[0][0]
+        assert "--title" in args
+        assert "New Title" in args
+        assert "--body" in args
+        assert "New Body" in args
+
+    @patch("subprocess.run")
+    def test_update_pr_error(self, mock_run: Mock) -> None:
+        """測試更新失敗"""
+        mock_run.side_effect = subprocess.CalledProcessError(
+            1, ["gh", "pr", "edit", "10"], stderr="PR not found"
+        )
+
+        gh_ops = GitHubOps()
+
+        with pytest.raises(GitHubError, match="Failed to update PR"):
+            gh_ops.update_pr("10", title="New Title")
