@@ -77,18 +77,18 @@ class GitHubOps:
         self,
         title: str,
         body: str,
-        head: str,
-        base: str = "main",
-        issue_id: Optional[str] = None,
+        head: Optional[str] = None,
+        base: Optional[str] = None,
+        draft: bool = False,
     ) -> str:
         """Create a GitHub Pull Request.
 
         Args:
             title: PR title
             body: PR body/description
-            head: Head branch name
-            base: Base branch name (default: main)
-            issue_id: Optional issue ID to link
+            head: Head branch name (optional, uses current branch if not specified)
+            base: Base branch name (optional, uses default branch if not specified)
+            draft: Create as draft PR (default: False)
 
         Returns:
             PR URL
@@ -105,11 +105,14 @@ class GitHubOps:
                 title,
                 "--body",
                 body,
-                "--head",
-                head,
-                "--base",
-                base,
             ]
+
+            if head:
+                cmd.extend(["--head", head])
+            if base:
+                cmd.extend(["--base", base])
+            if draft:
+                cmd.append("--draft")
 
             result = subprocess.run(
                 cmd,
@@ -215,3 +218,61 @@ class GitHubOps:
             return match.group(1)
 
         raise GitHubError(f"Invalid PR URL or number: {pr_url_or_number}")
+
+    def get_pr_for_branch(self, branch: str) -> Optional[Dict[str, Any]]:
+        """Check if a PR exists for the given branch.
+
+        Args:
+            branch: Branch name
+
+        Returns:
+            PR data as dictionary if exists, None otherwise
+
+        Raises:
+            GitHubError: If failed to check PR
+        """
+        try:
+            result = subprocess.run(
+                ["gh", "pr", "list", "--head", branch, "--json", "number,url,title,body"],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+
+            prs = json.loads(result.stdout)
+            # Return the first PR if exists
+            return prs[0] if prs else None
+
+        except subprocess.CalledProcessError as e:
+            raise GitHubError(f"Failed to check PR for branch {branch}: {e.stderr}") from e
+        except json.JSONDecodeError as e:
+            raise GitHubError(f"Failed to parse PR data: {e}") from e
+
+    def update_pr(self, pr_number: str, title: Optional[str] = None, body: Optional[str] = None) -> None:
+        """Update an existing Pull Request.
+
+        Args:
+            pr_number: PR number
+            title: New PR title (optional)
+            body: New PR body (optional)
+
+        Raises:
+            GitHubError: If failed to update PR
+        """
+        try:
+            cmd = ["gh", "pr", "edit", pr_number]
+
+            if title is not None:
+                cmd.extend(["--title", title])
+            if body is not None:
+                cmd.extend(["--body", body])
+
+            subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+
+        except subprocess.CalledProcessError as e:
+            raise GitHubError(f"Failed to update PR {pr_number}: {e.stderr}") from e
