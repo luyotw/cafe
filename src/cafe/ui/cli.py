@@ -723,6 +723,11 @@ def develop(
         None,
         "--user-input",
         help="Additional user instructions or context (non-interactive mode)",
+    ),
+    pr_number: Optional[int] = typer.Option(
+        None,
+        "--pr-number",
+        help="PR number to fetch unresolved comments from",
     )
 ) -> None:
     """Run develop phase: Execute development work according to plan.
@@ -739,6 +744,9 @@ def develop(
 
         # Use custom developer agent
         cafe develop my-feature --dev CustomDev
+
+        # Fetch unresolved PR comments to guide development
+        cafe develop my-feature --pr-number 123
 
         # Non-interactive mode with permission approval
         cafe develop my-feature --no-interactive --approve-denied-tools 0,2 --user-input "請小心處理"
@@ -819,6 +827,7 @@ def develop(
             interactive=interactive,
             approved_denial_indices=approved_denial_indices if approved_denial_indices else None,
             user_input=user_input or "",
+            pr_number=pr_number,
         )
 
         console.print("[bold]Starting development execution...[/bold]")
