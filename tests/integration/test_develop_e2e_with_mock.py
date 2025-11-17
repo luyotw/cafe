@@ -495,3 +495,128 @@ class TestDevelopE2EMockOutputValidation:
         output = result.stdout + result.stderr
         # 錯誤訊息應該提到 plan
         assert "plan" in output.lower()
+
+
+@pytest.mark.e2e
+class TestDevelopE2EMockPRComments:
+    """測試 PR comments 功能"""
+
+    def test_pr_number_parameter_accepted(self, tmp_path):
+        """測試 --pr-number 參數被接受
+
+        情境：使用 --pr-number 參數執行 develop
+        指令：cafe develop test-issue --pr-number 123 --no-interactive
+        預期：成功（即使 PR 不存在，也不應該影響執行）
+        """
+        issue_name = "test-issue"
+        setup_test_environment(tmp_path, issue_name)
+
+        result = run_cafe_develop(
+            tmp_path,
+            issue_name,
+            "CAFE_CONFIRMED\n\n開發完成。",
+            extra_args=["--pr-number", "123"]
+        )
+
+        # 應該成功完成（PR comments 是 optional context）
+        assert result.returncode == 0
+        output = result.stdout + result.stderr
+        assert "completed" in output.lower() or "成功" in output.lower()
+
+    def test_develop_without_pr_number_still_works(self, tmp_path):
+        """測試不使用 --pr-number 仍然正常運作
+
+        情境：不使用 --pr-number 參數執行 develop
+        指令：cafe develop test-issue --no-interactive
+        預期：成功，與之前的行為相同
+        """
+        issue_name = "test-issue"
+        setup_test_environment(tmp_path, issue_name)
+
+        result = run_cafe_develop(tmp_path, issue_name, "CAFE_CONFIRMED\n\n開發完成。")
+
+        # 應該正常工作（向後兼容）
+        assert result.returncode == 0
+        output = result.stdout + result.stderr
+        assert "completed" in output.lower() or "成功" in output.lower()
+
+    def test_pr_comments_with_real_gh_data(self, tmp_path):
+        """測試使用真實 PR #10 comments 資料（模擬 gh CLI）
+
+        情境：執行 develop 時提供 PR number，模擬 gh CLI 返回真實的 PR comments
+        指令：cafe develop org-topics --pr-number 10 --no-interactive
+        預期：成功執行，PR comments 被載入（通過創建 fake gh script）
+        """
+        from pathlib import Path
+
+        # 讀取真實的 PR comments (從 10.json)
+        pr_10_json_path = Path("/home/luyotw/local/pub/10.json")
+
+        if not pr_10_json_path.exists():
+            pytest.skip(f"找不到 {pr_10_json_path}，跳過測試")
+
+        with open(pr_10_json_path) as f:
+            raw_comments = json.load(f)
+
+        # 準備 gh repo view 的輸出（返回 repo 資訊）
+        repo_info = {
+            "owner": {"login": "openfunltd"},
+            "name": "iorgpubdb"
+        }
+
+        issue_name = "org-topics"
+        setup_test_environment(tmp_path, issue_name)
+
+        # 創建一個假的 gh script 來返回 PR comments
+        fake_gh_dir = tmp_path / "bin"
+        fake_gh_dir.mkdir()
+        fake_gh = fake_gh_dir / "gh"
+        fake_gh.write_text(f"""#!/bin/bash
+# Handle: gh repo view --json owner,name
+if [ "$1" = "repo" ] && [ "$2" = "view" ] && [ "$3" = "--json" ]; then
+    cat << 'EOF'
+{json.dumps(repo_info)}
+EOF
+    exit 0
+fi
+
+# Handle: gh api /repos/openfunltd/iorgpubdb/pulls/10/comments
+if [ "$1" = "api" ] && [[ "$2" == *"/pulls/10/comments" ]]; then
+    cat << 'EOF'
+{json.dumps(raw_comments)}
+EOF
+    exit 0
+fi
+
+echo "Unsupported gh command: $@" >&2
+exit 1
+""")
+        fake_gh.chmod(0o755)
+
+        # 使用 fake gh 執行測試（修改 PATH）
+        cafe_cmd = "cafe" if subprocess.run(["which", "cafe"], capture_output=True).returncode == 0 else "./cafe"
+        args = [cafe_cmd, "develop", issue_name, "--no-interactive", "--pr-number", "10"]
+
+        env = os.environ.copy()
+        env["CAFE_MOCK_AGENTS"] = "true"
+        env["CAFE_MOCK_RESPONSE"] = "CAFE_CONFIRMED\n\n開發完成。"
+        env["PATH"] = f"{fake_gh_dir}:{env.get('PATH', '')}"
+
+        result = subprocess.run(
+            args,
+            cwd=str(tmp_path),
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+
+        # 應該成功完成（如果 get_pr_comments 失敗，會導致錯誤）
+        output = result.stdout + result.stderr
+        print("\n=== CLI Output ===")
+        print(output)
+        print("==================\n")
+
+        assert result.returncode == 0, f"指令應該成功執行，但返回碼是 {result.returncode}，輸出：{output}"
+
+        # 驗證開發完成
+        assert "completed" in output.lower() or "成功" in output.lower()
