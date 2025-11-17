@@ -63,7 +63,12 @@ class TestPRE2EMockDraftFlag:
     @patch("cafe.phases.pr_phase.subprocess.run")
     @patch("cafe.core.git.subprocess.run")
     def test_draft_pr_by_default(self, mock_git_run, mock_pr_run, mock_ghops_run, tmp_path):
-        """測試預設創建 draft PR"""
+        """測試預設創建 draft PR
+
+        情境：GitHub 上不存在該 branch 的 PR，使用預設參數創建 draft PR
+        指令：cafe pr test-issue --title "Test PR" --body "Test body"
+        預期：創建 draft PR (#1)，gh pr create 帶有 --draft flag
+        """
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
 
@@ -157,7 +162,12 @@ class TestPRE2EMockDraftFlag:
     @patch("cafe.phases.pr_phase.subprocess.run")
     @patch("cafe.core.git.subprocess.run")
     def test_non_draft_pr(self, mock_git_run, mock_pr_run, mock_ghops_run, tmp_path):
-        """測試創建非 draft PR"""
+        """測試創建非 draft PR
+
+        情境：GitHub 上不存在該 branch 的 PR，明確指定不要 draft
+        指令：cafe pr test-issue --no-draft --title "Test PR" --body "Test body"
+        預期：創建正式 PR (#2)，gh pr create 不帶 --draft flag
+        """
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
 
@@ -253,7 +263,12 @@ class TestPRE2EMockCustomTitleAndBody:
     @patch("cafe.phases.pr_phase.subprocess.run")
     @patch("cafe.core.git.subprocess.run")
     def test_custom_title_and_body(self, mock_git_run, mock_pr_run, mock_ghops_run, tmp_path):
-        """測試使用自訂 title 和 body"""
+        """測試使用自訂 title 和 body
+
+        情境：GitHub 上不存在該 branch 的 PR，使用自訂的 title 和 body
+        指令：cafe pr test-issue --title "My Custom PR Title" --body "My custom PR body\\nwith details"
+        預期：創建 PR (#3) 使用提供的 title 和 body
+        """
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
 
@@ -349,7 +364,12 @@ class TestPRE2EMockCustomTitleAndBody:
     @patch("cafe.phases.pr_phase.subprocess.run")
     @patch("cafe.core.git.subprocess.run")
     def test_auto_generate_title_and_body(self, mock_git_run, mock_pr_run, mock_ghops_run, mock_agent_execute, tmp_path):
-        """測試自動產生 title 和 body"""
+        """測試自動產生 title 和 body
+
+        情境：GitHub 上不存在該 branch 的 PR，不提供 title/body，由 agent 自動生成
+        指令：cafe pr test-issue
+        預期：呼叫 agent (David) 生成 title 和 body，創建 PR (#4)
+        """
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
 
@@ -455,7 +475,12 @@ class TestPRE2EMockErrorHandling:
     """測試錯誤處理"""
 
     def test_missing_spec_file_fails(self, tmp_path):
-        """測試缺少 spec 檔案時失敗"""
+        """測試缺少 spec 檔案時失敗
+
+        情境：Issue 的 spec.md 不存在
+        指令：cafe pr test-issue
+        預期：失敗，錯誤訊息提示 spec file not found
+        """
         issue_name = "test-issue"
         # Don't setup test environment - missing spec file
 
@@ -502,7 +527,12 @@ class TestPRE2EMockErrorHandling:
     @patch("cafe.phases.pr_phase.subprocess.run")
     @patch("cafe.core.git.subprocess.run")
     def test_gh_pr_create_failure(self, mock_git_run, mock_pr_run, mock_ghops_run, tmp_path):
-        """測試 gh pr create 失敗"""
+        """測試 gh pr create 失敗
+
+        情境：GitHub CLI (gh pr create) 執行失敗（例如網路問題、權限問題）
+        指令：cafe pr test-issue --title "Test" --body "Test"
+        預期：失敗，錯誤訊息包含 "failed"
+        """
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
 
@@ -583,7 +613,12 @@ class TestPRE2EMockExistingFiles:
     @patch("cafe.utils.github.subprocess.run")
     @patch("cafe.core.git.subprocess.run")
     def test_pr_exists_non_interactive_without_update_fails(self, mock_ghops_run, mock_git_run, tmp_path):
-        """測試 PR 檔案已存在且非互動模式沒有 --update 會失敗"""
+        """測試 PR 檔案已存在且非互動模式沒有 --update 會失敗
+
+        情境：本地 PR 檔案 (title.txt, body.md) 已存在，非互動模式下沒有 --update flag
+        指令：cafe pr test-issue (非互動模式)
+        預期：失敗，錯誤訊息提示需要使用 --update
+        """
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
 
@@ -650,7 +685,12 @@ class TestPRE2EMockExistingFiles:
     @patch("cafe.phases.pr_phase.subprocess.run")
     @patch("cafe.core.git.subprocess.run")
     def test_pr_exists_with_update_flag_regenerates(self, mock_git_run, mock_pr_run, mock_ghops_run, mock_agent_execute, tmp_path):
-        """測試 PR 檔案已存在且使用 --update 會重新生成"""
+        """測試 PR 檔案已存在且使用 --update 會重新生成
+
+        情境：本地 PR 檔案 (title.txt, body.md) 已存在，使用 --update 強制重新生成
+        指令：cafe pr test-issue --update
+        預期：呼叫 agent 重新生成 title 和 body，覆蓋舊檔案，創建 PR (#1)
+        """
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
 
@@ -755,7 +795,12 @@ class TestPRE2EMockGitHubPRExists:
     @patch("cafe.phases.pr_phase.subprocess.run")
     @patch("cafe.core.git.subprocess.run")
     def test_github_pr_exists_non_interactive_without_update_fails(self, mock_git_run, mock_pr_run, mock_ghops_run, tmp_path):
-        """測試 GitHub PR 已存在且非互動模式沒有 --update 會失敗"""
+        """測試 GitHub PR 已存在且非互動模式沒有 --update 會失敗
+
+        情境：GitHub 上已存在該 branch 的 PR (#10)，非互動模式下沒有 --update flag
+        指令：cafe pr test-issue --title "New Title" --body "New Body" (非互動模式)
+        預期：失敗，錯誤訊息提示 PR 已存在
+        """
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
 
@@ -840,7 +885,12 @@ class TestPRE2EMockGitHubPRExists:
     @patch("cafe.phases.pr_phase.subprocess.run")
     @patch("cafe.core.git.subprocess.run")
     def test_github_pr_exists_with_update_flag_updates_pr(self, mock_git_run, mock_pr_run, mock_ghops_run, tmp_path):
-        """測試 GitHub PR 已存在且使用 --update 會更新 PR"""
+        """測試 GitHub PR 已存在且使用 --update 會更新 PR
+
+        情境：GitHub 上已存在該 branch 的 PR (#10)，使用 --update 更新現有 PR
+        指令：cafe pr test-issue --update --title "Updated Title" --body "Updated Body"
+        預期：成功，呼叫 gh pr edit 更新 PR #10 的 title 和 body
+        """
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
 
@@ -943,7 +993,12 @@ class TestPRE2EMockGitHubPRExists:
     @patch("cafe.phases.pr_phase.subprocess.run")
     @patch("cafe.core.git.subprocess.run")
     def test_github_pr_not_exists_creates_new_pr(self, mock_git_run, mock_pr_run, mock_ghops_run, tmp_path):
-        """測試 GitHub PR 不存在時創建新 PR"""
+        """測試 GitHub PR 不存在時創建新 PR
+
+        情境：GitHub 上不存在該 branch 的 PR，正常創建流程
+        指令：cafe pr test-issue --title "New PR Title" --body "New PR Body"
+        預期：成功，呼叫 gh pr create 創建新 PR (#20)
+        """
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
 
