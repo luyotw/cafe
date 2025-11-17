@@ -337,7 +337,21 @@ class AgentExecutor:
         # Claude 的 --allowed-tools 需要雙引號，否則授權無效
         tools_arg_value = None
         if allowed_tools:
-            tools_arg_value = ",".join(allowed_tools)
+            # Special handling for Claude: Write doesn't support path restrictions
+            # Write(/path) is treated as "no write permission", so we strip the path
+            processed_tools = []
+            for tool in allowed_tools:
+                if tool.startswith("Write("):
+                    # Strip path parameter: Write(/path) -> Write
+                    tool_name = "Write"
+                else:
+                    tool_name = tool
+
+                # Avoid duplicates
+                if tool_name not in processed_tools:
+                    processed_tools.append(tool_name)
+
+            tools_arg_value = ",".join(processed_tools)
             cmd.extend(["--allowed-tools", tools_arg_value])
 
         # Add streaming output format
@@ -463,9 +477,13 @@ class AgentExecutor:
             for tool in allowed_tools:
                 if tool.startswith("write_file("):
                     # Strip path parameter: write_file(/path) -> write_file
-                    processed_tools.append("write_file")
+                    tool_name = "write_file"
                 else:
-                    processed_tools.append(tool)
+                    tool_name = tool
+
+                # Avoid duplicates
+                if tool_name not in processed_tools:
+                    processed_tools.append(tool_name)
 
             tools_arg_value = ",".join(processed_tools)
             cmd.extend(["--allowed-tools", tools_arg_value])
