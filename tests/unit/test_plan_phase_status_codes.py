@@ -14,7 +14,7 @@ from cafe.phases.plan_phase import PlanPhase
 class TestPlanPhaseWithStatusCodes:
     """Test PlanPhase integration with status code system."""
 
-    def test_confirmed_status_code_completes_phase(self, tmp_path: Path) -> None:
+    def test_confirmed_status_code_completes_phase(self, tmp_path: Path, AgentCLI) -> None:
         """測試 CONFIRMED 狀態碼完成 phase"""
         requirements_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         requirements_file.parent.mkdir(parents=True, exist_ok=True)

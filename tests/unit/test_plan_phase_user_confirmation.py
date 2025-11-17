@@ -25,7 +25,7 @@ from cafe.phases.plan_phase import PlanPhase
 class TestPlanPhaseUserConfirmation:
     """測試 PlanPhase 用戶確認流程。"""
 
-    def test_confirmed_interactive_waits_for_user_confirmation(self, tmp_path: Path) -> None:
+    def test_confirmed_interactive_waits_for_user_confirmation(self, tmp_path: Path, AgentCLI) -> None:
         """測試 READY_FOR_REVIEW 時 interactive 模式等待用戶確認"""
         issue_name = "test-confirm"
         spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
