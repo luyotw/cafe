@@ -23,30 +23,42 @@ class AgentExecutor:
     TOOL_NAME_MAP = {
         AgentCLI.CLAUDE: {
             # Claude uses these names (standard)
+            # Reference: https://gist.github.com/wong2/e0f34aac66caf890a332f7b6f9e2ba8f
             "bash": "Bash",
             "read": "Read",
             "write": "Write",
             "edit": "Edit",
             "grep": "Grep",
             "glob": "Glob",
+            "ls": "LS",
+            "web_fetch": "WebFetch",
+            "web_search": "WebSearch",
         },
         AgentCLI.GEMINI: {
             # Gemini tool name translations
+            # Reference: https://geminicli.com/docs/tools/
             "bash": "run_shell_command",
             "read": "read_file",
             "write": "write_file",
             "edit": "replace",
             "grep": "search_file_content",
             "glob": "glob",
+            "ls": "list_directory",
+            "web_fetch": "web_fetch",
+            "web_search": "google_web_search",
         },
         AgentCLI.CURSOR: {
-            # Cursor tool name translations (TBD)
-            "bash": "bash",
-            "read": "read",
-            "write": "write",
-            "edit": "edit",
-            "grep": "grep",
-            "glob": "glob",
+            # Cursor tool name translations
+            # Reference: https://cursor.com/zh-Hant/docs/cli/reference/permissions
+            "bash": "Shell",
+            "read": "Read",
+            "write": "Write",
+            "edit": "Write",
+            "grep": "Shell(grep)",
+            "glob": "Shell(ls)",
+            "ls": "Shell(ls)",
+            "web_fetch": "Shell(curl)",
+            "web_search": "Shell(curl)",
         },
         AgentCLI.COPILOT: {
             # GitHub Copilot CLI tool name translations
@@ -55,8 +67,11 @@ class AgentExecutor:
             "read": "write",  # Copilot uses 'write' for all file operations
             "write": "write",
             "edit": "write",
-            "grep": "shell",
-            "glob": "shell",
+            "grep": "shell(grep)",
+            "glob": "shell(ls)",
+            "ls": "shell(ls)",
+            "web_fetch": "shell(curl)",
+            "web_search": "shell(curl)",
         },
     }
 
