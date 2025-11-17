@@ -1177,54 +1177,24 @@ def pr(
         permission_handler = PermissionHandler()
         git_ops = GitOperations()
 
-        # Interactive mode: ask for draft/title/body if not provided
-        final_draft = draft
-        final_title = title
-        final_body = body
+        from cafe.utils.github import GitHubOps
+        github_ops = GitHubOps()
 
-        if interactive:
-            # Ask for draft if not provided via CLI
-            if draft is None:
-                draft_response = typer.confirm("Create as draft PR?", default=True)
-                final_draft = draft_response
-
-            # Ask for custom title if not provided via CLI
-            if title is None:
-                console.print()
-                console.print("[dim]Custom PR title (press Enter for auto-generation):[/dim]")
-                title_input = input().strip()
-                final_title = title_input if title_input else None
-
-            # Ask for custom body if not provided via CLI
-            if body is None:
-                console.print()
-                console.print("[dim]Custom PR body (multi-line, Ctrl+D to finish, or press Enter on empty line for auto-generation):[/dim]")
-                body_lines = []
-                try:
-                    while True:
-                        line = input()
-                        if not line and not body_lines:  # First line is empty -> auto-generation
-                            break
-                        body_lines.append(line)
-                except EOFError:
-                    pass
-                final_body = "\n".join(body_lines) if body_lines else None
-        else:
-            # Non-interactive mode: use defaults
-            if final_draft is None:
-                final_draft = True  # Default to draft in non-interactive mode
+        # Determine final draft value
+        final_draft = draft if draft is not None else True  # Default to draft
 
         # Create PR phase
         phase = PRPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
+            github_ops=github_ops,
             spec_file=spec_file,
             workflow_mode=WorkflowMode.LOCAL,  # Always use local mode (no --mode flag)
             issue_name=issue_name,
             draft=final_draft,
-            custom_title=final_title,
-            custom_body=final_body,
+            custom_title=title,
+            custom_body=body,
             update=update,
             interactive=interactive,
         )
@@ -1233,14 +1203,6 @@ def pr(
         console.print("[bold blue]🚀 PR Phase: Create Pull Request[/bold blue]")
         console.print(f"Issue: {issue_name}")
         console.print(f"Base branch: {base}")
-        console.print(f"Draft PR: {final_draft}")
-        if final_title:
-            console.print(f"Custom title: {final_title}")
-        if final_body:
-            console.print(f"Custom body: (provided)")
-        console.print()
-
-        console.print("[bold]Creating pull request...[/bold]")
         console.print()
 
         result = phase.execute()
@@ -1250,7 +1212,7 @@ def pr(
             pr_number = result.data.get("pr_number")
             pr_url = result.data.get("pr_url")
             console.print()
-            console.print(f"[bold green]✅ Pull Request #{pr_number} created successfully![/bold green]")
+            console.print(f"[bold green]✅ {result.message}![/bold green]")
             console.print()
             if pr_url:
                 console.print(f"[bold cyan]{pr_url}[/bold cyan]")
