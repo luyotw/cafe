@@ -72,7 +72,12 @@ class TestDevelopE2EMockStatusCodes:
     """測試狀態碼處理"""
 
     def test_confirmed_status_success(self, tmp_path):
-        """測試 CONFIRMED 狀態碼成功完成"""
+        """測試 CONFIRMED 狀態碼成功完成
+
+        情境：Agent 返回 CAFE_CONFIRMED，開發工作完成
+        指令：cafe develop test-issue --no-interactive
+        預期：成功，status.json 顯示 completed 狀態
+        """
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
 
@@ -93,7 +98,12 @@ class TestDevelopE2EMockStatusCodes:
             assert status_data["status_code"] == "CAFE_CONFIRMED"
 
     def test_invalid_status_code_pauses(self, tmp_path):
-        """測試 agent 返回無效狀態碼會暫停（non-interactive 模式）"""
+        """測試 agent 返回無效狀態碼會暫停（non-interactive 模式）
+
+        情境：Agent 返回無法識別的狀態碼
+        指令：cafe develop test-issue --no-interactive
+        預期：暫停（paused），輸出包含 "paused" 或 "no status code"
+        """
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
 
@@ -106,7 +116,12 @@ class TestDevelopE2EMockStatusCodes:
         assert "paused" in output.lower() or "no status code" in output.lower()
 
     def test_no_status_code_pauses(self, tmp_path):
-        """測試 agent 回應沒有狀態碼會暫停（non-interactive 模式）"""
+        """測試 agent 回應沒有狀態碼會暫停（non-interactive 模式）
+
+        情境：Agent 回應內容沒有包含任何狀態碼
+        指令：cafe develop test-issue --no-interactive
+        預期：暫停（paused），輸出包含 "paused" 或 "no status code"
+        """
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
 
@@ -118,7 +133,12 @@ class TestDevelopE2EMockStatusCodes:
         assert "paused" in output.lower() or "no status code" in output.lower()
 
     def test_whitespace_only_response_should_fail(self, tmp_path):
-        """測試 agent 返回僅空白字符的回應應該失敗"""
+        """測試 agent 返回僅空白字符的回應應該失敗
+
+        情境：Agent 返回只包含空白字符的回應
+        指令：cafe develop test-issue --no-interactive
+        預期：失敗，錯誤訊息包含 "no response" 或 "failed"
+        """
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
 
@@ -130,7 +150,12 @@ class TestDevelopE2EMockStatusCodes:
         assert "no response" in output.lower() or "failed" in output.lower()
 
     def test_need_permission_in_non_interactive_should_fail(self, tmp_path):
-        """測試 NEED_PERMISSION 在 non-interactive 模式應該失敗"""
+        """測試 NEED_PERMISSION 在 non-interactive 模式應該失敗
+
+        情境：Agent 返回 CAFE_NEED_PERMISSION，但在非互動模式下
+        指令：cafe develop test-issue --no-interactive
+        預期：失敗，錯誤訊息包含 "permission" 或 "non-interactive"
+        """
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
 
@@ -146,7 +171,12 @@ class TestDevelopE2EMockFileValidation:
     """測試檔案相關錯誤"""
 
     def test_spec_file_not_exists_should_fail(self, tmp_path):
-        """測試 spec.md 不存在應該失敗"""
+        """測試 spec.md 不存在應該失敗
+
+        情境：Issue 的 spec.md 檔案不存在
+        指令：cafe develop test-issue --no-interactive
+        預期：失敗，錯誤訊息包含 "spec" 或 "not found"
+        """
         issue_name = "test-issue"
         # 只創建 plan.md，不創建 spec.md
         plan_dir = tmp_path / ".cafe" / "issues" / issue_name / "plan"
@@ -161,7 +191,12 @@ class TestDevelopE2EMockFileValidation:
         assert "spec" in output.lower() or "not found" in output.lower()
 
     def test_plan_file_not_exists_should_fail(self, tmp_path):
-        """測試 plan.md 不存在應該失敗"""
+        """測試 plan.md 不存在應該失敗
+
+        情境：Issue 的 plan.md 檔案不存在
+        指令：cafe develop test-issue --no-interactive
+        預期：失敗，錯誤訊息包含 "plan" 或 "not found"
+        """
         issue_name = "test-issue"
         # 只創建 spec.md，不創建 plan.md
         spec_dir = tmp_path / ".cafe" / "issues" / issue_name / "spec"
@@ -176,7 +211,12 @@ class TestDevelopE2EMockFileValidation:
         assert "plan" in output.lower() or "not found" in output.lower()
 
     def test_history_directory_created(self, tmp_path):
-        """測試 history 目錄被創建"""
+        """測試 history 目錄被創建
+
+        情境：成功執行 develop phase
+        指令：cafe develop test-issue --no-interactive
+        預期：成功，develop/history 目錄被創建，至少有一個 iteration 檔案
+        """
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
 
@@ -193,7 +233,12 @@ class TestDevelopE2EMockFileValidation:
         assert len(iteration_files) >= 1
 
     def test_iteration_file_structure(self, tmp_path):
-        """測試 iteration 檔案結構正確"""
+        """測試 iteration 檔案結構正確
+
+        情境：成功執行 develop phase
+        指令：cafe develop test-issue --no-interactive
+        預期：成功，iteration_001.json 包含正確的欄位（iteration, timestamp, status_code）
+        """
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
 
@@ -218,7 +263,12 @@ class TestDevelopE2EMockBranchManagement:
     """測試 branch 管理（使用 mock git operations）"""
 
     def test_config_file_created_with_branch_info(self, tmp_path):
-        """測試 config.json 包含 branch 資訊"""
+        """測試 config.json 包含 branch 資訊
+
+        情境：在 git repository 中執行 develop
+        指令：cafe develop test-issue --no-interactive
+        預期：成功，config.json 包含 base_branch 或 feature_branch 資訊
+        """
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
 
@@ -238,7 +288,12 @@ class TestDevelopE2EMockReviewFeedback:
     """測試 review feedback 處理"""
 
     def test_continues_with_review_feedback(self, tmp_path):
-        """測試當有 review feedback 時繼續執行"""
+        """測試當有 review feedback 時繼續執行
+
+        情境：已完成一次 develop，後來收到 review feedback (NEEDS_CHANGES)
+        指令：cafe develop test-issue --no-interactive（第二次執行）
+        預期：成功，處理 review feedback 並繼續執行
+        """
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
 
@@ -274,7 +329,12 @@ class TestDevelopE2EMockReviewFeedback:
         assert "completed" in output.lower() or "成功" in output.lower()
 
     def test_returns_early_when_already_completed(self, tmp_path):
-        """測試當已完成且無 review feedback 時提前返回"""
+        """測試當已完成且無 review feedback 時提前返回
+
+        情境：已完成 develop，無新的 review feedback
+        指令：cafe develop test-issue --no-interactive（第二次執行）
+        預期：成功但提前返回，輸出包含 "completed"
+        """
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
 
@@ -297,7 +357,12 @@ class TestDevelopE2EMockMultipleIterations:
     """測試多輪迭代場景"""
 
     def test_single_iteration_success(self, tmp_path):
-        """測試單輪迭代成功"""
+        """測試單輪迭代成功
+
+        情境：第一次執行 develop 並成功完成
+        指令：cafe develop test-issue --no-interactive
+        預期：成功，history 目錄只有一個 iteration 檔案
+        """
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
 
@@ -311,7 +376,12 @@ class TestDevelopE2EMockMultipleIterations:
         assert len(iteration_files) == 1
 
     def test_status_file_reflects_completion(self, tmp_path):
-        """測試 status.json 正確反映完成狀態"""
+        """測試 status.json 正確反映完成狀態
+
+        情境：成功完成 develop phase
+        指令：cafe develop test-issue --no-interactive
+        預期：成功，status.json 的 status 為 "completed"
+        """
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
 
@@ -333,7 +403,12 @@ class TestDevelopE2EMockErrorRecovery:
     """測試錯誤恢復場景"""
 
     def test_handles_corrupted_status_file(self, tmp_path):
-        """測試處理損壞的 status.json"""
+        """測試處理損壞的 status.json
+
+        情境：develop/status.json 檔案內容損壞（invalid JSON）
+        指令：cafe develop test-issue --no-interactive
+        預期：能夠繼續執行或優雅失敗，不會 crash
+        """
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
 
@@ -350,7 +425,12 @@ class TestDevelopE2EMockErrorRecovery:
         assert result.returncode in [0, 1]
 
     def test_handles_missing_directories_gracefully(self, tmp_path):
-        """測試優雅處理缺少的目錄"""
+        """測試優雅處理缺少的目錄
+
+        情境：develop 目錄不存在
+        指令：cafe develop test-issue --no-interactive
+        預期：成功，自動創建需要的目錄
+        """
         issue_name = "test-issue"
 
         # Initialize git repo
@@ -380,7 +460,12 @@ class TestDevelopE2EMockOutputValidation:
     """測試輸出驗證"""
 
     def test_output_contains_success_message(self, tmp_path):
-        """測試輸出包含成功訊息"""
+        """測試輸出包含成功訊息
+
+        情境：成功完成 develop phase
+        指令：cafe develop test-issue --no-interactive
+        預期：成功，輸出包含 "completed" 或 "success" 等成功訊息
+        """
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
 
@@ -392,7 +477,12 @@ class TestDevelopE2EMockOutputValidation:
         assert any(word in output.lower() for word in ["completed", "success", "成功", "完成"])
 
     def test_error_output_is_informative(self, tmp_path):
-        """測試錯誤輸出提供有用資訊"""
+        """測試錯誤輸出提供有用資訊
+
+        情境：故意不創建 plan.md 導致失敗
+        指令：cafe develop test-issue --no-interactive
+        預期：失敗，錯誤訊息明確提到 "plan"
+        """
         issue_name = "test-issue"
         # 故意不創建 plan.md
         spec_dir = tmp_path / ".cafe" / "issues" / issue_name / "spec"

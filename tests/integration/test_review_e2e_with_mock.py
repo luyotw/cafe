@@ -90,7 +90,12 @@ class TestReviewE2EMockStatusCodes:
     """測試狀態碼處理"""
 
     def test_confirmed_status_success(self, tmp_path):
-        """測試 CONFIRMED 狀態碼成功完成"""
+        """測試 CONFIRMED 狀態碼成功完成
+
+        情境：Agent 審查通過，返回 CAFE_CONFIRMED
+        指令：cafe review test-issue --no-interactive
+        預期：成功，status.json 顯示 completed 狀態，status_code 為 CAFE_CONFIRMED
+        """
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
 
@@ -111,7 +116,12 @@ class TestReviewE2EMockStatusCodes:
             assert status_data["status_code"] == "CAFE_CONFIRMED"
 
     def test_needs_changes_status_success(self, tmp_path):
-        """測試 NEEDS_CHANGES 狀態碼成功完成"""
+        """測試 NEEDS_CHANGES 狀態碼成功完成
+
+        情境：Agent 發現需要修正，返回 CAFE_NEEDS_CHANGES
+        指令：cafe review test-issue --no-interactive
+        預期：成功，status.json 顯示 completed 狀態（NEEDS_CHANGES 也視為完成）
+        """
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
 
@@ -132,7 +142,12 @@ class TestReviewE2EMockStatusCodes:
             assert status_data["status_code"] == "CAFE_NEEDS_CHANGES"
 
     def test_invalid_status_code_fails_in_non_interactive(self, tmp_path):
-        """測試無效狀態碼在 non-interactive 模式會失敗"""
+        """測試無效狀態碼在 non-interactive 模式會失敗
+
+        情境：Agent 返回無效的狀態碼
+        指令：cafe review test-issue --no-interactive
+        預期：失敗，錯誤訊息包含 "no status code" 或 "failed"
+        """
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
 
@@ -149,7 +164,12 @@ class TestReviewE2EMockFileValidation:
     """測試檔案相關功能"""
 
     def test_review_md_created(self, tmp_path):
-        """測試 review.md 被創建"""
+        """測試 review.md 被創建
+
+        情境：成功完成 review phase
+        指令：cafe review test-issue --no-interactive
+        預期：成功，review.md 包含狀態碼和審查意見
+        """
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
 
@@ -165,7 +185,12 @@ class TestReviewE2EMockFileValidation:
         assert "程式碼審查通過" in content
 
     def test_history_directory_created(self, tmp_path):
-        """測試 history 目錄被創建"""
+        """測試 history 目錄被創建
+
+        情境：成功完成 review phase（non-iterative）
+        指令：cafe review test-issue --no-interactive
+        預期：成功，review/history 目錄被創建，只有一個 iteration 檔案
+        """
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
 
@@ -182,7 +207,12 @@ class TestReviewE2EMockFileValidation:
         assert len(iteration_files) == 1
 
     def test_iteration_file_structure(self, tmp_path):
-        """測試 iteration 檔案結構正確"""
+        """測試 iteration 檔案結構正確
+
+        情境：成功完成 review phase
+        指令：cafe review test-issue --no-interactive
+        預期：成功，iteration_001.json 包含正確欄位，allowed_tools 為 ["bash"]
+        """
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
 
@@ -206,7 +236,12 @@ class TestReviewE2EMockFileValidation:
             assert data["allowed_tools"] == ["bash"]
 
     def test_no_diff_should_fail(self, tmp_path):
-        """測試沒有 diff 時應該失敗"""
+        """測試沒有 diff 時應該失敗
+
+        情境：Feature branch 沒有任何改變（無 diff）
+        指令：cafe review test-issue --no-interactive
+        預期：失敗，錯誤訊息包含 "no changes" 或 "diff"
+        """
         issue_name = "test-issue"
         init_git_repo(tmp_path)
 
@@ -235,7 +270,12 @@ class TestReviewE2EMockDiffHandling:
     """測試 diff 處理功能"""
 
     def test_full_branch_diff_by_default(self, tmp_path):
-        """測試預設審查完整 branch diff"""
+        """測試預設審查完整 branch diff
+
+        情境：沒有指定特定 commit，審查整個 feature branch
+        指令：cafe review test-issue --no-interactive
+        預期：成功，審查 feature branch 與 main 的所有差異
+        """
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
 
@@ -248,7 +288,12 @@ class TestReviewE2EMockDiffHandling:
         assert review_file.exists()
 
     def test_specific_commit_with_flag(self, tmp_path):
-        """測試使用 --commit 旗標審查特定 commit"""
+        """測試使用 --commit 旗標審查特定 commit
+
+        情境：只審查特定 commit 的變更
+        指令：cafe review test-issue --no-interactive --commit <commit-sha>
+        預期：成功，只審查指定 commit 的 diff
+        """
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
 
@@ -280,7 +325,12 @@ class TestReviewE2EMockAgentBehavior:
     """測試 mock agent 行為"""
 
     def test_agent_called_only_once(self, tmp_path):
-        """測試 agent 只被呼叫一次（non-iterative）"""
+        """測試 agent 只被呼叫一次（non-iterative）
+
+        情境：Review phase 是 non-iterative
+        指令：cafe review test-issue --no-interactive
+        預期：成功，history 只有一個 iteration 檔案
+        """
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
 
@@ -295,7 +345,12 @@ class TestReviewE2EMockAgentBehavior:
         assert iteration_files[0].name == "iteration_001.json"
 
     def test_whitespace_only_response_should_fail(self, tmp_path):
-        """測試 agent 返回僅空白字符的回應應該失敗"""
+        """測試 agent 返回僅空白字符的回應應該失敗
+
+        情境：Agent 返回只包含空白字符的回應
+        指令：cafe review test-issue --no-interactive
+        預期：失敗，錯誤訊息包含 "no response" 或 "failed"
+        """
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
 
@@ -312,7 +367,12 @@ class TestReviewE2EMockBaseBranch:
     """測試 base branch 處理"""
 
     def test_uses_default_main_branch(self, tmp_path):
-        """測試預設使用 main branch 作為 base"""
+        """測試預設使用 main branch 作為 base
+
+        情境：沒有在 config.json 指定 base_branch
+        指令：cafe review test-issue --no-interactive
+        預期：成功，使用 main 作為 base branch 進行 diff
+        """
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
 
@@ -325,7 +385,12 @@ class TestReviewE2EMockBaseBranch:
         assert status_file.exists()
 
     def test_reads_base_branch_from_config(self, tmp_path):
-        """測試從 issue config.json 讀取 base branch"""
+        """測試從 issue config.json 讀取 base branch
+
+        情境：config.json 指定 base_branch 為 develop
+        指令：cafe review test-issue --no-interactive
+        預期：嘗試使用 develop 作為 base branch（可能失敗如果 develop 不存在）
+        """
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
 

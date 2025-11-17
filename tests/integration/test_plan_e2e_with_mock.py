@@ -65,7 +65,12 @@ class TestPlanE2EMockStatusCodes:
     """測試無效狀態碼處理"""
 
     def test_invalid_status_code_should_fail(self, tmp_path):
-        """測試 agent 返回無效狀態碼應該失敗"""
+        """測試 agent 返回無效狀態碼應該失敗
+
+        情境：Agent 返回無法識別的狀態碼 (CAFE_INVALID_CODE)
+        指令：cafe plan test-issue --no-interactive --template default
+        預期：失敗，錯誤訊息包含 "no status code" 或 "failed"
+        """
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
         create_default_template(tmp_path)
@@ -78,7 +83,12 @@ class TestPlanE2EMockStatusCodes:
         assert "no status code" in output.lower() or "failed" in output.lower()
 
     def test_no_status_code_should_fail(self, tmp_path):
-        """測試 agent 回應沒有狀態碼應該失敗"""
+        """測試 agent 回應沒有狀態碼應該失敗
+
+        情境：Agent 回應內容沒有包含任何狀態碼
+        指令：cafe plan test-issue --no-interactive --template default
+        預期：失敗，錯誤訊息包含 "no status code" 或 "failed"
+        """
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
         create_default_template(tmp_path)
@@ -90,7 +100,12 @@ class TestPlanE2EMockStatusCodes:
         assert "no status code" in output.lower() or "failed" in output.lower()
 
     def test_empty_response_should_fail(self, tmp_path):
-        """測試 agent 返回空回應應該失敗"""
+        """測試 agent 返回空回應應該失敗
+
+        情境：Agent 返回完全空白的回應
+        指令：cafe plan test-issue --no-interactive --template default
+        預期：失敗，錯誤訊息包含 "empty" 或 "no status code" 或 "failed"
+        """
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
         create_default_template(tmp_path)
@@ -107,7 +122,12 @@ class TestPlanE2EMockTemplateErrors:
     """測試 Template 檔案相關錯誤"""
 
     def test_template_not_exists_should_fail(self, tmp_path):
-        """測試 template 不存在應該失敗"""
+        """測試 template 不存在應該失敗
+
+        情境：指定的 template 檔案不存在
+        指令：cafe plan test-issue --no-interactive --template nonexistent-template
+        預期：失敗，錯誤訊息包含 "template" 和 "not found"，plan.md 不被創建
+        """
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
         
@@ -122,7 +142,12 @@ class TestPlanE2EMockTemplateErrors:
         assert not plan_file.exists()
 
     def test_first_round_without_template_should_fail(self, tmp_path):
-        """測試第一輪沒有提供 template 應該失敗"""
+        """測試第一輪沒有提供 template 應該失敗
+
+        情境：首次創建 plan，但沒有提供 template
+        指令：cafe plan test-issue --no-interactive
+        預期：失敗，錯誤訊息包含 "template" 和 "required"
+        """
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
         
@@ -143,7 +168,12 @@ class TestPlanE2EMockContentValidation:
     """測試 Plan 內容驗證"""
 
     def test_plan_content_excludes_status_code(self, tmp_path):
-        """測試 plan.md 不包含狀態碼"""
+        """測試 plan.md 不包含狀態碼
+
+        情境：Agent 返回 CAFE_READY_FOR_REVIEW 狀態碼和計畫內容
+        指令：cafe plan test-issue --no-interactive --template default
+        預期：成功，plan.md 只包含計畫內容，不包含狀態碼字串
+        """
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
         create_default_template(tmp_path)
@@ -161,7 +191,12 @@ class TestPlanE2EMockContentValidation:
         assert "計畫內容" in content
 
     def test_plan_preserves_dev_guide_section(self, tmp_path):
-        """測試第二輪更新時保留開發指南"""
+        """測試第二輪更新時保留開發指南
+
+        情境：已有 plan.md，進行第二輪更新（不提供 template）
+        指令：cafe plan test-issue --no-interactive
+        預期：成功，原有的開發指南內容被保留，只更新計畫部分
+        """
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
         
@@ -182,7 +217,12 @@ class TestPlanE2EMockContentValidation:
         assert "更新後的計畫" in content
 
     def test_plan_file_has_valid_structure(self, tmp_path):
-        """測試 plan.md 有正確的 Markdown 結構"""
+        """測試 plan.md 有正確的 Markdown 結構
+
+        情境：Agent 返回結構化的 Markdown 內容
+        指令：cafe plan test-issue --no-interactive --template default
+        預期：成功，plan.md 包含有效的 Markdown 標題結構 (# 和 ##)
+        """
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
         create_default_template(tmp_path)
