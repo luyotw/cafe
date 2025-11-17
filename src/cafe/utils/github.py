@@ -3,7 +3,8 @@
 import json
 import re
 import subprocess
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, List
+from pydantic import BaseModel
 
 
 class GitHubError(Exception):
@@ -276,3 +277,142 @@ class GitHubOps:
 
         except subprocess.CalledProcessError as e:
             raise GitHubError(f"Failed to update PR {pr_number}: {e.stderr}") from e
+
+
+# PR Comments utilities
+
+class PRComment(BaseModel):
+    """PR review comment model."""
+
+    id: str
+    body: str
+    author: str
+    created_at: str
+    path: Optional[str] = None
+    line: Optional[int] = None
+    is_resolved: bool = False
+
+
+def get_pr_comments(pr_number: int) -> List[PRComment]:
+    """Get all review comments from a Pull Request.
+
+    Note: Uses gh api to get review comments (code comments), not issue comments.
+    GitHub API does not provide isResolved status for review comments, so all
+    comments are returned with is_resolved=False.
+
+    Args:
+        pr_number: PR number
+
+    Returns:
+        List of PRComment objects
+
+    Raises:
+        ValueError: If PR not found or invalid
+        GitHubError: If failed to get PR comments
+    """
+    try:
+        # Get repo info first
+        repo_result = subprocess.run(
+            ["gh", "repo", "view", "--json", "owner,name"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        if repo_result.returncode != 0:
+            raise GitHubError(f"Failed to get repo info: {repo_result.stderr}")
+
+        repo_data = json.loads(repo_result.stdout)
+        owner = repo_data["owner"]["login"]
+        repo_name = repo_data["name"]
+
+        # Get review comments using gh api
+        result = subprocess.run(
+            ["gh", "api", f"/repos/{owner}/{repo_name}/pulls/{pr_number}/comments"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        if result.returncode != 0:
+            if "not found" in result.stderr.lower() or "could not resolve" in result.stderr.lower():
+                raise ValueError(f"PR #{pr_number} not found")
+            raise GitHubError(f"Failed to get PR comments: {result.stderr}")
+
+        # gh api returns array directly, not wrapped in {"comments": [...]}
+        comments_data = json.loads(result.stdout)
+
+        comments = []
+        for comment in comments_data:
+            comments.append(PRComment(
+                id=str(comment.get("id", "")),
+                body=comment.get("body", ""),
+                author=comment.get("user", {}).get("login", "unknown"),
+                created_at=comment.get("created_at", ""),
+                path=comment.get("path"),
+                line=comment.get("line"),
+                # GitHub API doesn't provide isResolved for review comments
+                # All comments are treated as unresolved
+                is_resolved=False,
+            ))
+
+        return comments
+
+    except json.JSONDecodeError as e:
+        raise GitHubError(f"Failed to parse PR comments: {e}") from e
+    except Exception as e:
+        if isinstance(e, (ValueError, GitHubError)):
+            raise
+        raise GitHubError(f"Unexpected error getting PR comments: {e}") from e
+
+
+def filter_unresolved_comments(comments: List[PRComment]) -> List[PRComment]:
+    """Filter out resolved comments, keeping only unresolved ones.
+
+    Args:
+        comments: List of PRComment objects
+
+    Returns:
+        List of unresolved PRComment objects
+    """
+    return [c for c in comments if not c.is_resolved]
+
+
+def format_comments_for_prompt(comments: List[PRComment]) -> str:
+    """Format PR comments into a prompt-friendly string.
+
+    Args:
+        comments: List of PRComment objects (should be unresolved)
+
+    Returns:
+        Formatted string for inclusion in agent prompt
+    """
+    if not comments:
+        return ""
+
+    count = len(comments)
+    plural = "s" if count > 1 else ""
+    
+    lines = [
+        "=" * 80,
+        f"📝 PR Review Comments ({count} unresolved comment{plural})",
+        "=" * 80,
+        ""
+    ]
+
+    for i, comment in enumerate(comments, 1):
+        lines.append(f"Comment #{i}")
+        lines.append(f"Author: {comment.author}")
+        if comment.path:
+            location = f"{comment.path}"
+            if comment.line:
+                location += f" (line {comment.line})"
+            lines.append(f"Location: {location}")
+        lines.append(f"Created: {comment.created_at}")
+        lines.append("")
+        lines.append(comment.body)
+        lines.append("")
+        lines.append("-" * 80)
+        lines.append("")
+
+    return "\n".join(lines)
