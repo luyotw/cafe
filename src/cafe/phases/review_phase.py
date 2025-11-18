@@ -98,6 +98,16 @@ class ReviewPhase(Phase):
                         },
                     )
 
+                # Check if there are commits since the latest PR comment
+                if not self._has_commits_since_pr_comments():
+                    return PhaseResult(
+                        status=PhaseStatus.COMPLETED,
+                        message=f"PR #{self.pr_number} has no new commits since latest PR comment. Nothing to review.",
+                        data={
+                            "pr_number": self.pr_number,
+                        },
+                    )
+
             # Calculate iteration number based on existing review files
             self.iteration = self._get_next_iteration_number()
 
@@ -252,6 +262,58 @@ class ReviewPhase(Phase):
             traceback.print_exc()
             self._pr_comments_cache = ("", 0)
             return self._pr_comments_cache
+
+    def _get_latest_pr_comment_timestamp(self):
+        """Get timestamp of the latest PR comment.
+
+        Returns:
+            datetime object of the latest comment, or None if no comments
+        """
+        if not self.pr_number:
+            return None
+
+        try:
+            comments = get_pr_comments(self.pr_number)
+            if not comments:
+                return None
+
+            # Find the latest comment by created_at timestamp
+            from datetime import datetime
+            latest_timestamp = None
+            for comment in comments:
+                timestamp_str = comment.created_at
+                if timestamp_str.endswith('Z'):
+                    timestamp_str = timestamp_str.replace('Z', '+00:00')
+                comment_time = datetime.fromisoformat(timestamp_str)
+
+                if latest_timestamp is None or comment_time > latest_timestamp:
+                    latest_timestamp = comment_time
+
+            return latest_timestamp
+        except Exception as e:
+            print(f"⚠️  Failed to get latest PR comment timestamp: {e}")
+            return None
+
+    def _has_commits_since_pr_comments(self) -> bool:
+        """Check if there are commits since the latest PR comment.
+
+        Returns:
+            True if there are new commits, False otherwise
+        """
+        latest_comment_time = self._get_latest_pr_comment_timestamp()
+        if not latest_comment_time:
+            # No PR comments, so proceed with review
+            return True
+
+        try:
+            # Get commits since the latest PR comment timestamp
+            timestamp_str = latest_comment_time.isoformat()
+            commits = self.git_ops.get_commits_since(timestamp_str)
+            return len(commits) > 0
+        except Exception as e:
+            print(f"⚠️  Failed to check commits since PR comments: {e}")
+            # On error, assume there are new commits to be safe
+            return True
 
     def _generate_prompt(self, user_input: str) -> str:
         """Generate review prompt (implements abstract method from Phase).
