@@ -584,6 +584,13 @@ def plan(
         template_manager = TemplateManager(config_dir)
         selected_template = None
 
+        # Check if this is first iteration (no history files)
+        history_dir = Path(f".cafe/issues/{issue_name}/plan/history")
+        is_first_iteration = not history_dir.exists() or not list(history_dir.glob("iteration_*.json"))
+
+        if is_resume:
+            console.print(f"[dim]Resuming existing plan from: {plan_file}[/dim]")
+
         if template:
             # Template specified via --template option
             if not template_manager.template_exists(template):
@@ -591,12 +598,8 @@ def plan(
                 console.print("[dim]Use 'cafe template list' to see available templates[/dim]")
                 raise typer.Exit(1)
             selected_template = template
-        elif is_resume:
-            # Resuming existing plan - no template needed
-            console.print(f"[dim]Resuming existing plan from: {plan_file}[/dim]")
-            selected_template = None
-        else:
-            # New plan - template selection required
+        elif is_first_iteration:
+            # First iteration - template selection required
             templates = template_manager.list_templates()
             if not templates:
                 console.print("[yellow]Warning: No templates found[/yellow]")
@@ -610,12 +613,15 @@ def plan(
                         console.print(f"[dim]Using template: {selected_template}[/dim]")
                 else:
                     # Non-interactive mode requires explicit template
-                    console.print("[red]Error: --template is required in non-interactive mode for new plans[/red]")
+                    console.print("[red]Error: --template is required in non-interactive mode for first iteration[/red]")
                     console.print("[dim]Available templates:[/dim]")
                     for t in templates:
                         console.print(f"  - {t}")
                     console.print(f"[dim]Usage: cafe plan {issue_name} --no-interactive --template <name>[/dim]")
                     raise typer.Exit(1)
+        else:
+            # Subsequent iterations - template optional
+            selected_template = None
 
         # Display start message
         console.print("[bold blue]📋 Plan Phase: Implementation Planning[/bold blue]")
