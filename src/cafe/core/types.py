@@ -192,11 +192,16 @@ class PhaseProgress(BaseModel):
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "PhaseProgress":
         """Create from dictionary."""
+        # Handle 'Z' suffix in timestamp (convert to +00:00 for fromisoformat)
+        timestamp_str = data["timestamp"]
+        if timestamp_str.endswith('Z'):
+            timestamp_str = timestamp_str.replace('Z', '+00:00')
+
         return cls(
             phase=data["phase"],
             status=PhaseStatus(data["status"]),
             status_code=data.get("status_code"),
-            timestamp=datetime.fromisoformat(data["timestamp"]),
+            timestamp=datetime.fromisoformat(timestamp_str),
             iteration=data.get("iteration"),
             message=data.get("message", ""),
         )
