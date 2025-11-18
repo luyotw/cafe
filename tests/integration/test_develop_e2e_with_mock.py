@@ -540,6 +540,37 @@ class TestDevelopE2EMockPRComments:
         output = result.stdout + result.stderr
         assert "completed" in output.lower() or "成功" in output.lower()
 
+    def test_dev_alias_with_pr_number(self, tmp_path):
+        """測試 dev alias 也能接受 --pr-number 參數
+
+        情境：使用 dev alias 和 --pr-number 參數執行
+        指令：cafe dev test-issue --pr-number 123 --no-interactive
+        預期：成功（與 develop 命令行為一致）
+        """
+        issue_name = "test-issue"
+        setup_test_environment(tmp_path, issue_name)
+
+        # Use dev alias instead of develop
+        cafe_cmd = "cafe" if subprocess.run(["which", "cafe"], capture_output=True).returncode == 0 else "./cafe"
+        args = [cafe_cmd, "dev", issue_name, "--no-interactive", "--pr-number", "123"]
+
+        env = os.environ.copy()
+        env["CAFE_MOCK_AGENTS"] = "true"
+        env["CAFE_MOCK_RESPONSE"] = "CAFE_CONFIRMED\n\n開發完成。"
+
+        result = subprocess.run(
+            args,
+            cwd=str(tmp_path),
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+
+        # 應該成功完成（dev alias 與 develop 行為相同）
+        assert result.returncode == 0
+        output = result.stdout + result.stderr
+        assert "completed" in output.lower() or "成功" in output.lower()
+
     def test_pr_comments_with_real_gh_data(self, tmp_path):
         """測試使用簡化的 PR comments 資料（模擬 gh CLI）
 

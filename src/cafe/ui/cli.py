@@ -887,6 +887,11 @@ def dev_alias(
         None,
         "--user-input",
         help="Additional user instructions or context (non-interactive mode)",
+    ),
+    pr_number: Optional[int] = typer.Option(
+        None,
+        "--pr-number",
+        help="PR number to fetch unresolved comments from",
     )
 ) -> None:
     """Alias for 'develop' command."""
@@ -901,6 +906,7 @@ def dev_alias(
         interactive=interactive,
         approve_denied_tools=approve_denied_tools,
         user_input=user_input,
+        pr_number=pr_number,
     )
 
 
