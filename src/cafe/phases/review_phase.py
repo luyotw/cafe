@@ -426,7 +426,8 @@ class ReviewPhase(Phase):
         # 檢查是否需要重新執行檢查（develop 比 review 新）
         develop_is_newer = self._check_if_develop_is_newer()
         recheck_instruction = ""
-        if develop_is_newer:
+        # 只在第 4 輪之前顯示 recheck_instruction
+        if develop_is_newer and self.iteration < 4:
             recheck_instruction = """
 **【重要提示】develop phase 在上次 review 之後有新的變更，請重新執行所有檢查：**
 - **必須重新執行 git log 指令**，不要使用之前的快取結果
@@ -450,9 +451,13 @@ class ReviewPhase(Phase):
         # Add restriction for iteration 4+
         restriction = ""
         if self.iteration >= 4:
+            # 上一輪的 review 檔案
+            previous_review_file = f"review_{self.iteration - 1:03d}.md"
+            previous_review_path = self.review_dir / previous_review_file
             restriction = f"""
 ⚠️ **重要限制：**
 - 你現在是第 {self.iteration} 輪審查，只能針對「上一輪提出的問題」繼續追問
+- 上一輪的審查內容在：{previous_review_path}
 - **不可以提出新的問題**（除非是 critical 的問題，如安全性漏洞、資料損毀等）
 - 只能深入釐清已經提出的問題
 """
