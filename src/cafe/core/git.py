@@ -105,14 +105,17 @@ class GitOperations:
         """
         self.run_git("commit", "-m", message)
 
-    def push(self, branch_name: str, set_upstream: bool = True) -> None:
+    def push(self, branch_name: str, set_upstream: bool = True, force: bool = False) -> None:
         """Push branch to remote.
 
         Args:
             branch_name: Branch to push
             set_upstream: Set upstream tracking
+            force: Force push (use with caution)
         """
         args = ["push"]
+        if force:
+            args.append("--force")
         if set_upstream:
             args.extend(["-u", "origin"])
         args.append(branch_name)
