@@ -11,6 +11,7 @@ from cafe.core.permission import PermissionHandler
 from cafe.core.phase import Phase
 from cafe.core.status_codes import PhaseStatusCode, StatusCodeParser, generate_status_code_prompt
 from cafe.core.types import PhaseProgress, PhaseResult, PhaseStatus, WorkflowMode
+from cafe.utils.github import get_pr_comments, filter_unresolved_comments, format_comments_for_prompt
 
 
 class ReviewPhase(Phase):
@@ -35,6 +36,7 @@ class ReviewPhase(Phase):
         target_commit: Optional[str] = None,
         base_branch: str = "main",
         interactive: bool = True,
+        pr_number: Optional[int] = None,
     ) -> None:
         """Initialize review phase.
 
@@ -50,9 +52,10 @@ class ReviewPhase(Phase):
             target_commit: Specific commit to review (None for full branch)
             base_branch: Base branch for diff (default: main)
             interactive: Enable interactive mode (default: True)
+            pr_number: PR number to fetch unresolved comments from (optional)
         """
         super().__init__(interactive=interactive)
-        
+
         self.agent_manager = agent_manager
         self.permission_handler = permission_handler
         self.git_ops = git_ops
@@ -63,6 +66,8 @@ class ReviewPhase(Phase):
         self.review_agent = review_agent
         self.target_commit = target_commit
         self.iteration = 1  # Track iteration number for subsequent reviews
+        self.pr_number = pr_number
+        self._pr_comments_cache = None  # Cache for PR comments to avoid duplicate loading
 
         # Try to read base branch from issue config
         config_base_branch = self._read_base_branch_from_config()
@@ -79,6 +84,29 @@ class ReviewPhase(Phase):
         try:
             # Initialize history directory
             self._initialize_history_dir()
+
+            # Check PR comments if pr_number is provided
+            if self.pr_number:
+                print(f"ℹ️  PR #{self.pr_number} comments will be reviewed")
+                _, unresolved_count = self._load_pr_comments()
+                if unresolved_count == 0:
+                    return PhaseResult(
+                        status=PhaseStatus.COMPLETED,
+                        message=f"PR #{self.pr_number} has no unresolved comments. Nothing to review.",
+                        data={
+                            "pr_number": self.pr_number,
+                        },
+                    )
+
+                # Check if there are commits since the latest PR comment
+                if not self._has_commits_since_pr_comments():
+                    return PhaseResult(
+                        status=PhaseStatus.COMPLETED,
+                        message=f"PR #{self.pr_number} has no new commits since latest PR comment. Nothing to review.",
+                        data={
+                            "pr_number": self.pr_number,
+                        },
+                    )
 
             # Calculate iteration number based on existing review files
             self.iteration = self._get_next_iteration_number()
@@ -199,6 +227,94 @@ class ReviewPhase(Phase):
         existing_reviews = list(self.review_dir.glob("review_*.md"))
         return len(existing_reviews) + 1
 
+    def _load_pr_comments(self) -> tuple[str, int]:
+        """Load PR comments if pr_number is provided.
+
+        Returns:
+            Tuple of (formatted comments string, unresolved count)
+        """
+        if not self.pr_number:
+            return "", 0
+
+        # Return cached result if already loaded
+        if self._pr_comments_cache is not None:
+            return self._pr_comments_cache
+
+        try:
+            print(f"  → Calling get_pr_comments({self.pr_number})")
+            comments = get_pr_comments(self.pr_number)
+            print(f"  → Got {len(comments)} total comments")
+
+            unresolved = filter_unresolved_comments(comments)
+            print(f"  → {len(unresolved)} unresolved comments")
+
+            result = format_comments_for_prompt(unresolved)
+            if result:
+                print(f"  → Formatted result length: {len(result)} chars")
+
+            # Cache the result
+            self._pr_comments_cache = (result, len(unresolved))
+            return self._pr_comments_cache
+        except (ValueError, Exception) as e:
+            # Log error but don't fail - PR comments are optional context
+            print(f"⚠️  Failed to load PR comments: {e}")
+            import traceback
+            traceback.print_exc()
+            self._pr_comments_cache = ("", 0)
+            return self._pr_comments_cache
+
+    def _get_latest_pr_comment_timestamp(self):
+        """Get timestamp of the latest PR comment.
+
+        Returns:
+            datetime object of the latest comment, or None if no comments
+        """
+        if not self.pr_number:
+            return None
+
+        try:
+            comments = get_pr_comments(self.pr_number)
+            if not comments:
+                return None
+
+            # Find the latest comment by created_at timestamp
+            from datetime import datetime
+            latest_timestamp = None
+            for comment in comments:
+                timestamp_str = comment.created_at
+                if timestamp_str.endswith('Z'):
+                    timestamp_str = timestamp_str.replace('Z', '+00:00')
+                comment_time = datetime.fromisoformat(timestamp_str)
+
+                if latest_timestamp is None or comment_time > latest_timestamp:
+                    latest_timestamp = comment_time
+
+            return latest_timestamp
+        except Exception as e:
+            print(f"⚠️  Failed to get latest PR comment timestamp: {e}")
+            return None
+
+    def _has_commits_since_pr_comments(self) -> bool:
+        """Check if there are commits since the latest PR comment.
+
+        Returns:
+            True if there are new commits, False otherwise
+        """
+        latest_comment_time = self._get_latest_pr_comment_timestamp()
+        if not latest_comment_time:
+            # No PR comments, so proceed with review
+            return True
+
+        try:
+            # Get commits since the latest PR comment timestamp
+            timestamp_str = latest_comment_time.isoformat()
+            commits = self.git_ops.get_commits_since(timestamp_str)
+            return len(commits) > 0
+        except Exception as e:
+            print(f"⚠️  Failed to check commits since PR comments: {e}")
+            # On error, assume there are new commits to be safe
+            return True
+
     def _generate_prompt(self, user_input: str) -> str:
         """Generate review prompt (implements abstract method from Phase).
 
@@ -297,6 +413,10 @@ class ReviewPhase(Phase):
         Returns:
             Review prompt string
         """
+        # Load PR comments if available
+        pr_comments, _ = self._load_pr_comments()
+        pr_comments_section = f"\n\n{pr_comments}\n" if pr_comments else ""
+
         # Get requirements section
         try:
             requirements_section = self._get_requirements_section()
@@ -355,7 +475,7 @@ class ReviewPhase(Phase):
 
 **需求規格與實作計畫:**
 {requirements_section}
-
+{pr_comments_section}
 **可用的 Git 指令:**
 - `git log` - 查看 commit history
 - `git diff` - 查看程式碼變更

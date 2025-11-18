@@ -64,6 +64,7 @@ class DevelopPhase(Phase):
         self.user_input = user_input
         self.approved_denial_indices = approved_denial_indices if approved_denial_indices is not None else []
         self.pr_number = pr_number
+        self._pr_comments_cache = None  # Cache for PR comments to avoid duplicate loading
         self.phase_name = "develop"  # For base class progress tracking
 
         # Iteration tracking
@@ -332,14 +333,41 @@ class DevelopPhase(Phase):
         # No special handling needed
         return ""
 
+    def _get_last_develop_timestamp(self):
+        """Get timestamp from last develop/status.json.
+
+        Returns:
+            datetime object or None if not found
+        """
+        try:
+            status_file = self.history_dir.parent / "status.json"
+            if not status_file.exists():
+                return None
+
+            with open(status_file, 'r', encoding='utf-8') as f:
+                status_data = json.load(f)
+                timestamp_str = status_data.get("timestamp")
+                if timestamp_str:
+                    from datetime import datetime
+                    return datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
+        except Exception:
+            pass
+        return None
+
     def _load_pr_comments(self) -> tuple[str, int]:
         """Load PR comments if pr_number is provided.
 
+        Only loads comments that are newer than the last develop timestamp.
+
         Returns:
-            Tuple of (formatted comments string, unresolved count)
+            Tuple of (formatted comments string, new unresolved count)
         """
         if not self.pr_number:
             return "", 0
+
+        # Return cached result if already loaded
+        if self._pr_comments_cache is not None:
+            return self._pr_comments_cache
 
         try:
             print(f"  → Calling get_pr_comments({self.pr_number})")
@@ -349,16 +377,33 @@ class DevelopPhase(Phase):
             unresolved = filter_unresolved_comments(comments)
             print(f"  → {len(unresolved)} unresolved comments")
 
+            # Filter comments that are newer than last develop timestamp
+            last_develop_time = self._get_last_develop_timestamp()
+            if last_develop_time:
+                from datetime import datetime
+                new_comments = []
+                for comment in unresolved:
+                    comment_time = datetime.fromisoformat(comment.created_at.replace('Z', '+00:00'))
+                    if comment_time > last_develop_time:
+                        new_comments.append(comment)
+
+                print(f"  → {len(new_comments)} new unresolved comments (since last develop)")
+                unresolved = new_comments
+
             result = format_comments_for_prompt(unresolved)
             if result:
                 print(f"  → Formatted result length: {len(result)} chars")
-            return result, len(unresolved)
+
+            # Cache the result
+            self._pr_comments_cache = (result, len(unresolved))
+            return self._pr_comments_cache
         except (ValueError, Exception) as e:
             # Log error but don't fail - PR comments are optional context
             print(f"⚠️  Failed to load PR comments: {e}")
             import traceback
             traceback.print_exc()
-            return "", 0
+            self._pr_comments_cache = ("", 0)
+            return self._pr_comments_cache
 
     def _generate_prompt(self, user_input: str = "") -> str:
         """Generate prompt for current iteration.
@@ -529,7 +574,7 @@ class DevelopPhase(Phase):
                 if unresolved_count == 0:
                     return PhaseResult(
                         status=PhaseStatus.COMPLETED,
-                        message=f"PR #{self.pr_number} has no unresolved comments. Nothing to do.",
+                        message=f"PR #{self.pr_number} has no new PR comments since last develop. Nothing to do.",
                         data={
                             "branch": self._get_branch_name(),
                             "pr_number": self.pr_number,

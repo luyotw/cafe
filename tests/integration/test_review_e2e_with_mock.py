@@ -409,3 +409,136 @@ class TestReviewE2EMockBaseBranch:
         output = result.stdout + result.stderr
         # If git fails because develop doesn't exist, that's OK for this test
         assert result.returncode in [0, 1]  # May fail if develop branch doesn't exist
+
+
+@pytest.mark.e2e
+class TestReviewE2EMockPRComments:
+    """測試 review 指令的 --pr-number 參數"""
+
+    def test_pr_number_parameter_accepted(self, tmp_path):
+        """測試 --pr-number 參數被接受
+
+        情境：執行 review 時提供 PR number
+        指令：cafe review test-issue --pr-number 10 --no-interactive
+        預期：指令接受參數並執行（不管 PR 是否存在）
+        """
+        issue_name = "test-issue"
+        setup_test_environment(tmp_path, issue_name)
+
+        result = run_cafe_review(
+            tmp_path,
+            issue_name,
+            "CAFE_CONFIRMED\n\n審查通過。",
+            extra_args=["--pr-number", "10"]
+        )
+
+        output = result.stdout + result.stderr
+        # 可能因為 PR 不存在而失敗，但參數應該被接受
+        # returncode 0 表示成功，1 表示可能的錯誤（如 PR 不存在）
+        assert result.returncode in [0, 1]
+
+    def test_review_without_pr_number_still_works(self, tmp_path):
+        """測試不提供 --pr-number 仍正常運作
+
+        情境：正常執行 review，不提供 PR number
+        指令：cafe review test-issue --no-interactive
+        預期：成功完成審查
+        """
+        issue_name = "test-issue"
+        setup_test_environment(tmp_path, issue_name)
+
+        result = run_cafe_review(tmp_path, issue_name, "CAFE_CONFIRMED\n\n審查通過。")
+
+        assert result.returncode == 0
+        output = result.stdout + result.stderr
+        assert "passed" in output.lower() or "成功" in output.lower()
+
+    def test_pr_comments_with_real_gh_data(self, tmp_path):
+        """測試使用簡化的 PR comments 資料（模擬 gh CLI）
+
+        情境：執行 review 時提供 PR number，模擬 gh CLI 返回 PR comments
+        指令：cafe review test-issue --pr-number 10 --no-interactive
+        預期：成功執行，PR comments 被載入（通過創建 fake gh script）
+        """
+        # 簡化的 PR comments 資料（基於真實 PR #10）
+        raw_comments = [
+            {
+                "id": 2532554495,
+                "body": "這邊應該要用 bulkInsert() 批次寫入",
+                "user": {"login": "reviewer1"},
+                "created_at": "2025-11-17T03:28:30Z",
+                "path": "controllers/AdminController.php",
+                "line": 530
+            },
+            {
+                "id": 2532555684,
+                "body": "建議加上錯誤處理",
+                "user": {"login": "reviewer2"},
+                "created_at": "2025-11-17T03:29:36Z",
+                "path": "controllers/AdminController.php",
+                "line": 699
+            }
+        ]
+
+        # 準備 gh repo view 的輸出（返回 repo 資訊）
+        repo_info = {
+            "owner": {"login": "testowner"},
+            "name": "testrepo"
+        }
+
+        issue_name = "test-issue"
+        setup_test_environment(tmp_path, issue_name)
+
+        # 創建一個假的 gh script 來返回 PR comments
+        fake_gh_dir = tmp_path / "bin"
+        fake_gh_dir.mkdir()
+        fake_gh = fake_gh_dir / "gh"
+        fake_gh.write_text(f"""#!/bin/bash
+# Handle: gh repo view --json owner,name
+if [ "$1" = "repo" ] && [ "$2" = "view" ] && [ "$3" = "--json" ]; then
+    cat << 'EOF'
+{json.dumps(repo_info)}
+EOF
+    exit 0
+fi
+
+# Handle: gh api /repos/testowner/testrepo/pulls/10/comments
+if [ "$1" = "api" ] && [[ "$2" == *"/pulls/10/comments" ]]; then
+    cat << 'EOF'
+{json.dumps(raw_comments)}
+EOF
+    exit 0
+fi
+
+echo "Unsupported gh command: $@" >&2
+exit 1
+""")
+        fake_gh.chmod(0o755)
+
+        # 使用 fake gh 執行測試（修改 PATH）
+        cafe_cmd = "cafe" if subprocess.run(["which", "cafe"], capture_output=True).returncode == 0 else "./cafe"
+        args = [cafe_cmd, "review", issue_name, "--no-interactive", "--pr-number", "10"]
+
+        env = os.environ.copy()
+        env["CAFE_MOCK_AGENTS"] = "true"
+        env["CAFE_MOCK_RESPONSE"] = "CAFE_CONFIRMED\n\n審查完成。"
+        env["PATH"] = f"{fake_gh_dir}:{env.get('PATH', '')}"
+
+        result = subprocess.run(
+            args,
+            cwd=str(tmp_path),
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+
+        # 應該成功完成（如果 get_pr_comments 失敗，會導致錯誤）
+        output = result.stdout + result.stderr
+        print("\n=== CLI Output ===")
+        print(output)
+        print("==================\n")
+
+        assert result.returncode == 0, f"指令應該成功執行，但返回碼是 {result.returncode}，輸出：{output}"
+
+        # 驗證審查完成
+        assert "passed" in output.lower() or "成功" in output.lower()

@@ -976,6 +976,11 @@ def review(
         "--interactive/--no-interactive",
         help="Allow interactive prompts (default: True)",
     ),
+    pr_number: Optional[int] = typer.Option(
+        None,
+        "--pr-number",
+        help="PR number to fetch unresolved comments from",
+    ),
 ) -> None:
     """Run review phase: Code review by reviewer agent.
 
@@ -1038,6 +1043,7 @@ def review(
             target_commit=commit,
             base_branch=base_branch,
             interactive=interactive,
+            pr_number=pr_number,
         )
 
         # Display start message (use actual base_branch from phase)

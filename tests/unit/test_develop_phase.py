@@ -1286,7 +1286,7 @@ class TestDeveloperPermissions:
         source = inspect.getsource(DevelopPhase.execute)
 
         # Verify that base_allowed_tools includes edit
-        assert 'base_allowed_tools = ["write", "read", "edit", "bash"]' in source, \
+        assert 'base_allowed_tools = ["write", "read", "edit", "bash", "grep", "glob", "ls", "web_fetch", "web_search"]' in source, \
             "Developer's base_allowed_tools should include edit permission"
 
     def test_inherits_previous_iteration_tools(self, tmp_path):

@@ -162,3 +162,30 @@ class GitOperations:
             Commit list (one-line format)
         """
         return self.run_git("log", "--oneline", f"{base}..{head}")
+
+    def get_commits_since(self, timestamp: str) -> List[dict]:
+        """Get commits since a given timestamp.
+
+        Args:
+            timestamp: ISO format timestamp (e.g., "2025-01-02T10:00:00+00:00")
+
+        Returns:
+            List of commit dictionaries with 'hash' and 'message' keys
+        """
+        try:
+            # Use git log with --since parameter
+            output = self.run_git("log", "--since", timestamp, "--format=%H %s")
+            if not output:
+                return []
+
+            commits = []
+            for line in output.split('\n'):
+                if line.strip():
+                    parts = line.split(' ', 1)
+                    commits.append({
+                        "hash": parts[0],
+                        "message": parts[1] if len(parts) > 1 else ""
+                    })
+            return commits
+        except GitError:
+            return []
