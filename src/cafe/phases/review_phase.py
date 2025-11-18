@@ -521,6 +521,8 @@ class ReviewPhase(Phase):
    - 檢查是否有大量重複的程式碼
    - 檢查程式碼的正確性、可讀性、效能、安全性
    - 檢查是否有不應該被提交的檔案，例如個人設定檔、log 檔案等
+     - 若未 push 則要求使用 `git rebase` 或 `git filter-branch` 移除
+     - 若已 push 則要求使用 `git rm --cached` 移除並更新 .gitignore 後 commit
 
 5. **簡要說明問題**
    - 列出檔案路徑和行號並說明問題
