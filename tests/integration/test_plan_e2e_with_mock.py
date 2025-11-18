@@ -177,14 +177,18 @@ class TestPlanE2EMockContentValidation:
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
         create_default_template(tmp_path)
-        
-        result = run_cafe_plan(tmp_path, issue_name, "CAFE_READY_FOR_REVIEW\n\n# 實作計畫\n\n計畫內容")
-        
-        assert result.returncode == 0
-        
+
+        # Create plan.md with dev guide (simulating dev guide prompt step)
         plan_file = tmp_path / ".cafe" / "issues" / issue_name / "plan" / "plan.md"
+        plan_file.parent.mkdir(parents=True, exist_ok=True)
+        plan_file.write_text("## 開發指南\n\n測試用開發指南\n\n")
+
+        result = run_cafe_plan(tmp_path, issue_name, "CAFE_READY_FOR_REVIEW\n\n# 實作計畫\n\n計畫內容")
+
+        assert result.returncode == 0
+
         assert plan_file.exists()
-        
+
         content = plan_file.read_text()
         assert "CAFE_READY_FOR_REVIEW" not in content
         assert "# 實作計畫" in content
@@ -193,25 +197,31 @@ class TestPlanE2EMockContentValidation:
     def test_plan_preserves_dev_guide_section(self, tmp_path):
         """測試第二輪更新時保留開發指南
 
-        情境：已有 plan.md，進行第二輪更新（不提供 template）
+        情境：已有 plan.md 和第一輪 history，進行第二輪更新（不提供 template）
         指令：cafe plan test-issue --no-interactive
         預期：成功，原有的開發指南內容被保留，只更新計畫部分
         """
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
-        
+
         plan_file = tmp_path / ".cafe" / "issues" / issue_name / "plan" / "plan.md"
         plan_file.parent.mkdir(parents=True, exist_ok=True)
         plan_file.write_text("## 開發指南\n\n原始開發指南內容\n\n## 實作計畫\n\n初版計畫")
-        
+
+        # Create history file to simulate first iteration completed
+        history_dir = tmp_path / ".cafe" / "issues" / issue_name / "plan" / "history"
+        history_dir.mkdir(parents=True, exist_ok=True)
+        history_file = history_dir / "iteration_001.json"
+        history_file.write_text('{"iteration": 1, "status_code": "CAFE_READY_FOR_REVIEW"}')
+
         result = run_cafe_plan(
-            tmp_path, issue_name, 
+            tmp_path, issue_name,
             "CAFE_READY_FOR_REVIEW\n\n## 開發指南\n\n原始開發指南內容\n\n## 實作計畫\n\n更新後的計畫",
             template=None
         )
-        
+
         assert result.returncode == 0
-        
+
         content = plan_file.read_text()
         assert "原始開發指南內容" in content
         assert "更新後的計畫" in content
@@ -226,14 +236,18 @@ class TestPlanE2EMockContentValidation:
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
         create_default_template(tmp_path)
-        
-        result = run_cafe_plan(tmp_path, issue_name, "CAFE_READY_FOR_REVIEW\n\n# 實作計畫\n\n## 步驟一\n內容")
-        
-        assert result.returncode == 0
-        
+
+        # Create plan.md with dev guide (simulating dev guide prompt step)
         plan_file = tmp_path / ".cafe" / "issues" / issue_name / "plan" / "plan.md"
+        plan_file.parent.mkdir(parents=True, exist_ok=True)
+        plan_file.write_text("## 開發指南\n\n測試用開發指南\n\n")
+
+        result = run_cafe_plan(tmp_path, issue_name, "CAFE_READY_FOR_REVIEW\n\n# 實作計畫\n\n## 步驟一\n內容")
+
+        assert result.returncode == 0
+
         content = plan_file.read_text()
-        
+
         assert content.startswith("#")
         assert "## 步驟一" in content
         assert isinstance(content, str)
