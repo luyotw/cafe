@@ -257,8 +257,140 @@ class TestDevelopPhasePRCommentsIntegration:
 
                 # Verify: Should return COMPLETED without calling agent
                 assert result.status.value == "completed"
-                assert "no unresolved comments" in result.message.lower()
+                assert "no new pr comments" in result.message.lower()
                 assert result.data["pr_number"] == 123
 
                 # Verify agent was NOT called
+                mock_components["agent_manager"].execute_agent.assert_not_called()
+
+    def test_load_pr_comments_filters_old_comments(self, mock_components):
+        """測試 PR comments 過濾：只載入比上次 develop 更新的 comments
+
+        情境：有 3 個 unresolved comments，其中 2 個比上次 develop 舊，1 個比較新
+        預期：只返回 1 個新的 comment
+        """
+        import json
+
+        # 模擬上次 develop 時間：2025-01-02 10:00:00
+        last_develop_time = "2025-01-02T10:00:00Z"
+        status_file = mock_components["tmp_path"] / ".cafe" / "issues" / "test-issue" / "develop" / "status.json"
+        status_file.parent.mkdir(parents=True, exist_ok=True)
+        status_file.write_text(json.dumps({
+            "phase": "develop",
+            "status": "completed",
+            "timestamp": last_develop_time,
+            "iteration": 1
+        }))
+
+        with patch('cafe.phases.develop_phase.get_pr_comments') as mock_get:
+            with patch('cafe.phases.develop_phase.filter_unresolved_comments') as mock_filter:
+                with patch('cafe.phases.develop_phase.format_comments_for_prompt') as mock_format:
+                    # 3 個 comments：2 個舊的，1 個新的
+                    mock_comments = [
+                        PRComment(
+                            id="C1",
+                            body="Old comment 1",
+                            author="user1",
+                            created_at="2025-01-01T09:00:00Z",  # 比 develop 舊
+                            is_resolved=False
+                        ),
+                        PRComment(
+                            id="C2",
+                            body="Old comment 2",
+                            author="user2",
+                            created_at="2025-01-02T09:00:00Z",  # 比 develop 舊
+                            is_resolved=False
+                        ),
+                        PRComment(
+                            id="C3",
+                            body="New comment",
+                            author="user3",
+                            created_at="2025-01-02T11:00:00Z",  # 比 develop 新
+                            is_resolved=False
+                        ),
+                    ]
+                    mock_get.return_value = mock_comments
+                    mock_filter.return_value = mock_comments  # 全部都是 unresolved
+
+                    # format_comments_for_prompt 應該只收到新的 comment
+                    mock_format.return_value = "New comment"
+
+                    phase = DevelopPhase(
+                        agent_manager=mock_components["agent_manager"],
+                        permission_handler=mock_components["permission_handler"],
+                        git_ops=mock_components["git_ops"],
+                        spec_file=mock_components["spec_file"],
+                        plan_file=mock_components["plan_file"],
+                        workflow_mode=WorkflowMode.LOCAL,
+                        issue_name="test-issue",
+                        dev_agent="David",
+                        pr_number=123,
+                    )
+
+                    result, count = phase._load_pr_comments()
+
+                    # 應該只格式化新的 comment
+                    assert count == 1
+                    mock_format.assert_called_once()
+                    # 檢查傳給 format_comments_for_prompt 的只有新 comment
+                    formatted_comments = mock_format.call_args[0][0]
+                    assert len(formatted_comments) == 1
+                    assert formatted_comments[0].id == "C3"
+
+    def test_execute_with_only_old_pr_comments_returns_completed(self, mock_components):
+        """測試當 PR 只有舊的 unresolved comments 時 execute 直接返回 COMPLETED
+
+        情境：提供 pr_number 但所有 unresolved comments 都比上次 develop 舊
+        預期：execute() 返回 COMPLETED 狀態且不呼叫 agent
+        """
+        import json
+
+        # 模擬上次 develop 時間
+        last_develop_time = "2025-01-02T10:00:00Z"
+        status_file = mock_components["tmp_path"] / ".cafe" / "issues" / "test-issue" / "develop" / "status.json"
+        status_file.parent.mkdir(parents=True, exist_ok=True)
+        status_file.write_text(json.dumps({
+            "phase": "develop",
+            "status": "completed",
+            "timestamp": last_develop_time,
+            "iteration": 1
+        }))
+
+        with patch('cafe.phases.develop_phase.get_pr_comments') as mock_get:
+            with patch('cafe.phases.develop_phase.filter_unresolved_comments') as mock_filter:
+                # 所有 comments 都是舊的
+                mock_comments = [
+                    PRComment(
+                        id="C1",
+                        body="Old comment",
+                        author="user1",
+                        created_at="2025-01-01T09:00:00Z",  # 比 develop 舊
+                        is_resolved=False
+                    )
+                ]
+                mock_get.return_value = mock_comments
+                mock_filter.return_value = mock_comments
+
+                phase = DevelopPhase(
+                    agent_manager=mock_components["agent_manager"],
+                    permission_handler=mock_components["permission_handler"],
+                    git_ops=mock_components["git_ops"],
+                    spec_file=mock_components["spec_file"],
+                    plan_file=mock_components["plan_file"],
+                    workflow_mode=WorkflowMode.LOCAL,
+                    issue_name="test-issue",
+                    dev_agent="David",
+                    pr_number=123,
+                )
+
+                # Mock git operations
+                mock_components["git_ops"].branch_exists.return_value = True
+
+                result = phase.execute()
+
+                # 應該返回 COMPLETED 因為沒有新的 comments
+                assert result.status.value == "completed"
+                assert "no new pr comments" in result.message.lower()
+
+                # Agent 不應該被呼叫
                 mock_components["agent_manager"].execute_agent.assert_not_called()
