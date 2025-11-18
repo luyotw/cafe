@@ -1140,6 +1140,11 @@ def pr(
         "--update",
         help="Force regenerate PR title/body even if they already exist",
     ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help="Force push to remote (use with caution)",
+    ),
     config_file: str = typer.Option(
         ".cafe/config.yaml",
         "--config",
@@ -1211,6 +1216,7 @@ def pr(
             custom_title=title,
             custom_body=body,
             update=update,
+            force_push=force,
             interactive=interactive,
         )
 
