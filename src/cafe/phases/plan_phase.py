@@ -101,18 +101,55 @@ class PlanPhase(Phase):
                         message=f"Spec file not found: {self.spec_file}",
                     )
 
+                # Check if this is first iteration (no history files)
+                has_history = self.history_dir.exists() and list(self.history_dir.glob("iteration_*.json"))
+                is_first_iteration = not has_history
+
+                # First iteration requires template
+                if is_first_iteration and not self.template_path:
+                    if self.interactive:
+                        # Interactive mode: prompt for template selection
+                        from cafe.utils.template import TemplateManager
+                        from cafe.ui.template_selector import select_template
+                        from rich.console import Console
+                        console = Console()
+
+                        template_manager = TemplateManager(".cafe")
+                        templates = template_manager.list_templates()
+
+                        if not templates:
+                            return PhaseResult(
+                                status=PhaseStatus.FAILED,
+                                message="No templates found. Use 'cafe template add <source> <name>' to add templates.",
+                            )
+
+                        console.print()
+                        console.print("[yellow]First iteration requires a template.[/yellow]")
+                        template_paths = {name: template_manager.get_template_path(name) for name in templates}
+                        selected_template = select_template(templates, template_paths)
+
+                        if selected_template:
+                            self.template_path = str(template_manager.get_template_path(selected_template))
+                            console.print(f"[dim]Using template: {selected_template}[/dim]")
+                        else:
+                            return PhaseResult(
+                                status=PhaseStatus.FAILED,
+                                message="Template selection cancelled",
+                            )
+                    else:
+                        # Non-interactive mode: require --template option
+                        return PhaseResult(
+                            status=PhaseStatus.FAILED,
+                            message="Template is required for first iteration. Use --template option.",
+                        )
+
                 # Check for plan.md with development guide section
                 plan_file_path = self.history_dir.parent / "plan.md"
                 plan_exists = plan_file_path.exists()
 
                 # First round: plan.md doesn't exist
                 if not plan_exists:
-                    if not self.template_path:
-                        return PhaseResult(
-                            status=PhaseStatus.FAILED,
-                            message="First round requires template. Use --template option.",
-                        )
-                    # Template exists, but need to check/prompt for dev guide
+                    # Need to check/prompt for dev guide
                     if self.interactive:
                         # Prompt user to provide development guide
                         self._prompt_for_dev_guide()
