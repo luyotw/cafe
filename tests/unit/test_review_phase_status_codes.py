@@ -15,7 +15,7 @@ from cafe.phases.review_phase import ReviewPhase
 class TestReviewPhaseWithStatusCodes:
     """Test ReviewPhase integration with status code system."""
 
-    def test_confirmed_status_code_completes_phase(self, tmp_path: Path, AgentCLI) -> None:
+    def test_confirmed_status_code_completes_phase(self, tmp_path: Path) -> None:
         """測試 CONFIRMED 狀態碼完成 phase"""
         requirements_file = tmp_path / "requirements.md"
         requirements_file.write_text("Requirements")
