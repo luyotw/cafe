@@ -30,6 +30,7 @@ class PRPhase(Phase):
         custom_title: Optional[str] = None,
         custom_body: Optional[str] = None,
         update: bool = False,
+        force_push: bool = False,
         interactive: bool = True,
     ) -> None:
         """Initialize PR phase.
@@ -47,6 +48,7 @@ class PRPhase(Phase):
             custom_title: Custom PR title (None for auto-generation)
             custom_body: Custom PR body (None for auto-generation)
             update: Force update existing PR title/body (default: False)
+            force_push: Force push to remote (default: False)
             interactive: Enable interactive mode (default: True)
         """
         super().__init__(interactive=interactive)
@@ -63,6 +65,7 @@ class PRPhase(Phase):
         self.custom_title = custom_title
         self.custom_body = custom_body
         self.update = update
+        self.force_push = force_push
 
         # Set up history tracking (like other phases)
         spec_path = Path(spec_file)
@@ -98,7 +101,7 @@ class PRPhase(Phase):
             branch_name = self._get_branch_name()
 
             # Push branch to remote
-            self.git_ops.push(branch_name, set_upstream=True)
+            self.git_ops.push(branch_name, set_upstream=True, force=self.force_push)
 
             # Check if PR already exists on GitHub
             existing_pr = self.github_ops.get_pr_for_branch(branch_name)
