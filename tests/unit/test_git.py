@@ -161,6 +161,24 @@ class TestGitOperations:
 
             mock_run.assert_called_once_with("push", "feature-branch")
 
+    def test_push_with_force(self) -> None:
+        """測試 force push 到 remote"""
+        git = GitOperations()
+
+        with patch.object(git, "run_git") as mock_run:
+            git.push("feature-branch", set_upstream=True, force=True)
+
+            mock_run.assert_called_once_with("push", "--force", "-u", "origin", "feature-branch")
+
+    def test_push_force_without_upstream(self) -> None:
+        """測試 force push 不設定 upstream"""
+        git = GitOperations()
+
+        with patch.object(git, "run_git") as mock_run:
+            git.push("feature-branch", set_upstream=False, force=True)
+
+            mock_run.assert_called_once_with("push", "--force", "feature-branch")
+
     def test_get_status(self) -> None:
         """測試取得 git status"""
         git = GitOperations()
