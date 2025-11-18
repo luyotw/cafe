@@ -256,3 +256,189 @@ class TestReviewPhasePRCommentsIntegration:
 
                 # Verify agent was NOT called
                 mock_components["agent_manager"].execute_agent.assert_not_called()
+
+    def test_get_latest_pr_comment_timestamp(self, mock_components):
+        """測試取得最新 PR comment 的時間戳
+
+        情境：有多個 PR comments，需要找到最新的時間戳
+        預期：返回最新 comment 的 created_at 時間
+        """
+        with patch('cafe.phases.review_phase.get_pr_comments') as mock_get:
+            with patch('cafe.phases.review_phase.filter_unresolved_comments') as mock_filter:
+                # 3 個 comments，按時間排序
+                mock_comments = [
+                    PRComment(
+                        id="C1",
+                        body="Old comment",
+                        author="user1",
+                        created_at="2025-01-01T09:00:00Z",
+                        is_resolved=False
+                    ),
+                    PRComment(
+                        id="C2",
+                        body="Middle comment",
+                        author="user2",
+                        created_at="2025-01-02T09:00:00Z",
+                        is_resolved=False
+                    ),
+                    PRComment(
+                        id="C3",
+                        body="Latest comment",
+                        author="user3",
+                        created_at="2025-01-03T09:00:00Z",  # 最新的
+                        is_resolved=False
+                    ),
+                ]
+                mock_get.return_value = mock_comments
+                mock_filter.return_value = mock_comments
+
+                phase = ReviewPhase(
+                    agent_manager=mock_components["agent_manager"],
+                    permission_handler=mock_components["permission_handler"],
+                    git_ops=mock_components["git_ops"],
+                    spec_file=mock_components["spec_file"],
+                    plan_file=mock_components["plan_file"],
+                    workflow_mode=WorkflowMode.LOCAL,
+                    review_agent="Richard",
+                    pr_number=123,
+                )
+
+                timestamp = phase._get_latest_pr_comment_timestamp()
+
+                # 應該返回最新 comment 的時間
+                assert timestamp is not None
+                assert "2025-01-03" in timestamp.isoformat()
+
+    def test_check_commits_since_pr_comments(self, mock_components):
+        """測試檢查 PR comments 之後的 commits
+
+        情境：有新的 commits 在 PR comments 之後
+        預期：呼叫 git_ops.get_commits_since 並返回新 commits
+        """
+        with patch('cafe.phases.review_phase.get_pr_comments') as mock_get:
+            with patch('cafe.phases.review_phase.filter_unresolved_comments') as mock_filter:
+                # 最後一個 PR comment 的時間：2025-01-02 10:00:00
+                mock_comments = [
+                    PRComment(
+                        id="C1",
+                        body="Latest comment",
+                        author="user1",
+                        created_at="2025-01-02T10:00:00Z",
+                        is_resolved=False
+                    ),
+                ]
+                mock_get.return_value = mock_comments
+                mock_filter.return_value = mock_comments
+
+                phase = ReviewPhase(
+                    agent_manager=mock_components["agent_manager"],
+                    permission_handler=mock_components["permission_handler"],
+                    git_ops=mock_components["git_ops"],
+                    spec_file=mock_components["spec_file"],
+                    plan_file=mock_components["plan_file"],
+                    workflow_mode=WorkflowMode.LOCAL,
+                    review_agent="Richard",
+                    pr_number=123,
+                )
+
+                # Mock git log 返回新的 commits
+                mock_components["git_ops"].get_commits_since = Mock(return_value=[
+                    {"hash": "abc123", "message": "New commit after PR comment"}
+                ])
+
+                # 檢查是否有新 commits
+                has_new_commits = phase._has_commits_since_pr_comments()
+
+                # 應該返回 True
+                assert has_new_commits is True
+
+                # 驗證呼叫 git_ops.get_commits_since
+                mock_components["git_ops"].get_commits_since.assert_called_once()
+
+    def test_execute_with_no_new_commits_returns_completed(self, mock_components):
+        """測試當沒有新 commits 時 execute 直接返回 COMPLETED
+
+        情境：提供 pr_number 但所有 commits 都在 PR comments 之前
+        預期：execute() 返回 COMPLETED 狀態且不呼叫 agent
+        """
+        with patch('cafe.phases.review_phase.get_pr_comments') as mock_get:
+            with patch('cafe.phases.review_phase.filter_unresolved_comments') as mock_filter:
+                # PR comment 時間：2025-01-02 10:00:00
+                mock_comments = [
+                    PRComment(
+                        id="C1",
+                        body="Latest comment",
+                        author="user1",
+                        created_at="2025-01-02T10:00:00Z",
+                        is_resolved=False
+                    )
+                ]
+                mock_get.return_value = mock_comments
+                mock_filter.return_value = mock_comments
+
+                phase = ReviewPhase(
+                    agent_manager=mock_components["agent_manager"],
+                    permission_handler=mock_components["permission_handler"],
+                    git_ops=mock_components["git_ops"],
+                    spec_file=mock_components["spec_file"],
+                    plan_file=mock_components["plan_file"],
+                    workflow_mode=WorkflowMode.LOCAL,
+                    review_agent="Richard",
+                    pr_number=123,
+                )
+
+                # Mock: 沒有新的 commits
+                mock_components["git_ops"].get_commits_since = Mock(return_value=[])
+                mock_components["git_ops"].get_current_branch = Mock(return_value="test-issue")
+
+                result = phase.execute()
+
+                # 應該返回 COMPLETED 因為沒有新的 commits
+                assert result.status.value == "completed"
+                assert "no new commits" in result.message.lower()
+
+                # Agent 不應該被呼叫
+                mock_components["agent_manager"].execute_agent.assert_not_called()
+
+    def test_has_commits_returns_true_with_new_commits(self, mock_components):
+        """測試當有新 commits 時 _has_commits_since_pr_comments 返回 True
+
+        情境：提供 pr_number 且 git 有新 commits
+        預期：_has_commits_since_pr_comments() 返回 True
+        """
+        with patch('cafe.phases.review_phase.get_pr_comments') as mock_get:
+            with patch('cafe.phases.review_phase.filter_unresolved_comments') as mock_filter:
+                # PR comment 時間：2025-01-02 10:00:00
+                mock_comments = [
+                    PRComment(
+                        id="C1",
+                        body="Please review",
+                        author="user1",
+                        created_at="2025-01-02T10:00:00Z",
+                        is_resolved=False
+                    )
+                ]
+                mock_get.return_value = mock_comments
+                mock_filter.return_value = mock_comments
+
+                phase = ReviewPhase(
+                    agent_manager=mock_components["agent_manager"],
+                    permission_handler=mock_components["permission_handler"],
+                    git_ops=mock_components["git_ops"],
+                    spec_file=mock_components["spec_file"],
+                    plan_file=mock_components["plan_file"],
+                    workflow_mode=WorkflowMode.LOCAL,
+                    review_agent="Richard",
+                    pr_number=123,
+                )
+
+                # Mock: 有新的 commits
+                mock_components["git_ops"].get_commits_since = Mock(return_value=[
+                    {"hash": "abc123", "message": "New commit"}
+                ])
+
+                # 測試方法行為
+                has_new_commits = phase._has_commits_since_pr_comments()
+
+                # 應該返回 True（有新 commits）
+                assert has_new_commits is True
