@@ -115,7 +115,7 @@ class TestBranchPushing:
         result = phase.execute()
 
         # Should push branch named "issue-123"
-        git_ops.push.assert_called_once_with("issue-123", set_upstream=True)
+        git_ops.push.assert_called_once_with("issue-123", set_upstream=True, force=False)
         assert result.status == PhaseStatus.COMPLETED
 
     def test_push_branch_local_mode(self, tmp_path: Path) -> None:
@@ -151,7 +151,7 @@ class TestBranchPushing:
         result = phase.execute()
 
         # Should push branch named "feature"
-        git_ops.push.assert_called_once_with("feature", set_upstream=True)
+        git_ops.push.assert_called_once_with("feature", set_upstream=True, force=False)
 
     def test_push_failure_fails_phase(self) -> None:
         """測試 push 失敗時 phase 失敗"""
@@ -604,7 +604,7 @@ class TestIssueNameBranchNaming:
         result = phase.execute()
 
         # Should push branch named "my-feature" (from issue_name)
-        git_ops.push.assert_called_once_with("my-feature", set_upstream=True)
+        git_ops.push.assert_called_once_with("my-feature", set_upstream=True, force=False)
         assert result.status == PhaseStatus.COMPLETED
 
     def test_branch_name_fallback_to_filename(self, tmp_path: Path) -> None:
@@ -645,7 +645,7 @@ class TestIssueNameBranchNaming:
         result = phase.execute()
 
         # Should push branch named "feature" (from issue directory name, not filename)
-        git_ops.push.assert_called_once_with("feature", set_upstream=True)
+        git_ops.push.assert_called_once_with("feature", set_upstream=True, force=False)
         assert result.status == PhaseStatus.COMPLETED
 
 
