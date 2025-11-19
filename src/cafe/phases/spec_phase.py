@@ -593,6 +593,7 @@ class SpecPhase(Phase):
 - 對於明顯需要澄清的地方提問，但不過度追問小細節
 - 確保主要功能和預期行為清楚
 - 對於次要細節可以接受合理的彈性
+- 詢問驗收標準，但不要求過於詳細
 - 目標：在速度和精確度之間取得平衡"""
 
     def _generate_local_prompt(self, user_input: str = "") -> str:
@@ -608,118 +609,68 @@ class SpecPhase(Phase):
         status_code_prompt = self._get_status_code_prompt()
         rigor_guidelines = self._get_rigor_guidelines()
 
-        # Check if spec file exists
-        spec_path = Path(self.spec_file)
-        file_exists = spec_path.exists()
+        # --- 1. Determine context-specific sections ---
+        initial_instruction = ""
+        context_section = ""
+        restriction = ""
 
         if self.iteration == 1:
-            if file_exists:
-                # File exists - analyze and clarify
-                return f"""分析 {self.spec_file} 的內容。
+            initial_instruction = f"分析 {self.spec_file} 的內容。"
+            context_section = """
+**你的職責：**
+1. 仔細閱讀需求文件，找出所有不清楚、模糊、可能讓開發者自己腦補的地方。
+2. **以 PM 的身份**用對話方式向用戶提問，確認所有必要資訊。
+3. 如果需求已經很清楚，就說清楚了，不要硬湊問題。
+"""
+        else:  # Iteration 2+
+            initial_instruction = f"繼續分析 {self.spec_file} 的最新版本。"
+            if user_input:
+                context_section = f"""
+**使用者的回答：**
+{user_input}
+"""
+            if self.iteration >= 4:
+                restriction = f"""
+⚠️ **重要限制：**
+- 你現在是第 {self.iteration} 輪，只能針對「待解答的問題」繼續追問。
+- **不可以提出新的問題**。
+- 只能深入釐清已經提出的問題。
+"""
 
+        # --- 2. Define common instructions ---
+        base_prompt = f"""
 **你的角色：**
 你是一位經驗豐富的 Product Manager (PM)，專注於需求澄清和產品規劃。
 你不是軟體工程師，你的工作是確保需求清楚，避免開發者自己腦補。
 
-這是第 {self.iteration} 輪需求澄清。
+這是第 {self.iteration} 輪需求澄清。"""
 
-**你的職責：**
-1. 仔細閱讀需求文件，找出所有不清楚、模糊、可能讓開發者自己腦補的地方
-2. **以 PM 的身份**用對話方式向用戶提問，確認所有必要資訊
-3. 如果需求已經很清楚，就說清楚了，不要硬湊問題
-
-{rigor_guidelines}
-
-{non_technical}
-
-{status_code_prompt}
-
-**如果需要澄清需求（status: CAFE_NEED_CLARIFICATION）：**
+        need_clarification_instruction = f"""**如果需要澄清（status: CAFE_NEED_CLARIFICATION）：**
 使用 Write tool 將以下內容寫入 {self.spec_file}：
-   - 「## 使用者故事」- 用戶撰寫的使用者故事或由自動由需求描述產生的使用者故事
-   - 「## 目前的需求規格」- 列出目前已知的所有需求內容
-   - 「## 待釐清的問題」- 以 PM 的身份用對話方式向用戶提問
+   - 「## 使用者故事」- 用戶撰寫的使用者故事或由自動由需求描述產生的使用者故事。
+   - 「## 目前的需求規格」- 整合所有已知資訊（包括使用者故事、先前的對話、用戶的最新回答），列出目前已知的完整需求。
+   - 「## 待釐清的問題」- 以 PM 的身份用對話方式提問，深入釐清需求。
+"""
 
-記住：你是 PM，不是工程師，不要提技術細節！
-
-**如果需求已清楚（status: CAFE_CONFIRMED）：**
+        confirmed_instruction = f"""**如果需求已清楚（status: CAFE_CONFIRMED）：**
 使用 Write tool 將完整需求規格文件寫入 {self.spec_file}，格式：
-   - 「## 使用者故事」- 用戶撰寫的使用者故事或由自動由需求描述產生的使用者故事
-   - 「## 需求規格」- 完整的需求內容，包含：功能描述、使用場景、預期行為、驗收標準
-"""
-            else:
-                # File doesn't exist but user story should have been created
-                return f"""分析 {self.spec_file} 中的使用者故事。
-
-**你的角色：**
-你是一位經驗豐富的 Product Manager (PM)，負責將用戶的需求寫成使用者故事，並轉換成完整的需求文件。
-你不是軟體工程師，你的工作是確保需求清楚。
-
-這是第 {self.iteration} 輪需求澄清。
-
-{rigor_guidelines}
-
-{non_technical}
-
-{status_code_prompt}
-
-**如果需要更多資訊（status: CAFE_NEED_CLARIFICATION）：**
-使用 Write tool 將以下內容寫入 {self.spec_file}：
-   - 「## 使用者故事」- 用戶撰寫的使用者故事或由自動由需求描述產生的使用者故事
-   - 「## 目前的需求規格」- 整理目前從使用者故事得知的需求
-   - 「## 待釐清的問題」- 以 PM 的身份提出具體問題（使用場景、預期行為、驗收標準）
-
-記住：你是 PM，不要問技術實作問題！
-
-**如果資訊已足夠（status: CAFE_CONFIRMED）：**
-使用 Write tool 將完整需求文件寫入 {self.spec_file}，格式：
-   - 「## 使用者故事」- 用戶撰寫的使用者故事或由自動由需求描述產生的使用者故事
-   - 「## 需求規格」- 完整的需求內容
-"""
-        else:
-            # Iteration 2+: Include user's response
-            user_response_section = ""
-            if user_input:
-                user_response_section = f"""
-**使用者的回答：**
-{user_input}
-
+   - 「## 使用者故事」- 用戶撰寫的使用者故事或由自動由需求描述產生的使用者故事。
+   - 「## 需求規格」- 整合所有已確認的內容，產生最終的完整需求規格，包含功能描述、使用場景、預期行為、驗收標準等。
 """
 
-            # Add restriction for iteration 4+
-            restriction = ""
-            if self.iteration >= 4:
-                restriction = f"""
-⚠️ **重要限制：**
-- 你現在是第 {self.iteration} 輪，只能針對「待解答的問題」繼續追問
-- **不可以提出新的問題**
-- 只能深入釐清已經提出的問題
-"""
-
-            return f"""繼續分析 {self.spec_file} 的最新版本。
-
-**你的角色：**
-你是一位經驗豐富的 Product Manager (PM)，專注於需求澄清。
-你不是軟體工程師，不要提技術實作細節。
-
-這是第 {self.iteration} 輪需求澄清。請檢查需求文件的最新版本。
-{user_response_section}
+        # --- 3. Assemble the final prompt ---
+        return f"""{initial_instruction}
+{base_prompt.strip()}
+{context_section}
 {rigor_guidelines}
 
 {non_technical}
 
 {status_code_prompt}
 {restriction}
-**如果仍需澄清（status: CAFE_NEED_CLARIFICATION）：**
-使用 Write tool 將以下內容寫入 {self.spec_file}：
-   - 「## 使用者故事」- 用戶撰寫的使用者故事或由自動由需求描述產生的使用者故事
-   - 「## 目前的需求規格」- 整合之前的對話和用戶最新回答，列出目前已知的完整需求
-   - 「## 待釐清的問題」- 以 PM 的身份繼續用對話方式提問
+{need_clarification_instruction}
 
-**如果需求已清楚（status: CAFE_CONFIRMED）：**
-使用 Write tool 將完整需求規格文件寫入 {self.spec_file}，格式：
-   - 「## 使用者故事」- 用戶撰寫的使用者故事或由自動由需求描述產生的使用者故事
-   - 「## 需求規格」- 完整需求（整合所有已確認的內容）
+{confirmed_instruction}
 """
 
     def _generate_github_prompt(self, user_input: str = "") -> str:
