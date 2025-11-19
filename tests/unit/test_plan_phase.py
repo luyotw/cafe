@@ -27,6 +27,13 @@ def setup_agent_manager_mocks(agent_manager: MagicMock) -> None:
     agent_manager.get_total_token_usage.return_value = TokenUsage()
 
 
+def create_template_file(tmp_path: Path) -> str:
+    """Create a dummy template file for tests."""
+    template_file = tmp_path / "template.md"
+    template_file.write_text("# Plan Template\n\nTemplate content")
+    return str(template_file)
+
+
 class TestPlanPhaseBasics:
     """Test basic PlanPhase functionality."""
 
@@ -97,6 +104,7 @@ class TestLocalWorkflow:
             issue_name="test-feature",
             interactive=False,  # Non-interactive for this test
             user_input="confirm",  # Provide user decision
+            template_path=create_template_file(tmp_path),
         )
 
         result = phase.execute()
@@ -159,6 +167,7 @@ class TestLocalWorkflow:
             workflow_mode=WorkflowMode.LOCAL,
             issue_name="test-feature",
             interactive=False,
+            template_path=create_template_file(tmp_path),
         )
 
         result = phase.execute()
@@ -264,6 +273,7 @@ class TestGitHubWorkflow:
             workflow_mode=WorkflowMode.GITHUB,
             issue_id="456",
             interactive=False,  # Non-interactive for this test
+            template_path=create_template_file(tmp_path),
         )
 
         phase.execute()
@@ -838,6 +848,7 @@ class TestPlanPhaseNeedClarification:
             workflow_mode=WorkflowMode.LOCAL,
             issue_name="test-feature",
             interactive=False,
+            template_path=create_template_file(tmp_path),
         )
 
         result = phase.execute()
@@ -936,6 +947,7 @@ class TestPlanPhaseNeedClarification:
             workflow_mode=WorkflowMode.LOCAL,
             issue_name="test-feature",
             interactive=False,
+            template_path=create_template_file(tmp_path),
         )
 
         result = phase.execute()
@@ -1383,6 +1395,7 @@ class TestPlanPhasePromptGeneration:
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
+            template_path=create_template_file(tmp_path),
         )
 
         with patch('builtins.print'):
@@ -1704,6 +1717,7 @@ class TestExecuteAndHandleAgentResponse:
             workflow_mode=WorkflowMode.LOCAL,
             issue_name="test-issue",
             interactive=False,  # Non-interactive mode
+            template_path=create_template_file(tmp_path),
         )
         phase.iteration = 1
 
