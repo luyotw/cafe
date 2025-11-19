@@ -22,6 +22,13 @@ from cafe.core.types import PhaseStatus, WorkflowMode, TokenUsage
 from cafe.phases.plan_phase import PlanPhase
 
 
+def create_template_file(tmp_path: Path) -> str:
+    """Create a dummy template file for tests."""
+    template_file = tmp_path / "template.md"
+    template_file.write_text("# Plan Template\n\nTemplate content")
+    return str(template_file)
+
+
 class TestPlanPhaseUserConfirmation:
     """測試 PlanPhase 用戶確認流程。"""
 
@@ -194,6 +201,7 @@ class TestPlanPhaseUserConfirmation:
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,  # Non-interactive mode
             user_input="confirm",  # Provide user confirmation via parameter
+            template_path=create_template_file(tmp_path),
         )
 
         with patch('builtins.print'):

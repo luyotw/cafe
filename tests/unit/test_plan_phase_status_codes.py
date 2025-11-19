@@ -11,6 +11,13 @@ from cafe.core.types import PhaseStatus, WorkflowMode, TokenUsage
 from cafe.phases.plan_phase import PlanPhase
 
 
+def create_template_file(tmp_path: Path) -> str:
+    """Create a dummy template file for tests."""
+    template_file = tmp_path / "template.md"
+    template_file.write_text("# Plan Template\n\nTemplate content")
+    return str(template_file)
+
+
 class TestPlanPhaseWithStatusCodes:
     """Test PlanPhase integration with status code system."""
 
@@ -33,6 +40,7 @@ class TestPlanPhaseWithStatusCodes:
         mock_agent.config.cli.value = "copilot"
         mock_agent.config.session_id = "test_session"
         agent_manager.get_agent.return_value = mock_agent
+        agent_manager.get_total_token_usage.return_value = TokenUsage()
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -43,6 +51,7 @@ class TestPlanPhaseWithStatusCodes:
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
             user_input="confirm",  # Simulate user confirming the plan
+            template_path=create_template_file(tmp_path),
         )
 
         result = phase.execute()
@@ -70,6 +79,7 @@ class TestPlanPhaseWithStatusCodes:
         mock_agent.config.cli.value = "copilot"
         mock_agent.config.session_id = "test_session"
         agent_manager.get_agent.return_value = mock_agent
+        agent_manager.get_total_token_usage.return_value = TokenUsage()
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -79,6 +89,7 @@ class TestPlanPhaseWithStatusCodes:
             spec_file=str(requirements_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
+            template_path=create_template_file(tmp_path),
         )
 
         result = phase.execute()
@@ -109,6 +120,7 @@ class TestPlanPhaseWithStatusCodes:
         mock_agent.config.cli.value = "copilot"
         mock_agent.config.session_id = "test_session"
         agent_manager.get_agent.return_value = mock_agent
+        agent_manager.get_total_token_usage.return_value = TokenUsage()
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -149,6 +161,7 @@ class TestPlanPhaseWithStatusCodes:
         mock_agent.config.cli.value = "copilot"
         mock_agent.config.session_id = "test_session"
         agent_manager.get_agent.return_value = mock_agent
+        agent_manager.get_total_token_usage.return_value = TokenUsage()
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -159,6 +172,7 @@ class TestPlanPhaseWithStatusCodes:
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
             user_input="confirm",  # Simulate user confirming the plan
+            template_path=create_template_file(tmp_path),
         )
 
         result = phase.execute()
@@ -237,6 +251,7 @@ class TestPlanPhaseWithStatusCodes:
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
             user_input="confirm",  # Simulate user confirming the plan
+            template_path=create_template_file(tmp_path),
         )
 
         with patch('builtins.print'):
