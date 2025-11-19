@@ -13,6 +13,16 @@ from cafe.core.permission import PermissionHandler
 from cafe.core.git import GitOperations
 from cafe.core.types import AgentConfig, AgentCLI, WorkflowMode, PhaseStatus
 from cafe.phases.pr_phase import PRPhase
+from cafe.utils.github import GitHubOps
+
+
+@pytest.fixture
+def mock_github_ops():
+    """Mock GitHubOps"""
+    github_ops = MagicMock(spec=GitHubOps)
+    github_ops.get_pr_for_branch.return_value = None  # Assume no existing PR by default
+    github_ops.create_pr.return_value = "https://github.com/user/repo/pull/123"
+    return github_ops
 
 
 @pytest.fixture
@@ -59,7 +69,7 @@ commit3: Add tests"""
 class TestPRCommandNonInteractiveBasics:
     """測試 PR --no-interactive 基本功能"""
 
-    def test_draft_pr_creation(self, temp_pr_dir, mock_git_ops, tmp_path):
+    def test_draft_pr_creation(self, temp_pr_dir, mock_git_ops, mock_github_ops, tmp_path):
         """測試創建 draft PR"""
         # Arrange
         spec_file = str(temp_pr_dir / "spec" / "spec.md")
@@ -84,6 +94,7 @@ class TestPRCommandNonInteractiveBasics:
                     agent_manager=agent_manager,
                     permission_handler=permission_handler,
                     git_ops=mock_git_ops,
+                    github_ops=mock_github_ops,
                     spec_file=spec_file,
                     workflow_mode=WorkflowMode.LOCAL,
                     issue_name="test-issue",
@@ -111,7 +122,7 @@ class TestPRCommandNonInteractiveBasics:
         finally:
             os.chdir(original_cwd)
 
-    def test_non_draft_pr_creation(self, temp_pr_dir, mock_git_ops, tmp_path):
+    def test_non_draft_pr_creation(self, temp_pr_dir, mock_git_ops, mock_github_ops, tmp_path):
         """測試創建非 draft PR"""
         # Arrange
         spec_file = str(temp_pr_dir / "spec" / "spec.md")
@@ -136,6 +147,7 @@ class TestPRCommandNonInteractiveBasics:
                     agent_manager=agent_manager,
                     permission_handler=permission_handler,
                     git_ops=mock_git_ops,
+                    github_ops=mock_github_ops,
                     spec_file=spec_file,
                     workflow_mode=WorkflowMode.LOCAL,
                     issue_name="test-issue",
@@ -163,7 +175,7 @@ class TestPRCommandNonInteractiveBasics:
 class TestPRCommandCustomTitleAndBody:
     """測試自訂 title 和 body"""
 
-    def test_custom_title_and_body(self, temp_pr_dir, mock_git_ops, tmp_path):
+    def test_custom_title_and_body(self, temp_pr_dir, mock_git_ops, mock_github_ops, tmp_path):
         """測試使用自訂 title 和 body 創建 PR"""
         # Arrange
         spec_file = str(temp_pr_dir / "spec" / "spec.md")
@@ -190,6 +202,7 @@ class TestPRCommandCustomTitleAndBody:
                     agent_manager=agent_manager,
                     permission_handler=permission_handler,
                     git_ops=mock_git_ops,
+                    github_ops=mock_github_ops,
                     spec_file=spec_file,
                     workflow_mode=WorkflowMode.LOCAL,
                     issue_name="test-issue",
@@ -214,7 +227,7 @@ class TestPRCommandCustomTitleAndBody:
         finally:
             os.chdir(original_cwd)
 
-    def test_auto_generate_title_and_body(self, temp_pr_dir, mock_git_ops, tmp_path):
+    def test_auto_generate_title_and_body(self, temp_pr_dir, mock_git_ops, mock_github_ops, tmp_path):
         """測試自動產生 title 和 body"""
         # Arrange
         spec_file = str(temp_pr_dir / "spec" / "spec.md")
@@ -239,6 +252,7 @@ class TestPRCommandCustomTitleAndBody:
                     agent_manager=agent_manager,
                     permission_handler=permission_handler,
                     git_ops=mock_git_ops,
+                    github_ops=mock_github_ops,
                     spec_file=spec_file,
                     workflow_mode=WorkflowMode.LOCAL,
                     issue_name="test-issue",
@@ -270,7 +284,7 @@ class TestPRCommandCustomTitleAndBody:
 class TestPRCommandErrorHandling:
     """測試錯誤處理"""
 
-    def test_missing_spec_file_fails(self, tmp_path, mock_git_ops):
+    def test_missing_spec_file_fails(self, tmp_path, mock_git_ops, mock_github_ops):
         """測試缺少 spec 檔案時失敗"""
         # Arrange
         spec_file = str(tmp_path / ".cafe" / "issues" / "test-issue" / "spec" / "spec.md")
@@ -291,6 +305,7 @@ class TestPRCommandErrorHandling:
                 agent_manager=agent_manager,
                 permission_handler=permission_handler,
                 git_ops=mock_git_ops,
+                github_ops=mock_github_ops,
                 spec_file=spec_file,  # 不存在的檔案
                 workflow_mode=WorkflowMode.LOCAL,
                 issue_name="test-issue",
@@ -306,7 +321,7 @@ class TestPRCommandErrorHandling:
         finally:
             os.chdir(original_cwd)
 
-    def test_gh_pr_create_fails(self, temp_pr_dir, mock_git_ops, tmp_path):
+    def test_gh_pr_create_fails(self, temp_pr_dir, mock_git_ops, mock_github_ops, tmp_path):
         """測試 gh pr create 失敗時返回失敗"""
         # Arrange
         spec_file = str(temp_pr_dir / "spec" / "spec.md")
@@ -331,6 +346,7 @@ class TestPRCommandErrorHandling:
                     agent_manager=agent_manager,
                     permission_handler=permission_handler,
                     git_ops=mock_git_ops,
+                    github_ops=mock_github_ops,
                     spec_file=spec_file,
                     workflow_mode=WorkflowMode.LOCAL,
                     issue_name="test-issue",
