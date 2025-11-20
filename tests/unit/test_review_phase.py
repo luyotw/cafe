@@ -435,7 +435,7 @@ class TestPromptGeneration:
         assert "審查完成後請回傳狀態碼，不要做任何總結或額外說明" in prompt
 
     def test_review_prompt_no_iteration_count(self, tmp_path: Path) -> None:
-        """測試 review prompt 不包含迭代次數"""
+        """測試 review prompt 包含迭代次數"""
         requirements_file = tmp_path / "requirements.md"
         requirements_file.write_text("Requirements")
 
@@ -461,9 +461,8 @@ class TestPromptGeneration:
 
         call_args = agent_manager.execute.call_args[0]
         prompt = call_args[1]
-        # Should not mention iteration numbers
-        assert "第 1 輪" not in prompt
-        assert "第 2 輪" not in prompt
+        # Should mention iteration number (first iteration)
+        assert "第 1 輪" in prompt
 
 
 class TestReviewResultSaving:

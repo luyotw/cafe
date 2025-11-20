@@ -8,8 +8,20 @@ import pytest
 from cafe.agents.manager import AgentManager
 from cafe.core.git import GitOperations
 from cafe.core.permission import PermissionHandler
-from cafe.core.types import PhaseStatus, WorkflowMode, TokenUsage
+from cafe.core.types import PhaseStatus, WorkflowMode, TokenUsage, AgentCLI, AgentConfig
 from cafe.phases.review_phase import ReviewPhase
+
+
+def setup_agent_manager_mock(agent_manager: MagicMock, agent_name: str = "Richard") -> None:
+    """Setup agent_manager mock with get_agent method."""
+    mock_agent_executor = MagicMock()
+    mock_agent_executor.config = AgentConfig(
+        name=agent_name,
+        cli=AgentCLI.CLAUDE,
+        session_id='test_session'
+    )
+    agent_manager.get_agent.return_value = mock_agent_executor
+    agent_manager.get_total_token_usage.return_value = TokenUsage()
 
 
 class TestReviewPhaseWithStatusCodes:
@@ -21,7 +33,9 @@ class TestReviewPhaseWithStatusCodes:
         requirements_file.write_text("Requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
+        setup_agent_manager_mock(agent_manager)
         agent_manager.execute.return_value = ("CAFE_CONFIRMED\nCode looks good!", TokenUsage(), [], None)
+
 
         git_ops = MagicMock(spec=GitOperations)
         git_ops.get_diff.return_value = "diff content"
@@ -40,12 +54,11 @@ class TestReviewPhaseWithStatusCodes:
             workflow_mode=WorkflowMode.LOCAL,
         )
 
-        with patch.object(phase, "_save_review_result"):
-            result = phase.execute()
+        result = phase.execute()
 
         assert result.status == PhaseStatus.COMPLETED
         assert result.data.get("status_code") == "CAFE_CONFIRMED"
-        assert "passed" in result.message.lower()
+        assert "completed" in result.message.lower()
 
     def test_needs_changes_status_code(self, tmp_path: Path) -> None:
         """測試 NEEDS_CHANGES 狀態碼（單輪執行）"""
@@ -53,7 +66,9 @@ class TestReviewPhaseWithStatusCodes:
         requirements_file.write_text("Requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
+        setup_agent_manager_mock(agent_manager)
         agent_manager.execute.return_value = ("CAFE_NEEDS_CHANGES\n需要修正問題。", TokenUsage(), [], None)
+
 
         git_ops = MagicMock(spec=GitOperations)
         git_ops.get_diff.return_value = "diff content"
@@ -72,8 +87,7 @@ class TestReviewPhaseWithStatusCodes:
             workflow_mode=WorkflowMode.LOCAL,
         )
 
-        with patch.object(phase, "_save_review_result"):
-            result = phase.execute()
+        result = phase.execute()
 
         assert result.status == PhaseStatus.COMPLETED
         assert result.data.get("status_code") == "CAFE_NEEDS_CHANGES"
@@ -86,7 +100,9 @@ class TestReviewPhaseWithStatusCodes:
         requirements_file.write_text("Requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
+        setup_agent_manager_mock(agent_manager)
         agent_manager.execute.return_value = ("Review result:\nCAFE_CONFIRMED\nAll checks passed.", TokenUsage(), [], None)
+
 
         git_ops = MagicMock(spec=GitOperations)
         git_ops.get_diff.return_value = "diff content"
@@ -105,8 +121,7 @@ class TestReviewPhaseWithStatusCodes:
             workflow_mode=WorkflowMode.LOCAL,
         )
 
-        with patch.object(phase, "_save_review_result"):
-            result = phase.execute()
+        result = phase.execute()
 
         assert result.status == PhaseStatus.COMPLETED
         assert result.data.get("status_code") == "CAFE_CONFIRMED"
@@ -117,7 +132,9 @@ class TestReviewPhaseWithStatusCodes:
         requirements_file.write_text("Requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
+        setup_agent_manager_mock(agent_manager)
         agent_manager.execute.return_value = ("cafe_confirmed\nLooks good to me!", TokenUsage(), [], None)
+
 
         git_ops = MagicMock(spec=GitOperations)
         git_ops.get_diff.return_value = "diff content"
@@ -136,8 +153,7 @@ class TestReviewPhaseWithStatusCodes:
             workflow_mode=WorkflowMode.LOCAL,
         )
 
-        with patch.object(phase, "_save_review_result"):
-            result = phase.execute()
+        result = phase.execute()
 
         assert result.status == PhaseStatus.COMPLETED
         assert result.data.get("status_code") == "CAFE_CONFIRMED"
