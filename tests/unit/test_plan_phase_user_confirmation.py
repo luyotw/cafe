@@ -62,6 +62,7 @@ class TestPlanPhaseUserConfirmation:
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=True,
+            template_path=create_template_file(tmp_path),
         )
 
         # Mock user choosing 'c' (confirm)
@@ -106,6 +107,7 @@ class TestPlanPhaseUserConfirmation:
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=True,
+            template_path=create_template_file(tmp_path),
         )
 
         # Mock user choosing 'r' (reject)
@@ -133,8 +135,8 @@ class TestPlanPhaseUserConfirmation:
         agent_manager = MagicMock(spec=AgentManager)
         # First call: READY_FOR_REVIEW, second call after modification: READY_FOR_REVIEW again
         agent_manager.execute.side_effect = [
-            ("CAFE_READY_FOR_REVIEW\n計畫已完成", TokenUsage()),
-            ("CAFE_READY_FOR_REVIEW\n修改後的計畫", TokenUsage()),
+            ("CAFE_READY_FOR_REVIEW\n計畫已完成", TokenUsage(), [], None),
+            ("CAFE_READY_FOR_REVIEW\n修改後的計畫", TokenUsage(), [], None),
         ]
         agent_manager.get_total_token_usage.return_value = TokenUsage()
         agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
@@ -153,6 +155,7 @@ class TestPlanPhaseUserConfirmation:
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=True,
+            template_path=create_template_file(tmp_path),
         )
 
         # Mock user choosing 'm' (modify) first, then 'c' (confirm)
@@ -224,8 +227,8 @@ class TestPlanPhaseUserConfirmation:
 
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.side_effect = [
-            ("CAFE_NEED_CLARIFICATION\n需要更多資訊", TokenUsage()),
-            ("CAFE_READY_FOR_REVIEW\n計畫已完成", TokenUsage()),
+            ("CAFE_NEED_CLARIFICATION\n需要更多資訊", TokenUsage(), [], None),
+            ("CAFE_READY_FOR_REVIEW\n計畫已完成", TokenUsage(), [], None),
         ]
         agent_manager.get_total_token_usage.return_value = TokenUsage()
         agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
@@ -244,6 +247,7 @@ class TestPlanPhaseUserConfirmation:
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=True,
+            template_path=create_template_file(tmp_path),
         )
 
         # Mock user input for clarification and confirmation
