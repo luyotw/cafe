@@ -149,25 +149,23 @@ class PlanPhase(Phase):
 
                 # First round: plan.md doesn't exist
                 if not plan_exists:
-                    # Need to check/prompt for dev guide
+                    # Need to get dev guide
+                    dev_guide = ""
                     if self.interactive:
-                        # Prompt user to provide development guide
-                        self._prompt_for_dev_guide()
+                        # Interactive: prompt user for development guide
+                        dev_guide = self._get_dev_guide_from_user()
                     else:
-                        return PhaseResult(
-                            status=PhaseStatus.FAILED,
-                            message="First round requires development guide in interactive mode",
-                        )
-                # Subsequent rounds: plan.md exists but may lack dev guide section
-                elif not self._has_dev_guide_section(plan_file_path):
-                    if self.interactive:
-                        # Prompt user to provide development guide
-                        self._prompt_for_dev_guide()
-                    else:
-                        return PhaseResult(
-                            status=PhaseStatus.FAILED,
-                            message="plan.md 中缺少「開發指南」區塊",
-                        )
+                        # Non-interactive: require user_input as dev guide
+                        if not self.user_input:
+                            return PhaseResult(
+                                status=PhaseStatus.FAILED,
+                                message="First round requires development guide. Use --user-input to provide it.",
+                            )
+                        dev_guide = self.user_input
+
+                    # Save development guide as initial plan.md
+                    plan_file_path.parent.mkdir(parents=True, exist_ok=True)
+                    plan_file_path.write_text(f"## 開發指南\n\n{dev_guide}\n")
 
             # Implementation plan loop
             while True:
@@ -449,8 +447,12 @@ class PlanPhase(Phase):
 
         return False
 
-    def _prompt_for_dev_guide(self) -> None:
-        """Prompt user to write development guide when it doesn't exist."""
+    def _get_dev_guide_from_user(self) -> str:
+        """Prompt user to provide development guide.
+
+        Returns:
+            Development guide content from user input
+        """
         print("\n" + "="*70)
         print("請提供開發指南，說明實作方向與技術背景資訊：")
         print("="*70)
@@ -473,15 +475,11 @@ class PlanPhase(Phase):
         if not dev_guide:
             raise ValueError("未提供開發指南，無法繼續")
 
-        # Save development guide as initial plan.md
-        plan_dir = self.history_dir.parent
-        plan_file_path = plan_dir / "plan.md"
-        plan_file_path.parent.mkdir(parents=True, exist_ok=True)
-        plan_file_path.write_text(f"## 開發指南\n\n{dev_guide}\n")
-
         print()
         print("✅ 開發指南已記錄，開始實作規劃...")
         print()
+
+        return dev_guide
 
     def _prepare_user_input_for_iteration(self) -> "PhaseResult | str":
         """準備當前迭代的 user input。
