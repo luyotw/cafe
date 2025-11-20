@@ -74,6 +74,9 @@ class TestPRCommandNonInteractiveBasics:
         # Arrange
         spec_file = str(temp_pr_dir / "spec" / "spec.md")
 
+        # Override mock to return specific PR URL
+        mock_github_ops.create_pr.return_value = "https://github.com/user/repo/pull/1"
+
         original_cwd = os.getcwd()
         try:
             os.chdir(tmp_path)
@@ -86,11 +89,7 @@ class TestPRCommandNonInteractiveBasics:
             permission_handler = PermissionHandler()
 
             # Act
-            with patch("subprocess.run") as mock_run:
-                mock_run.return_value.stdout = "https://github.com/user/repo/pull/1"
-                mock_run.return_value.returncode = 0
-
-                phase = PRPhase(
+            phase = PRPhase(
                     agent_manager=agent_manager,
                     permission_handler=permission_handler,
                     git_ops=mock_git_ops,
@@ -100,9 +99,11 @@ class TestPRCommandNonInteractiveBasics:
                     issue_name="test-issue",
                     draft=True,
                     interactive=False,
+                    custom_title="Test PR Title",
+                    custom_body="Test PR Body",
                 )
 
-                result = phase.execute()
+            result = phase.execute()
 
             # Assert
             assert result.status == PhaseStatus.COMPLETED
@@ -110,15 +111,12 @@ class TestPRCommandNonInteractiveBasics:
             assert result.data["branch"] == "test-issue"
 
             # 驗證 git push 被呼叫
-            mock_git_ops.push.assert_called_once_with("test-issue", set_upstream=True)
+            mock_git_ops.push.assert_called_once_with("test-issue", set_upstream=True, force=False)
 
-            # 驗證 gh pr create 被呼叫，並包含 --draft flag
-            mock_run.assert_called_once()
-            cmd = mock_run.call_args[0][0]
-            assert "gh" in cmd
-            assert "pr" in cmd
-            assert "create" in cmd
-            assert "--draft" in cmd
+            # 驗證 github_ops.create_pr 被呼叫，並包含 draft flag
+            mock_github_ops.create_pr.assert_called_once()
+            call_kwargs = mock_github_ops.create_pr.call_args[1]
+            assert call_kwargs["draft"] == True
         finally:
             os.chdir(original_cwd)
 
@@ -126,6 +124,9 @@ class TestPRCommandNonInteractiveBasics:
         """測試創建非 draft PR"""
         # Arrange
         spec_file = str(temp_pr_dir / "spec" / "spec.md")
+
+        # Override mock to return specific PR URL
+        mock_github_ops.create_pr.return_value = "https://github.com/user/repo/pull/2"
 
         original_cwd = os.getcwd()
         try:
@@ -139,11 +140,7 @@ class TestPRCommandNonInteractiveBasics:
             permission_handler = PermissionHandler()
 
             # Act
-            with patch("subprocess.run") as mock_run:
-                mock_run.return_value.stdout = "https://github.com/user/repo/pull/2"
-                mock_run.return_value.returncode = 0
-
-                phase = PRPhase(
+            phase = PRPhase(
                     agent_manager=agent_manager,
                     permission_handler=permission_handler,
                     git_ops=mock_git_ops,
@@ -153,21 +150,20 @@ class TestPRCommandNonInteractiveBasics:
                     issue_name="test-issue",
                     draft=False,
                     interactive=False,
+                    custom_title="Test PR Title",
+                    custom_body="Test PR Body",
                 )
 
-                result = phase.execute()
+            result = phase.execute()
 
             # Assert
             assert result.status == PhaseStatus.COMPLETED
             assert result.data["pr_number"] == "2"
 
-            # 驗證 gh pr create 被呼叫，但不包含 --draft flag
-            mock_run.assert_called_once()
-            cmd = mock_run.call_args[0][0]
-            assert "gh" in cmd
-            assert "pr" in cmd
-            assert "create" in cmd
-            assert "--draft" not in cmd
+            # 驗證 github_ops.create_pr 被呼叫，不包含 draft flag
+            mock_github_ops.create_pr.assert_called_once()
+            call_kwargs = mock_github_ops.create_pr.call_args[1]
+            assert call_kwargs["draft"] == False
         finally:
             os.chdir(original_cwd)
 
@@ -182,6 +178,9 @@ class TestPRCommandCustomTitleAndBody:
         custom_title = "Custom PR Title"
         custom_body = "Custom PR body\nWith multiple lines"
 
+        # Override mock to return specific PR URL
+        mock_github_ops.create_pr.return_value = "https://github.com/user/repo/pull/3"
+
         original_cwd = os.getcwd()
         try:
             os.chdir(tmp_path)
@@ -194,11 +193,7 @@ class TestPRCommandCustomTitleAndBody:
             permission_handler = PermissionHandler()
 
             # Act
-            with patch("subprocess.run") as mock_run:
-                mock_run.return_value.stdout = "https://github.com/user/repo/pull/3"
-                mock_run.return_value.returncode = 0
-
-                phase = PRPhase(
+            phase = PRPhase(
                     agent_manager=agent_manager,
                     permission_handler=permission_handler,
                     git_ops=mock_git_ops,
@@ -212,25 +207,32 @@ class TestPRCommandCustomTitleAndBody:
                     interactive=False,
                 )
 
-                result = phase.execute()
+            result = phase.execute()
 
             # Assert
             assert result.status == PhaseStatus.COMPLETED
             assert result.data["pr_number"] == "3"
 
-            # 驗證 gh pr create 使用自訂 title 和 body
-            mock_run.assert_called_once()
-            cmd = mock_run.call_args[0][0]
-            assert custom_title in cmd
-            body_index = cmd.index("--body") + 1
-            assert custom_body == cmd[body_index]
+            # 驗證 github_ops.create_pr 使用自訂 title 和 body
+            mock_github_ops.create_pr.assert_called_once()
+            call_kwargs = mock_github_ops.create_pr.call_args[1]
+            assert call_kwargs["title"] == custom_title
+            assert call_kwargs["body"] == custom_body
+            assert call_kwargs["draft"] == True
         finally:
             os.chdir(original_cwd)
 
-    def test_auto_generate_title_and_body(self, temp_pr_dir, mock_git_ops, mock_github_ops, tmp_path):
+    def test_auto_generate_title_and_body(self, temp_pr_dir, mock_git_ops, mock_github_ops, tmp_path, monkeypatch):
         """測試自動產生 title 和 body"""
         # Arrange
         spec_file = str(temp_pr_dir / "spec" / "spec.md")
+
+        # Enable mock agent mode
+        monkeypatch.setenv("CAFE_MOCK_AGENTS", "true")
+        monkeypatch.setenv("CAFE_MOCK_RESPONSE", "CAFE_CONFIRMED\n\nPR content generated")
+
+        # Override mock to return specific PR URL
+        mock_github_ops.create_pr.return_value = "https://github.com/user/repo/pull/4"
 
         original_cwd = os.getcwd()
         try:
@@ -243,40 +245,38 @@ class TestPRCommandCustomTitleAndBody:
 
             permission_handler = PermissionHandler()
 
+            # Create title.txt and body.md files (mock agent won't write them)
+            pr_dir = temp_pr_dir / "pr"
+            pr_dir.mkdir(parents=True, exist_ok=True)
+            (pr_dir / "title.txt").write_text("測試功能需求")
+            (pr_dir / "body.md").write_text("## Summary\n\nTest summary\n\n## Changes\n\n- commit1\n- commit2")
+
             # Act
-            with patch("subprocess.run") as mock_run:
-                mock_run.return_value.stdout = "https://github.com/user/repo/pull/4"
-                mock_run.return_value.returncode = 0
+            phase = PRPhase(
+                agent_manager=agent_manager,
+                permission_handler=permission_handler,
+                git_ops=mock_git_ops,
+                github_ops=mock_github_ops,
+                spec_file=spec_file,
+                workflow_mode=WorkflowMode.LOCAL,
+                issue_name="test-issue",
+                draft=True,
+                custom_title=None,  # Auto-generate
+                custom_body=None,   # Auto-generate
+                interactive=False,
+            )
 
-                phase = PRPhase(
-                    agent_manager=agent_manager,
-                    permission_handler=permission_handler,
-                    git_ops=mock_git_ops,
-                    github_ops=mock_github_ops,
-                    spec_file=spec_file,
-                    workflow_mode=WorkflowMode.LOCAL,
-                    issue_name="test-issue",
-                    draft=True,
-                    custom_title=None,  # Auto-generate
-                    custom_body=None,   # Auto-generate
-                    interactive=False,
-                )
-
-                result = phase.execute()
+            result = phase.execute()
 
             # Assert
             assert result.status == PhaseStatus.COMPLETED
             assert result.data["pr_number"] == "4"
 
-            # 驗證 title 從 spec.md 提取
-            mock_run.assert_called_once()
-            cmd = mock_run.call_args[0][0]
-            assert "測試功能需求" in cmd
-
-            # 驗證 body 包含 commits
-            body_index = cmd.index("--body") + 1
-            body_value = cmd[body_index]
-            assert "commit1" in body_value
+            # 驗證 github_ops.create_pr 被調用
+            mock_github_ops.create_pr.assert_called_once()
+            call_kwargs = mock_github_ops.create_pr.call_args[1]
+            assert "測試功能需求" in call_kwargs["title"]
+            assert "commit1" in call_kwargs["body"]
         finally:
             os.chdir(original_cwd)
 
