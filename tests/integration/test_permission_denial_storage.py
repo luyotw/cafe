@@ -66,7 +66,8 @@ class TestSpecPhasePermissionDenialStorage:
         agent_manager.execute.return_value = (
             "CAFE_NEED_CLARIFICATION\n我需要讀取 /etc/passwd 來分析需求。",
             TokenUsage(),
-            permission_denials
+            permission_denials,
+            None  # cli_command_args
         )
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -125,7 +126,8 @@ class TestSpecPhasePermissionDenialStorage:
         agent_manager.execute.return_value = (
             "CAFE_CONFIRMED\n需求已經很清楚了。",
             TokenUsage(),
-            []  # No permission denials
+            [],  # No permission denials
+            None  # cli_command_args
         )
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -189,7 +191,8 @@ class TestPlanPhasePermissionDenialStorage:
         agent_manager.execute.return_value = (
             "CAFE_NEED_CLARIFICATION\n我需要執行 git status 來了解專案狀態。",
             TokenUsage(),
-            permission_denials
+            permission_denials,
+            None  # cli_command_args
         )
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -205,6 +208,7 @@ class TestPlanPhasePermissionDenialStorage:
         )
 
         with patch('builtins.print'), \
+             patch('builtins.input', return_value="1"), \
              patch.object(phase.display, 'get_multiline_input', side_effect=["需求細節", "更多資訊"]):
             result = phase.execute()
 
@@ -256,7 +260,8 @@ class TestDevelopPhasePermissionDenialStorage:
         agent_manager.execute.return_value = (
             "CAFE_NEED_PERMISSION\n\n我需要請求以下權限：\n- Edit: /home/user/app/config.php\n- Write: /home/user/app/new_feature.php",
             TokenUsage(),
-            permission_denials
+            permission_denials,
+            None  # cli_command_args
         )
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -325,7 +330,8 @@ class TestDevelopPhasePermissionDenialStorage:
         agent_manager.execute.return_value = (
             "CAFE_CONFIRMED\n\n開發工作已完成。所有功能都已實作並測試通過。",
             TokenUsage(),
-            []  # No permission denials
+            [],  # No permission denials
+            None  # cli_command_args
         )
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -394,7 +400,8 @@ class TestMultiplePermissionDenials:
         agent_manager.execute.return_value = (
             "CAFE_NEED_PERMISSION\n需要多個權限",
             TokenUsage(),
-            permission_denials
+            permission_denials,
+            None  # cli_command_args
         )
 
         permission_handler = MagicMock(spec=PermissionHandler)
