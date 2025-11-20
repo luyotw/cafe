@@ -396,10 +396,17 @@ class TestNonInteractiveModeIteration1:
         spec_file.parent.mkdir(parents=True, exist_ok=True)
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("CAFE_NEED_CLARIFICATION\n需要澄清需求。\n\n## 待釐清的問題\n1. 問題一", TokenUsage(), [], None)
+        # First call returns NEED_CLARIFICATION, second call returns CONFIRMED
+        agent_manager.execute.side_effect = [
+            ("CAFE_NEED_CLARIFICATION\n需要澄清需求。\n\n## 待釐清的問題\n1. 問題一", TokenUsage(), [], None),
+            ("CAFE_CONFIRMED\n需求已清楚", TokenUsage(), [], None),
+        ]
         setup_agent_manager_mocks(agent_manager)
 
         permission_handler = MagicMock(spec=PermissionHandler)
+
+        # Provide user story via user_input for non-interactive mode
+        user_story = "身為開發者，我想要有一個指令可以顯示 IP"
 
         phase = SpecPhase(
             agent_manager=agent_manager,
@@ -407,20 +414,18 @@ class TestNonInteractiveModeIteration1:
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
+            user_input=user_story,  # Use user_input parameter in non-interactive mode
         )
 
-        # Mock stdin with user story
-        user_story = "身為開發者，我想要有一個指令可以顯示 IP"
-        with patch('sys.stdin', StringIO(user_story + "\nEND\n")):
-            result = phase.execute()
+        result = phase.execute()
 
-        # Should return IN_PROGRESS after first iteration
-        assert result.status == PhaseStatus.IN_PROGRESS
-        assert result.data["status_code"] == PhaseStatusCode.NEED_CLARIFICATION.value
-        assert result.data["iterations"] == 1
+        # Should complete successfully with 2 iterations (user_input consumed in iteration 2)
+        assert result.status == PhaseStatus.COMPLETED
+        assert result.data["status_code"] == PhaseStatusCode.CONFIRMED.value
+        assert result.data["iterations"] == 2
 
-        # Agent should be called once
-        agent_manager.execute.assert_called_once()
+        # Agent should be called twice (once for initial, once after clarification)
+        assert agent_manager.execute.call_count == 2
 
     def test_first_call_creates_spec_file_from_stdin(self, tmp_path: Path) -> None:
         """第1次呼叫應該從 stdin 讀取 user story 並建立檔案"""
@@ -534,6 +539,8 @@ class TestNonInteractiveModeErrorHandling:
         spec_file.write_text("Test")
 
         agent_manager = MagicMock(spec=AgentManager)
+        # Agent returns NEED_CLARIFICATION which should cause failure without user_input
+        agent_manager.execute.return_value = ("CAFE_NEED_CLARIFICATION\n問題", TokenUsage(), [], None)
         setup_agent_manager_mocks(agent_manager)
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -547,12 +554,12 @@ class TestNonInteractiveModeErrorHandling:
         )
 
         # Empty stdin on iteration 2 (non-interactive, so stdin not used)
-        # Without user_input, should return IN_PROGRESS
+        # Without user_input in non-interactive mode, should FAIL
         with patch('sys.stdin', StringIO("\n")):
             result = phase.execute()
 
-        assert result.status == PhaseStatus.IN_PROGRESS
-        assert "waiting for user clarification" in result.message
+        assert result.status == PhaseStatus.FAILED
+        assert "non-interactive mode without user input" in result.message
 
 
 class TestInteractiveModeStillWorks:
