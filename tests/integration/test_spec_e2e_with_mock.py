@@ -1,40 +1,69 @@
 """E2E tests for 'cafe spec' command with mock agents.
 
-使用 subprocess.run() 測試實際 CLI 命令執行，但用 CAFE_MOCK_AGENTS=true 避免真實 LLM 呼叫。
+使用 CliRunner 測試 CLI 命令執行，用 CAFE_MOCK_AGENTS=true 避免真實 LLM 呼叫。
 """
 
-import subprocess
-import json
 import os
 from pathlib import Path
 from unittest.mock import patch
+from typing import Optional, List
+from dataclasses import dataclass
+
 import pytest
+from typer.testing import CliRunner
+
+from cafe.ui.cli import app
 
 
-def run_cafe_spec(tmp_path: Path, issue_name: str, mock_response: str, user_input: str = None, extra_args: list = None):
-    """Helper function to run cafe spec command with mock"""
-    # Use installed cafe command or fall back to local script
-    cafe_cmd = "cafe" if subprocess.run(["which", "cafe"], capture_output=True).returncode == 0 else "./cafe"
-    args = [cafe_cmd, "spec", issue_name, "--no-interactive"]
-    
+runner = CliRunner()
+
+
+@dataclass
+class MockResult:
+    """模擬 subprocess.run 的結果格式"""
+    returncode: int
+    stdout: str
+    stderr: str
+
+
+def run_cafe_spec(
+    tmp_path: Path,
+    issue_name: str,
+    mock_response: str,
+    user_input: Optional[str] = None,
+    extra_args: Optional[List[str]] = None
+) -> MockResult:
+    """Helper function to run cafe spec command with mock using CliRunner"""
+    args = ["spec", issue_name, "--no-interactive"]
+
     # Add user input as CLI argument
     if user_input:
         args.extend(["--user-input", user_input])
-    
+
     if extra_args:
         args.extend(extra_args)
-    
-    env = os.environ.copy()
-    env["CAFE_MOCK_AGENTS"] = "true"
+
+    # Set environment variables for mock
+    env_vars = {"CAFE_MOCK_AGENTS": "true"}
     if mock_response:
-        env["CAFE_MOCK_RESPONSE"] = mock_response
-    
-    return subprocess.run(
-        args,
-        cwd=str(tmp_path),
-        capture_output=True,
-        text=True,
-        env=env,
+        env_vars["CAFE_MOCK_RESPONSE"] = mock_response
+
+    # Change to tmp_path and run
+    original_cwd = os.getcwd()
+    try:
+        os.chdir(tmp_path)
+        with patch.dict(os.environ, env_vars):
+            result = runner.invoke(app, args, catch_exceptions=False)
+    except Exception as e:
+        # Return as failed result
+        return MockResult(returncode=1, stdout="", stderr=str(e))
+    finally:
+        os.chdir(original_cwd)
+
+    return MockResult(
+        returncode=result.exit_code,
+        stdout=result.stdout or "",
+        stderr=""  # CliRunner combines stdout/stderr
     )
 
 
@@ -144,26 +173,26 @@ class TestSpecE2EMockContentValidation:
     def test_spec_content_excludes_status_code(self, tmp_path):
         """測試 spec.md 不包含狀態碼
 
-        情境：Agent 返回 CAFE_CONFIRMED 狀態碼和需求內容
-        指令：cafe spec test-issue --no-interactive --user-input "我想要一個登入功能"
+        情境：Agent 返回 CAFE_READY_FOR_REVIEW 狀態碼和需求內容，用戶確認
+        指令：cafe spec test-issue --no-interactive --user-input "confirm"
         預期：成功，spec.md 只包含需求內容，不包含狀態碼字串
         """
         issue_name = "test-issue"
-        user_input = "我想要一個登入功能"
-        
+        user_input = "confirm"  # Provide confirmation for non-interactive mode
+
         result = run_cafe_spec(
             tmp_path, issue_name,
-            "CAFE_CONFIRMED\n\n# 登入功能需求規格\n\n這是測試需求。",
+            "CAFE_READY_FOR_REVIEW\n\n# 登入功能需求規格\n\n這是測試需求。",
             user_input
         )
-        
+
         assert result.returncode == 0
-        
+
         spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
         assert spec_file.exists()
-        
+
         content = spec_file.read_text()
-        assert "CAFE_CONFIRMED" not in content
+        assert "CAFE_READY_FOR_REVIEW" not in content
         assert "登入功能需求規格" in content
         assert "測試需求" in content
 
@@ -171,20 +200,20 @@ class TestSpecE2EMockContentValidation:
         """測試 spec.md 在正確路徑創建
 
         情境：成功完成 spec phase
-        指令：cafe spec test-issue --no-interactive --user-input "我想要一個功能"
+        指令：cafe spec test-issue --no-interactive --user-input "confirm"
         預期：成功，spec.md 創建在 .cafe/issues/test-issue/spec/ 目錄下
         """
         issue_name = "test-issue"
-        user_input = "我想要一個功能"
-        
+        user_input = "confirm"  # Provide confirmation for non-interactive mode
+
         result = run_cafe_spec(
             tmp_path, issue_name,
-            "CAFE_CONFIRMED\n\n# 測試需求",
+            "CAFE_READY_FOR_REVIEW\n\n# 測試需求",
             user_input
         )
-        
+
         assert result.returncode == 0
-        
+
         spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
         assert spec_file.exists()
         assert spec_file.is_file()
@@ -193,23 +222,23 @@ class TestSpecE2EMockContentValidation:
         """測試 spec.md 有正確的 Markdown 結構
 
         情境：Agent 返回結構化的 Markdown 內容
-        指令：cafe spec test-issue --no-interactive --user-input "我想要一個功能"
+        指令：cafe spec test-issue --no-interactive --user-input "confirm"
         預期：成功，spec.md 包含有效的 Markdown 標題結構 (# 和 ##)
         """
         issue_name = "test-issue"
-        user_input = "我想要一個功能"
-        
+        user_input = "confirm"  # Provide confirmation for non-interactive mode
+
         result = run_cafe_spec(
             tmp_path, issue_name,
-            "CAFE_CONFIRMED\n\n# 功能需求\n\n## 目標\n內容",
+            "CAFE_READY_FOR_REVIEW\n\n# 功能需求\n\n## 目標\n內容",
             user_input
         )
-        
+
         assert result.returncode == 0
-        
+
         spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
         content = spec_file.read_text()
-        
+
         assert content.startswith("#")
         assert "## 目標" in content
         assert isinstance(content, str)
@@ -293,15 +322,15 @@ class TestSpecWithIssueId:
     def test_spec_without_issue_id_works_normally(self, tmp_path):
         """測試不使用 --issue-id 參數時，原有流程不受影響
 
-        情境：使用者執行 cafe spec test-issue --no-interactive --user-input "..."
+        情境：使用者執行 cafe spec test-issue --no-interactive --user-input "confirm"
         預期：系統不呼叫 GitHub API，正常完成 spec phase
         """
         issue_name = "test-issue"
-        user_input = "I want a search feature"
+        user_input = "confirm"  # Provide confirmation for non-interactive mode
 
         result = run_cafe_spec(
             tmp_path, issue_name,
-            "CAFE_CONFIRMED\n\n# Search Feature",
+            "CAFE_READY_FOR_REVIEW\n\n# Search Feature",
             user_input
         )
 

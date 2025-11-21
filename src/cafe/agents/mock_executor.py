@@ -24,14 +24,14 @@ class MockAgentExecutor:
     def __init__(
         self,
         config: AgentConfig,
-        response: str = "CAFE_CONFIRMED\n\n# Mock Response\n\nThis is a mock response.",
+        response: str = "CAFE_READY_FOR_REVIEW\n\n# Mock Response\n\nThis is a mock response.",
         token_usage: Optional[TokenUsage] = None,
     ):
         """Initialize mock executor.
-        
+
         Args:
             config: Agent configuration
-            response: Predefined response (default: CAFE_CONFIRMED with mock content)
+            response: Predefined response (default: CAFE_READY_FOR_REVIEW with mock content)
             token_usage: Predefined token usage (default: empty)
         """
         self.config = config

@@ -68,19 +68,19 @@ class TestAgentManagerMockMode:
         assert isinstance(manager.agents["TestAgent"], MockAgentExecutor)
 
     def test_mock_executor_uses_default_response(self, monkeypatch):
-        """測試 mock executor 使用預設回應 CONFIRMED"""
+        """測試 mock executor 使用預設回應 READY_FOR_REVIEW"""
         # Arrange
         monkeypatch.setenv("CAFE_MOCK_AGENTS", "true")
         manager = AgentManager()
         config = AgentConfig(name="TestAgent", cli=AgentCLI.CLAUDE)
         manager.register_agent(config)
-        
+
         # Act
         executor = manager.get_agent("TestAgent")
         agent_response = executor.execute("test prompt")
 
         # Assert
-        assert "CAFE_CONFIRMED" in agent_response.response
+        assert "CAFE_READY_FOR_REVIEW" in agent_response.response
 
     def test_mock_executor_uses_custom_response_from_env(self, monkeypatch):
         """測試 mock executor 可以從環境變數自訂回應"""

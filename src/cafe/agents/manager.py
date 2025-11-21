@@ -44,8 +44,8 @@ class AgentManager:
         if self._use_mock:
             from cafe.agents.mock_executor import MockAgentExecutor
             
-            # Get mock response from env var (default: CAFE_CONFIRMED with empty spec)
-            mock_response = os.getenv("CAFE_MOCK_RESPONSE", "CAFE_CONFIRMED\n\n# Mock Spec\n\nThis is a mock specification.")
+            # Get mock response from env var (default: CAFE_READY_FOR_REVIEW with mock spec)
+            mock_response = os.getenv("CAFE_MOCK_RESPONSE", "CAFE_READY_FOR_REVIEW\n\n# Mock Spec\n\nThis is a mock specification.")
             self.agents[config.name] = MockAgentExecutor(
                 config=config,
                 response=mock_response

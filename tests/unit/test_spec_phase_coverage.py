@@ -355,7 +355,7 @@ class TestSpecPhaseGetMethods:
         )
 
         prompt = phase._get_status_code_prompt()
-        assert "CAFE_CONFIRMED" in prompt or "CONFIRMED" in prompt
+        assert "CAFE_READY_FOR_REVIEW" in prompt or "READY_FOR_REVIEW" in prompt
 
     def test_get_rigor_guidelines(self, tmp_path: Path) -> None:
         """測試 _get_rigor_guidelines 對不同 rigor levels"""

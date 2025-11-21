@@ -43,7 +43,7 @@ class TestSpecPhaseIterationHistoryMetadata:
 
         agent_manager = MagicMock(spec=AgentManager)
         setup_agent_manager_mock_for_spec(agent_manager, cli="copilot", session_id="test-session-123")
-        agent_manager.execute.return_value = ("CAFE_CONFIRMED\n需求已清楚", TokenUsage(), [], None)
+        agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n需求已清楚", TokenUsage(), [], None)
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -55,6 +55,7 @@ class TestSpecPhaseIterationHistoryMetadata:
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
             rigor=SpecRigor.MEDIUM,
+            user_input="confirm",  # Provide confirmation for non-interactive mode
         )
 
         with patch('builtins.print'):
@@ -86,7 +87,7 @@ class TestSpecPhaseIterationHistoryMetadata:
         assert len(history_data["prompt"]) > 0, "Prompt should not be empty"
 
         # Should include status code
-        assert history_data["status_code"] == "CAFE_CONFIRMED", "Should record status"
+        assert history_data["status_code"] == "CAFE_READY_FOR_REVIEW", "Should record status"
 
     def test_multiple_iterations_preserve_metadata(self, tmp_path: Path) -> None:
         """測試多次迭代時每次都記錄完整 metadata"""
@@ -99,7 +100,7 @@ class TestSpecPhaseIterationHistoryMetadata:
         setup_agent_manager_mock_for_spec(agent_manager, cli="claude", session_id="session-456")
         agent_manager.execute.side_effect = [
             ("CAFE_NEED_CLARIFICATION\n請補充資訊", TokenUsage(), [], None),
-            ("CAFE_CONFIRMED\n需求已清楚", TokenUsage(), [], None),
+            ("CAFE_READY_FOR_REVIEW\n需求已清楚", TokenUsage(), [], None),
         ]
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 
@@ -115,6 +116,7 @@ class TestSpecPhaseIterationHistoryMetadata:
         )
 
         with patch('builtins.print'), \
+             patch('builtins.input', return_value='c'), \
              patch.object(phase.display, 'get_multiline_input', return_value="補充資訊"):
             result = phase.execute()
 
@@ -140,4 +142,4 @@ class TestSpecPhaseIterationHistoryMetadata:
         assert history_2["session_id"] == "session-456"
         assert "read" in history_2["allowed_tools"]
         assert any("write" in tool for tool in history_2["allowed_tools"])
-        assert history_2["status_code"] == "CAFE_CONFIRMED"
+        assert history_2["status_code"] == "CAFE_READY_FOR_REVIEW"

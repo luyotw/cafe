@@ -396,16 +396,17 @@ class TestNonInteractiveModeIteration1:
         spec_file.parent.mkdir(parents=True, exist_ok=True)
 
         agent_manager = MagicMock(spec=AgentManager)
-        # First call returns NEED_CLARIFICATION, second call returns CONFIRMED
+        # First call returns NEED_CLARIFICATION, second call returns READY_FOR_REVIEW
         agent_manager.execute.side_effect = [
             ("CAFE_NEED_CLARIFICATION\n需要澄清需求。\n\n## 待釐清的問題\n1. 問題一", TokenUsage(), [], None),
-            ("CAFE_CONFIRMED\n需求已清楚", TokenUsage(), [], None),
+            ("CAFE_READY_FOR_REVIEW\n需求已清楚", TokenUsage(), [], None),
         ]
         setup_agent_manager_mocks(agent_manager)
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
         # Provide user story via user_input for non-interactive mode
+        # Note: For READY_FOR_REVIEW, we need to provide confirmation too
         user_story = "身為開發者，我想要有一個指令可以顯示 IP"
 
         phase = SpecPhase(
@@ -420,8 +421,10 @@ class TestNonInteractiveModeIteration1:
         result = phase.execute()
 
         # Should complete successfully with 2 iterations (user_input consumed in iteration 2)
+        # Note: Since READY_FOR_REVIEW needs confirmation but user_input was consumed,
+        # the phase will complete with READY_FOR_REVIEW status
         assert result.status == PhaseStatus.COMPLETED
-        assert result.data["status_code"] == PhaseStatusCode.CONFIRMED.value
+        assert result.data["status_code"] == PhaseStatusCode.READY_FOR_REVIEW.value
         assert result.data["iterations"] == 2
 
         # Agent should be called twice (once for initial, once after clarification)
@@ -456,12 +459,12 @@ class TestNonInteractiveModeIteration1:
         assert user_story in content
 
     def test_first_call_pm_confirms_immediately(self, tmp_path: Path) -> None:
-        """第1次呼叫：PM 直接確認需求（不提問），回傳 COMPLETED"""
+        """第1次呼叫：PM 直接 READY_FOR_REVIEW（不提問），回傳 COMPLETED"""
         spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("CAFE_CONFIRMED\n需求已清楚。", TokenUsage(), [], None)
+        agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n需求已清楚。", TokenUsage(), [], None)
         setup_agent_manager_mocks(agent_manager)
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -472,6 +475,7 @@ class TestNonInteractiveModeIteration1:
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
+            user_input="confirm",  # Provide confirmation for non-interactive mode
         )
 
         user_story = "簡單的需求"
@@ -479,9 +483,9 @@ class TestNonInteractiveModeIteration1:
              patch('builtins.print'):  # Suppress token usage output
             result = phase.execute()
 
-        # Should complete immediately
+        # Should complete immediately (READY_FOR_REVIEW + confirm = COMPLETED)
         assert result.status == PhaseStatus.COMPLETED
-        assert result.data["status_code"] == PhaseStatusCode.CONFIRMED.value
+        assert result.data["status_code"] == PhaseStatusCode.READY_FOR_REVIEW.value
         assert result.data["iterations"] == 1
 
 
@@ -574,7 +578,7 @@ class TestInteractiveModeStillWorks:
         spec_file.write_text("需求已清楚")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("CAFE_CONFIRMED\n需求確認", TokenUsage(), [], None)
+        agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n需求確認", TokenUsage(), [], None)
         setup_agent_manager_mocks(agent_manager)
         agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
 
@@ -589,12 +593,15 @@ class TestInteractiveModeStillWorks:
             rigor=SpecRigor.MEDIUM,  # Explicitly set rigor to avoid prompting
         )
 
-        # Mock display.get_multiline_input instead of builtins.input
-        with patch('builtins.print'), patch.object(phase.display, 'get_multiline_input', return_value=''):
+        # Mock user choosing 'c' (confirm)
+        with patch('builtins.print'), \
+             patch('builtins.input', return_value='c'), \
+             patch.object(phase.display, 'get_multiline_input', return_value=''):
             result = phase.execute()
 
         assert result.status == PhaseStatus.COMPLETED
-        assert result.data["iterations"] == 1
+        # With READY_FOR_REVIEW flow: 1. agent responds, 2. user confirms
+        assert result.data["iterations"] == 2
 
 
 class TestSkipConfirmedSpec:
@@ -760,8 +767,8 @@ class TestInterruptedIterationResume:
 
         # Setup mocks
         agent_manager = MagicMock(spec=AgentManager)
-        # 這次應該得到完成的回應
-        agent_manager.execute.return_value = ("CAFE_CONFIRMED\n需求已確認", TokenUsage(), [], None)
+        # 這次應該得到 READY_FOR_REVIEW
+        agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n需求已確認", TokenUsage(), [], None)
         setup_agent_manager_mocks(agent_manager)
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -773,6 +780,7 @@ class TestInterruptedIterationResume:
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
+            user_input="confirm",  # Provide confirmation for non-interactive mode
         )
 
         # Execute phase - 應該直接使用已儲存的 user_input，不會要求用戶輸入
@@ -794,7 +802,7 @@ class TestInterruptedIterationResume:
         # 驗證 iteration 2 的 history 被更新（有 response 了）
         iteration2_data = json.loads(iteration2.read_text())
         assert iteration2_data["response"] is not None
-        assert "CAFE_CONFIRMED" in iteration2_data["response"]
+        assert "CAFE_READY_FOR_REVIEW" in iteration2_data["response"]
 
 
 class TestSpecPhaseFilePermissions:
@@ -808,7 +816,7 @@ class TestSpecPhaseFilePermissions:
         spec_file.write_text("Test spec")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("CAFE_CONFIRMED\n完成", TokenUsage(), [], None)
+        agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n完成", TokenUsage(), [], None)
         agent_manager.get_total_token_usage.return_value = TokenUsage()
         setup_agent_manager_mocks(agent_manager)
 
@@ -820,6 +828,7 @@ class TestSpecPhaseFilePermissions:
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
+            user_input="confirm",  # Provide confirmation for non-interactive mode
         )
 
         # Execute

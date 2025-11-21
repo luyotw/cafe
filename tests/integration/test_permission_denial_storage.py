@@ -114,7 +114,7 @@ class TestSpecPhasePermissionDenialStorage:
         assert iteration_data["cli"] == "claude"
 
     def test_spec_phase_saves_empty_permission_denials_with_confirmed(self, tmp_path: Path):
-        """測試 SpecPhase 在 CONFIRMED 時正確儲存空的 permission_denials"""
+        """測試 SpecPhase 在 READY_FOR_REVIEW + 用戶確認後正確儲存空的 permission_denials"""
         issue_name = "test-spec-confirmed-issue"
         spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
@@ -122,9 +122,9 @@ class TestSpecPhasePermissionDenialStorage:
 
         agent_manager = setup_agent_manager_mock("Roger", AgentCLI.CLAUDE)
 
-        # Mock agent returns CONFIRMED without permission denials
+        # Mock agent returns READY_FOR_REVIEW without permission denials
         agent_manager.execute.return_value = (
-            "CAFE_CONFIRMED\n需求已經很清楚了。",
+            "CAFE_READY_FOR_REVIEW\n需求已經很清楚了。",
             TokenUsage(),
             [],  # No permission denials
             None  # cli_command_args
@@ -141,7 +141,9 @@ class TestSpecPhasePermissionDenialStorage:
             rigor=SpecRigor.MEDIUM,
         )
 
+        # Mock user choosing 'c' (confirm) after READY_FOR_REVIEW
         with patch('builtins.print'), \
+             patch('builtins.input', return_value='c'), \
              patch.object(phase.display, 'get_multiline_input', return_value="清楚的需求"):
             result = phase.execute()
 
@@ -157,8 +159,8 @@ class TestSpecPhasePermissionDenialStorage:
         assert "response" in iteration_data
         assert "permission_denials" in iteration_data
         assert iteration_data["permission_denials"] == []
-        assert "CAFE_CONFIRMED" in iteration_data["response"]
-        assert iteration_data["status_code"] == "CAFE_CONFIRMED"
+        assert "CAFE_READY_FOR_REVIEW" in iteration_data["response"]
+        assert iteration_data["status_code"] == "CAFE_READY_FOR_REVIEW"
 
 
 class TestPlanPhasePermissionDenialStorage:

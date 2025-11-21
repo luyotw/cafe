@@ -37,24 +37,24 @@ class TestSpecCommandNonInteractiveBasic:
     def test_successful_spec_creation_with_confirmed(
         self, mock_env, temp_spec_dir, monkeypatch
     ):
-        """測試 agent 返回 CONFIRMED 時成功創建 spec"""
+        """測試 agent 返回 READY_FOR_REVIEW + user confirm 時成功創建 spec"""
         # Arrange
         spec_file = str(temp_spec_dir / "spec.md")
-        user_input = "我想要一個登入功能"
-        
+        user_input = "confirm"  # Provide confirmation for non-interactive mode
+
         monkeypatch.setenv(
             "CAFE_MOCK_RESPONSE",
-            "CAFE_CONFIRMED\n\n# 登入功能需求規格\n\n這是測試規格。"
+            "CAFE_READY_FOR_REVIEW\n\n# 登入功能需求規格\n\n這是測試規格。"
         )
-        
+
         # 創建 mock agent manager
         agent_manager = AgentManager()
         agent_manager.register_agent(
             AgentConfig(name="Roger", cli=AgentCLI.CLAUDE)
         )
-        
+
         permission_handler = PermissionHandler()
-        
+
         # 創建 phase
         phase = SpecPhase(
             agent_manager=agent_manager,
@@ -64,13 +64,13 @@ class TestSpecCommandNonInteractiveBasic:
             interactive=False,
             user_input=user_input,
         )
-        
+
         # Act
         result = phase.execute()
-        
+
         # Assert
         assert result.status == PhaseStatus.COMPLETED
-        
+
         # 驗證 agent 被呼叫
         executor = agent_manager.get_agent("Roger")
         assert executor.call_count == 1
@@ -329,33 +329,37 @@ class TestSpecCommandNonInteractiveCLIValidation:
     def test_mock_mode_writes_spec_file(self, mock_env, temp_spec_dir):
         """測試 mock 模式下 spec 檔案會被正確寫入"""
         # Arrange
-        spec_file = str(temp_spec_dir / "spec.md")
-        
+        spec_file = temp_spec_dir / "spec.md"
+        # Create initial spec file (so user_input is used for confirmation, not initial input)
+        spec_file.write_text("# Initial Requirements\n\n我想要一個測試功能")
+
         agent_manager = AgentManager()
         agent_manager.register_agent(
             AgentConfig(name="Roger", cli=AgentCLI.CLAUDE)
         )
-        
+
         permission_handler = PermissionHandler()
-        
+
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
-            spec_file=spec_file,
+            spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
-            user_input="我想要一個測試功能",
+            user_input="confirm",  # Provide confirmation for non-interactive mode
         )
-        
+
         # Act
         result = phase.execute()
-        
+
         # Assert
         assert result.status == PhaseStatus.COMPLETED
-        assert Path(spec_file).exists()
-        content = Path(spec_file).read_text()
+        assert spec_file.exists()
+        content = spec_file.read_text()
         assert "Mock Spec" in content or "Mock Response" in content
-        assert "CAFE_CONFIRMED" not in content  # 狀態碼不應該在檔案內容中
+        # 狀態碼不應該在檔案內容中
+        assert "CAFE_READY_FOR_REVIEW" not in content
+        assert "CAFE_CONFIRMED" not in content
 
 
 class TestSpecCommandNonInteractiveAgentTracking:
@@ -405,34 +409,34 @@ class TestSpecCommandNonInteractiveAgentTracking:
     def test_agent_called_once_for_confirmed(
         self, mock_env, temp_spec_dir, monkeypatch
     ):
-        """測試 CONFIRMED 狀態下 agent 只被呼叫一次"""
+        """測試 READY_FOR_REVIEW + confirm 狀態下 agent 只被呼叫一次"""
         # Arrange
         spec_file = str(temp_spec_dir / "spec.md")
-        
+
         monkeypatch.setenv(
             "CAFE_MOCK_RESPONSE",
-            "CAFE_CONFIRMED\n\n# 測試規格"
+            "CAFE_READY_FOR_REVIEW\n\n# 測試規格"
         )
-        
+
         agent_manager = AgentManager()
         agent_manager.register_agent(
             AgentConfig(name="Roger", cli=AgentCLI.CLAUDE)
         )
-        
+
         permission_handler = PermissionHandler()
-        
+
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             spec_file=spec_file,
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
-            user_input="測試需求",
+            user_input="confirm",  # Provide confirmation for non-interactive mode
         )
-        
+
         # Act
         phase.execute()
-        
+
         # Assert
         executor = agent_manager.get_agent("Roger")
         assert executor.call_count == 1

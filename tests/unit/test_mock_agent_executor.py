@@ -9,7 +9,7 @@ class TestMockAgentExecutor:
     """測試 MockAgentExecutor 的基本功能"""
 
     def test_default_response(self):
-        """測試預設回應為 CONFIRMED"""
+        """測試預設回應為 READY_FOR_REVIEW"""
         # Arrange
         config = AgentConfig(name="TestAgent", cli=AgentCLI.CLAUDE)
         executor = MockAgentExecutor(config=config)
@@ -18,7 +18,7 @@ class TestMockAgentExecutor:
         agent_response = executor.execute("test prompt")
 
         # Assert
-        assert "CAFE_CONFIRMED" in agent_response.response
+        assert "CAFE_READY_FOR_REVIEW" in agent_response.response
         assert isinstance(agent_response.token_usage, TokenUsage)
 
     def test_custom_response(self):

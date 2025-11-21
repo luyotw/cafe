@@ -35,7 +35,7 @@ class TestSpecPhaseWithStatusCodes:
     """Test SpecPhase with status code system."""
 
     def test_confirmed_status_code_completes_phase(self, tmp_path: Path) -> None:
-        """測試 CONFIRMED 狀態碼會完成 phase"""
+        """測試 READY_FOR_REVIEW 狀態碼 + 用戶確認會完成 phase"""
         issue_name = "test-confirmed-issue"
         spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
@@ -43,7 +43,7 @@ class TestSpecPhaseWithStatusCodes:
 
         agent_manager = MagicMock(spec=AgentManager)
         setup_agent_manager_mock_for_spec(agent_manager)
-        agent_manager.execute.return_value = ("CAFE_CONFIRMED\n需求已經很清楚了。", TokenUsage(), [], None)
+        agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n需求已經很清楚了。", TokenUsage(), [], None)
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -57,7 +57,9 @@ class TestSpecPhaseWithStatusCodes:
             rigor=SpecRigor.MEDIUM,
         )
 
+        # Mock user choosing 'c' (confirm)
         with patch('builtins.print'), \
+             patch('builtins.input', return_value='c'), \
              patch.object(phase.display, 'get_multiline_input', return_value="需求"):
             result = phase.execute()
 
@@ -105,10 +107,10 @@ class TestSpecPhaseWithStatusCodes:
 
         agent_manager = MagicMock(spec=AgentManager)
         setup_agent_manager_mock_for_spec(agent_manager)
-        # 第一次回應需要澄清，第二次確認
+        # 第一次回應需要澄清，第二次 READY_FOR_REVIEW
         agent_manager.execute.side_effect = [
             ("CAFE_NEED_CLARIFICATION\n請補充更多資訊。", TokenUsage(), [], None),
-            ("CAFE_CONFIRMED\n需求已清楚。", TokenUsage(), [], None),
+            ("CAFE_READY_FOR_REVIEW\n需求已清楚。", TokenUsage(), [], None),
         ]
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 
@@ -123,8 +125,9 @@ class TestSpecPhaseWithStatusCodes:
             rigor=SpecRigor.MEDIUM,
         )
 
-        # Mock the display's get_multiline_input method
+        # Mock the display's get_multiline_input method and user confirmation
         with patch('builtins.print'), \
+             patch('builtins.input', return_value='c'), \
              patch.object(phase.display, 'get_multiline_input', return_value="補充資訊"):
             result = phase.execute()
 
@@ -141,7 +144,7 @@ class TestSpecPhaseWithStatusCodes:
 
         agent_manager = MagicMock(spec=AgentManager)
         setup_agent_manager_mock_for_spec(agent_manager)
-        agent_manager.execute.return_value = ("需求已經很清楚了。CAFE_CONFIRMED", TokenUsage(), [], None)
+        agent_manager.execute.return_value = ("需求已經很清楚了。CAFE_READY_FOR_REVIEW", TokenUsage(), [], None)
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -155,7 +158,9 @@ class TestSpecPhaseWithStatusCodes:
             rigor=SpecRigor.MEDIUM,
         )
 
+        # Mock user choosing 'c' (confirm)
         with patch('builtins.print'), \
+             patch('builtins.input', return_value='c'), \
              patch.object(phase.display, 'get_multiline_input', return_value="需求"):
             result = phase.execute()
 
@@ -171,10 +176,10 @@ class TestSpecPhaseWithStatusCodes:
 
         agent_manager = MagicMock(spec=AgentManager)
         setup_agent_manager_mock_for_spec(agent_manager)
-        # 第一次沒有狀態碼，第二次有
+        # 第一次沒有狀態碼，第二次 READY_FOR_REVIEW
         agent_manager.execute.side_effect = [
             ("我覺得需求不夠清楚。", TokenUsage(), [], None),  # 沒有狀態碼
-            ("CAFE_CONFIRMED\n現在清楚了。", TokenUsage(), [], None),
+            ("CAFE_READY_FOR_REVIEW\n現在清楚了。", TokenUsage(), [], None),
         ]
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 
@@ -189,8 +194,9 @@ class TestSpecPhaseWithStatusCodes:
             rigor=SpecRigor.MEDIUM,
         )
 
-        # Mock the display's get_multiline_input method
+        # Mock the display's get_multiline_input method and user confirmation
         with patch('builtins.print'), \
+             patch('builtins.input', return_value='c'), \
              patch.object(phase.display, 'get_multiline_input', return_value="我的回答"):
             result = phase.execute()
 
@@ -206,7 +212,7 @@ class TestSpecPhaseWithStatusCodes:
 
         agent_manager = MagicMock(spec=AgentManager)
         setup_agent_manager_mock_for_spec(agent_manager)
-        agent_manager.execute.return_value = ("cafe_confirmed\n需求清楚。", TokenUsage(), [], None)
+        agent_manager.execute.return_value = ("cafe_ready_for_review\n需求清楚。", TokenUsage(), [], None)
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -220,7 +226,9 @@ class TestSpecPhaseWithStatusCodes:
             rigor=SpecRigor.MEDIUM,
         )
 
+        # Mock user choosing 'c' (confirm)
         with patch('builtins.print'), \
+             patch('builtins.input', return_value='c'), \
              patch.object(phase.display, 'get_multiline_input', return_value="需求"):
             result = phase.execute()
 

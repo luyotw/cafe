@@ -1,13 +1,31 @@
 """E2E tests for 'cafe develop' command with mock agents.
 
-使用 subprocess.run() 測試實際 CLI 命令執行，但用 CAFE_MOCK_AGENTS=true 避免真實 LLM 呼叫。
+使用 CliRunner 測試 CLI 命令執行，用 CAFE_MOCK_AGENTS=true 避免真實 LLM 呼叫。
 """
 
 import subprocess
-import json
 import os
+import json
 from pathlib import Path
+from typing import Optional, List
+from dataclasses import dataclass
+from unittest.mock import patch
+
 import pytest
+from typer.testing import CliRunner
+
+from cafe.ui.cli import app
+
+
+runner = CliRunner()
+
+
+@dataclass
+class MockResult:
+    """模擬 subprocess.run 的結果格式"""
+    returncode: int
+    stdout: str
+    stderr: str
 
 
 def init_git_repo(tmp_path: Path):
@@ -45,25 +63,35 @@ def setup_test_environment(tmp_path: Path, issue_name: str):
 """)
 
 
-def run_cafe_develop(tmp_path: Path, issue_name: str, mock_response: str, extra_args: list = None):
-    """Helper function to run cafe develop command with mock"""
-    # Use installed cafe command or fall back to local script
-    cafe_cmd = "cafe" if subprocess.run(["which", "cafe"], capture_output=True).returncode == 0 else "./cafe"
-    args = [cafe_cmd, "develop", issue_name, "--no-interactive"]
+def run_cafe_develop(
+    tmp_path: Path,
+    issue_name: str,
+    mock_response: str,
+    extra_args: Optional[List[str]] = None
+) -> MockResult:
+    """Helper function to run cafe develop command with mock using CliRunner"""
+    args = ["develop", issue_name, "--no-interactive"]
     if extra_args:
         args.extend(extra_args)
 
-    env = os.environ.copy()
-    env["CAFE_MOCK_AGENTS"] = "true"
+    env_vars = {"CAFE_MOCK_AGENTS": "true"}
     if mock_response:
-        env["CAFE_MOCK_RESPONSE"] = mock_response
+        env_vars["CAFE_MOCK_RESPONSE"] = mock_response
 
-    return subprocess.run(
-        args,
-        cwd=str(tmp_path),
-        capture_output=True,
-        text=True,
-        env=env,
+    original_cwd = os.getcwd()
+    try:
+        os.chdir(tmp_path)
+        with patch.dict(os.environ, env_vars):
+            result = runner.invoke(app, args, catch_exceptions=False)
+    except Exception as e:
+        return MockResult(returncode=1, stdout="", stderr=str(e))
+    finally:
+        os.chdir(original_cwd)
+
+    return MockResult(
+        returncode=result.exit_code,
+        stdout=result.stdout or "",
+        stderr=""
     )
 
 

@@ -42,7 +42,7 @@ class TestSpecPhaseInteractiveVsNonInteractive:
     """測試 SpecPhase 的 interactive 和 non-interactive 模式差異。"""
 
     def test_confirmed_status_same_behavior_both_modes(self, tmp_path: Path) -> None:
-        """測試 CONFIRMED 狀態在兩種模式下行為相同（都完成）"""
+        """測試 READY_FOR_REVIEW + 用戶確認在兩種模式下行為相同（都完成）"""
         # 準備測試環境
         issue_name = "test-confirmed"
         spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
@@ -51,12 +51,12 @@ class TestSpecPhaseInteractiveVsNonInteractive:
 
         agent_manager = MagicMock(spec=AgentManager)
         setup_agent_manager_mock_for_spec(agent_manager)
-        agent_manager.execute.return_value = ("CAFE_CONFIRMED\n需求已清楚", TokenUsage(), [], None)
+        agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n需求已清楚", TokenUsage(), [], None)
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
-        # 測試 interactive mode
+        # 測試 interactive mode (需要用戶確認)
         phase_interactive = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
@@ -67,10 +67,11 @@ class TestSpecPhaseInteractiveVsNonInteractive:
         )
 
         with patch('builtins.print'), \
+             patch('builtins.input', return_value='c'), \
              patch.object(phase_interactive.display, 'get_multiline_input', return_value="需求"):
             result_interactive = phase_interactive.execute()
 
-        # 測試 non-interactive mode
+        # 測試 non-interactive mode (需要 user_input="confirm")
         agent_manager.execute.reset_mock()
         phase_noninteractive = SpecPhase(
             agent_manager=agent_manager,
@@ -79,6 +80,7 @@ class TestSpecPhaseInteractiveVsNonInteractive:
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
             rigor=SpecRigor.MEDIUM,
+            user_input="confirm",  # Provide confirmation in non-interactive mode
         )
 
         with patch('builtins.print'):
@@ -88,6 +90,7 @@ class TestSpecPhaseInteractiveVsNonInteractive:
         assert result_interactive.status == PhaseStatus.COMPLETED
         assert result_noninteractive.status == PhaseStatus.COMPLETED
         assert result_interactive.data.get("status_code") == "CAFE_CONFIRMED"
+        # Non-interactive with user_input="confirm" also results in CAFE_CONFIRMED
         assert result_noninteractive.data.get("status_code") == "CAFE_CONFIRMED"
 
     def test_rejected_status_same_behavior_both_modes(self, tmp_path: Path) -> None:
@@ -147,10 +150,10 @@ class TestSpecPhaseInteractiveVsNonInteractive:
 
         agent_manager = MagicMock(spec=AgentManager)
         setup_agent_manager_mock_for_spec(agent_manager)
-        # 第一次需要澄清，第二次確認
+        # 第一次需要澄清，第二次 READY_FOR_REVIEW
         agent_manager.execute.side_effect = [
             ("CAFE_NEED_CLARIFICATION\n請補充資訊", TokenUsage(), [], None),
-            ("CAFE_CONFIRMED\n需求已清楚", TokenUsage(), [], None),
+            ("CAFE_READY_FOR_REVIEW\n需求已清楚", TokenUsage(), [], None),
         ]
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 
@@ -166,12 +169,14 @@ class TestSpecPhaseInteractiveVsNonInteractive:
         )
 
         with patch('builtins.print'), \
+             patch('builtins.input', return_value='c'), \
              patch.object(phase.display, 'get_multiline_input', return_value="補充資訊"):
             result = phase.execute()
 
         # Interactive 模式應該自動進入第二輪並完成
+        # Iterations: 1. NEED_CLARIFICATION, 2. READY_FOR_REVIEW, 3. user confirms
         assert result.status == PhaseStatus.COMPLETED
-        assert result.data.get("iterations") == 2
+        assert result.data.get("iterations") == 3
         assert agent_manager.execute.call_count == 2
 
     def test_need_clarification_noninteractive_stops(self, tmp_path: Path) -> None:
@@ -214,10 +219,10 @@ class TestSpecPhaseInteractiveVsNonInteractive:
 
         agent_manager = MagicMock(spec=AgentManager)
         setup_agent_manager_mock_for_spec(agent_manager)
-        # 第一次沒有狀態碼，第二次確認
+        # 第一次沒有狀態碼，第二次 READY_FOR_REVIEW
         agent_manager.execute.side_effect = [
             ("這是回應但沒有狀態碼", TokenUsage(), [], None),
-            ("CAFE_CONFIRMED\n需求已清楚", TokenUsage(), [], None),
+            ("CAFE_READY_FOR_REVIEW\n需求已清楚", TokenUsage(), [], None),
         ]
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 
@@ -233,6 +238,7 @@ class TestSpecPhaseInteractiveVsNonInteractive:
         )
 
         with patch('builtins.print'), \
+             patch('builtins.input', return_value='c'), \
              patch.object(phase.display, 'get_multiline_input', return_value="需求"):
             result = phase.execute()
 
