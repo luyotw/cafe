@@ -11,10 +11,17 @@ from cafe.core.types import PhaseStatus, WorkflowMode, TokenUsage
 from cafe.phases.plan_phase import PlanPhase
 
 
+def create_template_file(tmp_path: Path) -> str:
+    """Create a dummy template file for tests."""
+    template_file = tmp_path / "template.md"
+    template_file.write_text("# Plan Template\n\nTemplate content")
+    return str(template_file)
+
+
 class TestPlanPhaseWithStatusCodes:
     """Test PlanPhase integration with status code system."""
 
-    def test_confirmed_status_code_completes_phase(self, tmp_path: Path, AgentCLI) -> None:
+    def test_confirmed_status_code_completes_phase(self, tmp_path: Path) -> None:
         """測試 CONFIRMED 狀態碼完成 phase"""
         requirements_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         requirements_file.parent.mkdir(parents=True, exist_ok=True)
@@ -33,6 +40,7 @@ class TestPlanPhaseWithStatusCodes:
         mock_agent.config.cli.value = "copilot"
         mock_agent.config.session_id = "test_session"
         agent_manager.get_agent.return_value = mock_agent
+        agent_manager.get_total_token_usage.return_value = TokenUsage()
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -43,13 +51,15 @@ class TestPlanPhaseWithStatusCodes:
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
             user_input="confirm",  # Simulate user confirming the plan
+            template_path=create_template_file(tmp_path),
         )
 
-        result = phase.execute()
+        with patch('builtins.print'):
+            result = phase.execute()
 
         assert result.status == PhaseStatus.COMPLETED
-        assert result.data.get("status_code") == "CAFE_CONFIRMED"
-        assert result.data.get("iterations") == 2  # 1st: agent returns READY_FOR_REVIEW, 2nd: user confirms
+        assert result.data.get("status_code") == "CAFE_READY_FOR_REVIEW"  # non-interactive mode completes at READY_FOR_REVIEW
+        assert result.data.get("iterations") == 1  # Only 1 iteration in non-interactive mode
 
     def test_rejected_status_code_fails_phase(self, tmp_path: Path) -> None:
         """測試 REJECTED 狀態碼導致 phase 失敗"""
@@ -70,6 +80,7 @@ class TestPlanPhaseWithStatusCodes:
         mock_agent.config.cli.value = "copilot"
         mock_agent.config.session_id = "test_session"
         agent_manager.get_agent.return_value = mock_agent
+        agent_manager.get_total_token_usage.return_value = TokenUsage()
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -79,9 +90,11 @@ class TestPlanPhaseWithStatusCodes:
             spec_file=str(requirements_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
+            template_path=create_template_file(tmp_path),
         )
 
-        result = phase.execute()
+        with patch('builtins.print'):
+            result = phase.execute()
 
         assert result.status == PhaseStatus.FAILED
         assert result.data.get("status_code") == "CAFE_REJECTED"
@@ -100,8 +113,8 @@ class TestPlanPhaseWithStatusCodes:
         agent_manager = MagicMock(spec=AgentManager)
         # First iteration needs clarification, second confirms
         agent_manager.execute.side_effect = [
-            ("CAFE_NEED_CLARIFICATION\n請補充更多資訊。", TokenUsage()),
-            ("CAFE_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage()),
+            ("CAFE_NEED_CLARIFICATION\n請補充更多資訊。", TokenUsage(), [], None),
+            ("CAFE_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage(), [], None),
         ]
 
         # Mock get_agent to return agent with config
@@ -109,6 +122,7 @@ class TestPlanPhaseWithStatusCodes:
         mock_agent.config.cli.value = "copilot"
         mock_agent.config.session_id = "test_session"
         agent_manager.get_agent.return_value = mock_agent
+        agent_manager.get_total_token_usage.return_value = TokenUsage()
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -118,12 +132,14 @@ class TestPlanPhaseWithStatusCodes:
             spec_file=str(requirements_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=True,
+            template_path=create_template_file(tmp_path),
         )
 
         # Mock user input and confirmation
         from unittest.mock import patch
         with patch.object(phase.display, 'get_multiline_input', return_value="補充資訊"), \
-             patch('builtins.input', return_value='c'):  # 'c' for confirm
+             patch('builtins.input', return_value='c'), \
+             patch('builtins.print'):  # 'c' for confirm
             result = phase.execute()
 
         assert result.status == PhaseStatus.COMPLETED
@@ -149,6 +165,7 @@ class TestPlanPhaseWithStatusCodes:
         mock_agent.config.cli.value = "copilot"
         mock_agent.config.session_id = "test_session"
         agent_manager.get_agent.return_value = mock_agent
+        agent_manager.get_total_token_usage.return_value = TokenUsage()
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -159,12 +176,14 @@ class TestPlanPhaseWithStatusCodes:
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
             user_input="confirm",  # Simulate user confirming the plan
+            template_path=create_template_file(tmp_path),
         )
 
-        result = phase.execute()
+        with patch('builtins.print'):
+            result = phase.execute()
 
         assert result.status == PhaseStatus.COMPLETED
-        assert result.data.get("status_code") == "CAFE_CONFIRMED"
+        assert result.data.get("status_code") == "CAFE_READY_FOR_REVIEW"  # non-interactive completes at READY_FOR_REVIEW
 
     def test_no_status_code_continues_iteration(self, tmp_path: Path) -> None:
         """測試沒有狀態碼時繼續迭代"""
@@ -180,8 +199,8 @@ class TestPlanPhaseWithStatusCodes:
         agent_manager = MagicMock(spec=AgentManager)
         # First has no status code, second has READY_FOR_REVIEW
         agent_manager.execute.side_effect = [
-            ("這是一般的回應，沒有狀態碼。", TokenUsage()),
-            ("CAFE_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage()),
+            ("這是一般的回應，沒有狀態碼。", TokenUsage(), [], None),
+            ("CAFE_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage(), [], None),
         ]
 
         # Mock get_agent to return agent with config
@@ -189,6 +208,7 @@ class TestPlanPhaseWithStatusCodes:
         mock_agent.config.cli.value = "claude"
         mock_agent.config.session_id = "test_session"
         agent_manager.get_agent.return_value = mock_agent
+        agent_manager.get_total_token_usage.return_value = TokenUsage()
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -198,6 +218,7 @@ class TestPlanPhaseWithStatusCodes:
             spec_file=str(requirements_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=True,  # Must be interactive to continue iterations
+            template_path=create_template_file(tmp_path),
         )
 
         with patch('builtins.print'), \
@@ -227,6 +248,7 @@ class TestPlanPhaseWithStatusCodes:
         mock_agent.config.cli.value = "claude"
         mock_agent.config.session_id = "test_session"
         agent_manager.get_agent.return_value = mock_agent
+        agent_manager.get_total_token_usage.return_value = TokenUsage()
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -237,10 +259,11 @@ class TestPlanPhaseWithStatusCodes:
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
             user_input="confirm",  # Simulate user confirming the plan
+            template_path=create_template_file(tmp_path),
         )
 
         with patch('builtins.print'):
             result = phase.execute()
 
         assert result.status == PhaseStatus.COMPLETED
-        assert result.data.get("status_code") == "CAFE_CONFIRMED"
+        assert result.data.get("status_code") == "CAFE_READY_FOR_REVIEW"  # non-interactive completes at READY_FOR_REVIEW

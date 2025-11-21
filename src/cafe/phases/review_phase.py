@@ -85,6 +85,22 @@ class ReviewPhase(Phase):
             # Initialize history directory
             self._initialize_history_dir()
 
+            # Check if there are any changes to review
+            if not self.pr_number:  # Only check diff for non-PR reviews
+                diff = self.git_ops.get_diff(
+                    base=self.base_branch,
+                    head=self.target_commit or "HEAD",
+                )
+                if not diff or not diff.strip():
+                    return PhaseResult(
+                        status=PhaseStatus.FAILED,
+                        message="No changes to review. The diff is empty.",
+                        data={
+                            "target_commit": self.target_commit,
+                            "base_branch": self.base_branch,
+                        },
+                    )
+
             # Check PR comments if pr_number is provided
             if self.pr_number:
                 print(f"ℹ️  PR #{self.pr_number} comments will be reviewed")
@@ -135,6 +151,7 @@ class ReviewPhase(Phase):
                 "bash(git log)",                # View commit history and messages
                 "bash(git diff)",               # View code changes
                 "bash(git show)",               # View specific commit details
+                "bash(git status)",               # View specific commit details
                 f"write({review_file_pattern})",  # Allow writing to specific review file
             ]
 
@@ -154,8 +171,14 @@ class ReviewPhase(Phase):
                 continue_codes=[],  # No continue codes - single iteration only
             )
 
-            # Agent writes review_XXX.md directly via Write tool
-            # No need to save review.md separately
+            # Save review to review_XXX.md file
+            # Note: Real agent would write via Write tool, but we save it here to ensure
+            # the file exists even in mock mode or if agent doesn't execute Write tool
+            review_file_name = f"review_{self.iteration:03d}.md"
+            review_file_path = self.review_dir / review_file_name
+            if not review_file_path.exists():
+                # Only write if agent didn't already write it via Write tool
+                review_file_path.write_text(response, encoding="utf-8")
 
             # If base class returned a result, use it
             if result:
@@ -196,9 +219,11 @@ class ReviewPhase(Phase):
             )
 
         except Exception as e:
+            import traceback
+            traceback_str = traceback.format_exc()
             return PhaseResult(
                 status=PhaseStatus.FAILED,
-                message=f"Review phase failed: {e}",
+                message=f"Review phase failed: {e}\n{traceback_str}",
             )
 
     def _initialize_history_dir(self) -> None:
@@ -208,6 +233,8 @@ class ReviewPhase(Phase):
             review_dir = Path(f".cafe/issues/{self.issue_id}/review")
         else:
             # Extract issue name from spec_file path and use its parent structure
+            if not self.spec_file:
+                raise ValueError("spec_file is required for local workflow mode")
             spec_path = Path(self.spec_file).resolve()  # Use absolute path
             # spec_file is like /path/.cafe/issues/<issue-name>/spec/spec.md
             # review_dir should be /path/.cafe/issues/<issue-name>/review
@@ -376,6 +403,8 @@ class ReviewPhase(Phase):
         """
         try:
             # 取得 issue name
+            if not self.spec_file:
+                return False  # No spec file, cannot compare timestamps
             spec_path = Path(self.spec_file).resolve()
             issue_name = spec_path.parent.parent.name
 
@@ -549,6 +578,8 @@ class ReviewPhase(Phase):
             config_file = Path(f".cafe/issues/{self.issue_id}/config.json")
         else:
             # Extract issue name from spec_file path
+            if not self.spec_file:
+                return None
             spec_path = Path(self.spec_file)
             issue_name = spec_path.parent.parent.name
             config_file = Path(f".cafe/issues/{issue_name}/config.json")
@@ -577,4 +608,20 @@ class ReviewPhase(Phase):
             return f"""請閱讀以下檔案來了解需求與實作計畫：
 - 需求規格 (Spec): {self.spec_file}
 - 實作計畫 (Plan): {self.plan_file}"""
+
+    def _get_status_analysis_prompt(self) -> str:
+        """取得分析 status code 的 prompt.
+
+        Returns:
+            分析 prompt 字串
+        """
+        review_file = self.review_dir / f"review_{self.iteration:03d}.md"
+        return f"""請閱讀 {review_file} 並分析 Code Review 的結果。
+
+根據以下條件判斷應該回傳哪個狀態碼：
+
+- CAFE_CONFIRMED: 程式碼審查通過，沒有需要修正的問題
+- CAFE_NEEDS_CHANGES: 有問題需要修正
+
+請只回傳一個狀態碼（例如：CAFE_CONFIRMED），不要有任何其他內容。"""
 

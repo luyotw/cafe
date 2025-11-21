@@ -221,11 +221,11 @@ class TestReviewCommandNonInteractiveFiles:
     def test_review_md_created(
         self, mock_env, temp_review_dir, mock_git_ops, monkeypatch, tmp_path
     ):
-        """測試 review.md 被創建"""
+        """測試 review_001.md 被創建"""
         # Arrange
         spec_file = str(temp_review_dir.parent / "spec" / "spec.md")
         plan_file = str(temp_review_dir.parent / "plan" / "plan.md")
-        review_file = temp_review_dir / "review.md"
+        review_file = temp_review_dir / "review_001.md"  # First iteration creates review_001.md
 
         monkeypatch.setenv(
             "CAFE_MOCK_RESPONSE",
@@ -457,9 +457,9 @@ class TestReviewCommandNonInteractiveDiffHandling:
 
             # Assert
             assert result.status == PhaseStatus.COMPLETED
-            # 驗證使用了正確的 commit
+            # 驗證使用了特定 commit 作為 head（但 base 仍然是 base_branch）
             git_ops.get_diff.assert_called_once_with(
-                base=f"{target_commit}^", head=target_commit
+                base="main", head=target_commit
             )
         finally:
             os.chdir(original_cwd)
@@ -505,11 +505,12 @@ class TestReviewCommandNonInteractiveAgentTracking:
             # Act
             phase.execute()
 
-            # Assert - 驗證 agent 被呼叫，且 prompt 包含 diff
+            # Assert - 驗證 agent 被呼叫，且 prompt 提到可以使用 git diff
             executor = agent_manager.get_agent("Richard")
             assert executor.call_count == 1
-            assert "diff" in executor.last_prompt.lower()
-            assert "test.py" in executor.last_prompt  # From mock diff
+            # Prompt 應該包含 git diff 指令的說明
+            assert "git diff" in executor.last_prompt.lower()
+            # 新設計：agent 自己執行 git diff 獲取內容，而不是在 prompt 中直接提供
         finally:
             os.chdir(original_cwd)
 
@@ -601,6 +602,12 @@ class TestReviewCommandNonInteractiveAgentTracking:
             with open(iteration_file) as f:
                 history_data = json.load(f)
                 assert "allowed_tools" in history_data
-                assert history_data["allowed_tools"] == ["bash"]
+                # Review phase 允許使用多種工具進行程式碼審查
+                allowed_tools = history_data["allowed_tools"]
+                assert isinstance(allowed_tools, list)
+                assert len(allowed_tools) > 0
+                # 確認包含關鍵的 git 工具
+                assert any("git diff" in tool or "bash(git diff)" in tool for tool in allowed_tools)
+                assert any("git log" in tool or "bash(git log)" in tool for tool in allowed_tools)
         finally:
             os.chdir(original_cwd)

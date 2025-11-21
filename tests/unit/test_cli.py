@@ -99,10 +99,18 @@ class TestBuildWorkflow:
         # 驗證 workflow 有 5 個 phases
         assert len(workflow.phases) == 5
 
+    @patch("cafe.ui.cli.PRPhase")
+    @patch("cafe.ui.cli.ReviewPhase")
+    @patch("cafe.ui.cli.DevelopPhase")
+    @patch("cafe.ui.cli.PlanPhase")
     @patch("cafe.ui.cli.SpecPhase")
     def test_build_workflow_passes_correct_mode(
         self,
         mock_req: Mock,
+        mock_plan: Mock,
+        mock_impl: Mock,
+        mock_review: Mock,
+        mock_pr: Mock,
         tmp_path: Path,
     ) -> None:
         """測試 workflow 正確傳遞 workflow mode"""

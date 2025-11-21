@@ -1,0 +1,27 @@
+#!/bin/bash
+
+# Pre-commit hook: Run unit and integration tests
+# All tests in tests/unit/ and tests/integration/ must pass before commit
+
+set -e
+
+echo "🧪 Running pre-commit tests..."
+echo ""
+
+# Set PYTHONPATH
+export PYTHONPATH="src:$PYTHONPATH"
+
+# Run unit and integration tests
+echo "Running tests/unit and tests/integration..."
+python3 -m pytest tests/unit/ tests/integration/ -v --tb=short -q
+
+# Check exit code
+if [ $? -eq 0 ]; then
+    echo ""
+    echo "✅ All tests passed! Proceeding with commit..."
+    exit 0
+else
+    echo ""
+    echo "❌ Tests failed! Please fix the failing tests before committing."
+    exit 1
+fi

@@ -985,7 +985,7 @@ class TestDevelopPhaseReviewFeedback:
         assert phase.iteration == 1
 
     def test_execute_returns_early_when_review_status_is_confirmed(self, tmp_path) -> None:
-        """測試當 review status 為 CONFIRMED/APPROVED 時，develop 已完成應該直接返回"""
+        """測試當 review status 為 CONFIRMED 時，develop 已完成應該直接返回"""
         # Setup
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -1339,11 +1339,14 @@ class TestDeveloperPermissions:
             agent_manager = MagicMock()
             agent_manager.get_agent.return_value = mock_executor
 
-            # Track what allowed_tools were passed to execute
-            captured_allowed_tools = None
+            # Track what allowed_tools were passed to execute (capture all calls)
+            captured_calls = []
             def capture_execute(*args, **kwargs):
-                nonlocal captured_allowed_tools
-                captured_allowed_tools = kwargs.get("allowed_tools", [])
+                captured_calls.append({
+                    "args": args,
+                    "kwargs": kwargs,
+                    "allowed_tools": kwargs.get("allowed_tools", [])
+                })
                 return (
                     "CAFE_DONE\nImplementation complete",
                     TokenUsage(),
@@ -1385,8 +1388,10 @@ class TestDeveloperPermissions:
             )
 
             # Verify that allowed_tools includes both base tools and previous iteration's tools
+            # 檢查第一次呼叫（主要執行，非 _analyze_missing_status_code）
+            assert len(captured_calls) >= 1, "execute should be called at least once"
             expected_tools = set(["write", "read", "edit", "bash", "grep(/some/path)"])
-            actual_tools = set(captured_allowed_tools) if captured_allowed_tools else set()
+            actual_tools = set(captured_calls[0]["allowed_tools"]) if captured_calls[0]["allowed_tools"] else set()
 
             assert expected_tools.issubset(actual_tools), \
                 f"Second iteration should inherit previous tools. Expected {expected_tools}, got {actual_tools}"

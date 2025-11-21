@@ -114,17 +114,17 @@ def test_spec_cli_with_llm_user():
                 pytest.fail(f"Unexpected status: {status}")
 
         print()
-        print(f"Calling: cafe spec test_myip_e2e.md --non-interactive")
+        print(f"Calling: cafe spec test_myip_e2e.md --no-interactive --user-input")
 
         # Call cafe spec
         result = subprocess.run(
-            ["cafe", "spec", "test_myip_e2e.md", "--non-interactive"],
-            input=user_input + "\nEND\n",
+            ["cafe", "spec", "test_myip_e2e.md", "--no-interactive", "--user-input", user_input],
             capture_output=True, text=True
         )
 
         print(f"Exit code: {result.returncode}")
         if result.returncode != 0:
+            print("STDOUT:", result.stdout)
             print("STDERR:", result.stderr)
 
         # Show token usage if available

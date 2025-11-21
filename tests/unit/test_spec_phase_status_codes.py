@@ -107,8 +107,8 @@ class TestSpecPhaseWithStatusCodes:
         setup_agent_manager_mock_for_spec(agent_manager)
         # 第一次回應需要澄清，第二次確認
         agent_manager.execute.side_effect = [
-            ("CAFE_NEED_CLARIFICATION\n請補充更多資訊。", TokenUsage()),
-            ("CAFE_CONFIRMED\n需求已清楚。", TokenUsage()),
+            ("CAFE_NEED_CLARIFICATION\n請補充更多資訊。", TokenUsage(), [], None),
+            ("CAFE_CONFIRMED\n需求已清楚。", TokenUsage(), [], None),
         ]
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 
@@ -173,8 +173,8 @@ class TestSpecPhaseWithStatusCodes:
         setup_agent_manager_mock_for_spec(agent_manager)
         # 第一次沒有狀態碼，第二次有
         agent_manager.execute.side_effect = [
-            ("我覺得需求不夠清楚。", TokenUsage()),  # 沒有狀態碼
-            ("CAFE_CONFIRMED\n現在清楚了。", TokenUsage()),
+            ("我覺得需求不夠清楚。", TokenUsage(), [], None),  # 沒有狀態碼
+            ("CAFE_CONFIRMED\n現在清楚了。", TokenUsage(), [], None),
         ]
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 

@@ -164,11 +164,14 @@ class TestReviewE2EMockFileValidation:
     """測試檔案相關功能"""
 
     def test_review_md_created(self, tmp_path):
-        """測試 review.md 被創建
+        """測試 review 成功完成並保存 iteration 資料
 
         情境：成功完成 review phase
         指令：cafe review test-issue --no-interactive
-        預期：成功，review.md 包含狀態碼和審查意見
+        預期：成功，iteration_001.json 包含 review 資訊
+
+        注意：review_001.md 是由 agent 的 Write tool 產生的，
+        在 mock 模式下不會實際產生檔案
         """
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
@@ -177,12 +180,15 @@ class TestReviewE2EMockFileValidation:
 
         assert result.returncode == 0
 
-        review_file = tmp_path / ".cafe" / "issues" / issue_name / "review" / "review.md"
-        assert review_file.exists()
+        # Verify iteration file contains review information
+        iteration_file = tmp_path / ".cafe" / "issues" / issue_name / "review" / "history" / "iteration_001.json"
+        assert iteration_file.exists()
 
-        content = review_file.read_text()
-        assert "CAFE_CONFIRMED" in content
-        assert "程式碼審查通過" in content
+        with open(iteration_file) as f:
+            data = json.load(f)
+            assert "response" in data
+            assert "CAFE_CONFIRMED" in data["response"]
+            assert "程式碼審查通過" in data["response"]
 
     def test_history_directory_created(self, tmp_path):
         """測試 history 目錄被創建
@@ -211,7 +217,7 @@ class TestReviewE2EMockFileValidation:
 
         情境：成功完成 review phase
         指令：cafe review test-issue --no-interactive
-        預期：成功，iteration_001.json 包含正確欄位，allowed_tools 為 ["bash"]
+        預期：成功，iteration_001.json 包含正確欄位，allowed_tools 包含 review 相關工具
         """
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
@@ -232,8 +238,15 @@ class TestReviewE2EMockFileValidation:
             assert "cli" in data
             assert "session_id" in data
             assert "allowed_tools" in data
-            # Review 允許使用 bash tools
-            assert data["allowed_tools"] == ["bash"]
+            # Review phase 允許使用多種工具進行程式碼審查
+            allowed_tools = data["allowed_tools"]
+            assert isinstance(allowed_tools, list)
+            assert len(allowed_tools) > 0
+            # 確認包含關鍵的 review 工具
+            assert any("read" in tool for tool in allowed_tools)
+            assert any("git diff" in tool or "bash(git diff)" in tool for tool in allowed_tools)
+            assert any("git log" in tool or "bash(git log)" in tool for tool in allowed_tools)
+            assert any("write" in tool for tool in allowed_tools)
 
     def test_no_diff_should_fail(self, tmp_path):
         """測試沒有 diff 時應該失敗
@@ -283,8 +296,8 @@ class TestReviewE2EMockDiffHandling:
 
         assert result.returncode == 0
 
-        # 驗證 review.md 包含審查結果
-        review_file = tmp_path / ".cafe" / "issues" / issue_name / "review" / "review.md"
+        # 驗證 review_001.md 包含審查結果
+        review_file = tmp_path / ".cafe" / "issues" / issue_name / "review" / "review_001.md"
         assert review_file.exists()
 
     def test_specific_commit_with_flag(self, tmp_path):
@@ -315,8 +328,8 @@ class TestReviewE2EMockDiffHandling:
 
         assert result.returncode == 0
 
-        # 驗證 review.md 被創建
-        review_file = tmp_path / ".cafe" / "issues" / issue_name / "review" / "review.md"
+        # 驗證 review_001.md 被創建
+        review_file = tmp_path / ".cafe" / "issues" / issue_name / "review" / "review_001.md"
         assert review_file.exists()
 
 

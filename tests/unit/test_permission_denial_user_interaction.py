@@ -76,7 +76,7 @@ class TestPermissionDenialUserInteraction:
         # First call: returns NEED_PERMISSION with denials
         # Second call: continues with approved tools
         agent_manager.execute.side_effect = [
-            ("CAFE_NEED_PERMISSION\n需要權限", TokenUsage(), permission_denials),
+            ("CAFE_NEED_PERMISSION\n需要權限", TokenUsage(), permission_denials, None),
             ("CAFE_CONFIRMED\n開發完成", TokenUsage(), [], None)
         ]
 
@@ -159,7 +159,7 @@ class TestPermissionDenialUserInteraction:
         ]
 
         agent_manager.execute.side_effect = [
-            ("CAFE_NEED_PERMISSION\n需要權限", TokenUsage(), permission_denials),
+            ("CAFE_NEED_PERMISSION\n需要權限", TokenUsage(), permission_denials, None),
             ("CAFE_CONFIRMED\n開發完成", TokenUsage(), [], None)
         ]
 
@@ -228,7 +228,8 @@ class TestPermissionDenialUserInteraction:
         agent_manager.execute.return_value = (
             "CAFE_NEED_PERMISSION\n需要權限",
             TokenUsage(),
-            permission_denials
+            permission_denials,
+            None  # cli_command_args
         )
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -288,7 +289,8 @@ class TestPermissionDenialUserInteraction:
         agent_manager.execute.return_value = (
             "CAFE_NEED_PERMISSION\n需要權限",
             TokenUsage(),
-            permission_denials
+            permission_denials,
+            None  # cli_command_args
         )
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -347,7 +349,7 @@ class TestPermissionDenialUserInteraction:
         ]
 
         agent_manager.execute.side_effect = [
-            ("CAFE_NEED_PERMISSION\n需要權限", TokenUsage(), permission_denials),
+            ("CAFE_NEED_PERMISSION\n需要權限", TokenUsage(), permission_denials, None),
             ("CAFE_CONFIRMED\n開發完成", TokenUsage(), [], None)
         ]
 
@@ -411,7 +413,8 @@ class TestPermissionDenialUserInteraction:
         agent_manager.execute.return_value = (
             "CAFE_NEED_PERMISSION\n需要權限",
             TokenUsage(),
-            permission_denials
+            permission_denials,
+            None  # cli_command_args
         )
 
         permission_handler = MagicMock(spec=PermissionHandler)

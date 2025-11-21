@@ -455,3 +455,24 @@ class PRPhase(Phase):
         body_file = spec_path.parent.parent / "pr" / "body.md"
 
         return body_file.read_text().strip()
+
+    def _get_status_analysis_prompt(self) -> str:
+        """取得分析 status code 的 prompt.
+
+        Returns:
+            分析 prompt 字串
+        """
+        spec_path = Path(self.spec_file)
+        pr_dir = spec_path.parent.parent / "pr"
+        title_file = pr_dir / "title.txt"
+        body_file = pr_dir / "body.md"
+
+        return f"""請檢查以下檔案是否存在且內容完整：
+- {title_file}
+- {body_file}
+
+根據以下條件判斷應該回傳哪個狀態碼：
+
+- CAFE_CONFIRMED: 兩個檔案都存在且內容完整
+
+請只回傳一個狀態碼（例如：CAFE_CONFIRMED），不要有任何其他內容。"""

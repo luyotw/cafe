@@ -435,9 +435,12 @@ class TestPromptGeneration:
         assert "審查完成後請回傳狀態碼，不要做任何總結或額外說明" in prompt
 
     def test_review_prompt_no_iteration_count(self, tmp_path: Path) -> None:
-        """測試 review prompt 不包含迭代次數"""
-        requirements_file = tmp_path / "requirements.md"
-        requirements_file.write_text("Requirements")
+        """測試 review prompt 包含迭代次數"""
+        # Use isolated directory structure for this test
+        issue_name = "test_review_prompt_no_iteration_count"
+        spec_file = tmp_path / issue_name / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
+        spec_file.write_text("Requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
         setup_agent_manager_mock(agent_manager)
@@ -452,7 +455,7 @@ class TestPromptGeneration:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            spec_file=str(requirements_file),
+            spec_file=str(spec_file),
             plan_file="plan.md",
             workflow_mode=WorkflowMode.LOCAL,
         )
@@ -461,9 +464,8 @@ class TestPromptGeneration:
 
         call_args = agent_manager.execute.call_args[0]
         prompt = call_args[1]
-        # Should not mention iteration numbers
-        assert "第 1 輪" not in prompt
-        assert "第 2 輪" not in prompt
+        # Should mention iteration number (first iteration)
+        assert "第 1 輪" in prompt
 
 
 class TestReviewResultSaving:
@@ -591,6 +593,7 @@ class TestReviewResultSaving:
             assert "bash(git log)" in history_data["allowed_tools"]
             assert "bash(git diff)" in history_data["allowed_tools"]
             assert "bash(git show)" in history_data["allowed_tools"]
+            assert "bash(git status)" in history_data["allowed_tools"]
             assert any("write(/.cafe/issues/myissue/review/review_" in tool for tool in history_data["allowed_tools"])
             assert history_data["denied_tools"] is None  # Default when not specified
             # ReviewPhase should NOT allow edit/replace - agent should only write new file, not modify existing ones

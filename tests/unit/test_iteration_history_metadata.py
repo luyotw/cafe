@@ -73,8 +73,10 @@ class TestSpecPhaseIterationHistoryMetadata:
         # Should include session ID
         assert history_data["session_id"] == "test-session-123", "Should record session ID"
 
-        # Should include allowed tools
-        assert history_data["allowed_tools"] == ["write", "read"], "Should record allowed tools"
+        # Should include allowed tools (check that read and write are present)
+        allowed_tools = history_data["allowed_tools"]
+        assert "read" in allowed_tools, "Should include read in allowed tools"
+        assert any("write" in tool for tool in allowed_tools), "Should include write in allowed tools"
 
         # Should include denied tools (empty in this case)
         assert history_data["denied_tools"] is None or history_data["denied_tools"] == [], "Should have denied_tools field"
@@ -96,8 +98,8 @@ class TestSpecPhaseIterationHistoryMetadata:
         agent_manager = MagicMock(spec=AgentManager)
         setup_agent_manager_mock_for_spec(agent_manager, cli="claude", session_id="session-456")
         agent_manager.execute.side_effect = [
-            ("CAFE_NEED_CLARIFICATION\n請補充資訊", TokenUsage()),
-            ("CAFE_CONFIRMED\n需求已清楚", TokenUsage()),
+            ("CAFE_NEED_CLARIFICATION\n請補充資訊", TokenUsage(), [], None),
+            ("CAFE_CONFIRMED\n需求已清楚", TokenUsage(), [], None),
         ]
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 
@@ -128,12 +130,14 @@ class TestSpecPhaseIterationHistoryMetadata:
         history_1 = json.loads(history_file_1.read_text())
         assert history_1["cli"] == "claude"
         assert history_1["session_id"] == "session-456"
-        assert history_1["allowed_tools"] == ["write", "read"]
+        assert "read" in history_1["allowed_tools"]
+        assert any("write" in tool for tool in history_1["allowed_tools"])
         assert history_1["status_code"] == "CAFE_NEED_CLARIFICATION"
 
         # Check second iteration
         history_2 = json.loads(history_file_2.read_text())
         assert history_2["cli"] == "claude"
         assert history_2["session_id"] == "session-456"
-        assert history_2["allowed_tools"] == ["write", "read"]
+        assert "read" in history_2["allowed_tools"]
+        assert any("write" in tool for tool in history_2["allowed_tools"])
         assert history_2["status_code"] == "CAFE_CONFIRMED"

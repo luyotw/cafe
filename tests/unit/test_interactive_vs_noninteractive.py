@@ -31,6 +31,13 @@ def setup_agent_manager_mock_for_spec(agent_manager: MagicMock) -> None:
     agent_manager.get_agent.return_value = mock_agent
 
 
+def create_template_file(tmp_path: Path) -> str:
+    """Create a dummy template file for tests."""
+    template_file = tmp_path / "template.md"
+    template_file.write_text("# Plan Template\n\nTemplate content")
+    return str(template_file)
+
+
 class TestSpecPhaseInteractiveVsNonInteractive:
     """測試 SpecPhase 的 interactive 和 non-interactive 模式差異。"""
 
@@ -142,8 +149,8 @@ class TestSpecPhaseInteractiveVsNonInteractive:
         setup_agent_manager_mock_for_spec(agent_manager)
         # 第一次需要澄清，第二次確認
         agent_manager.execute.side_effect = [
-            ("CAFE_NEED_CLARIFICATION\n請補充資訊", TokenUsage()),
-            ("CAFE_CONFIRMED\n需求已清楚", TokenUsage()),
+            ("CAFE_NEED_CLARIFICATION\n請補充資訊", TokenUsage(), [], None),
+            ("CAFE_CONFIRMED\n需求已清楚", TokenUsage(), [], None),
         ]
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 
@@ -193,10 +200,9 @@ class TestSpecPhaseInteractiveVsNonInteractive:
         with patch('builtins.print'):
             result = phase.execute()
 
-        # Non-interactive 模式應該停止在第一輪
-        assert result.status == PhaseStatus.IN_PROGRESS
-        assert result.data.get("iterations") == 1
-        assert result.data.get("status_code") == "CAFE_NEED_CLARIFICATION"
+        # Non-interactive 模式沒有 user_input 時應該 FAILED
+        assert result.status == PhaseStatus.FAILED
+        assert "NEED_CLARIFICATION" in result.message or "clarification" in result.message.lower()
         assert agent_manager.execute.call_count == 1
 
     def test_no_status_code_interactive_continues(self, tmp_path: Path) -> None:
@@ -210,8 +216,8 @@ class TestSpecPhaseInteractiveVsNonInteractive:
         setup_agent_manager_mock_for_spec(agent_manager)
         # 第一次沒有狀態碼，第二次確認
         agent_manager.execute.side_effect = [
-            ("這是回應但沒有狀態碼", TokenUsage()),
-            ("CAFE_CONFIRMED\n需求已清楚", TokenUsage()),
+            ("這是回應但沒有狀態碼", TokenUsage(), [], None),
+            ("CAFE_CONFIRMED\n需求已清楚", TokenUsage(), [], None),
         ]
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 
@@ -264,14 +270,19 @@ class TestSpecPhaseInteractiveVsNonInteractive:
         assert result.status == PhaseStatus.IN_PROGRESS
         assert result.data.get("iterations") == 1
         assert result.data.get("status_code") is None
-        assert agent_manager.execute.call_count == 1
+        # 呼叫 2 次：原始 prompt + _analyze_missing_status_code 分析
+        assert agent_manager.execute.call_count == 2
 
 
 class TestPlanPhaseInteractiveVsNonInteractive:
     """測試 PlanPhase 的 interactive 和 non-interactive 模式差異。"""
 
     def test_confirmed_status_same_behavior_both_modes(self, tmp_path: Path) -> None:
-        """測試 READY_FOR_REVIEW 狀態在兩種模式下行為相同（都完成）"""
+        """測試 READY_FOR_REVIEW 狀態在兩種模式下行為不同
+
+        Interactive: READY_FOR_REVIEW → 用戶確認 → CONFIRMED
+        Non-interactive: READY_FOR_REVIEW → 直接完成（不需用戶確認）
+        """
         issue_name = "test-plan-confirmed"
         spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
@@ -301,6 +312,7 @@ class TestPlanPhaseInteractiveVsNonInteractive:
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=True,
+            template_path=create_template_file(tmp_path),
         )
 
         with patch('builtins.print'), \
@@ -316,16 +328,17 @@ class TestPlanPhaseInteractiveVsNonInteractive:
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
             user_input="confirm",  # Provide confirmation in non-interactive mode
+            template_path=create_template_file(tmp_path),
         )
 
         with patch('builtins.print'):
             result_noninteractive = phase_noninteractive.execute()
 
-        # 兩種模式都應該返回 COMPLETED
+        # 兩種模式都應該返回 COMPLETED，但狀態碼不同
         assert result_interactive.status == PhaseStatus.COMPLETED
         assert result_noninteractive.status == PhaseStatus.COMPLETED
-        assert result_interactive.data.get("status_code") == "CAFE_CONFIRMED"
-        assert result_noninteractive.data.get("status_code") == "CAFE_CONFIRMED"
+        assert result_interactive.data.get("status_code") == "CAFE_CONFIRMED"  # Interactive 有用戶確認
+        assert result_noninteractive.data.get("status_code") == "CAFE_READY_FOR_REVIEW"  # Non-interactive 直接完成
 
     def test_need_clarification_interactive_continues(self, tmp_path: Path) -> None:
         """測試 NEED_CLARIFICATION 在 interactive 模式會繼續迭代"""
@@ -341,8 +354,8 @@ class TestPlanPhaseInteractiveVsNonInteractive:
         agent_manager = MagicMock(spec=AgentManager)
         setup_agent_manager_mock_for_spec(agent_manager)
         agent_manager.execute.side_effect = [
-            ("CAFE_NEED_CLARIFICATION\n需要更多資訊", TokenUsage()),
-            ("CAFE_READY_FOR_REVIEW\n計畫已完成", TokenUsage()),
+            ("CAFE_NEED_CLARIFICATION\n需要更多資訊", TokenUsage(), [], None),
+            ("CAFE_READY_FOR_REVIEW\n計畫已完成", TokenUsage(), [], None),
         ]
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 
@@ -360,6 +373,7 @@ class TestPlanPhaseInteractiveVsNonInteractive:
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=True,
+            template_path=create_template_file(tmp_path),
         )
 
         with patch('builtins.print'), \
@@ -373,7 +387,7 @@ class TestPlanPhaseInteractiveVsNonInteractive:
         assert agent_manager.execute.call_count == 2  # Agent executes twice (not counting user confirmation)
 
     def test_need_clarification_noninteractive_stops(self, tmp_path: Path) -> None:
-        """測試 NEED_CLARIFICATION 在 non-interactive 模式會停止並返回 IN_PROGRESS"""
+        """測試 NEED_CLARIFICATION 在 non-interactive 模式沒有 user_input 時應該 FAILED"""
         issue_name = "test-plan-clarification-noninteractive"
         spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
@@ -402,15 +416,15 @@ class TestPlanPhaseInteractiveVsNonInteractive:
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
+            template_path=create_template_file(tmp_path),
         )
 
         with patch('builtins.print'):
             result = phase.execute()
 
-        # Non-interactive 模式應該停止在第一輪
-        assert result.status == PhaseStatus.IN_PROGRESS
-        assert result.data.get("iterations") == 1
-        assert result.data.get("status_code") == "CAFE_NEED_CLARIFICATION"
+        # Non-interactive 模式沒有 user_input 時應該 FAILED
+        assert result.status == PhaseStatus.FAILED
+        assert "NEED_CLARIFICATION" in result.message or "clarification" in result.message.lower()
         assert agent_manager.execute.call_count == 1
 
     def test_no_status_code_noninteractive_stops(self, tmp_path: Path) -> None:
@@ -443,13 +457,14 @@ class TestPlanPhaseInteractiveVsNonInteractive:
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
+            template_path=create_template_file(tmp_path),
         )
 
         with patch('builtins.print'):
             result = phase.execute()
 
-        # Non-interactive 模式應該停止在第一輪
+        # Non-interactive 模式沒有狀態碼時應該 IN_PROGRESS（需要用戶輸入）
         assert result.status == PhaseStatus.IN_PROGRESS
         assert result.data.get("iterations") == 1
-        assert result.data.get("status_code") is None
-        assert agent_manager.execute.call_count == 1
+        # 呼叫 2 次：原始 prompt + _analyze_missing_status_code 分析
+        assert agent_manager.execute.call_count == 2

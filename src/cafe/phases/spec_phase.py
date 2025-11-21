@@ -1,6 +1,7 @@
 """Specification phase (requirements clarification)."""
 
 import json
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
@@ -11,6 +12,8 @@ from cafe.core.phase import Phase
 from cafe.core.status_codes import PhaseStatusCode, StatusCodeParser, generate_status_code_prompt
 from cafe.core.types import PhaseProgress, PhaseResult, PhaseStatus, WorkflowMode
 from cafe.ui.display import Display
+from cafe.utils.git_utils import get_github_repo_name
+from cafe.utils.github import GitHubOps, GitHubError
 
 # Maximum number of clarification iterations to prevent infinite loops
 MAX_CLARIFICATION_ITERATIONS = 10
@@ -63,6 +66,7 @@ class SpecPhase(Phase):
         issue_name: Optional[str] = None,
         rigor: Optional["SpecRigor"] = None,
         user_input: str = "",
+        fetch_issue_id: Optional[int] = None,
     ) -> None:
         """Initialize requirements phase.
 
@@ -77,6 +81,7 @@ class SpecPhase(Phase):
             issue_name: Issue name for history tracking (default: derived from spec_file)
             rigor: Specification rigor level (default: medium)
             user_input: User input for non-interactive mode (default: "")
+            fetch_issue_id: GitHub issue number to fetch content from (optional)
         """
         super().__init__(interactive=interactive)
         
@@ -89,6 +94,7 @@ class SpecPhase(Phase):
         self.issue_id = issue_id
         self.pm_agent = pm_agent
         self.user_input = user_input
+        self.fetch_issue_id = fetch_issue_id
         self.phase_name = "spec"  # For base class progress tracking
 
         # Track if rigor was explicitly set (for interactive prompting)
@@ -114,6 +120,9 @@ class SpecPhase(Phase):
         spec_path = Path(self.spec_file)
         issue_dir = spec_path.parent.parent  # .cafe/issues/{issue_name}
         self.history_dir = issue_dir / "spec" / "history"
+
+        # Load issue_id from config.json if exists (for comment posting after resume)
+        self._load_issue_config()
 
         # Track requirements and questions
         self.confirmed_requirements = []
@@ -144,9 +153,11 @@ class SpecPhase(Phase):
             Phase result
         """
         try:
-            # Ask for rigor level if interactive and not set
-            if self.interactive and self.iteration == 0:
-                self._prompt_for_rigor()
+            # Fetch issue content from GitHub if --issue-id is provided
+            if self.fetch_issue_id:
+                error_result = self._fetch_github_issue(self.fetch_issue_id)
+                if error_result:
+                    return error_result
 
             # Check if already confirmed - skip execution
             already_completed = self._check_if_already_completed([PhaseStatusCode.CONFIRMED])
@@ -165,7 +176,22 @@ class SpecPhase(Phase):
                 elif self.iteration == 0:
                     # File doesn't exist AND no history - get initial user story
                     if self.interactive:
-                        self._prompt_for_user_story()
+                        # If --issue-id not provided, ask user to choose input method
+                        if not self.fetch_issue_id:
+                            method, issue_id = self._prompt_for_input_method()
+
+                            if method == "github" and issue_id:
+                                # Fetch from GitHub Issue
+                                error_result = self._fetch_github_issue(issue_id)
+                                if error_result:
+                                    return error_result
+                            else:
+                                # Manual input
+                                self._prompt_for_user_story()
+                        else:
+                            # --issue-id already provided, skip to user story prompt
+                            self._prompt_for_user_story()
+
                     else:
                         # Non-interactive mode: use user_input if provided, otherwise read from stdin
                         if self.user_input:
@@ -189,6 +215,10 @@ class SpecPhase(Phase):
 
                         # Create spec file with user story
                         spec_path.write_text(user_story, encoding="utf-8")
+
+            # Ask for rigor level if interactive and not set (after input method selection)
+            if self.interactive and self.iteration == 0:
+                self._prompt_for_rigor()
 
             # Requirements clarification loop
             while True:
@@ -214,7 +244,6 @@ class SpecPhase(Phase):
                 spec_file_path = Path(self.spec_file)
 
                 # Convert to project-relative path (git ignore format: / prefix)
-                import os
                 project_root = Path(os.getcwd())
                 try:
                     relative_path = spec_file_path.relative_to(project_root)
@@ -285,6 +314,22 @@ class SpecPhase(Phase):
         # Add issue_id if GitHub mode and created new issue
         if self.workflow_mode == WorkflowMode.GITHUB and hasattr(self, '_created_issue_id'):
             data["issue_id"] = self._created_issue_id
+
+        # Post spec.md back to GitHub issue if fetched from GitHub
+        if hasattr(self, '_fetched_issue_id'):
+            try:
+                spec_path = Path(self.spec_file)
+                if spec_path.exists():
+                    spec_content = spec_path.read_text(encoding="utf-8")
+
+                    # Post comment to GitHub issue
+                    gh_ops = GitHubOps()
+                    gh_ops.add_issue_comment(self._fetched_issue_id, spec_content)
+
+            except GitHubError as e:
+                # Log error but don't fail the phase
+                print(f"Warning: Failed to post spec to GitHub issue: {e}")
+
         return data
 
     def _prepare_user_input_for_iteration(self) -> "PhaseResult | str":
@@ -389,6 +434,107 @@ class SpecPhase(Phase):
                 break
             else:
                 print("❌ 無效選擇，請輸入 1, 2, 或 3")
+
+    def _prompt_for_input_method(self) -> tuple[str, Optional[int]]:
+        """詢問用戶選擇需求輸入方式（手動 vs GitHub Issue）
+
+        Returns:
+            Tuple of (method, issue_id):
+            - method: "manual" 或 "github"
+            - issue_id: Issue ID (int) 如果選擇 GitHub，否則 None
+        """
+        print("\n" + "="*70)
+        print("請選擇需求輸入方式：")
+        print("="*70)
+        print()
+        print("1. 手動輸入需求")
+        print("2. 從 GitHub Issue 抓取")
+        print()
+
+        while True:
+            choice = input("請選擇 (1 或 2): ").strip()
+
+            if choice == "1":
+                return ("manual", None)
+            elif choice == "2":
+                # 先顯示警告
+                print()
+                print("⚠️  注意：完成後會將 spec.md 以 comment 方式貼回 GitHub Issue")
+                print()
+
+                # 詢問 Issue ID 或 URL
+                issue_input = input("請輸入 GitHub Issue ID 或 URL: ").strip()
+
+                try:
+                    # 使用 GitHubOps 提取 issue number
+                    gh_ops = GitHubOps()
+                    issue_id_str = gh_ops.extract_issue_number(issue_input)
+                    issue_id = int(issue_id_str)
+
+                    print()
+                    print(f"✓ 將從 GitHub Issue #{issue_id} 抓取需求")
+                    print()
+
+                    return ("github", issue_id)
+                except (ValueError, GitHubError) as e:
+                    print(f"❌ 無效的 Issue ID 或 URL: {e}")
+                    print("請重新選擇...")
+                    print()
+            else:
+                print("❌ 無效選擇，請輸入 1 或 2")
+
+    def _fetch_github_issue(self, issue_id: int) -> Optional[PhaseResult]:
+        """從 GitHub 抓取 issue 內容
+
+        Args:
+            issue_id: GitHub issue ID
+
+        Returns:
+            PhaseResult if error occurred, None if success
+        """
+        try:
+            # Get repository name from .git/config
+            repo_name = get_github_repo_name()
+
+            # Fetch issue content
+            gh_ops = GitHubOps()
+            issue_data = gh_ops.get_issue(str(issue_id), include_comments=False)
+
+            # Combine title and body as first user_input
+            issue_title = issue_data.get("title", "")
+            issue_body = issue_data.get("body", "")
+            fetched_content = f"# {issue_title}\n\n{issue_body}" if issue_title else issue_body
+
+            # Override user_input with fetched content
+            self.user_input = fetched_content
+
+            # Store issue_id for later comment posting
+            self._fetched_issue_id = str(issue_id)
+
+            # Save issue config
+            self._save_issue_config()
+
+            # Write fetched content to spec file (same as _prompt_for_user_story)
+            spec_path = Path(self.spec_file)
+            spec_path.parent.mkdir(parents=True, exist_ok=True)
+            spec_path.write_text(f"# 初始需求\n\n{fetched_content}\n")
+
+            print()
+            print("✅ 需求已從 GitHub Issue 載入，開始需求澄清...")
+            print()
+
+            return None  # Success
+
+        except FileNotFoundError as e:
+            return PhaseResult(
+                status=PhaseStatus.FAILED,
+                message=f"Failed to get repository info: {e}",
+            )
+        except GitHubError as e:
+            return PhaseResult(
+                status=PhaseStatus.FAILED,
+                message=f"Failed to fetch GitHub issue: {e}",
+            )
 
     def _prompt_for_user_story(self) -> None:
         """Prompt user to write initial requirement when no requirements file exists."""
@@ -593,6 +739,7 @@ class SpecPhase(Phase):
 - 對於明顯需要澄清的地方提問，但不過度追問小細節
 - 確保主要功能和預期行為清楚
 - 對於次要細節可以接受合理的彈性
+- 詢問驗收標準，但不要求過於詳細
 - 目標：在速度和精確度之間取得平衡"""
 
     def _generate_local_prompt(self, user_input: str = "") -> str:
@@ -608,118 +755,68 @@ class SpecPhase(Phase):
         status_code_prompt = self._get_status_code_prompt()
         rigor_guidelines = self._get_rigor_guidelines()
 
-        # Check if spec file exists
-        spec_path = Path(self.spec_file)
-        file_exists = spec_path.exists()
+        # --- 1. Determine context-specific sections ---
+        initial_instruction = ""
+        context_section = ""
+        restriction = ""
 
         if self.iteration == 1:
-            if file_exists:
-                # File exists - analyze and clarify
-                return f"""分析 {self.spec_file} 的內容。
+            initial_instruction = f"分析 {self.spec_file} 的內容。"
+            context_section = """
+**你的職責：**
+1. 仔細閱讀需求文件，找出所有不清楚、模糊、可能讓開發者自己腦補的地方。
+2. **以 PM 的身份**用對話方式向用戶提問，確認所有必要資訊。
+3. 如果需求已經很清楚，就說清楚了，不要硬湊問題。
+"""
+        else:  # Iteration 2+
+            initial_instruction = f"繼續分析 {self.spec_file} 的最新版本。"
+            if user_input:
+                context_section = f"""
+**使用者的回答：**
+{user_input}
+"""
+            if self.iteration >= 4:
+                restriction = f"""
+⚠️ **重要限制：**
+- 你現在是第 {self.iteration} 輪，只能針對「待解答的問題」繼續追問。
+- **不可以提出新的問題**。
+- 只能深入釐清已經提出的問題。
+"""
 
+        # --- 2. Define common instructions ---
+        base_prompt = f"""
 **你的角色：**
 你是一位經驗豐富的 Product Manager (PM)，專注於需求澄清和產品規劃。
 你不是軟體工程師，你的工作是確保需求清楚，避免開發者自己腦補。
 
-這是第 {self.iteration} 輪需求澄清。
+這是第 {self.iteration} 輪需求澄清。"""
 
-**你的職責：**
-1. 仔細閱讀需求文件，找出所有不清楚、模糊、可能讓開發者自己腦補的地方
-2. **以 PM 的身份**用對話方式向用戶提問，確認所有必要資訊
-3. 如果需求已經很清楚，就說清楚了，不要硬湊問題
-
-{rigor_guidelines}
-
-{non_technical}
-
-{status_code_prompt}
-
-**如果需要澄清需求（status: CAFE_NEED_CLARIFICATION）：**
+        need_clarification_instruction = f"""**如果需要澄清（status: CAFE_NEED_CLARIFICATION）：**
 使用 Write tool 將以下內容寫入 {self.spec_file}：
-   - 「## 使用者故事」- 用戶撰寫的使用者故事或由自動由需求描述產生的使用者故事
-   - 「## 目前的需求規格」- 列出目前已知的所有需求內容
-   - 「## 待釐清的問題」- 以 PM 的身份用對話方式向用戶提問
+   - 「## 使用者故事」- 用戶撰寫的使用者故事或由自動由需求描述產生的使用者故事。
+   - 「## 目前的需求規格」- 整合所有已知資訊（包括使用者故事、先前的對話、用戶的最新回答），列出目前已知的完整需求。
+   - 「## 待釐清的問題」- 以 PM 的身份用對話方式提問，深入釐清需求。
+"""
 
-記住：你是 PM，不是工程師，不要提技術細節！
-
-**如果需求已清楚（status: CAFE_CONFIRMED）：**
+        confirmed_instruction = f"""**如果需求已清楚（status: CAFE_CONFIRMED）：**
 使用 Write tool 將完整需求規格文件寫入 {self.spec_file}，格式：
-   - 「## 使用者故事」- 用戶撰寫的使用者故事或由自動由需求描述產生的使用者故事
-   - 「## 需求規格」- 完整的需求內容，包含：功能描述、使用場景、預期行為、驗收標準
-"""
-            else:
-                # File doesn't exist but user story should have been created
-                return f"""分析 {self.spec_file} 中的使用者故事。
-
-**你的角色：**
-你是一位經驗豐富的 Product Manager (PM)，負責將用戶的需求寫成使用者故事，並轉換成完整的需求文件。
-你不是軟體工程師，你的工作是確保需求清楚。
-
-這是第 {self.iteration} 輪需求澄清。
-
-{rigor_guidelines}
-
-{non_technical}
-
-{status_code_prompt}
-
-**如果需要更多資訊（status: CAFE_NEED_CLARIFICATION）：**
-使用 Write tool 將以下內容寫入 {self.spec_file}：
-   - 「## 使用者故事」- 用戶撰寫的使用者故事或由自動由需求描述產生的使用者故事
-   - 「## 目前的需求規格」- 整理目前從使用者故事得知的需求
-   - 「## 待釐清的問題」- 以 PM 的身份提出具體問題（使用場景、預期行為、驗收標準）
-
-記住：你是 PM，不要問技術實作問題！
-
-**如果資訊已足夠（status: CAFE_CONFIRMED）：**
-使用 Write tool 將完整需求文件寫入 {self.spec_file}，格式：
-   - 「## 使用者故事」- 用戶撰寫的使用者故事或由自動由需求描述產生的使用者故事
-   - 「## 需求規格」- 完整的需求內容
-"""
-        else:
-            # Iteration 2+: Include user's response
-            user_response_section = ""
-            if user_input:
-                user_response_section = f"""
-**使用者的回答：**
-{user_input}
-
+   - 「## 使用者故事」- 用戶撰寫的使用者故事或由自動由需求描述產生的使用者故事。
+   - 「## 需求規格」- 整合所有已確認的內容，產生最終的完整需求規格，包含功能描述、使用場景、預期行為、驗收標準等。
 """
 
-            # Add restriction for iteration 4+
-            restriction = ""
-            if self.iteration >= 4:
-                restriction = f"""
-⚠️ **重要限制：**
-- 你現在是第 {self.iteration} 輪，只能針對「待解答的問題」繼續追問
-- **不可以提出新的問題**
-- 只能深入釐清已經提出的問題
-"""
-
-            return f"""繼續分析 {self.spec_file} 的最新版本。
-
-**你的角色：**
-你是一位經驗豐富的 Product Manager (PM)，專注於需求澄清。
-你不是軟體工程師，不要提技術實作細節。
-
-這是第 {self.iteration} 輪需求澄清。請檢查需求文件的最新版本。
-{user_response_section}
+        # --- 3. Assemble the final prompt ---
+        return f"""{initial_instruction}
+{base_prompt.strip()}
+{context_section}
 {rigor_guidelines}
 
 {non_technical}
 
 {status_code_prompt}
 {restriction}
-**如果仍需澄清（status: CAFE_NEED_CLARIFICATION）：**
-使用 Write tool 將以下內容寫入 {self.spec_file}：
-   - 「## 使用者故事」- 用戶撰寫的使用者故事或由自動由需求描述產生的使用者故事
-   - 「## 目前的需求規格」- 整合之前的對話和用戶最新回答，列出目前已知的完整需求
-   - 「## 待釐清的問題」- 以 PM 的身份繼續用對話方式提問
+{need_clarification_instruction}
 
-**如果需求已清楚（status: CAFE_CONFIRMED）：**
-使用 Write tool 將完整需求規格文件寫入 {self.spec_file}，格式：
-   - 「## 使用者故事」- 用戶撰寫的使用者故事或由自動由需求描述產生的使用者故事
-   - 「## 需求規格」- 完整需求（整合所有已確認的內容）
+{confirmed_instruction}
 """
 
     def _generate_github_prompt(self, user_input: str = "") -> str:
@@ -771,6 +868,45 @@ class SpecPhase(Phase):
 回應確認訊息。
 """
 
+    def _load_issue_config(self) -> None:
+        """Load issue configuration (issue_id) from config.json if exists."""
+        # Path: .cafe/issues/{issue_name}/config.json
+        spec_path = Path(self.spec_file)
+        issue_dir = spec_path.parent.parent  # .cafe/issues/{issue_name}
+        config_file = issue_dir / "config.json"
+
+        if not config_file.exists():
+            return
+
+        try:
+            with open(config_file, "r", encoding="utf-8") as f:
+                config_data = json.load(f)
+                if "issue_id" in config_data:
+                    self._fetched_issue_id = config_data["issue_id"]
+        except (json.JSONDecodeError, IOError):
+            # Ignore errors, issue_id will remain unset
+            pass
+
+    def _save_issue_config(self) -> None:
+        """Save issue configuration (issue_id) to config.json."""
+        if not hasattr(self, '_fetched_issue_id'):
+            return
+
+        # Path: .cafe/issues/{issue_name}/config.json
+        spec_path = Path(self.spec_file)
+        issue_dir = spec_path.parent.parent  # .cafe/issues/{issue_name}
+        config_file = issue_dir / "config.json"
+
+        # Create config
+        config_data = {
+            "issue_id": self._fetched_issue_id,
+        }
+
+        # Write config
+        config_file.parent.mkdir(parents=True, exist_ok=True)
+        with open(config_file, "w", encoding="utf-8") as f:
+            json.dump(config_data, f, indent=2, ensure_ascii=False)
+
     def get_status_file(self) -> Path:
         """Public method to get status file path for workflow integration.
 
@@ -778,3 +914,19 @@ class SpecPhase(Phase):
             Path to status.json
         """
         return self._get_status_file()
+
+    def _get_status_analysis_prompt(self) -> str:
+        """取得分析 status code 的 prompt。
+
+        Returns:
+            分析 spec 檔案狀態的 prompt
+        """
+        return f"""請閱讀 {self.spec_file} 並分析目前的狀態。
+
+根據以下條件判斷應該回傳哪個狀態碼：
+
+- CAFE_CONFIRMED: 需求規格已完成，所有必要資訊都已釐清，沒有待確認的問題
+- CAFE_NEED_CLARIFICATION: 規格中還有問題需要與用戶確認，或有未釐清的細節
+- CAFE_REJECTED: 需求不明確、無法實現、或被明確拒絕
+
+請只回傳一個狀態碼（例如：CAFE_CONFIRMED），不要有任何其他內容。"""

@@ -13,6 +13,14 @@ from cafe.phases.plan_phase import PlanPhase
 from cafe.phases.develop_phase import DevelopPhase
 from cafe.phases.review_phase import ReviewPhase
 from cafe.phases.pr_phase import PRPhase
+from cafe.utils.github import GitHubOps
+
+
+@pytest.fixture
+def mock_github_ops():
+    """Mock GitHubOps"""
+    github_ops = MagicMock(spec=GitHubOps)
+    return github_ops
 
 
 class TestSpecPhaseInteractive:
@@ -186,7 +194,7 @@ class TestReviewPhaseInteractive:
 class TestPRPhaseInteractive:
     """測試 PRPhase 的 interactive 參數"""
 
-    def test_pr_phase_default_interactive_true(self):
+    def test_pr_phase_default_interactive_true(self, mock_github_ops):
         """測試 PRPhase 預設 interactive 為 True"""
         # Arrange
         agent_manager = MagicMock(spec=AgentManager)
@@ -198,6 +206,7 @@ class TestPRPhaseInteractive:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
+            github_ops=mock_github_ops,
             spec_file=".cafe/issues/test/spec/spec.md",
             workflow_mode=WorkflowMode.LOCAL,
         )
@@ -205,7 +214,7 @@ class TestPRPhaseInteractive:
         # Assert
         assert phase.interactive is True
 
-    def test_pr_phase_can_set_interactive_false(self):
+    def test_pr_phase_can_set_interactive_false(self, mock_github_ops):
         """測試 PRPhase 可以設定 interactive 為 False"""
         # Arrange
         agent_manager = MagicMock(spec=AgentManager)
@@ -217,6 +226,7 @@ class TestPRPhaseInteractive:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
+            github_ops=mock_github_ops,
             spec_file=".cafe/issues/test/spec/spec.md",
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
@@ -229,7 +239,7 @@ class TestPRPhaseInteractive:
 class TestInteractiveConsistency:
     """測試所有 Phase 的 interactive 行為一致性"""
 
-    def test_all_phases_support_interactive_parameter(self):
+    def test_all_phases_support_interactive_parameter(self, mock_github_ops):
         """測試所有 Phase 都支援 interactive 參數"""
         # Arrange
         agent_manager = MagicMock(spec=AgentManager)
@@ -281,6 +291,7 @@ class TestInteractiveConsistency:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
+            github_ops=mock_github_ops,
             spec_file="test.md",
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,

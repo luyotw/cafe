@@ -97,7 +97,7 @@ class TestPermissionDenialModel:
         )
 
         pattern = denial.to_allowed_tool_pattern()
-        assert pattern == "Read(/etc/passwd)"
+        assert pattern == "read(/etc/passwd)"
 
     def test_to_allowed_tool_pattern_with_bash_command(self):
         """測試將 bash command 轉換為 allowed_tools 格式"""
@@ -107,7 +107,7 @@ class TestPermissionDenialModel:
         )
 
         pattern = denial.to_allowed_tool_pattern()
-        assert pattern == "Bash(git status)"
+        assert pattern == "bash(git status)"
 
     def test_to_allowed_tool_pattern_with_long_command(self):
         """測試長命令只取前兩個詞"""
@@ -117,7 +117,7 @@ class TestPermissionDenialModel:
         )
 
         pattern = denial.to_allowed_tool_pattern()
-        assert pattern == "Bash(git commit)"
+        assert pattern == "bash(git commit)"
 
     def test_to_allowed_tool_pattern_without_params(self):
         """測試沒有特定參數時只返回工具名稱"""
@@ -127,7 +127,7 @@ class TestPermissionDenialModel:
         )
 
         pattern = denial.to_allowed_tool_pattern()
-        assert pattern == "SomeTool"
+        assert pattern == "sometool"
 
 
 class TestPermissionDenialStorage:

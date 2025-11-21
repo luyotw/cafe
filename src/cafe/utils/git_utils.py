@@ -1,9 +1,11 @@
 """Git utility functions."""
 
 import os
+import re
 import subprocess
 import tempfile
-from typing import Tuple
+from pathlib import Path
+from typing import Optional, Tuple
 
 
 def rewrite_commit_message(commit_sha: str, new_message: str, base_branch: str = "main") -> Tuple[bool, str]:
@@ -55,3 +57,59 @@ fi
             
     except Exception as e:
         return False, f"Error: {e}"
+
+
+def get_github_repo_name(cwd: Optional[Path] = None) -> str:
+    """Get GitHub repository name from .git/config.
+
+    Args:
+        cwd: Working directory (default: current directory)
+
+    Returns:
+        Repository name in "owner/repo" format
+
+    Raises:
+        FileNotFoundError: If .git/config not found
+        ValueError: If remote origin not found or invalid URL
+
+    Example:
+        >>> repo = get_github_repo_name()
+        >>> print(repo)  # "anthropics/cli-agent-flow-engine"
+    """
+    if cwd is None:
+        cwd = Path.cwd()
+    else:
+        cwd = Path(cwd)
+
+    config_file = cwd / ".git" / "config"
+    if not config_file.exists():
+        raise FileNotFoundError(f".git/config not found in {cwd}")
+
+    config_content = config_file.read_text()
+
+    # Find remote "origin" URL
+    # Match patterns like:
+    # [remote "origin"]
+    #     url = https://github.com/owner/repo.git
+    # or:
+    #     url = git@github.com:owner/repo.git
+    match = re.search(r'\[remote "origin"\][^\[]*?url\s*=\s*(.+)', config_content, re.MULTILINE)
+    if not match:
+        raise ValueError("No remote 'origin' found in .git/config")
+
+    remote_url = match.group(1).strip()
+
+    # Extract owner/repo from URL
+    # HTTPS: https://github.com/owner/repo.git
+    # SSH: git@github.com:owner/repo.git
+    https_match = re.match(r'https://github\.com/([^/]+)/([^/\.]+)', remote_url)
+    ssh_match = re.match(r'git@github\.com:([^/]+)/([^/\.]+)', remote_url)
+
+    if https_match:
+        owner, repo = https_match.groups()
+        return f"{owner}/{repo}"
+    elif ssh_match:
+        owner, repo = ssh_match.groups()
+        return f"{owner}/{repo}"
+    else:
+        raise ValueError(f"Invalid GitHub URL: {remote_url}")

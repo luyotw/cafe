@@ -26,12 +26,16 @@ def setup_plan_phase(tmp_path, monkeypatch):
     # 創建必要的目錄結構
     plan_dir = tmp_path / ".cafe" / "issues" / "test" / "plan"
     plan_dir.mkdir(parents=True)
-    
+
     spec_dir = tmp_path / ".cafe" / "issues" / "test" / "spec"
     spec_dir.mkdir(parents=True)
     spec_file = spec_dir / "spec.md"
-    spec_file.write_text("# 測試需求\n\n這是測試內容。")
-    
+    spec_file.write_text("# 測試需求\n\n這是測試內容。\n\n## 開發指南\n\n開發指南內容。")
+
+    # 創建已存在的 plan.md（包含開發指南）
+    plan_file = plan_dir / "plan.md"
+    plan_file.write_text("## 開發指南\n\n開發指南內容。\n\n## 實作計畫\n\nTODO")
+
     # 創建 template
     template_dir = tmp_path / ".cafe" / "templates" / "plan"
     template_dir.mkdir(parents=True)

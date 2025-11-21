@@ -106,7 +106,7 @@ cafe pr <issue-name>             # Phase 5: 建立 PR
 
 4. **ReviewPhase**（Code Review）
    - 審查者 agent (Richard) 審查程式碼變更
-   - 迭代直到 APPROVED/LGTM 狀態
+   - 迭代直到 CONFIRMED 或 NEEDS_CHANGES 狀態
 
 5. **PRPhase**（Pull Request）
    - 推送 branch 並透過 `gh` CLI 建立 GitHub PR

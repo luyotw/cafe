@@ -396,10 +396,17 @@ class TestNonInteractiveModeIteration1:
         spec_file.parent.mkdir(parents=True, exist_ok=True)
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("CAFE_NEED_CLARIFICATION\n需要澄清需求。\n\n## 待釐清的問題\n1. 問題一", TokenUsage(), [], None)
+        # First call returns NEED_CLARIFICATION, second call returns CONFIRMED
+        agent_manager.execute.side_effect = [
+            ("CAFE_NEED_CLARIFICATION\n需要澄清需求。\n\n## 待釐清的問題\n1. 問題一", TokenUsage(), [], None),
+            ("CAFE_CONFIRMED\n需求已清楚", TokenUsage(), [], None),
+        ]
         setup_agent_manager_mocks(agent_manager)
 
         permission_handler = MagicMock(spec=PermissionHandler)
+
+        # Provide user story via user_input for non-interactive mode
+        user_story = "身為開發者，我想要有一個指令可以顯示 IP"
 
         phase = SpecPhase(
             agent_manager=agent_manager,
@@ -407,20 +414,18 @@ class TestNonInteractiveModeIteration1:
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
+            user_input=user_story,  # Use user_input parameter in non-interactive mode
         )
 
-        # Mock stdin with user story
-        user_story = "身為開發者，我想要有一個指令可以顯示 IP"
-        with patch('sys.stdin', StringIO(user_story + "\nEND\n")):
-            result = phase.execute()
+        result = phase.execute()
 
-        # Should return IN_PROGRESS after first iteration
-        assert result.status == PhaseStatus.IN_PROGRESS
-        assert result.data["status_code"] == PhaseStatusCode.NEED_CLARIFICATION.value
-        assert result.data["iterations"] == 1
+        # Should complete successfully with 2 iterations (user_input consumed in iteration 2)
+        assert result.status == PhaseStatus.COMPLETED
+        assert result.data["status_code"] == PhaseStatusCode.CONFIRMED.value
+        assert result.data["iterations"] == 2
 
-        # Agent should be called once
-        agent_manager.execute.assert_called_once()
+        # Agent should be called twice (once for initial, once after clarification)
+        assert agent_manager.execute.call_count == 2
 
     def test_first_call_creates_spec_file_from_stdin(self, tmp_path: Path) -> None:
         """第1次呼叫應該從 stdin 讀取 user story 並建立檔案"""
@@ -534,6 +539,8 @@ class TestNonInteractiveModeErrorHandling:
         spec_file.write_text("Test")
 
         agent_manager = MagicMock(spec=AgentManager)
+        # Agent returns NEED_CLARIFICATION which should cause failure without user_input
+        agent_manager.execute.return_value = ("CAFE_NEED_CLARIFICATION\n問題", TokenUsage(), [], None)
         setup_agent_manager_mocks(agent_manager)
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -547,12 +554,12 @@ class TestNonInteractiveModeErrorHandling:
         )
 
         # Empty stdin on iteration 2 (non-interactive, so stdin not used)
-        # Without user_input, should return IN_PROGRESS
+        # Without user_input in non-interactive mode, should FAIL
         with patch('sys.stdin', StringIO("\n")):
             result = phase.execute()
 
-        assert result.status == PhaseStatus.IN_PROGRESS
-        assert "waiting for user clarification" in result.message
+        assert result.status == PhaseStatus.FAILED
+        assert "non-interactive mode without user input" in result.message
 
 
 class TestInteractiveModeStillWorks:
@@ -838,6 +845,209 @@ class TestSpecPhaseFilePermissions:
             f"Write permission should include spec.md path, got: {write_tools}"
         assert any(spec_path_str in tool or "spec.md" in tool for tool in edit_tools), \
             f"Edit permission should include spec.md path, got: {edit_tools}"
+
+
+class TestPromptForInputMethod:
+    """測試 _prompt_for_input_method() 方法"""
+
+    @patch("builtins.input")
+    def test_prompt_for_input_method_manual(self, mock_input: MagicMock, tmp_path: Path) -> None:
+        """測試選擇手動輸入（選項 1）"""
+        # Setup
+        mock_input.return_value = "1"
+        spec_file = tmp_path / ".cafe" / "issues" / "test-issue" / "spec" / "spec.md"
+
+        agent_manager = MagicMock(spec=AgentManager)
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        phase = SpecPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            spec_file=str(spec_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            interactive=True,
+        )
+
+        # Execute
+        method, issue_id = phase._prompt_for_input_method()
+
+        # Assert
+        assert method == "manual"
+        assert issue_id is None
+        mock_input.assert_called_once()
+
+    @patch("builtins.input")
+    @patch("cafe.phases.spec_phase.GitHubOps")
+    def test_prompt_for_input_method_github_with_number(
+        self, mock_github_ops: MagicMock, mock_input: MagicMock, tmp_path: Path
+    ) -> None:
+        """測試選擇 GitHub Issue + 輸入數字"""
+        # Setup
+        mock_input.side_effect = ["2", "123"]
+        mock_gh_instance = MagicMock()
+        mock_gh_instance.extract_issue_number.return_value = "123"
+        mock_github_ops.return_value = mock_gh_instance
+
+        spec_file = tmp_path / ".cafe" / "issues" / "test-issue" / "spec" / "spec.md"
+
+        agent_manager = MagicMock(spec=AgentManager)
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        phase = SpecPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            spec_file=str(spec_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            interactive=True,
+        )
+
+        # Execute
+        method, issue_id = phase._prompt_for_input_method()
+
+        # Assert
+        assert method == "github"
+        assert issue_id == 123
+        mock_gh_instance.extract_issue_number.assert_called_once_with("123")
+
+    @patch("builtins.input")
+    @patch("cafe.phases.spec_phase.GitHubOps")
+    def test_prompt_for_input_method_github_with_url(
+        self, mock_github_ops: MagicMock, mock_input: MagicMock, tmp_path: Path
+    ) -> None:
+        """測試選擇 GitHub Issue + 輸入 URL"""
+        # Setup
+        github_url = "https://github.com/owner/repo/issues/456"
+        mock_input.side_effect = ["2", github_url]
+        mock_gh_instance = MagicMock()
+        mock_gh_instance.extract_issue_number.return_value = "456"
+        mock_github_ops.return_value = mock_gh_instance
+
+        spec_file = tmp_path / ".cafe" / "issues" / "test-issue" / "spec" / "spec.md"
+
+        agent_manager = MagicMock(spec=AgentManager)
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        phase = SpecPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            spec_file=str(spec_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            interactive=True,
+        )
+
+        # Execute
+        method, issue_id = phase._prompt_for_input_method()
+
+        # Assert
+        assert method == "github"
+        assert issue_id == 456
+        mock_gh_instance.extract_issue_number.assert_called_once_with(github_url)
+
+    @patch("builtins.input")
+    def test_prompt_for_input_method_invalid_then_valid(
+        self, mock_input: MagicMock, tmp_path: Path
+    ) -> None:
+        """測試無效選擇後重試"""
+        # Setup - first invalid (3), then valid (1)
+        mock_input.side_effect = ["3", "1"]
+        spec_file = tmp_path / ".cafe" / "issues" / "test-issue" / "spec" / "spec.md"
+
+        agent_manager = MagicMock(spec=AgentManager)
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        phase = SpecPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            spec_file=str(spec_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            interactive=True,
+        )
+
+        # Execute
+        method, issue_id = phase._prompt_for_input_method()
+
+        # Assert
+        assert method == "manual"
+        assert issue_id is None
+        assert mock_input.call_count == 2
+
+
+class TestFetchGitHubIssue:
+    """測試 _fetch_github_issue() 方法"""
+
+    @patch("cafe.phases.spec_phase.get_github_repo_name")
+    @patch("cafe.phases.spec_phase.GitHubOps")
+    def test_fetch_github_issue_writes_spec_file(
+        self, mock_github_ops: MagicMock, mock_get_repo: MagicMock, tmp_path: Path
+    ) -> None:
+        """測試從 GitHub Issue 抓取後會寫入 spec.md"""
+        # Setup
+        mock_get_repo.return_value = "owner/repo"
+        mock_gh_instance = MagicMock()
+        mock_gh_instance.get_issue.return_value = {
+            "title": "Test Issue Title",
+            "body": "Test issue body content"
+        }
+        mock_github_ops.return_value = mock_gh_instance
+
+        spec_file = tmp_path / ".cafe" / "issues" / "test-issue" / "spec" / "spec.md"
+
+        agent_manager = MagicMock(spec=AgentManager)
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        phase = SpecPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            spec_file=str(spec_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            interactive=True,
+        )
+
+        # Execute
+        result = phase._fetch_github_issue(123)
+
+        # Assert
+        assert result is None  # Success
+        assert spec_file.exists()
+        content = spec_file.read_text()
+        assert "# 初始需求" in content
+        assert "Test Issue Title" in content
+        assert "Test issue body content" in content
+
+    @patch("cafe.phases.spec_phase.get_github_repo_name")
+    @patch("cafe.phases.spec_phase.GitHubOps")
+    def test_fetch_github_issue_stores_issue_id(
+        self, mock_github_ops: MagicMock, mock_get_repo: MagicMock, tmp_path: Path
+    ) -> None:
+        """測試抓取後會儲存 issue_id 供之後貼回 comment"""
+        # Setup
+        mock_get_repo.return_value = "owner/repo"
+        mock_gh_instance = MagicMock()
+        mock_gh_instance.get_issue.return_value = {
+            "title": "Test",
+            "body": "Body"
+        }
+        mock_github_ops.return_value = mock_gh_instance
+
+        spec_file = tmp_path / ".cafe" / "issues" / "test-issue" / "spec" / "spec.md"
+
+        agent_manager = MagicMock(spec=AgentManager)
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        phase = SpecPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            spec_file=str(spec_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            interactive=True,
+        )
+
+        # Execute
+        phase._fetch_github_issue(456)
+
+        # Assert
+        assert hasattr(phase, '_fetched_issue_id')
+        assert phase._fetched_issue_id == "456"
 
 
 if __name__ == "__main__":
