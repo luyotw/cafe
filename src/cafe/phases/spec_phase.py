@@ -63,6 +63,7 @@ class SpecPhase(Phase):
         issue_name: Optional[str] = None,
         rigor: Optional["SpecRigor"] = None,
         user_input: str = "",
+        fetch_issue_id: Optional[int] = None,
     ) -> None:
         """Initialize requirements phase.
 
@@ -77,6 +78,7 @@ class SpecPhase(Phase):
             issue_name: Issue name for history tracking (default: derived from spec_file)
             rigor: Specification rigor level (default: medium)
             user_input: User input for non-interactive mode (default: "")
+            fetch_issue_id: GitHub issue number to fetch content from (optional)
         """
         super().__init__(interactive=interactive)
         
@@ -89,6 +91,7 @@ class SpecPhase(Phase):
         self.issue_id = issue_id
         self.pm_agent = pm_agent
         self.user_input = user_input
+        self.fetch_issue_id = fetch_issue_id
         self.phase_name = "spec"  # For base class progress tracking
 
         # Track if rigor was explicitly set (for interactive prompting)
@@ -144,6 +147,44 @@ class SpecPhase(Phase):
             Phase result
         """
         try:
+            # Fetch issue content from GitHub if --issue-id is provided
+            if self.fetch_issue_id:
+                try:
+                    from cafe.utils.git_utils import get_github_repo_name
+                    from cafe.utils.github import GitHubOps, GitHubError
+
+                    # Get repository name from .git/config
+                    repo_name = get_github_repo_name()
+
+                    # Fetch issue content
+                    gh_ops = GitHubOps()
+                    issue_data = gh_ops.get_issue(str(self.fetch_issue_id), include_comments=False)
+
+                    # Combine title and body as first user_input
+                    issue_title = issue_data.get("title", "")
+                    issue_body = issue_data.get("body", "")
+                    fetched_content = f"# {issue_title}\n\n{issue_body}" if issue_title else issue_body
+
+                    # Override user_input with fetched content
+                    self.user_input = fetched_content
+
+                    # Store issue_id for later comment posting
+                    self._fetched_issue_id = str(self.fetch_issue_id)
+
+                    # Save issue config
+                    self._save_issue_config()
+
+                except FileNotFoundError as e:
+                    return PhaseResult(
+                        status=PhaseStatus.FAILED,
+                        message=f"Failed to get repository info: {e}",
+                    )
+                except GitHubError as e:
+                    return PhaseResult(
+                        status=PhaseStatus.FAILED,
+                        message=f"Failed to fetch GitHub issue: {e}",
+                    )
+
             # Ask for rigor level if interactive and not set
             if self.interactive and self.iteration == 0:
                 self._prompt_for_rigor()
@@ -285,6 +326,24 @@ class SpecPhase(Phase):
         # Add issue_id if GitHub mode and created new issue
         if self.workflow_mode == WorkflowMode.GITHUB and hasattr(self, '_created_issue_id'):
             data["issue_id"] = self._created_issue_id
+
+        # Post spec.md back to GitHub issue if fetched from GitHub
+        if hasattr(self, '_fetched_issue_id'):
+            try:
+                from cafe.utils.github import GitHubOps, GitHubError
+
+                spec_path = Path(self.spec_file)
+                if spec_path.exists():
+                    spec_content = spec_path.read_text(encoding="utf-8")
+
+                    # Post comment to GitHub issue
+                    gh_ops = GitHubOps()
+                    gh_ops.add_issue_comment(self._fetched_issue_id, spec_content)
+
+            except GitHubError as e:
+                # Log error but don't fail the phase
+                print(f"Warning: Failed to post spec to GitHub issue: {e}")
+
         return data
 
     def _prepare_user_input_for_iteration(self) -> "PhaseResult | str":
@@ -721,6 +780,28 @@ class SpecPhase(Phase):
 **如果需求已經很清楚，確認完成：**
 回應確認訊息。
 """
+
+    def _save_issue_config(self) -> None:
+        """Save issue configuration (issue_id) to config.json."""
+        import json
+
+        if not hasattr(self, '_fetched_issue_id'):
+            return
+
+        # Path: .cafe/issues/{issue_name}/config.json
+        spec_path = Path(self.spec_file)
+        issue_dir = spec_path.parent.parent  # .cafe/issues/{issue_name}
+        config_file = issue_dir / "config.json"
+
+        # Create config
+        config_data = {
+            "issue_id": self._fetched_issue_id,
+        }
+
+        # Write config
+        config_file.parent.mkdir(parents=True, exist_ok=True)
+        with open(config_file, "w", encoding="utf-8") as f:
+            json.dump(config_data, f, indent=2, ensure_ascii=False)
 
     def get_status_file(self) -> Path:
         """Public method to get status file path for workflow integration.

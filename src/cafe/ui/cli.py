@@ -317,6 +317,11 @@ def spec(
         "-i",
         help="GitHub issue ID (github mode)",
     ),
+    fetch_issue_id: Optional[int] = typer.Option(
+        None,
+        "--issue-id",
+        help="Fetch issue content from GitHub (provide issue number)",
+    ),
     pm_agent: str = typer.Option(
         "Roger",
         "--pm",
@@ -433,9 +438,9 @@ def spec(
         import sys
         is_interactive = interactive and sys.stdin.isatty()
 
-        # Validate user_input in non-interactive mode
-        if not is_interactive and not user_input:
-            console.print("[red]Error: --user-input is required when using --no-interactive[/red]")
+        # Validate user_input in non-interactive mode (unless using --issue-id to fetch)
+        if not is_interactive and not user_input and not fetch_issue_id:
+            console.print("[red]Error: --user-input is required when using --no-interactive (or use --issue-id to fetch from GitHub)[/red]")
             raise typer.Exit(1)
 
         # Create and execute spec phase
@@ -449,6 +454,8 @@ def spec(
             interactive=is_interactive,
             rigor=spec_rigor,
             user_input=user_input or "",
+            issue_name=issue_name,
+            fetch_issue_id=fetch_issue_id,
         )
 
         console.print("[bold]Starting conversational spec generation...[/bold]")
