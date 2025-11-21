@@ -159,10 +159,6 @@ class SpecPhase(Phase):
                 if error_result:
                     return error_result
 
-            # Ask for rigor level if interactive and not set
-            if self.interactive and self.iteration == 0:
-                self._prompt_for_rigor()
-
             # Check if already confirmed - skip execution
             already_completed = self._check_if_already_completed([PhaseStatusCode.CONFIRMED])
             if already_completed:
@@ -195,6 +191,7 @@ class SpecPhase(Phase):
                         else:
                             # --issue-id already provided, skip to user story prompt
                             self._prompt_for_user_story()
+
                     else:
                         # Non-interactive mode: use user_input if provided, otherwise read from stdin
                         if self.user_input:
@@ -218,6 +215,10 @@ class SpecPhase(Phase):
 
                         # Create spec file with user story
                         spec_path.write_text(user_story, encoding="utf-8")
+
+            # Ask for rigor level if interactive and not set (after input method selection)
+            if self.interactive and self.iteration == 0:
+                self._prompt_for_rigor()
 
             # Requirements clarification loop
             while True:
