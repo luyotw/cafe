@@ -436,8 +436,11 @@ class TestPromptGeneration:
 
     def test_review_prompt_no_iteration_count(self, tmp_path: Path) -> None:
         """測試 review prompt 包含迭代次數"""
-        requirements_file = tmp_path / "requirements.md"
-        requirements_file.write_text("Requirements")
+        # Use isolated directory structure for this test
+        issue_name = "test_review_prompt_no_iteration_count"
+        spec_file = tmp_path / issue_name / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
+        spec_file.write_text("Requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
         setup_agent_manager_mock(agent_manager)
@@ -452,7 +455,7 @@ class TestPromptGeneration:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            spec_file=str(requirements_file),
+            spec_file=str(spec_file),
             plan_file="plan.md",
             workflow_mode=WorkflowMode.LOCAL,
         )
