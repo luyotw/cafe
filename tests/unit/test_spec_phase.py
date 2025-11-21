@@ -972,5 +972,83 @@ class TestPromptForInputMethod:
         assert mock_input.call_count == 2
 
 
+class TestFetchGitHubIssue:
+    """測試 _fetch_github_issue() 方法"""
+
+    @patch("cafe.phases.spec_phase.get_github_repo_name")
+    @patch("cafe.phases.spec_phase.GitHubOps")
+    def test_fetch_github_issue_writes_spec_file(
+        self, mock_github_ops: MagicMock, mock_get_repo: MagicMock, tmp_path: Path
+    ) -> None:
+        """測試從 GitHub Issue 抓取後會寫入 spec.md"""
+        # Setup
+        mock_get_repo.return_value = "owner/repo"
+        mock_gh_instance = MagicMock()
+        mock_gh_instance.get_issue.return_value = {
+            "title": "Test Issue Title",
+            "body": "Test issue body content"
+        }
+        mock_github_ops.return_value = mock_gh_instance
+
+        spec_file = tmp_path / ".cafe" / "issues" / "test-issue" / "spec" / "spec.md"
+
+        agent_manager = MagicMock(spec=AgentManager)
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        phase = SpecPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            spec_file=str(spec_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            interactive=True,
+        )
+
+        # Execute
+        result = phase._fetch_github_issue(123)
+
+        # Assert
+        assert result is None  # Success
+        assert spec_file.exists()
+        content = spec_file.read_text()
+        assert "# 初始需求" in content
+        assert "Test Issue Title" in content
+        assert "Test issue body content" in content
+
+    @patch("cafe.phases.spec_phase.get_github_repo_name")
+    @patch("cafe.phases.spec_phase.GitHubOps")
+    def test_fetch_github_issue_stores_issue_id(
+        self, mock_github_ops: MagicMock, mock_get_repo: MagicMock, tmp_path: Path
+    ) -> None:
+        """測試抓取後會儲存 issue_id 供之後貼回 comment"""
+        # Setup
+        mock_get_repo.return_value = "owner/repo"
+        mock_gh_instance = MagicMock()
+        mock_gh_instance.get_issue.return_value = {
+            "title": "Test",
+            "body": "Body"
+        }
+        mock_github_ops.return_value = mock_gh_instance
+
+        spec_file = tmp_path / ".cafe" / "issues" / "test-issue" / "spec" / "spec.md"
+
+        agent_manager = MagicMock(spec=AgentManager)
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        phase = SpecPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            spec_file=str(spec_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            interactive=True,
+        )
+
+        # Execute
+        phase._fetch_github_issue(456)
+
+        # Assert
+        assert hasattr(phase, '_fetched_issue_id')
+        assert phase._fetched_issue_id == "456"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

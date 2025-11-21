@@ -514,6 +514,15 @@ class SpecPhase(Phase):
             # Save issue config
             self._save_issue_config()
 
+            # Write fetched content to spec file (same as _prompt_for_user_story)
+            spec_path = Path(self.spec_file)
+            spec_path.parent.mkdir(parents=True, exist_ok=True)
+            spec_path.write_text(f"# 初始需求\n\n{fetched_content}\n")
+
+            print()
+            print("✅ 需求已從 GitHub Issue 載入，開始需求澄清...")
+            print()
+
             return None  # Success
 
         except FileNotFoundError as e:
