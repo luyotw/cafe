@@ -270,11 +270,12 @@ class SpecPhase(Phase):
                     agent_name=self.pm_agent,
                     user_input=current_user_input,
                     valid_status_codes=[
-                        PhaseStatusCode.CONFIRMED,
+                        PhaseStatusCode.READY_FOR_REVIEW,
                         PhaseStatusCode.NEED_CLARIFICATION,
                         PhaseStatusCode.REJECTED,
                     ],
                     allowed_tools=allowed_tools,
+                    complete_codes=[PhaseStatusCode.READY_FOR_REVIEW],
                     continue_codes=[PhaseStatusCode.NEED_CLARIFICATION],
                 )
 
@@ -368,7 +369,36 @@ class SpecPhase(Phase):
         prev_status = prev_data.get("status_code", "")
 
         # 根據上一輪狀態，取得用戶輸入
-        if prev_status == "CAFE_NEED_CLARIFICATION":
+        if prev_status == "CAFE_READY_FOR_REVIEW":
+            # 需要用戶選擇：confirm/reject/modify
+            if self.interactive:
+                choice = self._ask_user_for_review_decision("需求規格")
+            else:
+                choice = self.user_input
+                # Non-interactive 模式：用完後清空，確保不重複使用
+                self.user_input = ""
+
+                if not choice:
+                    # Non-interactive 但沒提供輸入 → 立即失敗
+                    return PhaseResult(
+                        status=PhaseStatus.FAILED,
+                        message=f"Spec phase failed after iteration {self.iteration - 1}: received READY_FOR_REVIEW in non-interactive mode without user input",
+                        data={
+                            "iterations": self.iteration - 1,
+                            "last_response": prev_data.get("response", ""),
+                            "status_code": "CAFE_READY_FOR_REVIEW",
+                        },
+                    )
+
+            # 處理用戶選擇（不再區分 interactive/non-interactive）
+            return self._process_review_decision(
+                choice,
+                prev_data,
+                "Specification",
+                {"pm_agent": self.pm_agent},
+            )
+
+        elif prev_status == "CAFE_NEED_CLARIFICATION":
             return self._handle_need_clarification_input(prev_data, agent_display_name="PM")
         else:
             return ""
@@ -699,12 +729,12 @@ class SpecPhase(Phase):
         """
         return generate_status_code_prompt(
             valid_codes=[
-                PhaseStatusCode.CONFIRMED,
+                PhaseStatusCode.READY_FOR_REVIEW,
                 PhaseStatusCode.NEED_CLARIFICATION,
                 PhaseStatusCode.REJECTED,
             ],
             descriptions={
-                PhaseStatusCode.CONFIRMED: "需求已經很清楚，可以進行開發",
+                PhaseStatusCode.READY_FOR_REVIEW: "需求規格已完成，準備好讓使用者確認",
                 PhaseStatusCode.NEED_CLARIFICATION: "需求有不清楚的地方需要澄清",
                 PhaseStatusCode.REJECTED: "需求有嚴重問題，無法進行",
             },
@@ -798,7 +828,7 @@ class SpecPhase(Phase):
    - 「## 待釐清的問題」- 以 PM 的身份用對話方式提問，深入釐清需求。
 """
 
-        confirmed_instruction = f"""**如果需求已清楚（status: CAFE_CONFIRMED）：**
+        confirmed_instruction = f"""**如果需求已清楚（status: CAFE_READY_FOR_REVIEW）：**
 使用 Write tool 將完整需求規格文件寫入 {self.spec_file}，格式：
    - 「## 使用者故事」- 用戶撰寫的使用者故事或由自動由需求描述產生的使用者故事。
    - 「## 需求規格」- 整合所有已確認的內容，產生最終的完整需求規格，包含功能描述、使用場景、預期行為、驗收標準等。
@@ -925,8 +955,8 @@ class SpecPhase(Phase):
 
 根據以下條件判斷應該回傳哪個狀態碼：
 
-- CAFE_CONFIRMED: 需求規格已完成，所有必要資訊都已釐清，沒有待確認的問題
+- CAFE_READY_FOR_REVIEW: 需求規格已完成，所有必要資訊都已釐清，沒有待確認的問題
 - CAFE_NEED_CLARIFICATION: 規格中還有問題需要與用戶確認，或有未釐清的細節
 - CAFE_REJECTED: 需求不明確、無法實現、或被明確拒絕
 
-請只回傳一個狀態碼（例如：CAFE_CONFIRMED），不要有任何其他內容。"""
+請只回傳一個狀態碼（例如：CAFE_READY_FOR_REVIEW），不要有任何其他內容。"""
