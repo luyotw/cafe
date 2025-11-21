@@ -1,6 +1,7 @@
 """Specification phase (requirements clarification)."""
 
 import json
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
@@ -11,6 +12,8 @@ from cafe.core.phase import Phase
 from cafe.core.status_codes import PhaseStatusCode, StatusCodeParser, generate_status_code_prompt
 from cafe.core.types import PhaseProgress, PhaseResult, PhaseStatus, WorkflowMode
 from cafe.ui.display import Display
+from cafe.utils.git_utils import get_github_repo_name
+from cafe.utils.github import GitHubOps, GitHubError
 
 # Maximum number of clarification iterations to prevent infinite loops
 MAX_CLARIFICATION_ITERATIONS = 10
@@ -150,9 +153,6 @@ class SpecPhase(Phase):
             # Fetch issue content from GitHub if --issue-id is provided
             if self.fetch_issue_id:
                 try:
-                    from cafe.utils.git_utils import get_github_repo_name
-                    from cafe.utils.github import GitHubOps, GitHubError
-
                     # Get repository name from .git/config
                     repo_name = get_github_repo_name()
 
@@ -255,7 +255,6 @@ class SpecPhase(Phase):
                 spec_file_path = Path(self.spec_file)
 
                 # Convert to project-relative path (git ignore format: / prefix)
-                import os
                 project_root = Path(os.getcwd())
                 try:
                     relative_path = spec_file_path.relative_to(project_root)
@@ -330,8 +329,6 @@ class SpecPhase(Phase):
         # Post spec.md back to GitHub issue if fetched from GitHub
         if hasattr(self, '_fetched_issue_id'):
             try:
-                from cafe.utils.github import GitHubOps, GitHubError
-
                 spec_path = Path(self.spec_file)
                 if spec_path.exists():
                     spec_content = spec_path.read_text(encoding="utf-8")
@@ -783,8 +780,6 @@ class SpecPhase(Phase):
 
     def _save_issue_config(self) -> None:
         """Save issue configuration (issue_id) to config.json."""
-        import json
-
         if not hasattr(self, '_fetched_issue_id'):
             return
 
