@@ -1,5 +1,6 @@
 """Pull Request creation phase."""
 
+import json
 import re
 import subprocess
 from pathlib import Path
@@ -32,6 +33,7 @@ class PRPhase(Phase):
         update: bool = False,
         force_push: bool = False,
         interactive: bool = True,
+        base_branch: Optional[str] = None,
     ) -> None:
         """Initialize PR phase.
 
@@ -50,6 +52,7 @@ class PRPhase(Phase):
             update: Force update existing PR title/body (default: False)
             force_push: Force push to remote (default: False)
             interactive: Enable interactive mode (default: True)
+            base_branch: Target base branch (None for auto-detection from config)
         """
         super().__init__(interactive=interactive)
 
@@ -66,6 +69,15 @@ class PRPhase(Phase):
         self.custom_body = custom_body
         self.update = update
         self.force_push = force_push
+
+        # Read base_branch from config if not provided via CLI
+        if base_branch is not None:
+            # CLI parameter takes precedence
+            self.base_branch = base_branch
+        else:
+            # Try to read from config.json, fallback to "main"
+            config_base = self._read_base_branch_from_config()
+            self.base_branch = config_base if config_base else "main"
 
         # Set up history tracking (like other phases)
         spec_path = Path(spec_file)
@@ -164,7 +176,9 @@ class PRPhase(Phase):
             console.print()
 
             # Create PR using GitHub operations
-            pr_url = self.github_ops.create_pr(title=pr_title, body=pr_body, draft=self.draft)
+            pr_url = self.github_ops.create_pr(
+                title=pr_title, body=pr_body, draft=self.draft, base=self.base_branch
+            )
 
             # Extract PR number from URL
             match = re.search(r"/pull/(\d+)", pr_url)
@@ -476,3 +490,29 @@ class PRPhase(Phase):
 - CAFE_CONFIRMED: 兩個檔案都存在且內容完整
 
 請只回傳一個狀態碼（例如：CAFE_CONFIRMED），不要有任何其他內容。"""
+
+    def _read_base_branch_from_config(self) -> Optional[str]:
+        """Read base branch from issue config file.
+
+        Returns:
+            Base branch name if found, None otherwise
+        """
+        if not self.spec_file:
+            return None
+
+        # Determine config file path based on spec_file location
+        spec_path = Path(self.spec_file)
+        # config.json is at .cafe/issues/{issue_name}/config.json
+        # spec_file is at .cafe/issues/{issue_name}/spec/spec.md
+        # So config is at spec_file.parent.parent / "config.json"
+        config_file = spec_path.parent.parent / "config.json"
+
+        if not config_file.exists():
+            return None
+
+        try:
+            with open(config_file, 'r', encoding='utf-8') as f:
+                config_data = json.load(f)
+            return config_data.get("base_branch")
+        except (json.JSONDecodeError, KeyError, IOError):
+            return None
