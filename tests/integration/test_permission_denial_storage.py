@@ -169,15 +169,29 @@ class TestPlanPhasePermissionDenialStorage:
         issue_name = "test-plan-permission-issue"
         spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
         plan_dir = tmp_path / ".cafe" / "issues" / issue_name / "plan"
+        history_dir = plan_dir / "history"
 
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         plan_dir.mkdir(parents=True, exist_ok=True)
+        history_dir.mkdir(parents=True, exist_ok=True)
 
         spec_file.write_text("# Requirements\nTest requirements")
 
-        # Create plan.md with dev guide
+        # Create plan.md with dev guide (simulates already created from first iteration)
         plan_file = plan_dir / "plan.md"
         plan_file.write_text("# Dev Guide\nDev guide content\n\n# Implementation Plan\n")
+
+        # Create a previous iteration to simulate this is not the first iteration
+        iteration_001 = history_dir / "iteration_001.json"
+        iteration_001.write_text(json.dumps({
+            "iteration": 1,
+            "timestamp": "2025-11-14T10:00:00",
+            "user_input": "",
+            "prompt": "Initial plan prompt",
+            "response": "CAFE_READY_FOR_REVIEW\nInitial plan",
+            "status_code": "CAFE_READY_FOR_REVIEW",
+            "permission_denials": []
+        }))
 
         agent_manager = setup_agent_manager_mock("David", AgentCLI.CLAUDE)
 
@@ -203,18 +217,16 @@ class TestPlanPhasePermissionDenialStorage:
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             issue_name=issue_name,
-            interactive=True,
+            interactive=False,
             template_path=None,
+            user_input="需求細節",
         )
 
-        with patch('builtins.print'), \
-             patch('builtins.input', return_value="1"), \
-             patch.object(phase.display, 'get_multiline_input', side_effect=["需求細節", "更多資訊"]):
+        with patch('builtins.print'):
             result = phase.execute()
 
-        # Verify iteration history
-        history_dir = plan_dir / "history"
-        iteration_file = history_dir / "iteration_001.json"
+        # Verify iteration history - should now be iteration 2
+        iteration_file = history_dir / "iteration_002.json"
 
         assert iteration_file.exists()
 
