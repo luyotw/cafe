@@ -152,14 +152,13 @@ class TestLocalWorkflow:
         assert "這是開發指南內容" in content
         assert agent_manager.execute.called
 
-    def test_missing_dev_guide_fails_in_non_interactive_mode(self, tmp_path: Path) -> None:
-        """測試缺少開發指南時在非互動模式下失敗"""
+    def test_empty_dev_guide_allowed_in_non_interactive_mode(self, tmp_path: Path) -> None:
+        """測試空的開發指南在非互動模式下被允許"""
         spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements\n\nNo dev guide")
 
         agent_manager = MagicMock(spec=AgentManager)
-        # Add execute mock in case it's called (should not happen but防萬一)
         agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage(), [], None)
 
         setup_agent_manager_mocks(agent_manager)
@@ -172,14 +171,20 @@ class TestLocalWorkflow:
             workflow_mode=WorkflowMode.LOCAL,
             issue_name="test-feature",
             interactive=False,
+            user_input="confirm",  # Provide confirm for READY_FOR_REVIEW status
             template_path=create_template_file(tmp_path),
         )
 
-        result = phase.execute()
+        with patch('builtins.print'):
+            result = phase.execute()
 
-        assert result.status == PhaseStatus.FAILED
-        # Error message should mention development guide (in English or Chinese)
-        assert "development guide" in result.message.lower() or "開發指南" in result.message
+        # Empty dev guide should be allowed, phase should proceed
+        assert result.status == PhaseStatus.COMPLETED
+        # plan.md should exist with empty dev guide section
+        plan_file = spec_file.parent.parent / "plan" / "plan.md"
+        assert plan_file.exists()
+        content = plan_file.read_text()
+        assert "## 開發指南" in content
 
     def test_multiple_iterations_until_confirmed(self, tmp_path: Path) -> None:
         """測試在 non-interactive 模式下第一輪沒有 status code 時返回 IN_PROGRESS"""

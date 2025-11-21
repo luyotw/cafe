@@ -149,18 +149,13 @@ class PlanPhase(Phase):
 
                 # First round: plan.md doesn't exist
                 if not plan_exists:
-                    # Need to get dev guide
+                    # Need to get dev guide (optional)
                     dev_guide = ""
                     if self.interactive:
                         # Interactive: prompt user for development guide
                         dev_guide = self._get_dev_guide_from_user()
                     else:
-                        # Non-interactive: require user_input as dev guide
-                        if not self.user_input:
-                            return PhaseResult(
-                                status=PhaseStatus.FAILED,
-                                message="First round requires development guide. Use --user-input to provide it.",
-                            )
+                        # Non-interactive: use user_input as dev guide (can be empty)
                         dev_guide = self.user_input
 
                     # Save development guide as initial plan.md
@@ -470,13 +465,14 @@ class PlanPhase(Phase):
         print()
 
         # Get development guide using Display for better Unicode support
-        dev_guide = self.display.get_multiline_input("請輸入開發指南").strip()
+        dev_guide = self.display.get_multiline_input("請輸入開發指南（可留空）").strip()
 
-        if not dev_guide:
-            raise ValueError("未提供開發指南，無法繼續")
-
-        print()
-        print("✅ 開發指南已記錄，開始實作規劃...")
+        if dev_guide:
+            print()
+            print("✅ 開發指南已記錄，開始實作規劃...")
+        else:
+            print()
+            print("ℹ️  未提供開發指南，將直接開始實作規劃...")
         print()
 
         return dev_guide
