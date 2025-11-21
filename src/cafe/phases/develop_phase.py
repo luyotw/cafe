@@ -456,7 +456,8 @@ class DevelopPhase(Phase):
 2. 根據 review feedback 逐一修正問題
 3. 如果需要，可參考 {self.spec_file} 和 {self.plan_file}
 4. **嚴格按照既有的 commit message 風格撰寫 commit 訊息**，可分多次 commit
-5. 完成所有修正後回傳狀態碼
+5. **禁止修改非 HEAD 的 commit**
+6. 完成所有修正後回傳狀態碼
 
 {status_code_prompt}
 
@@ -481,7 +482,8 @@ class DevelopPhase(Phase):
 2. 嚴格按照計畫中的順序執行開發任務
 3. 使用計畫中指定的 commit message（不要修改）
 4. 完成每個任務後，在 {self.plan_file} 中將該項目打勾（- [ ] 改為 - [x]）
-5. 所有任務完成後回傳狀態碼
+5. **禁止修改非 HEAD 的 commit**
+6. 所有任務完成後回傳狀態碼
 
 {status_code_prompt}
 
@@ -526,7 +528,8 @@ class DevelopPhase(Phase):
 2. 繼續執行未完成的開發任務
 3. 使用計畫中指定的 commit message（不要修改）
 4. 完成每個任務後打勾
-5. 所有任務完成後回傳狀態碼
+5. **禁止修改非 HEAD 的 commit**
+6. 所有任務完成後回傳狀態碼
 
 {status_code_prompt}
 
