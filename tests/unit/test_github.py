@@ -324,6 +324,45 @@ class TestExtractPRNumber:
         assert pr_number == "456"
 
 
+class TestExtractIssueNumber:
+    """Test extract_issue_number functionality."""
+
+    def test_extract_issue_number_from_url(self) -> None:
+        """測試從 URL 提取 Issue 編號"""
+        gh_ops = GitHubOps()
+
+        issue_number = gh_ops.extract_issue_number(
+            "https://github.com/owner/repo/issues/123"
+        )
+
+        assert issue_number == "123"
+
+    def test_extract_issue_number_from_number(self) -> None:
+        """測試直接使用 Issue 編號"""
+        gh_ops = GitHubOps()
+
+        issue_number = gh_ops.extract_issue_number("123")
+
+        assert issue_number == "123"
+
+    def test_extract_issue_number_invalid_url(self) -> None:
+        """測試無效的 URL"""
+        gh_ops = GitHubOps()
+
+        with pytest.raises(GitHubError, match="Invalid issue URL or number"):
+            gh_ops.extract_issue_number("https://invalid-url.com")
+
+    def test_extract_issue_number_from_url_with_hash(self) -> None:
+        """測試從帶有 hash 的 URL 提取 Issue 編號"""
+        gh_ops = GitHubOps()
+
+        issue_number = gh_ops.extract_issue_number(
+            "https://github.com/owner/repo/issues/456#issuecomment-789"
+        )
+
+        assert issue_number == "456"
+
+
 class TestGetPRForBranch:
     """Test get_pr_for_branch functionality."""
 

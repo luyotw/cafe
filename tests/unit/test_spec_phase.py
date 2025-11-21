@@ -847,5 +847,130 @@ class TestSpecPhaseFilePermissions:
             f"Edit permission should include spec.md path, got: {edit_tools}"
 
 
+class TestPromptForInputMethod:
+    """測試 _prompt_for_input_method() 方法"""
+
+    @patch("builtins.input")
+    def test_prompt_for_input_method_manual(self, mock_input: MagicMock, tmp_path: Path) -> None:
+        """測試選擇手動輸入（選項 1）"""
+        # Setup
+        mock_input.return_value = "1"
+        spec_file = tmp_path / ".cafe" / "issues" / "test-issue" / "spec" / "spec.md"
+
+        agent_manager = MagicMock(spec=AgentManager)
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        phase = SpecPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            spec_file=str(spec_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            interactive=True,
+        )
+
+        # Execute
+        method, issue_id = phase._prompt_for_input_method()
+
+        # Assert
+        assert method == "manual"
+        assert issue_id is None
+        mock_input.assert_called_once()
+
+    @patch("builtins.input")
+    @patch("cafe.phases.spec_phase.GitHubOps")
+    def test_prompt_for_input_method_github_with_number(
+        self, mock_github_ops: MagicMock, mock_input: MagicMock, tmp_path: Path
+    ) -> None:
+        """測試選擇 GitHub Issue + 輸入數字"""
+        # Setup
+        mock_input.side_effect = ["2", "123"]
+        mock_gh_instance = MagicMock()
+        mock_gh_instance.extract_issue_number.return_value = "123"
+        mock_github_ops.return_value = mock_gh_instance
+
+        spec_file = tmp_path / ".cafe" / "issues" / "test-issue" / "spec" / "spec.md"
+
+        agent_manager = MagicMock(spec=AgentManager)
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        phase = SpecPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            spec_file=str(spec_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            interactive=True,
+        )
+
+        # Execute
+        method, issue_id = phase._prompt_for_input_method()
+
+        # Assert
+        assert method == "github"
+        assert issue_id == 123
+        mock_gh_instance.extract_issue_number.assert_called_once_with("123")
+
+    @patch("builtins.input")
+    @patch("cafe.phases.spec_phase.GitHubOps")
+    def test_prompt_for_input_method_github_with_url(
+        self, mock_github_ops: MagicMock, mock_input: MagicMock, tmp_path: Path
+    ) -> None:
+        """測試選擇 GitHub Issue + 輸入 URL"""
+        # Setup
+        github_url = "https://github.com/owner/repo/issues/456"
+        mock_input.side_effect = ["2", github_url]
+        mock_gh_instance = MagicMock()
+        mock_gh_instance.extract_issue_number.return_value = "456"
+        mock_github_ops.return_value = mock_gh_instance
+
+        spec_file = tmp_path / ".cafe" / "issues" / "test-issue" / "spec" / "spec.md"
+
+        agent_manager = MagicMock(spec=AgentManager)
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        phase = SpecPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            spec_file=str(spec_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            interactive=True,
+        )
+
+        # Execute
+        method, issue_id = phase._prompt_for_input_method()
+
+        # Assert
+        assert method == "github"
+        assert issue_id == 456
+        mock_gh_instance.extract_issue_number.assert_called_once_with(github_url)
+
+    @patch("builtins.input")
+    def test_prompt_for_input_method_invalid_then_valid(
+        self, mock_input: MagicMock, tmp_path: Path
+    ) -> None:
+        """測試無效選擇後重試"""
+        # Setup - first invalid (3), then valid (1)
+        mock_input.side_effect = ["3", "1"]
+        spec_file = tmp_path / ".cafe" / "issues" / "test-issue" / "spec" / "spec.md"
+
+        agent_manager = MagicMock(spec=AgentManager)
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        phase = SpecPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            spec_file=str(spec_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            interactive=True,
+        )
+
+        # Execute
+        method, issue_id = phase._prompt_for_input_method()
+
+        # Assert
+        assert method == "manual"
+        assert issue_id is None
+        assert mock_input.call_count == 2
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

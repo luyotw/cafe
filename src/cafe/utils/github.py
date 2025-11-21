@@ -220,6 +220,30 @@ class GitHubOps:
 
         raise GitHubError(f"Invalid PR URL or number: {pr_url_or_number}")
 
+    def extract_issue_number(self, issue_url_or_number: str) -> str:
+        """Extract issue number from URL or return the number directly.
+
+        Args:
+            issue_url_or_number: Issue URL or number
+
+        Returns:
+            Issue number as string
+
+        Raises:
+            GitHubError: If invalid URL or number
+        """
+        # If it's already a number, return it
+        if issue_url_or_number.isdigit():
+            return issue_url_or_number
+
+        # Try to extract from URL
+        # Pattern: https://github.com/owner/repo/issues/123
+        match = re.search(r"/issues/(\d+)", issue_url_or_number)
+        if match:
+            return match.group(1)
+
+        raise GitHubError(f"Invalid issue URL or number: {issue_url_or_number}")
+
     def get_pr_for_branch(self, branch: str) -> Optional[Dict[str, Any]]:
         """Check if a PR exists for the given branch.
 

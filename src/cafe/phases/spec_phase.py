@@ -155,38 +155,9 @@ class SpecPhase(Phase):
         try:
             # Fetch issue content from GitHub if --issue-id is provided
             if self.fetch_issue_id:
-                try:
-                    # Get repository name from .git/config
-                    repo_name = get_github_repo_name()
-
-                    # Fetch issue content
-                    gh_ops = GitHubOps()
-                    issue_data = gh_ops.get_issue(str(self.fetch_issue_id), include_comments=False)
-
-                    # Combine title and body as first user_input
-                    issue_title = issue_data.get("title", "")
-                    issue_body = issue_data.get("body", "")
-                    fetched_content = f"# {issue_title}\n\n{issue_body}" if issue_title else issue_body
-
-                    # Override user_input with fetched content
-                    self.user_input = fetched_content
-
-                    # Store issue_id for later comment posting
-                    self._fetched_issue_id = str(self.fetch_issue_id)
-
-                    # Save issue config
-                    self._save_issue_config()
-
-                except FileNotFoundError as e:
-                    return PhaseResult(
-                        status=PhaseStatus.FAILED,
-                        message=f"Failed to get repository info: {e}",
-                    )
-                except GitHubError as e:
-                    return PhaseResult(
-                        status=PhaseStatus.FAILED,
-                        message=f"Failed to fetch GitHub issue: {e}",
-                    )
+                error_result = self._fetch_github_issue(self.fetch_issue_id)
+                if error_result:
+                    return error_result
 
             # Ask for rigor level if interactive and not set
             if self.interactive and self.iteration == 0:
@@ -209,7 +180,21 @@ class SpecPhase(Phase):
                 elif self.iteration == 0:
                     # File doesn't exist AND no history - get initial user story
                     if self.interactive:
-                        self._prompt_for_user_story()
+                        # If --issue-id not provided, ask user to choose input method
+                        if not self.fetch_issue_id:
+                            method, issue_id = self._prompt_for_input_method()
+
+                            if method == "github" and issue_id:
+                                # Fetch from GitHub Issue
+                                error_result = self._fetch_github_issue(issue_id)
+                                if error_result:
+                                    return error_result
+                            else:
+                                # Manual input
+                                self._prompt_for_user_story()
+                        else:
+                            # --issue-id already provided, skip to user story prompt
+                            self._prompt_for_user_story()
                     else:
                         # Non-interactive mode: use user_input if provided, otherwise read from stdin
                         if self.user_input:
@@ -448,6 +433,98 @@ class SpecPhase(Phase):
                 break
             else:
                 print("❌ 無效選擇，請輸入 1, 2, 或 3")
+
+    def _prompt_for_input_method(self) -> tuple[str, Optional[int]]:
+        """詢問用戶選擇需求輸入方式（手動 vs GitHub Issue）
+
+        Returns:
+            Tuple of (method, issue_id):
+            - method: "manual" 或 "github"
+            - issue_id: Issue ID (int) 如果選擇 GitHub，否則 None
+        """
+        print("\n" + "="*70)
+        print("請選擇需求輸入方式：")
+        print("="*70)
+        print()
+        print("1. 手動輸入需求")
+        print("2. 從 GitHub Issue 抓取")
+        print()
+
+        while True:
+            choice = input("請選擇 (1 或 2): ").strip()
+
+            if choice == "1":
+                return ("manual", None)
+            elif choice == "2":
+                # 先顯示警告
+                print()
+                print("⚠️  注意：完成後會將 spec.md 以 comment 方式貼回 GitHub Issue")
+                print()
+
+                # 詢問 Issue ID 或 URL
+                issue_input = input("請輸入 GitHub Issue ID 或 URL: ").strip()
+
+                try:
+                    # 使用 GitHubOps 提取 issue number
+                    gh_ops = GitHubOps()
+                    issue_id_str = gh_ops.extract_issue_number(issue_input)
+                    issue_id = int(issue_id_str)
+
+                    print()
+                    print(f"✓ 將從 GitHub Issue #{issue_id} 抓取需求")
+                    print()
+
+                    return ("github", issue_id)
+                except (ValueError, GitHubError) as e:
+                    print(f"❌ 無效的 Issue ID 或 URL: {e}")
+                    print("請重新選擇...")
+                    print()
+            else:
+                print("❌ 無效選擇，請輸入 1 或 2")
+
+    def _fetch_github_issue(self, issue_id: int) -> Optional[PhaseResult]:
+        """從 GitHub 抓取 issue 內容
+
+        Args:
+            issue_id: GitHub issue ID
+
+        Returns:
+            PhaseResult if error occurred, None if success
+        """
+        try:
+            # Get repository name from .git/config
+            repo_name = get_github_repo_name()
+
+            # Fetch issue content
+            gh_ops = GitHubOps()
+            issue_data = gh_ops.get_issue(str(issue_id), include_comments=False)
+
+            # Combine title and body as first user_input
+            issue_title = issue_data.get("title", "")
+            issue_body = issue_data.get("body", "")
+            fetched_content = f"# {issue_title}\n\n{issue_body}" if issue_title else issue_body
+
+            # Override user_input with fetched content
+            self.user_input = fetched_content
+
+            # Store issue_id for later comment posting
+            self._fetched_issue_id = str(issue_id)
+
+            # Save issue config
+            self._save_issue_config()
+
+            return None  # Success
+
+        except FileNotFoundError as e:
+            return PhaseResult(
+                status=PhaseStatus.FAILED,
+                message=f"Failed to get repository info: {e}",
+            )
+        except GitHubError as e:
+            return PhaseResult(
+                status=PhaseStatus.FAILED,
+                message=f"Failed to fetch GitHub issue: {e}",
+            )
 
     def _prompt_for_user_story(self) -> None:
         """Prompt user to write initial requirement when no requirements file exists."""
