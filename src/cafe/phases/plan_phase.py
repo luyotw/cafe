@@ -565,4 +565,21 @@ class PlanPhase(Phase):
         print(plan_content)
         print(f"{'='*60}\n")
 
+    def _get_status_analysis_prompt(self) -> str:
+        """取得分析 status code 的 prompt.
+
+        Returns:
+            分析 prompt 字串
+        """
+        plan_file = self.history_dir.parent / "plan.md"
+        return f"""請閱讀 {plan_file} 並分析目前的狀態。
+
+根據以下條件判斷應該回傳哪個狀態碼：
+
+- CAFE_READY_FOR_REVIEW: 實作計畫已完成，可以給用戶審核
+- CAFE_NEED_CLARIFICATION: 還有問題需要與用戶確認
+- CAFE_REJECTED: 計畫被拒絕或無法完成
+
+請只回傳一個狀態碼（例如：CAFE_READY_FOR_REVIEW），不要有任何其他內容。"""
+
 

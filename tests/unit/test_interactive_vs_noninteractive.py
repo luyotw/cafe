@@ -270,7 +270,8 @@ class TestSpecPhaseInteractiveVsNonInteractive:
         assert result.status == PhaseStatus.IN_PROGRESS
         assert result.data.get("iterations") == 1
         assert result.data.get("status_code") is None
-        assert agent_manager.execute.call_count == 1
+        # 呼叫 2 次：原始 prompt + _analyze_missing_status_code 分析
+        assert agent_manager.execute.call_count == 2
 
 
 class TestPlanPhaseInteractiveVsNonInteractive:
@@ -465,4 +466,5 @@ class TestPlanPhaseInteractiveVsNonInteractive:
         # Non-interactive 模式沒有狀態碼時應該 IN_PROGRESS（需要用戶輸入）
         assert result.status == PhaseStatus.IN_PROGRESS
         assert result.data.get("iterations") == 1
-        assert agent_manager.execute.call_count == 1
+        # 呼叫 2 次：原始 prompt + _analyze_missing_status_code 分析
+        assert agent_manager.execute.call_count == 2

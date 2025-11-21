@@ -216,7 +216,8 @@ class TestLocalWorkflow:
         # In non-interactive mode, no status code results in IN_PROGRESS
         assert result.status == PhaseStatus.IN_PROGRESS
         assert "No status code found" in result.message
-        assert agent_manager.execute.call_count == 1
+        # 呼叫 2 次：原始 prompt + _analyze_missing_status_code 分析
+        assert agent_manager.execute.call_count == 2
 
 
 class TestGitHubWorkflow:
@@ -359,10 +360,11 @@ class TestPromptGeneration:
 
         # Non-interactive mode: first iteration without status code returns IN_PROGRESS
         assert result.status == PhaseStatus.IN_PROGRESS
-        assert agent_manager.execute.call_count == 1
+        # 呼叫 2 次：原始 prompt + _analyze_missing_status_code 分析
+        assert agent_manager.execute.call_count == 2
 
         # Check first call includes iteration info
-        first_call = agent_manager.execute.call_args[0]
+        first_call = agent_manager.execute.call_args_list[0][0]
         prompt = first_call[1]
         assert "第 1 輪" in prompt
 

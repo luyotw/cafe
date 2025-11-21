@@ -2,13 +2,14 @@
 import json
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from cafe.core.phase import Phase
 from cafe.core.status_codes import PhaseStatusCode
-from cafe.core.types import PhaseResult, PhaseStatus
+from cafe.core.types import PhaseResult, PhaseStatus, TokenUsage
 
 
 class ConcretePhase(Phase):
@@ -292,3 +293,103 @@ class TestLoadIterationCounter:
 
         # 應該返回 1（前一個完整的 iteration），這樣下次執行時會重用 iteration 2
         assert counter == 1
+
+
+class PhaseWithStatusAnalysis(Phase):
+    """用於測試 status analysis 的 Phase 實作."""
+
+    def __init__(
+        self,
+        agent_manager: MagicMock,
+        history_dir: Path,
+        status_prompt: Optional[str] = None,
+    ) -> None:
+        self.agent_manager = agent_manager
+        self.history_dir = history_dir
+        self.iteration = 1
+        self.interactive = True
+        self._status_prompt = status_prompt
+
+    def execute(self) -> PhaseResult:
+        return PhaseResult(status=PhaseStatus.COMPLETED, message="Test")
+
+    def _get_status_analysis_prompt(self) -> Optional[str]:
+        return self._status_prompt
+
+
+class TestAnalyzeMissingStatusCode:
+    """測試 _analyze_missing_status_code 方法"""
+
+    def test_analyze_returns_status_code_from_agent(self, tmp_path: Path) -> None:
+        """測試當 agent 回傳有效 status code 時正確解析"""
+        # Setup
+        agent_manager = MagicMock()
+        agent_manager.execute.return_value = (
+            "CAFE_CONFIRMED",
+            TokenUsage(input_tokens=10, output_tokens=5),
+            [],
+            [],
+        )
+
+        phase = PhaseWithStatusAnalysis(
+            agent_manager=agent_manager,
+            history_dir=tmp_path,
+            status_prompt="請分析狀態",
+        )
+
+        # Execute
+        result = phase._analyze_missing_status_code(
+            agent_name="TestAgent",
+            valid_status_codes=[PhaseStatusCode.CONFIRMED, PhaseStatusCode.NEED_CLARIFICATION],
+        )
+
+        # Assert
+        assert result == PhaseStatusCode.CONFIRMED
+        agent_manager.execute.assert_called_once()
+
+    def test_analyze_returns_none_when_no_prompt(self, tmp_path: Path) -> None:
+        """測試當 phase 沒有提供 prompt 時返回 None"""
+        # Setup
+        agent_manager = MagicMock()
+
+        phase = PhaseWithStatusAnalysis(
+            agent_manager=agent_manager,
+            history_dir=tmp_path,
+            status_prompt=None,  # 沒有 prompt
+        )
+
+        # Execute
+        result = phase._analyze_missing_status_code(
+            agent_name="TestAgent",
+            valid_status_codes=[PhaseStatusCode.CONFIRMED],
+        )
+
+        # Assert
+        assert result is None
+        agent_manager.execute.assert_not_called()
+
+    def test_analyze_returns_none_when_agent_returns_invalid_code(self, tmp_path: Path) -> None:
+        """測試當 agent 回傳無效 status code 時返回 None"""
+        # Setup
+        agent_manager = MagicMock()
+        agent_manager.execute.return_value = (
+            "Some random response without status code",
+            TokenUsage(input_tokens=10, output_tokens=5),
+            [],
+            [],
+        )
+
+        phase = PhaseWithStatusAnalysis(
+            agent_manager=agent_manager,
+            history_dir=tmp_path,
+            status_prompt="請分析狀態",
+        )
+
+        # Execute
+        result = phase._analyze_missing_status_code(
+            agent_name="TestAgent",
+            valid_status_codes=[PhaseStatusCode.CONFIRMED],
+        )
+
+        # Assert
+        assert result is None

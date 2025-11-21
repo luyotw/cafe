@@ -914,3 +914,19 @@ class SpecPhase(Phase):
             Path to status.json
         """
         return self._get_status_file()
+
+    def _get_status_analysis_prompt(self) -> str:
+        """取得分析 status code 的 prompt。
+
+        Returns:
+            分析 spec 檔案狀態的 prompt
+        """
+        return f"""請閱讀 {self.spec_file} 並分析目前的狀態。
+
+根據以下條件判斷應該回傳哪個狀態碼：
+
+- CAFE_CONFIRMED: 需求規格已完成，所有必要資訊都已釐清，沒有待確認的問題
+- CAFE_NEED_CLARIFICATION: 規格中還有問題需要與用戶確認，或有未釐清的細節
+- CAFE_REJECTED: 需求不明確、無法實現、或被明確拒絕
+
+請只回傳一個狀態碼（例如：CAFE_CONFIRMED），不要有任何其他內容。"""

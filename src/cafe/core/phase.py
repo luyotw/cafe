@@ -332,6 +332,13 @@ class Phase(ABC):
             valid_codes=valid_status_codes,
         )
 
+        # 6.1. 如果沒有 status code，嘗試呼叫 agent 分析
+        if status_code is None:
+            status_code = self._analyze_missing_status_code(
+                agent_name=agent_name,
+                valid_status_codes=valid_status_codes,
+            )
+
         # 7. 更新 history（總是保存，即使沒有 status code）
         self._update_iteration_history(
             phase_specific_data={
@@ -1093,4 +1100,44 @@ class Phase(ABC):
                 )
 
         # Unknown status code - continue
+        return None
+
+    def _analyze_missing_status_code(
+        self,
+        agent_name: str,
+        valid_status_codes: List[PhaseStatusCode],
+    ) -> Optional[PhaseStatusCode]:
+        """當 response 沒有 status code 時，呼叫 agent 分析狀態。
+
+        此方法用於處理某些 agent 不在 response 中回傳 status code 的情況。
+        它會使用 phase-specific 的 prompt 來請 agent 分析目前的狀態。
+
+        Args:
+            agent_name: Agent 名稱
+            valid_status_codes: 此 phase 有效的 status codes
+
+        Returns:
+            分析出的 PhaseStatusCode，如果無法分析則返回 None
+        """
+        # 取得 phase-specific 的分析 prompt
+        prompt = self._get_status_analysis_prompt()
+        if not prompt:
+            return None
+
+        # 呼叫 agent 分析狀態（只需要 response）
+        response, _, _, _ = self.agent_manager.execute(agent_name, prompt)
+
+        # 從回應中提取 status code
+        from cafe.core.status_codes import StatusCodeParser
+        return StatusCodeParser.extract(response, valid_codes=valid_status_codes)
+
+    def _get_status_analysis_prompt(self) -> Optional[str]:
+        """取得分析 status code 的 prompt（子類覆寫）。
+
+        當 agent response 中沒有 status code 時，會使用此 prompt 再呼叫一次 agent。
+        子類應該覆寫此方法，提供 phase-specific 的分析 prompt。
+
+        Returns:
+            分析 status code 的 prompt，如果不支援分析則返回 None
+        """
         return None

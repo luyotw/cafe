@@ -728,3 +728,18 @@ class DevelopPhase(Phase):
         else:
             # Use issue name as branch name
             return self.issue_name
+
+    def _get_status_analysis_prompt(self) -> str:
+        """取得分析 status code 的 prompt.
+
+        Returns:
+            分析 prompt 字串
+        """
+        return f"""請閱讀 {self.plan_file} 並檢查開發進度。
+
+根據以下條件判斷應該回傳哪個狀態碼：
+
+- CAFE_CONFIRMED: 所有任務都已完成（plan.md 中的項目都已打勾）
+- CAFE_NEED_PERMISSION: 需要請求額外的工具使用權限
+
+請只回傳一個狀態碼（例如：CAFE_CONFIRMED），不要有任何其他內容。"""

@@ -609,3 +609,19 @@ class ReviewPhase(Phase):
 - 需求規格 (Spec): {self.spec_file}
 - 實作計畫 (Plan): {self.plan_file}"""
 
+    def _get_status_analysis_prompt(self) -> str:
+        """取得分析 status code 的 prompt.
+
+        Returns:
+            分析 prompt 字串
+        """
+        review_file = self.review_dir / f"review_{self.iteration:03d}.md"
+        return f"""請閱讀 {review_file} 並分析 Code Review 的結果。
+
+根據以下條件判斷應該回傳哪個狀態碼：
+
+- CAFE_CONFIRMED: 程式碼審查通過，沒有需要修正的問題
+- CAFE_NEEDS_CHANGES: 有問題需要修正
+
+請只回傳一個狀態碼（例如：CAFE_CONFIRMED），不要有任何其他內容。"""
+
