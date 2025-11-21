@@ -84,9 +84,6 @@ class DevelopPhase(Phase):
         issue_dir = spec_path.parent.parent  # .cafe/issues/{issue_name}
         self.history_dir = issue_dir / "develop" / "history"
 
-        # Track conversation history
-        self.conversation_history: List[Dict[str, Any]] = []
-
         # Track user responses for permission requests
         self.user_responses: List[str] = []
 
@@ -95,9 +92,6 @@ class DevelopPhase(Phase):
 
         # Restore state from last iteration file (if resuming)
         self.iteration = self._load_iteration_counter()
-
-        # Load existing conversation history if available
-        self._load_conversation_history()
 
     def _check_plan_exists(self) -> bool:
         """Check if plan.md exists.
@@ -158,25 +152,6 @@ class DevelopPhase(Phase):
         except (json.JSONDecodeError, KeyError):
             return None
 
-    def _load_conversation_history(self) -> None:
-        """Load conversation history from previous iterations."""
-        history_dir = Path(self.history_dir)
-        if not history_dir.exists():
-            return
-
-        # Find all iteration files
-        iteration_files = sorted(history_dir.glob("iteration_*.json"))
-
-        for iteration_file in iteration_files:
-            with open(iteration_file, "r", encoding="utf-8") as f:
-                data = json.load(f)
-
-            # Restore conversation history
-            self.conversation_history.append(data)
-
-            # Restore user responses if they exist
-            if "user_response" in data and data["user_response"]:
-                self.user_responses.append(data["user_response"])
 
     def _save_progress_with_review_timestamp(
         self,
@@ -439,11 +414,11 @@ class DevelopPhase(Phase):
             return f"""請根據 Code Review 反饋進行修正。
 
 **你的角色：**
-你是一位經驗豐富的 Developer，負責根據 Code Review 的建議修正程式碼。
+你是一位經驗豐富的 Developer，負責根據 Code Review 的建議修正程式碼。你會嚴格依照既有的 commit message 風格寫 commit，且絕對不會修改非 HEAD 的 commit。
 
-**重要：請先閱讀 Review Feedback**
-- Review Feedback 檔案：{review_file_path}
-- 請仔細閱讀 reviewer 的所有建議和問題
+**重要**
+- **嚴格按照既有的 commit message 風格撰寫 commit 訊息**，可分多次 commit
+- **禁止修改非 HEAD 的 commit**
 - 優先處理 critical 等級的問題
 
 **檔案路徑：**
@@ -452,11 +427,11 @@ class DevelopPhase(Phase):
 - 實作計畫：{self.plan_file}
 {pr_comments_section}{user_input_section}
 **執行步驟：**
-1. **首先閱讀** {review_file_path}，了解所有需要修正的問題
+1. **首先閱讀** {review_file_path} 或 pr comments，了解所有需要修正的問題
 2. 根據 review feedback 逐一修正問題
-3. 如果需要，可參考 {self.spec_file} 和 {self.plan_file}
-4. **嚴格按照既有的 commit message 風格撰寫 commit 訊息**，可分多次 commit
-5. **禁止修改非 HEAD 的 commit**
+3. **嚴格按照既有的 commit message 風格撰寫 commit 訊息**，可分多次 commit
+4. **禁止修改非 HEAD 的 commit**
+5. 如果需要，可參考 {self.spec_file} 和 {self.plan_file}
 6. 完成所有修正後回傳狀態碼
 
 {status_code_prompt}
@@ -471,7 +446,10 @@ class DevelopPhase(Phase):
             return f"""請按照實作計畫執行開發工作。
 
 **你的角色：**
-你是一位經驗豐富的 Developer，負責根據需求規格和實作計畫進行開發。
+你是一位經驗豐富的 Developer，負責根據需求規格和實作計畫進行開發。你會嚴格依照既有的 commit message 風格寫 commit。
+
+**重要**
+- **嚴格按照既有的 commit message 風格撰寫 commit 訊息**，可分多次 commit
 
 **檔案路徑：**
 - 需求規格：{self.spec_file}
@@ -480,54 +458,8 @@ class DevelopPhase(Phase):
 **執行步驟：**
 1. 仔細閱讀 {self.spec_file} 和 {self.plan_file}
 2. 嚴格按照計畫中的順序執行開發任務
-3. 使用計畫中指定的 commit message（不要修改）
+3. **嚴格按照既有的 commit message 風格撰寫 commit 訊息**，可分多次 commit
 4. 完成每個任務後，在 {self.plan_file} 中將該項目打勾（- [ ] 改為 - [x]）
-5. **禁止修改非 HEAD 的 commit**
-6. 所有任務完成後回傳狀態碼
-
-{status_code_prompt}
-
-**完成後回傳狀態碼就好，不要做任何總結**
-"""
-        else:
-            # Subsequent iterations: refer to history and continue
-            status_code_prompt = generate_status_code_prompt(
-                valid_codes=[
-                    PhaseStatusCode.CONFIRMED,
-                    PhaseStatusCode.NEED_PERMISSION,
-                ],
-                descriptions={
-                    PhaseStatusCode.CONFIRMED: "開發工作已完成",
-                    PhaseStatusCode.NEED_PERMISSION: "需要請求工具使用權限",
-                },
-            )
-
-            # Build history reference
-            history_summary = []
-            for entry in self.conversation_history[-3:]:  # Last 3 iterations
-                history_summary.append(f"第 {entry['iteration']} 輪：{entry['status_code']}")
-            history_text = "\n".join(history_summary) if history_summary else "無歷史記錄"
-
-            user_input_section = f"\n\n**用戶的額外說明：**\n{user_input}\n" if user_input else ""
-            return f"""繼續執行開發工作。
-
-**你的角色：**
-你是一位經驗豐富的 Developer，負責根據需求規格和實作計畫進行開發。
-
-這是第 {self.iteration} 輪開發。
-
-**歷史記錄：**
-{history_text}
-
-**檔案路徑：**
-- 需求規格：{self.spec_file}
-- 實作計畫：{self.plan_file}
-{pr_comments_section}{user_input_section}
-**執行步驟：**
-1. 檢查 {self.plan_file} 了解哪些任務已完成
-2. 繼續執行未完成的開發任務
-3. 使用計畫中指定的 commit message（不要修改）
-4. 完成每個任務後打勾
 5. **禁止修改非 HEAD 的 commit**
 6. 所有任務完成後回傳狀態碼
 

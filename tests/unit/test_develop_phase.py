@@ -57,7 +57,6 @@ class TestDevelopPhaseInit:
         assert phase.iteration == 0
         assert phase.issue_name == "test"
         assert phase.history_dir == Path(".cafe/issues/test/develop/history")
-        assert phase.conversation_history == []
         assert phase.interactive is True
         assert phase.dev_agent == "David"
 
@@ -279,43 +278,6 @@ class TestHistoryAndProgress:
             assert data["status_code"] == "CAFE_CONFIRMED"
             assert data["iteration"] == 1
 
-    def test_load_history_restores_iterations(self, tmp_path: Path) -> None:
-        """測試 _load_history 恢復迭代記錄"""
-        agent_manager = MagicMock(spec=AgentManager)
-        permission_handler = MagicMock(spec=PermissionHandler)
-        git_ops = MagicMock(spec=GitOperations)
-
-        history_dir = tmp_path / ".cafe" / "issues" / "test" / "develop" / "history"
-        history_dir.mkdir(parents=True)
-
-        # Create mock history files
-        for i in range(1, 4):
-            history_file = history_dir / f"iteration_{i:03d}.json"
-            with open(history_file, 'w') as f:
-                json.dump({
-                    "iteration": i,
-                    "timestamp": datetime.now().isoformat(),
-                    "user_input": f"input {i}",
-                    "response": f"response {i}",
-                    "status_code": "CAFE_NEED_PERMISSION",
-                }, f)
-
-        phase = DevelopPhase(
-            agent_manager=agent_manager,
-            permission_handler=permission_handler,
-            git_ops=git_ops,
-            spec_file=str(tmp_path / ".cafe" / "issues" / "test" / "spec" / "spec.md"),
-            plan_file=str(tmp_path / ".cafe" / "issues" / "test" / "plan" / "plan.md"),
-            workflow_mode=WorkflowMode.LOCAL,
-            issue_name="test",
-        )
-
-        assert phase.iteration == 3
-        assert len(phase.conversation_history) == 3
-        assert phase.conversation_history[0]["iteration"] == 1
-        assert phase.conversation_history[2]["iteration"] == 3
-
-
 class TestStatusCodeHandling:
     """Test status code handling."""
 
@@ -434,34 +396,6 @@ class TestPromptGeneration:
         assert ".cafe/issues/test/plan/plan.md" in prompt
         assert "CONFIRMED" in prompt
         assert "CAFE_NEED_PERMISSION" in prompt
-
-    def test_subsequent_iteration_prompt_refers_to_history(self, tmp_path: Path) -> None:
-        """測試第 2+ 輪 prompt 參考歷史記錄"""
-        agent_manager = MagicMock(spec=AgentManager)
-        permission_handler = MagicMock(spec=PermissionHandler)
-        git_ops = MagicMock(spec=GitOperations)
-
-        phase = DevelopPhase(
-            agent_manager=agent_manager,
-            permission_handler=permission_handler,
-            git_ops=git_ops,
-            spec_file=".cafe/issues/test/spec/spec.md",
-            plan_file=".cafe/issues/test/plan/plan.md",
-            workflow_mode=WorkflowMode.LOCAL,
-        )
-
-        # Add history
-        phase.conversation_history = [
-            {"iteration": 1, "status_code": "CAFE_NEED_PERMISSION"},
-            {"iteration": 2, "status_code": "CAFE_NEED_PERMISSION"},
-        ]
-
-        phase.iteration = 3
-        prompt = phase._generate_prompt()
-
-        assert "第 3 輪" in prompt
-        assert "歷史記錄" in prompt
-
 
 class TestBranchManagement:
     """Test branch name generation."""

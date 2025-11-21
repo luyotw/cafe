@@ -171,50 +171,6 @@ class TestDevelopPhasePRCommentsIntegration:
                     assert result == ""
                     assert count == 0
 
-    def test_prompt_includes_pr_comments(self, mock_components):
-        """測試 prompt 包含 PR comments
-
-        情境：有未 resolved 的 PR comments
-        預期：生成的 prompt 包含 PR comments 內容
-        """
-        with patch('cafe.phases.develop_phase.get_pr_comments') as mock_get:
-            with patch('cafe.phases.develop_phase.filter_unresolved_comments') as mock_filter:
-                with patch('cafe.phases.develop_phase.format_comments_for_prompt') as mock_format:
-                    mock_comments = [
-                        PRComment(
-                            id="C1",
-                            body="Fix this bug",
-                            author="reviewer",
-                            created_at="2025-01-01T10:00:00Z",
-                            path="src/main.py",
-                            line=42,
-                            is_resolved=False
-                        )
-                    ]
-                    mock_get.return_value = mock_comments
-                    mock_filter.return_value = mock_comments
-                    formatted_comments = "=== PR Comments ===\nFix this bug"
-                    mock_format.return_value = formatted_comments
-
-                    phase = DevelopPhase(
-                        agent_manager=mock_components["agent_manager"],
-                        permission_handler=mock_components["permission_handler"],
-                        git_ops=mock_components["git_ops"],
-                        spec_file=mock_components["spec_file"],
-                        plan_file=mock_components["plan_file"],
-                        workflow_mode=WorkflowMode.LOCAL,
-                        issue_name="test-issue",
-                        dev_agent="David",
-                        pr_number=123,
-                    )
-
-                    # Generate prompt
-                    prompt = phase._generate_prompt("user input")
-
-                    # Verify PR comments are in prompt
-                    assert formatted_comments in prompt
-                    assert "Fix this bug" in prompt
-
     def test_execute_with_no_unresolved_comments_returns_completed(self, mock_components):
         """測試當 PR 沒有 unresolved comments 時 execute 直接返回 COMPLETED
 

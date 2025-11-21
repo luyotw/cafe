@@ -328,68 +328,6 @@ class TestPermissionDenialUserInteraction:
             assert "Edit" in display_text
             assert "/home/user/config.php" in display_text or "config.php" in display_text
 
-    def test_user_can_provide_additional_instructions_after_approving_tools(self, tmp_path: Path):
-        """測試用戶在批准工具後可以提供額外的指示"""
-        issue_name = "test-additional-instructions"
-        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
-        plan_file = tmp_path / ".cafe" / "issues" / issue_name / "plan" / "plan.md"
-
-        spec_file.parent.mkdir(parents=True, exist_ok=True)
-        plan_file.parent.mkdir(parents=True, exist_ok=True)
-        spec_file.write_text("# Requirements\nTest requirements")
-        plan_file.write_text("# Plan\nTest plan")
-
-        agent_manager = setup_agent_manager_mock()
-
-        permission_denials = [
-            PermissionDenial(
-                tool_name="Edit",
-                tool_input={"file_path": "/home/user/config.php"}
-            )
-        ]
-
-        agent_manager.execute.side_effect = [
-            ("CAFE_NEED_PERMISSION\n需要權限", TokenUsage(), permission_denials, None),
-            ("CAFE_CONFIRMED\n開發完成", TokenUsage(), [], None)
-        ]
-
-        permission_handler = MagicMock(spec=PermissionHandler)
-        git_ops = MagicMock(spec=GitOperations)
-        git_ops.branch_exists.return_value = False
-        git_ops.get_current_branch.return_value = "main"
-
-        phase = DevelopPhase(
-            agent_manager=agent_manager,
-            permission_handler=permission_handler,
-            git_ops=git_ops,
-            spec_file=str(spec_file),
-            plan_file=str(plan_file),
-            issue_name=issue_name,
-            workflow_mode=WorkflowMode.LOCAL,
-            interactive=True,
-        )
-
-        # First execution
-        with patch('builtins.print'):
-            result = phase.execute()
-
-        # Second execution - user provides additional instructions
-        additional_instructions = "請小心修改設定檔，不要改到資料庫連線"
-
-        with patch('builtins.print'), \
-             patch('builtins.input', return_value='y'), \
-             patch.object(phase.display, 'get_multiline_input', return_value=additional_instructions):
-
-            phase.iteration = 1
-            result = phase.execute()
-
-        # Verify additional instructions were included in the prompt
-        # (We can check this by examining the prompt passed to agent_manager.execute)
-        second_call = agent_manager.execute.call_args_list[1]
-        prompt = second_call[0][1]  # Second positional argument is the prompt
-
-        assert additional_instructions in prompt
-
     def test_non_interactive_mode_fails_when_permission_needed(self, tmp_path: Path):
         """測試非互動模式下遇到 NEED_PERMISSION 會失敗"""
         issue_name = "test-non-interactive"

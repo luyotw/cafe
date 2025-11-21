@@ -522,8 +522,8 @@ class ReviewPhase(Phase):
    - **檢查是否有機敏資訊被提交（如密碼、API key、憑證等），若有則視為 critical issue，請列出並要求立即移除，不可留在 commit 歷史中**
 
 2. **【重要】檢查 commit message 風格一致性**
-   - 比較基礎分支 ({self.base_branch}) 和當前分支的 commit message 風格
-   - 確認風格是否一致
+   - 比較基礎分支 ({self.base_branch}) 和當前分支的 commit message 風格是否一致
+   - 若只是大小寫、標點符號等細微差異，視為一致
    - **只檢查未 push 到 remote 的 commit**
    - **如果發現風格不一致：**
      - 明確列出哪些 commit SHA 和 message 不符合風格
