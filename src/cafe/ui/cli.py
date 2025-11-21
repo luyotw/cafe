@@ -1209,6 +1209,7 @@ def pr(
             update=update,
             force_push=force,
             interactive=interactive,
+            base_branch=base if base != "main" else None,  # Pass base only if not default
         )
 
         # Display start message

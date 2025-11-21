@@ -1264,3 +1264,193 @@ class TestPRURLInResult:
         assert result.status == PhaseStatus.COMPLETED
         assert result.data["pr_number"] == "42"
         assert result.data["pr_url"] == "https://github.com/user/repo/pull/42"
+
+
+class TestBaseBranchFromConfig:
+    """測試從 config.json 讀取 base_branch"""
+
+    def test_base_branch_from_config_used(self, tmp_path: Path) -> None:
+        """測試當 config.json 存在且有 base_branch 時，應使用該值"""
+        # Setup issue directory structure
+        spec_file = tmp_path / ".cafe" / "issues" / "fix-branch" / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
+        spec_file.write_text("# Feature\n")
+
+        # Setup config.json with base_branch
+        config_file = spec_file.parent.parent / "config.json"
+        config_file.write_text('{"base_branch": "develop", "feature_branch": "fix-branch"}')
+
+        agent_manager = MagicMock(spec=AgentManager)
+        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
+        mock_executor = MagicMock()
+        mock_executor.config.cli = AgentCLI.COPILOT
+        mock_executor.config.session_id = "session_123"
+        agent_manager.get_agent.return_value = mock_executor
+        agent_manager.get_total_token_usage.return_value = TokenUsage()
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        git_ops = MagicMock(spec=GitOperations)
+        github_ops = MagicMock(spec=GitHubOps)
+        github_ops.get_pr_for_branch.return_value = None  # No existing PR
+        github_ops.create_pr.return_value = "https://github.com/user/repo/pull/1"
+        git_ops.get_main_branch.return_value = "main"
+        git_ops.get_commits_between.return_value = "commit1"
+
+        phase = PRPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            git_ops=git_ops,
+            github_ops=github_ops,
+            spec_file=str(spec_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            issue_name="fix-branch",
+            custom_title="Test PR",
+            custom_body="Test body",
+        )
+
+        result = phase.execute()
+
+        # Verify github_ops.create_pr was called with base="develop"
+        github_ops.create_pr.assert_called_once()
+        call_args = github_ops.create_pr.call_args
+        assert call_args.kwargs['base'] == "develop"
+        assert result.status == PhaseStatus.COMPLETED
+
+    def test_base_branch_default_when_config_missing(self, tmp_path: Path) -> None:
+        """測試當 config.json 不存在時，應使用預設值 'main'"""
+        # Setup issue directory structure (no config.json)
+        spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
+        spec_file.write_text("# Feature\n")
+
+        agent_manager = MagicMock(spec=AgentManager)
+        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
+        mock_executor = MagicMock()
+        mock_executor.config.cli = AgentCLI.COPILOT
+        mock_executor.config.session_id = "session_123"
+        agent_manager.get_agent.return_value = mock_executor
+        agent_manager.get_total_token_usage.return_value = TokenUsage()
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        git_ops = MagicMock(spec=GitOperations)
+        github_ops = MagicMock(spec=GitHubOps)
+        github_ops.get_pr_for_branch.return_value = None  # No existing PR
+        github_ops.create_pr.return_value = "https://github.com/user/repo/pull/1"
+        git_ops.get_main_branch.return_value = "main"
+        git_ops.get_commits_between.return_value = "commit1"
+
+        phase = PRPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            git_ops=git_ops,
+            github_ops=github_ops,
+            spec_file=str(spec_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            issue_name="test-feature",
+            custom_title="Test PR",
+            custom_body="Test body",
+        )
+
+        result = phase.execute()
+
+        # Verify github_ops.create_pr was called with base="main" (default)
+        github_ops.create_pr.assert_called_once()
+        call_args = github_ops.create_pr.call_args
+        assert call_args.kwargs['base'] == "main"
+        assert result.status == PhaseStatus.COMPLETED
+
+    def test_base_branch_default_when_config_no_base_branch_field(self, tmp_path: Path) -> None:
+        """測試當 config.json 存在但無 base_branch 欄位時，應使用預設值 'main'"""
+        # Setup issue directory structure
+        spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
+        spec_file.write_text("# Feature\n")
+
+        # Setup config.json without base_branch field
+        config_file = spec_file.parent.parent / "config.json"
+        config_file.write_text('{"feature_branch": "test-feature"}')
+
+        agent_manager = MagicMock(spec=AgentManager)
+        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
+        mock_executor = MagicMock()
+        mock_executor.config.cli = AgentCLI.COPILOT
+        mock_executor.config.session_id = "session_123"
+        agent_manager.get_agent.return_value = mock_executor
+        agent_manager.get_total_token_usage.return_value = TokenUsage()
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        git_ops = MagicMock(spec=GitOperations)
+        github_ops = MagicMock(spec=GitHubOps)
+        github_ops.get_pr_for_branch.return_value = None  # No existing PR
+        github_ops.create_pr.return_value = "https://github.com/user/repo/pull/1"
+        git_ops.get_main_branch.return_value = "main"
+        git_ops.get_commits_between.return_value = "commit1"
+
+        phase = PRPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            git_ops=git_ops,
+            github_ops=github_ops,
+            spec_file=str(spec_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            issue_name="test-feature",
+            custom_title="Test PR",
+            custom_body="Test body",
+        )
+
+        result = phase.execute()
+
+        # Verify github_ops.create_pr was called with base="main" (default)
+        github_ops.create_pr.assert_called_once()
+        call_args = github_ops.create_pr.call_args
+        assert call_args.kwargs['base'] == "main"
+        assert result.status == PhaseStatus.COMPLETED
+
+    def test_cli_base_param_overrides_config(self, tmp_path: Path) -> None:
+        """測試 CLI --base 參數能覆蓋 config.json 中的值（CLI 參數優先）"""
+        # Setup issue directory structure
+        spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
+        spec_file.write_text("# Feature\n")
+
+        # Setup config.json with base_branch="develop"
+        config_file = spec_file.parent.parent / "config.json"
+        config_file.write_text('{"base_branch": "develop", "feature_branch": "test-feature"}')
+
+        agent_manager = MagicMock(spec=AgentManager)
+        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
+        mock_executor = MagicMock()
+        mock_executor.config.cli = AgentCLI.COPILOT
+        mock_executor.config.session_id = "session_123"
+        agent_manager.get_agent.return_value = mock_executor
+        agent_manager.get_total_token_usage.return_value = TokenUsage()
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        git_ops = MagicMock(spec=GitOperations)
+        github_ops = MagicMock(spec=GitHubOps)
+        github_ops.get_pr_for_branch.return_value = None  # No existing PR
+        github_ops.create_pr.return_value = "https://github.com/user/repo/pull/1"
+        git_ops.get_main_branch.return_value = "main"
+        git_ops.get_commits_between.return_value = "commit1"
+
+        # Pass base_branch="staging" via CLI parameter (should override config)
+        phase = PRPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            git_ops=git_ops,
+            github_ops=github_ops,
+            spec_file=str(spec_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            issue_name="test-feature",
+            custom_title="Test PR",
+            custom_body="Test body",
+            base_branch="staging",  # CLI parameter overrides config
+        )
+
+        result = phase.execute()
+
+        # Verify github_ops.create_pr was called with base="staging" (CLI value, not config value)
+        github_ops.create_pr.assert_called_once()
+        call_args = github_ops.create_pr.call_args
+        assert call_args.kwargs['base'] == "staging"
+        assert result.status == PhaseStatus.COMPLETED
