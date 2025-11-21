@@ -524,7 +524,7 @@ class ReviewPhase(Phase):
 2. **【重要】檢查 commit message 風格一致性**
    - 比較基礎分支 ({self.base_branch}) 和當前分支的 commit message 風格是否一致
    - 若只是大小寫、標點符號等細微差異，視為一致
-   - **只檢查未 push 到 remote 的 commit**
+   - **只檢查 HEAD 的 commit，過去的不追究**
    - **如果發現風格不一致：**
      - 明確列出哪些 commit SHA 和 message 不符合風格
      - 說明正確的風格範例（根據基礎分支的實際風格）
