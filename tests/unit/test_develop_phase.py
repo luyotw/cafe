@@ -985,7 +985,7 @@ class TestDevelopPhaseReviewFeedback:
         assert phase.iteration == 1
 
     def test_execute_returns_early_when_review_status_is_confirmed(self, tmp_path) -> None:
-        """測試當 review status 為 CONFIRMED/APPROVED 時，develop 已完成應該直接返回"""
+        """測試當 review status 為 CONFIRMED 時，develop 已完成應該直接返回"""
         # Setup
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)

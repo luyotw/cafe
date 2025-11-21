@@ -48,8 +48,8 @@ class StatusCodeParser:
             >>> extract("CAFE_CONFIRMED\\nThe requirements are clear.")
             PhaseStatusCode.CONFIRMED
 
-            >>> extract("I think this is good. CAFE_LGTM!")
-            PhaseStatusCode.LGTM
+            >>> extract("I think this is good. CAFE_CONFIRMED!")
+            PhaseStatusCode.CONFIRMED
         """
         if not response:
             return None

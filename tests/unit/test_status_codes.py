@@ -50,7 +50,7 @@ class TestStatusCodeParser:
 
     def test_extract_with_valid_codes_filter_rejects_invalid(self) -> None:
         """測試 valid_codes 會拒絕不在清單中的狀態碼"""
-        response = "CAFE_LGTM"
+        response = "CAFE_REJECTED"
         valid_codes = [
             PhaseStatusCode.CONFIRMED,
             PhaseStatusCode.NEED_CLARIFICATION,
@@ -58,7 +58,7 @@ class TestStatusCodeParser:
 
         code = StatusCodeParser.extract(response, valid_codes)
 
-        # LGTM 不在 valid_codes 中，應該找不到
+        # REJECTED 不在 valid_codes 中，應該找不到
         assert code is None
 
     def test_extract_returns_none_for_empty_response(self) -> None:
