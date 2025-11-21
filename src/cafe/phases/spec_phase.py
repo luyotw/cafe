@@ -121,6 +121,9 @@ class SpecPhase(Phase):
         issue_dir = spec_path.parent.parent  # .cafe/issues/{issue_name}
         self.history_dir = issue_dir / "spec" / "history"
 
+        # Load issue_id from config.json if exists (for comment posting after resume)
+        self._load_issue_config()
+
         # Track requirements and questions
         self.confirmed_requirements = []
         self.pending_questions = []
@@ -777,6 +780,25 @@ class SpecPhase(Phase):
 **如果需求已經很清楚，確認完成：**
 回應確認訊息。
 """
+
+    def _load_issue_config(self) -> None:
+        """Load issue configuration (issue_id) from config.json if exists."""
+        # Path: .cafe/issues/{issue_name}/config.json
+        spec_path = Path(self.spec_file)
+        issue_dir = spec_path.parent.parent  # .cafe/issues/{issue_name}
+        config_file = issue_dir / "config.json"
+
+        if not config_file.exists():
+            return
+
+        try:
+            with open(config_file, "r", encoding="utf-8") as f:
+                config_data = json.load(f)
+                if "issue_id" in config_data:
+                    self._fetched_issue_id = config_data["issue_id"]
+        except (json.JSONDecodeError, IOError):
+            # Ignore errors, issue_id will remain unset
+            pass
 
     def _save_issue_config(self) -> None:
         """Save issue configuration (issue_id) to config.json."""
