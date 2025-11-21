@@ -1215,7 +1215,7 @@ def pr(
         # Display start message
         console.print("[bold blue]🚀 PR Phase: Create Pull Request[/bold blue]")
         console.print(f"Issue: {issue_name}")
-        console.print(f"Base branch: {base}")
+        console.print(f"Base branch: {phase.base_branch}")
         console.print()
 
         result = phase.execute()
