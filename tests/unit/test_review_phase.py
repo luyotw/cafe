@@ -430,7 +430,8 @@ class TestPromptGeneration:
 
         call_args = agent_manager.execute.call_args[0]
         prompt = call_args[1]
-        assert "程式碼變更" in prompt
+        # 新版 prompt 不再直接提供「程式碼變更」，而是要求 agent 自己使用 git 指令
+        assert "git 狀態檢查" in prompt
         assert "狀態碼" in prompt
         assert "審查完成後請回傳狀態碼，不要做任何總結或額外說明" in prompt
 
@@ -672,10 +673,9 @@ class TestReviewResultSaving:
             prompt = history_data["prompt"]
             assert "你是資深軟體工程師 Richard" in prompt
             assert "程式碼審查" in prompt
-            # Prompt should list available git commands, not include diff directly
-            assert "git log" in prompt
-            assert "git diff" in prompt
-            assert "git show" in prompt
+            # 新版 prompt 包含審查任務說明，不再直接包含 git diff 內容
+            assert "你的審查任務" in prompt
+            assert "git 狀態檢查" in prompt
         finally:
             os.chdir(original_dir)
 

@@ -499,7 +499,7 @@ class ReviewPhase(Phase):
 
         # Build prompt
         try:
-            prompt = f"""你是資深軟體工程師 {self.review_agent}，正在進行第 {self.iteration} 輪程式碼審查 (Code Review)。
+            prompt = f"""你是資深軟體工程師 {self.review_agent}，正在進行第 {self.iteration} 輪程式碼審查 (Code Review)。你只會檢查當前分支有，且基礎分支 ({self.base_branch}) 沒有的 commit。
 
 {status_code_prompt}
 {recheck_instruction}
@@ -512,10 +512,6 @@ class ReviewPhase(Phase):
 **需求規格與實作計畫:**
 {requirements_section}
 {pr_comments_section}
-**可用的 Git 指令:**
-- `git log` - 查看 commit history
-- `git diff` - 查看程式碼變更
-- `git show` - 查看特定 commit 詳細資訊
 
 **你的審查任務（依優先順序）:**
 
@@ -526,13 +522,13 @@ class ReviewPhase(Phase):
 2. **【重要】檢查 commit message 風格一致性**
    - 比較基礎分支 ({self.base_branch}) 和當前分支的 commit message 風格是否一致
    - 若只是大小寫、標點符號等細微差異，視為一致
-   - **只檢查 HEAD 的 commit，過去的不追究**
+   - **只檢查當前分支有，且基礎分支沒有的 commit**
    - **如果發現風格不一致：**
      - 明確列出哪些 commit SHA 和 message 不符合風格
      - 說明正確的風格範例（根據基礎分支的實際風格）
      - **重要：提供完整的 shell 指令讓 developer 直接執行（每個 commit 一條），禁止使用專案目錄外的檔案路徑**
      - **Developer 可以直接執行這些指令，不需要請求權限，也不要用互動式 rebase**
-     
+
      指令範例：
      ```bash
      # 修改 commit abc123 的 message

@@ -505,12 +505,12 @@ class TestReviewCommandNonInteractiveAgentTracking:
             # Act
             phase.execute()
 
-            # Assert - 驗證 agent 被呼叫，且 prompt 提到可以使用 git diff
+            # Assert - 驗證 agent 被呼叫，且 prompt 包含審查任務說明
             executor = agent_manager.get_agent("Richard")
             assert executor.call_count == 1
-            # Prompt 應該包含 git diff 指令的說明
-            assert "git diff" in executor.last_prompt.lower()
-            # 新設計：agent 自己執行 git diff 獲取內容，而不是在 prompt 中直接提供
+            # 新版 prompt 包含審查任務指引，不再直接提供 git diff 內容
+            assert "git 狀態檢查" in executor.last_prompt or "審查任務" in executor.last_prompt
+            # 新設計：agent 自己執行 git 指令獲取內容，而不是在 prompt 中直接提供
         finally:
             os.chdir(original_cwd)
 
