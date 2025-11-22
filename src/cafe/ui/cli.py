@@ -18,6 +18,7 @@ from cafe.phases.pr_phase import PRPhase
 from cafe.phases.spec_phase import SpecPhase
 from cafe.phases.review_phase import ReviewPhase
 from cafe.utils.config import ConfigManager
+from cafe.utils.git_utils import is_branch_initialized
 from cafe.utils.template import TemplateManager
 from cafe.ui.template_selector import select_template
 
@@ -27,6 +28,54 @@ app = typer.Typer(
     no_args_is_help=True,
 )
 console = Console()
+
+
+def _get_and_validate_branch(ctx: typer.Context, phase_name: str) -> str:
+    """Get current branch and validate it for core phase commands.
+
+    Args:
+        ctx: Typer context (used to check for extra arguments)
+        phase_name: Name of the phase (for error messages)
+
+    Returns:
+        Current branch name
+
+    Raises:
+        typer.Exit: If validation fails
+    """
+    # Check for extra positional arguments
+    if ctx.args:
+        console.print(
+            f"[red]Error: The '{phase_name}' command no longer accepts an issue name. "
+            f"It automatically uses the current Git branch.[/red]"
+        )
+        raise typer.Exit(1)
+
+    # Get current branch
+    git = GitOperations()
+    try:
+        if not git.is_valid_branch():
+            console.print(
+                "[red]Error: You are not currently on a valid Git branch. "
+                "Please checkout a branch first.[/red]"
+            )
+            raise typer.Exit(1)
+
+        branch_name = git.get_current_branch()
+
+        # Check if branch is initialized
+        if not is_branch_initialized(branch_name):
+            console.print(
+                f"[red]Error: This branch has not been initialized. "
+                f"Please run 'cafe prepare' first.[/red]"
+            )
+            raise typer.Exit(1)
+
+        return branch_name
+
+    except Exception as e:
+        console.print(f"[red]Error: Failed to get current branch: {e}[/red]")
+        raise typer.Exit(1)
 
 
 def _setup_agents(config_manager: ConfigManager, issue_name: Optional[str] = None) -> AgentManager:
@@ -422,10 +471,7 @@ def prepare(
 
 @app.command()
 def spec(
-    issue_name: str = typer.Argument(
-        ...,
-        help="Issue name (will be saved to .cafe/issues/{issue-name}/spec/spec.md)",
-    ),
+    ctx: typer.Context,
     mode: str = typer.Option(
         "local",
         "--mode",
@@ -482,26 +528,28 @@ def spec(
     The PM agent will engage in a dialogue with you to clarify and generate
     a complete specification document. No technical details will be discussed.
 
-    Examples:
-        # Generate spec through conversation for "user-auth" issue
-        cafe spec user-auth
+    This command automatically uses the current Git branch name as the issue identifier.
 
-        # Generate spec for "new-feature" issue
-        cafe spec new-feature
+    Examples:
+        # Generate spec through conversation (uses current branch)
+        cafe spec
 
         # Create new GitHub issue with spec
-        cafe spec my-feature -m github
+        cafe spec -m github
 
         # Update existing GitHub issue
-        cafe spec my-feature -m github -i 123
+        cafe spec -m github -i 123
 
         # Use custom PM agent
-        cafe spec my-feature --pm CustomPM
+        cafe spec --pm CustomPM
 
         # Specify rigor level
-        cafe spec my-feature --rigor low
+        cafe spec --rigor low
     """
     try:
+        # Get and validate current branch
+        issue_name = _get_and_validate_branch(ctx, "spec")
+
         # Validate mode
         try:
             workflow_mode = WorkflowMode(mode)
@@ -611,10 +659,7 @@ def spec(
 
 @app.command()
 def plan(
-    issue_name: str = typer.Argument(
-        ...,
-        help="Issue name (reads spec from .cafe/issues/{issue-name}/spec/spec.md)",
-    ),
+    ctx: typer.Context,
     mode: str = typer.Option(
         "local",
         "--mode",
@@ -660,20 +705,22 @@ def plan(
     The developer agent will analyze the specification and create a detailed
     implementation plan with technical considerations and development guide.
 
-    Examples:
-        # Analyze spec and create plan for "user-auth" issue
-        cafe plan user-auth
+    This command automatically uses the current Git branch name as the issue identifier.
 
-        # Analyze spec for "new-feature" issue
-        cafe plan new-feature
+    Examples:
+        # Analyze spec and create plan (uses current branch)
+        cafe plan
 
         # Analyze GitHub issue and create plan
-        cafe plan my-feature -m github -i 123
+        cafe plan -m github -i 123
 
         # Use custom developer agent
-        cafe plan my-feature --dev CustomDev
+        cafe plan --dev CustomDev
     """
     try:
+        # Get and validate current branch
+        issue_name = _get_and_validate_branch(ctx, "plan")
+
         # Validate mode
         try:
             workflow_mode = WorkflowMode(mode)
@@ -783,10 +830,7 @@ def plan(
 
 @app.command()
 def develop(
-    issue_name: str = typer.Argument(
-        ...,
-        help="Issue name (reads spec & plan from .cafe/issues/{issue-name}/)",
-    ),
+    ctx: typer.Context,
     mode: str = typer.Option(
         "local",
         "--mode",
@@ -841,23 +885,25 @@ def develop(
     The developer agent will implement the planned features, running tests and
     making commits according to the implementation plan.
 
-    Examples:
-        # Execute development for "user-auth" issue
-        cafe develop user-auth
+    This command automatically uses the current Git branch name as the issue identifier.
 
-        # Execute development for "new-feature" issue
-        cafe develop new-feature
+    Examples:
+        # Execute development (uses current branch)
+        cafe develop
 
         # Use custom developer agent
-        cafe develop my-feature --dev CustomDev
+        cafe develop --dev CustomDev
 
         # Fetch unresolved PR comments to guide development
-        cafe develop my-feature --pr-number 123
+        cafe develop --pr-number 123
 
         # Non-interactive mode with permission approval
-        cafe develop my-feature --no-interactive --approve-denied-tools 0,2 --user-input "請小心處理"
+        cafe develop --no-interactive --approve-denied-tools 0,2 --user-input "請小心處理"
     """
     try:
+        # Get and validate current branch
+        issue_name = _get_and_validate_branch(ctx, "develop")
+
         # Validate mode
         try:
             workflow_mode = WorkflowMode(mode)
@@ -1040,10 +1086,7 @@ def dev_alias(
 
 @app.command()
 def review(
-    issue_name: str = typer.Argument(
-        ...,
-        help="Issue name (reads spec from .cafe/issues/{issue-name}/)",
-    ),
+    ctx: typer.Context,
     mode: str = typer.Option(
         "local",
         "--mode",
@@ -1099,17 +1142,22 @@ def review(
     The reviewer agent will review code changes and provide feedback.
     Each execution performs one review iteration.
 
+    This command automatically uses the current Git branch name as the issue identifier.
+
     Examples:
-        # Review entire feature branch
-        cafe review user-auth
+        # Review entire feature branch (uses current branch)
+        cafe review
 
         # Review specific commit
-        cafe review user-auth --commit abc123
+        cafe review --commit abc123
 
         # Use custom reviewer agent
-        cafe review my-feature --reviewer CustomReviewer
+        cafe review --reviewer CustomReviewer
     """
     try:
+        # Get and validate current branch
+        issue_name = _get_and_validate_branch(ctx, "review")
+
         # Validate mode
         try:
             workflow_mode = WorkflowMode(mode)
@@ -1221,10 +1269,7 @@ def review(
 
 @app.command()
 def pr(
-    issue_name: str = typer.Argument(
-        ...,
-        help="Issue name (reads spec from .cafe/issues/{issue-name}/)",
-    ),
+    ctx: typer.Context,
     base: str = typer.Option(
         "main",
         "--base",
@@ -1272,20 +1317,25 @@ def pr(
 
     The PR phase will push the feature branch and create a GitHub Pull Request.
 
+    This command automatically uses the current Git branch name as the issue identifier.
+
     Examples:
-        # Create draft PR (interactive mode will ask for confirmation)
-        cafe pr user-auth
+        # Create draft PR (uses current branch, interactive mode will ask for confirmation)
+        cafe pr
 
         # Create non-draft PR
-        cafe pr user-auth --no-draft
+        cafe pr --no-draft
 
         # Create PR with custom title and body
-        cafe pr user-auth --title "Add user authentication" --body "Implements login/logout"
+        cafe pr --title "Add user authentication" --body "Implements login/logout"
 
         # Non-interactive mode (creates draft PR by default)
-        cafe pr user-auth --no-interactive
+        cafe pr --no-interactive
     """
     try:
+        # Get and validate current branch
+        issue_name = _get_and_validate_branch(ctx, "pr")
+
         # Build file paths
         spec_file = f".cafe/issues/{issue_name}/spec/spec.md"
         plan_file = f".cafe/issues/{issue_name}/plan/plan.md"
