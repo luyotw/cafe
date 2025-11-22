@@ -34,7 +34,7 @@ def run_cafe_spec(
     extra_args: Optional[List[str]] = None
 ) -> MockResult:
     """Helper function to run cafe spec command with mock using CliRunner"""
-    args = ["spec", issue_name, "--no-interactive"]
+    args = ["spec", "--no-interactive"]
 
     # Add user input as CLI argument
     if user_input:
@@ -48,12 +48,22 @@ def run_cafe_spec(
     if mock_response:
         env_vars["CAFE_MOCK_RESPONSE"] = mock_response
 
+    # Setup: Create directory structure for the branch
+    issue_dir = tmp_path / ".cafe" / "issues" / issue_name
+    issue_dir.mkdir(parents=True, exist_ok=True)
+
     # Change to tmp_path and run
     original_cwd = os.getcwd()
     try:
         os.chdir(tmp_path)
-        with patch.dict(os.environ, env_vars):
-            result = runner.invoke(app, args, catch_exceptions=False)
+        # Mock Git operations to return the issue_name as branch
+        with patch("cafe.ui.cli.GitOperations") as mock_git_cls:
+            mock_git_instance = mock_git_cls.return_value
+            mock_git_instance.is_valid_branch.return_value = True
+            mock_git_instance.get_current_branch.return_value = issue_name
+
+            with patch.dict(os.environ, env_vars):
+                result = runner.invoke(app, args, catch_exceptions=False)
     except Exception as e:
         # Return as failed result
         return MockResult(returncode=1, stdout="", stderr=str(e))

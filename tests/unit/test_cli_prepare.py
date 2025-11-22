@@ -174,15 +174,6 @@ class TestPrepareCommand:
             assert "Not a git repository" in result.stdout
             assert "git init" in result.stdout
 
-    def test_prepare_empty_issue_name_interactive(self, temp_repo_dir, mock_git_ops):
-        """測試互動式模式下輸入空 issue name"""
-        # User inputs empty string
-        result = runner.invoke(app, ["prepare"], input="\n")
-
-        assert result.exit_code == 1
-        # Check for error message in output (may appear with or without styling)
-        assert ("Issue name cannot be empty" in result.stdout or "Error" in result.stdout)
-
     def test_prepare_creates_proper_directory_structure(self, temp_repo_dir, mock_git_ops):
         """測試創建正確的目錄結構"""
         result = runner.invoke(app, ["prepare", "my-issue"])

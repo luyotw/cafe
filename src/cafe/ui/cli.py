@@ -1015,10 +1015,7 @@ def develop(
 # Add "dev" as an alias for "develop"
 @app.command(name="dev")
 def dev_alias(
-    issue_name: str = typer.Argument(
-        ...,
-        help="Issue name (reads spec & plan from .cafe/issues/{issue-name}/)",
-    ),
+    ctx: typer.Context,
     mode: str = typer.Option(
         "local",
         "--mode",
@@ -1071,7 +1068,7 @@ def dev_alias(
     """Alias for 'develop' command."""
     # Call the develop function with all parameters
     develop(
-        issue_name=issue_name,
+        ctx=ctx,
         mode=mode,
         issue_id=issue_id,
         dev_agent=dev_agent,

@@ -60,7 +60,7 @@ def run_cafe_plan(
     template: str = "default"
 ) -> MockResult:
     """Helper function to run cafe plan command with mock using CliRunner"""
-    args = ["plan", issue_name, "--no-interactive"]
+    args = ["plan", "--no-interactive"]
     if template:
         args.extend(["--template", template])
     if extra_args:
@@ -73,8 +73,14 @@ def run_cafe_plan(
     original_cwd = os.getcwd()
     try:
         os.chdir(tmp_path)
-        with patch.dict(os.environ, env_vars):
-            result = runner.invoke(app, args, catch_exceptions=False)
+        # Mock Git operations to return the issue_name as branch
+        with patch("cafe.ui.cli.GitOperations") as mock_git_cls:
+            mock_git_instance = mock_git_cls.return_value
+            mock_git_instance.is_valid_branch.return_value = True
+            mock_git_instance.get_current_branch.return_value = issue_name
+
+            with patch.dict(os.environ, env_vars):
+                result = runner.invoke(app, args, catch_exceptions=False)
     except Exception as e:
         return MockResult(returncode=1, stdout="", stderr=str(e))
     finally:
