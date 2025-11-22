@@ -520,13 +520,15 @@ class ReviewPhase(Phase):
    - **檢查是否有機敏資訊被提交（如密碼、API key、憑證等），若有則視為 critical issue，請列出並要求立即移除，不可留在 commit 歷史中**
 
 2. **【重要】檢查 commit message 風格一致性**
-   - 比較基礎分支 ({self.base_branch}) 和當前分支的 commit message 風格是否一致
-   - 若只是大小寫、標點符號等細微差異，視為一致
-   - **只檢查當前分支有，且基礎分支沒有的 commit**
+   - 用 `git log {self.base_branch}..HEAD` 取得當前分支新增的 commit messages
+   - 用 `git log {self.base_branch} 取得基礎分支的 commit messages
+   - **只比較以下兩個項目是否一致：**
+     - 語言（中文/英文/...）
+     - 單行或多行格式
    - **如果發現風格不一致：**
      - 明確列出哪些 commit SHA 和 message 不符合風格
      - 說明正確的風格範例（根據基礎分支的實際風格）
-     - **重要：提供完整的 shell 指令讓 developer 直接執行（每個 commit 一條），禁止使用專案目錄外的檔案路徑**
+     - **重要：提供完整的更新指令讓 developer 直接執行（每個 commit 一條），禁止使用專案目錄外的檔案路徑**
      - **Developer 可以直接執行這些指令，不需要請求權限，也不要用互動式 rebase**
 
      指令範例：
