@@ -50,9 +50,18 @@ class GitOperations:
         """Get current branch name.
 
         Returns:
-            Current branch name
+            Current branch name (empty string if detached HEAD)
         """
         return self.run_git("branch", "--show-current")
+
+    def is_valid_branch(self) -> bool:
+        """Check if currently on a valid branch (not detached HEAD).
+
+        Returns:
+            True if on a valid branch, False if detached HEAD
+        """
+        current_branch = self.get_current_branch()
+        return bool(current_branch)
 
     def create_branch(self, branch_name: str) -> None:
         """Create and checkout a new branch.
