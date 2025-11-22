@@ -459,7 +459,7 @@ def prepare(
         console.print(f"  ⚓ Base branch: {base_branch}")
         console.print(f"  ⚙️  Config: .cafe/issues/{issue_name}/config.yaml")
         console.print()
-        console.print(f"[bold]Next step:[/bold] cafe spec {issue_name}")
+        console.print(f"[bold]Next step:[/bold] cafe spec")
         console.print()
 
     except typer.Exit:
@@ -734,7 +734,7 @@ def plan(
         # Check if spec file exists
         if not Path(spec_file).exists():
             console.print(f"[red]Error: Spec file not found: {spec_file}[/red]")
-            console.print(f"[dim]Hint: Run 'cafe spec {issue_name}' first to create the specification.[/dim]")
+            console.print(f"[dim]Hint: Run 'cafe spec' first to create the specification.[/dim]")
             raise typer.Exit(1)
 
         # Check if plan already exists
@@ -918,13 +918,13 @@ def develop(
         # Check if spec file exists
         if not Path(spec_file).exists():
             console.print(f"[red]Error: Spec file not found: {spec_file}[/red]")
-            console.print(f"[dim]Hint: Run 'cafe spec {issue_name}' first to create the specification.[/dim]")
+            console.print(f"[dim]Hint: Run 'cafe spec' first to create the specification.[/dim]")
             raise typer.Exit(1)
 
         # Check if plan file exists
         if not Path(plan_file).exists():
             console.print(f"[red]Error: Plan file not found: {plan_file}[/red]")
-            console.print(f"[dim]Hint: Run 'cafe plan {issue_name}' first to create the implementation plan.[/dim]")
+            console.print(f"[dim]Hint: Run 'cafe plan' first to create the implementation plan.[/dim]")
             raise typer.Exit(1)
 
         # Initialize components
@@ -999,13 +999,13 @@ def develop(
             console.print("[dim]Next steps:[/dim]")
             console.print(f"[dim]  1. Review changes: git diff[/dim]")
             console.print(f"[dim]  2. Run tests: pytest[/dim]")
-            console.print(f"[dim]  3. Code review: cafe review {issue_name}[/dim]")
+            console.print(f"[dim]  3. Code review: cafe review[/dim]")
         elif result.status.value == "failed":
             console.print(f"[red]❌ Development failed: {result.message}[/red]")
             raise typer.Exit(1)
         elif result.status.value == "in_progress":
             console.print(f"[yellow]⏸️  Development paused: {result.message}[/yellow]")
-            console.print(f"[dim]Resume with: cafe develop {issue_name}[/dim]")
+            console.print(f"[dim]Resume with: cafe develop[/dim]")
 
     except Exception as e:
         console.print(f"[red]Error: {e}[/red]")
@@ -1172,7 +1172,7 @@ def review(
         # Check if spec file exists
         if not Path(spec_file).exists():
             console.print(f"[red]Error: Spec file not found: {spec_file}[/red]")
-            console.print(f"[dim]Hint: Run 'cafe spec {issue_name}' first to create the specification.[/dim]")
+            console.print(f"[dim]Hint: Run 'cafe spec' first to create the specification.[/dim]")
             raise typer.Exit(1)
 
         # Initialize components
@@ -1235,7 +1235,7 @@ def review(
                 console.print("[bold green]✅ Code review passed![/bold green]")
                 console.print()
                 console.print("[dim]Next steps:[/dim]")
-                console.print(f"[dim]  1. Create PR: cafe pr {issue_name}[/dim]")
+                console.print(f"[dim]  1. Create PR: cafe pr[/dim]")
             else:
                 console.print(f"[bold yellow]📝 Code review completed with status: {status_code}[/bold yellow]")
                 console.print()
@@ -1255,8 +1255,8 @@ def review(
                 console.print()
                 console.print("[dim]Next steps:[/dim]")
                 console.print(f"[dim]  1. Review feedback: cat {review_path}[/dim]")
-                console.print(f"[dim]  2. Make changes: cafe develop {issue_name}[/dim]")
-                console.print(f"[dim]  3. Review again: cafe review {issue_name}[/dim]")
+                console.print(f"[dim]  2. Make changes: cafe develop[/dim]")
+                console.print(f"[dim]  3. Review again: cafe review[/dim]")
         else:
             console.print()
             console.print(f"[bold red]❌ Review phase failed: {result.message}[/bold red]")
@@ -1343,13 +1343,13 @@ def pr(
         # Check if spec file exists
         if not Path(spec_file).exists():
             console.print(f"[red]Error: Spec file not found: {spec_file}[/red]")
-            console.print(f"[dim]Hint: Run 'cafe spec {issue_name}' first to create the specification.[/dim]")
+            console.print(f"[dim]Hint: Run 'cafe spec' first to create the specification.[/dim]")
             raise typer.Exit(1)
 
         # Check if plan file exists
         if not Path(plan_file).exists():
             console.print(f"[red]Error: Plan file not found: {plan_file}[/red]")
-            console.print(f"[dim]Hint: Run 'cafe plan {issue_name}' first to create the plan.[/dim]")
+            console.print(f"[dim]Hint: Run 'cafe plan' first to create the plan.[/dim]")
             raise typer.Exit(1)
 
         # Initialize components
