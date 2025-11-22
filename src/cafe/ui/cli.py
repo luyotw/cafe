@@ -300,6 +300,127 @@ def version() -> None:
 
 
 @app.command()
+def prepare(
+    issue_name: Optional[str] = typer.Argument(
+        None,
+        help="Issue name (will create directory at .cafe/issues/{issue-name}/)",
+    ),
+    base_branch: Optional[str] = typer.Option(
+        None,
+        "--base",
+        "-b",
+        help="Base branch to branch from (default: current branch)",
+    ),
+    check_uncommitted: bool = typer.Option(
+        True,
+        "--check/--no-check",
+        help="Check for uncommitted changes before switching branch (default: True)",
+    ),
+) -> None:
+    """Prepare issue environment (directory, config, git branch) before running spec phase.
+
+    This command sets up the necessary directory structure, creates a feature branch,
+    and saves initial configuration for the issue.
+
+    Examples:
+        # Interactive mode (will ask for issue name)
+        cafe prepare
+
+        # Specify issue name directly
+        cafe prepare fix-login-bug
+
+        # Specify custom base branch
+        cafe prepare my-feature --base develop
+
+        # Skip uncommitted changes check
+        cafe prepare my-feature --no-check
+    """
+    import yaml
+
+    try:
+        # 1. Get issue name (from argument or prompt)
+        if not issue_name:
+            issue_name = typer.prompt("Issue name")
+            if not issue_name or not issue_name.strip():
+                console.print("[red]Error: Issue name cannot be empty.[/red]")
+                raise typer.Exit(1)
+            issue_name = issue_name.strip()
+
+        # 2. Initialize Git operations
+        try:
+            git_ops = GitOperations()
+        except Exception as e:
+            console.print(f"[red]Error: Not a git repository. {e}[/red]")
+            console.print("[yellow]Hint: Run 'git init' to initialize a git repository.[/yellow]")
+            raise typer.Exit(1)
+
+        # 3. Check for uncommitted changes (warning only)
+        if check_uncommitted and git_ops.has_uncommitted_changes():
+            console.print("[yellow]⚠️  Warning: You have uncommitted changes.[/yellow]")
+            console.print("[yellow]    It's recommended to commit or stash them before switching branches.[/yellow]")
+            console.print()
+
+            # Ask if user wants to continue
+            continue_anyway = typer.confirm("Continue anyway?", default=False)
+            if not continue_anyway:
+                console.print("[dim]Cancelled.[/dim]")
+                raise typer.Exit(0)
+
+        # 4. Determine base branch
+        if not base_branch:
+            base_branch = git_ops.get_current_branch()
+
+        console.print()
+        console.print(f"[bold blue]🔧 Preparing issue: {issue_name}[/bold blue]")
+        console.print(f"Base branch: {base_branch}")
+        console.print()
+
+        # 5. Create issue directory structure
+        issue_dir = Path(f".cafe/issues/{issue_name}")
+        spec_dir = issue_dir / "spec"
+        sessions_dir = issue_dir / "sessions"
+
+        spec_dir.mkdir(parents=True, exist_ok=True)
+        sessions_dir.mkdir(parents=True, exist_ok=True)
+
+        # 6. Create or switch to feature branch
+        feature_branch = issue_name
+        if git_ops.branch_exists(feature_branch):
+            console.print(f"[dim]Branch '{feature_branch}' already exists, switching to it...[/dim]")
+            git_ops.checkout_branch(feature_branch)
+        else:
+            console.print(f"[dim]Creating and switching to branch '{feature_branch}'...[/dim]")
+            git_ops.create_branch(feature_branch)
+
+        # 7. Save config.yaml
+        config_file = issue_dir / "config.yaml"
+        config_data = {
+            "base_branch": base_branch,
+            "feature_branch": feature_branch,
+        }
+
+        with open(config_file, 'w', encoding='utf-8') as f:
+            yaml.dump(config_data, f, allow_unicode=True, default_flow_style=False)
+
+        # 8. Display success message
+        console.print()
+        console.print(f"[green]✓ Successfully prepared issue: {issue_name}[/green]")
+        console.print(f"  📁 Directory: .cafe/issues/{issue_name}/")
+        console.print(f"  🌿 Feature branch: {feature_branch}")
+        console.print(f"  ⚓ Base branch: {base_branch}")
+        console.print(f"  ⚙️  Config: .cafe/issues/{issue_name}/config.yaml")
+        console.print()
+        console.print(f"[bold]Next step:[/bold] cafe spec {issue_name}")
+        console.print()
+
+    except typer.Exit:
+        raise
+    except Exception as e:
+        console.print(f"[red]Error during prepare: {e}[/red]")
+        raise typer.Exit(1)
+
+
+@app.command()
 def spec(
     issue_name: str = typer.Argument(
         ...,
