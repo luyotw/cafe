@@ -14,10 +14,19 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from cafe.agents.manager import AgentManager
+from cafe.core.git import GitOperations
 from cafe.core.permission import PermissionHandler
 from cafe.core.types import PhaseStatus, WorkflowMode, TokenUsage, SpecRigor, AgentConfig, AgentCLI
 from cafe.phases.spec_phase import SpecPhase
 from cafe.phases.plan_phase import PlanPhase
+
+
+@pytest.fixture
+def mock_git_ops() -> MagicMock:
+    """Create a mock GitOperations for testing."""
+    git_ops = MagicMock(spec=GitOperations)
+    git_ops.get_current_branch.return_value = "test-issue"
+    return git_ops
 
 
 def setup_agent_manager_mock_for_spec(agent_manager: MagicMock) -> None:
@@ -41,10 +50,15 @@ def create_template_file(tmp_path: Path) -> str:
 class TestSpecPhaseInteractiveVsNonInteractive:
     """測試 SpecPhase 的 interactive 和 non-interactive 模式差異。"""
 
-    def test_confirmed_status_same_behavior_both_modes(self, tmp_path: Path) -> None:
+    def test_confirmed_status_same_behavior_both_modes(
+        self, tmp_path: Path, mock_git_ops: MagicMock, monkeypatch
+    ) -> None:
         """測試 READY_FOR_REVIEW + 用戶確認在兩種模式下行為相同（都完成）"""
         # 準備測試環境
         issue_name = "test-confirmed"
+        mock_git_ops.get_current_branch.return_value = issue_name
+        monkeypatch.chdir(tmp_path)
+
         spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements\nTest requirements")
@@ -60,6 +74,7 @@ class TestSpecPhaseInteractiveVsNonInteractive:
         phase_interactive = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
+            git_ops=mock_git_ops,
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=True,
@@ -76,6 +91,7 @@ class TestSpecPhaseInteractiveVsNonInteractive:
         phase_noninteractive = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
+            git_ops=mock_git_ops,
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
@@ -93,9 +109,14 @@ class TestSpecPhaseInteractiveVsNonInteractive:
         # Non-interactive with user_input="confirm" also results in CAFE_CONFIRMED
         assert result_noninteractive.data.get("status_code") == "CAFE_CONFIRMED"
 
-    def test_rejected_status_same_behavior_both_modes(self, tmp_path: Path) -> None:
+    def test_rejected_status_same_behavior_both_modes(
+        self, tmp_path: Path, mock_git_ops: MagicMock, monkeypatch
+    ) -> None:
         """測試 REJECTED 狀態在兩種模式下行為相同（都失敗）"""
         issue_name = "test-rejected"
+        mock_git_ops.get_current_branch.return_value = issue_name
+        monkeypatch.chdir(tmp_path)
+
         spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements\nTest requirements")
@@ -111,6 +132,7 @@ class TestSpecPhaseInteractiveVsNonInteractive:
         phase_interactive = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
+            git_ops=mock_git_ops,
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=True,
@@ -126,6 +148,7 @@ class TestSpecPhaseInteractiveVsNonInteractive:
         phase_noninteractive = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
+            git_ops=mock_git_ops,
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
@@ -141,9 +164,14 @@ class TestSpecPhaseInteractiveVsNonInteractive:
         assert result_interactive.data.get("status_code") == "CAFE_REJECTED"
         assert result_noninteractive.data.get("status_code") == "CAFE_REJECTED"
 
-    def test_need_clarification_interactive_continues(self, tmp_path: Path) -> None:
+    def test_need_clarification_interactive_continues(
+        self, tmp_path: Path, mock_git_ops: MagicMock, monkeypatch
+    ) -> None:
         """測試 NEED_CLARIFICATION 在 interactive 模式會繼續迭代"""
         issue_name = "test-clarification-interactive"
+        mock_git_ops.get_current_branch.return_value = issue_name
+        monkeypatch.chdir(tmp_path)
+
         spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements\nTest requirements")
@@ -162,6 +190,7 @@ class TestSpecPhaseInteractiveVsNonInteractive:
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
+            git_ops=mock_git_ops,
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=True,
@@ -179,9 +208,14 @@ class TestSpecPhaseInteractiveVsNonInteractive:
         assert result.data.get("iterations") == 3
         assert agent_manager.execute.call_count == 2
 
-    def test_need_clarification_noninteractive_stops(self, tmp_path: Path) -> None:
+    def test_need_clarification_noninteractive_stops(
+        self, tmp_path: Path, mock_git_ops: MagicMock, monkeypatch
+    ) -> None:
         """測試 NEED_CLARIFICATION 在 non-interactive 模式會停止並返回 IN_PROGRESS"""
         issue_name = "test-clarification-noninteractive"
+        mock_git_ops.get_current_branch.return_value = issue_name
+        monkeypatch.chdir(tmp_path)
+
         spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements\nTest requirements")
@@ -196,6 +230,7 @@ class TestSpecPhaseInteractiveVsNonInteractive:
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
+            git_ops=mock_git_ops,
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
@@ -210,9 +245,14 @@ class TestSpecPhaseInteractiveVsNonInteractive:
         assert "NEED_CLARIFICATION" in result.message or "clarification" in result.message.lower()
         assert agent_manager.execute.call_count == 1
 
-    def test_no_status_code_interactive_continues(self, tmp_path: Path) -> None:
+    def test_no_status_code_interactive_continues(
+        self, tmp_path: Path, mock_git_ops: MagicMock, monkeypatch
+    ) -> None:
         """測試沒有狀態碼時 interactive 模式會繼續迭代"""
         issue_name = "test-no-code-interactive"
+        mock_git_ops.get_current_branch.return_value = issue_name
+        monkeypatch.chdir(tmp_path)
+
         spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements\nTest requirements")
@@ -231,6 +271,7 @@ class TestSpecPhaseInteractiveVsNonInteractive:
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
+            git_ops=mock_git_ops,
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=True,
@@ -246,9 +287,14 @@ class TestSpecPhaseInteractiveVsNonInteractive:
         assert result.status == PhaseStatus.COMPLETED
         assert agent_manager.execute.call_count == 2
 
-    def test_no_status_code_noninteractive_stops(self, tmp_path: Path) -> None:
+    def test_no_status_code_noninteractive_stops(
+        self, tmp_path: Path, mock_git_ops: MagicMock, monkeypatch
+    ) -> None:
         """測試沒有狀態碼時 non-interactive 模式會停止並返回 IN_PROGRESS"""
         issue_name = "test-no-code-noninteractive"
+        mock_git_ops.get_current_branch.return_value = issue_name
+        monkeypatch.chdir(tmp_path)
+
         spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements\nTest requirements")
@@ -263,6 +309,7 @@ class TestSpecPhaseInteractiveVsNonInteractive:
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
+            git_ops=mock_git_ops,
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
@@ -283,13 +330,18 @@ class TestSpecPhaseInteractiveVsNonInteractive:
 class TestPlanPhaseInteractiveVsNonInteractive:
     """測試 PlanPhase 的 interactive 和 non-interactive 模式差異。"""
 
-    def test_confirmed_status_same_behavior_both_modes(self, tmp_path: Path) -> None:
+    def test_confirmed_status_same_behavior_both_modes(
+        self, tmp_path: Path, mock_git_ops: MagicMock, monkeypatch
+    ) -> None:
         """測試 READY_FOR_REVIEW 狀態在兩種模式下行為不同
 
         Interactive: READY_FOR_REVIEW → 用戶確認 → CONFIRMED
         Non-interactive: READY_FOR_REVIEW → 直接完成（不需用戶確認）
         """
         issue_name = "test-plan-confirmed"
+        mock_git_ops.get_current_branch.return_value = issue_name
+        monkeypatch.chdir(tmp_path)
+
         spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements\nTest requirements\n\n## 開發指南\nDev guide")
@@ -315,6 +367,7 @@ class TestPlanPhaseInteractiveVsNonInteractive:
         phase_interactive = PlanPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
+            git_ops=mock_git_ops,
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=True,
@@ -330,6 +383,7 @@ class TestPlanPhaseInteractiveVsNonInteractive:
         phase_noninteractive = PlanPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
+            git_ops=mock_git_ops,
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
@@ -346,9 +400,14 @@ class TestPlanPhaseInteractiveVsNonInteractive:
         assert result_interactive.data.get("status_code") == "CAFE_CONFIRMED"  # Interactive 有用戶確認
         assert result_noninteractive.data.get("status_code") == "CAFE_READY_FOR_REVIEW"  # Non-interactive 直接完成
 
-    def test_need_clarification_interactive_continues(self, tmp_path: Path) -> None:
+    def test_need_clarification_interactive_continues(
+        self, tmp_path: Path, mock_git_ops: MagicMock, monkeypatch
+    ) -> None:
         """測試 NEED_CLARIFICATION 在 interactive 模式會繼續迭代"""
         issue_name = "test-plan-clarification-interactive"
+        mock_git_ops.get_current_branch.return_value = issue_name
+        monkeypatch.chdir(tmp_path)
+
         spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements\nTest requirements\n\n## 開發指南\nDev guide")
@@ -376,6 +435,7 @@ class TestPlanPhaseInteractiveVsNonInteractive:
         phase = PlanPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
+            git_ops=mock_git_ops,
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=True,
@@ -392,9 +452,14 @@ class TestPlanPhaseInteractiveVsNonInteractive:
         assert result.data.get("iterations") == 3  # 1st: NEED_CLARIFICATION, 2nd: READY_FOR_REVIEW, 3rd: user confirms
         assert agent_manager.execute.call_count == 2  # Agent executes twice (not counting user confirmation)
 
-    def test_need_clarification_noninteractive_stops(self, tmp_path: Path) -> None:
+    def test_need_clarification_noninteractive_stops(
+        self, tmp_path: Path, mock_git_ops: MagicMock, monkeypatch
+    ) -> None:
         """測試 NEED_CLARIFICATION 在 non-interactive 模式沒有 user_input 時應該 FAILED"""
         issue_name = "test-plan-clarification-noninteractive"
+        mock_git_ops.get_current_branch.return_value = issue_name
+        monkeypatch.chdir(tmp_path)
+
         spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements\nTest requirements\n\n## 開發指南\nDev guide")
@@ -419,6 +484,7 @@ class TestPlanPhaseInteractiveVsNonInteractive:
         phase = PlanPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
+            git_ops=mock_git_ops,
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
@@ -433,9 +499,14 @@ class TestPlanPhaseInteractiveVsNonInteractive:
         assert "NEED_CLARIFICATION" in result.message or "clarification" in result.message.lower()
         assert agent_manager.execute.call_count == 1
 
-    def test_no_status_code_noninteractive_stops(self, tmp_path: Path) -> None:
+    def test_no_status_code_noninteractive_stops(
+        self, tmp_path: Path, mock_git_ops: MagicMock, monkeypatch
+    ) -> None:
         """測試沒有狀態碼時 non-interactive 模式會停止並返回 IN_PROGRESS"""
         issue_name = "test-plan-no-code-noninteractive"
+        mock_git_ops.get_current_branch.return_value = issue_name
+        monkeypatch.chdir(tmp_path)
+
         spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements\nTest requirements\n\n## 開發指南\nDev guide")
@@ -460,6 +531,7 @@ class TestPlanPhaseInteractiveVsNonInteractive:
         phase = PlanPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
+            git_ops=mock_git_ops,
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,

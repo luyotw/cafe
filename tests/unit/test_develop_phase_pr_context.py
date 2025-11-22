@@ -15,8 +15,11 @@ class TestDevelopPhasePRCommentsIntegration:
     """測試 DevelopPhase 整合 PR comments"""
 
     @pytest.fixture
-    def mock_components(self, tmp_path):
+    def mock_components(self, tmp_path, monkeypatch):
         """創建 mock 的 components"""
+        # Change to tmp_path directory
+        monkeypatch.chdir(tmp_path)
+
         # Create test files
         spec_file = tmp_path / ".cafe" / "issues" / "test-issue" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
@@ -30,6 +33,7 @@ class TestDevelopPhasePRCommentsIntegration:
         agent_manager = Mock()
         permission_handler = Mock()
         git_ops = Mock()
+        git_ops.get_current_branch.return_value = "test-issue"
 
         return {
             "agent_manager": agent_manager,

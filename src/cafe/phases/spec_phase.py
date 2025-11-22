@@ -60,6 +60,7 @@ class SpecPhase(Phase):
         self,
         agent_manager: AgentManager,
         permission_handler: PermissionHandler,
+        git_ops: "GitOperations",
         spec_file: str,
         workflow_mode: WorkflowMode,
         issue_id: Optional[str] = None,
@@ -75,18 +76,19 @@ class SpecPhase(Phase):
         Args:
             agent_manager: Agent manager
             permission_handler: Permission handler
+            git_ops: Git operations
             spec_file: Path to spec file
             workflow_mode: Workflow mode (local or github)
             issue_id: GitHub issue ID (required for github mode)
             pm_agent: PM agent name (default: Roger)
             interactive: Enable interactive mode for user input (default: True)
-            issue_name: Issue name for history tracking (default: derived from spec_file)
+            issue_name: Issue name for history tracking (default: derived from current branch)
             rigor: Specification rigor level (default: medium)
             user_input: User input for non-interactive mode (default: "")
             fetch_issue_id: GitHub issue number to fetch content from (optional)
         """
-        super().__init__(interactive=interactive)
-        
+        super().__init__(interactive=interactive, git_ops=git_ops)
+
         from cafe.core.types import SpecRigor
 
         self.agent_manager = agent_manager
@@ -113,15 +115,12 @@ class SpecPhase(Phase):
         if issue_name:
             self.issue_name = issue_name
         else:
-            # Derive from spec_file path: .cafe/issues/{issue_name}/spec/spec.md
-            spec_path = Path(spec_file)
-            self.issue_name = spec_path.parent.parent.name
+            # Derive from current branch (issue_dir is set by base class)
+            self.issue_name = self.issue_dir.name
 
         # History directory for spec phase
         # Path: .cafe/issues/{issue_name}/spec/history
-        spec_path = Path(self.spec_file)
-        issue_dir = spec_path.parent.parent  # .cafe/issues/{issue_name}
-        self.history_dir = issue_dir / "spec" / "history"
+        self.history_dir = self.issue_dir / "spec" / "history"
 
         # Load issue_id from config.json if exists (for comment posting after resume)
         self._load_issue_config()
@@ -903,9 +902,7 @@ class SpecPhase(Phase):
     def _load_issue_config(self) -> None:
         """Load issue configuration (issue_id) from config.yaml if exists."""
         # Path: .cafe/issues/{issue_name}/config.yaml
-        spec_path = Path(self.spec_file)
-        issue_dir = spec_path.parent.parent  # .cafe/issues/{issue_name}
-        config_file = issue_dir / "config.yaml"
+        config_file = self.issue_dir / "config.yaml"
 
         config_data = self._read_issue_config(config_file)
         if config_data and "issue_id" in config_data:
@@ -917,9 +914,7 @@ class SpecPhase(Phase):
             return
 
         # Path: .cafe/issues/{issue_name}/config.yaml
-        spec_path = Path(self.spec_file)
-        issue_dir = spec_path.parent.parent  # .cafe/issues/{issue_name}
-        config_file = issue_dir / "config.yaml"
+        config_file = self.issue_dir / "config.yaml"
 
         # Create config
         config_data = {

@@ -10,9 +10,18 @@ from io import StringIO
 
 from cafe.phases.spec_phase import SpecPhase
 from cafe.agents.manager import AgentManager
+from cafe.core.git import GitOperations
 from cafe.core.types import PhaseProgress, PhaseResult, PhaseStatus, WorkflowMode, TokenUsage
 from cafe.core.permission import PermissionHandler
 from cafe.core.status_codes import PhaseStatusCode
+
+
+@pytest.fixture
+def mock_git_ops() -> MagicMock:
+    """Create a mock GitOperations for testing."""
+    git_ops = MagicMock(spec=GitOperations)
+    git_ops.get_current_branch.return_value = "test-issue"
+    return git_ops
 
 
 def create_mock_pm_agent(phase: SpecPhase, content: str, status_code: str = "CAFE_CONFIRMED") -> Callable:
@@ -58,7 +67,7 @@ def setup_agent_manager_mocks(agent_manager: MagicMock) -> None:
 class TestSpecPhaseBasics:
     """Test basic SpecPhase functionality."""
 
-    def test_init_spec_phase(self) -> None:
+    def test_init_spec_phase(self, mock_git_ops: MagicMock) -> None:
         """測試初始化 SpecPhase"""
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -66,6 +75,7 @@ class TestSpecPhaseBasics:
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
+            git_ops=mock_git_ops,
             spec_file="spec.md",
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
@@ -76,7 +86,7 @@ class TestSpecPhaseBasics:
         assert phase.spec_file == "spec.md"
         assert phase.workflow_mode == WorkflowMode.LOCAL
 
-    def test_init_with_github_mode(self) -> None:
+    def test_init_with_github_mode(self, mock_git_ops: MagicMock) -> None:
         """測試使用 GitHub mode 初始化"""
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -84,6 +94,7 @@ class TestSpecPhaseBasics:
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
+            git_ops=mock_git_ops,
             spec_file="spec.md",
             workflow_mode=WorkflowMode.GITHUB,
             interactive=False,
@@ -97,8 +108,13 @@ class TestSpecPhaseBasics:
 class TestAgentSelection:
     """Test PM agent selection."""
 
-    def test_uses_pm_agent(self, tmp_path: Path) -> None:
+    def test_uses_pm_agent(self, tmp_path: Path, mock_git_ops: MagicMock, monkeypatch) -> None:
         """測試使用 PM agent (Roger)"""
+        mock_git_ops.get_current_branch.return_value = "test-feature"
+
+        # Change working directory to tmp_path so relative paths work
+        monkeypatch.chdir(tmp_path)
+
         spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("Requirements")
@@ -112,6 +128,7 @@ class TestAgentSelection:
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
+            git_ops=mock_git_ops,
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
@@ -128,8 +145,10 @@ class TestAgentSelection:
 class TestHistoryTracking:
     """Test conversation history tracking for agents without session support."""
 
-    def test_history_directory_structure(self, tmp_path: Path) -> None:
+    def test_history_directory_structure(self, tmp_path: Path, mock_git_ops: MagicMock) -> None:
         """測試歷史記錄目錄結構包含 phase 資訊"""
+        mock_git_ops.get_current_branch.return_value = "test-feature"
+
         spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.parent.mkdir(parents=True, exist_ok=True)
@@ -143,16 +162,17 @@ class TestHistoryTracking:
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
+            git_ops=mock_git_ops,
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
             issue_name="test-feature",
         )
 
-        # Verify history directory path includes phase1 and is alongside requirements file
-        assert phase.history_dir == tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "history"
+        # Verify history directory path (now relative to project root)
+        assert str(phase.history_dir) == ".cafe/issues/test-feature/spec/history"
 
-    def test_save_iteration_history_creates_json(self, tmp_path: Path) -> None:
+    def test_save_iteration_history_creates_json(self, tmp_path: Path, mock_git_ops: MagicMock) -> None:
         """測試儲存迭代歷史會建立 JSON 檔案，包含 user_input（輪的開始）"""
         spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
@@ -167,6 +187,7 @@ class TestHistoryTracking:
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
+            git_ops=mock_git_ops,
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
@@ -203,7 +224,7 @@ class TestHistoryTracking:
         assert "confirmed_requirements" in data
         assert "pending_questions" in data
 
-    def test_save_iteration_history_includes_prompt(self, tmp_path: Path) -> None:
+    def test_save_iteration_history_includes_prompt(self, tmp_path: Path, mock_git_ops: MagicMock) -> None:
         """測試儲存迭代歷史時會包含 prompt 欄位"""
         spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
@@ -215,6 +236,7 @@ class TestHistoryTracking:
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
+            git_ops=mock_git_ops,
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
@@ -249,7 +271,7 @@ class TestHistoryTracking:
         assert data["pm_response"] == "請問使用者是誰？"
         assert data["status"] == "CAFE_NEED_CLARIFICATION"
 
-    def test_save_iteration_history_includes_agent_metadata(self, tmp_path: Path) -> None:
+    def test_save_iteration_history_includes_agent_metadata(self, tmp_path: Path, mock_git_ops: MagicMock) -> None:
         """測試儲存迭代歷史時會包含 agent metadata（cli, session_id, allowed_tools, denied_tools）"""
         from cafe.core.types import AgentCLI, AgentConfig
 
@@ -263,6 +285,7 @@ class TestHistoryTracking:
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
+            git_ops=mock_git_ops,
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
@@ -305,8 +328,10 @@ class TestHistoryTracking:
         assert data["allowed_tools"] == ["write", "read"]
         assert data["denied_tools"] is None
 
-    def test_issue_name_derived_from_spec_file(self, tmp_path: Path) -> None:
-        """測試 issue_name 從 spec_file 自動推導"""
+    def test_issue_name_derived_from_spec_file(self, tmp_path: Path, mock_git_ops: MagicMock) -> None:
+        """測試 issue_name 從當前 branch 自動推導"""
+        mock_git_ops.get_current_branch.return_value = "my-feature"
+
         spec_file = tmp_path / ".cafe" / "issues" / "my-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.parent.mkdir(parents=True, exist_ok=True)
@@ -318,16 +343,17 @@ class TestHistoryTracking:
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
+            git_ops=mock_git_ops,
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
         )
 
-        # Verify issue_name is derived from directory structure
+        # Verify issue_name is derived from current branch
         assert phase.issue_name == "my-feature"
-        assert phase.history_dir == tmp_path / ".cafe" / "issues" / "my-feature" / "spec" / "history"
+        assert str(phase.history_dir) == ".cafe/issues/my-feature/spec/history"
 
-    def test_iteration_2_prompt_includes_user_input(self, tmp_path: Path) -> None:
+    def test_iteration_2_prompt_includes_user_input(self, tmp_path: Path, mock_git_ops: MagicMock) -> None:
         """測試第 2 輪後 prompt 應該包含 user_input 而不是 context.md"""
         spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
@@ -339,6 +365,7 @@ class TestHistoryTracking:
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
+            git_ops=mock_git_ops,
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
@@ -359,7 +386,7 @@ class TestHistoryTracking:
         # Should have a section header for user response
         assert "使用者的回答" in prompt or "使用者回覆" in prompt
 
-    def test_iteration_4_prompt_includes_restriction(self, tmp_path: Path) -> None:
+    def test_iteration_4_prompt_includes_restriction(self, tmp_path: Path, mock_git_ops: MagicMock) -> None:
         """測試第 4 輪 prompt 包含問題限制"""
         spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
@@ -371,6 +398,7 @@ class TestHistoryTracking:
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
+            git_ops=mock_git_ops,
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
@@ -390,8 +418,11 @@ class TestHistoryTracking:
 class TestNonInteractiveModeIteration1:
     """Test non-interactive mode - first iteration (user story input)."""
 
-    def test_first_call_with_user_story_returns_in_progress(self, tmp_path: Path) -> None:
+    def test_first_call_with_user_story_returns_in_progress(self, tmp_path: Path, mock_git_ops: MagicMock, monkeypatch) -> None:
         """第1次呼叫：提供 user story，PM 提問，回傳 IN_PROGRESS"""
+        mock_git_ops.get_current_branch.return_value = "test-feature"
+        monkeypatch.chdir(tmp_path)
+
         spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
 
@@ -412,6 +443,7 @@ class TestNonInteractiveModeIteration1:
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
+            git_ops=mock_git_ops,
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
@@ -430,8 +462,11 @@ class TestNonInteractiveModeIteration1:
         # Agent should be called twice (once for initial, once after clarification)
         assert agent_manager.execute.call_count == 2
 
-    def test_first_call_creates_spec_file_from_stdin(self, tmp_path: Path) -> None:
+    def test_first_call_creates_spec_file_from_stdin(self, tmp_path: Path, mock_git_ops: MagicMock, monkeypatch) -> None:
         """第1次呼叫應該從 stdin 讀取 user story 並建立檔案"""
+        mock_git_ops.get_current_branch.return_value = "test-feature"
+        monkeypatch.chdir(tmp_path)
+
         spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
 
@@ -444,6 +479,7 @@ class TestNonInteractiveModeIteration1:
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
+            git_ops=mock_git_ops,
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
@@ -458,8 +494,11 @@ class TestNonInteractiveModeIteration1:
         content = spec_file.read_text()
         assert user_story in content
 
-    def test_first_call_pm_confirms_immediately(self, tmp_path: Path) -> None:
+    def test_first_call_pm_confirms_immediately(self, tmp_path: Path, mock_git_ops: MagicMock, monkeypatch) -> None:
         """第1次呼叫：PM 直接 READY_FOR_REVIEW（不提問），回傳 COMPLETED"""
+        mock_git_ops.get_current_branch.return_value = "test-feature"
+        monkeypatch.chdir(tmp_path)
+
         spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
 
@@ -472,6 +511,7 @@ class TestNonInteractiveModeIteration1:
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
+            git_ops=mock_git_ops,
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
@@ -492,8 +532,10 @@ class TestNonInteractiveModeIteration1:
 class TestNonInteractiveModeErrorHandling:
     """Test error handling in non-interactive mode."""
 
-    def test_no_stdin_input_on_first_call_fails(self, tmp_path: Path) -> None:
+    def test_no_stdin_input_on_first_call_fails(self, tmp_path: Path, mock_git_ops: MagicMock, monkeypatch) -> None:
         """第1次呼叫：沒有 stdin 輸入應該失敗"""
+        monkeypatch.chdir(tmp_path)
+
         spec_file = tmp_path / "nonexistent.md"
 
         agent_manager = MagicMock(spec=AgentManager)
@@ -502,6 +544,7 @@ class TestNonInteractiveModeErrorHandling:
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
+            git_ops=mock_git_ops,
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
@@ -514,8 +557,11 @@ class TestNonInteractiveModeErrorHandling:
         assert result.status == PhaseStatus.FAILED
         assert "No user story" in result.message
 
-    def test_no_stdin_input_on_second_call_fails(self, tmp_path: Path) -> None:
+    def test_no_stdin_input_on_second_call_fails(self, tmp_path: Path, mock_git_ops: MagicMock, monkeypatch) -> None:
         """第2+次呼叫：沒有用戶回答應該失敗"""
+        mock_git_ops.get_current_branch.return_value = "test-feature"
+        monkeypatch.chdir(tmp_path)
+
         spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("Initial")
@@ -551,6 +597,7 @@ class TestNonInteractiveModeErrorHandling:
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
+            git_ops=mock_git_ops,
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
@@ -569,9 +616,12 @@ class TestNonInteractiveModeErrorHandling:
 class TestInteractiveModeStillWorks:
     """Verify interactive mode still works as before."""
 
-    def test_interactive_mode_single_iteration(self, tmp_path: Path) -> None:
+    def test_interactive_mode_single_iteration(self, tmp_path: Path, mock_git_ops: MagicMock, monkeypatch) -> None:
         """互動模式：單次確認"""
         from cafe.core.types import SpecRigor
+
+        mock_git_ops.get_current_branch.return_value = "test-feature"
+        monkeypatch.chdir(tmp_path)
 
         spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
@@ -587,6 +637,7 @@ class TestInteractiveModeStillWorks:
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
+            git_ops=mock_git_ops,
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=True,  # Interactive mode
@@ -607,7 +658,7 @@ class TestInteractiveModeStillWorks:
 class TestSkipConfirmedSpec:
     """Test skipping execution if spec is already confirmed."""
 
-    def test_skip_execution_if_already_confirmed(self, tmp_path: Path) -> None:
+    def test_skip_execution_if_already_confirmed(self, tmp_path: Path, mock_git_ops: MagicMock) -> None:
         """測試如果已經 CONFIRMED 狀態就不再呼叫 agent"""
         spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
@@ -633,6 +684,7 @@ class TestSkipConfirmedSpec:
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
+            git_ops=mock_git_ops,
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
@@ -652,8 +704,11 @@ class TestSkipConfirmedSpec:
 class TestKeyboardInterrupt:
     """Test Ctrl+C handling."""
 
-    def test_keyboard_interrupt_does_not_save(self, tmp_path: Path) -> None:
+    def test_keyboard_interrupt_does_not_save(self, tmp_path: Path, mock_git_ops: MagicMock, monkeypatch) -> None:
         """測試 Ctrl+C 時不存檔"""
+        mock_git_ops.get_current_branch.return_value = "test-feature"
+        monkeypatch.chdir(tmp_path)
+
         spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("Initial spec")
@@ -668,6 +723,7 @@ class TestKeyboardInterrupt:
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
+            git_ops=mock_git_ops,
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
@@ -692,8 +748,10 @@ class TestKeyboardInterrupt:
 class TestSpecPhasePromptGeneration:
     """測試 SpecPhase prompt 生成"""
 
-    def test_prompt_does_not_include_status_code_without_prefix(self, tmp_path: Path) -> None:
+    def test_prompt_does_not_include_status_code_without_prefix(self, tmp_path: Path, mock_git_ops: MagicMock) -> None:
         """測試 prompt 不應該包含沒有 CAFE_ 前綴的 status code 指示"""
+        mock_git_ops.get_current_branch.return_value = "test"
+
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -714,6 +772,7 @@ class TestSpecPhasePromptGeneration:
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
+            git_ops=mock_git_ops,
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
@@ -735,10 +794,13 @@ class TestSpecPhasePromptGeneration:
 class TestInterruptedIterationResume:
     """測試中斷後恢復的完整流程."""
 
-    def test_resume_interrupted_iteration_uses_saved_user_input(self, tmp_path: Path) -> None:
+    def test_resume_interrupted_iteration_uses_saved_user_input(self, tmp_path: Path, mock_git_ops: MagicMock, monkeypatch) -> None:
         """測試中斷後恢復時，直接使用已儲存的 user_input，不再詢問用戶."""
         import json
         from io import StringIO
+
+        mock_git_ops.get_current_branch.return_value = "test-feature"
+        monkeypatch.chdir(tmp_path)
 
         spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
@@ -777,6 +839,7 @@ class TestInterruptedIterationResume:
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
+            git_ops=mock_git_ops,
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
@@ -808,8 +871,10 @@ class TestInterruptedIterationResume:
 class TestSpecPhaseFilePermissions:
     """測試 SpecPhase 的檔案權限設定"""
 
-    def test_uses_precise_file_permissions_for_spec_file(self, tmp_path: Path) -> None:
+    def test_uses_precise_file_permissions_for_spec_file(self, tmp_path: Path, mock_git_ops: MagicMock, monkeypatch) -> None:
         """測試使用精細的檔案路徑授權 (write/edit spec.md)"""
+        monkeypatch.chdir(tmp_path)
+
         # Setup
         spec_file = tmp_path / ".cafe" / "issues" / "test-issue" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
@@ -825,6 +890,7 @@ class TestSpecPhaseFilePermissions:
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
+            git_ops=mock_git_ops,
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
@@ -860,7 +926,7 @@ class TestPromptForInputMethod:
     """測試 _prompt_for_input_method() 方法"""
 
     @patch("builtins.input")
-    def test_prompt_for_input_method_manual(self, mock_input: MagicMock, tmp_path: Path) -> None:
+    def test_prompt_for_input_method_manual(self, mock_input: MagicMock, tmp_path: Path, mock_git_ops: MagicMock) -> None:
         """測試選擇手動輸入（選項 1）"""
         # Setup
         mock_input.return_value = "1"
@@ -872,6 +938,7 @@ class TestPromptForInputMethod:
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
+            git_ops=mock_git_ops,
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=True,
@@ -888,7 +955,7 @@ class TestPromptForInputMethod:
     @patch("builtins.input")
     @patch("cafe.phases.spec_phase.GitHubOps")
     def test_prompt_for_input_method_github_with_number(
-        self, mock_github_ops: MagicMock, mock_input: MagicMock, tmp_path: Path
+        self, mock_github_ops: MagicMock, mock_input: MagicMock, tmp_path: Path, mock_git_ops: MagicMock
     ) -> None:
         """測試選擇 GitHub Issue + 輸入數字"""
         # Setup
@@ -905,6 +972,7 @@ class TestPromptForInputMethod:
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
+            git_ops=mock_git_ops,
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=True,
@@ -921,7 +989,7 @@ class TestPromptForInputMethod:
     @patch("builtins.input")
     @patch("cafe.phases.spec_phase.GitHubOps")
     def test_prompt_for_input_method_github_with_url(
-        self, mock_github_ops: MagicMock, mock_input: MagicMock, tmp_path: Path
+        self, mock_github_ops: MagicMock, mock_input: MagicMock, tmp_path: Path, mock_git_ops: MagicMock
     ) -> None:
         """測試選擇 GitHub Issue + 輸入 URL"""
         # Setup
@@ -939,6 +1007,7 @@ class TestPromptForInputMethod:
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
+            git_ops=mock_git_ops,
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=True,
@@ -954,7 +1023,7 @@ class TestPromptForInputMethod:
 
     @patch("builtins.input")
     def test_prompt_for_input_method_invalid_then_valid(
-        self, mock_input: MagicMock, tmp_path: Path
+        self, mock_input: MagicMock, tmp_path: Path, mock_git_ops: MagicMock
     ) -> None:
         """測試無效選擇後重試"""
         # Setup - first invalid (3), then valid (1)
@@ -967,6 +1036,7 @@ class TestPromptForInputMethod:
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
+            git_ops=mock_git_ops,
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=True,
@@ -987,7 +1057,7 @@ class TestFetchGitHubIssue:
     @patch("cafe.phases.spec_phase.get_github_repo_name")
     @patch("cafe.phases.spec_phase.GitHubOps")
     def test_fetch_github_issue_writes_spec_file(
-        self, mock_github_ops: MagicMock, mock_get_repo: MagicMock, tmp_path: Path
+        self, mock_github_ops: MagicMock, mock_get_repo: MagicMock, tmp_path: Path, mock_git_ops: MagicMock
     ) -> None:
         """測試從 GitHub Issue 抓取後會寫入 spec.md"""
         # Setup
@@ -1007,6 +1077,7 @@ class TestFetchGitHubIssue:
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
+            git_ops=mock_git_ops,
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=True,
@@ -1026,7 +1097,7 @@ class TestFetchGitHubIssue:
     @patch("cafe.phases.spec_phase.get_github_repo_name")
     @patch("cafe.phases.spec_phase.GitHubOps")
     def test_fetch_github_issue_stores_issue_id(
-        self, mock_github_ops: MagicMock, mock_get_repo: MagicMock, tmp_path: Path
+        self, mock_github_ops: MagicMock, mock_get_repo: MagicMock, tmp_path: Path, mock_git_ops: MagicMock
     ) -> None:
         """測試抓取後會儲存 issue_id 供之後貼回 comment"""
         # Setup
@@ -1046,6 +1117,7 @@ class TestFetchGitHubIssue:
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
+            git_ops=mock_git_ops,
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=True,

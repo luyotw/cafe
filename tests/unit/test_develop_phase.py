@@ -33,11 +33,14 @@ def setup_agent_manager_mock(agent_manager: MagicMock, agent_name: str = "David"
 class TestDevelopPhaseInit:
     """Test DevelopPhase initialization."""
 
-    def test_init_with_all_required_params(self) -> None:
+    def test_init_with_all_required_params(self, tmp_path, monkeypatch) -> None:
         """測試使用所有必要參數初始化"""
+        monkeypatch.chdir(tmp_path)
+
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
         git_ops = MagicMock(spec=GitOperations)
+        git_ops.get_current_branch.return_value = "test"
 
         phase = DevelopPhase(
             agent_manager=agent_manager,
@@ -65,6 +68,7 @@ class TestDevelopPhaseInit:
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
         git_ops = MagicMock(spec=GitOperations)
+        git_ops.get_current_branch.return_value = "test"
 
         phase = DevelopPhase(
             agent_manager=agent_manager,
@@ -83,6 +87,7 @@ class TestDevelopPhaseInit:
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
         git_ops = MagicMock(spec=GitOperations)
+        git_ops.get_current_branch.return_value = "myissue"
 
         phase = DevelopPhase(
             agent_manager=agent_manager,
@@ -105,6 +110,7 @@ class TestPlanCheck:
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
         git_ops = MagicMock(spec=GitOperations)
+        git_ops.get_current_branch.return_value = "test"
 
         plan_file = tmp_path / "plan.md"
         plan_file.write_text("## Plan")
@@ -125,6 +131,7 @@ class TestPlanCheck:
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
         git_ops = MagicMock(spec=GitOperations)
+        git_ops.get_current_branch.return_value = "test"
 
         phase = DevelopPhase(
             agent_manager=agent_manager,
@@ -142,6 +149,7 @@ class TestPlanCheck:
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
         git_ops = MagicMock(spec=GitOperations)
+        git_ops.get_current_branch.return_value = "test"
 
         phase = DevelopPhase(
             agent_manager=agent_manager,
@@ -179,6 +187,7 @@ class TestIterativeFlow:
         permission_handler = MagicMock(spec=PermissionHandler)
 
         git_ops = MagicMock(spec=GitOperations)
+        git_ops.get_current_branch.return_value = "test"
         git_ops.branch_exists.return_value = False
         git_ops.get_current_branch.return_value = "main"
 
@@ -198,8 +207,10 @@ class TestIterativeFlow:
         assert phase.iteration == 1
         assert "CONFIRMED" in result.data["status_code"]
 
-    def test_execute_saves_history_on_completion(self, tmp_path: Path) -> None:
+    def test_execute_saves_history_on_completion(self, tmp_path: Path, monkeypatch) -> None:
         """測試完成時儲存 history"""
+        monkeypatch.chdir(tmp_path)
+
         spec_file = tmp_path / ".cafe" / "issues" / "test" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True)
         spec_file.write_text("# Spec")
@@ -216,8 +227,8 @@ class TestIterativeFlow:
         permission_handler = MagicMock(spec=PermissionHandler)
 
         git_ops = MagicMock(spec=GitOperations)
+        git_ops.get_current_branch.return_value = "test"
         git_ops.branch_exists.return_value = False
-        git_ops.get_current_branch.return_value = "main"
 
         phase = DevelopPhase(
             agent_manager=agent_manager,
@@ -254,6 +265,7 @@ class TestHistoryAndProgress:
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
         git_ops = MagicMock(spec=GitOperations)
+        git_ops.get_current_branch.return_value = "test"
 
         phase = DevelopPhase(
             agent_manager=agent_manager,
@@ -299,6 +311,7 @@ class TestStatusCodeHandling:
         permission_handler = MagicMock(spec=PermissionHandler)
 
         git_ops = MagicMock(spec=GitOperations)
+        git_ops.get_current_branch.return_value = "test"
         git_ops.branch_exists.return_value = False
         git_ops.get_current_branch.return_value = "main"
 
@@ -317,8 +330,10 @@ class TestStatusCodeHandling:
         assert result.status == PhaseStatus.COMPLETED
         assert result.data["status_code"] == "CAFE_CONFIRMED"
 
-    def test_handle_need_permission_in_interactive_mode(self, tmp_path: Path) -> None:
+    def test_handle_need_permission_in_interactive_mode(self, tmp_path: Path, monkeypatch) -> None:
         """測試在互動模式下處理 NEED_PERMISSION 狀態碼（單輪執行）"""
+        monkeypatch.chdir(tmp_path)
+
         spec_file = tmp_path / ".cafe" / "issues" / "test" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True)
         spec_file.write_text("# Spec")
@@ -336,8 +351,8 @@ class TestStatusCodeHandling:
         permission_handler = MagicMock(spec=PermissionHandler)
 
         git_ops = MagicMock(spec=GitOperations)
+        git_ops.get_current_branch.return_value = "test"
         git_ops.branch_exists.return_value = False
-        git_ops.get_current_branch.return_value = "main"
 
         phase = DevelopPhase(
             agent_manager=agent_manager,
@@ -379,6 +394,7 @@ class TestPromptGeneration:
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
         git_ops = MagicMock(spec=GitOperations)
+        git_ops.get_current_branch.return_value = "test"
 
         phase = DevelopPhase(
             agent_manager=agent_manager,
@@ -400,11 +416,14 @@ class TestPromptGeneration:
 class TestBranchManagement:
     """Test branch name generation."""
 
-    def test_local_mode_uses_issue_name_as_branch(self) -> None:
+    def test_local_mode_uses_issue_name_as_branch(self, tmp_path, monkeypatch) -> None:
         """測試 local mode 使用 issue_name 作為分支名"""
+        monkeypatch.chdir(tmp_path)
+
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
         git_ops = MagicMock(spec=GitOperations)
+        git_ops.get_current_branch.return_value = "my-feature"
 
         phase = DevelopPhase(
             agent_manager=agent_manager,
@@ -423,6 +442,7 @@ class TestBranchManagement:
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
         git_ops = MagicMock(spec=GitOperations)
+        git_ops.get_current_branch.return_value = "test"
 
         phase = DevelopPhase(
             agent_manager=agent_manager,
@@ -437,8 +457,10 @@ class TestBranchManagement:
         branch_name = phase._get_branch_name()
         assert branch_name == "issue-123"
 
-    def test_saves_base_branch_on_execution(self, tmp_path: Path) -> None:
+    def test_saves_base_branch_on_execution(self, tmp_path: Path, monkeypatch) -> None:
         """測試執行時儲存 base branch 資訊"""
+        monkeypatch.chdir(tmp_path)
+
         # Setup files
         spec_file = tmp_path / ".cafe" / "issues" / "test-issue" / "spec" / "spec.md"
         plan_file = tmp_path / ".cafe" / "issues" / "test-issue" / "plan" / "plan.md"
@@ -455,36 +477,30 @@ class TestBranchManagement:
         permission_handler = MagicMock(spec=PermissionHandler)
 
         git_ops = MagicMock(spec=GitOperations)
-        git_ops.get_current_branch.return_value = "main"
+        # First call (during init): return "test-issue" for issue_dir
+        # Second call (during execute): return "main" for base_branch
+        git_ops.get_current_branch.side_effect = ["test-issue", "main"]
         git_ops.branch_exists.return_value = False
-        git_ops.get_current_branch.return_value = "main"
 
-        import os
-        original_cwd = os.getcwd()
-        try:
-            os.chdir(tmp_path)
+        phase = DevelopPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            git_ops=git_ops,
+            spec_file=str(spec_file),
+            plan_file=str(plan_file),
+            workflow_mode=WorkflowMode.LOCAL,
+        )
 
-            phase = DevelopPhase(
-                agent_manager=agent_manager,
-                permission_handler=permission_handler,
-                git_ops=git_ops,
-                spec_file=str(spec_file),
-                plan_file=str(plan_file),
-                workflow_mode=WorkflowMode.LOCAL,
-            )
+        result = phase.execute()
 
-            result = phase.execute()
+        # Should save issue config with base branch
+        config_file = tmp_path / ".cafe" / "issues" / "test-issue" / "config.yaml"
+        assert config_file.exists()
 
-            # Should save issue config with base branch
-            config_file = tmp_path / ".cafe" / "issues" / "test-issue" / "config.yaml"
-            assert config_file.exists()
-
-            import yaml
-            config_data = yaml.safe_load(config_file.read_text())
-            assert config_data["base_branch"] == "main"
-            assert config_data["feature_branch"] == "test-issue"
-        finally:
-            os.chdir(original_cwd)
+        import yaml
+        config_data = yaml.safe_load(config_file.read_text())
+        assert config_data["base_branch"] == "main"
+        assert config_data["feature_branch"] == "test-issue"
 
 
 class TestReviewFeedbackDetection:
@@ -502,6 +518,7 @@ class TestReviewFeedbackDetection:
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
         git_ops = MagicMock(spec=GitOperations)
+        git_ops.get_current_branch.return_value = "test"
 
         phase = DevelopPhase(
             agent_manager=agent_manager,
@@ -526,6 +543,7 @@ class TestReviewFeedbackDetection:
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
         git_ops = MagicMock(spec=GitOperations)
+        git_ops.get_current_branch.return_value = "test"
 
         phase = DevelopPhase(
             agent_manager=agent_manager,
@@ -545,6 +563,7 @@ class TestReviewFeedbackDetection:
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
         git_ops = MagicMock(spec=GitOperations)
+        git_ops.get_current_branch.return_value = "test"
 
         phase = DevelopPhase(
             agent_manager=agent_manager,
@@ -569,6 +588,7 @@ class TestReviewFeedbackDetection:
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
         git_ops = MagicMock(spec=GitOperations)
+        git_ops.get_current_branch.return_value = "test"
 
         phase = DevelopPhase(
             agent_manager=agent_manager,
@@ -586,6 +606,7 @@ class TestReviewFeedbackDetection:
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
         git_ops = MagicMock(spec=GitOperations)
+        git_ops.get_current_branch.return_value = "test"
 
         phase = DevelopPhase(
             agent_manager=agent_manager,
@@ -612,6 +633,7 @@ class TestPromptGenerationWithReviewFeedback:
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
         git_ops = MagicMock(spec=GitOperations)
+        git_ops.get_current_branch.return_value = "test"
 
         phase = DevelopPhase(
             agent_manager=agent_manager,
@@ -636,6 +658,7 @@ class TestPromptGenerationWithReviewFeedback:
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
         git_ops = MagicMock(spec=GitOperations)
+        git_ops.get_current_branch.return_value = "test"
 
         phase = DevelopPhase(
             agent_manager=agent_manager,
@@ -665,6 +688,7 @@ class TestPromptGenerationWithReviewFeedback:
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
         git_ops = MagicMock(spec=GitOperations)
+        git_ops.get_current_branch.return_value = "test"
 
         phase = DevelopPhase(
             agent_manager=agent_manager,
@@ -685,12 +709,15 @@ class TestPromptGenerationWithReviewFeedback:
 class TestDevelopPhaseReviewFeedback:
     """測試 develop phase 處理 review feedback 的情況"""
 
-    def test_execute_continues_when_completed_but_review_feedback_exists(self, tmp_path) -> None:
+    def test_execute_continues_when_completed_but_review_feedback_exists(self, tmp_path, monkeypatch) -> None:
         """測試當 develop 已完成但有 review feedback 時，應該繼續執行而非直接返回"""
+        monkeypatch.chdir(tmp_path)
+
         # Setup
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
         git_ops = MagicMock(spec=GitOperations)
+        git_ops.get_current_branch.return_value = "test-issue"
 
         # Create test files
         issue_dir = tmp_path / ".cafe" / "issues" / "test-issue"
@@ -757,8 +784,6 @@ class TestDevelopPhaseReviewFeedback:
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 
         # Mock git operations
-        git_ops = MagicMock(spec=GitOperations)
-        git_ops.branch_exists.return_value = True
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -788,6 +813,7 @@ class TestDevelopPhaseReviewFeedback:
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
         git_ops = MagicMock(spec=GitOperations)
+        git_ops.get_current_branch.return_value = "test"
 
         # Create test files (without review.md)
         issue_dir = tmp_path / ".cafe" / "issues" / "test-issue"
@@ -837,12 +863,15 @@ class TestDevelopPhaseReviewFeedback:
         assert result.status == PhaseStatus.COMPLETED
         assert "already completed" in result.message.lower()
 
-    def test_execute_continues_when_review_status_is_needs_changes(self, tmp_path) -> None:
+    def test_execute_continues_when_review_status_is_needs_changes(self, tmp_path, monkeypatch) -> None:
         """測試當 review status 為 NEEDS_CHANGES 時，即使 develop 已完成也應該繼續執行"""
+        monkeypatch.chdir(tmp_path)
+
         # Setup
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
         git_ops = MagicMock(spec=GitOperations)
+        git_ops.get_current_branch.return_value = "test-issue"
 
         # Create test files
         issue_dir = tmp_path / ".cafe" / "issues" / "test-issue"
@@ -896,6 +925,7 @@ class TestDevelopPhaseReviewFeedback:
 
         # Mock git operations
         git_ops = MagicMock(spec=GitOperations)
+        git_ops.get_current_branch.return_value = "test"
         git_ops.branch_exists.return_value = True
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -925,6 +955,7 @@ class TestDevelopPhaseReviewFeedback:
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
         git_ops = MagicMock(spec=GitOperations)
+        git_ops.get_current_branch.return_value = "test"
 
         # Create test files
         issue_dir = tmp_path / ".cafe" / "issues" / "test-issue"
@@ -999,6 +1030,7 @@ class TestDevelopPhaseReviewFeedback:
 
         permission_handler = MagicMock(spec=PermissionHandler)
         git_ops = MagicMock(spec=GitOperations)
+        git_ops.get_current_branch.return_value = "test"
         git_ops.branch_exists.return_value = True
 
         # Create test files
@@ -1087,7 +1119,7 @@ class TestDevelopPhaseReviewFeedback:
 class TestDevelopPhaseIterationCounter:
     """Test DevelopPhase iteration counter behavior to prevent overwriting previous iterations."""
 
-    def test_second_execution_creates_iteration_002_not_overwrite_001(self, tmp_path: Path):
+    def test_second_execution_creates_iteration_002_not_overwrite_001(self, tmp_path: Path, monkeypatch):
         """測試第二次執行創建 iteration_002.json，而不是覆蓋 iteration_001.json
 
         這是一個 regression test，確保 DevelopPhase 使用 _load_iteration_counter()
@@ -1098,6 +1130,8 @@ class TestDevelopPhaseIterationCounter:
         2. 手動刪除 status.json 模擬未完成狀態
         3. 第二次執行：agent 繼續工作 (應創建 iteration_002.json)
         """
+        monkeypatch.chdir(tmp_path)
+
         issue_name = "test-iteration-not-overwrite"
         spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
         plan_file = tmp_path / ".cafe" / "issues" / issue_name / "plan" / "plan.md"
@@ -1118,8 +1152,8 @@ class TestDevelopPhaseIterationCounter:
 
         permission_handler = MagicMock(spec=PermissionHandler)
         git_ops = MagicMock(spec=GitOperations)
+        git_ops.get_current_branch.return_value = "test-iteration-not-overwrite"
         git_ops.branch_exists.return_value = False
-        git_ops.get_current_branch.return_value = "main"
 
         # First execution - agent completes work
         phase = DevelopPhase(

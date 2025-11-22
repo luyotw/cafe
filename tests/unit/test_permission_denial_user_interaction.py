@@ -48,9 +48,10 @@ def setup_agent_manager_mock(agent_name: str = "David") -> MagicMock:
 class TestPermissionDenialUserInteraction:
     """Test user interaction for permission denials."""
 
-    def test_user_approves_all_denied_tools_and_they_are_added_to_allowed_tools(self, tmp_path: Path):
+    def test_user_approves_all_denied_tools_and_they_are_added_to_allowed_tools(self, tmp_path: Path, monkeypatch):
         """測試用戶批准所有被拒絕的工具，這些工具會被加入 allowed_tools"""
         issue_name = "test-permission-approval"
+        monkeypatch.chdir(tmp_path)
         spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
         plan_file = tmp_path / ".cafe" / "issues" / issue_name / "plan" / "plan.md"
 
@@ -83,7 +84,7 @@ class TestPermissionDenialUserInteraction:
         permission_handler = MagicMock(spec=PermissionHandler)
         git_ops = MagicMock(spec=GitOperations)
         git_ops.branch_exists.return_value = False
-        git_ops.get_current_branch.return_value = "main"
+        git_ops.get_current_branch.return_value = "test-permission-approval"
 
         phase = DevelopPhase(
             agent_manager=agent_manager,
@@ -130,9 +131,10 @@ class TestPermissionDenialUserInteraction:
         assert "edit(/home/user/app/config.php)" in called_allowed_tools
         assert "bash(git status)" in called_allowed_tools
 
-    def test_user_rejects_some_tools_only_approved_ones_added_to_allowed_tools(self, tmp_path: Path):
+    def test_user_rejects_some_tools_only_approved_ones_added_to_allowed_tools(self, tmp_path: Path, monkeypatch):
         """測試用戶只批准部分工具，只有被批准的工具被加入 allowed_tools"""
         issue_name = "test-partial-approval"
+        monkeypatch.chdir(tmp_path)
         spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
         plan_file = tmp_path / ".cafe" / "issues" / issue_name / "plan" / "plan.md"
 
@@ -166,7 +168,7 @@ class TestPermissionDenialUserInteraction:
         permission_handler = MagicMock(spec=PermissionHandler)
         git_ops = MagicMock(spec=GitOperations)
         git_ops.branch_exists.return_value = False
-        git_ops.get_current_branch.return_value = "main"
+        git_ops.get_current_branch.return_value = "test-permission-partial-approval"
 
         phase = DevelopPhase(
             agent_manager=agent_manager,
@@ -201,9 +203,10 @@ class TestPermissionDenialUserInteraction:
         assert "bash(rm -rf /)" not in called_allowed_tools
         assert "read(/home/user/safe_file.txt)" in called_allowed_tools
 
-    def test_user_rejects_all_tools_phase_fails(self, tmp_path: Path):
+    def test_user_rejects_all_tools_phase_fails(self, tmp_path: Path, monkeypatch):
         """測試用戶拒絕所有工具，phase 失敗"""
         issue_name = "test-reject-all"
+        monkeypatch.chdir(tmp_path)
         spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
         plan_file = tmp_path / ".cafe" / "issues" / issue_name / "plan" / "plan.md"
 
@@ -235,7 +238,7 @@ class TestPermissionDenialUserInteraction:
         permission_handler = MagicMock(spec=PermissionHandler)
         git_ops = MagicMock(spec=GitOperations)
         git_ops.branch_exists.return_value = False
-        git_ops.get_current_branch.return_value = "main"
+        git_ops.get_current_branch.return_value = "test-permission-rejection"
 
         phase = DevelopPhase(
             agent_manager=agent_manager,
@@ -266,9 +269,10 @@ class TestPermissionDenialUserInteraction:
         assert result.status == PhaseStatus.FAILED
         assert "permission denied" in result.message.lower() or "no tools approved" in result.message.lower()
 
-    def test_permission_denials_displayed_with_clear_format(self, tmp_path: Path):
+    def test_permission_denials_displayed_with_clear_format(self, tmp_path: Path, monkeypatch):
         """測試權限請求以清楚的格式顯示給用戶"""
         issue_name = "test-display-format"
+        monkeypatch.chdir(tmp_path)
         spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
         plan_file = tmp_path / ".cafe" / "issues" / issue_name / "plan" / "plan.md"
 
@@ -296,7 +300,7 @@ class TestPermissionDenialUserInteraction:
         permission_handler = MagicMock(spec=PermissionHandler)
         git_ops = MagicMock(spec=GitOperations)
         git_ops.branch_exists.return_value = False
-        git_ops.get_current_branch.return_value = "main"
+        git_ops.get_current_branch.return_value = "test-permission-display"
 
         phase = DevelopPhase(
             agent_manager=agent_manager,
@@ -328,9 +332,10 @@ class TestPermissionDenialUserInteraction:
             assert "Edit" in display_text
             assert "/home/user/config.php" in display_text or "config.php" in display_text
 
-    def test_non_interactive_mode_fails_when_permission_needed(self, tmp_path: Path):
+    def test_non_interactive_mode_fails_when_permission_needed(self, tmp_path: Path, monkeypatch):
         """測試非互動模式下遇到 NEED_PERMISSION 會失敗"""
         issue_name = "test-non-interactive"
+        monkeypatch.chdir(tmp_path)
         spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
         plan_file = tmp_path / ".cafe" / "issues" / issue_name / "plan" / "plan.md"
 
@@ -358,7 +363,7 @@ class TestPermissionDenialUserInteraction:
         permission_handler = MagicMock(spec=PermissionHandler)
         git_ops = MagicMock(spec=GitOperations)
         git_ops.branch_exists.return_value = False
-        git_ops.get_current_branch.return_value = "main"
+        git_ops.get_current_branch.return_value = "test-non-interactive-permission-fail"
 
         phase = DevelopPhase(
             agent_manager=agent_manager,
@@ -385,9 +390,10 @@ class TestPermissionDenialUserInteraction:
             assert result.status == PhaseStatus.FAILED
             assert "non-interactive" in result.message.lower() or "permission" in result.message.lower()
 
-    def test_non_interactive_without_approved_indices_fails_on_second_run(self, tmp_path: Path):
+    def test_non_interactive_without_approved_indices_fails_on_second_run(self, tmp_path: Path, monkeypatch):
         """測試 non-interactive 模式下，第二輪沒有提供 approved_denial_indices 會失敗"""
         issue_name = "test-no-approved-indices"
+        monkeypatch.chdir(tmp_path)
         spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
         plan_file = tmp_path / ".cafe" / "issues" / issue_name / "plan" / "plan.md"
         history_dir = tmp_path / ".cafe" / "issues" / issue_name / "develop" / "history"
@@ -440,9 +446,10 @@ class TestPermissionDenialUserInteraction:
         assert "non-interactive" in result.message.lower()
         assert "approve-denied-tools" in result.message.lower()
 
-    def test_user_input_merged_with_permission_context(self, tmp_path: Path):
+    def test_user_input_merged_with_permission_context(self, tmp_path: Path, monkeypatch):
         """測試用戶的 permission context 會被合併到 prompt"""
         issue_name = "test-merge-input"
+        monkeypatch.chdir(tmp_path)
         spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
         plan_file = tmp_path / ".cafe" / "issues" / issue_name / "plan" / "plan.md"
         history_dir = tmp_path / ".cafe" / "issues" / issue_name / "develop" / "history"

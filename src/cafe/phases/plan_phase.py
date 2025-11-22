@@ -24,6 +24,7 @@ class PlanPhase(Phase):
         self,
         agent_manager: AgentManager,
         permission_handler: PermissionHandler,
+        git_ops: "GitOperations",
         spec_file: str,
         workflow_mode: WorkflowMode,
         issue_id: Optional[str] = None,
@@ -38,17 +39,18 @@ class PlanPhase(Phase):
         Args:
             agent_manager: Agent manager
             permission_handler: Permission handler
+            git_ops: Git operations (for deriving issue directory from current branch)
             spec_file: Path to spec file
             workflow_mode: Workflow mode (local or github)
             issue_id: GitHub issue ID (required for github mode)
-            issue_name: Issue name for history tracking (default: derived from spec_file)
+            issue_name: Issue name for history tracking (default: derived from current branch)
             dev_agent: Developer agent name (default: David)
             template_path: Path to plan template file (optional)
             interactive: Whether to allow interactive prompts (default: True)
             user_input: User input for non-interactive mode (default: "")
         """
-        super().__init__(interactive=interactive)
-        
+        super().__init__(interactive=interactive, git_ops=git_ops)
+
         self.agent_manager = agent_manager
         self.permission_handler = permission_handler
         self.spec_file = spec_file
@@ -61,19 +63,16 @@ class PlanPhase(Phase):
         self.iteration = 0
         self.phase_name = "plan"  # For base class progress tracking
 
-        # Determine issue name for history tracking
+        # Determine issue name for history tracking (issue_dir is set by base class)
         if issue_name:
             self.issue_name = issue_name
         else:
-            # Derive from spec_file path: .cafe/issues/{issue_name}/spec/spec.md
-            spec_path = Path(spec_file)
-            self.issue_name = spec_path.parent.parent.name
+            # Derive from current branch name (via issue_dir)
+            self.issue_name = self.issue_dir.name
 
         # History directory for plan phase
         # Path: .cafe/issues/{issue_name}/plan/history
-        spec_path = Path(self.spec_file)
-        issue_dir = spec_path.parent.parent  # .cafe/issues/{issue_name}
-        self.history_dir = issue_dir / "plan" / "history"
+        self.history_dir = self.issue_dir / "plan" / "history"
 
         # Load existing history if available (will create dir if needed)
         self.iteration = self._load_iteration_counter()

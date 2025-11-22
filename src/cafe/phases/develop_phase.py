@@ -46,14 +46,14 @@ class DevelopPhase(Phase):
             plan_file: Path to plan file
             workflow_mode: Workflow mode (local or github)
             issue_id: GitHub issue ID (required for github mode)
-            issue_name: Issue name for history tracking (default: derived from spec_file)
+            issue_name: Issue name for history tracking (default: derived from current branch)
             dev_agent: Developer agent name (default: David)
             interactive: Enable interactive mode (default: True)
             user_input: User input for non-interactive mode (default: "")
             approved_denial_indices: Indices of approved permission denials (for non-interactive mode)
             pr_number: PR number to fetch unresolved comments from (optional)
         """
-        super().__init__(interactive=interactive)
+        super().__init__(interactive=interactive, git_ops=git_ops)
 
         self.agent_manager = agent_manager
         self.permission_handler = permission_handler
@@ -72,19 +72,16 @@ class DevelopPhase(Phase):
         # Iteration tracking
         self.iteration = 0
 
-        # Determine issue name for history tracking
+        # Determine issue name for history tracking (issue_dir is set by base class)
         if issue_name:
             self.issue_name = issue_name
         else:
-            # Derive from spec_file path: .cafe/issues/{issue_name}/spec/spec.md
-            spec_path = Path(spec_file)
-            self.issue_name = spec_path.parent.parent.name
+            # Derive from current branch name (via issue_dir)
+            self.issue_name = self.issue_dir.name
 
         # History directory for develop phase
         # Path: .cafe/issues/{issue_name}/develop/history
-        spec_path = Path(self.spec_file)
-        issue_dir = spec_path.parent.parent  # .cafe/issues/{issue_name}
-        self.history_dir = issue_dir / "develop" / "history"
+        self.history_dir = self.issue_dir / "develop" / "history"
 
         # Track user responses for permission requests
         self.user_responses: List[str] = []

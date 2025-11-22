@@ -85,6 +85,7 @@ def _build_workflow(
     agent_manager: AgentManager,
     permission_handler: PermissionHandler,
     config_manager: ConfigManager,
+    git_ops: GitOperations,
 ) -> Workflow:
     """Build workflow with all phases.
 
@@ -95,6 +96,7 @@ def _build_workflow(
         agent_manager: Agent manager
         permission_handler: Permission handler
         config_manager: Configuration manager
+        git_ops: Git operations
 
     Returns:
         Configured workflow
@@ -111,6 +113,7 @@ def _build_workflow(
         SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
+            git_ops=git_ops,
             spec_file=spec_file,
             workflow_mode=mode,
             issue_id=issue_id,
@@ -123,6 +126,7 @@ def _build_workflow(
         PlanPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
+            git_ops=git_ops,
             spec_file=spec_file,
             workflow_mode=mode,
             issue_id=issue_id,
@@ -141,7 +145,6 @@ def _build_workflow(
         plan_file = "plan.md"
 
     # Phase 3: Development
-    git_ops = GitOperations()
     workflow.add_phase(
         DevelopPhase(
             agent_manager=agent_manager,
@@ -246,6 +249,7 @@ def run(
         config_manager = ConfigManager(config_dir)
         agent_manager = _setup_agents(config_manager)
         permission_handler = PermissionHandler()
+        git_ops = GitOperations()
 
         # Build and execute workflow
         console.print("[bold blue]Starting CAFE workflow...[/bold blue]")
@@ -262,6 +266,7 @@ def run(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             config_manager=config_manager,
+            git_ops=git_ops,
         )
 
         results = workflow.execute()

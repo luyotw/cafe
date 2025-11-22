@@ -6,11 +6,20 @@ from typer.testing import CliRunner
 from unittest.mock import MagicMock, Mock, patch
 
 from cafe.ui.cli import app, _setup_agents, _build_workflow
+from cafe.core.git import GitOperations
 from cafe.core.types import AgentCLI, PhaseResult, PhaseStatus, WorkflowMode
 from cafe.utils.config import ConfigManager
 
 
 runner = CliRunner()
+
+
+@pytest.fixture
+def mock_git_ops() -> MagicMock:
+    """Create a mock GitOperations for testing."""
+    git_ops = MagicMock(spec=GitOperations)
+    git_ops.get_current_branch.return_value = "test-issue"
+    return git_ops
 
 
 class TestSetupAgents:
@@ -73,6 +82,7 @@ class TestBuildWorkflow:
         mock_plan: Mock,
         mock_req: Mock,
         tmp_path: Path,
+        mock_git_ops: MagicMock,
     ) -> None:
         """測試建立 workflow 會初始化所有 5 個 phases"""
         config_file = tmp_path / "config.yaml"
@@ -87,6 +97,7 @@ class TestBuildWorkflow:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             config_manager=config_manager,
+            git_ops=mock_git_ops,
         )
 
         # 驗證所有 phase 都被建立
@@ -112,6 +123,7 @@ class TestBuildWorkflow:
         mock_review: Mock,
         mock_pr: Mock,
         tmp_path: Path,
+        mock_git_ops: MagicMock,
     ) -> None:
         """測試 workflow 正確傳遞 workflow mode"""
         config_file = tmp_path / "config.yaml"
@@ -126,6 +138,7 @@ class TestBuildWorkflow:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             config_manager=config_manager,
+            git_ops=mock_git_ops,
         )
 
         # 驗證 SpecPhase 收到正確的 mode

@@ -15,9 +15,18 @@ import json
 import pytest
 
 from cafe.agents.manager import AgentManager
+from cafe.core.git import GitOperations
 from cafe.core.permission import PermissionHandler
 from cafe.core.types import WorkflowMode, TokenUsage, SpecRigor, AgentCLI, AgentConfig
 from cafe.phases.spec_phase import SpecPhase
+
+
+@pytest.fixture
+def mock_git_ops() -> MagicMock:
+    """Create a mock GitOperations for testing."""
+    git_ops = MagicMock(spec=GitOperations)
+    git_ops.get_current_branch.return_value = "test-issue"
+    return git_ops
 
 
 def setup_agent_manager_mock_for_spec(agent_manager: MagicMock, cli: str = "copilot", session_id: str = "test-session") -> None:
@@ -34,9 +43,14 @@ def setup_agent_manager_mock_for_spec(agent_manager: MagicMock, cli: str = "copi
 class TestSpecPhaseIterationHistoryMetadata:
     """測試 SpecPhase iteration history 包含完整 metadata。"""
 
-    def test_iteration_history_includes_agent_metadata(self, tmp_path: Path) -> None:
+    def test_iteration_history_includes_agent_metadata(
+        self, tmp_path: Path, mock_git_ops: MagicMock, monkeypatch
+    ) -> None:
         """測試 iteration history 包含 CLI、session ID、allowed tools 等資訊"""
         issue_name = "test-metadata"
+        mock_git_ops.get_current_branch.return_value = issue_name
+        monkeypatch.chdir(tmp_path)
+
         spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements\nTest requirements")
@@ -51,6 +65,7 @@ class TestSpecPhaseIterationHistoryMetadata:
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
+            git_ops=mock_git_ops,
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
@@ -89,9 +104,14 @@ class TestSpecPhaseIterationHistoryMetadata:
         # Should include status code
         assert history_data["status_code"] == "CAFE_READY_FOR_REVIEW", "Should record status"
 
-    def test_multiple_iterations_preserve_metadata(self, tmp_path: Path) -> None:
+    def test_multiple_iterations_preserve_metadata(
+        self, tmp_path: Path, mock_git_ops: MagicMock, monkeypatch
+    ) -> None:
         """測試多次迭代時每次都記錄完整 metadata"""
         issue_name = "test-multi-metadata"
+        mock_git_ops.get_current_branch.return_value = issue_name
+        monkeypatch.chdir(tmp_path)
+
         spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements\nTest requirements")
@@ -109,6 +129,7 @@ class TestSpecPhaseIterationHistoryMetadata:
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
+            git_ops=mock_git_ops,
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=True,

@@ -17,17 +17,31 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from cafe.agents.manager import AgentManager
+from cafe.core.git import GitOperations
 from cafe.core.permission import PermissionHandler
 from cafe.core.types import PhaseStatus, WorkflowMode, TokenUsage
 from cafe.phases.spec_phase import SpecPhase
 
 
+@pytest.fixture
+def mock_git_ops() -> MagicMock:
+    """Create a mock GitOperations for testing."""
+    git_ops = MagicMock(spec=GitOperations)
+    git_ops.get_current_branch.return_value = "test-issue"
+    return git_ops
+
+
 class TestSpecPhaseUserConfirmation:
     """測試 SpecPhase 用戶確認流程。"""
 
-    def test_ready_for_review_interactive_waits_for_user_confirmation(self, tmp_path: Path) -> None:
+    def test_ready_for_review_interactive_waits_for_user_confirmation(
+        self, tmp_path: Path, mock_git_ops: MagicMock, monkeypatch
+    ) -> None:
         """測試 READY_FOR_REVIEW 時 interactive 模式等待用戶確認"""
         issue_name = "test-confirm"
+        mock_git_ops.get_current_branch.return_value = issue_name
+        monkeypatch.chdir(tmp_path)
+
         spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# 初始需求\n\n用戶想要一個新功能")
@@ -48,6 +62,7 @@ class TestSpecPhaseUserConfirmation:
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
+            git_ops=mock_git_ops,
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=True,
@@ -67,9 +82,14 @@ class TestSpecPhaseUserConfirmation:
         assert result.status == PhaseStatus.COMPLETED
         assert agent_manager.execute.call_count == 1, "只應呼叫 agent 一次"
 
-    def test_ready_for_review_interactive_user_rejects(self, tmp_path: Path) -> None:
+    def test_ready_for_review_interactive_user_rejects(
+        self, tmp_path: Path, mock_git_ops: MagicMock, monkeypatch
+    ) -> None:
         """測試用戶拒絕規格"""
         issue_name = "test-reject"
+        mock_git_ops.get_current_branch.return_value = issue_name
+        monkeypatch.chdir(tmp_path)
+
         spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# 初始需求\n\n用戶想要一個新功能")
@@ -90,6 +110,7 @@ class TestSpecPhaseUserConfirmation:
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
+            git_ops=mock_git_ops,
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=True,
@@ -108,9 +129,14 @@ class TestSpecPhaseUserConfirmation:
         assert "reject" in result.message.lower()
         assert agent_manager.execute.call_count == 1, "只應呼叫 agent 一次"
 
-    def test_ready_for_review_interactive_user_requests_modification(self, tmp_path: Path) -> None:
+    def test_ready_for_review_interactive_user_requests_modification(
+        self, tmp_path: Path, mock_git_ops: MagicMock, monkeypatch
+    ) -> None:
         """測試用戶要求修改，agent 應被呼叫第二次"""
         issue_name = "test-modify"
+        mock_git_ops.get_current_branch.return_value = issue_name
+        monkeypatch.chdir(tmp_path)
+
         spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# 初始需求\n\n用戶想要一個新功能")
@@ -135,6 +161,7 @@ class TestSpecPhaseUserConfirmation:
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
+            git_ops=mock_git_ops,
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=True,
@@ -157,9 +184,14 @@ class TestSpecPhaseUserConfirmation:
         # Should have called agent twice (first spec, then modified spec)
         assert agent_manager.execute.call_count == 2
 
-    def test_ready_for_review_noninteractive_completes_immediately(self, tmp_path: Path) -> None:
+    def test_ready_for_review_noninteractive_completes_immediately(
+        self, tmp_path: Path, mock_git_ops: MagicMock, monkeypatch
+    ) -> None:
         """測試 non-interactive 模式下 READY_FOR_REVIEW 直接完成，不需要用戶確認"""
         issue_name = "test-noninteractive"
+        mock_git_ops.get_current_branch.return_value = issue_name
+        monkeypatch.chdir(tmp_path)
+
         spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# 初始需求\n\n用戶想要一個新功能")
@@ -180,6 +212,7 @@ class TestSpecPhaseUserConfirmation:
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
+            git_ops=mock_git_ops,
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,  # Non-interactive mode
@@ -193,9 +226,14 @@ class TestSpecPhaseUserConfirmation:
         assert result.status == PhaseStatus.COMPLETED
         assert agent_manager.execute.call_count == 1
 
-    def test_need_clarification_does_not_need_confirmation(self, tmp_path: Path) -> None:
+    def test_need_clarification_does_not_need_confirmation(
+        self, tmp_path: Path, mock_git_ops: MagicMock, monkeypatch
+    ) -> None:
         """測試 NEED_CLARIFICATION 狀態不需要用戶確認，直接進入下一輪"""
         issue_name = "test-clarification"
+        mock_git_ops.get_current_branch.return_value = issue_name
+        monkeypatch.chdir(tmp_path)
+
         spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# 初始需求\n\n用戶想要一個新功能")
@@ -219,6 +257,7 @@ class TestSpecPhaseUserConfirmation:
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
+            git_ops=mock_git_ops,
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=True,

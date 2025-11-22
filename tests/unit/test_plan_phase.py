@@ -7,9 +7,18 @@ from unittest.mock import MagicMock, patch
 
 from cafe.phases.plan_phase import PlanPhase
 from cafe.agents.manager import AgentManager
+from cafe.core.git import GitOperations
 from cafe.core.status_codes import PhaseStatusCode
 from cafe.core.types import PhaseResult, PhaseStatus, WorkflowMode, TokenUsage
 from cafe.core.permission import PermissionHandler
+
+
+@pytest.fixture
+def mock_git_ops() -> MagicMock:
+    """Create a mock GitOperations for testing."""
+    git_ops = MagicMock(spec=GitOperations)
+    git_ops.get_current_branch.return_value = "test-issue"
+    return git_ops
 
 
 def setup_agent_manager_mocks(agent_manager: MagicMock) -> None:

@@ -24,13 +24,18 @@ class Phase(ABC):
         interactive: Whether to allow interactive user prompts (default: True)
     """
 
-    def __init__(self, interactive: bool = True):
+    def __init__(self, interactive: bool = True, git_ops: Optional["GitOperations"] = None):
         """Initialize phase with common attributes.
-        
+
         Args:
             interactive: Whether to allow interactive user prompts
+            git_ops: Git operations (optional, for automatic issue_dir setup)
         """
         self.interactive = interactive
+
+        # Automatically set issue_dir from current branch if git_ops is provided
+        if git_ops is not None:
+            self.issue_dir = self._get_issue_dir(git_ops)
 
     @abstractmethod
     def execute(self) -> PhaseResult:

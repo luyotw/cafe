@@ -23,41 +23,51 @@ def mock_github_ops():
     return github_ops
 
 
+@pytest.fixture
+def mock_git_ops():
+    """Mock GitOperations"""
+    git_ops = MagicMock(spec=GitOperations)
+    git_ops.get_current_branch.return_value = "test"
+    return git_ops
+
+
 class TestSpecPhaseInteractive:
     """測試 SpecPhase 的 interactive 參數"""
 
-    def test_spec_phase_default_interactive_true(self):
+    def test_spec_phase_default_interactive_true(self, mock_git_ops):
         """測試 SpecPhase 預設 interactive 為 True"""
         # Arrange
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
-        
+
         # Act
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
+            git_ops=mock_git_ops,
             spec_file=".cafe/issues/test/spec/spec.md",
             workflow_mode=WorkflowMode.LOCAL,
         )
-        
+
         # Assert
         assert phase.interactive is True
 
-    def test_spec_phase_can_set_interactive_false(self):
+    def test_spec_phase_can_set_interactive_false(self, mock_git_ops):
         """測試 SpecPhase 可以設定 interactive 為 False"""
         # Arrange
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
-        
+
         # Act
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
+            git_ops=mock_git_ops,
             spec_file=".cafe/issues/test/spec/spec.md",
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
         )
-        
+
         # Assert
         assert phase.interactive is False
 
@@ -65,38 +75,40 @@ class TestSpecPhaseInteractive:
 class TestPlanPhaseInteractive:
     """測試 PlanPhase 的 interactive 參數"""
 
-    def test_plan_phase_default_interactive_true(self):
+    def test_plan_phase_default_interactive_true(self, mock_git_ops):
         """測試 PlanPhase 預設 interactive 為 True"""
         # Arrange
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
-        
+
         # Act
         phase = PlanPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
+            git_ops=mock_git_ops,
             spec_file=".cafe/issues/test/spec/spec.md",
             workflow_mode=WorkflowMode.LOCAL,
         )
-        
+
         # Assert
         assert phase.interactive is True
 
-    def test_plan_phase_can_set_interactive_false(self):
+    def test_plan_phase_can_set_interactive_false(self, mock_git_ops):
         """測試 PlanPhase 可以設定 interactive 為 False"""
         # Arrange
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
-        
+
         # Act
         phase = PlanPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
+            git_ops=mock_git_ops,
             spec_file=".cafe/issues/test/spec/spec.md",
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
         )
-        
+
         # Assert
         assert phase.interactive is False
 
@@ -239,26 +251,28 @@ class TestPRPhaseInteractive:
 class TestInteractiveConsistency:
     """測試所有 Phase 的 interactive 行為一致性"""
 
-    def test_all_phases_support_interactive_parameter(self, mock_github_ops):
+    def test_all_phases_support_interactive_parameter(self, mock_github_ops, mock_git_ops):
         """測試所有 Phase 都支援 interactive 參數"""
         # Arrange
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
-        git_ops = MagicMock(spec=GitOperations)
-        
+        git_ops = mock_git_ops
+
         # Act & Assert - 所有 Phase 都應該接受 interactive 參數
         spec_phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
+            git_ops=git_ops,
             spec_file="test.md",
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
         )
         assert spec_phase.interactive is False
-        
+
         plan_phase = PlanPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
+            git_ops=git_ops,
             spec_file="test.md",
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
