@@ -650,10 +650,11 @@ class TestStreamingExecution:
         # Check session_id was saved
         assert executor.config.session_id == "test-session-123"
 
-        # Check output was printed
+        # Check output was printed (with newlines between chunks)
         captured = capsys.readouterr()
         assert "Claude Response (streaming):" in captured.out
-        assert "Hello world" in captured.out
+        assert "Hello" in captured.out
+        assert "world" in captured.out
 
     def test_execute_with_streaming_handles_error(self) -> None:
         """測試 streaming 執行失敗時拋出錯誤"""

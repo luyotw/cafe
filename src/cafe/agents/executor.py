@@ -243,10 +243,11 @@ class AgentExecutor:
                         output_lines.append(line)
 
                         # Extract content using custom extractor or default Claude extractor
+                        # FIXME: Should implement extractors seperately for each CLI
                         if json_content_extractor:
                             content = json_content_extractor(data)
                             if content:
-                                print(content, end='', flush=True)
+                                print(content, end='\n\n', flush=True)
                                 response_text += content
                         else:
                             # Default Claude format extractor
@@ -255,13 +256,13 @@ class AgentExecutor:
                                 for content_block in data["message"]["content"]:
                                     if content_block.get("type") == "text":
                                         text = content_block.get("text", "")
-                                        print(text, end='', flush=True)
+                                        print(text, end='\n\n', flush=True)
                                         response_text += text
 
                             # Old format: direct content field
                             elif "content" in data:
                                 content = data["content"]
-                                print(content, end='', flush=True)
+                                print(content, end='\n\n', flush=True)
                                 response_text += content
 
                         # Extract session_id
