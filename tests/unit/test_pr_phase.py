@@ -1269,8 +1269,11 @@ class TestPRURLInResult:
 class TestBaseBranchFromConfig:
     """測試從 config.yaml 讀取 base_branch"""
 
-    def test_base_branch_from_config_used(self, tmp_path: Path) -> None:
+    def test_base_branch_from_config_used(self, tmp_path: Path, monkeypatch) -> None:
         """測試當 config.yaml 存在且有 base_branch 時，應使用該值"""
+        # Change to tmp_path so relative paths work
+        monkeypatch.chdir(tmp_path)
+
         # Setup issue directory structure
         spec_file = tmp_path / ".cafe" / "issues" / "fix-branch" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
@@ -1290,6 +1293,7 @@ class TestBaseBranchFromConfig:
         permission_handler = MagicMock(spec=PermissionHandler)
 
         git_ops = MagicMock(spec=GitOperations)
+        git_ops.get_current_branch.return_value = "fix-branch"
         github_ops = MagicMock(spec=GitHubOps)
         github_ops.get_pr_for_branch.return_value = None  # No existing PR
         github_ops.create_pr.return_value = "https://github.com/user/repo/pull/1"
@@ -1454,3 +1458,167 @@ class TestBaseBranchFromConfig:
         call_args = github_ops.create_pr.call_args
         assert call_args.kwargs['base'] == "staging"
         assert result.status == PhaseStatus.COMPLETED
+
+
+class TestIssueCommentIntegration:
+    """Test issue comment integration when PR is created."""
+
+    def test_add_issue_comment_when_issue_id_configured(self, tmp_path: Path, monkeypatch) -> None:
+        """測試當 issue_id 有設定時，PR 建立後會自動加上 issue comment"""
+        # Change to tmp_path so relative paths work
+        monkeypatch.chdir(tmp_path)
+
+        # Setup issue directory structure with config
+        issue_dir = tmp_path / ".cafe" / "issues" / "test-feature"
+        spec_file = issue_dir / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
+        spec_file.write_text("# Feature\n")
+
+        config_file = issue_dir / "config.yaml"
+        config_file.write_text("issue_id: '123'\nbase_branch: 'main'\n")
+
+        agent_manager = MagicMock(spec=AgentManager)
+        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
+        mock_executor = MagicMock()
+        mock_executor.config.cli = AgentCLI.COPILOT
+        mock_executor.config.session_id = "session_123"
+        agent_manager.get_agent.return_value = mock_executor
+        agent_manager.get_total_token_usage.return_value = TokenUsage()
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        git_ops = MagicMock(spec=GitOperations)
+        git_ops.get_current_branch.return_value = "test-feature"
+        git_ops.get_main_branch.return_value = "main"
+        git_ops.get_commits_between.return_value = "commit1\ncommit2"
+
+        github_ops = MagicMock(spec=GitHubOps)
+        github_ops.get_pr_for_branch.return_value = None  # No existing PR
+        github_ops.create_pr.return_value = "https://github.com/user/repo/pull/42"
+
+        phase = PRPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            git_ops=git_ops,
+            github_ops=github_ops,
+            spec_file=str(spec_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            issue_name="test-feature",
+            custom_title="Test PR",
+            custom_body="Test body",
+        )
+
+        result = phase.execute()
+
+        # Verify PR was created
+        assert result.status == PhaseStatus.COMPLETED
+        github_ops.create_pr.assert_called_once()
+
+        # Verify issue comment was added
+        github_ops.add_issue_comment.assert_called_once_with(
+            "123",
+            "Pull Request created: #42\n\nhttps://github.com/user/repo/pull/42"
+        )
+
+    def test_no_issue_comment_when_issue_id_not_configured(self, tmp_path: Path) -> None:
+        """測試當 issue_id 未設定時，不會加 issue comment"""
+        # Setup issue directory structure without issue_id in config
+        issue_dir = tmp_path / ".cafe" / "issues" / "test-feature"
+        spec_file = issue_dir / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
+        spec_file.write_text("# Feature\n")
+
+        config_file = issue_dir / "config.yaml"
+        config_file.write_text("base_branch: 'main'\n")  # No issue_id
+
+        agent_manager = MagicMock(spec=AgentManager)
+        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
+        mock_executor = MagicMock()
+        mock_executor.config.cli = AgentCLI.COPILOT
+        mock_executor.config.session_id = "session_123"
+        agent_manager.get_agent.return_value = mock_executor
+        agent_manager.get_total_token_usage.return_value = TokenUsage()
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        git_ops = MagicMock(spec=GitOperations)
+        git_ops.get_current_branch.return_value = "test-feature"
+        git_ops.get_main_branch.return_value = "main"
+        git_ops.get_commits_between.return_value = "commit1\ncommit2"
+
+        github_ops = MagicMock(spec=GitHubOps)
+        github_ops.get_pr_for_branch.return_value = None  # No existing PR
+        github_ops.create_pr.return_value = "https://github.com/user/repo/pull/42"
+
+        phase = PRPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            git_ops=git_ops,
+            github_ops=github_ops,
+            spec_file=str(spec_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            issue_name="test-feature",
+            custom_title="Test PR",
+            custom_body="Test body",
+        )
+
+        result = phase.execute()
+
+        # Verify PR was created
+        assert result.status == PhaseStatus.COMPLETED
+        github_ops.create_pr.assert_called_once()
+
+        # Verify issue comment was NOT added
+        github_ops.add_issue_comment.assert_not_called()
+
+    def test_pr_succeeds_even_if_issue_comment_fails(self, tmp_path: Path, monkeypatch) -> None:
+        """測試即使 issue comment 失敗，PR 建立仍然成功"""
+        # Change to tmp_path so relative paths work
+        monkeypatch.chdir(tmp_path)
+
+        # Setup issue directory structure with config
+        issue_dir = tmp_path / ".cafe" / "issues" / "test-feature"
+        spec_file = issue_dir / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
+        spec_file.write_text("# Feature\n")
+
+        config_file = issue_dir / "config.yaml"
+        config_file.write_text("issue_id: '123'\nbase_branch: 'main'\n")
+
+        agent_manager = MagicMock(spec=AgentManager)
+        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
+        mock_executor = MagicMock()
+        mock_executor.config.cli = AgentCLI.COPILOT
+        mock_executor.config.session_id = "session_123"
+        agent_manager.get_agent.return_value = mock_executor
+        agent_manager.get_total_token_usage.return_value = TokenUsage()
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        git_ops = MagicMock(spec=GitOperations)
+        git_ops.get_current_branch.return_value = "test-feature"
+        git_ops.get_main_branch.return_value = "main"
+        git_ops.get_commits_between.return_value = "commit1\ncommit2"
+
+        github_ops = MagicMock(spec=GitHubOps)
+        github_ops.get_pr_for_branch.return_value = None  # No existing PR
+        github_ops.create_pr.return_value = "https://github.com/user/repo/pull/42"
+        # Simulate issue comment failure
+        github_ops.add_issue_comment.side_effect = Exception("GitHub API error")
+
+        phase = PRPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            git_ops=git_ops,
+            github_ops=github_ops,
+            spec_file=str(spec_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            issue_name="test-feature",
+            custom_title="Test PR",
+            custom_body="Test body",
+        )
+
+        result = phase.execute()
+
+        # Verify PR creation still succeeded despite comment failure
+        assert result.status == PhaseStatus.COMPLETED
+        assert result.data["pr_number"] == "42"
+        github_ops.create_pr.assert_called_once()
+        github_ops.add_issue_comment.assert_called_once()

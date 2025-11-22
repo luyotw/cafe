@@ -71,8 +71,12 @@ class ReviewPhase(Phase):
         self.pr_number = pr_number
         self._pr_comments_cache = None  # Cache for PR comments to avoid duplicate loading
 
+        # Get issue directory from current branch
+        self.issue_dir = self._get_issue_dir(git_ops)
+
         # Try to read base branch from issue config
-        config_base_branch = self._read_base_branch_from_config()
+        config_file = self.issue_dir / "config.yaml"
+        config_base_branch = self._get_issue_config_value(config_file, "base_branch")
         self.base_branch = config_base_branch if config_base_branch else base_branch
 
     def execute(self) -> PhaseResult:
@@ -568,25 +572,6 @@ class ReviewPhase(Phase):
         return prompt
 
 
-    def _read_base_branch_from_config(self) -> Optional[str]:
-        """Read base branch from issue config file.
-
-        Returns:
-            Base branch name if found, None otherwise
-        """
-        # Determine config file path based on workflow mode
-        if self.workflow_mode == WorkflowMode.GITHUB and self.issue_id:
-            config_file = Path(f".cafe/issues/{self.issue_id}/config.yaml")
-        else:
-            # Extract issue name from spec_file path
-            if not self.spec_file:
-                return None
-            spec_path = Path(self.spec_file)
-            issue_name = spec_path.parent.parent.name
-            config_file = Path(f".cafe/issues/{issue_name}/config.yaml")
-
-        config_data = self._read_issue_config(config_file)
-        return config_data.get("base_branch") if config_data else None
 
     def _get_requirements_section(self) -> str:
         """Get requirements and plan section for review prompt.

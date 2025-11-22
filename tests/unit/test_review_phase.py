@@ -710,6 +710,7 @@ class TestIssueConfigReading:
 
         git_ops = MagicMock(spec=GitOperations)
         git_ops.get_diff.return_value = "diff content"
+        git_ops.get_current_branch.return_value = "myissue"
 
         import os
         original_cwd = os.getcwd()

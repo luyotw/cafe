@@ -1174,3 +1174,29 @@ class Phase(ABC):
 
         with open(config_path, 'w', encoding='utf-8') as f:
             yaml.dump(config_data, f, allow_unicode=True, default_flow_style=False)
+
+    def _get_issue_config_value(self, config_file: Path, key: str) -> Optional[str]:
+        """Read a value from issue config file（共用方法）。
+
+        Args:
+            config_file: Path to config.yaml file
+            key: Config key to read (e.g., "issue_id", "base_branch")
+
+        Returns:
+            Config value if found, None otherwise
+        """
+        config_data = self._read_issue_config(config_file)
+        return config_data.get(key) if config_data else None
+
+    def _get_issue_dir(self, git_ops: "GitOperations") -> Path:
+        """Get issue directory path based on current Git branch（共用方法）。
+
+        Args:
+            git_ops: GitOperations instance to get current branch
+
+        Returns:
+            Path to issue directory (.cafe/issues/{branch_name}/)
+        """
+        from pathlib import Path
+        current_branch = git_ops.get_current_branch()
+        return Path(f".cafe/issues/{current_branch}")

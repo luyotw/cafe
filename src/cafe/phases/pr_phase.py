@@ -72,18 +72,21 @@ class PRPhase(Phase):
         self.update = update
         self.force_push = force_push
 
+        # Get issue directory from current branch
+        self.issue_dir = self._get_issue_dir(git_ops)
+
         # Read base_branch from config if not provided via CLI
         if base_branch is not None:
             # CLI parameter takes precedence
             self.base_branch = base_branch
         else:
             # Try to read from config.yaml, fallback to "main"
-            config_base = self._read_base_branch_from_config()
+            config_file = self.issue_dir / "config.yaml"
+            config_base = self._get_issue_config_value(config_file, "base_branch")
             self.base_branch = config_base if config_base else "main"
 
         # Set up history tracking (like other phases)
-        spec_path = Path(spec_file)
-        pr_dir = spec_path.parent.parent / "pr"
+        pr_dir = self.issue_dir / "pr"
         self.history_dir = pr_dir / "history"
         self.phase_name = "pr"
         self.iteration = self._load_iteration_counter()
@@ -95,6 +98,11 @@ class PRPhase(Phase):
             Phase result
         """
         try:
+            # Read issue_id from config if not provided
+            if not self.issue_id:
+                config_file = self.issue_dir / "config.yaml"
+                self.issue_id = self._get_issue_config_value(config_file, "issue_id")
+
             # Validate inputs
             if self.workflow_mode == WorkflowMode.GITHUB and not self.issue_id:
                 return PhaseResult(
@@ -187,6 +195,18 @@ class PRPhase(Phase):
             if not match:
                 raise RuntimeError(f"Failed to extract PR number from: {pr_url}")
             pr_number = match.group(1)
+
+            # Add PR link to GitHub issue if issue_id is configured
+            if self.issue_id:
+                try:
+                    comment = f"Pull Request created: #{pr_number}\n\n{pr_url}"
+                    self.github_ops.add_issue_comment(self.issue_id, comment)
+                except Exception as e:
+                    # Don't fail the entire PR phase if commenting fails
+                    # Just log the warning (user can manually add comment)
+                    from rich.console import Console
+                    console = Console()
+                    console.print(f"[yellow]⚠️  Warning: Failed to add PR link to issue #{self.issue_id}: {e}[/yellow]")
 
             return PhaseResult(
                 status=PhaseStatus.COMPLETED,
@@ -493,21 +513,3 @@ class PRPhase(Phase):
 
 請只回傳一個狀態碼（例如：CAFE_CONFIRMED），不要有任何其他內容。"""
 
-    def _read_base_branch_from_config(self) -> Optional[str]:
-        """Read base branch from issue config file.
-
-        Returns:
-            Base branch name if found, None otherwise
-        """
-        if not self.spec_file:
-            return None
-
-        # Determine config file path based on spec_file location
-        spec_path = Path(self.spec_file)
-        # config.yaml is at .cafe/issues/{issue_name}/config.yaml
-        # spec_file is at .cafe/issues/{issue_name}/spec/spec.md
-        # So config is at spec_file.parent.parent / "config.yaml"
-        config_file = spec_path.parent.parent / "config.yaml"
-
-        config_data = self._read_issue_config(config_file)
-        return config_data.get("base_branch") if config_data else None
