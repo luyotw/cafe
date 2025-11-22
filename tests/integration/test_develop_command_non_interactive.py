@@ -304,11 +304,11 @@ class TestDevelopCommandNonInteractiveFiles:
     def test_issue_config_created_with_branch_info(
         self, mock_env, temp_develop_dir, mock_git_ops, monkeypatch, tmp_path
     ):
-        """測試 issue config.json 包含 branch 資訊"""
+        """測試 issue config.yaml 包含 branch 資訊"""
         # Arrange
         spec_file = str(temp_develop_dir.parent / "spec" / "spec.md")
         plan_file = str(temp_develop_dir.parent / "plan" / "plan.md")
-        config_file = temp_develop_dir.parent / "config.json"
+        config_file = temp_develop_dir.parent / "config.yaml"
 
         monkeypatch.setenv(
             "CAFE_MOCK_RESPONSE",
@@ -342,8 +342,9 @@ class TestDevelopCommandNonInteractiveFiles:
             # Assert
             assert config_file.exists()
 
+            import yaml
             with open(config_file) as f:
-                config_data = json.load(f)
+                config_data = yaml.safe_load(f)
                 assert "base_branch" in config_data
                 assert "feature_branch" in config_data
                 assert config_data["base_branch"] == "main"

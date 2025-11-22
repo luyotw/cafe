@@ -694,12 +694,13 @@ class TestIssueConfigReading:
         spec_file.write_text("Requirements")
 
         # Create config file with base branch
-        config_file = issues_dir / "config.json"
+        config_file = issues_dir / "config.yaml"
         config_data = {
             "base_branch": "develop",
             "feature_branch": "myissue"
         }
-        config_file.write_text(json.dumps(config_data))
+        import yaml
+        config_file.write_text(yaml.dump(config_data, allow_unicode=True, default_flow_style=False))
 
         agent_manager = MagicMock(spec=AgentManager)
         setup_agent_manager_mock(agent_manager)

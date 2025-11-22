@@ -5,6 +5,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 
+import yaml
+
 from cafe.agents.manager import AgentManager
 from cafe.core.git import GitOperations
 from cafe.core.permission import PermissionHandler
@@ -184,16 +186,14 @@ class DevelopPhase(Phase):
             base_branch: Base branch name (e.g., 'main')
             feature_branch: Feature branch name (e.g., 'my-feature')
         """
-        config_file = self.history_dir.parent.parent / "config.json"
-        config_file.parent.mkdir(parents=True, exist_ok=True)
+        config_file = self.history_dir.parent.parent / "config.yaml"
 
         config_data = {
             "base_branch": base_branch,
             "feature_branch": feature_branch,
         }
 
-        with open(config_file, 'w', encoding='utf-8') as f:
-            json.dump(config_data, f, ensure_ascii=False, indent=2)
+        self._write_issue_config(config_file, config_data)
 
     def _check_if_already_completed_with_review(self) -> Optional[PhaseResult]:
         """檢查 phase 是否已完成，考慮 review feedback 和 PR comments 的特殊邏輯。

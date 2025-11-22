@@ -476,10 +476,11 @@ class TestBranchManagement:
             result = phase.execute()
 
             # Should save issue config with base branch
-            config_file = tmp_path / ".cafe" / "issues" / "test-issue" / "config.json"
+            config_file = tmp_path / ".cafe" / "issues" / "test-issue" / "config.yaml"
             assert config_file.exists()
 
-            config_data = json.loads(config_file.read_text())
+            import yaml
+            config_data = yaml.safe_load(config_file.read_text())
             assert config_data["base_branch"] == "main"
             assert config_data["feature_branch"] == "test-issue"
         finally:

@@ -5,6 +5,8 @@ from typing import List, Optional
 import json
 from datetime import datetime
 
+import yaml
+
 from cafe.agents.manager import AgentManager
 from cafe.core.git import GitOperations
 from cafe.core.permission import PermissionHandler
@@ -575,24 +577,17 @@ class ReviewPhase(Phase):
         """
         # Determine config file path based on workflow mode
         if self.workflow_mode == WorkflowMode.GITHUB and self.issue_id:
-            config_file = Path(f".cafe/issues/{self.issue_id}/config.json")
+            config_file = Path(f".cafe/issues/{self.issue_id}/config.yaml")
         else:
             # Extract issue name from spec_file path
             if not self.spec_file:
                 return None
             spec_path = Path(self.spec_file)
             issue_name = spec_path.parent.parent.name
-            config_file = Path(f".cafe/issues/{issue_name}/config.json")
+            config_file = Path(f".cafe/issues/{issue_name}/config.yaml")
 
-        if not config_file.exists():
-            return None
-
-        try:
-            with open(config_file, 'r', encoding='utf-8') as f:
-                config_data = json.load(f)
-            return config_data.get("base_branch")
-        except (json.JSONDecodeError, KeyError, IOError):
-            return None
+        config_data = self._read_issue_config(config_file)
+        return config_data.get("base_branch") if config_data else None
 
     def _get_requirements_section(self) -> str:
         """Get requirements and plan section for review prompt.

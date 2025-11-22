@@ -6,6 +6,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
+import yaml
+
 from cafe.agents.manager import AgentManager
 from cafe.core.permission import PermissionHandler
 from cafe.core.phase import Phase
@@ -899,33 +901,25 @@ class SpecPhase(Phase):
 """
 
     def _load_issue_config(self) -> None:
-        """Load issue configuration (issue_id) from config.json if exists."""
-        # Path: .cafe/issues/{issue_name}/config.json
+        """Load issue configuration (issue_id) from config.yaml if exists."""
+        # Path: .cafe/issues/{issue_name}/config.yaml
         spec_path = Path(self.spec_file)
         issue_dir = spec_path.parent.parent  # .cafe/issues/{issue_name}
-        config_file = issue_dir / "config.json"
+        config_file = issue_dir / "config.yaml"
 
-        if not config_file.exists():
-            return
-
-        try:
-            with open(config_file, "r", encoding="utf-8") as f:
-                config_data = json.load(f)
-                if "issue_id" in config_data:
-                    self._fetched_issue_id = config_data["issue_id"]
-        except (json.JSONDecodeError, IOError):
-            # Ignore errors, issue_id will remain unset
-            pass
+        config_data = self._read_issue_config(config_file)
+        if config_data and "issue_id" in config_data:
+            self._fetched_issue_id = config_data["issue_id"]
 
     def _save_issue_config(self) -> None:
-        """Save issue configuration (issue_id) to config.json."""
+        """Save issue configuration (issue_id) to config.yaml."""
         if not hasattr(self, '_fetched_issue_id'):
             return
 
-        # Path: .cafe/issues/{issue_name}/config.json
+        # Path: .cafe/issues/{issue_name}/config.yaml
         spec_path = Path(self.spec_file)
         issue_dir = spec_path.parent.parent  # .cafe/issues/{issue_name}
-        config_file = issue_dir / "config.json"
+        config_file = issue_dir / "config.yaml"
 
         # Create config
         config_data = {
@@ -933,9 +927,7 @@ class SpecPhase(Phase):
         }
 
         # Write config
-        config_file.parent.mkdir(parents=True, exist_ok=True)
-        with open(config_file, "w", encoding="utf-8") as f:
-            json.dump(config_data, f, indent=2, ensure_ascii=False)
+        self._write_issue_config(config_file, config_data)
 
     def get_status_file(self) -> Path:
         """Public method to get status file path for workflow integration.

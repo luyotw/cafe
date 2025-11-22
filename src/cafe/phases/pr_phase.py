@@ -6,6 +6,8 @@ import subprocess
 from pathlib import Path
 from typing import Optional
 
+import yaml
+
 from cafe.agents.manager import AgentManager
 from cafe.core.git import GitOperations
 from cafe.core.permission import PermissionHandler
@@ -75,7 +77,7 @@ class PRPhase(Phase):
             # CLI parameter takes precedence
             self.base_branch = base_branch
         else:
-            # Try to read from config.json, fallback to "main"
+            # Try to read from config.yaml, fallback to "main"
             config_base = self._read_base_branch_from_config()
             self.base_branch = config_base if config_base else "main"
 
@@ -502,17 +504,10 @@ class PRPhase(Phase):
 
         # Determine config file path based on spec_file location
         spec_path = Path(self.spec_file)
-        # config.json is at .cafe/issues/{issue_name}/config.json
+        # config.yaml is at .cafe/issues/{issue_name}/config.yaml
         # spec_file is at .cafe/issues/{issue_name}/spec/spec.md
-        # So config is at spec_file.parent.parent / "config.json"
-        config_file = spec_path.parent.parent / "config.json"
+        # So config is at spec_file.parent.parent / "config.yaml"
+        config_file = spec_path.parent.parent / "config.yaml"
 
-        if not config_file.exists():
-            return None
-
-        try:
-            with open(config_file, 'r', encoding='utf-8') as f:
-                config_data = json.load(f)
-            return config_data.get("base_branch")
-        except (json.JSONDecodeError, KeyError, IOError):
-            return None
+        config_data = self._read_issue_config(config_file)
+        return config_data.get("base_branch") if config_data else None

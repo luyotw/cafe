@@ -410,7 +410,7 @@ class TestReviewE2EMockBaseBranch:
     def test_uses_default_main_branch(self, tmp_path):
         """測試預設使用 main branch 作為 base
 
-        情境：沒有在 config.json 指定 base_branch
+        情境：沒有在 config.yaml 指定 base_branch
         指令：cafe review test-issue --no-interactive
         預期：成功，使用 main 作為 base branch 進行 diff
         """
@@ -426,21 +426,22 @@ class TestReviewE2EMockBaseBranch:
         assert status_file.exists()
 
     def test_reads_base_branch_from_config(self, tmp_path):
-        """測試從 issue config.json 讀取 base branch
+        """測試從 issue config.yaml 讀取 base branch
 
-        情境：config.json 指定 base_branch 為 develop
+        情境：config.yaml 指定 base_branch 為 develop
         指令：cafe review test-issue --no-interactive
         預期：嘗試使用 develop 作為 base branch（可能失敗如果 develop 不存在）
         """
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
 
-        # 創建 config.json with custom base_branch
-        config_file = tmp_path / ".cafe" / "issues" / issue_name / "config.json"
-        config_file.write_text(json.dumps({
+        # 創建 config.yaml with custom base_branch
+        import yaml
+        config_file = tmp_path / ".cafe" / "issues" / issue_name / "config.yaml"
+        config_file.write_text(yaml.dump({
             "base_branch": "develop",
             "feature_branch": issue_name
-        }))
+        }, allow_unicode=True, default_flow_style=False))
 
         result = run_cafe_review(tmp_path, issue_name, "CAFE_CONFIRMED\n\n審查通過。")
 

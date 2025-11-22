@@ -1267,18 +1267,18 @@ class TestPRURLInResult:
 
 
 class TestBaseBranchFromConfig:
-    """測試從 config.json 讀取 base_branch"""
+    """測試從 config.yaml 讀取 base_branch"""
 
     def test_base_branch_from_config_used(self, tmp_path: Path) -> None:
-        """測試當 config.json 存在且有 base_branch 時，應使用該值"""
+        """測試當 config.yaml 存在且有 base_branch 時，應使用該值"""
         # Setup issue directory structure
         spec_file = tmp_path / ".cafe" / "issues" / "fix-branch" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Feature\n")
 
-        # Setup config.json with base_branch
-        config_file = spec_file.parent.parent / "config.json"
-        config_file.write_text('{"base_branch": "develop", "feature_branch": "fix-branch"}')
+        # Setup config.yaml with base_branch
+        config_file = spec_file.parent.parent / "config.yaml"
+        config_file.write_text('base_branch: develop\nfeature_branch: fix-branch\n')
 
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
@@ -1317,8 +1317,8 @@ class TestBaseBranchFromConfig:
         assert result.status == PhaseStatus.COMPLETED
 
     def test_base_branch_default_when_config_missing(self, tmp_path: Path) -> None:
-        """測試當 config.json 不存在時，應使用預設值 'main'"""
-        # Setup issue directory structure (no config.json)
+        """測試當 config.yaml 不存在時，應使用預設值 'main'"""
+        # Setup issue directory structure (no config.yaml)
         spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Feature\n")
@@ -1360,15 +1360,15 @@ class TestBaseBranchFromConfig:
         assert result.status == PhaseStatus.COMPLETED
 
     def test_base_branch_default_when_config_no_base_branch_field(self, tmp_path: Path) -> None:
-        """測試當 config.json 存在但無 base_branch 欄位時，應使用預設值 'main'"""
+        """測試當 config.yaml 存在但無 base_branch 欄位時，應使用預設值 'main'"""
         # Setup issue directory structure
         spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Feature\n")
 
-        # Setup config.json without base_branch field
-        config_file = spec_file.parent.parent / "config.json"
-        config_file.write_text('{"feature_branch": "test-feature"}')
+        # Setup config.yaml without base_branch field
+        config_file = spec_file.parent.parent / "config.yaml"
+        config_file.write_text('feature_branch: test-feature\n')
 
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
@@ -1407,15 +1407,15 @@ class TestBaseBranchFromConfig:
         assert result.status == PhaseStatus.COMPLETED
 
     def test_cli_base_param_overrides_config(self, tmp_path: Path) -> None:
-        """測試 CLI --base 參數能覆蓋 config.json 中的值（CLI 參數優先）"""
+        """測試 CLI --base 參數能覆蓋 config.yaml 中的值（CLI 參數優先）"""
         # Setup issue directory structure
         spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Feature\n")
 
-        # Setup config.json with base_branch="develop"
-        config_file = spec_file.parent.parent / "config.json"
-        config_file.write_text('{"base_branch": "develop", "feature_branch": "test-feature"}')
+        # Setup config.yaml with base_branch="develop"
+        config_file = spec_file.parent.parent / "config.yaml"
+        config_file.write_text('base_branch: develop\nfeature_branch: test-feature\n')
 
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)

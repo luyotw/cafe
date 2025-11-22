@@ -6,6 +6,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import yaml
+
 from cafe.core.status_codes import PhaseStatusCode
 from cafe.core.types import PhaseProgress, PhaseResult, PhaseStatus
 
@@ -1141,3 +1143,34 @@ class Phase(ABC):
             分析 status code 的 prompt，如果不支援分析則返回 None
         """
         return None
+
+    def _read_issue_config(self, config_path: Path) -> Optional[Dict[str, Any]]:
+        """Read issue configuration from config.yaml（共用方法）。
+
+        Args:
+            config_path: Path to config.yaml file
+
+        Returns:
+            Config data as dict if file exists, None otherwise
+        """
+        if not config_path.exists():
+            return None
+
+        try:
+            with open(config_path, 'r', encoding='utf-8') as f:
+                config_data = yaml.safe_load(f)
+            return config_data if config_data else None
+        except (yaml.YAMLError, IOError):
+            return None
+
+    def _write_issue_config(self, config_path: Path, config_data: Dict[str, Any]) -> None:
+        """Write issue configuration to config.yaml（共用方法）。
+
+        Args:
+            config_path: Path to config.yaml file
+            config_data: Config data to write
+        """
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+
+        with open(config_path, 'w', encoding='utf-8') as f:
+            yaml.dump(config_data, f, allow_unicode=True, default_flow_style=False)

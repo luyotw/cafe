@@ -291,11 +291,11 @@ class TestDevelopE2EMockBranchManagement:
     """測試 branch 管理（使用 mock git operations）"""
 
     def test_config_file_created_with_branch_info(self, tmp_path):
-        """測試 config.json 包含 branch 資訊
+        """測試 config.yaml 包含 branch 資訊
 
         情境：在 git repository 中執行 develop
         指令：cafe develop test-issue --no-interactive
-        預期：成功，config.json 包含 base_branch 或 feature_branch 資訊
+        預期：成功，config.yaml 包含 base_branch 或 feature_branch 資訊
         """
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
@@ -304,10 +304,11 @@ class TestDevelopE2EMockBranchManagement:
 
         # Note: This test may fail in CI without git repo, skip or mock git
         if result.returncode == 0:
-            config_file = tmp_path / ".cafe" / "issues" / issue_name / "config.json"
+            config_file = tmp_path / ".cafe" / "issues" / issue_name / "config.yaml"
             if config_file.exists():
+                import yaml
                 with open(config_file) as f:
-                    config_data = json.load(f)
+                    config_data = yaml.safe_load(f)
                     assert "base_branch" in config_data or "feature_branch" in config_data
 
 
