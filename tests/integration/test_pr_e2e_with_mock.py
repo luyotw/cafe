@@ -73,7 +73,7 @@ def run_cafe_pr(
     extra_args: Optional[List[str]] = None
 ) -> MockResult:
     """Helper function to run cafe pr command with mock using CliRunner"""
-    args = ["pr", issue_name, "--no-interactive"]
+    args = ["pr", "--no-interactive"]
     if extra_args:
         args.extend(extra_args)
 
@@ -84,8 +84,18 @@ def run_cafe_pr(
     original_cwd = os.getcwd()
     try:
         os.chdir(tmp_path)
-        with patch.dict(os.environ, env_vars):
-            result = runner.invoke(app, args, catch_exceptions=False)
+        # Mock Git operations to return the issue_name as branch
+        with patch("cafe.ui.cli.GitOperations") as mock_git_cls:
+            mock_git_instance = mock_git_cls.return_value
+            mock_git_instance.is_valid_branch.return_value = True
+            mock_git_instance.get_current_branch.return_value = issue_name
+
+            # Also mock for PRPhase
+            with patch("cafe.phases.pr_phase.GitOperations") as mock_phase_git:
+                mock_phase_git.return_value = mock_git_instance
+
+                with patch.dict(os.environ, env_vars):
+                    result = runner.invoke(app, args, catch_exceptions=False)
     except Exception as e:
         return MockResult(returncode=1, stdout="", stderr=str(e))
     finally:
@@ -202,11 +212,13 @@ class TestPRE2EMockErrorHandling:
         """測試缺少 spec 檔案時失敗
 
         情境：Issue 的 spec.md 不存在
-        指令：cafe pr test-issue --no-interactive
-        預期：失敗，錯誤訊息提示 spec file not found
+        指令：cafe pr --no-interactive
+        預期：失敗，錯誤訊息提示 spec file not found 或 branch not initialized
         """
         issue_name = "test-issue"
-        # Don't setup test environment - missing spec file
+        # Initialize git repo but don't create spec file
+        init_git_repo(tmp_path)
+        subprocess.run(["git", "checkout", "-b", issue_name], cwd=str(tmp_path), capture_output=True)
 
         # Run cafe pr (should fail)
         result = run_cafe_pr(tmp_path, issue_name)
@@ -214,7 +226,7 @@ class TestPRE2EMockErrorHandling:
         # Should fail
         assert result.returncode != 0
         output = result.stdout + result.stderr
-        assert "spec" in output.lower() or "not found" in output.lower()
+        assert "spec" in output.lower() or "not found" in output.lower() or "not been initialized" in output.lower()
 
     def test_gh_pr_create_failure(self, tmp_path):
         """測試 gh pr create 失敗

@@ -212,3 +212,49 @@ class TestGitOperations:
             has_changes = git.has_uncommitted_changes()
 
             assert has_changes is False
+
+    def test_get_current_branch_detached_head(self) -> None:
+        """測試在 detached HEAD 狀態時回傳空字串"""
+        git = GitOperations()
+
+        with patch.object(git, "run_git") as mock_run:
+            # git branch --show-current 在 detached HEAD 時回傳空字串
+            mock_run.return_value = ""
+
+            branch = git.get_current_branch()
+
+            assert branch == ""
+            mock_run.assert_called_once_with("branch", "--show-current")
+
+    def test_is_valid_branch_true(self) -> None:
+        """測試當前在有效分支時回傳 True"""
+        git = GitOperations()
+
+        with patch.object(git, "get_current_branch") as mock_get:
+            mock_get.return_value = "feature-branch"
+
+            is_valid = git.is_valid_branch()
+
+            assert is_valid is True
+
+    def test_is_valid_branch_false_detached_head(self) -> None:
+        """測試在 detached HEAD 狀態時回傳 False"""
+        git = GitOperations()
+
+        with patch.object(git, "get_current_branch") as mock_get:
+            mock_get.return_value = ""
+
+            is_valid = git.is_valid_branch()
+
+            assert is_valid is False
+
+    def test_is_valid_branch_false_empty_string(self) -> None:
+        """測試當分支名稱為空時回傳 False"""
+        git = GitOperations()
+
+        with patch.object(git, "get_current_branch") as mock_get:
+            mock_get.return_value = ""
+
+            is_valid = git.is_valid_branch()
+
+            assert is_valid is False

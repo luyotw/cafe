@@ -5,7 +5,7 @@ import re
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Union
 
 
 def rewrite_commit_message(commit_sha: str, new_message: str, base_branch: str = "main") -> Tuple[bool, str]:
@@ -57,6 +57,31 @@ fi
             
     except Exception as e:
         return False, f"Error: {e}"
+
+
+def is_branch_initialized(branch_name: str, repo_path: Optional[Union[str, Path]] = None) -> bool:
+    """Check if a branch has been initialized via cafe prepare.
+
+    Args:
+        branch_name: Name of the branch to check
+        repo_path: Repository path (default: current directory)
+
+    Returns:
+        True if .cafe/issues/<branch-name>/ directory exists, False otherwise
+
+    Example:
+        >>> if is_branch_initialized("feature/new-login"):
+        ...     print("Branch is initialized")
+        ... else:
+        ...     print("Run 'cafe prepare' first")
+    """
+    if repo_path is None:
+        repo_path = Path.cwd()
+    else:
+        repo_path = Path(repo_path)
+
+    issue_dir = repo_path / ".cafe" / "issues" / branch_name
+    return issue_dir.exists() and issue_dir.is_dir()
 
 
 def get_github_repo_name(cwd: Optional[Path] = None) -> str:

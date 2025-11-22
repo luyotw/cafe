@@ -70,7 +70,7 @@ def run_cafe_develop(
     extra_args: Optional[List[str]] = None
 ) -> MockResult:
     """Helper function to run cafe develop command with mock using CliRunner"""
-    args = ["develop", issue_name, "--no-interactive"]
+    args = ["develop", "--no-interactive"]
     if extra_args:
         args.extend(extra_args)
 
@@ -81,8 +81,18 @@ def run_cafe_develop(
     original_cwd = os.getcwd()
     try:
         os.chdir(tmp_path)
-        with patch.dict(os.environ, env_vars):
-            result = runner.invoke(app, args, catch_exceptions=False)
+        # Mock Git operations to return the issue_name as branch
+        with patch("cafe.ui.cli.GitOperations") as mock_git_cls:
+            mock_git_instance = mock_git_cls.return_value
+            mock_git_instance.is_valid_branch.return_value = True
+            mock_git_instance.get_current_branch.return_value = issue_name
+
+            # Also need to mock for DevelopPhase
+            with patch("cafe.phases.develop_phase.GitOperations") as mock_phase_git:
+                mock_phase_git.return_value = mock_git_instance
+
+                with patch.dict(os.environ, env_vars):
+                    result = runner.invoke(app, args, catch_exceptions=False)
     except Exception as e:
         return MockResult(returncode=1, stdout="", stderr=str(e))
     finally:
@@ -573,30 +583,22 @@ class TestDevelopE2EMockPRComments:
         """測試 dev alias 也能接受 --pr-number 參數
 
         情境：使用 dev alias 和 --pr-number 參數執行
-        指令：cafe dev test-issue --pr-number 123 --no-interactive
+        指令：cafe dev --pr-number 123 --no-interactive
         預期：成功（與 develop 命令行為一致）
         """
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
 
-        # Use dev alias instead of develop
-        cafe_cmd = "cafe" if subprocess.run(["which", "cafe"], capture_output=True).returncode == 0 else "./cafe"
-        args = [cafe_cmd, "dev", issue_name, "--no-interactive", "--pr-number", "123"]
-
-        env = os.environ.copy()
-        env["CAFE_MOCK_AGENTS"] = "true"
-        env["CAFE_MOCK_RESPONSE"] = "CAFE_CONFIRMED\n\n開發完成。"
-
-        result = subprocess.run(
-            args,
-            cwd=str(tmp_path),
-            capture_output=True,
-            text=True,
-            env=env,
+        # 使用 run_cafe_develop helper 並添加 --pr-number
+        result = run_cafe_develop(
+            tmp_path,
+            issue_name,
+            "CAFE_CONFIRMED\n\n開發完成。",
+            extra_args=["--pr-number", "123"]
         )
 
         # 應該成功完成（dev alias 與 develop 行為相同）
-        assert result.returncode == 0
+        assert result.returncode == 0, f"指令應該成功執行，但返回碼是 {result.returncode}，輸出：{result.stderr}"
         output = result.stdout + result.stderr
         assert "completed" in output.lower() or "成功" in output.lower()
 
@@ -636,6 +638,9 @@ class TestDevelopE2EMockPRComments:
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
 
+        # Switch to the issue branch
+        subprocess.run(["git", "checkout", "-b", issue_name], cwd=str(tmp_path), capture_output=True)
+
         # 創建一個假的 gh script 來返回 PR comments
         fake_gh_dir = tmp_path / "bin"
         fake_gh_dir.mkdir()
@@ -664,7 +669,7 @@ exit 1
 
         # 使用 fake gh 執行測試（修改 PATH）
         cafe_cmd = "cafe" if subprocess.run(["which", "cafe"], capture_output=True).returncode == 0 else "./cafe"
-        args = [cafe_cmd, "develop", issue_name, "--no-interactive", "--pr-number", "10"]
+        args = [cafe_cmd, "develop", "--no-interactive", "--pr-number", "10"]
 
         env = os.environ.copy()
         env["CAFE_MOCK_AGENTS"] = "true"

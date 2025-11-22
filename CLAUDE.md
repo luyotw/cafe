@@ -60,29 +60,35 @@ mypy src/
 ### CLI 指令
 
 ```bash
-# 已實作的指令
-cafe spec <issue-name>           # Phase 1: 需求澄清（issue-name 是 issue 識別名稱）
-cafe plan <issue-name>           # Phase 2: 實作計畫
+# Phase 相關指令（自動使用當前 Git branch 名稱作為 issue 識別）
+cafe prepare [issue-name]        # 初始化 issue 環境（建立 branch 和目錄結構）
+cafe spec                        # Phase 1: 需求澄清
+cafe plan                        # Phase 2: 實作計畫
+cafe develop                     # Phase 3: 開發實作
+cafe review                      # Phase 4: Code Review
+cafe review --commit <sha>       # 審查特定 commit
+cafe pr                          # Phase 5: 建立 PR
+
+# 配置管理
 cafe config set <key> <value>    # 設定配置值（支援 alias）
 cafe config get <key>            # 取得配置值
 cafe config edit                 # 使用 $EDITOR 編輯配置檔
 cafe config reset                # 重置為預設值
+
+# Session 管理
 cafe ls                          # 列出所有 sessions
 cafe rm <session-name>           # 刪除 session
+
+# 模板管理
 cafe template ls                 # 列出所有 plan 模板
 cafe template add <source> <name>  # 新增模板
 cafe template cat <name>         # 檢視模板內容
 cafe template edit <name>        # 編輯模板
 cafe template rm <name>          # 刪除模板
-
-# 已實作
-cafe develop <issue-name>        # Phase 3: 開發實作
-cafe review <issue-name>         # Phase 4: Code Review
-cafe review <issue-name> --commit <sha>  # 審查特定 commit
-
-# 尚未實作（參見 PYTHON_REFACTOR_TODO.md）
-cafe pr <issue-name>             # Phase 5: 建立 PR
 ```
+
+**重要變更**：從 issue12 開始，核心 phase 指令（spec/plan/develop/review/pr）不再接受 `<issue-name>` 參數，
+改為自動使用當前 Git branch 名稱作為 issue 識別。使用前請先執行 `cafe prepare` 初始化環境。
 
 ## 架構設計
 
