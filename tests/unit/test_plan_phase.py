@@ -703,7 +703,7 @@ class TestPlanPhaseHistory:
 
         # Should have history_dir attribute
         assert hasattr(phase, 'history_dir')
-        assert phase.history_dir == spec_file.parent.parent / "plan" / "history"
+        assert phase.history_dir.resolve() == (spec_file.parent.parent / "plan" / "history").resolve()
 
     def test_save_history_creates_json_file(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
         monkeypatch.chdir(tmp_path)
@@ -1404,6 +1404,8 @@ class TestPlanPhasePromptGeneration:
     def test_prompt_includes_user_modification_request_in_iteration_2(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
         """測試 iteration 2 的 prompt 應該包含使用者的修改意見"""
         monkeypatch.chdir(tmp_path)
+        mock_git_ops.get_current_branch.return_value = "test"
+
         spec_file = tmp_path / ".cafe" / "issues" / "test" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements\n\n## 開發指南\nGuide")
@@ -1452,7 +1454,9 @@ class TestPlanPhasePromptGeneration:
             permission_handler=permission_handler,
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
+            issue_name="test",
             interactive=True,  # Must be interactive to test modification flow
+            template_path=create_template_file(tmp_path),
             git_ops=mock_git_ops,
         )
 
@@ -1543,6 +1547,8 @@ class TestPlanPhaseUserConfirmation:
         """測試在 non-interactive 模式下，READY_FOR_REVIEW 直接完成"""
         monkeypatch.chdir(tmp_path)
         issue_name = "test"
+        mock_git_ops.get_current_branch.return_value = issue_name
+
         spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements\n\n## 開發指南\nGuide")
@@ -1568,6 +1574,7 @@ class TestPlanPhaseUserConfirmation:
             permission_handler=permission_handler,
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
+            issue_name=issue_name,
             interactive=False,
             template_path=create_template_file(tmp_path),  # Provide template for first iteration
             git_ops=mock_git_ops,
