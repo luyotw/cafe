@@ -520,7 +520,7 @@ def close() -> None:
                     console.print(f"   State: {pr_state}{' (DRAFT)' if is_draft else ''}")
                     console.print(f"   URL: {pr_url}")
                     console.print()
-                    console.print("[yellow]Please merge or close the PR first, or mark it as ready for review if it's a draft.[/yellow]")
+                    console.print("[yellow]Please merge or close the PR first, or use --no-pr-check to skip the check.[/yellow]")
                     raise typer.Exit(1)
         except GitHubError:
             # If gh CLI is not installed or not authenticated, skip PR check
