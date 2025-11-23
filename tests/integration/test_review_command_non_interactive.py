@@ -174,7 +174,7 @@ class TestReviewCommandNonInteractiveBasics:
 
     def test_no_diff_should_fail(
         self, mock_env, temp_review_dir, monkeypatch, tmp_path
-    ):
+    , mock_git_ops):
         """測試沒有 diff 時應該失敗"""
         # Arrange
         spec_file = str(temp_review_dir.parent / "spec" / "spec.md")
@@ -367,7 +367,7 @@ class TestReviewCommandNonInteractiveDiffHandling:
 
     def test_full_branch_diff(
         self, mock_env, temp_review_dir, monkeypatch, tmp_path
-    ):
+    , mock_git_ops):
         """測試審查完整 branch diff"""
         # Arrange
         spec_file = str(temp_review_dir.parent / "spec" / "spec.md")
@@ -415,7 +415,7 @@ class TestReviewCommandNonInteractiveDiffHandling:
 
     def test_specific_commit_diff(
         self, mock_env, temp_review_dir, monkeypatch, tmp_path
-    ):
+    , mock_git_ops):
         """測試審查特定 commit"""
         # Arrange
         spec_file = str(temp_review_dir.parent / "spec" / "spec.md")

@@ -15,6 +15,7 @@ import pytest
 from typer.testing import CliRunner
 
 from cafe.ui.cli import app
+from .conftest import init_git_repo_for_issue
 
 
 runner = CliRunner()

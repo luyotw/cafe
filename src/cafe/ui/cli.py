@@ -536,6 +536,7 @@ def spec(
         config_manager = ConfigManager(config_dir)
         agent_manager = _setup_agents(config_manager, issue_name=issue_name)
         permission_handler = PermissionHandler()
+        git_ops = GitOperations()
 
         # Set show_prompt flag
         agent_manager.show_prompt = show_prompt
@@ -573,6 +574,7 @@ def spec(
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
+            git_ops=git_ops,
             spec_file=spec_file,
             workflow_mode=workflow_mode,
             issue_id=issue_id,
@@ -704,6 +706,7 @@ def plan(
         config_manager = ConfigManager(config_dir)
         agent_manager = _setup_agents(config_manager, issue_name=issue_name)
         permission_handler = PermissionHandler()
+        git_ops = GitOperations()
 
         # Set show_prompt flag
         agent_manager.show_prompt = show_prompt
@@ -752,6 +755,7 @@ def plan(
         phase = PlanPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
+            git_ops=git_ops,
             spec_file=spec_file,
             workflow_mode=workflow_mode,
             issue_id=issue_id,

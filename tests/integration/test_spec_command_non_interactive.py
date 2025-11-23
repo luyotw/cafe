@@ -11,6 +11,7 @@ from unittest.mock import MagicMock, patch
 from cafe.agents.manager import AgentManager
 from cafe.agents.mock_executor import MockAgentExecutor
 from cafe.core.permission import PermissionHandler
+from cafe.core.git import GitOperations
 from cafe.core.types import AgentConfig, AgentCLI, WorkflowMode, PhaseStatus
 from cafe.phases.spec_phase import SpecPhase
 
@@ -22,8 +23,18 @@ def mock_env(monkeypatch):
 
 
 @pytest.fixture
-def temp_spec_dir(tmp_path):
+def mock_git_ops():
+    """Create mock GitOperations for testing."""
+    git_ops = MagicMock(spec=GitOperations)
+    git_ops.get_current_branch.return_value = "test-issue"
+    git_ops.branch_exists.return_value = True
+    return git_ops
+
+
+@pytest.fixture
+def temp_spec_dir(tmp_path, monkeypatch):
     """創建臨時 spec 目錄結構"""
+    monkeypatch.chdir(tmp_path)
     # 創建完整的目錄結構: {tmp_path}/.cafe/issues/test-issue/spec/
     spec_dir = tmp_path / ".cafe" / "issues" / "test-issue" / "spec"
     spec_dir.mkdir(parents=True)
@@ -35,7 +46,7 @@ class TestSpecCommandNonInteractiveBasic:
     """測試 spec --no-interactive 的基本功能"""
 
     def test_successful_spec_creation_with_confirmed(
-        self, mock_env, temp_spec_dir, monkeypatch
+        self, mock_env, temp_spec_dir, mock_git_ops, monkeypatch
     ):
         """測試 agent 返回 READY_FOR_REVIEW + user confirm 時成功創建 spec"""
         # Arrange
@@ -59,6 +70,7 @@ class TestSpecCommandNonInteractiveBasic:
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
+            git_ops=mock_git_ops,
             spec_file=spec_file,
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
@@ -77,7 +89,7 @@ class TestSpecCommandNonInteractiveBasic:
 
     def test_need_clarification_should_fail_in_non_interactive(
         self, mock_env, temp_spec_dir, monkeypatch
-    ):
+    , mock_git_ops):
         """測試 non-interactive mode 遇到 NEED_CLARIFICATION 應該失敗"""
         # Arrange
         spec_file = str(temp_spec_dir / "spec.md")
@@ -96,6 +108,7 @@ class TestSpecCommandNonInteractiveBasic:
         permission_handler = PermissionHandler()
         
         phase = SpecPhase(
+            git_ops=mock_git_ops,
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             spec_file=spec_file,
@@ -113,7 +126,7 @@ class TestSpecCommandNonInteractiveBasic:
 
     def test_rejected_should_fail(
         self, mock_env, temp_spec_dir, monkeypatch
-    ):
+    , mock_git_ops):
         """測試 agent 返回 REJECTED 應該失敗"""
         # Arrange
         spec_file = str(temp_spec_dir / "spec.md")
@@ -132,6 +145,7 @@ class TestSpecCommandNonInteractiveBasic:
         permission_handler = PermissionHandler()
         
         phase = SpecPhase(
+            git_ops=mock_git_ops,
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             spec_file=spec_file,
@@ -149,7 +163,7 @@ class TestSpecCommandNonInteractiveBasic:
 
     def test_empty_user_input_should_fail(
         self, mock_env, temp_spec_dir
-    ):
+    , mock_git_ops):
         """測試沒有提供 user_input 應該失敗"""
         # Arrange
         spec_file = str(temp_spec_dir / "spec.md")
@@ -162,6 +176,7 @@ class TestSpecCommandNonInteractiveBasic:
         permission_handler = PermissionHandler()
         
         phase = SpecPhase(
+            git_ops=mock_git_ops,
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             spec_file=spec_file,
@@ -183,7 +198,7 @@ class TestSpecCommandNonInteractiveFiles:
 
     def test_spec_file_created_at_correct_path(
         self, mock_env, temp_spec_dir, monkeypatch
-    ):
+    , mock_git_ops):
         """測試 spec.md 在正確路徑創建"""
         # Arrange
         spec_file = str(temp_spec_dir / "spec.md")
@@ -201,6 +216,7 @@ class TestSpecCommandNonInteractiveFiles:
         permission_handler = PermissionHandler()
         
         phase = SpecPhase(
+            git_ops=mock_git_ops,
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             spec_file=spec_file,
@@ -218,7 +234,7 @@ class TestSpecCommandNonInteractiveFiles:
 
     def test_history_created(
         self, mock_env, temp_spec_dir, monkeypatch
-    ):
+    , mock_git_ops):
         """測試 history 目錄和檔案被創建"""
         # Arrange
         spec_file = str(temp_spec_dir / "spec.md")
@@ -237,6 +253,7 @@ class TestSpecCommandNonInteractiveFiles:
         permission_handler = PermissionHandler()
         
         phase = SpecPhase(
+            git_ops=mock_git_ops,
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             spec_file=spec_file,
@@ -262,7 +279,7 @@ class TestSpecCommandNonInteractiveErrorHandling:
 
     def test_invalid_status_code(
         self, mock_env, temp_spec_dir, monkeypatch
-    ):
+    , mock_git_ops):
         """測試無效的 status code"""
         # Arrange
         spec_file = str(temp_spec_dir / "spec.md")
@@ -280,6 +297,7 @@ class TestSpecCommandNonInteractiveErrorHandling:
         permission_handler = PermissionHandler()
         
         phase = SpecPhase(
+            git_ops=mock_git_ops,
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             spec_file=spec_file,
@@ -300,7 +318,7 @@ class TestSpecCommandNonInteractiveErrorHandling:
 class TestSpecCommandNonInteractiveCLIValidation:
     """測試 CLI 參數驗證"""
 
-    def test_no_user_input_should_fail(self, mock_env, temp_spec_dir):
+    def test_no_user_input_should_fail(self, mock_env, temp_spec_dir, mock_git_ops):
         """測試 --no-interactive 但沒提供 --user-input 應該失敗"""
         # Arrange
         spec_file = str(temp_spec_dir / "spec.md")
@@ -314,6 +332,7 @@ class TestSpecCommandNonInteractiveCLIValidation:
         
         # Act & Assert - 應該在初始化時就失敗
         phase = SpecPhase(
+            git_ops=mock_git_ops,
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             spec_file=spec_file,
@@ -326,7 +345,7 @@ class TestSpecCommandNonInteractiveCLIValidation:
         result = phase.execute()
         assert result.status == PhaseStatus.FAILED
 
-    def test_mock_mode_writes_spec_file(self, mock_env, temp_spec_dir):
+    def test_mock_mode_writes_spec_file(self, mock_env, temp_spec_dir, mock_git_ops):
         """測試 mock 模式下 spec 檔案會被正確寫入"""
         # Arrange
         spec_file = temp_spec_dir / "spec.md"
@@ -341,6 +360,7 @@ class TestSpecCommandNonInteractiveCLIValidation:
         permission_handler = PermissionHandler()
 
         phase = SpecPhase(
+            git_ops=mock_git_ops,
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             spec_file=str(spec_file),
@@ -367,7 +387,7 @@ class TestSpecCommandNonInteractiveAgentTracking:
 
     def test_agent_receives_user_input(
         self, mock_env, temp_spec_dir, monkeypatch
-    ):
+    , mock_git_ops):
         """測試 agent 收到正確的 user input"""
         # Arrange
         spec_file = str(temp_spec_dir / "spec.md")
@@ -386,6 +406,7 @@ class TestSpecCommandNonInteractiveAgentTracking:
         permission_handler = PermissionHandler()
         
         phase = SpecPhase(
+            git_ops=mock_git_ops,
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             spec_file=spec_file,
@@ -408,7 +429,7 @@ class TestSpecCommandNonInteractiveAgentTracking:
 
     def test_agent_called_once_for_confirmed(
         self, mock_env, temp_spec_dir, monkeypatch
-    ):
+    , mock_git_ops):
         """測試 READY_FOR_REVIEW + confirm 狀態下 agent 只被呼叫一次"""
         # Arrange
         spec_file = str(temp_spec_dir / "spec.md")
@@ -426,6 +447,7 @@ class TestSpecCommandNonInteractiveAgentTracking:
         permission_handler = PermissionHandler()
 
         phase = SpecPhase(
+            git_ops=mock_git_ops,
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             spec_file=spec_file,

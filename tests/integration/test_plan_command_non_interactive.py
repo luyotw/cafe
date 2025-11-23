@@ -11,6 +11,7 @@ from unittest.mock import MagicMock, patch
 from cafe.agents.manager import AgentManager
 from cafe.agents.mock_executor import MockAgentExecutor
 from cafe.core.permission import PermissionHandler
+from cafe.core.git import GitOperations
 from cafe.core.types import AgentConfig, AgentCLI, WorkflowMode, PhaseStatus
 from cafe.phases.plan_phase import PlanPhase
 
@@ -22,28 +23,39 @@ def mock_env(monkeypatch):
 
 
 @pytest.fixture
-def temp_plan_dir(tmp_path):
+def mock_git_ops():
+    """Create mock GitOperations for testing."""
+    git_ops = MagicMock(spec=GitOperations)
+    git_ops.get_current_branch.return_value = "test-issue"
+    git_ops.branch_exists.return_value = True
+    return git_ops
+
+
+@pytest.fixture
+def temp_plan_dir(tmp_path, monkeypatch):
     """創建臨時 plan 目錄結構"""
+    monkeypatch.chdir(tmp_path)
     # 創建完整的目錄結構: {tmp_path}/.cafe/issues/test-issue/plan/
     plan_dir = tmp_path / ".cafe" / "issues" / "test-issue" / "plan"
     plan_dir.mkdir(parents=True)
-    
+
     # 創建 spec 目錄和 spec.md（plan 需要 spec 已存在）
     spec_dir = tmp_path / ".cafe" / "issues" / "test-issue" / "spec"
     spec_dir.mkdir(parents=True)
     spec_file = spec_dir / "spec.md"
     spec_file.write_text("# 測試功能需求\n\n這是一個測試需求規格。")
-    
+
     return plan_dir
 
 
 @pytest.fixture
-def temp_plan_with_template(tmp_path):
+def temp_plan_with_template(tmp_path, monkeypatch):
     """創建包含 template 的臨時環境"""
+    monkeypatch.chdir(tmp_path)
     # 創建 plan 目錄
     plan_dir = tmp_path / ".cafe" / "issues" / "test-issue" / "plan"
     plan_dir.mkdir(parents=True)
-    
+
     # 創建 spec
     spec_dir = tmp_path / ".cafe" / "issues" / "test-issue" / "spec"
     spec_dir.mkdir(parents=True)
@@ -74,7 +86,7 @@ class TestPlanCommandNonInteractiveFirstRound:
 
     def test_first_round_without_template_should_fail(
         self, mock_env, temp_plan_dir
-    ):
+    , mock_git_ops):
         """測試第一輪沒有提供 --template 應該失敗"""
         # Arrange
         spec_file = str(temp_plan_dir.parent / "spec" / "spec.md")
@@ -88,6 +100,7 @@ class TestPlanCommandNonInteractiveFirstRound:
         
         # Act - 第一輪沒有 plan.md，且沒有 template
         phase = PlanPhase(
+            git_ops=mock_git_ops,
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             spec_file=spec_file,
@@ -105,7 +118,7 @@ class TestPlanCommandNonInteractiveFirstRound:
 
     def test_first_round_with_template_success(
         self, mock_env, temp_plan_with_template, monkeypatch
-    ):
+    , mock_git_ops):
         """測試第一輪提供 template 並返回 CONFIRMED 成功"""
         # Arrange
         plan_dir, default_template = temp_plan_with_template
@@ -126,6 +139,7 @@ class TestPlanCommandNonInteractiveFirstRound:
         
         # Act - 第一輪提供 template 和 user_input (dev guide)
         phase = PlanPhase(
+            git_ops=mock_git_ops,
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             spec_file=spec_file,
@@ -147,7 +161,7 @@ class TestPlanCommandNonInteractiveFirstRound:
 
     def test_first_round_need_modification_should_fail_in_non_interactive(
         self, mock_env, temp_plan_with_template, monkeypatch
-    ):
+    , mock_git_ops):
         """測試第一輪返回 NEED_MODIFICATION 在 non-interactive 模式應該失敗"""
         # Arrange
         plan_dir, default_template = temp_plan_with_template
@@ -167,6 +181,7 @@ class TestPlanCommandNonInteractiveFirstRound:
         permission_handler = PermissionHandler()
         
         phase = PlanPhase(
+            git_ops=mock_git_ops,
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             spec_file=spec_file,
@@ -189,7 +204,7 @@ class TestPlanCommandNonInteractiveSubsequentRounds:
 
     def test_subsequent_round_without_template_success(
         self, mock_env, temp_plan_with_template, monkeypatch
-    ):
+    , mock_git_ops):
         """測試第二輪及之後不需要 template，直接使用現有 plan.md"""
         # Arrange
         plan_dir, default_template = temp_plan_with_template
@@ -225,6 +240,7 @@ class TestPlanCommandNonInteractiveSubsequentRounds:
         
         # Act - 第二輪不提供 template（因為 plan.md 已存在）
         phase = PlanPhase(
+            git_ops=mock_git_ops,
             agent_manager=agent_manager,
             permission_handler=permission_handler,
 
@@ -244,7 +260,7 @@ class TestPlanCommandNonInteractiveSubsequentRounds:
 
     def test_subsequent_round_with_template_ignored(
         self, mock_env, temp_plan_with_template, monkeypatch
-    ):
+    , mock_git_ops):
         """測試第二輪提供 template 會被忽略（使用現有 plan.md）"""
         # Arrange
         plan_dir, default_template = temp_plan_with_template
@@ -280,6 +296,7 @@ class TestPlanCommandNonInteractiveSubsequentRounds:
         
         # Act - 提供 template，但應該被忽略
         phase = PlanPhase(
+            git_ops=mock_git_ops,
             agent_manager=agent_manager,
             permission_handler=permission_handler,
 
@@ -303,7 +320,7 @@ class TestPlanCommandNonInteractiveFiles:
 
     def test_plan_file_created_at_correct_path(
         self, mock_env, temp_plan_with_template, monkeypatch
-    ):
+    , mock_git_ops):
         """測試 plan.md 在正確路徑創建"""
         # Arrange
         plan_dir, default_template = temp_plan_with_template
@@ -323,6 +340,7 @@ class TestPlanCommandNonInteractiveFiles:
         permission_handler = PermissionHandler()
 
         phase = PlanPhase(
+            git_ops=mock_git_ops,
             agent_manager=agent_manager,
             permission_handler=permission_handler,
 
@@ -342,7 +360,7 @@ class TestPlanCommandNonInteractiveFiles:
 
     def test_history_created(
         self, mock_env, temp_plan_with_template, monkeypatch
-    ):
+    , mock_git_ops):
         """測試 history 目錄和檔案被創建"""
         # Arrange
         plan_dir, default_template = temp_plan_with_template
@@ -363,6 +381,7 @@ class TestPlanCommandNonInteractiveFiles:
         permission_handler = PermissionHandler()
         
         phase = PlanPhase(
+            git_ops=mock_git_ops,
             agent_manager=agent_manager,
             permission_handler=permission_handler,
 
@@ -390,7 +409,7 @@ class TestPlanCommandNonInteractiveErrorHandling:
 
     def test_rejected_should_fail(
         self, mock_env, temp_plan_with_template, monkeypatch
-    ):
+    , mock_git_ops):
         """測試 agent 返回 REJECTED 應該失敗"""
         # Arrange
         plan_dir, default_template = temp_plan_with_template
@@ -410,6 +429,7 @@ class TestPlanCommandNonInteractiveErrorHandling:
         permission_handler = PermissionHandler()
         
         phase = PlanPhase(
+            git_ops=mock_git_ops,
             agent_manager=agent_manager,
             permission_handler=permission_handler,
 
@@ -429,7 +449,7 @@ class TestPlanCommandNonInteractiveErrorHandling:
 
     def test_spec_file_not_exists_should_fail(
         self, mock_env, temp_plan_with_template
-    ):
+    , mock_git_ops):
         """測試 spec.md 不存在應該失敗"""
         # Arrange
         plan_dir, default_template = temp_plan_with_template
@@ -444,6 +464,7 @@ class TestPlanCommandNonInteractiveErrorHandling:
         permission_handler = PermissionHandler()
         
         phase = PlanPhase(
+            git_ops=mock_git_ops,
             agent_manager=agent_manager,
             permission_handler=permission_handler,
 
@@ -467,7 +488,7 @@ class TestPlanCommandNonInteractiveAgentTracking:
 
     def test_agent_receives_spec_file(
         self, mock_env, temp_plan_with_template, monkeypatch
-    ):
+    , mock_git_ops):
         """測試 agent 收到正確的 spec file 路徑"""
         # Arrange
         plan_dir, default_template = temp_plan_with_template
@@ -487,6 +508,7 @@ class TestPlanCommandNonInteractiveAgentTracking:
         permission_handler = PermissionHandler()
         
         phase = PlanPhase(
+            git_ops=mock_git_ops,
             agent_manager=agent_manager,
             permission_handler=permission_handler,
 
@@ -507,7 +529,7 @@ class TestPlanCommandNonInteractiveAgentTracking:
 
     def test_agent_called_once_for_confirmed(
         self, mock_env, temp_plan_with_template, monkeypatch
-    ):
+    , mock_git_ops):
         """測試 CONFIRMED 狀態下 agent 只被呼叫一次"""
         # Arrange
         plan_dir, default_template = temp_plan_with_template
@@ -527,6 +549,7 @@ class TestPlanCommandNonInteractiveAgentTracking:
         permission_handler = PermissionHandler()
         
         phase = PlanPhase(
+            git_ops=mock_git_ops,
             agent_manager=agent_manager,
             permission_handler=permission_handler,
 

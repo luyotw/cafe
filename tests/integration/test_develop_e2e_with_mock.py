@@ -15,6 +15,7 @@ import pytest
 from typer.testing import CliRunner
 
 from cafe.ui.cli import app
+from .conftest import init_git_repo_for_issue
 
 
 runner = CliRunner()
@@ -81,6 +82,8 @@ def run_cafe_develop(
     original_cwd = os.getcwd()
     try:
         os.chdir(tmp_path)
+        # Initialize git repo for the issue
+        init_git_repo_for_issue(tmp_path, issue_name)
         with patch.dict(os.environ, env_vars):
             result = runner.invoke(app, args, catch_exceptions=False)
     except Exception as e:

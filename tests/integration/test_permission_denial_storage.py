@@ -47,9 +47,11 @@ def setup_agent_manager_mock(agent_name: str = "TestAgent", cli: AgentCLI = Agen
 class TestSpecPhasePermissionDenialStorage:
     """Test SpecPhase saves response and permission_denials correctly."""
 
-    def test_spec_phase_saves_permission_denials_with_need_clarification(self, tmp_path: Path):
+    def test_spec_phase_saves_permission_denials_with_need_clarification(self, tmp_path: Path, mock_git_ops, monkeypatch):
         """測試 SpecPhase 在 NEED_CLARIFICATION 時正確儲存 response 和 permission_denials"""
+        monkeypatch.chdir(tmp_path)
         issue_name = "test-spec-permission-issue"
+        mock_git_ops.get_current_branch.return_value = issue_name
         spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements\nInitial requirements")
@@ -73,6 +75,7 @@ class TestSpecPhasePermissionDenialStorage:
         permission_handler = MagicMock(spec=PermissionHandler)
 
         phase = SpecPhase(
+            git_ops=mock_git_ops,
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             spec_file=str(spec_file),
@@ -113,9 +116,11 @@ class TestSpecPhasePermissionDenialStorage:
         assert iteration_data["status_code"] == "CAFE_NEED_CLARIFICATION"
         assert iteration_data["cli"] == "claude"
 
-    def test_spec_phase_saves_empty_permission_denials_with_confirmed(self, tmp_path: Path):
+    def test_spec_phase_saves_empty_permission_denials_with_confirmed(self, tmp_path: Path, mock_git_ops, monkeypatch):
         """測試 SpecPhase 在 READY_FOR_REVIEW + 用戶確認後正確儲存空的 permission_denials"""
+        monkeypatch.chdir(tmp_path)
         issue_name = "test-spec-confirmed-issue"
+        mock_git_ops.get_current_branch.return_value = issue_name
         spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements\nClear requirements")
@@ -133,6 +138,7 @@ class TestSpecPhasePermissionDenialStorage:
         permission_handler = MagicMock(spec=PermissionHandler)
 
         phase = SpecPhase(
+            git_ops=mock_git_ops,
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             spec_file=str(spec_file),
@@ -166,9 +172,11 @@ class TestSpecPhasePermissionDenialStorage:
 class TestPlanPhasePermissionDenialStorage:
     """Test PlanPhase saves response and permission_denials correctly."""
 
-    def test_plan_phase_saves_permission_denials_with_need_clarification(self, tmp_path: Path):
+    def test_plan_phase_saves_permission_denials_with_need_clarification(self, tmp_path: Path, mock_git_ops, monkeypatch):
         """測試 PlanPhase 在 NEED_CLARIFICATION 時正確儲存 response 和 permission_denials"""
+        monkeypatch.chdir(tmp_path)
         issue_name = "test-plan-permission-issue"
+        mock_git_ops.get_current_branch.return_value = issue_name
         spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
         plan_dir = tmp_path / ".cafe" / "issues" / issue_name / "plan"
         history_dir = plan_dir / "history"
@@ -214,6 +222,7 @@ class TestPlanPhasePermissionDenialStorage:
         permission_handler = MagicMock(spec=PermissionHandler)
 
         phase = PlanPhase(
+            git_ops=mock_git_ops,
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             spec_file=str(spec_file),
@@ -246,9 +255,11 @@ class TestPlanPhasePermissionDenialStorage:
 class TestDevelopPhasePermissionDenialStorage:
     """Test DevelopPhase saves response and permission_denials correctly."""
 
-    def test_develop_phase_saves_permission_denials_with_need_permission(self, tmp_path: Path):
+    def test_develop_phase_saves_permission_denials_with_need_permission(self, tmp_path: Path, mock_git_ops, monkeypatch):
         """測試 DevelopPhase 在 NEED_PERMISSION 時正確儲存 response 和 permission_denials"""
+        monkeypatch.chdir(tmp_path)
         issue_name = "test-develop-permission-issue"
+        mock_git_ops.get_current_branch.return_value = issue_name
         spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
         plan_file = tmp_path / ".cafe" / "issues" / issue_name / "plan" / "plan.md"
 
@@ -326,9 +337,11 @@ class TestDevelopPhasePermissionDenialStorage:
         assert iteration_data["permission_denials"][1]["tool_name"] == "Write"
         assert iteration_data["status_code"] == "CAFE_NEED_PERMISSION"
 
-    def test_develop_phase_saves_response_with_confirmed(self, tmp_path: Path):
+    def test_develop_phase_saves_response_with_confirmed(self, tmp_path: Path, mock_git_ops, monkeypatch):
         """測試 DevelopPhase 在 CONFIRMED 時正確儲存 response（無 permission_denials）"""
+        monkeypatch.chdir(tmp_path)
         issue_name = "test-develop-confirmed-issue"
+        mock_git_ops.get_current_branch.return_value = issue_name
         spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
         plan_file = tmp_path / ".cafe" / "issues" / issue_name / "plan" / "plan.md"
 
@@ -389,9 +402,11 @@ class TestDevelopPhasePermissionDenialStorage:
 class TestMultiplePermissionDenials:
     """Test phases handle multiple permission denials correctly."""
 
-    def test_multiple_permission_denials_are_all_saved(self, tmp_path: Path):
+    def test_multiple_permission_denials_are_all_saved(self, tmp_path: Path, mock_git_ops, monkeypatch):
         """測試多個 permission denials 都被正確儲存"""
+        monkeypatch.chdir(tmp_path)
         issue_name = "test-multiple-denials"
+        mock_git_ops.get_current_branch.return_value = issue_name
         spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
         plan_file = tmp_path / ".cafe" / "issues" / issue_name / "plan" / "plan.md"
 

@@ -70,7 +70,7 @@ class TestDevelopCommandNonInteractiveFirstRound:
 
     def test_first_round_without_plan_should_fail(
         self, mock_env, tmp_path
-    ):
+    , mock_git_ops):
         """測試第一輪沒有 plan.md 應該失敗"""
         # Arrange
         spec_dir = tmp_path / ".cafe" / "issues" / "test-issue" / "spec"
@@ -358,7 +358,7 @@ class TestDevelopCommandNonInteractiveBranchManagement:
 
     def test_creates_new_branch_when_not_exists(
         self, mock_env, temp_develop_dir, monkeypatch, tmp_path
-    ):
+    , mock_git_ops):
         """測試當 branch 不存在時創建新 branch"""
         # Arrange
         spec_file = str(temp_develop_dir.parent / "spec" / "spec.md")
@@ -405,7 +405,7 @@ class TestDevelopCommandNonInteractiveBranchManagement:
 
     def test_checkouts_existing_branch_when_exists(
         self, mock_env, temp_develop_dir, monkeypatch, tmp_path
-    ):
+    , mock_git_ops):
         """測試當 branch 已存在時切換到該 branch"""
         # Arrange
         spec_file = str(temp_develop_dir.parent / "spec" / "spec.md")
