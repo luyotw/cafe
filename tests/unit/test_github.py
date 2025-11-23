@@ -371,7 +371,7 @@ class TestGetPRForBranch:
         """測試找到 PR 的情況"""
         mock_run.return_value = Mock(
             returncode=0,
-            stdout='[{"number":10,"url":"https://github.com/owner/repo/pull/10","title":"Test PR","body":"Test body"}]',
+            stdout='[{"number":10,"url":"https://github.com/owner/repo/pull/10","title":"Test PR","body":"Test body","state":"OPEN","isDraft":false}]',
         )
 
         gh_ops = GitHubOps()
@@ -380,6 +380,8 @@ class TestGetPRForBranch:
         assert pr is not None
         assert pr["number"] == 10
         assert pr["url"] == "https://github.com/owner/repo/pull/10"
+        assert pr["state"] == "OPEN"
+        assert pr["isDraft"] is False
         # Should be called twice: once for --version check, once for actual call
         assert mock_run.call_count == 2
         # Check the actual call (last one)
@@ -389,6 +391,12 @@ class TestGetPRForBranch:
         assert "list" in args
         assert "--head" in args
         assert "feature-branch" in args
+        # Verify state and isDraft are requested in JSON fields
+        assert "--json" in args
+        json_index = args.index("--json")
+        json_fields = args[json_index + 1]
+        assert "state" in json_fields
+        assert "isDraft" in json_fields
 
     @patch("subprocess.run")
     def test_get_pr_for_branch_not_exists(self, mock_run: Mock) -> None:

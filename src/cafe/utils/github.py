@@ -251,14 +251,15 @@ class GitHubOps:
             branch: Branch name
 
         Returns:
-            PR data as dictionary if exists, None otherwise
+            PR data as dictionary if exists, None otherwise.
+            Dictionary contains: number, url, title, body, state, isDraft
 
         Raises:
             GitHubError: If failed to check PR
         """
         try:
             result = subprocess.run(
-                ["gh", "pr", "list", "--head", branch, "--json", "number,url,title,body"],
+                ["gh", "pr", "list", "--head", branch, "--json", "number,url,title,body,state,isDraft"],
                 capture_output=True,
                 text=True,
                 check=True,

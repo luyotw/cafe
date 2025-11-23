@@ -19,6 +19,7 @@ from cafe.phases.spec_phase import SpecPhase
 from cafe.phases.review_phase import ReviewPhase
 from cafe.utils.config import ConfigManager
 from cafe.utils.git_utils import is_branch_initialized
+from cafe.utils.github import GitHubOps, GitHubError
 from cafe.utils.template import TemplateManager
 from cafe.ui.template_selector import select_template
 
@@ -479,10 +480,11 @@ def close() -> None:
     """Close current feature and return to base branch.
 
     This command:
-    1. Switches to base branch (from issue config)
-    2. Deletes the feature branch
-    3. Pulls latest changes from remote
-    4. Preserves .cafe/issues/<issue-name>/ directory
+    1. Checks for open/draft PRs (blocks if found)
+    2. Switches to base branch (from issue config)
+    3. Deletes the feature branch
+    4. Pulls latest changes from remote
+    5. Preserves .cafe/issues/<issue-name>/ directory
     """
     import yaml
 
@@ -500,7 +502,31 @@ def close() -> None:
             console.print("[red]Error: Not on a valid branch (detached HEAD?).[/red]")
             raise typer.Exit(1)
 
-        # 3. Load issue config
+        # 3. Check for open/draft PRs
+        try:
+            github_ops = GitHubOps()
+            pr = github_ops.get_pr_for_branch(current_branch)
+
+            if pr:
+                pr_state = pr.get("state", "UNKNOWN")
+                is_draft = pr.get("isDraft", False)
+                pr_url = pr.get("url", "")
+
+                # Block if PR is open (OPEN state) or draft
+                if pr_state == "OPEN" or is_draft:
+                    console.print()
+                    console.print("[red]❌ Cannot close: Open PR found for this branch[/red]")
+                    console.print(f"   PR #{pr.get('number')}: {pr.get('title')}")
+                    console.print(f"   State: {pr_state}{' (DRAFT)' if is_draft else ''}")
+                    console.print(f"   URL: {pr_url}")
+                    console.print()
+                    console.print("[yellow]Please merge or close the PR first, or mark it as ready for review if it's a draft.[/yellow]")
+                    raise typer.Exit(1)
+        except GitHubError:
+            # If gh CLI is not installed or not authenticated, skip PR check
+            pass
+
+        # 4. Load issue config
         config_file = Path(f".cafe/issues/{current_branch}/config.yaml")
         if not config_file.exists():
             console.print(f"[red]Error: Issue config not found: {config_file}[/red]")
@@ -517,7 +543,7 @@ def close() -> None:
         console.print(f"[bold blue]🔒 Closing issue: {feature_branch}[/bold blue]")
         console.print()
 
-        # 4. Switch to base branch (CRITICAL - must succeed)
+        # 5. Switch to base branch (CRITICAL - must succeed)
         try:
             console.print(f"[dim]Switching to base branch: {base_branch}[/dim]")
             git_ops.checkout_branch(base_branch)
@@ -527,7 +553,7 @@ def close() -> None:
             console.print(f"[yellow]Hint: You may have uncommitted changes. Please commit or stash them first.[/yellow]")
             raise typer.Exit(1)
 
-        # 5. Delete feature branch (non-critical)
+        # 6. Delete feature branch (non-critical)
         try:
             console.print(f"[dim]Deleting feature branch: {feature_branch}[/dim]")
             git_ops.delete_branch(feature_branch)
@@ -536,7 +562,7 @@ def close() -> None:
             console.print(f"[yellow]⚠️  Warning: Failed to delete branch: {e}[/yellow]")
             console.print(f"[yellow]   The branch may not be fully merged. You can delete it manually later.[/yellow]")
 
-        # 6. Update base branch (non-critical)
+        # 7. Update base branch (non-critical)
         try:
             console.print(f"[dim]Updating base branch...[/dim]")
             git_ops.pull()
@@ -545,7 +571,7 @@ def close() -> None:
             console.print(f"[yellow]⚠️  Warning: Failed to update base branch: {e}[/yellow]")
             console.print(f"[yellow]   You may need to pull manually later.[/yellow]")
 
-        # 7. Display success message
+        # 8. Display success message
         console.print()
         console.print(f"[green]✓ Successfully closed issue: {feature_branch}[/green]")
         console.print(f"  📁 Issue data preserved at: .cafe/issues/{feature_branch}/")
