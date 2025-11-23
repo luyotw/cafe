@@ -6,20 +6,29 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from cafe.agents.manager import AgentManager
+from cafe.core.git import GitOperations
 from cafe.core.permission import PermissionHandler
 from cafe.core.types import PhaseStatus, SpecRigor, WorkflowMode
 from cafe.phases.spec_phase import SpecPhase, create_github_issue, update_github_issue
 
 
+@pytest.fixture
+def mock_git_ops() -> MagicMock:
+    """Create a mock GitOperations for testing."""
+    git_ops = MagicMock(spec=GitOperations)
+    git_ops.get_current_branch.return_value = "test"
+    return git_ops
+
+
 class TestGitHubFunctions:
     """Test GitHub helper functions."""
 
-    def test_create_github_issue_not_implemented(self) -> None:
+    def test_create_github_issue_not_implemented(self, mock_git_ops) -> None:
         """測試 create_github_issue 拋出 NotImplementedError"""
         with pytest.raises(NotImplementedError, match="GitHub issue creation not yet implemented"):
             create_github_issue("test content")
 
-    def test_update_github_issue_not_implemented(self) -> None:
+    def test_update_github_issue_not_implemented(self, mock_git_ops) -> None:
         """測試 update_github_issue 拋出 NotImplementedError"""
         with pytest.raises(NotImplementedError, match="GitHub issue update not yet implemented"):
             update_github_issue("123", "updated content")
@@ -28,8 +37,9 @@ class TestGitHubFunctions:
 class TestSpecPhaseRigorPrompt:
     """Test rigor level prompt."""
 
-    def test_prompt_for_rigor_default(self, tmp_path: Path) -> None:
+    def test_prompt_for_rigor_default(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
         """測試選擇預設 rigor level (Medium)"""
+        monkeypatch.chdir(tmp_path)
         spec_file = tmp_path / ".cafe" / "issues" / "test" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True)
 
@@ -42,6 +52,7 @@ class TestSpecPhaseRigorPrompt:
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=True,
+            git_ops=mock_git_ops,
         )
 
         with patch('builtins.input', return_value=""):
@@ -50,8 +61,9 @@ class TestSpecPhaseRigorPrompt:
 
         assert phase.rigor == SpecRigor.MEDIUM
 
-    def test_prompt_for_rigor_low(self, tmp_path: Path) -> None:
+    def test_prompt_for_rigor_low(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
         """測試選擇 Low rigor level"""
+        monkeypatch.chdir(tmp_path)
         spec_file = tmp_path / ".cafe" / "issues" / "test" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True)
 
@@ -64,6 +76,7 @@ class TestSpecPhaseRigorPrompt:
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=True,
+            git_ops=mock_git_ops,
         )
 
         with patch('builtins.input', return_value="1"):
@@ -72,8 +85,9 @@ class TestSpecPhaseRigorPrompt:
 
         assert phase.rigor == SpecRigor.LOW
 
-    def test_prompt_for_rigor_high(self, tmp_path: Path) -> None:
+    def test_prompt_for_rigor_high(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
         """測試選擇 High rigor level"""
+        monkeypatch.chdir(tmp_path)
         spec_file = tmp_path / ".cafe" / "issues" / "test" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True)
 
@@ -86,6 +100,7 @@ class TestSpecPhaseRigorPrompt:
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=True,
+            git_ops=mock_git_ops,
         )
 
         with patch('builtins.input', return_value="3"):
@@ -94,8 +109,9 @@ class TestSpecPhaseRigorPrompt:
 
         assert phase.rigor == SpecRigor.HIGH
 
-    def test_prompt_for_rigor_invalid_then_valid(self, tmp_path: Path) -> None:
+    def test_prompt_for_rigor_invalid_then_valid(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
         """測試輸入無效值後再輸入有效值"""
+        monkeypatch.chdir(tmp_path)
         spec_file = tmp_path / ".cafe" / "issues" / "test" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True)
 
@@ -108,6 +124,7 @@ class TestSpecPhaseRigorPrompt:
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=True,
+            git_ops=mock_git_ops,
         )
 
         with patch('builtins.input', side_effect=["invalid", "4", "2"]):
@@ -116,8 +133,9 @@ class TestSpecPhaseRigorPrompt:
 
         assert phase.rigor == SpecRigor.MEDIUM
 
-    def test_prompt_for_rigor_skips_if_explicitly_set(self, tmp_path: Path) -> None:
+    def test_prompt_for_rigor_skips_if_explicitly_set(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
         """測試如果已明確設定 rigor 則跳過提示"""
+        monkeypatch.chdir(tmp_path)
         spec_file = tmp_path / ".cafe" / "issues" / "test" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True)
 
@@ -131,6 +149,7 @@ class TestSpecPhaseRigorPrompt:
             workflow_mode=WorkflowMode.LOCAL,
             interactive=True,
             rigor=SpecRigor.HIGH,
+            git_ops=mock_git_ops,
         )
 
         with patch('builtins.input') as mock_input:
@@ -145,8 +164,9 @@ class TestSpecPhaseRigorPrompt:
 class TestSpecPhaseUserStoryPrompt:
     """Test user story prompt."""
 
-    def test_prompt_for_user_story_success(self, tmp_path: Path) -> None:
+    def test_prompt_for_user_story_success(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
         """測試成功提示用戶輸入需求"""
+        monkeypatch.chdir(tmp_path)
         spec_file = tmp_path / ".cafe" / "issues" / "test" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True)
 
@@ -159,6 +179,7 @@ class TestSpecPhaseUserStoryPrompt:
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=True,
+            git_ops=mock_git_ops,
         )
 
         user_requirement = "身為用戶，我想要新增登入功能，以便管理個人資料"
@@ -173,8 +194,9 @@ class TestSpecPhaseUserStoryPrompt:
         assert "# 初始需求" in content
         assert user_requirement in content
 
-    def test_prompt_for_user_story_empty_raises_error(self, tmp_path: Path) -> None:
+    def test_prompt_for_user_story_empty_raises_error(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
         """測試空輸入拋出 ValueError"""
+        monkeypatch.chdir(tmp_path)
         spec_file = tmp_path / ".cafe" / "issues" / "test" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True)
 
@@ -187,6 +209,7 @@ class TestSpecPhaseUserStoryPrompt:
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=True,
+            git_ops=mock_git_ops,
         )
 
         with patch.object(phase.display, 'get_multiline_input', return_value=""):
@@ -198,8 +221,9 @@ class TestSpecPhaseUserStoryPrompt:
 class TestSpecPhaseGitHubMethods:
     """Test GitHub-related methods."""
 
-    def test_create_github_issue(self, tmp_path: Path) -> None:
+    def test_create_github_issue(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
         """測試 _create_github_issue 呼叫"""
+        monkeypatch.chdir(tmp_path)
         spec_file = tmp_path / ".cafe" / "issues" / "test" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True)
 
@@ -212,13 +236,15 @@ class TestSpecPhaseGitHubMethods:
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.GITHUB,
             interactive=False,
+            git_ops=mock_git_ops,
         )
 
         with pytest.raises(NotImplementedError):
             phase._create_github_issue("test content")
 
-    def test_update_github_issue(self, tmp_path: Path) -> None:
+    def test_update_github_issue(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
         """測試 _update_github_issue 呼叫"""
+        monkeypatch.chdir(tmp_path)
         spec_file = tmp_path / ".cafe" / "issues" / "test" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True)
 
@@ -232,6 +258,7 @@ class TestSpecPhaseGitHubMethods:
             workflow_mode=WorkflowMode.GITHUB,
             interactive=False,
             issue_id="123",
+            git_ops=mock_git_ops,
         )
 
         with pytest.raises(NotImplementedError):
@@ -241,8 +268,9 @@ class TestSpecPhaseGitHubMethods:
 class TestSpecPhaseHelperMethods:
     """Test helper methods."""
 
-    def test_backup_spec(self, tmp_path: Path) -> None:
+    def test_backup_spec(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
         """測試 _backup_spec 建立備份"""
+        monkeypatch.chdir(tmp_path)
         spec_file = tmp_path / ".cafe" / "issues" / "test" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True)
         spec_file.write_text("Original content")
@@ -256,6 +284,7 @@ class TestSpecPhaseHelperMethods:
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
+            git_ops=mock_git_ops,
         )
 
         phase._backup_spec(spec_file)
@@ -265,8 +294,9 @@ class TestSpecPhaseHelperMethods:
         assert backup_file.exists()
         assert backup_file.read_text() == "Original content"
 
-    def test_display_current_spec(self, tmp_path: Path) -> None:
+    def test_display_current_spec(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
         """測試 _display_current_spec 顯示目前內容"""
+        monkeypatch.chdir(tmp_path)
         spec_file = tmp_path / ".cafe" / "issues" / "test" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True)
         spec_file.write_text("# Current Spec\nSome requirements")
@@ -282,6 +312,7 @@ class TestSpecPhaseHelperMethods:
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=True,
+            git_ops=mock_git_ops,
         )
         phase.pm_agent = "Roger"
         phase.iteration = 2
@@ -292,8 +323,9 @@ class TestSpecPhaseHelperMethods:
         # Verify print was called
         assert mock_print.called
 
-    def test_ask_user_for_clarification(self, tmp_path: Path) -> None:
+    def test_ask_user_for_clarification(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
         """測試 _ask_user_for_clarification"""
+        monkeypatch.chdir(tmp_path)
         spec_file = tmp_path / ".cafe" / "issues" / "test" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True)
 
@@ -306,6 +338,7 @@ class TestSpecPhaseHelperMethods:
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=True,
+            git_ops=mock_git_ops,
         )
 
         user_input = "這是我的回答"
@@ -318,8 +351,9 @@ class TestSpecPhaseHelperMethods:
 class TestSpecPhaseGetMethods:
     """Test getter methods."""
 
-    def test_get_non_technical_guidelines(self, tmp_path: Path) -> None:
+    def test_get_non_technical_guidelines(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
         """測試 _get_non_technical_guidelines 返回指南"""
+        monkeypatch.chdir(tmp_path)
         spec_file = tmp_path / ".cafe" / "issues" / "test" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True)
 
@@ -332,14 +366,16 @@ class TestSpecPhaseGetMethods:
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
+            git_ops=mock_git_ops,
         )
 
         guidelines = phase._get_non_technical_guidelines()
         assert "不可涉及技術細節" in guidelines
         assert "不要提及實作方式" in guidelines
 
-    def test_get_status_code_prompt(self, tmp_path: Path) -> None:
+    def test_get_status_code_prompt(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
         """測試 _get_status_code_prompt 返回 prompt"""
+        monkeypatch.chdir(tmp_path)
         spec_file = tmp_path / ".cafe" / "issues" / "test" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True)
 
@@ -352,13 +388,15 @@ class TestSpecPhaseGetMethods:
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
+            git_ops=mock_git_ops,
         )
 
         prompt = phase._get_status_code_prompt()
         assert "CAFE_READY_FOR_REVIEW" in prompt or "READY_FOR_REVIEW" in prompt
 
-    def test_get_rigor_guidelines(self, tmp_path: Path) -> None:
+    def test_get_rigor_guidelines(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
         """測試 _get_rigor_guidelines 對不同 rigor levels"""
+        monkeypatch.chdir(tmp_path)
         spec_file = tmp_path / ".cafe" / "issues" / "test" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True)
 
@@ -373,6 +411,7 @@ class TestSpecPhaseGetMethods:
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
             rigor=SpecRigor.LOW,
+            git_ops=mock_git_ops,
         )
         guidelines = phase._get_rigor_guidelines()
         assert "快速開發" in guidelines or "快速" in guidelines.lower()

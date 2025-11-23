@@ -748,8 +748,9 @@ class TestKeyboardInterrupt:
 class TestSpecPhasePromptGeneration:
     """測試 SpecPhase prompt 生成"""
 
-    def test_prompt_does_not_include_status_code_without_prefix(self, tmp_path: Path, mock_git_ops: MagicMock) -> None:
+    def test_prompt_does_not_include_status_code_without_prefix(self, tmp_path: Path, mock_git_ops: MagicMock, monkeypatch) -> None:
         """測試 prompt 不應該包含沒有 CAFE_ 前綴的 status code 指示"""
+        monkeypatch.chdir(tmp_path)
         mock_git_ops.get_current_branch.return_value = "test"
 
         agent_manager = MagicMock(spec=AgentManager)

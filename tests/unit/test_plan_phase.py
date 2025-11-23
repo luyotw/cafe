@@ -46,7 +46,7 @@ def create_template_file(tmp_path: Path) -> str:
 class TestPlanPhaseBasics:
     """Test basic PlanPhase functionality."""
 
-    def test_init_plan_phase(self) -> None:
+    def test_init_plan_phase(self, mock_git_ops) -> None:
         """測試初始化 PlanPhase"""
         agent_manager = MagicMock(spec=AgentManager)
 
@@ -58,6 +58,7 @@ class TestPlanPhaseBasics:
             permission_handler=permission_handler,
             spec_file="requirements.md",
             workflow_mode=WorkflowMode.LOCAL,
+            git_ops=mock_git_ops,
         )
 
         assert phase.agent_manager == agent_manager
@@ -65,7 +66,7 @@ class TestPlanPhaseBasics:
         assert phase.spec_file == "requirements.md"
         assert phase.workflow_mode == WorkflowMode.LOCAL
 
-    def test_init_with_github_mode(self) -> None:
+    def test_init_with_github_mode(self, mock_git_ops) -> None:
         """測試使用 GitHub mode 初始化"""
         agent_manager = MagicMock(spec=AgentManager)
 
@@ -78,6 +79,7 @@ class TestPlanPhaseBasics:
             spec_file="requirements.md",
             workflow_mode=WorkflowMode.GITHUB,
             issue_id="123",
+            git_ops=mock_git_ops,
         )
 
         assert phase.workflow_mode == WorkflowMode.GITHUB
@@ -87,8 +89,9 @@ class TestPlanPhaseBasics:
 class TestLocalWorkflow:
     """Test local workflow implementation analysis."""
 
-    def test_execute_local_workflow_with_dev_guide(self, tmp_path: Path) -> None:
-        """測試執行 local workflow 有開發指南"""
+    def test_execute_local_workflow_with_dev_guide(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
+        monkeypatch.chdir(tmp_path)
+        mock_git_ops.get_current_branch.return_value = "test-feature"
         spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements\n\nSome requirements")
@@ -114,6 +117,7 @@ class TestLocalWorkflow:
             interactive=False,  # Non-interactive for this test
             user_input="confirm",  # Provide user decision
             template_path=create_template_file(tmp_path),
+            git_ops=mock_git_ops,
         )
 
         result = phase.execute()
@@ -121,8 +125,9 @@ class TestLocalWorkflow:
         assert result.status == PhaseStatus.COMPLETED
         assert agent_manager.execute.called
 
-    def test_missing_dev_guide_prompts_user_in_interactive_mode(self, tmp_path: Path) -> None:
+    def test_missing_dev_guide_prompts_user_in_interactive_mode(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
         """測試有開發指南時可以正常執行（改為 non-interactive 並提供開發指南）"""
+        monkeypatch.chdir(tmp_path)
         spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements\n\nNo dev guide")
@@ -147,6 +152,7 @@ class TestLocalWorkflow:
             interactive=False,
             user_input="confirm",
             template_path=create_template_file(tmp_path),
+            git_ops=mock_git_ops,
         )
 
         result = phase.execute()
@@ -161,8 +167,11 @@ class TestLocalWorkflow:
         assert "這是開發指南內容" in content
         assert agent_manager.execute.called
 
-    def test_empty_dev_guide_allowed_in_non_interactive_mode(self, tmp_path: Path) -> None:
+    def test_empty_dev_guide_allowed_in_non_interactive_mode(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
         """測試空的開發指南在非互動模式下被允許"""
+        monkeypatch.chdir(tmp_path)
+        mock_git_ops.get_current_branch.return_value = "test-feature"
+
         spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements\n\nNo dev guide")
@@ -182,6 +191,7 @@ class TestLocalWorkflow:
             interactive=False,
             user_input="confirm",  # Provide confirm for READY_FOR_REVIEW status
             template_path=create_template_file(tmp_path),
+            git_ops=mock_git_ops,
         )
 
         with patch('builtins.print'):
@@ -195,8 +205,9 @@ class TestLocalWorkflow:
         content = plan_file.read_text()
         assert "## 開發指南" in content
 
-    def test_multiple_iterations_until_confirmed(self, tmp_path: Path) -> None:
-        """測試在 non-interactive 模式下第一輪沒有 status code 時返回 IN_PROGRESS"""
+    def test_multiple_iterations_until_confirmed(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
+        monkeypatch.chdir(tmp_path)
+        mock_git_ops.get_current_branch.return_value = "test-feature"
         spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements")
@@ -222,6 +233,7 @@ class TestLocalWorkflow:
             issue_name="test-feature",
             interactive=False,
             template_path=create_template_file(tmp_path),
+            git_ops=mock_git_ops,
         )
 
         with patch('builtins.print'):
@@ -237,8 +249,9 @@ class TestLocalWorkflow:
 class TestGitHubWorkflow:
     """Test GitHub workflow implementation analysis."""
 
-    def test_execute_github_workflow(self, tmp_path: Path) -> None:
+    def test_execute_github_workflow(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
         """測試執行 GitHub workflow"""
+        monkeypatch.chdir(tmp_path)
         # Create requirements file in tmp_path
         issue_name = "test-github-issue"
         spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
@@ -260,6 +273,7 @@ class TestGitHubWorkflow:
             issue_id="123",
             interactive=False,  # Non-interactive for this test
             user_input="confirm",  # Provide user decision
+            git_ops=mock_git_ops,
         )
 
         result = phase.execute()
@@ -270,8 +284,9 @@ class TestGitHubWorkflow:
         prompt = call_args[0][1]
         assert "gh issue view 123" in prompt
 
-    def test_github_workflow_uses_issue_id(self, tmp_path: Path) -> None:
+    def test_github_workflow_uses_issue_id(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
         """測試 GitHub workflow 使用 issue ID"""
+        monkeypatch.chdir(tmp_path)
         # Create requirements file in tmp_path
         issue_name = "test-github-issue-2"
         spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
@@ -293,6 +308,7 @@ class TestGitHubWorkflow:
             issue_id="456",
             interactive=False,  # Non-interactive for this test
             template_path=create_template_file(tmp_path),
+            git_ops=mock_git_ops,
         )
 
         phase.execute()
@@ -304,8 +320,9 @@ class TestGitHubWorkflow:
 class TestPromptGeneration:
     """Test prompt generation for different iterations."""
 
-    def test_first_iteration_prompt(self, tmp_path: Path) -> None:
-        """測試第一次迭代的 prompt"""
+    def test_first_iteration_prompt(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
+        monkeypatch.chdir(tmp_path)
+        mock_git_ops.get_current_branch.return_value = "test-feature"
         spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements")
@@ -330,6 +347,7 @@ class TestPromptGeneration:
             issue_name="test-feature",
             interactive=False,
             template_path=create_template_file(tmp_path),
+            git_ops=mock_git_ops,
         )
 
         with patch('builtins.print'):
@@ -340,8 +358,9 @@ class TestPromptGeneration:
         assert "spec.md" in prompt
         assert "第 1 輪" in prompt
 
-    def test_subsequent_iteration_includes_history(self, tmp_path: Path) -> None:
-        """測試後續迭代包含迭代資訊"""
+    def test_subsequent_iteration_includes_history(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
+        monkeypatch.chdir(tmp_path)
+        mock_git_ops.get_current_branch.return_value = "test-feature"
         spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements")
@@ -367,6 +386,7 @@ class TestPromptGeneration:
             issue_name="test-feature",
             interactive=False,
             template_path=create_template_file(tmp_path),
+            git_ops=mock_git_ops,
         )
 
         with patch('builtins.print'):
@@ -386,8 +406,9 @@ class TestPromptGeneration:
 class TestAgentSelection:
     """Test developer agent selection."""
 
-    def test_uses_dev_agent(self, tmp_path: Path) -> None:
-        """測試使用 Dev agent (David)"""
+    def test_uses_dev_agent(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
+        monkeypatch.chdir(tmp_path)
+        mock_git_ops.get_current_branch.return_value = "test-feature"
         spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements")
@@ -413,6 +434,7 @@ class TestAgentSelection:
             dev_agent="David",
             interactive=False,
             template_path=create_template_file(tmp_path),
+            git_ops=mock_git_ops,
         )
 
         with patch('builtins.print'):
@@ -426,7 +448,7 @@ class TestAgentSelection:
 class TestErrorHandling:
     """Test error handling."""
 
-    def test_missing_requirements_file_fails(self) -> None:
+    def test_missing_requirements_file_fails(self, mock_git_ops) -> None:
         """測試缺少需求檔案時失敗"""
         agent_manager = MagicMock(spec=AgentManager)
 
@@ -438,6 +460,7 @@ class TestErrorHandling:
             permission_handler=permission_handler,
             spec_file="/nonexistent/requirements.md",
             workflow_mode=WorkflowMode.LOCAL,
+            git_ops=mock_git_ops,
         )
 
         result = phase.execute()
@@ -445,7 +468,7 @@ class TestErrorHandling:
         assert result.status == PhaseStatus.FAILED
         assert "not found" in result.message.lower()
 
-    def test_github_mode_without_issue_id_fails(self) -> None:
+    def test_github_mode_without_issue_id_fails(self, mock_git_ops) -> None:
         """測試 GitHub mode 沒有 issue_id 時失敗"""
         agent_manager = MagicMock(spec=AgentManager)
 
@@ -458,6 +481,7 @@ class TestErrorHandling:
             spec_file="requirements.md",
             workflow_mode=WorkflowMode.GITHUB,
             issue_id=None,
+            git_ops=mock_git_ops,
         )
 
         result = phase.execute()
@@ -465,8 +489,9 @@ class TestErrorHandling:
         assert result.status == PhaseStatus.FAILED
         assert "issue_id" in result.message.lower()
 
-    def test_agent_execution_error_fails_phase(self, tmp_path: Path) -> None:
-        """測試 agent 執行錯誤時 phase 失敗"""
+    def test_agent_execution_error_fails_phase(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
+        monkeypatch.chdir(tmp_path)
+        mock_git_ops.get_current_branch.return_value = "test-feature"
         spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements")
@@ -491,6 +516,7 @@ class TestErrorHandling:
             issue_name="test-feature",
             interactive=False,
             template_path=create_template_file(tmp_path),
+            git_ops=mock_git_ops,
         )
 
         with patch('builtins.print'):
@@ -503,8 +529,9 @@ class TestErrorHandling:
 class TestPlanPhaseHistory:
     """Test history recording and loading functionality (TDD)."""
 
-    def test_saves_history_after_each_iteration(self, tmp_path: Path) -> None:
-        """測試每次迭代後保存歷史記錄"""
+    def test_saves_history_after_each_iteration(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
+        monkeypatch.chdir(tmp_path)
+        mock_git_ops.get_current_branch.return_value = "test-feature"
         spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements")
@@ -532,6 +559,7 @@ class TestPlanPhaseHistory:
             issue_name="test-feature",
             interactive=True,  # Must be interactive for NEED_CLARIFICATION flow
             template_path=create_template_file(tmp_path),
+            git_ops=mock_git_ops,
         )
 
         # Mock user input to continue after NEED_CLARIFICATION, then confirm after READY_FOR_REVIEW
@@ -555,8 +583,9 @@ class TestPlanPhaseHistory:
         assert data["status_code"] == "CAFE_NEED_CLARIFICATION"
         assert "需要更多資訊" in data["response"]
 
-    def test_saves_progress_to_status_json(self, tmp_path: Path) -> None:
-        """測試保存進度到 status.json"""
+    def test_saves_progress_to_status_json(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
+        monkeypatch.chdir(tmp_path)
+        mock_git_ops.get_current_branch.return_value = "test-feature"
         spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements")
@@ -583,6 +612,7 @@ class TestPlanPhaseHistory:
             interactive=False,
             user_input="confirm",
             template_path=create_template_file(tmp_path),
+            git_ops=mock_git_ops,
         )
 
         with patch('builtins.print'):
@@ -601,8 +631,9 @@ class TestPlanPhaseHistory:
         # In non-interactive mode, READY_FOR_REVIEW completes immediately without user confirmation
         assert data["status_code"] == "CAFE_READY_FOR_REVIEW"
 
-    def test_creates_plan_md_file(self, tmp_path: Path) -> None:
-        """測試 agent 創建 plan.md 文件"""
+    def test_creates_plan_md_file(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
+        monkeypatch.chdir(tmp_path)
+        mock_git_ops.get_current_branch.return_value = "test-feature"
         spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements")
@@ -635,6 +666,7 @@ class TestPlanPhaseHistory:
             issue_name="test-feature",
             interactive=False,
             template_path=create_template_file(tmp_path),
+            git_ops=mock_git_ops,
         )
 
         with patch('builtins.print'):
@@ -648,8 +680,9 @@ class TestPlanPhaseHistory:
         assert "實作計畫" in content
         assert "技術分析" in content
 
-    def test_init_creates_history_dir_and_attributes(self, tmp_path: Path) -> None:
-        """測試 __init__ 創建 history_dir 和 conversation_history 屬性"""
+    def test_init_creates_history_dir_and_attributes(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
+        monkeypatch.chdir(tmp_path)
+        mock_git_ops.get_current_branch.return_value = "test-issue"
         spec_file = tmp_path / ".cafe" / "issues" / "test-issue" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True)
         spec_file.write_text("# Spec\n\n## 開發指南\nGuide")
@@ -665,14 +698,16 @@ class TestPlanPhaseHistory:
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             issue_name="test-issue",
+            git_ops=mock_git_ops,
         )
 
         # Should have history_dir attribute
         assert hasattr(phase, 'history_dir')
         assert phase.history_dir == spec_file.parent.parent / "plan" / "history"
 
-    def test_save_history_creates_json_file(self, tmp_path: Path) -> None:
-        """測試 _save_history() 創建 JSON 檔案，包含 user_input"""
+    def test_save_history_creates_json_file(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
+        monkeypatch.chdir(tmp_path)
+        mock_git_ops.get_current_branch.return_value = "test-issue"
         spec_file = tmp_path / ".cafe" / "issues" / "test-issue" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True)
         spec_file.write_text("# Spec\n\n## 開發指南\nGuide")
@@ -688,6 +723,7 @@ class TestPlanPhaseHistory:
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             issue_name="test-issue",
+            git_ops=mock_git_ops,
         )
 
         phase.iteration = 1
@@ -718,8 +754,9 @@ class TestPlanPhaseHistory:
         assert data["status_code"] == "CAFE_NEED_CLARIFICATION"
         assert "timestamp" in data
 
-    def test_load_history_reads_existing_files(self, tmp_path: Path) -> None:
-        """測試 _load_history() 讀取現有歷史檔案"""
+    def test_load_history_reads_existing_files(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
+        monkeypatch.chdir(tmp_path)
+        mock_git_ops.get_current_branch.return_value = "test-issue"
         spec_file = tmp_path / ".cafe" / "issues" / "test-issue" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True)
         spec_file.write_text("# Spec\n\n## 開發指南\nGuide")
@@ -751,13 +788,15 @@ class TestPlanPhaseHistory:
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             issue_name="test-issue",
+            git_ops=mock_git_ops,
         )
 
         # _load_history() should be called in __init__ and update iteration counter
         assert phase.iteration == 1
 
-    def test_save_history_includes_agent_metadata(self, tmp_path: Path) -> None:
-        """測試 _save_history() 包含 agent metadata（cli, session_id, allowed_tools, denied_tools）"""
+    def test_save_history_includes_agent_metadata(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
+        monkeypatch.chdir(tmp_path)
+        mock_git_ops.get_current_branch.return_value = "test-issue"
         from cafe.core.types import AgentCLI, AgentConfig
 
         spec_file = tmp_path / ".cafe" / "issues" / "test-issue" / "spec" / "spec.md"
@@ -775,6 +814,7 @@ class TestPlanPhaseHistory:
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             issue_name="test-issue",
+            git_ops=mock_git_ops,
         )
 
         phase.iteration = 1
@@ -816,8 +856,9 @@ class TestPlanPhaseHistory:
 class TestPlanPhaseNeedClarification:
     """Test NEED_CLARIFICATION handling (TDD)."""
 
-    def test_need_clarification_prompts_user_in_interactive_mode(self, tmp_path: Path) -> None:
-        """測試 NEED_CLARIFICATION 時在互動模式下提示使用者輸入"""
+    def test_need_clarification_prompts_user_in_interactive_mode(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
+        monkeypatch.chdir(tmp_path)
+        mock_git_ops.get_current_branch.return_value = "test-feature"
         spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements")
@@ -845,6 +886,7 @@ class TestPlanPhaseNeedClarification:
             issue_name="test-feature",
             interactive=True,  # Must be interactive for NEED_CLARIFICATION flow
             template_path=create_template_file(tmp_path),
+            git_ops=mock_git_ops,
         )
 
         # Mock user input (provide actual content and confirmation)
@@ -860,8 +902,9 @@ class TestPlanPhaseNeedClarification:
             # Should have prompted user for input
             assert mock_input.call_count == 1
 
-    def test_need_clarification_exits_in_non_interactive_mode(self, tmp_path: Path) -> None:
-        """測試 NEED_CLARIFICATION 時在非互動模式下退出並等待"""
+    def test_need_clarification_exits_in_non_interactive_mode(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
+        monkeypatch.chdir(tmp_path)
+        mock_git_ops.get_current_branch.return_value = "test-feature"
         spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements")
@@ -886,6 +929,7 @@ class TestPlanPhaseNeedClarification:
             issue_name="test-feature",
             interactive=False,
             template_path=create_template_file(tmp_path),
+            git_ops=mock_git_ops,
         )
 
         with patch('builtins.print'):
@@ -897,8 +941,9 @@ class TestPlanPhaseNeedClarification:
         # Should have NEED_CLARIFICATION status code in result data
         assert result.data["status_code"] == "CAFE_NEED_CLARIFICATION"
 
-    def test_need_clarification_saves_iteration_history_with_user_input_and_response(self, tmp_path: Path) -> None:
-        """測試每輪 history 包含 user_input（輪的開始），下一輪的 user_input 就是上一輪的 user_response"""
+    def test_need_clarification_saves_iteration_history_with_user_input_and_response(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
+        monkeypatch.chdir(tmp_path)
+        mock_git_ops.get_current_branch.return_value = "test-feature"
         spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements")
@@ -926,6 +971,7 @@ class TestPlanPhaseNeedClarification:
             issue_name="test-feature",
             interactive=True,  # Must be interactive for NEED_CLARIFICATION flow
             template_path=create_template_file(tmp_path),
+            git_ops=mock_git_ops,
         )
 
         # Mock user input and confirmation
@@ -962,8 +1008,9 @@ class TestPlanPhaseNeedClarification:
         assert "user_input" in data2  # 輪的開始：上一輪的使用者回應
         assert data2["user_input"] == "我的回應內容"
 
-    def test_need_clarification_saves_progress(self, tmp_path: Path) -> None:
-        """測試 NEED_CLARIFICATION 時保存進度"""
+    def test_need_clarification_saves_progress(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
+        monkeypatch.chdir(tmp_path)
+        mock_git_ops.get_current_branch.return_value = "test-feature"
         spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements")
@@ -988,6 +1035,7 @@ class TestPlanPhaseNeedClarification:
             issue_name="test-feature",
             interactive=False,
             template_path=create_template_file(tmp_path),
+            git_ops=mock_git_ops,
         )
 
         result = phase.execute()
@@ -1008,8 +1056,9 @@ class TestPlanPhaseNeedClarification:
 class TestPlanPhaseResume:
     """Test resuming from interrupted phase (TDD)."""
 
-    def test_resume_shows_previous_plan_and_asks_user(self, tmp_path: Path) -> None:
-        """測試中斷重跑時顯示上一輪的 plan.md 並詢問使用者"""
+    def test_resume_shows_previous_plan_and_asks_user(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
+        monkeypatch.chdir(tmp_path)
+        mock_git_ops.get_current_branch.return_value = "test-feature"
         spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements")
@@ -1049,6 +1098,7 @@ class TestPlanPhaseResume:
             issue_name="test-feature",
             interactive=True,  # Must be interactive for resume flow
             template_path=create_template_file(tmp_path),
+            git_ops=mock_git_ops,
         )
 
         # Mock user providing response and then confirming
@@ -1065,8 +1115,9 @@ class TestPlanPhaseResume:
 class TestPlanPhaseIterationDisplay:
     """Test plan display at iteration start."""
 
-    def test_displays_plan_at_start_of_iteration_2(self, tmp_path: Path) -> None:
+    def test_displays_plan_at_start_of_iteration_2(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
         """測試第二輪開始時顯示 plan.md 內容"""
+        monkeypatch.chdir(tmp_path)
         issue_name = "test-display-plan"
         spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
@@ -1095,6 +1146,7 @@ class TestPlanPhaseIterationDisplay:
             workflow_mode=WorkflowMode.LOCAL,
             interactive=True,  # Must be interactive for multi-iteration flow
             template_path=create_template_file(tmp_path),
+            git_ops=mock_git_ops,
         )
 
         # 捕獲所有 print 輸出
@@ -1113,8 +1165,9 @@ class TestPlanPhaseIterationDisplay:
         assert len(plan_display_headers) >= 1, "應該在第二輪開始時顯示計畫內容"
         assert any("Iteration 1" in line for line in plan_display_headers), "應該標註是 Iteration 1 的計畫"
 
-    def test_no_plan_display_in_iteration_1(self, tmp_path: Path) -> None:
+    def test_no_plan_display_in_iteration_1(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
         """測試第一輪不應該顯示計畫內容（因為還沒產生）"""
+        monkeypatch.chdir(tmp_path)
         issue_name = "test-no-display-iter1"
         spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
@@ -1137,6 +1190,7 @@ class TestPlanPhaseIterationDisplay:
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,  # Changed to False to avoid hanging
+            git_ops=mock_git_ops,
         )
 
         printed_output = []
@@ -1156,8 +1210,9 @@ class TestPlanPhaseIterationDisplay:
 class TestPlanPhaseProgressTracking:
     """Test progress tracking functionality (TDD)."""
 
-    def test_save_progress_creates_status_json(self, tmp_path: Path) -> None:
-        """測試 _save_progress() 創建 status.json"""
+    def test_save_progress_creates_status_json(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
+        monkeypatch.chdir(tmp_path)
+        mock_git_ops.get_current_branch.return_value = "test-issue"
         spec_file = tmp_path / ".cafe" / "issues" / "test-issue" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True)
         spec_file.write_text("# Spec\n\n## 開發指南\nGuide")
@@ -1173,6 +1228,7 @@ class TestPlanPhaseProgressTracking:
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             issue_name="test-issue",
+            git_ops=mock_git_ops,
         )
 
         phase.iteration = 2
@@ -1190,8 +1246,9 @@ class TestPlanPhaseProgressTracking:
         assert data["status_code"] == "CAFE_NEED_CLARIFICATION"
         assert data["iteration"] == 2
 
-    def test_load_progress_returns_none_when_no_file(self, tmp_path: Path) -> None:
-        """測試 _load_progress() 在沒有檔案時返回 None"""
+    def test_load_progress_returns_none_when_no_file(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
+        monkeypatch.chdir(tmp_path)
+        mock_git_ops.get_current_branch.return_value = "test-issue"
         spec_file = tmp_path / ".cafe" / "issues" / "test-issue" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True)
         spec_file.write_text("# Spec\n\n## 開發指南\nGuide")
@@ -1207,6 +1264,7 @@ class TestPlanPhaseProgressTracking:
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             issue_name="test-issue",
+            git_ops=mock_git_ops,
         )
 
         progress = phase._load_progress()
@@ -1216,8 +1274,9 @@ class TestPlanPhaseProgressTracking:
 class TestPlanPhaseNoStatusCode:
     """測試 agent 回傳內容但沒有 status code 的情況"""
 
-    def test_agent_response_without_status_code_saves_to_history(self, tmp_path: Path) -> None:
+    def test_agent_response_without_status_code_saves_to_history(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
         """測試 agent 回傳內容但沒有 status code 時，non-interactive 模式返回 IN_PROGRESS
+        monkeypatch.chdir(tmp_path)
 
         這個測試模擬真實情況：agent 回傳了內容，但沒有包含正確的 status code
         （可能是格式錯誤或 agent 沒照指示做）。在 non-interactive 模式下，
@@ -1249,6 +1308,7 @@ class TestPlanPhaseNoStatusCode:
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
             template_path=create_template_file(tmp_path),  # Provide template for first iteration
+            git_ops=mock_git_ops,
         )
 
         # Mock agent to return content without status code
@@ -1278,8 +1338,9 @@ class TestPlanPhaseNoStatusCode:
 class TestPlanPhaseEmptyResponse:
     """測試 agent 回傳空字串的情況"""
 
-    def test_agent_empty_response_should_fail_with_no_response_status(self, tmp_path: Path) -> None:
+    def test_agent_empty_response_should_fail_with_no_response_status(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
         """測試 agent 回傳空字串時應該失敗並標記為 NO_RESPONSE 狀態
+        monkeypatch.chdir(tmp_path)
 
         當 agent 回傳空字串（可能是執行失敗或輸出未正確捕捉），
         應該立即終止並返回 FAILED 狀態，並在 history 中記錄 CAFE_NO_RESPONSE。
@@ -1313,6 +1374,7 @@ class TestPlanPhaseEmptyResponse:
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
             template_path=create_template_file(tmp_path),  # Provide template for first iteration
+            git_ops=mock_git_ops,
         )
 
         with patch('builtins.print'):
@@ -1339,8 +1401,9 @@ class TestPlanPhaseEmptyResponse:
 class TestPlanPhasePromptGeneration:
     """測試 PlanPhase 的 prompt 產生"""
 
-    def test_prompt_includes_user_modification_request_in_iteration_2(self, tmp_path: Path) -> None:
+    def test_prompt_includes_user_modification_request_in_iteration_2(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
         """測試 iteration 2 的 prompt 應該包含使用者的修改意見"""
+        monkeypatch.chdir(tmp_path)
         spec_file = tmp_path / ".cafe" / "issues" / "test" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements\n\n## 開發指南\nGuide")
@@ -1390,6 +1453,7 @@ class TestPlanPhasePromptGeneration:
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=True,  # Must be interactive to test modification flow
+            git_ops=mock_git_ops,
         )
 
         # Mock user choosing 'm' (modify) then confirming with CONFIRMED status code
@@ -1416,8 +1480,9 @@ class TestPlanPhasePromptGeneration:
         assert modification_request in first_prompt, \
             f"Prompt should include user's modification request.\nPrompt: {first_prompt}"
 
-    def test_prompt_does_not_include_contradicting_status_code_format(self, tmp_path: Path) -> None:
+    def test_prompt_does_not_include_contradicting_status_code_format(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
         """測試 prompt 不應該包含矛盾的 status code 格式指示"""
+        monkeypatch.chdir(tmp_path)
         spec_file = tmp_path / ".cafe" / "issues" / "test" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements\n\n## 開發指南\nGuide")
@@ -1453,6 +1518,7 @@ class TestPlanPhasePromptGeneration:
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
             template_path=create_template_file(tmp_path),
+            git_ops=mock_git_ops,
         )
 
         with patch('builtins.print'):
@@ -1473,8 +1539,9 @@ class TestPlanPhasePromptGeneration:
 class TestPlanPhaseUserConfirmation:
     """測試用戶確認計畫後的行為"""
 
-    def test_user_confirmation_saves_history_and_updates_status(self, tmp_path: Path) -> None:
+    def test_user_confirmation_saves_history_and_updates_status(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
         """測試在 non-interactive 模式下，READY_FOR_REVIEW 直接完成"""
+        monkeypatch.chdir(tmp_path)
         issue_name = "test"
         spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
@@ -1503,6 +1570,7 @@ class TestPlanPhaseUserConfirmation:
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
             template_path=create_template_file(tmp_path),  # Provide template for first iteration
+            git_ops=mock_git_ops,
         )
 
         with patch('builtins.print'):
@@ -1536,8 +1604,9 @@ class TestPlanPhaseUserConfirmation:
 class TestExecuteAndHandleAgentResponse:
     """測試 PlanPhase._execute_and_handle_agent_response() 方法（透過 base class）"""
 
-    def test_returns_none_for_ready_for_review(self, tmp_path: Path) -> None:
-        """測試當 agent 返回 READY_FOR_REVIEW 時返回 None（繼續循環）"""
+    def test_returns_none_for_ready_for_review(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
+        monkeypatch.chdir(tmp_path)
+        mock_git_ops.get_current_branch.return_value = "test-issue"
         # Setup
         spec_file = tmp_path / "spec.md"
         spec_file.write_text("Test spec content")
@@ -1557,6 +1626,7 @@ class TestExecuteAndHandleAgentResponse:
             issue_name="test-issue",
             interactive=True,  # Must be interactive for READY_FOR_REVIEW to return None
             template_path=create_template_file(tmp_path),
+            git_ops=mock_git_ops,
         )
         phase.iteration = 1
 
@@ -1578,8 +1648,9 @@ class TestExecuteAndHandleAgentResponse:
         # Verify
         assert result is None  # Should continue to next iteration
 
-    def test_returns_none_for_need_clarification(self, tmp_path: Path) -> None:
-        """測試當 agent 返回 NEED_CLARIFICATION 時返回 None（繼續循環）"""
+    def test_returns_none_for_need_clarification(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
+        monkeypatch.chdir(tmp_path)
+        mock_git_ops.get_current_branch.return_value = "test-issue"
         # Setup
         spec_file = tmp_path / "spec.md"
         spec_file.write_text("Test spec content")
@@ -1598,6 +1669,7 @@ class TestExecuteAndHandleAgentResponse:
             workflow_mode=WorkflowMode.LOCAL,
             issue_name="test-issue",
             interactive=False,  # Changed to False to avoid hanging
+            git_ops=mock_git_ops,
         )
         phase.iteration = 1
 
@@ -1619,8 +1691,9 @@ class TestExecuteAndHandleAgentResponse:
         # Verify
         assert result is None  # Should continue to next iteration
 
-    def test_returns_failed_for_rejected(self, tmp_path: Path) -> None:
-        """測試當 agent 返回 REJECTED 時返回 FAILED 狀態"""
+    def test_returns_failed_for_rejected(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
+        monkeypatch.chdir(tmp_path)
+        mock_git_ops.get_current_branch.return_value = "test-issue"
         # Setup
         spec_file = tmp_path / "spec.md"
         spec_file.write_text("Test spec content")
@@ -1639,6 +1712,7 @@ class TestExecuteAndHandleAgentResponse:
             workflow_mode=WorkflowMode.LOCAL,
             issue_name="test-issue",
             interactive=False,  # Changed to False to avoid hanging
+            git_ops=mock_git_ops,
         )
         phase.iteration = 1
 
@@ -1662,8 +1736,9 @@ class TestExecuteAndHandleAgentResponse:
         assert result.status == PhaseStatus.FAILED
         assert "rejected" in result.message.lower()
 
-    def test_returns_failed_for_no_response(self, tmp_path: Path) -> None:
-        """測試當 agent 返回空回應時返回 FAILED 狀態"""
+    def test_returns_failed_for_no_response(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
+        monkeypatch.chdir(tmp_path)
+        mock_git_ops.get_current_branch.return_value = "test-issue"
         # Setup
         spec_file = tmp_path / "spec.md"
         spec_file.write_text("Test spec content")
@@ -1682,6 +1757,7 @@ class TestExecuteAndHandleAgentResponse:
             workflow_mode=WorkflowMode.LOCAL,
             issue_name="test-issue",
             interactive=False,  # Changed to False to avoid hanging
+            git_ops=mock_git_ops,
         )
         phase.iteration = 1
 
@@ -1705,8 +1781,9 @@ class TestExecuteAndHandleAgentResponse:
         assert result.status == PhaseStatus.FAILED
         assert "no response" in result.message.lower()
 
-    def test_returns_none_for_no_status_code_interactive(self, tmp_path: Path) -> None:
-        """測試沒有 status code 且 interactive 模式時返回 None（繼續循環）"""
+    def test_returns_none_for_no_status_code_interactive(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
+        monkeypatch.chdir(tmp_path)
+        mock_git_ops.get_current_branch.return_value = "test-issue"
         # Setup
         spec_file = tmp_path / "spec.md"
         spec_file.write_text("Test spec content")
@@ -1726,6 +1803,7 @@ class TestExecuteAndHandleAgentResponse:
             issue_name="test-issue",
             interactive=True,  # Must be interactive to return None for NO_RESPONSE
             template_path=create_template_file(tmp_path),
+            git_ops=mock_git_ops,
         )
         phase.iteration = 1
 
@@ -1748,9 +1826,12 @@ class TestExecuteAndHandleAgentResponse:
         assert result is None  # Should continue in interactive mode
 
     def test_returns_in_progress_for_no_status_code_non_interactive(
-        self, tmp_path: Path
+        self, tmp_path: Path, mock_git_ops, monkeypatch
     ) -> None:
         """測試沒有 status code 且 non-interactive 模式時返回 IN_PROGRESS 狀態"""
+        monkeypatch.chdir(tmp_path)
+        mock_git_ops.get_current_branch.return_value = "test-issue"
+
         # Setup
         spec_file = tmp_path / "spec.md"
         spec_file.write_text("Test spec content")
@@ -1770,6 +1851,7 @@ class TestExecuteAndHandleAgentResponse:
             issue_name="test-issue",
             interactive=False,  # Non-interactive mode
             template_path=create_template_file(tmp_path),
+            git_ops=mock_git_ops,
         )
         phase.iteration = 1
 
@@ -1797,8 +1879,9 @@ class TestExecuteAndHandleAgentResponse:
 class TestPlanPhaseFilePermissions:
     """測試 PlanPhase 的檔案權限設定"""
 
-    def test_uses_precise_file_permissions_for_plan_file(self, tmp_path: Path) -> None:
-        """測試使用精細的檔案路徑授權 (write/edit plan.md)"""
+    def test_uses_precise_file_permissions_for_plan_file(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
+        monkeypatch.chdir(tmp_path)
+        mock_git_ops.get_current_branch.return_value = "test-issue"
         # Setup
         spec_file = tmp_path / ".cafe" / "issues" / "test-issue" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
@@ -1825,6 +1908,7 @@ class TestPlanPhaseFilePermissions:
             interactive=False,
             user_input="confirm",
             template_path=create_template_file(tmp_path),
+            git_ops=mock_git_ops,
         )
 
         # Execute
