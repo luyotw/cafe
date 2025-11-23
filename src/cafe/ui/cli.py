@@ -475,6 +475,91 @@ def prepare(
 
 
 @app.command()
+def close() -> None:
+    """Close current feature and return to base branch.
+
+    This command:
+    1. Switches to base branch (from issue config)
+    2. Deletes the feature branch
+    3. Pulls latest changes from remote
+    4. Preserves .cafe/issues/<issue-name>/ directory
+    """
+    import yaml
+
+    try:
+        # 1. Initialize Git operations
+        try:
+            git_ops = GitOperations()
+        except Exception as e:
+            console.print(f"[red]Error: Not a git repository. {e}[/red]")
+            raise typer.Exit(1)
+
+        # 2. Get current branch
+        current_branch = git_ops.get_current_branch()
+        if not current_branch:
+            console.print("[red]Error: Not on a valid branch (detached HEAD?).[/red]")
+            raise typer.Exit(1)
+
+        # 3. Load issue config
+        config_file = Path(f".cafe/issues/{current_branch}/config.yaml")
+        if not config_file.exists():
+            console.print(f"[red]Error: Issue config not found: {config_file}[/red]")
+            console.print(f"[yellow]Hint: This branch may not be initialized with 'cafe prepare'.[/yellow]")
+            raise typer.Exit(1)
+
+        with open(config_file, 'r', encoding='utf-8') as f:
+            config_data = yaml.safe_load(f)
+
+        base_branch = config_data.get("base_branch", "main")
+        feature_branch = current_branch
+
+        console.print()
+        console.print(f"[bold blue]🔒 Closing issue: {feature_branch}[/bold blue]")
+        console.print()
+
+        # 4. Switch to base branch (CRITICAL - must succeed)
+        try:
+            console.print(f"[dim]Switching to base branch: {base_branch}[/dim]")
+            git_ops.checkout_branch(base_branch)
+            console.print(f"[green]✓ Switched to base branch: {base_branch}[/green]")
+        except Exception as e:
+            console.print(f"[red]Error: Failed to switch to base branch: {e}[/red]")
+            console.print(f"[yellow]Hint: You may have uncommitted changes. Please commit or stash them first.[/yellow]")
+            raise typer.Exit(1)
+
+        # 5. Delete feature branch (non-critical)
+        try:
+            console.print(f"[dim]Deleting feature branch: {feature_branch}[/dim]")
+            git_ops.delete_branch(feature_branch)
+            console.print(f"[green]✓ Deleted feature branch: {feature_branch}[/green]")
+        except Exception as e:
+            console.print(f"[yellow]⚠️  Warning: Failed to delete branch: {e}[/yellow]")
+            console.print(f"[yellow]   The branch may not be fully merged. You can delete it manually later.[/yellow]")
+
+        # 6. Update base branch (non-critical)
+        try:
+            console.print(f"[dim]Updating base branch...[/dim]")
+            git_ops.pull()
+            console.print(f"[green]✓ Updated base branch[/green]")
+        except Exception as e:
+            console.print(f"[yellow]⚠️  Warning: Failed to update base branch: {e}[/yellow]")
+            console.print(f"[yellow]   You may need to pull manually later.[/yellow]")
+
+        # 7. Display success message
+        console.print()
+        console.print(f"[green]✓ Successfully closed issue: {feature_branch}[/green]")
+        console.print(f"  📁 Issue data preserved at: .cafe/issues/{feature_branch}/")
+        console.print(f"  🌿 Current branch: {base_branch}")
+        console.print()
+
+    except typer.Exit:
+        raise
+    except Exception as e:
+        console.print(f"[red]Error during close: {e}[/red]")
+        raise typer.Exit(1)
+
+
+@app.command()
 def spec(
     ctx: typer.Context,
     mode: str = typer.Option(
