@@ -1131,6 +1131,55 @@ class TestFetchGitHubIssue:
         assert hasattr(phase, '_fetched_issue_id')
         assert phase._fetched_issue_id == "456"
 
+    def test_save_issue_config_preserves_existing_fields(
+        self, tmp_path: Path, mock_git_ops: MagicMock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """測試 _save_issue_config 會保留現有的 base_branch 和 feature_branch"""
+        import yaml
+
+        # Change to tmp_path to make .cafe paths work correctly
+        monkeypatch.chdir(tmp_path)
+
+        # Setup - 先建立有 base_branch 和 feature_branch 的 config.yaml
+        issue_dir = Path(".cafe/issues/test-issue")
+        issue_dir.mkdir(parents=True, exist_ok=True)
+        config_file = issue_dir / "config.yaml"
+
+        initial_config = {
+            "base_branch": "main",
+            "feature_branch": "test-issue",
+        }
+        with open(config_file, 'w', encoding='utf-8') as f:
+            yaml.dump(initial_config, f, allow_unicode=True, default_flow_style=False)
+
+        spec_file = issue_dir / "spec" / "spec.md"
+
+        agent_manager = MagicMock(spec=AgentManager)
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        phase = SpecPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            git_ops=mock_git_ops,
+            spec_file=str(spec_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            interactive=True,
+        )
+
+        # 設定 _fetched_issue_id 以觸發儲存
+        phase._fetched_issue_id = "123"
+
+        # Execute
+        phase._save_issue_config()
+
+        # Assert - 驗證 config.yaml 包含所有欄位
+        with open(config_file, 'r', encoding='utf-8') as f:
+            saved_config = yaml.safe_load(f)
+
+        assert saved_config["base_branch"] == "main"
+        assert saved_config["feature_branch"] == "test-issue"
+        assert saved_config["issue_id"] == "123"
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

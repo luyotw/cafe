@@ -916,8 +916,12 @@ class SpecPhase(Phase):
         # Path: .cafe/issues/{issue_name}/config.yaml
         config_file = self.issue_dir / "config.yaml"
 
-        # Create config
+        # Read existing config to preserve base_branch and feature_branch
+        existing_config = self._read_issue_config(config_file) or {}
+
+        # Merge with new issue_id
         config_data = {
+            **existing_config,
             "issue_id": self._fetched_issue_id,
         }
 
