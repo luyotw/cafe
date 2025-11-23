@@ -146,6 +146,25 @@ class GitOperations:
         """
         return bool(self.get_status())
 
+    def delete_branch(self, branch_name: str) -> None:
+        """Delete a local branch.
+
+        Args:
+            branch_name: Name of branch to delete
+
+        Raises:
+            GitError: If branch deletion fails
+        """
+        self.run_git("branch", "-d", branch_name)
+
+    def pull(self) -> None:
+        """Pull latest changes from remote.
+
+        Raises:
+            GitError: If pull fails
+        """
+        self.run_git("pull")
+
     def get_main_branch(self) -> str:
         """Get the main branch name (main or master).
 
