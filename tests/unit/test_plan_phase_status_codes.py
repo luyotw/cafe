@@ -8,8 +8,17 @@ import pytest
 from cafe.agents.manager import AgentManager
 from cafe.core.permission import PermissionHandler
 from cafe.core.types import PhaseStatus, WorkflowMode, TokenUsage
+from cafe.core.git import GitOperations
 from cafe.phases.plan_phase import PlanPhase
 
+
+
+@pytest.fixture
+def mock_git_ops() -> MagicMock:
+    """Create a mock GitOperations for testing."""
+    git_ops = MagicMock(spec=GitOperations)
+    git_ops.get_current_branch.return_value = "test"
+    return git_ops
 
 def create_template_file(tmp_path: Path) -> str:
     """Create a dummy template file for tests."""
@@ -21,8 +30,9 @@ def create_template_file(tmp_path: Path) -> str:
 class TestPlanPhaseWithStatusCodes:
     """Test PlanPhase integration with status code system."""
 
-    def test_confirmed_status_code_completes_phase(self, tmp_path: Path) -> None:
+    def test_confirmed_status_code_completes_phase(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
         """測試 CONFIRMED 狀態碼完成 phase"""
+        monkeypatch.chdir(tmp_path)
         requirements_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         requirements_file.parent.mkdir(parents=True, exist_ok=True)
         requirements_file.write_text("# 需求\n\n## 開發指南\nSome guide")
@@ -47,6 +57,7 @@ class TestPlanPhaseWithStatusCodes:
         phase = PlanPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
+                git_ops=mock_git_ops,
             spec_file=str(requirements_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
@@ -61,8 +72,9 @@ class TestPlanPhaseWithStatusCodes:
         assert result.data.get("status_code") == "CAFE_READY_FOR_REVIEW"  # non-interactive mode completes at READY_FOR_REVIEW
         assert result.data.get("iterations") == 1  # Only 1 iteration in non-interactive mode
 
-    def test_rejected_status_code_fails_phase(self, tmp_path: Path) -> None:
+    def test_rejected_status_code_fails_phase(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
         """測試 REJECTED 狀態碼導致 phase 失敗"""
+        monkeypatch.chdir(tmp_path)
         requirements_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         requirements_file.parent.mkdir(parents=True, exist_ok=True)
         requirements_file.write_text("# 需求\n\n## 開發指南\nSome guide")
@@ -87,6 +99,7 @@ class TestPlanPhaseWithStatusCodes:
         phase = PlanPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
+                git_ops=mock_git_ops,
             spec_file=str(requirements_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
@@ -99,8 +112,9 @@ class TestPlanPhaseWithStatusCodes:
         assert result.status == PhaseStatus.FAILED
         assert result.data.get("status_code") == "CAFE_REJECTED"
 
-    def test_need_clarification_continues_iteration(self, tmp_path: Path) -> None:
+    def test_need_clarification_continues_iteration(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
         """測試 NEED_CLARIFICATION 繼續迭代"""
+        monkeypatch.chdir(tmp_path)
         requirements_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         requirements_file.parent.mkdir(parents=True, exist_ok=True)
         requirements_file.write_text("# 需求\n\n## 開發指南\nSome guide")
@@ -129,6 +143,7 @@ class TestPlanPhaseWithStatusCodes:
         phase = PlanPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
+                git_ops=mock_git_ops,
             spec_file=str(requirements_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=True,
@@ -146,8 +161,9 @@ class TestPlanPhaseWithStatusCodes:
         assert result.data.get("iterations") == 3  # 1st: NEED_CLARIFICATION, 2nd: READY_FOR_REVIEW, 3rd: user confirms
         assert agent_manager.execute.call_count == 2  # Agent executes twice (not counting user confirmation)
 
-    def test_status_code_in_middle_of_response(self, tmp_path: Path) -> None:
+    def test_status_code_in_middle_of_response(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
         """測試狀態碼在回應中間也能識別"""
+        monkeypatch.chdir(tmp_path)
         requirements_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         requirements_file.parent.mkdir(parents=True, exist_ok=True)
         requirements_file.write_text("# 需求\n\n## 開發指南\nSome guide")
@@ -172,6 +188,7 @@ class TestPlanPhaseWithStatusCodes:
         phase = PlanPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
+                git_ops=mock_git_ops,
             spec_file=str(requirements_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
@@ -185,8 +202,9 @@ class TestPlanPhaseWithStatusCodes:
         assert result.status == PhaseStatus.COMPLETED
         assert result.data.get("status_code") == "CAFE_READY_FOR_REVIEW"  # non-interactive completes at READY_FOR_REVIEW
 
-    def test_no_status_code_continues_iteration(self, tmp_path: Path) -> None:
+    def test_no_status_code_continues_iteration(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
         """測試沒有狀態碼時繼續迭代"""
+        monkeypatch.chdir(tmp_path)
         requirements_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         requirements_file.parent.mkdir(parents=True, exist_ok=True)
         requirements_file.write_text("# 需求\n\n## 開發指南\nSome guide")
@@ -215,6 +233,7 @@ class TestPlanPhaseWithStatusCodes:
         phase = PlanPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
+                git_ops=mock_git_ops,
             spec_file=str(requirements_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=True,  # Must be interactive to continue iterations
@@ -229,8 +248,9 @@ class TestPlanPhaseWithStatusCodes:
         assert result.status == PhaseStatus.COMPLETED
         assert agent_manager.execute.call_count == 2
 
-    def test_case_insensitive_status_code(self, tmp_path: Path) -> None:
+    def test_case_insensitive_status_code(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
         """測試狀態碼不區分大小寫"""
+        monkeypatch.chdir(tmp_path)
         requirements_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         requirements_file.parent.mkdir(parents=True, exist_ok=True)
         requirements_file.write_text("# 需求\n\n## 開發指南\nSome guide")
@@ -255,6 +275,7 @@ class TestPlanPhaseWithStatusCodes:
         phase = PlanPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
+                git_ops=mock_git_ops,
             spec_file=str(requirements_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,

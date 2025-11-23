@@ -12,8 +12,17 @@ from cafe.agents.manager import AgentManager
 from cafe.core.permission import PermissionHandler
 from cafe.core.status_codes import PhaseStatusCode
 from cafe.core.types import PhaseStatus, WorkflowMode, TokenUsage, SpecRigor, AgentConfig, AgentCLI
+from cafe.core.git import GitOperations
 from cafe.phases.spec_phase import SpecPhase
 
+
+
+@pytest.fixture
+def mock_git_ops() -> MagicMock:
+    """Create a mock GitOperations for testing."""
+    git_ops = MagicMock(spec=GitOperations)
+    git_ops.get_current_branch.return_value = "test"
+    return git_ops
 
 def setup_agent_manager_mock_for_spec(agent_manager: MagicMock) -> None:
     """Setup agent_manager mocks for SpecPhase tests.
@@ -34,8 +43,9 @@ def setup_agent_manager_mock_for_spec(agent_manager: MagicMock) -> None:
 class TestSpecPhaseWithStatusCodes:
     """Test SpecPhase with status code system."""
 
-    def test_confirmed_status_code_completes_phase(self, tmp_path: Path) -> None:
+    def test_confirmed_status_code_completes_phase(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
         """測試 READY_FOR_REVIEW 狀態碼 + 用戶確認會完成 phase"""
+        monkeypatch.chdir(tmp_path)
         issue_name = "test-confirmed-issue"
         spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
@@ -51,6 +61,7 @@ class TestSpecPhaseWithStatusCodes:
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
+                git_ops=mock_git_ops,
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=True,
@@ -67,8 +78,9 @@ class TestSpecPhaseWithStatusCodes:
         assert result.data.get("status_code") == "CAFE_CONFIRMED"
         assert agent_manager.execute.call_count == 1
 
-    def test_rejected_status_code_fails_phase(self, tmp_path: Path) -> None:
+    def test_rejected_status_code_fails_phase(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
         """測試 REJECTED 狀態碼會失敗 phase"""
+        monkeypatch.chdir(tmp_path)
         issue_name = "test-rejected-issue"
         spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
@@ -84,6 +96,7 @@ class TestSpecPhaseWithStatusCodes:
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
+                git_ops=mock_git_ops,
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=True,
@@ -98,8 +111,9 @@ class TestSpecPhaseWithStatusCodes:
         assert result.data.get("status_code") == "CAFE_REJECTED"
         assert "rejected" in result.message.lower()
 
-    def test_need_clarification_continues_iteration(self, tmp_path: Path) -> None:
+    def test_need_clarification_continues_iteration(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
         """測試 NEED_CLARIFICATION 狀態碼會繼續迭代（互動模式）"""
+        monkeypatch.chdir(tmp_path)
         issue_name = "test-clarification-issue"
         spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
@@ -119,6 +133,7 @@ class TestSpecPhaseWithStatusCodes:
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
+                git_ops=mock_git_ops,
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=True,
@@ -135,8 +150,9 @@ class TestSpecPhaseWithStatusCodes:
         assert agent_manager.execute.call_count == 2
         assert result.data.get("iterations") >= 2  # May have extra iteration for file load
 
-    def test_status_code_in_middle_of_response(self, tmp_path: Path) -> None:
+    def test_status_code_in_middle_of_response(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
         """測試狀態碼在回應中間也能識別"""
+        monkeypatch.chdir(tmp_path)
         issue_name = "test-middle-status-issue"
         spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
@@ -152,6 +168,7 @@ class TestSpecPhaseWithStatusCodes:
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
+                git_ops=mock_git_ops,
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=True,
@@ -167,8 +184,9 @@ class TestSpecPhaseWithStatusCodes:
         assert result.status == PhaseStatus.COMPLETED
         assert result.data.get("status_code") == "CAFE_CONFIRMED"
 
-    def test_no_status_code_continues_iteration(self, tmp_path: Path) -> None:
+    def test_no_status_code_continues_iteration(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
         """測試沒有狀態碼時會繼續迭代直到有狀態碼（互動模式）"""
+        monkeypatch.chdir(tmp_path)
         issue_name = "test-no-status-issue"
         spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
@@ -188,6 +206,7 @@ class TestSpecPhaseWithStatusCodes:
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
+                git_ops=mock_git_ops,
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=True,
@@ -203,8 +222,9 @@ class TestSpecPhaseWithStatusCodes:
         assert result.status == PhaseStatus.COMPLETED
         assert agent_manager.execute.call_count == 2
 
-    def test_case_insensitive_status_code(self, tmp_path: Path) -> None:
+    def test_case_insensitive_status_code(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
         """測試狀態碼不分大小寫"""
+        monkeypatch.chdir(tmp_path)
         issue_name = "test-case-insensitive-issue"
         spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
@@ -220,6 +240,7 @@ class TestSpecPhaseWithStatusCodes:
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
+                git_ops=mock_git_ops,
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=True,
