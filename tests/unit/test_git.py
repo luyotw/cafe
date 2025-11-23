@@ -258,3 +258,41 @@ class TestGitOperations:
             is_valid = git.is_valid_branch()
 
             assert is_valid is False
+
+    def test_delete_branch(self) -> None:
+        """測試刪除本地分支"""
+        git = GitOperations()
+
+        with patch.object(git, "run_git") as mock_run:
+            git.delete_branch("feature-branch")
+
+            mock_run.assert_called_once_with("branch", "-d", "feature-branch")
+
+    def test_delete_branch_failure(self) -> None:
+        """測試刪除分支失敗時拋出 GitError"""
+        git = GitOperations()
+
+        with patch.object(git, "run_git") as mock_run:
+            mock_run.side_effect = GitError("Branch deletion failed")
+
+            with pytest.raises(GitError, match="Branch deletion failed"):
+                git.delete_branch("feature-branch")
+
+    def test_pull(self) -> None:
+        """測試拉取遠端更新"""
+        git = GitOperations()
+
+        with patch.object(git, "run_git") as mock_run:
+            git.pull()
+
+            mock_run.assert_called_once_with("pull")
+
+    def test_pull_failure(self) -> None:
+        """測試 pull 失敗時拋出 GitError"""
+        git = GitOperations()
+
+        with patch.object(git, "run_git") as mock_run:
+            mock_run.side_effect = GitError("Pull failed")
+
+            with pytest.raises(GitError, match="Pull failed"):
+                git.pull()
