@@ -68,6 +68,7 @@ cafe develop                     # Phase 3: 開發實作
 cafe review                      # Phase 4: Code Review
 cafe review --commit <sha>       # 審查特定 commit
 cafe pr                          # Phase 5: 建立 PR
+cafe close                       # 結束 issue：切換回 base branch，刪除 feature branch，更新 base branch
 
 # 配置管理
 cafe config set <key> <value>    # 設定配置值（支援 alias）
