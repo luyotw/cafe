@@ -42,6 +42,9 @@ def setup_agent_manager_mock(agent_name: str = "David") -> MagicMock:
     agent_manager.get_agent.return_value = mock_agent
     agent_manager.get_total_token_usage.return_value = TokenUsage()
 
+    # Set default execute return value (4-tuple: response, token_usage, permission_denials, cli_command_args)
+    agent_manager.execute.return_value = ("CAFE_CONFIRMED\n完成", TokenUsage(), [], None)
+
     return agent_manager
 
 
@@ -424,6 +427,7 @@ class TestPermissionDenialUserInteraction:
         agent_manager = setup_agent_manager_mock()
         permission_handler = MagicMock(spec=PermissionHandler)
         git_ops = MagicMock(spec=GitOperations)
+        git_ops.get_current_branch.return_value = issue_name
         git_ops.branch_exists.return_value = True
 
         # Create phase WITHOUT approved_denial_indices

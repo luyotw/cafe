@@ -1276,12 +1276,14 @@ class TestPlanPhaseNoStatusCode:
 
     def test_agent_response_without_status_code_saves_to_history(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
         """測試 agent 回傳內容但沒有 status code 時，non-interactive 模式返回 IN_PROGRESS
-        monkeypatch.chdir(tmp_path)
 
         這個測試模擬真實情況：agent 回傳了內容，但沒有包含正確的 status code
         （可能是格式錯誤或 agent 沒照指示做）。在 non-interactive 模式下，
         應該返回 IN_PROGRESS 以便用戶知道需要再次執行。
         """
+        monkeypatch.chdir(tmp_path)
+        mock_git_ops.get_current_branch.return_value = "test"
+
         spec_file = tmp_path / ".cafe" / "issues" / "test" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements\n\n## 開發指南\nGuide")
@@ -1306,6 +1308,7 @@ class TestPlanPhaseNoStatusCode:
             permission_handler=permission_handler,
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
+            issue_name="test",
             interactive=False,
             template_path=create_template_file(tmp_path),  # Provide template for first iteration
             git_ops=mock_git_ops,
@@ -1340,11 +1343,13 @@ class TestPlanPhaseEmptyResponse:
 
     def test_agent_empty_response_should_fail_with_no_response_status(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
         """測試 agent 回傳空字串時應該失敗並標記為 NO_RESPONSE 狀態
-        monkeypatch.chdir(tmp_path)
 
         當 agent 回傳空字串（可能是執行失敗或輸出未正確捕捉），
         應該立即終止並返回 FAILED 狀態，並在 history 中記錄 CAFE_NO_RESPONSE。
         """
+        monkeypatch.chdir(tmp_path)
+        mock_git_ops.get_current_branch.return_value = "test"
+
         spec_file = tmp_path / ".cafe" / "issues" / "test" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements\n\n## 開發指南\nGuide")
@@ -1372,6 +1377,7 @@ class TestPlanPhaseEmptyResponse:
             permission_handler=permission_handler,
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
+            issue_name="test",
             interactive=False,
             template_path=create_template_file(tmp_path),  # Provide template for first iteration
             git_ops=mock_git_ops,
