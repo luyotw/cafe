@@ -79,6 +79,13 @@ def init_git_repo_for_issue(tmp_path: Path, issue_name: str) -> None:
         issue_name: Issue name to use as branch name
     """
     if (tmp_path / ".git").exists():
+        # Git repo already exists, just checkout to issue branch
+        subprocess.run(
+            ["git", "checkout", "-B", issue_name],
+            cwd=tmp_path,
+            capture_output=True,
+            check=False  # Don't fail if branch doesn't exist
+        )
         return
 
     # Initialize git repo

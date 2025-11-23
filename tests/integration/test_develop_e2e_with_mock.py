@@ -64,6 +64,39 @@ def setup_test_environment(tmp_path: Path, issue_name: str):
 """)
 
 
+def run_cafe_develop_subprocess(
+    tmp_path: Path,
+    issue_name: str,
+    mock_response: str,
+    extra_args: Optional[List[str]] = None
+) -> MockResult:
+    """Helper function to run cafe develop command with mock using subprocess.run"""
+    args = ["cafe", "develop", issue_name, "--no-interactive"]
+    if extra_args:
+        args.extend(extra_args)
+
+    env = os.environ.copy()
+    env["CAFE_MOCK_AGENTS"] = "true"
+    if mock_response:
+        env["CAFE_MOCK_RESPONSE"] = mock_response
+
+    init_git_repo_for_issue(tmp_path, issue_name)
+
+    result = subprocess.run(
+        args,
+        cwd=str(tmp_path),
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+    return MockResult(
+        returncode=result.returncode,
+        stdout=result.stdout or "",
+        stderr=result.stderr or ""
+    )
+
+
 def run_cafe_develop(
     tmp_path: Path,
     issue_name: str,
@@ -114,27 +147,13 @@ class TestDevelopE2EMockStatusCodes:
 
         result = run_cafe_develop(tmp_path, issue_name, "CAFE_CONFIRMED\n\n開發完成。")
 
-        print(f"DEBUG: Command output:\n{result.stdout}")
-        if result.stderr:
-            print(f"DEBUG: Command stderr:\n{result.stderr}")
-
-        assert result.returncode == 0, f"Command failed with output: {result.stdout}\n{result.stderr}"
+        assert result.returncode == 0
         output = result.stdout + result.stderr
-        assert "completed" in output.lower() or "成功" in output.lower(), f"Output doesn't contain success message: {output}"
+        assert "completed" in output.lower() or "成功" in output.lower()
 
         # 驗證 status.json 被創建
         status_file = tmp_path / ".cafe" / "issues" / issue_name / "develop" / "status.json"
-
-        # Debug: list all files created
-        import os
-        issue_dir = tmp_path / ".cafe" / "issues" / issue_name
-        if issue_dir.exists():
-            print(f"Files in {issue_dir}:")
-            for root, dirs, files in os.walk(issue_dir):
-                for file in files:
-                    print(f"  {os.path.join(root, file)}")
-
-        assert status_file.exists(), f"status.json not found at {status_file}"
+        assert status_file.exists()
 
         with open(status_file) as f:
             status_data = json.load(f)

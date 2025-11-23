@@ -257,8 +257,14 @@ class TestDevelopPhasePermissionDenialStorage:
 
     def test_develop_phase_saves_permission_denials_with_need_permission(self, tmp_path: Path, mock_git_ops, monkeypatch):
         """測試 DevelopPhase 在 NEED_PERMISSION 時正確儲存 response 和 permission_denials"""
+        from .conftest import init_git_repo_for_issue
+
         monkeypatch.chdir(tmp_path)
         issue_name = "test-develop-permission-issue"
+
+        # Initialize git repo for this issue
+        init_git_repo_for_issue(tmp_path, issue_name)
+
         mock_git_ops.get_current_branch.return_value = issue_name
         spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
         plan_file = tmp_path / ".cafe" / "issues" / issue_name / "plan" / "plan.md"
@@ -339,8 +345,14 @@ class TestDevelopPhasePermissionDenialStorage:
 
     def test_develop_phase_saves_response_with_confirmed(self, tmp_path: Path, mock_git_ops, monkeypatch):
         """測試 DevelopPhase 在 CONFIRMED 時正確儲存 response（無 permission_denials）"""
+        from .conftest import init_git_repo_for_issue
+
         monkeypatch.chdir(tmp_path)
         issue_name = "test-develop-confirmed-issue"
+
+        # Initialize git repo for this issue
+        init_git_repo_for_issue(tmp_path, issue_name)
+
         mock_git_ops.get_current_branch.return_value = issue_name
         spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
         plan_file = tmp_path / ".cafe" / "issues" / issue_name / "plan" / "plan.md"
@@ -404,8 +416,14 @@ class TestMultiplePermissionDenials:
 
     def test_multiple_permission_denials_are_all_saved(self, tmp_path: Path, mock_git_ops, monkeypatch):
         """測試多個 permission denials 都被正確儲存"""
+        from .conftest import init_git_repo_for_issue
+
         monkeypatch.chdir(tmp_path)
         issue_name = "test-multiple-denials"
+
+        # Initialize git repo for this issue
+        init_git_repo_for_issue(tmp_path, issue_name)
+
         mock_git_ops.get_current_branch.return_value = issue_name
         spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
         plan_file = tmp_path / ".cafe" / "issues" / issue_name / "plan" / "plan.md"
