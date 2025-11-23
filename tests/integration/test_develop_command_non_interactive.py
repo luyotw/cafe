@@ -563,7 +563,7 @@ class TestDevelopCommandNonInteractiveReviewFeedback:
         plan_file = str(temp_develop_dir.parent / "plan" / "plan.md")
 
         # 創建 develop status.json（已完成）
-        status_file = temp_develop_dir.parent / "status.json"
+        status_file = temp_develop_dir / "status.json"
         status_file.write_text(json.dumps({
             "phase": "develop",
             "status": "completed",
@@ -635,8 +635,8 @@ class TestDevelopCommandNonInteractiveReviewFeedback:
         spec_file = str(temp_develop_dir.parent / "spec" / "spec.md")
         plan_file = str(temp_develop_dir.parent / "plan" / "plan.md")
 
-        # 創建 develop status.json（已完成）- status.json is in issue directory
-        status_file = temp_develop_dir.parent / "status.json"
+        # 創建 develop status.json（已完成）
+        status_file = temp_develop_dir / "status.json"
         status_file.write_text(json.dumps({
             "phase": "develop",
             "status": "completed",

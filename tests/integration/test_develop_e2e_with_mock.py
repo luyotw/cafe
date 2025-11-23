@@ -114,13 +114,27 @@ class TestDevelopE2EMockStatusCodes:
 
         result = run_cafe_develop(tmp_path, issue_name, "CAFE_CONFIRMED\n\n開發完成。")
 
-        assert result.returncode == 0
+        print(f"DEBUG: Command output:\n{result.stdout}")
+        if result.stderr:
+            print(f"DEBUG: Command stderr:\n{result.stderr}")
+
+        assert result.returncode == 0, f"Command failed with output: {result.stdout}\n{result.stderr}"
         output = result.stdout + result.stderr
-        assert "completed" in output.lower() or "成功" in output.lower()
+        assert "completed" in output.lower() or "成功" in output.lower(), f"Output doesn't contain success message: {output}"
 
         # 驗證 status.json 被創建
         status_file = tmp_path / ".cafe" / "issues" / issue_name / "develop" / "status.json"
-        assert status_file.exists()
+
+        # Debug: list all files created
+        import os
+        issue_dir = tmp_path / ".cafe" / "issues" / issue_name
+        if issue_dir.exists():
+            print(f"Files in {issue_dir}:")
+            for root, dirs, files in os.walk(issue_dir):
+                for file in files:
+                    print(f"  {os.path.join(root, file)}")
+
+        assert status_file.exists(), f"status.json not found at {status_file}"
 
         with open(status_file) as f:
             status_data = json.load(f)

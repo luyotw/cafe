@@ -490,7 +490,12 @@ class Phase(ABC):
         """Get the path to status.json file.
 
         Returns:
-            Path to status.json in {history_dir}/status.json
+            Path to status.json in {history_dir.parent}/status.json
+
+        For different phases:
+            - SpecPhase: .cafe/issues/myissue/spec/status.json
+            - PlanPhase: .cafe/issues/myissue/plan/status.json
+            - DevelopPhase: .cafe/issues/myissue/develop/status.json
         """
         if not hasattr(self, "history_dir"):
             raise AttributeError("Phase must have 'history_dir' attribute")
