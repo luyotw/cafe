@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch, mock_open
 
 import pytest
 
-from cafe.utils.git_utils import rewrite_commit_message
+from cafe.utils.git_utils import rewrite_commit_message, is_branch_initialized
 
 
 class TestRewriteCommitMessage:
@@ -128,10 +128,52 @@ class TestRewriteCommitMessage:
         """測試結果訊息包含短 SHA (前7碼)"""
         with patch('cafe.utils.git_utils.subprocess.run') as mock_run:
             mock_run.return_value = MagicMock(returncode=0, stderr='', stdout='')
-            
+
             success, msg = rewrite_commit_message("abcdef1234567890", "fix: message")
-            
+
             assert success is True
             # 應該只顯示前7碼
             assert "abcdef1" in msg
             assert "abcdef1234567890" not in msg
+
+
+class TestIsBranchInitialized:
+    """測試 is_branch_initialized 函數"""
+
+    def test_is_branch_initialized_true(self, tmp_path):
+        """測試 branch 已初始化時回傳 True"""
+        # 建立 .cafe/issues/feature-branch 目錄
+        issue_dir = tmp_path / ".cafe" / "issues" / "feature-branch"
+        issue_dir.mkdir(parents=True)
+
+        assert is_branch_initialized("feature-branch", str(tmp_path)) is True
+
+    def test_is_branch_initialized_false(self, tmp_path):
+        """測試 branch 未初始化時回傳 False"""
+        # 建立 .cafe 目錄但沒有 issues/feature-branch
+        cafe_dir = tmp_path / ".cafe"
+        cafe_dir.mkdir()
+
+        assert is_branch_initialized("feature-branch", str(tmp_path)) is False
+
+    def test_is_branch_initialized_no_cafe_dir(self, tmp_path):
+        """測試 .cafe 目錄不存在時回傳 False"""
+        assert is_branch_initialized("feature-branch", str(tmp_path)) is False
+
+    def test_is_branch_initialized_with_default_path(self, tmp_path):
+        """測試使用預設路徑（當前目錄）"""
+        # 建立 issue 目錄
+        issue_dir = tmp_path / ".cafe" / "issues" / "test-branch"
+        issue_dir.mkdir(parents=True)
+
+        with patch('cafe.utils.git_utils.Path.cwd', return_value=tmp_path):
+            assert is_branch_initialized("test-branch") is True
+
+    def test_is_branch_initialized_special_characters_in_branch_name(self, tmp_path):
+        """測試包含特殊字元的 branch 名稱"""
+        # 建立包含特殊字元的 branch 目錄
+        branch_name = "feature/new-login"
+        issue_dir = tmp_path / ".cafe" / "issues" / branch_name
+        issue_dir.mkdir(parents=True)
+
+        assert is_branch_initialized(branch_name, str(tmp_path)) is True

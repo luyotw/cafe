@@ -36,7 +36,7 @@ def run_cafe_spec(
     extra_args: Optional[List[str]] = None
 ) -> MockResult:
     """Helper function to run cafe spec command with mock using CliRunner"""
-    args = ["spec", issue_name, "--no-interactive"]
+    args = ["spec", "--no-interactive"]
 
     # Add user input as CLI argument
     if user_input:
@@ -49,6 +49,10 @@ def run_cafe_spec(
     env_vars = {"CAFE_MOCK_AGENTS": "true"}
     if mock_response:
         env_vars["CAFE_MOCK_RESPONSE"] = mock_response
+
+    # Setup: Create directory structure for the branch
+    issue_dir = tmp_path / ".cafe" / "issues" / issue_name
+    issue_dir.mkdir(parents=True, exist_ok=True)
 
     # Change to tmp_path and run
     original_cwd = os.getcwd()
@@ -256,7 +260,7 @@ def run_cafe_spec_subprocess(
     extra_args: Optional[List[str]] = None
 ) -> MockResult:
     """Helper function to run cafe spec command with mock using subprocess.run"""
-    args = ["cafe", "spec", issue_name, "--no-interactive"]
+    args = ["cafe", "spec", "--no-interactive"]
 
     # Add user input as CLI argument
     if user_input:
@@ -321,12 +325,14 @@ class TestSpecWithIssueId:
         )
 
         # Should fail because gh CLI is not installed in test environment
-        # Error can be about GitHub or gh CLI not found
+        # Error can be about GitHub or gh CLI not found, or branch not initialized
         output = result.stdout + result.stderr
         assert ("Failed to fetch GitHub issue" in output or
                 "Failed to get issue" in output or
                 "Failed to get repository info" in output or
-                "No such file or directory: 'gh'" in output)
+                "No such file or directory: 'gh'" in output or
+                "This branch has not been initialized" in output or
+                "Failed to get current branch" in output)
 
     def test_spec_with_issue_id_posts_comment_on_completion(self, tmp_path):
         """測試當 spec phase 完成時，系統將 spec.md 貼回 GitHub issue
@@ -355,12 +361,14 @@ class TestSpecWithIssueId:
             extra_args=["--issue-id", issue_id]
         )
 
-        # Should fail on GitHub fetch, not on comment posting
+        # Should fail on GitHub fetch, not on comment posting, or branch not initialized
         output = result.stdout + result.stderr
         assert ("Failed to fetch GitHub issue" in output or
                 "Failed to get issue" in output or
                 "Failed to get repository info" in output or
-                "No such file or directory: 'gh'" in output)
+                "No such file or directory: 'gh'" in output or
+                "This branch has not been initialized" in output or
+                "Failed to get current branch" in output)
 
     def test_spec_without_issue_id_works_normally(self, tmp_path):
         """測試不使用 --issue-id 參數時，原有流程不受影響

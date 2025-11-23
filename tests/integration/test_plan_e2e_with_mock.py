@@ -61,7 +61,7 @@ def run_cafe_plan(
     template: str = "default"
 ) -> MockResult:
     """Helper function to run cafe plan command with mock using CliRunner"""
-    args = ["plan", issue_name, "--no-interactive"]
+    args = ["plan", "--no-interactive"]
     if template:
         args.extend(["--template", template])
     if extra_args:

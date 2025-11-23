@@ -360,18 +360,20 @@ class TestConfigCommand:
 class TestPlanCommand:
     """Test plan command."""
 
+    @patch("cafe.ui.cli.GitOperations")
     @patch("cafe.ui.cli.select_template")
     @patch("cafe.ui.cli.PlanPhase")
     def test_plan_local_mode_success(
         self,
         mock_plan_phase: Mock,
         mock_select_template: Mock,
+        mock_git_ops: Mock,
         tmp_path: Path,
     ) -> None:
         """測試 plan 指令 local mode 成功執行"""
         # Setup: Create spec file in the expected location
-        issue_name = "test-issue"
-        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
+        branch_name = "test-issue"
+        spec_file = tmp_path / ".cafe" / "issues" / branch_name / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Spec\n\n## 開發指南\nGuide")
 
@@ -379,6 +381,12 @@ class TestPlanCommand:
         template_dir = tmp_path / ".cafe" / "templates" / "plan"
         template_dir.mkdir(parents=True, exist_ok=True)
         (template_dir / "default.md").write_text("# Plan Template")
+
+        # Mock Git operations
+        mock_git_instance = MagicMock()
+        mock_git_instance.is_valid_branch.return_value = True
+        mock_git_instance.get_current_branch.return_value = branch_name
+        mock_git_ops.return_value = mock_git_instance
 
         # Mock template selection
         mock_select_template.return_value = "default"
@@ -397,7 +405,7 @@ class TestPlanCommand:
         old_cwd = os.getcwd()
         try:
             os.chdir(tmp_path)
-            result = runner.invoke(app, ["plan", issue_name])
+            result = runner.invoke(app, ["plan"])
         finally:
             os.chdir(old_cwd)
 
@@ -407,18 +415,20 @@ class TestPlanCommand:
         assert "Iterations: 2" in result.stdout
         mock_plan_phase.assert_called_once()
 
+    @patch("cafe.ui.cli.GitOperations")
     @patch("cafe.ui.cli.select_template")
     @patch("cafe.ui.cli.PlanPhase")
     def test_plan_github_mode_with_issue(
         self,
         mock_plan_phase: Mock,
         mock_select_template: Mock,
+        mock_git_ops: Mock,
         tmp_path: Path,
     ) -> None:
         """測試 plan 指令 github mode 使用 issue ID"""
         # Setup: GitHub mode still checks if spec file exists first
-        issue_name = "test-issue"
-        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
+        branch_name = "test-issue"
+        spec_file = tmp_path / ".cafe" / "issues" / branch_name / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Spec\n\n## 開發指南\nGuide")
 
@@ -426,6 +436,12 @@ class TestPlanCommand:
         template_dir = tmp_path / ".cafe" / "templates" / "plan"
         template_dir.mkdir(parents=True, exist_ok=True)
         (template_dir / "default.md").write_text("# Plan Template")
+
+        # Mock Git operations
+        mock_git_instance = MagicMock()
+        mock_git_instance.is_valid_branch.return_value = True
+        mock_git_instance.get_current_branch.return_value = branch_name
+        mock_git_ops.return_value = mock_git_instance
 
         # Mock template selection
         mock_select_template.return_value = "default"
@@ -444,7 +460,7 @@ class TestPlanCommand:
         old_cwd = os.getcwd()
         try:
             os.chdir(tmp_path)
-            result = runner.invoke(app, ["plan", issue_name, "-m", "github", "-i", "123"])
+            result = runner.invoke(app, ["plan", "-m", "github", "-i", "123"])
         finally:
             os.chdir(old_cwd)
 
@@ -453,18 +469,20 @@ class TestPlanCommand:
         assert "GitHub Issue: #123" in result.stdout
         mock_plan_phase.assert_called_once()
 
+    @patch("cafe.ui.cli.GitOperations")
     @patch("cafe.ui.cli.select_template")
     @patch("cafe.ui.cli.PlanPhase")
     def test_plan_fails_with_error(
         self,
         mock_plan_phase: Mock,
         mock_select_template: Mock,
+        mock_git_ops: Mock,
         tmp_path: Path,
     ) -> None:
         """測試 plan 指令執行失敗"""
         # Setup: Create spec file in the expected location
-        issue_name = "test-issue"
-        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
+        branch_name = "test-issue"
+        spec_file = tmp_path / ".cafe" / "issues" / branch_name / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Spec")
 
@@ -472,6 +490,12 @@ class TestPlanCommand:
         template_dir = tmp_path / ".cafe" / "templates" / "plan"
         template_dir.mkdir(parents=True, exist_ok=True)
         (template_dir / "default.md").write_text("# Plan Template")
+
+        # Mock Git operations
+        mock_git_instance = MagicMock()
+        mock_git_instance.is_valid_branch.return_value = True
+        mock_git_instance.get_current_branch.return_value = branch_name
+        mock_git_ops.return_value = mock_git_instance
 
         # Mock template selection
         mock_select_template.return_value = "default"
@@ -489,7 +513,7 @@ class TestPlanCommand:
         old_cwd = os.getcwd()
         try:
             os.chdir(tmp_path)
-            result = runner.invoke(app, ["plan", issue_name])
+            result = runner.invoke(app, ["plan"])
         finally:
             os.chdir(old_cwd)
 
@@ -497,15 +521,34 @@ class TestPlanCommand:
         assert result.exit_code == 1
         assert "Plan phase failed" in result.stdout
 
-    def test_plan_invalid_mode_fails(self, tmp_path: Path) -> None:
+    @patch("cafe.ui.cli.GitOperations")
+    def test_plan_invalid_mode_fails(self, mock_git_ops: Mock, tmp_path: Path) -> None:
         """測試 plan 指令使用無效 mode"""
-        issue_name = "test-issue"
+        branch_name = "test-issue"
         config_file = tmp_path / "config.yaml"
 
-        result = runner.invoke(
-            app,
-            ["plan", issue_name, "-m", "invalid", "--config", str(config_file)]
-        )
+        # Setup: Create spec file in the expected location
+        spec_file = tmp_path / ".cafe" / "issues" / branch_name / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
+        spec_file.write_text("# Spec")
+
+        # Mock Git operations
+        mock_git_instance = MagicMock()
+        mock_git_instance.is_valid_branch.return_value = True
+        mock_git_instance.get_current_branch.return_value = branch_name
+        mock_git_ops.return_value = mock_git_instance
+
+        # Execute
+        import os
+        old_cwd = os.getcwd()
+        try:
+            os.chdir(tmp_path)
+            result = runner.invoke(
+                app,
+                ["plan", "-m", "invalid", "--config", str(config_file)]
+            )
+        finally:
+            os.chdir(old_cwd)
 
         assert result.exit_code == 1
         assert "Invalid mode" in result.stdout
