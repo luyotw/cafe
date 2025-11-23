@@ -322,6 +322,14 @@ class TestDevelopPhasePermissionDenialStorage:
         history_dir = tmp_path / ".cafe" / "issues" / issue_name / "develop" / "history"
         iteration_file = history_dir / "iteration_001.json"
 
+        # Debug: list all files created
+        import os
+        print(f"\nDEBUG: Files created in {tmp_path}:")
+        for root, dirs, files in os.walk(tmp_path):
+            for file in files:
+                filepath = os.path.join(root, file)
+                print(f"  {filepath}")
+
         assert iteration_file.exists(), f"Iteration file should exist at {iteration_file}"
 
         with open(iteration_file, "r") as f:
