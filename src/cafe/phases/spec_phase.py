@@ -125,6 +125,9 @@ class SpecPhase(Phase):
         # Load issue_id from config.json if exists (for comment posting after resume)
         self._load_issue_config()
 
+        # Store original requirement (from first iteration)
+        self.original_requirement: Optional[str] = None
+
         # Track requirements and questions
         self.confirmed_requirements = []
         self.pending_questions = []
@@ -220,6 +223,11 @@ class SpecPhase(Phase):
             # Ask for rigor level if interactive and not set (after input method selection)
             if self.interactive and self.iteration == 0:
                 self._prompt_for_rigor()
+
+            # Capture original requirement before entering clarification loop
+            spec_path = Path(self.spec_file)
+            if spec_path.exists():
+                self.original_requirement = spec_path.read_text(encoding="utf-8").strip()
 
             # Requirements clarification loop
             while True:
@@ -822,8 +830,21 @@ class SpecPhase(Phase):
 
 這是第 {self.iteration} 輪需求澄清。"""
 
+        # Build original requirement section for prompt
+        original_req_section = ""
+        if self.original_requirement:
+            original_req_section = f"""
+⚠️ **重要：原始需求描述**
+以下是用戶最初提供的原始需求，**除非用戶明確要求修改，否則絕對不可更動此部分內容**：
+
+```
+{self.original_requirement}
+```
+"""
+
         need_clarification_instruction = f"""**如果需要澄清（status: CAFE_NEED_CLARIFICATION）：**
 使用 Write tool 將以下內容寫入 {self.spec_file}：
+   - 「## 原始需求描述」- **完整保留**用戶最初提供的原始需求，不可修改（除非用戶明確要求）。
    - 「## 使用者故事」- 用戶撰寫的使用者故事或由自動由需求描述產生的使用者故事。
    - 「## 目前的需求規格」- 整合所有已知資訊（包括使用者故事、先前的對話、用戶的最新回答），列出目前已知的完整需求。
    - 「## 待釐清的問題」- 以 PM 的身份用對話方式提問，深入釐清需求。
@@ -831,6 +852,7 @@ class SpecPhase(Phase):
 
         confirmed_instruction = f"""**如果需求已清楚（status: CAFE_READY_FOR_REVIEW）：**
 使用 Write tool 將完整需求規格文件寫入 {self.spec_file}，格式：
+   - 「## 原始需求描述」- **完整保留**用戶最初提供的原始需求，不可修改（除非用戶明確要求）。
    - 「## 使用者故事」- 用戶撰寫的使用者故事或由自動由需求描述產生的使用者故事。
    - 「## 需求規格」- 整合所有已確認的內容，產生最終的完整需求規格，包含功能描述、使用場景、預期行為、驗收標準等。
 """
@@ -842,6 +864,7 @@ class SpecPhase(Phase):
 {rigor_guidelines}
 
 {non_technical}
+{original_req_section}
 
 {status_code_prompt}
 {restriction}

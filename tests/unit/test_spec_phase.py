@@ -1181,5 +1181,176 @@ class TestFetchGitHubIssue:
         assert saved_config["issue_id"] == "123"
 
 
+class TestOriginalRequirement:
+    """測試原始需求描述的保存與使用"""
+
+    def test_captures_original_requirement_before_first_iteration(
+        self, tmp_path: Path, mock_git_ops: MagicMock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """測試在第一輪迭代前會捕獲原始需求描述"""
+        monkeypatch.chdir(tmp_path)
+
+        # Setup - 建立初始 spec.md
+        spec_file = Path(".cafe/issues/test-issue/spec/spec.md")
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
+        original_content = "# 初始需求\n\n身為用戶，我想要匯出 CSV 檔案"
+        spec_file.write_text(original_content, encoding="utf-8")
+
+        agent_manager = MagicMock(spec=AgentManager)
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        # Mock agent response to return CONFIRMED immediately
+        agent_manager.execute.return_value = ("CAFE_CONFIRMED", MagicMock())
+
+        phase = SpecPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            git_ops=mock_git_ops,
+            spec_file=str(spec_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            interactive=False,
+        )
+
+        # Execute - 這會進入 while loop 並在第一輪前捕獲原始需求
+        phase.execute()
+
+        # Assert - 驗證原始需求被保存
+        assert phase.original_requirement == original_content
+
+    def test_original_requirement_included_in_prompt(
+        self, tmp_path: Path, mock_git_ops: MagicMock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """測試 prompt 中包含原始需求描述的指示"""
+        monkeypatch.chdir(tmp_path)
+
+        # Setup
+        spec_file = Path(".cafe/issues/test-issue/spec/spec.md")
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
+        original_content = "身為用戶，我想要匯出 CSV 檔案"
+        spec_file.write_text(original_content, encoding="utf-8")
+
+        agent_manager = MagicMock(spec=AgentManager)
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        phase = SpecPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            git_ops=mock_git_ops,
+            spec_file=str(spec_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            interactive=False,
+        )
+
+        # 手動設定 original_requirement（模擬已捕獲）
+        phase.original_requirement = original_content
+        phase.iteration = 1
+
+        # Execute - 生成 prompt
+        prompt = phase._generate_local_prompt(user_input="")
+
+        # Assert - 驗證 prompt 包含原始需求描述
+        assert "原始需求描述" in prompt
+        assert original_content in prompt
+        assert "除非用戶明確要求修改，否則絕對不可更動此部分內容" in prompt
+
+    def test_spec_format_includes_original_requirement_section(
+        self, tmp_path: Path, mock_git_ops: MagicMock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """測試 spec.md 格式指示包含「原始需求描述」區塊"""
+        monkeypatch.chdir(tmp_path)
+
+        # Setup
+        spec_file = Path(".cafe/issues/test-issue/spec/spec.md")
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
+        spec_file.write_text("測試需求", encoding="utf-8")
+
+        agent_manager = MagicMock(spec=AgentManager)
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        phase = SpecPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            git_ops=mock_git_ops,
+            spec_file=str(spec_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            interactive=False,
+        )
+
+        phase.original_requirement = "測試需求"
+        phase.iteration = 1
+
+        # Execute - 生成 prompt
+        prompt = phase._generate_local_prompt(user_input="")
+
+        # Assert - 驗證格式指示包含「原始需求描述」
+        assert "「## 原始需求描述」" in prompt
+        assert "完整保留" in prompt or "不可修改" in prompt
+
+    def test_empty_original_requirement_not_shown_in_prompt(
+        self, tmp_path: Path, mock_git_ops: MagicMock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """測試空的原始需求不會顯示在 prompt 中"""
+        monkeypatch.chdir(tmp_path)
+
+        # Setup
+        spec_file = Path(".cafe/issues/test-issue/spec/spec.md")
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
+
+        agent_manager = MagicMock(spec=AgentManager)
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        phase = SpecPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            git_ops=mock_git_ops,
+            spec_file=str(spec_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            interactive=False,
+        )
+
+        # 設定為空字串（模擬空檔案）
+        phase.original_requirement = ""
+        phase.iteration = 1
+
+        # Execute - 生成 prompt
+        prompt = phase._generate_local_prompt(user_input="")
+
+        # Assert - 驗證不包含原始需求描述區塊
+        assert "⚠️ **重要：原始需求描述**" not in prompt
+        assert "除非用戶明確要求修改，否則絕對不可更動此部分內容" not in prompt
+
+    def test_none_original_requirement_not_shown_in_prompt(
+        self, tmp_path: Path, mock_git_ops: MagicMock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """測試 None 的原始需求不會顯示在 prompt 中"""
+        monkeypatch.chdir(tmp_path)
+
+        # Setup
+        spec_file = Path(".cafe/issues/test-issue/spec/spec.md")
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
+
+        agent_manager = MagicMock(spec=AgentManager)
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        phase = SpecPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            git_ops=mock_git_ops,
+            spec_file=str(spec_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            interactive=False,
+        )
+
+        # original_requirement 保持為 None（預設值）
+        assert phase.original_requirement is None
+        phase.iteration = 1
+
+        # Execute - 生成 prompt
+        prompt = phase._generate_local_prompt(user_input="")
+
+        # Assert - 驗證不包含原始需求描述區塊
+        assert "⚠️ **重要：原始需求描述**" not in prompt
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
