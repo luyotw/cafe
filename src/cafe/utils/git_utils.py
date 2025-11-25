@@ -106,9 +106,25 @@ def get_github_repo_name(cwd: Optional[Path] = None) -> str:
     else:
         cwd = Path(cwd)
 
-    config_file = cwd / ".git" / "config"
+    git_path = cwd / ".git"
+
+    # Handle worktree: .git is a file pointing to the real git directory
+    if git_path.is_file():
+        # Read the gitdir path from .git file
+        gitdir_content = git_path.read_text().strip()
+        # Format: "gitdir: /path/to/main/repo/.git/worktrees/branch-name"
+        if gitdir_content.startswith("gitdir: "):
+            gitdir = Path(gitdir_content[8:])  # Remove "gitdir: " prefix
+            # The main repo's config is at ../../config (up from worktrees/branch-name)
+            config_file = gitdir.parent.parent / "config"
+        else:
+            raise ValueError(f"Invalid .git file format in {cwd}")
+    else:
+        # Normal repository: .git is a directory
+        config_file = git_path / "config"
+
     if not config_file.exists():
-        raise FileNotFoundError(f".git/config not found in {cwd}")
+        raise FileNotFoundError(f".git/config not found (looking at {config_file})")
 
     config_content = config_file.read_text()
 
