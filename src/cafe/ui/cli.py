@@ -449,7 +449,7 @@ def prepare(
 
             if use_worktree:
                 # Suggest default path
-                default_path = f"worktrees/{issue_name}"
+                default_path = f".cafe/worktrees/{issue_name}"
                 console.print(f"[dim]Default path: {default_path}[/dim]")
 
                 # Prompt for path (allow empty input to use default)

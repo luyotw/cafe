@@ -358,15 +358,15 @@ class TestPrepareCommandWorktree:
             assert "worktree_path" not in config_data
 
     def test_prepare_interactive_worktree_default_path_suggestion(self, temp_repo_dir, mock_git_ops):
-        """測試互動模式建議預設路徑 worktrees/{issue-name}"""
+        """測試互動模式建議預設路徑 .cafe/worktrees/{issue-name}"""
         # 模擬使用者輸入：issue name, 是否使用 worktree (y), 使用預設路徑（空白輸入）
         user_input = "test-issue\ny\n\n"
         result = runner.invoke(app, ["prepare"], input=user_input)
 
         assert result.exit_code == 0
         # 驗證輸出中有顯示預設路徑建議
-        assert "worktrees/test-issue" in result.stdout
+        assert ".cafe/worktrees/test-issue" in result.stdout
         # 驗證使用預設路徑
         mock_git_ops.create_worktree.assert_called_once_with(
-            "worktrees/test-issue", "test-issue", "main"
+            ".cafe/worktrees/test-issue", "test-issue", "main"
         )
