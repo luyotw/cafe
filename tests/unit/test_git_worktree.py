@@ -5,13 +5,20 @@ from pathlib import Path
 from cafe.core.git import GitOperations, GitError
 
 
+@pytest.fixture(autouse=True)
+def ensure_clean_working_dir(tmp_path, monkeypatch):
+    """Ensure each test starts with a clean temporary working directory."""
+    # Clear git environment variables that might interfere with tests
+    for var in ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_OBJECT_DIRECTORY']:
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.chdir(tmp_path)
+
+
 class TestGitWorktree:
     """測試 GitOperations 的 worktree 相關操作."""
 
-    def test_create_worktree(self, tmp_path, monkeypatch):
+    def test_create_worktree(self, tmp_path):
         """測試建立 worktree."""
-        monkeypatch.chdir(tmp_path)
-
         # 初始化 git repo
         git_ops = GitOperations(str(tmp_path))
         git_ops.run_git("init", "-b", "main")
@@ -36,10 +43,8 @@ class TestGitWorktree:
         worktree_git = GitOperations(str(worktree_path))
         assert worktree_git.get_current_branch() == "test-branch"
 
-    def test_create_worktree_creates_parent_dir(self, tmp_path, monkeypatch):
+    def test_create_worktree_creates_parent_dir(self, tmp_path):
         """測試建立 worktree 時會自動建立父目錄."""
-        monkeypatch.chdir(tmp_path)
-
         git_ops = GitOperations(str(tmp_path))
         git_ops.run_git("init", "-b", "main")
         git_ops.run_git("config", "user.email", "test@test.com")
@@ -56,10 +61,8 @@ class TestGitWorktree:
 
         assert worktree_path.exists()
 
-    def test_remove_worktree(self, tmp_path, monkeypatch):
+    def test_remove_worktree(self, tmp_path):
         """測試移除 worktree."""
-        monkeypatch.chdir(tmp_path)
-
         git_ops = GitOperations(str(tmp_path))
         git_ops.run_git("init", "-b", "main")
         git_ops.run_git("config", "user.email", "test@test.com")
@@ -79,10 +82,8 @@ class TestGitWorktree:
         git_ops.remove_worktree(str(worktree_path))
         assert not worktree_path.exists()
 
-    def test_remove_worktree_nonexistent(self, tmp_path, monkeypatch):
+    def test_remove_worktree_nonexistent(self, tmp_path):
         """測試移除不存在的 worktree 應該拋出錯誤."""
-        monkeypatch.chdir(tmp_path)
-
         git_ops = GitOperations(str(tmp_path))
         git_ops.run_git("init", "-b", "main")
 
@@ -90,10 +91,8 @@ class TestGitWorktree:
         with pytest.raises(GitError):
             git_ops.remove_worktree(str(worktree_path))
 
-    def test_worktree_exists(self, tmp_path, monkeypatch):
+    def test_worktree_exists(self, tmp_path):
         """測試檢查 worktree 是否存在."""
-        monkeypatch.chdir(tmp_path)
-
         git_ops = GitOperations(str(tmp_path))
         git_ops.run_git("init", "-b", "main")
         git_ops.run_git("config", "user.email", "test@test.com")
@@ -113,10 +112,8 @@ class TestGitWorktree:
         git_ops.create_worktree(str(worktree_path), "test-branch", "main")
         assert git_ops.worktree_exists(str(worktree_path))
 
-    def test_list_worktrees(self, tmp_path, monkeypatch):
+    def test_list_worktrees(self, tmp_path):
         """測試列出所有 worktrees."""
-        monkeypatch.chdir(tmp_path)
-
         git_ops = GitOperations(str(tmp_path))
         git_ops.run_git("init", "-b", "main")
         git_ops.run_git("config", "user.email", "test@test.com")
@@ -146,10 +143,8 @@ class TestGitWorktree:
         assert str(worktree1.resolve()) in worktree_paths
         assert str(worktree2.resolve()) in worktree_paths
 
-    def test_list_worktrees_structure(self, tmp_path, monkeypatch):
+    def test_list_worktrees_structure(self, tmp_path):
         """測試 list_worktrees 返回的資料結構."""
-        monkeypatch.chdir(tmp_path)
-
         git_ops = GitOperations(str(tmp_path))
         git_ops.run_git("init", "-b", "main")
         git_ops.run_git("config", "user.email", "test@test.com")
