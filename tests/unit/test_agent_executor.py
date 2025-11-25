@@ -1060,6 +1060,133 @@ class TestCLICommandArgsGeneration:
             assert "shell" in agent_response.cli_command_args
             assert "edit(/test.php)" in agent_response.cli_command_args
 
+    def test_execute_claude_with_model_parameter(self) -> None:
+        """測試 Claude 在配置中有 model 時會加入 --model 參數"""
+        config = AgentConfig(
+            name="Roger",
+            cli=AgentCLI.CLAUDE,
+            session_id="test-session-123",
+            model="opus"
+        )
+        executor = AgentExecutor(config)
+
+        # Mock streaming process
+        mock_process = MagicMock()
+        mock_process.stdout.readline.side_effect = [
+            '{"content": "Test response"}\n',
+            "",
+        ]
+        mock_process.stderr.read.return_value = ""
+        mock_process.wait.return_value = 0
+
+        with patch("subprocess.run", return_value=MagicMock(stdout='{"session_id": "test-session-123"}', returncode=0)), \
+             patch("subprocess.Popen", return_value=mock_process) as mock_popen, \
+             patch("sys.platform", "win32"):
+            agent_response = executor._execute_claude("Test prompt")
+
+            # Verify --model parameter is in command
+            call_args = mock_popen.call_args[0][0]
+            assert "--model" in call_args
+            assert "opus" in call_args
+
+            # Verify cli_command_args contains model
+            assert "--model" in agent_response.cli_command_args
+            assert "opus" in agent_response.cli_command_args
+
+    def test_execute_gemini_with_model_parameter(self) -> None:
+        """測試 Gemini 在配置中有 model 時會加入 --model 參數"""
+        config = AgentConfig(
+            name="Roger",
+            cli=AgentCLI.GEMINI,
+            model="gemini-2.0-flash-exp"
+        )
+        executor = AgentExecutor(config)
+
+        # Mock streaming process
+        mock_process = MagicMock()
+        mock_process.stdout.readline.side_effect = [
+            '{"response": "Test response"}\n',
+            "",
+        ]
+        mock_process.stderr.read.return_value = ""
+        mock_process.wait.return_value = 0
+
+        with patch("subprocess.Popen", return_value=mock_process) as mock_popen, \
+             patch("sys.platform", "win32"):
+            agent_response = executor._execute_gemini("Test prompt")
+
+            # Verify --model parameter is in command
+            call_args = mock_popen.call_args[0][0]
+            assert "--model" in call_args
+            assert "gemini-2.0-flash-exp" in call_args
+
+            # Verify cli_command_args contains model
+            assert "--model" in agent_response.cli_command_args
+            assert "gemini-2.0-flash-exp" in agent_response.cli_command_args
+
+    def test_execute_cursor_with_model_parameter(self) -> None:
+        """測試 Cursor 在配置中有 model 時會加入 --model 參數"""
+        config = AgentConfig(
+            name="David",
+            cli=AgentCLI.CURSOR,
+            model="claude-3-5-sonnet-20241022"
+        )
+        executor = AgentExecutor(config)
+
+        # Mock streaming process
+        mock_process = MagicMock()
+        mock_process.stdout.readline.side_effect = [
+            '{"response": "Test response"}\n',
+            "",
+        ]
+        mock_process.stderr.read.return_value = ""
+        mock_process.wait.return_value = 0
+
+        with patch("subprocess.Popen", return_value=mock_process) as mock_popen, \
+             patch("sys.platform", "win32"):
+            agent_response = executor._execute_cursor("Test prompt")
+
+            # Verify --model parameter is in command
+            call_args = mock_popen.call_args[0][0]
+            assert "--model" in call_args
+            assert "claude-3-5-sonnet-20241022" in call_args
+
+            # Verify cli_command_args contains model
+            assert "--model" in agent_response.cli_command_args
+            assert "claude-3-5-sonnet-20241022" in agent_response.cli_command_args
+
+    def test_execute_copilot_with_model_parameter(self) -> None:
+        """測試 Copilot 在配置中有 model 時會加入 --model 參數"""
+        config = AgentConfig(
+            name="David",
+            cli=AgentCLI.COPILOT,
+            model="gpt-4"
+        )
+        executor = AgentExecutor(config)
+
+        # Mock streaming process
+        mock_process = MagicMock()
+        mock_process.stdout.readline.side_effect = [
+            "Copilot response\n",
+            "",
+        ]
+        mock_process.stderr.read.return_value = ""
+        mock_process.wait.return_value = 0
+
+        with patch("subprocess.Popen", return_value=mock_process) as mock_popen, \
+             patch("pathlib.Path.exists", return_value=False), \
+             patch("sys.platform", "win32"):
+            agent_response = executor._execute_copilot("Test prompt")
+
+            # Verify --model parameter is in command
+            call_args = mock_popen.call_args[0][0]
+            assert "--model" in call_args
+            assert "gpt-4" in call_args
+
+            # Verify cli_command_args contains model
+            assert "--model" in agent_response.cli_command_args
+            assert "gpt-4" in agent_response.cli_command_args
+
 
 class TestDefaultEditPermission:
     """測試 edit 權限不會自動加入（phases 需要明確指定）"""

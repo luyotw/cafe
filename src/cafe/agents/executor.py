@@ -349,6 +349,10 @@ class AgentExecutor:
         # Step 2: Use resume with actual prompt
         cmd = ["claude", "--resume", session_id, "-p", prompt]
 
+        # Add model if specified in config
+        if self.config.model:
+            cmd.extend(["--model", self.config.model])
+
         # Add allowed tools if specified
         # Claude 的 --allowed-tools 需要雙引號，否則授權無效
         tools_arg_value = None
@@ -384,6 +388,8 @@ class AgentExecutor:
             "--verbose",
             "--add-dir", ".cafe"
         ]
+        if self.config.model:
+            cli_command_args.extend(["--model", self.config.model])
         if tools_arg_value:
             cli_command_args.extend(["--allowed-tools", f'"{tools_arg_value}"'])
 
@@ -484,6 +490,10 @@ class AgentExecutor:
         # Build command
         cmd = ["gemini", "-p", prompt]
 
+        # Add model if specified in config
+        if self.config.model:
+            cmd.extend(["--model", self.config.model])
+
         # Add allowed tools if specified
         tools_arg_value = None
         if allowed_tools:
@@ -516,6 +526,8 @@ class AgentExecutor:
             "--output-format", "stream-json",
             "--include-directories", ".cafe"
         ]
+        if self.config.model:
+            cli_command_args.extend(["--model", self.config.model])
         if tools_arg_value:
             cli_command_args.extend(["--allowed-tools", f'"{tools_arg_value}"'])
 
@@ -611,6 +623,10 @@ class AgentExecutor:
         # Build command
         cmd = ["cursor-agent", "-p", prompt]
 
+        # Add model if specified in config
+        if self.config.model:
+            cmd.extend(["--model", self.config.model])
+
         # Add allowed tools if specified
         tools_arg_value = None
         if allowed_tools:
@@ -622,6 +638,8 @@ class AgentExecutor:
 
         # Record CLI command arguments (除了 prompt) - 用於 debug
         cli_command_args = ["--output-format", "json"]
+        if self.config.model:
+            cli_command_args.extend(["--model", self.config.model])
         if tools_arg_value:
             cli_command_args.extend(["--allowed-tools", tools_arg_value])
 
@@ -672,6 +690,10 @@ class AgentExecutor:
         # Build command: copilot -p "prompt" --allow-all-tools or --allow-tool
         cmd = ["copilot", "-p", prompt]
 
+        # Add model if specified in config
+        if self.config.model:
+            cmd.extend(["--model", self.config.model])
+
         # Add allowed tools if specified
         if allowed_tools:
             # Use --allow-tool for each tool
@@ -691,6 +713,8 @@ class AgentExecutor:
         # Record CLI command arguments (除了 prompt) - 用於 debug
         # Copilot 使用 --allow-tool (多個) 而不是 --allowed-tools
         cli_command_args = ["--add-dir", ".cafe"]
+        if self.config.model:
+            cli_command_args.extend(["--model", self.config.model])
         if self.config.session_id:
             cli_command_args.extend(["--resume", self.config.session_id])
         if allowed_tools:

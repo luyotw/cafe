@@ -55,6 +55,7 @@ class AgentConfig(BaseModel):
     name: str
     cli: AgentCLI
     session_id: Optional[str] = None
+    model: Optional[str] = None  # Optional model name for CLI (e.g., "sonnet", "opus")
 
 
 class TokenUsage(BaseModel):
