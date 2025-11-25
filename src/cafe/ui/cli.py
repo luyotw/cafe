@@ -480,6 +480,21 @@ def prepare(
             # Worktree mode
             console.print(f"[dim]Creating worktree at '{worktree_path}'...[/dim]")
             git_ops.create_worktree(worktree_path, feature_branch, base_branch)
+
+            # Create symlink to .cafe directory so worktree can access cafe commands
+            import os
+            worktree_abs = Path(worktree_path).resolve()
+            cafe_dir = Path(".cafe").resolve()
+            worktree_cafe_link = worktree_abs / ".cafe"
+
+            # Only create symlink if:
+            # 1. .cafe directory exists
+            # 2. worktree directory exists (created by git worktree add)
+            # 3. symlink doesn't already exist
+            if cafe_dir.exists() and worktree_abs.exists() and not worktree_cafe_link.exists():
+                # Calculate relative path from worktree to main repo's .cafe
+                relative_cafe = os.path.relpath(cafe_dir, worktree_abs)
+                worktree_cafe_link.symlink_to(relative_cafe)
         else:
             # Normal branch mode
             if git_ops.branch_exists(feature_branch):
