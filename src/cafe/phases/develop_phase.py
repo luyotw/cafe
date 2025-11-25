@@ -405,6 +405,15 @@ class DevelopPhase(Phase):
         has_review_feedback = self._check_review_feedback_exists()
         review_file_path = self._get_review_file_path()
 
+        config_file = self.issue_dir / "config.yaml"
+        base_branch = self._get_issue_config_value(config_file, "base_branch") or "main"
+        important_note = f"""
+**重要**
+- **嚴格與 {base_branch} 的 commit message 保持一致性**，可分多次 commit，一致性包括：
+  - 語言（英文/中文）
+  - message 為一行 (只有 subject line) 或多行 (subject + body)
+"""
+
         if has_review_feedback:
             # With review feedback - 修正模式
             user_input_section = f"\n\n**用戶的額外說明：**\n{user_input}\n" if user_input else ""
@@ -413,10 +422,7 @@ class DevelopPhase(Phase):
 **你的角色：**
 你是一位經驗豐富的 Developer，負責根據 Code Review 的建議修正程式碼。你會嚴格依照既有的 commit message 風格寫 commit，且絕對不會修改非當前分支的 commit。
 
-**重要**
-- **嚴格按照既有的 commit message 風格撰寫 commit 訊息**，可分多次 commit
-- **禁止修改非當前分支的 commit**
-- 優先處理 critical 等級的問題
+{important_note}
 
 **檔案路徑：**
 - Review Feedback：{review_file_path}
@@ -445,8 +451,7 @@ class DevelopPhase(Phase):
 **你的角色：**
 你是一位經驗豐富的 Developer，負責根據需求規格和實作計畫進行開發。你會嚴格依照既有的 commit message 風格寫 commit。
 
-**重要**
-- **嚴格按照既有的 commit message 風格撰寫 commit 訊息**，可分多次 commit
+{important_note}
 
 **檔案路徑：**
 - 需求規格：{self.spec_file}
