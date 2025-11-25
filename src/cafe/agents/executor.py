@@ -482,7 +482,7 @@ class AgentExecutor:
         self._ensure_geminiignore()
 
         # Build command
-        cmd = ["gemini", prompt]
+        cmd = ["gemini", "-p", prompt]
 
         # Add allowed tools if specified
         tools_arg_value = None
