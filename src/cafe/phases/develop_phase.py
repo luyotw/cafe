@@ -411,11 +411,11 @@ class DevelopPhase(Phase):
             return f"""請根據 Code Review 反饋進行修正。
 
 **你的角色：**
-你是一位經驗豐富的 Developer，負責根據 Code Review 的建議修正程式碼。你會嚴格依照既有的 commit message 風格寫 commit，且絕對不會修改非 HEAD 的 commit。
+你是一位經驗豐富的 Developer，負責根據 Code Review 的建議修正程式碼。你會嚴格依照既有的 commit message 風格寫 commit，且絕對不會修改非當前分支的 commit。
 
 **重要**
 - **嚴格按照既有的 commit message 風格撰寫 commit 訊息**，可分多次 commit
-- **禁止修改非 HEAD 的 commit**
+- **禁止修改非當前分支的 commit**
 - 優先處理 critical 等級的問題
 
 **檔案路徑：**
@@ -427,7 +427,7 @@ class DevelopPhase(Phase):
 1. **首先閱讀** {review_file_path} 或 pr comments，了解所有需要修正的問題
 2. 根據 review feedback 逐一修正問題
 3. **嚴格按照既有的 commit message 風格撰寫 commit 訊息**，可分多次 commit
-4. **禁止修改非 HEAD 的 commit**
+4. **禁止修改非當前分支的 commit**
 5. 如果需要，可參考 {self.spec_file} 和 {self.plan_file}
 6. 完成所有修正後回傳狀態碼
 
@@ -457,7 +457,7 @@ class DevelopPhase(Phase):
 2. 嚴格按照計畫中的順序執行開發任務
 3. **嚴格按照既有的 commit message 風格撰寫 commit 訊息**，可分多次 commit
 4. 完成每個任務後，在 {self.plan_file} 中將該項目打勾（- [ ] 改為 - [x]）
-5. **禁止修改非 HEAD 的 commit**
+5. **禁止修改非當前分支的 commit**
 6. 所有任務完成後回傳狀態碼
 
 {status_code_prompt}
