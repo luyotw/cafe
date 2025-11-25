@@ -513,7 +513,14 @@ def prepare(
             console.print(f"  📂 Worktree: {worktree_path}")
         console.print(f"  ⚙️  Config: .cafe/issues/{issue_name}/config.yaml")
         console.print()
-        console.print(f"[bold]Next step:[/bold] cafe spec")
+
+        # Show next steps
+        if use_worktree:
+            console.print(f"[bold]Next steps:[/bold]")
+            console.print(f"  cd {worktree_path}")
+            console.print(f"  cafe spec")
+        else:
+            console.print(f"[bold]Next step:[/bold] cafe spec")
         console.print()
 
     except typer.Exit:
