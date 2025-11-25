@@ -298,3 +298,100 @@ class TestCloseCommandWithPRCheck:
             # Verify git operations were called
             mock_git_ops.checkout_branch.assert_called_once_with("main")
             mock_git_ops.delete_branch.assert_called_once_with("test-issue")
+
+
+class TestCloseCommandWorktree:
+    """Test close command with worktree support (TDD Red phase)."""
+
+    @pytest.fixture
+    def issue_with_worktree_config(self, temp_repo_dir):
+        """Create an issue with worktree configuration."""
+        # Create issue directory with config
+        issue_dir = temp_repo_dir / ".cafe" / "issues" / "test-worktree-issue"
+        issue_dir.mkdir(parents=True)
+
+        config_file = issue_dir / "config.yaml"
+        config_data = {
+            "base_branch": "main",
+            "feature_branch": "test-worktree-issue",
+            "worktree_path": "worktrees/test-worktree-issue",
+        }
+
+        with open(config_file, 'w', encoding='utf-8') as f:
+            yaml.dump(config_data, f)
+
+        return issue_dir
+
+    def test_close_with_worktree_success(
+        self, temp_repo_dir, mock_git_ops, mock_github_ops_no_pr, issue_with_worktree_config
+    ):
+        """測試 worktree 模式下成功清理"""
+        mock_git_ops.get_current_branch.return_value = "test-worktree-issue"
+
+        # 確保 branch 刪除成功
+        mock_git_ops.delete_branch.return_value = None
+
+        result = runner.invoke(app, ["close"])
+
+        assert result.exit_code == 0
+        # 驗證 branch 先被刪除
+        mock_git_ops.delete_branch.assert_called_once_with("test-worktree-issue")
+        # 驗證 worktree 目錄被刪除
+        mock_git_ops.remove_worktree.assert_called_once_with("worktrees/test-worktree-issue")
+
+    def test_close_with_worktree_branch_delete_fails(
+        self, temp_repo_dir, mock_git_ops, mock_github_ops_no_pr, issue_with_worktree_config
+    ):
+        """測試 branch 刪除失敗時保留 worktree"""
+        mock_git_ops.get_current_branch.return_value = "test-worktree-issue"
+
+        # 模擬 branch 刪除失敗（未合併）
+        mock_git_ops.delete_branch.side_effect = GitError("The branch 'test-worktree-issue' is not fully merged")
+
+        result = runner.invoke(app, ["close"])
+
+        # 應該成功完成（顯示警告）
+        assert result.exit_code == 0
+        # 驗證 branch 刪除被嘗試
+        mock_git_ops.delete_branch.assert_called_once()
+        # 驗證 worktree 目錄沒有被刪除
+        assert not mock_git_ops.remove_worktree.called
+
+    def test_close_without_worktree_normal_flow(
+        self, temp_repo_dir, mock_git_ops, mock_github_ops_no_pr
+    ):
+        """測試沒有 worktree 時的正常流程"""
+        # Create issue directory without worktree config
+        issue_dir = temp_repo_dir / ".cafe" / "issues" / "normal-issue"
+        issue_dir.mkdir(parents=True)
+
+        config_file = issue_dir / "config.yaml"
+        config_data = {
+            "base_branch": "main",
+            "feature_branch": "normal-issue",
+            # 沒有 worktree_path
+        }
+
+        with open(config_file, 'w', encoding='utf-8') as f:
+            yaml.dump(config_data, f)
+
+        mock_git_ops.get_current_branch.return_value = "normal-issue"
+
+        result = runner.invoke(app, ["close"])
+
+        assert result.exit_code == 0
+        # 驗證 branch 被刪除
+        mock_git_ops.delete_branch.assert_called_once_with("normal-issue")
+        # 驗證 worktree 方法沒有被呼叫
+        assert not hasattr(mock_git_ops, 'remove_worktree') or not mock_git_ops.remove_worktree.called
+
+    def test_close_worktree_success_message(
+        self, temp_repo_dir, mock_git_ops, mock_github_ops_no_pr, issue_with_worktree_config
+    ):
+        """測試 worktree 清理的成功訊息"""
+        mock_git_ops.get_current_branch.return_value = "test-worktree-issue"
+
+        result = runner.invoke(app, ["close"])
+
+        assert result.exit_code == 0
+        assert "worktree" in result.stdout.lower() or "worktrees/test-worktree-issue" in result.stdout

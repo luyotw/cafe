@@ -558,6 +558,7 @@ def close() -> None:
 
         base_branch = config_data.get("base_branch", "main")
         feature_branch = current_branch
+        worktree_path = config_data.get("worktree_path")
 
         console.print()
         console.print(f"[bold blue]🔒 Closing issue: {feature_branch}[/bold blue]")
@@ -574,13 +575,25 @@ def close() -> None:
             raise typer.Exit(1)
 
         # 6. Delete feature branch (non-critical)
+        branch_deleted = False
         try:
             console.print(f"[dim]Deleting feature branch: {feature_branch}[/dim]")
             git_ops.delete_branch(feature_branch)
             console.print(f"[green]✓ Deleted feature branch: {feature_branch}[/green]")
+            branch_deleted = True
         except Exception as e:
             console.print(f"[yellow]⚠️  Warning: Failed to delete branch: {e}[/yellow]")
             console.print(f"[yellow]   The branch may not be fully merged. You can delete it manually later.[/yellow]")
+
+        # 6.5. Delete worktree if exists (only after branch deletion succeeds)
+        if worktree_path and branch_deleted:
+            try:
+                console.print(f"[dim]Deleting worktree: {worktree_path}[/dim]")
+                git_ops.remove_worktree(worktree_path)
+                console.print(f"[green]✓ Deleted worktree: {worktree_path}[/green]")
+            except Exception as e:
+                console.print(f"[yellow]⚠️  Warning: Failed to delete worktree: {e}[/yellow]")
+                console.print(f"[yellow]   You may need to delete it manually.[/yellow]")
 
         # 7. Update base branch (non-critical)
         try:
