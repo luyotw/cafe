@@ -61,14 +61,15 @@ mypy src/
 
 ```bash
 # Phase 相關指令（自動使用當前 Git branch 名稱作為 issue 識別）
-cafe prepare [issue-name]        # 初始化 issue 環境（建立 branch 和目錄結構）
-cafe spec                        # Phase 1: 需求澄清
-cafe plan                        # Phase 2: 實作計畫
-cafe develop                     # Phase 3: 開發實作
-cafe review                      # Phase 4: Code Review
-cafe review --commit <sha>       # 審查特定 commit
-cafe pr                          # Phase 5: 建立 PR
-cafe close                       # 結束 issue：切換回 base branch，刪除 feature branch，更新 base branch
+cafe prepare [issue-name]              # 初始化 issue 環境（建立 branch 和目錄結構）
+cafe prepare [issue-name] --worktree <path>  # 使用 worktree 模式（例如：worktrees/my-feature）
+cafe spec                              # Phase 1: 需求澄清
+cafe plan                              # Phase 2: 實作計畫
+cafe develop                           # Phase 3: 開發實作
+cafe review                            # Phase 4: Code Review
+cafe review --commit <sha>             # 審查特定 commit
+cafe pr                                # Phase 5: 建立 PR
+cafe close                             # 結束 issue：切換回 base branch，刪除 feature branch（及 worktree）
 
 # 配置管理
 cafe config set <key> <value>    # 設定配置值（支援 alias）
@@ -90,6 +91,40 @@ cafe template rm <name>          # 刪除模板
 
 **重要變更**：從 issue12 開始，核心 phase 指令（spec/plan/develop/review/pr）不再接受 `<issue-name>` 參數，
 改為自動使用當前 Git branch 名稱作為 issue 識別。使用前請先執行 `cafe prepare` 初始化環境。
+
+### Git Worktree 模式
+
+從 issue19 開始，支援使用 Git worktree 同時處理多個 issue，避免頻繁切換分支：
+
+```bash
+# 使用 worktree 模式準備 issue
+cafe prepare my-feature --worktree worktrees/my-feature
+
+# 此時會：
+# 1. 在 worktrees/my-feature 目錄建立 worktree
+# 2. 在該 worktree 中建立 my-feature 分支
+# 3. 在 .cafe/issues/my-feature/config.yaml 記錄 worktree 路徑
+
+# 接著可以正常執行其他指令
+cd worktrees/my-feature
+cafe spec
+cafe plan
+cafe develop
+
+# 完成後關閉 issue（會自動清理 worktree）
+cafe close
+# 此時會：
+# 1. 切換回 base branch
+# 2. 刪除 my-feature 分支
+# 3. 刪除 worktrees/my-feature 目錄（只有在分支成功刪除後才執行）
+
+# 如果分支刪除失敗（例如有未合併的變更），worktree 目錄會被保留
+```
+
+**注意事項**：
+- Worktree 路徑會儲存在 `.cafe/issues/<issue-name>/config.yaml` 中
+- `cafe close` 只有在成功刪除分支後，才會刪除 worktree 目錄
+- 如果分支刪除失敗（未合併變更），worktree 會被保留以便繼續工作
 
 ## 架構設計
 

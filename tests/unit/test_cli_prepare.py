@@ -244,3 +244,74 @@ class TestPrepareCommand:
             with open(config_file) as f:
                 config_data = yaml.safe_load(f)
                 assert config_data["base_branch"] == base_branch
+
+
+class TestPrepareCommandWorktree:
+    """Test prepare command with worktree support (TDD Red phase)."""
+
+    def test_prepare_with_worktree_non_interactive(self, temp_repo_dir, mock_git_ops):
+        """測試使用 --worktree 參數在非互動模式建立 worktree"""
+        worktree_path = "worktrees/test-issue"
+        result = runner.invoke(app, ["prepare", "test-issue", "--worktree", worktree_path])
+
+        assert result.exit_code == 0
+        # 驗證呼叫 create_worktree 而非 create_branch
+        mock_git_ops.create_worktree.assert_called_once()
+        mock_git_ops.create_branch.assert_not_called()
+
+        # 驗證 worktree_path 儲存到 config.yaml
+        config_file = temp_repo_dir / ".cafe" / "issues" / "test-issue" / "config.yaml"
+        with open(config_file) as f:
+            config_data = yaml.safe_load(f)
+            assert config_data["worktree_path"] == worktree_path
+
+    def test_prepare_with_worktree_default_path_suggestion(self, temp_repo_dir, mock_git_ops):
+        """測試 --worktree 使用預設路徑格式 worktrees/{issue-name}"""
+        # 非互動模式下，--worktree 必須帶路徑參數
+        # 這個測試驗證使用預設路徑格式的情況
+        default_worktree_path = "worktrees/my-feature"
+        result = runner.invoke(app, ["prepare", "my-feature", "--worktree", default_worktree_path])
+
+        assert result.exit_code == 0
+        # 應使用指定的路徑
+        call_args = mock_git_ops.create_worktree.call_args
+        assert call_args[0][0] == default_worktree_path  # 第一個參數是路徑
+
+    def test_prepare_without_worktree_uses_branch(self, temp_repo_dir, mock_git_ops):
+        """測試不使用 --worktree 時應建立分支"""
+        result = runner.invoke(app, ["prepare", "normal-issue"])
+
+        assert result.exit_code == 0
+        # 驗證呼叫 create_branch 而非 create_worktree
+        mock_git_ops.create_branch.assert_called_once()
+        assert not hasattr(mock_git_ops, 'create_worktree') or not mock_git_ops.create_worktree.called
+
+        # 驗證 config.yaml 不包含 worktree_path
+        config_file = temp_repo_dir / ".cafe" / "issues" / "normal-issue" / "config.yaml"
+        with open(config_file) as f:
+            config_data = yaml.safe_load(f)
+            assert "worktree_path" not in config_data
+
+    def test_prepare_success_message_includes_worktree_path(self, temp_repo_dir, mock_git_ops):
+        """測試成功訊息包含 worktree 路徑資訊"""
+        worktree_path = "worktrees/feature-x"
+        result = runner.invoke(app, ["prepare", "feature-x", "--worktree", worktree_path])
+
+        assert result.exit_code == 0
+        assert "worktree" in result.stdout.lower() or worktree_path in result.stdout
+
+    def test_prepare_with_worktree_calls_create_worktree_with_correct_params(self, temp_repo_dir, mock_git_ops):
+        """測試 create_worktree 使用正確的參數"""
+        worktree_path = "worktrees/test-branch"
+        base_branch = "develop"
+        result = runner.invoke(app, [
+            "prepare", "test-branch",
+            "--worktree", worktree_path,
+            "--base", base_branch
+        ])
+
+        assert result.exit_code == 0
+        # 驗證參數：路徑、分支名稱、base branch
+        mock_git_ops.create_worktree.assert_called_once_with(
+            worktree_path, "test-branch", base_branch
+        )

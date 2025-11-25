@@ -220,3 +220,88 @@ class GitOperations:
             return commits
         except GitError:
             return []
+
+    def create_worktree(self, path: str, branch_name: str, base_branch: str) -> None:
+        """建立 Git worktree.
+
+        Args:
+            path: Worktree 路徑
+            branch_name: 新分支名稱
+            base_branch: 基礎分支名稱
+
+        Raises:
+            GitError: 如果建立失敗
+        """
+        # 確保父目錄存在
+        worktree_path = Path(path)
+        worktree_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # 建立 worktree 並建立新分支
+        self.run_git("worktree", "add", "-b", branch_name, path, base_branch)
+
+    def remove_worktree(self, path: str) -> None:
+        """移除 Git worktree.
+
+        Args:
+            path: Worktree 路徑
+
+        Raises:
+            GitError: 如果移除失敗
+        """
+        self.run_git("worktree", "remove", path)
+
+    def worktree_exists(self, path: str) -> bool:
+        """檢查 worktree 是否存在.
+
+        Args:
+            path: Worktree 路徑
+
+        Returns:
+            True 如果 worktree 存在
+        """
+        worktrees = self.list_worktrees()
+        abs_path = str(Path(path).resolve())
+        return any(wt["path"] == abs_path for wt in worktrees)
+
+    def list_worktrees(self) -> List[dict]:
+        """列出所有 worktrees.
+
+        Returns:
+            Worktree 清單，每個 worktree 包含 path 和 branch
+        """
+        try:
+            # git worktree list --porcelain 格式：
+            # worktree /path/to/worktree
+            # HEAD <commit-hash>
+            # branch refs/heads/branch-name
+            # (空行)
+            output = self.run_git("worktree", "list", "--porcelain")
+            if not output:
+                return []
+
+            worktrees = []
+            current_worktree = {}
+
+            for line in output.split('\n'):
+                line = line.strip()
+                if not line:
+                    # 空行表示一個 worktree 結束
+                    if current_worktree:
+                        worktrees.append(current_worktree)
+                        current_worktree = {}
+                elif line.startswith("worktree "):
+                    current_worktree["path"] = line[9:]  # 去掉 "worktree " 前綴
+                elif line.startswith("branch "):
+                    # refs/heads/branch-name -> branch-name
+                    branch_ref = line[7:]  # 去掉 "branch " 前綴
+                    current_worktree["branch"] = branch_ref.replace("refs/heads/", "")
+                elif line.startswith("detached"):
+                    current_worktree["branch"] = "HEAD"
+
+            # 加入最後一個 worktree
+            if current_worktree:
+                worktrees.append(current_worktree)
+
+            return worktrees
+        except GitError:
+            return []
