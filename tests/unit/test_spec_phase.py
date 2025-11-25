@@ -1351,6 +1351,39 @@ class TestOriginalRequirement:
         # Assert - 驗證不包含原始需求描述區塊
         assert "⚠️ **重要：原始需求描述**" not in prompt
 
+    def test_pm_prompt_includes_no_code_modification_instruction(
+        self, tmp_path: Path, mock_git_ops: MagicMock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """測試 PM prompt 中包含「不會修改程式碼」的指示"""
+        monkeypatch.chdir(tmp_path)
+
+        # Setup
+        spec_file = Path(".cafe/issues/test-issue/spec/spec.md")
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
+        spec_file.write_text("測試需求", encoding="utf-8")
+
+        agent_manager = MagicMock(spec=AgentManager)
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        phase = SpecPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            git_ops=mock_git_ops,
+            spec_file=str(spec_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            interactive=False,
+        )
+
+        phase.iteration = 1
+
+        # Execute - 生成 prompt
+        prompt = phase._generate_local_prompt(user_input="")
+
+        # Assert - 驗證包含「不會修改程式碼」相關指示
+        assert "不是軟體工程師" in prompt
+        assert "絕對不會自行修改程式碼" in prompt
+        assert "Product Manager" in prompt or "PM" in prompt
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
