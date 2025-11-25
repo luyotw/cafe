@@ -524,11 +524,13 @@ class ReviewPhase(Phase):
    - **檢查是否有機敏資訊被提交（如密碼、API key、憑證等），若有則視為 critical issue，請列出並要求立即移除，不可留在 commit 歷史中**
 
 2. **【重要】檢查 commit message 風格一致性**
-   - 用 `git log {self.base_branch}..HEAD` 取得當前分支新增的 commit messages
-   - 用 `git log {self.base_branch} 取得基礎分支的 commit messages
+   - 用 `git log {self.base_branch}..HEAD` 取得當前分支新增的 commit
+   - 用 `git log {self.base_branch} --max-count=5` 取得基礎分支的 commit
+   - 計算基礎分支最近 5 個 commit message 是單行或多行，計算方式為 **subject 行數 + body 行數**，只有 subject 行的視為單行，有 body 的視為多行，中間分隔的空行不計算在內。建議用 `git log <sha> -1 --format="%B" | wc -l` 計算，超過 2 的視為多行
+   - 計算當前分支所有 commit message 是單行或多行，計算方式同上
    - **只比較以下兩個項目是否一致：**
-     - 語言（中文/英文/...）
-     - 單行或多行格式
+     - 有 body 或沒有 body（多行描述）的情況是否與基礎分支一致，自動生成的 commit 例如 merge commit 可以忽略不檢查
+     - 語言（中文/英文/...）是否一致
    - **如果發現風格不一致：**
      - 明確列出哪些 commit SHA 和 message 不符合風格
      - 說明正確的風格範例（根據基礎分支的實際風格）
