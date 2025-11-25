@@ -371,6 +371,11 @@ def prepare(
         "--check/--no-check",
         help="Check for uncommitted changes before switching branch (default: True)",
     ),
+    worktree: Optional[str] = typer.Option(
+        "",
+        "--worktree",
+        help="Use worktree mode with specified path (e.g., worktrees/my-feature)",
+    ),
 ) -> None:
     """Prepare issue environment (directory, config, git branch) before running spec phase.
 
@@ -438,14 +443,23 @@ def prepare(
         spec_dir.mkdir(parents=True, exist_ok=True)
         sessions_dir.mkdir(parents=True, exist_ok=True)
 
-        # 6. Create or switch to feature branch
+        # 6. Create or switch to feature branch (or worktree)
         feature_branch = issue_name
-        if git_ops.branch_exists(feature_branch):
-            console.print(f"[dim]Branch '{feature_branch}' already exists, switching to it...[/dim]")
-            git_ops.checkout_branch(feature_branch)
+        use_worktree = bool(worktree and worktree.strip())
+        worktree_path = worktree.strip() if use_worktree else None
+
+        if use_worktree:
+            # Worktree mode
+            console.print(f"[dim]Creating worktree at '{worktree_path}'...[/dim]")
+            git_ops.create_worktree(worktree_path, feature_branch, base_branch)
         else:
-            console.print(f"[dim]Creating and switching to branch '{feature_branch}'...[/dim]")
-            git_ops.create_branch(feature_branch)
+            # Normal branch mode
+            if git_ops.branch_exists(feature_branch):
+                console.print(f"[dim]Branch '{feature_branch}' already exists, switching to it...[/dim]")
+                git_ops.checkout_branch(feature_branch)
+            else:
+                console.print(f"[dim]Creating and switching to branch '{feature_branch}'...[/dim]")
+                git_ops.create_branch(feature_branch)
 
         # 7. Save config.yaml
         config_file = issue_dir / "config.yaml"
@@ -453,6 +467,10 @@ def prepare(
             "base_branch": base_branch,
             "feature_branch": feature_branch,
         }
+
+        # Add worktree_path if using worktree mode
+        if use_worktree:
+            config_data["worktree_path"] = worktree_path
 
         with open(config_file, 'w', encoding='utf-8') as f:
             yaml.dump(config_data, f, allow_unicode=True, default_flow_style=False)
@@ -463,6 +481,8 @@ def prepare(
         console.print(f"  📁 Directory: .cafe/issues/{issue_name}/")
         console.print(f"  🌿 Feature branch: {feature_branch}")
         console.print(f"  ⚓ Base branch: {base_branch}")
+        if use_worktree:
+            console.print(f"  📂 Worktree: {worktree_path}")
         console.print(f"  ⚙️  Config: .cafe/issues/{issue_name}/config.yaml")
         console.print()
         console.print(f"[bold]Next step:[/bold] cafe spec")
