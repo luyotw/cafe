@@ -13,16 +13,19 @@ runner = CliRunner()
 
 
 @pytest.fixture
-def temp_repo_dir(tmp_path, monkeypatch):
+def temp_repo_dir(tmp_path):
     """Create a temporary git repository directory."""
-    # Change to temp directory
-    monkeypatch.chdir(tmp_path)
-
     # Create .cafe directory
     cafe_dir = tmp_path / ".cafe"
     cafe_dir.mkdir(parents=True)
 
     return tmp_path
+
+
+@pytest.fixture(autouse=True)
+def change_test_dir(tmp_path, monkeypatch):
+    """Automatically change to tmp_path for all tests to ensure isolation."""
+    monkeypatch.chdir(tmp_path)
 
 
 @pytest.fixture
@@ -76,8 +79,8 @@ class TestPrepareCommand:
 
     def test_prepare_interactive_mode(self, temp_repo_dir, mock_git_ops):
         """測試互動式輸入 issue name"""
-        # Simulate user input
-        result = runner.invoke(app, ["prepare"], input="my-feature\n")
+        # Simulate user input: issue name, worktree question (no)
+        result = runner.invoke(app, ["prepare"], input="my-feature\nn\n")
 
         assert result.exit_code == 0
         assert "Successfully prepared issue: my-feature" in result.stdout
@@ -314,4 +317,56 @@ class TestPrepareCommandWorktree:
         # 驗證參數：路徑、分支名稱、base branch
         mock_git_ops.create_worktree.assert_called_once_with(
             worktree_path, "test-branch", base_branch
+        )
+
+    def test_prepare_interactive_worktree_prompt_yes(self, temp_repo_dir, mock_git_ops):
+        """測試互動模式詢問是否使用 worktree，使用者選擇 Yes"""
+        # 模擬使用者輸入：issue name, 是否使用 worktree (y), worktree 路徑
+        user_input = "my-feature\ny\nworktrees/my-feature\n"
+        result = runner.invoke(app, ["prepare"], input=user_input)
+
+        assert result.exit_code == 0
+        # 驗證有詢問 worktree 相關問題
+        assert "worktree" in result.stdout.lower()
+        # 驗證呼叫 create_worktree
+        mock_git_ops.create_worktree.assert_called_once_with(
+            "worktrees/my-feature", "my-feature", "main"
+        )
+        mock_git_ops.create_branch.assert_not_called()
+
+        # 驗證 config.yaml 包含 worktree_path
+        config_file = temp_repo_dir / ".cafe" / "issues" / "my-feature" / "config.yaml"
+        with open(config_file) as f:
+            config_data = yaml.safe_load(f)
+            assert config_data["worktree_path"] == "worktrees/my-feature"
+
+    def test_prepare_interactive_worktree_prompt_no(self, temp_repo_dir, mock_git_ops):
+        """測試互動模式詢問是否使用 worktree，使用者選擇 No"""
+        # 模擬使用者輸入：issue name, 是否使用 worktree (n)
+        user_input = "normal-feature\nn\n"
+        result = runner.invoke(app, ["prepare"], input=user_input)
+
+        assert result.exit_code == 0
+        # 驗證呼叫 create_branch 而非 create_worktree
+        mock_git_ops.create_branch.assert_called_once_with("normal-feature")
+        assert not hasattr(mock_git_ops, 'create_worktree') or not mock_git_ops.create_worktree.called
+
+        # 驗證 config.yaml 不包含 worktree_path
+        config_file = temp_repo_dir / ".cafe" / "issues" / "normal-feature" / "config.yaml"
+        with open(config_file) as f:
+            config_data = yaml.safe_load(f)
+            assert "worktree_path" not in config_data
+
+    def test_prepare_interactive_worktree_default_path_suggestion(self, temp_repo_dir, mock_git_ops):
+        """測試互動模式建議預設路徑 worktrees/{issue-name}"""
+        # 模擬使用者輸入：issue name, 是否使用 worktree (y), 使用預設路徑（空白輸入）
+        user_input = "test-issue\ny\n\n"
+        result = runner.invoke(app, ["prepare"], input=user_input)
+
+        assert result.exit_code == 0
+        # 驗證輸出中有顯示預設路徑建議
+        assert "worktrees/test-issue" in result.stdout
+        # 驗證使用預設路徑
+        mock_git_ops.create_worktree.assert_called_once_with(
+            "worktrees/test-issue", "test-issue", "main"
         )

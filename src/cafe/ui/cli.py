@@ -399,6 +399,7 @@ def prepare(
 
     try:
         # 1. Get issue name (from argument or prompt)
+        is_interactive = not issue_name  # Track if we're in interactive mode
         if not issue_name:
             issue_name = typer.prompt("Issue name")
             if not issue_name or not issue_name.strip():
@@ -430,6 +431,35 @@ def prepare(
         if not base_branch:
             base_branch = git_ops.get_current_branch()
 
+        # 4.5. Determine worktree mode (interactive or from parameter)
+        use_worktree = False
+        worktree_path = None
+
+        # If --worktree parameter is provided (non-interactive)
+        if worktree and worktree.strip():
+            use_worktree = True
+            worktree_path = worktree.strip()
+        # If in interactive mode and no --worktree parameter
+        elif is_interactive and not worktree:
+            # Ask user if they want to use worktree mode
+            use_worktree = typer.confirm(
+                "Use Git worktree mode for this issue?",
+                default=False
+            )
+
+            if use_worktree:
+                # Suggest default path
+                default_path = f"worktrees/{issue_name}"
+                console.print(f"[dim]Default path: {default_path}[/dim]")
+
+                # Prompt for path (allow empty input to use default)
+                user_path = typer.prompt(
+                    "Worktree path (press Enter for default)",
+                    default=default_path,
+                    show_default=False
+                )
+                worktree_path = user_path.strip() if user_path.strip() else default_path
+
         console.print()
         console.print(f"[bold blue]🔧 Preparing issue: {issue_name}[/bold blue]")
         console.print(f"Base branch: {base_branch}")
@@ -445,8 +475,6 @@ def prepare(
 
         # 6. Create or switch to feature branch (or worktree)
         feature_branch = issue_name
-        use_worktree = bool(worktree and worktree.strip())
-        worktree_path = worktree.strip() if use_worktree else None
 
         if use_worktree:
             # Worktree mode
