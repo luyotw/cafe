@@ -562,6 +562,75 @@ class TestErrorHandling:
         assert result.status == PhaseStatus.FAILED
         assert "failed" in result.message.lower()
 
+    def test_execute_fails_when_not_authenticated(self, tmp_path: Path) -> None:
+        """測試當 gh 未登入時，execute() 正確回傳失敗狀態"""
+        # Setup issue directory structure
+        spec_file = tmp_path / ".cafe" / "issues" / "test-issue" / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
+        spec_file.write_text("# Feature\n")
+
+        agent_manager = MagicMock(spec=AgentManager)
+        permission_handler = MagicMock(spec=PermissionHandler)
+        git_ops = MagicMock(spec=GitOperations)
+        github_ops = MagicMock(spec=GitHubOps)
+        # check_gh_auth() returns False (not authenticated)
+        github_ops.check_gh_auth.return_value = False
+
+        phase = PRPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            git_ops=git_ops,
+            github_ops=github_ops,
+            spec_file=str(spec_file),
+            workflow_mode=WorkflowMode.LOCAL,
+        )
+
+        # Execute
+        result = phase.execute()
+
+        # Assert
+        assert result.status == PhaseStatus.FAILED
+        assert "gh auth login" in result.message
+        # Should not push or create PR if not authenticated
+        git_ops.push.assert_not_called()
+        github_ops.create_pr.assert_not_called()
+
+    def test_execute_handles_github_error_from_check_auth(self, tmp_path: Path) -> None:
+        """測試當 check_gh_auth() 拋出 GitHubError 時，execute() 正確處理並回傳錯誤訊息"""
+        from cafe.utils.github import GitHubError
+
+        # Setup issue directory structure
+        spec_file = tmp_path / ".cafe" / "issues" / "test-issue" / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
+        spec_file.write_text("# Feature\n")
+
+        agent_manager = MagicMock(spec=AgentManager)
+        permission_handler = MagicMock(spec=PermissionHandler)
+        git_ops = MagicMock(spec=GitOperations)
+        github_ops = MagicMock(spec=GitHubOps)
+        # check_gh_auth() raises GitHubError
+        github_ops.check_gh_auth.side_effect = GitHubError("Network error")
+
+        phase = PRPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            git_ops=git_ops,
+            github_ops=github_ops,
+            spec_file=str(spec_file),
+            workflow_mode=WorkflowMode.LOCAL,
+        )
+
+        # Execute
+        result = phase.execute()
+
+        # Assert
+        assert result.status == PhaseStatus.FAILED
+        assert "Failed to check gh authentication" in result.message
+        assert "Network error" in result.message
+        # Should not push or create PR if check fails
+        git_ops.push.assert_not_called()
+        github_ops.create_pr.assert_not_called()
+
 
 class TestIssueNameBranchNaming:
     """Test issue_name parameter for branch naming."""

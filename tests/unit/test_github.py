@@ -285,6 +285,58 @@ class TestCheckGHInstalled:
         assert gh_ops.check_gh_installed() is False
 
 
+class TestCheckGHAuth:
+    """Test check_gh_auth functionality."""
+
+    @patch("subprocess.run")
+    def test_gh_auth_success(self, mock_run: Mock) -> None:
+        """測試 gh CLI 已登入"""
+        # First call for __init__ (check_gh_installed)
+        # Second call for check_gh_auth
+        mock_run.side_effect = [
+            Mock(returncode=0, stdout="gh version 2.0.0"),  # --version check
+            Mock(returncode=0, stdout="gh version 2.0.0"),  # check_gh_installed in check_gh_auth
+            Mock(returncode=0, stdout="Logged in to github.com"),  # auth status
+        ]
+
+        gh_ops = GitHubOps()
+        result = gh_ops.check_gh_auth()
+
+        assert result is True
+        # Verify gh auth status was called
+        assert mock_run.call_count == 3
+        last_call_args = mock_run.call_args_list[-1][0][0]
+        assert "gh" in last_call_args
+        assert "auth" in last_call_args
+        assert "status" in last_call_args
+
+    @patch("subprocess.run")
+    def test_gh_auth_not_authenticated(self, mock_run: Mock) -> None:
+        """測試 gh CLI 未登入"""
+        mock_run.side_effect = [
+            Mock(returncode=0, stdout="gh version 2.0.0"),  # --version check in __init__
+            Mock(returncode=0, stdout="gh version 2.0.0"),  # check_gh_installed in check_gh_auth
+            Mock(returncode=1, stderr="Not logged in"),  # auth status
+        ]
+
+        gh_ops = GitHubOps()
+        result = gh_ops.check_gh_auth()
+
+        assert result is False
+
+    @patch("subprocess.run")
+    def test_gh_auth_not_installed(self, mock_run: Mock) -> None:
+        """測試 gh CLI 未安裝時拋出錯誤"""
+        mock_run.side_effect = [
+            Mock(returncode=0, stdout="gh version 2.0.0"),  # --version check in __init__
+            FileNotFoundError("gh not found"),  # check_gh_installed in check_gh_auth
+        ]
+
+        gh_ops = GitHubOps()
+
+        with pytest.raises(GitHubError, match="gh CLI is not installed"):
+            gh_ops.check_gh_auth()
+
 class TestExtractPRNumber:
     """Test extract_pr_number functionality."""
 

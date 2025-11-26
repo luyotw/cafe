@@ -42,6 +42,29 @@ class GitHubOps:
         except (FileNotFoundError, subprocess.CalledProcessError):
             return False
 
+    def check_gh_auth(self) -> bool:
+        """檢查 gh CLI 是否已登入
+
+        Returns:
+            True if authenticated, False otherwise
+
+        Raises:
+            GitHubError: If gh CLI is not installed or check failed
+        """
+        if not self.check_gh_installed():
+            raise GitHubError(
+                "gh CLI is not installed. Please install it from: https://github.com/cli/cli"
+            )
+
+        result = subprocess.run(
+            ["gh", "auth", "status"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        # gh auth status returns 0 if authenticated, 1 if not
+        return result.returncode == 0
+
     def get_issue(self, issue_id: str, include_comments: bool = False) -> Dict[str, Any]:
         """Get GitHub issue information.
 

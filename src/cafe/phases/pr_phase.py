@@ -13,7 +13,7 @@ from cafe.core.git import GitOperations
 from cafe.core.permission import PermissionHandler
 from cafe.core.phase import Phase
 from cafe.core.types import PhaseResult, PhaseStatus, WorkflowMode
-from cafe.utils.github import GitHubOps
+from cafe.utils.github import GitHubOps, GitHubError
 
 
 class PRPhase(Phase):
@@ -98,6 +98,19 @@ class PRPhase(Phase):
             Phase result
         """
         try:
+            # Check gh CLI authentication status
+            try:
+                if not self.github_ops.check_gh_auth():
+                    return PhaseResult(
+                        status=PhaseStatus.FAILED,
+                        message="gh CLI is not authenticated. Please run: gh auth login",
+                    )
+            except GitHubError as e:
+                return PhaseResult(
+                    status=PhaseStatus.FAILED,
+                    message=f"Failed to check gh authentication: {e}",
+                )
+
             # Read issue_id from config if not provided
             if not self.issue_id:
                 config_file = self.issue_dir / "config.yaml"

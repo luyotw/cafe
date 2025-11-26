@@ -537,6 +537,14 @@ class SpecPhase(Phase):
 
             # Fetch issue content
             gh_ops = GitHubOps()
+
+            # Check gh CLI authentication status
+            if not gh_ops.check_gh_auth():
+                return PhaseResult(
+                    status=PhaseStatus.FAILED,
+                    message="gh CLI is not authenticated. Please run: gh auth login",
+                )
+
             issue_data = gh_ops.get_issue(str(issue_id), include_comments=False)
 
             # Combine title and body as first user_input
