@@ -53,29 +53,28 @@ class TestSpecPhaseInteractiveVsNonInteractive:
     def test_confirmed_status_same_behavior_both_modes(
         self, tmp_path: Path, mock_git_ops: MagicMock, monkeypatch
     ) -> None:
-        """測試 READY_FOR_REVIEW + 用戶確認在兩種模式下行為相同（都完成）"""
-        # 準備測試環境
-        issue_name = "test-confirmed"
-        mock_git_ops.get_current_branch.return_value = issue_name
+        """測試 READY_FOR_REVIEW 在兩種模式下的行為差異（沒有 while loop）"""
         monkeypatch.chdir(tmp_path)
 
-        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
-        spec_file.parent.mkdir(parents=True, exist_ok=True)
-        spec_file.write_text("# Requirements\nTest requirements")
+        # 測試 interactive mode: READY_FOR_REVIEW 應該回傳 IN_PROGRESS（等待用戶確認）
+        issue_name_interactive = "test-confirmed-interactive"
+        mock_git_ops.get_current_branch.return_value = issue_name_interactive
+        spec_file_interactive = tmp_path / ".cafe" / "issues" / issue_name_interactive / "spec" / "spec.md"
+        spec_file_interactive.parent.mkdir(parents=True, exist_ok=True)
+        spec_file_interactive.write_text("# Requirements\nTest requirements")
 
-        agent_manager = MagicMock(spec=AgentManager)
-        setup_agent_manager_mock_for_spec(agent_manager)
-        agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n需求已清楚", TokenUsage(), [], None)
-        agent_manager.get_total_token_usage.return_value = TokenUsage()
+        agent_manager_interactive = MagicMock(spec=AgentManager)
+        setup_agent_manager_mock_for_spec(agent_manager_interactive)
+        agent_manager_interactive.execute.return_value = ("CAFE_READY_FOR_REVIEW\n需求已清楚", TokenUsage(), [], None)
+        agent_manager_interactive.get_total_token_usage.return_value = TokenUsage()
 
-        permission_handler = MagicMock(spec=PermissionHandler)
+        permission_handler_interactive = MagicMock(spec=PermissionHandler)
 
-        # 測試 interactive mode (需要用戶確認)
         phase_interactive = SpecPhase(
-            agent_manager=agent_manager,
-            permission_handler=permission_handler,
+            agent_manager=agent_manager_interactive,
+            permission_handler=permission_handler_interactive,
             git_ops=mock_git_ops,
-            spec_file=str(spec_file),
+            spec_file=str(spec_file_interactive),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=True,
             rigor=SpecRigor.MEDIUM,
@@ -86,28 +85,40 @@ class TestSpecPhaseInteractiveVsNonInteractive:
              patch.object(phase_interactive.display, 'get_multiline_input', return_value="需求"):
             result_interactive = phase_interactive.execute()
 
-        # 測試 non-interactive mode (需要 user_input="confirm")
-        agent_manager.execute.reset_mock()
+        # 測試 non-interactive mode: READY_FOR_REVIEW 立即完成
+        issue_name_noninteractive = "test-confirmed-noninteractive"
+        mock_git_ops.get_current_branch.return_value = issue_name_noninteractive
+        spec_file_noninteractive = tmp_path / ".cafe" / "issues" / issue_name_noninteractive / "spec" / "spec.md"
+        spec_file_noninteractive.parent.mkdir(parents=True, exist_ok=True)
+        spec_file_noninteractive.write_text("# Requirements\nTest requirements")
+
+        agent_manager_noninteractive = MagicMock(spec=AgentManager)
+        setup_agent_manager_mock_for_spec(agent_manager_noninteractive)
+        agent_manager_noninteractive.execute.return_value = ("CAFE_READY_FOR_REVIEW\n需求已清楚", TokenUsage(), [], None)
+        agent_manager_noninteractive.get_total_token_usage.return_value = TokenUsage()
+
+        permission_handler_noninteractive = MagicMock(spec=PermissionHandler)
+
         phase_noninteractive = SpecPhase(
-            agent_manager=agent_manager,
-            permission_handler=permission_handler,
+            agent_manager=agent_manager_noninteractive,
+            permission_handler=permission_handler_noninteractive,
             git_ops=mock_git_ops,
-            spec_file=str(spec_file),
+            spec_file=str(spec_file_noninteractive),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
             rigor=SpecRigor.MEDIUM,
-            user_input="confirm",  # Provide confirmation in non-interactive mode
         )
 
         with patch('builtins.print'):
             result_noninteractive = phase_noninteractive.execute()
 
-        # 兩種模式都應該返回 COMPLETED
-        assert result_interactive.status == PhaseStatus.COMPLETED
+        # Interactive: 回傳 IN_PROGRESS（等待確認）
+        assert result_interactive.status == PhaseStatus.IN_PROGRESS
+        assert result_interactive.data.get("status_code") == "CAFE_READY_FOR_REVIEW"
+
+        # Non-interactive: 立即完成
         assert result_noninteractive.status == PhaseStatus.COMPLETED
-        assert result_interactive.data.get("status_code") == "CAFE_CONFIRMED"
-        # Non-interactive with user_input="confirm" also results in CAFE_CONFIRMED
-        assert result_noninteractive.data.get("status_code") == "CAFE_CONFIRMED"
+        assert result_noninteractive.data.get("status_code") == "CAFE_READY_FOR_REVIEW"
 
     def test_rejected_status_same_behavior_both_modes(
         self, tmp_path: Path, mock_git_ops: MagicMock, monkeypatch
@@ -167,7 +178,7 @@ class TestSpecPhaseInteractiveVsNonInteractive:
     def test_need_clarification_interactive_continues(
         self, tmp_path: Path, mock_git_ops: MagicMock, monkeypatch
     ) -> None:
-        """測試 NEED_CLARIFICATION 在 interactive 模式會繼續迭代"""
+        """測試 NEED_CLARIFICATION 在 interactive 模式回傳 IN_PROGRESS（沒有 while loop）"""
         issue_name = "test-clarification-interactive"
         mock_git_ops.get_current_branch.return_value = issue_name
         monkeypatch.chdir(tmp_path)
@@ -178,11 +189,8 @@ class TestSpecPhaseInteractiveVsNonInteractive:
 
         agent_manager = MagicMock(spec=AgentManager)
         setup_agent_manager_mock_for_spec(agent_manager)
-        # 第一次需要澄清，第二次 READY_FOR_REVIEW
-        agent_manager.execute.side_effect = [
-            ("CAFE_NEED_CLARIFICATION\n請補充資訊", TokenUsage(), [], None),
-            ("CAFE_READY_FOR_REVIEW\n需求已清楚", TokenUsage(), [], None),
-        ]
+        # 第一次執行得到 NEED_CLARIFICATION
+        agent_manager.execute.return_value = ("CAFE_NEED_CLARIFICATION\n請補充資訊", TokenUsage(), [], None)
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -202,11 +210,10 @@ class TestSpecPhaseInteractiveVsNonInteractive:
              patch.object(phase.display, 'get_multiline_input', return_value="補充資訊"):
             result = phase.execute()
 
-        # Interactive 模式應該自動進入第二輪並完成
-        # Iterations: 1. NEED_CLARIFICATION, 2. READY_FOR_REVIEW, 3. user confirms
-        assert result.status == PhaseStatus.COMPLETED
-        assert result.data.get("iterations") == 3
-        assert agent_manager.execute.call_count == 2
+        # Interactive 模式：第一次執行得到 NEED_CLARIFICATION，回傳 IN_PROGRESS
+        assert result.status == PhaseStatus.IN_PROGRESS
+        assert result.data.get("iterations") == 1
+        assert agent_manager.execute.call_count == 1
 
     def test_need_clarification_noninteractive_stops(
         self, tmp_path: Path, mock_git_ops: MagicMock, monkeypatch
@@ -240,15 +247,16 @@ class TestSpecPhaseInteractiveVsNonInteractive:
         with patch('builtins.print'):
             result = phase.execute()
 
-        # Non-interactive 模式沒有 user_input 時應該 FAILED
-        assert result.status == PhaseStatus.FAILED
-        assert "NEED_CLARIFICATION" in result.message or "clarification" in result.message.lower()
+        # Non-interactive 模式：第一次執行得到 NEED_CLARIFICATION，回傳 IN_PROGRESS
+        assert result.status == PhaseStatus.IN_PROGRESS
+        assert result.data.get("status_code") == "CAFE_NEED_CLARIFICATION"
+        assert result.data.get("iterations") == 1
         assert agent_manager.execute.call_count == 1
 
     def test_no_status_code_interactive_continues(
         self, tmp_path: Path, mock_git_ops: MagicMock, monkeypatch
     ) -> None:
-        """測試沒有狀態碼時 interactive 模式會繼續迭代"""
+        """測試沒有狀態碼時 interactive 模式回傳 IN_PROGRESS（沒有 while loop）"""
         issue_name = "test-no-code-interactive"
         mock_git_ops.get_current_branch.return_value = issue_name
         monkeypatch.chdir(tmp_path)
@@ -259,11 +267,8 @@ class TestSpecPhaseInteractiveVsNonInteractive:
 
         agent_manager = MagicMock(spec=AgentManager)
         setup_agent_manager_mock_for_spec(agent_manager)
-        # 第一次沒有狀態碼，第二次 READY_FOR_REVIEW
-        agent_manager.execute.side_effect = [
-            ("這是回應但沒有狀態碼", TokenUsage(), [], None),
-            ("CAFE_READY_FOR_REVIEW\n需求已清楚", TokenUsage(), [], None),
-        ]
+        # 第一次執行沒有狀態碼
+        agent_manager.execute.return_value = ("這是回應但沒有狀態碼", TokenUsage(), [], None)
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -283,8 +288,10 @@ class TestSpecPhaseInteractiveVsNonInteractive:
              patch.object(phase.display, 'get_multiline_input', return_value="需求"):
             result = phase.execute()
 
-        # Interactive 模式應該自動進入第二輪並完成
-        assert result.status == PhaseStatus.COMPLETED
+        # Interactive 模式：第一次執行沒有狀態碼，回傳 IN_PROGRESS
+        assert result.status == PhaseStatus.IN_PROGRESS
+        assert result.data.get("status_code") is None
+        # Agent 被呼叫2次：1次正常執行，1次分析missing status code
         assert agent_manager.execute.call_count == 2
 
     def test_no_status_code_noninteractive_stops(

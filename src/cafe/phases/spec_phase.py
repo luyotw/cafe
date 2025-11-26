@@ -292,9 +292,21 @@ class SpecPhase(Phase):
             # Phase-specific post-processing: Sync spec to GitHub (no-op in local mode)
             self._sync_spec_to_github("")
 
+            # Since we removed the while loop, if result is None (meaning need to continue),
+            # we should return IN_PROGRESS with the status code from response
             if result is None:
-                # Should not happen, but just in case
-                print("⚠️  Warning: No result from agent interaction.")
+                # Extract status code from response to include in result
+                from cafe.core.status_codes import StatusCodeParser
+                status_code = StatusCodeParser.extract(response)
+
+                return PhaseResult(
+                    status=PhaseStatus.IN_PROGRESS,
+                    message=f"Spec phase needs more iterations (iteration {self.iteration})",
+                    data={
+                        "iterations": self.iteration,
+                        "status_code": status_code.value if status_code else None,
+                    },
+                )
 
             return result
 

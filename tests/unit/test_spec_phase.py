@@ -419,7 +419,7 @@ class TestNonInteractiveModeIteration1:
     """Test non-interactive mode - first iteration (user story input)."""
 
     def test_first_call_with_user_story_returns_in_progress(self, tmp_path: Path, mock_git_ops: MagicMock, monkeypatch) -> None:
-        """第1次呼叫：提供 user story，PM 提問，回傳 IN_PROGRESS"""
+        """第1次呼叫：提供 user story，PM 提問，回傳 IN_PROGRESS（沒有 while loop，只執行一次）"""
         mock_git_ops.get_current_branch.return_value = "test-feature"
         monkeypatch.chdir(tmp_path)
 
@@ -427,17 +427,13 @@ class TestNonInteractiveModeIteration1:
         spec_file.parent.mkdir(parents=True, exist_ok=True)
 
         agent_manager = MagicMock(spec=AgentManager)
-        # First call returns NEED_CLARIFICATION, second call returns READY_FOR_REVIEW
-        agent_manager.execute.side_effect = [
-            ("CAFE_NEED_CLARIFICATION\n需要澄清需求。\n\n## 待釐清的問題\n1. 問題一", TokenUsage(), [], None),
-            ("CAFE_READY_FOR_REVIEW\n需求已清楚", TokenUsage(), [], None),
-        ]
+        # Agent returns NEED_CLARIFICATION
+        agent_manager.execute.return_value = ("CAFE_NEED_CLARIFICATION\n需要澄清需求。\n\n## 待釐清的問題\n1. 問題一", TokenUsage(), [], None)
         setup_agent_manager_mocks(agent_manager)
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
         # Provide user story via user_input for non-interactive mode
-        # Note: For READY_FOR_REVIEW, we need to provide confirmation too
         user_story = "身為開發者，我想要有一個指令可以顯示 IP"
 
         phase = SpecPhase(
@@ -452,15 +448,13 @@ class TestNonInteractiveModeIteration1:
 
         result = phase.execute()
 
-        # Should complete successfully with 2 iterations (user_input consumed in iteration 2)
-        # Note: Since READY_FOR_REVIEW needs confirmation but user_input was consumed,
-        # the phase will complete with READY_FOR_REVIEW status
-        assert result.status == PhaseStatus.COMPLETED
-        assert result.data["status_code"] == PhaseStatusCode.READY_FOR_REVIEW.value
-        assert result.data["iterations"] == 2
+        # Should return IN_PROGRESS since agent needs clarification (no while loop anymore)
+        assert result.status == PhaseStatus.IN_PROGRESS
+        assert result.data["status_code"] == "CAFE_NEED_CLARIFICATION"
+        assert result.data["iterations"] == 1
 
-        # Agent should be called twice (once for initial, once after clarification)
-        assert agent_manager.execute.call_count == 2
+        # Agent should be called once
+        assert agent_manager.execute.call_count == 1
 
     def test_first_call_creates_spec_file_from_stdin(self, tmp_path: Path, mock_git_ops: MagicMock, monkeypatch) -> None:
         """第1次呼叫應該從 stdin 讀取 user story 並建立檔案"""
@@ -566,16 +560,17 @@ class TestNonInteractiveModeErrorHandling:
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("Initial")
 
-        # Setup history
+        # Setup history - previous iteration had NEED_CLARIFICATION
         issue_dir = tmp_path / ".cafe" / "issues" / "test-feature"
         history_dir = issue_dir / "spec" / "history"
         history_dir.mkdir(parents=True)
 
         import json
+        # Previous iteration (complete with response)
         (history_dir / "iteration_001.json").write_text(json.dumps({
             "iteration": 1,
-            "pm_response": "CAFE_NEED_CLARIFICATION\n問題",
-            "user_response": "",
+            "user_input": "Initial user story",
+            "response": "CAFE_NEED_CLARIFICATION\n問題",
             "status_code": "CAFE_NEED_CLARIFICATION"
         }))
 
@@ -589,8 +584,6 @@ class TestNonInteractiveModeErrorHandling:
         spec_file.write_text("Test")
 
         agent_manager = MagicMock(spec=AgentManager)
-        # Agent returns NEED_CLARIFICATION which should cause failure without user_input
-        agent_manager.execute.return_value = ("CAFE_NEED_CLARIFICATION\n問題", TokenUsage(), [], None)
         setup_agent_manager_mocks(agent_manager)
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -617,7 +610,7 @@ class TestInteractiveModeStillWorks:
     """Verify interactive mode still works as before."""
 
     def test_interactive_mode_single_iteration(self, tmp_path: Path, mock_git_ops: MagicMock, monkeypatch) -> None:
-        """互動模式：單次確認"""
+        """互動模式：單次迭代（沒有 while loop，回傳 IN_PROGRESS 等待確認）"""
         from cafe.core.types import SpecRigor
 
         mock_git_ops.get_current_branch.return_value = "test-feature"
@@ -650,9 +643,9 @@ class TestInteractiveModeStillWorks:
              patch.object(phase.display, 'get_multiline_input', return_value=''):
             result = phase.execute()
 
-        assert result.status == PhaseStatus.COMPLETED
-        # With READY_FOR_REVIEW flow: 1. agent responds, 2. user confirms
-        assert result.data["iterations"] == 2
+        # In interactive mode, READY_FOR_REVIEW returns IN_PROGRESS (waiting for user confirmation)
+        assert result.status == PhaseStatus.IN_PROGRESS
+        assert result.data["iterations"] == 1
 
 
 class TestSkipConfirmedSpec:

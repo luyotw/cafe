@@ -17,7 +17,7 @@ import pytest
 from cafe.agents.manager import AgentManager
 from cafe.core.git import GitOperations
 from cafe.core.permission import PermissionHandler
-from cafe.core.types import WorkflowMode, TokenUsage, SpecRigor, AgentCLI, AgentConfig
+from cafe.core.types import WorkflowMode, TokenUsage, SpecRigor, AgentCLI, AgentConfig, PhaseStatus
 from cafe.phases.spec_phase import SpecPhase
 
 
@@ -107,7 +107,7 @@ class TestSpecPhaseIterationHistoryMetadata:
     def test_multiple_iterations_preserve_metadata(
         self, tmp_path: Path, mock_git_ops: MagicMock, monkeypatch
     ) -> None:
-        """測試多次迭代時每次都記錄完整 metadata"""
+        """測試迭代時記錄完整 metadata（沒有 while loop，只執行一次）"""
         issue_name = "test-multi-metadata"
         mock_git_ops.get_current_branch.return_value = issue_name
         monkeypatch.chdir(tmp_path)
@@ -118,10 +118,8 @@ class TestSpecPhaseIterationHistoryMetadata:
 
         agent_manager = MagicMock(spec=AgentManager)
         setup_agent_manager_mock_for_spec(agent_manager, cli="claude", session_id="session-456")
-        agent_manager.execute.side_effect = [
-            ("CAFE_NEED_CLARIFICATION\n請補充資訊", TokenUsage(), [], None),
-            ("CAFE_READY_FOR_REVIEW\n需求已清楚", TokenUsage(), [], None),
-        ]
+        # 第一次執行得到 NEED_CLARIFICATION
+        agent_manager.execute.return_value = ("CAFE_NEED_CLARIFICATION\n請補充資訊", TokenUsage(), [], None)
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -141,26 +139,19 @@ class TestSpecPhaseIterationHistoryMetadata:
              patch.object(phase.display, 'get_multiline_input', return_value="補充資訊"):
             result = phase.execute()
 
-        # Check both iteration history files
+        # 沒有 while loop，只有第一次迭代
+        assert result.status == PhaseStatus.IN_PROGRESS
+
+        # Check first iteration history file
         history_dir = spec_file.parent / "history"
         history_file_1 = history_dir / "iteration_001.json"
-        history_file_2 = history_dir / "iteration_002.json"
 
         assert history_file_1.exists()
-        assert history_file_2.exists()
 
-        # Check first iteration
+        # Check first iteration metadata
         history_1 = json.loads(history_file_1.read_text())
         assert history_1["cli"] == "claude"
         assert history_1["session_id"] == "session-456"
         assert "read" in history_1["allowed_tools"]
         assert any("write" in tool for tool in history_1["allowed_tools"])
         assert history_1["status_code"] == "CAFE_NEED_CLARIFICATION"
-
-        # Check second iteration
-        history_2 = json.loads(history_file_2.read_text())
-        assert history_2["cli"] == "claude"
-        assert history_2["session_id"] == "session-456"
-        assert "read" in history_2["allowed_tools"]
-        assert any("write" in tool for tool in history_2["allowed_tools"])
-        assert history_2["status_code"] == "CAFE_READY_FOR_REVIEW"

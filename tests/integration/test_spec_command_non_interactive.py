@@ -90,23 +90,23 @@ class TestSpecCommandNonInteractiveBasic:
     def test_need_clarification_should_fail_in_non_interactive(
         self, mock_env, temp_spec_dir, monkeypatch
     , mock_git_ops):
-        """測試 non-interactive mode 遇到 NEED_CLARIFICATION 應該失敗"""
+        """測試 non-interactive mode 遇到 NEED_CLARIFICATION 返回 IN_PROGRESS（沒有 while loop）"""
         # Arrange
         spec_file = str(temp_spec_dir / "spec.md")
         user_input = "我想要一個功能"
-        
+
         monkeypatch.setenv(
             "CAFE_MOCK_RESPONSE",
             "CAFE_NEED_CLARIFICATION\n\n請問這個功能的使用者是誰？"
         )
-        
+
         agent_manager = AgentManager()
         agent_manager.register_agent(
             AgentConfig(name="Roger", cli=AgentCLI.CLAUDE)
         )
-        
+
         permission_handler = PermissionHandler()
-        
+
         phase = SpecPhase(
             git_ops=mock_git_ops,
             agent_manager=agent_manager,
@@ -116,13 +116,13 @@ class TestSpecCommandNonInteractiveBasic:
             interactive=False,
             user_input=user_input,
         )
-        
+
         # Act
         result = phase.execute()
-        
-        # Assert - non-interactive mode 無法處理 NEED_CLARIFICATION，立即失敗
-        assert result.status == PhaseStatus.FAILED
-        assert "NEED_CLARIFICATION" in result.message or "non-interactive" in result.message
+
+        # Assert - 沒有 while loop，NEED_CLARIFICATION 返回 IN_PROGRESS
+        assert result.status == PhaseStatus.IN_PROGRESS
+        assert result.data.get("status_code") == "CAFE_NEED_CLARIFICATION"
 
     def test_rejected_should_fail(
         self, mock_env, temp_spec_dir, monkeypatch

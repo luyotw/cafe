@@ -61,7 +61,7 @@ class TestSpecPhaseWithStatusCodes:
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
-                git_ops=mock_git_ops,
+            git_ops=mock_git_ops,
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=True,
@@ -74,8 +74,9 @@ class TestSpecPhaseWithStatusCodes:
              patch.object(phase.display, 'get_multiline_input', return_value="需求"):
             result = phase.execute()
 
-        assert result.status == PhaseStatus.COMPLETED
-        assert result.data.get("status_code") == "CAFE_CONFIRMED"
+        # 沒有 while loop，interactive 模式下 READY_FOR_REVIEW 回傳 IN_PROGRESS
+        assert result.status == PhaseStatus.IN_PROGRESS
+        assert result.data.get("status_code") == "CAFE_READY_FOR_REVIEW"
         assert agent_manager.execute.call_count == 1
 
     def test_rejected_status_code_fails_phase(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
@@ -112,7 +113,7 @@ class TestSpecPhaseWithStatusCodes:
         assert "rejected" in result.message.lower()
 
     def test_need_clarification_continues_iteration(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
-        """測試 NEED_CLARIFICATION 狀態碼會繼續迭代（互動模式）"""
+        """測試 NEED_CLARIFICATION 狀態碼回傳 IN_PROGRESS（沒有 while loop）"""
         monkeypatch.chdir(tmp_path)
         issue_name = "test-clarification-issue"
         spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
@@ -121,11 +122,8 @@ class TestSpecPhaseWithStatusCodes:
 
         agent_manager = MagicMock(spec=AgentManager)
         setup_agent_manager_mock_for_spec(agent_manager)
-        # 第一次回應需要澄清，第二次 READY_FOR_REVIEW
-        agent_manager.execute.side_effect = [
-            ("CAFE_NEED_CLARIFICATION\n請補充更多資訊。", TokenUsage(), [], None),
-            ("CAFE_READY_FOR_REVIEW\n需求已清楚。", TokenUsage(), [], None),
-        ]
+        # 第一次回應需要澄清
+        agent_manager.execute.return_value = ("CAFE_NEED_CLARIFICATION\n請補充更多資訊。", TokenUsage(), [], None)
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -133,7 +131,7 @@ class TestSpecPhaseWithStatusCodes:
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
-                git_ops=mock_git_ops,
+            git_ops=mock_git_ops,
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=True,
@@ -146,9 +144,10 @@ class TestSpecPhaseWithStatusCodes:
              patch.object(phase.display, 'get_multiline_input', return_value="補充資訊"):
             result = phase.execute()
 
-        assert result.status == PhaseStatus.COMPLETED
-        assert agent_manager.execute.call_count == 2
-        assert result.data.get("iterations") >= 2  # May have extra iteration for file load
+        # 沒有 while loop，第一次執行得到 NEED_CLARIFICATION 回傳 IN_PROGRESS
+        assert result.status == PhaseStatus.IN_PROGRESS
+        assert result.data.get("status_code") == "CAFE_NEED_CLARIFICATION"
+        assert result.data.get("iterations") == 1
 
     def test_status_code_in_middle_of_response(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
         """測試狀態碼在回應中間也能識別"""
@@ -168,7 +167,7 @@ class TestSpecPhaseWithStatusCodes:
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
-                git_ops=mock_git_ops,
+            git_ops=mock_git_ops,
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=True,
@@ -181,11 +180,12 @@ class TestSpecPhaseWithStatusCodes:
              patch.object(phase.display, 'get_multiline_input', return_value="需求"):
             result = phase.execute()
 
-        assert result.status == PhaseStatus.COMPLETED
-        assert result.data.get("status_code") == "CAFE_CONFIRMED"
+        # 沒有 while loop，READY_FOR_REVIEW 回傳 IN_PROGRESS
+        assert result.status == PhaseStatus.IN_PROGRESS
+        assert result.data.get("status_code") == "CAFE_READY_FOR_REVIEW"
 
     def test_no_status_code_continues_iteration(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
-        """測試沒有狀態碼時會繼續迭代直到有狀態碼（互動模式）"""
+        """測試沒有狀態碼時回傳 IN_PROGRESS（沒有 while loop）"""
         monkeypatch.chdir(tmp_path)
         issue_name = "test-no-status-issue"
         spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
@@ -194,11 +194,8 @@ class TestSpecPhaseWithStatusCodes:
 
         agent_manager = MagicMock(spec=AgentManager)
         setup_agent_manager_mock_for_spec(agent_manager)
-        # 第一次沒有狀態碼，第二次 READY_FOR_REVIEW
-        agent_manager.execute.side_effect = [
-            ("我覺得需求不夠清楚。", TokenUsage(), [], None),  # 沒有狀態碼
-            ("CAFE_READY_FOR_REVIEW\n現在清楚了。", TokenUsage(), [], None),
-        ]
+        # 第一次沒有狀態碼
+        agent_manager.execute.return_value = ("我覺得需求不夠清楚。", TokenUsage(), [], None)
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -206,7 +203,7 @@ class TestSpecPhaseWithStatusCodes:
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
-                git_ops=mock_git_ops,
+            git_ops=mock_git_ops,
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=True,
@@ -219,8 +216,9 @@ class TestSpecPhaseWithStatusCodes:
              patch.object(phase.display, 'get_multiline_input', return_value="我的回答"):
             result = phase.execute()
 
-        assert result.status == PhaseStatus.COMPLETED
-        assert agent_manager.execute.call_count == 2
+        # 沒有 while loop，沒有狀態碼回傳 IN_PROGRESS
+        assert result.status == PhaseStatus.IN_PROGRESS
+        assert result.data.get("status_code") is None
 
     def test_case_insensitive_status_code(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
         """測試狀態碼不分大小寫"""
@@ -240,7 +238,7 @@ class TestSpecPhaseWithStatusCodes:
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
-                git_ops=mock_git_ops,
+            git_ops=mock_git_ops,
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=True,
@@ -253,5 +251,6 @@ class TestSpecPhaseWithStatusCodes:
              patch.object(phase.display, 'get_multiline_input', return_value="需求"):
             result = phase.execute()
 
-        assert result.status == PhaseStatus.COMPLETED
-        assert result.data.get("status_code") == "CAFE_CONFIRMED"
+        # 沒有 while loop，READY_FOR_REVIEW 回傳 IN_PROGRESS
+        assert result.status == PhaseStatus.IN_PROGRESS
+        assert result.data.get("status_code") == "CAFE_READY_FOR_REVIEW"
