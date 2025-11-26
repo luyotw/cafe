@@ -551,12 +551,13 @@ def close() -> None:
 
     This command:
     1. Checks for open/draft PRs (blocks if found)
-    2. Switches to base branch (from issue config)
-    3. Deletes the feature branch
+    2. For worktree mode: switches back to main repo, removes worktree, deletes branch
+    3. For normal mode: switches to base branch, deletes feature branch
     4. Pulls latest changes from remote
     5. Preserves .cafe/issues/<issue-name>/ directory
     """
     import yaml
+    import os
 
     try:
         # 1. Initialize Git operations
@@ -614,47 +615,143 @@ def close() -> None:
         console.print(f"[bold blue]🔒 Closing issue: {feature_branch}[/bold blue]")
         console.print()
 
-        # 5. Switch to base branch (CRITICAL - must succeed)
-        try:
-            console.print(f"[dim]Switching to base branch: {base_branch}[/dim]")
-            git_ops.checkout_branch(base_branch)
-            console.print(f"[green]✓ Switched to base branch: {base_branch}[/green]")
-        except Exception as e:
-            console.print(f"[red]Error: Failed to switch to base branch: {e}[/red]")
-            console.print(f"[yellow]Hint: You may have uncommitted changes. Please commit or stash them first.[/yellow]")
-            raise typer.Exit(1)
-
-        # 6. Delete feature branch (non-critical)
-        branch_deleted = False
-        try:
-            console.print(f"[dim]Deleting feature branch: {feature_branch}[/dim]")
-            git_ops.delete_branch(feature_branch)
-            console.print(f"[green]✓ Deleted feature branch: {feature_branch}[/green]")
-            branch_deleted = True
-        except Exception as e:
-            console.print(f"[yellow]⚠️  Warning: Failed to delete branch: {e}[/yellow]")
-            console.print(f"[yellow]   The branch may not be fully merged. You can delete it manually later.[/yellow]")
-
-        # 6.5. Delete worktree if exists (only after branch deletion succeeds)
-        if worktree_path and branch_deleted:
+        # 5. Handle worktree mode vs normal mode
+        if worktree_path:
+            # === WORKTREE MODE ===
+            # Step 1: Switch back to main repository
             try:
-                console.print(f"[dim]Deleting worktree: {worktree_path}[/dim]")
-                git_ops.remove_worktree(worktree_path)
-                console.print(f"[green]✓ Deleted worktree: {worktree_path}[/green]")
+                console.print(f"[dim]Switching to main repository...[/dim]")
+                # Find the main repository path (parent of .cafe/worktrees)
+                current_dir = Path.cwd()
+                main_repo = current_dir
+                while main_repo != main_repo.parent:
+                    git_dir = main_repo / ".git"
+                    if git_dir.exists() and git_dir.is_dir():
+                        break
+                    main_repo = main_repo.parent
+
+                os.chdir(str(main_repo))
+                console.print(f"[green]✓ Switched to main repository: {main_repo}[/green]")
             except Exception as e:
-                console.print(f"[yellow]⚠️  Warning: Failed to delete worktree: {e}[/yellow]")
-                console.print(f"[yellow]   You may need to delete it manually.[/yellow]")
+                console.print(f"[red]❌ Failed to switch to main repository: {e}[/red]")
+                console.print()
+                console.print("[yellow]Remaining steps (please execute manually):[/yellow]")
+                console.print(f"  1. cd to main repository")
+                console.print(f"  2. git checkout {base_branch}")
+                console.print(f"  3. git pull")
+                console.print(f"  4. git worktree remove {worktree_path}")
+                console.print(f"  5. git branch -d {feature_branch}")
+                console.print()
+                raise typer.Exit(1)
 
-        # 7. Update base branch (non-critical)
-        try:
-            console.print(f"[dim]Updating base branch...[/dim]")
-            git_ops.pull()
-            console.print(f"[green]✓ Updated base branch[/green]")
-        except Exception as e:
-            console.print(f"[yellow]⚠️  Warning: Failed to update base branch: {e}[/yellow]")
-            console.print(f"[yellow]   You may need to pull manually later.[/yellow]")
+            # Step 2: Checkout base branch (in main repo)
+            try:
+                console.print(f"[dim]Switching to base branch: {base_branch}[/dim]")
+                # Re-initialize git_ops in main repo
+                git_ops = GitOperations()
+                git_ops.checkout_branch(base_branch)
+                console.print(f"[green]✓ Switched to base branch: {base_branch}[/green]")
+            except Exception as e:
+                console.print(f"[red]❌ Failed to switch to base branch: {e}[/red]")
+                console.print()
+                console.print("[yellow]Remaining steps (please execute manually):[/yellow]")
+                console.print(f"  1. git checkout {base_branch}")
+                console.print(f"  2. git pull")
+                console.print(f"  3. git worktree remove {worktree_path}")
+                console.print(f"  4. git branch -d {feature_branch}")
+                console.print()
+                raise typer.Exit(1)
 
-        # 8. Display success message
+            # Step 3: Pull latest changes
+            try:
+                console.print(f"[dim]Updating base branch...[/dim]")
+                git_ops.pull()
+                console.print(f"[green]✓ Updated base branch[/green]")
+            except Exception as e:
+                console.print(f"[red]❌ Failed to update base branch: {e}[/red]")
+                console.print()
+                console.print("[yellow]Remaining steps (please execute manually):[/yellow]")
+                console.print(f"  1. git pull")
+                console.print(f"  2. git worktree remove {worktree_path}")
+                console.print(f"  3. git branch -d {feature_branch}")
+                console.print()
+                raise typer.Exit(1)
+
+            # Step 4: Remove worktree
+            try:
+                console.print(f"[dim]Removing worktree: {worktree_path}[/dim]")
+                git_ops.remove_worktree(worktree_path)
+                console.print(f"[green]✓ Removed worktree: {worktree_path}[/green]")
+            except Exception as e:
+                console.print(f"[red]❌ Failed to remove worktree: {e}[/red]")
+                console.print()
+                console.print("[yellow]Remaining steps (please execute manually):[/yellow]")
+                console.print(f"  1. git worktree remove {worktree_path}")
+                console.print(f"  2. git branch -d {feature_branch}")
+                console.print()
+                raise typer.Exit(1)
+
+            # Step 5: Delete feature branch
+            try:
+                console.print(f"[dim]Deleting feature branch: {feature_branch}[/dim]")
+                git_ops.delete_branch(feature_branch)
+                console.print(f"[green]✓ Deleted feature branch: {feature_branch}[/green]")
+            except Exception as e:
+                console.print(f"[red]❌ Failed to delete branch: {e}[/red]")
+                console.print(f"[yellow]The branch may not be fully merged.[/yellow]")
+                console.print()
+                console.print("[yellow]Remaining steps (please execute manually):[/yellow]")
+                console.print(f"  1. git branch -D {feature_branch}  # Force delete if needed")
+                console.print()
+                raise typer.Exit(1)
+
+        else:
+            # === NORMAL MODE (no worktree) ===
+            # Step 1: Checkout base branch
+            try:
+                console.print(f"[dim]Switching to base branch: {base_branch}[/dim]")
+                git_ops.checkout_branch(base_branch)
+                console.print(f"[green]✓ Switched to base branch: {base_branch}[/green]")
+            except Exception as e:
+                console.print(f"[red]❌ Failed to switch to base branch: {e}[/red]")
+                console.print(f"[yellow]Hint: You may have uncommitted changes. Please commit or stash them first.[/yellow]")
+                console.print()
+                console.print("[yellow]Remaining steps (please execute manually):[/yellow]")
+                console.print(f"  1. git checkout {base_branch}")
+                console.print(f"  2. git pull")
+                console.print(f"  3. git branch -d {feature_branch}")
+                console.print()
+                raise typer.Exit(1)
+
+            # Step 2: Pull latest changes
+            try:
+                console.print(f"[dim]Updating base branch...[/dim]")
+                git_ops.pull()
+                console.print(f"[green]✓ Updated base branch[/green]")
+            except Exception as e:
+                console.print(f"[red]❌ Failed to update base branch: {e}[/red]")
+                console.print()
+                console.print("[yellow]Remaining steps (please execute manually):[/yellow]")
+                console.print(f"  1. git pull")
+                console.print(f"  2. git branch -d {feature_branch}")
+                console.print()
+                raise typer.Exit(1)
+
+            # Step 3: Delete feature branch
+            try:
+                console.print(f"[dim]Deleting feature branch: {feature_branch}[/dim]")
+                git_ops.delete_branch(feature_branch)
+                console.print(f"[green]✓ Deleted feature branch: {feature_branch}[/green]")
+            except Exception as e:
+                console.print(f"[red]❌ Failed to delete branch: {e}[/red]")
+                console.print(f"[yellow]The branch may not be fully merged.[/yellow]")
+                console.print()
+                console.print("[yellow]Remaining steps (please execute manually):[/yellow]")
+                console.print(f"  1. git branch -D {feature_branch}  # Force delete if needed")
+                console.print()
+                raise typer.Exit(1)
+
+        # 6. Display success message
         console.print()
         console.print(f"[green]✓ Successfully closed issue: {feature_branch}[/green]")
         console.print(f"  📁 Issue data preserved at: .cafe/issues/{feature_branch}/")
