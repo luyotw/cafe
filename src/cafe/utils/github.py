@@ -56,17 +56,14 @@ class GitHubOps:
                 "gh CLI is not installed. Please install it from: https://github.com/cli/cli"
             )
 
-        try:
-            result = subprocess.run(
-                ["gh", "auth", "status"],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            # gh auth status returns 0 if authenticated, 1 if not
-            return result.returncode == 0
-        except subprocess.CalledProcessError as e:
-            raise GitHubError(f"Failed to check gh authentication: {e.stderr}") from e
+        result = subprocess.run(
+            ["gh", "auth", "status"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        # gh auth status returns 0 if authenticated, 1 if not
+        return result.returncode == 0
 
     def get_issue(self, issue_id: str, include_comments: bool = False) -> Dict[str, Any]:
         """Get GitHub issue information.

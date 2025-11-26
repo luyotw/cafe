@@ -13,7 +13,7 @@ from cafe.core.git import GitOperations
 from cafe.core.permission import PermissionHandler
 from cafe.core.phase import Phase
 from cafe.core.types import PhaseResult, PhaseStatus, WorkflowMode
-from cafe.utils.github import GitHubOps
+from cafe.utils.github import GitHubOps, GitHubError
 
 
 class PRPhase(Phase):
