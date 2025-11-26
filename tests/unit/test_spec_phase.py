@@ -1180,6 +1180,43 @@ class TestFetchGitHubIssue:
         assert saved_config["feature_branch"] == "test-issue"
         assert saved_config["issue_id"] == "123"
 
+    @patch("cafe.phases.spec_phase.get_github_repo_name")
+    @patch("cafe.phases.spec_phase.GitHubOps")
+    def test_fetch_github_issue_fails_when_not_authenticated(
+        self, mock_github_ops: MagicMock, mock_get_repo: MagicMock, tmp_path: Path, mock_git_ops: MagicMock
+    ) -> None:
+        """測試當 gh 未登入時，_fetch_github_issue() 正確回傳失敗狀態"""
+        # Setup
+        mock_get_repo.return_value = "owner/repo"
+        mock_gh_instance = MagicMock()
+        # check_gh_auth() returns False (not authenticated)
+        mock_gh_instance.check_gh_auth.return_value = False
+        mock_github_ops.return_value = mock_gh_instance
+
+        spec_file = tmp_path / ".cafe" / "issues" / "test-issue" / "spec" / "spec.md"
+
+        agent_manager = MagicMock(spec=AgentManager)
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        phase = SpecPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            git_ops=mock_git_ops,
+            spec_file=str(spec_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            interactive=True,
+        )
+
+        # Execute
+        result = phase._fetch_github_issue(123)
+
+        # Assert
+        assert result is not None
+        assert result.status == PhaseStatus.FAILED
+        assert "gh auth login" in result.message
+        # Should not call get_issue if not authenticated
+        mock_gh_instance.get_issue.assert_not_called()
+
 
 class TestOriginalRequirement:
     """測試原始需求描述的保存與使用"""
