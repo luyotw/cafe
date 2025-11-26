@@ -229,74 +229,74 @@ class SpecPhase(Phase):
             if spec_path.exists():
                 self.original_requirement = spec_path.read_text(encoding="utf-8").strip()
 
-            # Requirements clarification loop
-            while True:
-                self.iteration += 1
+            self.iteration += 1
 
-                # Safety check: prevent infinite loops
-                max_iterations_result = self._check_max_iterations(
-                    MAX_CLARIFICATION_ITERATIONS,
-                    "Requirements clarification"
-                )
-                if max_iterations_result:
-                    return max_iterations_result
+            # Safety check: prevent infinite loops
+            max_iterations_result = self._check_max_iterations(
+                MAX_CLARIFICATION_ITERATIONS,
+                "Requirements clarification"
+            )
+            if max_iterations_result:
+                return max_iterations_result
 
-                # Prepare user_input for this iteration
-                result_or_input = self._prepare_user_input_for_iteration()
-                if isinstance(result_or_input, PhaseResult):
-                    # Method returned a PhaseResult (completion/failure/pause)
-                    return result_or_input
-                # Otherwise, it's the user input string
-                current_user_input = result_or_input
+            # Prepare user_input for this iteration
+            result_or_input = self._prepare_user_input_for_iteration()
+            if isinstance(result_or_input, PhaseResult):
+                # Method returned a PhaseResult (completion/failure/pause)
+                return result_or_input
+            # Otherwise, it's the user input string
+            current_user_input = result_or_input
 
-                # Prepare allowed tools with write/edit permission for spec file
-                spec_file_path = Path(self.spec_file)
+            # Prepare allowed tools with write/edit permission for spec file
+            spec_file_path = Path(self.spec_file)
 
-                # Convert to project-relative path (git ignore format: / prefix)
-                project_root = Path(os.getcwd())
-                try:
-                    relative_path = spec_file_path.relative_to(project_root)
-                    spec_file_pattern = f"/{relative_path}"
-                except ValueError:
-                    # If path is not relative to cwd, use absolute path
-                    spec_file_pattern = str(spec_file_path)
+            # Convert to project-relative path (git ignore format: / prefix)
+            project_root = Path(os.getcwd())
+            try:
+                relative_path = spec_file_path.relative_to(project_root)
+                spec_file_pattern = f"/{relative_path}"
+            except ValueError:
+                # If path is not relative to cwd, use absolute path
+                spec_file_pattern = str(spec_file_path)
 
-                # Merge base tools with previous iteration's tools (if any)
-                base_allowed_tools = [
-                    "read",
-                    "grep",
-                    "glob",
-                    "ls",
-                    "web_fetch",
-                    "web_search",
-                    f"write({spec_file_pattern})",
-                    f"edit({spec_file_pattern})",
-                ]
-                allowed_tools = self._merge_allowed_tools(base_allowed_tools)
+            # Merge base tools with previous iteration's tools (if any)
+            base_allowed_tools = [
+                "read",
+                "grep",
+                "glob",
+                "ls",
+                "web_fetch",
+                "web_search",
+                f"write({spec_file_pattern})",
+                f"edit({spec_file_pattern})",
+            ]
+            allowed_tools = self._merge_allowed_tools(base_allowed_tools)
 
-                # Execute full agent interaction cycle (generate prompt, execute, handle status)
-                result, response = self._execute_and_handle_agent_response(
-                    agent_name=self.pm_agent,
-                    user_input=current_user_input,
-                    valid_status_codes=[
-                        PhaseStatusCode.READY_FOR_REVIEW,
-                        PhaseStatusCode.NEED_CLARIFICATION,
-                        PhaseStatusCode.REJECTED,
-                    ],
-                    allowed_tools=allowed_tools,
-                    complete_codes=[PhaseStatusCode.READY_FOR_REVIEW],
-                    continue_codes=[PhaseStatusCode.NEED_CLARIFICATION],
-                )
+            # Execute full agent interaction cycle (generate prompt, execute, handle status)
+            result, response = self._execute_and_handle_agent_response(
+                agent_name=self.pm_agent,
+                user_input=current_user_input,
+                valid_status_codes=[
+                    PhaseStatusCode.READY_FOR_REVIEW,
+                    PhaseStatusCode.NEED_CLARIFICATION,
+                    PhaseStatusCode.REJECTED,
+                ],
+                allowed_tools=allowed_tools,
+                complete_codes=[PhaseStatusCode.READY_FOR_REVIEW],
+                continue_codes=[PhaseStatusCode.NEED_CLARIFICATION],
+            )
 
-                # In mock mode or if agent doesn't use write tool, write spec from response
-                self._ensure_spec_file_written(response)
+            # In mock mode or if agent doesn't use write tool, write spec from response
+            self._ensure_spec_file_written(response)
 
-                # Phase-specific post-processing: Sync spec to GitHub (no-op in local mode)
-                self._sync_spec_to_github("")
+            # Phase-specific post-processing: Sync spec to GitHub (no-op in local mode)
+            self._sync_spec_to_github("")
 
-                if result:
-                    return result
-                # If result is None, continue to next iteration
+            if result is None:
+                # Should not happen, but just in case
+                print("⚠️  Warning: No result from agent interaction.")
+
+            return result
 
         except KeyboardInterrupt:
             # User paused with Ctrl+C - save progress and allow resume
