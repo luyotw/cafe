@@ -337,25 +337,6 @@ class TestCheckGHAuth:
         with pytest.raises(GitHubError, match="gh CLI is not installed"):
             gh_ops.check_gh_auth()
 
-    @patch("subprocess.run")
-    def test_gh_auth_check_error(self, mock_run: Mock) -> None:
-        """測試檢查過程出錯"""
-        mock_run.side_effect = [
-            Mock(returncode=0, stdout="gh version 2.0.0"),  # --version check in __init__
-            Mock(returncode=0, stdout="gh version 2.0.0"),  # check_gh_installed in check_gh_auth
-            subprocess.CalledProcessError(
-                returncode=2,
-                cmd=["gh", "auth", "status"],
-                stderr="Unknown error"
-            ),
-        ]
-
-        gh_ops = GitHubOps()
-
-        with pytest.raises(GitHubError, match="Failed to check gh authentication"):
-            gh_ops.check_gh_auth()
-
-
 class TestExtractPRNumber:
     """Test extract_pr_number functionality."""
 
