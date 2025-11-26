@@ -98,6 +98,19 @@ class PRPhase(Phase):
             Phase result
         """
         try:
+            # Check gh CLI authentication status
+            try:
+                if not self.github_ops.check_gh_auth():
+                    return PhaseResult(
+                        status=PhaseStatus.FAILED,
+                        message="gh CLI is not authenticated. Please run: gh auth login",
+                    )
+            except GitHubError as e:
+                return PhaseResult(
+                    status=PhaseStatus.FAILED,
+                    message=f"Failed to check gh authentication: {e}",
+                )
+
             # Read issue_id from config if not provided
             if not self.issue_id:
                 config_file = self.issue_dir / "config.yaml"
