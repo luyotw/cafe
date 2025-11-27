@@ -1087,8 +1087,32 @@ class Phase(ABC):
             )
 
         # Handle continue codes (e.g., NEED_CLARIFICATION)
+        # After removing while loops: complete immediately, user runs command again manually if needed
         if status_code in continue_codes:
-            return None  # Continue to next iteration
+            self._print_token_usage_summary()
+            token_usage = self.agent_manager.get_total_token_usage()
+            result_data = {
+                "iterations": self.iteration,
+                "final_response": response,
+                "status_code": status_code.value,
+                "token_usage": {
+                    "input_tokens": token_usage.input_tokens,
+                    "output_tokens": token_usage.output_tokens,
+                    "cache_creation_input_tokens": token_usage.cache_creation_input_tokens,
+                    "cache_read_input_tokens": token_usage.cache_read_input_tokens,
+                    "total_cost_usd": token_usage.total_cost_usd,
+                }
+            }
+            if hasattr(self, '_get_completion_data'):
+                phase_data = self._get_completion_data()
+                result_data.update(phase_data)
+
+            return PhaseResult(
+                status=PhaseStatus.COMPLETED,
+                message=f"Phase completed in {self.iteration} iteration(s) - {status_code.value}",
+                data=result_data,
+                token_usage=token_usage,
+            )
 
         # Handle no status code found
         if status_code is None:

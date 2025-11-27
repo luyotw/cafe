@@ -240,8 +240,8 @@ class TestLocalWorkflow:
         with patch('builtins.print'):
             result = phase.execute()
 
-        # 移除 while loop 後，execute() 只執行一次，返回 IN_PROGRESS
-        assert result.status == PhaseStatus.IN_PROGRESS
+        # 移除 while loop 後，execute() 只執行一次，返回 COMPLETED
+        assert result.status == PhaseStatus.COMPLETED
         assert result.data.get("status_code") == "CAFE_NEED_CLARIFICATION"
         # 沒有 while loop，只呼叫 agent 一次
         assert agent_manager.execute.call_count == 1
@@ -893,8 +893,8 @@ class TestPlanPhaseNeedClarification:
              patch('builtins.print'):
             result = phase.execute()
 
-            # 移除 while loop 後，NEED_CLARIFICATION 返回 IN_PROGRESS
-            assert result.status == PhaseStatus.IN_PROGRESS
+            # 移除 while loop 後，NEED_CLARIFICATION 返回 COMPLETED
+            assert result.status == PhaseStatus.COMPLETED
             assert result.data.get("status_code") == "CAFE_NEED_CLARIFICATION"
             # 沒有 while loop，只呼叫 agent 一次
             assert agent_manager.execute.call_count == 1
@@ -932,8 +932,8 @@ class TestPlanPhaseNeedClarification:
         with patch('builtins.print'):
             result = phase.execute()
 
-        # 移除 while loop 後，NEED_CLARIFICATION 在 non-interactive 模式下返回 IN_PROGRESS
-        assert result.status == PhaseStatus.IN_PROGRESS
+        # 移除 while loop 後，NEED_CLARIFICATION 在 non-interactive 模式下返回 COMPLETED
+        assert result.status == PhaseStatus.COMPLETED
         assert result.data.get("status_code") == "CAFE_NEED_CLARIFICATION"
 
     def test_need_clarification_saves_iteration_history_with_user_input_and_response(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
@@ -1667,6 +1667,7 @@ class TestExecuteAndHandleAgentResponse:
         mock_agent.config.session_id = "test_session"
         agent_manager.get_agent.return_value = mock_agent
         agent_manager.execute.return_value = ("CAFE_NEED_CLARIFICATION\n需要更多資訊", TokenUsage(), [], None)
+        agent_manager.get_total_token_usage.return_value = TokenUsage()
 
         phase = PlanPhase(
             agent_manager=agent_manager,
@@ -1694,8 +1695,9 @@ class TestExecuteAndHandleAgentResponse:
             phase_specific_data={"dev_agent": phase.dev_agent},
         )
 
-        # Verify
-        assert result is None  # Should continue to next iteration
+        # After behavior change: NEED_CLARIFICATION returns COMPLETED immediately
+        assert result is not None
+        assert result.status == PhaseStatus.COMPLETED
 
     def test_returns_failed_for_rejected(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
         monkeypatch.chdir(tmp_path)

@@ -144,8 +144,8 @@ class TestSpecPhaseWithStatusCodes:
              patch.object(phase.display, 'get_multiline_input', return_value="補充資訊"):
             result = phase.execute()
 
-        # 沒有 while loop，第一次執行得到 NEED_CLARIFICATION 回傳 IN_PROGRESS
-        assert result.status == PhaseStatus.IN_PROGRESS
+        # 沒有 while loop，第一次執行得到 NEED_CLARIFICATION 直接完成，用戶需手動再次執行
+        assert result.status == PhaseStatus.COMPLETED
         assert result.data.get("status_code") == "CAFE_NEED_CLARIFICATION"
         assert result.data.get("iterations") == 1
 

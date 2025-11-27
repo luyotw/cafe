@@ -261,7 +261,7 @@ class TestSpecPhaseUserConfirmation:
              patch('builtins.print'):
             result = phase.execute()
 
-        # 沒有 while loop，NEED_CLARIFICATION 返回 IN_PROGRESS
-        assert result.status == PhaseStatus.IN_PROGRESS
+        # 沒有 while loop，NEED_CLARIFICATION 返回 COMPLETED（不再自動繼續）
+        assert result.status == PhaseStatus.COMPLETED
         assert result.data.get("status_code") == "CAFE_NEED_CLARIFICATION"
         assert agent_manager.execute.call_count == 1

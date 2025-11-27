@@ -448,8 +448,8 @@ class TestNonInteractiveModeIteration1:
 
         result = phase.execute()
 
-        # Should return IN_PROGRESS since agent needs clarification (no while loop anymore)
-        assert result.status == PhaseStatus.IN_PROGRESS
+        # Should return COMPLETED since NEED_CLARIFICATION now completes immediately (no automatic continuation)
+        assert result.status == PhaseStatus.COMPLETED
         assert result.data["status_code"] == "CAFE_NEED_CLARIFICATION"
         assert result.data["iterations"] == 1
 

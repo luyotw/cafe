@@ -291,10 +291,11 @@ class TestPlanPhaseUserConfirmation:
              patch('builtins.print'):
             result = phase.execute()
 
-        # After removing while loop, NEED_CLARIFICATION returns IN_PROGRESS after getting user input
+        # After removing while loop, NEED_CLARIFICATION returns COMPLETED (no automatic continuation)
+        # User needs to run command again manually if they want to continue
         # No input() prompt after NEED_CLARIFICATION, only get_multiline_input
         # The 'c' from input() is never called because we don't reach READY_FOR_REVIEW
         assert mock_input.call_count == 0, "NEED_CLARIFICATION 不應該提示確認"
-        assert result.status == PhaseStatus.IN_PROGRESS
+        assert result.status == PhaseStatus.COMPLETED
         assert result.data.get("status_code") == "CAFE_NEED_CLARIFICATION"
         assert agent_manager.execute.call_count == 1

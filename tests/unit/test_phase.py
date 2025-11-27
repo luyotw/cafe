@@ -420,12 +420,14 @@ class TestHandleStandardStatusCodes:
         assert result is not None
         assert result.status == PhaseStatus.COMPLETED
 
-    def test_handle_continue_codes_returns_none(self) -> None:
-        """測試 continue_codes（如 NEED_CLARIFICATION）返回 None（繼續循環）"""
+    def test_handle_continue_codes_returns_completed(self) -> None:
+        """測試 continue_codes（如 NEED_CLARIFICATION）返回 COMPLETED（不再繼續循環）"""
         class TestPhase(Phase):
             def __init__(self):
                 self.iteration = 1
                 self.interactive = True
+                self.agent_manager = MagicMock()
+                self.agent_manager.get_total_token_usage.return_value = TokenUsage()
 
             def execute(self) -> PhaseResult:
                 return PhaseResult(status=PhaseStatus.COMPLETED)
@@ -437,7 +439,9 @@ class TestHandleStandardStatusCodes:
             continue_codes=[PhaseStatusCode.NEED_CLARIFICATION],
         )
 
-        assert result is None  # Continue to next iteration
+        # After behavior change: returns COMPLETED immediately
+        assert result is not None
+        assert result.status == PhaseStatus.COMPLETED
 
     def test_handle_no_status_code_interactive_returns_none(self) -> None:
         """測試沒有 status code 且 interactive 模式返回 None（繼續循環）"""

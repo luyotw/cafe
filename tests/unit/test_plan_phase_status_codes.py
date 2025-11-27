@@ -154,8 +154,8 @@ class TestPlanPhaseWithStatusCodes:
              patch('builtins.print'):  # 'c' for confirm
             result = phase.execute()
 
-        # After removing while loop, NEED_CLARIFICATION returns IN_PROGRESS
-        assert result.status == PhaseStatus.IN_PROGRESS
+        # After removing while loop, NEED_CLARIFICATION returns COMPLETED (no automatic continuation)
+        assert result.status == PhaseStatus.COMPLETED
         assert result.data.get("status_code") == "CAFE_NEED_CLARIFICATION"
         assert result.data.get("iterations") == 1
         assert agent_manager.execute.call_count == 1
@@ -247,10 +247,10 @@ class TestPlanPhaseWithStatusCodes:
              patch('builtins.input', return_value='c'):
             result = phase.execute()
 
-        # After removing while loop, returns IN_PROGRESS
-        # Note: status_code is None because we extract from original response, not from _analyze_missing_status_code
-        assert result.status == PhaseStatus.IN_PROGRESS
-        assert result.data.get("status_code") is None  # This is the current behavior
+        # After behavior change: _analyze_missing_status_code returns NEED_CLARIFICATION, which now completes immediately
+        # The extracted status code from _analyze_missing_status_code is NEED_CLARIFICATION
+        assert result.status == PhaseStatus.COMPLETED
+        assert result.data.get("status_code") == "CAFE_NEED_CLARIFICATION"  # Status code from second call
         assert agent_manager.execute.call_count == 2  # First call + _analyze_missing_status_code
 
     def test_case_insensitive_status_code(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:

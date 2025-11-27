@@ -139,8 +139,8 @@ class TestSpecPhaseIterationHistoryMetadata:
              patch.object(phase.display, 'get_multiline_input', return_value="補充資訊"):
             result = phase.execute()
 
-        # 沒有 while loop，只有第一次迭代
-        assert result.status == PhaseStatus.IN_PROGRESS
+        # 沒有 while loop，只有第一次迭代，NEED_CLARIFICATION 返回 COMPLETED
+        assert result.status == PhaseStatus.COMPLETED
 
         # Check first iteration history file
         history_dir = spec_file.parent / "history"

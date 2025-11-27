@@ -179,7 +179,7 @@ class TestSpecPhaseInteractiveVsNonInteractive:
     def test_need_clarification_interactive_continues(
         self, tmp_path: Path, mock_git_ops: MagicMock, monkeypatch
     ) -> None:
-        """測試 NEED_CLARIFICATION 在 interactive 模式回傳 IN_PROGRESS（沒有 while loop）"""
+        """測試 NEED_CLARIFICATION 在 interactive 模式回傳 COMPLETED（沒有 while loop，不自動繼續）"""
         issue_name = "test-clarification-interactive"
         mock_git_ops.get_current_branch.return_value = issue_name
         monkeypatch.chdir(tmp_path)
@@ -211,15 +211,15 @@ class TestSpecPhaseInteractiveVsNonInteractive:
              patch.object(phase.display, 'get_multiline_input', return_value="補充資訊"):
             result = phase.execute()
 
-        # Interactive 模式：第一次執行得到 NEED_CLARIFICATION，回傳 IN_PROGRESS
-        assert result.status == PhaseStatus.IN_PROGRESS
+        # Interactive 模式：第一次執行得到 NEED_CLARIFICATION，回傳 COMPLETED
+        assert result.status == PhaseStatus.COMPLETED
         assert result.data.get("iterations") == 1
         assert agent_manager.execute.call_count == 1
 
     def test_need_clarification_noninteractive_stops(
         self, tmp_path: Path, mock_git_ops: MagicMock, monkeypatch
     ) -> None:
-        """測試 NEED_CLARIFICATION 在 non-interactive 模式會停止並返回 IN_PROGRESS"""
+        """測試 NEED_CLARIFICATION 在 non-interactive 模式會停止並返回 COMPLETED"""
         issue_name = "test-clarification-noninteractive"
         mock_git_ops.get_current_branch.return_value = issue_name
         monkeypatch.chdir(tmp_path)
@@ -248,8 +248,8 @@ class TestSpecPhaseInteractiveVsNonInteractive:
         with patch('builtins.print'):
             result = phase.execute()
 
-        # Non-interactive 模式：第一次執行得到 NEED_CLARIFICATION，回傳 IN_PROGRESS
-        assert result.status == PhaseStatus.IN_PROGRESS
+        # Non-interactive 模式：第一次執行得到 NEED_CLARIFICATION，回傳 COMPLETED
+        assert result.status == PhaseStatus.COMPLETED
         assert result.data.get("status_code") == "CAFE_NEED_CLARIFICATION"
         assert result.data.get("iterations") == 1
         assert agent_manager.execute.call_count == 1
@@ -454,8 +454,8 @@ class TestPlanPhaseInteractiveVsNonInteractive:
              patch('builtins.input', return_value='c'):
             result = phase.execute()
 
-        # 移除 while loop 後，NEED_CLARIFICATION 返回 IN_PROGRESS
-        assert result.status == PhaseStatus.IN_PROGRESS
+        # 移除 while loop 後，NEED_CLARIFICATION 返回 COMPLETED
+        assert result.status == PhaseStatus.COMPLETED
         assert result.data.get("status_code") == "CAFE_NEED_CLARIFICATION"
         assert agent_manager.execute.call_count == 1  # 只呼叫一次
 
@@ -501,8 +501,8 @@ class TestPlanPhaseInteractiveVsNonInteractive:
         with patch('builtins.print'):
             result = phase.execute()
 
-        # 移除 while loop 後，non-interactive 模式下 NEED_CLARIFICATION 返回 IN_PROGRESS
-        assert result.status == PhaseStatus.IN_PROGRESS
+        # 移除 while loop 後，non-interactive 模式下 NEED_CLARIFICATION 返回 COMPLETED
+        assert result.status == PhaseStatus.COMPLETED
         assert result.data.get("status_code") == "CAFE_NEED_CLARIFICATION"
         assert agent_manager.execute.call_count == 1
 

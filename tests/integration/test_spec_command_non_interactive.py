@@ -120,8 +120,8 @@ class TestSpecCommandNonInteractiveBasic:
         # Act
         result = phase.execute()
 
-        # Assert - 沒有 while loop，NEED_CLARIFICATION 返回 IN_PROGRESS
-        assert result.status == PhaseStatus.IN_PROGRESS
+        # Assert - After behavior change, NEED_CLARIFICATION returns COMPLETED (no automatic continuation)
+        assert result.status == PhaseStatus.COMPLETED
         assert result.data.get("status_code") == "CAFE_NEED_CLARIFICATION"
 
     def test_rejected_should_fail(

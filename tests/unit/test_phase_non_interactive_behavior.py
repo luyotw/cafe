@@ -98,8 +98,8 @@ class TestNonInteractiveModeWithNeedClarification:
 
         result = phase.execute()
 
-        # 移除 while loop 後，NEED_CLARIFICATION 返回 IN_PROGRESS
-        assert result.status == PhaseStatus.IN_PROGRESS
+        # 移除 while loop 後，NEED_CLARIFICATION 返回 COMPLETED（不再自動繼續）
+        assert result.status == PhaseStatus.COMPLETED
         assert result.data.get("status_code") == "CAFE_NEED_CLARIFICATION"
     
     def test_should_fail_after_first_need_clarification(
@@ -135,8 +135,8 @@ class TestNonInteractiveModeWithNeedClarification:
 
         result = phase.execute()
 
-        # 移除 while loop 後，只執行一次，返回 IN_PROGRESS
-        assert result.status == PhaseStatus.IN_PROGRESS
+        # 移除 while loop 後，只執行一次，返回 COMPLETED（不再自動繼續）
+        assert result.status == PhaseStatus.COMPLETED
         assert result.data.get("status_code") == "CAFE_NEED_CLARIFICATION"
 
 

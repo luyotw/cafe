@@ -194,9 +194,8 @@ class TestPlanCommandNonInteractiveFirstRound:
         # Act
         result = phase.execute()
 
-        # Assert - After removing while loop, NEED_CLARIFICATION in non-interactive returns IN_PROGRESS
-        # (not FAILED), because the phase can't continue without user input but doesn't fail immediately
-        assert result.status == PhaseStatus.IN_PROGRESS
+        # Assert - After behavior change, NEED_CLARIFICATION returns COMPLETED immediately (no automatic continuation)
+        assert result.status == PhaseStatus.COMPLETED
         assert result.data.get("status_code") == "CAFE_NEED_CLARIFICATION"
 
 
