@@ -128,6 +128,31 @@ def _setup_agents(config_manager: ConfigManager, issue_name: Optional[str] = Non
     return agent_manager
 
 
+def _get_latest_versioned_file(phase_name: str, issue_name: str) -> Optional[Path]:
+    """Get the latest versioned file for a phase.
+
+    Args:
+        phase_name: Phase name (e.g., "spec", "plan")
+        issue_name: Issue name
+
+    Returns:
+        Path to the latest versioned file, or None if no versioned files exist
+    """
+    phase_dir = Path(f".cafe/issues/{issue_name}/{phase_name}")
+    if not phase_dir.exists():
+        return None
+
+    # Find all versioned files
+    pattern = f"{phase_name}_*.md"
+    versioned_files = sorted(phase_dir.glob(pattern))
+
+    if not versioned_files:
+        return None
+
+    # Return the latest (highest numbered) file
+    return versioned_files[-1]
+
+
 def _build_workflow(
     mode: WorkflowMode,
     issue_id: Optional[str],
@@ -1037,18 +1062,16 @@ def plan(
             console.print(f"[red]Error: Invalid mode '{mode}'. Use 'local' or 'github'.[/red]")
             raise typer.Exit(1)
 
-        # Build spec file path: .cafe/issues/{issue-name}/spec/spec.md
-        spec_file = f".cafe/issues/{issue_name}/spec/spec.md"
-
-        # Check if spec file exists
-        if not Path(spec_file).exists():
-            console.print(f"[red]Error: Spec file not found: {spec_file}[/red]")
+        # Check if spec file exists (use latest versioned file)
+        spec_file_path = _get_latest_versioned_file("spec", issue_name)
+        if spec_file_path is None:
+            console.print(f"[red]Error: No spec file found for issue '{issue_name}'[/red]")
             console.print(f"[dim]Hint: Run 'cafe spec' first to create the specification.[/dim]")
             raise typer.Exit(1)
 
-        # Check if plan already exists
-        plan_file = f".cafe/issues/{issue_name}/plan/plan.md"
-        is_resume = Path(plan_file).exists()
+        # Check if plan already exists (any versioned plan file)
+        plan_file_path = _get_latest_versioned_file("plan", issue_name)
+        is_resume = plan_file_path is not None
 
         # Initialize components
         config_dir = str(Path(config_file).parent) if config_file != ".cafe/config.yaml" else ".cafe"
@@ -1246,21 +1269,22 @@ def develop(
             console.print(f"[red]Error: Invalid mode '{mode}'. Use 'local' or 'github'.[/red]")
             raise typer.Exit(1)
 
-        # Build file paths
-        spec_file = f".cafe/issues/{issue_name}/spec/spec.md"
-        plan_file = f".cafe/issues/{issue_name}/plan/plan.md"
-
-        # Check if spec file exists
-        if not Path(spec_file).exists():
-            console.print(f"[red]Error: Spec file not found: {spec_file}[/red]")
+        # Get latest versioned files
+        spec_file_path = _get_latest_versioned_file("spec", issue_name)
+        if spec_file_path is None:
+            console.print(f"[red]Error: No spec file found for issue '{issue_name}'[/red]")
             console.print(f"[dim]Hint: Run 'cafe spec' first to create the specification.[/dim]")
             raise typer.Exit(1)
 
-        # Check if plan file exists
-        if not Path(plan_file).exists():
-            console.print(f"[red]Error: Plan file not found: {plan_file}[/red]")
+        plan_file_path = _get_latest_versioned_file("plan", issue_name)
+        if plan_file_path is None:
+            console.print(f"[red]Error: No plan file found for issue '{issue_name}'[/red]")
             console.print(f"[dim]Hint: Run 'cafe plan' first to create the implementation plan.[/dim]")
             raise typer.Exit(1)
+
+        # Convert to strings for compatibility
+        spec_file = str(spec_file_path)
+        plan_file = str(plan_file_path)
 
         # Initialize components
         config_dir = str(Path(config_file).parent) if config_file != ".cafe/config.yaml" else ".cafe"
@@ -1497,15 +1521,22 @@ def review(
             console.print(f"[red]Error: Invalid mode '{mode}'. Use 'local' or 'github'.[/red]")
             raise typer.Exit(1)
 
-        # Build file paths
-        spec_file = f".cafe/issues/{issue_name}/spec/spec.md"
-        plan_file = f".cafe/issues/{issue_name}/plan/plan.md"
-
-        # Check if spec file exists
-        if not Path(spec_file).exists():
-            console.print(f"[red]Error: Spec file not found: {spec_file}[/red]")
+        # Get latest versioned files
+        spec_file_path = _get_latest_versioned_file("spec", issue_name)
+        if spec_file_path is None:
+            console.print(f"[red]Error: No spec file found for issue '{issue_name}'[/red]")
             console.print(f"[dim]Hint: Run 'cafe spec' first to create the specification.[/dim]")
             raise typer.Exit(1)
+
+        plan_file_path = _get_latest_versioned_file("plan", issue_name)
+        if plan_file_path is None:
+            console.print(f"[red]Error: No plan file found for issue '{issue_name}'[/red]")
+            console.print(f"[dim]Hint: Run 'cafe plan' first to create the implementation plan.[/dim]")
+            raise typer.Exit(1)
+
+        # Convert to strings for compatibility
+        spec_file = str(spec_file_path)
+        plan_file = str(plan_file_path)
 
         # Initialize components
         config_dir = str(Path(config_file).parent) if config_file != ".cafe/config.yaml" else ".cafe"
@@ -1668,21 +1699,22 @@ def pr(
         # Get and validate current branch
         issue_name = _get_and_validate_branch(ctx, "pr")
 
-        # Build file paths
-        spec_file = f".cafe/issues/{issue_name}/spec/spec.md"
-        plan_file = f".cafe/issues/{issue_name}/plan/plan.md"
-
-        # Check if spec file exists
-        if not Path(spec_file).exists():
-            console.print(f"[red]Error: Spec file not found: {spec_file}[/red]")
+        # Get latest versioned files
+        spec_file_path = _get_latest_versioned_file("spec", issue_name)
+        if spec_file_path is None:
+            console.print(f"[red]Error: No spec file found for issue '{issue_name}'[/red]")
             console.print(f"[dim]Hint: Run 'cafe spec' first to create the specification.[/dim]")
             raise typer.Exit(1)
 
-        # Check if plan file exists
-        if not Path(plan_file).exists():
-            console.print(f"[red]Error: Plan file not found: {plan_file}[/red]")
+        plan_file_path = _get_latest_versioned_file("plan", issue_name)
+        if plan_file_path is None:
+            console.print(f"[red]Error: No plan file found for issue '{issue_name}'[/red]")
             console.print(f"[dim]Hint: Run 'cafe plan' first to create the plan.[/dim]")
             raise typer.Exit(1)
+
+        # Convert to strings for compatibility
+        spec_file = str(spec_file_path)
+        plan_file = str(plan_file_path)
 
         # Initialize components
         config_dir = str(Path(config_file).parent) if config_file != ".cafe/config.yaml" else ".cafe"
