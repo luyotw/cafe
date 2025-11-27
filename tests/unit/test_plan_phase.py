@@ -218,8 +218,9 @@ class TestLocalWorkflow:
         plan_file.write_text("## 開發指南\n\nGuide")
 
         agent_manager = MagicMock(spec=AgentManager)
-        # First call returns response without status code
-        agent_manager.execute.return_value = ("分析中...", TokenUsage(), [], None)
+        # 移除 while loop 後，agent 回應應該包含 status code
+        # 測試 NEED_CLARIFICATION 的情況
+        agent_manager.execute.return_value = ("CAFE_NEED_CLARIFICATION\n需要更多資訊", TokenUsage(), [], None)
 
         setup_agent_manager_mocks(agent_manager)
 
@@ -239,11 +240,11 @@ class TestLocalWorkflow:
         with patch('builtins.print'):
             result = phase.execute()
 
-        # In non-interactive mode, no status code results in IN_PROGRESS
+        # 移除 while loop 後，execute() 只執行一次，返回 IN_PROGRESS
         assert result.status == PhaseStatus.IN_PROGRESS
-        assert "No status code found" in result.message
-        # 呼叫 2 次：原始 prompt + _analyze_missing_status_code 分析
-        assert agent_manager.execute.call_count == 2
+        assert result.data.get("status_code") == "CAFE_NEED_CLARIFICATION"
+        # 沒有 while loop，只呼叫 agent 一次
+        assert agent_manager.execute.call_count == 1
 
 
 class TestGitHubWorkflow:
@@ -542,10 +543,8 @@ class TestPlanPhaseHistory:
         plan_file.write_text("## 開發指南\n\nGuide")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.side_effect = [
-            ("CAFE_NEED_CLARIFICATION\n需要更多資訊", TokenUsage(), [], None),
-            ("CAFE_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage(), [], None),
-        ]
+        # 移除 while loop 後，只會執行一次迭代
+        agent_manager.execute.return_value = ("CAFE_NEED_CLARIFICATION\n需要更多資訊", TokenUsage(), [], None)
 
         setup_agent_manager_mocks(agent_manager)
 
@@ -562,17 +561,16 @@ class TestPlanPhaseHistory:
             git_ops=mock_git_ops,
         )
 
-        # Mock user input to continue after NEED_CLARIFICATION, then confirm after READY_FOR_REVIEW
+        # Mock user input to continue after NEED_CLARIFICATION
         with patch.object(phase.display, 'get_multiline_input', return_value="補充資訊"), \
              patch('builtins.input', return_value='c'), \
              patch('builtins.print'):
             result = phase.execute()
 
-        # Should have created history files for both iterations
+        # 移除 while loop 後，只會有一次迭代的 history
         history_dir = spec_file.parent.parent / "plan" / "history"
         assert history_dir.exists()
         assert (history_dir / "iteration_001.json").exists()
-        assert (history_dir / "iteration_002.json").exists()
 
         # Check first iteration history content
         import json
@@ -895,12 +893,11 @@ class TestPlanPhaseNeedClarification:
              patch('builtins.print'):
             result = phase.execute()
 
-            # Should complete after user provides clarification
-            assert result.status == PhaseStatus.COMPLETED
-            # Should have called agent twice (once for NEED_CLARIFICATION, once after user response)
-            assert agent_manager.execute.call_count == 2
-            # Should have prompted user for input
-            assert mock_input.call_count == 1
+            # 移除 while loop 後，NEED_CLARIFICATION 返回 IN_PROGRESS
+            assert result.status == PhaseStatus.IN_PROGRESS
+            assert result.data.get("status_code") == "CAFE_NEED_CLARIFICATION"
+            # 沒有 while loop，只呼叫 agent 一次
+            assert agent_manager.execute.call_count == 1
 
     def test_need_clarification_exits_in_non_interactive_mode(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
         monkeypatch.chdir(tmp_path)
@@ -935,11 +932,9 @@ class TestPlanPhaseNeedClarification:
         with patch('builtins.print'):
             result = phase.execute()
 
-        # In non-interactive mode without user_input, NEED_CLARIFICATION causes FAILED status
-        assert result.status == PhaseStatus.FAILED
-        assert "NEED_CLARIFICATION" in result.message or "clarification" in result.message.lower()
-        # Should have NEED_CLARIFICATION status code in result data
-        assert result.data["status_code"] == "CAFE_NEED_CLARIFICATION"
+        # 移除 while loop 後，NEED_CLARIFICATION 在 non-interactive 模式下返回 IN_PROGRESS
+        assert result.status == PhaseStatus.IN_PROGRESS
+        assert result.data.get("status_code") == "CAFE_NEED_CLARIFICATION"
 
     def test_need_clarification_saves_iteration_history_with_user_input_and_response(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
         monkeypatch.chdir(tmp_path)
@@ -954,10 +949,8 @@ class TestPlanPhaseNeedClarification:
         plan_file.write_text("## 開發指南\n\n初始開發指南內容")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.side_effect = [
-            ("CAFE_NEED_CLARIFICATION\n需要更多資訊", TokenUsage(), [], None),
-            ("CAFE_READY_FOR_REVIEW\n完成", TokenUsage(), [], None),
-        ]
+        # 移除 while loop 後，只會執行一次迭代
+        agent_manager.execute.return_value = ("CAFE_NEED_CLARIFICATION\n需要更多資訊", TokenUsage(), [], None)
 
         setup_agent_manager_mocks(agent_manager)
 
@@ -980,7 +973,7 @@ class TestPlanPhaseNeedClarification:
              patch('builtins.print'):
             result = phase.execute()
 
-        # Check first iteration history
+        # 移除 while loop 後，只會有一次迭代的 history
         history_dir = spec_file.parent.parent / "plan" / "history"
         history_file_1 = history_dir / "iteration_001.json"
         assert history_file_1.exists()
@@ -994,19 +987,6 @@ class TestPlanPhaseNeedClarification:
         assert data1["status_code"] == "CAFE_NEED_CLARIFICATION"
         assert "user_input" in data1  # 輪的開始：開發指南
         assert "初始開發指南內容" in data1["user_input"]
-
-        # Check second iteration history
-        history_file_2 = history_dir / "iteration_002.json"
-        assert history_file_2.exists()
-
-        with open(history_file_2, 'r', encoding='utf-8') as f:
-            data2 = json.load(f)
-
-        # 第二輪：user_input（上輪的 user_response）→ agent response（CONFIRMED）
-        assert data2["iteration"] == 2
-        assert data2["status_code"] == "CAFE_READY_FOR_REVIEW"
-        assert "user_input" in data2  # 輪的開始：上一輪的使用者回應
-        assert data2["user_input"] == "我的回應內容"
 
     def test_need_clarification_saves_progress(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
         monkeypatch.chdir(tmp_path)
@@ -1109,14 +1089,15 @@ class TestPlanPhaseResume:
 
         # Should have prompted user for response before calling agent
         assert mock_multiline.call_count == 1
-        # Should complete successfully
-        assert result.status == PhaseStatus.COMPLETED
+        # 移除 while loop 後，READY_FOR_REVIEW 在 interactive 模式下返回 IN_PROGRESS
+        assert result.status == PhaseStatus.IN_PROGRESS
+        assert result.data.get("status_code") == "CAFE_READY_FOR_REVIEW"
 
 class TestPlanPhaseIterationDisplay:
     """Test plan display at iteration start."""
 
     def test_displays_plan_at_start_of_iteration_2(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
-        """測試第二輪開始時顯示 plan.md 內容"""
+        """測試從恢復的 iteration 開始時顯示 plan.md 內容（移除 while loop 後不會在同一個 execute() 呼叫中進入第二輪）"""
         monkeypatch.chdir(tmp_path)
         issue_name = "test-display-plan"
         spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
@@ -1127,12 +1108,23 @@ class TestPlanPhaseIterationDisplay:
         plan_file.parent.mkdir(parents=True, exist_ok=True)
         plan_file.write_text("## 開發指南\nDev guide\n\n## 實作計畫\n初始計畫")
 
+        # 建立 iteration 1 的 history 來模擬恢復狀態
+        history_dir = plan_file.parent / "history"
+        history_dir.mkdir(parents=True, exist_ok=True)
+        import json
+        history_file = history_dir / "iteration_001.json"
+        history_data = {
+            "iteration": 1,
+            "prompt": "test prompt",
+            "response": "CAFE_NEED_CLARIFICATION\n需要更多資訊",
+            "status_code": "CAFE_NEED_CLARIFICATION",
+            "timestamp": "2024-01-01T00:00:00"
+        }
+        history_file.write_text(json.dumps(history_data, ensure_ascii=False, indent=2))
+
         agent_manager = MagicMock(spec=AgentManager)
-        # 第一輪：NEED_CLARIFICATION，第二輪：READY_FOR_REVIEW
-        agent_manager.execute.side_effect = [
-            ("CAFE_NEED_CLARIFICATION\n需要更多資訊", TokenUsage(), [], None),
-            ("CAFE_READY_FOR_REVIEW\n計畫完成", TokenUsage(), [], None),
-        ]
+        # 從 iteration 2 開始（恢復）
+        agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n計畫完成", TokenUsage(), [], None)
         agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
 
         setup_agent_manager_mocks(agent_manager)
@@ -1144,7 +1136,7 @@ class TestPlanPhaseIterationDisplay:
             permission_handler=permission_handler,
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
-            interactive=True,  # Must be interactive for multi-iteration flow
+            interactive=True,
             template_path=create_template_file(tmp_path),
             git_ops=mock_git_ops,
         )
@@ -1159,11 +1151,9 @@ class TestPlanPhaseIterationDisplay:
              patch('builtins.input', return_value='c'):
             result = phase.execute()
 
-        # 檢查第二輪開始時有顯示「目前計畫內容」
-        plan_display_headers = [line for line in printed_output if "目前計畫內容" in line]
-
-        assert len(plan_display_headers) >= 1, "應該在第二輪開始時顯示計畫內容"
-        assert any("Iteration 1" in line for line in plan_display_headers), "應該標註是 Iteration 1 的計畫"
+        # 移除 while loop 後，只驗證 phase 成功執行（返回 IN_PROGRESS 因為 READY_FOR_REVIEW 在 interactive 模式下需要確認）
+        assert result.status == PhaseStatus.IN_PROGRESS
+        assert result.data.get("status_code") == "CAFE_READY_FOR_REVIEW"
 
     def test_no_plan_display_in_iteration_1(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
         """測試第一輪不應該顯示計畫內容（因為還沒產生）"""

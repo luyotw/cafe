@@ -401,11 +401,11 @@ class TestPlanPhaseInteractiveVsNonInteractive:
         with patch('builtins.print'):
             result_noninteractive = phase_noninteractive.execute()
 
-        # 兩種模式都應該返回 COMPLETED，但狀態碼不同
-        assert result_interactive.status == PhaseStatus.COMPLETED
+        # 移除 while loop 後，interactive 模式下 READY_FOR_REVIEW 返回 IN_PROGRESS，non-interactive 返回 COMPLETED
+        assert result_interactive.status == PhaseStatus.IN_PROGRESS
+        assert result_interactive.data.get("status_code") == "CAFE_READY_FOR_REVIEW"  # Interactive 等待用戶確認
         assert result_noninteractive.status == PhaseStatus.COMPLETED
-        assert result_interactive.data.get("status_code") == "CAFE_CONFIRMED"  # Interactive 有用戶確認
-        assert result_noninteractive.data.get("status_code") == "CAFE_READY_FOR_REVIEW"  # Non-interactive 直接完成
+        assert result_noninteractive.data.get("status_code") == "CAFE_CONFIRMED"  # Non-interactive 有 user_input 會得到 CONFIRMED
 
     def test_need_clarification_interactive_continues(
         self, tmp_path: Path, mock_git_ops: MagicMock, monkeypatch
@@ -425,10 +425,8 @@ class TestPlanPhaseInteractiveVsNonInteractive:
 
         agent_manager = MagicMock(spec=AgentManager)
         setup_agent_manager_mock_for_spec(agent_manager)
-        agent_manager.execute.side_effect = [
-            ("CAFE_NEED_CLARIFICATION\n需要更多資訊", TokenUsage(), [], None),
-            ("CAFE_READY_FOR_REVIEW\n計畫已完成", TokenUsage(), [], None),
-        ]
+        # 移除 while loop 後，只會執行一次
+        agent_manager.execute.return_value = ("CAFE_NEED_CLARIFICATION\n需要更多資訊", TokenUsage(), [], None)
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -454,10 +452,10 @@ class TestPlanPhaseInteractiveVsNonInteractive:
              patch('builtins.input', return_value='c'):
             result = phase.execute()
 
-        # Interactive 模式應該自動進入第二輪並完成
-        assert result.status == PhaseStatus.COMPLETED
-        assert result.data.get("iterations") == 3  # 1st: NEED_CLARIFICATION, 2nd: READY_FOR_REVIEW, 3rd: user confirms
-        assert agent_manager.execute.call_count == 2  # Agent executes twice (not counting user confirmation)
+        # 移除 while loop 後，NEED_CLARIFICATION 返回 IN_PROGRESS
+        assert result.status == PhaseStatus.IN_PROGRESS
+        assert result.data.get("status_code") == "CAFE_NEED_CLARIFICATION"
+        assert agent_manager.execute.call_count == 1  # 只呼叫一次
 
     def test_need_clarification_noninteractive_stops(
         self, tmp_path: Path, mock_git_ops: MagicMock, monkeypatch
@@ -501,9 +499,9 @@ class TestPlanPhaseInteractiveVsNonInteractive:
         with patch('builtins.print'):
             result = phase.execute()
 
-        # Non-interactive 模式沒有 user_input 時應該 FAILED
-        assert result.status == PhaseStatus.FAILED
-        assert "NEED_CLARIFICATION" in result.message or "clarification" in result.message.lower()
+        # 移除 while loop 後，non-interactive 模式下 NEED_CLARIFICATION 返回 IN_PROGRESS
+        assert result.status == PhaseStatus.IN_PROGRESS
+        assert result.data.get("status_code") == "CAFE_NEED_CLARIFICATION"
         assert agent_manager.execute.call_count == 1
 
     def test_no_status_code_noninteractive_stops(

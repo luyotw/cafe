@@ -80,16 +80,17 @@ class TestPlanPhaseUserConfirmation:
             template_path=create_template_file(tmp_path),
         )
 
-        # Mock user choosing 'c' (confirm)
+        # Mock user choosing 'c' (confirm) - but this won't be used in first execute()
         with patch('builtins.input', return_value='c') as mock_input, \
              patch('builtins.print'):
             result = phase.execute()
 
-        # Should prompt user for confirmation
-        assert mock_input.called, "應該提示用戶確認"
-
-        # Should complete without calling agent again
-        assert result.status == PhaseStatus.COMPLETED
+        # After removing while loop, READY_FOR_REVIEW in interactive mode returns IN_PROGRESS
+        # (not COMPLETED), because it needs user confirmation which happens in next iteration
+        # input() is NOT called in first execute() anymore
+        assert not mock_input.called, "第一次 execute() 不會提示用戶確認"
+        assert result.status == PhaseStatus.IN_PROGRESS
+        assert result.data.get("status_code") == "CAFE_READY_FOR_REVIEW"
         assert agent_manager.execute.call_count == 1, "只應呼叫 agent 一次"
 
     def test_confirmed_interactive_user_rejects(
@@ -131,15 +132,16 @@ class TestPlanPhaseUserConfirmation:
             template_path=create_template_file(tmp_path),
         )
 
-        # Mock user choosing 'r' (reject)
+        # Mock user choosing 'r' (reject) - but this won't be used in first execute()
         with patch('builtins.input', return_value='r') as mock_input, \
              patch('builtins.print'):
             result = phase.execute()
 
-        # Should fail after user rejects
-        assert mock_input.called
-        assert result.status == PhaseStatus.FAILED
-        assert "reject" in result.message.lower()
+        # After removing while loop, READY_FOR_REVIEW in interactive mode returns IN_PROGRESS
+        # User rejection would happen in next execute() call, not this one
+        assert not mock_input.called, "第一次 execute() 不會提示用戶確認"
+        assert result.status == PhaseStatus.IN_PROGRESS
+        assert result.data.get("status_code") == "CAFE_READY_FOR_REVIEW"
         assert agent_manager.execute.call_count == 1, "只應呼叫 agent 一次"
 
     def test_confirmed_interactive_user_requests_modification(
@@ -159,11 +161,8 @@ class TestPlanPhaseUserConfirmation:
         plan_file.write_text("## 開發指南\nDev guide\n\n## 實作計畫\nTODO")
 
         agent_manager = MagicMock(spec=AgentManager)
-        # First call: READY_FOR_REVIEW, second call after modification: READY_FOR_REVIEW again
-        agent_manager.execute.side_effect = [
-            ("CAFE_READY_FOR_REVIEW\n計畫已完成", TokenUsage(), [], None),
-            ("CAFE_READY_FOR_REVIEW\n修改後的計畫", TokenUsage(), [], None),
-        ]
+        # After removing while loop, only first call happens in single execute()
+        agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n計畫已完成", TokenUsage(), [], None)
         agent_manager.get_total_token_usage.return_value = TokenUsage()
         agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
 
@@ -185,20 +184,20 @@ class TestPlanPhaseUserConfirmation:
             template_path=create_template_file(tmp_path),
         )
 
-        # Mock user choosing 'm' (modify) first, then 'c' (confirm)
-        with patch('builtins.input', side_effect=['m', 'c']) as mock_input, \
+        # Mock user choosing 'm' (modify) - but this won't be used in first execute()
+        with patch('builtins.input', return_value='m') as mock_input, \
              patch.object(phase.display, 'get_multiline_input', return_value="請加上錯誤處理") as mock_multiline, \
              patch('builtins.print'):
             result = phase.execute()
 
-        # Should prompt twice (first time 'm', second time 'c')
-        assert mock_input.call_count == 2
-        # Should ask for modification feedback
-        assert mock_multiline.called
-        # Should complete successfully
-        assert result.status == PhaseStatus.COMPLETED
-        # Should have called agent twice (first plan, then modified plan)
-        assert agent_manager.execute.call_count == 2
+        # After removing while loop, READY_FOR_REVIEW in interactive mode returns IN_PROGRESS
+        # input() is NOT called in first execute(), user modification happens in next execute()
+        assert mock_input.call_count == 0, "第一次 execute() 不會提示用戶確認"
+        assert not mock_multiline.called, "第一次 execute() 不會請求修改意見"
+        # Should return IN_PROGRESS to continue in next iteration
+        assert result.status == PhaseStatus.IN_PROGRESS
+        assert result.data.get("status_code") == "CAFE_READY_FOR_REVIEW"
+        assert agent_manager.execute.call_count == 1
 
     def test_confirmed_noninteractive_completes_immediately(
         self, tmp_path: Path, mock_git_ops: MagicMock, monkeypatch
@@ -264,10 +263,8 @@ class TestPlanPhaseUserConfirmation:
         plan_file.write_text("## 開發指南\nDev guide\n\n## 實作計畫\nTODO")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.side_effect = [
-            ("CAFE_NEED_CLARIFICATION\n需要更多資訊", TokenUsage(), [], None),
-            ("CAFE_READY_FOR_REVIEW\n計畫已完成", TokenUsage(), [], None),
-        ]
+        # After removing while loop, only first call happens
+        agent_manager.execute.return_value = ("CAFE_NEED_CLARIFICATION\n需要更多資訊", TokenUsage(), [], None)
         agent_manager.get_total_token_usage.return_value = TokenUsage()
         agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
 
@@ -289,14 +286,16 @@ class TestPlanPhaseUserConfirmation:
             template_path=create_template_file(tmp_path),
         )
 
-        # Mock user input for clarification and confirmation
+        # Mock user input for clarification
         with patch.object(phase.display, 'get_multiline_input', return_value="補充資訊"), \
              patch('builtins.input', return_value='c') as mock_input, \
              patch('builtins.print'):
             result = phase.execute()
 
-        # Should only prompt ONCE for confirmation (after second READY_FOR_REVIEW)
-        # Not after NEED_CLARIFICATION
-        assert mock_input.call_count == 1, "應該只在 READY_FOR_REVIEW 後提示確認"
-        assert result.status == PhaseStatus.COMPLETED
-        assert agent_manager.execute.call_count == 2
+        # After removing while loop, NEED_CLARIFICATION returns IN_PROGRESS after getting user input
+        # No input() prompt after NEED_CLARIFICATION, only get_multiline_input
+        # The 'c' from input() is never called because we don't reach READY_FOR_REVIEW
+        assert mock_input.call_count == 0, "NEED_CLARIFICATION 不應該提示確認"
+        assert result.status == PhaseStatus.IN_PROGRESS
+        assert result.data.get("status_code") == "CAFE_NEED_CLARIFICATION"
+        assert agent_manager.execute.call_count == 1

@@ -161,71 +161,82 @@ class PlanPhase(Phase):
                     plan_file_path.parent.mkdir(parents=True, exist_ok=True)
                     plan_file_path.write_text(f"## 開發指南\n\n{dev_guide}\n")
 
-            # Implementation plan loop
-            while True:
-                # Increment iteration and execute agent
-                self.iteration += 1
+            # Increment iteration and execute agent
+            self.iteration += 1
 
-                # Safety check: prevent infinite loops
-                max_iterations_result = self._check_max_iterations(
-                    MAX_PLANNING_ITERATIONS,
-                    "Implementation plan"
-                )
-                if max_iterations_result:
-                    return max_iterations_result
+            # Safety check: prevent infinite loops
+            max_iterations_result = self._check_max_iterations(
+                MAX_PLANNING_ITERATIONS,
+                "Implementation plan"
+            )
+            if max_iterations_result:
+                return max_iterations_result
 
-                # Prepare user_input for this iteration
-                result_or_input = self._prepare_user_input_for_iteration()
-                if isinstance(result_or_input, PhaseResult):
-                    # Method returned a PhaseResult (completion/failure/pause)
-                    return result_or_input
-                # Otherwise, it's the user input string
-                current_user_input = result_or_input
+            # Prepare user_input for this iteration
+            result_or_input = self._prepare_user_input_for_iteration()
+            if isinstance(result_or_input, PhaseResult):
+                # Method returned a PhaseResult (completion/failure/pause)
+                return result_or_input
+            # Otherwise, it's the user input string
+            current_user_input = result_or_input
 
-                # Prepare allowed tools with write/edit permission for plan file
-                plan_file_path = self.history_dir.parent / "plan.md"
+            # Prepare allowed tools with write/edit permission for plan file
+            plan_file_path = self.history_dir.parent / "plan.md"
 
-                # Convert to project-relative path (git ignore format: / prefix)
-                import os
-                project_root = Path(os.getcwd())
-                try:
-                    relative_plan_path = plan_file_path.relative_to(project_root)
-                    plan_file_pattern = f"/{relative_plan_path}"
-                except ValueError:
-                    # If path is not relative to cwd, use absolute path
-                    plan_file_pattern = str(plan_file_path)
+            # Convert to project-relative path (git ignore format: / prefix)
+            import os
+            project_root = Path(os.getcwd())
+            try:
+                relative_plan_path = plan_file_path.relative_to(project_root)
+                plan_file_pattern = f"/{relative_plan_path}"
+            except ValueError:
+                # If path is not relative to cwd, use absolute path
+                plan_file_pattern = str(plan_file_path)
 
-                # Merge base tools with previous iteration's tools (if any)
-                base_allowed_tools = [
-                    "read",
-                    "grep",
-                    "glob",
-                    "ls",
-                    "web_fetch",
-                    "web_search",
-                    f"write({plan_file_pattern})",
-                    f"edit({plan_file_pattern})",
-                ]
-                allowed_tools = self._merge_allowed_tools(base_allowed_tools)
+            # Merge base tools with previous iteration's tools (if any)
+            base_allowed_tools = [
+                "read",
+                "grep",
+                "glob",
+                "ls",
+                "web_fetch",
+                "web_search",
+                f"write({plan_file_pattern})",
+                f"edit({plan_file_pattern})",
+            ]
+            allowed_tools = self._merge_allowed_tools(base_allowed_tools)
 
-                # Execute full agent interaction cycle (generate prompt, execute, handle status)
-                result, response = self._execute_and_handle_agent_response(
-                    agent_name=self.dev_agent,
-                    user_input=current_user_input,
-                    valid_status_codes=[
-                        PhaseStatusCode.READY_FOR_REVIEW,
-                        PhaseStatusCode.NEED_CLARIFICATION,
-                        PhaseStatusCode.REJECTED,
-                    ],
-                    allowed_tools=allowed_tools,
-                    complete_codes=[PhaseStatusCode.READY_FOR_REVIEW],
-                    continue_codes=[PhaseStatusCode.NEED_CLARIFICATION],
-                    phase_specific_data={"dev_agent": self.dev_agent},
-                )
+            # Execute full agent interaction cycle (generate prompt, execute, handle status)
+            result, response = self._execute_and_handle_agent_response(
+                agent_name=self.dev_agent,
+                user_input=current_user_input,
+                valid_status_codes=[
+                    PhaseStatusCode.READY_FOR_REVIEW,
+                    PhaseStatusCode.NEED_CLARIFICATION,
+                    PhaseStatusCode.REJECTED,
+                ],
+                allowed_tools=allowed_tools,
+                complete_codes=[PhaseStatusCode.READY_FOR_REVIEW],
+                continue_codes=[PhaseStatusCode.NEED_CLARIFICATION],
+                phase_specific_data={"dev_agent": self.dev_agent},
+            )
 
-                if result:
-                    return result
-                # If result is None, continue to next iteration
+            if result:
+                return result
+
+            # Since we removed the while loop, if result is None (meaning need to continue),
+            # we should return IN_PROGRESS with the status code from response
+            from cafe.core.status_codes import StatusCodeParser
+            status_code = StatusCodeParser.extract(response)
+
+            return PhaseResult(
+                status=PhaseStatus.IN_PROGRESS,
+                message=f"Plan phase needs more iterations (iteration {self.iteration})",
+                data={
+                    "iterations": self.iteration,
+                    "status_code": status_code.value if status_code else None,
+                },
+            )
 
         except Exception as e:
             return PhaseResult(

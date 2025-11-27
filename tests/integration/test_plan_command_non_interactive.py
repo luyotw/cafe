@@ -194,9 +194,10 @@ class TestPlanCommandNonInteractiveFirstRound:
         # Act
         result = phase.execute()
 
-        # Assert - non-interactive 無法處理 NEED_CLARIFICATION，立即失敗
-        assert result.status == PhaseStatus.FAILED
-        assert "NEED_CLARIFICATION" in result.message or "non-interactive" in result.message
+        # Assert - After removing while loop, NEED_CLARIFICATION in non-interactive returns IN_PROGRESS
+        # (not FAILED), because the phase can't continue without user input but doesn't fail immediately
+        assert result.status == PhaseStatus.IN_PROGRESS
+        assert result.data.get("status_code") == "CAFE_NEED_CLARIFICATION"
 
 
 class TestPlanCommandNonInteractiveSubsequentRounds:

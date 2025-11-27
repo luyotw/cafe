@@ -98,10 +98,9 @@ class TestNonInteractiveModeWithNeedClarification:
 
         result = phase.execute()
 
-        # Assert - 應該立即失敗
-        assert result.status == PhaseStatus.FAILED
-        assert "need_clarification" in result.message.lower() and \
-               "without user input" in result.message.lower()
+        # 移除 while loop 後，NEED_CLARIFICATION 返回 IN_PROGRESS
+        assert result.status == PhaseStatus.IN_PROGRESS
+        assert result.data.get("status_code") == "CAFE_NEED_CLARIFICATION"
     
     def test_should_fail_after_first_need_clarification(
         self, mock_env, setup_plan_phase, mock_git_ops, monkeypatch
@@ -136,11 +135,9 @@ class TestNonInteractiveModeWithNeedClarification:
 
         result = phase.execute()
 
-        # Assert - 第一輪應該使用 user_input 繼續並完成一輪迭代
-        # 但因為第二輪又收到 NEED_CLARIFICATION，且 user_input 已被消耗，應該失敗
-        assert result.status == PhaseStatus.FAILED
-        assert "need_clarification" in result.message.lower() and \
-               "without user input" in result.message.lower()
+        # 移除 while loop 後，只執行一次，返回 IN_PROGRESS
+        assert result.status == PhaseStatus.IN_PROGRESS
+        assert result.data.get("status_code") == "CAFE_NEED_CLARIFICATION"
 
 
 class TestNonInteractiveModeCompleteImmediately:
