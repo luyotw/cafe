@@ -443,10 +443,8 @@ class DevelopPhase(Phase):
 """
         
         # No review feedback - normal development mode
-        if self.iteration == 1:
-            # First iteration: provide spec.md and plan.md paths
-            user_input_section = f"\n\n**用戶的額外說明：**\n{user_input}\n" if user_input else ""
-            return f"""請按照實作計畫執行開發工作。
+        user_input_section = f"\n\n**用戶的額外說明：**\n{user_input}\n" if user_input else ""
+        return f"""請按照實作計畫執行開發工作。
 
 **你的角色：**
 你是一位經驗豐富的 Developer，負責根據需求規格和實作計畫進行開發。你會嚴格依照既有的 commit message 風格寫 commit。
