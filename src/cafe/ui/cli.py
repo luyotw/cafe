@@ -199,12 +199,13 @@ def _build_workflow(
     )
 
     # Phase 2: Implementation plan
+    # Note: spec_file parameter is deprecated, phases compute latest versioned files internally
     workflow.add_phase(
         PlanPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            spec_file=spec_file,
+            spec_file="",  # Deprecated - computed internally
             workflow_mode=mode,
             issue_id=issue_id,
             dev_agent=dev_name,
@@ -212,23 +213,15 @@ def _build_workflow(
         )
     )
 
-    # Determine plan file path from spec file
-    spec_path = Path(spec_file)
-    if ".cafe/issues/" in spec_file:
-        # Extract issue name from spec path: .cafe/issues/{issue-name}/spec/spec.md
-        plan_file = str(spec_path.parent.parent / "plan" / "plan.md")
-    else:
-        # Fallback to simple plan.md
-        plan_file = "plan.md"
-
     # Phase 3: Development
+    # Note: spec_file and plan_file parameters are deprecated, phases compute latest versioned files internally
     workflow.add_phase(
         DevelopPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            spec_file=spec_file,
-            plan_file=plan_file,
+            spec_file="",  # Deprecated - computed internally
+            plan_file="",  # Deprecated - computed internally
             workflow_mode=mode,
             issue_id=issue_id,
             dev_agent=dev_name,
@@ -236,13 +229,14 @@ def _build_workflow(
     )
 
     # Phase 4: Code review
+    # Note: spec_file and plan_file parameters are deprecated, phases compute latest versioned files internally
     workflow.add_phase(
         ReviewPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            spec_file=spec_file,
-            plan_file=plan_file,
+            spec_file="",  # Deprecated - computed internally
+            plan_file="",  # Deprecated - computed internally
             workflow_mode=mode,
             issue_id=issue_id,
             review_agent=reviewer_name,
@@ -250,12 +244,14 @@ def _build_workflow(
     )
 
     # Phase 5: PR creation
+    # Note: spec_file parameter is deprecated, phases compute latest versioned files internally
     workflow.add_phase(
         PRPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            spec_file=spec_file,
+            github_ops=GitHubOps(),
+            spec_file="",  # Deprecated - computed internally
             workflow_mode=mode,
             issue_id=issue_id,
         )
@@ -1098,7 +1094,7 @@ def plan(
         selected_template = None
 
         if is_resume:
-            console.print(f"[dim]Resuming existing plan from: {plan_file}[/dim]")
+            console.print(f"[dim]Resuming existing plan from: {plan_file_path}[/dim]")
 
         if template:
             # Template specified via --template option
@@ -1116,7 +1112,7 @@ def plan(
         console.print(f"CLI: {dev_cli}")
         console.print(f"Session ID: {dev_session_id}")
         if workflow_mode == WorkflowMode.LOCAL:
-            console.print(f"Spec file: {spec_file}")
+            console.print(f"Spec file: {spec_file_path}")
         elif issue_id:
             console.print(f"GitHub Issue: #{issue_id}")
         console.print()
@@ -1129,11 +1125,12 @@ def plan(
                 template_path_str = str(template_path_obj)
 
         # Create and execute plan phase
+        # Note: spec_file parameter is deprecated, PlanPhase computes latest versioned files internally
         phase = PlanPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            spec_file=spec_file,
+            spec_file=str(spec_file_path) if spec_file_path else "",  # Deprecated - computed internally
             workflow_mode=workflow_mode,
             issue_id=issue_id,
             issue_name=issue_name,

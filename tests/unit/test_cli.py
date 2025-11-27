@@ -369,10 +369,11 @@ class TestPlanCommand:
         tmp_path: Path,
     ) -> None:
         """測試 plan 指令 local mode 成功執行"""
-        # Setup: Create spec file in the expected location
+        # Setup: Create versioned spec file in the expected location
         branch_name = "test-issue"
-        spec_file = tmp_path / ".cafe" / "issues" / branch_name / "spec" / "spec.md"
-        spec_file.parent.mkdir(parents=True, exist_ok=True)
+        spec_dir = tmp_path / ".cafe" / "issues" / branch_name / "spec"
+        spec_dir.mkdir(parents=True, exist_ok=True)
+        spec_file = spec_dir / "spec_001.md"
         spec_file.write_text("# Spec\n\n## 開發指南\nGuide")
 
         # Create a default template
@@ -403,7 +404,7 @@ class TestPlanCommand:
         old_cwd = os.getcwd()
         try:
             os.chdir(tmp_path)
-            result = runner.invoke(app, ["plan"])
+            result = runner.invoke(app, ["plan", "--no-interactive", "--template", "default"])
         finally:
             os.chdir(old_cwd)
 
@@ -424,10 +425,11 @@ class TestPlanCommand:
         tmp_path: Path,
     ) -> None:
         """測試 plan 指令 github mode 使用 issue ID"""
-        # Setup: GitHub mode still checks if spec file exists first
+        # Setup: GitHub mode still checks if versioned spec file exists first
         branch_name = "test-issue"
-        spec_file = tmp_path / ".cafe" / "issues" / branch_name / "spec" / "spec.md"
-        spec_file.parent.mkdir(parents=True, exist_ok=True)
+        spec_dir = tmp_path / ".cafe" / "issues" / branch_name / "spec"
+        spec_dir.mkdir(parents=True, exist_ok=True)
+        spec_file = spec_dir / "spec_001.md"
         spec_file.write_text("# Spec\n\n## 開發指南\nGuide")
 
         # Create a default template
@@ -458,7 +460,7 @@ class TestPlanCommand:
         old_cwd = os.getcwd()
         try:
             os.chdir(tmp_path)
-            result = runner.invoke(app, ["plan", "-m", "github", "-i", "123"])
+            result = runner.invoke(app, ["plan", "-m", "github", "-i", "123", "--no-interactive", "--template", "default"])
         finally:
             os.chdir(old_cwd)
 
@@ -478,10 +480,11 @@ class TestPlanCommand:
         tmp_path: Path,
     ) -> None:
         """測試 plan 指令執行失敗"""
-        # Setup: Create spec file in the expected location
+        # Setup: Create versioned spec file in the expected location
         branch_name = "test-issue"
-        spec_file = tmp_path / ".cafe" / "issues" / branch_name / "spec" / "spec.md"
-        spec_file.parent.mkdir(parents=True, exist_ok=True)
+        spec_dir = tmp_path / ".cafe" / "issues" / branch_name / "spec"
+        spec_dir.mkdir(parents=True, exist_ok=True)
+        spec_file = spec_dir / "spec_001.md"
         spec_file.write_text("# Spec")
 
         # Create a default template
@@ -511,7 +514,7 @@ class TestPlanCommand:
         old_cwd = os.getcwd()
         try:
             os.chdir(tmp_path)
-            result = runner.invoke(app, ["plan"])
+            result = runner.invoke(app, ["plan", "--no-interactive", "--template", "default"])
         finally:
             os.chdir(old_cwd)
 
