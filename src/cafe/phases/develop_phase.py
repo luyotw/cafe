@@ -93,13 +93,24 @@ class DevelopPhase(Phase):
         self.iteration = self._load_iteration_counter()
 
     def _check_plan_exists(self) -> bool:
-        """Check if plan.md exists.
+        """Check if plan file exists (versioned or legacy plan.md).
 
         Returns:
-            True if plan.md exists, False otherwise
+            True if plan file exists, False otherwise
         """
         plan_path = Path(self.plan_file)
-        return plan_path.exists()
+        if plan_path.exists():
+            return True
+
+        # Also check for versioned plan files as fallback
+        plan_dir = self.issue_dir / "plan"
+        latest_plan = self._get_latest_versioned_file("plan", plan_dir)
+        if latest_plan and latest_plan.exists():
+            # Update self.plan_file to use the latest versioned file
+            self.plan_file = str(latest_plan)
+            return True
+
+        return False
 
     def _get_review_file_path(self) -> Path:
         """取得 review 檔案的完整路徑.

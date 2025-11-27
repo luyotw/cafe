@@ -1313,3 +1313,30 @@ class Phase(ABC):
         if prev_file.exists():
             import shutil
             shutil.copy2(prev_file, current_file)
+
+    def _get_latest_versioned_file(
+        self,
+        phase_name: str,
+        phase_dir: Path,
+    ) -> Optional[Path]:
+        """取得最新版本的檔案路徑（共用方法）。
+
+        Args:
+            phase_name: Phase 名稱（如 "spec", "plan", "review"）
+            phase_dir: Phase 目錄路徑
+
+        Returns:
+            最新版本檔案的 Path 物件，如果沒有任何版本則返回 None
+
+        Examples:
+            >>> _get_latest_versioned_file("spec", Path(".cafe/issues/myissue/spec"))
+            Path('.cafe/issues/myissue/spec/spec_003.md')  # 假設有 3 個版本
+        """
+        # Find all versioned files
+        pattern = f"{phase_name}_*.md"
+        versioned_files = sorted(phase_dir.glob(pattern))
+
+        # Return the latest one (highest number)
+        if versioned_files:
+            return versioned_files[-1]
+        return None

@@ -382,8 +382,14 @@ class PRPhase(Phase):
             # If path is not relative to cwd, use absolute path
             body_file_pattern = str(body_file)
 
-        # Derive plan file path
-        plan_file = spec_path.parent.parent / "plan" / "plan.md"
+        # Derive plan file path - use latest versioned file if available
+        plan_dir = spec_path.parent.parent / "plan"
+        latest_plan = self._get_latest_versioned_file("plan", plan_dir)
+        if latest_plan and latest_plan.exists():
+            plan_file = latest_plan
+        else:
+            # Fallback to legacy plan.md
+            plan_file = plan_dir / "plan.md"
 
         # Get commits for context
         main_branch = self.git_ops.get_main_branch()
