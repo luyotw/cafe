@@ -305,6 +305,29 @@ class DevelopPhase(Phase):
         # No special handling needed
         return ""
 
+    def _ask_for_additional_input(self) -> str:
+        """詢問使用者是否有額外的話要對開發者說（可選）。
+
+        此方法在每一輪開始時呼叫，讓使用者可以提供額外的指示或說明。
+
+        Interactive 模式：提示使用者輸入，可按 Enter 跳過
+        Non-interactive 模式：使用 self.user_input（一次性，用完清空）
+
+        Returns:
+            str: 使用者輸入（可為空字串）
+        """
+        if self.interactive:
+            print("\n" + "="*60)
+            print("💬 有沒有要對開發者說的話？（直接按 Enter 跳過）")
+            print("="*60)
+            user_input = input("> ").strip()
+            return user_input
+        else:
+            # Non-interactive: 使用 self.user_input（一次性）
+            user_input = self.user_input
+            self.user_input = ""  # 清空，避免重複使用
+            return user_input
+
     def _get_last_develop_timestamp(self):
         """Get timestamp from last develop/status.json.
 
@@ -567,6 +590,15 @@ class DevelopPhase(Phase):
                     current_user_input = f"{current_user_input}\n\n{permission_user_input}"
                 else:
                     current_user_input = permission_user_input
+
+            # Ask for additional user input (optional)
+            # This is done AFTER permission handling to avoid consuming input() calls when phase might fail
+            additional_input = self._ask_for_additional_input()
+            if additional_input:
+                if current_user_input:
+                    current_user_input = f"{current_user_input}\n\n{additional_input}"
+                else:
+                    current_user_input = additional_input
 
             # Execute full agent interaction cycle (generate prompt, execute, handle status)
             result, response = self._execute_and_handle_agent_response(
