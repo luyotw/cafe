@@ -1146,7 +1146,7 @@ def plan(
                 if Path(plan_file).exists():
                     console.print(f"Saved to: {plan_file}")
                 console.print()
-                console.print("[dim]Review the plan and run:[/dim] [bold]cafe plan[/bold] [dim](to modify) or[/dim] [bold]cafe develop[/bold] [dim](to continue)[/dim]")
+                console.print("[dim]To review the plan, run:[/dim] [bold]cafe plan[/bold]")
             elif status_code == "CAFE_REJECTED":
                 console.print("[bold red]❌ Plan rejected by agent[/bold red]")
                 console.print(f"Iterations: {result.data.get('iterations', 'N/A')}")
