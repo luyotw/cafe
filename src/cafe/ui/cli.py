@@ -937,14 +937,30 @@ def spec(
         # Display result
         if result.status.value == "completed":
             console.print()
-            console.print("[bold green]✅ Spec clarification completed![/bold green]")
-            console.print(f"Iterations: {result.data.get('iterations', 'N/A')}")
-            if workflow_mode == WorkflowMode.LOCAL:
-                console.print(f"Saved to: {spec_file}")
-            elif result.data.get('issue_id'):
-                console.print(f"Created issue: #{result.data['issue_id']}")
-            elif issue_id:
-                console.print(f"Updated issue: #{issue_id}")
+            status_code = result.data.get('status_code')
+
+            if status_code == "CAFE_NEED_CLARIFICATION":
+                console.print("[bold yellow]💬 Agent needs clarification[/bold yellow]")
+                console.print(f"Iterations: {result.data.get('iterations', 'N/A')}")
+                if workflow_mode == WorkflowMode.LOCAL:
+                    console.print(f"Saved to: {spec_file}")
+                console.print()
+                console.print("[dim]To continue, run:[/dim] [bold]cafe spec[/bold]")
+            elif status_code == "CAFE_REJECTED":
+                console.print("[bold red]❌ Spec rejected by agent[/bold red]")
+                console.print(f"Iterations: {result.data.get('iterations', 'N/A')}")
+                if workflow_mode == WorkflowMode.LOCAL:
+                    console.print(f"Saved to: {spec_file}")
+            else:
+                # CAFE_READY_FOR_REVIEW or CAFE_CONFIRMED
+                console.print("[bold green]✅ Spec clarification completed![/bold green]")
+                console.print(f"Iterations: {result.data.get('iterations', 'N/A')}")
+                if workflow_mode == WorkflowMode.LOCAL:
+                    console.print(f"Saved to: {spec_file}")
+                elif result.data.get('issue_id'):
+                    console.print(f"Created issue: #{result.data['issue_id']}")
+                elif issue_id:
+                    console.print(f"Updated issue: #{issue_id}")
         else:
             console.print()
             console.print(f"[bold red]❌ Spec phase failed: {result.message}[/bold red]")
@@ -1112,12 +1128,27 @@ def plan(
         # Display result
         if result.status.value == "completed":
             console.print()
-            console.print("[bold green]✅ Implementation plan completed![/bold green]")
-            console.print(f"Iterations: {result.data.get('iterations', 'N/A')}")
-            # Build plan file path
+            status_code = result.data.get('status_code')
             plan_file = f".cafe/issues/{issue_name}/plan/plan.md"
-            if Path(plan_file).exists():
-                console.print(f"Saved to: {plan_file}")
+
+            if status_code == "CAFE_NEED_CLARIFICATION":
+                console.print("[bold yellow]💬 Agent needs clarification[/bold yellow]")
+                console.print(f"Iterations: {result.data.get('iterations', 'N/A')}")
+                if Path(plan_file).exists():
+                    console.print(f"Saved to: {plan_file}")
+                console.print()
+                console.print("[dim]To continue, run:[/dim] [bold]cafe plan[/bold]")
+            elif status_code == "CAFE_REJECTED":
+                console.print("[bold red]❌ Plan rejected by agent[/bold red]")
+                console.print(f"Iterations: {result.data.get('iterations', 'N/A')}")
+                if Path(plan_file).exists():
+                    console.print(f"Saved to: {plan_file}")
+            else:
+                # CAFE_READY_FOR_REVIEW or CAFE_CONFIRMED
+                console.print("[bold green]✅ Implementation plan completed![/bold green]")
+                console.print(f"Iterations: {result.data.get('iterations', 'N/A')}")
+                if Path(plan_file).exists():
+                    console.print(f"Saved to: {plan_file}")
         else:
             console.print()
             console.print(f"[bold red]❌ Plan phase failed: {result.message}[/bold red]")
