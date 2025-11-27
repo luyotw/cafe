@@ -92,7 +92,6 @@ class TestBuildWorkflow:
 
         workflow = _build_workflow(
             mode=WorkflowMode.LOCAL,
-            spec_file="req.md",
             issue_id=None,
             agent_manager=agent_manager,
             permission_handler=permission_handler,
@@ -133,7 +132,6 @@ class TestBuildWorkflow:
 
         _build_workflow(
             mode=WorkflowMode.GITHUB,
-            spec_file="req.md",
             issue_id="123",
             agent_manager=agent_manager,
             permission_handler=permission_handler,

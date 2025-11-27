@@ -61,7 +61,6 @@ class SpecPhase(Phase):
         agent_manager: AgentManager,
         permission_handler: PermissionHandler,
         git_ops: "GitOperations",
-        spec_file: str,
         workflow_mode: WorkflowMode,
         issue_id: Optional[str] = None,
         pm_agent: str = "Roger",
@@ -70,6 +69,7 @@ class SpecPhase(Phase):
         rigor: Optional["SpecRigor"] = None,
         user_input: str = "",
         fetch_issue_id: Optional[int] = None,
+        spec_file: Optional[str] = None,  # Deprecated: kept for backward compatibility
     ) -> None:
         """Initialize requirements phase.
 
@@ -77,7 +77,6 @@ class SpecPhase(Phase):
             agent_manager: Agent manager
             permission_handler: Permission handler
             git_ops: Git operations
-            spec_file: Path to spec file
             workflow_mode: Workflow mode (local or github)
             issue_id: GitHub issue ID (required for github mode)
             pm_agent: PM agent name (default: Roger)
@@ -86,6 +85,7 @@ class SpecPhase(Phase):
             rigor: Specification rigor level (default: medium)
             user_input: User input for non-interactive mode (default: "")
             fetch_issue_id: GitHub issue number to fetch content from (optional)
+            spec_file: (Deprecated) Spec file path - ignored, kept for backward compatibility
         """
         super().__init__(interactive=interactive, git_ops=git_ops)
 
@@ -93,7 +93,6 @@ class SpecPhase(Phase):
 
         self.agent_manager = agent_manager
         self.permission_handler = permission_handler
-        self.spec_file = spec_file
         self.workflow_mode = workflow_mode
         self.issue_id = issue_id
         self.pm_agent = pm_agent
@@ -118,9 +117,16 @@ class SpecPhase(Phase):
             # Derive from current branch (issue_dir is set by base class)
             self.issue_name = self.issue_dir.name
 
+        # Phase directory for spec phase
+        # Path: .cafe/issues/{issue_name}/spec
+        self.phase_dir = self.issue_dir / "spec"
+
         # History directory for spec phase
         # Path: .cafe/issues/{issue_name}/spec/history
-        self.history_dir = self.issue_dir / "spec" / "history"
+        self.history_dir = self.phase_dir / "history"
+
+        # spec_file will be set in execute() based on iteration number
+        self.spec_file: str = ""
 
         # Load issue_id from config.json if exists (for comment posting after resume)
         self._load_issue_config()
@@ -157,6 +163,32 @@ class SpecPhase(Phase):
             Phase result
         """
         try:
+            # Ensure phase directory exists
+            self.phase_dir.mkdir(parents=True, exist_ok=True)
+
+            # Get next iteration number and setup versioned file path
+            try:
+                iteration_number = self._get_next_iteration_number("spec", self.phase_dir)
+            except ValueError as e:
+                # Exceeded 999 iterations
+                return PhaseResult(
+                    status=PhaseStatus.FAILED,
+                    message=f"Spec phase failed: {str(e)}",
+                    data={},
+                )
+
+            # Update self.iteration to match iteration_number from versioned files
+            # This ensures iteration counter is in sync with actual versioned files
+            if iteration_number > self.iteration:
+                self.iteration = iteration_number
+
+            # Copy previous version if exists (iteration > 1)
+            self._copy_previous_version("spec", iteration_number, self.phase_dir)
+
+            # Set versioned spec_file path
+            spec_file_path = self._get_versioned_file_path("spec", iteration_number, self.phase_dir)
+            self.spec_file = str(spec_file_path)
+
             # Fetch issue content from GitHub if --issue-id is provided
             if self.fetch_issue_id:
                 error_result = self._fetch_github_issue(self.fetch_issue_id)
@@ -177,8 +209,8 @@ class SpecPhase(Phase):
                 if spec_path.exists():
                     # Backup original spec if exists
                     self._backup_spec(spec_path)
-                elif self.iteration == 0:
-                    # File doesn't exist AND no history - get initial user story
+                elif iteration_number == 1:
+                    # File doesn't exist AND this is first iteration - get initial user story
                     if self.interactive:
                         # If --issue-id not provided, ask user to choose input method
                         if not self.fetch_issue_id:
@@ -221,7 +253,7 @@ class SpecPhase(Phase):
                         spec_path.write_text(user_story, encoding="utf-8")
 
             # Ask for rigor level if interactive and not set (after input method selection)
-            if self.interactive and self.iteration == 0:
+            if self.interactive and iteration_number == 1:
                 self._prompt_for_rigor()
 
             # Capture original requirement before entering clarification loop

@@ -130,7 +130,6 @@ def _setup_agents(config_manager: ConfigManager, issue_name: Optional[str] = Non
 
 def _build_workflow(
     mode: WorkflowMode,
-    spec_file: str,
     issue_id: Optional[str],
     agent_manager: AgentManager,
     permission_handler: PermissionHandler,
@@ -141,7 +140,6 @@ def _build_workflow(
 
     Args:
         mode: Workflow mode
-        spec_file: Specification file path
         issue_id: GitHub issue ID
         agent_manager: Agent manager
         permission_handler: Permission handler
@@ -164,7 +162,6 @@ def _build_workflow(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            spec_file=spec_file,
             workflow_mode=mode,
             issue_id=issue_id,
             pm_agent=pm_name,
@@ -863,11 +860,8 @@ def spec(
                 console.print(f"[red]Error: Invalid rigor '{rigor}'. Use 'low', 'medium', or 'high'.[/red]")
                 raise typer.Exit(1)
 
-        # Build spec file path: .cafe/issues/{issue-name}/spec/spec.md
-        spec_file = f".cafe/issues/{issue_name}/spec/spec.md"
-
-        # Create directory if it doesn't exist
-        spec_dir = Path(spec_file).parent
+        # Create spec directory if it doesn't exist
+        spec_dir = Path(f".cafe/issues/{issue_name}/spec")
         spec_dir.mkdir(parents=True, exist_ok=True)
 
         # Initialize components
@@ -895,7 +889,7 @@ def spec(
         if spec_rigor:
             console.print(f"Rigor: {spec_rigor.value}")
         if workflow_mode == WorkflowMode.LOCAL:
-            console.print(f"Spec file: {spec_file}")
+            console.print(f"Spec directory: {spec_dir}")
         elif issue_id:
             console.print(f"GitHub Issue: #{issue_id}")
         console.print()
@@ -914,7 +908,6 @@ def spec(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            spec_file=spec_file,
             workflow_mode=workflow_mode,
             issue_id=issue_id,
             pm_agent=pm_agent,
@@ -943,20 +936,20 @@ def spec(
                 console.print("[bold yellow]💬 Agent needs clarification[/bold yellow]")
                 console.print(f"Iterations: {result.data.get('iterations', 'N/A')}")
                 if workflow_mode == WorkflowMode.LOCAL:
-                    console.print(f"Saved to: {spec_file}")
+                    console.print(f"Saved to: {spec_dir}")
                 console.print()
                 console.print("[dim]To continue, run:[/dim] [bold]cafe spec[/bold]")
             elif status_code == "CAFE_REJECTED":
                 console.print("[bold red]❌ Spec rejected by agent[/bold red]")
                 console.print(f"Iterations: {result.data.get('iterations', 'N/A')}")
                 if workflow_mode == WorkflowMode.LOCAL:
-                    console.print(f"Saved to: {spec_file}")
+                    console.print(f"Saved to: {spec_dir}")
             else:
                 # CAFE_READY_FOR_REVIEW or CAFE_CONFIRMED
                 console.print("[bold green]✅ Spec clarification completed![/bold green]")
                 console.print(f"Iterations: {result.data.get('iterations', 'N/A')}")
                 if workflow_mode == WorkflowMode.LOCAL:
-                    console.print(f"Saved to: {spec_file}")
+                    console.print(f"Saved to: {spec_dir}")
                 elif result.data.get('issue_id'):
                     console.print(f"Created issue: #{result.data['issue_id']}")
                 elif issue_id:

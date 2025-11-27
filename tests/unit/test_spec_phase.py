@@ -76,14 +76,13 @@ class TestSpecPhaseBasics:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=mock_git_ops,
-            spec_file="spec.md",
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
         )
 
         assert phase.agent_manager == agent_manager
         assert phase.permission_handler == permission_handler
-        assert phase.spec_file == "spec.md"
+        assert phase.spec_file == ""  # Will be set in execute()
         assert phase.workflow_mode == WorkflowMode.LOCAL
 
     def test_init_with_github_mode(self, mock_git_ops: MagicMock) -> None:
@@ -95,7 +94,6 @@ class TestSpecPhaseBasics:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=mock_git_ops,
-            spec_file="spec.md",
             workflow_mode=WorkflowMode.GITHUB,
             interactive=False,
             issue_id="123",
@@ -129,7 +127,6 @@ class TestAgentSelection:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=mock_git_ops,
-            spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
             pm_agent="Roger",
@@ -163,7 +160,6 @@ class TestHistoryTracking:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=mock_git_ops,
-            spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
             issue_name="test-feature",
@@ -188,7 +184,6 @@ class TestHistoryTracking:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=mock_git_ops,
-            spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
             issue_name="test-feature",
@@ -237,7 +232,6 @@ class TestHistoryTracking:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=mock_git_ops,
-            spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
             issue_name="test-feature",
@@ -286,7 +280,6 @@ class TestHistoryTracking:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=mock_git_ops,
-            spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
             issue_name="test-feature",
@@ -344,7 +337,6 @@ class TestHistoryTracking:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=mock_git_ops,
-            spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
         )
@@ -366,7 +358,6 @@ class TestHistoryTracking:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=mock_git_ops,
-            spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
             issue_name="test-feature",
@@ -399,7 +390,6 @@ class TestHistoryTracking:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=mock_git_ops,
-            spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
             issue_name="test-feature",
@@ -440,7 +430,6 @@ class TestNonInteractiveModeIteration1:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=mock_git_ops,
-            spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
             user_input=user_story,  # Use user_input parameter in non-interactive mode
@@ -474,7 +463,6 @@ class TestNonInteractiveModeIteration1:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=mock_git_ops,
-            spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
         )
@@ -506,7 +494,6 @@ class TestNonInteractiveModeIteration1:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=mock_git_ops,
-            spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
             user_input="confirm",  # Provide confirmation for non-interactive mode
@@ -539,7 +526,6 @@ class TestNonInteractiveModeErrorHandling:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=mock_git_ops,
-            spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
         )
@@ -591,7 +577,6 @@ class TestNonInteractiveModeErrorHandling:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=mock_git_ops,
-            spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
             issue_id="spec",
@@ -631,7 +616,6 @@ class TestInteractiveModeStillWorks:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=mock_git_ops,
-            spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=True,  # Interactive mode
             rigor=SpecRigor.MEDIUM,  # Explicitly set rigor to avoid prompting
@@ -678,7 +662,6 @@ class TestSkipConfirmedSpec:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=mock_git_ops,
-            spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
         )
@@ -717,7 +700,6 @@ class TestKeyboardInterrupt:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=mock_git_ops,
-            spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
         )
@@ -767,7 +749,6 @@ class TestSpecPhasePromptGeneration:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=mock_git_ops,
-            spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
         )
@@ -834,7 +815,6 @@ class TestInterruptedIterationResume:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=mock_git_ops,
-            spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
             user_input="confirm",  # Provide confirmation for non-interactive mode
@@ -885,7 +865,6 @@ class TestSpecPhaseFilePermissions:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=mock_git_ops,
-            spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
             user_input="confirm",  # Provide confirmation for non-interactive mode
@@ -933,7 +912,6 @@ class TestPromptForInputMethod:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=mock_git_ops,
-            spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=True,
         )
@@ -967,7 +945,6 @@ class TestPromptForInputMethod:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=mock_git_ops,
-            spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=True,
         )
@@ -1002,7 +979,6 @@ class TestPromptForInputMethod:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=mock_git_ops,
-            spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=True,
         )
@@ -1031,7 +1007,6 @@ class TestPromptForInputMethod:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=mock_git_ops,
-            spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=True,
         )
@@ -1072,7 +1047,6 @@ class TestFetchGitHubIssue:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=mock_git_ops,
-            spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=True,
         )
@@ -1112,7 +1086,6 @@ class TestFetchGitHubIssue:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=mock_git_ops,
-            spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=True,
         )
@@ -1154,7 +1127,6 @@ class TestFetchGitHubIssue:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=mock_git_ops,
-            spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=True,
         )
@@ -1195,7 +1167,6 @@ class TestFetchGitHubIssue:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=mock_git_ops,
-            spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=True,
         )
@@ -1236,7 +1207,6 @@ class TestOriginalRequirement:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=mock_git_ops,
-            spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
         )
@@ -1266,7 +1236,6 @@ class TestOriginalRequirement:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=mock_git_ops,
-            spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
         )
@@ -1301,7 +1270,6 @@ class TestOriginalRequirement:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=mock_git_ops,
-            spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
         )
@@ -1333,7 +1301,6 @@ class TestOriginalRequirement:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=mock_git_ops,
-            spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
         )
@@ -1366,7 +1333,6 @@ class TestOriginalRequirement:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=mock_git_ops,
-            spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
         )
@@ -1399,7 +1365,6 @@ class TestOriginalRequirement:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=mock_git_ops,
-            spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
         )
@@ -1413,6 +1378,130 @@ class TestOriginalRequirement:
         assert "不是軟體工程師" in prompt
         assert "絕對不會自行修改程式碼" in prompt
         assert "Product Manager" in prompt or "PM" in prompt
+
+
+class TestSpecPhaseVersionedFiles:
+    """測試 SpecPhase 的版本化檔案管理"""
+
+    def test_first_iteration_creates_spec_001(self, tmp_path: Path, mock_git_ops: MagicMock, monkeypatch) -> None:
+        """測試第一輪產生 spec_001.md"""
+        monkeypatch.chdir(tmp_path)
+        mock_git_ops.get_current_branch.return_value = "test-issue"
+
+        # Setup initial spec content
+        spec_dir = tmp_path / ".cafe" / "issues" / "test-issue" / "spec"
+        spec_dir.mkdir(parents=True, exist_ok=True)
+
+        # Create initial requirement
+        initial_spec = spec_dir / "spec.md"
+        initial_spec.write_text("# 初始需求\n\n身為使用者，我想要功能X")
+
+        # Setup mocks
+        agent_manager = MagicMock(spec=AgentManager)
+        agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n需求已確認", TokenUsage(), [], None)
+        setup_agent_manager_mocks(agent_manager)
+
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        # Create phase without spec_file parameter (should auto-calculate)
+        phase = SpecPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            git_ops=mock_git_ops,
+            workflow_mode=WorkflowMode.LOCAL,
+            interactive=False,
+            user_input="confirm",
+        )
+
+        # Execute
+        result = phase.execute()
+
+        # Verify spec_001.md was created
+        spec_001 = spec_dir / "spec_001.md"
+        assert spec_001.exists(), "spec_001.md should be created in first iteration"
+
+    def test_second_iteration_creates_spec_002_copy(self, tmp_path: Path, mock_git_ops: MagicMock, monkeypatch) -> None:
+        """測試第二輪產生 spec_002.md（內容為 spec_001.md 的複製）"""
+        monkeypatch.chdir(tmp_path)
+        mock_git_ops.get_current_branch.return_value = "test-issue"
+
+        spec_dir = tmp_path / ".cafe" / "issues" / "test-issue" / "spec"
+        spec_dir.mkdir(parents=True, exist_ok=True)
+
+        # Create spec_001.md from first iteration
+        spec_001 = spec_dir / "spec_001.md"
+        spec_001_content = "## 需求規格\n功能描述：這是第一輪的內容"
+        spec_001.write_text(spec_001_content)
+
+        # Create history to simulate iteration 1 completion
+        history_dir = spec_dir / "history"
+        history_dir.mkdir(parents=True, exist_ok=True)
+        iteration1 = history_dir / "iteration_001.json"
+        iteration1.write_text(json.dumps({
+            "iteration": 1,
+            "user_input": "Initial requirement",
+            "response": "CAFE_READY_FOR_REVIEW\n第一輪完成",
+            "status_code": "CAFE_READY_FOR_REVIEW"
+        }))
+
+        # Setup mocks for iteration 2
+        agent_manager = MagicMock(spec=AgentManager)
+        agent_manager.execute.return_value = ("CAFE_CONFIRMED\n最終確認", TokenUsage(), [], None)
+        setup_agent_manager_mocks(agent_manager)
+
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        # Create phase
+        phase = SpecPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            git_ops=mock_git_ops,
+            workflow_mode=WorkflowMode.LOCAL,
+            interactive=False,
+            user_input="modify\n請加入更多細節",
+        )
+
+        # Execute iteration 2
+        result = phase.execute()
+
+        # Verify spec_002.md was created
+        spec_002 = spec_dir / "spec_002.md"
+        assert spec_002.exists(), "spec_002.md should be created in second iteration"
+
+        # Verify spec_002.md initially contains copy of spec_001.md
+        spec_002_content = spec_002.read_text()
+        assert spec_001_content in spec_002_content, "spec_002.md should initially contain spec_001.md content"
+
+    def test_exceeds_999_iterations_raises_error(self, tmp_path: Path, mock_git_ops: MagicMock, monkeypatch) -> None:
+        """測試超過 999 輪時拋出錯誤"""
+        monkeypatch.chdir(tmp_path)
+        mock_git_ops.get_current_branch.return_value = "test-issue"
+
+        spec_dir = tmp_path / ".cafe" / "issues" / "test-issue" / "spec"
+        spec_dir.mkdir(parents=True, exist_ok=True)
+
+        # Create 999 spec files
+        for i in range(1, 1000):
+            spec_file = spec_dir / f"spec_{i:03d}.md"
+            spec_file.write_text(f"Spec iteration {i}")
+
+        # Setup mocks
+        agent_manager = MagicMock(spec=AgentManager)
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        # Create phase
+        phase = SpecPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            git_ops=mock_git_ops,
+            workflow_mode=WorkflowMode.LOCAL,
+            interactive=False,
+        )
+
+        # Attempt to execute - should raise ValueError
+        with pytest.raises(ValueError, match="不可超過 999"):
+            # Directly call _get_next_iteration_number to test the limit
+            phase._get_next_iteration_number("spec", spec_dir)
 
 
 if __name__ == "__main__":
