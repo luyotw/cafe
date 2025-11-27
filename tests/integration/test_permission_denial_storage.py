@@ -311,7 +311,9 @@ class TestDevelopPhasePermissionDenialStorage:
             interactive=True,
         )
 
-        with patch('builtins.print'):
+        # Mock input() for _ask_for_additional_input() to skip user input
+        with patch('builtins.print'), \
+             patch('builtins.input', return_value=""):
             result = phase.execute()
 
         # Verify phase returned IN_PROGRESS
@@ -389,7 +391,9 @@ class TestDevelopPhasePermissionDenialStorage:
             interactive=True,
         )
 
-        with patch('builtins.print'):
+        # Mock input() for _ask_for_additional_input() to skip user input
+        with patch('builtins.print'), \
+             patch('builtins.input', return_value=""):
             result = phase.execute()
 
         # Verify phase completed
@@ -467,7 +471,9 @@ class TestMultiplePermissionDenials:
             interactive=True,
         )
 
-        with patch('builtins.print'):
+        # Mock input() for _ask_for_additional_input() to skip user input
+        with patch('builtins.print'), \
+             patch('builtins.input', return_value=""):
             result = phase.execute()
 
         # Verify all permission denials are saved

@@ -210,6 +210,7 @@ class TestIterativeFlow:
             plan_file=str(plan_file),
             workflow_mode=WorkflowMode.LOCAL,
             issue_name="test",
+            interactive=False,  # Set to non-interactive to avoid input() call
         )
 
         result = phase.execute()
@@ -249,6 +250,7 @@ class TestIterativeFlow:
             plan_file=str(plan_file),
             workflow_mode=WorkflowMode.LOCAL,
             issue_name="test",
+            interactive=False,  # Set to non-interactive to avoid input() call
         )
 
         result = phase.execute()
@@ -334,6 +336,7 @@ class TestStatusCodeHandling:
             plan_file=str(plan_file),
             workflow_mode=WorkflowMode.LOCAL,
             issue_name="test",
+            interactive=False,  # Set to non-interactive to avoid input() call
         )
 
         result = phase.execute()
@@ -377,7 +380,9 @@ class TestStatusCodeHandling:
         )
 
         # Execute - should return IN_PROGRESS and save history
-        result = phase.execute()
+        # Mock input() to simulate user skipping additional input
+        with patch('builtins.input', return_value=""):
+            result = phase.execute()
 
         # Should return IN_PROGRESS (not continue execution)
         assert result.status == PhaseStatus.IN_PROGRESS
@@ -1377,3 +1382,120 @@ class TestDeveloperPermissions:
                 f"Second iteration should inherit previous tools. Expected {expected_tools}, got {actual_tools}"
         finally:
             os.chdir(original_dir)
+
+
+class TestAskForAdditionalInput:
+    """測試 _ask_for_additional_input() 方法"""
+
+    def test_ask_for_additional_input_interactive_with_input(self, tmp_path, monkeypatch) -> None:
+        """測試 interactive 模式，使用者提供額外輸入"""
+        monkeypatch.chdir(tmp_path)
+
+        # Setup
+        agent_manager = MagicMock(spec=AgentManager)
+        setup_agent_manager_mock(agent_manager)
+        permission_handler = MagicMock(spec=PermissionHandler)
+        git_ops = MagicMock(spec=GitOperations)
+        git_ops.get_current_branch.return_value = "test"
+
+        # Create phase
+        phase = DevelopPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            git_ops=git_ops,
+            spec_file=".cafe/issues/test/spec/spec.md",
+            plan_file=".cafe/issues/test/plan/plan.md",
+            workflow_mode=WorkflowMode.LOCAL,
+            interactive=True,
+        )
+
+        # Mock input() to return user input
+        with patch('builtins.input', return_value="請注意效能"):
+            result = phase._ask_for_additional_input()
+
+        assert result == "請注意效能"
+
+    def test_ask_for_additional_input_interactive_empty(self, tmp_path, monkeypatch) -> None:
+        """測試 interactive 模式，使用者按 Enter 跳過"""
+        monkeypatch.chdir(tmp_path)
+
+        # Setup
+        agent_manager = MagicMock(spec=AgentManager)
+        setup_agent_manager_mock(agent_manager)
+        permission_handler = MagicMock(spec=PermissionHandler)
+        git_ops = MagicMock(spec=GitOperations)
+        git_ops.get_current_branch.return_value = "test"
+
+        # Create phase
+        phase = DevelopPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            git_ops=git_ops,
+            spec_file=".cafe/issues/test/spec/spec.md",
+            plan_file=".cafe/issues/test/plan/plan.md",
+            workflow_mode=WorkflowMode.LOCAL,
+            interactive=True,
+        )
+
+        # Mock input() to return empty string
+        with patch('builtins.input', return_value=""):
+            result = phase._ask_for_additional_input()
+
+        assert result == ""
+
+    def test_ask_for_additional_input_non_interactive(self, tmp_path, monkeypatch) -> None:
+        """測試 non-interactive 模式，使用 user_input"""
+        monkeypatch.chdir(tmp_path)
+
+        # Setup
+        agent_manager = MagicMock(spec=AgentManager)
+        setup_agent_manager_mock(agent_manager)
+        permission_handler = MagicMock(spec=PermissionHandler)
+        git_ops = MagicMock(spec=GitOperations)
+        git_ops.get_current_branch.return_value = "test"
+
+        # Create phase with user_input
+        phase = DevelopPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            git_ops=git_ops,
+            spec_file=".cafe/issues/test/spec/spec.md",
+            plan_file=".cafe/issues/test/plan/plan.md",
+            workflow_mode=WorkflowMode.LOCAL,
+            interactive=False,
+            user_input="請記得寫測試",
+        )
+
+        result = phase._ask_for_additional_input()
+
+        # 驗證返回值
+        assert result == "請記得寫測試"
+        # 重要：驗證 user_input 被清空
+        assert phase.user_input == ""
+
+    def test_ask_for_additional_input_non_interactive_empty(self, tmp_path, monkeypatch) -> None:
+        """測試 non-interactive 模式，user_input 為空"""
+        monkeypatch.chdir(tmp_path)
+
+        # Setup
+        agent_manager = MagicMock(spec=AgentManager)
+        setup_agent_manager_mock(agent_manager)
+        permission_handler = MagicMock(spec=PermissionHandler)
+        git_ops = MagicMock(spec=GitOperations)
+        git_ops.get_current_branch.return_value = "test"
+
+        # Create phase without user_input
+        phase = DevelopPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            git_ops=git_ops,
+            spec_file=".cafe/issues/test/spec/spec.md",
+            plan_file=".cafe/issues/test/plan/plan.md",
+            workflow_mode=WorkflowMode.LOCAL,
+            interactive=False,
+            user_input="",
+        )
+
+        result = phase._ask_for_additional_input()
+
+        assert result == ""

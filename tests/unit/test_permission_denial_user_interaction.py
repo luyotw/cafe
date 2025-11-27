@@ -101,7 +101,9 @@ class TestPermissionDenialUserInteraction:
         )
 
         # First execution - agent requests permissions
-        with patch('builtins.print'):
+        # Mock input() for _ask_for_additional_input() to skip user input
+        with patch('builtins.print'), \
+             patch('builtins.input', return_value=""):
             result = phase.execute()
 
         assert result.status == PhaseStatus.IN_PROGRESS
@@ -115,9 +117,9 @@ class TestPermissionDenialUserInteraction:
         assert len(iteration_data["permission_denials"]) == 2
 
         # Second execution - user approves all tools
-        # Mock user input: approve both tools, then provide additional instructions
+        # Mock user input: approve both tools ('y', 'y'), then skip additional input ('')
         with patch('builtins.print'), \
-             patch('builtins.input', side_effect=['y', 'y']),  \
+             patch('builtins.input', side_effect=['y', 'y', '']),  \
              patch.object(phase.display, 'get_multiline_input', return_value="請繼續開發"):
 
             # Reset iteration for second execution
@@ -185,14 +187,17 @@ class TestPermissionDenialUserInteraction:
         )
 
         # First execution
-        with patch('builtins.print'):
+        # Mock input() for _ask_for_additional_input() to skip user input
+        with patch('builtins.print'), \
+             patch('builtins.input', return_value=""):
             result = phase.execute()
 
         assert result.status == PhaseStatus.IN_PROGRESS
 
         # Second execution - user rejects first two, approves last one
+        # Mock input(): 'n', 'n', 'y' for permissions, then '' for additional input
         with patch('builtins.print'), \
-             patch('builtins.input', side_effect=['n', 'n', 'y']), \
+             patch('builtins.input', side_effect=['n', 'n', 'y', '']), \
              patch.object(phase.display, 'get_multiline_input', return_value="只用安全的檔案"):
 
             phase.iteration = 1
@@ -255,12 +260,15 @@ class TestPermissionDenialUserInteraction:
         )
 
         # First execution
-        with patch('builtins.print'):
+        # Mock input() for _ask_for_additional_input() to skip user input
+        with patch('builtins.print'), \
+             patch('builtins.input', return_value=""):
             result = phase.execute()
 
         assert result.status == PhaseStatus.IN_PROGRESS
 
         # Second execution - user rejects all tools
+        # Mock input(): 'n', 'n' for permissions (no additional input needed as it will fail)
         with patch('builtins.print'), \
              patch('builtins.input', side_effect=['n', 'n']), \
              patch.object(phase.display, 'get_multiline_input', return_value="不給權限"):
@@ -317,12 +325,15 @@ class TestPermissionDenialUserInteraction:
         )
 
         # First execution
-        with patch('builtins.print'):
+        # Mock input() for _ask_for_additional_input() to skip user input
+        with patch('builtins.print'), \
+             patch('builtins.input', return_value=""):
             result = phase.execute()
 
         # Second execution - verify display format
+        # Mock input(): 'y' for permission, then '' for additional input
         with patch('builtins.print') as mock_print, \
-             patch('builtins.input', return_value='y'), \
+             patch('builtins.input', side_effect=['y', '']), \
              patch.object(phase.display, 'get_multiline_input', return_value="繼續"):
 
             phase.iteration = 1
