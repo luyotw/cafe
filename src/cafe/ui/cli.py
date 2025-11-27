@@ -136,7 +136,7 @@ def _get_latest_versioned_file(phase_name: str, issue_name: str) -> Optional[Pat
         issue_name: Issue name
 
     Returns:
-        Path to the latest versioned file, or None if no versioned files exist
+        Path to the latest versioned file, or base file if no versioned files exist, or None if no files exist
     """
     phase_dir = Path(f".cafe/issues/{issue_name}/{phase_name}")
     if not phase_dir.exists():
@@ -146,11 +146,16 @@ def _get_latest_versioned_file(phase_name: str, issue_name: str) -> Optional[Pat
     pattern = f"{phase_name}_*.md"
     versioned_files = sorted(phase_dir.glob(pattern))
 
-    if not versioned_files:
-        return None
+    if versioned_files:
+        # Return the latest (highest numbered) file
+        return versioned_files[-1]
 
-    # Return the latest (highest numbered) file
-    return versioned_files[-1]
+    # Fallback to base file (e.g., spec.md, plan.md)
+    base_file = phase_dir / f"{phase_name}.md"
+    if base_file.exists():
+        return base_file
+
+    return None
 
 
 def _build_workflow(
