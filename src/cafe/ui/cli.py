@@ -1140,13 +1140,20 @@ def plan(
                     console.print(f"Saved to: {plan_file}")
                 console.print()
                 console.print("[dim]To continue, run:[/dim] [bold]cafe plan[/bold]")
+            elif status_code == "CAFE_READY_FOR_REVIEW":
+                console.print("[bold yellow]📋 Plan ready for review[/bold yellow]")
+                console.print(f"Iterations: {result.data.get('iterations', 'N/A')}")
+                if Path(plan_file).exists():
+                    console.print(f"Saved to: {plan_file}")
+                console.print()
+                console.print("[dim]Review the plan and run:[/dim] [bold]cafe plan[/bold] [dim](to modify) or[/dim] [bold]cafe develop[/bold] [dim](to continue)[/dim]")
             elif status_code == "CAFE_REJECTED":
                 console.print("[bold red]❌ Plan rejected by agent[/bold red]")
                 console.print(f"Iterations: {result.data.get('iterations', 'N/A')}")
                 if Path(plan_file).exists():
                     console.print(f"Saved to: {plan_file}")
             else:
-                # CAFE_READY_FOR_REVIEW or CAFE_CONFIRMED
+                # CAFE_CONFIRMED
                 console.print("[bold green]✅ Implementation plan completed![/bold green]")
                 console.print(f"Iterations: {result.data.get('iterations', 'N/A')}")
                 if Path(plan_file).exists():
