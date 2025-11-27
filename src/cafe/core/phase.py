@@ -1229,3 +1229,87 @@ class Phase(ABC):
         from pathlib import Path
         current_branch = git_ops.get_current_branch()
         return Path(f".cafe/issues/{current_branch}")
+
+    def _get_versioned_file_path(
+        self,
+        phase_name: str,
+        iteration: int,
+        phase_dir: Path,
+    ) -> Path:
+        """取得版本化檔案的路徑（共用方法）。
+
+        Args:
+            phase_name: Phase 名稱（如 "spec", "plan", "review"）
+            iteration: Iteration 編號（1-based）
+            phase_dir: Phase 目錄路徑
+
+        Returns:
+            版本化檔案的 Path 物件（格式：{phase_name}_{iteration:03d}.md）
+
+        Examples:
+            >>> _get_versioned_file_path("spec", 1, Path(".cafe/issues/myissue/spec"))
+            Path('.cafe/issues/myissue/spec/spec_001.md')
+        """
+        file_name = f"{phase_name}_{iteration:03d}.md"
+        return phase_dir / file_name
+
+    def _get_next_iteration_number(
+        self,
+        phase_name: str,
+        phase_dir: Path,
+    ) -> int:
+        """取得下一個 iteration 編號（共用方法）。
+
+        Args:
+            phase_name: Phase 名稱（如 "spec", "plan", "review"）
+            phase_dir: Phase 目錄路徑
+
+        Returns:
+            下一個 iteration 編號（從 1 開始）
+
+        Raises:
+            ValueError: 如果已有 999 個檔案
+        """
+        # Check if directory exists
+        if not phase_dir.exists():
+            return 1
+
+        # Count existing {phase_name}_*.md files
+        existing_files = list(phase_dir.glob(f"{phase_name}_*.md"))
+        count = len(existing_files)
+
+        # Check if exceeds 999
+        if count >= 999:
+            raise ValueError("不可超過 999")
+
+        return count + 1
+
+    def _copy_previous_version(
+        self,
+        phase_name: str,
+        iteration: int,
+        phase_dir: Path,
+    ) -> None:
+        """複製前一版本的檔案到新版本（共用方法）。
+
+        Args:
+            phase_name: Phase 名稱（如 "spec", "plan", "review"）
+            iteration: 當前 iteration 編號
+            phase_dir: Phase 目錄路徑
+
+        Note:
+            - 如果是第一輪（iteration=1），不執行任何動作
+            - 如果前一版本不存在，不執行任何動作
+        """
+        # Do nothing for first iteration
+        if iteration == 1:
+            return
+
+        # Get previous and current file paths
+        prev_file = self._get_versioned_file_path(phase_name, iteration - 1, phase_dir)
+        current_file = self._get_versioned_file_path(phase_name, iteration, phase_dir)
+
+        # Copy if previous file exists
+        if prev_file.exists():
+            import shutil
+            shutil.copy2(prev_file, current_file)
