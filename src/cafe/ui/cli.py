@@ -961,6 +961,8 @@ def spec(
                     console.print(f"Created issue: #{result.data['issue_id']}")
                 elif issue_id:
                     console.print(f"Updated issue: #{issue_id}")
+                console.print()
+                console.print("[dim]Next step:[/dim] [bold]cafe plan[/bold]")
         else:
             console.print()
             console.print(f"[bold red]❌ Spec phase failed: {result.message}[/bold red]")
@@ -1149,6 +1151,8 @@ def plan(
                 console.print(f"Iterations: {result.data.get('iterations', 'N/A')}")
                 if Path(plan_file).exists():
                     console.print(f"Saved to: {plan_file}")
+                console.print()
+                console.print("[dim]Next step:[/dim] [bold]cafe develop[/bold]")
         else:
             console.print()
             console.print(f"[bold red]❌ Plan phase failed: {result.message}[/bold red]")
