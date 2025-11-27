@@ -76,7 +76,7 @@ class TestSpecPhaseUserConfirmation:
             result = phase.execute()
 
         # 沒有 while loop，READY_FOR_REVIEW 在 interactive 模式下返回 IN_PROGRESS
-        assert result.status == PhaseStatus.IN_PROGRESS
+        assert result.status == PhaseStatus.COMPLETED
         assert result.data.get("status_code") == "CAFE_READY_FOR_REVIEW"
         assert agent_manager.execute.call_count == 1, "只應呼叫 agent 一次"
 
@@ -123,7 +123,7 @@ class TestSpecPhaseUserConfirmation:
 
         # 沒有 while loop，READY_FOR_REVIEW 在 interactive 模式下返回 IN_PROGRESS
         # 用戶拒絕的行為會在後續的 execute() 呼叫中處理
-        assert result.status == PhaseStatus.IN_PROGRESS
+        assert result.status == PhaseStatus.COMPLETED
         assert result.data.get("status_code") == "CAFE_READY_FOR_REVIEW"
         assert agent_manager.execute.call_count == 1, "只應呼叫 agent 一次"
 
@@ -171,7 +171,7 @@ class TestSpecPhaseUserConfirmation:
             result = phase.execute()
 
         # 沒有 while loop，READY_FOR_REVIEW 在 interactive 模式下返回 IN_PROGRESS
-        assert result.status == PhaseStatus.IN_PROGRESS
+        assert result.status == PhaseStatus.COMPLETED
         assert result.data.get("status_code") == "CAFE_READY_FOR_REVIEW"
         # 只呼叫 agent 一次
         assert agent_manager.execute.call_count == 1

@@ -112,11 +112,12 @@ class TestSpecPhaseInteractiveVsNonInteractive:
         with patch('builtins.print'):
             result_noninteractive = phase_noninteractive.execute()
 
-        # Interactive: 回傳 IN_PROGRESS（等待確認）
-        assert result_interactive.status == PhaseStatus.IN_PROGRESS
+        # After behavior change: Both modes complete immediately for READY_FOR_REVIEW
+        # User can manually run again if they want to make changes
+        assert result_interactive.status == PhaseStatus.COMPLETED
         assert result_interactive.data.get("status_code") == "CAFE_READY_FOR_REVIEW"
 
-        # Non-interactive: 立即完成
+        # Non-interactive: 立即完成（行為不變）
         assert result_noninteractive.status == PhaseStatus.COMPLETED
         assert result_noninteractive.data.get("status_code") == "CAFE_READY_FOR_REVIEW"
 
@@ -401,9 +402,10 @@ class TestPlanPhaseInteractiveVsNonInteractive:
         with patch('builtins.print'):
             result_noninteractive = phase_noninteractive.execute()
 
-        # 移除 while loop 後，interactive 模式下 READY_FOR_REVIEW 返回 IN_PROGRESS，non-interactive 返回 COMPLETED
-        assert result_interactive.status == PhaseStatus.IN_PROGRESS
-        assert result_interactive.data.get("status_code") == "CAFE_READY_FOR_REVIEW"  # Interactive 等待用戶確認
+        # After behavior change: Both modes complete immediately for READY_FOR_REVIEW
+        # User can manually run again if they want to make changes
+        assert result_interactive.status == PhaseStatus.COMPLETED
+        assert result_interactive.data.get("status_code") == "CAFE_READY_FOR_REVIEW"  # No longer waits for user
         assert result_noninteractive.status == PhaseStatus.COMPLETED
         assert result_noninteractive.data.get("status_code") == "CAFE_CONFIRMED"  # Non-interactive 有 user_input 會得到 CONFIRMED
 

@@ -1089,8 +1089,8 @@ class TestPlanPhaseResume:
 
         # Should have prompted user for response before calling agent
         assert mock_multiline.call_count == 1
-        # 移除 while loop 後，READY_FOR_REVIEW 在 interactive 模式下返回 IN_PROGRESS
-        assert result.status == PhaseStatus.IN_PROGRESS
+        # After behavior change, READY_FOR_REVIEW in interactive mode returns COMPLETED immediately
+        assert result.status == PhaseStatus.COMPLETED
         assert result.data.get("status_code") == "CAFE_READY_FOR_REVIEW"
 
 class TestPlanPhaseIterationDisplay:
@@ -1151,8 +1151,8 @@ class TestPlanPhaseIterationDisplay:
              patch('builtins.input', return_value='c'):
             result = phase.execute()
 
-        # 移除 while loop 後，只驗證 phase 成功執行（返回 IN_PROGRESS 因為 READY_FOR_REVIEW 在 interactive 模式下需要確認）
-        assert result.status == PhaseStatus.IN_PROGRESS
+        # After behavior change: READY_FOR_REVIEW in interactive mode returns COMPLETED immediately
+        assert result.status == PhaseStatus.COMPLETED
         assert result.data.get("status_code") == "CAFE_READY_FOR_REVIEW"
 
     def test_no_plan_display_in_iteration_1(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
@@ -1620,6 +1620,7 @@ class TestExecuteAndHandleAgentResponse:
         mock_agent.config.session_id = "test_session"
         agent_manager.get_agent.return_value = mock_agent
         agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n計畫已完成", TokenUsage(), [], None)
+        agent_manager.get_total_token_usage.return_value = TokenUsage()
 
         phase = PlanPhase(
             agent_manager=agent_manager,
@@ -1627,29 +1628,31 @@ class TestExecuteAndHandleAgentResponse:
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             issue_name="test-issue",
-            interactive=True,  # Must be interactive for READY_FOR_REVIEW to return None
+            interactive=True,
             template_path=create_template_file(tmp_path),
             git_ops=mock_git_ops,
         )
         phase.iteration = 1
 
         # Execute - call base class method with all required parameters
-        result, _ = phase._execute_and_handle_agent_response(
-            agent_name=phase.dev_agent,
-            user_input="請建立計畫",
-            valid_status_codes=[
-                PhaseStatusCode.READY_FOR_REVIEW,
-                PhaseStatusCode.NEED_CLARIFICATION,
-                PhaseStatusCode.REJECTED,
-            ],
-            allowed_tools=["write", "read"],
-            complete_codes=[PhaseStatusCode.READY_FOR_REVIEW],
-            continue_codes=[PhaseStatusCode.NEED_CLARIFICATION],
-            phase_specific_data={"dev_agent": phase.dev_agent},
-        )
+        with patch('builtins.print'):
+            result, _ = phase._execute_and_handle_agent_response(
+                agent_name=phase.dev_agent,
+                user_input="請建立計畫",
+                valid_status_codes=[
+                    PhaseStatusCode.READY_FOR_REVIEW,
+                    PhaseStatusCode.NEED_CLARIFICATION,
+                    PhaseStatusCode.REJECTED,
+                ],
+                allowed_tools=["write", "read"],
+                complete_codes=[PhaseStatusCode.READY_FOR_REVIEW],
+                continue_codes=[PhaseStatusCode.NEED_CLARIFICATION],
+                phase_specific_data={"dev_agent": phase.dev_agent},
+            )
 
-        # Verify
-        assert result is None  # Should continue to next iteration
+        # After behavior change: READY_FOR_REVIEW returns COMPLETED immediately
+        assert result is not None
+        assert result.status == PhaseStatus.COMPLETED
 
     def test_returns_none_for_need_clarification(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
         monkeypatch.chdir(tmp_path)

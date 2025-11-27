@@ -80,16 +80,16 @@ class TestPlanPhaseUserConfirmation:
             template_path=create_template_file(tmp_path),
         )
 
-        # Mock user choosing 'c' (confirm) - but this won't be used in first execute()
+        # Mock user choosing 'c' (confirm) - but this won't be used anymore
         with patch('builtins.input', return_value='c') as mock_input, \
              patch('builtins.print'):
             result = phase.execute()
 
-        # After removing while loop, READY_FOR_REVIEW in interactive mode returns IN_PROGRESS
-        # (not COMPLETED), because it needs user confirmation which happens in next iteration
-        # input() is NOT called in first execute() anymore
-        assert not mock_input.called, "第一次 execute() 不會提示用戶確認"
-        assert result.status == PhaseStatus.IN_PROGRESS
+        # After removing while loop and changing behavior to complete immediately,
+        # READY_FOR_REVIEW in both interactive and non-interactive modes returns COMPLETED
+        # User confirmation is no longer automatic - if user wants to modify, they run again manually
+        assert not mock_input.called, "不再提示用戶確認"
+        assert result.status == PhaseStatus.COMPLETED
         assert result.data.get("status_code") == "CAFE_READY_FOR_REVIEW"
         assert agent_manager.execute.call_count == 1, "只應呼叫 agent 一次"
 
@@ -132,15 +132,15 @@ class TestPlanPhaseUserConfirmation:
             template_path=create_template_file(tmp_path),
         )
 
-        # Mock user choosing 'r' (reject) - but this won't be used in first execute()
+        # Mock user choosing 'r' (reject) - but this won't be used anymore
         with patch('builtins.input', return_value='r') as mock_input, \
              patch('builtins.print'):
             result = phase.execute()
 
-        # After removing while loop, READY_FOR_REVIEW in interactive mode returns IN_PROGRESS
-        # User rejection would happen in next execute() call, not this one
-        assert not mock_input.called, "第一次 execute() 不會提示用戶確認"
-        assert result.status == PhaseStatus.IN_PROGRESS
+        # After changing behavior, READY_FOR_REVIEW returns COMPLETED immediately
+        # User can manually run again if they want to make changes
+        assert not mock_input.called, "不再提示用戶確認"
+        assert result.status == PhaseStatus.COMPLETED
         assert result.data.get("status_code") == "CAFE_READY_FOR_REVIEW"
         assert agent_manager.execute.call_count == 1, "只應呼叫 agent 一次"
 
@@ -184,18 +184,17 @@ class TestPlanPhaseUserConfirmation:
             template_path=create_template_file(tmp_path),
         )
 
-        # Mock user choosing 'm' (modify) - but this won't be used in first execute()
+        # Mock user choosing 'm' (modify) - but this won't be used anymore
         with patch('builtins.input', return_value='m') as mock_input, \
              patch.object(phase.display, 'get_multiline_input', return_value="請加上錯誤處理") as mock_multiline, \
              patch('builtins.print'):
             result = phase.execute()
 
-        # After removing while loop, READY_FOR_REVIEW in interactive mode returns IN_PROGRESS
-        # input() is NOT called in first execute(), user modification happens in next execute()
-        assert mock_input.call_count == 0, "第一次 execute() 不會提示用戶確認"
-        assert not mock_multiline.called, "第一次 execute() 不會請求修改意見"
-        # Should return IN_PROGRESS to continue in next iteration
-        assert result.status == PhaseStatus.IN_PROGRESS
+        # After changing behavior, READY_FOR_REVIEW returns COMPLETED immediately
+        # User modification happens by running the command again manually with their feedback
+        assert mock_input.call_count == 0, "不再提示用戶確認"
+        assert not mock_multiline.called, "不再請求修改意見"
+        assert result.status == PhaseStatus.COMPLETED
         assert result.data.get("status_code") == "CAFE_READY_FOR_REVIEW"
         assert agent_manager.execute.call_count == 1
 

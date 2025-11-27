@@ -643,8 +643,8 @@ class TestInteractiveModeStillWorks:
              patch.object(phase.display, 'get_multiline_input', return_value=''):
             result = phase.execute()
 
-        # In interactive mode, READY_FOR_REVIEW returns IN_PROGRESS (waiting for user confirmation)
-        assert result.status == PhaseStatus.IN_PROGRESS
+        # After behavior change: READY_FOR_REVIEW returns COMPLETED immediately in both modes
+        assert result.status == PhaseStatus.COMPLETED
         assert result.data["iterations"] == 1
 
 

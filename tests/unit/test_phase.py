@@ -394,23 +394,31 @@ class TestHandleStandardStatusCodes:
         assert result.data["final_response"] == "User rejected the plan"
 
     def test_handle_complete_codes_returns_none(self) -> None:
-        """測試 complete_codes（如 READY_FOR_REVIEW）返回 None（繼續循環）"""
+        """測試 complete_codes（如 READY_FOR_REVIEW）返回 COMPLETED（不再循環）"""
+        from unittest.mock import MagicMock, patch
+        from cafe.core.types import TokenUsage
+
         class TestPhase(Phase):
             def __init__(self):
                 self.iteration = 1
                 self.interactive = True
+                self.agent_manager = MagicMock()
+                self.agent_manager.get_total_token_usage.return_value = TokenUsage()
 
             def execute(self) -> PhaseResult:
                 return PhaseResult(status=PhaseStatus.COMPLETED)
 
         phase = TestPhase()
-        result = phase._handle_standard_status_codes(
-            status_code=PhaseStatusCode.READY_FOR_REVIEW,
-            response="Plan is ready",
-            complete_codes=[PhaseStatusCode.READY_FOR_REVIEW, PhaseStatusCode.CONFIRMED],
-        )
+        with patch('builtins.print'):
+            result = phase._handle_standard_status_codes(
+                status_code=PhaseStatusCode.READY_FOR_REVIEW,
+                response="Plan is ready",
+                complete_codes=[PhaseStatusCode.READY_FOR_REVIEW, PhaseStatusCode.CONFIRMED],
+            )
 
-        assert result is None  # Continue to next iteration
+        # After behavior change: returns COMPLETED immediately
+        assert result is not None
+        assert result.status == PhaseStatus.COMPLETED
 
     def test_handle_continue_codes_returns_none(self) -> None:
         """測試 continue_codes（如 NEED_CLARIFICATION）返回 None（繼續循環）"""

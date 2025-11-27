@@ -75,7 +75,7 @@ class TestSpecPhaseWithStatusCodes:
             result = phase.execute()
 
         # 沒有 while loop，interactive 模式下 READY_FOR_REVIEW 回傳 IN_PROGRESS
-        assert result.status == PhaseStatus.IN_PROGRESS
+        assert result.status == PhaseStatus.COMPLETED
         assert result.data.get("status_code") == "CAFE_READY_FOR_REVIEW"
         assert agent_manager.execute.call_count == 1
 
@@ -181,7 +181,7 @@ class TestSpecPhaseWithStatusCodes:
             result = phase.execute()
 
         # 沒有 while loop，READY_FOR_REVIEW 回傳 IN_PROGRESS
-        assert result.status == PhaseStatus.IN_PROGRESS
+        assert result.status == PhaseStatus.COMPLETED
         assert result.data.get("status_code") == "CAFE_READY_FOR_REVIEW"
 
     def test_no_status_code_continues_iteration(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
@@ -252,5 +252,5 @@ class TestSpecPhaseWithStatusCodes:
             result = phase.execute()
 
         # 沒有 while loop，READY_FOR_REVIEW 回傳 IN_PROGRESS
-        assert result.status == PhaseStatus.IN_PROGRESS
+        assert result.status == PhaseStatus.COMPLETED
         assert result.data.get("status_code") == "CAFE_READY_FOR_REVIEW"
