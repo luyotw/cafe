@@ -42,7 +42,7 @@ class TestSpecPhaseUserConfirmation:
         mock_git_ops.get_current_branch.return_value = issue_name
         monkeypatch.chdir(tmp_path)
 
-        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec_001.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# 初始需求\n\n用戶想要一個新功能")
 
@@ -65,14 +65,11 @@ class TestSpecPhaseUserConfirmation:
             git_ops=mock_git_ops,
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
-            interactive=True,
+            interactive=False,
+            user_input="confirm",
         )
-        # Skip rigor prompt by marking it as explicitly set
-        phase._rigor_explicitly_set = True
 
-        # Mock user choosing 'c' (confirm)
-        with patch('builtins.input', return_value='c') as mock_input, \
-             patch('builtins.print'):
+        with patch('builtins.print'):
             result = phase.execute()
 
         # 沒有 while loop，READY_FOR_REVIEW 在 interactive 模式下返回 IN_PROGRESS
@@ -88,7 +85,7 @@ class TestSpecPhaseUserConfirmation:
         mock_git_ops.get_current_branch.return_value = issue_name
         monkeypatch.chdir(tmp_path)
 
-        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec_001.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# 初始需求\n\n用戶想要一個新功能")
 
@@ -111,14 +108,11 @@ class TestSpecPhaseUserConfirmation:
             git_ops=mock_git_ops,
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
-            interactive=True,
+            interactive=False,
+            user_input="confirm",
         )
-        # Skip rigor prompt by marking it as explicitly set
-        phase._rigor_explicitly_set = True
 
-        # Mock user choosing 'r' (reject)
-        with patch('builtins.input', return_value='r') as mock_input, \
-             patch('builtins.print'):
+        with patch('builtins.print'):
             result = phase.execute()
 
         # 沒有 while loop，READY_FOR_REVIEW 在 interactive 模式下返回 IN_PROGRESS
@@ -135,7 +129,7 @@ class TestSpecPhaseUserConfirmation:
         mock_git_ops.get_current_branch.return_value = issue_name
         monkeypatch.chdir(tmp_path)
 
-        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec_001.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# 初始需求\n\n用戶想要一個新功能")
 
@@ -159,15 +153,11 @@ class TestSpecPhaseUserConfirmation:
             git_ops=mock_git_ops,
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
-            interactive=True,
+            interactive=False,
+            user_input="請加上錯誤處理",
         )
-        # Skip rigor prompt by marking it as explicitly set
-        phase._rigor_explicitly_set = True
 
-        # Mock user choosing 'm' (modify)
-        with patch('builtins.input', return_value='m') as mock_input, \
-             patch.object(phase.display, 'get_multiline_input', return_value="請加上錯誤處理") as mock_multiline, \
-             patch('builtins.print'):
+        with patch('builtins.print'):
             result = phase.execute()
 
         # 沒有 while loop，READY_FOR_REVIEW 在 interactive 模式下返回 IN_PROGRESS
@@ -184,7 +174,7 @@ class TestSpecPhaseUserConfirmation:
         mock_git_ops.get_current_branch.return_value = issue_name
         monkeypatch.chdir(tmp_path)
 
-        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec_001.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# 初始需求\n\n用戶想要一個新功能")
 
@@ -226,7 +216,7 @@ class TestSpecPhaseUserConfirmation:
         mock_git_ops.get_current_branch.return_value = issue_name
         monkeypatch.chdir(tmp_path)
 
-        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec_001.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# 初始需求\n\n用戶想要一個新功能")
 
@@ -250,15 +240,11 @@ class TestSpecPhaseUserConfirmation:
             git_ops=mock_git_ops,
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
-            interactive=True,
+            interactive=False,
+            user_input="補充資訊",
         )
-        # Skip rigor prompt by marking it as explicitly set
-        phase._rigor_explicitly_set = True
 
-        # Mock user input for clarification
-        with patch.object(phase.display, 'get_multiline_input', return_value="補充資訊"), \
-             patch('builtins.input', return_value='c') as mock_input, \
-             patch('builtins.print'):
+        with patch('builtins.print'):
             result = phase.execute()
 
         # 沒有 while loop，NEED_CLARIFICATION 返回 COMPLETED（不再自動繼續）
