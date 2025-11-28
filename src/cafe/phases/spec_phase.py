@@ -261,7 +261,8 @@ class SpecPhase(Phase):
             if spec_path.exists():
                 self.original_requirement = spec_path.read_text(encoding="utf-8").strip()
 
-            self.iteration += 1
+            # NOTE: self.iteration is already set from versioned files at line 183
+            # No need to increment here as it's handled by _get_next_iteration_number()
 
             # Safety check: prevent infinite loops
             max_iterations_result = self._check_max_iterations(
