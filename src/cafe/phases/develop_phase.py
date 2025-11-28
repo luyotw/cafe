@@ -112,6 +112,39 @@ class DevelopPhase(Phase):
 
         return False
 
+    def _save_develop_clarification(self, agent_response: str) -> None:
+        """儲存 developer 需要澄清的問題到 develop_{it_num}.md 檔案.
+
+        Args:
+            agent_response: Agent 回應內容（包含狀態碼）
+        """
+        # Remove status code line from response
+        lines = agent_response.strip().split('\n')
+        # Skip first line (status code) and any empty lines after it
+        content_lines = []
+        skip_status = True
+        for line in lines:
+            if skip_status and line.strip().startswith('CAFE_'):
+                continue
+            skip_status = False
+            content_lines.append(line)
+
+        # Remove leading empty lines
+        while content_lines and not content_lines[0].strip():
+            content_lines.pop(0)
+
+        content = '\n'.join(content_lines)
+
+        # Get file path
+        develop_dir = self.issue_dir / "develop"
+        develop_file = self._get_versioned_file_path("develop", self.iteration, develop_dir)
+
+        # Ensure directory exists
+        develop_file.parent.mkdir(parents=True, exist_ok=True)
+
+        # Write content
+        develop_file.write_text(content, encoding='utf-8')
+
     def _get_review_file_path(self) -> Path:
         """取得 review 檔案的完整路徑.
 
@@ -627,11 +660,15 @@ class DevelopPhase(Phase):
                 continue_codes=[],  # No automatic continue codes
             )
 
-            # Handle NEED_PERMISSION specially - return and wait for next invocation
+            # Handle NEED_PERMISSION and NEED_CLARIFICATION specially - return and wait for next invocation
             if response:
                 response_status = StatusCodeParser.extract(
                     response,
-                    valid_codes=[PhaseStatusCode.CONFIRMED, PhaseStatusCode.NEED_PERMISSION],
+                    valid_codes=[
+                        PhaseStatusCode.CONFIRMED,
+                        PhaseStatusCode.NEED_PERMISSION,
+                        PhaseStatusCode.NEED_CLARIFICATION,
+                    ],
                 )
                 if response_status == PhaseStatusCode.NEED_PERMISSION:
                     # Display permission request and return IN_PROGRESS
@@ -659,6 +696,38 @@ class DevelopPhase(Phase):
                             data={
                                 "iterations": self.iteration,
                                 "last_response": response,
+                            },
+                        )
+                elif response_status == PhaseStatusCode.NEED_CLARIFICATION:
+                    # Save clarification to file
+                    self._save_develop_clarification(response)
+
+                    # Display clarification request and return IN_PROGRESS
+                    if self.interactive:
+                        print(f"\n{'='*60}")
+                        print(f"Dev ({self.dev_agent}) - Iteration {self.iteration}:")
+                        print(f"{'='*60}")
+                        print(response)
+                        print(f"{'='*60}\n")
+                        print("💡 開發者需要澄清。請再次執行 'cafe develop' 來回應。")
+
+                        return PhaseResult(
+                            status=PhaseStatus.IN_PROGRESS,
+                            message=f"Clarification requested in iteration {self.iteration}. Run command again to respond.",
+                            data={
+                                "iterations": self.iteration,
+                                "last_response": response,
+                                "status_code": response_status.value,
+                            },
+                        )
+                    else:
+                        return PhaseResult(
+                            status=PhaseStatus.COMPLETED,
+                            message="Clarification needed - saved to develop file. Re-run with --user-input to provide response.",
+                            data={
+                                "iterations": self.iteration,
+                                "last_response": response,
+                                "status_code": response_status.value,
                             },
                         )
 
