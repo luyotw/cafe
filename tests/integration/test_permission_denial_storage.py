@@ -311,9 +311,10 @@ class TestDevelopPhasePermissionDenialStorage:
         with patch('builtins.print'):
             result = phase.execute()
 
-        # Verify phase returned IN_PROGRESS
-        assert result.status == PhaseStatus.IN_PROGRESS
-        assert result.data.get("status_code") == "CAFE_NEED_PERMISSION"
+        # Verify phase returned FAILED (non-interactive mode fails on NEED_PERMISSION)
+        assert result.status == PhaseStatus.FAILED
+        # Status code is in the last_response, not separately stored
+        assert "CAFE_NEED_PERMISSION" in result.data.get("last_response", "")
 
         # Verify iteration history was saved with response and permission_denials
         history_dir = tmp_path / ".cafe" / "issues" / issue_name / "develop" / "history"
