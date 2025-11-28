@@ -112,6 +112,39 @@ class DevelopPhase(Phase):
 
         return False
 
+    def _save_develop_clarification(self, agent_response: str) -> None:
+        """儲存 developer 需要澄清的問題到 develop_{it_num}.md 檔案.
+
+        Args:
+            agent_response: Agent 回應內容（包含狀態碼）
+        """
+        # Remove status code line from response
+        lines = agent_response.strip().split('\n')
+        # Skip first line (status code) and any empty lines after it
+        content_lines = []
+        skip_status = True
+        for line in lines:
+            if skip_status and line.strip().startswith('CAFE_'):
+                continue
+            skip_status = False
+            content_lines.append(line)
+
+        # Remove leading empty lines
+        while content_lines and not content_lines[0].strip():
+            content_lines.pop(0)
+
+        content = '\n'.join(content_lines)
+
+        # Get file path
+        develop_dir = self.issue_dir / "develop"
+        develop_file = self._get_versioned_file_path("develop", self.iteration, develop_dir)
+
+        # Ensure directory exists
+        develop_file.parent.mkdir(parents=True, exist_ok=True)
+
+        # Write content
+        develop_file.write_text(content, encoding='utf-8')
+
     def _get_review_file_path(self) -> Path:
         """取得 review 檔案的完整路徑.
 
@@ -424,16 +457,27 @@ class DevelopPhase(Phase):
             valid_codes=[
                 PhaseStatusCode.CONFIRMED,
                 PhaseStatusCode.NEED_PERMISSION,
+                PhaseStatusCode.NEED_CLARIFICATION,
             ],
             descriptions={
                 PhaseStatusCode.CONFIRMED: "開發工作已完成",
                 PhaseStatusCode.NEED_PERMISSION: "需要請求工具使用權限",
+                PhaseStatusCode.NEED_CLARIFICATION: "需要 user 澄清業務邏輯或需求",
             },
         )
 
         # Load PR comments if available
         pr_comments, _ = self._load_pr_comments()
         pr_comments_section = f"\n\n{pr_comments}\n" if pr_comments else ""
+
+        # Check for existing develop clarification file
+        develop_dir = self.issue_dir / "develop"
+        develop_file = self._get_latest_versioned_file("develop", develop_dir)
+        develop_file_section = ""
+        develop_instruction = ""
+        if develop_file and develop_file.exists():
+            develop_file_section = f"\n- Developer 問題記錄：{develop_file}"
+            develop_instruction = f"1. **首先閱讀** {develop_file} 中的問題（如果有）\n"
 
         # Check if review feedback exists (every iteration, not just first)
         has_review_feedback = self._check_review_feedback_exists()
@@ -461,15 +505,15 @@ class DevelopPhase(Phase):
 **檔案路徑：**
 - Review Feedback：{review_file_path}
 - 需求規格：{self.spec_file}
-- 實作計畫：{self.plan_file}
+- 實作計畫：{self.plan_file}{develop_file_section}
 {pr_comments_section}{user_input_section}
 **執行步驟：**
-1. **首先閱讀** {review_file_path} 或 pr comments，了解所有需要修正的問題
-2. 根據 review feedback 逐一修正問題
-3. **嚴格按照既有的 commit message 風格撰寫 commit 訊息**，可分多次 commit
-4. **禁止修改非當前分支的 commit**
-5. 如果需要，可參考 {self.spec_file} 和 {self.plan_file}
-6. 完成所有修正後回傳狀態碼
+{develop_instruction}2. **首先閱讀** {review_file_path} 或 pr comments，了解所有需要修正的問題
+3. 根據 review feedback 逐一修正問題
+4. **嚴格按照既有的 commit message 風格撰寫 commit 訊息**，可分多次 commit
+5. **禁止修改非當前分支的 commit**
+6. 如果需要，可參考 {self.spec_file} 和 {self.plan_file}
+7. 完成所有修正後回傳狀態碼
 
 {status_code_prompt}
 
@@ -487,15 +531,15 @@ class DevelopPhase(Phase):
 
 **檔案路徑：**
 - 需求規格：{self.spec_file}
-- 實作計畫：{self.plan_file}
+- 實作計畫：{self.plan_file}{develop_file_section}
 {pr_comments_section}{user_input_section}
 **執行步驟：**
-1. 仔細閱讀 {self.spec_file} 和 {self.plan_file}
-2. 嚴格按照計畫中的順序執行開發任務
-3. **嚴格按照既有的 commit message 風格撰寫 commit 訊息**，可分多次 commit
-4. 完成每個任務後，在 {self.plan_file} 中將該項目打勾（- [ ] 改為 - [x]）
-5. **禁止修改非當前分支的 commit**
-6. 所有任務完成後回傳狀態碼
+{develop_instruction}2. 仔細閱讀 {self.spec_file} 和 {self.plan_file}
+3. 嚴格按照計畫中的順序執行開發任務
+4. **嚴格按照既有的 commit message 風格撰寫 commit 訊息**，可分多次 commit
+5. 完成每個任務後，在 {self.plan_file} 中將該項目打勾（- [ ] 改為 - [x]）
+6. **禁止修改非當前分支的 commit**
+7. 所有任務完成後回傳狀態碼
 
 {status_code_prompt}
 
@@ -618,17 +662,22 @@ class DevelopPhase(Phase):
                 valid_status_codes=[
                     PhaseStatusCode.CONFIRMED,
                     PhaseStatusCode.NEED_PERMISSION,
+                    PhaseStatusCode.NEED_CLARIFICATION,
                 ],
                 allowed_tools=allowed_tools,
                 complete_codes=[PhaseStatusCode.CONFIRMED],
                 continue_codes=[],  # No automatic continue codes
             )
 
-            # Handle NEED_PERMISSION specially - return and wait for next invocation
+            # Handle NEED_PERMISSION and NEED_CLARIFICATION specially - return and wait for next invocation
             if response:
                 response_status = StatusCodeParser.extract(
                     response,
-                    valid_codes=[PhaseStatusCode.CONFIRMED, PhaseStatusCode.NEED_PERMISSION],
+                    valid_codes=[
+                        PhaseStatusCode.CONFIRMED,
+                        PhaseStatusCode.NEED_PERMISSION,
+                        PhaseStatusCode.NEED_CLARIFICATION,
+                    ],
                 )
                 if response_status == PhaseStatusCode.NEED_PERMISSION:
                     # Display permission request and return IN_PROGRESS
@@ -656,6 +705,38 @@ class DevelopPhase(Phase):
                             data={
                                 "iterations": self.iteration,
                                 "last_response": response,
+                            },
+                        )
+                elif response_status == PhaseStatusCode.NEED_CLARIFICATION:
+                    # Save clarification to file
+                    self._save_develop_clarification(response)
+
+                    # Display clarification request and return IN_PROGRESS
+                    if self.interactive:
+                        print(f"\n{'='*60}")
+                        print(f"Dev ({self.dev_agent}) - Iteration {self.iteration}:")
+                        print(f"{'='*60}")
+                        print(response)
+                        print(f"{'='*60}\n")
+                        print("💡 開發者需要澄清。請再次執行 'cafe develop' 來回應。")
+
+                        return PhaseResult(
+                            status=PhaseStatus.IN_PROGRESS,
+                            message=f"Clarification requested in iteration {self.iteration}. Run command again to respond.",
+                            data={
+                                "iterations": self.iteration,
+                                "last_response": response,
+                                "status_code": response_status.value,
+                            },
+                        )
+                    else:
+                        return PhaseResult(
+                            status=PhaseStatus.COMPLETED,
+                            message="Clarification needed - saved to develop file. Re-run with --user-input to provide response.",
+                            data={
+                                "iterations": self.iteration,
+                                "last_response": response,
+                                "status_code": response_status.value,
                             },
                         )
 
