@@ -39,10 +39,10 @@ def temp_plan_dir(tmp_path, monkeypatch):
     plan_dir = tmp_path / ".cafe" / "issues" / "test-issue" / "plan"
     plan_dir.mkdir(parents=True)
 
-    # 創建 spec 目錄和 spec.md（plan 需要 spec 已存在）
+    # 創建 spec 目錄和 spec_001.md（plan 需要 spec 已存在）
     spec_dir = tmp_path / ".cafe" / "issues" / "test-issue" / "spec"
     spec_dir.mkdir(parents=True)
-    spec_file = spec_dir / "spec.md"
+    spec_file = spec_dir / "spec_001.md"
     spec_file.write_text("# 測試功能需求\n\n這是一個測試需求規格。")
 
     return plan_dir
@@ -59,7 +59,7 @@ def temp_plan_with_template(tmp_path, monkeypatch):
     # 創建 spec
     spec_dir = tmp_path / ".cafe" / "issues" / "test-issue" / "spec"
     spec_dir.mkdir(parents=True)
-    spec_file = spec_dir / "spec.md"
+    spec_file = spec_dir / "spec_001.md"
     spec_file.write_text("# 測試功能需求\n\n這是一個測試需求規格。")
     
     # 創建 template 目錄和預設 template
@@ -89,7 +89,7 @@ class TestPlanCommandNonInteractiveFirstRound:
     , mock_git_ops):
         """測試第一輪沒有提供 --template 應該失敗"""
         # Arrange
-        spec_file = str(temp_plan_dir.parent / "spec" / "spec.md")
+        spec_file = str(temp_plan_dir.parent / "spec" / "spec_001.md")
         
         agent_manager = AgentManager()
         agent_manager.register_agent(
@@ -122,8 +122,8 @@ class TestPlanCommandNonInteractiveFirstRound:
         """測試第一輪提供 template 並返回 CONFIRMED 成功"""
         # Arrange
         plan_dir, default_template = temp_plan_with_template
-        plan_file = str(plan_dir / "plan.md")
-        spec_file = str(plan_dir.parent / "spec" / "spec.md")
+        plan_file = str(plan_dir / "plan_001.md")
+        spec_file = str(plan_dir.parent / "spec" / "spec_001.md")
         
         monkeypatch.setenv(
             "CAFE_MOCK_RESPONSE",
@@ -165,8 +165,8 @@ class TestPlanCommandNonInteractiveFirstRound:
         """測試第一輪返回 NEED_MODIFICATION 在 non-interactive 模式應該失敗"""
         # Arrange
         plan_dir, default_template = temp_plan_with_template
-        plan_file = str(plan_dir / "plan.md")
-        spec_file = str(plan_dir.parent / "spec" / "spec.md")
+        plan_file = str(plan_dir / "plan_001.md")
+        spec_file = str(plan_dir.parent / "spec" / "spec_001.md")
         
         monkeypatch.setenv(
             "CAFE_MOCK_RESPONSE",
@@ -205,11 +205,11 @@ class TestPlanCommandNonInteractiveSubsequentRounds:
     def test_subsequent_round_without_template_success(
         self, mock_env, temp_plan_with_template, monkeypatch
     , mock_git_ops):
-        """測試第二輪及之後不需要 template，直接使用現有 plan.md"""
+        """測試第二輪及之後不需要 template，直接使用現有 plan_001.md"""
         # Arrange
         plan_dir, default_template = temp_plan_with_template
-        plan_file = str(plan_dir / "plan.md")
-        spec_file = str(plan_dir.parent / "spec" / "spec.md")
+        plan_file = str(plan_dir / "plan_001.md")
+        spec_file = str(plan_dir.parent / "spec" / "spec_001.md")
 
         # 先創建 plan.md（模擬第一輪已完成，包含開發指南）
         Path(plan_file).write_text("## 開發指南\n\n原始開發指南\n\n## 實作計畫\n\n初版計畫內容")
@@ -261,11 +261,11 @@ class TestPlanCommandNonInteractiveSubsequentRounds:
     def test_subsequent_round_with_template_ignored(
         self, mock_env, temp_plan_with_template, monkeypatch
     , mock_git_ops):
-        """測試第二輪提供 template 會被忽略（使用現有 plan.md）"""
+        """測試第二輪提供 template 會被忽略（使用現有 plan_001.md）"""
         # Arrange
         plan_dir, default_template = temp_plan_with_template
-        plan_file = str(plan_dir / "plan.md")
-        spec_file = str(plan_dir.parent / "spec" / "spec.md")
+        plan_file = str(plan_dir / "plan_001.md")
+        spec_file = str(plan_dir.parent / "spec" / "spec_001.md")
 
         # 先創建 plan.md（包含開發指南）
         Path(plan_file).write_text("## 開發指南\n\n原始開發指南\n\n## 實作計畫\n\n初版計畫內容")
@@ -321,11 +321,11 @@ class TestPlanCommandNonInteractiveFiles:
     def test_plan_file_created_at_correct_path(
         self, mock_env, temp_plan_with_template, monkeypatch
     , mock_git_ops):
-        """測試 plan.md 在正確路徑創建"""
+        """測試 plan_001.md 在正確路徑創建"""
         # Arrange
         plan_dir, default_template = temp_plan_with_template
-        plan_file = str(plan_dir / "plan.md")
-        spec_file = str(plan_dir.parent / "spec" / "spec.md")
+        plan_file = str(plan_dir / "plan_001.md")
+        spec_file = str(plan_dir.parent / "spec" / "spec_001.md")
         
         monkeypatch.setenv(
             "CAFE_MOCK_RESPONSE",
@@ -364,8 +364,8 @@ class TestPlanCommandNonInteractiveFiles:
         """測試 history 目錄和檔案被創建"""
         # Arrange
         plan_dir, default_template = temp_plan_with_template
-        plan_file = str(plan_dir / "plan.md")
-        spec_file = str(plan_dir.parent / "spec" / "spec.md")
+        plan_file = str(plan_dir / "plan_001.md")
+        spec_file = str(plan_dir.parent / "spec" / "spec_001.md")
         history_dir = plan_dir / "history"
         
         monkeypatch.setenv(
@@ -413,8 +413,8 @@ class TestPlanCommandNonInteractiveErrorHandling:
         """測試 agent 返回 REJECTED 應該失敗"""
         # Arrange
         plan_dir, default_template = temp_plan_with_template
-        plan_file = str(plan_dir / "plan.md")
-        spec_file = str(plan_dir.parent / "spec" / "spec.md")
+        plan_file = str(plan_dir / "plan_001.md")
+        spec_file = str(plan_dir.parent / "spec" / "spec_001.md")
         
         monkeypatch.setenv(
             "CAFE_MOCK_RESPONSE",
@@ -450,10 +450,10 @@ class TestPlanCommandNonInteractiveErrorHandling:
     def test_spec_file_not_exists_should_fail(
         self, mock_env, temp_plan_with_template
     , mock_git_ops):
-        """測試 spec.md 不存在應該失敗"""
+        """測試 spec_001.md 不存在應該失敗"""
         # Arrange
         plan_dir, default_template = temp_plan_with_template
-        plan_file = str(plan_dir / "plan.md")
+        plan_file = str(plan_dir / "plan_001.md")
         spec_file = str(plan_dir.parent / "spec" / "nonexistent.md")  # 不存在的檔案
         
         agent_manager = AgentManager()
@@ -492,8 +492,8 @@ class TestPlanCommandNonInteractiveAgentTracking:
         """測試 agent 收到正確的 spec file 路徑"""
         # Arrange
         plan_dir, default_template = temp_plan_with_template
-        plan_file = str(plan_dir / "plan.md")
-        spec_file = str(plan_dir.parent / "spec" / "spec.md")
+        plan_file = str(plan_dir / "plan_001.md")
+        spec_file = str(plan_dir.parent / "spec" / "spec_001.md")
         
         monkeypatch.setenv(
             "CAFE_MOCK_RESPONSE",
@@ -522,10 +522,10 @@ class TestPlanCommandNonInteractiveAgentTracking:
         # Act
         phase.execute()
 
-        # Assert - 驗證 agent 被呼叫，且 prompt 包含 spec.md
+        # Assert - 驗證 agent 被呼叫，且 prompt 包含 spec_001.md
         executor = agent_manager.get_agent("David")
         assert executor.call_count >= 1
-        assert "spec.md" in executor.last_prompt
+        assert "spec_001.md" in executor.last_prompt
 
     def test_agent_called_once_for_confirmed(
         self, mock_env, temp_plan_with_template, monkeypatch
@@ -533,8 +533,8 @@ class TestPlanCommandNonInteractiveAgentTracking:
         """測試 CONFIRMED 狀態下 agent 只被呼叫一次"""
         # Arrange
         plan_dir, default_template = temp_plan_with_template
-        plan_file = str(plan_dir / "plan.md")
-        spec_file = str(plan_dir.parent / "spec" / "spec.md")
+        plan_file = str(plan_dir / "plan_001.md")
+        spec_file = str(plan_dir.parent / "spec" / "spec_001.md")
         
         monkeypatch.setenv(
             "CAFE_MOCK_RESPONSE",
