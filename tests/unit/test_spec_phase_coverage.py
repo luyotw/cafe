@@ -40,8 +40,9 @@ class TestSpecPhaseRigorPrompt:
     def test_prompt_for_rigor_default(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
         """測試選擇預設 rigor level (Medium)"""
         monkeypatch.chdir(tmp_path)
-        spec_file = tmp_path / ".cafe" / "issues" / "test" / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / "test" / "spec" / "spec_001.md"
         spec_file.parent.mkdir(parents=True)
+        spec_file.write_text("# Initial Spec\n")
 
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -64,8 +65,9 @@ class TestSpecPhaseRigorPrompt:
     def test_prompt_for_rigor_low(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
         """測試選擇 Low rigor level"""
         monkeypatch.chdir(tmp_path)
-        spec_file = tmp_path / ".cafe" / "issues" / "test" / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / "test" / "spec" / "spec_001.md"
         spec_file.parent.mkdir(parents=True)
+        spec_file.write_text("# Initial Spec\n")
 
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -88,8 +90,9 @@ class TestSpecPhaseRigorPrompt:
     def test_prompt_for_rigor_high(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
         """測試選擇 High rigor level"""
         monkeypatch.chdir(tmp_path)
-        spec_file = tmp_path / ".cafe" / "issues" / "test" / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / "test" / "spec" / "spec_001.md"
         spec_file.parent.mkdir(parents=True)
+        spec_file.write_text("# Initial Spec\n")
 
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -112,8 +115,9 @@ class TestSpecPhaseRigorPrompt:
     def test_prompt_for_rigor_invalid_then_valid(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
         """測試輸入無效值後再輸入有效值"""
         monkeypatch.chdir(tmp_path)
-        spec_file = tmp_path / ".cafe" / "issues" / "test" / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / "test" / "spec" / "spec_001.md"
         spec_file.parent.mkdir(parents=True)
+        spec_file.write_text("# Initial Spec\n")
 
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -136,8 +140,9 @@ class TestSpecPhaseRigorPrompt:
     def test_prompt_for_rigor_skips_if_explicitly_set(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
         """測試如果已明確設定 rigor 則跳過提示"""
         monkeypatch.chdir(tmp_path)
-        spec_file = tmp_path / ".cafe" / "issues" / "test" / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / "test" / "spec" / "spec_001.md"
         spec_file.parent.mkdir(parents=True)
+        spec_file.write_text("# Initial Spec\n")
 
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -167,8 +172,9 @@ class TestSpecPhaseUserStoryPrompt:
     def test_prompt_for_user_story_success(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
         """測試成功提示用戶輸入需求"""
         monkeypatch.chdir(tmp_path)
-        spec_file = tmp_path / ".cafe" / "issues" / "test" / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / "test" / "spec" / "spec_001.md"
         spec_file.parent.mkdir(parents=True)
+        spec_file.write_text("# Initial Spec\n")
 
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -181,6 +187,8 @@ class TestSpecPhaseUserStoryPrompt:
             interactive=True,
             git_ops=mock_git_ops,
         )
+        # Manually set spec_file since we're calling internal method directly
+        phase.spec_file = str(spec_file)
 
         user_requirement = "身為用戶，我想要新增登入功能，以便管理個人資料"
 
@@ -197,8 +205,9 @@ class TestSpecPhaseUserStoryPrompt:
     def test_prompt_for_user_story_empty_raises_error(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
         """測試空輸入拋出 ValueError"""
         monkeypatch.chdir(tmp_path)
-        spec_file = tmp_path / ".cafe" / "issues" / "test" / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / "test" / "spec" / "spec_001.md"
         spec_file.parent.mkdir(parents=True)
+        spec_file.write_text("# Initial Spec\n")
 
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -224,8 +233,9 @@ class TestSpecPhaseGitHubMethods:
     def test_create_github_issue(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
         """測試 _create_github_issue 呼叫"""
         monkeypatch.chdir(tmp_path)
-        spec_file = tmp_path / ".cafe" / "issues" / "test" / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / "test" / "spec" / "spec_001.md"
         spec_file.parent.mkdir(parents=True)
+        spec_file.write_text("# Initial Spec\n")
 
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -245,8 +255,9 @@ class TestSpecPhaseGitHubMethods:
     def test_update_github_issue(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
         """測試 _update_github_issue 呼叫"""
         monkeypatch.chdir(tmp_path)
-        spec_file = tmp_path / ".cafe" / "issues" / "test" / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / "test" / "spec" / "spec_001.md"
         spec_file.parent.mkdir(parents=True)
+        spec_file.write_text("# Initial Spec\n")
 
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -271,7 +282,7 @@ class TestSpecPhaseHelperMethods:
     def test_backup_spec(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
         """測試 _backup_spec 建立備份"""
         monkeypatch.chdir(tmp_path)
-        spec_file = tmp_path / ".cafe" / "issues" / "test" / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / "test" / "spec" / "spec_001.md"
         spec_file.parent.mkdir(parents=True)
         spec_file.write_text("Original content")
 
@@ -290,14 +301,14 @@ class TestSpecPhaseHelperMethods:
         phase._backup_spec(spec_file)
 
         # Check backup was created
-        backup_file = spec_file.parent / "spec.md.backup"
+        backup_file = spec_file.parent / "spec_001.md.backup"
         assert backup_file.exists()
         assert backup_file.read_text() == "Original content"
 
     def test_display_current_spec(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
         """測試 _display_current_spec 顯示目前內容"""
         monkeypatch.chdir(tmp_path)
-        spec_file = tmp_path / ".cafe" / "issues" / "test" / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / "test" / "spec" / "spec_001.md"
         spec_file.parent.mkdir(parents=True)
         spec_file.write_text("# Current Spec\nSome requirements")
 
@@ -316,6 +327,8 @@ class TestSpecPhaseHelperMethods:
         )
         phase.pm_agent = "Roger"
         phase.iteration = 2
+        # Manually set spec_file since we're calling internal method directly
+        phase.spec_file = str(spec_file)
 
         with patch('builtins.print') as mock_print:
             phase._display_current_spec()
@@ -326,8 +339,9 @@ class TestSpecPhaseHelperMethods:
     def test_ask_user_for_clarification(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
         """測試 _ask_user_for_clarification"""
         monkeypatch.chdir(tmp_path)
-        spec_file = tmp_path / ".cafe" / "issues" / "test" / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / "test" / "spec" / "spec_001.md"
         spec_file.parent.mkdir(parents=True)
+        spec_file.write_text("# Initial Spec\n")
 
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -354,8 +368,9 @@ class TestSpecPhaseGetMethods:
     def test_get_non_technical_guidelines(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
         """測試 _get_non_technical_guidelines 返回指南"""
         monkeypatch.chdir(tmp_path)
-        spec_file = tmp_path / ".cafe" / "issues" / "test" / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / "test" / "spec" / "spec_001.md"
         spec_file.parent.mkdir(parents=True)
+        spec_file.write_text("# Initial Spec\n")
 
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -376,8 +391,9 @@ class TestSpecPhaseGetMethods:
     def test_get_status_code_prompt(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
         """測試 _get_status_code_prompt 返回 prompt"""
         monkeypatch.chdir(tmp_path)
-        spec_file = tmp_path / ".cafe" / "issues" / "test" / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / "test" / "spec" / "spec_001.md"
         spec_file.parent.mkdir(parents=True)
+        spec_file.write_text("# Initial Spec\n")
 
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -397,8 +413,9 @@ class TestSpecPhaseGetMethods:
     def test_get_rigor_guidelines(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
         """測試 _get_rigor_guidelines 對不同 rigor levels"""
         monkeypatch.chdir(tmp_path)
-        spec_file = tmp_path / ".cafe" / "issues" / "test" / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / "test" / "spec" / "spec_001.md"
         spec_file.parent.mkdir(parents=True)
+        spec_file.write_text("# Initial Spec\n")
 
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
