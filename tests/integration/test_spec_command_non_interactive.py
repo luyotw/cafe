@@ -50,7 +50,7 @@ class TestSpecCommandNonInteractiveBasic:
     ):
         """測試 agent 返回 READY_FOR_REVIEW + user confirm 時成功創建 spec"""
         # Arrange
-        spec_file = str(temp_spec_dir / "spec.md")
+        spec_file = str(temp_spec_dir / "spec_001.md")
         user_input = "confirm"  # Provide confirmation for non-interactive mode
 
         monkeypatch.setenv(
@@ -92,7 +92,7 @@ class TestSpecCommandNonInteractiveBasic:
     , mock_git_ops):
         """測試 non-interactive mode 遇到 NEED_CLARIFICATION 返回 IN_PROGRESS（沒有 while loop）"""
         # Arrange
-        spec_file = str(temp_spec_dir / "spec.md")
+        spec_file = str(temp_spec_dir / "spec_001.md")
         user_input = "我想要一個功能"
 
         monkeypatch.setenv(
@@ -129,7 +129,7 @@ class TestSpecCommandNonInteractiveBasic:
     , mock_git_ops):
         """測試 agent 返回 REJECTED 應該失敗"""
         # Arrange
-        spec_file = str(temp_spec_dir / "spec.md")
+        spec_file = str(temp_spec_dir / "spec_001.md")
         user_input = "不合理的需求"
         
         monkeypatch.setenv(
@@ -166,7 +166,7 @@ class TestSpecCommandNonInteractiveBasic:
     , mock_git_ops):
         """測試沒有提供 user_input 應該失敗"""
         # Arrange
-        spec_file = str(temp_spec_dir / "spec.md")
+        spec_file = str(temp_spec_dir / "spec_001.md")
         
         agent_manager = AgentManager()
         agent_manager.register_agent(
@@ -199,9 +199,9 @@ class TestSpecCommandNonInteractiveFiles:
     def test_spec_file_created_at_correct_path(
         self, mock_env, temp_spec_dir, monkeypatch
     , mock_git_ops):
-        """測試 spec.md 在正確路徑創建"""
+        """測試 spec_001.md 在正確路徑創建"""
         # Arrange
-        spec_file = str(temp_spec_dir / "spec.md")
+        spec_file = str(temp_spec_dir / "spec_001.md")
         
         monkeypatch.setenv(
             "CAFE_MOCK_RESPONSE",
@@ -237,7 +237,7 @@ class TestSpecCommandNonInteractiveFiles:
     , mock_git_ops):
         """測試 history 目錄和檔案被創建"""
         # Arrange
-        spec_file = str(temp_spec_dir / "spec.md")
+        spec_file = str(temp_spec_dir / "spec_001.md")
         history_dir = temp_spec_dir / "history"
         
         monkeypatch.setenv(
@@ -282,7 +282,7 @@ class TestSpecCommandNonInteractiveErrorHandling:
     , mock_git_ops):
         """測試無效的 status code"""
         # Arrange
-        spec_file = str(temp_spec_dir / "spec.md")
+        spec_file = str(temp_spec_dir / "spec_001.md")
         
         monkeypatch.setenv(
             "CAFE_MOCK_RESPONSE",
@@ -321,7 +321,7 @@ class TestSpecCommandNonInteractiveCLIValidation:
     def test_no_user_input_should_fail(self, mock_env, temp_spec_dir, mock_git_ops):
         """測試 --no-interactive 但沒提供 --user-input 應該失敗"""
         # Arrange
-        spec_file = str(temp_spec_dir / "spec.md")
+        spec_file = str(temp_spec_dir / "spec_001.md")
         
         agent_manager = AgentManager()
         agent_manager.register_agent(
@@ -345,12 +345,16 @@ class TestSpecCommandNonInteractiveCLIValidation:
         result = phase.execute()
         assert result.status == PhaseStatus.FAILED
 
-    def test_mock_mode_writes_spec_file(self, mock_env, temp_spec_dir, mock_git_ops):
+    def test_mock_mode_writes_spec_file(self, mock_env, temp_spec_dir, mock_git_ops, monkeypatch):
         """測試 mock 模式下 spec 檔案會被正確寫入"""
         # Arrange
-        spec_file = temp_spec_dir / "spec.md"
-        # Create initial spec file (so user_input is used for confirmation, not initial input)
-        spec_file.write_text("# Initial Requirements\n\n我想要一個測試功能")
+        spec_file = temp_spec_dir / "spec_001.md"
+        # Don't create initial spec file so agent generates it from user_input
+
+        monkeypatch.setenv(
+            "CAFE_MOCK_RESPONSE",
+            "CAFE_READY_FOR_REVIEW\n\n# Mock Spec\n\nThis is a mock response for testing."
+        )
 
         agent_manager = AgentManager()
         agent_manager.register_agent(
@@ -366,7 +370,7 @@ class TestSpecCommandNonInteractiveCLIValidation:
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
-            user_input="confirm",  # Provide confirmation for non-interactive mode
+            user_input="我想要一個測試功能",  # Provide user requirement for first iteration
         )
 
         # Act
@@ -390,7 +394,7 @@ class TestSpecCommandNonInteractiveAgentTracking:
     , mock_git_ops):
         """測試 agent 收到正確的 user input"""
         # Arrange
-        spec_file = str(temp_spec_dir / "spec.md")
+        spec_file = str(temp_spec_dir / "spec_001.md")
         user_input = "我想要一個特殊的登入功能"
         
         monkeypatch.setenv(
@@ -421,9 +425,9 @@ class TestSpecCommandNonInteractiveAgentTracking:
         # Assert - 驗證 agent 被呼叫，且收到包含 user input 的 prompt
         executor = agent_manager.get_agent("Roger")
         assert executor.call_count >= 1
-        # Agent 的 prompt 包含 spec.md 路徑（agent 會讀取該檔案）
-        assert "spec.md" in executor.last_prompt
-        # 驗證 spec.md 被創建（內容來自 mock response）
+        # Agent 的 prompt 包含 spec_001.md 路徑（agent 會讀取該檔案）
+        assert "spec_001.md" in executor.last_prompt
+        # 驗證 spec_001.md 被創建（內容來自 mock response）
         spec_content = Path(spec_file).read_text()
         assert "測試規格" in spec_content  # Mock response 的內容
 
@@ -432,7 +436,7 @@ class TestSpecCommandNonInteractiveAgentTracking:
     , mock_git_ops):
         """測試 READY_FOR_REVIEW + confirm 狀態下 agent 只被呼叫一次"""
         # Arrange
-        spec_file = str(temp_spec_dir / "spec.md")
+        spec_file = str(temp_spec_dir / "spec_001.md")
 
         monkeypatch.setenv(
             "CAFE_MOCK_RESPONSE",

@@ -46,8 +46,8 @@ class ReviewPhase(Phase):
             agent_manager: Agent manager
             permission_handler: Permission handler
             git_ops: Git operations
-            spec_file: Path to spec file
-            plan_file: Path to plan file
+            spec_file: Path to spec file (deprecated - will be computed from latest version)
+            plan_file: Path to plan file (deprecated - will be computed from latest version)
             workflow_mode: Workflow mode (local or github)
             issue_id: GitHub issue ID (required for github mode)
             review_agent: Review agent name (default: Richard)
@@ -61,8 +61,6 @@ class ReviewPhase(Phase):
         self.agent_manager = agent_manager
         self.permission_handler = permission_handler
         self.git_ops = git_ops
-        self.spec_file = spec_file
-        self.plan_file = plan_file
         self.workflow_mode = workflow_mode
         self.issue_id = issue_id
         self.review_agent = review_agent
@@ -73,6 +71,17 @@ class ReviewPhase(Phase):
 
         # Get issue directory from current branch
         self.issue_dir = self._get_issue_dir(git_ops)
+
+        # Get latest versioned files
+        spec_dir = self.issue_dir / "spec"
+        plan_dir = self.issue_dir / "plan"
+
+        latest_spec = self._get_latest_versioned_file("spec", spec_dir)
+        latest_plan = self._get_latest_versioned_file("plan", plan_dir)
+
+        # Use latest versioned files if available, otherwise use provided paths
+        self.spec_file = str(latest_spec) if latest_spec else spec_file
+        self.plan_file = str(latest_plan) if latest_plan else plan_file
 
         # Try to read base branch from issue config
         config_file = self.issue_dir / "config.yaml"

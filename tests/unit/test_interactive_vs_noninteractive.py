@@ -59,7 +59,7 @@ class TestSpecPhaseInteractiveVsNonInteractive:
         # 測試 interactive mode: READY_FOR_REVIEW 應該回傳 IN_PROGRESS（等待用戶確認）
         issue_name_interactive = "test-confirmed-interactive"
         mock_git_ops.get_current_branch.return_value = issue_name_interactive
-        spec_file_interactive = tmp_path / ".cafe" / "issues" / issue_name_interactive / "spec" / "spec.md"
+        spec_file_interactive = tmp_path / ".cafe" / "issues" / issue_name_interactive / "spec" / "spec_001.md"
         spec_file_interactive.parent.mkdir(parents=True, exist_ok=True)
         spec_file_interactive.write_text("# Requirements\nTest requirements")
 
@@ -88,7 +88,7 @@ class TestSpecPhaseInteractiveVsNonInteractive:
         # 測試 non-interactive mode: READY_FOR_REVIEW 立即完成
         issue_name_noninteractive = "test-confirmed-noninteractive"
         mock_git_ops.get_current_branch.return_value = issue_name_noninteractive
-        spec_file_noninteractive = tmp_path / ".cafe" / "issues" / issue_name_noninteractive / "spec" / "spec.md"
+        spec_file_noninteractive = tmp_path / ".cafe" / "issues" / issue_name_noninteractive / "spec" / "spec_001.md"
         spec_file_noninteractive.parent.mkdir(parents=True, exist_ok=True)
         spec_file_noninteractive.write_text("# Requirements\nTest requirements")
 
@@ -129,7 +129,7 @@ class TestSpecPhaseInteractiveVsNonInteractive:
         mock_git_ops.get_current_branch.return_value = issue_name
         monkeypatch.chdir(tmp_path)
 
-        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec_001.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements\nTest requirements")
 
@@ -184,7 +184,7 @@ class TestSpecPhaseInteractiveVsNonInteractive:
         mock_git_ops.get_current_branch.return_value = issue_name
         monkeypatch.chdir(tmp_path)
 
-        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec_001.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements\nTest requirements")
 
@@ -224,7 +224,7 @@ class TestSpecPhaseInteractiveVsNonInteractive:
         mock_git_ops.get_current_branch.return_value = issue_name
         monkeypatch.chdir(tmp_path)
 
-        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec_001.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements\nTest requirements")
 
@@ -262,7 +262,7 @@ class TestSpecPhaseInteractiveVsNonInteractive:
         mock_git_ops.get_current_branch.return_value = issue_name
         monkeypatch.chdir(tmp_path)
 
-        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec_001.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements\nTest requirements")
 
@@ -303,7 +303,7 @@ class TestSpecPhaseInteractiveVsNonInteractive:
         mock_git_ops.get_current_branch.return_value = issue_name
         monkeypatch.chdir(tmp_path)
 
-        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec_001.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements\nTest requirements")
 
@@ -350,11 +350,11 @@ class TestPlanPhaseInteractiveVsNonInteractive:
         mock_git_ops.get_current_branch.return_value = issue_name
         monkeypatch.chdir(tmp_path)
 
-        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec_001.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements\nTest requirements\n\n## 開發指南\nDev guide")
 
-        plan_file = spec_file.parent.parent / "plan" / "plan.md"
+        plan_file = spec_file.parent.parent / "plan" / "plan_001.md"
         plan_file.parent.mkdir(parents=True, exist_ok=True)
         plan_file.write_text("## 開發指南\nDev guide\n\n## 實作計畫\nTODO")
 
@@ -417,11 +417,11 @@ class TestPlanPhaseInteractiveVsNonInteractive:
         mock_git_ops.get_current_branch.return_value = issue_name
         monkeypatch.chdir(tmp_path)
 
-        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec_001.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements\nTest requirements\n\n## 開發指南\nDev guide")
 
-        plan_file = spec_file.parent.parent / "plan" / "plan.md"
+        plan_file = spec_file.parent.parent / "plan" / "plan_001.md"
         plan_file.parent.mkdir(parents=True, exist_ok=True)
         plan_file.write_text("## 開發指南\nDev guide\n\n## 實作計畫\nTODO")
 
@@ -467,11 +467,11 @@ class TestPlanPhaseInteractiveVsNonInteractive:
         mock_git_ops.get_current_branch.return_value = issue_name
         monkeypatch.chdir(tmp_path)
 
-        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec_001.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements\nTest requirements\n\n## 開發指南\nDev guide")
 
-        plan_file = spec_file.parent.parent / "plan" / "plan.md"
+        plan_file = spec_file.parent.parent / "plan" / "plan_001.md"
         plan_file.parent.mkdir(parents=True, exist_ok=True)
         plan_file.write_text("## 開發指南\nDev guide\n\n## 實作計畫\nTODO")
 
@@ -514,11 +514,11 @@ class TestPlanPhaseInteractiveVsNonInteractive:
         mock_git_ops.get_current_branch.return_value = issue_name
         monkeypatch.chdir(tmp_path)
 
-        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec_001.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements\nTest requirements\n\n## 開發指南\nDev guide")
 
-        plan_file = spec_file.parent.parent / "plan" / "plan.md"
+        plan_file = spec_file.parent.parent / "plan" / "plan_001.md"
         plan_file.parent.mkdir(parents=True, exist_ok=True)
         plan_file.write_text("## 開發指南\nDev guide\n\n## 實作計畫\nTODO")
 

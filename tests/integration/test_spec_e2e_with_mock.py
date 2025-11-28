@@ -179,11 +179,11 @@ class TestSpecE2EMockContentValidation:
     """測試 Spec 內容驗證"""
 
     def test_spec_content_excludes_status_code(self, tmp_path):
-        """測試 spec.md 不包含狀態碼
+        """測試 spec_001.md 不包含狀態碼
 
         情境：Agent 返回 CAFE_READY_FOR_REVIEW 狀態碼和需求內容，用戶確認
         指令：cafe spec test-issue --no-interactive --user-input "confirm"
-        預期：成功，spec.md 只包含需求內容，不包含狀態碼字串
+        預期：成功，spec_001.md 只包含需求內容，不包含狀態碼字串
         """
         issue_name = "test-issue"
         user_input = "confirm"  # Provide confirmation for non-interactive mode
@@ -196,7 +196,7 @@ class TestSpecE2EMockContentValidation:
 
         assert result.returncode == 0
 
-        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec_001.md"
         assert spec_file.exists()
 
         content = spec_file.read_text()
@@ -205,11 +205,11 @@ class TestSpecE2EMockContentValidation:
         assert "測試需求" in content
 
     def test_spec_file_created_at_correct_path(self, tmp_path):
-        """測試 spec.md 在正確路徑創建
+        """測試 spec_001.md 在正確路徑創建
 
         情境：成功完成 spec phase
         指令：cafe spec test-issue --no-interactive --user-input "confirm"
-        預期：成功，spec.md 創建在 .cafe/issues/test-issue/spec/ 目錄下
+        預期：成功，spec_001.md 創建在 .cafe/issues/test-issue/spec/ 目錄下
         """
         issue_name = "test-issue"
         user_input = "confirm"  # Provide confirmation for non-interactive mode
@@ -222,16 +222,16 @@ class TestSpecE2EMockContentValidation:
 
         assert result.returncode == 0
 
-        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec_001.md"
         assert spec_file.exists()
         assert spec_file.is_file()
 
     def test_spec_file_has_valid_structure(self, tmp_path):
-        """測試 spec.md 有正確的 Markdown 結構
+        """測試 spec_001.md 有正確的 Markdown 結構
 
         情境：Agent 返回結構化的 Markdown 內容
         指令：cafe spec test-issue --no-interactive --user-input "confirm"
-        預期：成功，spec.md 包含有效的 Markdown 標題結構 (# 和 ##)
+        預期：成功，spec_001.md 包含有效的 Markdown 標題結構 (# 和 ##)
         """
         issue_name = "test-issue"
         user_input = "confirm"  # Provide confirmation for non-interactive mode
@@ -244,7 +244,7 @@ class TestSpecE2EMockContentValidation:
 
         assert result.returncode == 0
 
-        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec_001.md"
         content = spec_file.read_text()
 
         assert content.startswith("#")
@@ -335,7 +335,7 @@ class TestSpecWithIssueId:
                 "Failed to get current branch" in output)
 
     def test_spec_with_issue_id_posts_comment_on_completion(self, tmp_path):
-        """測試當 spec phase 完成時，系統將 spec.md 貼回 GitHub issue
+        """測試當 spec phase 完成時，系統將 spec_001.md 貼回 GitHub issue
 
         情境：使用者執行 cafe spec test-issue --issue-id 123，PM agent 返回 CAFE_CONFIRMED
         預期：系統呼叫 add_issue_comment(123, spec_content)
@@ -388,7 +388,7 @@ class TestSpecWithIssueId:
         assert result.returncode == 0
 
         # Verify spec file created
-        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec_001.md"
         assert spec_file.exists()
 
     def test_spec_with_issue_id_issue_not_found(self, tmp_path):

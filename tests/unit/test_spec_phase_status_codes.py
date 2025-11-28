@@ -47,7 +47,7 @@ class TestSpecPhaseWithStatusCodes:
         """測試 READY_FOR_REVIEW 狀態碼 + 用戶確認會完成 phase"""
         monkeypatch.chdir(tmp_path)
         issue_name = "test-confirmed-issue"
-        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec_001.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements\nTest requirements")
 
@@ -64,14 +64,12 @@ class TestSpecPhaseWithStatusCodes:
             git_ops=mock_git_ops,
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
-            interactive=True,
+            interactive=False,
             rigor=SpecRigor.MEDIUM,
+            user_input="需求",
         )
 
-        # Mock user choosing 'c' (confirm)
-        with patch('builtins.print'), \
-             patch('builtins.input', return_value='c'), \
-             patch.object(phase.display, 'get_multiline_input', return_value="需求"):
+        with patch('builtins.print'):
             result = phase.execute()
 
         # 沒有 while loop，interactive 模式下 READY_FOR_REVIEW 回傳 IN_PROGRESS
@@ -83,7 +81,7 @@ class TestSpecPhaseWithStatusCodes:
         """測試 REJECTED 狀態碼會失敗 phase"""
         monkeypatch.chdir(tmp_path)
         issue_name = "test-rejected-issue"
-        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec_001.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements\nTest requirements")
 
@@ -100,12 +98,12 @@ class TestSpecPhaseWithStatusCodes:
                 git_ops=mock_git_ops,
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
-            interactive=True,
+            interactive=False,
             rigor=SpecRigor.MEDIUM,
+            user_input="需求",
         )
 
-        with patch('builtins.print'), \
-             patch.object(phase.display, 'get_multiline_input', return_value="需求"):
+        with patch('builtins.print'):
             result = phase.execute()
 
         assert result.status == PhaseStatus.FAILED
@@ -116,7 +114,7 @@ class TestSpecPhaseWithStatusCodes:
         """測試 NEED_CLARIFICATION 狀態碼回傳 IN_PROGRESS（沒有 while loop）"""
         monkeypatch.chdir(tmp_path)
         issue_name = "test-clarification-issue"
-        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec_001.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements\nTest requirements")
 
@@ -134,14 +132,12 @@ class TestSpecPhaseWithStatusCodes:
             git_ops=mock_git_ops,
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
-            interactive=True,
+            interactive=False,
             rigor=SpecRigor.MEDIUM,
+            user_input="補充資訊",
         )
 
-        # Mock the display's get_multiline_input method and user confirmation
-        with patch('builtins.print'), \
-             patch('builtins.input', return_value='c'), \
-             patch.object(phase.display, 'get_multiline_input', return_value="補充資訊"):
+        with patch('builtins.print'):
             result = phase.execute()
 
         # 沒有 while loop，第一次執行得到 NEED_CLARIFICATION 直接完成，用戶需手動再次執行
@@ -153,7 +149,7 @@ class TestSpecPhaseWithStatusCodes:
         """測試狀態碼在回應中間也能識別"""
         monkeypatch.chdir(tmp_path)
         issue_name = "test-middle-status-issue"
-        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec_001.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements\nTest requirements")
 
@@ -170,14 +166,12 @@ class TestSpecPhaseWithStatusCodes:
             git_ops=mock_git_ops,
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
-            interactive=True,
+            interactive=False,
             rigor=SpecRigor.MEDIUM,
+            user_input="需求",
         )
 
-        # Mock user choosing 'c' (confirm)
-        with patch('builtins.print'), \
-             patch('builtins.input', return_value='c'), \
-             patch.object(phase.display, 'get_multiline_input', return_value="需求"):
+        with patch('builtins.print'):
             result = phase.execute()
 
         # 沒有 while loop，READY_FOR_REVIEW 回傳 IN_PROGRESS
@@ -188,7 +182,7 @@ class TestSpecPhaseWithStatusCodes:
         """測試沒有狀態碼時回傳 IN_PROGRESS（沒有 while loop）"""
         monkeypatch.chdir(tmp_path)
         issue_name = "test-no-status-issue"
-        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec_001.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements\nTest requirements")
 
@@ -206,14 +200,12 @@ class TestSpecPhaseWithStatusCodes:
             git_ops=mock_git_ops,
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
-            interactive=True,
+            interactive=False,
             rigor=SpecRigor.MEDIUM,
+            user_input="我的回答",
         )
 
-        # Mock the display's get_multiline_input method and user confirmation
-        with patch('builtins.print'), \
-             patch('builtins.input', return_value='c'), \
-             patch.object(phase.display, 'get_multiline_input', return_value="我的回答"):
+        with patch('builtins.print'):
             result = phase.execute()
 
         # 沒有 while loop，沒有狀態碼回傳 IN_PROGRESS
@@ -224,7 +216,7 @@ class TestSpecPhaseWithStatusCodes:
         """測試狀態碼不分大小寫"""
         monkeypatch.chdir(tmp_path)
         issue_name = "test-case-insensitive-issue"
-        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec_001.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements\nTest requirements")
 
@@ -241,14 +233,12 @@ class TestSpecPhaseWithStatusCodes:
             git_ops=mock_git_ops,
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
-            interactive=True,
+            interactive=False,
             rigor=SpecRigor.MEDIUM,
+            user_input="需求",
         )
 
-        # Mock user choosing 'c' (confirm)
-        with patch('builtins.print'), \
-             patch('builtins.input', return_value='c'), \
-             patch.object(phase.display, 'get_multiline_input', return_value="需求"):
+        with patch('builtins.print'):
             result = phase.execute()
 
         # 沒有 while loop，READY_FOR_REVIEW 回傳 IN_PROGRESS

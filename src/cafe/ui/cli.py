@@ -128,9 +128,38 @@ def _setup_agents(config_manager: ConfigManager, issue_name: Optional[str] = Non
     return agent_manager
 
 
+def _get_latest_versioned_file(phase_name: str, issue_name: str) -> Optional[Path]:
+    """Get the latest versioned file for a phase.
+
+    Args:
+        phase_name: Phase name (e.g., "spec", "plan")
+        issue_name: Issue name
+
+    Returns:
+        Path to the latest versioned file, or base file if no versioned files exist, or None if no files exist
+    """
+    phase_dir = Path(f".cafe/issues/{issue_name}/{phase_name}")
+    if not phase_dir.exists():
+        return None
+
+    # Find all versioned files
+    pattern = f"{phase_name}_*.md"
+    versioned_files = sorted(phase_dir.glob(pattern))
+
+    if versioned_files:
+        # Return the latest (highest numbered) file
+        return versioned_files[-1]
+
+    # Fallback to base file (e.g., spec.md, plan.md)
+    base_file = phase_dir / f"{phase_name}.md"
+    if base_file.exists():
+        return base_file
+
+    return None
+
+
 def _build_workflow(
     mode: WorkflowMode,
-    spec_file: str,
     issue_id: Optional[str],
     agent_manager: AgentManager,
     permission_handler: PermissionHandler,
@@ -141,7 +170,6 @@ def _build_workflow(
 
     Args:
         mode: Workflow mode
-        spec_file: Specification file path
         issue_id: GitHub issue ID
         agent_manager: Agent manager
         permission_handler: Permission handler
@@ -164,7 +192,6 @@ def _build_workflow(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            spec_file=spec_file,
             workflow_mode=mode,
             issue_id=issue_id,
             pm_agent=pm_name,
@@ -172,12 +199,13 @@ def _build_workflow(
     )
 
     # Phase 2: Implementation plan
+    # Note: spec_file parameter is deprecated, phases compute latest versioned files internally
     workflow.add_phase(
         PlanPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            spec_file=spec_file,
+            spec_file="",  # Deprecated - computed internally
             workflow_mode=mode,
             issue_id=issue_id,
             dev_agent=dev_name,
@@ -185,23 +213,15 @@ def _build_workflow(
         )
     )
 
-    # Determine plan file path from spec file
-    spec_path = Path(spec_file)
-    if ".cafe/issues/" in spec_file:
-        # Extract issue name from spec path: .cafe/issues/{issue-name}/spec/spec.md
-        plan_file = str(spec_path.parent.parent / "plan" / "plan.md")
-    else:
-        # Fallback to simple plan.md
-        plan_file = "plan.md"
-
     # Phase 3: Development
+    # Note: spec_file and plan_file parameters are deprecated, phases compute latest versioned files internally
     workflow.add_phase(
         DevelopPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            spec_file=spec_file,
-            plan_file=plan_file,
+            spec_file="",  # Deprecated - computed internally
+            plan_file="",  # Deprecated - computed internally
             workflow_mode=mode,
             issue_id=issue_id,
             dev_agent=dev_name,
@@ -209,13 +229,14 @@ def _build_workflow(
     )
 
     # Phase 4: Code review
+    # Note: spec_file and plan_file parameters are deprecated, phases compute latest versioned files internally
     workflow.add_phase(
         ReviewPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            spec_file=spec_file,
-            plan_file=plan_file,
+            spec_file="",  # Deprecated - computed internally
+            plan_file="",  # Deprecated - computed internally
             workflow_mode=mode,
             issue_id=issue_id,
             review_agent=reviewer_name,
@@ -223,12 +244,14 @@ def _build_workflow(
     )
 
     # Phase 5: PR creation
+    # Note: spec_file parameter is deprecated, phases compute latest versioned files internally
     workflow.add_phase(
         PRPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            spec_file=spec_file,
+            github_ops=GitHubOps(),
+            spec_file="",  # Deprecated - computed internally
             workflow_mode=mode,
             issue_id=issue_id,
         )
@@ -863,11 +886,8 @@ def spec(
                 console.print(f"[red]Error: Invalid rigor '{rigor}'. Use 'low', 'medium', or 'high'.[/red]")
                 raise typer.Exit(1)
 
-        # Build spec file path: .cafe/issues/{issue-name}/spec/spec.md
-        spec_file = f".cafe/issues/{issue_name}/spec/spec.md"
-
-        # Create directory if it doesn't exist
-        spec_dir = Path(spec_file).parent
+        # Create spec directory if it doesn't exist
+        spec_dir = Path(f".cafe/issues/{issue_name}/spec")
         spec_dir.mkdir(parents=True, exist_ok=True)
 
         # Initialize components
@@ -895,7 +915,7 @@ def spec(
         if spec_rigor:
             console.print(f"Rigor: {spec_rigor.value}")
         if workflow_mode == WorkflowMode.LOCAL:
-            console.print(f"Spec file: {spec_file}")
+            console.print(f"Spec directory: {spec_dir}")
         elif issue_id:
             console.print(f"GitHub Issue: #{issue_id}")
         console.print()
@@ -914,7 +934,6 @@ def spec(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            spec_file=spec_file,
             workflow_mode=workflow_mode,
             issue_id=issue_id,
             pm_agent=pm_agent,
@@ -943,20 +962,20 @@ def spec(
                 console.print("[bold yellow]💬 Agent needs clarification[/bold yellow]")
                 console.print(f"Iterations: {result.data.get('iterations', 'N/A')}")
                 if workflow_mode == WorkflowMode.LOCAL:
-                    console.print(f"Saved to: {spec_file}")
+                    console.print(f"Saved to: {spec_dir}")
                 console.print()
                 console.print("[dim]To continue, run:[/dim] [bold]cafe spec[/bold]")
             elif status_code == "CAFE_REJECTED":
                 console.print("[bold red]❌ Spec rejected by agent[/bold red]")
                 console.print(f"Iterations: {result.data.get('iterations', 'N/A')}")
                 if workflow_mode == WorkflowMode.LOCAL:
-                    console.print(f"Saved to: {spec_file}")
+                    console.print(f"Saved to: {spec_dir}")
             else:
                 # CAFE_READY_FOR_REVIEW or CAFE_CONFIRMED
                 console.print("[bold green]✅ Spec clarification completed![/bold green]")
                 console.print(f"Iterations: {result.data.get('iterations', 'N/A')}")
                 if workflow_mode == WorkflowMode.LOCAL:
-                    console.print(f"Saved to: {spec_file}")
+                    console.print(f"Saved to: {spec_dir}")
                 elif result.data.get('issue_id'):
                     console.print(f"Created issue: #{result.data['issue_id']}")
                 elif issue_id:
@@ -1044,18 +1063,16 @@ def plan(
             console.print(f"[red]Error: Invalid mode '{mode}'. Use 'local' or 'github'.[/red]")
             raise typer.Exit(1)
 
-        # Build spec file path: .cafe/issues/{issue-name}/spec/spec.md
-        spec_file = f".cafe/issues/{issue_name}/spec/spec.md"
-
-        # Check if spec file exists
-        if not Path(spec_file).exists():
-            console.print(f"[red]Error: Spec file not found: {spec_file}[/red]")
+        # Check if spec file exists (use latest versioned file)
+        spec_file_path = _get_latest_versioned_file("spec", issue_name)
+        if spec_file_path is None:
+            console.print(f"[red]Error: No spec file found for issue '{issue_name}'[/red]")
             console.print(f"[dim]Hint: Run 'cafe spec' first to create the specification.[/dim]")
             raise typer.Exit(1)
 
-        # Check if plan already exists
-        plan_file = f".cafe/issues/{issue_name}/plan/plan.md"
-        is_resume = Path(plan_file).exists()
+        # Check if plan already exists (any versioned plan file)
+        plan_file_path = _get_latest_versioned_file("plan", issue_name)
+        is_resume = plan_file_path is not None
 
         # Initialize components
         config_dir = str(Path(config_file).parent) if config_file != ".cafe/config.yaml" else ".cafe"
@@ -1077,7 +1094,7 @@ def plan(
         selected_template = None
 
         if is_resume:
-            console.print(f"[dim]Resuming existing plan from: {plan_file}[/dim]")
+            console.print(f"[dim]Resuming existing plan from: {plan_file_path}[/dim]")
 
         if template:
             # Template specified via --template option
@@ -1095,7 +1112,7 @@ def plan(
         console.print(f"CLI: {dev_cli}")
         console.print(f"Session ID: {dev_session_id}")
         if workflow_mode == WorkflowMode.LOCAL:
-            console.print(f"Spec file: {spec_file}")
+            console.print(f"Spec file: {spec_file_path}")
         elif issue_id:
             console.print(f"GitHub Issue: #{issue_id}")
         console.print()
@@ -1108,11 +1125,12 @@ def plan(
                 template_path_str = str(template_path_obj)
 
         # Create and execute plan phase
+        # Note: spec_file parameter is deprecated, PlanPhase computes latest versioned files internally
         phase = PlanPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            spec_file=spec_file,
+            spec_file=str(spec_file_path) if spec_file_path else "",  # Deprecated - computed internally
             workflow_mode=workflow_mode,
             issue_id=issue_id,
             issue_name=issue_name,
@@ -1253,21 +1271,22 @@ def develop(
             console.print(f"[red]Error: Invalid mode '{mode}'. Use 'local' or 'github'.[/red]")
             raise typer.Exit(1)
 
-        # Build file paths
-        spec_file = f".cafe/issues/{issue_name}/spec/spec.md"
-        plan_file = f".cafe/issues/{issue_name}/plan/plan.md"
-
-        # Check if spec file exists
-        if not Path(spec_file).exists():
-            console.print(f"[red]Error: Spec file not found: {spec_file}[/red]")
+        # Get latest versioned files
+        spec_file_path = _get_latest_versioned_file("spec", issue_name)
+        if spec_file_path is None:
+            console.print(f"[red]Error: No spec file found for issue '{issue_name}'[/red]")
             console.print(f"[dim]Hint: Run 'cafe spec' first to create the specification.[/dim]")
             raise typer.Exit(1)
 
-        # Check if plan file exists
-        if not Path(plan_file).exists():
-            console.print(f"[red]Error: Plan file not found: {plan_file}[/red]")
+        plan_file_path = _get_latest_versioned_file("plan", issue_name)
+        if plan_file_path is None:
+            console.print(f"[red]Error: No plan file found for issue '{issue_name}'[/red]")
             console.print(f"[dim]Hint: Run 'cafe plan' first to create the implementation plan.[/dim]")
             raise typer.Exit(1)
+
+        # Convert to strings for compatibility
+        spec_file = str(spec_file_path)
+        plan_file = str(plan_file_path)
 
         # Initialize components
         config_dir = str(Path(config_file).parent) if config_file != ".cafe/config.yaml" else ".cafe"
@@ -1504,15 +1523,22 @@ def review(
             console.print(f"[red]Error: Invalid mode '{mode}'. Use 'local' or 'github'.[/red]")
             raise typer.Exit(1)
 
-        # Build file paths
-        spec_file = f".cafe/issues/{issue_name}/spec/spec.md"
-        plan_file = f".cafe/issues/{issue_name}/plan/plan.md"
-
-        # Check if spec file exists
-        if not Path(spec_file).exists():
-            console.print(f"[red]Error: Spec file not found: {spec_file}[/red]")
+        # Get latest versioned files
+        spec_file_path = _get_latest_versioned_file("spec", issue_name)
+        if spec_file_path is None:
+            console.print(f"[red]Error: No spec file found for issue '{issue_name}'[/red]")
             console.print(f"[dim]Hint: Run 'cafe spec' first to create the specification.[/dim]")
             raise typer.Exit(1)
+
+        plan_file_path = _get_latest_versioned_file("plan", issue_name)
+        if plan_file_path is None:
+            console.print(f"[red]Error: No plan file found for issue '{issue_name}'[/red]")
+            console.print(f"[dim]Hint: Run 'cafe plan' first to create the implementation plan.[/dim]")
+            raise typer.Exit(1)
+
+        # Convert to strings for compatibility
+        spec_file = str(spec_file_path)
+        plan_file = str(plan_file_path)
 
         # Initialize components
         config_dir = str(Path(config_file).parent) if config_file != ".cafe/config.yaml" else ".cafe"
@@ -1675,21 +1701,22 @@ def pr(
         # Get and validate current branch
         issue_name = _get_and_validate_branch(ctx, "pr")
 
-        # Build file paths
-        spec_file = f".cafe/issues/{issue_name}/spec/spec.md"
-        plan_file = f".cafe/issues/{issue_name}/plan/plan.md"
-
-        # Check if spec file exists
-        if not Path(spec_file).exists():
-            console.print(f"[red]Error: Spec file not found: {spec_file}[/red]")
+        # Get latest versioned files
+        spec_file_path = _get_latest_versioned_file("spec", issue_name)
+        if spec_file_path is None:
+            console.print(f"[red]Error: No spec file found for issue '{issue_name}'[/red]")
             console.print(f"[dim]Hint: Run 'cafe spec' first to create the specification.[/dim]")
             raise typer.Exit(1)
 
-        # Check if plan file exists
-        if not Path(plan_file).exists():
-            console.print(f"[red]Error: Plan file not found: {plan_file}[/red]")
+        plan_file_path = _get_latest_versioned_file("plan", issue_name)
+        if plan_file_path is None:
+            console.print(f"[red]Error: No plan file found for issue '{issue_name}'[/red]")
             console.print(f"[dim]Hint: Run 'cafe plan' first to create the plan.[/dim]")
             raise typer.Exit(1)
+
+        # Convert to strings for compatibility
+        spec_file = str(spec_file_path)
+        plan_file = str(plan_file_path)
 
         # Initialize components
         config_dir = str(Path(config_file).parent) if config_file != ".cafe/config.yaml" else ".cafe"

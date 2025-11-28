@@ -70,12 +70,19 @@ class PlanPhase(Phase):
             # Derive from current branch name (via issue_dir)
             self.issue_name = self.issue_dir.name
 
+        # Phase directory for plan phase (for versioned files)
+        # Path: .cafe/issues/{issue_name}/plan
+        self.phase_dir = self.issue_dir / "plan"
+
         # History directory for plan phase
         # Path: .cafe/issues/{issue_name}/plan/history
-        self.history_dir = self.issue_dir / "plan" / "history"
+        self.history_dir = self.phase_dir / "history"
 
         # Load existing history if available (will create dir if needed)
         self.iteration = self._load_iteration_counter()
+
+        # Initialize plan_file to None (will be set during execute)
+        self.plan_file: Optional[Path] = None
 
     def execute(self) -> PhaseResult:
         """Execute implementation plan phase.
@@ -91,6 +98,26 @@ class PlanPhase(Phase):
                     message="GitHub mode requires issue_id",
                 )
 
+            # Increment iteration and execute agent
+            self.iteration += 1
+
+            # Safety check: prevent infinite loops
+            max_iterations_result = self._check_max_iterations(
+                MAX_PLANNING_ITERATIONS,
+                "Implementation plan"
+            )
+            if max_iterations_result:
+                return max_iterations_result
+
+            # Get iteration number for versioned file
+            iteration_number = self._get_next_iteration_number("plan", self.phase_dir)
+
+            # Copy previous version if exists (before sending prompt to agent)
+            self._copy_previous_version("plan", iteration_number, self.phase_dir)
+
+            # Calculate versioned plan file path
+            self.plan_file = self._get_versioned_file_path("plan", iteration_number, self.phase_dir)
+
             if self.workflow_mode == WorkflowMode.LOCAL:
                 # Check requirements file exists
                 req_path = Path(self.spec_file)
@@ -100,7 +127,7 @@ class PlanPhase(Phase):
                         message=f"Spec file not found: {self.spec_file}",
                     )
 
-                # Check if this is first iteration (no history files)
+                # Check if this is first iteration (no history files or plan files)
                 has_history = self.history_dir.exists() and list(self.history_dir.glob("iteration_*.json"))
                 is_first_iteration = not has_history
 
@@ -142,11 +169,10 @@ class PlanPhase(Phase):
                             message="Template is required for first iteration. Use --template option.",
                         )
 
-                # Check for plan.md with development guide section
-                plan_file_path = self.history_dir.parent / "plan.md"
-                plan_exists = plan_file_path.exists()
+                # Check for any existing plan file with development guide section
+                plan_exists = self.plan_file.exists() and self._has_dev_guide_section(self.plan_file)
 
-                # First round: plan.md doesn't exist
+                # First round: no plan file exists or no dev guide
                 if not plan_exists:
                     # Need to get dev guide (optional)
                     dev_guide = ""
@@ -157,20 +183,9 @@ class PlanPhase(Phase):
                         # Non-interactive: use user_input as dev guide (can be empty)
                         dev_guide = self.user_input
 
-                    # Save development guide as initial plan.md
-                    plan_file_path.parent.mkdir(parents=True, exist_ok=True)
-                    plan_file_path.write_text(f"## 開發指南\n\n{dev_guide}\n")
-
-            # Increment iteration and execute agent
-            self.iteration += 1
-
-            # Safety check: prevent infinite loops
-            max_iterations_result = self._check_max_iterations(
-                MAX_PLANNING_ITERATIONS,
-                "Implementation plan"
-            )
-            if max_iterations_result:
-                return max_iterations_result
+                    # Save development guide as initial versioned plan file
+                    self.plan_file.parent.mkdir(parents=True, exist_ok=True)
+                    self.plan_file.write_text(f"## 開發指南\n\n{dev_guide}\n")
 
             # Prepare user_input for this iteration
             result_or_input = self._prepare_user_input_for_iteration()
@@ -180,18 +195,16 @@ class PlanPhase(Phase):
             # Otherwise, it's the user input string
             current_user_input = result_or_input
 
-            # Prepare allowed tools with write/edit permission for plan file
-            plan_file_path = self.history_dir.parent / "plan.md"
-
+            # Prepare allowed tools with write/edit permission for versioned plan file
             # Convert to project-relative path (git ignore format: / prefix)
             import os
             project_root = Path(os.getcwd())
             try:
-                relative_plan_path = plan_file_path.relative_to(project_root)
+                relative_plan_path = self.plan_file.relative_to(project_root)
                 plan_file_pattern = f"/{relative_plan_path}"
             except ValueError:
                 # If path is not relative to cwd, use absolute path
-                plan_file_pattern = str(plan_file_path)
+                plan_file_pattern = str(self.plan_file)
 
             # Merge base tools with previous iteration's tools (if any)
             base_allowed_tools = [
@@ -267,8 +280,12 @@ class PlanPhase(Phase):
         Returns:
             Prompt string
         """
-        # Get paths
-        plan_file_path = self.history_dir.parent / "plan.md"
+        # Use versioned plan file path (fallback to calculating it if not set)
+        if self.plan_file is None:
+            # For tests or edge cases where plan_file wasn't set in execute()
+            iteration_number = self._get_next_iteration_number("plan", self.phase_dir)
+            self.plan_file = self._get_versioned_file_path("plan", iteration_number, self.phase_dir)
+        plan_file_path = self.plan_file
 
         status_code_prompt = generate_status_code_prompt(
             valid_codes=[
@@ -500,10 +517,9 @@ class PlanPhase(Phase):
             PhaseResult: 如果需要結束/暫停 phase（完成、失敗、或等待用戶輸入）
             str: 用戶輸入內容（供 agent 使用）
         """
-        # Iteration 1: user_input is the dev guide content
+        # Iteration 1: user_input is the dev guide content from versioned plan file
         if self.iteration == 1:
-            plan_file = self.history_dir.parent / "plan.md"
-            return plan_file.read_text() if plan_file.exists() else ""
+            return self.plan_file.read_text() if self.plan_file.exists() else ""
 
         # Iteration 2+: Check if current iteration was interrupted (has user_input but no response)
         current_data = self._load_current_iteration_data()
@@ -558,9 +574,14 @@ class PlanPhase(Phase):
             return ""
 
     def _display_current_plan(self) -> None:
-        """顯示目前的 plan.md 內容（僅 interactive 模式）。"""
-        plan_file = self.history_dir.parent / "plan.md"
-        plan_content = plan_file.read_text() if plan_file.exists() else "（檔案未產生）"
+        """顯示目前的 plan 檔案內容（僅 interactive 模式）。"""
+        # Display the previous version (current iteration - 1)
+        prev_iteration = self.iteration - 1
+        if prev_iteration > 0:
+            prev_plan_file = self._get_versioned_file_path("plan", prev_iteration, self.phase_dir)
+            plan_content = prev_plan_file.read_text() if prev_plan_file.exists() else "（檔案未產生）"
+        else:
+            plan_content = "（檔案未產生）"
 
         # Get agent CLI info for display
         agent_cli = self.agent_manager.get_agent_config(self.dev_agent).cli.value
@@ -577,8 +598,7 @@ class PlanPhase(Phase):
         Returns:
             分析 prompt 字串
         """
-        plan_file = self.history_dir.parent / "plan.md"
-        return f"""請閱讀 {plan_file} 並分析目前的狀態。
+        return f"""請閱讀 {self.plan_file} 並分析目前的狀態。
 
 根據以下條件判斷應該回傳哪個狀態碼：
 

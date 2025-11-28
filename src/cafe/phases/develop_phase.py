@@ -93,13 +93,24 @@ class DevelopPhase(Phase):
         self.iteration = self._load_iteration_counter()
 
     def _check_plan_exists(self) -> bool:
-        """Check if plan.md exists.
+        """Check if plan file exists (versioned or legacy plan.md).
 
         Returns:
-            True if plan.md exists, False otherwise
+            True if plan file exists, False otherwise
         """
         plan_path = Path(self.plan_file)
-        return plan_path.exists()
+        if plan_path.exists():
+            return True
+
+        # Also check for versioned plan files as fallback
+        plan_dir = self.issue_dir / "plan"
+        latest_plan = self._get_latest_versioned_file("plan", plan_dir)
+        if latest_plan and latest_plan.exists():
+            # Update self.plan_file to use the latest versioned file
+            self.plan_file = str(latest_plan)
+            return True
+
+        return False
 
     def _get_review_file_path(self) -> Path:
         """取得 review 檔案的完整路徑.
@@ -305,6 +316,29 @@ class DevelopPhase(Phase):
         # No special handling needed
         return ""
 
+    def _ask_for_additional_input(self) -> str:
+        """詢問使用者是否有額外的話要對開發者說（可選）。
+
+        此方法在每一輪開始時呼叫，讓使用者可以提供額外的指示或說明。
+
+        Interactive 模式：提示使用者輸入，可按 Enter 跳過
+        Non-interactive 模式：使用 self.user_input（一次性，用完清空）
+
+        Returns:
+            str: 使用者輸入（可為空字串）
+        """
+        if self.interactive:
+            print("\n" + "="*60)
+            print("💬 有沒有要對開發者說的話？（直接按 Enter 跳過）")
+            print("="*60)
+            user_input = input("> ").strip()
+            return user_input
+        else:
+            # Non-interactive: 使用 self.user_input（一次性）
+            user_input = self.user_input
+            self.user_input = ""  # 清空，避免重複使用
+            return user_input
+
     def _get_last_develop_timestamp(self):
         """Get timestamp from last develop/status.json.
 
@@ -443,10 +477,8 @@ class DevelopPhase(Phase):
 """
         
         # No review feedback - normal development mode
-        if self.iteration == 1:
-            # First iteration: provide spec.md and plan.md paths
-            user_input_section = f"\n\n**用戶的額外說明：**\n{user_input}\n" if user_input else ""
-            return f"""請按照實作計畫執行開發工作。
+        user_input_section = f"\n\n**用戶的額外說明：**\n{user_input}\n" if user_input else ""
+        return f"""請按照實作計畫執行開發工作。
 
 **你的角色：**
 你是一位經驗豐富的 Developer，負責根據需求規格和實作計畫進行開發。你會嚴格依照既有的 commit message 風格寫 commit。
@@ -569,6 +601,15 @@ class DevelopPhase(Phase):
                     current_user_input = f"{current_user_input}\n\n{permission_user_input}"
                 else:
                     current_user_input = permission_user_input
+
+            # Ask for additional user input (optional)
+            # This is done AFTER permission handling to avoid consuming input() calls when phase might fail
+            additional_input = self._ask_for_additional_input()
+            if additional_input:
+                if current_user_input:
+                    current_user_input = f"{current_user_input}\n\n{additional_input}"
+                else:
+                    current_user_input = additional_input
 
             # Execute full agent interaction cycle (generate prompt, execute, handle status)
             result, response = self._execute_and_handle_agent_response(

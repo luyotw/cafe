@@ -52,7 +52,7 @@ class TestSpecPhasePermissionDenialStorage:
         monkeypatch.chdir(tmp_path)
         issue_name = "test-spec-permission-issue"
         mock_git_ops.get_current_branch.return_value = issue_name
-        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec_001.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements\nInitial requirements")
 
@@ -80,13 +80,12 @@ class TestSpecPhasePermissionDenialStorage:
             permission_handler=permission_handler,
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
-            interactive=True,
+            interactive=False,
             rigor=SpecRigor.MEDIUM,
+            user_input="初始需求",
         )
 
-        # Mock user input
-        with patch('builtins.print'), \
-             patch.object(phase.display, 'get_multiline_input', side_effect=["初始需求", "補充資訊"]):
+        with patch('builtins.print'):
             # Execute one iteration
             result = phase.execute()
 
@@ -121,7 +120,7 @@ class TestSpecPhasePermissionDenialStorage:
         monkeypatch.chdir(tmp_path)
         issue_name = "test-spec-confirmed-issue"
         mock_git_ops.get_current_branch.return_value = issue_name
-        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec_001.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements\nClear requirements")
 
@@ -143,14 +142,12 @@ class TestSpecPhasePermissionDenialStorage:
             permission_handler=permission_handler,
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
-            interactive=True,
+            interactive=False,
             rigor=SpecRigor.MEDIUM,
+            user_input="清楚的需求",
         )
 
-        # Mock user choosing 'c' (confirm) after READY_FOR_REVIEW
-        with patch('builtins.print'), \
-             patch('builtins.input', return_value='c'), \
-             patch.object(phase.display, 'get_multiline_input', return_value="清楚的需求"):
+        with patch('builtins.print'):
             result = phase.execute()
 
         # Verify iteration history
@@ -177,7 +174,7 @@ class TestPlanPhasePermissionDenialStorage:
         monkeypatch.chdir(tmp_path)
         issue_name = "test-plan-permission-issue"
         mock_git_ops.get_current_branch.return_value = issue_name
-        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
+        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec_001.md"
         plan_dir = tmp_path / ".cafe" / "issues" / issue_name / "plan"
         history_dir = plan_dir / "history"
 
@@ -187,8 +184,8 @@ class TestPlanPhasePermissionDenialStorage:
 
         spec_file.write_text("# Requirements\nTest requirements")
 
-        # Create plan.md with dev guide (simulates already created from first iteration)
-        plan_file = plan_dir / "plan.md"
+        # Create plan_001.md with dev guide (simulates already created from first iteration)
+        plan_file = plan_dir / "plan_001.md"
         plan_file.write_text("# Dev Guide\nDev guide content\n\n# Implementation Plan\n")
 
         # Create a previous iteration to simulate this is not the first iteration
@@ -266,8 +263,8 @@ class TestDevelopPhasePermissionDenialStorage:
         init_git_repo_for_issue(tmp_path, issue_name)
 
         mock_git_ops.get_current_branch.return_value = issue_name
-        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
-        plan_file = tmp_path / ".cafe" / "issues" / issue_name / "plan" / "plan.md"
+        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec_001.md"
+        plan_file = tmp_path / ".cafe" / "issues" / issue_name / "plan" / "plan_001.md"
 
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         plan_file.parent.mkdir(parents=True, exist_ok=True)
@@ -308,15 +305,16 @@ class TestDevelopPhasePermissionDenialStorage:
             plan_file=str(plan_file),
             issue_name=issue_name,
             workflow_mode=WorkflowMode.LOCAL,
-            interactive=True,
+            interactive=False,
         )
 
         with patch('builtins.print'):
             result = phase.execute()
 
-        # Verify phase returned IN_PROGRESS
-        assert result.status == PhaseStatus.IN_PROGRESS
-        assert result.data.get("status_code") == "CAFE_NEED_PERMISSION"
+        # Verify phase returned FAILED (non-interactive mode fails on NEED_PERMISSION)
+        assert result.status == PhaseStatus.FAILED
+        # Status code is in the last_response, not separately stored
+        assert "CAFE_NEED_PERMISSION" in result.data.get("last_response", "")
 
         # Verify iteration history was saved with response and permission_denials
         history_dir = tmp_path / ".cafe" / "issues" / issue_name / "develop" / "history"
@@ -354,8 +352,8 @@ class TestDevelopPhasePermissionDenialStorage:
         init_git_repo_for_issue(tmp_path, issue_name)
 
         mock_git_ops.get_current_branch.return_value = issue_name
-        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
-        plan_file = tmp_path / ".cafe" / "issues" / issue_name / "plan" / "plan.md"
+        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec_001.md"
+        plan_file = tmp_path / ".cafe" / "issues" / issue_name / "plan" / "plan_001.md"
 
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         plan_file.parent.mkdir(parents=True, exist_ok=True)
@@ -386,7 +384,7 @@ class TestDevelopPhasePermissionDenialStorage:
             plan_file=str(plan_file),
             issue_name=issue_name,
             workflow_mode=WorkflowMode.LOCAL,
-            interactive=True,
+            interactive=False,
         )
 
         with patch('builtins.print'):
@@ -425,8 +423,8 @@ class TestMultiplePermissionDenials:
         init_git_repo_for_issue(tmp_path, issue_name)
 
         mock_git_ops.get_current_branch.return_value = issue_name
-        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
-        plan_file = tmp_path / ".cafe" / "issues" / issue_name / "plan" / "plan.md"
+        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec_001.md"
+        plan_file = tmp_path / ".cafe" / "issues" / issue_name / "plan" / "plan_001.md"
 
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         plan_file.parent.mkdir(parents=True, exist_ok=True)
@@ -464,7 +462,7 @@ class TestMultiplePermissionDenials:
             plan_file=str(plan_file),
             issue_name=issue_name,
             workflow_mode=WorkflowMode.LOCAL,
-            interactive=True,
+            interactive=False,
         )
 
         with patch('builtins.print'):

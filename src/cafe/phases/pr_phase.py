@@ -44,7 +44,7 @@ class PRPhase(Phase):
             permission_handler: Permission handler
             git_ops: Git operations
             github_ops: GitHub operations
-            spec_file: Path to spec file
+            spec_file: Path to spec file (deprecated - will be computed from latest version)
             workflow_mode: Workflow mode (local or github)
             issue_id: GitHub issue ID (required for github mode)
             issue_name: Issue name (for local mode branch naming)
@@ -62,7 +62,6 @@ class PRPhase(Phase):
         self.permission_handler = permission_handler
         self.git_ops = git_ops
         self.github_ops = github_ops
-        self.spec_file = spec_file
         self.workflow_mode = workflow_mode
         self.issue_id = issue_id
         self.issue_name = issue_name
@@ -74,6 +73,13 @@ class PRPhase(Phase):
 
         # Get issue directory from current branch
         self.issue_dir = self._get_issue_dir(git_ops)
+
+        # Get latest versioned spec file
+        spec_dir = self.issue_dir / "spec"
+        latest_spec = self._get_latest_versioned_file("spec", spec_dir)
+
+        # Use latest versioned file if available, otherwise use provided path
+        self.spec_file = str(latest_spec) if latest_spec else spec_file
 
         # Read base_branch from config if not provided via CLI
         if base_branch is not None:
@@ -382,8 +388,14 @@ class PRPhase(Phase):
             # If path is not relative to cwd, use absolute path
             body_file_pattern = str(body_file)
 
-        # Derive plan file path
-        plan_file = spec_path.parent.parent / "plan" / "plan.md"
+        # Derive plan file path - use latest versioned file if available
+        plan_dir = spec_path.parent.parent / "plan"
+        latest_plan = self._get_latest_versioned_file("plan", plan_dir)
+        if latest_plan and latest_plan.exists():
+            plan_file = latest_plan
+        else:
+            # Fallback to legacy plan.md
+            plan_file = plan_dir / "plan.md"
 
         # Get commits for context
         main_branch = self.git_ops.get_main_branch()
