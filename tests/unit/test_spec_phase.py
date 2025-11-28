@@ -857,10 +857,10 @@ class TestSpecPhaseFilePermissions:
         """測試使用精細的檔案路徑授權 (write/edit spec.md)"""
         monkeypatch.chdir(tmp_path)
 
-        # Setup
-        spec_file = tmp_path / ".cafe" / "issues" / "test-issue" / "spec" / "spec_001.md"
-        spec_file.parent.mkdir(parents=True, exist_ok=True)
-        spec_file.write_text("Test spec")
+        # Setup - Don't create spec file, let execute() create it
+        spec_dir = tmp_path / ".cafe" / "issues" / "test-issue" / "spec"
+        spec_dir.mkdir(parents=True, exist_ok=True)
+        spec_file = spec_dir / "spec_001.md"  # Expected file path after execution
 
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n完成", TokenUsage(), [], None)
@@ -895,12 +895,12 @@ class TestSpecPhaseFilePermissions:
         assert len(write_tools) >= 1, "Should have at least one write permission"
         assert len(edit_tools) >= 1, "Should have at least one edit permission"
 
-        # Verify the paths point to spec.md
+        # Verify the paths point to spec_001.md (versioned file)
         spec_path_str = str(spec_file)
-        assert any(spec_path_str in tool or "spec.md" in tool for tool in write_tools), \
-            f"Write permission should include spec.md path, got: {write_tools}"
-        assert any(spec_path_str in tool or "spec.md" in tool for tool in edit_tools), \
-            f"Edit permission should include spec.md path, got: {edit_tools}"
+        assert any(spec_path_str in tool or "spec_001.md" in tool for tool in write_tools), \
+            f"Write permission should include spec_001.md path, got: {write_tools}"
+        assert any(spec_path_str in tool or "spec_001.md" in tool for tool in edit_tools), \
+            f"Edit permission should include spec_001.md path, got: {edit_tools}"
 
 
 class TestPromptForInputMethod:
@@ -1034,10 +1034,11 @@ class TestFetchGitHubIssue:
     @patch("cafe.phases.spec_phase.get_github_repo_name")
     @patch("cafe.phases.spec_phase.GitHubOps")
     def test_fetch_github_issue_writes_spec_file(
-        self, mock_github_ops: MagicMock, mock_get_repo: MagicMock, tmp_path: Path, mock_git_ops: MagicMock
+        self, mock_github_ops: MagicMock, mock_get_repo: MagicMock, tmp_path: Path, mock_git_ops: MagicMock, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """測試從 GitHub Issue 抓取後會寫入 spec.md"""
         # Setup
+        monkeypatch.chdir(tmp_path)
         mock_get_repo.return_value = "owner/repo"
         mock_gh_instance = MagicMock()
         mock_gh_instance.get_issue.return_value = {
@@ -1047,6 +1048,7 @@ class TestFetchGitHubIssue:
         mock_github_ops.return_value = mock_gh_instance
 
         spec_file = tmp_path / ".cafe" / "issues" / "test-issue" / "spec" / "spec_001.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
 
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -1086,6 +1088,7 @@ class TestFetchGitHubIssue:
         mock_github_ops.return_value = mock_gh_instance
 
         spec_file = tmp_path / ".cafe" / "issues" / "test-issue" / "spec" / "spec_001.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
 
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -1199,8 +1202,8 @@ class TestOriginalRequirement:
         """測試在第一輪迭代前會捕獲原始需求描述"""
         monkeypatch.chdir(tmp_path)
 
-        # Setup - 建立初始 spec.md
-        spec_file = Path(".cafe/issues/test-issue/spec/spec.md")
+        # Setup - 建立初始 spec_001.md (versioned file)
+        spec_file = Path(".cafe/issues/test-issue/spec/spec_001.md")
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         original_content = "# 初始需求\n\n身為用戶，我想要匯出 CSV 檔案"
         spec_file.write_text(original_content, encoding="utf-8")

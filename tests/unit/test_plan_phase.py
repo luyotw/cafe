@@ -199,8 +199,8 @@ class TestLocalWorkflow:
 
         # Empty dev guide should be allowed, phase should proceed
         assert result.status == PhaseStatus.COMPLETED
-        # plan.md should exist with empty dev guide section
-        plan_file = spec_file.parent.parent / "plan" / "plan.md"
+        # plan_001.md should exist with empty dev guide section
+        plan_file = spec_file.parent.parent / "plan" / "plan_001.md"
         assert plan_file.exists()
         content = plan_file.read_text()
         assert "## 開發指南" in content
@@ -943,8 +943,8 @@ class TestPlanPhaseNeedClarification:
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements")
 
-        # Create dev guide file
-        plan_file = spec_file.parent.parent / "plan" / "plan.md"
+        # Create dev guide file (versioned)
+        plan_file = spec_file.parent.parent / "plan" / "plan_001.md"
         plan_file.parent.mkdir(parents=True, exist_ok=True)
         plan_file.write_text("## 開發指南\n\n初始開發指南內容")
 
@@ -1043,8 +1043,8 @@ class TestPlanPhaseResume:
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Requirements")
 
-        # Create plan.md with dev guide
-        plan_file = spec_file.parent.parent / "plan" / "plan.md"
+        # Create plan_001.md with dev guide (versioned)
+        plan_file = spec_file.parent.parent / "plan" / "plan_001.md"
         plan_file.parent.mkdir(parents=True, exist_ok=True)
         plan_file.write_text("## 開發指南\n\nGuide\n\n## 待確認問題\n\n需要確認技術選型")
 
@@ -1937,8 +1937,8 @@ class TestPlanPhaseFilePermissions:
         assert len(write_tools) >= 1, "Should have at least one write permission"
         assert len(edit_tools) >= 1, "Should have at least one edit permission"
 
-        # Verify the paths point to plan.md
-        assert any("plan.md" in tool for tool in write_tools), \
-            f"Write permission should include plan.md path, got: {write_tools}"
-        assert any("plan.md" in tool for tool in edit_tools), \
-            f"Edit permission should include plan.md path, got: {edit_tools}"
+        # Verify the paths point to plan_001.md (versioned file)
+        assert any("plan_001.md" in tool for tool in write_tools), \
+            f"Write permission should include plan_001.md path, got: {write_tools}"
+        assert any("plan_001.md" in tool for tool in edit_tools), \
+            f"Edit permission should include plan_001.md path, got: {edit_tools}"

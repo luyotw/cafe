@@ -613,7 +613,14 @@ class SpecPhase(Phase):
             self._save_issue_config()
 
             # Write fetched content to spec file (same as _prompt_for_user_story)
-            spec_path = Path(self.spec_file)
+            # If spec_file is not set (when called directly without execute()),
+            # compute it using the next iteration number
+            if not self.spec_file:
+                iteration_number = self._get_next_iteration_number("spec", self.phase_dir)
+                spec_path = self._get_versioned_file_path("spec", iteration_number, self.phase_dir)
+            else:
+                spec_path = Path(self.spec_file)
+
             spec_path.parent.mkdir(parents=True, exist_ok=True)
             spec_path.write_text(f"# 初始需求\n\n{fetched_content}\n")
 
