@@ -424,10 +424,12 @@ class DevelopPhase(Phase):
             valid_codes=[
                 PhaseStatusCode.CONFIRMED,
                 PhaseStatusCode.NEED_PERMISSION,
+                PhaseStatusCode.NEED_CLARIFICATION,
             ],
             descriptions={
                 PhaseStatusCode.CONFIRMED: "開發工作已完成",
                 PhaseStatusCode.NEED_PERMISSION: "需要請求工具使用權限",
+                PhaseStatusCode.NEED_CLARIFICATION: "需要 user 澄清業務邏輯或需求",
             },
         )
 
@@ -618,6 +620,7 @@ class DevelopPhase(Phase):
                 valid_status_codes=[
                     PhaseStatusCode.CONFIRMED,
                     PhaseStatusCode.NEED_PERMISSION,
+                    PhaseStatusCode.NEED_CLARIFICATION,
                 ],
                 allowed_tools=allowed_tools,
                 complete_codes=[PhaseStatusCode.CONFIRMED],
