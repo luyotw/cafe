@@ -177,10 +177,16 @@ class SpecPhase(Phase):
                     data={},
                 )
 
-            # Update self.iteration to match iteration_number from versioned files
-            # This ensures iteration counter is in sync with actual versioned files
-            if iteration_number > self.iteration:
-                self.iteration = iteration_number
+            # Set self.iteration based on versioned files and history
+            # iteration_number is the next file number (count + 1)
+            # self.iteration is the current execution iteration
+            if self.iteration == 0:  # No history
+                # If files exist, this is a resume of the last iteration
+                # If no files, this is the first iteration
+                self.iteration = max(1, iteration_number - 1)
+            else:  # Has history
+                # Continue from last completed iteration
+                self.iteration += 1
 
             # Copy previous version if exists (iteration > 1)
             self._copy_previous_version("spec", iteration_number, self.phase_dir)

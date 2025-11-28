@@ -601,9 +601,10 @@ class TestInteractiveModeStillWorks:
         mock_git_ops.get_current_branch.return_value = "test-feature"
         monkeypatch.chdir(tmp_path)
 
-        # Create directory but don't pre-create spec file - let the phase create spec_001.md
-        spec_dir = tmp_path / ".cafe" / "issues" / "test-feature" / "spec"
-        spec_dir.mkdir(parents=True, exist_ok=True)
+        # Create spec_001.md file (versioned) so it skips the user story prompt
+        spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec_001.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
+        spec_file.write_text("需求已清楚")
 
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n需求確認", TokenUsage(), [], None)
