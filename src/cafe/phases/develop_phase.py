@@ -470,6 +470,15 @@ class DevelopPhase(Phase):
         pr_comments, _ = self._load_pr_comments()
         pr_comments_section = f"\n\n{pr_comments}\n" if pr_comments else ""
 
+        # Check for existing develop clarification file
+        develop_dir = self.issue_dir / "develop"
+        develop_file = self._get_latest_versioned_file("develop", develop_dir)
+        develop_file_section = ""
+        develop_instruction = ""
+        if develop_file and develop_file.exists():
+            develop_file_section = f"\n- Developer 問題記錄：{develop_file}"
+            develop_instruction = f"1. **首先閱讀** {develop_file} 中的問題（如果有）\n"
+
         # Check if review feedback exists (every iteration, not just first)
         has_review_feedback = self._check_review_feedback_exists()
         review_file_path = self._get_review_file_path()
@@ -496,15 +505,15 @@ class DevelopPhase(Phase):
 **檔案路徑：**
 - Review Feedback：{review_file_path}
 - 需求規格：{self.spec_file}
-- 實作計畫：{self.plan_file}
+- 實作計畫：{self.plan_file}{develop_file_section}
 {pr_comments_section}{user_input_section}
 **執行步驟：**
-1. **首先閱讀** {review_file_path} 或 pr comments，了解所有需要修正的問題
-2. 根據 review feedback 逐一修正問題
-3. **嚴格按照既有的 commit message 風格撰寫 commit 訊息**，可分多次 commit
-4. **禁止修改非當前分支的 commit**
-5. 如果需要，可參考 {self.spec_file} 和 {self.plan_file}
-6. 完成所有修正後回傳狀態碼
+{develop_instruction}2. **首先閱讀** {review_file_path} 或 pr comments，了解所有需要修正的問題
+3. 根據 review feedback 逐一修正問題
+4. **嚴格按照既有的 commit message 風格撰寫 commit 訊息**，可分多次 commit
+5. **禁止修改非當前分支的 commit**
+6. 如果需要，可參考 {self.spec_file} 和 {self.plan_file}
+7. 完成所有修正後回傳狀態碼
 
 {status_code_prompt}
 
@@ -522,15 +531,15 @@ class DevelopPhase(Phase):
 
 **檔案路徑：**
 - 需求規格：{self.spec_file}
-- 實作計畫：{self.plan_file}
+- 實作計畫：{self.plan_file}{develop_file_section}
 {pr_comments_section}{user_input_section}
 **執行步驟：**
-1. 仔細閱讀 {self.spec_file} 和 {self.plan_file}
-2. 嚴格按照計畫中的順序執行開發任務
-3. **嚴格按照既有的 commit message 風格撰寫 commit 訊息**，可分多次 commit
-4. 完成每個任務後，在 {self.plan_file} 中將該項目打勾（- [ ] 改為 - [x]）
-5. **禁止修改非當前分支的 commit**
-6. 所有任務完成後回傳狀態碼
+{develop_instruction}2. 仔細閱讀 {self.spec_file} 和 {self.plan_file}
+3. 嚴格按照計畫中的順序執行開發任務
+4. **嚴格按照既有的 commit message 風格撰寫 commit 訊息**，可分多次 commit
+5. 完成每個任務後，在 {self.plan_file} 中將該項目打勾（- [ ] 改為 - [x]）
+6. **禁止修改非當前分支的 commit**
+7. 所有任務完成後回傳狀態碼
 
 {status_code_prompt}
 

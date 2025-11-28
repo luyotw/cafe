@@ -179,3 +179,85 @@ def test_develop_file_numbering_increments(mock_deps):
     phase.iteration = 3
     file3 = phase._get_versioned_file_path("develop", phase.iteration, develop_dir)
     assert str(file3).endswith("develop_003.md")
+
+
+def test_prompt_includes_develop_file_when_exists(mock_deps, monkeypatch, tmp_path):
+    """測試當存在前一輪的 develop_{it_num-1}.md 時，prompt 包含該檔案路徑."""
+    monkeypatch.chdir(tmp_path)
+
+    # Create a develop file
+    develop_dir = mock_deps["issue_dir"] / "develop"
+    develop_file = develop_dir / "develop_001.md"
+    develop_file.write_text("Previous question: What should we do?")
+
+    phase = DevelopPhase(
+        agent_manager=mock_deps["agent_manager"],
+        permission_handler=mock_deps["permission_handler"],
+        git_ops=mock_deps["git_ops"],
+        spec_file=mock_deps["spec_file"],
+        plan_file=mock_deps["plan_file"],
+        workflow_mode=WorkflowMode.LOCAL,
+        issue_name="test-issue",
+        interactive=False,
+    )
+
+    phase.iteration = 2
+
+    prompt = phase._generate_prompt()
+
+    # Verify prompt includes develop file path
+    assert "develop_001.md" in prompt
+    # Verify prompt includes instruction to read develop file
+    assert "首先閱讀" in prompt or "閱讀" in prompt
+
+
+def test_prompt_includes_read_instruction_when_develop_file_exists(mock_deps, monkeypatch, tmp_path):
+    """測試 prompt 中包含「首先閱讀 develop_XXX.md 中的問題」的指示."""
+    monkeypatch.chdir(tmp_path)
+
+    # Create a develop file
+    develop_dir = mock_deps["issue_dir"] / "develop"
+    develop_file = develop_dir / "develop_001.md"
+    develop_file.write_text("Need help with this issue.")
+
+    phase = DevelopPhase(
+        agent_manager=mock_deps["agent_manager"],
+        permission_handler=mock_deps["permission_handler"],
+        git_ops=mock_deps["git_ops"],
+        spec_file=mock_deps["spec_file"],
+        plan_file=mock_deps["plan_file"],
+        workflow_mode=WorkflowMode.LOCAL,
+        issue_name="test-issue",
+        interactive=False,
+    )
+
+    phase.iteration = 2
+
+    prompt = phase._generate_prompt()
+
+    # Verify prompt includes instruction to read develop file
+    assert "develop_001.md" in prompt
+    assert "問題" in prompt
+
+
+def test_prompt_excludes_develop_file_when_not_exists(mock_deps, monkeypatch, tmp_path):
+    """測試當不存在 develop file 時，prompt 不包含相關指示."""
+    monkeypatch.chdir(tmp_path)
+
+    phase = DevelopPhase(
+        agent_manager=mock_deps["agent_manager"],
+        permission_handler=mock_deps["permission_handler"],
+        git_ops=mock_deps["git_ops"],
+        spec_file=mock_deps["spec_file"],
+        plan_file=mock_deps["plan_file"],
+        workflow_mode=WorkflowMode.LOCAL,
+        issue_name="test-issue",
+        interactive=False,
+    )
+
+    phase.iteration = 1
+
+    prompt = phase._generate_prompt()
+
+    # Verify prompt does not include develop file references
+    assert "develop_" not in prompt or "develop_001.md" not in prompt
