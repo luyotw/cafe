@@ -43,7 +43,7 @@ class TestPlanPhaseWithStatusCodes:
         plan_file.write_text("## 開發指南\nSome guide\n\n## 實作計畫\nTODO")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage(), [], None)
+        agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage(), [], None, [])
 
         # Mock get_agent to return agent with config
         mock_agent = MagicMock()
@@ -85,7 +85,7 @@ class TestPlanPhaseWithStatusCodes:
         plan_file.write_text("## 開發指南\nSome guide\n\n## 實作計畫\nTODO")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("CAFE_REJECTED\n分析無法進行。", TokenUsage(), [], None)
+        agent_manager.execute.return_value = ("CAFE_REJECTED\n分析無法進行。", TokenUsage(), [], None, [])
 
         # Mock get_agent to return agent with config
         mock_agent = MagicMock()
@@ -126,7 +126,7 @@ class TestPlanPhaseWithStatusCodes:
 
         agent_manager = MagicMock(spec=AgentManager)
         # After removing while loop, only executes once and returns IN_PROGRESS
-        agent_manager.execute.return_value = ("CAFE_NEED_CLARIFICATION\n請補充更多資訊。", TokenUsage(), [], None)
+        agent_manager.execute.return_value = ("CAFE_NEED_CLARIFICATION\n請補充更多資訊。", TokenUsage(), [], None, [])
 
         # Mock get_agent to return agent with config
         mock_agent = MagicMock()
@@ -173,7 +173,7 @@ class TestPlanPhaseWithStatusCodes:
         plan_file.write_text("## 開發指南\nSome guide\n\n## 實作計畫\nTODO")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("分析結果：\nCAFE_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage(), [], None)
+        agent_manager.execute.return_value = ("分析結果：\nCAFE_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage(), [], None, [])
 
         # Mock get_agent to return agent with config
         mock_agent = MagicMock()
@@ -219,8 +219,8 @@ class TestPlanPhaseWithStatusCodes:
         # call is used internally but the original response (without status code) is returned.
         # So when we extract status code from response in plan_phase.py, we get None.
         agent_manager.execute.side_effect = [
-            ("這是一般的回應，沒有狀態碼。", TokenUsage(), [], None),
-            ("CAFE_NEED_CLARIFICATION\n請補充技術選型。", TokenUsage(), [], None),
+            ("這是一般的回應，沒有狀態碼。", TokenUsage(), [], None, []),
+            ("CAFE_NEED_CLARIFICATION\n請補充技術選型。", TokenUsage(), [], None, []),
         ]
 
         # Mock get_agent to return agent with config
@@ -266,7 +266,7 @@ class TestPlanPhaseWithStatusCodes:
         plan_file.write_text("## 開發指南\nSome guide\n\n## 實作計畫\nTODO")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("cafe_ready_for_review\n實作分析已完成。", TokenUsage(), [], None)
+        agent_manager.execute.return_value = ("cafe_ready_for_review\n實作分析已完成。", TokenUsage(), [], None, [])
 
         # Mock get_agent to return agent with config
         mock_agent = MagicMock()

@@ -329,6 +329,8 @@ class TestAnalyzeMissingStatusCode:
             TokenUsage(input_tokens=10, output_tokens=5),
             [],
             [],
+        
+            []  # streaming_log
         )
 
         phase = PhaseWithStatusAnalysis(
@@ -377,6 +379,8 @@ class TestAnalyzeMissingStatusCode:
             TokenUsage(input_tokens=10, output_tokens=5),
             [],
             [],
+        
+            []  # streaming_log
         )
 
         phase = PhaseWithStatusAnalysis(

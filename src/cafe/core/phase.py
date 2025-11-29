@@ -308,7 +308,7 @@ class Phase(ABC):
 
         # 4. 執行 agent（with error recovery）
         try:
-            response, token_usage, permission_denials, cli_command_args = self.agent_manager.execute(
+            response, token_usage, permission_denials, cli_command_args, streaming_log = self.agent_manager.execute(
                 agent_name,
                 prompt,
                 allowed_tools=allowed_tools,
@@ -433,7 +433,8 @@ class Phase(ABC):
         self._update_iteration_history(
             phase_specific_data={
                 "response": response,
-                "permission_denials": [denial.model_dump() for denial in permission_denials]
+                "permission_denials": [denial.model_dump() for denial in permission_denials],
+                "streaming_log": streaming_log
             },
             prompt=prompt,
             agent_cli=agent_cli,
@@ -1288,7 +1289,7 @@ class Phase(ABC):
             return None
 
         # 呼叫 agent 分析狀態（只需要 response）
-        response, _, _, _ = self.agent_manager.execute(agent_name, prompt)
+        response, _, _, _, _ = self.agent_manager.execute(agent_name, prompt)
 
         # 從回應中提取 status code
         from cafe.core.status_codes import StatusCodeParser

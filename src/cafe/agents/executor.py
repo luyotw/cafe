@@ -225,6 +225,7 @@ class AgentExecutor:
 
         output_lines = []
         response_text = ""
+        streaming_log: List[str] = []  # 記錄所有 streaming 片段
         token_usage = TokenUsage()
         session_id = None
         permission_denials: List[PermissionDenial] = []
@@ -248,7 +249,8 @@ class AgentExecutor:
                             content = json_content_extractor(data)
                             if content:
                                 print(content, end='\n\n', flush=True)
-                                response_text += content
+                                streaming_log.append(content)
+                                response_text = content  # 只保存最後一個片段
                         else:
                             # Default Claude format extractor
                             # Extract content from message.content[] (new Claude format)
@@ -257,13 +259,15 @@ class AgentExecutor:
                                     if content_block.get("type") == "text":
                                         text = content_block.get("text", "")
                                         print(text, end='\n\n', flush=True)
-                                        response_text += text
+                                        streaming_log.append(text)
+                                        response_text = text  # 只保存最後一個片段
 
                             # Old format: direct content field
                             elif "content" in data:
                                 content = data["content"]
                                 print(content, end='\n\n', flush=True)
-                                response_text += content
+                                streaming_log.append(content)
+                                response_text = content  # 只保存最後一個片段
 
                         # Extract session_id
                         if "session_id" in data and not session_id:
@@ -300,6 +304,7 @@ class AgentExecutor:
                     # Simple line-by-line streaming (Copilot style)
                     print(line, end='')
                     output_lines.append(line)
+                    streaming_log.append(line)  # 記錄每一行到 streaming_log
 
         print(f"\n{'='*80}\n")
 
@@ -322,15 +327,19 @@ class AgentExecutor:
 
         # Return response (either from stream-json or combined lines)
         if parse_stream_json:
-            # If we got JSON content, use that; otherwise fall back to output_lines
+            # response_text 已經是最後一個片段，如果為空則使用 output_lines
             final_response = response_text if response_text else ''.join(output_lines)
+            final_streaming_log = streaming_log if streaming_log else []
         else:
-            final_response = ''.join(output_lines)
+            # Copilot style: 最後一行作為 response，所有行作為 streaming_log
+            final_response = output_lines[-1] if output_lines else ""
+            final_streaming_log = output_lines
 
         return AgentResponse(
             response=final_response,
             token_usage=token_usage,
-            permission_denials=permission_denials
+            permission_denials=permission_denials,
+            streaming_log=final_streaming_log
         )
 
     def _execute_claude(self, prompt: str, allowed_tools: Optional[List[str]] = None) -> AgentResponse:

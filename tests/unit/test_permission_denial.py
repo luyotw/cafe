@@ -145,7 +145,7 @@ class TestPermissionDenialStorage:
 
             def execute(self) -> PhaseResult:
                 # 模擬 agent 返回 permission denials
-                response, token_usage, permission_denials = self.agent_manager.execute(
+                response, token_usage, permission_denials, _, _ = self.agent_manager.execute(
                     "David", "Test prompt"
                 )
 
@@ -176,7 +176,9 @@ class TestPermissionDenialStorage:
         agent_manager.execute.return_value = (
             "I need permission to read /etc/passwd",
             TokenUsage(),
-            permission_denials
+            permission_denials,
+            None,
+            []
         )
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 
@@ -220,7 +222,7 @@ class TestPermissionDenialStorage:
                 self.iteration = 1
 
             def execute(self) -> PhaseResult:
-                response, token_usage, permission_denials = self.agent_manager.execute(
+                response, token_usage, permission_denials, _, _ = self.agent_manager.execute(
                     "David", "Test prompt"
                 )
 
@@ -244,7 +246,9 @@ class TestPermissionDenialStorage:
         agent_manager.execute.return_value = (
             "Normal response without denials",
             TokenUsage(),
-            []  # No permission denials
+            [],  # No permission denials
+            None,
+            []
         )
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 
@@ -282,7 +286,7 @@ class TestPermissionDenialStorage:
                 self.iteration = 1
 
             def execute(self) -> PhaseResult:
-                response, token_usage, permission_denials = self.agent_manager.execute(
+                response, token_usage, permission_denials, _, _ = self.agent_manager.execute(
                     "David", "Test prompt"
                 )
 
@@ -320,7 +324,9 @@ class TestPermissionDenialStorage:
         agent_manager.execute.return_value = (
             "I need multiple permissions",
             TokenUsage(),
-            permission_denials
+            permission_denials,
+            None,
+            []
         )
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 

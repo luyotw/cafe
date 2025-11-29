@@ -47,7 +47,7 @@ class TestSpecPhaseUserConfirmation:
         spec_file.write_text("# 初始需求\n\n用戶想要一個新功能")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n規格已完成", TokenUsage(), [], None)
+        agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n規格已完成", TokenUsage(), [], None, [])
         agent_manager.get_total_token_usage.return_value = TokenUsage()
         agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
 
@@ -90,7 +90,7 @@ class TestSpecPhaseUserConfirmation:
         spec_file.write_text("# 初始需求\n\n用戶想要一個新功能")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n規格已完成", TokenUsage(), [], None)
+        agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n規格已完成", TokenUsage(), [], None, [])
         agent_manager.get_total_token_usage.return_value = TokenUsage()
         agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
 
@@ -135,7 +135,7 @@ class TestSpecPhaseUserConfirmation:
 
         agent_manager = MagicMock(spec=AgentManager)
         # 沒有 while loop，第一次呼叫只會執行一次
-        agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n規格已完成", TokenUsage(), [], None)
+        agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n規格已完成", TokenUsage(), [], None, [])
         agent_manager.get_total_token_usage.return_value = TokenUsage()
         agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
 
@@ -179,7 +179,7 @@ class TestSpecPhaseUserConfirmation:
         spec_file.write_text("# 初始需求\n\n用戶想要一個新功能")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n規格已完成", TokenUsage(), [], None)
+        agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n規格已完成", TokenUsage(), [], None, [])
         agent_manager.get_total_token_usage.return_value = TokenUsage()
         agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
 
@@ -222,7 +222,7 @@ class TestSpecPhaseUserConfirmation:
 
         agent_manager = MagicMock(spec=AgentManager)
         # 沒有 while loop，只會執行一次
-        agent_manager.execute.return_value = ("CAFE_NEED_CLARIFICATION\n需要更多資訊", TokenUsage(), [], None)
+        agent_manager.execute.return_value = ("CAFE_NEED_CLARIFICATION\n需要更多資訊", TokenUsage(), [], None, [])
         agent_manager.get_total_token_usage.return_value = TokenUsage()
         agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
 

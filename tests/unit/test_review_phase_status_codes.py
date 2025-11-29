@@ -34,7 +34,7 @@ class TestReviewPhaseWithStatusCodes:
 
         agent_manager = MagicMock(spec=AgentManager)
         setup_agent_manager_mock(agent_manager)
-        agent_manager.execute.return_value = ("CAFE_CONFIRMED\nCode looks good!", TokenUsage(), [], None)
+        agent_manager.execute.return_value = ("CAFE_CONFIRMED\nCode looks good!", TokenUsage(), [], None, [])
 
 
         git_ops = MagicMock(spec=GitOperations)
@@ -67,7 +67,7 @@ class TestReviewPhaseWithStatusCodes:
 
         agent_manager = MagicMock(spec=AgentManager)
         setup_agent_manager_mock(agent_manager)
-        agent_manager.execute.return_value = ("CAFE_NEEDS_CHANGES\n需要修正問題。", TokenUsage(), [], None)
+        agent_manager.execute.return_value = ("CAFE_NEEDS_CHANGES\n需要修正問題。", TokenUsage(), [], None, [])
 
 
         git_ops = MagicMock(spec=GitOperations)
@@ -101,7 +101,7 @@ class TestReviewPhaseWithStatusCodes:
 
         agent_manager = MagicMock(spec=AgentManager)
         setup_agent_manager_mock(agent_manager)
-        agent_manager.execute.return_value = ("Review result:\nCAFE_CONFIRMED\nAll checks passed.", TokenUsage(), [], None)
+        agent_manager.execute.return_value = ("Review result:\nCAFE_CONFIRMED\nAll checks passed.", TokenUsage(), [], None, [])
 
 
         git_ops = MagicMock(spec=GitOperations)
@@ -133,7 +133,7 @@ class TestReviewPhaseWithStatusCodes:
 
         agent_manager = MagicMock(spec=AgentManager)
         setup_agent_manager_mock(agent_manager)
-        agent_manager.execute.return_value = ("cafe_confirmed\nLooks good to me!", TokenUsage(), [], None)
+        agent_manager.execute.return_value = ("cafe_confirmed\nLooks good to me!", TokenUsage(), [], None, [])
 
 
         git_ops = MagicMock(spec=GitOperations)

@@ -193,7 +193,7 @@ class TestIterativeFlow:
 
         agent_manager = MagicMock(spec=AgentManager)
         setup_agent_manager_mock(agent_manager)
-        agent_manager.execute.return_value = ("Development completed. CAFE_CONFIRMED", TokenUsage(), [], None)
+        agent_manager.execute.return_value = ("Development completed. CAFE_CONFIRMED", TokenUsage(), [], None, [])
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -233,7 +233,7 @@ class TestIterativeFlow:
 
         agent_manager = MagicMock(spec=AgentManager)
         setup_agent_manager_mock(agent_manager)
-        agent_manager.execute.return_value = ("CAFE_CONFIRMED", TokenUsage(), [], None)
+        agent_manager.execute.return_value = ("CAFE_CONFIRMED", TokenUsage(), [], None, [])
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -318,7 +318,7 @@ class TestStatusCodeHandling:
 
         agent_manager = MagicMock(spec=AgentManager)
         setup_agent_manager_mock(agent_manager)
-        agent_manager.execute.return_value = ("All done. CAFE_CONFIRMED", TokenUsage(), [], None)
+        agent_manager.execute.return_value = ("All done. CAFE_CONFIRMED", TokenUsage(), [], None, [])
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -359,7 +359,7 @@ class TestStatusCodeHandling:
         agent_manager = MagicMock(spec=AgentManager)
         setup_agent_manager_mock(agent_manager)
         # Agent returns NEED_PERMISSION
-        agent_manager.execute.return_value = ("Need permission. CAFE_NEED_PERMISSION", TokenUsage(), [], None)
+        agent_manager.execute.return_value = ("Need permission. CAFE_NEED_PERMISSION", TokenUsage(), [], None, [])
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -487,7 +487,7 @@ class TestBranchManagement:
 
         agent_manager = MagicMock(spec=AgentManager)
         setup_agent_manager_mock(agent_manager)
-        agent_manager.execute.return_value = ("CAFE_CONFIRMED\n開發完成", TokenUsage(), [], None)
+        agent_manager.execute.return_value = ("CAFE_CONFIRMED\n開發完成", TokenUsage(), [], None, [])
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -796,7 +796,7 @@ class TestDevelopPhaseReviewFeedback:
         # Mock agent response
         agent_manager = MagicMock(spec=AgentManager)
         setup_agent_manager_mock(agent_manager)
-        agent_manager.execute.return_value = ("CAFE_CONFIRMED\n修正完成", TokenUsage(), [], None)
+        agent_manager.execute.return_value = ("CAFE_CONFIRMED\n修正完成", TokenUsage(), [], None, [])
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 
         # Mock git operations
@@ -936,7 +936,7 @@ class TestDevelopPhaseReviewFeedback:
         # Mock agent response
         agent_manager = MagicMock(spec=AgentManager)
         setup_agent_manager_mock(agent_manager)
-        agent_manager.execute.return_value = ("CAFE_CONFIRMED\n修正完成", TokenUsage(), [], None)
+        agent_manager.execute.return_value = ("CAFE_CONFIRMED\n修正完成", TokenUsage(), [], None, [])
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 
         # Mock git operations
@@ -1041,7 +1041,7 @@ class TestDevelopPhaseReviewFeedback:
         # Setup
         agent_manager = MagicMock(spec=AgentManager)
         setup_agent_manager_mock(agent_manager)
-        agent_manager.execute.return_value = ("CAFE_CONFIRMED\n修正完成", TokenUsage(), [], None)
+        agent_manager.execute.return_value = ("CAFE_CONFIRMED\n修正完成", TokenUsage(), [], None, [])
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -1183,7 +1183,7 @@ class TestDevelopPhaseIterationCounter:
             interactive=False,
         )
 
-        agent_manager.execute.return_value = ("CAFE_CONFIRMED\n第一次開發完成", TokenUsage(), [], None)
+        agent_manager.execute.return_value = ("CAFE_CONFIRMED\n第一次開發完成", TokenUsage(), [], None, [])
         result1 = phase.execute()
 
         assert result1.status == PhaseStatus.COMPLETED
@@ -1219,7 +1219,7 @@ class TestDevelopPhaseIterationCounter:
         git_ops.branch_exists.return_value = True
 
         # Second execution - agent does more work
-        agent_manager.execute.return_value = ("CAFE_CONFIRMED\n第二次開發完成", TokenUsage(), [], None)
+        agent_manager.execute.return_value = ("CAFE_CONFIRMED\n第二次開發完成", TokenUsage(), [], None, [])
         result2 = phase2.execute()
 
         assert result2.status == PhaseStatus.COMPLETED
@@ -1336,7 +1336,8 @@ class TestDeveloperPermissions:
                     "CAFE_DONE\nImplementation complete",
                     TokenUsage(),
                     [],
-                    None
+                    None,
+                    []
                 )
 
             agent_manager.execute.side_effect = capture_execute

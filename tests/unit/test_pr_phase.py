@@ -18,7 +18,7 @@ class TestPRPhaseBasics:
     def test_init_pr_phase(self) -> None:
         """測試初始化 PRPhase"""
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
+        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None, [])
         mock_executor = MagicMock()
         mock_executor.config.cli = AgentCLI.COPILOT
         mock_executor.config.session_id = "session_123"
@@ -47,7 +47,7 @@ class TestPRPhaseBasics:
     def test_init_with_github_mode(self) -> None:
         """測試使用 GitHub mode 初始化"""
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
+        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None, [])
         mock_executor = MagicMock()
         mock_executor.config.cli = AgentCLI.COPILOT
         mock_executor.config.session_id = "session_123"
@@ -84,7 +84,7 @@ class TestBranchPushing:
         spec_file.write_text("# Feature\n")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
+        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None, [])
         mock_executor = MagicMock()
         mock_executor.config.cli = AgentCLI.COPILOT
         mock_executor.config.session_id = "session_123"
@@ -124,7 +124,7 @@ class TestBranchPushing:
         requirements_file.write_text("# Feature Title\n")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
+        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None, [])
         mock_executor = MagicMock()
         mock_executor.config.cli = AgentCLI.COPILOT
         mock_executor.config.session_id = "session_123"
@@ -156,7 +156,7 @@ class TestBranchPushing:
     def test_push_failure_fails_phase(self) -> None:
         """測試 push 失敗時 phase 失敗"""
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
+        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None, [])
         mock_executor = MagicMock()
         mock_executor.config.cli = AgentCLI.COPILOT
         mock_executor.config.session_id = "session_123"
@@ -197,7 +197,7 @@ class TestPRCreation:
         spec_file.write_text("# Feature\n")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
+        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None, [])
         mock_executor = MagicMock()
         mock_executor.config.cli = AgentCLI.COPILOT
         mock_executor.config.session_id = "session_123"
@@ -242,7 +242,7 @@ class TestPRCreation:
         spec_file.write_text("# Feature Title\n")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
+        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None, [])
         mock_executor = MagicMock()
         mock_executor.config.cli = AgentCLI.COPILOT
         mock_executor.config.session_id = "session_123"
@@ -277,7 +277,7 @@ class TestPRCreation:
     def test_gh_not_available_fails(self) -> None:
         """測試 gh 不可用時失敗"""
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
+        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None, [])
         mock_executor = MagicMock()
         mock_executor.config.cli = AgentCLI.COPILOT
         mock_executor.config.session_id = "session_123"
@@ -318,7 +318,7 @@ class TestPRTitleGeneration:
         spec_file.write_text("# Feature\n")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
+        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None, [])
         mock_executor = MagicMock()
         mock_executor.config.cli = AgentCLI.COPILOT
         mock_executor.config.session_id = "session_123"
@@ -357,7 +357,7 @@ class TestPRTitleGeneration:
         spec_file.write_text("# Add User Authentication\n\nDetails...")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
+        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None, [])
         mock_executor = MagicMock()
         mock_executor.config.cli = AgentCLI.COPILOT
         mock_executor.config.session_id = "session_123"
@@ -400,7 +400,7 @@ class TestPRBodyGeneration:
         spec_file.write_text("# Feature Title\n")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
+        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None, [])
         mock_executor = MagicMock()
         mock_executor.config.cli = AgentCLI.COPILOT
         mock_executor.config.session_id = "session_123"
@@ -441,7 +441,7 @@ class TestErrorHandling:
     def test_github_mode_without_issue_id_fails(self) -> None:
         """測試 GitHub mode 沒有 issue_id 時失敗"""
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
+        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None, [])
         mock_executor = MagicMock()
         mock_executor.config.cli = AgentCLI.COPILOT
         mock_executor.config.session_id = "session_123"
@@ -471,7 +471,7 @@ class TestErrorHandling:
     def test_missing_requirements_file_fails(self) -> None:
         """測試缺少需求檔案時失敗"""
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
+        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None, [])
         mock_executor = MagicMock()
         mock_executor.config.cli = AgentCLI.COPILOT
         mock_executor.config.session_id = "session_123"
@@ -500,7 +500,7 @@ class TestErrorHandling:
     def test_git_error_fails_phase(self) -> None:
         """測試 git 操作錯誤時 phase 失敗"""
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
+        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None, [])
         mock_executor = MagicMock()
         mock_executor.config.cli = AgentCLI.COPILOT
         mock_executor.config.session_id = "session_123"
@@ -532,7 +532,7 @@ class TestErrorHandling:
     def test_gh_pr_create_error_fails_phase(self) -> None:
         """測試 gh pr create 失敗時 phase 失敗"""
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
+        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None, [])
         mock_executor = MagicMock()
         mock_executor.config.cli = AgentCLI.COPILOT
         mock_executor.config.session_id = "session_123"
@@ -643,7 +643,7 @@ class TestIssueNameBranchNaming:
         spec_file.write_text("# Feature\n")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
+        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None, [])
         mock_executor = MagicMock()
         mock_executor.config.cli = AgentCLI.COPILOT
         mock_executor.config.session_id = "session_123"
@@ -684,7 +684,7 @@ class TestIssueNameBranchNaming:
         spec_file.write_text("# Feature\n")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
+        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None, [])
         mock_executor = MagicMock()
         mock_executor.config.cli = AgentCLI.COPILOT
         mock_executor.config.session_id = "session_123"
@@ -729,7 +729,7 @@ class TestDraftPRCreation:
         spec_file.write_text("# Feature\n")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
+        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None, [])
         mock_executor = MagicMock()
         mock_executor.config.cli = AgentCLI.COPILOT
         mock_executor.config.session_id = "session_123"
@@ -773,7 +773,7 @@ class TestDraftPRCreation:
         spec_file.write_text("# Feature\n")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
+        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None, [])
         mock_executor = MagicMock()
         mock_executor.config.cli = AgentCLI.COPILOT
         mock_executor.config.session_id = "session_123"
@@ -821,7 +821,7 @@ class TestCustomTitleAndBody:
         spec_file.write_text("# Feature\n")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
+        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None, [])
         mock_executor = MagicMock()
         mock_executor.config.cli = AgentCLI.COPILOT
         mock_executor.config.session_id = "session_123"
@@ -882,7 +882,7 @@ class TestCustomTitleAndBody:
         plan_file.write_text("# Implementation Plan\n")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
+        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None, [])
         mock_executor = MagicMock()
         mock_executor.config.cli = AgentCLI.COPILOT
         mock_executor.config.session_id = "session_123"
@@ -903,7 +903,7 @@ class TestCustomTitleAndBody:
             pr_dir.mkdir(parents=True, exist_ok=True)
             (pr_dir / "title.txt").write_text("Auto Generated Title")
             (pr_dir / "body.md").write_text("## Summary\nAuto-generated PR body\n\n## Changes\n- commit1\n- commit2")
-            return "CAFE_CONFIRMED", TokenUsage(), [], None
+            return "CAFE_CONFIRMED", TokenUsage(), [], None, []
 
         agent_manager.execute.side_effect = mock_agent_execute
 
@@ -954,7 +954,7 @@ class TestPartialCustomTitleOrBody:
         plan_file.write_text("# Implementation Plan\n")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
+        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None, [])
         mock_executor = MagicMock()
         mock_executor.config.cli = AgentCLI.COPILOT
         mock_executor.config.session_id = "session_123"
@@ -974,7 +974,7 @@ class TestPartialCustomTitleOrBody:
             pr_dir = spec_file.parent.parent / "pr"
             # Agent should only generate body
             (pr_dir / "body.md").write_text("## Summary\nGenerated body content")
-            return "CAFE_CONFIRMED", TokenUsage(), [], None
+            return "CAFE_CONFIRMED", TokenUsage(), [], None, []
 
         agent_manager.execute.side_effect = mock_agent_execute
 
@@ -1030,7 +1030,7 @@ class TestPartialCustomTitleOrBody:
         plan_file.write_text("# Implementation Plan\n")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
+        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None, [])
         mock_executor = MagicMock()
         mock_executor.config.cli = AgentCLI.COPILOT
         mock_executor.config.session_id = "session_123"
@@ -1050,7 +1050,7 @@ class TestPartialCustomTitleOrBody:
             pr_dir = spec_file.parent.parent / "pr"
             # Agent should only generate title
             (pr_dir / "title.txt").write_text("Generated PR Title")
-            return "CAFE_CONFIRMED", TokenUsage(), [], None
+            return "CAFE_CONFIRMED", TokenUsage(), [], None, []
 
         agent_manager.execute.side_effect = mock_agent_execute
 
@@ -1111,7 +1111,7 @@ class TestPRExistingFiles:
         (pr_dir / "body.md").write_text("Existing Body")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
+        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None, [])
         mock_executor = MagicMock()
         mock_executor.config.cli = AgentCLI.COPILOT
         mock_executor.config.session_id = "session_123"
@@ -1168,7 +1168,7 @@ class TestPRExistingFiles:
         (pr_dir / "body.md").write_text("Old Body")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
+        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None, [])
         mock_executor = MagicMock()
         mock_executor.config.cli = AgentCLI.COPILOT
         mock_executor.config.session_id = "session_123"
@@ -1192,7 +1192,7 @@ class TestPRExistingFiles:
         def mock_agent_execute(agent_name, prompt, allowed_tools):
             (pr_dir / "title.txt").write_text("New Generated Title")
             (pr_dir / "body.md").write_text("New Generated Body")
-            return "CAFE_CONFIRMED", TokenUsage(), [], None
+            return "CAFE_CONFIRMED", TokenUsage(), [], None, []
 
         agent_manager.execute.side_effect = mock_agent_execute
 
@@ -1237,7 +1237,7 @@ class TestPRExistingFiles:
         (pr_dir / "body.md").write_text("Old Body")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
+        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None, [])
         mock_executor = MagicMock()
         mock_executor.config.cli = AgentCLI.COPILOT
         mock_executor.config.session_id = "session_123"
@@ -1300,7 +1300,7 @@ class TestPRURLInResult:
         spec_file.write_text("# Feature\n\nAdd new feature")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
+        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None, [])
         mock_executor = MagicMock()
         mock_executor.config.cli = AgentCLI.COPILOT
         mock_executor.config.session_id = "session_123"
@@ -1353,7 +1353,7 @@ class TestBaseBranchFromConfig:
         config_file.write_text('base_branch: develop\nfeature_branch: fix-branch\n')
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
+        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None, [])
         mock_executor = MagicMock()
         mock_executor.config.cli = AgentCLI.COPILOT
         mock_executor.config.session_id = "session_123"
@@ -1397,7 +1397,7 @@ class TestBaseBranchFromConfig:
         spec_file.write_text("# Feature\n")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
+        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None, [])
         mock_executor = MagicMock()
         mock_executor.config.cli = AgentCLI.COPILOT
         mock_executor.config.session_id = "session_123"
@@ -1444,7 +1444,7 @@ class TestBaseBranchFromConfig:
         config_file.write_text('feature_branch: test-feature\n')
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
+        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None, [])
         mock_executor = MagicMock()
         mock_executor.config.cli = AgentCLI.COPILOT
         mock_executor.config.session_id = "session_123"
@@ -1491,7 +1491,7 @@ class TestBaseBranchFromConfig:
         config_file.write_text('base_branch: develop\nfeature_branch: test-feature\n')
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
+        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None, [])
         mock_executor = MagicMock()
         mock_executor.config.cli = AgentCLI.COPILOT
         mock_executor.config.session_id = "session_123"
@@ -1547,7 +1547,7 @@ class TestIssueCommentIntegration:
         config_file.write_text("issue_id: '123'\nbase_branch: 'main'\n")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
+        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None, [])
         mock_executor = MagicMock()
         mock_executor.config.cli = AgentCLI.COPILOT
         mock_executor.config.session_id = "session_123"
@@ -1600,7 +1600,7 @@ class TestIssueCommentIntegration:
         config_file.write_text("base_branch: 'main'\n")  # No issue_id
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
+        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None, [])
         mock_executor = MagicMock()
         mock_executor.config.cli = AgentCLI.COPILOT
         mock_executor.config.session_id = "session_123"
@@ -1653,7 +1653,7 @@ class TestIssueCommentIntegration:
         config_file.write_text("issue_id: '123'\nbase_branch: 'main'\n")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None)
+        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None, [])
         mock_executor = MagicMock()
         mock_executor.config.cli = AgentCLI.COPILOT
         mock_executor.config.session_id = "session_123"

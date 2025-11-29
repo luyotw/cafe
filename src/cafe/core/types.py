@@ -75,6 +75,7 @@ class AgentResponse(BaseModel):
     token_usage: TokenUsage
     permission_denials: List["PermissionDenial"] = Field(default_factory=list)
     cli_command_args: Optional[List[str]] = None  # CLI 命令參數（除了 prompt）
+    streaming_log: List[str] = Field(default_factory=list)  # Streaming 片段歷史記錄
 
 
 class PhaseResult(BaseModel):

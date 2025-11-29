@@ -102,7 +102,7 @@ class TestLocalWorkflow:
         plan_file.write_text("## 開發指南\n\nDevelopment guide here")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage(), [], None)
+        agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage(), [], None, [])
 
         setup_agent_manager_mocks(agent_manager)
 
@@ -138,7 +138,7 @@ class TestLocalWorkflow:
         plan_file.write_text("## 開發指南\n\n這是開發指南內容\n\n## 實作計畫\n\nTODO")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage(), [], None)
+        agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage(), [], None, [])
 
         setup_agent_manager_mocks(agent_manager)
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -177,7 +177,7 @@ class TestLocalWorkflow:
         spec_file.write_text("# Requirements\n\nNo dev guide")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage(), [], None)
+        agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage(), [], None, [])
 
         setup_agent_manager_mocks(agent_manager)
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -220,7 +220,7 @@ class TestLocalWorkflow:
         agent_manager = MagicMock(spec=AgentManager)
         # 移除 while loop 後，agent 回應應該包含 status code
         # 測試 NEED_CLARIFICATION 的情況
-        agent_manager.execute.return_value = ("CAFE_NEED_CLARIFICATION\n需要更多資訊", TokenUsage(), [], None)
+        agent_manager.execute.return_value = ("CAFE_NEED_CLARIFICATION\n需要更多資訊", TokenUsage(), [], None, [])
 
         setup_agent_manager_mocks(agent_manager)
 
@@ -260,7 +260,7 @@ class TestGitHubWorkflow:
         spec_file.write_text("# Requirements\n\n## 開發指南\nDev guide")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage(), [], None)
+        agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage(), [], None, [])
 
         setup_agent_manager_mocks(agent_manager)
 
@@ -295,7 +295,7 @@ class TestGitHubWorkflow:
         spec_file.write_text("# Requirements\n\n## 開發指南\nDev guide")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage(), [], None)
+        agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage(), [], None, [])
 
         setup_agent_manager_mocks(agent_manager)
 
@@ -334,7 +334,7 @@ class TestPromptGeneration:
         plan_file.write_text("## 開發指南\n\nGuide")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage(), [], None)
+        agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage(), [], None, [])
 
         setup_agent_manager_mocks(agent_manager)
 
@@ -373,7 +373,7 @@ class TestPromptGeneration:
 
         agent_manager = MagicMock(spec=AgentManager)
         # First call returns response without status code
-        agent_manager.execute.return_value = ("分析中", TokenUsage(), [], None)
+        agent_manager.execute.return_value = ("分析中", TokenUsage(), [], None, [])
 
         setup_agent_manager_mocks(agent_manager)
 
@@ -420,7 +420,7 @@ class TestAgentSelection:
         plan_file.write_text("## 開發指南\n\nGuide")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage(), [], None)
+        agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage(), [], None, [])
 
         setup_agent_manager_mocks(agent_manager)
 
@@ -544,7 +544,7 @@ class TestPlanPhaseHistory:
 
         agent_manager = MagicMock(spec=AgentManager)
         # 移除 while loop 後，只會執行一次迭代
-        agent_manager.execute.return_value = ("CAFE_NEED_CLARIFICATION\n需要更多資訊", TokenUsage(), [], None)
+        agent_manager.execute.return_value = ("CAFE_NEED_CLARIFICATION\n需要更多資訊", TokenUsage(), [], None, [])
 
         setup_agent_manager_mocks(agent_manager)
 
@@ -594,7 +594,7 @@ class TestPlanPhaseHistory:
         plan_file.write_text("## 開發指南\n\nGuide")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage(), [], None)
+        agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage(), [], None, [])
         agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
 
         setup_agent_manager_mocks(agent_manager)
@@ -647,7 +647,7 @@ class TestPlanPhaseHistory:
             plan_file = spec_file.parent.parent / "plan" / "plan.md"
             plan_file.parent.mkdir(parents=True, exist_ok=True)
             plan_file.write_text("# 實作計畫\n\n## 技術分析\n分析內容")
-            return ("CAFE_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage(), [], None)
+            return ("CAFE_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage(), [], None, [])
 
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.side_effect = mock_agent_writes_plan
@@ -868,8 +868,8 @@ class TestPlanPhaseNeedClarification:
 
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.side_effect = [
-            ("CAFE_NEED_CLARIFICATION\n需要更多資訊", TokenUsage(), [], None),
-            ("CAFE_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage(), [], None),
+            ("CAFE_NEED_CLARIFICATION\n需要更多資訊", TokenUsage(), [], None, []),
+            ("CAFE_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage(), [], None, []),
         ]
 
         setup_agent_manager_mocks(agent_manager)
@@ -912,7 +912,7 @@ class TestPlanPhaseNeedClarification:
         plan_file.write_text("## 開發指南\n\nGuide")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("CAFE_NEED_CLARIFICATION\n需要更多資訊", TokenUsage(), [], None)
+        agent_manager.execute.return_value = ("CAFE_NEED_CLARIFICATION\n需要更多資訊", TokenUsage(), [], None, [])
 
         setup_agent_manager_mocks(agent_manager)
 
@@ -950,7 +950,7 @@ class TestPlanPhaseNeedClarification:
 
         agent_manager = MagicMock(spec=AgentManager)
         # 移除 while loop 後，只會執行一次迭代
-        agent_manager.execute.return_value = ("CAFE_NEED_CLARIFICATION\n需要更多資訊", TokenUsage(), [], None)
+        agent_manager.execute.return_value = ("CAFE_NEED_CLARIFICATION\n需要更多資訊", TokenUsage(), [], None, [])
 
         setup_agent_manager_mocks(agent_manager)
 
@@ -1001,7 +1001,7 @@ class TestPlanPhaseNeedClarification:
         plan_file.write_text("## 開發指南\n\nGuide")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("CAFE_NEED_CLARIFICATION\n需要更多資訊", TokenUsage(), [], None)
+        agent_manager.execute.return_value = ("CAFE_NEED_CLARIFICATION\n需要更多資訊", TokenUsage(), [], None, [])
 
         setup_agent_manager_mocks(agent_manager)
 
@@ -1064,7 +1064,7 @@ class TestPlanPhaseResume:
         history_file.write_text(json.dumps(history_data, ensure_ascii=False, indent=2))
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n實作計畫已完成。", TokenUsage(), [], None)
+        agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n實作計畫已完成。", TokenUsage(), [], None, [])
 
         setup_agent_manager_mocks(agent_manager)
 
@@ -1124,7 +1124,7 @@ class TestPlanPhaseIterationDisplay:
 
         agent_manager = MagicMock(spec=AgentManager)
         # 從 iteration 2 開始（恢復）
-        agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n計畫完成", TokenUsage(), [], None)
+        agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n計畫完成", TokenUsage(), [], None, [])
         agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
 
         setup_agent_manager_mocks(agent_manager)
@@ -1169,7 +1169,7 @@ class TestPlanPhaseIterationDisplay:
 
         agent_manager = MagicMock(spec=AgentManager)
         # 第一輪就 READY_FOR_REVIEW
-        agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n計畫完成", TokenUsage(), [], None)
+        agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n計畫完成", TokenUsage(), [], None, [])
         agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -1305,7 +1305,7 @@ class TestPlanPhaseNoStatusCode:
         )
 
         # Mock agent to return content without status code
-        agent_manager.execute.return_value = ("這是計畫內容，但沒有 status code", TokenUsage(), [], None)
+        agent_manager.execute.return_value = ("這是計畫內容，但沒有 status code", TokenUsage(), [], None, [])
 
         with patch('builtins.print'):
             result = phase.execute()
@@ -1357,7 +1357,7 @@ class TestPlanPhaseEmptyResponse:
         agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="copilot"))
 
         # Mock agent to return empty string
-        agent_manager.execute.return_value = ("", TokenUsage(), [], None)
+        agent_manager.execute.return_value = ("", TokenUsage(), [], None, [])
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -1462,8 +1462,8 @@ class TestPlanPhasePromptGeneration:
         # First call will be for iteration 2 (after user chooses 'm')
         # Second call should return CONFIRMED to finish
         agent_manager.execute.side_effect = [
-            ("CAFE_READY_FOR_REVIEW\n修改後的計畫", TokenUsage(), [], None),  # iter 2: user requested modification
-            ("CAFE_CONFIRMED\n確認完成", TokenUsage(), [], None),  # iter 3: user confirms
+            ("CAFE_READY_FOR_REVIEW\n修改後的計畫", TokenUsage(), [], None, []),  # iter 2: user requested modification
+            ("CAFE_CONFIRMED\n確認完成", TokenUsage(), [], None, []),  # iter 3: user confirms
         ]
 
         with patch('builtins.input', side_effect=['m', 'c']) as mock_input, \
@@ -1555,7 +1555,7 @@ class TestPlanPhaseUserConfirmation:
 
         agent_manager = MagicMock(spec=AgentManager)
         # Agent returns READY_FOR_REVIEW
-        agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n計畫完成", TokenUsage(), [], None)
+        agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n計畫完成", TokenUsage(), [], None, [])
 
         mock_agent = MagicMock()
         mock_agent.config.cli.value = "claude"
@@ -1619,7 +1619,7 @@ class TestExecuteAndHandleAgentResponse:
         mock_agent.config.cli.value = "claude"
         mock_agent.config.session_id = "test_session"
         agent_manager.get_agent.return_value = mock_agent
-        agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n計畫已完成", TokenUsage(), [], None)
+        agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n計畫已完成", TokenUsage(), [], None, [])
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 
         phase = PlanPhase(
@@ -1666,7 +1666,7 @@ class TestExecuteAndHandleAgentResponse:
         mock_agent.config.cli.value = "claude"
         mock_agent.config.session_id = "test_session"
         agent_manager.get_agent.return_value = mock_agent
-        agent_manager.execute.return_value = ("CAFE_NEED_CLARIFICATION\n需要更多資訊", TokenUsage(), [], None)
+        agent_manager.execute.return_value = ("CAFE_NEED_CLARIFICATION\n需要更多資訊", TokenUsage(), [], None, [])
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 
         phase = PlanPhase(
@@ -1711,7 +1711,7 @@ class TestExecuteAndHandleAgentResponse:
         mock_agent.config.cli.value = "claude"
         mock_agent.config.session_id = "test_session"
         agent_manager.get_agent.return_value = mock_agent
-        agent_manager.execute.return_value = ("CAFE_REJECTED\n需求不明確", TokenUsage(), [], None)
+        agent_manager.execute.return_value = ("CAFE_REJECTED\n需求不明確", TokenUsage(), [], None, [])
 
         phase = PlanPhase(
             agent_manager=agent_manager,
@@ -1756,7 +1756,7 @@ class TestExecuteAndHandleAgentResponse:
         mock_agent.config.cli.value = "claude"
         mock_agent.config.session_id = "test_session"
         agent_manager.get_agent.return_value = mock_agent
-        agent_manager.execute.return_value = ("", TokenUsage(), [], None)  # Empty response
+        agent_manager.execute.return_value = ("", TokenUsage(), [], None, [])  # Empty response
 
         phase = PlanPhase(
             agent_manager=agent_manager,
@@ -1801,7 +1801,7 @@ class TestExecuteAndHandleAgentResponse:
         mock_agent.config.cli.value = "claude"
         mock_agent.config.session_id = "test_session"
         agent_manager.get_agent.return_value = mock_agent
-        agent_manager.execute.return_value = ("Some response without status code", TokenUsage(), [], None)
+        agent_manager.execute.return_value = ("Some response without status code", TokenUsage(), [], None, [])
 
         phase = PlanPhase(
             agent_manager=agent_manager,
@@ -1849,7 +1849,7 @@ class TestExecuteAndHandleAgentResponse:
         mock_agent.config.cli.value = "claude"
         mock_agent.config.session_id = "test_session"
         agent_manager.get_agent.return_value = mock_agent
-        agent_manager.execute.return_value = ("Some response without status code", TokenUsage(), [], None)
+        agent_manager.execute.return_value = ("Some response without status code", TokenUsage(), [], None, [])
 
         phase = PlanPhase(
             agent_manager=agent_manager,
@@ -1901,7 +1901,7 @@ class TestPlanPhaseFilePermissions:
         plan_file.write_text("## 開發指南\n\nDevelopment guide here")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n完成", TokenUsage(), [], None)
+        agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n完成", TokenUsage(), [], None, [])
         agent_manager.get_total_token_usage.return_value = TokenUsage()
         setup_agent_manager_mocks(agent_manager)
 

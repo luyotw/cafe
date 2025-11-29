@@ -70,6 +70,8 @@ class TestSpecPhasePermissionDenialStorage:
             TokenUsage(),
             permission_denials,
             None  # cli_command_args
+        ,
+            []  # streaming_log
         )
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -131,7 +133,8 @@ class TestSpecPhasePermissionDenialStorage:
             "CAFE_READY_FOR_REVIEW\n需求已經很清楚了。",
             TokenUsage(),
             [],  # No permission denials
-            None  # cli_command_args
+            None,  # cli_command_args
+            []  # streaming_log
         )
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -214,6 +217,8 @@ class TestPlanPhasePermissionDenialStorage:
             TokenUsage(),
             permission_denials,
             None  # cli_command_args
+        ,
+            []  # streaming_log
         )
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -290,6 +295,8 @@ class TestDevelopPhasePermissionDenialStorage:
             TokenUsage(),
             permission_denials,
             None  # cli_command_args
+        ,
+            []  # streaming_log
         )
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -368,7 +375,8 @@ class TestDevelopPhasePermissionDenialStorage:
             "CAFE_CONFIRMED\n\n開發工作已完成。所有功能都已實作並測試通過。",
             TokenUsage(),
             [],  # No permission denials
-            None  # cli_command_args
+            None,  # cli_command_args
+            []  # streaming_log
         )
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -447,6 +455,8 @@ class TestMultiplePermissionDenials:
             TokenUsage(),
             permission_denials,
             None  # cli_command_args
+        ,
+            []  # streaming_log
         )
 
         permission_handler = MagicMock(spec=PermissionHandler)

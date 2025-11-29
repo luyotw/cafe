@@ -43,7 +43,7 @@ def setup_agent_manager_mock(agent_name: str = "David") -> MagicMock:
     agent_manager.get_total_token_usage.return_value = TokenUsage()
 
     # Set default execute return value (4-tuple: response, token_usage, permission_denials, cli_command_args)
-    agent_manager.execute.return_value = ("CAFE_CONFIRMED\n完成", TokenUsage(), [], None)
+    agent_manager.execute.return_value = ("CAFE_CONFIRMED\n完成", TokenUsage(), [], None, [])
 
     return agent_manager
 
@@ -80,8 +80,8 @@ class TestPermissionDenialUserInteraction:
         # First call: returns NEED_PERMISSION with denials
         # Second call: continues with approved tools
         agent_manager.execute.side_effect = [
-            ("CAFE_NEED_PERMISSION\n需要權限", TokenUsage(), permission_denials, None),
-            ("CAFE_CONFIRMED\n開發完成", TokenUsage(), [], None)
+            ("CAFE_NEED_PERMISSION\n需要權限", TokenUsage(), permission_denials, None, []),
+            ("CAFE_CONFIRMED\n開發完成", TokenUsage(), [], None, [])
         ]
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -166,8 +166,8 @@ class TestPermissionDenialUserInteraction:
         ]
 
         agent_manager.execute.side_effect = [
-            ("CAFE_NEED_PERMISSION\n需要權限", TokenUsage(), permission_denials, None),
-            ("CAFE_CONFIRMED\n開發完成", TokenUsage(), [], None)
+            ("CAFE_NEED_PERMISSION\n需要權限", TokenUsage(), permission_denials, None, []),
+            ("CAFE_CONFIRMED\n開發完成", TokenUsage(), [], None, [])
         ]
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -240,7 +240,8 @@ class TestPermissionDenialUserInteraction:
             "CAFE_NEED_PERMISSION\n需要權限",
             TokenUsage(),
             permission_denials,
-            None  # cli_command_args
+            None,  # cli_command_args
+            []  # streaming_log
         )
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -305,7 +306,8 @@ class TestPermissionDenialUserInteraction:
             "CAFE_NEED_PERMISSION\n需要權限",
             TokenUsage(),
             permission_denials,
-            None  # cli_command_args
+            None,  # cli_command_args
+            []  # streaming_log
         )
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -371,7 +373,8 @@ class TestPermissionDenialUserInteraction:
             "CAFE_NEED_PERMISSION\n需要權限",
             TokenUsage(),
             permission_denials,
-            None  # cli_command_args
+            None,  # cli_command_args
+            []  # streaming_log
         )
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -493,7 +496,7 @@ class TestPermissionDenialUserInteraction:
             json.dump(iteration_001, f)
 
         agent_manager = setup_agent_manager_mock()
-        agent_manager.execute.return_value = ("CAFE_CONFIRMED\n完成", TokenUsage(), [], None)
+        agent_manager.execute.return_value = ("CAFE_CONFIRMED\n完成", TokenUsage(), [], None, [])
 
         permission_handler = MagicMock(spec=PermissionHandler)
         git_ops = MagicMock(spec=GitOperations)

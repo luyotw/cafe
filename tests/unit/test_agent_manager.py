@@ -135,13 +135,14 @@ class TestAgentExecution:
                 token_usage=TokenUsage()
             )
 
-            response, token_usage, permission_denials, cli_command_args = manager.execute("David", "Test prompt")
+            response, token_usage, permission_denials, cli_command_args, streaming_log = manager.execute("David", "Test prompt")
 
             assert response == "Agent response"
+            assert streaming_log == []
             mock_execute.assert_called_once_with("Test prompt", None)
 
     def test_execute_returns_tuple_with_token_usage(self) -> None:
-        """測試 execute 回傳 4-tuple (response, token_usage, permission_denials, cli_command_args)"""
+        """測試 execute 回傳 5-tuple (response, token_usage, permission_denials, cli_command_args, streaming_log)"""
         manager = AgentManager()
         config = AgentConfig(name="David", cli=AgentCLI.CLAUDE)
         manager.register_agent(config)
@@ -156,14 +157,15 @@ class TestAgentExecution:
 
             result = manager.execute("David", "Test prompt")
 
-            # Should return 4-tuple (response, token_usage, permission_denials, cli_command_args)
+            # Should return 5-tuple (response, token_usage, permission_denials, cli_command_args, streaming_log)
             assert isinstance(result, tuple)
-            assert len(result) == 4
-            response, token_usage, permission_denials, cli_command_args = result
+            assert len(result) == 5
+            response, token_usage, permission_denials, cli_command_args, streaming_log = result
             assert response == "Agent response"
             assert token_usage.input_tokens == 100
             assert permission_denials == []
             assert cli_command_args is None
+            assert streaming_log == []
             assert token_usage.output_tokens == 50
 
     def test_execute_current_agent(self) -> None:

@@ -601,9 +601,11 @@ class TestStreamingExecution:
                 parse_stream_json=False,
             )
 
-        # Check response
-        assert agent_response.response == "Line 1\nLine 2\nLine 3\n"
+        # Check response (should be last line only for copilot style)
+        assert agent_response.response == "Line 3\n"
         assert isinstance(agent_response.token_usage, TokenUsage)
+        # Check streaming_log (should contain all lines)
+        assert agent_response.streaming_log == ["Line 1\n", "Line 2\n", "Line 3\n"]
 
         # Check output was printed
         captured = capsys.readouterr()
@@ -639,8 +641,10 @@ class TestStreamingExecution:
                 parse_stream_json=True,
             )
 
-        # Check response content
-        assert agent_response.response == "Hello world"
+        # Check response content (should be last fragment only)
+        assert agent_response.response == "world"
+        # Check streaming_log (should contain all fragments)
+        assert agent_response.streaming_log == ["Hello ", "world"]
 
         # Check token usage
         assert agent_response.token_usage.input_tokens == 10
@@ -702,9 +706,10 @@ class TestStreamingExecution:
                 parse_stream_json=True,
             )
 
-        # Should extract content from valid JSON, skip invalid
-        assert "Valid JSON" in agent_response.response
-        assert " more valid" in agent_response.response
+        # Should have last fragment as response
+        assert agent_response.response == " more valid"
+        # Should have all valid JSON contents in streaming_log
+        assert agent_response.streaming_log == ["Valid JSON", " more valid"]
 
         # Check that invalid line was still printed
         captured = capsys.readouterr()
@@ -735,7 +740,8 @@ class TestClaudeStreamingExecution:
              patch("sys.platform", "win32"):
             agent_response = executor._execute_claude("Test prompt")
 
-        assert agent_response.response == "Response text"
+        assert agent_response.response == "text"  # Last fragment only
+        assert agent_response.streaming_log == ["Response ", "text"]
         assert agent_response.token_usage.input_tokens == 5
         assert agent_response.token_usage.output_tokens == 2
 
@@ -770,8 +776,9 @@ class TestClaudeStreamingExecution:
              patch("sys.platform", "win32"):
             agent_response = executor._execute_claude("Test prompt")
 
-            # Should extract text from message.content[] and concatenate
-            assert agent_response.response == "Hello from Claude with new format"
+            # Should extract text from message.content[] - last fragment only
+            assert agent_response.response == " with new format"
+            assert agent_response.streaming_log == ["Hello from Claude", " with new format"]
             assert isinstance(agent_response.token_usage, TokenUsage)
             assert agent_response.token_usage.input_tokens == 100
             assert agent_response.token_usage.output_tokens == 50
@@ -798,8 +805,9 @@ class TestClaudeStreamingExecution:
              patch("sys.platform", "win32"):
             agent_response = executor._execute_claude("Analyze file")
 
-            # Should only extract text blocks, skipping tool_use
-            assert agent_response.response == "Analysis: Complete"
+            # Should only extract text blocks, skipping tool_use - last fragment only
+            assert agent_response.response == "Complete"
+            assert agent_response.streaming_log == ["Analysis: ", "Complete"]
 
 
 class TestCopilotStreamingExecution:
@@ -825,8 +833,10 @@ class TestCopilotStreamingExecution:
              patch("sys.platform", "win32"):
             agent_response = executor._execute_copilot("Test prompt")
 
-            assert "Copilot response line 1" in agent_response.response
-            assert "Copilot response line 2" in agent_response.response
+            # For copilot style, response is last line only
+            assert agent_response.response == "Copilot response line 2\n"
+            # streaming_log contains all lines
+            assert agent_response.streaming_log == ["Copilot response line 1\n", "Copilot response line 2\n"]
 
             # Verify streaming output was shown
             captured = capsys.readouterr()

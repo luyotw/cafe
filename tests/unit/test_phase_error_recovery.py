@@ -143,6 +143,8 @@ class TestAgentExecutionWithRecovery:
             Mock(input_tokens=100, output_tokens=50),
             [],
             [],
+        
+            []  # streaming_log
         )
         agent_manager.get_agent.return_value = Mock(
             config=Mock(cli=Mock(value="claude"), session_id="test-session")

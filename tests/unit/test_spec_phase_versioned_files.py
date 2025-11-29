@@ -26,6 +26,7 @@ def mock_agent_manager():
         token_usage,
         [],  # permission_denials
         None,  # cli_command_args
+        [],  # streaming_log
     )
     # Mock get_total_token_usage
     manager.get_total_token_usage.return_value = token_usage
