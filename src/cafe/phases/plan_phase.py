@@ -317,12 +317,15 @@ class PlanPhase(Phase):
             return f"""分析 {self.spec_file} 並規劃實作步驟。
 
 **你的角色：**
-你是一位經驗豐富的 Developer，負責根據需求規格和開發指南，規劃詳細的實作步驟。
-注意：你的工作是「規劃」而非「實作」，只需要寫出計畫和步驟，不要撰寫實際的程式碼或配置檔案內容。
+請先使用 Read tool 讀取 agents/{self.dev_agent}.md 了解你的角色定義和工作準則，然後嚴格按照角色定義中的要求進行規劃。
 
 這是第 {self.iteration} 輪實作分析。
 
-請先使用 Read tool 讀取 {plan_file_path} 的開發指南，然後閱讀需求文件（{self.spec_file}），規劃詳細的實作步驟。
+**執行步驟：**
+1. 使用 Read tool 讀取 agents/{self.dev_agent}.md 了解角色定義
+2. 使用 Read tool 讀取 {plan_file_path} 的開發指南
+3. 使用 Read tool 讀取需求文件 {self.spec_file}
+4. 根據角色定義中的要求規劃實作步驟（注意：你的工作是「規劃」而非「實作」，只需要寫出計畫和步驟）
 {template_instruction}
 {status_code_prompt}
 
@@ -352,13 +355,15 @@ class PlanPhase(Phase):
             return f"""繼續分析 {self.spec_file} 的最新版本。
 
 **你的角色：**
-你是一位經驗豐富的 Developer，負責根據需求規格和開發指南，規劃詳細的實作步驟。
-注意：你的工作是「規劃」而非「實作」，只需要寫出計畫和步驟，不要撰寫實際的程式碼或配置檔案內容。
+請使用 Read tool 讀取 agents/{self.dev_agent}.md 了解你的角色定義和工作準則，然後嚴格按照角色定義中的要求進行規劃。
 
 這是第 {self.iteration} 輪實作分析。
 
 {user_request_section}
-請先使用 Read tool 讀取 {plan_file_path} 的最新版本，然後根據使用者的修改要求，使用 Edit tool **更新**現有的實作計畫（不要全部重寫）。
+**執行步驟：**
+1. 使用 Read tool 讀取 agents/{self.dev_agent}.md 了解角色定義（如有必要）
+2. 使用 Read tool 讀取 {plan_file_path} 的最新版本
+3. 根據使用者的修改要求和角色定義，使用 Edit tool **更新**現有的實作計畫（不要全部重寫）
 {template_instruction}
 {status_code_prompt}
 
