@@ -970,8 +970,20 @@ def spec(
                 console.print(f"Iterations: {result.data.get('iterations', 'N/A')}")
                 if workflow_mode == WorkflowMode.LOCAL:
                     console.print(f"Saved to: {spec_dir}")
-            else:
-                # CAFE_READY_FOR_REVIEW or CAFE_CONFIRMED
+            elif status_code == "CAFE_READY_FOR_REVIEW":
+                # Spec draft is ready, but needs user confirmation
+                console.print("[bold green]✅ Spec draft completed![/bold green]")
+                console.print(f"Iterations: {result.data.get('iterations', 'N/A')}")
+                if workflow_mode == WorkflowMode.LOCAL:
+                    console.print(f"Saved to: {spec_dir}")
+                elif result.data.get('issue_id'):
+                    console.print(f"Created issue: #{result.data['issue_id']}")
+                elif issue_id:
+                    console.print(f"Updated issue: #{issue_id}")
+                console.print()
+                console.print("[dim]Please review the spec and run:[/dim] [bold]cafe spec[/bold]")
+            elif status_code == "CAFE_CONFIRMED":
+                # Spec is confirmed, ready to proceed to plan
                 console.print("[bold green]✅ Spec clarification completed![/bold green]")
                 console.print(f"Iterations: {result.data.get('iterations', 'N/A')}")
                 if workflow_mode == WorkflowMode.LOCAL:
@@ -982,6 +994,13 @@ def spec(
                     console.print(f"Updated issue: #{issue_id}")
                 console.print()
                 console.print("[dim]Next step:[/dim] [bold]cafe plan[/bold]")
+            else:
+                # Unknown status code - show generic completion message
+                console.print("[bold green]✅ Spec phase completed![/bold green]")
+                console.print(f"Iterations: {result.data.get('iterations', 'N/A')}")
+                console.print(f"Status: {status_code}")
+                if workflow_mode == WorkflowMode.LOCAL:
+                    console.print(f"Saved to: {spec_dir}")
         else:
             console.print()
             console.print(f"[bold red]❌ Spec phase failed: {result.message}[/bold red]")
