@@ -779,6 +779,13 @@ def close() -> None:
         console.print(f"[green]✓ Successfully closed issue: {feature_branch}[/green]")
         console.print(f"  📁 Issue data preserved at: .cafe/issues/{feature_branch}/")
         console.print(f"  🌿 Current branch: {base_branch}")
+
+        # For worktree mode, remind user to change directory
+        if worktree_path:
+            console.print()
+            console.print(f"[yellow]⚠️  Your terminal is still in the deleted worktree directory.[/yellow]")
+            console.print(f"[yellow]   Please run:[/yellow] [bold]cd {main_repo}[/bold]")
+
         console.print()
 
     except typer.Exit:
