@@ -615,3 +615,12 @@ class ReviewPhase(Phase):
 
 請只回傳一個狀態碼（例如：CAFE_CONFIRMED），不要有任何其他內容。"""
 
+    def _detect_written_output_files(self) -> List[Path]:
+        """檢查 review file 是否在失敗前已寫入。
+
+        Returns:
+            List[Path]: 如果 review_{iteration}.md 存在則返回包含它的列表，否則返回空列表
+        """
+        review_file = self.review_dir / f"review_{self.iteration:03d}.md"
+        return [review_file] if review_file.exists() else []
+

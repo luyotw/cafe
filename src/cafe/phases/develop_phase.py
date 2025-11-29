@@ -802,3 +802,14 @@ class DevelopPhase(Phase):
 - CAFE_NEED_PERMISSION: 需要請求額外的工具使用權限
 
 請只回傳一個狀態碼（例如：CAFE_CONFIRMED），不要有任何其他內容。"""
+
+    def _detect_written_output_files(self) -> List[Path]:
+        """檢查 develop file 是否在失敗前已寫入。
+
+        DevelopPhase 使用 develop_{iteration}.md 來記錄 CAFE_NEED_CLARIFICATION 的問題。
+
+        Returns:
+            List[Path]: 如果 develop_{iteration}.md 存在則返回包含它的列表，否則返回空列表
+        """
+        develop_file = self.develop_dir / f"develop_{self.iteration:03d}.md"
+        return [develop_file] if develop_file.exists() else []

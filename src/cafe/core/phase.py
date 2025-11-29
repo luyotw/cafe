@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional
 import yaml
 
 from cafe.core.status_codes import PhaseStatusCode
-from cafe.core.types import PhaseProgress, PhaseResult, PhaseStatus
+from cafe.core.types import PhaseProgress, PhaseResult, PhaseStatus, TokenUsage
 
 
 class Phase(ABC):
@@ -306,12 +306,95 @@ class Phase(ABC):
             with open(iteration_file, "w", encoding="utf-8") as f:
                 json.dump(history_data, f, ensure_ascii=False, indent=2)
 
-        # 4. 執行 agent
-        response, token_usage, permission_denials, cli_command_args = self.agent_manager.execute(
-            agent_name,
-            prompt,
-            allowed_tools=allowed_tools,
-        )
+        # 4. 執行 agent（with error recovery）
+        try:
+            response, token_usage, permission_denials, cli_command_args = self.agent_manager.execute(
+                agent_name,
+                prompt,
+                allowed_tools=allowed_tools,
+            )
+        except Exception as e:
+            # Agent execution failed - attempt recovery
+            from cafe.agents.executor import AgentExecutionError
+
+            print(f"⚠️  Agent execution failed: {e}")
+
+            # 4a. 檢查 agent 是否寫入輸出檔案
+            written_files = self._detect_written_output_files()
+
+            # 4b. 嘗試從寫入的檔案恢復 response
+            recovered_response, recovered_status_code = self._recover_from_written_files(
+                written_files,
+                valid_status_codes,
+            )
+
+            # 4c. 建立 error log 檔案用於除錯
+            error_log_file = Path(self.history_dir) / f"execution_error_{self.iteration:03d}.log"
+            error_log_file.parent.mkdir(parents=True, exist_ok=True)
+            error_log_file.write_text(
+                f"Timestamp: {datetime.now().isoformat()}\n"
+                f"Error: {str(e)}\n"
+                f"Written files: {[str(f) for f in written_files]}\n"
+                f"Recovered response: {bool(recovered_response)}\n"
+                f"Recovered status: {recovered_status_code.value if recovered_status_code else None}\n",
+                encoding="utf-8",
+            )
+
+            if recovered_response and recovered_status_code:
+                # 4d. 恢復成功 - 視為部分成功
+                print(f"✅ Recovered response from {written_files[0].name}")
+                print(f"   Status code: {recovered_status_code.value}")
+
+                response = recovered_response
+                status_code = recovered_status_code
+                permission_denials = []  # 無權限資訊
+                token_usage = TokenUsage()  # Empty token usage
+
+                # 加入恢復 metadata 到 iteration history
+                phase_specific_data = phase_specific_data or {}
+                phase_specific_data["response"] = response
+                phase_specific_data["permission_denials"] = []
+                phase_specific_data["recovered_from_error"] = True
+                phase_specific_data["original_error"] = str(e)
+
+                # 更新 history（包含恢復的 response 和 status）
+                self._update_iteration_history(
+                    phase_specific_data=phase_specific_data,
+                    prompt=prompt,
+                    agent_cli=agent_cli,
+                    agent_session_id=agent_session_id,
+                    allowed_tools=allowed_tools,
+                    denied_tools=denied_tools,
+                    cli_command_args=[],
+                    status_code=status_code,
+                )
+
+                # 保存 progress
+                if hasattr(self, "_save_progress"):
+                    self._save_progress(status_code)
+
+                # 返回恢復的結果
+                return response, status_code
+            else:
+                # 4e. 恢復失敗 - 更新 history 並 re-raise
+                print(f"❌ Could not recover from error")
+
+                # 更新 iteration history 包含錯誤資訊
+                if iteration_file.exists():
+                    with open(iteration_file, "r", encoding="utf-8") as f:
+                        history_data = json.load(f)
+
+                    history_data["response"] = None
+                    history_data["status_code"] = None
+                    history_data["error"] = str(e)
+                    if isinstance(e, AgentExecutionError) and hasattr(e, 'error_type'):
+                        history_data["error_type"] = e.error_type
+
+                    with open(iteration_file, "w", encoding="utf-8") as f:
+                        json.dump(history_data, f, ensure_ascii=False, indent=2)
+
+                # Re-raise 讓 phase 處理失敗
+                raise
 
         # 5. 檢查空回應
         no_response_status = self._check_empty_response(response)
@@ -500,6 +583,55 @@ class Phase(ABC):
         if not hasattr(self, "history_dir"):
             raise AttributeError("Phase must have 'history_dir' attribute")
         return Path(self.history_dir).parent / "status.json"
+
+    def _detect_written_output_files(self) -> List[Path]:
+        """偵測 agent 在失敗前是否已寫入輸出檔案。
+
+        Base implementation 返回空列表（不進行 recovery）。
+        子類應覆寫此方法以檢查 phase-specific 的輸出檔案。
+
+        Returns:
+            List[Path]: Agent 寫入的檔案路徑列表
+        """
+        return []
+
+    def _recover_from_written_files(
+        self,
+        written_files: List[Path],
+        valid_status_codes: List[PhaseStatusCode],
+    ) -> tuple[Optional[str], Optional[PhaseStatusCode]]:
+        """嘗試從已寫入的檔案中恢復 agent response。
+
+        Args:
+            written_files: Agent 在失敗前寫入的檔案列表
+            valid_status_codes: 此 phase 有效的 status codes
+
+        Returns:
+            Tuple[Optional[str], Optional[PhaseStatusCode]]:
+                - recovered_response: 恢復的 response 內容
+                - extracted_status_code: 從檔案中提取的 status code
+                如果恢復失敗則返回 (None, None)
+        """
+        if not written_files:
+            return None, None
+
+        # 讀取第一個（主要）輸出檔案
+        try:
+            primary_file = written_files[0]
+            recovered_response = primary_file.read_text(encoding="utf-8")
+
+            # 從檔案內容提取 status code
+            from cafe.core.status_codes import StatusCodeParser
+            status_code = StatusCodeParser.extract(
+                recovered_response,
+                valid_codes=valid_status_codes,
+            )
+
+            return recovered_response, status_code
+        except Exception as e:
+            # 記錄恢復失敗但不 raise
+            print(f"⚠️  Failed to recover from written files: {e}")
+            return None, None
 
     def _save_progress(self, status_code: PhaseStatusCode) -> None:
         """Save phase progress to status.json（通用方法）。

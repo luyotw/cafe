@@ -608,4 +608,13 @@ class PlanPhase(Phase):
 
 請只回傳一個狀態碼（例如：CAFE_READY_FOR_REVIEW），不要有任何其他內容。"""
 
+    def _detect_written_output_files(self) -> List[Path]:
+        """檢查 plan file 是否在失敗前已寫入。
+
+        Returns:
+            List[Path]: 如果 plan_{iteration}.md 存在則返回包含它的列表，否則返回空列表
+        """
+        plan_file = self._get_versioned_file_path("plan", self.iteration, self.phase_dir)
+        return [Path(plan_file)] if Path(plan_file).exists() else []
+
 
