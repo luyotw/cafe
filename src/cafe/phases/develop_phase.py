@@ -517,9 +517,20 @@ class DevelopPhase(Phase):
 
 {status_code_prompt}
 
+**如何請求澄清：**
+遇到以下情況時，請回傳 `CAFE_NEED_CLARIFICATION` 狀態碼：
+- 業務邏輯或需求不清楚
+- 被要求執行的事項與角色的行為準則產生衝突
+
+請求澄清時的步驟：
+1. 回傳 `CAFE_NEED_CLARIFICATION` 狀態碼
+2. 在回應中清楚描述需要澄清的問題（可使用條列式）
+3. 系統會將你的問題儲存到 develop_XXX.md 檔案中
+4. User 回覆後，系統會在下次執行時提供該檔案供你閱讀
+
 **完成後回傳狀態碼就好，不要做任何總結**
 """
-        
+
         # No review feedback - normal development mode
         user_input_section = f"\n\n**用戶的額外說明：**\n{user_input}\n" if user_input else ""
         return f"""請按照實作計畫執行開發工作。
@@ -542,6 +553,17 @@ class DevelopPhase(Phase):
 7. 所有任務完成後回傳狀態碼
 
 {status_code_prompt}
+
+**如何請求澄清：**
+遇到以下情況時，請回傳 `CAFE_NEED_CLARIFICATION` 狀態碼：
+- 業務邏輯或需求不清楚
+- 被要求執行的事項與角色的行為準則產生衝突
+
+請求澄清時的步驟：
+1. 回傳 `CAFE_NEED_CLARIFICATION` 狀態碼
+2. 在回應中清楚描述需要澄清的問題（可使用條列式）
+3. 系統會將你的問題儲存到 develop_XXX.md 檔案中
+4. User 回覆後，系統會在下次執行時提供該檔案供你閱讀
 
 **完成後回傳狀態碼就好，不要做任何總結**
 """
