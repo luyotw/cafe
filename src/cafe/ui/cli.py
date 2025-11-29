@@ -808,10 +808,10 @@ def spec(
         "--issue-id",
         help="Fetch issue content from GitHub (provide issue number)",
     ),
-    pm_agent: str = typer.Option(
-        "Roger",
+    pm_agent: Optional[str] = typer.Option(
+        None,
         "--pm",
-        help="PM agent name",
+        help="PM agent name (defaults to config)",
     ),
     rigor: Optional[str] = typer.Option(
         None,
@@ -899,6 +899,10 @@ def spec(
 
         # Set show_prompt flag
         agent_manager.show_prompt = show_prompt
+
+        # Get PM agent name (from flag or config)
+        if pm_agent is None:
+            pm_agent = config_manager.get("agents.pm.name", "Roger")
 
         # Get PM agent CLI
         pm_executor = agent_manager.get_agent(pm_agent)
@@ -1510,10 +1514,10 @@ def review(
         "-b",
         help="Base branch for diff (default: main)",
     ),
-    reviewer_agent: str = typer.Option(
-        "Richard",
+    reviewer_agent: Optional[str] = typer.Option(
+        None,
         "--reviewer",
-        help="Reviewer agent name",
+        help="Reviewer agent name (defaults to config)",
     ),
     config_file: str = typer.Option(
         ".cafe/config.yaml",
@@ -1590,6 +1594,10 @@ def review(
 
         # Set show_prompt flag
         agent_manager.show_prompt = show_prompt
+
+        # Get reviewer agent name (from flag or config)
+        if reviewer_agent is None:
+            reviewer_agent = config_manager.get("agents.reviewer.name", "Richard")
 
         # Get reviewer agent CLI
         reviewer_executor = agent_manager.get_agent(reviewer_agent)

@@ -235,5 +235,74 @@ class TestDevelopCommandAgentDefault:
                 assert called_agent_name == "John", f"Expected 'John' but got '{called_agent_name}'"
 
 
+class TestSpecCommandAgentDefault:
+    """測試 spec 指令使用 config 中的 PM agent 名稱。"""
+
+    def test_spec_uses_config_pm_name_when_no_flag_provided(
+        self,
+        runner,
+        mock_git_ops,
+        mock_agent_manager,
+        mock_permission_handler,
+        setup_test_env,
+    ):
+        """當沒有提供 --pm flag 時，spec 指令應使用 config 中的 PM agent 名稱。"""
+        # Setup: Mock ConfigManager to return 'Alice' as PM agent name
+        with patch("cafe.ui.cli.ConfigManager") as mock_config:
+            mock_config_instance = Mock()
+
+            def get_side_effect(key, default=None):
+                if key == "agents.pm.name":
+                    return "Alice"
+                elif key == "agents.developer.name":
+                    return "David"
+                elif key == "agents.reviewer.name":
+                    return "Richard"
+                elif key == "agents.pm.cli":
+                    return "copilot"
+                elif key == "agents.developer.cli":
+                    return "copilot"
+                elif key == "agents.reviewer.cli":
+                    return "copilot"
+                return default
+
+            mock_config_instance.get.side_effect = get_side_effect
+            mock_config.return_value = mock_config_instance
+
+            # Mock _setup_agents
+            with patch("cafe.ui.cli._setup_agents") as mock_setup:
+                mock_setup.return_value = mock_agent_manager.return_value
+
+                # Mock SpecPhase
+                with patch("cafe.ui.cli.SpecPhase") as mock_spec_phase:
+                    mock_phase_instance = Mock()
+                    mock_phase_instance.execute.return_value = PhaseResult(
+                        status=PhaseStatus.COMPLETED,
+                        message="Spec completed",
+                        data={
+                            "iterations": 1,
+                            "status_code": PhaseStatusCode.CONFIRMED.value,
+                        },
+                    )
+                    mock_spec_phase.return_value = mock_phase_instance
+
+                    # Mock get_agent
+                    mock_executor = Mock()
+                    mock_executor.config.cli.value = "copilot"
+                    mock_executor.config.session_id = "test-session"
+                    mock_agent_manager.return_value.get_agent.return_value = mock_executor
+
+                    # Execute spec command WITHOUT --pm flag
+                    result = runner.invoke(app, ["spec", "--interactive", "--user-input", "test spec"])
+
+                    # Verify: Should have called get_agent with 'Alice' (from config), not 'Roger'
+                    mock_agent_manager.return_value.get_agent.assert_called_once()
+                    called_agent_name = mock_agent_manager.return_value.get_agent.call_args[0][0]
+                    assert called_agent_name == "Alice", f"Expected 'Alice' but got '{called_agent_name}'"
+
+
+# Note: Review command test requires additional setup (spec/plan files) - tested manually
+# The fix is identical to spec/plan/develop commands above
+
 # Note: PR command doesn't expose dev_agent parameter in CLI
 # It uses developer agent internally through PRPhase, which should be fixed in the phase itself
