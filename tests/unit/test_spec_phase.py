@@ -1361,7 +1361,7 @@ class TestOriginalRequirement:
     def test_pm_prompt_includes_no_code_modification_instruction(
         self, tmp_path: Path, mock_git_ops: MagicMock, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """測試 PM prompt 中包含「不會修改程式碼」的指示"""
+        """測試 PM prompt 中包含讀取角色定義的指示"""
         monkeypatch.chdir(tmp_path)
 
         # Setup
@@ -1385,10 +1385,11 @@ class TestOriginalRequirement:
         # Execute - 生成 prompt
         prompt = phase._generate_local_prompt(user_input="")
 
-        # Assert - 驗證包含「不會修改程式碼」相關指示
-        assert "不是軟體工程師" in prompt
-        assert "絕對不會自行修改程式碼" in prompt
-        assert "Product Manager" in prompt or "PM" in prompt
+        # Assert - 驗證包含讀取角色定義檔案的指示
+        assert "agents/Roger.md" in prompt
+        assert "讀取" in prompt
+        assert "角色定義" in prompt
+        assert "嚴格按照角色定義中的要求" in prompt
 
 
 class TestSpecPhaseVersionedFiles:

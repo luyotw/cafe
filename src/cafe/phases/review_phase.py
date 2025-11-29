@@ -512,7 +512,15 @@ class ReviewPhase(Phase):
 
         # Build prompt
         try:
-            prompt = f"""你是資深軟體工程師 {self.review_agent}，正在進行第 {self.iteration} 輪程式碼審查 (Code Review)。你只會檢查當前分支有，且基礎分支 ({self.base_branch}) 沒有的 commit。
+            prompt = f"""**你的角色:**
+請使用 Read tool 讀取 agents/{self.review_agent}.md 了解你的角色定義和工作準則，然後嚴格按照角色定義中的要求進行程式碼審查工作。
+
+**執行步驟:**
+1. 使用 Read tool 讀取 agents/{self.review_agent}.md 了解角色定義
+2. 使用 Read tool 讀取需求規格和實作計畫
+3. 根據角色定義中的要求進行第 {self.iteration} 輪程式碼審查
+
+你正在進行第 {self.iteration} 輪程式碼審查 (Code Review)。你只會檢查當前分支有，且基礎分支 ({self.base_branch}) 沒有的 commit。
 
 {status_code_prompt}
 {recheck_instruction}

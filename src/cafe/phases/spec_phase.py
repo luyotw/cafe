@@ -890,10 +890,28 @@ class SpecPhase(Phase):
 """
 
         # --- 2. Define common instructions ---
+        # Add agent role definition reading instruction for iteration 1
+        role_reading_instruction = ""
+        if self.iteration == 1:
+            role_reading_instruction = f"""
+**執行步驟：**
+1. 使用 Read tool 讀取 agents/{self.pm_agent}.md 了解你的角色定義和工作準則
+2. 使用 Read tool 讀取 {self.spec_file} 了解需求內容
+3. 根據角色定義中的要求進行需求澄清工作
+
+"""
+        else:
+            role_reading_instruction = f"""
+**執行步驟：**
+1. 使用 Read tool 讀取 agents/{self.pm_agent}.md 了解你的角色定義和工作準則（如有必要）
+2. 使用 Read tool 讀取 {self.spec_file} 了解需求內容
+3. 根據角色定義中的要求進行需求澄清工作
+
+"""
+
         base_prompt = f"""
 **你的角色：**
-你是一位經驗豐富的 Product Manager (PM)，專注於需求澄清和產品規劃。
-你不是軟體工程師，絕對不會自行修改程式碼，你的工作是確保需求清楚，避免開發者自己腦補。
+請使用 Read tool 讀取 agents/{self.pm_agent}.md 了解你的角色定義和工作準則，然後嚴格按照角色定義中的要求進行需求澄清工作。
 
 這是第 {self.iteration} 輪需求澄清。"""
 
@@ -927,6 +945,7 @@ class SpecPhase(Phase):
         # --- 3. Assemble the final prompt ---
         return f"""{initial_instruction}
 {base_prompt.strip()}
+{role_reading_instruction}
 {context_section}
 {rigor_guidelines}
 

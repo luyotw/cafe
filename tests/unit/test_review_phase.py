@@ -671,7 +671,10 @@ class TestReviewResultSaving:
 
             # Verify prompt contains expected content (from _generate_review_prompt)
             prompt = history_data["prompt"]
-            assert "你是資深軟體工程師 Richard" in prompt
+            # Verify prompt instructs agent to read role definition
+            assert "agents/Richard.md" in prompt
+            assert "讀取" in prompt
+            assert "角色定義" in prompt
             assert "程式碼審查" in prompt
             # 新版 prompt 包含審查任務說明，不再直接包含 git diff 內容
             assert "你的審查任務" in prompt
