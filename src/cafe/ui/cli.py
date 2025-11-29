@@ -1026,10 +1026,10 @@ def plan(
         "-i",
         help="GitHub issue ID (github mode)",
     ),
-    dev_agent: str = typer.Option(
-        "David",
+    dev_agent: Optional[str] = typer.Option(
+        None,
         "--dev",
-        help="Developer agent name",
+        help="Developer agent name (defaults to config)",
     ),
     template: Optional[str] = typer.Option(
         None,
@@ -1102,6 +1102,10 @@ def plan(
 
         # Set show_prompt flag
         agent_manager.show_prompt = show_prompt
+
+        # Get developer agent name (from flag or config)
+        if dev_agent is None:
+            dev_agent = config_manager.get("agents.developer.name", "David")
 
         # Get developer agent CLI
         dev_executor = agent_manager.get_agent(dev_agent)
@@ -1222,10 +1226,10 @@ def develop(
         "-i",
         help="GitHub issue ID (github mode)",
     ),
-    dev_agent: str = typer.Option(
-        "David",
+    dev_agent: Optional[str] = typer.Option(
+        None,
         "--dev",
-        help="Developer agent name",
+        help="Developer agent name (defaults to config)",
     ),
     config_file: str = typer.Option(
         ".cafe/config.yaml",
@@ -1316,6 +1320,10 @@ def develop(
 
         # Set show_prompt flag
         agent_manager.show_prompt = show_prompt
+
+        # Get developer agent name (from flag or config)
+        if dev_agent is None:
+            dev_agent = config_manager.get("agents.developer.name", "David")
 
         # Get developer agent CLI
         dev_executor = agent_manager.get_agent(dev_agent)
@@ -1422,10 +1430,10 @@ def dev_alias(
         "-i",
         help="GitHub issue ID (github mode)",
     ),
-    dev_agent: str = typer.Option(
-        "David",
+    dev_agent: Optional[str] = typer.Option(
+        None,
         "--dev",
-        help="Developer agent name",
+        help="Developer agent name (defaults to config)",
     ),
     config_file: str = typer.Option(
         ".cafe/config.yaml",
