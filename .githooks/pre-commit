@@ -11,6 +11,14 @@ echo ""
 # Set PYTHONPATH
 export PYTHONPATH="src:$PYTHONPATH"
 
+# CRITICAL: Prevent tests from polluting the real Git repository
+# Get Python's temp directory and set GIT_CEILING_DIRECTORIES to its parent
+# This prevents Git from searching upward and finding the project's .git
+PYTHON_TMPDIR=$(python3 -c "import tempfile, os; print(os.path.dirname(tempfile.gettempdir()))")
+export GIT_CEILING_DIRECTORIES="$PYTHON_TMPDIR"
+
+echo "🔒 Git isolation enabled: GIT_CEILING_DIRECTORIES=$GIT_CEILING_DIRECTORIES"
+
 # Run unit and integration tests
 echo "Running tests/unit and tests/integration..."
 python3 -m pytest tests/unit/ tests/integration/ -v --tb=short -q
