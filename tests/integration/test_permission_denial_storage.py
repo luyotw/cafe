@@ -265,7 +265,7 @@ class TestDevelopPhasePermissionDenialStorage:
         issue_name = "test-develop-permission-issue"
 
         # Initialize git repo for this issue
-        init_git_repo_for_issue(tmp_path, issue_name)
+        init_git_repo_for_issue(tmp_path, issue_name, monkeypatch)
 
         mock_git_ops.get_current_branch.return_value = issue_name
         spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec_001.md"
@@ -356,7 +356,7 @@ class TestDevelopPhasePermissionDenialStorage:
         issue_name = "test-develop-confirmed-issue"
 
         # Initialize git repo for this issue
-        init_git_repo_for_issue(tmp_path, issue_name)
+        init_git_repo_for_issue(tmp_path, issue_name, monkeypatch)
 
         mock_git_ops.get_current_branch.return_value = issue_name
         spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec_001.md"
@@ -428,7 +428,7 @@ class TestMultiplePermissionDenials:
         issue_name = "test-multiple-denials"
 
         # Initialize git repo for this issue
-        init_git_repo_for_issue(tmp_path, issue_name)
+        init_git_repo_for_issue(tmp_path, issue_name, monkeypatch)
 
         mock_git_ops.get_current_branch.return_value = issue_name
         spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec_001.md"
