@@ -1,7 +1,10 @@
 """Shared fixtures and helpers for integration tests."""
 
+import os
 import subprocess
+from contextlib import contextmanager
 from pathlib import Path
+from typing import Optional
 from unittest.mock import MagicMock
 
 import pytest
@@ -52,6 +55,13 @@ def prepared_repo_factory(tmp_path, monkeypatch):
         # Use tmp_path for this specific test
         repo_path = tmp_path / issue_name
         repo_path.mkdir(parents=True, exist_ok=True)
+
+        # 🔥 關鍵修復：設置 GIT_CEILING_DIRECTORIES 阻止向上搜尋
+        monkeypatch.setenv('GIT_CEILING_DIRECTORIES', str(tmp_path.parent))
+
+        # 清理其他 Git 環境變數
+        for var in ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE']:
+            monkeypatch.delenv(var, raising=False)
 
         # Change to repo directory
         monkeypatch.chdir(repo_path)
@@ -114,6 +124,13 @@ def git_repo(tmp_path, monkeypatch):
             # git_repo is the tmp_path with initialized git
             issue_name = git_repo.name  # 'test-issue'
     """
+    # 🔥 關鍵修復：設置 GIT_CEILING_DIRECTORIES 阻止向上搜尋
+    monkeypatch.setenv('GIT_CEILING_DIRECTORIES', str(tmp_path.parent))
+
+    # 清理其他 Git 環境變數
+    for var in ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE']:
+        monkeypatch.delenv(var, raising=False)
+
     monkeypatch.chdir(tmp_path)
 
     # Initialize git repo
@@ -153,7 +170,58 @@ def git_repo(tmp_path, monkeypatch):
     return tmp_path
 
 
-def init_git_repo_for_issue(tmp_path: Path, issue_name: str) -> None:
+@contextmanager
+def _git_env_isolation(tmp_path: Path, monkeypatch: Optional[pytest.MonkeyPatch] = None):
+    """Context manager for Git environment variable isolation.
+
+    Args:
+        tmp_path: Temporary directory path
+        monkeypatch: Optional pytest monkeypatch fixture. If provided, uses it.
+                    Otherwise, uses os.environ directly (less safe but works).
+    """
+    # 保存原始環境變數值
+    original_env = {}
+    git_vars = ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_CEILING_DIRECTORIES']
+    
+    for var in git_vars:
+        original_env[var] = os.environ.get(var)
+
+    try:
+        # 設置 GIT_CEILING_DIRECTORIES 阻止向上搜尋
+        ceiling_dir = str(tmp_path.parent)
+        if monkeypatch:
+            monkeypatch.setenv('GIT_CEILING_DIRECTORIES', ceiling_dir)
+            # 清理其他 Git 環境變數
+            for var in ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE']:
+                monkeypatch.delenv(var, raising=False)
+        else:
+            os.environ['GIT_CEILING_DIRECTORIES'] = ceiling_dir
+            # 清理其他 Git 環境變數
+            for var in ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE']:
+                os.environ.pop(var, None)
+        
+        yield
+    finally:
+        # 恢復原始環境變數
+        if monkeypatch:
+            for var, value in original_env.items():
+                if value is None:
+                    monkeypatch.delenv(var, raising=False)
+                else:
+                    monkeypatch.setenv(var, value)
+        else:
+            for var, value in original_env.items():
+                if value is None:
+                    os.environ.pop(var, None)
+                else:
+                    os.environ[var] = value
+
+
+def init_git_repo_for_issue(
+    tmp_path: Path, 
+    issue_name: str, 
+    monkeypatch: Optional[pytest.MonkeyPatch] = None
+) -> None:
     """Initialize git repo in tmp_path and checkout issue branch.
 
     Helper function for e2e tests that need to run CLI commands in a git repo.
@@ -161,47 +229,50 @@ def init_git_repo_for_issue(tmp_path: Path, issue_name: str) -> None:
     Args:
         tmp_path: Temporary directory path
         issue_name: Issue name to use as branch name
+        monkeypatch: Optional pytest monkeypatch fixture for environment isolation.
+                    If provided, uses it for better isolation. Otherwise uses os.environ.
     """
-    if (tmp_path / ".git").exists():
-        # Git repo already exists, just checkout to issue branch
+    with _git_env_isolation(tmp_path, monkeypatch):
+        if (tmp_path / ".git").exists():
+            # Git repo already exists, just checkout to issue branch
+            subprocess.run(
+                ["git", "checkout", "-B", issue_name],
+                cwd=tmp_path,
+                capture_output=True,
+                check=False  # Don't fail if branch doesn't exist
+            )
+            return
+
+        # Initialize git repo
+        subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True, check=True)
         subprocess.run(
-            ["git", "checkout", "-B", issue_name],
+            ["git", "config", "user.email", "test@example.com"],
             cwd=tmp_path,
             capture_output=True,
-            check=False  # Don't fail if branch doesn't exist
+            check=True
         )
-        return
+        subprocess.run(
+            ["git", "config", "user.name", "Test User"],
+            cwd=tmp_path,
+            capture_output=True,
+            check=True
+        )
 
-    # Initialize git repo
-    subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True, check=True)
-    subprocess.run(
-        ["git", "config", "user.email", "test@example.com"],
-        cwd=tmp_path,
-        capture_output=True,
-        check=True
-    )
-    subprocess.run(
-        ["git", "config", "user.name", "Test User"],
-        cwd=tmp_path,
-        capture_output=True,
-        check=True
-    )
+        # Create initial commit
+        readme = tmp_path / "README.md"
+        readme.write_text("# Test Project")
+        subprocess.run(["git", "add", "."], cwd=tmp_path, capture_output=True, check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "Initial commit"],
+            cwd=tmp_path,
+            capture_output=True,
+            check=True
+        )
 
-    # Create initial commit
-    readme = tmp_path / "README.md"
-    readme.write_text("# Test Project")
-    subprocess.run(["git", "add", "."], cwd=tmp_path, capture_output=True, check=True)
-    subprocess.run(
-        ["git", "commit", "-m", "Initial commit"],
-        cwd=tmp_path,
-        capture_output=True,
-        check=True
-    )
-
-    # Create and checkout issue branch
-    subprocess.run(
-        ["git", "checkout", "-b", issue_name],
-        cwd=tmp_path,
-        capture_output=True,
-        check=True
-    )
+        # Create and checkout issue branch
+        subprocess.run(
+            ["git", "checkout", "-b", issue_name],
+            cwd=tmp_path,
+            capture_output=True,
+            check=True
+        )
