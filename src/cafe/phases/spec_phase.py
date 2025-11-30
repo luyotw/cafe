@@ -9,6 +9,7 @@ from typing import List, Optional
 import yaml
 
 from cafe.agents.manager import AgentManager
+from cafe.core.git import GitOperations
 from cafe.core.permission import PermissionHandler
 from cafe.core.phase import Phase
 from cafe.core.status_codes import PhaseStatusCode, StatusCodeParser, generate_status_code_prompt
@@ -60,7 +61,7 @@ class SpecPhase(Phase):
         self,
         agent_manager: AgentManager,
         permission_handler: PermissionHandler,
-        git_ops: "GitOperations",
+        git_ops: GitOperations,
         workflow_mode: WorkflowMode,
         issue_id: Optional[str] = None,
         pm_agent: str = "Roger",

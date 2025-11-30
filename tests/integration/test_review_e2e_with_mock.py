@@ -15,7 +15,6 @@ import pytest
 from typer.testing import CliRunner
 
 from cafe.ui.cli import app
-from .conftest import init_git_repo_for_issue
 
 
 runner = CliRunner()
@@ -29,35 +28,30 @@ class MockResult:
     stderr: str
 
 
-def init_git_repo(tmp_path: Path):
-    """初始化 git repository"""
-    subprocess.run(["git", "init"], cwd=str(tmp_path), capture_output=True)
-    subprocess.run(["git", "config", "user.name", "Test User"], cwd=str(tmp_path), capture_output=True)
-    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=str(tmp_path), capture_output=True)
-    subprocess.run(["git", "checkout", "-b", "main"], cwd=str(tmp_path), capture_output=True)
+def add_test_commit_to_branch(repo_path: Path):
+    """Add a test commit to the current branch for review testing"""
+    test_file = repo_path / "test.py"
+    test_file.write_text("""def hello():
+    print("Hello, World!")
 
-    # Create initial commit
-    readme = tmp_path / "README.md"
-    readme.write_text("# Test Project")
-    subprocess.run(["git", "add", "."], cwd=str(tmp_path), capture_output=True)
-    subprocess.run(["git", "commit", "-m", "Initial commit"], cwd=str(tmp_path), capture_output=True)
+if __name__ == "__main__":
+    hello()
+""")
+    subprocess.run(["git", "add", "test.py"], cwd=str(repo_path), capture_output=True)
+    subprocess.run(["git", "commit", "-m", "Add hello function"], cwd=str(repo_path), capture_output=True)
 
 
-def setup_test_environment(tmp_path: Path, issue_name: str):
-    """設置測試環境：創建 spec.md 和 plan.md，初始化 git repo，創建測試 commit"""
-    # Initialize git repo with initial commit
-    init_git_repo(tmp_path)
+def setup_test_files(repo_path: Path, issue_name: str):
+    """Setup test files (spec.md, plan.md) for review testing.
 
+    Note: Git repo and directory structure should already be created by prepared_repo_factory.
+    """
     # 創建 spec.md
-    spec_dir = tmp_path / ".cafe" / "issues" / issue_name / "spec"
-    spec_dir.mkdir(parents=True, exist_ok=True)
-    spec_file = spec_dir / "spec.md"
+    spec_file = repo_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
     spec_file.write_text("# 測試功能需求\n\n這是一個測試需求規格。")
 
     # 創建 plan.md
-    plan_dir = tmp_path / ".cafe" / "issues" / issue_name / "plan"
-    plan_dir.mkdir(parents=True, exist_ok=True)
-    plan_file = plan_dir / "plan.md"
+    plan_file = repo_path / ".cafe" / "issues" / issue_name / "plan" / "plan.md"
     plan_file.write_text("""# 實作計畫
 
 ## 任務清單
@@ -69,26 +63,17 @@ def setup_test_environment(tmp_path: Path, issue_name: str):
 已完成所有任務。
 """)
 
-    # 創建 feature branch 並添加測試 commit
-    subprocess.run(["git", "checkout", "-b", issue_name], cwd=str(tmp_path), capture_output=True)
-    test_file = tmp_path / "test.py"
-    test_file.write_text("""def hello():
-    print("Hello, World!")
-
-if __name__ == "__main__":
-    hello()
-""")
-    subprocess.run(["git", "add", "test.py"], cwd=str(tmp_path), capture_output=True)
-    subprocess.run(["git", "commit", "-m", "Add hello function"], cwd=str(tmp_path), capture_output=True)
-
 
 def run_cafe_review(
-    tmp_path: Path,
+    repo_path: Path,
     issue_name: str,
     mock_response: str,
     extra_args: Optional[List[str]] = None
 ) -> MockResult:
-    """Helper function to run cafe review command with mock using CliRunner"""
+    """Helper function to run cafe review command with mock using CliRunner
+
+    Note: Assumes prepared_repo_factory has already set the working directory.
+    """
     args = ["review", "--no-interactive"]
     if extra_args:
         args.extend(extra_args)
@@ -97,9 +82,7 @@ def run_cafe_review(
     if mock_response:
         env_vars["CAFE_MOCK_RESPONSE"] = mock_response
 
-    original_cwd = os.getcwd()
     try:
-        os.chdir(tmp_path)
         # Mock Git operations to return the issue_name as branch
         with patch("cafe.ui.cli.GitOperations") as mock_git_cls:
             mock_git_instance = mock_git_cls.return_value
@@ -114,8 +97,6 @@ def run_cafe_review(
                     result = runner.invoke(app, args, catch_exceptions=False)
     except Exception as e:
         return MockResult(returncode=1, stdout="", stderr=str(e))
-    finally:
-        os.chdir(original_cwd)
 
     return MockResult(
         returncode=result.exit_code,
@@ -128,7 +109,7 @@ def run_cafe_review(
 class TestReviewE2EMockStatusCodes:
     """測試狀態碼處理"""
 
-    def test_confirmed_status_success(self, tmp_path):
+    def test_confirmed_status_success(self, prepared_repo_factory):
         """測試 CONFIRMED 狀態碼成功完成
 
         情境：Agent 審查通過，返回 CAFE_CONFIRMED
@@ -136,16 +117,18 @@ class TestReviewE2EMockStatusCodes:
         預期：成功，status.json 顯示 completed 狀態，status_code 為 CAFE_CONFIRMED
         """
         issue_name = "test-issue"
-        setup_test_environment(tmp_path, issue_name)
+        repo_path = prepared_repo_factory(issue_name)
+        setup_test_files(repo_path, issue_name)
+        add_test_commit_to_branch(repo_path)
 
-        result = run_cafe_review(tmp_path, issue_name, "CAFE_CONFIRMED\n\n程式碼審查通過。")
+        result = run_cafe_review(repo_path, issue_name, "CAFE_CONFIRMED\n\n程式碼審查通過。")
 
         assert result.returncode == 0
         output = result.stdout + result.stderr
         assert "completed" in output.lower() or "成功" in output.lower() or "passed" in output.lower()
 
         # 驗證 status.json 被創建
-        status_file = tmp_path / ".cafe" / "issues" / issue_name / "review" / "status.json"
+        status_file = repo_path / ".cafe" / "issues" / issue_name / "review" / "status.json"
         assert status_file.exists()
 
         with open(status_file) as f:
@@ -154,7 +137,7 @@ class TestReviewE2EMockStatusCodes:
             assert status_data["status"] == "completed"
             assert status_data["status_code"] == "CAFE_CONFIRMED"
 
-    def test_needs_changes_status_success(self, tmp_path):
+    def test_needs_changes_status_success(self, prepared_repo_factory):
         """測試 NEEDS_CHANGES 狀態碼成功完成
 
         情境：Agent 發現需要修正，返回 CAFE_NEEDS_CHANGES
@@ -162,16 +145,18 @@ class TestReviewE2EMockStatusCodes:
         預期：成功，status.json 顯示 completed 狀態（NEEDS_CHANGES 也視為完成）
         """
         issue_name = "test-issue"
-        setup_test_environment(tmp_path, issue_name)
+        repo_path = prepared_repo_factory(issue_name)
+        setup_test_files(repo_path, issue_name)
+        add_test_commit_to_branch(repo_path)
 
-        result = run_cafe_review(tmp_path, issue_name, "CAFE_NEEDS_CHANGES\n\n需要修正 commit message。")
+        result = run_cafe_review(repo_path, issue_name, "CAFE_NEEDS_CHANGES\n\n需要修正 commit message。")
 
         assert result.returncode == 0
         output = result.stdout + result.stderr
         assert "completed" in output.lower() or "成功" in output.lower()
 
         # 驗證 status.json 被創建，且 NEEDS_CHANGES 也視為 completed
-        status_file = tmp_path / ".cafe" / "issues" / issue_name / "review" / "status.json"
+        status_file = repo_path / ".cafe" / "issues" / issue_name / "review" / "status.json"
         assert status_file.exists()
 
         with open(status_file) as f:
@@ -180,7 +165,7 @@ class TestReviewE2EMockStatusCodes:
             assert status_data["status"] == "completed"  # NEEDS_CHANGES 也是完成狀態
             assert status_data["status_code"] == "CAFE_NEEDS_CHANGES"
 
-    def test_invalid_status_code_fails_in_non_interactive(self, tmp_path):
+    def test_invalid_status_code_fails_in_non_interactive(self, prepared_repo_factory):
         """測試無效狀態碼在 non-interactive 模式會失敗
 
         情境：Agent 返回無效的狀態碼
@@ -188,9 +173,11 @@ class TestReviewE2EMockStatusCodes:
         預期：失敗，錯誤訊息包含 "no status code" 或 "failed"
         """
         issue_name = "test-issue"
-        setup_test_environment(tmp_path, issue_name)
+        repo_path = prepared_repo_factory(issue_name)
+        setup_test_files(repo_path, issue_name)
+        add_test_commit_to_branch(repo_path)
 
-        result = run_cafe_review(tmp_path, issue_name, "CAFE_INVALID_CODE\n\n審查意見...")
+        result = run_cafe_review(repo_path, issue_name, "CAFE_INVALID_CODE\n\n審查意見...")
 
         # Non-interactive mode fails when status code is invalid/missing
         assert result.returncode != 0
@@ -202,7 +189,7 @@ class TestReviewE2EMockStatusCodes:
 class TestReviewE2EMockFileValidation:
     """測試檔案相關功能"""
 
-    def test_review_md_created(self, tmp_path):
+    def test_review_md_created(self, prepared_repo_factory):
         """測試 review 成功完成並保存 iteration 資料
 
         情境：成功完成 review phase
@@ -213,14 +200,16 @@ class TestReviewE2EMockFileValidation:
         在 mock 模式下不會實際產生檔案
         """
         issue_name = "test-issue"
-        setup_test_environment(tmp_path, issue_name)
+        repo_path = prepared_repo_factory(issue_name)
+        setup_test_files(repo_path, issue_name)
+        add_test_commit_to_branch(repo_path)
 
-        result = run_cafe_review(tmp_path, issue_name, "CAFE_CONFIRMED\n\n程式碼審查通過。")
+        result = run_cafe_review(repo_path, issue_name, "CAFE_CONFIRMED\n\n程式碼審查通過。")
 
         assert result.returncode == 0
 
         # Verify iteration file contains review information
-        iteration_file = tmp_path / ".cafe" / "issues" / issue_name / "review" / "history" / "iteration_001.json"
+        iteration_file = repo_path / ".cafe" / "issues" / issue_name / "review" / "history" / "iteration_001.json"
         assert iteration_file.exists()
 
         with open(iteration_file) as f:
@@ -229,7 +218,7 @@ class TestReviewE2EMockFileValidation:
             assert "CAFE_CONFIRMED" in data["response"]
             assert "程式碼審查通過" in data["response"]
 
-    def test_history_directory_created(self, tmp_path):
+    def test_history_directory_created(self, prepared_repo_factory):
         """測試 history 目錄被創建
 
         情境：成功完成 review phase（non-iterative）
@@ -237,13 +226,15 @@ class TestReviewE2EMockFileValidation:
         預期：成功，review/history 目錄被創建，只有一個 iteration 檔案
         """
         issue_name = "test-issue"
-        setup_test_environment(tmp_path, issue_name)
+        repo_path = prepared_repo_factory(issue_name)
+        setup_test_files(repo_path, issue_name)
+        add_test_commit_to_branch(repo_path)
 
-        result = run_cafe_review(tmp_path, issue_name, "CAFE_CONFIRMED\n\n審查完成。")
+        result = run_cafe_review(repo_path, issue_name, "CAFE_CONFIRMED\n\n審查完成。")
 
         assert result.returncode == 0
 
-        history_dir = tmp_path / ".cafe" / "issues" / issue_name / "review" / "history"
+        history_dir = repo_path / ".cafe" / "issues" / issue_name / "review" / "history"
         assert history_dir.exists()
         assert history_dir.is_dir()
 
@@ -251,7 +242,7 @@ class TestReviewE2EMockFileValidation:
         iteration_files = list(history_dir.glob("iteration_*.json"))
         assert len(iteration_files) == 1
 
-    def test_iteration_file_structure(self, tmp_path):
+    def test_iteration_file_structure(self, prepared_repo_factory):
         """測試 iteration 檔案結構正確
 
         情境：成功完成 review phase
@@ -259,13 +250,15 @@ class TestReviewE2EMockFileValidation:
         預期：成功，iteration_001.json 包含正確欄位，allowed_tools 包含 review 相關工具
         """
         issue_name = "test-issue"
-        setup_test_environment(tmp_path, issue_name)
+        repo_path = prepared_repo_factory(issue_name)
+        setup_test_files(repo_path, issue_name)
+        add_test_commit_to_branch(repo_path)
 
-        result = run_cafe_review(tmp_path, issue_name, "CAFE_NEEDS_CHANGES\n\n需要修正。")
+        result = run_cafe_review(repo_path, issue_name, "CAFE_NEEDS_CHANGES\n\n需要修正。")
 
         assert result.returncode == 0
 
-        iteration_file = tmp_path / ".cafe" / "issues" / issue_name / "review" / "history" / "iteration_001.json"
+        iteration_file = repo_path / ".cafe" / "issues" / issue_name / "review" / "history" / "iteration_001.json"
         assert iteration_file.exists()
 
         with open(iteration_file) as f:
@@ -288,7 +281,7 @@ class TestReviewE2EMockFileValidation:
             assert any("write" in tool for tool in allowed_tools)
 
     @pytest.mark.skip(reason="需要使用真實 Git 操作而非 mock，將在後續修復")
-    def test_no_diff_should_fail(self, tmp_path):
+    def test_no_diff_should_fail(self, prepared_repo_factory):
         """測試沒有 diff 時應該失敗
 
         情境：Feature branch 沒有任何改變（無 diff）
@@ -296,24 +289,13 @@ class TestReviewE2EMockFileValidation:
         預期：失敗，錯誤訊息包含 "no changes" 或 "diff"
         """
         issue_name = "test-issue"
-        init_git_repo(tmp_path)
+        repo_path = prepared_repo_factory(issue_name)
+        setup_test_files(repo_path, issue_name)
 
-        # 創建 spec 和 plan 但不創建 feature branch（沒有 diff）
-        spec_dir = tmp_path / ".cafe" / "issues" / issue_name / "spec"
-        spec_dir.mkdir(parents=True, exist_ok=True)
-        spec_file = spec_dir / "spec.md"
-        spec_file.write_text("# 測試功能需求")
-
-        plan_dir = tmp_path / ".cafe" / "issues" / issue_name / "plan"
-        plan_dir.mkdir(parents=True, exist_ok=True)
-        plan_file = plan_dir / "plan.md"
-        plan_file.write_text("# 實作計畫")
-
-        # 創建 feature branch 但沒有任何改變
-        subprocess.run(["git", "checkout", "-b", issue_name], cwd=str(tmp_path), capture_output=True)
+        # 不調用 add_test_commit_to_branch()，故意製造 "no diff" 情境
 
         # 停留在 feature branch，沒有任何改變（與 main 沒有差異）
-        result = run_cafe_review(tmp_path, issue_name, "CAFE_CONFIRMED\n\n審查通過。")
+        result = run_cafe_review(repo_path, issue_name, "CAFE_CONFIRMED\n\n審查通過。")
 
         # 沒有 diff 應該失敗
         assert result.returncode != 0
@@ -325,7 +307,7 @@ class TestReviewE2EMockFileValidation:
 class TestReviewE2EMockDiffHandling:
     """測試 diff 處理功能"""
 
-    def test_full_branch_diff_by_default(self, tmp_path):
+    def test_full_branch_diff_by_default(self, prepared_repo_factory):
         """測試預設審查完整 branch diff
 
         情境：沒有指定特定 commit，審查整個 feature branch
@@ -333,17 +315,19 @@ class TestReviewE2EMockDiffHandling:
         預期：成功，審查 feature branch 與 main 的所有差異
         """
         issue_name = "test-issue"
-        setup_test_environment(tmp_path, issue_name)
+        repo_path = prepared_repo_factory(issue_name)
+        setup_test_files(repo_path, issue_name)
+        add_test_commit_to_branch(repo_path)
 
-        result = run_cafe_review(tmp_path, issue_name, "CAFE_CONFIRMED\n\n審查完成。")
+        result = run_cafe_review(repo_path, issue_name, "CAFE_CONFIRMED\n\n審查完成。")
 
         assert result.returncode == 0
 
         # 驗證 review_001.md 包含審查結果
-        review_file = tmp_path / ".cafe" / "issues" / issue_name / "review" / "review_001.md"
+        review_file = repo_path / ".cafe" / "issues" / issue_name / "review" / "review_001.md"
         assert review_file.exists()
 
-    def test_specific_commit_with_flag(self, tmp_path):
+    def test_specific_commit_with_flag(self, prepared_repo_factory):
         """測試使用 --commit 旗標審查特定 commit
 
         情境：只審查特定 commit 的變更
@@ -351,19 +335,21 @@ class TestReviewE2EMockDiffHandling:
         預期：成功，只審查指定 commit 的 diff
         """
         issue_name = "test-issue"
-        setup_test_environment(tmp_path, issue_name)
+        repo_path = prepared_repo_factory(issue_name)
+        setup_test_files(repo_path, issue_name)
+        add_test_commit_to_branch(repo_path)
 
         # 取得最新 commit SHA
         commit_result = subprocess.run(
             ["git", "rev-parse", "HEAD"],
-            cwd=str(tmp_path),
+            cwd=str(repo_path),
             capture_output=True,
             text=True,
         )
         commit_sha = commit_result.stdout.strip()[:7]  # 取前 7 個字元
 
         result = run_cafe_review(
-            tmp_path,
+            repo_path,
             issue_name,
             "CAFE_CONFIRMED\n\nCommit 審查通過。",
             extra_args=["--commit", commit_sha]
@@ -372,7 +358,7 @@ class TestReviewE2EMockDiffHandling:
         assert result.returncode == 0
 
         # 驗證 review_001.md 被創建
-        review_file = tmp_path / ".cafe" / "issues" / issue_name / "review" / "review_001.md"
+        review_file = repo_path / ".cafe" / "issues" / issue_name / "review" / "review_001.md"
         assert review_file.exists()
 
 
@@ -380,7 +366,7 @@ class TestReviewE2EMockDiffHandling:
 class TestReviewE2EMockAgentBehavior:
     """測試 mock agent 行為"""
 
-    def test_agent_called_only_once(self, tmp_path):
+    def test_agent_called_only_once(self, prepared_repo_factory):
         """測試 agent 只被呼叫一次（non-iterative）
 
         情境：Review phase 是 non-iterative
@@ -388,19 +374,21 @@ class TestReviewE2EMockAgentBehavior:
         預期：成功，history 只有一個 iteration 檔案
         """
         issue_name = "test-issue"
-        setup_test_environment(tmp_path, issue_name)
+        repo_path = prepared_repo_factory(issue_name)
+        setup_test_files(repo_path, issue_name)
+        add_test_commit_to_branch(repo_path)
 
-        result = run_cafe_review(tmp_path, issue_name, "CAFE_CONFIRMED\n\n審查完成。")
+        result = run_cafe_review(repo_path, issue_name, "CAFE_CONFIRMED\n\n審查完成。")
 
         assert result.returncode == 0
 
         # 驗證 history 只有一個 iteration
-        history_dir = tmp_path / ".cafe" / "issues" / issue_name / "review" / "history"
+        history_dir = repo_path / ".cafe" / "issues" / issue_name / "review" / "history"
         iteration_files = list(history_dir.glob("iteration_*.json"))
         assert len(iteration_files) == 1
         assert iteration_files[0].name == "iteration_001.json"
 
-    def test_whitespace_only_response_should_fail(self, tmp_path):
+    def test_whitespace_only_response_should_fail(self, prepared_repo_factory):
         """測試 agent 返回僅空白字符的回應應該失敗
 
         情境：Agent 返回只包含空白字符的回應
@@ -408,9 +396,11 @@ class TestReviewE2EMockAgentBehavior:
         預期：失敗，錯誤訊息包含 "no response" 或 "failed"
         """
         issue_name = "test-issue"
-        setup_test_environment(tmp_path, issue_name)
+        repo_path = prepared_repo_factory(issue_name)
+        setup_test_files(repo_path, issue_name)
+        add_test_commit_to_branch(repo_path)
 
-        result = run_cafe_review(tmp_path, issue_name, "   \n\n  ")
+        result = run_cafe_review(repo_path, issue_name, "   \n\n  ")
 
         # Whitespace-only response is treated as NO_RESPONSE
         assert result.returncode != 0
@@ -422,7 +412,7 @@ class TestReviewE2EMockAgentBehavior:
 class TestReviewE2EMockBaseBranch:
     """測試 base branch 處理"""
 
-    def test_uses_default_main_branch(self, tmp_path):
+    def test_uses_default_main_branch(self, prepared_repo_factory):
         """測試預設使用 main branch 作為 base
 
         情境：沒有在 config.yaml 指定 base_branch
@@ -430,17 +420,19 @@ class TestReviewE2EMockBaseBranch:
         預期：成功，使用 main 作為 base branch 進行 diff
         """
         issue_name = "test-issue"
-        setup_test_environment(tmp_path, issue_name)
+        repo_path = prepared_repo_factory(issue_name)
+        setup_test_files(repo_path, issue_name)
+        add_test_commit_to_branch(repo_path)
 
-        result = run_cafe_review(tmp_path, issue_name, "CAFE_CONFIRMED\n\n審查通過。")
+        result = run_cafe_review(repo_path, issue_name, "CAFE_CONFIRMED\n\n審查通過。")
 
         assert result.returncode == 0
 
         # 驗證成功執行（預設 base branch 是 main）
-        status_file = tmp_path / ".cafe" / "issues" / issue_name / "review" / "status.json"
+        status_file = repo_path / ".cafe" / "issues" / issue_name / "review" / "status.json"
         assert status_file.exists()
 
-    def test_reads_base_branch_from_config(self, tmp_path):
+    def test_reads_base_branch_from_config(self, prepared_repo_factory):
         """測試從 issue config.yaml 讀取 base branch
 
         情境：config.yaml 指定 base_branch 為 develop
@@ -448,17 +440,19 @@ class TestReviewE2EMockBaseBranch:
         預期：嘗試使用 develop 作為 base branch（可能失敗如果 develop 不存在）
         """
         issue_name = "test-issue"
-        setup_test_environment(tmp_path, issue_name)
+        repo_path = prepared_repo_factory(issue_name)
+        setup_test_files(repo_path, issue_name)
+        add_test_commit_to_branch(repo_path)
 
         # 創建 config.yaml with custom base_branch
         import yaml
-        config_file = tmp_path / ".cafe" / "issues" / issue_name / "config.yaml"
+        config_file = repo_path / ".cafe" / "issues" / issue_name / "config.yaml"
         config_file.write_text(yaml.dump({
             "base_branch": "develop",
             "feature_branch": issue_name
         }, allow_unicode=True, default_flow_style=False))
 
-        result = run_cafe_review(tmp_path, issue_name, "CAFE_CONFIRMED\n\n審查通過。")
+        result = run_cafe_review(repo_path, issue_name, "CAFE_CONFIRMED\n\n審查通過。")
 
         # Even if develop branch doesn't exist, the command should attempt to use it
         # The test focuses on whether the config is read, not the git operation success
@@ -472,7 +466,7 @@ class TestReviewE2EMockBaseBranch:
 class TestReviewE2EMockPRComments:
     """測試 review 指令的 --pr-number 參數"""
 
-    def test_pr_number_parameter_accepted(self, tmp_path):
+    def test_pr_number_parameter_accepted(self, prepared_repo_factory):
         """測試 --pr-number 參數被接受
 
         情境：執行 review 時提供 PR number
@@ -480,10 +474,12 @@ class TestReviewE2EMockPRComments:
         預期：指令接受參數並執行（不管 PR 是否存在）
         """
         issue_name = "test-issue"
-        setup_test_environment(tmp_path, issue_name)
+        repo_path = prepared_repo_factory(issue_name)
+        setup_test_files(repo_path, issue_name)
+        add_test_commit_to_branch(repo_path)
 
         result = run_cafe_review(
-            tmp_path,
+            repo_path,
             issue_name,
             "CAFE_CONFIRMED\n\n審查通過。",
             extra_args=["--pr-number", "10"]
@@ -494,7 +490,7 @@ class TestReviewE2EMockPRComments:
         # returncode 0 表示成功，1 表示可能的錯誤（如 PR 不存在）
         assert result.returncode in [0, 1]
 
-    def test_review_without_pr_number_still_works(self, tmp_path):
+    def test_review_without_pr_number_still_works(self, prepared_repo_factory):
         """測試不提供 --pr-number 仍正常運作
 
         情境：正常執行 review，不提供 PR number
@@ -502,15 +498,17 @@ class TestReviewE2EMockPRComments:
         預期：成功完成審查
         """
         issue_name = "test-issue"
-        setup_test_environment(tmp_path, issue_name)
+        repo_path = prepared_repo_factory(issue_name)
+        setup_test_files(repo_path, issue_name)
+        add_test_commit_to_branch(repo_path)
 
-        result = run_cafe_review(tmp_path, issue_name, "CAFE_CONFIRMED\n\n審查通過。")
+        result = run_cafe_review(repo_path, issue_name, "CAFE_CONFIRMED\n\n審查通過。")
 
         assert result.returncode == 0
         output = result.stdout + result.stderr
         assert "passed" in output.lower() or "成功" in output.lower()
 
-    def test_pr_comments_with_real_gh_data(self, tmp_path):
+    def test_pr_comments_with_real_gh_data(self, prepared_repo_factory):
         """測試使用簡化的 PR comments 資料（模擬 gh CLI）
 
         情境：執行 review 時提供 PR number，模擬 gh CLI 返回 PR comments
@@ -544,10 +542,12 @@ class TestReviewE2EMockPRComments:
         }
 
         issue_name = "test-issue"
-        setup_test_environment(tmp_path, issue_name)
+        repo_path = prepared_repo_factory(issue_name)
+        setup_test_files(repo_path, issue_name)
+        add_test_commit_to_branch(repo_path)
 
         # 創建一個假的 gh script 來返回 PR comments
-        fake_gh_dir = tmp_path / "bin"
+        fake_gh_dir = repo_path / "bin"
         fake_gh_dir.mkdir()
         fake_gh = fake_gh_dir / "gh"
         fake_gh.write_text(f"""#!/bin/bash
@@ -583,7 +583,7 @@ exit 1
 
         result = subprocess.run(
             args,
-            cwd=str(tmp_path),
+            cwd=str(repo_path),
             capture_output=True,
             text=True,
             env=env,

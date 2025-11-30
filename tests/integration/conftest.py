@@ -19,6 +19,90 @@ def mock_git_ops():
 
 
 @pytest.fixture
+def prepared_repo_factory(tmp_path, monkeypatch):
+    """Factory fixture that creates isolated git repositories for integration tests.
+
+    This fixture simulates 'cafe prepare' behavior:
+    - Creates a clean git repository in a temporary directory
+    - Initializes git config (user.name, user.email)
+    - Creates initial commit on main branch
+    - Creates and checks out the issue branch
+    - Creates .cafe/issues/{issue_name}/ directory structure
+    - Changes working directory to the repo using monkeypatch.chdir()
+
+    Usage:
+        def test_something(prepared_repo_factory):
+            repo_path = prepared_repo_factory("my-issue")
+            # Now working directory is repo_path
+            # .cafe/issues/my-issue/ exists
+            # Currently on 'my-issue' branch
+
+    Returns:
+        Callable that takes issue_name and returns Path to the repository
+    """
+    def _create_prepared_repo(issue_name: str) -> Path:
+        """Create and prepare a git repository for the given issue.
+
+        Args:
+            issue_name: Name of the issue (will be used as branch name)
+
+        Returns:
+            Path to the repository root
+        """
+        # Use tmp_path for this specific test
+        repo_path = tmp_path / issue_name
+        repo_path.mkdir(parents=True, exist_ok=True)
+
+        # Change to repo directory
+        monkeypatch.chdir(repo_path)
+
+        # Initialize git repo
+        subprocess.run(["git", "init"], cwd=repo_path, capture_output=True, check=True)
+        subprocess.run(
+            ["git", "config", "user.email", "test@example.com"],
+            cwd=repo_path,
+            capture_output=True,
+            check=True
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Test User"],
+            cwd=repo_path,
+            capture_output=True,
+            check=True
+        )
+
+        # Create initial commit on main branch
+        readme = repo_path / "README.md"
+        readme.write_text("# Test Project")
+        subprocess.run(["git", "add", "."], cwd=repo_path, capture_output=True, check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "Initial commit"],
+            cwd=repo_path,
+            capture_output=True,
+            check=True
+        )
+
+        # Create and checkout issue branch
+        subprocess.run(
+            ["git", "checkout", "-b", issue_name],
+            cwd=repo_path,
+            capture_output=True,
+            check=True
+        )
+
+        # Create .cafe/issues/{issue_name}/ directory structure
+        issue_dir = repo_path / ".cafe" / "issues" / issue_name
+        (issue_dir / "spec").mkdir(parents=True, exist_ok=True)
+        (issue_dir / "plan").mkdir(parents=True, exist_ok=True)
+        (issue_dir / "review").mkdir(parents=True, exist_ok=True)
+        (issue_dir / "review" / "history").mkdir(parents=True, exist_ok=True)
+
+        return repo_path
+
+    return _create_prepared_repo
+
+
+@pytest.fixture
 def git_repo(tmp_path, monkeypatch):
     """Create a git repository in tmp_path with initial commit and issue branch.
 
