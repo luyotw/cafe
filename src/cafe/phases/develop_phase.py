@@ -835,5 +835,6 @@ class DevelopPhase(Phase):
         Returns:
             List[Path]: 如果 develop_{iteration}.md 存在則返回包含它的列表，否則返回空列表
         """
-        develop_file = self.develop_dir / f"develop_{self.iteration:03d}.md"
+        develop_dir = self.issue_dir / "develop"
+        develop_file = develop_dir / f"develop_{self.iteration:03d}.md"
         return [develop_file] if develop_file.exists() else []
