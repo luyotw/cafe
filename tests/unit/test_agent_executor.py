@@ -1027,11 +1027,8 @@ class TestCLICommandArgsGeneration:
             assert "--output-format" in agent_response.cli_command_args
             assert "json" in agent_response.cli_command_args
 
-            # Check allowed-tools (Cursor format: comma-separated, no quotes needed based on impl)
-            assert "--allowed-tools" in agent_response.cli_command_args
-            allowed_tools_idx = agent_response.cli_command_args.index("--allowed-tools")
-            allowed_tools_value = agent_response.cli_command_args[allowed_tools_idx + 1]
-            assert "Write,Read,Edit(/test.php)" in allowed_tools_value
+            # Check for allowed-tools (Cursor does not have this parameter, we can only use --force to allow all operations)
+            assert "--force" in agent_response.cli_command_args
 
     def test_execute_copilot_generates_cli_command_args_with_multiple_allow_tool_flags(self) -> None:
         """測試 Copilot 使用多個 --allow-tool flags 生成 cli_command_args"""

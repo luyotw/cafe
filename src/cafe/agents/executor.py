@@ -624,7 +624,7 @@ class AgentExecutor:
 
         Args:
             prompt: Prompt to send to Cursor
-            allowed_tools: List of allowed tools (already translated)
+            allowed_tools: List of allowed tools (ignored - cursor-agent doesn't support permission control)
 
         Returns:
             AgentResponse with response text, token usage, and permission denials
@@ -636,21 +636,16 @@ class AgentExecutor:
         if self.config.model:
             cmd.extend(["--model", self.config.model])
 
-        # Add allowed tools if specified
-        tools_arg_value = None
-        if allowed_tools:
-            tools_arg_value = ",".join(allowed_tools)
-            cmd.extend(["--allowed-tools", tools_arg_value])
+        # Cursor-agent doesn't support allowed-tools, use --force to auto-approve all tools
+        cmd.append("--force")
 
         # Add JSON output format for parsing
         cmd.extend(["--output-format", "json"])
 
         # Record CLI command arguments (除了 prompt) - 用於 debug
-        cli_command_args = ["--output-format", "json"]
+        cli_command_args = ["--output-format", "json", "--force"]
         if self.config.model:
             cli_command_args.extend(["--model", self.config.model])
-        if tools_arg_value:
-            cli_command_args.extend(["--allowed-tools", tools_arg_value])
 
         # Cursor-specific parser: parse JSON output
         def parse_cursor_response(output_lines: List[str]) -> AgentResponse:
