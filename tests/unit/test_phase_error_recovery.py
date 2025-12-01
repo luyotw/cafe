@@ -178,9 +178,10 @@ class TestAgentExecutionWithRecovery:
     def test_agent_error_with_no_output_files(self, tmp_path):
         """Agent 執行失敗且沒有輸出檔案：應 re-raise 錯誤。"""
         agent_manager = Mock(spec=AgentManager)
-        agent_manager.execute.side_effect = AgentExecutionError(
-            "Token limit exceeded", error_type="TOKEN_LIMIT"
-        )
+        error = AgentExecutionError("Token limit exceeded", error_type="TOKEN_LIMIT")
+        # 模擬 executor 在錯誤物件上附帶實際 CLI 參數
+        error.cli_command_args = ["--output-format", "stream-json", "--include-directories", ".cafe"]
+        agent_manager.execute.side_effect = error
         agent_manager.get_agent.return_value = Mock(
             config=Mock(cli=Mock(value="claude"), session_id="test-session")
         )
@@ -211,6 +212,13 @@ class TestAgentExecutionWithRecovery:
         assert history_data["status_code"] is None
         assert "error" in history_data
         assert "Token limit exceeded" in history_data["error"]
+        # 應該記錄實際的 CLI 參數，方便除錯
+        assert history_data["cli_command_args"] == [
+            "--output-format",
+            "stream-json",
+            "--include-directories",
+            ".cafe",
+        ]
 
     def test_agent_error_with_written_files_successful_recovery(self, tmp_path):
         """Agent 執行失敗但有輸出檔案：應成功恢復。"""

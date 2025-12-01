@@ -358,6 +358,11 @@ class Phase(ABC):
                 phase_specific_data["original_error"] = str(e)
 
                 # 更新 history（包含恢復的 response 和 status）
+                # 儘可能記錄實際的 CLI 參數（如果錯誤物件有附帶）
+                cli_args: List[str] = []
+                if isinstance(e, AgentExecutionError) and hasattr(e, "cli_command_args"):
+                    cli_args = getattr(e, "cli_command_args") or []
+
                 self._update_iteration_history(
                     phase_specific_data=phase_specific_data,
                     prompt=prompt,
@@ -365,7 +370,7 @@ class Phase(ABC):
                     agent_session_id=agent_session_id,
                     allowed_tools=allowed_tools,
                     denied_tools=denied_tools,
-                    cli_command_args=[],
+                    cli_command_args=cli_args,
                     status_code=status_code,
                 )
 
@@ -379,7 +384,7 @@ class Phase(ABC):
                 # 4e. 恢復失敗 - 更新 history 並 re-raise
                 print(f"❌ Could not recover from error")
 
-                # 更新 iteration history 包含錯誤資訊
+                # 更新 iteration history 包含錯誤資訊與 CLI 參數
                 if iteration_file.exists():
                     with open(iteration_file, "r", encoding="utf-8") as f:
                         history_data = json.load(f)
@@ -387,8 +392,17 @@ class Phase(ABC):
                     history_data["response"] = None
                     history_data["status_code"] = None
                     history_data["error"] = str(e)
-                    if isinstance(e, AgentExecutionError) and hasattr(e, 'error_type'):
+
+                    # 記錄錯誤類型（如果有）
+                    if isinstance(e, AgentExecutionError) and hasattr(e, "error_type"):
                         history_data["error_type"] = e.error_type
+
+                    # 儘可能記錄實際使用的 CLI 命令參數
+                    if isinstance(e, AgentExecutionError) and hasattr(e, "cli_command_args"):
+                        history_data["cli_command_args"] = getattr(e, "cli_command_args")
+                    else:
+                        # 明確標記為 None，方便後續偵錯時看出「沒有可用的 CLI 參數」
+                        history_data.setdefault("cli_command_args", None)
 
                     with open(iteration_file, "w", encoding="utf-8") as f:
                         json.dump(history_data, f, ensure_ascii=False, indent=2)

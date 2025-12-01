@@ -205,7 +205,7 @@ class AgentExecutor:
         if sys.platform != 'win32' and process.stderr:
             # Use select on Unix-like systems to check for immediate stderr output
             ready, _, _ = select.select([process.stderr], [], [], stderr_check_timeout)
-            
+
             if process.stderr in ready:
                 # Read first line of stderr if available (non-blocking)
                 stderr_line = process.stderr.readline()
@@ -214,9 +214,14 @@ class AgentExecutor:
                     process.kill()
                     remaining_stderr = process.stderr.read()
                     full_stderr = stderr_line + remaining_stderr
-                    raise AgentExecutionError(
+
+                    # Attach實際 CLI 參數到錯誤物件，方便記錄到 history
+                    err = AgentExecutionError(
                         f"{cli_name} execution failed: {full_stderr}"
                     )
+                    # 不包含可執行檔本身（例如 'gemini' / 'claude'）
+                    err.cli_command_args = cmd[1:]
+                    raise err
 
         # Print header
         print(f"\n{'='*80}")
@@ -313,9 +318,12 @@ class AgentExecutor:
         returncode = process.wait()
 
         if returncode != 0:
-            raise AgentExecutionError(
+            err = AgentExecutionError(
                 f"{cli_name} execution failed with code {returncode}: {stderr_output}"
             )
+            # 附上實際 CLI 參數，方便 Phase 在錯誤時寫入 iteration history
+            err.cli_command_args = cmd[1:]
+            raise err
 
         # Save session_id if extracted
         if session_id and not self.config.session_id:
