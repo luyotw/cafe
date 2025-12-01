@@ -1,7 +1,7 @@
 """Status codes for phase execution control."""
 
 from enum import Enum
-from typing import List, Optional
+from typing import List, Optional, Set
 
 
 class PhaseStatusCode(str, Enum):
@@ -42,7 +42,7 @@ class StatusCodeParser:
             valid_codes: Optional list of valid codes for this context
 
         Returns:
-            Extracted status code or None if not found
+            Extracted status code or None if not found or multiple different codes found
 
         Examples:
             >>> extract("CAFE_CONFIRMED\\nThe requirements are clear.")
@@ -50,10 +50,21 @@ class StatusCodeParser:
 
             >>> extract("I think this is good. CAFE_CONFIRMED!")
             PhaseStatusCode.CONFIRMED
+
+            >>> extract("CAFE_NEED_CLARIFICATION\\nCAFE_READY_FOR_REVIEW\\nContent...")
+            None  # Multiple different codes found, treated as abnormal state
         """
         if not response:
             return None
 
+        # First, check if there are multiple different status codes
+        all_codes = StatusCodeParser.extract_all(response, valid_codes)
+        if len(all_codes) > 1:
+            # Multiple different codes found, treat as abnormal state
+            return None
+
+        # If only one type of code or none, continue with original logic
+        # (to maintain backward compatibility with priority: first line > entire response)
         # Check first line (recommended format)
         first_line = response.strip().split('\n')[0].strip().upper()
 
@@ -89,6 +100,38 @@ class StatusCodeParser:
                     return code
 
         return None
+
+    @staticmethod
+    def extract_all(response: str, valid_codes: Optional[List[PhaseStatusCode]] = None) -> Set[PhaseStatusCode]:
+        """Extract all status codes from agent response.
+
+        Args:
+            response: Agent response text
+            valid_codes: Optional list of valid codes for this context
+
+        Returns:
+            Set of all found status codes (empty set if none found)
+
+        Examples:
+            >>> extract_all("CAFE_CONFIRMED\\nCAFE_NEED_CLARIFICATION\\nContent...")
+            {PhaseStatusCode.CONFIRMED, PhaseStatusCode.NEED_CLARIFICATION}
+
+            >>> extract_all("CAFE_NEED_CLARIFICATION\\nCAFE_NEED_CLARIFICATION\\nContent...")
+            {PhaseStatusCode.NEED_CLARIFICATION}
+        """
+        if not response:
+            return set()
+
+        found_codes: Set[PhaseStatusCode] = set()
+        response_upper = response.upper()
+
+        # Search for all status codes in the response
+        codes_to_check = valid_codes if valid_codes else list(PhaseStatusCode)
+        for code in codes_to_check:
+            if code.value in response_upper:
+                found_codes.add(code)
+
+        return found_codes
 
     @staticmethod
     def is_success(code: Optional[PhaseStatusCode]) -> bool:

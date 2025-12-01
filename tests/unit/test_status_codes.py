@@ -95,8 +95,8 @@ class TestStatusCodeParser:
 
         code = StatusCodeParser.extract(response, valid_codes)
 
-        # 應該回傳第一行的 NEEDS_CHANGES，而不是後面的 CONFIRMED
-        assert code == PhaseStatusCode.NEEDS_CHANGES
+        # 多種不同狀態碼時應回傳 None（視為異常狀態）
+        assert code is None
 
     def test_extract_multiple_codes_returns_first_valid(self) -> None:
         """測試多個狀態碼時回傳第一個有效的"""
@@ -123,6 +123,78 @@ class TestStatusCodeParser:
         code = StatusCodeParser.extract(response)
 
         # 應該找不到狀態碼（因為需要 CAFE_CONFIRMED 格式）
+        assert code is None
+
+    def test_extract_all_returns_all_unique_codes(self) -> None:
+        """測試 extract_all 能提取所有不同種類的狀態碼"""
+        response = "CAFE_CONFIRMED\nCAFE_NEED_CLARIFICATION\nCAFE_REJECTED\nContent..."
+
+        codes = StatusCodeParser.extract_all(response)
+
+        assert codes == {
+            PhaseStatusCode.CONFIRMED,
+            PhaseStatusCode.NEED_CLARIFICATION,
+            PhaseStatusCode.REJECTED,
+        }
+
+    def test_extract_all_deduplicates_same_code(self) -> None:
+        """測試 extract_all 同一狀態碼重複出現時只回傳一次"""
+        response = "CAFE_NEED_CLARIFICATION\nCAFE_NEED_CLARIFICATION\nContent..."
+
+        codes = StatusCodeParser.extract_all(response)
+
+        assert codes == {PhaseStatusCode.NEED_CLARIFICATION}
+
+    def test_extract_all_with_valid_codes_filter(self) -> None:
+        """測試 extract_all 支援 valid_codes 過濾功能"""
+        response = "CAFE_CONFIRMED\nCAFE_NEED_CLARIFICATION\nCAFE_REJECTED\nContent..."
+        valid_codes = [
+            PhaseStatusCode.CONFIRMED,
+            PhaseStatusCode.NEED_CLARIFICATION,
+        ]
+
+        codes = StatusCodeParser.extract_all(response, valid_codes)
+
+        assert codes == {
+            PhaseStatusCode.CONFIRMED,
+            PhaseStatusCode.NEED_CLARIFICATION,
+        }
+
+    def test_extract_all_returns_empty_set_when_no_codes(self) -> None:
+        """測試 extract_all 無狀態碼時回傳空 set"""
+        response = "This is a response without status codes."
+
+        codes = StatusCodeParser.extract_all(response)
+
+        assert codes == set()
+
+    def test_extract_returns_none_for_multiple_different_codes(self) -> None:
+        """測試 extract 在多種狀態碼時回傳 None"""
+        response = "CAFE_NEED_CLARIFICATION\nCAFE_READY_FOR_REVIEW\nContent..."
+
+        code = StatusCodeParser.extract(response)
+
+        assert code is None
+
+    def test_extract_returns_code_for_repeated_same_code(self) -> None:
+        """測試 extract 在同一狀態碼重複時正常回傳"""
+        response = "CAFE_NEED_CLARIFICATION\nCAFE_NEED_CLARIFICATION\nContent..."
+
+        code = StatusCodeParser.extract(response)
+
+        assert code == PhaseStatusCode.NEED_CLARIFICATION
+
+    def test_extract_handles_edge_case_with_valid_codes(self) -> None:
+        """測試 extract 使用 valid_codes 過濾後，若仍有多種狀態碼則回傳 None"""
+        response = "CAFE_CONFIRMED\nCAFE_NEED_CLARIFICATION\nCAFE_REJECTED\nContent..."
+        valid_codes = [
+            PhaseStatusCode.CONFIRMED,
+            PhaseStatusCode.NEED_CLARIFICATION,
+        ]
+
+        code = StatusCodeParser.extract(response, valid_codes)
+
+        # 過濾後仍有 2 種狀態碼，應該回傳 None
         assert code is None
 
 
