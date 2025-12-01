@@ -886,7 +886,7 @@ class TestCLICommandArgsGeneration:
             assert "--allowed-tools" not in agent_response.cli_command_args
 
     def test_execute_claude_generates_cli_command_args_with_allowed_tools(self) -> None:
-        """測試 Claude 在有 allowed_tools 時生成正確的 cli_command_args（含雙引號）"""
+        """測試 Claude 在有 allowed_tools 時生成正確的 cli_command_args"""
         config = AgentConfig(
             name="Roger",
             cli=AgentCLI.CLAUDE,
@@ -910,7 +910,7 @@ class TestCLICommandArgsGeneration:
              patch("sys.platform", "win32"):
             agent_response = executor._execute_claude("Test prompt", allowed_tools=allowed_tools)
 
-            # Verify cli_command_args contains allowed-tools with quotes
+            # Verify cli_command_args contains allowed-tools，值與實際命令參數一致
             assert agent_response.cli_command_args is not None
             assert "--allowed-tools" in agent_response.cli_command_args
 
@@ -918,10 +918,8 @@ class TestCLICommandArgsGeneration:
             allowed_tools_idx = agent_response.cli_command_args.index("--allowed-tools")
             allowed_tools_value = agent_response.cli_command_args[allowed_tools_idx + 1]
 
-            # Must have double quotes (required for authorization)
-            assert allowed_tools_value.startswith('"')
-            assert allowed_tools_value.endswith('"')
-            assert "Write,Read,Edit(/views/admin/topics.php)" in allowed_tools_value
+            # 不再額外加雙引號，應直接是傳給 CLI 的參數值
+            assert allowed_tools_value == "Write,Read,Edit(/views/admin/topics.php)"
 
     def test_execute_gemini_generates_cli_command_args_without_allowed_tools(self) -> None:
         """測試 Gemini 在沒有 allowed_tools 時生成正確的 cli_command_args"""
@@ -959,7 +957,7 @@ class TestCLICommandArgsGeneration:
             assert "--allowed-tools" not in agent_response.cli_command_args
 
     def test_execute_gemini_generates_cli_command_args_with_allowed_tools(self) -> None:
-        """測試 Gemini 在有 allowed_tools 時生成正確的 cli_command_args（含雙引號）"""
+        """測試 Gemini 在有 allowed_tools 時生成正確的 cli_command_args"""
         config = AgentConfig(
             name="Roger",
             cli=AgentCLI.GEMINI,
@@ -982,7 +980,7 @@ class TestCLICommandArgsGeneration:
              patch("sys.platform", "win32"):
             agent_response = executor._execute_gemini("Test prompt", allowed_tools=allowed_tools)
 
-            # Verify cli_command_args contains allowed-tools with quotes
+            # Verify cli_command_args contains allowed-tools，值與實際命令參數一致
             assert agent_response.cli_command_args is not None
             assert "--allowed-tools" in agent_response.cli_command_args
 
@@ -990,10 +988,8 @@ class TestCLICommandArgsGeneration:
             allowed_tools_idx = agent_response.cli_command_args.index("--allowed-tools")
             allowed_tools_value = agent_response.cli_command_args[allowed_tools_idx + 1]
 
-            # Must have double quotes (required for authorization)
-            assert allowed_tools_value.startswith('"')
-            assert allowed_tools_value.endswith('"')
-            assert "write_file,read_file,replace(/views/admin/topics.php)" in allowed_tools_value
+            # 不再額外加雙引號，應直接是傳給 CLI 的參數值
+            assert allowed_tools_value == "write_file,read_file,replace(/views/admin/topics.php)"
 
     def test_execute_cursor_generates_cli_command_args(self) -> None:
         """測試 Cursor 生成正確的 cli_command_args"""

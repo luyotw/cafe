@@ -389,19 +389,6 @@ class AgentExecutor:
         # Include .cafe directory for tool access
         cmd.extend(["--add-dir", ".cafe"])
 
-        # Record CLI command arguments (除了 prompt) - 用於 debug
-        # Claude 的 allowed-tools 必須加雙引號
-        cli_command_args = [
-            "--resume", session_id,
-            "--output-format", "stream-json",
-            "--verbose",
-            "--add-dir", ".cafe"
-        ]
-        if self.config.model:
-            cli_command_args.extend(["--model", self.config.model])
-        if tools_arg_value:
-            cli_command_args.extend(["--allowed-tools", f'"{tools_arg_value}"'])
-
         # Execute with streaming
         agent_response = self._execute_with_streaming(
             cmd=cmd,
@@ -412,8 +399,9 @@ class AgentExecutor:
         # Update session_id in config for future use
         self.config.session_id = session_id
 
-        # Add CLI command args to response
-        agent_response.cli_command_args = cli_command_args
+        # Add CLI command args to response（實際執行的參數列表，不包含可執行檔本身）
+        # 例如：["--resume", "session", "-p", "prompt", "--output-format", ...]
+        agent_response.cli_command_args = cmd[1:]
 
         return agent_response
 
@@ -529,17 +517,6 @@ class AgentExecutor:
         # Include .cafe directory for tool access
         cmd.extend(["--include-directories", ".cafe"])
 
-        # Record CLI command arguments (除了 prompt) - 用於 debug
-        # Gemini 的 allowed-tools 也需要引號（跟 Claude 一樣）
-        cli_command_args = [
-            "--output-format", "stream-json",
-            "--include-directories", ".cafe"
-        ]
-        if self.config.model:
-            cli_command_args.extend(["--model", self.config.model])
-        if tools_arg_value:
-            cli_command_args.extend(["--allowed-tools", f'"{tools_arg_value}"'])
-
         # Gemini-specific parser: parse last line as final result
         def parse_gemini_response(output_lines: List[str]) -> AgentResponse:
             full_output = ''.join(output_lines)
@@ -615,7 +592,8 @@ class AgentExecutor:
         )
 
         # Add CLI command args to response
-        agent_response.cli_command_args = cli_command_args
+        # 使用實際執行的參數（不包含程式名稱）
+        agent_response.cli_command_args = cmd[1:]
 
         return agent_response
 
@@ -642,11 +620,6 @@ class AgentExecutor:
         # Add JSON output format for parsing
         cmd.extend(["--output-format", "json"])
 
-        # Record CLI command arguments (除了 prompt) - 用於 debug
-        cli_command_args = ["--output-format", "json", "--force"]
-        if self.config.model:
-            cli_command_args.extend(["--model", self.config.model])
-
         # Cursor-specific parser: parse JSON output
         def parse_cursor_response(output_lines: List[str]) -> AgentResponse:
             full_output = ''.join(output_lines)
@@ -666,7 +639,7 @@ class AgentExecutor:
         agent_response = self._execute_with_streaming(cmd, "Cursor", parse_cursor_response)
 
         # Add CLI command args to response
-        agent_response.cli_command_args = cli_command_args
+        agent_response.cli_command_args = cmd[1:]
 
         return agent_response
 
@@ -714,19 +687,6 @@ class AgentExecutor:
         # Include .cafe directory for tool access
         cmd.extend(["--add-dir", ".cafe"])
 
-        # Record CLI command arguments (除了 prompt) - 用於 debug
-        # Copilot 使用 --allow-tool (多個) 而不是 --allowed-tools
-        cli_command_args = ["--add-dir", ".cafe"]
-        if self.config.model:
-            cli_command_args.extend(["--model", self.config.model])
-        if self.config.session_id:
-            cli_command_args.extend(["--resume", self.config.session_id])
-        if allowed_tools:
-            for tool in allowed_tools:
-                cli_command_args.extend(["--allow-tool", tool])
-        else:
-            cli_command_args.append("--allow-all-tools")
-
         # Execute with streaming (line-by-line mode)
         agent_response = self._execute_with_streaming(
             cmd=cmd,
@@ -747,7 +707,7 @@ class AgentExecutor:
                 session_id = newest_session.replace(".jsonl", "")
                 self.config.session_id = session_id
 
-        # Add CLI command args to response
-        agent_response.cli_command_args = cli_command_args
+        # Add CLI command args to response（實際執行參數，不包含程式名稱）
+        agent_response.cli_command_args = cmd[1:]
 
         return agent_response
