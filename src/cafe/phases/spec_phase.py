@@ -866,13 +866,26 @@ class SpecPhase(Phase):
         status_code_prompt = self._get_status_code_prompt()
         rigor_guidelines = self._get_rigor_guidelines()
 
+        # 計算前一個和當前的檔案名稱
+        prev_spec_file = None
+        if self.iteration > 1:
+            from pathlib import Path
+            prev_iteration = self.iteration
+            prev_spec_file = self._get_versioned_file_path("spec", prev_iteration, self.phase_dir)
+            prev_spec_file = str(prev_spec_file)
+        
+        current_spec_file = self.spec_file
+
         # --- 1. Determine context-specific sections ---
         initial_instruction = ""
         context_section = ""
         restriction = ""
 
         if self.iteration == 1:
-            initial_instruction = f"分析 {self.spec_file} 的內容。"
+            # 第一輪：讀取 user_input（初始需求），寫入 spec_001.md
+            initial_instruction = f"""**第 1 輪需求澄清**
+
+讀取 {current_spec_file} 中的初始需求內容。"""
             context_section = """
 **你的職責：**
 1. 仔細閱讀需求文件，找出所有不清楚、模糊、可能讓開發者自己腦補的地方。
@@ -880,7 +893,13 @@ class SpecPhase(Phase):
 3. 如果需求已經很清楚，就說清楚了，不要硬湊問題。
 """
         else:  # Iteration 2+
-            initial_instruction = f"繼續分析 {self.spec_file} 的最新版本。"
+            # 第二輪以後：讀取前一輪的 spec 檔案及 user_input，寫入新的 spec 檔案
+            initial_instruction = f"""**第 {self.iteration} 輪需求澄清**
+
+1. 使用 Read tool 讀取 {prev_spec_file}（前一輪的分析結果）
+2. 查看使用者的最新回答（見下方）
+3. 使用 Write tool 將更新後的內容寫入 {current_spec_file}（新的版本）"""
+            
             if user_input:
                 context_section = f"""
 **使用者的回答：**
@@ -895,30 +914,25 @@ class SpecPhase(Phase):
 """
 
         # --- 2. Define common instructions ---
-        # Add agent role definition reading instruction for iteration 1
-        role_reading_instruction = ""
-        if self.iteration == 1:
-            role_reading_instruction = f"""
+        # Add agent role definition reading instruction
+        role_reading_instruction = f"""
 **執行步驟：**
 1. 使用 Read tool 讀取 agents/{self.pm_agent}.md 了解你的角色定義和工作準則
-2. 使用 Read tool 讀取 {self.spec_file} 了解需求內容
-3. 根據角色定義中的要求進行需求澄清工作
-
+"""
+        
+        if self.iteration == 1:
+            role_reading_instruction += f"""2. 使用 Read tool 讀取 {current_spec_file} 了解初始需求內容
+3. 使用 Write tool 將分析結果（包含原始需求、使用者故事、目前規格、待釐清問題）寫入 {current_spec_file}
 """
         else:
-            role_reading_instruction = f"""
-**執行步驟：**
-1. 使用 Read tool 讀取 agents/{self.pm_agent}.md 了解你的角色定義和工作準則（如有必要）
-2. 使用 Read tool 讀取 {self.spec_file} 了解需求內容
-3. 根據角色定義中的要求進行需求澄清工作
-
+            role_reading_instruction += f"""2. 使用 Read tool 讀取 {prev_spec_file}（前一輪的分析結果）
+3. 整合使用者的最新回答
+4. 使用 Write tool 將更新後的分析結果寫入 {current_spec_file}（新版本）
 """
 
         base_prompt = f"""
 **你的角色：**
-請使用 Read tool 讀取 agents/{self.pm_agent}.md 了解你的角色定義和工作準則，然後嚴格按照角色定義中的要求進行需求澄清工作。
-
-這是第 {self.iteration} 輪需求澄清。"""
+PM (Product Manager)，負責需求澄清工作。請讀取 agents/{self.pm_agent}.md 了解你的角色定義和工作準則，然後嚴格按照角色定義中的要求執行。"""
 
         # Build original requirement section for prompt
         original_req_section = ""
@@ -933,7 +947,7 @@ class SpecPhase(Phase):
 """
 
         need_clarification_instruction = f"""**如果需要澄清（status: CAFE_NEED_CLARIFICATION）：**
-使用 Write tool 將以下內容寫入 {self.spec_file}：
+使用 Write tool 將以下內容寫入 {current_spec_file}：
    - 「## 原始需求描述」- **完整保留**用戶最初提供的原始需求，不可修改（除非用戶明確要求）。
    - 「## 使用者故事」- 用戶撰寫的使用者故事或由自動由需求描述產生的使用者故事。
    - 「## 目前的需求規格」- 整合所有已知資訊（包括使用者故事、先前的對話、用戶的最新回答），列出目前已知的完整需求。
@@ -941,7 +955,7 @@ class SpecPhase(Phase):
 """
 
         confirmed_instruction = f"""**如果需求已清楚（status: CAFE_READY_FOR_REVIEW）：**
-使用 Write tool 將完整需求規格文件寫入 {self.spec_file}，格式：
+使用 Write tool 將完整需求規格文件寫入 {current_spec_file}，格式：
    - 「## 原始需求描述」- **完整保留**用戶最初提供的原始需求，不可修改（除非用戶明確要求）。
    - 「## 使用者故事」- 用戶撰寫的使用者故事或由自動由需求描述產生的使用者故事。
    - 「## 需求規格」- 整合所有已確認的內容，產生最終的完整需求規格，包含功能描述、使用場景、預期行為、驗收標準等。
