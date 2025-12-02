@@ -1526,14 +1526,14 @@ class TestWriteToolPathStripping:
             tools_index = response.cli_command_args.index("--allowed-tools")
             tools_value = response.cli_command_args[tools_index + 1]
 
-            # Should only contain Read and Write (no duplicates, no paths)
+            # Should contain Read and Write with paths (converted to git ignore format)
             assert "Read" in tools_value
-            assert "Write" in tools_value
-            # Should not contain paths
-            assert "/.cafe" not in tools_value
-            # Should not have duplicate Write
+            assert "Write(/.cafe/test.txt)" in tools_value
+            assert "Write(/.cafe/test2.txt)" in tools_value
+            # Should have separate Write entries for different paths
             tools_list = tools_value.strip('"').split(",")
-            assert tools_list.count("Write") == 1
+            write_tools = [t for t in tools_list if t.startswith("Write")]
+            assert len(write_tools) == 2  # Two different Write paths
 
     def test_gemini_write_path_stripping(self) -> None:
         """測試 Gemini write_file(/path) 會被轉換為 write_file"""

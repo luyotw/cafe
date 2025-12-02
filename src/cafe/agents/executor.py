@@ -374,19 +374,53 @@ class AgentExecutor:
         # Claude 的 --allowed-tools 需要雙引號，否則授權無效
         tools_arg_value = None
         if allowed_tools:
-            # Special handling for Claude: Write doesn't support path restrictions
-            # Write(/path) is treated as "no write permission", so we strip the path
+            # Special handling for Claude: convert absolute paths to git ignore format
             processed_tools = []
+            import os
+            from pathlib import Path
+            
             for tool in allowed_tools:
-                if tool.startswith("Write("):
-                    # Strip path parameter: Write(/path) -> Write
-                    tool_name = "Write"
+                # 處理帶路徑的工具（例如 write(/abs/path) 或 edit(/abs/path)）
+                if "(" in tool and ")" in tool:
+                    tool_name = tool.split("(")[0].lower()
+                    path_part = tool.split("(")[1].rstrip(")")
+                    
+                    # 如果是絕對路徑，轉換為 git ignore rule（相對於 repo root）
+                    if path_part.startswith("/"):
+                        try:
+                            abs_path = Path(path_part)
+                            # 取得 git repo root
+                            repo_root = Path(os.getcwd())
+                            # 如果在 worktree 中，找到主 repo
+                            git_dir = repo_root / ".git"
+                            if git_dir.is_file():
+                                # worktree 的 .git 是檔案，指向主 repo
+                                with open(git_dir) as f:
+                                    git_dir_content = f.read().strip()
+                                    if git_dir_content.startswith("gitdir: "):
+                                        worktree_git_dir = git_dir_content[8:]
+                                        # worktree git dir 通常是 .git/worktrees/<name>
+                                        # 主 repo 是 worktree_git_dir 的父父目錄
+                                        repo_root = Path(worktree_git_dir).parent.parent.parent
+                            
+                            # 計算相對路徑
+                            rel_path = abs_path.relative_to(repo_root)
+                            # git ignore format: /path/to/file
+                            git_ignore_path = f"/{rel_path}"
+                            processed_tool = f"{tool_name.capitalize()}({git_ignore_path})"
+                        except (ValueError, OSError):
+                            # 如果轉換失敗，使用原始路徑
+                            processed_tool = tool
+                    else:
+                        # 已經是相對路徑或 git ignore rule
+                        processed_tool = tool
                 else:
-                    tool_name = tool
+                    # 沒有路徑參數的工具
+                    processed_tool = tool
 
                 # Avoid duplicates
-                if tool_name not in processed_tools:
-                    processed_tools.append(tool_name)
+                if processed_tool not in processed_tools:
+                    processed_tools.append(processed_tool)
 
             tools_arg_value = ",".join(processed_tools)
             cmd.extend(["--allowed-tools", tools_arg_value])

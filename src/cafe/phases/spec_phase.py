@@ -290,14 +290,11 @@ class SpecPhase(Phase):
             # Prepare allowed tools with write/edit permission for spec file
             spec_file_path = Path(self.spec_file)
 
-            # Convert to project-relative path (git ignore format: / prefix)
-            project_root = Path(os.getcwd())
-            try:
-                relative_path = spec_file_path.relative_to(project_root)
-                spec_file_pattern = f"/{relative_path}"
-            except ValueError:
-                # If path is not relative to cwd, use absolute path
-                spec_file_pattern = str(spec_file_path)
+            # Convert to absolute path for tools
+            # 使用絕對路徑避免 worktree 環境中的相對路徑問題
+            if not spec_file_path.is_absolute():
+                spec_file_path = spec_file_path.resolve()
+            spec_file_pattern = str(spec_file_path)
 
             # Merge base tools with previous iteration's tools (if any)
             base_allowed_tools = [
@@ -866,9 +863,13 @@ class SpecPhase(Phase):
         status_code_prompt = self._get_status_code_prompt()
         rigor_guidelines = self._get_rigor_guidelines()
 
-        # 計算當前和前一個的檔案名稱
+        # 計算當前和前一個的檔案名稱（使用絕對路徑）
         # self.spec_file 是當前要寫入的檔案（已在 execute() 中設定好）
-        current_spec_file = self.spec_file
+        from pathlib import Path
+        current_spec_path = Path(self.spec_file)
+        if not current_spec_path.is_absolute():
+            current_spec_path = current_spec_path.resolve()
+        current_spec_file = str(current_spec_path)
         
         # 前一輪的檔案：只在 iteration > 1 時才存在
         prev_spec_file = None
@@ -876,14 +877,19 @@ class SpecPhase(Phase):
             # 前一輪的 iteration 是 self.iteration - 1
             # 但檔案編號可能不同（取決於是否有舊檔案）
             # 最簡單的方式：列出現有檔案並取最新的一個（除了當前檔案）
-            from pathlib import Path
             existing_specs = sorted(self.phase_dir.glob("spec_*.md"))
             if len(existing_specs) >= 2:
                 # 有至少 2 個檔案，取倒數第二個（最新的前一個）
-                prev_spec_file = str(existing_specs[-2])
+                prev_spec_path = existing_specs[-2]
+                if not prev_spec_path.is_absolute():
+                    prev_spec_path = prev_spec_path.resolve()
+                prev_spec_file = str(prev_spec_path)
             elif len(existing_specs) == 1:
                 # 只有 1 個檔案，那就是前一輪的
-                prev_spec_file = str(existing_specs[0])
+                prev_spec_path = existing_specs[0]
+                if not prev_spec_path.is_absolute():
+                    prev_spec_path = prev_spec_path.resolve()
+                prev_spec_file = str(prev_spec_path)
 
         # --- 1. Determine context-specific sections ---
         initial_instruction = ""
@@ -1079,7 +1085,13 @@ PM (Product Manager)，負責需求澄清工作。請讀取 agents/{self.pm_agen
         Returns:
             分析 spec 檔案狀態的 prompt
         """
-        return f"""請閱讀 {self.spec_file} 並分析目前的狀態。
+        # 使用絕對路徑
+        from pathlib import Path
+        spec_path = Path(self.spec_file)
+        if not spec_path.is_absolute():
+            spec_path = spec_path.resolve()
+        
+        return f"""請使用 Read tool 讀取 {spec_path} 並分析目前的狀態。
 
 根據以下條件判斷應該回傳哪個狀態碼：
 

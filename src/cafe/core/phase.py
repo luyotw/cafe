@@ -1371,8 +1371,13 @@ class Phase(ABC):
             return None, None
 
         try:
-            # 呼叫 agent 分析狀態
-            response, _, _, _, _ = self.agent_manager.execute(agent_name, prompt)
+            # 呼叫 agent 分析狀態（需要 read 權限）
+            allowed_tools = ["read", "grep", "glob", "ls"]
+            response, _, _, _, _ = self.agent_manager.execute(
+                agent_name, 
+                prompt,
+                allowed_tools=allowed_tools
+            )
 
             # 從回應中提取 status code
             from cafe.core.status_codes import StatusCodeParser
