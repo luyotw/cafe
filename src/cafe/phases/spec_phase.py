@@ -866,15 +866,24 @@ class SpecPhase(Phase):
         status_code_prompt = self._get_status_code_prompt()
         rigor_guidelines = self._get_rigor_guidelines()
 
-        # 計算前一個和當前的檔案名稱
+        # 計算當前和前一個的檔案名稱
+        # self.spec_file 是當前要寫入的檔案（已在 execute() 中設定好）
+        current_spec_file = self.spec_file
+        
+        # 前一輪的檔案：只在 iteration > 1 時才存在
         prev_spec_file = None
         if self.iteration > 1:
+            # 前一輪的 iteration 是 self.iteration - 1
+            # 但檔案編號可能不同（取決於是否有舊檔案）
+            # 最簡單的方式：列出現有檔案並取最新的一個（除了當前檔案）
             from pathlib import Path
-            prev_iteration = self.iteration
-            prev_spec_file = self._get_versioned_file_path("spec", prev_iteration, self.phase_dir)
-            prev_spec_file = str(prev_spec_file)
-        
-        current_spec_file = self.spec_file
+            existing_specs = sorted(self.phase_dir.glob("spec_*.md"))
+            if len(existing_specs) >= 2:
+                # 有至少 2 個檔案，取倒數第二個（最新的前一個）
+                prev_spec_file = str(existing_specs[-2])
+            elif len(existing_specs) == 1:
+                # 只有 1 個檔案，那就是前一輪的
+                prev_spec_file = str(existing_specs[0])
 
         # --- 1. Determine context-specific sections ---
         initial_instruction = ""

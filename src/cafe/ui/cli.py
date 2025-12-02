@@ -965,9 +965,14 @@ def spec(
         result = phase.execute()
 
         # Display result
-        if result.status.value == "completed":
+        if result.status.value in ["completed", "in_progress"]:
             console.print()
             status_code = result.data.get('status_code')
+            
+            # 如果沒有有效的 status code，視為失敗
+            if not status_code:
+                console.print(f"[bold red]❌ Spec phase failed: No valid status code returned[/bold red]")
+                raise typer.Exit(1)
 
             if status_code == "CAFE_NEED_CLARIFICATION":
                 console.print("[bold yellow]💬 Agent needs clarification[/bold yellow]")
