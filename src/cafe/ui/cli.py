@@ -973,20 +973,24 @@ def spec(
                 console.print("[bold yellow]💬 Agent needs clarification[/bold yellow]")
                 console.print(f"Iterations: {result.data.get('iterations', 'N/A')}")
                 if workflow_mode == WorkflowMode.LOCAL:
-                    console.print(f"Saved to: {spec_dir}")
+                    # 顯示完整檔案路徑
+                    spec_file = result.data.get('spec_file', spec_dir)
+                    console.print(f"Saved to: {spec_file}")
                 console.print()
                 console.print("[dim]To continue, run:[/dim] [bold]cafe spec[/bold]")
             elif status_code == "CAFE_REJECTED":
                 console.print("[bold red]❌ Spec rejected by agent[/bold red]")
                 console.print(f"Iterations: {result.data.get('iterations', 'N/A')}")
                 if workflow_mode == WorkflowMode.LOCAL:
-                    console.print(f"Saved to: {spec_dir}")
+                    spec_file = result.data.get('spec_file', spec_dir)
+                    console.print(f"Saved to: {spec_file}")
             elif status_code == "CAFE_READY_FOR_REVIEW":
                 # Spec draft is ready, but needs user confirmation
                 console.print("[bold green]✅ Spec draft completed![/bold green]")
                 console.print(f"Iterations: {result.data.get('iterations', 'N/A')}")
                 if workflow_mode == WorkflowMode.LOCAL:
-                    console.print(f"Saved to: {spec_dir}")
+                    spec_file = result.data.get('spec_file', spec_dir)
+                    console.print(f"Saved to: {spec_file}")
                 elif result.data.get('issue_id'):
                     console.print(f"Created issue: #{result.data['issue_id']}")
                 elif issue_id:
@@ -998,7 +1002,8 @@ def spec(
                 console.print("[bold green]✅ Spec clarification completed![/bold green]")
                 console.print(f"Iterations: {result.data.get('iterations', 'N/A')}")
                 if workflow_mode == WorkflowMode.LOCAL:
-                    console.print(f"Saved to: {spec_dir}")
+                    spec_file = result.data.get('spec_file', spec_dir)
+                    console.print(f"Saved to: {spec_file}")
                 elif result.data.get('issue_id'):
                     console.print(f"Created issue: #{result.data['issue_id']}")
                 elif issue_id:
@@ -1011,7 +1016,8 @@ def spec(
                 console.print(f"Iterations: {result.data.get('iterations', 'N/A')}")
                 console.print(f"Status: {status_code}")
                 if workflow_mode == WorkflowMode.LOCAL:
-                    console.print(f"Saved to: {spec_dir}")
+                    spec_file = result.data.get('spec_file', spec_dir)
+                    console.print(f"Saved to: {spec_file}")
         else:
             console.print()
             console.print(f"[bold red]❌ Spec phase failed: {result.message}[/bold red]")

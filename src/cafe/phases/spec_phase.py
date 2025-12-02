@@ -214,8 +214,8 @@ class SpecPhase(Phase):
                 # Check if spec file exists
                 spec_path = Path(self.spec_file)
                 if spec_path.exists():
-                    # Backup original spec if exists
-                    self._backup_spec(spec_path)
+                    # File already exists (resume case), skip to execution
+                    pass
                 elif iteration_number == 1:
                     # File doesn't exist AND this is first iteration - get initial user story
                     if self.interactive:
@@ -345,6 +345,7 @@ class SpecPhase(Phase):
                     data={
                         "iterations": self.iteration,
                         "status_code": status_code.value if status_code else None,
+                        "spec_file": self.spec_file,  # 問題1: 加上完整檔案路徑
                     },
                 )
 
@@ -358,7 +359,10 @@ class SpecPhase(Phase):
             return PhaseResult(
                 status=PhaseStatus.IN_PROGRESS,
                 message="Paused by user - can resume later",
-                data={"iterations": self.iteration},
+                data={
+                    "iterations": self.iteration,
+                    "spec_file": self.spec_file,  # 問題1: 加上完整檔案路徑
+                },
             )
         except Exception as e:
             return PhaseResult(
