@@ -436,20 +436,56 @@ class Phase(ABC):
             valid_codes=valid_status_codes,
         )
 
-        # 6.1. 如果沒有 status code，嘗試呼叫 agent 分析
-        if status_code is None:
-            status_code = self._analyze_missing_status_code(
+        # 6.1. 檢查是否有多個不同的 status codes
+        all_status_codes = StatusCodeParser.extract_all(response, valid_codes=valid_status_codes)
+        has_multiple_codes = len(all_status_codes) > 1
+
+        # 6.2. 如果沒有 status code（包含多個 status codes 的情況），嘗試呼叫 agent 分析並記錄
+        # 因為多個 status codes 也代表狀態不明確，需要分析
+        analysis_attempted = False
+        analysis_response = None
+        original_status_code_missing = (status_code is None)  # 記錄原始狀態
+        
+        if original_status_code_missing:  # 包含：沒有 status code 或有多個 status codes
+            analysis_attempted = True
+            analysis_response_str, analysis_status_code = self._analyze_missing_status_code_with_logging(
                 agent_name=agent_name,
                 valid_status_codes=valid_status_codes,
+                original_response=response,
+            )
+            analysis_response = analysis_response_str
+            
+            if analysis_status_code:
+                status_code = analysis_status_code
+
+        # 6.3. 寫入 error log（如果原始回應有問題：沒有 status code、多個 codes、或分析後仍無 status code）
+        # 注意：即使分析成功找到 status code，我們仍然記錄原始回應的問題
+        if analysis_attempted or original_status_code_missing:
+            self._write_status_code_error_log(
+                original_response=response,
+                valid_status_codes=valid_status_codes,
+                status_code=status_code,
+                analysis_attempted=analysis_attempted,
+                analysis_response=analysis_response,
+                cli_command_args=cli_command_args,
+                multiple_codes_found=list(all_status_codes) if has_multiple_codes else None,
             )
 
         # 7. 更新 history（總是保存，即使沒有 status code）
+        phase_data = {
+            "response": response,
+            "permission_denials": [denial.model_dump() for denial in permission_denials],
+            "streaming_log": streaming_log
+        }
+        
+        # 如果進行了 status code 分析，記錄到 history
+        if analysis_attempted:
+            phase_data["status_code_analyzed"] = True
+            if analysis_response:
+                phase_data["status_code_analysis_response"] = analysis_response
+        
         self._update_iteration_history(
-            phase_specific_data={
-                "response": response,
-                "permission_denials": [denial.model_dump() for denial in permission_denials],
-                "streaming_log": streaming_log
-            },
+            phase_specific_data=phase_data,
             prompt=prompt,
             agent_cli=agent_cli,
             agent_session_id=agent_session_id,
@@ -1308,6 +1344,135 @@ class Phase(ABC):
         # 從回應中提取 status code
         from cafe.core.status_codes import StatusCodeParser
         return StatusCodeParser.extract(response, valid_codes=valid_status_codes)
+
+    def _analyze_missing_status_code_with_logging(
+        self,
+        agent_name: str,
+        valid_status_codes: List[PhaseStatusCode],
+        original_response: str,
+    ) -> tuple[Optional[str], Optional[PhaseStatusCode]]:
+        """當 response 沒有 status code 時，呼叫 agent 分析狀態（帶日誌）。
+
+        此方法是 _analyze_missing_status_code 的加強版本，會返回分析 response 以便記錄。
+
+        Args:
+            agent_name: Agent 名稱
+            valid_status_codes: 此 phase 有效的 status codes
+            original_response: 原始回應（用於日誌）
+
+        Returns:
+            tuple[analysis_response, status_code]:
+                - analysis_response: 分析呼叫的回應內容（可能為 None）
+                - status_code: 提取的 status code（可能為 None）
+        """
+        # 取得 phase-specific 的分析 prompt
+        prompt = self._get_status_analysis_prompt()
+        if not prompt:
+            return None, None
+
+        try:
+            # 呼叫 agent 分析狀態
+            response, _, _, _, _ = self.agent_manager.execute(agent_name, prompt)
+
+            # 從回應中提取 status code
+            from cafe.core.status_codes import StatusCodeParser
+            status_code = StatusCodeParser.extract(response, valid_codes=valid_status_codes)
+
+            return response, status_code
+        except Exception as e:
+            # 分析失敗，返回 None
+            print(f"⚠️  Status code analysis failed: {e}")
+            return None, None
+
+    def _write_status_code_error_log(
+        self,
+        original_response: str,
+        valid_status_codes: List[PhaseStatusCode],
+        status_code: Optional[PhaseStatusCode],
+        analysis_attempted: bool,
+        analysis_response: Optional[str],
+        cli_command_args: Optional[List[str]],
+        multiple_codes_found: Optional[List[PhaseStatusCode]] = None,
+    ) -> None:
+        """寫入 status code 錯誤日誌到 execution_error_{num}.log。
+
+        當遇到以下情況時寫入日誌：
+        - 原始回應沒有 status code
+        - 原始回應有多個 status code
+        - 分析嘗試失敗
+
+        Args:
+            original_response: 原始 agent 回應
+            valid_status_codes: 有效的 status codes
+            status_code: 最終提取的 status code（可能為 None）
+            analysis_attempted: 是否嘗試了分析
+            analysis_response: 分析呼叫的回應（如果有）
+            cli_command_args: CLI 命令參數
+            multiple_codes_found: 如果發現多個 status codes，列出所有找到的 codes
+        """
+        if not hasattr(self, "history_dir") or not hasattr(self, "iteration"):
+            return
+
+        # 只在需要時寫入 log：沒有 status code、進行了分析、或發現多個 codes
+        if status_code is not None and not analysis_attempted and not multiple_codes_found:
+            return
+
+        error_log_file = Path(self.history_dir) / f"execution_error_{self.iteration:03d}.log"
+        error_log_file.parent.mkdir(parents=True, exist_ok=True)
+
+        # 決定錯誤類型
+        if multiple_codes_found:
+            error_type = "Multiple status codes"
+        elif status_code is None:
+            error_type = "Missing status code"
+        else:
+            error_type = "Status code required analysis"
+
+        # 建立日誌內容
+        log_lines = [
+            f"Timestamp: {datetime.now().isoformat()}",
+            f"Issue: {self.issue_dir.name if hasattr(self, 'issue_dir') else 'unknown'}",
+            f"Iteration: {self.iteration}",
+            f"Phase: {self.phase_name if hasattr(self, 'phase_name') else 'unknown'}",
+            f"Error type: {error_type}",
+            "",
+            "Original response:",
+            "-" * 60,
+            original_response,
+            "-" * 60,
+            "",
+            f"Valid status codes: {[code.value for code in valid_status_codes]}",
+            f"Extracted status code: {status_code.value if status_code else None}",
+        ]
+
+        if multiple_codes_found:
+            log_lines.extend([
+                "",
+                f"Multiple status codes found: {[code.value for code in multiple_codes_found]}",
+            ])
+        
+        log_lines.append("")
+        log_lines.append(f"Analysis attempted: {analysis_attempted}")
+
+        if analysis_attempted:
+            log_lines.extend([
+                "",
+                "Analysis response:",
+                "-" * 60,
+                analysis_response if analysis_response else "(No response from analysis)",
+                "-" * 60,
+            ])
+
+        if cli_command_args:
+            log_lines.extend([
+                "",
+                "CLI command args:",
+                "-" * 60,
+                " ".join(cli_command_args) if isinstance(cli_command_args, list) else str(cli_command_args),
+                "-" * 60,
+            ])
+
+        error_log_file.write_text("\n".join(log_lines), encoding="utf-8")
 
     def _get_status_analysis_prompt(self) -> Optional[str]:
         """取得分析 status code 的 prompt（子類覆寫）。
