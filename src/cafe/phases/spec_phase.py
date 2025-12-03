@@ -172,10 +172,12 @@ class SpecPhase(Phase):
                 iteration_number = self._get_next_iteration_number("spec", self.phase_dir)
             except ValueError as e:
                 # Exceeded 999 iterations
+                # spec_file 可能尚未設定，使用 hasattr 檢查
+                spec_file = self.spec_file if hasattr(self, 'spec_file') else None
                 return PhaseResult(
                     status=PhaseStatus.FAILED,
                     message=f"Spec phase failed: {str(e)}",
-                    data={},
+                    data={"spec_file": spec_file},
                 )
 
             # Set self.iteration based on versioned files and history
@@ -362,9 +364,12 @@ class SpecPhase(Phase):
                 },
             )
         except Exception as e:
+            # 即使發生 exception，也嘗試包含 spec_file 以便 CLI 顯示
+            spec_file = self.spec_file if hasattr(self, 'spec_file') else None
             return PhaseResult(
                 status=PhaseStatus.FAILED,
                 message=f"Requirements phase failed: {e}",
+                data={"spec_file": spec_file},
             )
 
     def _get_completion_data(self) -> dict:
@@ -392,6 +397,9 @@ class SpecPhase(Phase):
             except GitHubError as e:
                 # Log error but don't fail the phase
                 print(f"Warning: Failed to post spec to GitHub issue: {e}")
+
+        # Always include spec_file in completion data (問題1: 加上完整檔案路徑)
+        data["spec_file"] = self.spec_file
 
         return data
 

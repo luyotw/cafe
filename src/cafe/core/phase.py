@@ -1199,14 +1199,21 @@ class Phase(ABC):
 
         # Handle REJECTED
         if status_code == PhaseStatusCode.REJECTED:
+            result_data = {
+                "iterations": self.iteration,
+                "final_response": response,
+                "status_code": status_code.value,
+            }
+
+            # Allow phases to add phase-specific data (e.g., spec_file)
+            if hasattr(self, '_get_completion_data'):
+                phase_data = self._get_completion_data()
+                result_data.update(phase_data)
+
             return PhaseResult(
                 status=PhaseStatus.FAILED,
                 message=f"Phase rejected in iteration {self.iteration}",
-                data={
-                    "iterations": self.iteration,
-                    "final_response": response,
-                    "status_code": status_code.value,
-                },
+                data=result_data,
             )
 
         # Handle complete codes (e.g., CONFIRMED)
