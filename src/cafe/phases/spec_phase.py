@@ -298,8 +298,12 @@ class SpecPhase(Phase):
             if not spec_file_path.is_absolute():
                 spec_file_path = spec_file_path.resolve()
 
-            repo_root = get_repo_root()
-            spec_file_pattern = to_git_ignore_path(spec_file_path, repo_root)
+            try:
+                repo_root = get_repo_root()
+                spec_file_pattern = to_git_ignore_path(spec_file_path, repo_root)
+            except (ValueError, OSError):
+                # Fallback to absolute path if not in a git repository
+                spec_file_pattern = str(spec_file_path)
 
             # Merge base tools with previous iteration's tools (if any)
             base_allowed_tools = [

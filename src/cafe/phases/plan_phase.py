@@ -204,8 +204,12 @@ class PlanPhase(Phase):
             if not plan_file_path.is_absolute():
                 plan_file_path = plan_file_path.resolve()
 
-            repo_root = get_repo_root()
-            plan_file_pattern = to_git_ignore_path(plan_file_path, repo_root)
+            try:
+                repo_root = get_repo_root()
+                plan_file_pattern = to_git_ignore_path(plan_file_path, repo_root)
+            except (ValueError, OSError):
+                # Fallback to absolute path if not in a git repository
+                plan_file_pattern = str(plan_file_path)
 
             # Merge base tools with previous iteration's tools (if any)
             base_allowed_tools = [

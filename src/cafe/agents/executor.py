@@ -2,9 +2,11 @@
 
 import json
 import subprocess
+from pathlib import Path
 from typing import Callable, List, Optional, Tuple
 
 from cafe.core.types import AgentConfig, AgentCLI, AgentResponse, PermissionDenial, TokenUsage
+from cafe.utils.git_utils import get_repo_root, to_git_ignore_path
 
 
 class AgentExecutionError(Exception):
@@ -376,43 +378,34 @@ class AgentExecutor:
         if allowed_tools:
             # Special handling for Claude: convert absolute paths to git ignore format
             processed_tools = []
-            import os
-            from pathlib import Path
-            
+
             for tool in allowed_tools:
                 # 處理帶路徑的工具（例如 write(/abs/path) 或 edit(/abs/path)）
                 if "(" in tool and ")" in tool:
                     tool_name = tool.split("(")[0].lower()
                     path_part = tool.split("(")[1].rstrip(")")
-                    
-                    # 如果是絕對路徑，轉換為 git ignore rule（相對於 repo root）
-                    if path_part.startswith("/"):
+
+                    # 檢查是否是絕對路徑（需要轉換）還是 git ignore 格式（直接傳遞）
+                    # Git ignore 格式：以 /. 開頭的路徑（例如 /.cafe/..., /.git/...）
+                    # 絕對路徑：系統絕對路徑（例如 /Users/me/repo/.cafe/...）
+                    path_obj = Path(path_part)
+
+                    # 區分方式：
+                    # 1. 如果以 /. 開頭，是 git ignore 格式（例如 /.cafe/）
+                    # 2. 否則如果是絕對路徑，是系統路徑，需要轉換
+                    is_git_ignore_format = path_part.startswith("/.")
+
+                    if path_obj.is_absolute() and not is_git_ignore_format:
+                        # 這是系統絕對路徑，需要轉換為 git ignore 格式
                         try:
-                            abs_path = Path(path_part)
-                            # 取得 git repo root
-                            repo_root = Path(os.getcwd())
-                            # 如果在 worktree 中，找到主 repo
-                            git_dir = repo_root / ".git"
-                            if git_dir.is_file():
-                                # worktree 的 .git 是檔案，指向主 repo
-                                with open(git_dir) as f:
-                                    git_dir_content = f.read().strip()
-                                    if git_dir_content.startswith("gitdir: "):
-                                        worktree_git_dir = git_dir_content[8:]
-                                        # worktree git dir 通常是 .git/worktrees/<name>
-                                        # 主 repo 是 worktree_git_dir 的父父目錄
-                                        repo_root = Path(worktree_git_dir).parent.parent.parent
-                            
-                            # 計算相對路徑
-                            rel_path = abs_path.relative_to(repo_root)
-                            # git ignore format: /path/to/file
-                            git_ignore_path = f"/{rel_path}"
+                            repo_root = get_repo_root()
+                            git_ignore_path = to_git_ignore_path(path_obj, repo_root)
                             processed_tool = f"{tool_name.capitalize()}({git_ignore_path})"
                         except (ValueError, OSError):
-                            # 如果轉換失敗，使用原始路徑
+                            # 轉換失敗，使用原始路徑
                             processed_tool = tool
                     else:
-                        # 已經是相對路徑或 git ignore rule
+                        # 已經是 git ignore 格式或相對路徑，直接使用
                         processed_tool = tool
                 else:
                     # 沒有路徑參數的工具
