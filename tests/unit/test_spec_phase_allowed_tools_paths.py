@@ -134,13 +134,17 @@ class TestSpecPhaseAllowedToolsPaths:
         write_path = write_tool.replace("write(", "").replace(")", "")
         edit_path = edit_tool.replace("edit(", "").replace(")", "")
 
-        # 路徑應該以 /. 開頭（相對路徑的 git ignore 格式）
-        assert write_path.startswith("/."), f"Expected path to start with '/.' but got: {write_path}"
-        assert edit_path.startswith("/."), f"Expected path to start with '/.' but got: {edit_path}"
+        # 路徑應該以 .cafe 開頭（普通相對路徑，不帶 / 前綴）
+        assert write_path.startswith(".cafe"), f"Expected path to start with '.cafe' but got: {write_path}"
+        assert edit_path.startswith(".cafe"), f"Expected path to start with '.cafe' but got: {edit_path}"
+
+        # 路徑不應該以 / 開頭（不是 git ignore 格式）
+        assert not write_path.startswith("/"), f"Path should not start with '/' but got: {write_path}"
+        assert not edit_path.startswith("/"), f"Path should not start with '/' but got: {edit_path}"
 
         # 路徑應該包含正確的 issue 路徑
-        assert "/.cafe/issues/test-issue/spec/" in write_path, f"Expected /.cafe/issues/test-issue/spec/ in {write_path}"
-        assert "/.cafe/issues/test-issue/spec/" in edit_path, f"Expected /.cafe/issues/test-issue/spec/ in {edit_path}"
+        assert ".cafe/issues/test-issue/spec/" in write_path, f"Expected .cafe/issues/test-issue/spec/ in {write_path}"
+        assert ".cafe/issues/test-issue/spec/" in edit_path, f"Expected .cafe/issues/test-issue/spec/ in {edit_path}"
 
     @pytest.mark.skip(reason="Worktree support requires Phase base class refactor - tracked in issue #TODO")
     def test_spec_phase_uses_relative_paths_in_worktree(self, tmp_path, mock_agent_manager, mock_permission, mock_git, monkeypatch):
@@ -298,12 +302,16 @@ class TestPlanPhaseAllowedToolsPaths:
         write_path = write_tool.replace("write(", "").replace(")", "")
         edit_path = edit_tool.replace("edit(", "").replace(")", "")
 
-        # 關鍵斷言：路徑應該是相對路徑（git ignore 格式：以 / 開頭）
-        assert write_path.startswith("/."), f"Expected path to start with '/.' but got: {write_path}"
-        assert edit_path.startswith("/."), f"Expected path to start with '/.' but got: {edit_path}"
+        # 關鍵斷言：路徑應該是普通相對路徑（不帶 / 前綴）
+        assert write_path.startswith(".cafe"), f"Expected path to start with '.cafe' but got: {write_path}"
+        assert edit_path.startswith(".cafe"), f"Expected path to start with '.cafe' but got: {edit_path}"
 
-        assert "/.cafe/issues/test-issue/plan/" in write_path, f"Expected /.cafe/issues/test-issue/plan/ in {write_path}"
-        assert "/.cafe/issues/test-issue/plan/" in edit_path, f"Expected /.cafe/issues/test-issue/plan/ in {edit_path}"
+        # 路徑不應該以 / 開頭（不是 git ignore 格式）
+        assert not write_path.startswith("/"), f"Path should not start with '/' but got: {write_path}"
+        assert not edit_path.startswith("/"), f"Path should not start with '/' but got: {edit_path}"
+
+        assert ".cafe/issues/test-issue/plan/" in write_path, f"Expected .cafe/issues/test-issue/plan/ in {write_path}"
+        assert ".cafe/issues/test-issue/plan/" in edit_path, f"Expected .cafe/issues/test-issue/plan/ in {edit_path}"
 
     @pytest.mark.skip(reason="Worktree support requires Phase base class refactor - tracked in issue #TODO")
     def test_plan_phase_uses_relative_paths_in_worktree(self, tmp_path, mock_agent_manager, mock_permission, mock_git, monkeypatch):

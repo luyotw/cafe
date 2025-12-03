@@ -79,8 +79,8 @@ class TestClaudePathProcessing:
     @patch("cafe.agents.executor.AgentExecutor._execute_with_streaming")
     @patch("cafe.agents.executor.AgentExecutor._create_new_session")
     @patch("os.getcwd")
-    def test_git_ignore_format_passed_through(self, mock_getcwd, mock_create_session, mock_execute):
-        """Git ignore 格式應該直接傳遞，不應該被轉換"""
+    def test_relative_paths_converted_to_git_ignore_format(self, mock_getcwd, mock_create_session, mock_execute):
+        """Claude 應該將普通相對路徑轉換為 git ignore 格式"""
         # Setup
         mock_getcwd.return_value = "/Users/me/repo"
         mock_create_session.return_value = "test-session-123"
@@ -92,10 +92,10 @@ class TestClaudePathProcessing:
         config = AgentConfig(name="Test", cli=AgentCLI.CLAUDE)
         executor = AgentExecutor(config)
 
-        # 使用 git ignore 格式的 allowed_tools
+        # 使用普通相對路徑的 allowed_tools（Phase 傳來的格式）
         allowed_tools = [
-            "Write(/.cafe/issues/test/spec/spec_001.md)",
-            "Edit(/.cafe/issues/test/spec/spec_001.md)",
+            "Write(.cafe/issues/test/spec/spec_001.md)",
+            "Edit(.cafe/issues/test/spec/spec_001.md)",
         ]
 
         # Execute
@@ -109,8 +109,11 @@ class TestClaudePathProcessing:
         allowed_tools_idx = cmd.index("--allowed-tools")
         tools_arg = cmd[allowed_tools_idx + 1]
 
-        # Git ignore 格式應該被保留
+        # 應該被轉換為 git ignore 格式（加上前綴 /）
         assert "/.cafe/issues/test/spec/spec_001.md" in tools_arg
+        # 不應該包含普通相對路徑
+        assert "Write(.cafe" not in tools_arg
+        assert "Edit(.cafe" not in tools_arg
         # 不應該包含絕對路徑
         assert "/Users/me/repo/.cafe" not in tools_arg
 
@@ -164,7 +167,7 @@ class TestGeminiPathProcessing:
     @patch("pathlib.Path.exists")
     @patch("pathlib.Path.read_text")
     def test_strips_path_from_write_file_tool(self, mock_read_text, mock_exists, mock_execute):
-        """Gemini 的 write_file 應該移除路徑參數"""
+        """Gemini 的 write_file 應該移除路徑參數，replace 保持普通相對路徑"""
         # Setup
         mock_exists.return_value = True
         mock_read_text.return_value = "!/.cafe\n"
@@ -176,10 +179,10 @@ class TestGeminiPathProcessing:
         config = AgentConfig(name="Test", cli=AgentCLI.GEMINI)
         executor = AgentExecutor(config)
 
-        # 使用帶路徑的 write_file
+        # 使用普通相對路徑（Phase 傳來的格式）
         allowed_tools = [
-            "write_file(/.cafe/issues/test/spec.md)",
-            "replace(/.cafe/issues/test/spec.md)",
+            "write_file(.cafe/issues/test/spec.md)",
+            "replace(.cafe/issues/test/spec.md)",
         ]
 
         # Execute
@@ -193,8 +196,10 @@ class TestGeminiPathProcessing:
         allowed_tools_idx = cmd.index("--allowed-tools")
         tools_arg = cmd[allowed_tools_idx + 1]
 
-        # write_file 路徑應該被移除，replace 保留
-        assert tools_arg == "write_file,replace(/.cafe/issues/test/spec.md)"
+        # write_file 路徑應該被移除，replace 保持普通相對路徑（不轉換為 git ignore format）
+        assert tools_arg == "write_file,replace(.cafe/issues/test/spec.md)"
+        # 不應該被轉換為 git ignore format
+        assert "/.cafe" not in tools_arg
 
 
 class TestCopilotPathProcessing:
@@ -202,8 +207,8 @@ class TestCopilotPathProcessing:
 
     @patch("cafe.agents.executor.AgentExecutor._execute_with_streaming")
     @patch("pathlib.Path.exists")
-    def test_passes_tools_directly(self, mock_exists, mock_execute):
-        """Copilot 應該直接傳遞 allowed_tools"""
+    def test_passes_tools_directly_with_relative_paths(self, mock_exists, mock_execute):
+        """Copilot 應該直接傳遞普通相對路徑，不轉換為 git ignore format"""
         # Setup
         mock_exists.return_value = True
         mock_execute.return_value = MagicMock(
@@ -214,10 +219,10 @@ class TestCopilotPathProcessing:
         config = AgentConfig(name="Test", cli=AgentCLI.COPILOT)
         executor = AgentExecutor(config)
 
-        # 使用 git ignore 格式
+        # 使用普通相對路徑（Phase 傳來的格式）
         allowed_tools = [
-            "write(/.cafe/issues/test/spec.md)",
-            "write(/.cafe/issues/test/plan.md)",
+            "write(.cafe/issues/test/spec.md)",
+            "write(.cafe/issues/test/plan.md)",
         ]
 
         # Execute
@@ -227,7 +232,9 @@ class TestCopilotPathProcessing:
         call_args = mock_execute.call_args
         cmd = call_args.kwargs["cmd"]
 
-        # 應該有兩個 --allow-tool 參數
+        # 應該有兩個 --allow-tool 參數，保持普通相對路徑
         assert cmd.count("--allow-tool") == 2
-        assert "write(/.cafe/issues/test/spec.md)" in cmd
-        assert "write(/.cafe/issues/test/plan.md)" in cmd
+        assert "write(.cafe/issues/test/spec.md)" in cmd
+        assert "write(.cafe/issues/test/plan.md)" in cmd
+        # 不應該被轉換為 git ignore format
+        assert "write(/.cafe" not in str(cmd)

@@ -290,9 +290,9 @@ class SpecPhase(Phase):
             current_user_input = result_or_input
 
             # Prepare allowed tools with write/edit permission for spec file
-            # Convert to git ignore format (relative path with / prefix)
-            # 問題2: 使用 git ignore 格式（/.cafe/issues/...），支援 worktree 環境
-            from cafe.utils.git_utils import get_repo_root, to_git_ignore_path
+            # Convert to relative path (without / prefix) - 普通相對路徑
+            # 問題2: 使用普通相對路徑（.cafe/issues/...），支援 worktree 環境
+            from cafe.utils.git_utils import get_repo_root, to_relative_path
 
             spec_file_path = Path(self.spec_file)
             if not spec_file_path.is_absolute():
@@ -300,7 +300,7 @@ class SpecPhase(Phase):
 
             try:
                 repo_root = get_repo_root()
-                spec_file_pattern = to_git_ignore_path(spec_file_path, repo_root)
+                spec_file_pattern = to_relative_path(spec_file_path, repo_root)
             except (ValueError, OSError):
                 # Fallback to absolute path if not in a git repository
                 spec_file_pattern = str(spec_file_path)

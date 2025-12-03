@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Callable, List, Optional, Tuple
 
 from cafe.core.types import AgentConfig, AgentCLI, AgentResponse, PermissionDenial, TokenUsage
-from cafe.utils.git_utils import get_repo_root, to_git_ignore_path
+from cafe.utils.git_utils import get_repo_root, to_git_ignore_path, to_relative_path
 
 
 class AgentExecutionError(Exception):
@@ -385,18 +385,23 @@ class AgentExecutor:
                     tool_name = tool.split("(")[0].lower()
                     path_part = tool.split("(")[1].rstrip(")")
 
-                    # 檢查是否是絕對路徑（需要轉換）還是 git ignore 格式（直接傳遞）
-                    # Git ignore 格式：以 /. 開頭的路徑（例如 /.cafe/..., /.git/...）
+                    # Claude 需要將路徑轉換為 git ignore 格式
+                    # Git ignore 格式：以 / 開頭的相對路徑（例如 /.cafe/...）
+                    # 普通相對路徑：不帶 / 前綴（例如 .cafe/...）- Phase 傳來的格式
                     # 絕對路徑：系統絕對路徑（例如 /Users/me/repo/.cafe/...）
                     path_obj = Path(path_part)
 
-                    # 區分方式：
-                    # 1. 如果以 /. 開頭，是 git ignore 格式（例如 /.cafe/）
-                    # 2. 否則如果是絕對路徑，是系統路徑，需要轉換
-                    is_git_ignore_format = path_part.startswith("/.")
+                    # 區分路徑類型：
+                    # 1. 如果已經是 git ignore 格式（以 /. 或 /src 等開頭），保持不變
+                    # 2. 如果是絕對路徑（例如 /Users/...），轉換為 git ignore 格式
+                    # 3. 如果是普通相對路徑（例如 .cafe/...），轉換為 git ignore 格式（加前綴 /）
+                    is_git_ignore_format = path_part.startswith("/") and not path_obj.is_absolute()
 
-                    if path_obj.is_absolute() and not is_git_ignore_format:
-                        # 這是系統絕對路徑，需要轉換為 git ignore 格式
+                    if is_git_ignore_format:
+                        # 已經是 git ignore 格式，直接使用
+                        processed_tool = tool
+                    elif path_obj.is_absolute():
+                        # 系統絕對路徑，轉換為 git ignore 格式
                         try:
                             repo_root = get_repo_root()
                             git_ignore_path = to_git_ignore_path(path_obj, repo_root)
@@ -405,8 +410,9 @@ class AgentExecutor:
                             # 轉換失敗，使用原始路徑
                             processed_tool = tool
                     else:
-                        # 已經是 git ignore 格式或相對路徑，直接使用
-                        processed_tool = tool
+                        # 普通相對路徑（例如 .cafe/...），轉換為 git ignore 格式（加前綴 /）
+                        git_ignore_path = "/" + path_part
+                        processed_tool = f"{tool_name.capitalize()}({git_ignore_path})"
                 else:
                     # 沒有路徑參數的工具
                     processed_tool = tool

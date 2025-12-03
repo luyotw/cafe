@@ -137,6 +137,42 @@ def get_repo_root(cwd: Optional[Path] = None) -> Path:
     raise ValueError(f"Not in a Git repository: {cwd}")
 
 
+def to_relative_path(file_path: Union[str, Path], repo_root: Union[str, Path]) -> str:
+    """將絕對路徑轉換為普通相對路徑。
+
+    普通相對路徑：不帶前綴 / 的相對於 repo root 的路徑。
+    例如：.cafe/issues/issue26/spec/spec_001.md
+
+    Args:
+        file_path: 檔案的絕對路徑
+        repo_root: Repository 根目錄的絕對路徑
+
+    Returns:
+        普通相對路徑字串（不帶前綴 /）
+
+    Raises:
+        ValueError: 如果 file_path 不在 repo_root 下
+
+    Example:
+        >>> path = to_relative_path(
+        ...     "/Users/me/repo/.cafe/issues/x/spec.md",
+        ...     "/Users/me/repo"
+        ... )
+        >>> print(path)  # .cafe/issues/x/spec.md
+    """
+    file_path = Path(file_path).resolve()
+    repo_root = Path(repo_root).resolve()
+
+    # 檢查 file_path 是否在 repo_root 下
+    try:
+        relative_path = file_path.relative_to(repo_root)
+    except ValueError:
+        raise ValueError(f"File path {file_path} is not under repository root {repo_root}")
+
+    # 返回普通相對路徑（不帶前綴 /）
+    return str(relative_path)
+
+
 def to_git_ignore_path(file_path: Union[str, Path], repo_root: Union[str, Path]) -> str:
     """將絕對路徑轉換為 git ignore 格式的相對路徑。
 
