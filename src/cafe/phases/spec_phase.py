@@ -15,7 +15,7 @@ from cafe.core.phase import Phase
 from cafe.core.status_codes import PhaseStatusCode, StatusCodeParser, generate_status_code_prompt
 from cafe.core.types import PhaseProgress, PhaseResult, PhaseStatus, WorkflowMode
 from cafe.ui.display import Display
-from cafe.utils.git_utils import get_github_repo_name
+from cafe.utils.git_utils import get_github_repo_name, get_repo_root, to_relative_path
 from cafe.utils.github import GitHubOps, GitHubError
 
 # Maximum number of clarification iterations to prevent infinite loops
@@ -878,14 +878,30 @@ class SpecPhase(Phase):
         status_code_prompt = self._get_status_code_prompt()
         rigor_guidelines = self._get_rigor_guidelines()
 
-        # 計算當前和前一個的檔案名稱（使用絕對路徑）
+        # 計算當前和前一個的檔案名稱（使用相對路徑）
         # self.spec_file 是當前要寫入的檔案（已在 execute() 中設定好）
         from pathlib import Path
         current_spec_path = Path(self.spec_file)
         if not current_spec_path.is_absolute():
             current_spec_path = current_spec_path.resolve()
-        current_spec_file = str(current_spec_path)
-        
+
+        # 轉換為相對路徑（用於 prompt）
+        # 先取得 repo_root，如果失敗就用絕對路徑
+        try:
+            repo_root = get_repo_root()
+        except (ValueError, OSError):
+            # 無法取得 repo root，使用絕對路徑
+            repo_root = None
+
+        # 轉換 current_spec_file
+        if repo_root:
+            try:
+                current_spec_file = to_relative_path(current_spec_path, repo_root)
+            except (ValueError, OSError):
+                current_spec_file = str(current_spec_path)
+        else:
+            current_spec_file = str(current_spec_path)
+
         # 前一輪的檔案：只在 iteration > 1 時才存在
         prev_spec_file = None
         if self.iteration > 1:
@@ -898,13 +914,27 @@ class SpecPhase(Phase):
                 prev_spec_path = existing_specs[-2]
                 if not prev_spec_path.is_absolute():
                     prev_spec_path = prev_spec_path.resolve()
-                prev_spec_file = str(prev_spec_path)
+                # 轉換為相對路徑
+                if repo_root:
+                    try:
+                        prev_spec_file = to_relative_path(prev_spec_path, repo_root)
+                    except (ValueError, OSError):
+                        prev_spec_file = str(prev_spec_path)
+                else:
+                    prev_spec_file = str(prev_spec_path)
             elif len(existing_specs) == 1:
                 # 只有 1 個檔案，那就是前一輪的
                 prev_spec_path = existing_specs[0]
                 if not prev_spec_path.is_absolute():
                     prev_spec_path = prev_spec_path.resolve()
-                prev_spec_file = str(prev_spec_path)
+                # 轉換為相對路徑
+                if repo_root:
+                    try:
+                        prev_spec_file = to_relative_path(prev_spec_path, repo_root)
+                    except (ValueError, OSError):
+                        prev_spec_file = str(prev_spec_path)
+                else:
+                    prev_spec_file = str(prev_spec_path)
 
         # --- 1. Determine context-specific sections ---
         initial_instruction = ""

@@ -12,6 +12,7 @@ from cafe.core.phase import Phase
 from cafe.core.status_codes import PhaseStatusCode, StatusCodeParser, generate_status_code_prompt
 from cafe.core.types import PhaseProgress, PhaseResult, PhaseStatus, WorkflowMode
 from cafe.ui.display import Display
+from cafe.utils.git_utils import get_repo_root, to_relative_path
 
 # Maximum number of planning iterations to prevent infinite loops
 MAX_PLANNING_ITERATIONS = 10
@@ -290,7 +291,35 @@ class PlanPhase(Phase):
             # For tests or edge cases where plan_file wasn't set in execute()
             iteration_number = self._get_next_iteration_number("plan", self.phase_dir)
             self.plan_file = self._get_versioned_file_path("plan", iteration_number, self.phase_dir)
-        plan_file_path = self.plan_file
+
+        # 轉換所有檔案路徑為相對路徑（用於 prompt）
+        # 分別處理每個路徑，避免一個失敗導致全部fallback
+        try:
+            repo_root = get_repo_root()
+        except (ValueError, OSError):
+            # 無法取得 repo root，全部使用絕對路徑
+            plan_file_path = self.plan_file
+            spec_file_path = self.spec_file
+            template_path = self.template_path
+        else:
+            # 有 repo root，逐個轉換
+            try:
+                plan_file_path = to_relative_path(Path(self.plan_file).resolve(), repo_root)
+            except (ValueError, OSError):
+                plan_file_path = self.plan_file
+
+            try:
+                spec_file_path = to_relative_path(Path(self.spec_file).resolve(), repo_root)
+            except (ValueError, OSError):
+                spec_file_path = self.spec_file
+
+            if self.template_path:
+                try:
+                    template_path = to_relative_path(Path(self.template_path).resolve(), repo_root)
+                except (ValueError, OSError):
+                    template_path = self.template_path
+            else:
+                template_path = None
 
         status_code_prompt = generate_status_code_prompt(
             valid_codes=[
@@ -307,10 +336,10 @@ class PlanPhase(Phase):
 
         # Add template reference if template is provided
         template_instruction = ""
-        if self.template_path:
+        if template_path:
             template_instruction = f"""
 **重要：必須嚴格按照模版格式撰寫**
-請先閱讀 {self.template_path}，然後嚴格按照模版的格式、章節結構、撰寫風格來撰寫 plan.md。
+請先閱讀 {template_path}，然後嚴格按照模版的格式、章節結構、撰寫風格來撰寫 plan.md。
 - 嚴格使用與模版相同的章節標題和結構
 - 參考模版中的內容詳細程度和撰寫風格
 - 有「嚴格」、「必須」等字眼的部分，請務必保持一致
@@ -319,7 +348,7 @@ class PlanPhase(Phase):
 """
 
         if self.iteration == 1:
-            return f"""分析 {self.spec_file} 並規劃實作步驟。
+            return f"""分析 {spec_file_path} 並規劃實作步驟。
 
 **你的角色：**
 請先使用 Read tool 讀取 agents/{self.dev_agent}.md 了解你的角色定義和工作準則，然後嚴格按照角色定義中的要求進行規劃。
@@ -329,7 +358,7 @@ class PlanPhase(Phase):
 **執行步驟：**
 1. 使用 Read tool 讀取 agents/{self.dev_agent}.md 了解角色定義
 2. 使用 Read tool 讀取 {plan_file_path} 的開發指南
-3. 使用 Read tool 讀取需求文件 {self.spec_file}
+3. 使用 Read tool 讀取需求文件 {spec_file_path}
 4. 根據角色定義中的要求規劃實作步驟（注意：你的工作是「規劃」而非「實作」，只需要寫出計畫和步驟）
 {template_instruction}
 {status_code_prompt}
@@ -357,7 +386,7 @@ class PlanPhase(Phase):
 
 """
 
-            return f"""繼續分析 {self.spec_file} 的最新版本。
+            return f"""繼續分析 {spec_file_path} 的最新版本。
 
 **你的角色：**
 請使用 Read tool 讀取 agents/{self.dev_agent}.md 了解你的角色定義和工作準則，然後嚴格按照角色定義中的要求進行規劃。
