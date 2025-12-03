@@ -84,6 +84,95 @@ def is_branch_initialized(branch_name: str, repo_path: Optional[Union[str, Path]
     return issue_dir.exists() and issue_dir.is_dir()
 
 
+def get_repo_root(cwd: Optional[Path] = None) -> Path:
+    """取得 Git repository 的根目錄。
+
+    支援一般 repository 和 worktree 環境。
+    從給定目錄開始向上搜尋，直到找到 .git 目錄或檔案。
+    如果是 worktree（.git 是檔案），則解析 gitdir 找到主 repo。
+
+    Args:
+        cwd: 起始目錄（default: 當前目錄）
+
+    Returns:
+        Repository 根目錄的 Path 物件
+
+    Raises:
+        ValueError: 如果不在 Git repository 中
+
+    Example:
+        >>> repo_root = get_repo_root()
+        >>> print(repo_root)  # /Users/me/projects/my-repo
+    """
+    if cwd is None:
+        cwd = Path.cwd()
+    else:
+        cwd = Path(cwd)
+
+    # 向上搜尋 .git
+    current = cwd.resolve()
+    while current != current.parent:
+        git_path = current / ".git"
+        if git_path.exists():
+            # 找到 .git，檢查是目錄還是檔案
+            if git_path.is_dir():
+                # 一般 repo：返回此目錄
+                return current
+            elif git_path.is_file():
+                # Worktree：解析 .git 檔案找到主 repo
+                gitdir_content = git_path.read_text().strip()
+                if gitdir_content.startswith("gitdir: "):
+                    # 格式：gitdir: /path/to/main-repo/.git/worktrees/branch-name
+                    gitdir = Path(gitdir_content[8:])  # 移除 "gitdir: " 前綴
+                    # 主 repo 的 .git 目錄在 ../../（從 worktrees/branch-name 向上兩層）
+                    main_git_dir = gitdir.parent.parent
+                    # 主 repo root 是 .git 的父目錄
+                    main_repo_root = main_git_dir.parent
+                    return main_repo_root
+                else:
+                    raise ValueError(f"Invalid .git file format: {git_path}")
+        current = current.parent
+
+    # 沒有找到 .git
+    raise ValueError(f"Not in a Git repository: {cwd}")
+
+
+def to_git_ignore_path(file_path: Union[str, Path], repo_root: Union[str, Path]) -> str:
+    """將絕對路徑轉換為 git ignore 格式的相對路徑。
+
+    Git ignore 格式：以 / 開頭的相對於 repo root 的路徑。
+    例如：/.cafe/issues/issue26/spec/spec_001.md
+
+    Args:
+        file_path: 檔案的絕對路徑
+        repo_root: Repository 根目錄的絕對路徑
+
+    Returns:
+        Git ignore 格式的路徑字串（以 / 開頭）
+
+    Raises:
+        ValueError: 如果 file_path 不在 repo_root 下
+
+    Example:
+        >>> path = to_git_ignore_path(
+        ...     "/Users/me/repo/.cafe/issues/x/spec.md",
+        ...     "/Users/me/repo"
+        ... )
+        >>> print(path)  # /.cafe/issues/x/spec.md
+    """
+    file_path = Path(file_path).resolve()
+    repo_root = Path(repo_root).resolve()
+
+    # 檢查 file_path 是否在 repo_root 下
+    try:
+        relative_path = file_path.relative_to(repo_root)
+    except ValueError:
+        raise ValueError(f"File path {file_path} is not under repository root {repo_root}")
+
+    # 轉換為 git ignore 格式（以 / 開頭）
+    return "/" + str(relative_path)
+
+
 def get_github_repo_name(cwd: Optional[Path] = None) -> str:
     """Get GitHub repository name from .git/config.
 
