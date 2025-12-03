@@ -290,13 +290,16 @@ class SpecPhase(Phase):
             current_user_input = result_or_input
 
             # Prepare allowed tools with write/edit permission for spec file
-            spec_file_path = Path(self.spec_file)
+            # Convert to git ignore format (relative path with / prefix)
+            # 問題2: 使用 git ignore 格式（/.cafe/issues/...），支援 worktree 環境
+            from cafe.utils.git_utils import get_repo_root, to_git_ignore_path
 
-            # Convert to absolute path for tools
-            # 使用絕對路徑避免 worktree 環境中的相對路徑問題
+            spec_file_path = Path(self.spec_file)
             if not spec_file_path.is_absolute():
                 spec_file_path = spec_file_path.resolve()
-            spec_file_pattern = str(spec_file_path)
+
+            repo_root = get_repo_root()
+            spec_file_pattern = to_git_ignore_path(spec_file_path, repo_root)
 
             # Merge base tools with previous iteration's tools (if any)
             base_allowed_tools = [

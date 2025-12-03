@@ -196,15 +196,16 @@ class PlanPhase(Phase):
             current_user_input = result_or_input
 
             # Prepare allowed tools with write/edit permission for versioned plan file
-            # Convert to project-relative path (git ignore format: / prefix)
-            import os
-            project_root = Path(os.getcwd())
-            try:
-                relative_plan_path = self.plan_file.relative_to(project_root)
-                plan_file_pattern = f"/{relative_plan_path}"
-            except ValueError:
-                # If path is not relative to cwd, use absolute path
-                plan_file_pattern = str(self.plan_file)
+            # Convert to git ignore format (relative path with / prefix)
+            # 問題2: 使用 git ignore 格式（/.cafe/issues/...），支援 worktree 環境
+            from cafe.utils.git_utils import get_repo_root, to_git_ignore_path
+
+            plan_file_path = Path(self.plan_file)
+            if not plan_file_path.is_absolute():
+                plan_file_path = plan_file_path.resolve()
+
+            repo_root = get_repo_root()
+            plan_file_pattern = to_git_ignore_path(plan_file_path, repo_root)
 
             # Merge base tools with previous iteration's tools (if any)
             base_allowed_tools = [
