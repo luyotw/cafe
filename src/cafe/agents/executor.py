@@ -378,8 +378,12 @@ class AgentExecutor:
         Returns:
             AgentResponse with response text, token usage, and permission denials
         """
-        # Step 1: Always warmup/create session first
-        session_id = self._create_new_session()
+        # Step 1: Get or create session
+        # If session_id already exists in config, use it; otherwise create new
+        if self.config.session_id:
+            session_id = self.config.session_id
+        else:
+            session_id = self._create_new_session()
 
         # Step 2: Use resume with actual prompt
         cmd = ["claude", "--resume", session_id, "-p", prompt]
@@ -446,12 +450,31 @@ class AgentExecutor:
         # Include .cafe directory for tool access
         cmd.extend(["--add-dir", ".cafe"])
 
-        # Execute with streaming
-        agent_response = self._execute_with_streaming(
-            cmd=cmd,
-            cli_name="Claude",
-            parse_stream_json=True,
-        )
+        # Execute with streaming - with session recovery
+        try:
+            agent_response = self._execute_with_streaming(
+                cmd=cmd,
+                cli_name="Claude",
+                parse_stream_json=True,
+            )
+        except AgentExecutionError as e:
+            # Check if session not found
+            if "no conversation found" in str(e).lower():
+                print(f"\n⚠️  Session {session_id} not found, creating new session...\n")
+                # Create new session and retry
+                session_id = self._create_new_session()
+                # Update session_id in command
+                resume_idx = cmd.index("--resume")
+                cmd[resume_idx + 1] = session_id
+                # Retry with new session
+                agent_response = self._execute_with_streaming(
+                    cmd=cmd,
+                    cli_name="Claude",
+                    parse_stream_json=True,
+                )
+            else:
+                # Other error, re-raise
+                raise
 
         # Update session_id in config for future use
         self.config.session_id = session_id
