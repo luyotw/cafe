@@ -636,8 +636,12 @@ class TestInteractiveModeStillWorks:
 class TestSkipConfirmedSpec:
     """Test skipping execution if spec is already confirmed."""
 
-    def test_skip_execution_if_already_confirmed(self, tmp_path: Path, mock_git_ops: MagicMock) -> None:
+    def test_skip_execution_if_already_confirmed(self, tmp_path: Path, mock_git_ops: MagicMock, monkeypatch) -> None:
         """測試如果已經 CONFIRMED 狀態就不再呼叫 agent"""
+        # Set up repo root and change directory
+        monkeypatch.chdir(tmp_path)
+        mock_git_ops.get_current_branch.return_value = "test-feature"
+
         spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec_001.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("Initial spec")
@@ -665,6 +669,7 @@ class TestSkipConfirmedSpec:
             git_ops=mock_git_ops,
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
+            issue_name="test-feature",  # Explicitly set issue_name
         )
 
         result = phase.execute()
