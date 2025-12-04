@@ -166,6 +166,63 @@ class AgentExecutor:
         """
         return self._total_token_usage
 
+    def _execute_with_session_recovery(
+        self,
+        cmd: List[str],
+        cli_name: str,
+        create_new_session_fn: Callable[[], str],
+        update_cmd_with_session_fn: Callable[[List[str], str], List[str]],
+        **streaming_kwargs
+    ) -> AgentResponse:
+        """Generic session recovery wrapper for all CLIs with session support.
+
+        This method wraps _execute_with_streaming to automatically handle session
+        not found errors by creating a new session and retrying.
+
+        Args:
+            cmd: Command to execute
+            cli_name: Name of CLI (for display)
+            create_new_session_fn: Function to create a new session, returns session_id
+            update_cmd_with_session_fn: Function to update cmd with new session_id
+            **streaming_kwargs: Arguments passed to _execute_with_streaming
+
+        Returns:
+            AgentResponse
+
+        Raises:
+            AgentExecutionError: If execution fails with non-session error
+        """
+        try:
+            return self._execute_with_streaming(cmd=cmd, cli_name=cli_name, **streaming_kwargs)
+        except AgentExecutionError as e:
+            # Check if it's a session not found error
+            error_msg = str(e).lower()
+            session_error_phrases = [
+                "no conversation found",
+                "session not found",
+                "conversation does not exist"
+            ]
+
+            if any(phrase in error_msg for phrase in session_error_phrases):
+                # Get old session ID from config
+                old_session_id = self.config.session_id
+                print(f"\n⚠️  Session {old_session_id} not found, creating new session...\n")
+
+                # Create new session
+                new_session_id = create_new_session_fn()
+
+                # Update command with new session
+                cmd = update_cmd_with_session_fn(cmd, new_session_id)
+
+                # Update config
+                self.config.session_id = new_session_id
+
+                # Retry
+                return self._execute_with_streaming(cmd=cmd, cli_name=cli_name, **streaming_kwargs)
+            else:
+                # Other error, re-raise
+                raise
+
     def _execute_with_streaming(
         self,
         cmd: List[str],
@@ -451,33 +508,26 @@ class AgentExecutor:
         cmd.extend(["--add-dir", ".cafe"])
 
         # Execute with streaming - with session recovery
-        try:
-            agent_response = self._execute_with_streaming(
-                cmd=cmd,
-                cli_name="Claude",
-                parse_stream_json=True,
-            )
-        except AgentExecutionError as e:
-            # Check if session not found
-            if "no conversation found" in str(e).lower():
-                print(f"\n⚠️  Session {session_id} not found, creating new session...\n")
-                # Create new session and retry
-                session_id = self._create_new_session()
-                # Update session_id in command
-                resume_idx = cmd.index("--resume")
-                cmd[resume_idx + 1] = session_id
-                # Retry with new session
-                agent_response = self._execute_with_streaming(
-                    cmd=cmd,
-                    cli_name="Claude",
-                    parse_stream_json=True,
-                )
-            else:
-                # Other error, re-raise
-                raise
+        def create_session():
+            return self._create_new_session()
 
-        # Update session_id in config for future use
-        self.config.session_id = session_id
+        def update_cmd(cmd, new_session_id):
+            resume_idx = cmd.index("--resume")
+            cmd[resume_idx + 1] = new_session_id
+            return cmd
+
+        agent_response = self._execute_with_session_recovery(
+            cmd=cmd,
+            cli_name="Claude",
+            create_new_session_fn=create_session,
+            update_cmd_with_session_fn=update_cmd,
+            parse_stream_json=True,
+        )
+
+        # Session ID is already updated by _execute_with_session_recovery if needed
+        # Just ensure it's set in config for first-time execution
+        if not self.config.session_id:
+            self.config.session_id = session_id
 
         # Add CLI command args to response（實際執行的參數列表，不包含可執行檔本身）
         # 例如：["--resume", "session", "-p", "prompt", "--output-format", ...]
@@ -694,6 +744,10 @@ class AgentExecutor:
         if self.config.model:
             cmd.extend(["--model", self.config.model])
 
+        # Add session if configured
+        if self.config.session_id:
+            cmd.extend(["--resume", self.config.session_id])
+
         # Cursor-agent doesn't support allowed-tools, use --force to auto-approve all tools
         cmd.append("--force")
 
@@ -715,8 +769,28 @@ class AgentExecutor:
                 # If not JSON, return raw output
                 return AgentResponse(response=full_output, token_usage=TokenUsage())
 
-        # Execute Cursor
-        agent_response = self._execute_with_streaming(cmd, "Cursor", parse_cursor_response)
+        # Execute with session recovery if session_id is configured
+        if self.config.session_id:
+            def create_session():
+                # Cursor creates session automatically, return empty string
+                return ""
+
+            def update_cmd(cmd, new_session_id):
+                # Update --resume argument
+                if "--resume" in cmd:
+                    resume_idx = cmd.index("--resume")
+                    cmd[resume_idx + 1] = new_session_id
+                return cmd
+
+            agent_response = self._execute_with_session_recovery(
+                cmd=cmd,
+                cli_name="Cursor",
+                create_new_session_fn=create_session,
+                update_cmd_with_session_fn=update_cmd,
+                response_parser=parse_cursor_response,
+            )
+        else:
+            agent_response = self._execute_with_streaming(cmd, "Cursor", parse_cursor_response)
 
         # Add CLI command args to response
         agent_response.cli_command_args = cmd[1:]
@@ -768,11 +842,33 @@ class AgentExecutor:
         cmd.extend(["--add-dir", ".cafe"])
 
         # Execute with streaming (line-by-line mode)
-        agent_response = self._execute_with_streaming(
-            cmd=cmd,
-            cli_name="Copilot",
-            parse_stream_json=False,
-        )
+        # Use session recovery if session_id is configured
+        if self.config.session_id:
+            def create_session():
+                # Copilot creates session automatically, detect from filesystem
+                # For now, just return empty string and let filesystem detection handle it
+                return ""
+
+            def update_cmd(cmd, new_session_id):
+                # Update --resume argument
+                if "--resume" in cmd:
+                    resume_idx = cmd.index("--resume")
+                    cmd[resume_idx + 1] = new_session_id
+                return cmd
+
+            agent_response = self._execute_with_session_recovery(
+                cmd=cmd,
+                cli_name="Copilot",
+                create_new_session_fn=create_session,
+                update_cmd_with_session_fn=update_cmd,
+                parse_stream_json=False,
+            )
+        else:
+            agent_response = self._execute_with_streaming(
+                cmd=cmd,
+                cli_name="Copilot",
+                parse_stream_json=False,
+            )
 
         # 如果還沒有 session_id，嘗試從新建立的 session 檔案中提取
         if not self.config.session_id and copilot_session_dir.exists():
