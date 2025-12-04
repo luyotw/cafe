@@ -191,8 +191,8 @@ class SpecPhase(Phase):
                 # Continue from last completed iteration
                 self.iteration += 1
 
-            # Copy previous version if exists (iteration > 1)
-            self._copy_previous_version("spec", iteration_number, self.phase_dir)
+            # Note: Copy of previous version is deferred until just before agent execution
+            # to avoid creating new iterations when interrupted before agent is called
 
             # Set versioned spec_file path
             spec_file_path = self._get_versioned_file_path("spec", iteration_number, self.phase_dir)
@@ -317,6 +317,10 @@ class SpecPhase(Phase):
                 f"edit({spec_file_pattern})",
             ]
             allowed_tools = self._merge_allowed_tools(base_allowed_tools)
+
+            # Copy previous version just before calling agent (if iteration > 1)
+            # This ensures we only create a new iteration when we actually execute the agent
+            self._copy_previous_version("spec", iteration_number, self.phase_dir)
 
             # Execute full agent interaction cycle (generate prompt, execute, handle status)
             result, response = self._execute_and_handle_agent_response(

@@ -113,8 +113,8 @@ class PlanPhase(Phase):
             # Get iteration number for versioned file
             iteration_number = self._get_next_iteration_number("plan", self.phase_dir)
 
-            # Copy previous version if exists (before sending prompt to agent)
-            self._copy_previous_version("plan", iteration_number, self.phase_dir)
+            # Note: Copy of previous version is deferred until just before agent execution
+            # to avoid creating new iterations when interrupted before agent is called
 
             # Calculate versioned plan file path
             self.plan_file = self._get_versioned_file_path("plan", iteration_number, self.phase_dir)
@@ -224,6 +224,10 @@ class PlanPhase(Phase):
                 f"edit({plan_file_pattern})",
             ]
             allowed_tools = self._merge_allowed_tools(base_allowed_tools)
+
+            # Copy previous version just before calling agent (if iteration > 1)
+            # This ensures we only create a new iteration when we actually execute the agent
+            self._copy_previous_version("plan", iteration_number, self.phase_dir)
 
             # Execute full agent interaction cycle (generate prompt, execute, handle status)
             result, response = self._execute_and_handle_agent_response(
