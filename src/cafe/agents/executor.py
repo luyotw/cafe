@@ -284,11 +284,17 @@ class AgentExecutor:
             if process.stderr in ready:
                 # Read first line of stderr if available (non-blocking)
                 stderr_line = process.stderr.readline()
-                if stderr_line and ("already in use" in stderr_line.lower() or "error:" in stderr_line.lower()):
+                if stderr_line and ("already in use" in stderr_line.lower() or "error:" in stderr_line.lower() or "limit reached" in stderr_line.lower()):
                     # Likely a fatal error, read rest and terminate
                     process.kill()
                     remaining_stderr = process.stderr.read()
                     full_stderr = stderr_line + remaining_stderr
+
+                    # Check if it's a rate limit error
+                    if "limit reached" in full_stderr.lower():
+                        print(f"\n❌ {cli_name} API 使用量已達上限\n")
+                        print(f"錯誤訊息: {full_stderr.strip()}\n")
+                        print(f"{'='*80}\n")
 
                     # Attach實際 CLI 參數到錯誤物件，方便記錄到 history
                     err = AgentExecutionError(
@@ -393,6 +399,11 @@ class AgentExecutor:
         returncode = process.wait()
 
         if returncode != 0:
+            # Check if it's a rate limit error
+            if stderr_output and "limit reached" in stderr_output.lower():
+                print(f"\n❌ {cli_name} API 使用量已達上限\n")
+                print(f"錯誤訊息: {stderr_output.strip()}\n")
+
             err = AgentExecutionError(
                 f"{cli_name} execution failed with code {returncode}: {stderr_output}"
             )
@@ -553,15 +564,26 @@ class AgentExecutor:
             check=False,
         )
 
+        # Check for rate limit error first (appears in stderr as plain text)
+        if result.stderr and "limit reached" in result.stderr.lower():
+            print(f"\n❌ Claude API 使用量已達上限\n")
+            print(f"錯誤訊息: {result.stderr.strip()}\n")
+            raise AgentExecutionError(f"Claude API rate limit reached: {result.stderr}")
+
         try:
             response_data = json.loads(result.stdout)
-            
+
             # Check for errors (like limit reached)
             if response_data.get("is_error"):
                 error_msg = response_data.get("result", "Unknown error")
-                print(f"\n⚠️  Claude API Error: {error_msg}\n")
+                # Check if it's a rate limit error
+                if "limit" in error_msg.lower():
+                    print(f"\n❌ Claude API 使用量已達上限\n")
+                    print(f"錯誤訊息: {error_msg}\n")
+                else:
+                    print(f"\n⚠️  Claude API Error: {error_msg}\n")
                 raise AgentExecutionError(f"Claude API error: {error_msg}")
-            
+
             session_id = response_data.get("session_id")
             if not session_id:
                 raise AgentExecutionError("No session_id in response")
