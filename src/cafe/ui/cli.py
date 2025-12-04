@@ -504,20 +504,29 @@ def prepare(
             console.print(f"[dim]Creating worktree at '{worktree_path}'...[/dim]")
             git_ops.create_worktree(worktree_path, feature_branch, base_branch)
 
-            # Create symlink to .cafe directory so worktree can access cafe commands
-            import os
+            # Create actual .cafe directory in worktree instead of symlink
+            # This avoids permission issues with agent CLIs that resolve symlinks
+            import shutil
             worktree_abs = Path(worktree_path).resolve()
-            cafe_dir = Path(".cafe").resolve()
-            worktree_cafe_link = worktree_abs / ".cafe"
+            repo_cafe_dir = Path(".cafe").resolve()
+            worktree_cafe_dir = worktree_abs / ".cafe"
 
-            # Only create symlink if:
-            # 1. .cafe directory exists
-            # 2. worktree directory exists (created by git worktree add)
-            # 3. symlink doesn't already exist
-            if cafe_dir.exists() and worktree_abs.exists() and not worktree_cafe_link.exists():
-                # Calculate relative path from worktree to main repo's .cafe
-                relative_cafe = os.path.relpath(cafe_dir, worktree_abs)
-                worktree_cafe_link.symlink_to(relative_cafe)
+            # Create .cafe directory structure in worktree if it doesn't exist
+            if repo_cafe_dir.exists() and worktree_abs.exists() and not worktree_cafe_dir.exists():
+                # Create .cafe directory
+                worktree_cafe_dir.mkdir(parents=True, exist_ok=True)
+
+                # Copy config.yaml from repo root
+                repo_config = repo_cafe_dir / "config.yaml"
+                worktree_config = worktree_cafe_dir / "config.yaml"
+                if repo_config.exists():
+                    shutil.copy2(repo_config, worktree_config)
+
+                # Create issues directory structure
+                worktree_issues_dir = worktree_cafe_dir / "issues" / issue_name
+                worktree_issues_dir.mkdir(parents=True, exist_ok=True)
+                (worktree_issues_dir / "spec").mkdir(exist_ok=True)
+                (worktree_issues_dir / "sessions").mkdir(exist_ok=True)
         else:
             # Normal branch mode
             if git_ops.branch_exists(feature_branch):
@@ -700,7 +709,36 @@ def close() -> None:
                 console.print()
                 raise typer.Exit(1)
 
-            # Step 4: Remove worktree
+            # Step 4: Sync .cafe/issues/{issue_name}/ from worktree to repo root
+            try:
+                console.print(f"[dim]Syncing issue data from worktree to repo root...[/dim]")
+                import shutil
+                worktree_abs = Path(worktree_path).resolve()
+                worktree_issue_dir = worktree_abs / ".cafe" / "issues" / feature_branch
+                # Use absolute path for repo_issue_dir since we're in main_repo after os.chdir()
+                repo_issue_dir = (Path.cwd() / ".cafe" / "issues" / feature_branch).resolve()
+
+                if worktree_issue_dir.exists():
+                    # Ensure repo issue dir exists
+                    repo_issue_dir.mkdir(parents=True, exist_ok=True)
+
+                    # Copy all subdirectories (spec/, plan/, sessions/, etc.) from worktree to repo root
+                    for item in worktree_issue_dir.iterdir():
+                        if item.is_dir():
+                            dest = repo_issue_dir / item.name
+                            if dest.exists():
+                                shutil.rmtree(dest)
+                            shutil.copytree(item, dest)
+                        elif item.name != "config.yaml":  # Don't overwrite config.yaml
+                            shutil.copy2(item, repo_issue_dir / item.name)
+
+                console.print(f"[green]✓ Synced issue data to repo root[/green]")
+            except Exception as e:
+                console.print(f"[yellow]⚠️  Failed to sync issue data: {e}[/yellow]")
+                console.print(f"[yellow]   Issue data remains in worktree at: {worktree_path}/.cafe/issues/{feature_branch}/[/yellow]")
+                # Continue with worktree removal even if sync fails
+
+            # Step 5: Remove worktree
             try:
                 console.print(f"[dim]Removing worktree: {worktree_path}[/dim]")
                 git_ops.remove_worktree(worktree_path)
@@ -714,7 +752,7 @@ def close() -> None:
                 console.print()
                 raise typer.Exit(1)
 
-            # Step 5: Delete feature branch
+            # Step 6: Delete feature branch
             try:
                 console.print(f"[dim]Deleting feature branch: {feature_branch}[/dim]")
                 git_ops.delete_branch(feature_branch)

@@ -389,3 +389,49 @@ class TestCloseCommandWorktree:
 
         assert result.exit_code == 0
         assert "worktree" in result.stdout.lower() or "worktrees/test-worktree-issue" in result.stdout
+
+    def test_close_syncs_worktree_issue_data_back_to_repo_root(
+        self, temp_repo_dir, mock_git_ops, mock_github_ops_no_pr
+    ):
+        """測試 worktree 模式下會將 .cafe/issues/{issue_name}/ 同步回 repo root"""
+        # Setup: 創建 .git 目錄（模擬 git repository）
+        (temp_repo_dir / ".git").mkdir()
+
+        # Setup: 創建 worktree 和 repo root 的 .cafe 目錄
+        worktree_path = temp_repo_dir / "worktrees" / "sync-test"
+        worktree_path.mkdir(parents=True)
+
+        # 創建 worktree 的 .cafe/issues/sync-test/ 並寫入一些檔案
+        worktree_cafe_issue = worktree_path / ".cafe" / "issues" / "sync-test"
+        worktree_cafe_issue.mkdir(parents=True)
+        (worktree_cafe_issue / "spec").mkdir()
+        (worktree_cafe_issue / "spec" / "spec_001.md").write_text("Worktree spec content")
+        (worktree_cafe_issue / "plan").mkdir()
+        (worktree_cafe_issue / "plan" / "plan_001.md").write_text("Worktree plan content")
+
+        # 創建 repo root 的 issue config
+        repo_issue_dir = temp_repo_dir / ".cafe" / "issues" / "sync-test"
+        repo_issue_dir.mkdir(parents=True)
+        config_file = repo_issue_dir / "config.yaml"
+        config_data = {
+            "base_branch": "main",
+            "feature_branch": "sync-test",
+            "worktree_path": str(worktree_path),
+        }
+        with open(config_file, 'w', encoding='utf-8') as f:
+            yaml.dump(config_data, f)
+
+        mock_git_ops.get_current_branch.return_value = "sync-test"
+        mock_git_ops.delete_branch.return_value = None
+
+        result = runner.invoke(app, ["close"])
+
+        assert result.exit_code == 0
+
+        # 驗證 worktree 的 spec/plan 被同步到 repo root
+        repo_spec = repo_issue_dir / "spec" / "spec_001.md"
+        repo_plan = repo_issue_dir / "plan" / "plan_001.md"
+        assert repo_spec.exists(), "spec_001.md should be synced to repo root"
+        assert repo_spec.read_text() == "Worktree spec content"
+        assert repo_plan.exists(), "plan_001.md should be synced to repo root"
+        assert repo_plan.read_text() == "Worktree plan content"

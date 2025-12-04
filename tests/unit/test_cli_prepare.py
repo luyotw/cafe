@@ -370,3 +370,39 @@ class TestPrepareCommandWorktree:
         mock_git_ops.create_worktree.assert_called_once_with(
             ".cafe/worktrees/test-issue", "test-issue", "main"
         )
+
+    def test_prepare_creates_cafe_directory_in_worktree_not_symlink(self, temp_repo_dir, mock_git_ops):
+        """測試 worktree 中創建實際的 .cafe/ 目錄而非符號連結"""
+        # Setup: 創建 repo root 的 .cafe/config.yaml
+        repo_cafe_dir = temp_repo_dir / ".cafe"
+        repo_cafe_dir.mkdir(parents=True, exist_ok=True)
+        repo_config = repo_cafe_dir / "config.yaml"
+        repo_config.write_text("test_config: value\n")
+
+        # 創建 worktree 目錄（模擬 git worktree add 的行為）
+        worktree_path = temp_repo_dir / "worktrees" / "test-issue"
+        worktree_path.mkdir(parents=True, exist_ok=True)
+
+        # Mock create_worktree 為空操作（worktree 目錄已存在）
+        mock_git_ops.create_worktree.return_value = None
+
+        result = runner.invoke(app, ["prepare", "test-issue", "--worktree", str(worktree_path)])
+
+        assert result.exit_code == 0
+
+        # 驗證 worktree 中有實際的 .cafe/ 目錄（不是符號連結）
+        worktree_cafe_dir = worktree_path / ".cafe"
+        assert worktree_cafe_dir.exists(), ".cafe directory should exist in worktree"
+        assert worktree_cafe_dir.is_dir(), ".cafe should be a real directory, not a symlink"
+        assert not worktree_cafe_dir.is_symlink(), ".cafe should NOT be a symlink"
+
+        # 驗證 config.yaml 被複製到 worktree
+        worktree_config = worktree_cafe_dir / "config.yaml"
+        assert worktree_config.exists(), "config.yaml should be copied to worktree"
+        assert worktree_config.read_text() == "test_config: value\n"
+
+        # 驗證 issue 目錄結構被創建
+        worktree_issue_dir = worktree_cafe_dir / "issues" / "test-issue"
+        assert worktree_issue_dir.exists(), "Issue directory should be created in worktree"
+        assert (worktree_issue_dir / "spec").exists(), "spec directory should exist"
+        assert (worktree_issue_dir / "sessions").exists(), "sessions directory should exist"
