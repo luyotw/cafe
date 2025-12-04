@@ -247,28 +247,12 @@ class AgentExecutor:
         Raises:
             AgentExecutionError: If execution fails
         """
-        # Detect worktree environment and set cwd to repo root if needed
-        # This ensures agent CLIs can access .cafe directory in worktree environments
-        cwd = None
-        try:
-            repo_root = get_repo_root()
-            current_dir = Path.cwd()
-            # Worktree indicator: .git is a file (not a directory)
-            git_path = current_dir / ".git"
-            if git_path.is_file() and current_dir != repo_root:
-                # We're in a worktree, use repo root as cwd
-                cwd = str(repo_root)
-        except (ValueError, OSError):
-            # Cannot get repo root, use default cwd (None = current directory)
-            pass
-
         process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
             bufsize=1,  # Line buffered
-            cwd=cwd,
         )
 
         # Check stderr first for immediate errors (e.g., session locked)
