@@ -441,6 +441,8 @@ class AgentExecutor:
             session_id = self.config.session_id
         else:
             session_id = self._create_new_session()
+            # Update config immediately so session recovery can access it
+            self.config.session_id = session_id
 
         # Step 2: Use resume with actual prompt
         cmd = ["claude", "--resume", session_id, "-p", prompt]
@@ -524,10 +526,8 @@ class AgentExecutor:
             parse_stream_json=True,
         )
 
-        # Session ID is already updated by _execute_with_session_recovery if needed
-        # Just ensure it's set in config for first-time execution
-        if not self.config.session_id:
-            self.config.session_id = session_id
+        # Session ID is already set in config (either from existing or newly created)
+        # and updated by _execute_with_session_recovery if recovery was needed
 
         # Add CLI command args to response（實際執行的參數列表，不包含可執行檔本身）
         # 例如：["--resume", "session", "-p", "prompt", "--output-format", ...]
