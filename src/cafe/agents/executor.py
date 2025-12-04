@@ -557,11 +557,24 @@ class AgentExecutor:
         """
         cmd = ["claude", "-p", "Say 'hi'", "--output-format", "json"]
 
+        # Use same cwd logic as _execute_with_streaming for consistency
+        cwd = None
+        try:
+            repo_root = get_repo_root()
+            current_dir = Path.cwd()
+            git_path = current_dir / ".git"
+            if git_path.is_file() and current_dir != repo_root:
+                # We're in a worktree, use repo root as cwd
+                cwd = str(repo_root)
+        except (ValueError, OSError):
+            pass
+
         result = subprocess.run(
             cmd,
             capture_output=True,
             text=True,
             check=False,
+            cwd=cwd,
         )
 
         # Check for rate limit error first (appears in stderr as plain text)
