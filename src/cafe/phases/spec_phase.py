@@ -266,9 +266,17 @@ class SpecPhase(Phase):
                 self._prompt_for_rigor()
 
             # Capture original requirement before entering clarification loop
-            spec_path = Path(self.spec_file)
-            if spec_path.exists():
-                self.original_requirement = spec_path.read_text(encoding="utf-8").strip()
+            # Read from the previous iteration file (the one we'll copy from)
+            # iteration_number is the NEXT file number, so previous is iteration_number - 1
+            if iteration_number > 1:
+                prev_spec_path = self._get_versioned_file_path("spec", iteration_number - 1, self.phase_dir)
+                if prev_spec_path.exists():
+                    self.original_requirement = prev_spec_path.read_text(encoding="utf-8").strip()
+            else:
+                # First iteration: read from current file if it exists
+                spec_path = Path(self.spec_file)
+                if spec_path.exists():
+                    self.original_requirement = spec_path.read_text(encoding="utf-8").strip()
 
             # NOTE: self.iteration is already set from versioned files at line 183
             # No need to increment here as it's handled by _get_next_iteration_number()

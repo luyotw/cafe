@@ -1201,7 +1201,6 @@ class TestFetchGitHubIssue:
 class TestOriginalRequirement:
     """測試原始需求描述的保存與使用"""
 
-    @pytest.mark.skip(reason="TODO: Fix after copy timing change - original_requirement may need different initialization")
     def test_captures_original_requirement_before_first_iteration(
         self, tmp_path: Path, mock_git_ops: MagicMock, monkeypatch: pytest.MonkeyPatch
     ) -> None:

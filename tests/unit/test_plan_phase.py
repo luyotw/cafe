@@ -936,7 +936,6 @@ class TestPlanPhaseNeedClarification:
         assert result.status == PhaseStatus.COMPLETED
         assert result.data.get("status_code") == "CAFE_NEED_CLARIFICATION"
 
-    @pytest.mark.skip(reason="TODO: Fix after copy timing change - plan file content initialization may need adjustment")
     def test_need_clarification_saves_iteration_history_with_user_input_and_response(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
         monkeypatch.chdir(tmp_path)
         mock_git_ops.get_current_branch.return_value = "test-feature"
@@ -1037,7 +1036,6 @@ class TestPlanPhaseNeedClarification:
 class TestPlanPhaseResume:
     """Test resuming from interrupted phase (TDD)."""
 
-    @pytest.mark.skip(reason="TODO: Fix after copy timing change - get_multiline_input call count may have changed")
     def test_resume_shows_previous_plan_and_asks_user(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
         monkeypatch.chdir(tmp_path)
         mock_git_ops.get_current_branch.return_value = "test-feature"

@@ -338,7 +338,6 @@ class TestSpecPhaseInteractiveVsNonInteractive:
 class TestPlanPhaseInteractiveVsNonInteractive:
     """測試 PlanPhase 的 interactive 和 non-interactive 模式差異。"""
 
-    @pytest.mark.skip(reason="TODO: Fix after copy timing change")
     def test_confirmed_status_same_behavior_both_modes(
         self, tmp_path: Path, mock_git_ops: MagicMock, monkeypatch
     ) -> None:

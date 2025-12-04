@@ -170,11 +170,19 @@ class PlanPhase(Phase):
                             message="Template is required for first iteration. Use --template option.",
                         )
 
-                # Check for any existing plan file with development guide section
-                plan_exists = self.plan_file.exists() and self._has_dev_guide_section(self.plan_file)
+                # Only prompt for dev guide in first iteration
+                # Note: self.iteration is determined by history files, not versioned plan files
+                if is_first_iteration:
+                    # Check for any existing plan file with development guide section
+                    # Always check plan_001.md (first versioned file), not self.plan_file
+                    first_plan_file = self._get_versioned_file_path("plan", 1, self.phase_dir)
+                    plan_exists = first_plan_file.exists() and self._has_dev_guide_section(first_plan_file)
+                else:
+                    # Not first iteration: plan should already exist
+                    plan_exists = True
 
                 # First round: no plan file exists or no dev guide
-                if not plan_exists:
+                if is_first_iteration and not plan_exists:
                     # Need to get dev guide (optional)
                     dev_guide = ""
                     if self.interactive:
@@ -562,7 +570,10 @@ class PlanPhase(Phase):
         """
         # Iteration 1: user_input is the dev guide content from versioned plan file
         if self.iteration == 1:
-            return self.plan_file.read_text() if self.plan_file.exists() else ""
+            # Always read from plan_001.md (the first versioned file)
+            # Note: Iteration number is determined by history files, not by versioned plan files
+            first_plan_file = self._get_versioned_file_path("plan", 1, self.phase_dir)
+            return first_plan_file.read_text() if first_plan_file.exists() else ""
 
         # Iteration 2+: Check if current iteration was interrupted (has user_input but no response)
         current_data = self._load_current_iteration_data()
