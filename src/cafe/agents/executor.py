@@ -172,6 +172,8 @@ class AgentExecutor:
         cli_name: str,
         create_new_session_fn: Callable[[], str],
         update_cmd_with_session_fn: Callable[[List[str], str], List[str]],
+        max_retries: int = 3,
+        _retry_count: int = 0,
         **streaming_kwargs
     ) -> AgentResponse:
         """Generic session recovery wrapper for all CLIs with session support.
@@ -184,13 +186,15 @@ class AgentExecutor:
             cli_name: Name of CLI (for display)
             create_new_session_fn: Function to create a new session, returns session_id
             update_cmd_with_session_fn: Function to update cmd with new session_id
+            max_retries: Maximum number of retry attempts (default: 3)
+            _retry_count: Internal counter for recursive retries
             **streaming_kwargs: Arguments passed to _execute_with_streaming
 
         Returns:
             AgentResponse
 
         Raises:
-            AgentExecutionError: If execution fails with non-session error
+            AgentExecutionError: If execution fails with non-session error or max retries exceeded
         """
         try:
             return self._execute_with_streaming(cmd=cmd, cli_name=cli_name, **streaming_kwargs)
@@ -204,6 +208,11 @@ class AgentExecutor:
             ]
 
             if any(phrase in error_msg for phrase in session_error_phrases):
+                # Check if we've exceeded max retries
+                if _retry_count >= max_retries:
+                    print(f"\n❌ Could not recover from error after {max_retries} attempts\n")
+                    raise
+
                 # Get old session ID from config
                 old_session_id = self.config.session_id
                 print(f"\n⚠️  Session {old_session_id} not found, creating new session...\n")
@@ -217,8 +226,16 @@ class AgentExecutor:
                 # Update config
                 self.config.session_id = new_session_id
 
-                # Retry
-                return self._execute_with_streaming(cmd=cmd, cli_name=cli_name, **streaming_kwargs)
+                # Retry recursively to support multiple recovery attempts
+                return self._execute_with_session_recovery(
+                    cmd=cmd,
+                    cli_name=cli_name,
+                    create_new_session_fn=create_new_session_fn,
+                    update_cmd_with_session_fn=update_cmd_with_session_fn,
+                    max_retries=max_retries,
+                    _retry_count=_retry_count + 1,
+                    **streaming_kwargs
+                )
             else:
                 # Other error, re-raise
                 raise

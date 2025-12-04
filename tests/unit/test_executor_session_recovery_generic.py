@@ -179,3 +179,99 @@ class TestGenericSessionRecovery:
 
         # 驗證 session_id 已更新
         assert executor.config.session_id == "fresh-session"
+
+    def test_multiple_session_recovery_attempts(self, monkeypatch):
+        """測試多次 session recovery（當新 session 也失敗時）"""
+        config = AgentConfig(
+            name="TestAgent",
+            cli=AgentCLI.CLAUDE,
+            session_id="session-1"
+        )
+        executor = AgentExecutor(config)
+
+        call_count = [0]
+        session_creation_count = [0]
+
+        def mock_popen(*args, **kwargs):
+            call_count[0] += 1
+            mock_proc = MagicMock()
+
+            if call_count[0] <= 2:
+                # 前兩次：session 不存在
+                mock_proc.stdout.readline.side_effect = ['']
+                mock_proc.stderr = MagicMock()
+                mock_proc.stderr.read.return_value = "No conversation found"
+                mock_proc.wait.return_value = 1
+            else:
+                # 第三次：成功
+                mock_proc.stdout.readline.side_effect = [
+                    '{"message":{"content":[{"type":"text","text":"Success"}]}}\n',
+                    ''
+                ]
+                mock_proc.stderr = MagicMock()
+                mock_proc.stderr.read.return_value = ""
+                mock_proc.wait.return_value = 0
+
+            return mock_proc
+
+        def mock_run_for_session_creation(*args, **kwargs):
+            session_creation_count[0] += 1
+            return MagicMock(
+                returncode=0,
+                stdout=f'{{"session_id": "session-{session_creation_count[0] + 1}"}}',
+                stderr=""
+            )
+
+        with patch("subprocess.Popen", side_effect=mock_popen):
+            with patch("subprocess.run", side_effect=mock_run_for_session_creation):
+                with patch("select.select", return_value=([], [], [])):
+                    response = executor.execute("Test prompt")
+
+        # 驗證成功執行
+        assert response.response == "Success"
+
+        # 驗證經過 2 次 session 創建（session-1 → session-2 → session-3）
+        assert session_creation_count[0] == 2
+        assert executor.config.session_id == "session-3"
+
+        # 驗證執行了 3 次（2 次失敗 + 1 次成功）
+        assert call_count[0] == 3
+
+    def test_max_retries_exceeded(self, monkeypatch):
+        """測試超過最大 retry 次數時會失敗"""
+        config = AgentConfig(
+            name="TestAgent",
+            cli=AgentCLI.CLAUDE,
+            session_id="session-1"
+        )
+        executor = AgentExecutor(config)
+
+        def mock_popen(*args, **kwargs):
+            # 永遠回傳 session not found
+            mock_proc = MagicMock()
+            mock_proc.stdout.readline.side_effect = ['']
+            mock_proc.stderr = MagicMock()
+            mock_proc.stderr.read.return_value = "No conversation found"
+            mock_proc.wait.return_value = 1
+            return mock_proc
+
+        session_creation_count = [0]
+
+        def mock_run_for_session_creation(*args, **kwargs):
+            session_creation_count[0] += 1
+            return MagicMock(
+                returncode=0,
+                stdout=f'{{"session_id": "session-{session_creation_count[0] + 1}"}}',
+                stderr=""
+            )
+
+        from cafe.agents.executor import AgentExecutionError
+
+        with patch("subprocess.Popen", side_effect=mock_popen):
+            with patch("subprocess.run", side_effect=mock_run_for_session_creation):
+                with patch("select.select", return_value=([], [], [])):
+                    with pytest.raises(AgentExecutionError):
+                        executor.execute("Test prompt")
+
+        # 驗證達到最大 retry 次數（3 次，因為 max_retries=3）
+        assert session_creation_count[0] == 3
