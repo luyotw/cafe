@@ -17,6 +17,14 @@ export PYTHONPATH="src:$PYTHONPATH"
 PYTHON_TMPDIR=$(python3 -c "import tempfile, os; print(os.path.dirname(tempfile.gettempdir()))")
 export GIT_CEILING_DIRECTORIES="$PYTHON_TMPDIR"
 
+# WORKTREE FIX: Clear all git environment variables that might interfere with tests
+# When running in a git worktree, these variables can cause test failures
+unset GIT_DIR
+unset GIT_WORK_TREE
+unset GIT_INDEX_FILE
+unset GIT_OBJECT_DIRECTORY
+unset GIT_ALTERNATE_OBJECT_DIRECTORIES
+
 echo "🔒 Git isolation enabled: GIT_CEILING_DIRECTORIES=$GIT_CEILING_DIRECTORIES"
 
 # Run unit and integration tests
