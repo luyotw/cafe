@@ -91,6 +91,9 @@ def get_repo_root(cwd: Optional[Path] = None) -> Path:
     從給定目錄開始向上搜尋，直到找到 .git 目錄或檔案。
     如果是 worktree（.git 是檔案），則解析 gitdir 找到主 repo。
 
+    尊重 GIT_CEILING_DIRECTORIES 環境變數，防止向上搜索超過指定邊界。
+    這對於防止測試污染真實 repository 非常重要。
+
     Args:
         cwd: 起始目錄（default: 當前目錄）
 
@@ -98,20 +101,38 @@ def get_repo_root(cwd: Optional[Path] = None) -> Path:
         Repository 根目錄的 Path 物件
 
     Raises:
-        ValueError: 如果不在 Git repository 中
+        ValueError: 如果不在 Git repository 中，或搜索被 ceiling 阻止
 
     Example:
         >>> repo_root = get_repo_root()
         >>> print(repo_root)  # /Users/me/projects/my-repo
     """
+    import os
+
     if cwd is None:
         cwd = Path.cwd()
     else:
         cwd = Path(cwd)
 
+    # 解析 GIT_CEILING_DIRECTORIES（可能包含多個路徑，用冒號分隔）
+    ceiling_dirs: set[Path] = set()
+    ceiling_env = os.environ.get("GIT_CEILING_DIRECTORIES")
+    if ceiling_env:
+        for ceiling_str in ceiling_env.split(":"):
+            if ceiling_str:  # 忽略空字串
+                ceiling_dirs.add(Path(ceiling_str).resolve())
+
     # 向上搜尋 .git
     current = cwd.resolve()
     while current != current.parent:
+        # 檢查是否到達 ceiling（在檢查 .git 之前）
+        # 如果當前目錄是 ceiling，則停止搜索
+        if current in ceiling_dirs:
+            raise ValueError(
+                f"Not in a Git repository: {cwd} "
+                f"(stopped at ceiling: {current})"
+            )
+
         git_path = current / ".git"
         if git_path.exists():
             # 找到 .git，檢查是目錄還是檔案
@@ -131,6 +152,8 @@ def get_repo_root(cwd: Optional[Path] = None) -> Path:
                     return main_repo_root
                 else:
                     raise ValueError(f"Invalid .git file format: {git_path}")
+
+        # 向上移動到父目錄
         current = current.parent
 
     # 沒有找到 .git

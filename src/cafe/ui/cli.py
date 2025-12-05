@@ -2256,6 +2256,51 @@ def template(
         raise typer.Exit(1)
 
 
+@app.command()
+def test() -> None:
+    """🧪 模擬 agent 執行測試（用於重現污染問題）。
+
+    執行 scripts/simulate_agent_test.sh 來模擬 agent 在 worktree 中的行為。
+    這個指令會：
+    1. 執行測試
+    2. 嘗試 commit（觸發 pre-commit hook）
+    3. 檢查是否產生污染 commits
+    """
+    import subprocess
+    from pathlib import Path
+
+    # 找到 script 檔案
+    script_path = Path(__file__).parent.parent.parent.parent / "scripts" / "simulate_agent_test.sh"
+
+    if not script_path.exists():
+        console.print(f"[red]Error: Script not found at {script_path}[/red]")
+        raise typer.Exit(1)
+
+    console.print("[bold blue]🤖 模擬 Agent 執行測試...[/bold blue]")
+    console.print(f"[dim]Script: {script_path}[/dim]")
+    console.print("")
+
+    try:
+        # 執行 script（不指定 cwd，使用當前目錄）
+        result = subprocess.run(
+            ["bash", str(script_path)],
+            # 不指定 cwd，讓它從當前目錄執行（這樣可以測試 worktree）
+            # 不指定 env，讓它繼承當前環境（模擬 agent 行為）
+        )
+
+        if result.returncode == 0:
+            console.print("")
+            console.print("[green]✅ 測試完成，沒有偵測到污染[/green]")
+        else:
+            console.print("")
+            console.print("[red]❌ 偵測到污染或測試失敗！[/red]")
+            raise typer.Exit(1)
+
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1)
+
+
 def main() -> None:
     """Entry point for CLI."""
     # Check if all dependencies are installed
