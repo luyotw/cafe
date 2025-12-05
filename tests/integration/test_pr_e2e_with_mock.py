@@ -3,7 +3,6 @@
 使用 CliRunner 測試 CLI 命令執行，用 CAFE_MOCK_AGENTS=true 避免真實 LLM 呼叫。
 """
 
-import subprocess
 import os
 from pathlib import Path
 from typing import Optional, List
@@ -27,22 +26,8 @@ class MockResult:
     stderr: str
 
 
-def init_git_repo(tmp_path: Path):
-    """初始化 git repository"""
-    subprocess.run(["git", "init"], cwd=str(tmp_path), capture_output=True)
-    subprocess.run(["git", "config", "user.name", "Test User"], cwd=str(tmp_path), capture_output=True)
-    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=str(tmp_path), capture_output=True)
-    subprocess.run(["git", "checkout", "-b", "main"], cwd=str(tmp_path), capture_output=True)
-    # Create initial commit
-    (tmp_path / "README.md").write_text("# Test Project\n")
-    subprocess.run(["git", "add", "."], cwd=str(tmp_path), capture_output=True)
-    subprocess.run(["git", "commit", "-m", "Initial commit"], cwd=str(tmp_path), capture_output=True)
-
-
 def setup_test_environment(tmp_path: Path, issue_name: str):
-    """設置測試環境：創建 spec.md 和 plan.md，初始化 git repo"""
-    # Initialize git repo
-    init_git_repo(tmp_path)
+    """設置測試環境：創建 spec.md 和 plan.md"""
 
     # 創建 spec.md
     spec_dir = tmp_path / ".cafe" / "issues" / issue_name / "spec"
@@ -216,9 +201,7 @@ class TestPRE2EMockErrorHandling:
         預期：失敗，錯誤訊息提示 spec file not found 或 branch not initialized
         """
         issue_name = "test-issue"
-        # Initialize git repo but don't create spec file
-        init_git_repo(tmp_path)
-        subprocess.run(["git", "checkout", "-b", issue_name], cwd=str(tmp_path), capture_output=True)
+        # Don't create spec file (git operations are mocked)
 
         # Run cafe pr (should fail)
         result = run_cafe_pr(tmp_path, issue_name)

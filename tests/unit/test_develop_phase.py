@@ -169,20 +169,8 @@ class TestPlanCheck:
 class TestIterativeFlow:
     """Test iterative execution flow."""
 
-    def test_execute_with_confirmed_status(self, tmp_path: Path, monkeypatch) -> None:
+    def test_execute_with_confirmed_status(self, tmp_path: Path) -> None:
         """測試收到 CONFIRMED 狀態碼後完成"""
-        import subprocess
-
-        # Initialize git repo
-        monkeypatch.chdir(tmp_path)
-        subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True, check=True)
-        subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=tmp_path, capture_output=True, check=True)
-        subprocess.run(["git", "config", "user.name", "Test User"], cwd=tmp_path, capture_output=True, check=True)
-        readme = tmp_path / "README.md"
-        readme.write_text("# Test")
-        subprocess.run(["git", "add", "."], cwd=tmp_path, capture_output=True, check=True)
-        subprocess.run(["git", "commit", "-m", "Initial"], cwd=tmp_path, capture_output=True, check=True)
-
         spec_file = tmp_path / ".cafe" / "issues" / "test" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True)
         spec_file.write_text("# Spec")

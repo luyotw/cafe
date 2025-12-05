@@ -4,7 +4,6 @@
 """
 
 import os
-import subprocess
 from pathlib import Path
 from unittest.mock import patch
 from typing import Optional, List
@@ -252,47 +251,6 @@ class TestSpecE2EMockContentValidation:
         assert isinstance(content, str)
 
 
-def run_cafe_spec_subprocess(
-    tmp_path: Path,
-    issue_name: str,
-    mock_response: str,
-    user_input: Optional[str] = None,
-    extra_args: Optional[List[str]] = None
-) -> MockResult:
-    """Helper function to run cafe spec command with mock using subprocess.run"""
-    args = ["cafe", "spec", "--no-interactive"]
-
-    # Add user input as CLI argument
-    if user_input:
-        args.extend(["--user-input", user_input])
-
-    if extra_args:
-        args.extend(extra_args)
-
-    # Set environment variables for mock
-    env = os.environ.copy()
-    env["CAFE_MOCK_AGENTS"] = "true"
-    if mock_response:
-        env["CAFE_MOCK_RESPONSE"] = mock_response
-
-    # Initialize git repo for the issue
-    init_git_repo_for_issue(tmp_path, issue_name)
-
-    result = subprocess.run(
-        args,
-        cwd=str(tmp_path),
-        capture_output=True,
-        text=True,
-        env=env,
-    )
-
-    return MockResult(
-        returncode=result.returncode,
-        stdout=result.stdout or "",
-        stderr=result.stderr or ""
-    )
-
-
 @pytest.mark.integration
 class TestSpecWithIssueId:
     """測試 --issue-id 功能"""
@@ -317,7 +275,7 @@ class TestSpecWithIssueId:
 """)
 
         # Run command with --issue-id (will fail on GitHub fetch, but that's expected)
-        result = run_cafe_spec_subprocess(
+        result = run_cafe_spec(
             tmp_path, issue_name,
             "CAFE_CONFIRMED\n\n# Login Feature Spec\n\nComplete requirements",
             user_input=None,
@@ -355,7 +313,7 @@ class TestSpecWithIssueId:
         spec_content = "CAFE_CONFIRMED\n\n# Complete Spec\n\nAll requirements documented"
 
         # Run command (will fail on GitHub interaction)
-        result = run_cafe_spec_subprocess(
+        result = run_cafe_spec(
             tmp_path, issue_name, spec_content,
             user_input=None,
             extra_args=["--issue-id", issue_id]

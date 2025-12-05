@@ -3,7 +3,6 @@
 使用 CliRunner 測試 CLI 命令執行，用 CAFE_MOCK_AGENTS=true 避免真實 LLM 呼叫。
 """
 
-import subprocess
 import os
 import json
 from pathlib import Path
@@ -30,6 +29,8 @@ class MockResult:
 
 def add_test_commit_to_branch(repo_path: Path):
     """Add a test commit to the current branch for review testing"""
+    from cafe.core.git import GitOperations
+
     test_file = repo_path / "test.py"
     test_file.write_text("""def hello():
     print("Hello, World!")
@@ -37,8 +38,9 @@ def add_test_commit_to_branch(repo_path: Path):
 if __name__ == "__main__":
     hello()
 """)
-    subprocess.run(["git", "add", "test.py"], cwd=str(repo_path), capture_output=True)
-    subprocess.run(["git", "commit", "-m", "Add hello function"], cwd=str(repo_path), capture_output=True)
+    git = GitOperations(repo_path)
+    git.run_git("add", ".")
+    git.commit("Add hello function")
 
 
 def setup_test_files(repo_path: Path, issue_name: str):
@@ -340,13 +342,9 @@ class TestReviewE2EMockDiffHandling:
         add_test_commit_to_branch(repo_path)
 
         # 取得最新 commit SHA
-        commit_result = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            cwd=str(repo_path),
-            capture_output=True,
-            text=True,
-        )
-        commit_sha = commit_result.stdout.strip()[:7]  # 取前 7 個字元
+        from cafe.core.git import GitOperations
+        git = GitOperations(repo_path)
+        commit_sha = git.run_git("rev-parse", "HEAD")[:7]  # 取前 7 個字元
 
         result = run_cafe_review(
             repo_path,
@@ -573,29 +571,33 @@ exit 1
         fake_gh.chmod(0o755)
 
         # 使用 fake gh 執行測試（修改 PATH）
-        cafe_cmd = "cafe" if subprocess.run(["which", "cafe"], capture_output=True).returncode == 0 else "./cafe"
-        args = [cafe_cmd, "review", "--no-interactive", "--pr-number", "10"]
+        args = ["review", "--no-interactive", "--pr-number", "10"]
 
-        env = os.environ.copy()
-        env["CAFE_MOCK_AGENTS"] = "true"
-        env["CAFE_MOCK_RESPONSE"] = "CAFE_CONFIRMED\n\n審查完成。"
-        env["PATH"] = f"{fake_gh_dir}:{env.get('PATH', '')}"
+        env_vars = {
+            "CAFE_MOCK_AGENTS": "true",
+            "CAFE_MOCK_RESPONSE": "CAFE_CONFIRMED\n\n審查完成。",
+            "PATH": f"{fake_gh_dir}:{os.environ.get('PATH', '')}"
+        }
 
-        result = subprocess.run(
-            args,
-            cwd=str(repo_path),
-            capture_output=True,
-            text=True,
-            env=env,
-        )
+        # Mock Git operations
+        with patch("cafe.ui.cli.GitOperations") as mock_git_cls:
+            mock_git_instance = mock_git_cls.return_value
+            mock_git_instance.is_valid_branch.return_value = True
+            mock_git_instance.get_current_branch.return_value = issue_name
+
+            with patch("cafe.phases.review_phase.GitOperations") as mock_phase_git:
+                mock_phase_git.return_value = mock_git_instance
+
+                with patch.dict(os.environ, env_vars):
+                    result = runner.invoke(app, args, catch_exceptions=False)
 
         # 應該成功完成（如果 get_pr_comments 失敗，會導致錯誤）
-        output = result.stdout + result.stderr
+        output = result.stdout or ""
         print("\n=== CLI Output ===")
         print(output)
         print("==================\n")
 
-        assert result.returncode == 0, f"指令應該成功執行，但返回碼是 {result.returncode}，輸出：{output}"
+        assert result.exit_code == 0, f"指令應該成功執行，但返回碼是 {result.exit_code}，輸出：{output}"
 
-        # 驗證審查完成
-        assert "passed" in output.lower() or "成功" in output.lower()
+        # 驗證審查完成 (檢查 PR comments 被載入)
+        assert "pr #10 comments will be reviewed" in output.lower() or "got 2 total comments" in output.lower()

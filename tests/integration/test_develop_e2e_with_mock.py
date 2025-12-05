@@ -3,7 +3,6 @@
 使用 CliRunner 測試 CLI 命令執行，用 CAFE_MOCK_AGENTS=true 避免真實 LLM 呼叫。
 """
 
-import subprocess
 import os
 import json
 from pathlib import Path
@@ -29,18 +28,10 @@ class MockResult:
     stderr: str
 
 
-def init_git_repo(tmp_path: Path):
-    """初始化 git repository"""
-    subprocess.run(["git", "init"], cwd=str(tmp_path), capture_output=True)
-    subprocess.run(["git", "config", "user.name", "Test User"], cwd=str(tmp_path), capture_output=True)
-    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=str(tmp_path), capture_output=True)
-    subprocess.run(["git", "checkout", "-b", "main"], cwd=str(tmp_path), capture_output=True)
-
-
 def setup_test_environment(tmp_path: Path, issue_name: str):
     """設置測試環境：創建 spec.md 和 plan.md，初始化 git repo"""
-    # Initialize git repo
-    init_git_repo(tmp_path)
+    # Initialize git repo (with GIT_CEILING_DIRECTORIES protection)
+    init_git_repo_for_issue(tmp_path, issue_name)
 
     # 創建 spec.md
     spec_dir = tmp_path / ".cafe" / "issues" / issue_name / "spec"
@@ -62,39 +53,6 @@ def setup_test_environment(tmp_path: Path, issue_name: str):
 ## 開發指南
 請按照以上任務清單逐步實作。
 """)
-
-
-def run_cafe_develop_subprocess(
-    tmp_path: Path,
-    issue_name: str,
-    mock_response: str,
-    extra_args: Optional[List[str]] = None
-) -> MockResult:
-    """Helper function to run cafe develop command with mock using subprocess.run"""
-    args = ["cafe", "develop", issue_name, "--no-interactive"]
-    if extra_args:
-        args.extend(extra_args)
-
-    env = os.environ.copy()
-    env["CAFE_MOCK_AGENTS"] = "true"
-    if mock_response:
-        env["CAFE_MOCK_RESPONSE"] = mock_response
-
-    init_git_repo_for_issue(tmp_path, issue_name)
-
-    result = subprocess.run(
-        args,
-        cwd=str(tmp_path),
-        capture_output=True,
-        text=True,
-        env=env,
-    )
-
-    return MockResult(
-        returncode=result.returncode,
-        stdout=result.stdout or "",
-        stderr=result.stderr or ""
-    )
 
 
 def run_cafe_develop(
@@ -498,8 +456,8 @@ class TestDevelopE2EMockErrorRecovery:
         """
         issue_name = "test-issue"
 
-        # Initialize git repo
-        init_git_repo(tmp_path)
+        # Initialize git repo (with GIT_CEILING_DIRECTORIES protection)
+        init_git_repo_for_issue(tmp_path, issue_name)
 
         # 只創建最基本的 spec 和 plan
         spec_dir = tmp_path / ".cafe" / "issues" / issue_name / "spec"
@@ -664,8 +622,7 @@ class TestDevelopE2EMockPRComments:
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
 
-        # Switch to the issue branch
-        subprocess.run(["git", "checkout", "-b", issue_name], cwd=str(tmp_path), capture_output=True)
+        # init_git_repo_for_issue already checked out to the issue branch
 
         # 創建一個假的 gh script 來返回 PR comments
         fake_gh_dir = tmp_path / "bin"
@@ -694,29 +651,29 @@ exit 1
         fake_gh.chmod(0o755)
 
         # 使用 fake gh 執行測試（修改 PATH）
-        cafe_cmd = "cafe" if subprocess.run(["which", "cafe"], capture_output=True).returncode == 0 else "./cafe"
-        args = [cafe_cmd, "develop", "--no-interactive", "--pr-number", "10"]
+        args = ["develop", "--no-interactive", "--pr-number", "10"]
 
-        env = os.environ.copy()
-        env["CAFE_MOCK_AGENTS"] = "true"
-        env["CAFE_MOCK_RESPONSE"] = "CAFE_CONFIRMED\n\n開發完成。"
-        env["PATH"] = f"{fake_gh_dir}:{env.get('PATH', '')}"
+        env_vars = {
+            "CAFE_MOCK_AGENTS": "true",
+            "CAFE_MOCK_RESPONSE": "CAFE_CONFIRMED\n\n開發完成。",
+            "PATH": f"{fake_gh_dir}:{os.environ.get('PATH', '')}"
+        }
 
-        result = subprocess.run(
-            args,
-            cwd=str(tmp_path),
-            capture_output=True,
-            text=True,
-            env=env,
-        )
+        original_cwd = os.getcwd()
+        try:
+            os.chdir(tmp_path)
+            with patch.dict(os.environ, env_vars):
+                result = runner.invoke(app, args, catch_exceptions=False)
+        finally:
+            os.chdir(original_cwd)
 
         # 應該成功完成（如果 get_pr_comments 失敗，會導致錯誤）
-        output = result.stdout + result.stderr
+        output = result.stdout or ""
         print("\n=== CLI Output ===")
         print(output)
         print("==================\n")
 
-        assert result.returncode == 0, f"指令應該成功執行，但返回碼是 {result.returncode}，輸出：{output}"
+        assert result.exit_code == 0, f"指令應該成功執行，但返回碼是 {result.exit_code}，輸出：{output}"
 
         # 驗證開發完成
         assert "completed" in output.lower() or "成功" in output.lower()

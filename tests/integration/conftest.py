@@ -1,7 +1,6 @@
 """Shared fixtures and helpers for integration tests."""
 
 import os
-import subprocess
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Optional
@@ -66,39 +65,20 @@ def prepared_repo_factory(tmp_path, monkeypatch):
         # Change to repo directory
         monkeypatch.chdir(repo_path)
 
-        # Initialize git repo
-        subprocess.run(["git", "init"], cwd=repo_path, capture_output=True, check=True)
-        subprocess.run(
-            ["git", "config", "user.email", "test@example.com"],
-            cwd=repo_path,
-            capture_output=True,
-            check=True
-        )
-        subprocess.run(
-            ["git", "config", "user.name", "Test User"],
-            cwd=repo_path,
-            capture_output=True,
-            check=True
-        )
+        # Initialize git repo using GitOperations
+        git = GitOperations(repo_path)
+        git.run_git("init")
+        git.run_git("config", "user.email", "test@example.com")
+        git.run_git("config", "user.name", "Test User")
 
         # Create initial commit on main branch
         readme = repo_path / "README.md"
         readme.write_text("# Test Project")
-        subprocess.run(["git", "add", "."], cwd=repo_path, capture_output=True, check=True)
-        subprocess.run(
-            ["git", "commit", "-m", "Initial commit"],
-            cwd=repo_path,
-            capture_output=True,
-            check=True
-        )
+        git.run_git("add", ".")
+        git.commit("Initial commit")
 
         # Create and checkout issue branch
-        subprocess.run(
-            ["git", "checkout", "-b", issue_name],
-            cwd=repo_path,
-            capture_output=True,
-            check=True
-        )
+        git.run_git("checkout", "-b", issue_name)
 
         # Create .cafe/issues/{issue_name}/ directory structure
         issue_dir = repo_path / ".cafe" / "issues" / issue_name
@@ -133,39 +113,20 @@ def git_repo(tmp_path, monkeypatch):
 
     monkeypatch.chdir(tmp_path)
 
-    # Initialize git repo
-    subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True, check=True)
-    subprocess.run(
-        ["git", "config", "user.email", "test@example.com"],
-        cwd=tmp_path,
-        capture_output=True,
-        check=True
-    )
-    subprocess.run(
-        ["git", "config", "user.name", "Test User"],
-        cwd=tmp_path,
-        capture_output=True,
-        check=True
-    )
+    # Initialize git repo using GitOperations
+    git = GitOperations(tmp_path)
+    git.run_git("init")
+    git.run_git("config", "user.email", "test@example.com")
+    git.run_git("config", "user.name", "Test User")
 
     # Create initial commit
     readme = tmp_path / "README.md"
     readme.write_text("# Test Project")
-    subprocess.run(["git", "add", "."], cwd=tmp_path, capture_output=True, check=True)
-    subprocess.run(
-        ["git", "commit", "-m", "Initial commit"],
-        cwd=tmp_path,
-        capture_output=True,
-        check=True
-    )
+    git.run_git("add", ".")
+    git.commit("Initial commit")
 
     # Create and checkout test-issue branch
-    subprocess.run(
-        ["git", "checkout", "-b", "test-issue"],
-        cwd=tmp_path,
-        capture_output=True,
-        check=True
-    )
+    git.run_git("checkout", "-b", "test-issue")
 
     return tmp_path
 
@@ -233,46 +194,26 @@ def init_git_repo_for_issue(
                     If provided, uses it for better isolation. Otherwise uses os.environ.
     """
     with _git_env_isolation(tmp_path, monkeypatch):
+        git = GitOperations(tmp_path)
+
         if (tmp_path / ".git").exists():
             # Git repo already exists, just checkout to issue branch
-            subprocess.run(
-                ["git", "checkout", "-B", issue_name],
-                cwd=tmp_path,
-                capture_output=True,
-                check=False  # Don't fail if branch doesn't exist
-            )
+            try:
+                git.run_git("checkout", "-B", issue_name)
+            except:
+                pass  # Don't fail if branch doesn't exist
             return
 
-        # Initialize git repo
-        subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True, check=True)
-        subprocess.run(
-            ["git", "config", "user.email", "test@example.com"],
-            cwd=tmp_path,
-            capture_output=True,
-            check=True
-        )
-        subprocess.run(
-            ["git", "config", "user.name", "Test User"],
-            cwd=tmp_path,
-            capture_output=True,
-            check=True
-        )
+        # Initialize git repo using GitOperations
+        git.run_git("init")
+        git.run_git("config", "user.email", "test@example.com")
+        git.run_git("config", "user.name", "Test User")
 
         # Create initial commit
         readme = tmp_path / "README.md"
         readme.write_text("# Test Project")
-        subprocess.run(["git", "add", "."], cwd=tmp_path, capture_output=True, check=True)
-        subprocess.run(
-            ["git", "commit", "-m", "Initial commit"],
-            cwd=tmp_path,
-            capture_output=True,
-            check=True
-        )
+        git.run_git("add", ".")
+        git.commit("Initial commit")
 
         # Create and checkout issue branch
-        subprocess.run(
-            ["git", "checkout", "-b", issue_name],
-            cwd=tmp_path,
-            capture_output=True,
-            check=True
-        )
+        git.run_git("checkout", "-b", issue_name)
