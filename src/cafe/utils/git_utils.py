@@ -149,12 +149,57 @@ def get_repo_root(cwd: Optional[Path] = None) -> Path:
                     main_git_dir = gitdir.parent.parent
                     # 主 repo root 是 .git 的父目錄
                     main_repo_root = main_git_dir.parent
+
+                    # 🔥 關鍵修復：檢查主 repo root 是否在 ceiling 之外
+                    # Ceiling 語意：只允許在 ceiling 目錄內部搜索
+                    # 如果 worktree 指向的主 repo 不在 ceiling 內部，應該拋出錯誤
+                    if ceiling_dirs:
+                        # 檢查 main_repo_root 是否在任何 ceiling 之內
+                        is_under_any_ceiling = False
+                        for ceiling in ceiling_dirs:
+                            try:
+                                rel = main_repo_root.relative_to(ceiling)
+                                # main_repo_root 在 ceiling 之下，允許
+                                is_under_any_ceiling = True
+                                break
+                            except ValueError as e:
+                                # main_repo_root 不在這個 ceiling 之下，繼續檢查其他 ceiling
+                                continue
+
+                        if not is_under_any_ceiling:
+                            # main_repo_root 不在任何 ceiling 之內，拋出錯誤
+                            raise ValueError(
+                                f"Not in a Git repository: {cwd} "
+                                f"(worktree points to repo outside ceiling: {main_repo_root})"
+                            )
+
                     return main_repo_root
                 else:
                     raise ValueError(f"Invalid .git file format: {git_path}")
 
-        # 向上移動到父目錄
-        current = current.parent
+        # 向上移動到父目錄前，檢查 parent 是否在 ceiling 之外
+        # Ceiling 語意：只允許在 ceiling 目錄內部搜索
+        parent = current.parent
+        if ceiling_dirs:
+            # 檢查 parent 是否在任何 ceiling 之內
+            is_under_any_ceiling = False
+            for ceiling in ceiling_dirs:
+                try:
+                    parent.relative_to(ceiling)
+                    # parent 在 ceiling 之下，允許繼續向上搜索
+                    is_under_any_ceiling = True
+                    break
+                except ValueError:
+                    # parent 不在這個 ceiling 之下，繼續檢查其他 ceiling
+                    continue
+
+            if not is_under_any_ceiling:
+                # parent 不在任何 ceiling 之內，停止搜索
+                raise ValueError(
+                    f"Not in a Git repository: {cwd} (stopped at ceiling boundary)"
+                )
+
+        current = parent
 
     # 沒有找到 .git
     raise ValueError(f"Not in a Git repository: {cwd}")

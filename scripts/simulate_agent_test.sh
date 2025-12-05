@@ -41,7 +41,7 @@ echo "=== 測試完成 ==="
 echo ""
 echo "=== 檢查污染狀況 ==="
 echo "檢查 'Initial' 或 'Initial commit' commits："
-git log --oneline --grep="^Initial" --grep="^Initial commit" -5 || echo "沒有找到污染 commits"
+git --no-pager log --oneline --grep="^Initial" --grep="^Initial commit" -5 || echo "沒有找到污染 commits"
 
 # 創建一個測試檔案並嘗試 commit（這會觸發 pre-commit hook）
 echo ""
@@ -60,16 +60,16 @@ if git commit -m "Test: agent simulation commit" ; then
     # 檢查最新的 commit
     echo ""
     echo "=== 最新 commits ==="
-    git log --oneline -3
+    git --no-pager log --oneline -3
 
     # 檢查是否產生污染
     echo ""
     echo "=== 檢查是否產生新的污染 commits ==="
     # 檢查 "Initial" 或 "Initial commit" commits
-    POLLUTION_COUNT=$(git log --oneline --grep="^Initial" --since="1 minute ago" | wc -l)
+    POLLUTION_COUNT=$(git --no-pager log --oneline --grep="^Initial" --since="1 minute ago" | wc -l)
     if [ "$POLLUTION_COUNT" -gt 0 ]; then
         echo "⚠️⚠️⚠️  偵測到 $POLLUTION_COUNT 個新的污染 commits！"
-        git log --oneline --grep="^Initial" --since="1 minute ago"
+        git --no-pager log --oneline --grep="^Initial" --since="1 minute ago"
         exit 1
     else
         echo "✓ 沒有產生新的污染 commits"

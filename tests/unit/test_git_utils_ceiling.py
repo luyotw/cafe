@@ -195,3 +195,44 @@ class TestGetRepoRootPreservesExistingBehavior:
 
         with pytest.raises(ValueError, match="Not in a Git repository"):
             get_repo_root()
+
+    def test_worktree_respects_ceiling(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """測試：當在 worktree 中且 worktree 指向 ceiling 之外的主 repo 時，應該被阻止。
+
+        這是修復測試污染的關鍵測試：
+        1. 在 tmp_path 中建立一個 worktree（.git 是檔案）
+        2. .git 檔案指向真實 repo（在 ceiling 之外）
+        3. 設置 ceiling 為 tmp_path.parent
+        4. get_repo_root() 應該拋出錯誤，而不是返回真實 repo
+        """
+        # 建立主 repo（在 ceiling 之外 - 更上層的目錄）
+        # tmp_path = /T/pytest-xxx/test0
+        # ceiling = tmp_path.parent = /T/pytest-xxx
+        # real_repo = ceiling.parent / "real_repo" = /T/real_repo (在 ceiling 之上！)
+        real_repo = tmp_path.parent.parent / "real_repo"
+        real_repo.mkdir(exist_ok=True)  # May already exist from other tests
+        real_git = real_repo / ".git"
+        real_git.mkdir(exist_ok=True)
+
+        # 建立 worktree 目錄（在 ceiling 之內）
+        worktree_dir = tmp_path / "test_worktree"
+        worktree_dir.mkdir()
+
+        # 建立 .git 檔案指向主 repo
+        git_file = worktree_dir / ".git"
+        gitdir_path = real_git / "worktrees" / "test_branch"
+        gitdir_path.mkdir(parents=True, exist_ok=True)
+        git_file.write_text(f"gitdir: {gitdir_path}\n")
+
+        # 設置 ceiling（tmp_path.parent 阻止搜索到 real_repo）
+        ceiling = tmp_path.parent
+        monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(ceiling))
+
+        # 從 worktree 目錄執行
+        monkeypatch.chdir(worktree_dir)
+
+        # 應該拋出錯誤，因為 worktree 指向的主 repo 在 ceiling 之外
+        with pytest.raises(ValueError, match="worktree points to repo"):
+            get_repo_root()
