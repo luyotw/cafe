@@ -323,7 +323,6 @@ class SpecPhase(Phase):
                 "ls",
                 "web_fetch",
                 "web_search",
-                f"write({spec_file_pattern})",
                 f"edit({spec_file_pattern})",
             ]
             allowed_tools = self._merge_allowed_tools(base_allowed_tools)

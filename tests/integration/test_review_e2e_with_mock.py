@@ -280,7 +280,7 @@ class TestReviewE2EMockFileValidation:
             assert any("read" in tool for tool in allowed_tools)
             assert any("git diff" in tool or "bash(git diff)" in tool for tool in allowed_tools)
             assert any("git log" in tool or "bash(git log)" in tool for tool in allowed_tools)
-            assert any("write" in tool for tool in allowed_tools)
+            assert any("edit" in tool for tool in allowed_tools)
 
     @pytest.mark.skip(reason="需要使用真實 Git 操作而非 mock，將在後續修復")
     def test_no_diff_should_fail(self, prepared_repo_factory):

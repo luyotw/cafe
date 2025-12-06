@@ -167,11 +167,16 @@ class ReviewPhase(Phase):
                 "bash(git diff)",               # View code changes
                 "bash(git show)",               # View specific commit details
                 "bash(git status)",               # View specific commit details
-                f"write({review_file_pattern})",  # Allow writing to specific review file
+                f"edit({review_file_pattern})",  # Allow editing to specific review file
             ]
 
             # Merge base tools with previous iteration's tools (if any)
             allowed_tools = self._merge_allowed_tools(base_allowed_tools)
+
+            # Create review file with placeholder content to ensure it exists for edit tool
+            review_file_path.parent.mkdir(parents=True, exist_ok=True)
+            if not review_file_path.exists():
+                review_file_path.write_text("# TODO: Write review content here\n")
 
             # Execute review using base class method
             result, response = self._execute_and_handle_agent_response(
@@ -187,12 +192,15 @@ class ReviewPhase(Phase):
             )
 
             # Save review to review_XXX.md file
-            # Note: Real agent would write via Write tool, but we save it here to ensure
-            # the file exists even in mock mode or if agent doesn't execute Write tool
+            # Note: Real agent would write via Edit tool, but we save it here to ensure
+            # the file has actual content in mock mode or if agent doesn't execute Edit tool
             review_file_name = f"review_{self.iteration:03d}.md"
             review_file_path = self.review_dir / review_file_name
-            if not review_file_path.exists():
-                # Only write if agent didn't already write it via Write tool
+            # Check if file is placeholder or doesn't exist
+            is_placeholder = (review_file_path.exists() and
+                            review_file_path.read_text().strip() == "# TODO: Write review content here")
+            if not review_file_path.exists() or is_placeholder:
+                # Write response if agent didn't write it via Edit tool
                 review_file_path.write_text(response, encoding="utf-8")
 
             # If base class returned a result, use it
