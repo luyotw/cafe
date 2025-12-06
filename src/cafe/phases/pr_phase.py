@@ -29,6 +29,7 @@ class PRPhase(Phase):
         workflow_mode: WorkflowMode,
         issue_id: Optional[str] = None,
         issue_name: Optional[str] = None,
+        dev_agent: str = "David",
         draft: bool = True,
         custom_title: Optional[str] = None,
         custom_body: Optional[str] = None,
@@ -48,6 +49,7 @@ class PRPhase(Phase):
             workflow_mode: Workflow mode (local or github)
             issue_id: GitHub issue ID (required for github mode)
             issue_name: Issue name (for local mode branch naming)
+            dev_agent: Developer agent name (default: David)
             draft: Create as draft PR (default: True)
             custom_title: Custom PR title (None for auto-generation)
             custom_body: Custom PR body (None for auto-generation)
@@ -65,6 +67,7 @@ class PRPhase(Phase):
         self.workflow_mode = workflow_mode
         self.issue_id = issue_id
         self.issue_name = issue_name
+        self.dev_agent = dev_agent
         self.draft = draft
         self.custom_title = custom_title
         self.custom_body = custom_body
@@ -476,7 +479,7 @@ class PRPhase(Phase):
 
         # Use common agent execution method (handles all history saving automatically)
         result, response = self._execute_and_handle_agent_response(
-            agent_name="David",
+            agent_name=self.dev_agent,
             user_input="",  # No user input for PR generation
             valid_status_codes=[PhaseStatusCode.CONFIRMED],
             allowed_tools=allowed_tools,

@@ -145,6 +145,15 @@ class Phase(ABC):
         # 更新 phase 特定資料
         history_data.update(phase_specific_data)
 
+        # 確保必須儲存的欄位存在（如果 phase_specific_data 沒有提供，則設為預設值）
+        # 這些欄位在除錯和追蹤時非常重要，應該總是存在
+        if "response" not in history_data:
+            history_data["response"] = None
+        if "permission_denials" not in history_data:
+            history_data["permission_denials"] = []
+        if "streaming_log" not in history_data:
+            history_data["streaming_log"] = []
+
         # 更新共用的 agent metadata
         history_data["prompt"] = prompt
         history_data["cli"] = agent_cli
@@ -417,7 +426,8 @@ class Phase(ABC):
             self._update_iteration_history(
                 phase_specific_data={
                     "response": response,
-                    "permission_denials": [denial.model_dump() for denial in permission_denials]
+                    "permission_denials": [denial.model_dump() for denial in permission_denials],
+                    "streaming_log": streaming_log
                 },
                 prompt=prompt,
                 agent_cli=agent_cli,

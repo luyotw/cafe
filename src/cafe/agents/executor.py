@@ -264,13 +264,20 @@ class AgentExecutor:
         Raises:
             AgentExecutionError: If execution fails
         """
-        process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            bufsize=1,  # Line buffered
-        )
+        try:
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                bufsize=1,  # Line buffered
+            )
+        except FileNotFoundError as e:
+            # CLI command not found - provide user-friendly error
+            cli_name = cmd[0] if cmd else "unknown"
+            raise AgentExecutionError(
+                f"CLI tool '{cli_name}' not found. Please install it or configure a different agent CLI in .cafe/config.yaml"
+            ) from e
 
         # Check stderr first for immediate errors (e.g., session locked)
         import select
