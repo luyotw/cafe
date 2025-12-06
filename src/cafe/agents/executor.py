@@ -426,8 +426,9 @@ class AgentExecutor:
             final_response = response_text if response_text else ''.join(output_lines)
             final_streaming_log = streaming_log if streaming_log else []
         else:
-            # Copilot style: 最後一行作為 response，所有行作為 streaming_log
-            final_response = output_lines[-1] if output_lines else ""
+            # Copilot/non-JSON style: 完整輸出作為 response
+            # 所有行（包含換行符）組合成完整文本
+            final_response = ''.join(output_lines) if output_lines else ""
             final_streaming_log = output_lines
 
         return AgentResponse(

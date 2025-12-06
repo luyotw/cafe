@@ -601,8 +601,8 @@ class TestStreamingExecution:
                 parse_stream_json=False,
             )
 
-        # Check response (should be last line only for copilot style)
-        assert agent_response.response == "Line 3\n"
+        # Check response (should be complete output for copilot style)
+        assert agent_response.response == "Line 1\nLine 2\nLine 3\n"
         assert isinstance(agent_response.token_usage, TokenUsage)
         # Check streaming_log (should contain all lines)
         assert agent_response.streaming_log == ["Line 1\n", "Line 2\n", "Line 3\n"]
@@ -833,8 +833,8 @@ class TestCopilotStreamingExecution:
              patch("sys.platform", "win32"):
             agent_response = executor._execute_copilot("Test prompt")
 
-            # For copilot style, response is last line only
-            assert agent_response.response == "Copilot response line 2\n"
+            # For copilot style, response is complete output (all lines joined)
+            assert agent_response.response == "Copilot response line 1\nCopilot response line 2\n"
             # streaming_log contains all lines
             assert agent_response.streaming_log == ["Copilot response line 1\n", "Copilot response line 2\n"]
 
