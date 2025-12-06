@@ -1928,17 +1928,13 @@ class TestPlanPhaseFilePermissions:
         call_kwargs = agent_manager.execute.call_args
         allowed_tools = call_kwargs[1].get("allowed_tools")
 
-        # Should have read, write(plan.md), edit(plan.md)
+        # Should have read, edit(plan.md) (write removed since no CLI supports file-specific write)
         assert "read" in allowed_tools
-        # Check for write and edit with plan file path
-        write_tools = [t for t in allowed_tools if t.startswith("write(")]
+        # Check for edit with plan file path
         edit_tools = [t for t in allowed_tools if t.startswith("edit(")]
 
-        assert len(write_tools) >= 1, "Should have at least one write permission"
         assert len(edit_tools) >= 1, "Should have at least one edit permission"
 
         # Verify the paths point to plan_001.md (versioned file)
-        assert any("plan_001.md" in tool for tool in write_tools), \
-            f"Write permission should include plan_001.md path, got: {write_tools}"
         assert any("plan_001.md" in tool for tool in edit_tools), \
             f"Edit permission should include plan_001.md path, got: {edit_tools}"

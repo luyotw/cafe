@@ -117,33 +117,27 @@ class TestSpecPhaseAllowedToolsPaths:
         assert result.status == PhaseStatus.COMPLETED
         assert len(captured_tools) > 0
 
-        # 檢查最後一次呼叫的 allowed_tools
+        # 檢查最後一次呼叫的 allowed_tools (write removed, only edit remains)
         tools = captured_tools[-1]
-        assert any("write(" in tool for tool in tools), f"No write tool found in {tools}"
         assert any("edit(" in tool for tool in tools), f"No edit tool found in {tools}"
 
-        # 找出 write 和 edit 工具的路徑
-        write_tool = next(t for t in tools if "write(" in t)
+        # 找出 edit 工具的路徑
         edit_tool = next(t for t in tools if "edit(" in t)
 
         # 關鍵斷言：路徑應該是相對路徑（git ignore 格式：以 / 開頭但不包含絕對路徑）
-        # 格式應該是：write(/.cafe/issues/test-issue/spec/spec_001.md)
-        # 不應該是：write(/var/folders/.../my-repo/.cafe/issues/test-issue/spec/spec_001.md)
+        # 格式應該是：edit(/.cafe/issues/test-issue/spec/spec_001.md)
+        # 不應該是：edit(/var/folders/.../my-repo/.cafe/issues/test-issue/spec/spec_001.md)
 
-        # 提取路徑（去掉 write() 或 edit() 包裝）
-        write_path = write_tool.replace("write(", "").replace(")", "")
+        # 提取路徑（去掉 edit() 包裝）
         edit_path = edit_tool.replace("edit(", "").replace(")", "")
 
         # 路徑應該以 .cafe 開頭（普通相對路徑，不帶 / 前綴）
-        assert write_path.startswith(".cafe"), f"Expected path to start with '.cafe' but got: {write_path}"
         assert edit_path.startswith(".cafe"), f"Expected path to start with '.cafe' but got: {edit_path}"
 
         # 路徑不應該以 / 開頭（不是 git ignore 格式）
-        assert not write_path.startswith("/"), f"Path should not start with '/' but got: {write_path}"
         assert not edit_path.startswith("/"), f"Path should not start with '/' but got: {edit_path}"
 
         # 路徑應該包含正確的 issue 路徑
-        assert ".cafe/issues/test-issue/spec/" in write_path, f"Expected .cafe/issues/test-issue/spec/ in {write_path}"
         assert ".cafe/issues/test-issue/spec/" in edit_path, f"Expected .cafe/issues/test-issue/spec/ in {edit_path}"
 
     @pytest.mark.skip(reason="Worktree support requires Phase base class refactor - tracked in issue #TODO")
@@ -295,22 +289,18 @@ class TestPlanPhaseAllowedToolsPaths:
         assert len(captured_tools) > 0
 
         tools = captured_tools[-1]
-        write_tool = next(t for t in tools if "write(" in t)
+        # Only check for edit (write removed since no CLI supports file-specific write)
         edit_tool = next(t for t in tools if "edit(" in t)
 
         # 提取路徑
-        write_path = write_tool.replace("write(", "").replace(")", "")
         edit_path = edit_tool.replace("edit(", "").replace(")", "")
 
         # 關鍵斷言：路徑應該是普通相對路徑（不帶 / 前綴）
-        assert write_path.startswith(".cafe"), f"Expected path to start with '.cafe' but got: {write_path}"
         assert edit_path.startswith(".cafe"), f"Expected path to start with '.cafe' but got: {edit_path}"
 
         # 路徑不應該以 / 開頭（不是 git ignore 格式）
-        assert not write_path.startswith("/"), f"Path should not start with '/' but got: {write_path}"
         assert not edit_path.startswith("/"), f"Path should not start with '/' but got: {edit_path}"
 
-        assert ".cafe/issues/test-issue/plan/" in write_path, f"Expected .cafe/issues/test-issue/plan/ in {write_path}"
         assert ".cafe/issues/test-issue/plan/" in edit_path, f"Expected .cafe/issues/test-issue/plan/ in {edit_path}"
 
     @pytest.mark.skip(reason="Worktree support requires Phase base class refactor - tracked in issue #TODO")

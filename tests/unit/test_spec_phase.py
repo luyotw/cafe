@@ -859,7 +859,7 @@ class TestSpecPhaseFilePermissions:
     """測試 SpecPhase 的檔案權限設定"""
 
     def test_uses_precise_file_permissions_for_spec_file(self, tmp_path: Path, mock_git_ops: MagicMock, monkeypatch) -> None:
-        """測試使用精細的檔案路徑授權 (write/edit spec.md)"""
+        """測試使用精細的檔案路徑授權 (edit spec.md)"""
         monkeypatch.chdir(tmp_path)
 
         # Setup - Don't create spec file, let execute() create it
@@ -891,19 +891,15 @@ class TestSpecPhaseFilePermissions:
         call_kwargs = agent_manager.execute.call_args
         allowed_tools = call_kwargs[1].get("allowed_tools")
 
-        # Should have read, write(spec.md), edit(spec.md)
+        # Should have read, edit(spec.md) (write removed since no CLI supports file-specific write)
         assert "read" in allowed_tools
-        # Check for write and edit with spec file path
-        write_tools = [t for t in allowed_tools if t.startswith("write(")]
+        # Check for edit with spec file path
         edit_tools = [t for t in allowed_tools if t.startswith("edit(")]
 
-        assert len(write_tools) >= 1, "Should have at least one write permission"
         assert len(edit_tools) >= 1, "Should have at least one edit permission"
 
         # Verify the paths point to spec_001.md (versioned file)
         spec_path_str = str(spec_file)
-        assert any(spec_path_str in tool or "spec_001.md" in tool for tool in write_tools), \
-            f"Write permission should include spec_001.md path, got: {write_tools}"
         assert any(spec_path_str in tool or "spec_001.md" in tool for tool in edit_tools), \
             f"Edit permission should include spec_001.md path, got: {edit_tools}"
 

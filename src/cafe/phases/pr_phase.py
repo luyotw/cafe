@@ -401,10 +401,8 @@ class PRPhase(Phase):
             plan_file = plan_dir / "plan.md"
 
         # Get commits for context
-        main_branch = self.git_ops.get_main_branch()
-        commits = self.git_ops.get_commits_between(
-            base=f"origin/{main_branch}", head="HEAD"
-        )
+        # Use shared method to get only commits from current feature branch
+        commits = self._get_current_branch_commits(self.git_ops, self.base_branch)
 
         # Build issue reference for GitHub mode
         issue_instruction = f"\n- 在 body.md 開頭加上 `Closes #{self.issue_id}`" if self.workflow_mode == WorkflowMode.GITHUB else ""
@@ -467,12 +465,20 @@ class PRPhase(Phase):
         # Increment iteration counter before agent execution
         self.iteration += 1
 
-        # Set allowed tools for writing
+        # Set allowed tools for editing
         allowed_tools = ["read", "grep", "glob", "ls", "web_fetch", "web_search"]
+
+        # Touch files with placeholder content before agent execution to ensure they exist for edit tool
         if generate_title:
-            allowed_tools.append(f"write({title_file_pattern})")
+            title_file.parent.mkdir(parents=True, exist_ok=True)
+            if not title_file.exists():
+                title_file.write_text("# TODO: Write PR title here\n")
+            allowed_tools.append(f"edit({title_file_pattern})")
         if generate_body:
-            allowed_tools.append(f"write({body_file_pattern})")
+            body_file.parent.mkdir(parents=True, exist_ok=True)
+            if not body_file.exists():
+                body_file.write_text("# TODO: Write PR body here\n")
+            allowed_tools.append(f"edit({body_file_pattern})")
 
         # Store prompt for _generate_prompt method
         self._current_prompt = full_prompt
@@ -481,7 +487,7 @@ class PRPhase(Phase):
         result, response = self._execute_and_handle_agent_response(
             agent_name=self.dev_agent,
             user_input="",  # No user input for PR generation
-            valid_status_codes=[PhaseStatusCode.CONFIRMED],
+            valid_status_codes=[PhaseStatusCode.CONFIRMED, PhaseStatusCode.NEED_PERMISSION],
             allowed_tools=allowed_tools,
             complete_codes=[PhaseStatusCode.CONFIRMED],
         )

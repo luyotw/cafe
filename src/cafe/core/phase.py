@@ -1564,6 +1564,21 @@ class Phase(ABC):
         current_branch = git_ops.get_current_branch()
         return Path(f".cafe/issues/{current_branch}")
 
+    def _get_current_branch_commits(self, git_ops: "GitOperations", base_branch: str) -> str:
+        """Get commits from current branch that are not in base branch（共用方法）。
+
+        這個方法用於獲取當前 feature branch 上新增的 commits，不包含 base branch 上的 commits。
+        使用 git log base_branch..HEAD 格式來只顯示當前 branch 的 commits。
+
+        Args:
+            git_ops: GitOperations instance to get commits
+            base_branch: Base branch name (e.g., "main", "develop")
+
+        Returns:
+            String containing commit list in oneline format
+        """
+        return git_ops.get_commits_between(base=base_branch, head="HEAD")
+
     def _get_versioned_file_path(
         self,
         phase_name: str,

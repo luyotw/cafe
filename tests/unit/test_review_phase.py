@@ -595,12 +595,9 @@ class TestReviewResultSaving:
             assert "bash(git diff)" in history_data["allowed_tools"]
             assert "bash(git show)" in history_data["allowed_tools"]
             assert "bash(git status)" in history_data["allowed_tools"]
-            assert any("write(/.cafe/issues/myissue/review/review_" in tool for tool in history_data["allowed_tools"])
+            # ReviewPhase now uses edit instead of write (no CLI supports file-specific write)
+            assert any("edit(/.cafe/issues/myissue/review/review_" in tool for tool in history_data["allowed_tools"])
             assert history_data["denied_tools"] is None  # Default when not specified
-            # ReviewPhase should NOT allow edit/replace - agent should only write new file, not modify existing ones
-            allowed_tools_lower = [t.lower() for t in history_data["allowed_tools"]]
-            assert "edit" not in allowed_tools_lower, "ReviewPhase should not have edit permission"
-            assert "replace" not in allowed_tools_lower, "ReviewPhase should not have replace permission"
         finally:
             os.chdir(original_dir)
 
