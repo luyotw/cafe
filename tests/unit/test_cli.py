@@ -1,6 +1,7 @@
 """Tests for CLI."""
 
 import pytest
+import typer
 from pathlib import Path
 from typer.testing import CliRunner
 from unittest.mock import MagicMock, Mock, patch
@@ -904,3 +905,82 @@ worktree_path: {worktree_path}
         # Verify no git operations were performed
         mock_git_instance.checkout_branch.assert_not_called()
         mock_git_instance.delete_branch.assert_not_called()
+
+
+class TestEditFileWithEditor:
+    """測試 _edit_file_with_editor 函式"""
+
+    @patch("cafe.ui.cli.subprocess.run")
+    @patch.dict("os.environ", {"EDITOR": "nano"})
+    def test_edit_file_with_custom_editor(
+        self, mock_subprocess: Mock, tmp_path: Path
+    ) -> None:
+        """測試使用 $EDITOR 環境變數開啟檔案"""
+        from cafe.ui.cli import _edit_file_with_editor
+
+        # Setup
+        test_file = tmp_path / "test.md"
+        test_file.write_text("test content")
+        mock_subprocess.return_value = Mock(returncode=0)
+
+        # Execute
+        _edit_file_with_editor(test_file)
+
+        # Verify
+        mock_subprocess.assert_called_once_with(["nano", str(test_file)], check=True)
+
+    @patch("cafe.ui.cli.subprocess.run")
+    @patch.dict("os.environ", {}, clear=True)
+    def test_edit_file_with_default_vim(
+        self, mock_subprocess: Mock, tmp_path: Path
+    ) -> None:
+        """測試預設使用 vim 作為編輯器"""
+        from cafe.ui.cli import _edit_file_with_editor
+
+        # Setup
+        test_file = tmp_path / "test.md"
+        test_file.write_text("test content")
+        mock_subprocess.return_value = Mock(returncode=0)
+
+        # Execute
+        _edit_file_with_editor(test_file)
+
+        # Verify
+        mock_subprocess.assert_called_once_with(["vim", str(test_file)], check=True)
+
+    @patch("cafe.ui.cli.subprocess.run")
+    @patch.dict("os.environ", {"EDITOR": "nonexistent-editor"})
+    def test_edit_file_editor_not_found(
+        self, mock_subprocess: Mock, tmp_path: Path
+    ) -> None:
+        """測試編輯器不存在時的錯誤處理"""
+        from cafe.ui.cli import _edit_file_with_editor
+
+        # Setup
+        test_file = tmp_path / "test.md"
+        test_file.write_text("test content")
+        mock_subprocess.side_effect = FileNotFoundError()
+
+        # Execute & Verify
+        with pytest.raises(typer.Exit) as exc_info:
+            _edit_file_with_editor(test_file)
+        assert exc_info.value.exit_code == 1
+
+    @patch("cafe.ui.cli.subprocess.run")
+    @patch.dict("os.environ", {"EDITOR": "vim"})
+    def test_edit_file_editor_execution_failed(
+        self, mock_subprocess: Mock, tmp_path: Path
+    ) -> None:
+        """測試編輯器執行失敗時的錯誤處理"""
+        from cafe.ui.cli import _edit_file_with_editor
+        import subprocess
+
+        # Setup
+        test_file = tmp_path / "test.md"
+        test_file.write_text("test content")
+        mock_subprocess.side_effect = subprocess.CalledProcessError(1, "vim")
+
+        # Execute & Verify
+        with pytest.raises(typer.Exit) as exc_info:
+            _edit_file_with_editor(test_file)
+        assert exc_info.value.exit_code == 1

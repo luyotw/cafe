@@ -1,5 +1,7 @@
 """Command-line interface for CAFE."""
 
+import os
+import subprocess
 import sys
 from pathlib import Path
 from typing import List, Optional
@@ -156,6 +158,30 @@ def _get_latest_versioned_file(phase_name: str, issue_name: str) -> Optional[Pat
         return base_file
 
     return None
+
+
+def _edit_file_with_editor(file_path: Path) -> None:
+    """Open a file in the user's editor.
+
+    Args:
+        file_path: Path to the file to edit
+
+    Raises:
+        typer.Exit: If editor is not found or execution fails
+    """
+    # Use EDITOR env var, or fallback to vim
+    editor = os.environ.get("EDITOR", "vim")
+
+    try:
+        subprocess.run([editor, str(file_path)], check=True)
+        console.print(f"[green]✓ File edited: {file_path}[/green]")
+    except subprocess.CalledProcessError:
+        console.print(f"[red]Error: Failed to edit file[/red]")
+        raise typer.Exit(1)
+    except FileNotFoundError:
+        console.print(f"[red]Error: Editor '{editor}' not found[/red]")
+        console.print(f"[dim]Set EDITOR environment variable or install vim[/dim]")
+        raise typer.Exit(1)
 
 
 def _build_workflow(
