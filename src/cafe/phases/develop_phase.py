@@ -1,6 +1,7 @@
 """Development phase."""
 
 import json
+import readline  # Enable line editing with arrow keys
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, List, Dict, Any

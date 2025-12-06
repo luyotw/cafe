@@ -1,6 +1,7 @@
 """Tests for CLI."""
 
 import pytest
+import typer
 from pathlib import Path
 from typer.testing import CliRunner
 from unittest.mock import MagicMock, Mock, patch
@@ -904,3 +905,478 @@ worktree_path: {worktree_path}
         # Verify no git operations were performed
         mock_git_instance.checkout_branch.assert_not_called()
         mock_git_instance.delete_branch.assert_not_called()
+
+
+class TestEditFileWithEditor:
+    """測試 _edit_file_with_editor 函式"""
+
+    @patch("cafe.ui.cli.subprocess.run")
+    @patch.dict("os.environ", {"EDITOR": "nano"})
+    def test_edit_file_with_custom_editor(
+        self, mock_subprocess: Mock, tmp_path: Path
+    ) -> None:
+        """測試使用 $EDITOR 環境變數開啟檔案"""
+        from cafe.ui.cli import _edit_file_with_editor
+
+        # Setup
+        test_file = tmp_path / "test.md"
+        test_file.write_text("test content")
+        mock_subprocess.return_value = Mock(returncode=0)
+
+        # Execute
+        _edit_file_with_editor(test_file)
+
+        # Verify
+        mock_subprocess.assert_called_once_with(["nano", str(test_file)], check=True)
+
+    @patch("cafe.ui.cli.subprocess.run")
+    @patch.dict("os.environ", {}, clear=True)
+    def test_edit_file_with_default_vim(
+        self, mock_subprocess: Mock, tmp_path: Path
+    ) -> None:
+        """測試預設使用 vim 作為編輯器"""
+        from cafe.ui.cli import _edit_file_with_editor
+
+        # Setup
+        test_file = tmp_path / "test.md"
+        test_file.write_text("test content")
+        mock_subprocess.return_value = Mock(returncode=0)
+
+        # Execute
+        _edit_file_with_editor(test_file)
+
+        # Verify
+        mock_subprocess.assert_called_once_with(["vim", str(test_file)], check=True)
+
+    @patch("cafe.ui.cli.subprocess.run")
+    @patch.dict("os.environ", {"EDITOR": "nonexistent-editor"})
+    def test_edit_file_editor_not_found(
+        self, mock_subprocess: Mock, tmp_path: Path
+    ) -> None:
+        """測試編輯器不存在時的錯誤處理"""
+        from cafe.ui.cli import _edit_file_with_editor
+
+        # Setup
+        test_file = tmp_path / "test.md"
+        test_file.write_text("test content")
+        mock_subprocess.side_effect = FileNotFoundError()
+
+        # Execute & Verify
+        with pytest.raises(typer.Exit) as exc_info:
+            _edit_file_with_editor(test_file)
+        assert exc_info.value.exit_code == 1
+
+    @patch("cafe.ui.cli.subprocess.run")
+    @patch.dict("os.environ", {"EDITOR": "vim"})
+    def test_edit_file_editor_execution_failed(
+        self, mock_subprocess: Mock, tmp_path: Path
+    ) -> None:
+        """測試編輯器執行失敗時的錯誤處理"""
+        from cafe.ui.cli import _edit_file_with_editor
+        import subprocess
+
+        # Setup
+        test_file = tmp_path / "test.md"
+        test_file.write_text("test content")
+        mock_subprocess.side_effect = subprocess.CalledProcessError(1, "vim")
+
+        # Execute & Verify
+        with pytest.raises(typer.Exit) as exc_info:
+            _edit_file_with_editor(test_file)
+        assert exc_info.value.exit_code == 1
+
+
+class TestSpecEditCommand:
+    """測試 cafe spec edit 指令"""
+
+    @patch("cafe.ui.cli.GitOperations")
+    @patch("cafe.ui.cli._edit_file_with_editor")
+    def test_spec_edit_opens_latest_file(
+        self, mock_edit: Mock, mock_git_ops_class: Mock, tmp_path: Path
+    ) -> None:
+        """測試正確找到並開啟最新的 spec_XXX.md 檔案"""
+        import os
+
+        # Setup
+        mock_git_instance = MagicMock()
+        mock_git_instance.is_valid_branch.return_value = True
+        mock_git_instance.get_current_branch.return_value = "test-issue"
+        mock_git_ops_class.return_value = mock_git_instance
+
+        # Create issue directory and spec files
+        issue_dir = tmp_path / ".cafe" / "issues" / "test-issue"
+        spec_dir = issue_dir / "spec"
+        spec_dir.mkdir(parents=True)
+        spec_file_1 = spec_dir / "spec_001.md"
+        spec_file_2 = spec_dir / "spec_002.md"
+        spec_file_1.write_text("Spec version 1")
+        spec_file_2.write_text("Spec version 2")
+
+        # Execute
+        old_cwd = os.getcwd()
+        try:
+            os.chdir(tmp_path)
+            result = runner.invoke(app, ["spec", "edit"])
+        finally:
+            os.chdir(old_cwd)
+
+        # Verify
+        assert result.exit_code == 0
+        mock_edit.assert_called_once()
+        called_path = mock_edit.call_args[0][0]
+        assert called_path.name == "spec_002.md"
+
+    @patch("cafe.ui.cli.GitOperations")
+    def test_spec_edit_no_file_shows_error(
+        self, mock_git_ops_class: Mock, tmp_path: Path
+    ) -> None:
+        """測試沒有 spec 檔案時顯示錯誤"""
+        import os
+
+        # Setup
+        mock_git_instance = MagicMock()
+        mock_git_instance.is_valid_branch.return_value = True
+        mock_git_instance.get_current_branch.return_value = "test-issue"
+        mock_git_ops_class.return_value = mock_git_instance
+
+        # Create issue directory but no spec files
+        issue_dir = tmp_path / ".cafe" / "issues" / "test-issue"
+        spec_dir = issue_dir / "spec"
+        spec_dir.mkdir(parents=True)
+
+        # Execute
+        old_cwd = os.getcwd()
+        try:
+            os.chdir(tmp_path)
+            result = runner.invoke(app, ["spec", "edit"])
+        finally:
+            os.chdir(old_cwd)
+
+        # Verify
+        assert result.exit_code == 1
+        assert "No spec file found" in result.stdout
+        assert "cafe spec" in result.stdout
+
+    @patch("cafe.ui.cli.GitOperations")
+    def test_spec_edit_not_in_issue_branch_shows_error(
+        self, mock_git_ops_class: Mock, tmp_path: Path
+    ) -> None:
+        """測試不在 issue branch 上時顯示錯誤"""
+        import os
+
+        # Setup
+        mock_git_instance = MagicMock()
+        mock_git_instance.is_valid_branch.return_value = True
+        mock_git_instance.get_current_branch.return_value = "test-issue"
+        mock_git_ops_class.return_value = mock_git_instance
+
+        # Don't create .cafe directory to simulate not initialized
+        # Execute
+        old_cwd = os.getcwd()
+        try:
+            os.chdir(tmp_path)
+            result = runner.invoke(app, ["spec", "edit"])
+        finally:
+            os.chdir(old_cwd)
+
+        # Verify
+        assert result.exit_code == 1
+        assert "not been initialized" in result.stdout
+        assert "cafe prepare" in result.stdout
+
+    @patch("cafe.ui.cli.GitOperations")
+    @patch("cafe.ui.cli._edit_file_with_editor")
+    def test_spec_edit_shows_success_message(
+        self, mock_edit: Mock, mock_git_ops_class: Mock, tmp_path: Path
+    ) -> None:
+        """測試編輯完成後顯示成功訊息"""
+        import os
+
+        # Setup
+        mock_git_instance = MagicMock()
+        mock_git_instance.is_valid_branch.return_value = True
+        mock_git_instance.get_current_branch.return_value = "test-issue"
+        mock_git_ops_class.return_value = mock_git_instance
+
+        # Create spec file
+        issue_dir = tmp_path / ".cafe" / "issues" / "test-issue"
+        spec_dir = issue_dir / "spec"
+        spec_dir.mkdir(parents=True)
+        spec_file = spec_dir / "spec_001.md"
+        spec_file.write_text("Spec content")
+
+        # Execute
+        old_cwd = os.getcwd()
+        try:
+            os.chdir(tmp_path)
+            result = runner.invoke(app, ["spec", "edit"])
+        finally:
+            os.chdir(old_cwd)
+
+        # Verify - message from _edit_file_with_editor
+        assert result.exit_code == 0
+        mock_edit.assert_called_once()
+
+
+class TestPlanEditCommand:
+    """測試 cafe plan edit 指令"""
+
+    @patch("cafe.ui.cli.GitOperations")
+    @patch("cafe.ui.cli._edit_file_with_editor")
+    def test_plan_edit_opens_latest_file(
+        self, mock_edit: Mock, mock_git_ops_class: Mock, tmp_path: Path
+    ) -> None:
+        """測試正確找到並開啟最新的 plan_XXX.md 檔案"""
+        import os
+
+        # Setup
+        mock_git_instance = MagicMock()
+        mock_git_instance.is_valid_branch.return_value = True
+        mock_git_instance.get_current_branch.return_value = "test-issue"
+        mock_git_ops_class.return_value = mock_git_instance
+
+        # Create issue directory and plan files
+        issue_dir = tmp_path / ".cafe" / "issues" / "test-issue"
+        plan_dir = issue_dir / "plan"
+        plan_dir.mkdir(parents=True)
+        plan_file_1 = plan_dir / "plan_001.md"
+        plan_file_2 = plan_dir / "plan_002.md"
+        plan_file_1.write_text("Plan version 1")
+        plan_file_2.write_text("Plan version 2")
+
+        # Execute
+        old_cwd = os.getcwd()
+        try:
+            os.chdir(tmp_path)
+            result = runner.invoke(app, ["plan", "edit"])
+        finally:
+            os.chdir(old_cwd)
+
+        # Verify
+        assert result.exit_code == 0
+        mock_edit.assert_called_once()
+        called_path = mock_edit.call_args[0][0]
+        assert called_path.name == "plan_002.md"
+
+    @patch("cafe.ui.cli.GitOperations")
+    def test_plan_edit_no_file_shows_error(
+        self, mock_git_ops_class: Mock, tmp_path: Path
+    ) -> None:
+        """測試沒有 plan 檔案時顯示錯誤"""
+        import os
+
+        # Setup
+        mock_git_instance = MagicMock()
+        mock_git_instance.is_valid_branch.return_value = True
+        mock_git_instance.get_current_branch.return_value = "test-issue"
+        mock_git_ops_class.return_value = mock_git_instance
+
+        # Create issue directory but no plan files
+        issue_dir = tmp_path / ".cafe" / "issues" / "test-issue"
+        plan_dir = issue_dir / "plan"
+        plan_dir.mkdir(parents=True)
+
+        # Execute
+        old_cwd = os.getcwd()
+        try:
+            os.chdir(tmp_path)
+            result = runner.invoke(app, ["plan", "edit"])
+        finally:
+            os.chdir(old_cwd)
+
+        # Verify
+        assert result.exit_code == 1
+        assert "No plan file found" in result.stdout
+        assert "cafe plan" in result.stdout
+
+    @patch("cafe.ui.cli.GitOperations")
+    def test_plan_edit_not_in_issue_branch_shows_error(
+        self, mock_git_ops_class: Mock, tmp_path: Path
+    ) -> None:
+        """測試不在 issue branch 上時顯示錯誤"""
+        import os
+
+        # Setup
+        mock_git_instance = MagicMock()
+        mock_git_instance.is_valid_branch.return_value = True
+        mock_git_instance.get_current_branch.return_value = "test-issue"
+        mock_git_ops_class.return_value = mock_git_instance
+
+        # Don't create .cafe directory to simulate not initialized
+        # Execute
+        old_cwd = os.getcwd()
+        try:
+            os.chdir(tmp_path)
+            result = runner.invoke(app, ["plan", "edit"])
+        finally:
+            os.chdir(old_cwd)
+
+        # Verify
+        assert result.exit_code == 1
+        assert "not been initialized" in result.stdout
+        assert "cafe prepare" in result.stdout
+
+    @patch("cafe.ui.cli.GitOperations")
+    @patch("cafe.ui.cli._edit_file_with_editor")
+    def test_plan_edit_shows_success_message(
+        self, mock_edit: Mock, mock_git_ops_class: Mock, tmp_path: Path
+    ) -> None:
+        """測試編輯完成後顯示成功訊息"""
+        import os
+
+        # Setup
+        mock_git_instance = MagicMock()
+        mock_git_instance.is_valid_branch.return_value = True
+        mock_git_instance.get_current_branch.return_value = "test-issue"
+        mock_git_ops_class.return_value = mock_git_instance
+
+        # Create plan file
+        issue_dir = tmp_path / ".cafe" / "issues" / "test-issue"
+        plan_dir = issue_dir / "plan"
+        plan_dir.mkdir(parents=True)
+        plan_file = plan_dir / "plan_001.md"
+        plan_file.write_text("Plan content")
+
+        # Execute
+        old_cwd = os.getcwd()
+        try:
+            os.chdir(tmp_path)
+            result = runner.invoke(app, ["plan", "edit"])
+        finally:
+            os.chdir(old_cwd)
+
+        # Verify - message from _edit_file_with_editor
+        assert result.exit_code == 0
+        mock_edit.assert_called_once()
+
+
+class TestReviewEditCommand:
+    """測試 cafe review edit 指令"""
+
+    @patch("cafe.ui.cli.GitOperations")
+    @patch("cafe.ui.cli._edit_file_with_editor")
+    def test_review_edit_opens_latest_file(
+        self, mock_edit: Mock, mock_git_ops_class: Mock, tmp_path: Path
+    ) -> None:
+        """測試正確找到並開啟最新的 review_XXX.md 檔案"""
+        import os
+
+        # Setup
+        mock_git_instance = MagicMock()
+        mock_git_instance.is_valid_branch.return_value = True
+        mock_git_instance.get_current_branch.return_value = "test-issue"
+        mock_git_ops_class.return_value = mock_git_instance
+
+        # Create issue directory and review files
+        issue_dir = tmp_path / ".cafe" / "issues" / "test-issue"
+        review_dir = issue_dir / "review"
+        review_dir.mkdir(parents=True)
+        review_file_1 = review_dir / "review_001.md"
+        review_file_2 = review_dir / "review_002.md"
+        review_file_1.write_text("Review version 1")
+        review_file_2.write_text("Review version 2")
+
+        # Execute
+        old_cwd = os.getcwd()
+        try:
+            os.chdir(tmp_path)
+            result = runner.invoke(app, ["review", "edit"])
+        finally:
+            os.chdir(old_cwd)
+
+        # Verify
+        assert result.exit_code == 0
+        mock_edit.assert_called_once()
+        called_path = mock_edit.call_args[0][0]
+        assert called_path.name == "review_002.md"
+
+    @patch("cafe.ui.cli.GitOperations")
+    def test_review_edit_no_file_shows_error(
+        self, mock_git_ops_class: Mock, tmp_path: Path
+    ) -> None:
+        """測試沒有 review 檔案時顯示錯誤"""
+        import os
+
+        # Setup
+        mock_git_instance = MagicMock()
+        mock_git_instance.is_valid_branch.return_value = True
+        mock_git_instance.get_current_branch.return_value = "test-issue"
+        mock_git_ops_class.return_value = mock_git_instance
+
+        # Create issue directory but no review files
+        issue_dir = tmp_path / ".cafe" / "issues" / "test-issue"
+        review_dir = issue_dir / "review"
+        review_dir.mkdir(parents=True)
+
+        # Execute
+        old_cwd = os.getcwd()
+        try:
+            os.chdir(tmp_path)
+            result = runner.invoke(app, ["review", "edit"])
+        finally:
+            os.chdir(old_cwd)
+
+        # Verify
+        assert result.exit_code == 1
+        assert "No review file found" in result.stdout
+        assert "cafe review" in result.stdout
+
+    @patch("cafe.ui.cli.GitOperations")
+    def test_review_edit_not_in_issue_branch_shows_error(
+        self, mock_git_ops_class: Mock, tmp_path: Path
+    ) -> None:
+        """測試不在 issue branch 上時顯示錯誤"""
+        import os
+
+        # Setup
+        mock_git_instance = MagicMock()
+        mock_git_instance.is_valid_branch.return_value = True
+        mock_git_instance.get_current_branch.return_value = "test-issue"
+        mock_git_ops_class.return_value = mock_git_instance
+
+        # Don't create .cafe directory to simulate not initialized
+        # Execute
+        old_cwd = os.getcwd()
+        try:
+            os.chdir(tmp_path)
+            result = runner.invoke(app, ["review", "edit"])
+        finally:
+            os.chdir(old_cwd)
+
+        # Verify
+        assert result.exit_code == 1
+        assert "not been initialized" in result.stdout
+        assert "cafe prepare" in result.stdout
+
+    @patch("cafe.ui.cli.GitOperations")
+    @patch("cafe.ui.cli._edit_file_with_editor")
+    def test_review_edit_shows_success_message(
+        self, mock_edit: Mock, mock_git_ops_class: Mock, tmp_path: Path
+    ) -> None:
+        """測試編輯完成後顯示成功訊息"""
+        import os
+
+        # Setup
+        mock_git_instance = MagicMock()
+        mock_git_instance.is_valid_branch.return_value = True
+        mock_git_instance.get_current_branch.return_value = "test-issue"
+        mock_git_ops_class.return_value = mock_git_instance
+
+        # Create review file
+        issue_dir = tmp_path / ".cafe" / "issues" / "test-issue"
+        review_dir = issue_dir / "review"
+        review_dir.mkdir(parents=True)
+        review_file = review_dir / "review_001.md"
+        review_file.write_text("Review content")
+
+        # Execute
+        old_cwd = os.getcwd()
+        try:
+            os.chdir(tmp_path)
+            result = runner.invoke(app, ["review", "edit"])
+        finally:
+            os.chdir(old_cwd)
+
+        # Verify - message from _edit_file_with_editor
+        assert result.exit_code == 0
+        mock_edit.assert_called_once()
