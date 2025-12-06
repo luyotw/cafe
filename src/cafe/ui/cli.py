@@ -862,6 +862,7 @@ def close() -> None:
 @app.command()
 def spec(
     ctx: typer.Context,
+    action: Optional[str] = typer.Argument(None, help="Action: edit (to edit latest spec file)"),
     mode: str = typer.Option(
         "local",
         "--mode",
@@ -920,6 +921,8 @@ def spec(
 
     This command automatically uses the current Git branch name as the issue identifier.
 
+    Use 'cafe spec edit' to edit the latest specification file.
+
     Examples:
         # Generate spec through conversation (uses current branch)
         cafe spec
@@ -935,7 +938,33 @@ def spec(
 
         # Specify rigor level
         cafe spec --rigor low
+
+        # Edit latest spec file
+        cafe spec edit
     """
+    # Handle edit action
+    if action == "edit":
+        try:
+            # Get and validate current branch
+            issue_name = _get_and_validate_branch(ctx, "spec")
+
+            # Find latest spec file
+            spec_file = _get_latest_versioned_file("spec", issue_name)
+            if not spec_file:
+                console.print(f"[red]Error: No spec file found for issue '{issue_name}'[/red]")
+                console.print(f"[dim]Hint: Run 'cafe spec' first to create the specification.[/dim]")
+                raise typer.Exit(1)
+
+            # Edit the file
+            _edit_file_with_editor(spec_file)
+            return
+
+        except typer.Exit:
+            raise
+        except Exception as e:
+            console.print(f"[red]Error: {e}[/red]")
+            raise typer.Exit(1)
+
     try:
         # Get and validate current branch
         issue_name = _get_and_validate_branch(ctx, "spec")
