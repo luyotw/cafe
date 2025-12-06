@@ -1129,6 +1129,7 @@ def spec(
 @app.command()
 def plan(
     ctx: typer.Context,
+    action: Optional[str] = typer.Argument(None, help="Action: edit (to edit latest plan file)"),
     mode: str = typer.Option(
         "local",
         "--mode",
@@ -1176,6 +1177,8 @@ def plan(
 
     This command automatically uses the current Git branch name as the issue identifier.
 
+    Use 'cafe plan edit' to edit the latest plan file.
+
     Examples:
         # Analyze spec and create plan (uses current branch)
         cafe plan
@@ -1185,7 +1188,33 @@ def plan(
 
         # Use custom developer agent
         cafe plan --dev CustomDev
+
+        # Edit latest plan file
+        cafe plan edit
     """
+    # Handle edit action
+    if action == "edit":
+        try:
+            # Get and validate current branch
+            issue_name = _get_and_validate_branch(ctx, "plan")
+
+            # Find latest plan file
+            plan_file = _get_latest_versioned_file("plan", issue_name)
+            if not plan_file:
+                console.print(f"[red]Error: No plan file found for issue '{issue_name}'[/red]")
+                console.print(f"[dim]Hint: Run 'cafe plan' first to create the plan.[/dim]")
+                raise typer.Exit(1)
+
+            # Edit the file
+            _edit_file_with_editor(plan_file)
+            return
+
+        except typer.Exit:
+            raise
+        except Exception as e:
+            console.print(f"[red]Error: {e}[/red]")
+            raise typer.Exit(1)
+
     try:
         # Get and validate current branch
         issue_name = _get_and_validate_branch(ctx, "plan")
@@ -1601,6 +1630,7 @@ def dev_alias(
 @app.command()
 def review(
     ctx: typer.Context,
+    action: Optional[str] = typer.Argument(None, help="Action: edit (to edit latest review file)"),
     mode: str = typer.Option(
         "local",
         "--mode",
@@ -1667,7 +1697,33 @@ def review(
 
         # Use custom reviewer agent
         cafe review --reviewer CustomReviewer
+
+        # Edit latest review file
+        cafe review edit
     """
+    # Handle edit action
+    if action == "edit":
+        try:
+            # Get and validate current branch
+            issue_name = _get_and_validate_branch(ctx, "review")
+
+            # Find latest review file
+            review_file = _get_latest_versioned_file("review", issue_name)
+            if not review_file:
+                console.print(f"[red]Error: No review file found for issue '{issue_name}'[/red]")
+                console.print(f"[dim]Hint: Run 'cafe review' first to create the review.[/dim]")
+                raise typer.Exit(1)
+
+            # Edit the file
+            _edit_file_with_editor(review_file)
+            return
+
+        except typer.Exit:
+            raise
+        except Exception as e:
+            console.print(f"[red]Error: {e}[/red]")
+            raise typer.Exit(1)
+
     try:
         # Get and validate current branch
         issue_name = _get_and_validate_branch(ctx, "review")
