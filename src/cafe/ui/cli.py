@@ -1836,6 +1836,9 @@ def pr(
         # Determine final draft value
         final_draft = draft if draft is not None else True  # Default to draft
 
+        # Get developer agent name from config (for PR generation)
+        dev_agent = config_manager.get("agents.developer.name", "David")
+
         # Create PR phase
         phase = PRPhase(
             agent_manager=agent_manager,
@@ -1845,6 +1848,7 @@ def pr(
             spec_file=spec_file,
             workflow_mode=WorkflowMode.LOCAL,  # Always use local mode (no --mode flag)
             issue_name=issue_name,
+            dev_agent=dev_agent,
             draft=final_draft,
             custom_title=title,
             custom_body=body,
