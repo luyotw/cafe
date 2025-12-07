@@ -419,8 +419,8 @@ class AgentExecutor:
             err.cli_command_args = cmd[1:]
             raise err
 
-        # Save session_id if extracted
-        if session_id and not self.config.session_id:
+        # Save session_id if extracted (always update to handle session expiration)
+        if session_id:
             self.config.session_id = session_id
 
         # Use custom response parser if provided

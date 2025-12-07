@@ -1689,34 +1689,6 @@ class TestGeminiSessionManagement:
             # Verify session_id was extracted and stored
             assert executor.config.session_id == "extracted-session-789"
 
-    def test_gemini_does_not_overwrite_existing_session_id(self) -> None:
-        """測試當 config.session_id 已存在時，不應被新的 session_id 覆蓋"""
-        config = AgentConfig(
-            name="Roger",
-            cli=AgentCLI.GEMINI,
-            session_id="existing-session-123"
-        )
-        executor = AgentExecutor(config)
-
-        with patch("subprocess.Popen") as mock_popen, \
-             patch("sys.platform", "win32"):
-            # Mock process returns different session_id
-            mock_process = MagicMock()
-            mock_process.stdout.readline.side_effect = [
-                '{"type":"init","session_id":"existing-session-123","model":"auto"}\n',
-                '{"type":"message","role":"assistant","content":"Response"}\n',
-                '{"response": "Response"}\n',
-                '',
-            ]
-            mock_process.stderr.read.return_value = ""
-            mock_process.wait.return_value = 0
-            mock_popen.return_value = mock_process
-
-            executor._execute_gemini("Test prompt")
-
-            # Should keep existing session_id
-            assert executor.config.session_id == "existing-session-123"
-
     def test_gemini_complete_session_flow(self) -> None:
         """測試完整的 session 流程：第一次執行提取 session_id，第二次執行帶上 session_id"""
         config = AgentConfig(name="Roger", cli=AgentCLI.GEMINI)
@@ -1765,5 +1737,33 @@ class TestGeminiSessionManagement:
             assert "--resume" in second_call_args
             resume_index = second_call_args.index("--resume")
             assert second_call_args[resume_index + 1] == "first-session-abc"
+
+    def test_gemini_updates_session_id_when_changed(self) -> None:
+        """測試當 Gemini 回傳新的 session_id 時（例如 session 過期），能正確更新"""
+        config = AgentConfig(
+            name="Roger",
+            cli=AgentCLI.GEMINI,
+            session_id="old-session-123"
+        )
+        executor = AgentExecutor(config)
+
+        with patch("subprocess.Popen") as mock_popen, \
+             patch("sys.platform", "win32"):
+            # Mock process returns a new session_id (e.g., due to expiration)
+            mock_process = MagicMock()
+            mock_process.stdout.readline.side_effect = [
+                '{"type":"init","session_id":"new-session-456","model":"auto"}\n',
+                '{"type":"message","role":"assistant","content":"Response with new session"}\n',
+                '{"response": "Response with new session"}\n',
+                '',
+            ]
+            mock_process.stderr.read.return_value = ""
+            mock_process.wait.return_value = 0
+            mock_popen.return_value = mock_process
+
+            executor._execute_gemini("Test prompt")
+
+            # Should update to new session_id
+            assert executor.config.session_id == "new-session-456"
 
 
