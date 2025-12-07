@@ -913,6 +913,11 @@ def spec(
         "-u",
         help="User input for non-interactive mode (required when --no-interactive)",
     ),
+    auto: bool = typer.Option(
+        False,
+        "--auto",
+        help="Auto mode: automatically continue iterations until CAFE_CONFIRMED",
+    ),
 ) -> None:
     """Run specification phase: Spec clarification with conversational generation.
 
@@ -926,6 +931,9 @@ def spec(
     Examples:
         # Generate spec through conversation (uses current branch)
         cafe spec
+
+        # Auto mode: automatically continue iterations until CAFE_CONFIRMED
+        cafe spec --auto
 
         # Create new GitHub issue with spec
         cafe spec -m github
@@ -1028,6 +1036,11 @@ def spec(
         import sys
         is_interactive = interactive and sys.stdin.isatty()
 
+        # Validate auto mode constraints
+        if auto and not is_interactive:
+            console.print("[red]Error: --auto can only be used in interactive mode[/red]")
+            raise typer.Exit(1)
+
         # Validate user_input in non-interactive mode (unless using --issue-id to fetch)
         if not is_interactive and not user_input and not fetch_issue_id:
             console.print("[red]Error: --user-input is required when using --no-interactive (or use --issue-id to fetch from GitHub)[/red]")
@@ -1053,9 +1066,68 @@ def spec(
         console.print("[dim]Focus on WHAT you want, not HOW to implement it.[/dim]")
         if is_interactive:
             console.print("[dim]💡 Tip: Press Ctrl+C anytime to pause and save progress.[/dim]")
+        if auto:
+            console.print("[dim]🤖 Auto mode: will automatically continue iterations until CAFE_CONFIRMED[/dim]")
         console.print()
 
-        result = phase.execute()
+        # Execute phase iterations (with recursion for auto-continue)
+        def execute_iteration(iteration_count=1):
+            """Execute one iteration and optionally continue to next"""
+            if iteration_count > 1:
+                console.print(f"\n[bold cyan]━━━ Iteration {iteration_count} ━━━[/bold cyan]\n")
+            
+            # Execute phase
+            result = phase.execute()
+
+            # Check result status
+            if result.status.value not in ["completed", "in_progress"]:
+                return result  # Phase failed
+                
+            status_code = result.data.get('status_code')
+            if not status_code:
+                return result  # No valid status code
+            
+            # Check if we should continue
+            if status_code in ["CAFE_CONFIRMED", "CAFE_REJECTED"]:
+                return result  # Reached final state
+            
+            elif status_code in ["CAFE_NEED_CLARIFICATION", "CAFE_READY_FOR_REVIEW"]:
+                # Only continue iterations in interactive mode (with or without --auto)
+                if not is_interactive:
+                    # Non-interactive mode: stop after first iteration
+                    return result
+                
+                # Show brief status
+                console.print()
+                if status_code == "CAFE_NEED_CLARIFICATION":
+                    console.print("[yellow]💬 Agent needs clarification[/yellow]")
+                else:  # CAFE_READY_FOR_REVIEW
+                    console.print("[yellow]📝 Draft ready for review[/yellow]")
+                
+                # Decide whether to continue
+                should_continue = False
+                if auto:
+                    # Auto mode: continue automatically
+                    console.print("[dim]Auto mode: continuing to next iteration...[/dim]")
+                    should_continue = True
+                else:
+                    # Interactive mode: ask user
+                    from rich.prompt import Confirm
+                    should_continue = Confirm.ask("\n[bold]Continue to next iteration?[/bold]", default=True)
+                
+                if should_continue:
+                    console.print("[dim]Continuing...[/dim]")
+                    return execute_iteration(iteration_count + 1)
+                else:
+                    console.print("[dim]Stopped by user.[/dim]")
+                    return result
+            else:
+                # Unknown status
+                console.print(f"\n[bold yellow]⚠️  Unknown status code: {status_code}[/bold yellow]")
+                return result
+        
+        # Start execution
+        result = execute_iteration()
 
         # Display result
         if result.status.value in ["completed", "in_progress"]:
