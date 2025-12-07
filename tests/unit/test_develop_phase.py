@@ -506,6 +506,61 @@ class TestBranchManagement:
         assert config_data["base_branch"] == "main"
         assert config_data["feature_branch"] == "test-issue"
 
+    def test_save_issue_config_preserves_existing_fields(self, tmp_path: Path, monkeypatch) -> None:
+        """測試保存 config 時會保留現有的 worktree_path、issue_id 和 rigor"""
+        import yaml
+        
+        # Change to tmp_path so relative paths work
+        monkeypatch.chdir(tmp_path)
+        
+        # Setup
+        config_file = Path(".cafe/issues/test-issue/config.yaml")
+        config_file.parent.mkdir(parents=True)
+        
+        # Create existing config with worktree_path, issue_id, and rigor
+        existing_config = {
+            "base_branch": "main",
+            "feature_branch": "test-issue",
+            "worktree_path": ".cafe/worktrees/test-issue",
+            "issue_id": "123",
+            "rigor": "high"
+        }
+        config_file.write_text(yaml.dump(existing_config))
+        
+        # Create mock objects
+        agent_manager = MagicMock(spec=AgentManager)
+        permission_handler = MagicMock(spec=PermissionHandler)
+        git_ops = MagicMock(spec=GitOperations)
+        git_ops.get_current_branch.return_value = "test-issue"
+        
+        # Create phase with minimal files
+        spec_file = Path(".cafe/issues/test-issue/spec/spec.md")
+        plan_file = Path(".cafe/issues/test-issue/plan/plan.md")
+        spec_file.parent.mkdir(exist_ok=True)
+        plan_file.parent.mkdir(exist_ok=True)
+        spec_file.write_text("spec")
+        plan_file.write_text("plan")
+        
+        phase = DevelopPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            git_ops=git_ops,
+            spec_file=str(spec_file),
+            plan_file=str(plan_file),
+            workflow_mode=WorkflowMode.LOCAL,
+        )
+        
+        # Call _save_issue_config directly with new base_branch
+        phase._save_issue_config("develop", "test-issue")
+        
+        # Verify config was updated but preserved existing fields
+        config_data = yaml.safe_load(config_file.read_text())
+        assert config_data["base_branch"] == "develop"  # Updated
+        assert config_data["feature_branch"] == "test-issue"  # Updated
+        assert config_data["worktree_path"] == ".cafe/worktrees/test-issue"  # Preserved
+        assert config_data["issue_id"] == "123"  # Preserved
+        assert config_data["rigor"] == "high"  # Preserved
+
 
 class TestReviewFeedbackDetection:
     """Test review feedback detection methods."""

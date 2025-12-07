@@ -1127,7 +1127,7 @@ PM (Product Manager)，負責需求澄清工作。請讀取 agents/{self.pm_agen
         # Path: .cafe/issues/{issue_name}/config.yaml
         config_file = self.issue_dir / "config.yaml"
 
-        # Read existing config to preserve base_branch and feature_branch
+        # Read existing config to preserve base_branch, feature_branch, and worktree_path
         existing_config = self._read_issue_config(config_file) or {}
 
         # Prepare new config data
