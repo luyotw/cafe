@@ -311,19 +311,22 @@ class DevelopPhase(Phase):
         """準備當前迭代的 user input。
 
         Develop phase 的特殊邏輯：
-        - Iteration 1（沒有 previous data）: 空字串（agent 自主執行）
+        - Iteration 1（沒有 previous data）: 使用 self.user_input（如果有提供 --user-input 參數）
         - Iteration 2+（有 previous data）: 檢查是否有待處理的 NEED_PERMISSION
 
         Returns:
             PhaseResult: 如果需要結束/暫停 phase
-            str: 用戶輸入內容（通常為空，除非處理 NEED_PERMISSION）
+            str: 用戶輸入內容（通常為空，除非處理 NEED_PERMISSION 或提供了 --user-input）
         """
         # Check for previous iteration data
         prev_data = self._load_previous_iteration_data()
 
-        # No previous data: first execution, agent starts autonomously
+        # No previous data: first execution
         if not prev_data:
-            return ""
+            # Use self.user_input if provided (from --user-input parameter)
+            user_input = self.user_input if self.user_input else ""
+            self.user_input = ""  # Clear after first use
+            return user_input
 
         prev_status = prev_data.get("status_code", "")
 
@@ -352,29 +355,6 @@ class DevelopPhase(Phase):
 
         # No special handling needed
         return ""
-
-    def _ask_for_additional_input(self) -> str:
-        """詢問使用者是否有額外的話要對開發者說（可選）。
-
-        此方法在每一輪開始時呼叫，讓使用者可以提供額外的指示或說明。
-
-        Interactive 模式：提示使用者輸入，可按 Enter 跳過
-        Non-interactive 模式：使用 self.user_input（一次性，用完清空）
-
-        Returns:
-            str: 使用者輸入（可為空字串）
-        """
-        if self.interactive:
-            print("\n" + "="*60)
-            print("💬 有沒有要對開發者說的話？（直接按 Enter 跳過）")
-            print("="*60)
-            user_input = input("> ").strip()
-            return user_input
-        else:
-            # Non-interactive: 使用 self.user_input（一次性）
-            user_input = self.user_input
-            self.user_input = ""  # 清空，避免重複使用
-            return user_input
 
     def _get_last_develop_timestamp(self):
         """Get timestamp from last develop/status.json.
@@ -673,15 +653,6 @@ class DevelopPhase(Phase):
                     current_user_input = f"{current_user_input}\n\n{permission_user_input}"
                 else:
                     current_user_input = permission_user_input
-
-            # Ask for additional user input (optional)
-            # This is done AFTER permission handling to avoid consuming input() calls when phase might fail
-            additional_input = self._ask_for_additional_input()
-            if additional_input:
-                if current_user_input:
-                    current_user_input = f"{current_user_input}\n\n{additional_input}"
-                else:
-                    current_user_input = additional_input
 
             # Execute full agent interaction cycle (generate prompt, execute, handle status)
             result, response = self._execute_and_handle_agent_response(
