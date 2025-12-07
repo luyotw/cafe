@@ -230,10 +230,13 @@ class DevelopPhase(Phase):
         """
         config_file = self.history_dir.parent.parent / "config.yaml"
 
-        config_data = {
-            "base_branch": base_branch,
-            "feature_branch": feature_branch,
-        }
+        # Read existing config to preserve worktree_path, issue_id, and rigor
+        existing_config = self._read_issue_config(config_file) or {}
+
+        # Update with base_branch and feature_branch
+        config_data = {**existing_config}
+        config_data["base_branch"] = base_branch
+        config_data["feature_branch"] = feature_branch
 
         self._write_issue_config(config_file, config_data)
 
