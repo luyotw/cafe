@@ -346,6 +346,9 @@ class SpecPhase(Phase):
             # Phase-specific post-processing: Sync spec to GitHub (no-op in local mode)
             self._sync_spec_to_github("")
 
+            # Save rigor setting to config after each iteration
+            self._save_issue_config()
+
             # Since we removed the while loop, if result is None (meaning need to continue),
             # we should return IN_PROGRESS with the status code from response
             if result is None:
@@ -1101,30 +1104,41 @@ PM (Product Manager)，負責需求澄清工作。請讀取 agents/{self.pm_agen
 """
 
     def _load_issue_config(self) -> None:
-        """Load issue configuration (issue_id) from config.yaml if exists."""
+        """Load issue configuration (issue_id, rigor) from config.yaml if exists."""
+        from cafe.core.types import SpecRigor
+
         # Path: .cafe/issues/{issue_name}/config.yaml
         config_file = self.issue_dir / "config.yaml"
 
         config_data = self._read_issue_config(config_file)
-        if config_data and "issue_id" in config_data:
-            self._fetched_issue_id = config_data["issue_id"]
+        if config_data:
+            if "issue_id" in config_data:
+                self._fetched_issue_id = config_data["issue_id"]
+            # Load rigor from config if not explicitly set by user
+            if "rigor" in config_data and not self._rigor_explicitly_set:
+                try:
+                    self.rigor = SpecRigor(config_data["rigor"])
+                except (ValueError, KeyError):
+                    # Invalid rigor value in config, use default
+                    pass
 
     def _save_issue_config(self) -> None:
-        """Save issue configuration (issue_id) to config.yaml."""
-        if not hasattr(self, '_fetched_issue_id'):
-            return
-
+        """Save issue configuration (issue_id, rigor) to config.yaml."""
         # Path: .cafe/issues/{issue_name}/config.yaml
         config_file = self.issue_dir / "config.yaml"
 
         # Read existing config to preserve base_branch and feature_branch
         existing_config = self._read_issue_config(config_file) or {}
 
-        # Merge with new issue_id
-        config_data = {
-            **existing_config,
-            "issue_id": self._fetched_issue_id,
-        }
+        # Prepare new config data
+        config_data = {**existing_config}
+
+        # Add issue_id if available
+        if hasattr(self, '_fetched_issue_id'):
+            config_data["issue_id"] = self._fetched_issue_id
+
+        # Always save rigor (even if it's the default) so subsequent iterations use the same value
+        config_data["rigor"] = self.rigor.value
 
         # Write config
         self._write_issue_config(config_file, config_data)

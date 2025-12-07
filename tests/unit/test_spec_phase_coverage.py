@@ -8,7 +8,7 @@ import pytest
 from cafe.agents.manager import AgentManager
 from cafe.core.git import GitOperations
 from cafe.core.permission import PermissionHandler
-from cafe.core.types import PhaseStatus, SpecRigor, WorkflowMode
+from cafe.core.types import PhaseStatus, SpecRigor, TokenUsage, WorkflowMode
 from cafe.phases.spec_phase import SpecPhase, create_github_issue, update_github_issue
 
 
@@ -483,3 +483,179 @@ class TestSpecPhaseGetMethods:
         phase.rigor = SpecRigor.HIGH
         guidelines = phase._get_rigor_guidelines()
         assert "詳細" in guidelines or "精確" in guidelines
+
+
+class TestSpecPhaseRigorPersistence:
+    """測試 rigor 參數的持久化"""
+
+    def test_rigor_saved_to_config_after_first_iteration(self, tmp_path, mock_git_ops, monkeypatch):
+        """測試第一輪執行後 rigor 被儲存到 config"""
+        monkeypatch.chdir(tmp_path)
+        mock_git_ops.get_current_branch.return_value = "test-issue"
+
+        spec_file = tmp_path / ".cafe" / "issues" / "test-issue" / "spec" / "spec_001.md"
+        spec_file.parent.mkdir(parents=True)
+        spec_file.write_text("# 初始需求\n\n測試需求")
+
+        agent_manager = MagicMock(spec=AgentManager)
+        agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n需求已完成", TokenUsage(), [], None, [])
+        agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
+        agent_manager.get_total_token_usage.return_value = TokenUsage()
+
+        mock_agent = MagicMock()
+        mock_agent.config.cli.value = "claude"
+        mock_agent.config.session_id = "test_session"
+        agent_manager.get_agent.return_value = mock_agent
+
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        # Create phase with explicitly set rigor=LOW
+        from cafe.core.types import SpecRigor
+        phase = SpecPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            workflow_mode=WorkflowMode.LOCAL,
+            interactive=False,
+            git_ops=mock_git_ops,
+            rigor=SpecRigor.LOW,
+        )
+
+        with patch('builtins.print'):
+            phase.execute()
+
+        # Check that rigor was saved to config
+        config_file = tmp_path / ".cafe" / "issues" / "test-issue" / "config.yaml"
+        assert config_file.exists()
+
+        import yaml
+        with open(config_file, 'r') as f:
+            config_data = yaml.safe_load(f)
+
+        assert config_data["rigor"] == "low"
+
+    def test_rigor_loaded_from_config_in_second_iteration(self, tmp_path, mock_git_ops, monkeypatch):
+        """測試第二輪從 config 載入 rigor"""
+        monkeypatch.chdir(tmp_path)
+        mock_git_ops.get_current_branch.return_value = "test-issue"
+
+        issue_dir = tmp_path / ".cafe" / "issues" / "test-issue"
+        spec_dir = issue_dir / "spec"
+        spec_dir.mkdir(parents=True)
+
+        # Create spec_001.md (previous iteration)
+        spec_001 = spec_dir / "spec_001.md"
+        spec_001.write_text("# 需求\n\n## 待釐清的問題\n測試問題")
+
+        # Create config with rigor=low
+        config_file = issue_dir / "config.yaml"
+        import yaml
+        with open(config_file, 'w') as f:
+            yaml.dump({"rigor": "low"}, f)
+
+        # Create iteration 1 history with NEED_CLARIFICATION
+        history_dir = spec_dir / "history"
+        history_dir.mkdir()
+        import json
+        iteration_1 = history_dir / "iteration_001.json"
+        iteration_1.write_text(json.dumps({
+            "iteration": 1,
+            "timestamp": "2025-11-09T12:00:00",
+            "user_input": "初始需求",
+            "pm_agent": "Roger",
+            "response": "CAFE_NEED_CLARIFICATION\n需要更多資訊",
+            "status_code": "CAFE_NEED_CLARIFICATION"
+        }, ensure_ascii=False))
+
+        agent_manager = MagicMock(spec=AgentManager)
+        agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n需求已完成", TokenUsage(), [], None, [])
+        agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
+        agent_manager.get_total_token_usage.return_value = TokenUsage()
+
+        mock_agent = MagicMock()
+        mock_agent.config.cli.value = "claude"
+        mock_agent.config.session_id = "test_session"
+        agent_manager.get_agent.return_value = mock_agent
+
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        # Create phase WITHOUT explicitly setting rigor (should load from config)
+        from cafe.core.types import SpecRigor
+        phase = SpecPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            workflow_mode=WorkflowMode.LOCAL,
+            interactive=False,
+            user_input="c",  # Confirm
+            git_ops=mock_git_ops,
+            # rigor NOT set - should load from config
+        )
+
+        # Execute phase (will load config in __init__)
+        with patch('builtins.print'):
+            phase.execute()
+
+        # Verify rigor was loaded from config
+        assert phase.rigor == SpecRigor.LOW
+
+        # Verify prompt contains LOW rigor guidelines
+        # Check iteration 2 history
+        iteration_2 = history_dir / "iteration_002.json"
+        assert iteration_2.exists()
+        with open(iteration_2, 'r') as f:
+            iter2_data = json.load(f)
+        
+        assert "低（快速開發）" in iter2_data["prompt"]
+        assert "中（平衡模式）" not in iter2_data["prompt"]
+
+    def test_explicit_rigor_overrides_config(self, tmp_path, mock_git_ops, monkeypatch):
+        """測試明確設定的 rigor 會覆蓋 config 中的值"""
+        monkeypatch.chdir(tmp_path)
+        mock_git_ops.get_current_branch.return_value = "test-issue"
+
+        issue_dir = tmp_path / ".cafe" / "issues" / "test-issue"
+        issue_dir.mkdir(parents=True)
+
+        # Create config with rigor=low
+        config_file = issue_dir / "config.yaml"
+        import yaml
+        with open(config_file, 'w') as f:
+            yaml.dump({"rigor": "low"}, f)
+
+        spec_file = issue_dir / "spec" / "spec_001.md"
+        spec_file.parent.mkdir(parents=True)
+        spec_file.write_text("# 初始需求\n\n測試需求")
+
+        agent_manager = MagicMock(spec=AgentManager)
+        agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n需求已完成", TokenUsage(), [], None, [])
+        agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
+        agent_manager.get_total_token_usage.return_value = TokenUsage()
+
+        mock_agent = MagicMock()
+        mock_agent.config.cli.value = "claude"
+        mock_agent.config.session_id = "test_session"
+        agent_manager.get_agent.return_value = mock_agent
+
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        # Create phase with explicitly set rigor=HIGH (should override config)
+        from cafe.core.types import SpecRigor
+        phase = SpecPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            workflow_mode=WorkflowMode.LOCAL,
+            interactive=False,
+            git_ops=mock_git_ops,
+            rigor=SpecRigor.HIGH,  # Explicitly set to HIGH
+        )
+
+        # Execute phase
+        with patch('builtins.print'):
+            phase.execute()
+
+        # Verify rigor is HIGH (not LOW from config)
+        assert phase.rigor == SpecRigor.HIGH
+
+        # Verify config was updated to HIGH
+        with open(config_file, 'r') as f:
+            config_data = yaml.safe_load(f)
+        assert config_data["rigor"] == "high"
