@@ -564,9 +564,19 @@ def prepare(
 
         # 7. Save config.yaml
         config_file = issue_dir / "config.yaml"
+        
+        # Load global config to get default limits
+        from cafe.utils.config import ConfigManager
+        config_manager = ConfigManager(".cafe")
+        global_config = config_manager.load_config()
+        max_review_iterations = global_config.get("limits", {}).get("max_review_iterations", 5)
+        
         config_data = {
             "base_branch": base_branch,
             "feature_branch": feature_branch,
+            "limits": {
+                "max_review_iterations": max_review_iterations,
+            },
         }
 
         # Add worktree_path if using worktree mode

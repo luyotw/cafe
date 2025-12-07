@@ -72,6 +72,7 @@ class TestPrepareCommand:
             config_data = yaml.safe_load(f)
             assert config_data["base_branch"] == "main"
             assert config_data["feature_branch"] == "test-issue"
+            assert config_data["limits"]["max_review_iterations"] == 5
 
         # Verify git operations called
         mock_git_ops.branch_exists.assert_called_once_with("test-issue")
@@ -209,7 +210,9 @@ class TestPrepareCommand:
             # Parse YAML
             config_data = yaml.safe_load(content)
             assert isinstance(config_data, dict)
-            assert len(config_data) == 2
+            assert len(config_data) == 3  # base_branch, feature_branch, limits
+            assert "limits" in config_data
+            assert config_data["limits"]["max_review_iterations"] == 5
 
     def test_prepare_idempotent(self, temp_repo_dir, mock_git_ops):
         """測試重複執行 prepare 是否安全（冪等性）"""
