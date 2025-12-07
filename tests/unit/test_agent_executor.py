@@ -1717,4 +1717,53 @@ class TestGeminiSessionManagement:
             # Should keep existing session_id
             assert executor.config.session_id == "existing-session-123"
 
+    def test_gemini_complete_session_flow(self) -> None:
+        """測試完整的 session 流程：第一次執行提取 session_id，第二次執行帶上 session_id"""
+        config = AgentConfig(name="Roger", cli=AgentCLI.GEMINI)
+        executor = AgentExecutor(config)
+
+        with patch("subprocess.Popen") as mock_popen, \
+             patch("sys.platform", "win32"):
+            # First execution: no session_id
+            mock_process_1 = MagicMock()
+            mock_process_1.stdout.readline.side_effect = [
+                '{"type":"init","session_id":"first-session-abc","model":"auto"}\n',
+                '{"type":"message","role":"assistant","content":"First response"}\n',
+                '{"response": "First response"}\n',
+                '',
+            ]
+            mock_process_1.stderr.read.return_value = ""
+            mock_process_1.wait.return_value = 0
+            mock_popen.return_value = mock_process_1
+
+            response1 = executor._execute_gemini("First prompt")
+            assert response1.response == "First response"
+            assert executor.config.session_id == "first-session-abc"
+
+            # Verify first call didn't include --resume
+            first_call_args = mock_popen.call_args_list[0][0][0]
+            assert "--resume" not in first_call_args
+
+            # Second execution: with session_id
+            mock_process_2 = MagicMock()
+            mock_process_2.stdout.readline.side_effect = [
+                '{"type":"init","session_id":"first-session-abc","model":"auto"}\n',
+                '{"type":"message","role":"assistant","content":"Second response"}\n',
+                '{"response": "Second response"}\n',
+                '',
+            ]
+            mock_process_2.stderr.read.return_value = ""
+            mock_process_2.wait.return_value = 0
+            mock_popen.return_value = mock_process_2
+
+            response2 = executor._execute_gemini("Second prompt")
+            assert response2.response == "Second response"
+            assert executor.config.session_id == "first-session-abc"
+
+            # Verify second call included --resume
+            second_call_args = mock_popen.call_args_list[1][0][0]
+            assert "--resume" in second_call_args
+            resume_index = second_call_args.index("--resume")
+            assert second_call_args[resume_index + 1] == "first-session-abc"
+
 
