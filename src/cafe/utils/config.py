@@ -57,15 +57,15 @@ class ConfigManager:
             "agents": {
                 "pm": {
                     "name": "Roger",
-                    "cli": "copilot",
+                    "cli": "gemini",
                 },
                 "developer": {
                     "name": "David",
-                    "cli": "copilot",
+                    "cli": "claude",
                 },
                 "reviewer": {
                     "name": "Richard",
-                    "cli": "copilot",
+                    "cli": "gemini",
                 },
             },
             "defaults": {
