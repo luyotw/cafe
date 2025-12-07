@@ -184,6 +184,62 @@ def _edit_file_with_editor(file_path: Path) -> None:
         raise typer.Exit(1)
 
 
+def _get_latest_review_iteration(issue_name: str) -> int:
+    """Get the latest review iteration number from history files.
+    
+    Args:
+        issue_name: Issue name
+        
+    Returns:
+        Latest iteration number, or 0 if no history exists
+    """
+    history_dir = Path(f".cafe/issues/{issue_name}/review/history")
+    if not history_dir.exists():
+        return 0
+    
+    # Find all iteration files
+    iteration_files = sorted(history_dir.glob("iteration_*.json"))
+    if not iteration_files:
+        return 0
+    
+    # Extract iteration number from the latest file (e.g., iteration_005.json -> 5)
+    latest_file = iteration_files[-1]
+    try:
+        iteration_num = int(latest_file.stem.split("_")[1])
+        return iteration_num
+    except (IndexError, ValueError):
+        return 0
+
+
+def _execute_next_phase_auto(next_phase: str, issue_name: str) -> None:
+    """Execute the next phase in auto mode.
+    
+    Args:
+        next_phase: Name of the next phase to execute ("plan", "develop", "review", "pr")
+        issue_name: Issue name for tracking
+    """
+    console.print()
+    console.print(f"[bold cyan]🤖 Auto mode: executing [bold]{next_phase}[/bold]...[/bold cyan]")
+    console.print()
+    
+    # Build command
+    if next_phase == "pr":
+        # PR phase doesn't have --auto
+        cmd = [sys.executable, "-m", "cafe.ui.cli", "pr"]
+    else:
+        cmd = [sys.executable, "-m", "cafe.ui.cli", next_phase, "--auto"]
+    
+    # Execute the command
+    try:
+        result = subprocess.run(cmd, check=False)
+        if result.returncode != 0:
+            console.print(f"[red]Error: {next_phase} phase failed with exit code {result.returncode}[/red]")
+            raise typer.Exit(result.returncode)
+    except Exception as e:
+        console.print(f"[red]Error executing {next_phase}: {e}[/red]")
+        raise typer.Exit(1)
+
+
 def _build_workflow(
     mode: WorkflowMode,
     issue_id: Optional[str],
@@ -1189,7 +1245,12 @@ def spec(
                 elif issue_id:
                     console.print(f"Updated issue: #{issue_id}")
                 console.print()
-                console.print("[dim]Next step:[/dim] [bold]cafe plan[/bold]")
+                
+                # Auto mode: execute next phase
+                if auto:
+                    _execute_next_phase_auto("plan", current_branch)
+                else:
+                    console.print("[dim]Next step:[/dim] [bold]cafe plan[/bold]")
             else:
                 # Unknown status code - show generic completion message
                 console.print("[bold green]✅ Spec phase completed![/bold green]")
@@ -1502,7 +1563,12 @@ def plan(
                 if Path(plan_file).exists():
                     console.print(f"Saved to: {plan_file}")
                 console.print()
-                console.print("[dim]Next step:[/dim] [bold]cafe develop[/bold]")
+                
+                # Auto mode: execute next phase
+                if auto:
+                    _execute_next_phase_auto("develop", current_branch)
+                else:
+                    console.print("[dim]Next step:[/dim] [bold]cafe develop[/bold]")
         else:
             console.print()
             console.print(f"[bold red]❌ Plan phase failed: {result.message}[/bold red]")
@@ -1563,7 +1629,12 @@ def develop(
         None,
         "--pr-number",
         help="PR number to fetch unresolved comments from",
-    )
+    ),
+    auto: bool = typer.Option(
+        False,
+        "--auto",
+        help="Auto mode: automatically execute cafe review after completion",
+    ),
 ) -> None:
     """Run develop phase: Execute development work according to plan.
 
@@ -1700,10 +1771,15 @@ def develop(
             console.print(f"Branch: {result.data.get('branch', 'N/A')}")
             console.print(f"Iterations: {result.data.get('iterations', 'N/A')}")
             console.print()
-            console.print("[dim]Next steps:[/dim]")
-            console.print(f"[dim]  1. Review changes: git diff[/dim]")
-            console.print(f"[dim]  2. Run tests: pytest[/dim]")
-            console.print(f"[dim]  3. Code review: cafe review[/dim]")
+            
+            # Auto mode: execute next phase
+            if auto:
+                _execute_next_phase_auto("review", current_branch)
+            else:
+                console.print("[dim]Next steps:[/dim]")
+                console.print(f"[dim]  1. Review changes: git diff[/dim]")
+                console.print(f"[dim]  2. Run tests: pytest[/dim]")
+                console.print(f"[dim]  3. Code review: cafe review[/dim]")
         elif result.status.value == "failed":
             console.print(f"[red]❌ Development failed: {result.message}[/red]")
             raise typer.Exit(1)
@@ -1837,6 +1913,11 @@ def review(
         None,
         "--pr-number",
         help="PR number to fetch unresolved comments from",
+    ),
+    auto: bool = typer.Option(
+        False,
+        "--auto",
+        help="Auto mode: automatically execute next phase based on result",
     ),
 ) -> None:
     """Run review phase: Code review by reviewer agent.
@@ -1973,9 +2054,15 @@ def review(
             if status_code == "CAFE_CONFIRMED":
                 console.print("[bold green]✅ Code review passed![/bold green]")
                 console.print()
-                console.print("[dim]Next steps:[/dim]")
-                console.print(f"[dim]  1. Create PR: cafe pr[/dim]")
+                
+                # Auto mode: execute PR phase
+                if auto:
+                    _execute_next_phase_auto("pr", issue_name)
+                else:
+                    console.print("[dim]Next steps:[/dim]")
+                    console.print(f"[dim]  1. Create PR: cafe pr[/dim]")
             else:
+                # CAFE_NEEDS_CHANGES or other status
                 console.print(f"[bold yellow]📝 Code review completed with status: {status_code}[/bold yellow]")
                 console.print()
 
@@ -1992,10 +2079,39 @@ def review(
                 console.print("[dim]Review feedback saved to:[/dim]")
                 console.print(f"[dim]  {review_path}[/dim]")
                 console.print()
-                console.print("[dim]Next steps:[/dim]")
-                console.print(f"[dim]  1. Review feedback: cat {review_path}[/dim]")
-                console.print(f"[dim]  2. Make changes: cafe develop[/dim]")
-                console.print(f"[dim]  3. Review again: cafe review[/dim]")
+                
+                # Auto mode: check max_review_iterations and execute develop if not exceeded
+                if auto:
+                    # Read max_review_iterations from issue config
+                    import yaml
+                    issue_config_file = Path(f".cafe/issues/{issue_name}/config.yaml")
+                    max_iterations = 5  # Default
+                    if issue_config_file.exists():
+                        with open(issue_config_file, 'r') as f:
+                            issue_config = yaml.safe_load(f)
+                            max_iterations = issue_config.get("auto", {}).get("max_review_iterations", 5)
+                    
+                    # Get current review iteration count
+                    current_iteration = _get_latest_review_iteration(issue_name)
+                    
+                    if current_iteration >= max_iterations:
+                        # Exceeded max iterations
+                        console.print()
+                        console.print(f"[bold yellow]⚠️  已達到 review 迴圈上限 ({max_iterations} 次)[/bold yellow]")
+                        console.print()
+                        console.print("[dim]您可以：[/dim]")
+                        console.print(f"[dim]  • 繼續執行：[bold]cafe review[/bold]（不加 --auto）[/dim]")
+                        console.print(f"[dim]  • 調整上限：[bold]cafe config set auto.max_review_iterations 10[/bold][/dim]")
+                        console.print(f"[dim]  • 或修改 .cafe/issues/{issue_name}/config.yaml[/dim]")
+                    else:
+                        # Continue with develop phase
+                        console.print(f"[dim]Review iteration: {current_iteration}/{max_iterations}[/dim]")
+                        _execute_next_phase_auto("develop", issue_name)
+                else:
+                    console.print("[dim]Next steps:[/dim]")
+                    console.print(f"[dim]  1. Review feedback: cat {review_path}[/dim]")
+                    console.print(f"[dim]  2. Make changes: cafe develop[/dim]")
+                    console.print(f"[dim]  3. Review again: cafe review[/dim]")
         else:
             console.print()
             console.print(f"[bold red]❌ Review phase failed: {result.message}[/bold red]")
