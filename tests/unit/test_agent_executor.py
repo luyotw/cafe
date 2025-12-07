@@ -1664,4 +1664,57 @@ class TestGeminiSessionManagement:
             call_args = mock_popen.call_args[0][0]
             assert "--resume" not in call_args
 
+    def test_gemini_extracts_session_id_from_init_message(self) -> None:
+        """測試從 Gemini init 訊息中提取 session_id"""
+        config = AgentConfig(name="Roger", cli=AgentCLI.GEMINI)
+        executor = AgentExecutor(config)
+
+        with patch("subprocess.Popen") as mock_popen, \
+             patch("sys.platform", "win32"):
+            # Mock process with init message containing session_id
+            mock_process = MagicMock()
+            mock_process.stdout.readline.side_effect = [
+                '{"type":"init","session_id":"extracted-session-789","model":"auto"}\n',
+                '{"type":"message","role":"assistant","content":"Hello"}\n',
+                '{"response": "Hello"}\n',
+                '',
+            ]
+            mock_process.stderr.read.return_value = ""
+            mock_process.wait.return_value = 0
+            mock_popen.return_value = mock_process
+
+            # Execute without existing session_id
+            executor._execute_gemini("Test prompt")
+
+            # Verify session_id was extracted and stored
+            assert executor.config.session_id == "extracted-session-789"
+
+    def test_gemini_does_not_overwrite_existing_session_id(self) -> None:
+        """測試當 config.session_id 已存在時，不應被新的 session_id 覆蓋"""
+        config = AgentConfig(
+            name="Roger",
+            cli=AgentCLI.GEMINI,
+            session_id="existing-session-123"
+        )
+        executor = AgentExecutor(config)
+
+        with patch("subprocess.Popen") as mock_popen, \
+             patch("sys.platform", "win32"):
+            # Mock process returns different session_id
+            mock_process = MagicMock()
+            mock_process.stdout.readline.side_effect = [
+                '{"type":"init","session_id":"existing-session-123","model":"auto"}\n',
+                '{"type":"message","role":"assistant","content":"Response"}\n',
+                '{"response": "Response"}\n',
+                '',
+            ]
+            mock_process.stderr.read.return_value = ""
+            mock_process.wait.return_value = 0
+            mock_popen.return_value = mock_process
+
+            executor._execute_gemini("Test prompt")
+
+            # Should keep existing session_id
+            assert executor.config.session_id == "existing-session-123"
+
 

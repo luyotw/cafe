@@ -363,7 +363,7 @@ class AgentExecutor:
                                 streaming_log.append(content)
                                 response_text = content  # 只保存最後一個片段
 
-                        # Extract session_id
+                        # Extract session_id (from init message for Gemini, or any message for Claude)
                         if "session_id" in data and not session_id:
                             session_id = data["session_id"]
 
