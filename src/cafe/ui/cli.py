@@ -1241,6 +1241,11 @@ def plan(
         "--interactive/--no-interactive",
         help="Allow interactive prompts (default: True)",
     ),
+    auto: bool = typer.Option(
+        False,
+        "--auto",
+        help="Auto mode: automatically continue iterations until CAFE_CONFIRMED",
+    ),
 ) -> None:
     """Run plan phase: Implementation planning with developer agent.
 
@@ -1254,6 +1259,9 @@ def plan(
     Examples:
         # Analyze spec and create plan (uses current branch)
         cafe plan
+
+        # Auto mode: automatically continue iterations until CAFE_CONFIRMED
+        cafe plan --auto
 
         # Analyze GitHub issue and create plan
         cafe plan -m github -i 123
@@ -1378,11 +1386,79 @@ def plan(
             template_path=template_path_str,
         )
 
+        # Determine if should be interactive
+        import sys
+        is_interactive = interactive and sys.stdin.isatty()
+
+        # Validate auto mode constraints
+        if auto and not is_interactive:
+            console.print("[red]Error: --auto can only be used in interactive mode[/red]")
+            raise typer.Exit(1)
+
         console.print("[bold]Starting implementation planning...[/bold]")
         console.print("[dim]The developer will analyze technical feasibility and create implementation plan.[/dim]")
+        if auto:
+            console.print("[dim]🤖 Auto mode: will automatically continue iterations until CAFE_CONFIRMED[/dim]")
         console.print()
 
-        result = phase.execute()
+        # Execute phase iterations (with recursion for auto-continue)
+        def execute_iteration(iteration_count=1):
+            """Execute one iteration and optionally continue to next"""
+            if iteration_count > 1:
+                console.print(f"\n[bold cyan]━━━ Iteration {iteration_count} ━━━[/bold cyan]\n")
+            
+            # Execute phase
+            result = phase.execute()
+
+            # Check result status
+            if result.status.value != "completed":
+                return result  # Phase failed
+                
+            status_code = result.data.get('status_code')
+            if not status_code:
+                return result  # No valid status code
+            
+            # Check if we should continue
+            if status_code in ["CAFE_CONFIRMED", "CAFE_REJECTED"]:
+                return result  # Reached final state
+            
+            elif status_code in ["CAFE_NEED_CLARIFICATION", "CAFE_READY_FOR_REVIEW"]:
+                # Only continue iterations in interactive mode (with or without --auto)
+                if not is_interactive:
+                    # Non-interactive mode: stop after first iteration
+                    return result
+                
+                # Show brief status
+                console.print()
+                if status_code == "CAFE_NEED_CLARIFICATION":
+                    console.print("[yellow]💬 Agent needs clarification[/yellow]")
+                else:  # CAFE_READY_FOR_REVIEW
+                    console.print("[yellow]📋 Plan ready for review[/yellow]")
+                
+                # Decide whether to continue
+                should_continue = False
+                if auto:
+                    # Auto mode: continue automatically
+                    console.print("[dim]Auto mode: continuing to next iteration...[/dim]")
+                    should_continue = True
+                else:
+                    # Interactive mode: ask user
+                    from rich.prompt import Confirm
+                    should_continue = Confirm.ask("\n[bold]Continue to next iteration?[/bold]", default=True)
+                
+                if should_continue:
+                    console.print("[dim]Continuing...[/dim]")
+                    return execute_iteration(iteration_count + 1)
+                else:
+                    console.print("[dim]Stopped by user.[/dim]")
+                    return result
+            else:
+                # Unknown status
+                console.print(f"\n[bold yellow]⚠️  Unknown status code: {status_code}[/bold yellow]")
+                return result
+        
+        # Start execution
+        result = execute_iteration()
 
         # Display result
         if result.status.value == "completed":
