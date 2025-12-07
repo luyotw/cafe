@@ -571,18 +571,12 @@ def prepare(
         console.print()
 
         # 5. Create issue directory structure
-        issue_dir = Path(f".cafe/issues/{issue_name}")
-        spec_dir = issue_dir / "spec"
-        sessions_dir = issue_dir / "sessions"
-
-        spec_dir.mkdir(parents=True, exist_ok=True)
-        sessions_dir.mkdir(parents=True, exist_ok=True)
-
-        # 6. Create or switch to feature branch (or worktree)
+        # In worktree mode, we'll set issue_dir after creating the worktree
+        # In normal mode, use local .cafe/issues/
         feature_branch = issue_name
-
+        
         if use_worktree:
-            # Worktree mode
+            # Worktree mode - create worktree first, then set issue_dir to point there
             console.print(f"[dim]Creating worktree at '{worktree_path}'...[/dim]")
             git_ops.create_worktree(worktree_path, feature_branch, base_branch)
 
@@ -593,24 +587,32 @@ def prepare(
             repo_cafe_dir = Path(".cafe").resolve()
             worktree_cafe_dir = worktree_abs / ".cafe"
 
-            # Create .cafe directory structure in worktree if it doesn't exist
-            if repo_cafe_dir.exists() and worktree_abs.exists() and not worktree_cafe_dir.exists():
-                # Create .cafe directory
-                worktree_cafe_dir.mkdir(parents=True, exist_ok=True)
+            # Create .cafe directory structure in worktree
+            worktree_cafe_dir.mkdir(parents=True, exist_ok=True)
 
-                # Copy config.yaml from repo root
-                repo_config = repo_cafe_dir / "config.yaml"
-                worktree_config = worktree_cafe_dir / "config.yaml"
-                if repo_config.exists():
-                    shutil.copy2(repo_config, worktree_config)
+            # Copy config.yaml from repo root
+            repo_config = repo_cafe_dir / "config.yaml"
+            worktree_config = worktree_cafe_dir / "config.yaml"
+            if repo_config.exists():
+                shutil.copy2(repo_config, worktree_config)
 
-                # Create issues directory structure
-                worktree_issues_dir = worktree_cafe_dir / "issues" / issue_name
-                worktree_issues_dir.mkdir(parents=True, exist_ok=True)
-                (worktree_issues_dir / "spec").mkdir(exist_ok=True)
-                (worktree_issues_dir / "sessions").mkdir(exist_ok=True)
+            # Create issues directory structure in worktree
+            worktree_issues_dir = worktree_cafe_dir / "issues" / issue_name
+            worktree_issues_dir.mkdir(parents=True, exist_ok=True)
+            (worktree_issues_dir / "spec").mkdir(exist_ok=True)
+            (worktree_issues_dir / "sessions").mkdir(exist_ok=True)
+            
+            # Set issue_dir to worktree location
+            issue_dir = worktree_issues_dir
         else:
             # Normal branch mode
+            issue_dir = Path(f".cafe/issues/{issue_name}")
+            spec_dir = issue_dir / "spec"
+            sessions_dir = issue_dir / "sessions"
+
+            spec_dir.mkdir(parents=True, exist_ok=True)
+            sessions_dir.mkdir(parents=True, exist_ok=True)
+            
             if git_ops.branch_exists(feature_branch):
                 console.print(f"[dim]Branch '{feature_branch}' already exists, switching to it...[/dim]")
                 git_ops.checkout_branch(feature_branch)
@@ -618,7 +620,7 @@ def prepare(
                 console.print(f"[dim]Creating and switching to branch '{feature_branch}'...[/dim]")
                 git_ops.create_branch(feature_branch)
 
-        # 7. Save config.yaml
+        # 6. Save config.yaml (in worktree's issue dir if using worktree, else local)
         config_file = issue_dir / "config.yaml"
         
         # Load global config to get default auto settings
@@ -1248,7 +1250,7 @@ def spec(
                 
                 # Auto mode: execute next phase
                 if auto:
-                    _execute_next_phase_auto("plan", current_branch)
+                    _execute_next_phase_auto("plan", issue_name)
                 else:
                     console.print("[dim]Next step:[/dim] [bold]cafe plan[/bold]")
             else:
@@ -1566,7 +1568,7 @@ def plan(
                 
                 # Auto mode: execute next phase
                 if auto:
-                    _execute_next_phase_auto("develop", current_branch)
+                    _execute_next_phase_auto("develop", issue_name)
                 else:
                     console.print("[dim]Next step:[/dim] [bold]cafe develop[/bold]")
         else:
@@ -1774,7 +1776,7 @@ def develop(
             
             # Auto mode: execute next phase
             if auto:
-                _execute_next_phase_auto("review", current_branch)
+                _execute_next_phase_auto("review", issue_name)
             else:
                 console.print("[dim]Next steps:[/dim]")
                 console.print(f"[dim]  1. Review changes: git diff[/dim]")

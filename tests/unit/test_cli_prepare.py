@@ -265,8 +265,8 @@ class TestPrepareCommandWorktree:
         mock_git_ops.create_worktree.assert_called_once()
         mock_git_ops.create_branch.assert_not_called()
 
-        # 驗證 worktree_path 儲存到 config.yaml
-        config_file = temp_repo_dir / ".cafe" / "issues" / "test-issue" / "config.yaml"
+        # 驗證 worktree_path 儲存到 config.yaml（在 worktree 內）
+        config_file = temp_repo_dir / worktree_path / ".cafe" / "issues" / "test-issue" / "config.yaml"
         with open(config_file) as f:
             config_data = yaml.safe_load(f)
             assert config_data["worktree_path"] == worktree_path
@@ -337,8 +337,8 @@ class TestPrepareCommandWorktree:
         )
         mock_git_ops.create_branch.assert_not_called()
 
-        # 驗證 config.yaml 包含 worktree_path
-        config_file = temp_repo_dir / ".cafe" / "issues" / "my-feature" / "config.yaml"
+        # 驗證 config.yaml 包含 worktree_path（在 worktree 內）
+        config_file = temp_repo_dir / "worktrees/my-feature" / ".cafe" / "issues" / "my-feature" / "config.yaml"
         with open(config_file) as f:
             config_data = yaml.safe_load(f)
             assert config_data["worktree_path"] == "worktrees/my-feature"
