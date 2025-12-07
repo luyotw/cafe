@@ -109,6 +109,78 @@ class TestSpecPhasePromptPaths:
         # 只要是相對路徑即可
         assert "/.cafe/issues/test-issue/spec/" not in prompt, f"Prompt should not use git ignore format (/.cafe)"
 
+    def test_worktree_prompt_uses_cwd_relative_paths(self, tmp_path, mock_agent_manager, mock_permission, mock_git, monkeypatch):
+        """在 worktree 中，prompt 應使用相對於當前工作目錄的路徑，而非包含 worktree 路徑"""
+        # Setup: 模擬 worktree 環境
+        # 主 repo 在 tmp_path/my-repo
+        # worktree 在 tmp_path/my-repo/.cafe/worktrees/test-issue
+        
+        repo_root = tmp_path / "my-repo"
+        git_dir = repo_root / ".git"
+        git_dir.mkdir(parents=True)
+        
+        # Worktree 目錄
+        worktree_dir = repo_root / ".cafe" / "worktrees" / "test-issue"
+        worktree_git_dir = repo_root / ".git" / "worktrees" / "test-issue"
+        worktree_git_dir.mkdir(parents=True, exist_ok=True)
+        
+        # 在 worktree 中建立 issue 目錄結構
+        issue_dir = worktree_dir / ".cafe" / "issues" / "test-issue"
+        spec_dir = issue_dir / "spec"
+        spec_dir.mkdir(parents=True, exist_ok=True)
+        
+        # 切換到 worktree 目錄（模擬在 worktree 中工作）
+        monkeypatch.chdir(worktree_dir)
+        
+        # Capture the prompt passed to agent
+        captured_prompts = []
+        
+        def capture_execute(agent_name, prompt, *args, **kwargs):
+            captured_prompts.append(prompt)
+            return (
+                "CAFE_READY_FOR_REVIEW\n\nTest response",
+                TokenUsage(),
+                [],
+                [],
+                ""
+            )
+        
+        mock_agent_manager.execute.side_effect = capture_execute
+        
+        phase = SpecPhase(
+            agent_manager=mock_agent_manager,
+            permission_handler=mock_permission,
+            git_ops=mock_git,
+            workflow_mode=WorkflowMode.LOCAL,
+            pm_agent="Roger",
+            interactive=False,
+            issue_name="test-issue",
+            user_input="Test requirements",
+        )
+        
+        # Execute
+        result = phase.execute()
+        
+        # Assert
+        assert result.status == PhaseStatus.COMPLETED
+        assert len(captured_prompts) > 0
+        
+        # 檢查 prompt 內容
+        prompt = captured_prompts[-1]
+        
+        # 關鍵斷言：在 worktree 中，prompt 不應包含 worktree 路徑
+        # 錯誤的格式：.cafe/worktrees/test-issue/.cafe/issues/test-issue/spec/
+        # 正確的格式：.cafe/issues/test-issue/spec/
+        assert ".cafe/worktrees/test-issue/.cafe/issues/test-issue/spec/" not in prompt, \
+            f"Prompt should not contain worktree path prefix in worktree environment"
+        
+        # Prompt 應該只包含相對於 worktree 根目錄的路徑
+        assert ".cafe/issues/test-issue/spec/" in prompt, \
+            f"Prompt should contain cwd-relative path, got: {prompt[:500]}"
+        
+        # 確保不包含絕對路徑
+        assert str(tmp_path) not in prompt, f"Prompt should not contain absolute path {tmp_path}"
+
 
 
 class TestPlanPhasePromptPaths:
@@ -187,3 +259,81 @@ class TestPlanPhasePromptPaths:
         assert ".cafe/issues/test-issue/spec/" in prompt, f"Prompt should contain relative spec path"
         # plan 路徑
         assert ".cafe/issues/test-issue/plan/" in prompt, f"Prompt should contain relative plan path"
+
+    def test_worktree_prompt_uses_cwd_relative_paths(self, tmp_path, mock_agent_manager, mock_permission, mock_git, monkeypatch):
+        """在 worktree 中，PlanPhase 的 prompt 應使用相對於當前工作目錄的路徑"""
+        # Setup: 模擬 worktree 環境
+        repo_root = tmp_path / "my-repo"
+        git_dir = repo_root / ".git"
+        git_dir.mkdir(parents=True)
+        
+        # Worktree 目錄
+        worktree_dir = repo_root / ".cafe" / "worktrees" / "test-issue"
+        worktree_git_dir = repo_root / ".git" / "worktrees" / "test-issue"
+        worktree_git_dir.mkdir(parents=True, exist_ok=True)
+        
+        # 在 worktree 中建立 issue 目錄結構
+        issue_dir = worktree_dir / ".cafe" / "issues" / "test-issue"
+        spec_dir = issue_dir / "spec"
+        plan_dir = issue_dir / "plan"
+        spec_dir.mkdir(parents=True, exist_ok=True)
+        plan_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Create spec file
+        spec_file = spec_dir / "spec_001.md"
+        spec_file.write_text("# Test Spec")
+        
+        # 切換到 worktree 目錄（模擬在 worktree 中工作）
+        monkeypatch.chdir(worktree_dir)
+        
+        # Capture the prompt passed to agent
+        captured_prompts = []
+        
+        def capture_execute(agent_name, prompt, *args, **kwargs):
+            captured_prompts.append(prompt)
+            return (
+                "CAFE_READY_FOR_REVIEW\n\nPlan ready",
+                TokenUsage(),
+                [],
+                [],
+                ""
+            )
+        
+        mock_agent_manager.execute.side_effect = capture_execute
+        
+        phase = PlanPhase(
+            agent_manager=mock_agent_manager,
+            permission_handler=mock_permission,
+            git_ops=mock_git,
+            spec_file=str(spec_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            dev_agent="David",
+            interactive=False,
+            issue_name="test-issue",
+            template_path=self.create_template_file(worktree_dir),
+        )
+        
+        # Execute
+        result = phase.execute()
+        
+        # Assert
+        assert result.status == PhaseStatus.COMPLETED
+        assert len(captured_prompts) > 0
+        
+        # 檢查 prompt 內容
+        prompt = captured_prompts[-1]
+        
+        # 關鍵斷言：在 worktree 中，prompt 不應包含 worktree 路徑
+        # 錯誤的格式：.cafe/worktrees/test-issue/.cafe/issues/test-issue/
+        # 正確的格式：.cafe/issues/test-issue/
+        assert ".cafe/worktrees/test-issue/.cafe/issues/test-issue/" not in prompt, \
+            f"Prompt should not contain worktree path prefix in worktree environment"
+        
+        # Prompt 應該只包含相對於 worktree 根目錄的路徑
+        assert ".cafe/issues/test-issue/spec/" in prompt, \
+            f"Prompt should contain cwd-relative spec path"
+        assert ".cafe/issues/test-issue/plan/" in prompt, \
+            f"Prompt should contain cwd-relative plan path"
+        
+        # 確保不包含絕對路徑
+        assert str(tmp_path) not in prompt, f"Prompt should not contain absolute path {tmp_path}"

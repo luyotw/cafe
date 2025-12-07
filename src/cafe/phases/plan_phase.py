@@ -12,7 +12,7 @@ from cafe.core.phase import Phase
 from cafe.core.status_codes import PhaseStatusCode, StatusCodeParser, generate_status_code_prompt
 from cafe.core.types import PhaseProgress, PhaseResult, PhaseStatus, WorkflowMode
 from cafe.ui.display import Display
-from cafe.utils.git_utils import get_repo_root, to_relative_path
+from cafe.utils.git_utils import get_repo_root
 
 # Maximum number of planning iterations to prevent infinite loops
 MAX_PLANNING_ITERATIONS = 10
@@ -298,34 +298,27 @@ class PlanPhase(Phase):
             iteration_number = self._get_next_iteration_number("plan", self.phase_dir)
             self.plan_file = self._get_versioned_file_path("plan", iteration_number, self.phase_dir)
 
-        # 轉換所有檔案路徑為相對路徑（用於 prompt）
-        # 分別處理每個路徑，避免一個失敗導致全部fallback
+        # 轉換所有檔案路徑為相對於當前工作目錄的路徑（用於 prompt）
+        # 使用 to_cwd_relative_path 以支援 worktree 環境
+        from cafe.utils.git_utils import to_cwd_relative_path
+        
         try:
-            repo_root = get_repo_root()
+            plan_file_path = to_cwd_relative_path(Path(self.plan_file).resolve())
         except (ValueError, OSError):
-            # 無法取得 repo root，全部使用絕對路徑
             plan_file_path = self.plan_file
+
+        try:
+            spec_file_path = to_cwd_relative_path(Path(self.spec_file).resolve())
+        except (ValueError, OSError):
             spec_file_path = self.spec_file
-            template_path = self.template_path
+
+        if self.template_path:
+            try:
+                template_path = to_cwd_relative_path(Path(self.template_path).resolve())
+            except (ValueError, OSError):
+                template_path = self.template_path
         else:
-            # 有 repo root，逐個轉換
-            try:
-                plan_file_path = to_relative_path(Path(self.plan_file).resolve(), repo_root)
-            except (ValueError, OSError):
-                plan_file_path = self.plan_file
-
-            try:
-                spec_file_path = to_relative_path(Path(self.spec_file).resolve(), repo_root)
-            except (ValueError, OSError):
-                spec_file_path = self.spec_file
-
-            if self.template_path:
-                try:
-                    template_path = to_relative_path(Path(self.template_path).resolve(), repo_root)
-                except (ValueError, OSError):
-                    template_path = self.template_path
-            else:
-                template_path = None
+            template_path = None
 
         status_code_prompt = generate_status_code_prompt(
             valid_codes=[
