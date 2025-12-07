@@ -1605,3 +1605,165 @@ class TestWriteToolPathStripping:
             assert "Edit" in tools_value
 
 
+class TestGeminiSessionManagement:
+    """Test Gemini session management functionality."""
+
+    def test_gemini_passes_resume_parameter_when_session_id_exists(self) -> None:
+        """測試當 config.session_id 存在時，CLI 指令包含 --resume {session_id}"""
+        config = AgentConfig(
+            name="Roger",
+            cli=AgentCLI.GEMINI,
+            session_id="test-session-123"
+        )
+        executor = AgentExecutor(config)
+
+        with patch("subprocess.Popen") as mock_popen, \
+             patch("sys.platform", "win32"):
+            # Mock process
+            mock_process = MagicMock()
+            mock_process.stdout.readline.side_effect = [
+                '{"type":"init","session_id":"test-session-123"}\n',
+                '{"type":"message","role":"assistant","content":"Response"}\n',
+                '{"response": "Response"}\n',
+                '',
+            ]
+            mock_process.stderr.read.return_value = ""
+            mock_process.wait.return_value = 0
+            mock_popen.return_value = mock_process
+
+            executor._execute_gemini("Test prompt")
+
+            # Verify command includes --resume parameter
+            call_args = mock_popen.call_args[0][0]
+            assert "--resume" in call_args
+            resume_index = call_args.index("--resume")
+            assert call_args[resume_index + 1] == "test-session-123"
+
+    def test_gemini_does_not_pass_resume_parameter_when_no_session_id(self) -> None:
+        """測試當 config.session_id 不存在時，CLI 指令不包含 --resume"""
+        config = AgentConfig(name="Roger", cli=AgentCLI.GEMINI)
+        executor = AgentExecutor(config)
+
+        with patch("subprocess.Popen") as mock_popen, \
+             patch("sys.platform", "win32"):
+            # Mock process
+            mock_process = MagicMock()
+            mock_process.stdout.readline.side_effect = [
+                '{"type":"init","session_id":"new-session-456"}\n',
+                '{"type":"message","role":"assistant","content":"Response"}\n',
+                '{"response": "Response"}\n',
+                '',
+            ]
+            mock_process.stderr.read.return_value = ""
+            mock_process.wait.return_value = 0
+            mock_popen.return_value = mock_process
+
+            executor._execute_gemini("Test prompt")
+
+            # Verify command does not include --resume parameter
+            call_args = mock_popen.call_args[0][0]
+            assert "--resume" not in call_args
+
+    def test_gemini_extracts_session_id_from_init_message(self) -> None:
+        """測試從 Gemini init 訊息中提取 session_id"""
+        config = AgentConfig(name="Roger", cli=AgentCLI.GEMINI)
+        executor = AgentExecutor(config)
+
+        with patch("subprocess.Popen") as mock_popen, \
+             patch("sys.platform", "win32"):
+            # Mock process with init message containing session_id
+            mock_process = MagicMock()
+            mock_process.stdout.readline.side_effect = [
+                '{"type":"init","session_id":"extracted-session-789","model":"auto"}\n',
+                '{"type":"message","role":"assistant","content":"Hello"}\n',
+                '{"response": "Hello"}\n',
+                '',
+            ]
+            mock_process.stderr.read.return_value = ""
+            mock_process.wait.return_value = 0
+            mock_popen.return_value = mock_process
+
+            # Execute without existing session_id
+            executor._execute_gemini("Test prompt")
+
+            # Verify session_id was extracted and stored
+            assert executor.config.session_id == "extracted-session-789"
+
+    def test_gemini_complete_session_flow(self) -> None:
+        """測試完整的 session 流程：第一次執行提取 session_id，第二次執行帶上 session_id"""
+        config = AgentConfig(name="Roger", cli=AgentCLI.GEMINI)
+        executor = AgentExecutor(config)
+
+        with patch("subprocess.Popen") as mock_popen, \
+             patch("sys.platform", "win32"):
+            # First execution: no session_id
+            mock_process_1 = MagicMock()
+            mock_process_1.stdout.readline.side_effect = [
+                '{"type":"init","session_id":"first-session-abc","model":"auto"}\n',
+                '{"type":"message","role":"assistant","content":"First response"}\n',
+                '{"response": "First response"}\n',
+                '',
+            ]
+            mock_process_1.stderr.read.return_value = ""
+            mock_process_1.wait.return_value = 0
+            mock_popen.return_value = mock_process_1
+
+            response1 = executor._execute_gemini("First prompt")
+            assert response1.response == "First response"
+            assert executor.config.session_id == "first-session-abc"
+
+            # Verify first call didn't include --resume
+            first_call_args = mock_popen.call_args_list[0][0][0]
+            assert "--resume" not in first_call_args
+
+            # Second execution: with session_id
+            mock_process_2 = MagicMock()
+            mock_process_2.stdout.readline.side_effect = [
+                '{"type":"init","session_id":"first-session-abc","model":"auto"}\n',
+                '{"type":"message","role":"assistant","content":"Second response"}\n',
+                '{"response": "Second response"}\n',
+                '',
+            ]
+            mock_process_2.stderr.read.return_value = ""
+            mock_process_2.wait.return_value = 0
+            mock_popen.return_value = mock_process_2
+
+            response2 = executor._execute_gemini("Second prompt")
+            assert response2.response == "Second response"
+            assert executor.config.session_id == "first-session-abc"
+
+            # Verify second call included --resume
+            second_call_args = mock_popen.call_args_list[1][0][0]
+            assert "--resume" in second_call_args
+            resume_index = second_call_args.index("--resume")
+            assert second_call_args[resume_index + 1] == "first-session-abc"
+
+    def test_gemini_updates_session_id_when_changed(self) -> None:
+        """測試當 Gemini 回傳新的 session_id 時（例如 session 過期），能正確更新"""
+        config = AgentConfig(
+            name="Roger",
+            cli=AgentCLI.GEMINI,
+            session_id="old-session-123"
+        )
+        executor = AgentExecutor(config)
+
+        with patch("subprocess.Popen") as mock_popen, \
+             patch("sys.platform", "win32"):
+            # Mock process returns a new session_id (e.g., due to expiration)
+            mock_process = MagicMock()
+            mock_process.stdout.readline.side_effect = [
+                '{"type":"init","session_id":"new-session-456","model":"auto"}\n',
+                '{"type":"message","role":"assistant","content":"Response with new session"}\n',
+                '{"response": "Response with new session"}\n',
+                '',
+            ]
+            mock_process.stderr.read.return_value = ""
+            mock_process.wait.return_value = 0
+            mock_popen.return_value = mock_process
+
+            executor._execute_gemini("Test prompt")
+
+            # Should update to new session_id
+            assert executor.config.session_id == "new-session-456"
+
+

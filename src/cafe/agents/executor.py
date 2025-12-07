@@ -363,7 +363,7 @@ class AgentExecutor:
                                 streaming_log.append(content)
                                 response_text = content  # 只保存最後一個片段
 
-                        # Extract session_id
+                        # Extract session_id (from init message for Gemini, or any message for Claude)
                         if "session_id" in data and not session_id:
                             session_id = data["session_id"]
 
@@ -419,8 +419,8 @@ class AgentExecutor:
             err.cli_command_args = cmd[1:]
             raise err
 
-        # Save session_id if extracted
-        if session_id and not self.config.session_id:
+        # Save session_id if extracted (always update to handle session expiration)
+        if session_id:
             self.config.session_id = session_id
 
         # Use custom response parser if provided
@@ -647,6 +647,10 @@ class AgentExecutor:
 
         # Build command
         cmd = ["gemini", "-p", prompt]
+
+        # Add session if configured
+        if self.config.session_id:
+            cmd.extend(["--resume", self.config.session_id])
 
         # Add model if specified in config
         if self.config.model:
