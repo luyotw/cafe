@@ -364,32 +364,23 @@ class PRPhase(Phase):
         pr_dir = spec_path.parent.parent / "pr"
         pr_dir.mkdir(parents=True, exist_ok=True)
 
-        # IMPORTANT: allowed_tools 使用 gitignore 格式的路徑規則：
-        #   - 以 / 開頭表示從專案根目錄開始的路徑
-        #   - 例如：/.cafe/issues/myissue/pr/title.txt
-        #   - 這樣可以精確匹配，避免誤配其他目錄下的同名檔案
-        import os
-        project_root = Path(os.getcwd()).resolve()
+        # Use path relative to current working directory (supports worktree)
+        from cafe.utils.git_utils import to_cwd_relative_path
 
-        # 使用 resolve() 確保是絕對路徑，才能正確使用 relative_to()
-        title_file = (pr_dir / "title.txt").resolve()
-        body_file = (pr_dir / "body.md").resolve()
+        title_file = pr_dir / "title.txt"
+        body_file = pr_dir / "body.md"
 
         try:
-            relative_title_path = title_file.relative_to(project_root)
-            # 加上 / 前綴表示從專案根目錄開始（gitignore 格式）
-            title_file_pattern = f"/{relative_title_path}"
+            title_file_pattern = to_cwd_relative_path(title_file)
         except ValueError:
-            # If path is not relative to cwd, use absolute path
-            title_file_pattern = str(title_file)
+            # Fallback to absolute path if file is not under cwd
+            title_file_pattern = str(title_file.resolve())
 
         try:
-            relative_body_path = body_file.relative_to(project_root)
-            # 加上 / 前綴表示從專案根目錄開始（gitignore 格式）
-            body_file_pattern = f"/{relative_body_path}"
+            body_file_pattern = to_cwd_relative_path(body_file)
         except ValueError:
-            # If path is not relative to cwd, use absolute path
-            body_file_pattern = str(body_file)
+            # Fallback to absolute path if file is not under cwd
+            body_file_pattern = str(body_file.resolve())
 
         # Derive plan file path - use latest versioned file if available
         plan_dir = spec_path.parent.parent / "plan"

@@ -241,6 +241,49 @@ def to_relative_path(file_path: Union[str, Path], repo_root: Union[str, Path]) -
     return str(relative_path)
 
 
+def to_cwd_relative_path(file_path: Union[str, Path]) -> str:
+    """將檔案路徑轉換為相對於當前工作目錄的相對路徑。
+
+    此函數支援 worktree 環境，因為它使用當前工作目錄作為基準，
+    而不是 repository root。在 worktree 中，當前工作目錄就是 worktree 目錄。
+
+    Args:
+        file_path: 檔案路徑（可以是絕對或相對路徑）
+
+    Returns:
+        相對於當前工作目錄的普通相對路徑字串（不帶前綴 /）
+
+    Raises:
+        ValueError: 如果 file_path 不在當前工作目錄下
+
+    Example:
+        在普通 repo 中:
+        >>> # cwd = /Users/me/repo
+        >>> path = to_cwd_relative_path("/Users/me/repo/.cafe/issues/x/spec.md")
+        >>> print(path)  # .cafe/issues/x/spec.md
+
+        在 worktree 中:
+        >>> # cwd = /Users/me/repo/.cafe/worktrees/issue33
+        >>> path = to_cwd_relative_path(
+        ...     "/Users/me/repo/.cafe/worktrees/issue33/.cafe/issues/issue33/spec.md"
+        ... )
+        >>> print(path)  # .cafe/issues/issue33/spec.md
+    """
+    import os
+
+    file_path = Path(file_path)
+    if not file_path.is_absolute():
+        file_path = file_path.resolve()
+
+    cwd = Path(os.getcwd()).resolve()
+
+    try:
+        relative_path = file_path.relative_to(cwd)
+        return str(relative_path)
+    except ValueError:
+        raise ValueError(f"File path {file_path} is not under current working directory {cwd}")
+
+
 def to_git_ignore_path(file_path: Union[str, Path], repo_root: Union[str, Path]) -> str:
     """將絕對路徑轉換為 git ignore 格式的相對路徑。
 

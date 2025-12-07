@@ -206,19 +206,14 @@ class PlanPhase(Phase):
 
             # Prepare allowed tools with write/edit permission for versioned plan file
             # Convert to relative path (without / prefix) - 普通相對路徑
-            # 問題2: 使用普通相對路徑（.cafe/issues/...），支援 worktree 環境
-            from cafe.utils.git_utils import get_repo_root, to_relative_path
-
-            plan_file_path = Path(self.plan_file)
-            if not plan_file_path.is_absolute():
-                plan_file_path = plan_file_path.resolve()
+            # Use path relative to current working directory (supports worktree)
+            from cafe.utils.git_utils import to_cwd_relative_path
 
             try:
-                repo_root = get_repo_root()
-                plan_file_pattern = to_relative_path(plan_file_path, repo_root)
-            except (ValueError, OSError):
-                # Fallback to absolute path if not in a git repository
-                plan_file_pattern = str(plan_file_path)
+                plan_file_pattern = to_cwd_relative_path(self.plan_file)
+            except ValueError:
+                # Fallback to absolute path if file is not under cwd
+                plan_file_pattern = str(Path(self.plan_file).resolve())
 
             # Merge base tools with previous iteration's tools (if any)
             base_allowed_tools = [

@@ -142,19 +142,18 @@ class ReviewPhase(Phase):
             # Calculate iteration number based on existing review files
             self.iteration = self._get_next_iteration_number()
 
-            # Prepare allowed tools with write permission for review file
+            # Prepare allowed tools with edit permission for review file
             review_file_name = f"review_{self.iteration:03d}.md"
             review_file_path = self.review_dir / review_file_name
 
-            # Convert to project-relative path (git ignore format: / prefix)
-            import os
-            project_root = Path(os.getcwd())
+            # Use path relative to current working directory (supports worktree)
+            from cafe.utils.git_utils import to_cwd_relative_path
+
             try:
-                relative_path = review_file_path.relative_to(project_root)
-                review_file_pattern = f"/{relative_path}"
+                review_file_pattern = to_cwd_relative_path(review_file_path)
             except ValueError:
-                # If path is not relative to cwd, use absolute path
-                review_file_pattern = str(review_file_path)
+                # Fallback to absolute path if file is not under cwd
+                review_file_pattern = str(review_file_path.resolve())
 
             base_allowed_tools = [
                 "read",                         # Read spec and plan files

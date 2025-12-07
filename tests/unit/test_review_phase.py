@@ -596,7 +596,8 @@ class TestReviewResultSaving:
             assert "bash(git show)" in history_data["allowed_tools"]
             assert "bash(git status)" in history_data["allowed_tools"]
             # ReviewPhase now uses edit instead of write (no CLI supports file-specific write)
-            assert any("edit(/.cafe/issues/myissue/review/review_" in tool for tool in history_data["allowed_tools"])
+            # Path is relative to cwd (without / prefix) to support worktree
+            assert any("edit(.cafe/issues/myissue/review/review_" in tool for tool in history_data["allowed_tools"])
             assert history_data["denied_tools"] is None  # Default when not specified
         finally:
             os.chdir(original_dir)
