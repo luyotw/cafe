@@ -648,6 +648,10 @@ class AgentExecutor:
         # Build command
         cmd = ["gemini", "-p", prompt]
 
+        # Add session if configured
+        if self.config.session_id:
+            cmd.extend(["--resume", self.config.session_id])
+
         # Add model if specified in config
         if self.config.model:
             cmd.extend(["--model", self.config.model])

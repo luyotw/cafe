@@ -1605,3 +1605,63 @@ class TestWriteToolPathStripping:
             assert "Edit" in tools_value
 
 
+class TestGeminiSessionManagement:
+    """Test Gemini session management functionality."""
+
+    def test_gemini_passes_resume_parameter_when_session_id_exists(self) -> None:
+        """測試當 config.session_id 存在時，CLI 指令包含 --resume {session_id}"""
+        config = AgentConfig(
+            name="Roger",
+            cli=AgentCLI.GEMINI,
+            session_id="test-session-123"
+        )
+        executor = AgentExecutor(config)
+
+        with patch("subprocess.Popen") as mock_popen, \
+             patch("sys.platform", "win32"):
+            # Mock process
+            mock_process = MagicMock()
+            mock_process.stdout.readline.side_effect = [
+                '{"type":"init","session_id":"test-session-123"}\n',
+                '{"type":"message","role":"assistant","content":"Response"}\n',
+                '{"response": "Response"}\n',
+                '',
+            ]
+            mock_process.stderr.read.return_value = ""
+            mock_process.wait.return_value = 0
+            mock_popen.return_value = mock_process
+
+            executor._execute_gemini("Test prompt")
+
+            # Verify command includes --resume parameter
+            call_args = mock_popen.call_args[0][0]
+            assert "--resume" in call_args
+            resume_index = call_args.index("--resume")
+            assert call_args[resume_index + 1] == "test-session-123"
+
+    def test_gemini_does_not_pass_resume_parameter_when_no_session_id(self) -> None:
+        """測試當 config.session_id 不存在時，CLI 指令不包含 --resume"""
+        config = AgentConfig(name="Roger", cli=AgentCLI.GEMINI)
+        executor = AgentExecutor(config)
+
+        with patch("subprocess.Popen") as mock_popen, \
+             patch("sys.platform", "win32"):
+            # Mock process
+            mock_process = MagicMock()
+            mock_process.stdout.readline.side_effect = [
+                '{"type":"init","session_id":"new-session-456"}\n',
+                '{"type":"message","role":"assistant","content":"Response"}\n',
+                '{"response": "Response"}\n',
+                '',
+            ]
+            mock_process.stderr.read.return_value = ""
+            mock_process.wait.return_value = 0
+            mock_popen.return_value = mock_process
+
+            executor._execute_gemini("Test prompt")
+
+            # Verify command does not include --resume parameter
+            call_args = mock_popen.call_args[0][0]
+            assert "--resume" not in call_args
+
+
