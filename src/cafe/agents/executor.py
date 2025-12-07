@@ -117,12 +117,18 @@ class AgentExecutor:
 
         return translated
 
-    def execute(self, prompt: str, allowed_tools: Optional[List[str]] = None) -> AgentResponse:
+    def execute(
+        self,
+        prompt: str,
+        allowed_tools: Optional[List[str]] = None,
+        allowed_directories: Optional[List[str]] = None
+    ) -> AgentResponse:
         """Execute the agent with given prompt.
 
         Args:
             prompt: Prompt to send to the agent
             allowed_tools: List of allowed tools (using Claude naming convention)
+            allowed_directories: List of allowed directories (e.g., [".cafe", "src"])
 
         Returns:
             AgentResponse with response text, token usage, and permission denials
@@ -135,13 +141,13 @@ class AgentExecutor:
 
         try:
             if self.config.cli == AgentCLI.CLAUDE:
-                agent_response = self._execute_claude(prompt, translated_tools)
+                agent_response = self._execute_claude(prompt, translated_tools, allowed_directories)
             elif self.config.cli == AgentCLI.GEMINI:
-                agent_response = self._execute_gemini(prompt, translated_tools)
+                agent_response = self._execute_gemini(prompt, translated_tools, allowed_directories)
             elif self.config.cli == AgentCLI.CURSOR:
-                agent_response = self._execute_cursor(prompt, translated_tools)
+                agent_response = self._execute_cursor(prompt, translated_tools, allowed_directories)
             elif self.config.cli == AgentCLI.COPILOT:
-                agent_response = self._execute_copilot(prompt, translated_tools)
+                agent_response = self._execute_copilot(prompt, translated_tools, allowed_directories)
             else:
                 raise AgentExecutionError(f"Unsupported agent CLI: {self.config.cli}")
 
@@ -445,12 +451,18 @@ class AgentExecutor:
             streaming_log=final_streaming_log
         )
 
-    def _execute_claude(self, prompt: str, allowed_tools: Optional[List[str]] = None) -> AgentResponse:
+    def _execute_claude(
+        self,
+        prompt: str,
+        allowed_tools: Optional[List[str]] = None,
+        allowed_directories: Optional[List[str]] = None
+    ) -> AgentResponse:
         """Execute Claude agent with streaming output.
 
         Args:
             prompt: Prompt to send to Claude
             allowed_tools: List of allowed tools (already translated)
+            allowed_directories: List of allowed directories
 
         Returns:
             AgentResponse with response text, token usage, and permission denials
@@ -526,8 +538,10 @@ class AgentExecutor:
         # Add streaming output format
         cmd.extend(["--output-format", "stream-json", "--verbose"])
 
-        # Include .cafe directory for tool access
-        cmd.extend(["--add-dir", ".cafe"])
+        # Add allowed directories if specified
+        if allowed_directories:
+            for directory in allowed_directories:
+                cmd.extend(["--add-dir", directory])
 
         # Execute with streaming - with session recovery
         def create_session():
@@ -632,12 +646,18 @@ class AgentExecutor:
             # Create new .geminiignore file
             geminiignore_path.write_text(f"{required_pattern}\n")
 
-    def _execute_gemini(self, prompt: str, allowed_tools: Optional[List[str]] = None) -> AgentResponse:
+    def _execute_gemini(
+        self,
+        prompt: str,
+        allowed_tools: Optional[List[str]] = None,
+        allowed_directories: Optional[List[str]] = None
+    ) -> AgentResponse:
         """Execute Gemini agent with streaming output.
 
         Args:
             prompt: Prompt to send to Gemini
             allowed_tools: List of allowed tools (already translated)
+            allowed_directories: List of allowed directories
 
         Returns:
             AgentResponse with response text, token usage, and permission denials
@@ -679,8 +699,10 @@ class AgentExecutor:
         # Add streaming JSON output format
         cmd.extend(["--output-format", "stream-json"])
 
-        # Include .cafe directory for tool access
-        cmd.extend(["--include-directories", ".cafe"])
+        # Add allowed directories if specified
+        if allowed_directories:
+            for directory in allowed_directories:
+                cmd.extend(["--include-directories", directory])
 
         # Gemini-specific parser: parse last line as final result
         def parse_gemini_response(output_lines: List[str]) -> AgentResponse:
@@ -762,12 +784,18 @@ class AgentExecutor:
 
         return agent_response
 
-    def _execute_cursor(self, prompt: str, allowed_tools: Optional[List[str]] = None) -> AgentResponse:
+    def _execute_cursor(
+        self,
+        prompt: str,
+        allowed_tools: Optional[List[str]] = None,
+        allowed_directories: Optional[List[str]] = None
+    ) -> AgentResponse:
         """Execute Cursor agent with streaming output.
 
         Args:
             prompt: Prompt to send to Cursor
             allowed_tools: List of allowed tools (ignored - cursor-agent doesn't support permission control)
+            allowed_directories: List of allowed directories (ignored - cursor-agent doesn't support this)
 
         Returns:
             AgentResponse with response text, token usage, and permission denials
@@ -832,12 +860,18 @@ class AgentExecutor:
 
         return agent_response
 
-    def _execute_copilot(self, prompt: str, allowed_tools: Optional[List[str]] = None) -> AgentResponse:
+    def _execute_copilot(
+        self,
+        prompt: str,
+        allowed_tools: Optional[List[str]] = None,
+        allowed_directories: Optional[List[str]] = None
+    ) -> AgentResponse:
         """Execute GitHub Copilot CLI agent with streaming output.
 
         Args:
             prompt: Prompt to send to Copilot
             allowed_tools: List of allowed tools (already translated)
+            allowed_directories: List of allowed directories
 
         Returns:
             AgentResponse with response text, token usage, and permission denials
@@ -873,8 +907,10 @@ class AgentExecutor:
         if self.config.session_id:
             cmd.extend(["--resume", self.config.session_id])
 
-        # Include .cafe directory for tool access
-        cmd.extend(["--add-dir", ".cafe"])
+        # Add allowed directories if specified
+        if allowed_directories:
+            for directory in allowed_directories:
+                cmd.extend(["--add-dir", directory])
 
         # Execute with streaming (line-by-line mode)
         # Use session recovery if session_id is configured
