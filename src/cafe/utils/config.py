@@ -68,7 +68,7 @@ class ConfigManager:
                     "cli": "gemini",
                 },
             },
-            "limits": {
+            "auto": {
                 "max_review_iterations": 5,
             },
             "defaults": {
