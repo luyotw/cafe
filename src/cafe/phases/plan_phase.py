@@ -627,6 +627,7 @@ class PlanPhase(Phase):
         prev_iteration = self.iteration - 1
         if prev_iteration > 0:
             prev_plan_file = self._get_versioned_file_path("plan", prev_iteration, self.phase_dir)
+            print(f"\n💾 載入最新的需求規格檔案： {prev_plan_file}\n")
             plan_content = prev_plan_file.read_text() if prev_plan_file.exists() else "（檔案未產生）"
         else:
             plan_content = "（檔案未產生）"

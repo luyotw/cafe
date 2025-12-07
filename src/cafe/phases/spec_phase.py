@@ -490,8 +490,13 @@ class SpecPhase(Phase):
 
     def _display_current_spec(self) -> None:
         """顯示目前的 spec.md 內容（僅 interactive 模式）。"""
-        spec_file = Path(self.spec_file)
-        spec_content = spec_file.read_text() if spec_file.exists() else "（檔案未產生）"
+        prev_iteration = self.iteration - 1
+        if prev_iteration > 0:
+            prev_spec_file = self._get_versioned_file_path("spec", prev_iteration, self.phase_dir)
+            print(f"\n💾 載入最新的需求規格檔案： {prev_spec_file}\n")
+            spec_content = prev_spec_file.read_text() if prev_spec_file.exists() else "（檔案未產生）"
+        else:
+            spec_content = "（檔案未產生）"
 
         # Get PM CLI info for display
         pm_cli = self.agent_manager.get_agent_config(self.pm_agent).cli.value

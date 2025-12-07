@@ -1196,6 +1196,88 @@ class TestPlanPhaseIterationDisplay:
 
         assert len(plan_display_headers) == 0, "第一輪開始時不應該顯示計畫內容"
 
+    def test_display_current_plan_first_iteration_shows_not_generated(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
+        """測試 _display_current_plan 第一輪時顯示「檔案未產生」"""
+        monkeypatch.chdir(tmp_path)
+        plan_dir = tmp_path / ".cafe" / "issues" / "test" / "plan"
+        plan_dir.mkdir(parents=True)
+
+        agent_manager = MagicMock(spec=AgentManager)
+        agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
+
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        spec_file = tmp_path / ".cafe" / "issues" / "test" / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True)
+        spec_file.write_text("# Requirements\n\n## 開發指南\nGuide")
+
+        phase = PlanPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            spec_file=str(spec_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            interactive=True,
+            git_ops=mock_git_ops,
+        )
+        phase.dev_agent = "David"
+        phase.iteration = 1  # 第一輪
+        phase.plan_file = str(plan_dir / "plan_001.md")
+        phase.phase_dir = plan_dir
+
+        with patch('builtins.print') as mock_print:
+            phase._display_current_plan()
+
+        # 驗證顯示「檔案未產生」
+        print_calls = [str(call) for call in mock_print.call_args_list]
+        assert any("檔案未產生" in str(call) for call in print_calls), \
+            f"Expected '檔案未產生' in print calls, got: {print_calls}"
+
+    def test_display_current_plan_loads_previous_iteration(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
+        """測試 _display_current_plan 載入上一輪檔案（iteration > 1）"""
+        monkeypatch.chdir(tmp_path)
+        plan_dir = tmp_path / ".cafe" / "issues" / "test" / "plan"
+        plan_dir.mkdir(parents=True)
+
+        # 建立上一輪的檔案（plan_001.md）
+        prev_plan_file = plan_dir / "plan_001.md"
+        prev_plan_file.write_text("# Previous Plan\n\n## 實作計畫\nPrevious plan content")
+
+        # 當前輪檔案（plan_002.md）還不存在
+        current_plan_file = plan_dir / "plan_002.md"
+
+        agent_manager = MagicMock(spec=AgentManager)
+        agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
+
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        spec_file = tmp_path / ".cafe" / "issues" / "test" / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True)
+        spec_file.write_text("# Requirements\n\n## 開發指南\nGuide")
+
+        phase = PlanPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            spec_file=str(spec_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            interactive=True,
+            git_ops=mock_git_ops,
+        )
+        phase.dev_agent = "David"
+        phase.iteration = 2  # 第二輪
+        phase.plan_file = str(current_plan_file)
+        phase.phase_dir = plan_dir
+
+        with patch('builtins.print') as mock_print:
+            phase._display_current_plan()
+
+        # 驗證有印出載入訊息，並包含正確的檔案路徑
+        print_calls = [str(call) for call in mock_print.call_args_list]
+        assert any("plan_001.md" in str(call) for call in print_calls), \
+            f"Expected plan_001.md in print calls, got: {print_calls}"
+        # 驗證載入的內容是上一輪的內容
+        assert any("Previous plan content" in str(call) for call in print_calls), \
+            f"Expected 'Previous plan content' in print calls, got: {print_calls}"
+
 
 class TestPlanPhaseProgressTracking:
     """Test progress tracking functionality (TDD)."""

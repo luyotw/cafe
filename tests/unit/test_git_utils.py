@@ -1,12 +1,13 @@
 """Tests for git_utils module."""
 
+import os
 import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch, mock_open
 
 import pytest
 
-from cafe.utils.git_utils import rewrite_commit_message, is_branch_initialized
+from cafe.utils.git_utils import rewrite_commit_message, is_branch_initialized, to_cwd_relative_path
 
 
 class TestRewriteCommitMessage:
@@ -177,3 +178,101 @@ class TestIsBranchInitialized:
         issue_dir.mkdir(parents=True)
 
         assert is_branch_initialized(branch_name, str(tmp_path)) is True
+
+
+class TestToCwdRelativePath:
+    """測試 to_cwd_relative_path 函數"""
+
+    def test_converts_absolute_path_to_relative(self, tmp_path, monkeypatch):
+        """測試將絕對路徑轉換為相對路徑"""
+        # 切換到 tmp_path
+        monkeypatch.chdir(tmp_path)
+        
+        # 建立測試檔案路徑
+        test_file = tmp_path / ".cafe" / "issues" / "test" / "spec.md"
+        
+        # 轉換為相對路徑
+        result = to_cwd_relative_path(test_file)
+        
+        assert result == ".cafe/issues/test/spec.md"
+
+    def test_handles_already_relative_path(self, tmp_path, monkeypatch):
+        """測試處理已經是相對路徑的情況"""
+        monkeypatch.chdir(tmp_path)
+        
+        # 使用相對路徑
+        relative_path = Path(".cafe/issues/test/spec.md")
+        
+        result = to_cwd_relative_path(relative_path)
+        
+        assert result == ".cafe/issues/test/spec.md"
+
+    def test_worktree_scenario(self, tmp_path, monkeypatch):
+        """測試 worktree 場景：cwd 是 worktree 目錄"""
+        # 模擬 worktree 結構
+        # Main repo: /repo
+        # Worktree: /repo/.cafe/worktrees/issue33
+        # File: /repo/.cafe/worktrees/issue33/.cafe/issues/issue33/spec.md
+        
+        worktree_dir = tmp_path / ".cafe" / "worktrees" / "issue33"
+        worktree_dir.mkdir(parents=True)
+        
+        # 切換到 worktree 目錄
+        monkeypatch.chdir(worktree_dir)
+        
+        # 檔案在 worktree 內
+        spec_file = worktree_dir / ".cafe" / "issues" / "issue33" / "spec.md"
+        
+        result = to_cwd_relative_path(spec_file)
+        
+        # 應該相對於 worktree 目錄
+        assert result == ".cafe/issues/issue33/spec.md"
+
+    def test_normal_repo_scenario(self, tmp_path, monkeypatch):
+        """測試一般 repo 場景：cwd 是 repo root"""
+        # 切換到 repo root
+        monkeypatch.chdir(tmp_path)
+        
+        # 檔案在 repo 內
+        spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
+        
+        result = to_cwd_relative_path(spec_file)
+        
+        assert result == ".cafe/issues/test-feature/spec/spec.md"
+
+    def test_raises_error_if_path_not_under_cwd(self, tmp_path, monkeypatch):
+        """測試路徑不在 cwd 下時拋出錯誤"""
+        # 切換到某個目錄
+        subdir = tmp_path / "subdir"
+        subdir.mkdir()
+        monkeypatch.chdir(subdir)
+        
+        # 檔案在 cwd 之外
+        outside_file = tmp_path / "outside.txt"
+        
+        with pytest.raises(ValueError, match="not under current working directory"):
+            to_cwd_relative_path(outside_file)
+
+    def test_preserves_path_separators(self, tmp_path, monkeypatch):
+        """測試保留路徑分隔符"""
+        monkeypatch.chdir(tmp_path)
+        
+        # 深層路徑
+        deep_file = tmp_path / "a" / "b" / "c" / "d" / "file.txt"
+        
+        result = to_cwd_relative_path(deep_file)
+        
+        assert result == "a/b/c/d/file.txt"
+        # 確保使用正斜線（跨平台一致）
+        assert "\\" not in result
+
+    def test_handles_path_with_dots(self, tmp_path, monkeypatch):
+        """測試處理包含點的路徑"""
+        monkeypatch.chdir(tmp_path)
+        
+        # 包含點的目錄名稱
+        test_file = tmp_path / ".hidden" / "spec_001.md"
+        
+        result = to_cwd_relative_path(test_file)
+        
+        assert result == ".hidden/spec_001.md"

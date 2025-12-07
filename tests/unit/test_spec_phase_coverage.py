@@ -305,12 +305,11 @@ class TestSpecPhaseHelperMethods:
         assert backup_file.exists()
         assert backup_file.read_text() == "Original content"
 
-    def test_display_current_spec(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
-        """測試 _display_current_spec 顯示目前內容"""
+    def test_display_current_spec_first_iteration(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
+        """測試 _display_current_spec 第一輪時顯示「檔案未產生」"""
         monkeypatch.chdir(tmp_path)
-        spec_file = tmp_path / ".cafe" / "issues" / "test" / "spec" / "spec_001.md"
-        spec_file.parent.mkdir(parents=True)
-        spec_file.write_text("# Current Spec\nSome requirements")
+        spec_dir = tmp_path / ".cafe" / "issues" / "test" / "spec"
+        spec_dir.mkdir(parents=True)
 
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
@@ -320,21 +319,63 @@ class TestSpecPhaseHelperMethods:
         phase = SpecPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
-            spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             interactive=True,
             git_ops=mock_git_ops,
         )
         phase.pm_agent = "Roger"
-        phase.iteration = 2
-        # Manually set spec_file since we're calling internal method directly
-        phase.spec_file = str(spec_file)
+        phase.iteration = 1  # 第一輪
+        phase.spec_file = str(spec_dir / "spec_001.md")
+        phase.phase_dir = spec_dir
 
         with patch('builtins.print') as mock_print:
             phase._display_current_spec()
 
-        # Verify print was called
-        assert mock_print.called
+        # 驗證顯示「檔案未產生」
+        print_calls = [str(call) for call in mock_print.call_args_list]
+        assert any("檔案未產生" in str(call) for call in print_calls), \
+            f"Expected '檔案未產生' in print calls, got: {print_calls}"
+
+    def test_display_current_spec_loads_previous_iteration(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
+        """測試 _display_current_spec 載入上一輪檔案（iteration > 1）"""
+        monkeypatch.chdir(tmp_path)
+        spec_dir = tmp_path / ".cafe" / "issues" / "test" / "spec"
+        spec_dir.mkdir(parents=True)
+
+        # 建立上一輪的檔案（spec_001.md）
+        prev_spec_file = spec_dir / "spec_001.md"
+        prev_spec_file.write_text("# Previous Spec\nPrevious requirements")
+
+        # 當前輪檔案（spec_002.md）還不存在
+        current_spec_file = spec_dir / "spec_002.md"
+
+        agent_manager = MagicMock(spec=AgentManager)
+        agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
+
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        phase = SpecPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            workflow_mode=WorkflowMode.LOCAL,
+            interactive=True,
+            git_ops=mock_git_ops,
+        )
+        phase.pm_agent = "Roger"
+        phase.iteration = 2  # 第二輪
+        phase.spec_file = str(current_spec_file)
+        phase.phase_dir = spec_dir
+
+        with patch('builtins.print') as mock_print:
+            phase._display_current_spec()
+
+        # 驗證有印出載入訊息，並包含正確的檔案路徑
+        print_calls = [str(call) for call in mock_print.call_args_list]
+        assert any("spec_001.md" in str(call) for call in print_calls), \
+            f"Expected spec_001.md in print calls, got: {print_calls}"
+        # 驗證載入的內容是上一輪的內容
+        assert any("Previous requirements" in str(call) for call in print_calls), \
+            f"Expected 'Previous requirements' in print calls, got: {print_calls}"
 
     def test_ask_user_for_clarification(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
         """測試 _ask_user_for_clarification"""
