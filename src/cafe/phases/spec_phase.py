@@ -971,7 +971,7 @@ class SpecPhase(Phase):
 
 1. 使用 Read tool 讀取 {prev_spec_file}（前一輪的分析結果）
 2. 查看使用者的最新回答（見下方）
-3. 使用 Write tool 將更新後的內容寫入 {current_spec_file}（新的版本）"""
+3. 修改 {current_spec_file}，更新內容（新的版本）"""
             
             if user_input:
                 context_section = f"""
@@ -995,12 +995,12 @@ class SpecPhase(Phase):
         
         if self.iteration == 1:
             role_reading_instruction += f"""2. 使用 Read tool 讀取 {current_spec_file} 了解初始需求內容
-3. 使用 Write tool 將分析結果（包含原始需求、使用者故事、目前規格、待釐清問題）寫入 {current_spec_file}
+3. 修改 {current_spec_file}，補充分析結果（包含原始需求、使用者故事、目前規格、待釐清問題）
 """
         else:
             role_reading_instruction += f"""2. 使用 Read tool 讀取 {prev_spec_file}（前一輪的分析結果）
 3. 整合使用者的最新回答
-4. 使用 Write tool 將更新後的分析結果寫入 {current_spec_file}（新版本）
+4. 修改 {current_spec_file}，更新分析結果（新版本）
 """
 
         base_prompt = f"""
@@ -1020,7 +1020,7 @@ PM (Product Manager)，負責需求澄清工作。請讀取 agents/{self.pm_agen
 """
 
         need_clarification_instruction = f"""**如果需要澄清（status: CAFE_NEED_CLARIFICATION）：**
-使用 Write tool 將以下內容寫入 {current_spec_file}：
+將以下內容寫入 {current_spec_file}：
    - 「## 原始需求描述」- **完整保留**用戶最初提供的原始需求，不可修改（除非用戶明確要求）。
    - 「## 使用者故事」- 用戶撰寫的使用者故事或由自動由需求描述產生的使用者故事。
    - 「## 目前的需求規格」- 整合所有已知資訊（包括使用者故事、先前的對話、用戶的最新回答），列出目前已知的完整需求。
@@ -1028,7 +1028,7 @@ PM (Product Manager)，負責需求澄清工作。請讀取 agents/{self.pm_agen
 """
 
         confirmed_instruction = f"""**如果需求已清楚（status: CAFE_READY_FOR_REVIEW）：**
-使用 Write tool 將完整需求規格文件寫入 {current_spec_file}，格式：
+將完整需求規格文件寫入 {current_spec_file}，格式：
    - 「## 原始需求描述」- **完整保留**用戶最初提供的原始需求，不可修改（除非用戶明確要求）。
    - 「## 使用者故事」- 用戶撰寫的使用者故事或由自動由需求描述產生的使用者故事。
    - 「## 需求規格」- 整合所有已確認的內容，產生最終的完整需求規格，包含功能描述、使用場景、預期行為、驗收標準等。

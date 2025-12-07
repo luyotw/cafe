@@ -369,18 +369,17 @@ class PlanPhase(Phase):
 {template_instruction}
 {status_code_prompt}
 
-**重要：使用 Edit tool 將實作計畫附加到檔案**
-- 使用 Edit tool 在「## 開發指南」區塊**之後**附加實作計畫
-- 不要使用 Write tool（會覆寫開發指南）
+**重要：修改檔案，將實作計畫附加到檔案**
+- 在「## 開發指南」區塊**之後**附加實作計畫
 - 保留「## 開發指南」區塊不變
 
 **如果需要更多資訊（status: CAFE_NEED_CLARIFICATION）：**
-使用 Edit tool 在開發指南之後附加：
+在開發指南之後附加：
    - 「## 實作計畫」- 目前的實作分析內容
    - 「## 待確認問題」- 列出需要確認的技術問題
 
 **如果分析完成（status: CAFE_READY_FOR_REVIEW）：**
-使用 Edit tool 在開發指南之後附加完整實作計畫，嚴格按照模版的章節結構和格式撰寫。
+在開發指南之後附加完整實作計畫，嚴格按照模版的章節結構和格式撰寫。
 """
         else:
             # Add user's modification request section for iteration 2+
@@ -403,21 +402,20 @@ class PlanPhase(Phase):
 **執行步驟：**
 1. 使用 Read tool 讀取 agents/{self.dev_agent}.md 了解角色定義（如有必要）
 2. 使用 Read tool 讀取 {plan_file_path} 的最新版本
-3. 根據使用者的修改要求和角色定義，使用 Edit tool **更新**現有的實作計畫（不要全部重寫）
+3. 根據使用者的修改要求和角色定義，**更新**現有的實作計畫（不要全部重寫）
 {template_instruction}
 {status_code_prompt}
 
-**重要：使用 Edit tool 更新檔案**
-- 使用 Edit tool 的 old_string/new_string 方式更新特定段落
-- 不要使用 Write tool 重寫整個檔案
+**重要：修改檔案，更新特定段落**
+- 修改特定段落的內容（使用 old_string/new_string 方式）
 - 保留「## 開發指南」區塊不變
 - 只修改需要變更的部分
 
 **如果仍需確認（status: CAFE_NEED_CLARIFICATION）：**
-使用 Edit tool 更新 {plan_file_path} 中的相關段落，並在「## 待確認問題」區塊列出需要確認的技術問題。
+更新 {plan_file_path} 中的相關段落，並在「## 待確認問題」區塊列出需要確認的技術問題。
 
 **如果分析完成（status: CAFE_READY_FOR_REVIEW）：**
-使用 Edit tool 更新 {plan_file_path} 中需要修改的段落，確保實作計畫符合使用者的要求。
+更新 {plan_file_path} 中需要修改的段落，確保實作計畫符合使用者的要求。
 """
 
     def _generate_github_prompt(self, user_input: str) -> str:

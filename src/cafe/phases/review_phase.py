@@ -533,7 +533,7 @@ class ReviewPhase(Phase):
 {recheck_instruction}
 {restriction}
 **審查結果儲存:**
-- **必須**將完整的審查結果寫入檔案：`{review_file_path}`
+- **必須**將完整的審查結果儲存到：`{review_file_path}`
 - 檔案格式為 Markdown
 - 內容包含所有審查發現的問題和建議
 
