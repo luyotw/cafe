@@ -66,9 +66,10 @@ class TestTranslateToolNamesWithPaths:
         result = executor._translate_tool_names(tools)
 
         # Gemini 工具名稱轉換，路徑保留
+        # Note: edit 也轉換為 write_file，因為 Gemini CLI 不支援 replace
         assert result == [
             "write_file(/.cafe/issues/test/spec.md)",
-            "replace(/.cafe/issues/test/spec.md)",
+            "write_file(/.cafe/issues/test/spec.md)",
             "read_file(/.cafe/issues/test/spec.md)",
         ]
 
@@ -167,7 +168,7 @@ class TestGeminiPathProcessing:
     @patch("pathlib.Path.exists")
     @patch("pathlib.Path.read_text")
     def test_strips_path_from_write_file_tool(self, mock_read_text, mock_exists, mock_execute):
-        """Gemini 的 write_file 應該移除路徑參數，replace 保持普通相對路徑"""
+        """Gemini 的 write_file 應該移除路徑參數（因為 CLI 不支援路徑限制）"""
         # Setup
         mock_exists.return_value = True
         mock_read_text.return_value = "!/.cafe\n"
@@ -180,9 +181,10 @@ class TestGeminiPathProcessing:
         executor = AgentExecutor(config)
 
         # 使用普通相對路徑（Phase 傳來的格式）
+        # Note: 這裡測試都用 write_file，因為 Gemini 不支援 replace
         allowed_tools = [
             "write_file(.cafe/issues/test/spec.md)",
-            "replace(.cafe/issues/test/spec.md)",
+            "write_file(.cafe/issues/test/plan.md)",
         ]
 
         # Execute
@@ -196,10 +198,10 @@ class TestGeminiPathProcessing:
         allowed_tools_idx = cmd.index("--allowed-tools")
         tools_arg = cmd[allowed_tools_idx + 1]
 
-        # write_file 路徑應該被移除，replace 保持普通相對路徑（不轉換為 git ignore format）
-        assert tools_arg == "write_file,replace(.cafe/issues/test/spec.md)"
-        # 不應該被轉換為 git ignore format
-        assert "/.cafe" not in tools_arg
+        # write_file 路徑應該被移除（去重後只保留一個 write_file）
+        assert tools_arg == "write_file"
+        # 不應該包含路徑
+        assert ".cafe" not in tools_arg
 
 
 class TestCopilotPathProcessing:

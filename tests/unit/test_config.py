@@ -292,6 +292,7 @@ class TestResetConfig:
     def test_reset_to_defaults(self, tmp_path: Path) -> None:
         """測試重置為預設值"""
         manager = ConfigManager(config_dir=str(tmp_path / ".cafe"))
+        original_cli = manager.get("agents.pm.cli")
 
         # Set some custom values
         manager.set("agents.pm.cli", "gemini")
@@ -302,12 +303,13 @@ class TestResetConfig:
 
         # Should be back to default
         config = manager.get("agents")
-        assert config["pm"]["cli"] == "copilot"  # Default value
+        assert config["pm"]["cli"] == original_cli
 
     def test_reset_persists_to_file(self, tmp_path: Path) -> None:
         """測試重置會持久化到檔案"""
         config_dir = tmp_path / ".cafe"
         manager = ConfigManager(config_dir=str(config_dir))
+        original_cli = manager.get("agents.pm.cli")
 
         manager.set("agents.pm.cli", "gemini")
         manager.reset()
@@ -316,7 +318,7 @@ class TestResetConfig:
         manager2 = ConfigManager(config_dir=str(config_dir))
         config = manager2.load_config()
 
-        assert config["agents"]["pm"]["cli"] == "copilot"
+        assert config["agents"]["pm"]["cli"] == original_cli
 
 
 class TestAliasResolution:
