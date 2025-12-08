@@ -35,7 +35,7 @@ class TestAgentExecutorBasics:
             assert agent_response.response == "Agent response"
             assert isinstance(agent_response.token_usage, TokenUsage)
             assert agent_response.permission_denials == []
-            mock_execute.assert_called_once_with("Test prompt", None)
+            mock_execute.assert_called_once_with("Test prompt", None, None)
 
 
 class TestAgentExecutorWithSession:
@@ -879,11 +879,12 @@ class TestCLICommandArgsGeneration:
             assert "--output-format" in agent_response.cli_command_args
             assert "stream-json" in agent_response.cli_command_args
             assert "--verbose" in agent_response.cli_command_args
-            assert "--add-dir" in agent_response.cli_command_args
-            assert ".cafe" in agent_response.cli_command_args
 
             # No allowed-tools when not specified
             assert "--allowed-tools" not in agent_response.cli_command_args
+
+            # No --add-dir when allowed_directories is None
+            assert "--add-dir" not in agent_response.cli_command_args
 
     def test_execute_claude_generates_cli_command_args_with_allowed_tools(self) -> None:
         """測試 Claude 在有 allowed_tools 時生成正確的 cli_command_args"""
@@ -950,11 +951,12 @@ class TestCLICommandArgsGeneration:
             # Check basic args (Gemini doesn't use --session parameter)
             assert "--output-format" in agent_response.cli_command_args
             assert "stream-json" in agent_response.cli_command_args
-            assert "--include-directories" in agent_response.cli_command_args
-            assert ".cafe" in agent_response.cli_command_args
 
             # No allowed-tools when not specified
             assert "--allowed-tools" not in agent_response.cli_command_args
+
+            # No --include-directories when allowed_directories is None
+            assert "--include-directories" not in agent_response.cli_command_args
 
     def test_execute_gemini_generates_cli_command_args_with_allowed_tools(self) -> None:
         """測試 Gemini 在有 allowed_tools 時生成正確的 cli_command_args"""
@@ -1768,7 +1770,6 @@ class TestGeminiSessionManagement:
 
 
 
-
 class TestPromptTooLongErrorHandling:
     """Test handling of 'Prompt is too long' errors by creating fresh session."""
 
@@ -1782,13 +1783,13 @@ class TestPromptTooLongErrorHandling:
         executor = AgentExecutor(config)
 
         call_count = 0
-        
+
         def mock_popen_side_effect(*args, **kwargs):
             nonlocal call_count
             call_count += 1
-            
+
             mock_process = MagicMock()
-            
+
             if call_count == 1:
                 # First call: return prompt too long error
                 mock_process.stdout.readline.side_effect = [
@@ -1801,7 +1802,7 @@ class TestPromptTooLongErrorHandling:
                     '{"content": "Success with new session"}\n',
                     '',
                 ]
-            
+
             mock_process.stderr.read.return_value = ""
             mock_process.wait.return_value = 0
             return mock_process
@@ -1809,27 +1810,27 @@ class TestPromptTooLongErrorHandling:
         with patch("subprocess.run") as mock_run, \
              patch("subprocess.Popen") as mock_popen, \
              patch("sys.platform", "win32"):
-            
+
             # Mock session creation
             mock_run.return_value = MagicMock(
                 stdout='{"session_id": "new-session-456"}',
                 returncode=0
             )
-            
+
             mock_popen.side_effect = mock_popen_side_effect
-            
+
             # Execute should succeed after retry
             response = executor._execute_claude("Test prompt")
-            
+
             # Should have called Popen twice (initial + retry)
             assert mock_popen.call_count == 2
-            
+
             # Should have created new session
             assert mock_run.call_count == 1
-            
+
             # Session ID should be updated
             assert executor.config.session_id == "new-session-456"
-            
+
             # Response should be from second attempt
             assert response.response == "Success with new session"
 
@@ -1845,7 +1846,7 @@ class TestPromptTooLongErrorHandling:
         with patch("subprocess.Popen") as mock_popen, \
              patch("subprocess.run") as mock_run, \
              patch("sys.platform", "win32"):
-            
+
             # Mock process returns prompt too long error
             mock_process = MagicMock()
             mock_process.stdout.readline.side_effect = [
@@ -1855,10 +1856,10 @@ class TestPromptTooLongErrorHandling:
             mock_process.stderr.read.return_value = ""
             mock_process.wait.return_value = 0
             mock_popen.return_value = mock_process
-            
+
             # Mock session creation to fail (to trigger error)
             mock_run.side_effect = Exception("Failed to create session")
-            
+
             # Should raise error with cli_command_args
             with pytest.raises(Exception):
                 executor._execute_claude("Test prompt")
@@ -1905,3 +1906,152 @@ class TestPromptTooLongErrorHandling:
 
             # Error message should indicate prompt too long
             assert "prompt is too long" in str(exc_info.value).lower()
+
+
+class TestAllowedDirectoriesParameter:
+    """測試 allowed_directories 參數處理"""
+
+    def test_execute_accepts_allowed_directories_parameter(self) -> None:
+        """測試 execute() 方法接受 allowed_directories 參數"""
+        config = AgentConfig(name="Roger", cli=AgentCLI.CLAUDE, session_id="test-session")
+        executor = AgentExecutor(config)
+
+        with patch.object(executor, "_execute_claude") as mock_execute:
+            mock_execute.return_value = AgentResponse(
+                response="Test response",
+                token_usage=TokenUsage()
+            )
+
+            executor.execute("Test prompt", allowed_directories=[".cafe", "src"])
+
+            # Verify _execute_claude was called with allowed_directories
+            mock_execute.assert_called_once_with("Test prompt", None, [".cafe", "src"])
+
+    def test_claude_adds_add_dir_parameters(self) -> None:
+        """測試 Claude 使用 --add-dir 參數"""
+        config = AgentConfig(
+            name="Roger",
+            cli=AgentCLI.CLAUDE,
+            session_id="test-session-123"
+        )
+        executor = AgentExecutor(config)
+
+        # Mock streaming process
+        mock_process = MagicMock()
+        mock_process.stdout.readline.side_effect = [
+            '{"content": "Test response"}\n',
+            "",
+        ]
+        mock_process.stderr.read.return_value = ""
+        mock_process.wait.return_value = 0
+
+        with patch("subprocess.Popen", return_value=mock_process) as mock_popen, \
+             patch("select.select", return_value=([], [], [])):
+            agent_response = executor.execute(
+                "Test prompt",
+                allowed_directories=[".cafe", "src"]
+            )
+
+            # Verify command contains --add-dir parameters
+            called_cmd = mock_popen.call_args[0][0]
+            assert "--add-dir" in called_cmd
+            cafe_index = called_cmd.index("--add-dir")
+            assert called_cmd[cafe_index + 1] == ".cafe"
+            # Find second --add-dir
+            src_index = called_cmd.index("--add-dir", cafe_index + 2)
+            assert called_cmd[src_index + 1] == "src"
+
+    def test_gemini_adds_include_directories_parameters(self) -> None:
+        """測試 Gemini 使用 --include-directories 參數"""
+        config = AgentConfig(
+            name="Roger",
+            cli=AgentCLI.GEMINI
+        )
+        executor = AgentExecutor(config)
+
+        # Mock streaming process
+        mock_process = MagicMock()
+        mock_process.stdout.readline.side_effect = [
+            '{"type": "message", "role": "assistant", "content": "Test response"}\n',
+            '{"response": "Final response"}\n',
+            "",
+        ]
+        mock_process.stderr.read.return_value = ""
+        mock_process.wait.return_value = 0
+
+        with patch("subprocess.Popen", return_value=mock_process) as mock_popen, \
+             patch.object(executor, "_ensure_geminiignore"), \
+             patch("select.select", return_value=([], [], [])):
+            agent_response = executor.execute(
+                "Test prompt",
+                allowed_directories=[".cafe", "docs"]
+            )
+
+            # Verify command contains --include-directories parameters
+            called_cmd = mock_popen.call_args[0][0]
+            assert "--include-directories" in called_cmd
+            cafe_index = called_cmd.index("--include-directories")
+            assert called_cmd[cafe_index + 1] == ".cafe"
+            # Find second --include-directories
+            docs_index = called_cmd.index("--include-directories", cafe_index + 2)
+            assert called_cmd[docs_index + 1] == "docs"
+
+    def test_copilot_adds_add_dir_parameters(self) -> None:
+        """測試 Copilot 使用 --add-dir 參數"""
+        config = AgentConfig(
+            name="Roger",
+            cli=AgentCLI.COPILOT
+        )
+        executor = AgentExecutor(config)
+
+        # Mock streaming process
+        mock_process = MagicMock()
+        mock_process.stdout.readline.side_effect = [
+            "Test response\n",
+            "",
+        ]
+        mock_process.stderr.read.return_value = ""
+        mock_process.wait.return_value = 0
+
+        with patch("subprocess.Popen", return_value=mock_process) as mock_popen, \
+             patch("select.select", return_value=([], [], [])):
+            agent_response = executor.execute(
+                "Test prompt",
+                allowed_directories=[".cafe", "tests"]
+            )
+
+            # Verify command contains --add-dir parameters
+            called_cmd = mock_popen.call_args[0][0]
+            assert "--add-dir" in called_cmd
+            cafe_index = called_cmd.index("--add-dir")
+            assert called_cmd[cafe_index + 1] == ".cafe"
+            # Find second --add-dir
+            tests_index = called_cmd.index("--add-dir", cafe_index + 2)
+            assert called_cmd[tests_index + 1] == "tests"
+
+    def test_allowed_directories_defaults_to_none(self) -> None:
+        """測試 allowed_directories 預設為 None 時不加參數"""
+        config = AgentConfig(
+            name="Roger",
+            cli=AgentCLI.CLAUDE,
+            session_id="test-session"
+        )
+        executor = AgentExecutor(config)
+
+        # Mock streaming process
+        mock_process = MagicMock()
+        mock_process.stdout.readline.side_effect = [
+            '{"content": "Test response"}\n',
+            "",
+        ]
+        mock_process.stderr.read.return_value = ""
+        mock_process.wait.return_value = 0
+
+        with patch("subprocess.Popen", return_value=mock_process) as mock_popen, \
+             patch("select.select", return_value=([], [], [])):
+            executor.execute("Test prompt")
+
+            # Verify no --add-dir in command when allowed_directories is None
+            called_cmd = mock_popen.call_args[0][0]
+            assert "--add-dir" not in called_cmd
+

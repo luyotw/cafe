@@ -339,11 +339,12 @@ class TestExecuteAgentIteration:
         )
 
         # Verify agent_manager.execute was called with correct parameters
-        # Should only have: agent_name, prompt, allowed_tools (NO denied_tools)
+        # Should have: agent_name, prompt, allowed_tools, allowed_directories
         agent_manager.execute.assert_called_once_with(
             "test_agent",
             "Test prompt",
             allowed_tools=["write", "read", "bash"],
+            allowed_directories=[".cafe"],
         )
 
 
@@ -928,3 +929,18 @@ class TestMergeAllowedTools:
 
         # Verify - should only have base tools
         assert set(result) == set(base_tools)
+
+
+class TestPhaseAllowedDirectories:
+    """測試 Phase 的 _get_allowed_directories 方法"""
+
+    def test_get_allowed_directories_returns_cafe_directory(self, tmp_path: Path) -> None:
+        """測試 _get_allowed_directories 回傳 .cafe 目錄"""
+        # Setup
+        phase = ConcretePhase()
+
+        # Execute
+        result = phase._get_allowed_directories()
+
+        # Verify
+        assert result == [".cafe"]
