@@ -1729,6 +1729,11 @@ def develop(
             console.print()
             console.print("─" * 80)
             console.print()
+            
+            # If interactive and no user_input provided yet, prompt for it
+            if interactive and not user_input:
+                user_input = typer.prompt("請輸入您的回應")
+                console.print()
 
         # Parse approve_denied_tools if provided
         approved_denial_indices: List[int] = []
@@ -1786,6 +1791,31 @@ def develop(
             console.print(f"[red]❌ Development failed: {result.message}[/red]")
             raise typer.Exit(1)
         elif result.status.value == "in_progress":
+            # Check if this is a NEED_CLARIFICATION status
+            if result.data.get("status_code") == "NEED_CLARIFICATION":
+                # Prompt for user input in interactive mode
+                if interactive:
+                    console.print()
+                    user_response = typer.prompt("請輸入您的回應")
+                    console.print()
+                    
+                    # Re-run develop with user response
+                    ctx.invoke(
+                        develop,
+                        ctx=ctx,
+                        mode=mode,
+                        issue_id=issue_id,
+                        dev_agent=dev_agent,
+                        config_file=config_file,
+                        show_prompt=show_prompt,
+                        interactive=interactive,
+                        approve_denied_tools=approve_denied_tools,
+                        user_input=user_response,
+                        pr_number=pr_number,
+                        auto=auto,
+                    )
+                    return
+            
             console.print(f"[yellow]⏸️  Development paused: {result.message}[/yellow]")
             console.print(f"[dim]Resume with: cafe develop[/dim]")
 
