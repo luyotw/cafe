@@ -353,7 +353,14 @@ class DevelopPhase(Phase):
             # Note: The actual permission handling (calling _handle_previous_permission_denials)
             # will be done in execute() method when constructing allowed_tools
 
-        # No special handling needed
+        # Handle NEED_CLARIFICATION - use user_input if provided
+        if prev_status == "CAFE_NEED_CLARIFICATION":
+            user_input = self.user_input if self.user_input else ""
+            self.user_input = ""  # Clear after use
+            return user_input
+
+        # No special handling needed - clear user_input to avoid misuse
+        self.user_input = ""
         return ""
 
     def _get_last_develop_timestamp(self):
