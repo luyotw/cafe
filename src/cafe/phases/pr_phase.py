@@ -410,14 +410,14 @@ class PRPhase(Phase):
         # Build tasks based on what needs to be generated
         tasks = []
         if generate_title:
-            tasks.append(f"""1. 將 PR title 寫入 `{title_file}`
+            tasks.append(f"""1. 修改既有檔案 `{title_file}`，用 PR title 取代原本內容
    - 一行，簡潔明確（不超過 80 字元）
    - 描述這個 PR 做了什麼
    - 範例：Add user authentication with OAuth2 support""")
 
         if generate_body:
             task_num = "2" if generate_title else "1"
-            tasks.append(f"""{task_num}. 將 PR description 寫入 `{body_file}`（Markdown 格式）
+            tasks.append(f"""{task_num}. 修改既有檔案 `{body_file}`，用 PR description 取代原本內容（Markdown 格式）
    - ## Summary - 簡要說明（2-3 句話）
    - ## Changes - 主要變更（bullet points）
    - ## Test Plan - 如何測試{issue_instruction}""")
