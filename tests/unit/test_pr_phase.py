@@ -898,7 +898,7 @@ class TestCustomTitleAndBody:
         git_ops.get_commits_between.return_value = "commit1\ncommit2"
 
         # Mock agent to write title and body files
-        def mock_agent_execute(agent_name, prompt, allowed_tools):
+        def mock_agent_execute(agent_name, prompt, allowed_tools, allowed_directories=None):
             pr_dir = spec_file.parent.parent / "pr"
             pr_dir.mkdir(parents=True, exist_ok=True)
             (pr_dir / "title.txt").write_text("Auto Generated Title")
@@ -970,7 +970,7 @@ class TestPartialCustomTitleOrBody:
         git_ops.get_commits_between.return_value = "commit1\ncommit2"
 
         # Mock agent to write only body file (title is custom)
-        def mock_agent_execute(agent_name, prompt, allowed_tools):
+        def mock_agent_execute(agent_name, prompt, allowed_tools, allowed_directories=None):
             pr_dir = spec_file.parent.parent / "pr"
             # Agent should only generate body
             (pr_dir / "body.md").write_text("## Summary\nGenerated body content")
@@ -1046,7 +1046,7 @@ class TestPartialCustomTitleOrBody:
         git_ops.get_commits_between.return_value = "commit1\ncommit2"
 
         # Mock agent to write only title file (body is custom)
-        def mock_agent_execute(agent_name, prompt, allowed_tools):
+        def mock_agent_execute(agent_name, prompt, allowed_tools, allowed_directories=None):
             pr_dir = spec_file.parent.parent / "pr"
             # Agent should only generate title
             (pr_dir / "title.txt").write_text("Generated PR Title")
@@ -1189,7 +1189,7 @@ class TestPRExistingFiles:
         git_ops.get_commits_between.return_value = "commit1\ncommit2"
 
         # Mock agent to write new files
-        def mock_agent_execute(agent_name, prompt, allowed_tools):
+        def mock_agent_execute(agent_name, prompt, allowed_tools, allowed_directories=None):
             (pr_dir / "title.txt").write_text("New Generated Title")
             (pr_dir / "body.md").write_text("New Generated Body")
             return "CAFE_CONFIRMED", TokenUsage(), [], None, []

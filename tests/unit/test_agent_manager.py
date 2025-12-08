@@ -139,7 +139,7 @@ class TestAgentExecution:
 
             assert response == "Agent response"
             assert streaming_log == []
-            mock_execute.assert_called_once_with("Test prompt", None)
+            mock_execute.assert_called_once_with("Test prompt", None, None)
 
     def test_execute_returns_tuple_with_token_usage(self) -> None:
         """測試 execute 回傳 5-tuple (response, token_usage, permission_denials, cli_command_args, streaming_log)"""

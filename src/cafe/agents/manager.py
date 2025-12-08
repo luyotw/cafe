@@ -108,13 +108,20 @@ class AgentManager:
             return None
         return self.agents.get(self.current_agent_name)
 
-    def execute(self, agent_name: str, prompt: str, allowed_tools: Optional[List[str]] = None) -> Tuple[str, TokenUsage, List, Optional[List[str]], List[str]]:
+    def execute(
+        self,
+        agent_name: str,
+        prompt: str,
+        allowed_tools: Optional[List[str]] = None,
+        allowed_directories: Optional[List[str]] = None
+    ) -> Tuple[str, TokenUsage, List, Optional[List[str]], List[str]]:
         """Execute prompt with specified agent.
 
         Args:
             agent_name: Name of agent to use
             prompt: Prompt to execute
             allowed_tools: List of allowed tools (using Claude naming convention)
+            allowed_directories: List of allowed directories
 
         Returns:
             Tuple of (agent's response, token usage, permission denials, cli_command_args, streaming_log)
@@ -137,7 +144,7 @@ class AgentManager:
 
         while True:
             try:
-                agent_response = executor.execute(prompt, allowed_tools)
+                agent_response = executor.execute(prompt, allowed_tools, allowed_directories)
                 break  # Success, exit loop
             except AgentExecutionError as e:
                 # Handle session conflict (only retry once)

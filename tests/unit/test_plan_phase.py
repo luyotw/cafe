@@ -642,7 +642,7 @@ class TestPlanPhaseHistory:
         plan_file.write_text("## 開發指南\n\nGuide")
 
         # Mock agent to write plan.md file
-        def mock_agent_writes_plan(agent_name: str, prompt: str, allowed_tools=None, denied_tools=None):
+        def mock_agent_writes_plan(agent_name: str, prompt: str, allowed_tools=None, allowed_directories=None):
             # Agent writes plan.md
             plan_file = spec_file.parent.parent / "plan" / "plan.md"
             plan_file.parent.mkdir(parents=True, exist_ok=True)
@@ -1518,7 +1518,7 @@ class TestPlanPhasePromptGeneration:
 
         # Capture the prompt that was sent to agent
         captured_prompt = None
-        def capture_prompt(agent_name, prompt, allowed_tools=None, denied_tools=None):
+        def capture_prompt(agent_name, prompt, allowed_tools=None, allowed_directories=None):
             nonlocal captured_prompt
             captured_prompt = prompt
             return ("CAFE_READY_FOR_REVIEW\n修改後的計畫", TokenUsage())
@@ -1584,7 +1584,7 @@ class TestPlanPhasePromptGeneration:
 
         # Capture the prompt
         captured_prompt = None
-        def capture_prompt(agent_name, prompt, allowed_tools=None, denied_tools=None):
+        def capture_prompt(agent_name, prompt, allowed_tools=None, allowed_directories=None):
             nonlocal captured_prompt
             captured_prompt = prompt
             return ("CAFE_READY_FOR_REVIEW\n計畫完成", TokenUsage())

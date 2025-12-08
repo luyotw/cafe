@@ -339,11 +339,12 @@ class TestExecuteAgentIteration:
         )
 
         # Verify agent_manager.execute was called with correct parameters
-        # Should only have: agent_name, prompt, allowed_tools (NO denied_tools)
+        # Should have: agent_name, prompt, allowed_tools, allowed_directories
         agent_manager.execute.assert_called_once_with(
             "test_agent",
             "Test prompt",
             allowed_tools=["write", "read", "bash"],
+            allowed_directories=[".cafe"],
         )
 
 
