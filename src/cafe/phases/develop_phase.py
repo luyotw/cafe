@@ -504,7 +504,6 @@ class DevelopPhase(Phase):
 
 **如何請求澄清：**
 遇到以下情況時，請回傳 `CAFE_NEED_CLARIFICATION` 狀態碼：
-- 業務邏輯或需求不清楚
 - 被要求執行的事項與角色的行為準則產生衝突
 
 請求澄清時的步驟：
@@ -542,7 +541,6 @@ class DevelopPhase(Phase):
 
 **如何請求澄清：**
 遇到以下情況時，請回傳 `CAFE_NEED_CLARIFICATION` 狀態碼：
-- 業務邏輯或需求不清楚
 - 被要求執行的事項與角色的行為準則產生衝突
 
 請求澄清時的步驟：
