@@ -1825,72 +1825,8 @@ def develop(
 
 
 # Add "dev" as an alias for "develop"
-@app.command(name="dev")
-def dev_alias(
-    ctx: typer.Context,
-    mode: str = typer.Option(
-        "local",
-        "--mode",
-        "-m",
-        help="Workflow mode: local or github",
-    ),
-    issue_id: Optional[str] = typer.Option(
-        None,
-        "--issue",
-        "-i",
-        help="GitHub issue ID (github mode)",
-    ),
-    dev_agent: Optional[str] = typer.Option(
-        None,
-        "--dev",
-        help="Developer agent name (defaults to config)",
-    ),
-    config_file: str = typer.Option(
-        ".cafe/config.yaml",
-        "--config",
-        "-c",
-        help="Path to configuration file",
-    ),
-    show_prompt: bool = typer.Option(
-        False,
-        "--show-prompt",
-        help="Show the prompt sent to agent",
-    ),
-    interactive: bool = typer.Option(
-        True,
-        "--interactive/--no-interactive",
-        help="Allow interactive prompts (default: True)",
-    ),
-    approve_denied_tools: Optional[str] = typer.Option(
-        None,
-        "--approve-denied-tools",
-        help="Comma-separated indices of permission denials to approve (non-interactive mode)",
-    ),
-    user_input: Optional[str] = typer.Option(
-        None,
-        "--user-input",
-        help="Additional user instructions or context (non-interactive mode)",
-    ),
-    pr_number: Optional[int] = typer.Option(
-        None,
-        "--pr-number",
-        help="PR number to fetch unresolved comments from",
-    )
-) -> None:
-    """Alias for 'develop' command."""
-    # Call the develop function with all parameters
-    develop(
-        ctx=ctx,
-        mode=mode,
-        issue_id=issue_id,
-        dev_agent=dev_agent,
-        config_file=config_file,
-        show_prompt=show_prompt,
-        interactive=interactive,
-        approve_denied_tools=approve_denied_tools,
-        user_input=user_input,
-        pr_number=pr_number,
-    )
+# Use the same function with different name to ensure parameter sync
+app.command(name="dev", hidden=False)(develop)
 
 
 @app.command()
