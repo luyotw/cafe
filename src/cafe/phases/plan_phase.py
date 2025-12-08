@@ -362,7 +362,7 @@ class PlanPhase(Phase):
 {template_instruction}
 {status_code_prompt}
 
-**重要：修改檔案，將實作計畫附加到檔案**
+**重要：修改既有檔案，將實作計畫附加到檔案**
 - 在「## 開發指南」區塊**之後**附加實作計畫
 - 保留「## 開發指南」區塊不變
 
@@ -399,7 +399,7 @@ class PlanPhase(Phase):
 {template_instruction}
 {status_code_prompt}
 
-**重要：修改檔案，更新特定段落**
+**重要：修改既有檔案，更新特定段落**
 - 修改特定段落的內容（使用 old_string/new_string 方式）
 - 保留「## 開發指南」區塊不變
 - 只修改需要變更的部分
