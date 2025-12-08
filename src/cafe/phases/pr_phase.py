@@ -179,7 +179,10 @@ class PRPhase(Phase):
                         )
 
                 # User wants to update or --update flag is set
-                pr_title, pr_body = self._prepare_pr_content()
+                result, content = self._prepare_pr_content()
+                if result:
+                    return result
+                pr_title, pr_body = content
 
                 # Display updating message
                 from rich.console import Console
@@ -198,7 +201,10 @@ class PRPhase(Phase):
                 )
 
             # PR doesn't exist, create new one
-            pr_title, pr_body = self._prepare_pr_content()
+            result, content = self._prepare_pr_content()
+            if result:
+                return result
+            pr_title, pr_body = content
 
             # Display creating message
             from rich.console import Console
@@ -269,7 +275,7 @@ class PRPhase(Phase):
                 return match.group(1)
             return filename
 
-    def _prepare_pr_content(self) -> tuple[str, str]:
+    def _prepare_pr_content(self) -> tuple[PhaseResult | None, tuple[str, str] | None]:
         """Prepare PR title and body.
 
         Returns:
@@ -325,13 +331,16 @@ class PRPhase(Phase):
 
         # Generate missing content using agent
         if need_title or need_body:
-            self._generate_pr_content(generate_title=need_title, generate_body=need_body)
+            result = self._generate_pr_content(generate_title=need_title, generate_body=need_body)
+            # If agent returned a result (e.g., NEED_PERMISSION), propagate it
+            if result:
+                return result, None
 
         # Read PR title and body from files (unified approach)
         pr_title = self._get_pr_title()
         pr_body = self._get_pr_body()
 
-        return pr_title, pr_body
+        return None, (pr_title, pr_body)
 
     def _generate_prompt(self, user_input: str = "") -> str:
         """Generate prompt for agent (required by _execute_and_handle_agent_response).
@@ -480,11 +489,11 @@ class PRPhase(Phase):
             user_input="",  # No user input for PR generation
             valid_status_codes=[PhaseStatusCode.CONFIRMED, PhaseStatusCode.NEED_PERMISSION],
             allowed_tools=allowed_tools,
-            complete_codes=[PhaseStatusCode.CONFIRMED],
+            complete_codes=[PhaseStatusCode.CONFIRMED, PhaseStatusCode.NEED_PERMISSION],
         )
 
-        # Check if we should return early (error or completion)
-        if result:
+        # Check if we should return early (only for NEED_PERMISSION)
+        if result and result.data.get("status_code") == "CAFE_NEED_PERMISSION":
             return result
 
         # Verify requested files were created
