@@ -321,6 +321,7 @@ class Phase(ABC):
                 agent_name,
                 prompt,
                 allowed_tools=allowed_tools,
+                allowed_directories=self._get_allowed_directories(),
             )
         except Exception as e:
             # Agent execution failed - attempt recovery
@@ -884,6 +885,17 @@ class Phase(ABC):
         # Use set to avoid duplicates, then convert back to list
         return list(set(base_allowed_tools + prev_allowed_tools + approved_tools_from_denials))
 
+    def _get_allowed_directories(self) -> List[str]:
+        """取得允許的目錄列表。
+
+        回傳需要讓底層 CLI 工具存取的目錄列表。
+        預設回傳 [".cafe"]，讓所有 CLI 工具都能讀取 .cafe 目錄。
+
+        Returns:
+            允許的目錄列表
+        """
+        return [".cafe"]
+
     def _handle_previous_permission_denials(self) -> tuple[List[str], str]:
         """處理上一輪的 permission denials，返回批准的工具和用戶輸入。
 
@@ -1356,7 +1368,9 @@ class Phase(ABC):
             return None
 
         # 呼叫 agent 分析狀態（只需要 response）
-        response, _, _, _, _ = self.agent_manager.execute(agent_name, prompt)
+        response, _, _, _, _ = self.agent_manager.execute(
+            agent_name, prompt, allowed_directories=self._get_allowed_directories()
+        )
 
         # 從回應中提取 status code
         from cafe.core.status_codes import StatusCodeParser
@@ -1391,9 +1405,10 @@ class Phase(ABC):
             # 呼叫 agent 分析狀態（需要 read 權限）
             allowed_tools = ["read", "grep", "glob", "ls"]
             response, _, _, _, _ = self.agent_manager.execute(
-                agent_name, 
+                agent_name,
                 prompt,
-                allowed_tools=allowed_tools
+                allowed_tools=allowed_tools,
+                allowed_directories=self._get_allowed_directories()
             )
 
             # 從回應中提取 status code
