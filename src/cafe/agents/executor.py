@@ -199,7 +199,7 @@ class AgentExecutor:
         try:
             return self._execute_with_streaming(cmd=cmd, cli_name=cli_name, **streaming_kwargs)
         except AgentExecutionError as e:
-            # Check if it's a session not found error
+            # Check if it's a session not found error or prompt too long error
             error_msg = str(e).lower()
             session_error_phrases = [
                 "no conversation found",
@@ -207,15 +207,28 @@ class AgentExecutor:
                 "conversation does not exist"
             ]
 
-            if any(phrase in error_msg for phrase in session_error_phrases):
+            # Check for prompt too long error
+            is_prompt_too_long = (
+                hasattr(e, 'error_type') and e.error_type == "invalid_request" and
+                "prompt is too long" in error_msg
+            )
+
+            is_session_error = any(phrase in error_msg for phrase in session_error_phrases)
+
+            if is_session_error or is_prompt_too_long:
                 # Check if we've exceeded max retries
                 if _retry_count >= max_retries:
                     print(f"\n❌ Could not recover from error after {max_retries} attempts\n")
                     raise
 
-                # Get old session ID from config
-                old_session_id = self.config.session_id
-                print(f"\n⚠️  Session {old_session_id} not found, creating new session...\n")
+                if is_prompt_too_long:
+                    # Handle prompt too long error: create fresh session
+                    old_session_id = self.config.session_id
+                    print(f"\n⚠️  Prompt is too long for session {old_session_id}, creating fresh session...\n")
+                else:
+                    # Handle session not found error
+                    old_session_id = self.config.session_id
+                    print(f"\n⚠️  Session {old_session_id} not found, creating new session...\n")
 
                 # Create new session
                 new_session_id = create_new_session_fn()
@@ -336,6 +349,21 @@ class AgentExecutor:
 
                         # Always collect the line for response_parser (e.g., Gemini needs last line)
                         output_lines.append(line)
+
+                        # Check for error field (e.g., "invalid_request" for prompt too long)
+                        if "error" in data and data.get("error") == "invalid_request":
+                            # Extract error message from response text
+                            error_text = response_text or ""
+                            if "message" in data and "content" in data["message"]:
+                                for content_block in data["message"]["content"]:
+                                    if content_block.get("type") == "text":
+                                        error_text = content_block.get("text", "")
+
+                            # Raise error with specific type for session recovery handling
+                            err = AgentExecutionError(f"{cli_name} invalid request: {error_text}")
+                            err.error_type = "invalid_request"
+                            err.cli_command_args = cmd[1:]
+                            raise err
 
                         # Extract content using custom extractor or default Claude extractor
                         # FIXME: Should implement extractors seperately for each CLI

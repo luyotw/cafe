@@ -1767,3 +1767,141 @@ class TestGeminiSessionManagement:
             assert executor.config.session_id == "new-session-456"
 
 
+
+
+class TestPromptTooLongErrorHandling:
+    """Test handling of 'Prompt is too long' errors by creating fresh session."""
+
+    def test_claude_handles_prompt_too_long_error(self) -> None:
+        """測試 Claude 遇到 prompt too long 錯誤時自動建立新 session 並重試"""
+        config = AgentConfig(
+            name="Roger",
+            cli=AgentCLI.CLAUDE,
+            session_id="old-session-123"
+        )
+        executor = AgentExecutor(config)
+
+        call_count = 0
+        
+        def mock_popen_side_effect(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            
+            mock_process = MagicMock()
+            
+            if call_count == 1:
+                # First call: return prompt too long error
+                mock_process.stdout.readline.side_effect = [
+                    '{"type":"assistant","message":{"content":[{"type":"text","text":"Prompt is too long"}]},"error":"invalid_request"}\n',
+                    '',
+                ]
+            else:
+                # Second call (after retry): return success
+                mock_process.stdout.readline.side_effect = [
+                    '{"content": "Success with new session"}\n',
+                    '',
+                ]
+            
+            mock_process.stderr.read.return_value = ""
+            mock_process.wait.return_value = 0
+            return mock_process
+
+        with patch("subprocess.run") as mock_run, \
+             patch("subprocess.Popen") as mock_popen, \
+             patch("sys.platform", "win32"):
+            
+            # Mock session creation
+            mock_run.return_value = MagicMock(
+                stdout='{"session_id": "new-session-456"}',
+                returncode=0
+            )
+            
+            mock_popen.side_effect = mock_popen_side_effect
+            
+            # Execute should succeed after retry
+            response = executor._execute_claude("Test prompt")
+            
+            # Should have called Popen twice (initial + retry)
+            assert mock_popen.call_count == 2
+            
+            # Should have created new session
+            assert mock_run.call_count == 1
+            
+            # Session ID should be updated
+            assert executor.config.session_id == "new-session-456"
+            
+            # Response should be from second attempt
+            assert response.response == "Success with new session"
+
+    def test_prompt_too_long_error_includes_cli_command_args(self) -> None:
+        """測試 prompt too long 錯誤時，錯誤物件包含 CLI 參數"""
+        config = AgentConfig(
+            name="Roger",
+            cli=AgentCLI.CLAUDE,
+            session_id="test-session"
+        )
+        executor = AgentExecutor(config)
+
+        with patch("subprocess.Popen") as mock_popen, \
+             patch("subprocess.run") as mock_run, \
+             patch("sys.platform", "win32"):
+            
+            # Mock process returns prompt too long error
+            mock_process = MagicMock()
+            mock_process.stdout.readline.side_effect = [
+                '{"type":"assistant","message":{"content":[{"type":"text","text":"Prompt is too long"}]},"error":"invalid_request"}\n',
+                '',
+            ]
+            mock_process.stderr.read.return_value = ""
+            mock_process.wait.return_value = 0
+            mock_popen.return_value = mock_process
+            
+            # Mock session creation to fail (to trigger error)
+            mock_run.side_effect = Exception("Failed to create session")
+            
+            # Should raise error with cli_command_args
+            with pytest.raises(Exception):
+                executor._execute_claude("Test prompt")
+
+    def test_prompt_too_long_max_retries_exceeded(self) -> None:
+        """測試 prompt too long 錯誤超過最大重試次數時拋出錯誤"""
+        config = AgentConfig(
+            name="Roger",
+            cli=AgentCLI.CLAUDE,
+            session_id="old-session"
+        )
+        executor = AgentExecutor(config)
+
+        with patch("subprocess.Popen") as mock_popen, \
+             patch("subprocess.run") as mock_run, \
+             patch("sys.platform", "win32"):
+
+            # Always return prompt too long error (need fresh mock for each call)
+            def create_error_process(*args, **kwargs):
+                mock_process = MagicMock()
+                mock_process.stdout.readline.side_effect = [
+                    '{"type":"assistant","message":{"content":[{"type":"text","text":"Prompt is too long"}]},"error":"invalid_request"}\n',
+                    '',
+                ]
+                mock_process.stderr.read.return_value = ""
+                mock_process.wait.return_value = 0
+                return mock_process
+
+            mock_popen.side_effect = create_error_process
+
+            # Mock session creation to always return different session
+            session_count = [0]
+            def create_session(*args, **kwargs):
+                session_count[0] += 1
+                return MagicMock(
+                    stdout=f'{{"session_id": "session-{session_count[0]}"}}',
+                    returncode=0
+                )
+            mock_run.side_effect = create_session
+
+            # Should raise after max retries
+            with pytest.raises(AgentExecutionError) as exc_info:
+                executor._execute_claude("Test prompt")
+
+            # Error message should indicate prompt too long
+            assert "prompt is too long" in str(exc_info.value).lower()
