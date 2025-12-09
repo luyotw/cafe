@@ -594,7 +594,21 @@ class DevelopPhase(Phase):
             if already_completed:
                 return already_completed
 
-            # Check PR comments if pr_number is provided
+            # Auto-detect PR number if not provided
+            if not self.pr_number:
+                try:
+                    from cafe.utils.github import GitHubOps
+                    github_ops = GitHubOps()
+                    branch_name = self._get_branch_name()
+                    pr_data = github_ops.get_pr_for_branch(branch_name)
+                    if pr_data:
+                        self.pr_number = pr_data["number"]
+                        print(f"ℹ️  Auto-detected PR #{self.pr_number} for branch '{branch_name}'")
+                except Exception as e:
+                    # Silently ignore errors - PR detection is optional
+                    print(f"ℹ️  No PR detected for current branch (this is normal if PR hasn't been created yet)")
+
+            # Check PR comments if pr_number is available
             if self.pr_number:
                 _, unresolved_count = self._load_pr_comments()
                 if unresolved_count == 0:
