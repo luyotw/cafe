@@ -262,3 +262,141 @@ class TestSpecCommandOutputComparison:
         assert "Spec clarification completed!" in result_confirmed.stdout
         assert "cafe plan" in result_confirmed.stdout
         assert "Please review the spec" not in result_confirmed.stdout
+
+
+class TestSpecRigorConfigLoading:
+    """測試 spec 命令從 config 載入 rigor 設定。"""
+
+    @pytest.fixture
+    def setup_env_with_rigor(self, tmp_path, monkeypatch):
+        """Setup test environment with issue config containing rigor setting."""
+        import yaml
+        # Create issue directory and config
+        issue_dir = tmp_path / ".cafe" / "issues" / "test-branch"
+        issue_dir.mkdir(parents=True, exist_ok=True)
+
+        config_file = issue_dir / "config.yaml"
+        config_data = {
+            "base_branch": "main",
+            "feature_branch": "test-branch",
+            "spec": {
+                "rigor": "high"
+            }
+        }
+        with open(config_file, 'w', encoding='utf-8') as f:
+            yaml.dump(config_data, f)
+
+        # Change to tmp_path
+        monkeypatch.chdir(tmp_path)
+        return tmp_path
+
+    @pytest.fixture
+    def setup_env_without_rigor(self, tmp_path, monkeypatch):
+        """Setup test environment with issue config without rigor setting."""
+        import yaml
+        # Create issue directory and config
+        issue_dir = tmp_path / ".cafe" / "issues" / "test-branch"
+        issue_dir.mkdir(parents=True, exist_ok=True)
+
+        config_file = issue_dir / "config.yaml"
+        config_data = {
+            "base_branch": "main",
+            "feature_branch": "test-branch"
+        }
+        with open(config_file, 'w', encoding='utf-8') as f:
+            yaml.dump(config_data, f)
+
+        # Change to tmp_path
+        monkeypatch.chdir(tmp_path)
+        return tmp_path
+
+    def test_loads_rigor_from_config(
+        self, runner, mock_git_ops, mock_spec_phase, mock_agent_manager,
+        mock_permission_handler, setup_env_with_rigor
+    ):
+        """應該從 issue config 載入 rigor 設定。"""
+        from cafe.core.types import SpecRigor
+
+        # Setup: Phase returns success
+        mock_phase_instance = Mock()
+        mock_phase_instance.execute.return_value = PhaseResult(
+            status=PhaseStatus.COMPLETED,
+            message="Spec confirmed",
+            data={"iterations": 1, "status_code": "CAFE_CONFIRMED"},
+        )
+        mock_spec_phase.return_value = mock_phase_instance
+
+        # Execute without --rigor flag
+        result = runner.invoke(app, ["spec", "--interactive", "--user-input", "test"])
+
+        # Verify: SpecPhase was created with rigor=high from config
+        assert result.exit_code == 0
+        args, kwargs = mock_spec_phase.call_args
+        assert kwargs.get("rigor") == SpecRigor.HIGH
+
+    def test_cli_flag_overrides_config_rigor(
+        self, runner, mock_git_ops, mock_spec_phase, mock_agent_manager,
+        mock_permission_handler, setup_env_with_rigor
+    ):
+        """CLI flag 應該覆蓋 config 中的 rigor 設定。"""
+        from cafe.core.types import SpecRigor
+
+        # Setup: Phase returns success
+        mock_phase_instance = Mock()
+        mock_phase_instance.execute.return_value = PhaseResult(
+            status=PhaseStatus.COMPLETED,
+            message="Spec confirmed",
+            data={"iterations": 1, "status_code": "CAFE_CONFIRMED"},
+        )
+        mock_spec_phase.return_value = mock_phase_instance
+
+        # Execute with --rigor low (config has high)
+        result = runner.invoke(app, ["spec", "--rigor", "low", "--interactive", "--user-input", "test"])
+
+        # Verify: SpecPhase was created with rigor=low from CLI flag
+        assert result.exit_code == 0
+        args, kwargs = mock_spec_phase.call_args
+        assert kwargs.get("rigor") == SpecRigor.LOW
+
+    def test_no_rigor_when_not_in_config_or_flag(
+        self, runner, mock_git_ops, mock_spec_phase, mock_agent_manager,
+        mock_permission_handler, setup_env_without_rigor
+    ):
+        """當 config 和 flag 都沒有 rigor 時，應該傳入 None。"""
+        # Setup: Phase returns success
+        mock_phase_instance = Mock()
+        mock_phase_instance.execute.return_value = PhaseResult(
+            status=PhaseStatus.COMPLETED,
+            message="Spec confirmed",
+            data={"iterations": 1, "status_code": "CAFE_CONFIRMED"},
+        )
+        mock_spec_phase.return_value = mock_phase_instance
+
+        # Execute without --rigor flag and config has no rigor
+        result = runner.invoke(app, ["spec", "--interactive", "--user-input", "test"])
+
+        # Verify: SpecPhase was created with rigor=None
+        assert result.exit_code == 0
+        args, kwargs = mock_spec_phase.call_args
+        assert kwargs.get("rigor") is None
+
+    def test_displays_rigor_when_loaded_from_config(
+        self, runner, mock_git_ops, mock_spec_phase, mock_agent_manager,
+        mock_permission_handler, setup_env_with_rigor
+    ):
+        """應該顯示從 config 載入的 rigor 設定。"""
+        # Setup: Phase returns success
+        mock_phase_instance = Mock()
+        mock_phase_instance.execute.return_value = PhaseResult(
+            status=PhaseStatus.COMPLETED,
+            message="Spec confirmed",
+            data={"iterations": 1, "status_code": "CAFE_CONFIRMED"},
+        )
+        mock_spec_phase.return_value = mock_phase_instance
+
+        # Execute
+        result = runner.invoke(app, ["spec", "--interactive", "--user-input", "test"])
+
+        # Verify: Output shows rigor level
+        assert result.exit_code == 0
+        assert "Rigor: high" in result.stdout
