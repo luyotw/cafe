@@ -861,23 +861,12 @@ class SpecPhase(Phase):
         # 前一輪的檔案：只在 iteration > 1 時才存在
         prev_spec_file = None
         if self.iteration > 1:
-            # 前一輪的 iteration 是 self.iteration - 1
-            # 但檔案編號可能不同（取決於是否有舊檔案）
-            # 最簡單的方式：列出現有檔案並取最新的一個（除了當前檔案）
+            # 列出現有檔案並取最新的一個（作為前一輪的檔案）
+            # 當前檔案 (self.spec_file) 可能還不存在（即將被建立），所以最新的檔案就是前一輪的
             existing_specs = sorted(self.phase_dir.glob("spec_*.md"))
-            if len(existing_specs) >= 2:
-                # 有至少 2 個檔案，取倒數第二個（最新的前一個）
-                prev_spec_path = existing_specs[-2]
-                if not prev_spec_path.is_absolute():
-                    prev_spec_path = prev_spec_path.resolve()
-                # 轉換為相對於當前工作目錄的路徑
-                try:
-                    prev_spec_file = to_cwd_relative_path(prev_spec_path)
-                except (ValueError, OSError):
-                    prev_spec_file = str(prev_spec_path)
-            elif len(existing_specs) == 1:
-                # 只有 1 個檔案，那就是前一輪的
-                prev_spec_path = existing_specs[0]
+            if existing_specs:
+                # 取最新的檔案（編號最大的）作為前一輪的檔案
+                prev_spec_path = existing_specs[-1]
                 if not prev_spec_path.is_absolute():
                     prev_spec_path = prev_spec_path.resolve()
                 # 轉換為相對於當前工作目錄的路徑
