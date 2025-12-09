@@ -1681,7 +1681,7 @@ def develop(
     auto: bool = typer.Option(
         False,
         "--auto",
-        help="Auto mode: automatically execute cafe review after completion",
+        help="Auto mode: continue iterations automatically and execute cafe review after completion",
     ),
 ) -> None:
     """Run develop phase: Execute development work according to plan.
@@ -1839,12 +1839,35 @@ def develop(
         elif result.status.value == "in_progress":
             # Check if this is a NEED_CLARIFICATION status
             if result.data.get("status_code") == "NEED_CLARIFICATION":
+                # In auto mode, continue automatically without user input
+                if auto:
+                    console.print()
+                    console.print("[yellow]💡 開發者需要澄清。[/yellow]")
+                    console.print("[dim]🤖 Auto mode: automatically continuing...[/dim]")
+                    console.print()
+
+                    # Re-run develop with empty user response in auto mode
+                    ctx.invoke(
+                        develop,
+                        ctx=ctx,
+                        mode=mode,
+                        issue_id=issue_id,
+                        dev_agent=dev_agent,
+                        config_file=config_file,
+                        show_prompt=show_prompt,
+                        interactive=interactive,
+                        approve_denied_tools=approve_denied_tools,
+                        user_input="",  # Empty input in auto mode
+                        pr_number=pr_number,
+                        auto=auto,
+                    )
+                    return
                 # Prompt for user input in interactive mode
-                if interactive:
+                elif interactive:
                     console.print()
                     user_response = typer.prompt("請輸入您的回應")
                     console.print()
-                    
+
                     # Re-run develop with user response
                     ctx.invoke(
                         develop,
@@ -1861,7 +1884,7 @@ def develop(
                         auto=auto,
                     )
                     return
-            
+
             console.print(f"[yellow]⏸️  Development paused: {result.message}[/yellow]")
             console.print(f"[dim]Resume with: cafe develop[/dim]")
 
