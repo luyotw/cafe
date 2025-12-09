@@ -117,21 +117,8 @@ class ReviewPhase(Phase):
             # Initialize history directory
             self._initialize_history_dir()
 
-            # Check if there are any changes to review
-            if not self.pr_number:  # Only check diff for non-PR reviews
-                diff = self.git_ops.get_diff(
-                    base=self.base_branch,
-                    head=self.target_commit or "HEAD",
-                )
-                if not diff or not diff.strip():
-                    return PhaseResult(
-                        status=PhaseStatus.FAILED,
-                        message="No changes to review. The diff is empty.",
-                        data={
-                            "target_commit": self.target_commit,
-                            "base_branch": self.base_branch,
-                        },
-                    )
+            # Note: We don't check if diff is empty here - let the review agent
+            # see the empty diff and decide (usually NEEDS_CHANGES)
 
             # Check PR comments if pr_number is provided
             if self.pr_number:

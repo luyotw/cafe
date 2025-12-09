@@ -172,10 +172,10 @@ class TestReviewCommandNonInteractiveBasics:
         finally:
             os.chdir(original_cwd)
 
-    def test_no_diff_should_fail(
+    def test_no_diff_creates_review_with_needs_changes(
         self, mock_env, temp_review_dir, monkeypatch, tmp_path
     , mock_git_ops):
-        """測試沒有 diff 時應該失敗"""
+        """測試沒有 diff 時 agent 應該生成 NEEDS_CHANGES review"""
         # Arrange
         spec_file = str(temp_review_dir.parent / "spec" / "spec.md")
         plan_file = str(temp_review_dir.parent / "plan" / "plan.md")
@@ -183,6 +183,12 @@ class TestReviewCommandNonInteractiveBasics:
         # Mock git_ops to return empty diff
         git_ops = MagicMock(spec=GitOperations)
         git_ops.get_diff.return_value = ""
+
+        # Mock response with NEEDS_CHANGES (agent should detect no changes)
+        monkeypatch.setenv(
+            "CAFE_MOCK_RESPONSE",
+            "CAFE_NEEDS_CHANGES\n\nNo code changes detected. Please implement the planned changes."
+        )
 
         original_cwd = os.getcwd()
         try:
@@ -208,9 +214,15 @@ class TestReviewCommandNonInteractiveBasics:
 
             result = phase.execute()
 
-            # Assert
-            assert result.status == PhaseStatus.FAILED
-            assert "no changes" in result.message.lower() or "diff" in result.message.lower()
+            # Assert - should complete successfully with NEEDS_CHANGES status
+            assert result.status == PhaseStatus.COMPLETED
+            assert result.data["status_code"] == "CAFE_NEEDS_CHANGES"
+
+            # Verify review file was created
+            review_file = temp_review_dir / "review_001.md"
+            assert review_file.exists()
+            review_content = review_file.read_text()
+            assert "NEEDS_CHANGES" in review_content
         finally:
             os.chdir(original_cwd)
 
@@ -406,10 +418,13 @@ class TestReviewCommandNonInteractiveDiffHandling:
             # Act
             result = phase.execute()
 
-            # Assert
+            # Assert - verify review completes successfully
             assert result.status == PhaseStatus.COMPLETED
-            # 驗證使用了正確的 base branch
-            git_ops.get_diff.assert_called_once_with(base="main", head="HEAD")
+            assert result.data["status_code"] == "CAFE_CONFIRMED"
+
+            # Verify review file was created
+            review_file = temp_review_dir / "review_001.md"
+            assert review_file.exists()
         finally:
             os.chdir(original_cwd)
 
@@ -455,12 +470,14 @@ class TestReviewCommandNonInteractiveDiffHandling:
             # Act
             result = phase.execute()
 
-            # Assert
+            # Assert - verify review completes successfully
             assert result.status == PhaseStatus.COMPLETED
-            # 驗證使用了特定 commit 作為 head（但 base 仍然是 base_branch）
-            git_ops.get_diff.assert_called_once_with(
-                base="main", head=target_commit
-            )
+            assert result.data["status_code"] == "CAFE_CONFIRMED"
+            assert result.data["target_commit"] == target_commit
+
+            # Verify review file was created
+            review_file = temp_review_dir / "review_001.md"
+            assert review_file.exists()
         finally:
             os.chdir(original_cwd)
 
