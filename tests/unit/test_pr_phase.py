@@ -529,12 +529,19 @@ class TestErrorHandling:
         assert result.status == PhaseStatus.FAILED
         assert "Git push error" in result.message or "failed" in result.message.lower()
 
-    def test_gh_pr_create_error_fails_phase(self) -> None:
+    def test_gh_pr_create_error_fails_phase(self, tmp_path: Path) -> None:
         """測試 gh pr create 失敗時 phase 失敗"""
+        # Setup issue directory structure
+        spec_file = tmp_path / ".cafe" / "issues" / "test-issue" / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
+        spec_file.write_text("# Feature\n")
+        plan_file = spec_file.parent.parent / "plan" / "plan.md"
+        plan_file.parent.mkdir(parents=True, exist_ok=True)
+        plan_file.write_text("# Plan\n")
+
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None, [])
         mock_executor = MagicMock()
-        mock_executor.config.cli = AgentCLI.COPILOT
+        mock_executor.config.cli.value = "copilot"
         mock_executor.config.session_id = "session_123"
         agent_manager.get_agent.return_value = mock_executor
         agent_manager.get_total_token_usage.return_value = TokenUsage()
@@ -543,24 +550,39 @@ class TestErrorHandling:
         git_ops = MagicMock(spec=GitOperations)
         github_ops = MagicMock(spec=GitHubOps)
         github_ops.get_pr_for_branch.return_value = None  # No existing PR
-        github_ops.create_pr.return_value = "https://github.com/user/repo/pull/1"
+        github_ops.check_gh_auth.return_value = True
+        # Mock create_pr to raise an error
+        from cafe.utils.github import GitHubError
+        github_ops.create_pr.side_effect = GitHubError("Failed to create PR")
         git_ops.get_main_branch.return_value = "main"
         git_ops.get_commits_between.return_value = "commits"
+        git_ops.get_current_branch.return_value = "test-issue"
+
+        # Mock agent to write title and body files
+        def mock_agent_execute(agent_name, prompt, allowed_tools=None, allowed_directories=None):
+            pr_dir = spec_file.parent.parent / "pr"
+            pr_dir.mkdir(parents=True, exist_ok=True)
+            (pr_dir / "title.txt").write_text("Test Title")
+            (pr_dir / "body.md").write_text("Test Body")
+            return "CAFE_CONFIRMED", TokenUsage(), [], None, []
+
+        agent_manager.execute.side_effect = mock_agent_execute
 
         phase = PRPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
             github_ops=github_ops,
-            spec_file="spec.md",
+            spec_file=str(spec_file),
             workflow_mode=WorkflowMode.GITHUB,
             issue_id="123",
+            issue_name="test-issue",
         )
 
         result = phase.execute()
 
         assert result.status == PhaseStatus.FAILED
-        assert "failed" in result.message.lower()
+        assert "failed" in result.message.lower() or "error" in result.message.lower()
 
     def test_execute_fails_when_not_authenticated(self, tmp_path: Path) -> None:
         """測試當 gh 未登入時，execute() 正確回傳失敗狀態"""
@@ -1691,3 +1713,74 @@ class TestIssueCommentIntegration:
         assert result.data["pr_number"] == "42"
         github_ops.create_pr.assert_called_once()
         github_ops.add_issue_comment.assert_called_once()
+
+
+class TestInteractiveModeBehavior:
+    """Test interactive mode specific behaviors."""
+
+    def test_interactive_mode_auto_generates_without_asking(self, tmp_path: Path) -> None:
+        """
+        測試互動模式下，若無 --title 或 --body，應直接由 agent 生成，不再詢問。
+        """
+        # Setup
+        spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
+        spec_file.write_text("# Feature\n")
+        plan_file = spec_file.parent.parent / "plan" / "plan.md"
+        plan_file.parent.mkdir(parents=True, exist_ok=True)
+        plan_file.write_text("# Plan\n")
+
+        agent_manager = MagicMock(spec=AgentManager)
+        mock_executor = MagicMock()
+        mock_executor.config.cli.value = "copilot"
+        mock_executor.config.session_id = "session_123"
+        agent_manager.get_agent.return_value = mock_executor
+        agent_manager.get_total_token_usage.return_value = TokenUsage()
+
+        permission_handler = MagicMock(spec=PermissionHandler)
+        git_ops = MagicMock(spec=GitOperations)
+        github_ops = MagicMock(spec=GitHubOps)
+
+        github_ops.get_pr_for_branch.return_value = None
+        github_ops.create_pr.return_value = "https://github.com/user/repo/pull/1"
+        github_ops.check_gh_auth.return_value = True
+        git_ops.get_main_branch.return_value = "main"
+        git_ops.get_commits_between.return_value = "commit1"
+        git_ops.get_current_branch.return_value = "test-feature"
+
+        # Mock agent to write title and body files
+        def mock_agent_execute(agent_name, prompt, allowed_tools, allowed_directories=None):
+            pr_dir = spec_file.parent.parent / "pr"
+            pr_dir.mkdir(parents=True, exist_ok=True)
+            (pr_dir / "title.txt").write_text("Agent Title")
+            (pr_dir / "body.md").write_text("Agent Body")
+            return "CAFE_CONFIRMED", TokenUsage(), [], None, []
+
+        agent_manager.execute.side_effect = mock_agent_execute
+
+        phase = PRPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            git_ops=git_ops,
+            github_ops=github_ops,
+            spec_file=str(spec_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            interactive=True,  # Key part of the test
+            custom_title=None,
+            custom_body=None,
+            issue_name="test-feature"
+        )
+
+        # Execute
+        result = phase.execute()
+
+        # Assert
+        assert result.status == PhaseStatus.COMPLETED
+        # Verify agent was called to generate content
+        agent_manager.execute.assert_called_once()
+        # Verify PR was created with agent-generated content
+        github_ops.create_pr.assert_called_once()
+        call_args = github_ops.create_pr.call_args
+        assert call_args.kwargs['title'] == "Agent Title"
+        assert call_args.kwargs['body'] == "Agent Body"
+        # Verify no user input was ever requested (by not mocking it and not getting an error)
