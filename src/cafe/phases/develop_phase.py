@@ -517,7 +517,7 @@ class DevelopPhase(Phase):
             descriptions={
                 PhaseStatusCode.CONFIRMED: "開發工作已完成",
                 PhaseStatusCode.NEED_PERMISSION: "需要請求工具使用權限",
-                PhaseStatusCode.NEED_CLARIFICATION: "需要 user 澄清業務邏輯或需求",
+                PhaseStatusCode.NEED_CLARIFICATION: "需要 user 澄清下一步",
             },
         )
 
@@ -614,8 +614,8 @@ class DevelopPhase(Phase):
 {status_code_prompt}
 
 **如何請求澄清：**
-遇到以下情況時，請回傳 `CAFE_NEED_CLARIFICATION` 狀態碼：
-- 被要求執行的事項與角色的行為準則產生衝突
+被要求執行的事項與角色的行為準則產生衝突時，請回傳 `CAFE_NEED_CLARIFICATION` 狀態碼。**若非此情況禁止請求澄清。**
+- 
 
 請求澄清時的步驟：
 1. 回傳 `CAFE_NEED_CLARIFICATION` 狀態碼
