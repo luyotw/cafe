@@ -24,6 +24,8 @@ from cafe.utils.git_utils import is_branch_initialized
 from cafe.utils.github import GitHubOps, GitHubError
 from cafe.utils.template import TemplateManager
 from cafe.ui.template_selector import select_template
+from cafe.ui.phase_prompts import prompt_for_input_method, prompt_for_rigor
+from cafe.ui.display import Display
 
 app = typer.Typer(
     name="cafe",
@@ -616,15 +618,55 @@ def prepare(
                 console.print(f"[dim]Creating and switching to branch '{feature_branch}'...[/dim]")
                 git_ops.create_branch(feature_branch)
 
-        # 6. Save config.yaml (in worktree's issue dir if using worktree, else local)
+        # 6. Interactive prompts for spec/plan configuration (only in interactive mode)
+        spec_config = {}
+        plan_config = {}
+
+        if is_interactive:
+            console.print()
+            console.print("[bold cyan]📝 Pre-configure spec and plan phases[/bold cyan]")
+            console.print("[dim]This will save time by not asking these questions again in spec/plan phases.[/dim]")
+            console.print()
+
+            # Initialize Display for prompts
+            display = Display()
+            github_ops = GitHubOps()
+
+            # Prompt for input method and issue ID
+            input_method, issue_id = prompt_for_input_method(display, github_ops)
+            spec_config["input_method"] = input_method
+            if issue_id is not None:
+                spec_config["issue_id"] = str(issue_id)
+
+            # Prompt for rigor level
+            rigor = prompt_for_rigor(display)
+            spec_config["rigor"] = rigor
+
+            # Prompt for plan template
+            template_manager = TemplateManager(".cafe")
+            templates = template_manager.list_templates()
+
+            if templates:
+                console.print()
+                console.print("[bold cyan]Please select a plan template:[/bold cyan]")
+                template_paths = {name: template_manager.get_template_path(name) for name in templates}
+                selected_template = select_template(templates, template_paths)
+                if selected_template:
+                    plan_config["template"] = selected_template
+            else:
+                console.print()
+                console.print("[yellow]⚠️  No plan templates found. Using default template.[/yellow]")
+                console.print("[dim]    Tip: Use 'cafe template add <source> <name>' to add templates.[/dim]")
+
+        # 7. Save config.yaml (in worktree's issue dir if using worktree, else local)
         config_file = issue_dir / "config.yaml"
-        
+
         # Load global config to get default auto settings
         from cafe.utils.config import ConfigManager
         config_manager = ConfigManager(".cafe")
         global_config = config_manager.load_config()
         max_review_iterations = global_config.get("auto", {}).get("max_review_iterations", 5)
-        
+
         config_data = {
             "base_branch": base_branch,
             "feature_branch": feature_branch,
@@ -632,6 +674,14 @@ def prepare(
                 "max_review_iterations": max_review_iterations,
             },
         }
+
+        # Add spec config if present
+        if spec_config:
+            config_data["spec"] = spec_config
+
+        # Add plan config if present
+        if plan_config:
+            config_data["plan"] = plan_config
 
         # Add worktree_path if using worktree mode
         if use_worktree:
