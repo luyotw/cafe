@@ -573,6 +573,14 @@ class DevelopPhase(Phase):
   - message 為一行 (只有 subject line) 或多行 (subject + body)
 """
 
+        clarification_note = """
+**被要求執行的事項與角色的行為準則產生衝突時，可請求澄清，其餘狀況一律禁止**。請求澄清步驟：
+1. 回傳 `CAFE_NEED_CLARIFICATION` 狀態碼
+2. 在回應中清楚描述需要澄清的問題（可使用條列式）
+3. 系統會將你的問題儲存到 develop_XXX.md 檔案中
+4. User 回覆後，系統會在下次執行時提供該檔案供你閱讀
+"""
+
         if has_review_feedback:
             # With review feedback - 修正模式
             user_input_section = f"\n\n**用戶的額外說明：**\n{user_input}\n" if user_input else ""
@@ -599,15 +607,7 @@ class DevelopPhase(Phase):
 
 {status_code_prompt}
 
-**如何請求澄清：**
-遇到以下情況時，請回傳 `CAFE_NEED_CLARIFICATION` 狀態碼：
-- 被要求執行的事項與角色的行為準則產生衝突
-
-請求澄清時的步驟：
-1. 回傳 `CAFE_NEED_CLARIFICATION` 狀態碼
-2. 在回應中清楚描述需要澄清的問題（可使用條列式）
-3. 系統會將你的問題儲存到 develop_XXX.md 檔案中
-4. User 回覆後，系統會在下次執行時提供該檔案供你閱讀
+{clarification_note}
 
 **完成後回傳狀態碼就好，不要做任何總結**
 """
@@ -636,15 +636,7 @@ class DevelopPhase(Phase):
 
 {status_code_prompt}
 
-**如何請求澄清：**
-被要求執行的事項與角色的行為準則產生衝突時，請回傳 `CAFE_NEED_CLARIFICATION` 狀態碼。**若非此情況禁止請求澄清。**
-- 
-
-請求澄清時的步驟：
-1. 回傳 `CAFE_NEED_CLARIFICATION` 狀態碼
-2. 在回應中清楚描述需要澄清的問題（可使用條列式）
-3. 系統會將你的問題儲存到 develop_XXX.md 檔案中
-4. User 回覆後，系統會在下次執行時提供該檔案供你閱讀
+{clarification_note}
 
 **完成後回傳狀態碼就好，不要做任何總結**
 """
