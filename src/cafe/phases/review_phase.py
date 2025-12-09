@@ -39,6 +39,7 @@ class ReviewPhase(Phase):
         base_branch: str = "main",
         interactive: bool = True,
         pr_number: Optional[int] = None,
+        force: bool = False,
     ) -> None:
         """Initialize review phase.
 
@@ -55,6 +56,7 @@ class ReviewPhase(Phase):
             base_branch: Base branch for diff (default: main)
             interactive: Enable interactive mode (default: True)
             pr_number: PR number to fetch unresolved comments from (optional)
+            force: Force re-execution even if already completed (default: False)
         """
         super().__init__(interactive=interactive)
 
@@ -68,6 +70,7 @@ class ReviewPhase(Phase):
         self.iteration = 1  # Track iteration number for subsequent reviews
         self.pr_number = pr_number
         self._pr_comments_cache = None  # Cache for PR comments to avoid duplicate loading
+        self.force = force  # Store force flag for use in execute()
 
         # Get issue directory from current branch
         self.issue_dir = self._get_issue_dir(git_ops)
@@ -88,6 +91,10 @@ class ReviewPhase(Phase):
         config_base_branch = self._get_issue_config_value(config_file, "base_branch")
         self.base_branch = config_base_branch if config_base_branch else base_branch
 
+        # Set up phase and history directories (needed for _check_if_already_completed)
+        self.phase_dir = self.issue_dir / "review"
+        self.history_dir = self.phase_dir / "history"
+
     def execute(self) -> PhaseResult:
         """Execute code review phase (single iteration).
 
@@ -97,6 +104,16 @@ class ReviewPhase(Phase):
             Phase result
         """
         try:
+            # Check if phase is already completed (avoid re-running completed phases)
+            # unless force flag is set
+            from cafe.core.status_codes import PhaseStatusCode
+            early_exit_result = self._check_if_already_completed(
+                [PhaseStatusCode.CONFIRMED, PhaseStatusCode.REJECTED],
+                force=self.force
+            )
+            if early_exit_result:
+                return early_exit_result
+
             # Initialize history directory
             self._initialize_history_dir()
 

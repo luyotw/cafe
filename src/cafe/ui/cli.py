@@ -1887,6 +1887,12 @@ def review(
         "--auto",
         help="Auto mode: automatically execute next phase based on result",
     ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        "-f",
+        help="Force re-execution even if review already completed",
+    ),
 ) -> None:
     """Run review phase: Code review by reviewer agent.
 
@@ -1904,6 +1910,9 @@ def review(
 
         # Use custom reviewer agent
         cafe review --reviewer CustomReviewer
+
+        # Force re-review even if already completed
+        cafe review --force
 
         # Edit latest review file
         cafe review edit
@@ -1992,6 +2001,7 @@ def review(
             base_branch=base_branch,
             interactive=interactive,
             pr_number=pr_number,
+            force=force,
         )
 
         # Display start message (use actual base_branch from phase)

@@ -1033,6 +1033,7 @@ class Phase(ABC):
     def _check_if_already_completed(
         self,
         complete_status_codes: List[PhaseStatusCode],
+        force: bool = False,
     ) -> Optional[PhaseResult]:
         """檢查 phase 是否已經完成（通用方法）。
 
@@ -1041,10 +1042,15 @@ class Phase(ABC):
 
         Args:
             complete_status_codes: 表示完成的狀態碼列表（如 [CONFIRMED] 或 [READY_FOR_REVIEW]）
+            force: 如果為 True，則跳過已完成檢查，允許重新執行（預設：False）
 
         Returns:
             PhaseResult 如果已完成，None 如果未完成
         """
+        # If force is True, skip the check and allow re-execution
+        if force:
+            return None
+
         if not hasattr(self, "agent_manager"):
             raise AttributeError("Phase must have 'agent_manager' attribute")
 
