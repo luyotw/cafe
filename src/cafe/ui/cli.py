@@ -2245,13 +2245,14 @@ def pr(
             console.print(f"[bold green]✅ {result.message}![/bold green]")
             console.print()
             if pr_url:
-                console.print(f"[bold cyan]{pr_url}[/bold cyan]")
+                # Show files diff URL for easier review
+                files_url = pr_url + "/files"
+                console.print(f"[bold cyan]{files_url}[/bold cyan]")
                 console.print()
             console.print("[dim]Next steps:[/dim]")
-            console.print(f"[dim]  1. View PR: gh pr view {pr_number}[/dim]")
-            console.print(f"[dim]  2. Edit PR: gh pr edit {pr_number}[/dim]")
-            if final_draft:
-                console.print(f"[dim]  3. Mark as ready: gh pr ready {pr_number}[/dim]")
+            console.print(f"[dim]  1. Review PR: open the link above or run [bold]gh pr diff --web[/bold][/dim]")
+            console.print(f"[dim]  2. If OK: [bold]merge[/bold] the PR, then run [bold]cafe close[/bold][/dim]")
+            console.print(f"[dim]  3. If issues found: add comments and submit review, then run [bold]cafe develop --auto[/bold] (or [bold]cafe make[/bold])[/dim]")
         else:
             console.print()
             console.print(f"[bold red]❌ PR phase failed: {result.message}[/bold red]")
