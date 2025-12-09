@@ -391,6 +391,51 @@ class DevelopPhase(Phase):
             pass
         return None
 
+    def _is_clarification_answered(self, develop_file: Path) -> bool:
+        """檢查 develop clarification 是否已經被回答.
+
+        Args:
+            develop_file: develop clarification 文件路徑（例如 develop_001.md）
+
+        Returns:
+            True 如果已經在後續 iteration 中被回答，False 否則
+        """
+        # Extract iteration number from develop file name
+        # develop_001.md -> 1
+        import re
+        match = re.search(r'develop_(\d+)\.md', develop_file.name)
+        if not match:
+            return False
+
+        clarification_iteration = int(match.group(1))
+
+        # Check subsequent iterations for user_input
+        history_dir = self.issue_dir / "develop" / "history"
+        if not history_dir.exists():
+            return False
+
+        # Look for any iteration after the clarification that has user_input
+        import json
+        for iteration_file in sorted(history_dir.glob("iteration_*.json")):
+            match = re.search(r'iteration_(\d+)\.json', iteration_file.name)
+            if not match:
+                continue
+
+            iteration_num = int(match.group(1))
+            if iteration_num <= clarification_iteration:
+                continue
+
+            try:
+                with open(iteration_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    # If this iteration has user_input, the clarification was answered
+                    if data.get('user_input', '').strip():
+                        return True
+            except (json.JSONDecodeError, IOError):
+                continue
+
+        return False
+
     def _load_pr_comments(self) -> tuple[str, int]:
         """Load PR comments if pr_number is provided.
 
@@ -482,8 +527,11 @@ class DevelopPhase(Phase):
         develop_file_section = ""
         develop_instruction = ""
         if develop_file and develop_file.exists():
-            develop_file_section = f"\n- Developer 問題記錄：{develop_file}"
-            develop_instruction = f"1. **首先閱讀** {develop_file} 中的問題（如果有）\n"
+            # Check if this clarification has already been answered
+            # by looking for a subsequent iteration with user_input
+            if not self._is_clarification_answered(develop_file):
+                develop_file_section = f"\n- Developer 問題記錄：{develop_file}"
+                develop_instruction = f"1. **首先閱讀** {develop_file} 中的問題（如果有）\n"
 
         # Check if review feedback exists (every iteration, not just first)
         has_review_feedback = self._check_review_feedback_exists()
