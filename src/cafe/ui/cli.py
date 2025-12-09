@@ -1762,25 +1762,6 @@ def develop(
         console.print(f"Plan file: {plan_file}")
         console.print()
 
-        # Check for existing develop clarification file and display it
-        develop_file_path = _get_latest_versioned_file("develop", issue_name)
-        if develop_file_path and develop_file_path.exists():
-            console.print("[bold yellow]📝 Developer 在上一輪有以下問題需要您回答：[/bold yellow]")
-            console.print()
-            try:
-                develop_content = develop_file_path.read_text()
-                console.print(develop_content)
-            except Exception as e:
-                console.print(f"[red]Error reading develop file: {e}[/red]")
-            console.print()
-            console.print("─" * 80)
-            console.print()
-            
-            # If interactive and no user_input provided yet, prompt for it
-            if interactive and not user_input:
-                user_input = typer.prompt("請輸入您的回應")
-                console.print()
-
         # Parse approve_denied_tools if provided
         approved_denial_indices: List[int] = []
         if approve_denied_tools is not None:
