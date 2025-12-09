@@ -394,11 +394,14 @@ class DevelopPhase(Phase):
     def _is_clarification_answered(self, develop_file: Path) -> bool:
         """檢查 develop clarification 是否已經被回答.
 
+        邏輯：如果在 clarification 之後的任何 iteration 中有 user_input，
+        表示用戶已經回答了該澄清問題。
+
         Args:
             develop_file: develop clarification 文件路徑（例如 develop_001.md）
 
         Returns:
-            True 如果已經在後續 iteration 中被回答，False 否則
+            True 如果已經在任何後續 iteration 中被回答，False 否則
         """
         # Extract iteration number from develop file name
         # develop_001.md -> 1
@@ -409,12 +412,12 @@ class DevelopPhase(Phase):
 
         clarification_iteration = int(match.group(1))
 
-        # Check subsequent iterations for user_input
+        # Check all iterations (not just current iteration) for user_input
         history_dir = self.issue_dir / "develop" / "history"
         if not history_dir.exists():
             return False
 
-        # Look for any iteration after the clarification that has user_input
+        # Look for ANY iteration after the clarification that has user_input
         import json
         for iteration_file in sorted(history_dir.glob("iteration_*.json")):
             match = re.search(r'iteration_(\d+)\.json', iteration_file.name)
@@ -422,6 +425,7 @@ class DevelopPhase(Phase):
                 continue
 
             iteration_num = int(match.group(1))
+            # Only check iterations AFTER the clarification was created
             if iteration_num <= clarification_iteration:
                 continue
 
