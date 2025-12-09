@@ -175,11 +175,11 @@ class TestDevelopPhasePRCommentsIntegration:
                     assert result == ""
                     assert count == 0
 
-    def test_execute_with_no_unresolved_comments_returns_completed(self, mock_components):
-        """測試當 PR 沒有 unresolved comments 時 execute 直接返回 COMPLETED
+    def test_load_pr_comments_with_no_unresolved_returns_empty(self, mock_components):
+        """測試當 PR 沒有 unresolved comments 時 _load_pr_comments 返回空字串
 
         情境：提供 pr_number 但 PR 沒有 unresolved comments
-        預期：execute() 返回 COMPLETED 狀態且不呼叫 agent
+        預期：_load_pr_comments() 返回空字串和 count=0，但不阻止 develop 執行
         """
         with patch('cafe.phases.develop_phase.get_pr_comments') as mock_get:
             with patch('cafe.phases.develop_phase.filter_unresolved_comments') as mock_filter:
@@ -209,19 +209,12 @@ class TestDevelopPhasePRCommentsIntegration:
                     pr_number=123,
                 )
 
-                # Mock git operations
-                mock_components["git_ops"].branch_exists.return_value = True
+                # Load PR comments
+                result, count = phase._load_pr_comments()
 
-                # Execute
-                result = phase.execute()
-
-                # Verify: Should return COMPLETED without calling agent
-                assert result.status.value == "completed"
-                assert "no new pr comments" in result.message.lower()
-                assert result.data["pr_number"] == 123
-
-                # Verify agent was NOT called
-                mock_components["agent_manager"].execute_agent.assert_not_called()
+                # Verify: Should return empty (no unresolved comments)
+                assert result == ""
+                assert count == 0
 
     def test_load_pr_comments_filters_old_comments(self, mock_components):
         """測試 PR comments 過濾：只載入比上次 develop 更新的 comments
@@ -297,11 +290,11 @@ class TestDevelopPhasePRCommentsIntegration:
                     assert len(formatted_comments) == 1
                     assert formatted_comments[0].id == "C3"
 
-    def test_execute_with_only_old_pr_comments_returns_completed(self, mock_components):
-        """測試當 PR 只有舊的 unresolved comments 時 execute 直接返回 COMPLETED
+    def test_load_pr_comments_filters_old_comments_returns_empty(self, mock_components):
+        """測試當 PR 只有舊的 unresolved comments 時 _load_pr_comments 返回空字串
 
         情境：提供 pr_number 但所有 unresolved comments 都比上次 develop 舊
-        預期：execute() 返回 COMPLETED 狀態且不呼叫 agent
+        預期：_load_pr_comments() 返回空字串和 count=0（舊 comments 被過濾掉）
         """
         import json
 
@@ -343,14 +336,9 @@ class TestDevelopPhasePRCommentsIntegration:
                     pr_number=123,
                 )
 
-                # Mock git operations
-                mock_components["git_ops"].branch_exists.return_value = True
+                # Load PR comments
+                result, count = phase._load_pr_comments()
 
-                result = phase.execute()
-
-                # 應該返回 COMPLETED 因為沒有新的 comments
-                assert result.status.value == "completed"
-                assert "no new pr comments" in result.message.lower()
-
-                # Agent 不應該被呼叫
-                mock_components["agent_manager"].execute_agent.assert_not_called()
+                # 應該返回空（所有 comments 都是舊的）
+                assert result == ""
+                assert count == 0

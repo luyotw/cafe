@@ -608,18 +608,17 @@ class DevelopPhase(Phase):
                     # Silently ignore errors - PR detection is optional
                     print(f"ℹ️  No PR detected for current branch (this is normal if PR hasn't been created yet)")
 
-            # Check PR comments if pr_number is available
+            # Load PR comments if pr_number is available (will be included in prompt)
+            # Note: We don't skip execution even if there are no new comments,
+            # as the developer may still have work to do based on the plan
             if self.pr_number:
-                _, unresolved_count = self._load_pr_comments()
-                if unresolved_count == 0:
-                    return PhaseResult(
-                        status=PhaseStatus.COMPLETED,
-                        message=f"PR #{self.pr_number} has no new PR comments since last develop. Nothing to do.",
-                        data={
-                            "branch": self._get_branch_name(),
-                            "pr_number": self.pr_number,
-                        },
-                    )
+                print(f"\n🔍 Checking PR #{self.pr_number} for unresolved comments...")
+                pr_comments, unresolved_count = self._load_pr_comments()
+                if unresolved_count > 0:
+                    print(f"✅ Found {unresolved_count} new unresolved PR comment(s) to address")
+                else:
+                    print(f"ℹ️  No new unresolved PR comments since last develop")
+                print()
 
             # Create or checkout branch
             branch_name = self._get_branch_name()
