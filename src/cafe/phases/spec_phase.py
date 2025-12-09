@@ -164,6 +164,15 @@ class SpecPhase(Phase):
             Phase result
         """
         try:
+            # Check if phase is already completed (avoid re-running completed phases)
+            from cafe.core.status_codes import PhaseStatusCode
+            early_exit_result = self._check_if_already_completed([
+                PhaseStatusCode.CONFIRMED,
+                PhaseStatusCode.REJECTED,
+            ])
+            if early_exit_result:
+                return early_exit_result
+
             # Ensure phase directory exists
             self.phase_dir.mkdir(parents=True, exist_ok=True)
 

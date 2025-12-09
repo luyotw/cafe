@@ -92,6 +92,15 @@ class PlanPhase(Phase):
             Phase result
         """
         try:
+            # Check if phase is already completed (avoid re-running completed phases)
+            from cafe.core.status_codes import PhaseStatusCode
+            early_exit_result = self._check_if_already_completed([
+                PhaseStatusCode.CONFIRMED,
+                PhaseStatusCode.REJECTED,
+            ])
+            if early_exit_result:
+                return early_exit_result
+
             # Validate inputs
             if self.workflow_mode == WorkflowMode.GITHUB and not self.issue_id:
                 return PhaseResult(
