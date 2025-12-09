@@ -80,8 +80,8 @@ class TestPrepareCommand:
 
     def test_prepare_interactive_mode(self, temp_repo_dir, mock_git_ops):
         """測試互動式輸入 issue name"""
-        # Simulate user input: issue name, worktree question (no)
-        result = runner.invoke(app, ["prepare"], input="my-feature\nn\n")
+        # Simulate user input: issue name, worktree (n), input method (1), rigor (empty=medium), template (1)
+        result = runner.invoke(app, ["prepare"], input="my-feature\nn\n1\n\n1\n")
 
         assert result.exit_code == 0
         assert "Successfully prepared issue: my-feature" in result.stdout
@@ -324,8 +324,8 @@ class TestPrepareCommandWorktree:
 
     def test_prepare_interactive_worktree_prompt_yes(self, temp_repo_dir, mock_git_ops):
         """測試互動模式詢問是否使用 worktree，使用者選擇 Yes"""
-        # 模擬使用者輸入：issue name, 是否使用 worktree (y), worktree 路徑
-        user_input = "my-feature\ny\nworktrees/my-feature\n"
+        # 模擬使用者輸入：issue name, worktree (y), worktree path, input method (1), rigor (empty), template (1)
+        user_input = "my-feature\ny\nworktrees/my-feature\n1\n\n1\n"
         result = runner.invoke(app, ["prepare"], input=user_input)
 
         assert result.exit_code == 0
@@ -345,8 +345,8 @@ class TestPrepareCommandWorktree:
 
     def test_prepare_interactive_worktree_prompt_no(self, temp_repo_dir, mock_git_ops):
         """測試互動模式詢問是否使用 worktree，使用者選擇 No"""
-        # 模擬使用者輸入：issue name, 是否使用 worktree (n)
-        user_input = "normal-feature\nn\n"
+        # 模擬使用者輸入：issue name, worktree (n), input method (1), rigor (empty), template (1)
+        user_input = "normal-feature\nn\n1\n\n1\n"
         result = runner.invoke(app, ["prepare"], input=user_input)
 
         assert result.exit_code == 0
@@ -362,8 +362,8 @@ class TestPrepareCommandWorktree:
 
     def test_prepare_interactive_worktree_default_path_suggestion(self, temp_repo_dir, mock_git_ops):
         """測試互動模式建議預設路徑 .cafe/worktrees/{issue-name}"""
-        # 模擬使用者輸入：issue name, 是否使用 worktree (y), 使用預設路徑（空白輸入）
-        user_input = "test-issue\ny\n\n"
+        # 模擬使用者輸入：issue name, worktree (y), default path (empty), input method (1), rigor (empty), template (1)
+        user_input = "test-issue\ny\n\n1\n\n1\n"
         result = runner.invoke(app, ["prepare"], input=user_input)
 
         assert result.exit_code == 0

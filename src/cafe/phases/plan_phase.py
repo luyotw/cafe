@@ -71,6 +71,9 @@ class PlanPhase(Phase):
             # Derive from current branch name (via issue_dir)
             self.issue_name = self.issue_dir.name
 
+        # Load template from config if not explicitly provided
+        self._load_plan_config()
+
         # Phase directory for plan phase (for versioned files)
         # Path: .cafe/issues/{issue_name}/plan
         self.phase_dir = self.issue_dir / "plan"
@@ -665,5 +668,27 @@ class PlanPhase(Phase):
         """
         plan_file = self._get_versioned_file_path("plan", self.iteration, self.phase_dir)
         return [Path(plan_file)] if Path(plan_file).exists() else []
+
+    def _load_plan_config(self) -> None:
+        """Load plan configuration (template) from config.yaml if exists."""
+        # If template_path is already explicitly provided, don't override it
+        if self.template_path:
+            return
+
+        # Path: .cafe/issues/{issue_name}/config.yaml
+        config_file = self.issue_dir / "config.yaml"
+
+        config_data = self._read_issue_config(config_file)
+        if config_data:
+            # Load from plan section if exists
+            plan_config = config_data.get("plan", {})
+
+            if "template" in plan_config:
+                # Resolve template name to path
+                from cafe.utils.template import TemplateManager
+                template_manager = TemplateManager(".cafe")
+                template_path = template_manager.get_template_path(plan_config["template"])
+                if template_path and template_path.exists():
+                    self.template_path = str(template_path)
 
 
