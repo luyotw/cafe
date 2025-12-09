@@ -1155,10 +1155,10 @@ def spec(
 
         # Load issue config to get saved rigor setting
         import yaml
-        config_file = Path(f".cafe/issues/{issue_name}/config.yaml")
+        issue_config_file = Path(f".cafe/issues/{issue_name}/config.yaml")
         saved_rigor = None
-        if config_file.exists():
-            with open(config_file, 'r', encoding='utf-8') as f:
+        if issue_config_file.exists():
+            with open(issue_config_file, 'r', encoding='utf-8') as f:
                 config_data = yaml.safe_load(f) or {}
                 spec_config = config_data.get("spec", {})
                 saved_rigor = spec_config.get("rigor")

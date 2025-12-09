@@ -400,3 +400,36 @@ class TestSpecRigorConfigLoading:
         # Verify: Output shows rigor level
         assert result.exit_code == 0
         assert "Rigor: high" in result.stdout
+
+    def test_does_not_override_config_file_parameter(
+        self, runner, mock_git_ops, mock_spec_phase, mock_agent_manager,
+        mock_permission_handler, setup_env_with_rigor
+    ):
+        """讀取 issue config 時不應該覆蓋 config_file 參數。"""
+        # Setup: Phase returns success
+        mock_phase_instance = Mock()
+        mock_phase_instance.execute.return_value = PhaseResult(
+            status=PhaseStatus.COMPLETED,
+            message="Spec confirmed",
+            data={"iterations": 1, "status_code": "CAFE_CONFIRMED"},
+        )
+        mock_spec_phase.return_value = mock_phase_instance
+
+        # Mock ConfigManager to verify it receives correct config_dir
+        with patch("cafe.ui.cli.ConfigManager") as MockConfigManager:
+            mock_config_manager = Mock()
+            MockConfigManager.return_value = mock_config_manager
+            mock_config_manager.get.return_value = "Roger"
+            mock_config_manager.load_config.return_value = {}
+
+            # Mock _setup_agents to return mock agent manager
+            with patch("cafe.ui.cli._setup_agents") as mock_setup_agents:
+                mock_setup_agents.return_value = mock_agent_manager.return_value
+
+                # Execute with default config file path
+                result = runner.invoke(app, ["spec", "--interactive", "--user-input", "test"])
+
+                # Verify: ConfigManager was initialized with correct directory
+                assert result.exit_code == 0
+                # Should use ".cafe" not the issue config path
+                MockConfigManager.assert_called_once_with(".cafe")
