@@ -367,7 +367,7 @@ class DevelopPhase(Phase):
         """Get timestamp from last develop/status.json.
 
         Returns:
-            datetime object or None if not found
+            datetime object (timezone-aware) or None if not found
         """
         try:
             status_file = self.history_dir.parent / "status.json"
@@ -378,8 +378,15 @@ class DevelopPhase(Phase):
                 status_data = json.load(f)
                 timestamp_str = status_data.get("timestamp")
                 if timestamp_str:
-                    from datetime import datetime
-                    return datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
+                    from datetime import datetime, timezone
+                    # Ensure we always get a timezone-aware datetime
+                    if timestamp_str.endswith('Z'):
+                        timestamp_str = timestamp_str.replace('Z', '+00:00')
+                    dt = datetime.fromisoformat(timestamp_str)
+                    # If datetime is naive, assume UTC
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=timezone.utc)
+                    return dt
         except Exception:
             pass
         return None
@@ -410,10 +417,18 @@ class DevelopPhase(Phase):
             # Filter comments that are newer than last develop timestamp
             last_develop_time = self._get_last_develop_timestamp()
             if last_develop_time:
-                from datetime import datetime
+                from datetime import datetime, timezone
                 new_comments = []
                 for comment in unresolved:
-                    comment_time = datetime.fromisoformat(comment.created_at.replace('Z', '+00:00'))
+                    comment_time_str = comment.created_at
+                    # Ensure we always get a timezone-aware datetime
+                    if comment_time_str.endswith('Z'):
+                        comment_time_str = comment_time_str.replace('Z', '+00:00')
+                    comment_time = datetime.fromisoformat(comment_time_str)
+                    # If datetime is naive, assume UTC
+                    if comment_time.tzinfo is None:
+                        comment_time = comment_time.replace(tzinfo=timezone.utc)
+
                     if comment_time > last_develop_time:
                         new_comments.append(comment)
 
