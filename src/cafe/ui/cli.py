@@ -213,7 +213,7 @@ def _get_latest_review_iteration(issue_name: str) -> int:
 
 def _execute_next_phase_auto(next_phase: str, issue_name: str) -> None:
     """Execute the next phase in auto mode.
-    
+
     Args:
         next_phase: Name of the next phase to execute ("plan", "develop", "review", "pr")
         issue_name: Issue name for tracking
@@ -221,13 +221,9 @@ def _execute_next_phase_auto(next_phase: str, issue_name: str) -> None:
     console.print()
     console.print(f"[bold cyan]🤖 Auto mode: executing [bold]{next_phase}[/bold]...[/bold cyan]")
     console.print()
-    
+
     # Build command
-    if next_phase == "pr":
-        # PR phase doesn't have --auto
-        cmd = [sys.executable, "-m", "cafe.ui.cli", "pr"]
-    else:
-        cmd = [sys.executable, "-m", "cafe.ui.cli", next_phase, "--auto"]
+    cmd = [sys.executable, "-m", "cafe.ui.cli", next_phase, "--auto"]
     
     # Execute the command
     try:
@@ -2135,6 +2131,11 @@ def pr(
         "--force",
         help="Force push to remote (use with caution)",
     ),
+    auto: bool = typer.Option(
+        False,
+        "--auto",
+        help="Auto mode: automatically update existing PR without asking",
+    ),
     config_file: str = typer.Option(
         ".cafe/config.yaml",
         "--config",
@@ -2199,6 +2200,9 @@ def pr(
         # Determine final draft value
         final_draft = draft if draft is not None else True  # Default to draft
 
+        # In auto mode, automatically update existing PR
+        final_update = update or auto
+
         # Get developer agent name from config (for PR generation)
         dev_agent = config_manager.get("agents.developer.name", "David")
 
@@ -2215,7 +2219,7 @@ def pr(
             draft=final_draft,
             custom_title=title,
             custom_body=body,
-            update=update,
+            update=final_update,
             force_push=force,
             interactive=interactive,
             base_branch=base if base != "main" else None,  # Pass base only if not default
