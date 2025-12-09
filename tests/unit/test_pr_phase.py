@@ -529,8 +529,11 @@ class TestErrorHandling:
         assert result.status == PhaseStatus.FAILED
         assert "Git push error" in result.message or "failed" in result.message.lower()
 
-    def test_gh_pr_create_error_fails_phase(self, tmp_path: Path) -> None:
+    def test_gh_pr_create_error_fails_phase(self, tmp_path: Path, monkeypatch) -> None:
         """測試 gh pr create 失敗時 phase 失敗"""
+        # Change to tmp_path to avoid pollution
+        monkeypatch.chdir(tmp_path)
+
         # Setup issue directory structure
         spec_file = tmp_path / ".cafe" / "issues" / "test-issue" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
