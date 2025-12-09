@@ -451,23 +451,44 @@ class Phase(ABC):
         all_status_codes = StatusCodeParser.extract_all(response, valid_codes=valid_status_codes)
         has_multiple_codes = len(all_status_codes) > 1
 
-        # 6.2. 如果沒有 status code（包含多個 status codes 的情況），嘗試呼叫 agent 分析並記錄
-        # 因為多個 status codes 也代表狀態不明確，需要分析
+        # 6.2. 如果沒有 status code（包含多個 status codes 的情況），發送繼續訊息
+        # 因為多個 status codes 也代表狀態不明確，需要 agent 確認
         analysis_attempted = False
         analysis_response = None
         original_status_code_missing = (status_code is None)  # 記錄原始狀態
-        
+
         if original_status_code_missing:  # 包含：沒有 status code 或有多個 status codes
+            print(f"\n⚠️  Agent 回應沒有狀態碼，發送繼續訊息...")
             analysis_attempted = True
-            analysis_response_str, analysis_status_code = self._analyze_missing_status_code_with_logging(
-                agent_name=agent_name,
-                valid_status_codes=valid_status_codes,
-                original_response=response,
-            )
-            analysis_response = analysis_response_str
-            
-            if analysis_status_code:
-                status_code = analysis_status_code
+            try:
+                # 發送簡單的繼續提示（所有 CLI 都支援 session resume）
+                continue_prompt = "若完成了就回應狀態碼，未完成就繼續"
+                continue_response, _, _, _, _ = self.agent_manager.execute(
+                    agent_name,
+                    continue_prompt,
+                    allowed_tools=allowed_tools,
+                    allowed_directories=self._get_allowed_directories(),
+                )
+
+                # 嘗試從繼續的回應中提取狀態碼
+                continue_status_code = StatusCodeParser.extract(
+                    continue_response,
+                    valid_codes=valid_status_codes,
+                )
+
+                if continue_status_code:
+                    print(f"✅ 繼續執行後獲得狀態碼: {continue_status_code.value}")
+                    # 將原始回應和繼續回應合併
+                    response = response + "\n\n" + continue_response
+                    status_code = continue_status_code
+                    analysis_response = continue_response
+                else:
+                    print(f"⚠️  繼續執行後仍未獲得狀態碼")
+                    analysis_response = continue_response
+
+            except Exception as e:
+                print(f"⚠️  繼續訊息發送失敗: {e}")
+                analysis_response = None
 
         # 6.3. 寫入 error log（如果原始回應有問題：沒有 status code、多個 codes、或分析後仍無 status code）
         # 注意：即使分析成功找到 status code，我們仍然記錄原始回應的問題

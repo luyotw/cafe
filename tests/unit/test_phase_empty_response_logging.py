@@ -168,11 +168,11 @@ class TestMissingStatusCodeLogging:
         mock_permission_handler,
         monkeypatch,
     ):
-        """測試：當 agent 回應缺少 status code 時，應該記錄分析流程到日誌"""
+        """測試：當 agent 回應缺少 status code 時，應該發送繼續訊息並記錄流程到日誌"""
         monkeypatch.chdir(temp_dir)
-        
+
         # First call: response without status code
-        # Second call: analysis call that returns status code
+        # Second call: continuation call that returns status code
         mock_agent_manager.execute.side_effect = [
             (
                 "這是一個沒有 status code 的回應",  # response without status code
@@ -182,14 +182,14 @@ class TestMissingStatusCodeLogging:
                 None,  # streaming_log
             ),
             (
-                "CAFE_NEED_CLARIFICATION",  # analysis response with status code
+                "CAFE_NEED_CLARIFICATION",  # continuation response with status code
                 MagicMock(),  # token_usage
                 [],  # permission_denials
-                ["-p", "analysis prompt"],  # cli_command_args
+                ["-p", "若完成了就回應狀態碼，未完成就繼續"],  # cli_command_args
                 None,  # streaming_log
             ),
         ]
-        
+
         phase = SpecPhase(
             agent_manager=mock_agent_manager,
             permission_handler=mock_permission_handler,
@@ -199,28 +199,25 @@ class TestMissingStatusCodeLogging:
             interactive=False,
             user_input="測試輸入",
         )
-        
-        # Mock _get_status_analysis_prompt to return a prompt
-        with patch.object(phase, '_get_status_analysis_prompt') as mock_prompt:
-            mock_prompt.return_value = "請分析狀態"
-            
-            result = phase.execute()
-        
-        # 驗證 execute 被呼叫兩次（第一次正常執行，第二次分析）
+
+        result = phase.execute()
+
+        # 驗證 execute 被呼叫兩次（第一次正常執行，第二次繼續）
         assert mock_agent_manager.execute.call_count == 2
-        
-        # 驗證 history 有記錄分析後的 status code
+
+        # 驗證 history 有記錄繼續後的 status code
         history_file = temp_dir / ".cafe/issues/test-issue/spec/history/iteration_001.json"
         assert history_file.exists()
-        
+
         with open(history_file, "r", encoding="utf-8") as f:
             history_data = json.load(f)
-        
-        # 應該記錄原始回應（沒有 status code 的）
-        assert history_data["response"] == "這是一個沒有 status code 的回應"
-        # 應該記錄分析後的 status code
+
+        # 應該記錄合併後的回應（包含原始回應和繼續回應）
+        assert "這是一個沒有 status code 的回應" in history_data["response"]
+        assert "CAFE_NEED_CLARIFICATION" in history_data["response"]
+        # 應該記錄繼續後的 status code
         assert history_data["status_code"] == "CAFE_NEED_CLARIFICATION"
-        # 應該有標記說明 status code 是通過分析得到的
+        # 應該有標記說明 status code 是通過繼續得到的
         assert "status_code_analyzed" in history_data
         assert history_data["status_code_analyzed"] is True
     
@@ -234,8 +231,8 @@ class TestMissingStatusCodeLogging:
     ):
         """測試：當回應缺少 status code 時，應該寫入 execution_error_{num}.log"""
         monkeypatch.chdir(temp_dir)
-        
-        # Response without status code, and analysis also fails
+
+        # Response without status code, and continuation also fails
         mock_agent_manager.execute.side_effect = [
             (
                 "沒有 status code 的回應",
@@ -245,14 +242,14 @@ class TestMissingStatusCodeLogging:
                 None,
             ),
             (
-                "分析結果也沒有 status code",  # Analysis also returns no status code
+                "繼續結果也沒有 status code",  # Continuation also returns no status code
                 MagicMock(),
                 [],
-                ["-p", "analysis prompt"],
+                ["-p", "若完成了就回應狀態碼，未完成就繼續"],
                 None,
             ),
         ]
-        
+
         phase = SpecPhase(
             agent_manager=mock_agent_manager,
             permission_handler=mock_permission_handler,
@@ -262,18 +259,15 @@ class TestMissingStatusCodeLogging:
             interactive=False,
             user_input="測試輸入",
         )
-        
-        with patch.object(phase, '_get_status_analysis_prompt') as mock_prompt:
-            mock_prompt.return_value = "請分析狀態"
-            
-            result = phase.execute()
-        
+
+        result = phase.execute()
+
         # 驗證應該有 error log
         error_log = temp_dir / ".cafe/issues/test-issue/spec/history/execution_error_001.log"
         assert error_log.exists()
-        
+
         error_content = error_log.read_text(encoding="utf-8")
-        
+
         # 驗證 log 內容包含關鍵資訊
         assert "Timestamp:" in error_content
         assert "Missing status code" in error_content or "no status code" in error_content.lower()
@@ -281,7 +275,7 @@ class TestMissingStatusCodeLogging:
         assert "沒有 status code 的回應" in error_content
         assert "Analysis attempted: True" in error_content
         assert "Analysis response:" in error_content
-        assert "分析結果也沒有 status code" in error_content
+        assert "繼續結果也沒有 status code" in error_content
     
     def test_multiple_status_codes_logs_to_error_log(
         self,
@@ -291,11 +285,11 @@ class TestMissingStatusCodeLogging:
         mock_permission_handler,
         monkeypatch,
     ):
-        """測試：當回應包含多個 status code 時，應該嘗試分析並寫入 execution_error_{num}.log"""
+        """測試：當回應包含多個 status code 時，應該嘗試繼續並寫入 execution_error_{num}.log"""
         monkeypatch.chdir(temp_dir)
-        
+
         # First call: response with multiple status codes (use valid codes for spec phase)
-        # Second call: analysis call that returns a single status code
+        # Second call: continuation call that returns a single status code
         mock_agent_manager.execute.side_effect = [
             (
                 "CAFE_READY_FOR_REVIEW\n這是內容\nCAFE_NEED_CLARIFICATION",  # Multiple status codes
@@ -305,14 +299,14 @@ class TestMissingStatusCodeLogging:
                 None,
             ),
             (
-                "CAFE_NEED_CLARIFICATION",  # Analysis returns single status code
+                "CAFE_NEED_CLARIFICATION",  # Continuation returns single status code
                 MagicMock(),
                 [],
-                ["-p", "analysis prompt"],
+                ["-p", "若完成了就回應狀態碼，未完成就繼續"],
                 None,
             ),
         ]
-        
+
         phase = SpecPhase(
             agent_manager=mock_agent_manager,
             permission_handler=mock_permission_handler,
@@ -322,22 +316,18 @@ class TestMissingStatusCodeLogging:
             interactive=False,
             user_input="測試輸入",
         )
-        
-        # Mock _get_status_analysis_prompt to return a prompt
-        with patch.object(phase, '_get_status_analysis_prompt') as mock_prompt:
-            mock_prompt.return_value = "請分析狀態"
-            
-            result = phase.execute()
-        
-        # 驗證 execute 被呼叫兩次（第一次正常執行，第二次分析）
+
+        result = phase.execute()
+
+        # 驗證 execute 被呼叫兩次（第一次正常執行，第二次繼續）
         assert mock_agent_manager.execute.call_count == 2
-        
+
         # 驗證應該有 error log
         error_log = temp_dir / ".cafe/issues/test-issue/spec/history/execution_error_001.log"
         assert error_log.exists()
-        
+
         error_content = error_log.read_text(encoding="utf-8")
-        
+
         # 驗證 log 內容包含關鍵資訊
         assert "Multiple status codes" in error_content
         assert "CAFE_READY_FOR_REVIEW" in error_content
@@ -358,7 +348,7 @@ class TestErrorLogFormat:
     ):
         """測試：error log 應該包含所有必要的除錯資訊"""
         monkeypatch.chdir(temp_dir)
-        
+
         # Response without status code
         mock_agent_manager.execute.side_effect = [
             (
@@ -369,14 +359,14 @@ class TestErrorLogFormat:
                 None,
             ),
             (
-                "分析回應",
+                "繼續回應",
                 MagicMock(),
                 [],
-                ["-p", "analysis"],
+                ["-p", "若完成了就回應狀態碼，未完成就繼續"],
                 None,
             ),
         ]
-        
+
         phase = SpecPhase(
             agent_manager=mock_agent_manager,
             permission_handler=mock_permission_handler,
@@ -386,17 +376,14 @@ class TestErrorLogFormat:
             interactive=False,
             user_input="測試輸入",
         )
-        
-        with patch.object(phase, '_get_status_analysis_prompt') as mock_prompt:
-            mock_prompt.return_value = "請分析"
-            
-            result = phase.execute()
-        
+
+        result = phase.execute()
+
         error_log = temp_dir / ".cafe/issues/test-issue/spec/history/execution_error_001.log"
         assert error_log.exists()
-        
+
         error_content = error_log.read_text(encoding="utf-8")
-        
+
         # 必要欄位檢查
         required_fields = [
             "Timestamp:",
@@ -409,6 +396,6 @@ class TestErrorLogFormat:
             "Analysis attempted:",
             "CLI command args:",
         ]
-        
+
         for field in required_fields:
             assert field in error_content, f"Missing required field: {field}"

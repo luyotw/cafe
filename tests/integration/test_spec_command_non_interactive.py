@@ -396,10 +396,10 @@ class TestSpecCommandNonInteractiveAgentTracking:
         # Arrange
         spec_file = str(temp_spec_dir / "spec_001.md")
         user_input = "我想要一個特殊的登入功能"
-        
+
         monkeypatch.setenv(
             "CAFE_MOCK_RESPONSE",
-            "CAFE_CONFIRMED\n\n# 測試規格"
+            "CAFE_READY_FOR_REVIEW\n\n# 測試規格"
         )
         
         agent_manager = AgentManager()
