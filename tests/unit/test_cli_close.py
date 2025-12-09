@@ -73,6 +73,18 @@ def issue_with_config(temp_repo_dir):
     return issue_dir
 
 
+@pytest.fixture(autouse=True)
+def cleanup_archive(temp_repo_dir):
+    """Clean up archived directories after each test."""
+    yield
+    # Clean up archive directory after test
+    import shutil
+    project_path = str(temp_repo_dir.resolve()).lstrip('/').replace('/', '-')
+    archive_base = Path.home() / ".cafe" / "projects" / project_path
+    if archive_base.exists():
+        shutil.rmtree(archive_base)
+
+
 class TestCloseCommand:
     """Test close command."""
 
@@ -92,8 +104,15 @@ class TestCloseCommand:
         mock_git_ops.delete_branch.assert_called_once_with("test-issue")
         mock_git_ops.pull.assert_called_once()
 
-        # Verify issue directory still exists
-        assert issue_with_config.exists()
+        # Verify issue directory moved to archive
+        assert not issue_with_config.exists(), "Issue directory should be moved to archive"
+
+        # Verify archived location
+        from pathlib import Path
+        import os
+        project_path = str(temp_repo_dir.resolve()).lstrip('/').replace('/', '-')
+        archive_path = Path.home() / ".cafe" / "projects" / project_path / "archived" / "test-issue"
+        assert archive_path.exists(), f"Issue should be archived at {archive_path}"
 
     def test_close_checkout_fails(self, temp_repo_dir, mock_git_ops, mock_github_ops_no_pr, issue_with_config):
         """測試切換分支失敗（AC-2）"""
@@ -133,13 +152,20 @@ class TestCloseCommand:
         # Verify previous operations were called
         mock_git_ops.checkout_branch.assert_called_once_with("main")
 
-    def test_close_preserves_issue_directory(self, temp_repo_dir, mock_git_ops, mock_github_ops_no_pr, issue_with_config):
-        """測試確認資料夾保留（AC-5）"""
+    def test_close_archives_issue_directory(self, temp_repo_dir, mock_git_ops, mock_github_ops_no_pr, issue_with_config):
+        """測試確認資料夾被歸檔（AC-5）"""
         result = runner.invoke(app, ["close"])
 
         assert result.exit_code == 0
-        # Issue directory must still exist
-        assert issue_with_config.exists()
+
+        # Issue directory should be moved to archive
+        assert not issue_with_config.exists(), "Issue directory should be moved to archive"
+
+        # Verify archived location
+        from pathlib import Path
+        project_path = str(temp_repo_dir.resolve()).lstrip('/').replace('/', '-')
+        archive_path = Path.home() / ".cafe" / "projects" / project_path / "archived" / "test-issue"
+        assert archive_path.exists(), f"Issue should be archived at {archive_path}"
 
     def test_close_without_issue_config(self, temp_repo_dir, mock_git_ops, mock_github_ops_no_pr):
         """測試當 issue config 不存在時"""
@@ -428,10 +454,19 @@ class TestCloseCommandWorktree:
 
         assert result.exit_code == 0
 
-        # 驗證 worktree 的 spec/plan 被同步到 repo root
-        repo_spec = repo_issue_dir / "spec" / "spec_001.md"
-        repo_plan = repo_issue_dir / "plan" / "plan_001.md"
-        assert repo_spec.exists(), "spec_001.md should be synced to repo root"
-        assert repo_spec.read_text() == "Worktree spec content"
-        assert repo_plan.exists(), "plan_001.md should be synced to repo root"
-        assert repo_plan.read_text() == "Worktree plan content"
+        # 驗證 worktree 的 spec/plan 被同步到 repo root 後歸檔
+        # Issue directory should be moved to archive after sync
+        assert not repo_issue_dir.exists(), "Issue directory should be moved to archive"
+
+        # Verify archived location contains synced data
+        from pathlib import Path
+        project_path = str(temp_repo_dir.resolve()).lstrip('/').replace('/', '-')
+        archive_path = Path.home() / ".cafe" / "projects" / project_path / "archived" / "sync-test"
+        assert archive_path.exists(), f"Issue should be archived at {archive_path}"
+
+        archive_spec = archive_path / "spec" / "spec_001.md"
+        archive_plan = archive_path / "plan" / "plan_001.md"
+        assert archive_spec.exists(), "spec_001.md should be in archive"
+        assert archive_spec.read_text() == "Worktree spec content"
+        assert archive_plan.exists(), "plan_001.md should be in archive"
+        assert archive_plan.read_text() == "Worktree plan content"

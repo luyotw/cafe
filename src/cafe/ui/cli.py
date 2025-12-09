@@ -717,6 +717,30 @@ def prepare(
         raise typer.Exit(1)
 
 
+def _get_project_path() -> str:
+    """Get the project path in the ~/.claude/projects/ naming format.
+
+    Converts absolute path like /Users/YO/side_projects/my-project
+    to -Users-YO-side-projects-my-project
+    """
+    repo_root = Path.cwd()
+    # Find the git repository root
+    original_root = repo_root
+    while repo_root != repo_root.parent:
+        if (repo_root / ".git").exists():
+            break
+        repo_root = repo_root.parent
+    else:
+        # If no .git directory found, use current working directory
+        repo_root = original_root
+
+    # Convert to ~/.claude/projects/ naming format: replace / with -
+    abs_path = str(repo_root.resolve())
+    # Remove leading / and replace remaining / with -
+    project_path = abs_path.lstrip('/').replace('/', '-')
+    return project_path
+
+
 @app.command()
 def close() -> None:
     """Close current feature and return to base branch.
@@ -726,10 +750,11 @@ def close() -> None:
     2. For worktree mode: switches back to main repo, removes worktree, deletes branch
     3. For normal mode: switches to base branch, deletes feature branch
     4. Pulls latest changes from remote
-    5. Preserves .cafe/issues/<issue-name>/ directory
+    5. Archives .cafe/issues/<issue-name>/ to ~/.cafe/projects/<project-path>/archived/<issue-name>/
     """
     import yaml
     import os
+    import shutil
 
     try:
         # 1. Initialize Git operations
@@ -781,10 +806,11 @@ def close() -> None:
 
         base_branch = config_data.get("base_branch", "main")
         feature_branch = current_branch
+        issue_name = current_branch  # Issue name is the same as current branch
         worktree_path = config_data.get("worktree_path")
 
         console.print()
-        console.print(f"[bold blue]🔒 Closing issue: {feature_branch}[/bold blue]")
+        console.print(f"[bold blue]🔒 Closing issue: {issue_name}[/bold blue]")
         console.print()
 
         # 5. Handle worktree mode vs normal mode
@@ -952,10 +978,39 @@ def close() -> None:
                 console.print()
                 raise typer.Exit(1)
 
-        # 6. Display success message
+        # 6. Archive issue data to ~/.cafe/projects/<project-path>/archived/<issue-name>/
+        try:
+            console.print(f"[dim]Archiving issue data...[/dim]")
+
+            # Get project path in ~/.claude/projects/ naming format
+            project_path = _get_project_path()
+
+            # Construct archive path
+            home_dir = Path.home()
+            archive_base = home_dir / ".cafe" / "projects" / project_path / "archived"
+            archive_path = archive_base / issue_name
+
+            # Ensure archive directory exists
+            archive_base.mkdir(parents=True, exist_ok=True)
+
+            # Move issue directory to archive
+            issue_dir = Path.cwd() / ".cafe" / "issues" / issue_name
+            if issue_dir.exists():
+                # If archive already exists, remove it first
+                if archive_path.exists():
+                    shutil.rmtree(archive_path)
+                shutil.move(str(issue_dir), str(archive_path))
+                console.print(f"[green]✓ Archived issue data to: {archive_path}[/green]")
+            else:
+                console.print(f"[yellow]⚠️  No issue data found at .cafe/issues/{issue_name}/[/yellow]")
+        except Exception as e:
+            console.print(f"[yellow]⚠️  Failed to archive issue data: {e}[/yellow]")
+            console.print(f"[yellow]   Issue data remains at: .cafe/issues/{issue_name}/[/yellow]")
+
+        # 7. Display success message
         console.print()
-        console.print(f"[green]✓ Successfully closed issue: {feature_branch}[/green]")
-        console.print(f"  📁 Issue data preserved at: .cafe/issues/{feature_branch}/")
+        console.print(f"[green]✓ Successfully closed issue: {issue_name}[/green]")
+        console.print(f"  📁 Issue data archived to: {archive_path if 'archive_path' in locals() else '~/.cafe/projects/.../archived/' + issue_name}")
         console.print(f"  🌿 Current branch: {base_branch}")
 
         # For worktree mode, remind user to change directory
