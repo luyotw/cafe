@@ -15,6 +15,7 @@ from cafe.core.phase import Phase
 from cafe.core.status_codes import PhaseStatusCode, StatusCodeParser, generate_status_code_prompt
 from cafe.core.types import PhaseProgress, PhaseResult, PhaseStatus, WorkflowMode
 from cafe.ui.display import Display
+from cafe.ui.phase_prompts import prompt_for_input_method, prompt_for_rigor, fetch_github_issue
 from cafe.utils.git_utils import get_github_repo_name, get_repo_root, to_cwd_relative_path
 from cafe.utils.github import GitHubOps, GitHubError
 
@@ -528,44 +529,9 @@ class SpecPhase(Phase):
         if self._rigor_explicitly_set:
             return
 
-        print("\n" + "="*70)
-        print("請選擇規格嚴謹程度：")
-        print("="*70)
-        print()
-        print("1. Low (低) - 快速開發模式")
-        print("   • 只問最關鍵的資訊")
-        print("   • 允許模糊地帶，讓開發者自行判斷")
-        print("   • 適合：快速原型、MVP、內部工具")
-        print()
-        print("2. Medium (中) - 平衡模式 [預設]")
-        print("   • 詢問重要細節和關鍵場景")
-        print("   • 在速度和精確度間取得平衡")
-        print("   • 適合：一般功能開發")
-        print()
-        print("3. High (高) - 精確規格模式")
-        print("   • 詳細詢問所有細節和邊界情況")
-        print("   • 確保需求可測試、無模糊")
-        print("   • 適合：核心功能、API 設計、對外產品")
-        print()
-        print("="*70)
-
-        while True:
-            choice = input("請選擇 (1-3, 直接按 Enter 使用預設值 2): ").strip()
-
-            if choice == "" or choice == "2":
-                self.rigor = SpecRigor.MEDIUM
-                print(f"✓ 已選擇：Medium (中) - 平衡模式\n")
-                break
-            elif choice == "1":
-                self.rigor = SpecRigor.LOW
-                print(f"✓ 已選擇：Low (低) - 快速開發模式\n")
-                break
-            elif choice == "3":
-                self.rigor = SpecRigor.HIGH
-                print(f"✓ 已選擇：High (高) - 精確規格模式\n")
-                break
-            else:
-                print("❌ 無效選擇，請輸入 1, 2, 或 3")
+        # Use shared prompt function
+        rigor_str = prompt_for_rigor(self.display)
+        self.rigor = SpecRigor(rigor_str)
 
     def _prompt_for_input_method(self) -> tuple[str, Optional[int]]:
         """詢問用戶選擇需求輸入方式（手動 vs GitHub Issue）
@@ -575,45 +541,9 @@ class SpecPhase(Phase):
             - method: "manual" 或 "github"
             - issue_id: Issue ID (int) 如果選擇 GitHub，否則 None
         """
-        print("\n" + "="*70)
-        print("請選擇需求輸入方式：")
-        print("="*70)
-        print()
-        print("1. 手動輸入需求")
-        print("2. 從 GitHub Issue 抓取")
-        print()
-
-        while True:
-            choice = input("請選擇 (1 或 2): ").strip()
-
-            if choice == "1":
-                return ("manual", None)
-            elif choice == "2":
-                # 先顯示警告
-                print()
-                print("⚠️  注意：完成後會將 spec.md 以 comment 方式貼回 GitHub Issue")
-                print()
-
-                # 詢問 Issue ID 或 URL
-                issue_input = input("請輸入 GitHub Issue ID 或 URL: ").strip()
-
-                try:
-                    # 使用 GitHubOps 提取 issue number
-                    gh_ops = GitHubOps()
-                    issue_id_str = gh_ops.extract_issue_number(issue_input)
-                    issue_id = int(issue_id_str)
-
-                    print()
-                    print(f"✓ 將從 GitHub Issue #{issue_id} 抓取需求")
-                    print()
-
-                    return ("github", issue_id)
-                except (ValueError, GitHubError) as e:
-                    print(f"❌ 無效的 Issue ID 或 URL: {e}")
-                    print("請重新選擇...")
-                    print()
-            else:
-                print("❌ 無效選擇，請輸入 1 或 2")
+        # Use shared prompt function
+        gh_ops = GitHubOps()
+        return prompt_for_input_method(self.display, gh_ops)
 
     def _fetch_github_issue(self, issue_id: int) -> Optional[PhaseResult]:
         """從 GitHub 抓取 issue 內容
@@ -628,22 +558,9 @@ class SpecPhase(Phase):
             # Get repository name from .git/config
             repo_name = get_github_repo_name()
 
-            # Fetch issue content
+            # Fetch issue content using shared function
             gh_ops = GitHubOps()
-
-            # Check gh CLI authentication status
-            if not gh_ops.check_gh_auth():
-                return PhaseResult(
-                    status=PhaseStatus.FAILED,
-                    message="gh CLI is not authenticated. Please run: gh auth login",
-                )
-
-            issue_data = gh_ops.get_issue(str(issue_id), include_comments=False)
-
-            # Combine title and body as first user_input
-            issue_title = issue_data.get("title", "")
-            issue_body = issue_data.get("body", "")
-            fetched_content = f"# {issue_title}\n\n{issue_body}" if issue_title else issue_body
+            fetched_content = fetch_github_issue(gh_ops, issue_id)
 
             # Override user_input with fetched content
             self.user_input = fetched_content
@@ -676,6 +593,12 @@ class SpecPhase(Phase):
             return PhaseResult(
                 status=PhaseStatus.FAILED,
                 message=f"Failed to get repository info: {e}",
+            )
+        except RuntimeError as e:
+            # From fetch_github_issue when gh CLI not authenticated
+            return PhaseResult(
+                status=PhaseStatus.FAILED,
+                message=str(e),
             )
         except GitHubError as e:
             return PhaseResult(
