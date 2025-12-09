@@ -130,6 +130,10 @@ class SpecPhase(Phase):
         # spec_file will be set in execute() based on iteration number
         self.spec_file: str = ""
 
+        # Config-based settings (loaded from config.yaml by _load_issue_config())
+        self._config_input_method: Optional[str] = None
+        self._config_issue_id: Optional[int] = None
+
         # Load issue_id from config.json if exists (for comment posting after resume)
         self._load_issue_config()
 
@@ -231,18 +235,31 @@ class SpecPhase(Phase):
                 elif iteration_number == 1:
                     # File doesn't exist AND this is first iteration - get initial user story
                     if self.interactive:
-                        # If --issue-id not provided, ask user to choose input method
+                        # If --issue-id not provided, check config or ask user to choose input method
                         if not self.fetch_issue_id:
-                            method, issue_id = self._prompt_for_input_method()
-
-                            if method == "github" and issue_id:
-                                # Fetch from GitHub Issue
-                                error_result = self._fetch_github_issue(issue_id)
-                                if error_result:
-                                    return error_result
+                            # Check if config has input_method specified
+                            if self._config_input_method:
+                                # Use config values
+                                if self._config_input_method == "github" and self._config_issue_id:
+                                    # Fetch from GitHub Issue
+                                    error_result = self._fetch_github_issue(self._config_issue_id)
+                                    if error_result:
+                                        return error_result
+                                else:
+                                    # Manual input
+                                    self._prompt_for_user_story()
                             else:
-                                # Manual input
-                                self._prompt_for_user_story()
+                                # No config, prompt user
+                                method, issue_id = self._prompt_for_input_method()
+
+                                if method == "github" and issue_id:
+                                    # Fetch from GitHub Issue
+                                    error_result = self._fetch_github_issue(issue_id)
+                                    if error_result:
+                                        return error_result
+                                else:
+                                    # Manual input
+                                    self._prompt_for_user_story()
                         else:
                             # --issue-id already provided, skip to user story prompt
                             self._prompt_for_user_story()
@@ -1021,7 +1038,7 @@ PM (Product Manager)，負責需求澄清工作。請讀取 agents/{self.pm_agen
 """
 
     def _load_issue_config(self) -> None:
-        """Load issue configuration (issue_id, rigor) from config.yaml if exists."""
+        """Load issue configuration (issue_id, rigor, input_method) from config.yaml if exists."""
         from cafe.core.types import SpecRigor
 
         # Path: .cafe/issues/{issue_name}/config.yaml
@@ -1029,15 +1046,35 @@ PM (Product Manager)，負責需求澄清工作。請讀取 agents/{self.pm_agen
 
         config_data = self._read_issue_config(config_file)
         if config_data:
-            if "issue_id" in config_data:
-                self._fetched_issue_id = config_data["issue_id"]
-            # Load rigor from config if not explicitly set by user
-            if "rigor" in config_data and not self._rigor_explicitly_set:
+            # Load from new spec section if exists
+            spec_config = config_data.get("spec", {})
+
+            # Load input_method and issue_id from spec section
+            if "input_method" in spec_config:
+                self._config_input_method = spec_config["input_method"]
+                # If method is github, also load issue_id
+                if spec_config.get("issue_id"):
+                    self._config_issue_id = int(spec_config["issue_id"])
+
+            # Load rigor from spec section
+            if "rigor" in spec_config and not self._rigor_explicitly_set:
                 try:
-                    self.rigor = SpecRigor(config_data["rigor"])
+                    self.rigor = SpecRigor(spec_config["rigor"])
                 except (ValueError, KeyError):
                     # Invalid rigor value in config, use default
                     pass
+
+            # Backwards compatibility: load from root level if spec section doesn't exist
+            if not spec_config:
+                if "issue_id" in config_data:
+                    self._fetched_issue_id = config_data["issue_id"]
+                # Load rigor from config if not explicitly set by user
+                if "rigor" in config_data and not self._rigor_explicitly_set:
+                    try:
+                        self.rigor = SpecRigor(config_data["rigor"])
+                    except (ValueError, KeyError):
+                        # Invalid rigor value in config, use default
+                        pass
 
     def _save_issue_config(self) -> None:
         """Save issue configuration (issue_id, rigor) to config.yaml."""
