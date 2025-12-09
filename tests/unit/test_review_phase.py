@@ -507,16 +507,14 @@ class TestReviewResultSaving:
         history_dir = review_dir / "history"
         history_dir.mkdir(exist_ok=True)
 
-        with patch("cafe.phases.review_phase.Path") as MockPath:
-            # Mock Path to use our temp directory
-            mock_review_path = MagicMock()
-            mock_review_path.parent.parent.name = "myissue"
-            mock_review_path.exists.return_value = True
-            mock_review_path.read_text.return_value = "Requirements"
-
-            MockPath.return_value = mock_review_path
-
+        # Change to tmp_path so phase can find the files
+        import os
+        original_dir = os.getcwd()
+        try:
+            os.chdir(tmp_path)
             phase.execute()
+        finally:
+            os.chdir(original_dir)
 
     def test_saves_agent_info_to_history(self, tmp_path: Path) -> None:
         """測試 history 包含 agent 資訊（cli, session_id, allowed_tools, denied_tools）"""
