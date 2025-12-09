@@ -589,12 +589,7 @@ class DevelopPhase(Phase):
                         message=f"Spec file not found: {self.spec_file}",
                     )
 
-            # Check if already completed (with review feedback awareness)
-            already_completed = self._check_if_already_completed_with_review()
-            if already_completed:
-                return already_completed
-
-            # Auto-detect PR number if not provided
+            # Auto-detect PR number if not provided (must happen before already_completed check)
             if not self.pr_number:
                 try:
                     from cafe.utils.github import GitHubOps
@@ -607,6 +602,11 @@ class DevelopPhase(Phase):
                 except Exception as e:
                     # Silently ignore errors - PR detection is optional
                     print(f"ℹ️  No PR detected for current branch (this is normal if PR hasn't been created yet)")
+
+            # Check if already completed (with review feedback awareness)
+            already_completed = self._check_if_already_completed_with_review()
+            if already_completed:
+                return already_completed
 
             # Load PR comments if pr_number is available (will be included in prompt)
             # Note: We don't skip execution even if there are no new comments,
