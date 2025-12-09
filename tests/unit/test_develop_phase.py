@@ -1428,4 +1428,230 @@ class TestDeveloperPermissions:
             os.chdir(original_dir)
 
 
+class TestDevelopPhasePRDetection:
+    """測試 PR 自動偵測功能"""
+
+    def test_auto_detects_pr_number_when_not_provided(
+        self, tmp_path, monkeypatch
+    ):
+        """測試：當未提供 pr_number 時，自動偵測當前 branch 的 PR"""
+        monkeypatch.chdir(tmp_path)
+
+        # Setup files
+        spec_file = tmp_path / ".cafe/issues/test-issue/spec/spec_001.md"
+        plan_file = tmp_path / ".cafe/issues/test-issue/plan/plan_001.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
+        plan_file.parent.mkdir(parents=True, exist_ok=True)
+        spec_file.write_text("# Spec")
+        plan_file.write_text("# Plan")
+
+        # Setup mocks
+        mock_git_ops = MagicMock(spec=GitOperations)
+        mock_git_ops.get_current_branch.return_value = "test-feature"
+        mock_git_ops.branch_exists.return_value = True
+
+        mock_permission_handler = MagicMock(spec=PermissionHandler)
+
+        mock_agent_manager = MagicMock(spec=AgentManager)
+        setup_agent_manager_mock(mock_agent_manager, "David")
+        mock_agent_manager.execute.return_value = (
+            "CAFE_CONFIRMED\n\nDevelopment completed",
+            TokenUsage(),
+            [],
+            ["-p", "test"],
+            None,
+        )
+
+        # Mock GitHubOps to return PR data
+        mock_github_ops = MagicMock()
+        mock_github_ops.get_pr_for_branch.return_value = {
+            "number": 123,
+            "url": "https://github.com/owner/repo/pull/123",
+            "title": "Test PR",
+            "state": "OPEN",
+        }
+
+        with patch("cafe.utils.github.GitHubOps", return_value=mock_github_ops):
+            phase = DevelopPhase(
+                agent_manager=mock_agent_manager,
+                permission_handler=mock_permission_handler,
+                git_ops=mock_git_ops,
+                spec_file=str(spec_file),
+                plan_file=str(plan_file),
+                workflow_mode=WorkflowMode.LOCAL,
+                issue_name="test-issue",
+                # pr_number not provided - should auto-detect
+            )
+
+            result = phase.execute()
+
+        # Verify PR number was auto-detected
+        assert phase.pr_number == 123
+        # Verify get_pr_for_branch was called with correct branch name (derived from issue_name)
+        mock_github_ops.get_pr_for_branch.assert_called_once_with("test-issue")
+
+    def test_uses_provided_pr_number_when_given(
+        self, tmp_path, monkeypatch
+    ):
+        """測試：當提供 pr_number 時，不進行自動偵測"""
+        monkeypatch.chdir(tmp_path)
+
+        # Setup files
+        spec_file = tmp_path / ".cafe/issues/test-issue/spec/spec_001.md"
+        plan_file = tmp_path / ".cafe/issues/test-issue/plan/plan_001.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
+        plan_file.parent.mkdir(parents=True, exist_ok=True)
+        spec_file.write_text("# Spec")
+        plan_file.write_text("# Plan")
+
+        # Setup mocks
+        mock_git_ops = MagicMock(spec=GitOperations)
+        mock_git_ops.get_current_branch.return_value = "test-feature"
+        mock_git_ops.branch_exists.return_value = True
+
+        mock_permission_handler = MagicMock(spec=PermissionHandler)
+
+        mock_agent_manager = MagicMock(spec=AgentManager)
+        setup_agent_manager_mock(mock_agent_manager, "David")
+        mock_agent_manager.execute.return_value = (
+            "CAFE_CONFIRMED\n\nDevelopment completed",
+            TokenUsage(),
+            [],
+            ["-p", "test"],
+            None,
+        )
+
+        # Mock GitHubOps - should NOT be called
+        mock_github_ops = MagicMock()
+
+        with patch("cafe.utils.github.GitHubOps", return_value=mock_github_ops):
+            phase = DevelopPhase(
+                agent_manager=mock_agent_manager,
+                permission_handler=mock_permission_handler,
+                git_ops=mock_git_ops,
+                spec_file=str(spec_file),
+                plan_file=str(plan_file),
+                workflow_mode=WorkflowMode.LOCAL,
+                issue_name="test-issue",
+                pr_number=456,  # Explicitly provided
+            )
+
+            result = phase.execute()
+
+        # Verify provided PR number is used
+        assert phase.pr_number == 456
+        # Verify get_pr_for_branch was NOT called (no auto-detection)
+        mock_github_ops.get_pr_for_branch.assert_not_called()
+
+    def test_continues_when_pr_detection_fails(
+        self, tmp_path, monkeypatch
+    ):
+        """測試：當 PR 偵測失敗時，繼續執行（不會中斷）"""
+        monkeypatch.chdir(tmp_path)
+
+        # Setup files
+        spec_file = tmp_path / ".cafe/issues/test-issue/spec/spec_001.md"
+        plan_file = tmp_path / ".cafe/issues/test-issue/plan/plan_001.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
+        plan_file.parent.mkdir(parents=True, exist_ok=True)
+        spec_file.write_text("# Spec")
+        plan_file.write_text("# Plan")
+
+        # Setup mocks
+        mock_git_ops = MagicMock(spec=GitOperations)
+        mock_git_ops.get_current_branch.return_value = "test-feature"
+        mock_git_ops.branch_exists.return_value = True
+
+        mock_permission_handler = MagicMock(spec=PermissionHandler)
+
+        mock_agent_manager = MagicMock(spec=AgentManager)
+        setup_agent_manager_mock(mock_agent_manager, "David")
+        mock_agent_manager.execute.return_value = (
+            "CAFE_CONFIRMED\n\nDevelopment completed",
+            TokenUsage(),
+            [],
+            ["-p", "test"],
+            None,
+        )
+
+        # Mock GitHubOps to raise exception (e.g., gh not authenticated)
+        mock_github_ops = MagicMock()
+        mock_github_ops.get_pr_for_branch.side_effect = Exception("GitHub API error")
+
+        with patch("cafe.utils.github.GitHubOps", return_value=mock_github_ops):
+            phase = DevelopPhase(
+                agent_manager=mock_agent_manager,
+                permission_handler=mock_permission_handler,
+                git_ops=mock_git_ops,
+                spec_file=str(spec_file),
+                plan_file=str(plan_file),
+                workflow_mode=WorkflowMode.LOCAL,
+                issue_name="test-issue",
+                # pr_number not provided - auto-detection will fail
+            )
+
+            result = phase.execute()
+
+        # Verify PR detection failed gracefully (didn't crash)
+        # Result may be FAILED or COMPLETED depending on other factors,
+        # but the important thing is that PR detection error was caught
+        assert result is not None
+        # Verify pr_number remains None (detection failed)
+        assert phase.pr_number is None
+
+    def test_continues_when_no_pr_exists_for_branch(
+        self, tmp_path, monkeypatch
+    ):
+        """測試：當 branch 沒有對應的 PR 時，繼續執行"""
+        monkeypatch.chdir(tmp_path)
+
+        # Setup files
+        spec_file = tmp_path / ".cafe/issues/test-issue/spec/spec_001.md"
+        plan_file = tmp_path / ".cafe/issues/test-issue/plan/plan_001.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
+        plan_file.parent.mkdir(parents=True, exist_ok=True)
+        spec_file.write_text("# Spec")
+        plan_file.write_text("# Plan")
+
+        # Setup mocks
+        mock_git_ops = MagicMock(spec=GitOperations)
+        mock_git_ops.get_current_branch.return_value = "test-feature"
+        mock_git_ops.branch_exists.return_value = True
+
+        mock_permission_handler = MagicMock(spec=PermissionHandler)
+
+        mock_agent_manager = MagicMock(spec=AgentManager)
+        setup_agent_manager_mock(mock_agent_manager, "David")
+        mock_agent_manager.execute.return_value = (
+            "CAFE_CONFIRMED\n\nDevelopment completed",
+            TokenUsage(),
+            [],
+            ["-p", "test"],
+            None,
+        )
+
+        # Mock GitHubOps to return None (no PR found)
+        mock_github_ops = MagicMock()
+        mock_github_ops.get_pr_for_branch.return_value = None
+
+        with patch("cafe.utils.github.GitHubOps", return_value=mock_github_ops):
+            phase = DevelopPhase(
+                agent_manager=mock_agent_manager,
+                permission_handler=mock_permission_handler,
+                git_ops=mock_git_ops,
+                spec_file=str(spec_file),
+                plan_file=str(plan_file),
+                workflow_mode=WorkflowMode.LOCAL,
+                issue_name="test-issue",
+                # pr_number not provided - no PR exists
+            )
+
+            result = phase.execute()
+
+        # Verify phase continues execution (no crash)
+        assert result is not None
+        # Verify pr_number remains None (no PR found)
+        assert phase.pr_number is None
+
+
 
