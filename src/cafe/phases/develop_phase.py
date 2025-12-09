@@ -353,15 +353,38 @@ class DevelopPhase(Phase):
             # Note: The actual permission handling (calling _handle_previous_permission_denials)
             # will be done in execute() method when constructing allowed_tools
 
-        # Handle NEED_CLARIFICATION - use user_input if provided
+        # Handle NEED_CLARIFICATION - use base class method
         if prev_status == "CAFE_NEED_CLARIFICATION":
-            user_input = self.user_input if self.user_input else ""
-            self.user_input = ""  # Clear after use
-            return user_input
+            return self._handle_need_clarification_input(prev_data, agent_display_name="開發者")
 
         # No special handling needed - clear user_input to avoid misuse
         self.user_input = ""
         return ""
+
+    def _ask_user_for_clarification(self) -> str:
+        """詢問用戶對 NEED_CLARIFICATION 的回答，並顯示 develop 檔案內容。
+
+        Override 基類方法以顯示 develop clarification 檔案內容。
+
+        Returns:
+            str: 用戶的回答
+        """
+        # Find the latest develop clarification file
+        develop_dir = self.issue_dir / "develop"
+        develop_files = sorted(develop_dir.glob("develop_*.md"))
+
+        if develop_files:
+            latest_develop_file = develop_files[-1]
+            print(f"\n{'='*60}")
+            print(f"Dev ({self.dev_agent}):")
+            print(f"{'='*60}")
+            develop_content = latest_develop_file.read_text(encoding='utf-8')
+            print(develop_content)
+            print(f"{'='*60}\n")
+            print("💡 開發者需要澄清。")
+            print()
+
+        return self.display.get_multiline_input("請回答問題")
 
     def _get_last_develop_timestamp(self):
         """Get timestamp from last develop/status.json.

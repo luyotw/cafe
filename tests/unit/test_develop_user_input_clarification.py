@@ -47,7 +47,7 @@ class TestDevelopUserInputForClarification:
             "git_ops": git_ops,
         }
 
-    def test_user_input_saved_when_responding_to_clarification(self, setup_develop_phase):
+    def test_user_input_saved_when_responding_to_clarification(self, setup_develop_phase, monkeypatch):
         """測試當回應 NEED_CLARIFICATION 時，user_input 應該被保存到 iteration history"""
         # 建立上一輪的 iteration 檔案，狀態為 NEED_CLARIFICATION
         prev_iteration_file = setup_develop_phase["history_dir"] / "iteration_001.json"
@@ -60,8 +60,8 @@ class TestDevelopUserInputForClarification:
         }
         with open(prev_iteration_file, "w") as f:
             json.dump(prev_iteration_data, f)
-        
-        # 建立 develop phase，提供 user_input
+
+        # 建立 develop phase，在 non-interactive 模式下提供 user_input
         user_response = "選項 A"
         phase = DevelopPhase(
             agent_manager=setup_develop_phase["agent_manager"],
@@ -73,21 +73,21 @@ class TestDevelopUserInputForClarification:
             issue_id=None,
             issue_name="test-issue",
             dev_agent="John",
-            interactive=True,
+            interactive=False,  # 改成 non-interactive 模式以使用 user_input
             user_input=user_response,
         )
-        
+
         # 設定 iteration 為 2，這樣會載入 iteration_001.json
         phase.iteration = 2
         # 確保 history_dir 指向測試環境的目錄
         phase.history_dir = setup_develop_phase["history_dir"]
-        
+
         # 呼叫 _prepare_user_input_for_iteration
         result = phase._prepare_user_input_for_iteration()
-        
+
         # 確認返回的是 user_input
         assert result == user_response
-        
+
         # 確認 user_input 被清空（避免下次重複使用）
         assert phase.user_input == ""
 
