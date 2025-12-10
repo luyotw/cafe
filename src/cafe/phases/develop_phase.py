@@ -572,7 +572,7 @@ class DevelopPhase(Phase):
             # Build review sources instruction
             review_sources = []
             if review_file_path:
-                review_sources.append(review_file_path)
+                review_sources.append(str(review_file_path))
             if has_pr_comments:
                 review_sources.append(f"PR comments (見上方 {unresolved_count} 則 unresolved comments)")
 
