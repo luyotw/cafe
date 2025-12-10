@@ -107,6 +107,15 @@ class PRPhase(Phase):
             Phase result
         """
         try:
+            # Check if local review mode is enabled
+            config_file = self.issue_dir / "config.yaml"
+            pr_auto_create = self._get_issue_config_value(config_file, "pr.auto_create")
+
+            # If pr.auto_create is False, use local review mode
+            if pr_auto_create is False:
+                return self._execute_local_review_mode()
+
+            # Otherwise, continue with GitHub PR creation
             # Check gh CLI authentication status
             try:
                 if not self.github_ops.check_gh_auth():
@@ -252,6 +261,105 @@ class PRPhase(Phase):
                 status=PhaseStatus.FAILED,
                 message=f"PR phase failed: {e}",
             )
+
+    def _execute_local_review_mode(self) -> PhaseResult:
+        """Execute local review mode (no GitHub PR).
+
+        Returns:
+            Phase result
+        """
+        from rich.console import Console
+        from rich.syntax import Syntax
+        from rich.panel import Panel
+        from cafe.core.status_codes import PhaseStatusCode
+
+        console = Console()
+
+        # Get git diff
+        try:
+            diff_output = self.git_ops.run_command(f"git diff {self.base_branch}..HEAD")
+        except Exception as e:
+            return PhaseResult(
+                status=PhaseStatus.FAILED,
+                message=f"Failed to get git diff: {e}",
+            )
+
+        # Display diff
+        console.print()
+        console.print(Panel.fit(
+            "📋 Local Review Mode - Code Changes",
+            style="bold cyan"
+        ))
+        console.print()
+
+        if diff_output.strip():
+            syntax = Syntax(diff_output, "diff", theme="monokai", line_numbers=False)
+            console.print(syntax)
+        else:
+            console.print("[yellow]No changes to review[/yellow]")
+
+        console.print()
+
+        # Ask user for decision (c/r/m)
+        if self.interactive:
+            choice = self._ask_user_for_review_decision("程式碼變更")
+        else:
+            # Non-interactive mode not supported for local review
+            return PhaseResult(
+                status=PhaseStatus.FAILED,
+                message="Local review mode requires interactive mode",
+            )
+
+        # Process decision using base class method
+        result = self._process_review_decision(
+            choice=choice,
+            prev_data={},
+            phase_name="Local review",
+            phase_specific_data={},
+        )
+
+        # If result is a string, it's a modification request
+        if isinstance(result, str):
+            modification_request = result
+
+            # Save to versioned pr file
+            pr_dir = self.issue_dir / "pr"
+            pr_dir.mkdir(exist_ok=True)
+
+            # Get next version number
+            existing_files = sorted(pr_dir.glob("pr_*.md"))
+            next_version = len(existing_files) + 1
+            pr_file = pr_dir / f"pr_{next_version:03d}.md"
+
+            # Save modification request
+            pr_file.write_text(modification_request)
+
+            console.print()
+            console.print(f"[green]✓ Modification request saved to {pr_file.relative_to(Path.cwd())}[/green]")
+            console.print()
+            console.print("[bold]Next step:[/bold] cafe develop --auto (or cafe make)")
+            console.print()
+
+            return PhaseResult(
+                status=PhaseStatus.COMPLETED,
+                message=f"Local review completed - modification requested (saved to {pr_file.name})",
+                data={"status_code": PhaseStatusCode.NEEDS_CHANGES.value, "pr_file": str(pr_file)},
+            )
+
+        # Otherwise, it's a PhaseResult (confirm or reject)
+        # Add custom messages for local review
+        if result.status == PhaseStatus.COMPLETED:
+            console.print()
+            console.print("[green]✓ Changes confirmed![/green]")
+            console.print()
+            console.print("[bold]Next step:[/bold] cafe close")
+            console.print()
+        elif result.status == PhaseStatus.FAILED:
+            console.print()
+            console.print("[red]✗ Changes rejected[/red]")
+            console.print()
+
+        return result
 
     def _get_branch_name(self) -> str:
         """Get branch name based on workflow mode.

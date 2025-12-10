@@ -96,18 +96,27 @@ def _setup_agents(config_manager: ConfigManager, issue_name: Optional[str] = Non
     agent_manager = AgentManager(issue_name=issue_name)
 
     # Get agent configurations from config or use defaults
-    pm_config = config_manager.get("agents.pm", {
-        "name": "Roger",
-        "cli": "copilot",
-    })
-    dev_config = config_manager.get("agents.developer", {
-        "name": "David",
-        "cli": "copilot",
-    })
-    reviewer_config = config_manager.get("agents.reviewer", {
-        "name": "Richard",
-        "cli": "copilot",
-    })
+    pm_config = config_manager.get(
+        "agents.pm",
+        {
+            "name": "Roger",
+            "cli": "copilot",
+        },
+    )
+    dev_config = config_manager.get(
+        "agents.developer",
+        {
+            "name": "David",
+            "cli": "copilot",
+        },
+    )
+    reviewer_config = config_manager.get(
+        "agents.reviewer",
+        {
+            "name": "Richard",
+            "cli": "copilot",
+        },
+    )
 
     # Register agents
     agent_manager.register_agent(
@@ -188,22 +197,22 @@ def _edit_file_with_editor(file_path: Path) -> None:
 
 def _get_latest_review_iteration(issue_name: str) -> int:
     """Get the latest review iteration number from history files.
-    
+
     Args:
         issue_name: Issue name
-        
+
     Returns:
         Latest iteration number, or 0 if no history exists
     """
     history_dir = Path(f".cafe/issues/{issue_name}/review/history")
     if not history_dir.exists():
         return 0
-    
+
     # Find all iteration files
     iteration_files = sorted(history_dir.glob("iteration_*.json"))
     if not iteration_files:
         return 0
-    
+
     # Extract iteration number from the latest file (e.g., iteration_005.json -> 5)
     latest_file = iteration_files[-1]
     try:
@@ -226,12 +235,14 @@ def _execute_next_phase_auto(next_phase: str, issue_name: str) -> None:
 
     # Build command
     cmd = [sys.executable, "-m", "cafe.ui.cli", next_phase, "--auto"]
-    
+
     # Execute the command
     try:
         result = subprocess.run(cmd, check=False)
         if result.returncode != 0:
-            console.print(f"[red]Error: {next_phase} phase failed with exit code {result.returncode}[/red]")
+            console.print(
+                f"[red]Error: {next_phase} phase failed with exit code {result.returncode}[/red]"
+            )
             raise typer.Exit(result.returncode)
     except Exception as e:
         console.print(f"[red]Error executing {next_phase}: {e}[/red]")
@@ -398,7 +409,9 @@ def run(
 
         # Initialize components
         # ConfigManager takes config_dir, so extract the directory
-        config_dir = str(Path(config_file).parent) if config_file != ".cafe/config.yaml" else ".cafe"
+        config_dir = (
+            str(Path(config_file).parent) if config_file != ".cafe/config.yaml" else ".cafe"
+        )
         config_manager = ConfigManager(config_dir)
         agent_manager = _setup_agents(config_manager)
         permission_handler = PermissionHandler()
@@ -521,7 +534,9 @@ def prepare(
         # 3. Check for uncommitted changes (warning only)
         if check_uncommitted and git_ops.has_uncommitted_changes():
             console.print("[yellow]⚠️  Warning: You have uncommitted changes.[/yellow]")
-            console.print("[yellow]    It's recommended to commit or stash them before switching branches.[/yellow]")
+            console.print(
+                "[yellow]    It's recommended to commit or stash them before switching branches.[/yellow]"
+            )
             console.print()
 
             # Ask if user wants to continue
@@ -545,10 +560,7 @@ def prepare(
         # If in interactive mode and no --worktree parameter
         elif is_interactive and not worktree:
             # Ask user if they want to use worktree mode
-            use_worktree = typer.confirm(
-                "Use Git worktree mode for this issue?",
-                default=False
-            )
+            use_worktree = typer.confirm("Use Git worktree mode for this issue?", default=False)
 
             if use_worktree:
                 # Suggest default path
@@ -559,7 +571,7 @@ def prepare(
                 user_path = typer.prompt(
                     "Worktree path (press Enter for default)",
                     default=default_path,
-                    show_default=False
+                    show_default=False,
                 )
                 worktree_path = user_path.strip() if user_path.strip() else default_path
 
@@ -572,7 +584,7 @@ def prepare(
         # In worktree mode, we'll set issue_dir after creating the worktree
         # In normal mode, use local .cafe/issues/
         feature_branch = issue_name
-        
+
         if use_worktree:
             # Worktree mode - create worktree first, then set issue_dir to point there
             console.print(f"[dim]Creating worktree at '{worktree_path}'...[/dim]")
@@ -581,6 +593,7 @@ def prepare(
             # Create actual .cafe directory in worktree instead of symlink
             # This avoids permission issues with agent CLIs that resolve symlinks
             import shutil
+
             worktree_abs = Path(worktree_path).resolve()
             repo_cafe_dir = Path(".cafe").resolve()
             worktree_cafe_dir = worktree_abs / ".cafe"
@@ -599,7 +612,7 @@ def prepare(
             worktree_issues_dir.mkdir(parents=True, exist_ok=True)
             (worktree_issues_dir / "spec").mkdir(exist_ok=True)
             (worktree_issues_dir / "sessions").mkdir(exist_ok=True)
-            
+
             # Set issue_dir to worktree location
             issue_dir = worktree_issues_dir
         else:
@@ -610,9 +623,11 @@ def prepare(
 
             spec_dir.mkdir(parents=True, exist_ok=True)
             sessions_dir.mkdir(parents=True, exist_ok=True)
-            
+
             if git_ops.branch_exists(feature_branch):
-                console.print(f"[dim]Branch '{feature_branch}' already exists, switching to it...[/dim]")
+                console.print(
+                    f"[dim]Branch '{feature_branch}' already exists, switching to it...[/dim]"
+                )
                 git_ops.checkout_branch(feature_branch)
             else:
                 console.print(f"[dim]Creating and switching to branch '{feature_branch}'...[/dim]")
@@ -625,7 +640,9 @@ def prepare(
         if is_interactive:
             console.print()
             console.print("[bold cyan]📝 Pre-configure spec and plan phases[/bold cyan]")
-            console.print("[dim]This will save time by not asking these questions again in spec/plan phases.[/dim]")
+            console.print(
+                "[dim]This will save time by not asking these questions again in spec/plan phases.[/dim]"
+            )
             console.print()
 
             # Initialize Display for prompts
@@ -649,20 +666,27 @@ def prepare(
             if templates:
                 console.print()
                 console.print("[bold cyan]Please select a plan template:[/bold cyan]")
-                template_paths = {name: template_manager.get_template_path(name) for name in templates}
+                template_paths = {
+                    name: template_manager.get_template_path(name) for name in templates
+                }
                 selected_template = select_template(templates, template_paths)
                 if selected_template:
                     plan_config["template"] = selected_template
             else:
                 console.print()
-                console.print("[yellow]⚠️  No plan templates found. Using default template.[/yellow]")
-                console.print("[dim]    Tip: Use 'cafe template add <source> <name>' to add templates.[/dim]")
+                console.print(
+                    "[yellow]⚠️  No plan templates found. Using default template.[/yellow]"
+                )
+                console.print(
+                    "[dim]    Tip: Use 'cafe template add <source> <name>' to add templates.[/dim]"
+                )
 
         # 7. Save config.yaml (in worktree's issue dir if using worktree, else local)
         config_file = issue_dir / "config.yaml"
 
         # Load global config to get default auto settings
         from cafe.utils.config import ConfigManager
+
         config_manager = ConfigManager(".cafe")
         global_config = config_manager.load_config()
         max_review_iterations = global_config.get("auto", {}).get("max_review_iterations", 5)
@@ -687,7 +711,7 @@ def prepare(
         if use_worktree:
             config_data["worktree_path"] = worktree_path
 
-        with open(config_file, 'w', encoding='utf-8') as f:
+        with open(config_file, "w", encoding="utf-8") as f:
             yaml.dump(config_data, f, allow_unicode=True, default_flow_style=False)
 
         # 8. Display success message
@@ -737,7 +761,7 @@ def _get_project_path() -> str:
     # Convert to ~/.claude/projects/ naming format: replace / with -
     abs_path = str(repo_root.resolve())
     # Remove leading / and replace remaining / with -
-    project_path = abs_path.lstrip('/').replace('/', '-')
+    project_path = abs_path.lstrip("/").replace("/", "-")
     return project_path
 
 
@@ -788,7 +812,9 @@ def close() -> None:
                     console.print(f"   State: {pr_state}{' (DRAFT)' if is_draft else ''}")
                     console.print(f"   URL: {pr_url}")
                     console.print()
-                    console.print("[yellow]Please merge or close the PR first, or use --no-pr-check to skip the check.[/yellow]")
+                    console.print(
+                        "[yellow]Please merge or close the PR first, or use --no-pr-check to skip the check.[/yellow]"
+                    )
                     raise typer.Exit(1)
         except GitHubError:
             # If gh CLI is not installed or not authenticated, skip PR check
@@ -798,10 +824,12 @@ def close() -> None:
         config_file = Path(f".cafe/issues/{current_branch}/config.yaml")
         if not config_file.exists():
             console.print(f"[red]Error: Issue config not found: {config_file}[/red]")
-            console.print(f"[yellow]Hint: This branch may not be initialized with 'cafe prepare'.[/yellow]")
+            console.print(
+                f"[yellow]Hint: This branch may not be initialized with 'cafe prepare'.[/yellow]"
+            )
             raise typer.Exit(1)
 
-        with open(config_file, 'r', encoding='utf-8') as f:
+        with open(config_file, "r", encoding="utf-8") as f:
             config_data = yaml.safe_load(f)
 
         base_branch = config_data.get("base_branch", "main")
@@ -860,16 +888,27 @@ def close() -> None:
                 console.print()
                 raise typer.Exit(1)
 
-            # Step 3: Pull latest changes
+            # Step 3: Merge or pull changes based on pr.auto_create config
+            pr_auto_create = config_data.get("pr", {}).get("auto_create", True)
             try:
-                console.print(f"[dim]Updating base branch...[/dim]")
-                git_ops.pull()
-                console.print(f"[green]✓ Updated base branch[/green]")
+                if pr_auto_create is False:
+                    # Local review mode: merge feature branch into base branch
+                    console.print(f"[dim]Merging feature branch into base branch...[/dim]")
+                    git_ops.merge(feature_branch)
+                    console.print(f"[green]✓ Merged feature branch: {feature_branch}[/green]")
+                else:
+                    # GitHub PR mode: pull latest changes
+                    console.print(f"[dim]Updating base branch...[/dim]")
+                    git_ops.pull()
+                    console.print(f"[green]✓ Updated base branch[/green]")
             except Exception as e:
                 console.print(f"[red]❌ Failed to update base branch: {e}[/red]")
                 console.print()
                 console.print("[yellow]Remaining steps (please execute manually):[/yellow]")
-                console.print(f"  1. git pull")
+                if pr_auto_create is False:
+                    console.print(f"  1. git merge {feature_branch}")
+                else:
+                    console.print(f"  1. git pull")
                 console.print(f"  2. git worktree remove {worktree_path}")
                 console.print(f"  3. git branch -d {feature_branch}")
                 console.print()
@@ -879,6 +918,7 @@ def close() -> None:
             try:
                 console.print(f"[dim]Syncing issue data from worktree to repo root...[/dim]")
                 import shutil
+
                 worktree_abs = Path(worktree_path).resolve()
                 worktree_issue_dir = worktree_abs / ".cafe" / "issues" / feature_branch
                 # Use absolute path for repo_issue_dir since we're in main_repo after os.chdir()
@@ -901,7 +941,9 @@ def close() -> None:
                 console.print(f"[green]✓ Synced issue data to repo root[/green]")
             except Exception as e:
                 console.print(f"[yellow]⚠️  Failed to sync issue data: {e}[/yellow]")
-                console.print(f"[yellow]   Issue data remains in worktree at: {worktree_path}/.cafe/issues/{feature_branch}/[/yellow]")
+                console.print(
+                    f"[yellow]   Issue data remains in worktree at: {worktree_path}/.cafe/issues/{feature_branch}/[/yellow]"
+                )
                 # Continue with worktree removal even if sync fails
 
             # Step 5: Remove worktree
@@ -941,7 +983,9 @@ def close() -> None:
                 console.print(f"[green]✓ Switched to base branch: {base_branch}[/green]")
             except Exception as e:
                 console.print(f"[red]❌ Failed to switch to base branch: {e}[/red]")
-                console.print(f"[yellow]Hint: You may have uncommitted changes. Please commit or stash them first.[/yellow]")
+                console.print(
+                    f"[yellow]Hint: You may have uncommitted changes. Please commit or stash them first.[/yellow]"
+                )
                 console.print()
                 console.print("[yellow]Remaining steps (please execute manually):[/yellow]")
                 console.print(f"  1. git checkout {base_branch}")
@@ -950,16 +994,27 @@ def close() -> None:
                 console.print()
                 raise typer.Exit(1)
 
-            # Step 2: Pull latest changes
+            # Step 2: Merge or pull changes based on pr.auto_create config
+            pr_auto_create = config_data.get("pr", {}).get("auto_create", True)
             try:
-                console.print(f"[dim]Updating base branch...[/dim]")
-                git_ops.pull()
-                console.print(f"[green]✓ Updated base branch[/green]")
+                if pr_auto_create is False:
+                    # Local review mode: merge feature branch into base branch
+                    console.print(f"[dim]Merging feature branch into base branch...[/dim]")
+                    git_ops.merge(feature_branch)
+                    console.print(f"[green]✓ Merged feature branch: {feature_branch}[/green]")
+                else:
+                    # GitHub PR mode: pull latest changes
+                    console.print(f"[dim]Updating base branch...[/dim]")
+                    git_ops.pull()
+                    console.print(f"[green]✓ Updated base branch[/green]")
             except Exception as e:
                 console.print(f"[red]❌ Failed to update base branch: {e}[/red]")
                 console.print()
                 console.print("[yellow]Remaining steps (please execute manually):[/yellow]")
-                console.print(f"  1. git pull")
+                if pr_auto_create is False:
+                    console.print(f"  1. git merge {feature_branch}")
+                else:
+                    console.print(f"  1. git pull")
                 console.print(f"  2. git branch -d {feature_branch}")
                 console.print()
                 raise typer.Exit(1)
@@ -1002,7 +1057,9 @@ def close() -> None:
                 shutil.move(str(issue_dir), str(archive_path))
                 console.print(f"[green]✓ Archived issue data to: {archive_path}[/green]")
             else:
-                console.print(f"[yellow]⚠️  No issue data found at .cafe/issues/{issue_name}/[/yellow]")
+                console.print(
+                    f"[yellow]⚠️  No issue data found at .cafe/issues/{issue_name}/[/yellow]"
+                )
         except Exception as e:
             console.print(f"[yellow]⚠️  Failed to archive issue data: {e}[/yellow]")
             console.print(f"[yellow]   Issue data remains at: .cafe/issues/{issue_name}/[/yellow]")
@@ -1010,13 +1067,17 @@ def close() -> None:
         # 7. Display success message
         console.print()
         console.print(f"[green]✓ Successfully closed issue: {issue_name}[/green]")
-        console.print(f"  📁 Issue data archived to: {archive_path if 'archive_path' in locals() else '~/.cafe/projects/.../archived/' + issue_name}")
+        console.print(
+            f"  📁 Issue data archived to: {archive_path if 'archive_path' in locals() else '~/.cafe/projects/.../archived/' + issue_name}"
+        )
         console.print(f"  🌿 Current branch: {base_branch}")
 
         # For worktree mode, remind user to change directory
         if worktree_path:
             console.print()
-            console.print(f"[yellow]⚠️  Your terminal is still in the deleted worktree directory.[/yellow]")
+            console.print(
+                f"[yellow]⚠️  Your terminal is still in the deleted worktree directory.[/yellow]"
+            )
             console.print(f"[yellow]   Please run:[/yellow] [bold]cd {main_repo}[/bold]")
 
         console.print()
@@ -1129,7 +1190,9 @@ def spec(
             spec_file = _get_latest_versioned_file("spec", issue_name)
             if not spec_file:
                 console.print(f"[red]Error: No spec file found for issue '{issue_name}'[/red]")
-                console.print(f"[dim]Hint: Run 'cafe spec' first to create the specification.[/dim]")
+                console.print(
+                    f"[dim]Hint: Run 'cafe spec' first to create the specification.[/dim]"
+                )
                 raise typer.Exit(1)
 
             # Edit the file
@@ -1155,10 +1218,11 @@ def spec(
 
         # Load issue config to get saved rigor setting
         import yaml
+
         issue_config_file = Path(f".cafe/issues/{issue_name}/config.yaml")
         saved_rigor = None
         if issue_config_file.exists():
-            with open(issue_config_file, 'r', encoding='utf-8') as f:
+            with open(issue_config_file, "r", encoding="utf-8") as f:
                 config_data = yaml.safe_load(f) or {}
                 spec_config = config_data.get("spec", {})
                 saved_rigor = spec_config.get("rigor")
@@ -1169,14 +1233,18 @@ def spec(
             # CLI flag takes precedence
             try:
                 from cafe.core.types import SpecRigor
+
                 spec_rigor = SpecRigor(rigor)
             except ValueError:
-                console.print(f"[red]Error: Invalid rigor '{rigor}'. Use 'low', 'medium', or 'high'.[/red]")
+                console.print(
+                    f"[red]Error: Invalid rigor '{rigor}'. Use 'low', 'medium', or 'high'.[/red]"
+                )
                 raise typer.Exit(1)
         elif saved_rigor:
             # Use saved rigor from config
             try:
                 from cafe.core.types import SpecRigor
+
                 spec_rigor = SpecRigor(saved_rigor)
             except ValueError:
                 # Ignore invalid saved value
@@ -1187,7 +1255,9 @@ def spec(
         spec_dir.mkdir(parents=True, exist_ok=True)
 
         # Initialize components
-        config_dir = str(Path(config_file).parent) if config_file != ".cafe/config.yaml" else ".cafe"
+        config_dir = (
+            str(Path(config_file).parent) if config_file != ".cafe/config.yaml" else ".cafe"
+        )
         config_manager = ConfigManager(config_dir)
         agent_manager = _setup_agents(config_manager, issue_name=issue_name)
         permission_handler = PermissionHandler()
@@ -1222,6 +1292,7 @@ def spec(
 
         # Determine if should be interactive
         import sys
+
         is_interactive = interactive and sys.stdin.isatty()
 
         # Validate auto mode constraints
@@ -1231,7 +1302,9 @@ def spec(
 
         # Validate user_input in non-interactive mode (unless using --issue-id to fetch)
         if not is_interactive and not user_input and not fetch_issue_id:
-            console.print("[red]Error: --user-input is required when using --no-interactive (or use --issue-id to fetch from GitHub)[/red]")
+            console.print(
+                "[red]Error: --user-input is required when using --no-interactive (or use --issue-id to fetch from GitHub)[/red]"
+            )
             raise typer.Exit(1)
 
         # Create and execute spec phase
@@ -1255,7 +1328,9 @@ def spec(
         if is_interactive:
             console.print("[dim]💡 Tip: Press Ctrl+C anytime to pause and save progress.[/dim]")
         if auto:
-            console.print("[dim]🤖 Auto mode: will automatically continue iterations until CAFE_CONFIRMED[/dim]")
+            console.print(
+                "[dim]🤖 Auto mode: will automatically continue iterations until CAFE_CONFIRMED[/dim]"
+            )
         console.print()
 
         # Execute phase iterations (with recursion for auto-continue)
@@ -1263,35 +1338,35 @@ def spec(
             """Execute one iteration and optionally continue to next"""
             if iteration_count > 1:
                 console.print(f"\n[bold cyan]━━━ Iteration {iteration_count} ━━━[/bold cyan]\n")
-            
+
             # Execute phase
             result = phase.execute()
 
             # Check result status
             if result.status.value not in ["completed", "in_progress"]:
                 return result  # Phase failed
-                
-            status_code = result.data.get('status_code')
+
+            status_code = result.data.get("status_code")
             if not status_code:
                 return result  # No valid status code
-            
+
             # Check if we should continue
             if status_code in ["CAFE_CONFIRMED", "CAFE_REJECTED"]:
                 return result  # Reached final state
-            
+
             elif status_code in ["CAFE_NEED_CLARIFICATION", "CAFE_READY_FOR_REVIEW"]:
                 # Only continue iterations in interactive mode (with or without --auto)
                 if not is_interactive:
                     # Non-interactive mode: stop after first iteration
                     return result
-                
+
                 # Show brief status
                 console.print()
                 if status_code == "CAFE_NEED_CLARIFICATION":
                     console.print("[yellow]💬 Agent needs clarification[/yellow]")
                 else:  # CAFE_READY_FOR_REVIEW
                     console.print("[yellow]📝 Draft ready for review[/yellow]")
-                
+
                 # Decide whether to continue
                 should_continue = False
                 if auto:
@@ -1301,8 +1376,11 @@ def spec(
                 else:
                     # Interactive mode: ask user
                     from rich.prompt import Confirm
-                    should_continue = Confirm.ask("\n[bold]Continue to next iteration?[/bold]", default=True)
-                
+
+                    should_continue = Confirm.ask(
+                        "\n[bold]Continue to next iteration?[/bold]", default=True
+                    )
+
                 if should_continue:
                     console.print("[dim]Continuing...[/dim]")
                     return execute_iteration(iteration_count + 1)
@@ -1313,18 +1391,20 @@ def spec(
                 # Unknown status
                 console.print(f"\n[bold yellow]⚠️  Unknown status code: {status_code}[/bold yellow]")
                 return result
-        
+
         # Start execution
         result = execute_iteration()
 
         # Display result
         if result.status.value in ["completed", "in_progress"]:
             console.print()
-            status_code = result.data.get('status_code')
-            
+            status_code = result.data.get("status_code")
+
             # 如果沒有有效的 status code，視為失敗
             if not status_code:
-                console.print(f"[bold red]❌ Spec phase failed: No valid status code returned[/bold red]")
+                console.print(
+                    f"[bold red]❌ Spec phase failed: No valid status code returned[/bold red]"
+                )
                 raise typer.Exit(1)
 
             if status_code == "CAFE_NEED_CLARIFICATION":
@@ -1332,7 +1412,7 @@ def spec(
                 console.print(f"Iterations: {result.data.get('iterations', 'N/A')}")
                 if workflow_mode == WorkflowMode.LOCAL:
                     # 顯示完整檔案路徑
-                    spec_file = result.data.get('spec_file', spec_dir)
+                    spec_file = result.data.get("spec_file", spec_dir)
                     console.print(f"Saved to: {spec_file}")
                 console.print()
                 console.print("[dim]To continue, run:[/dim] [bold]cafe spec[/bold]")
@@ -1340,16 +1420,16 @@ def spec(
                 console.print("[bold red]❌ Spec rejected by agent[/bold red]")
                 console.print(f"Iterations: {result.data.get('iterations', 'N/A')}")
                 if workflow_mode == WorkflowMode.LOCAL:
-                    spec_file = result.data.get('spec_file', spec_dir)
+                    spec_file = result.data.get("spec_file", spec_dir)
                     console.print(f"Saved to: {spec_file}")
             elif status_code == "CAFE_READY_FOR_REVIEW":
                 # Spec draft is ready, but needs user confirmation
                 console.print("[bold green]✅ Spec draft completed![/bold green]")
                 console.print(f"Iterations: {result.data.get('iterations', 'N/A')}")
                 if workflow_mode == WorkflowMode.LOCAL:
-                    spec_file = result.data.get('spec_file', spec_dir)
+                    spec_file = result.data.get("spec_file", spec_dir)
                     console.print(f"Saved to: {spec_file}")
-                elif result.data.get('issue_id'):
+                elif result.data.get("issue_id"):
                     console.print(f"Created issue: #{result.data['issue_id']}")
                 elif issue_id:
                     console.print(f"Updated issue: #{issue_id}")
@@ -1360,14 +1440,14 @@ def spec(
                 console.print("[bold green]✅ Spec clarification completed![/bold green]")
                 console.print(f"Iterations: {result.data.get('iterations', 'N/A')}")
                 if workflow_mode == WorkflowMode.LOCAL:
-                    spec_file = result.data.get('spec_file', spec_dir)
+                    spec_file = result.data.get("spec_file", spec_dir)
                     console.print(f"Saved to: {spec_file}")
-                elif result.data.get('issue_id'):
+                elif result.data.get("issue_id"):
                     console.print(f"Created issue: #{result.data['issue_id']}")
                 elif issue_id:
                     console.print(f"Updated issue: #{issue_id}")
                 console.print()
-                
+
                 # Auto mode: execute next phase
                 if auto:
                     _execute_next_phase_auto("plan", issue_name)
@@ -1379,7 +1459,7 @@ def spec(
                 console.print(f"Iterations: {result.data.get('iterations', 'N/A')}")
                 console.print(f"Status: {status_code}")
                 if workflow_mode == WorkflowMode.LOCAL:
-                    spec_file = result.data.get('spec_file', spec_dir)
+                    spec_file = result.data.get("spec_file", spec_dir)
                     console.print(f"Saved to: {spec_file}")
         else:
             console.print()
@@ -1511,7 +1591,9 @@ def plan(
         is_resume = plan_file_path is not None
 
         # Initialize components
-        config_dir = str(Path(config_file).parent) if config_file != ".cafe/config.yaml" else ".cafe"
+        config_dir = (
+            str(Path(config_file).parent) if config_file != ".cafe/config.yaml" else ".cafe"
+        )
         config_manager = ConfigManager(config_dir)
         agent_manager = _setup_agents(config_manager, issue_name=issue_name)
         permission_handler = PermissionHandler()
@@ -1570,7 +1652,9 @@ def plan(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            spec_file=str(spec_file_path) if spec_file_path else "",  # Deprecated - computed internally
+            spec_file=(
+                str(spec_file_path) if spec_file_path else ""
+            ),  # Deprecated - computed internally
             workflow_mode=workflow_mode,
             issue_id=issue_id,
             issue_name=issue_name,
@@ -1581,6 +1665,7 @@ def plan(
 
         # Determine if should be interactive
         import sys
+
         is_interactive = interactive and sys.stdin.isatty()
 
         # Validate auto mode constraints
@@ -1589,9 +1674,13 @@ def plan(
             raise typer.Exit(1)
 
         console.print("[bold]Starting implementation planning...[/bold]")
-        console.print("[dim]The developer will analyze technical feasibility and create implementation plan.[/dim]")
+        console.print(
+            "[dim]The developer will analyze technical feasibility and create implementation plan.[/dim]"
+        )
         if auto:
-            console.print("[dim]🤖 Auto mode: will automatically continue iterations until CAFE_CONFIRMED[/dim]")
+            console.print(
+                "[dim]🤖 Auto mode: will automatically continue iterations until CAFE_CONFIRMED[/dim]"
+            )
         console.print()
 
         # Execute phase iterations (with recursion for auto-continue)
@@ -1599,35 +1688,35 @@ def plan(
             """Execute one iteration and optionally continue to next"""
             if iteration_count > 1:
                 console.print(f"\n[bold cyan]━━━ Iteration {iteration_count} ━━━[/bold cyan]\n")
-            
+
             # Execute phase
             result = phase.execute()
 
             # Check result status
             if result.status.value != "completed":
                 return result  # Phase failed
-                
-            status_code = result.data.get('status_code')
+
+            status_code = result.data.get("status_code")
             if not status_code:
                 return result  # No valid status code
-            
+
             # Check if we should continue
             if status_code in ["CAFE_CONFIRMED", "CAFE_REJECTED"]:
                 return result  # Reached final state
-            
+
             elif status_code in ["CAFE_NEED_CLARIFICATION", "CAFE_READY_FOR_REVIEW"]:
                 # Only continue iterations in interactive mode (with or without --auto)
                 if not is_interactive:
                     # Non-interactive mode: stop after first iteration
                     return result
-                
+
                 # Show brief status
                 console.print()
                 if status_code == "CAFE_NEED_CLARIFICATION":
                     console.print("[yellow]💬 Agent needs clarification[/yellow]")
                 else:  # CAFE_READY_FOR_REVIEW
                     console.print("[yellow]📋 Plan ready for review[/yellow]")
-                
+
                 # Decide whether to continue
                 should_continue = False
                 if auto:
@@ -1637,8 +1726,11 @@ def plan(
                 else:
                     # Interactive mode: ask user
                     from rich.prompt import Confirm
-                    should_continue = Confirm.ask("\n[bold]Continue to next iteration?[/bold]", default=True)
-                
+
+                    should_continue = Confirm.ask(
+                        "\n[bold]Continue to next iteration?[/bold]", default=True
+                    )
+
                 if should_continue:
                     console.print("[dim]Continuing...[/dim]")
                     return execute_iteration(iteration_count + 1)
@@ -1649,14 +1741,14 @@ def plan(
                 # Unknown status
                 console.print(f"\n[bold yellow]⚠️  Unknown status code: {status_code}[/bold yellow]")
                 return result
-        
+
         # Start execution
         result = execute_iteration()
 
         # Display result
         if result.status.value == "completed":
             console.print()
-            status_code = result.data.get('status_code')
+            status_code = result.data.get("status_code")
             plan_file = f".cafe/issues/{issue_name}/plan/plan.md"
 
             if status_code == "CAFE_NEED_CLARIFICATION":
@@ -1685,7 +1777,7 @@ def plan(
                 if Path(plan_file).exists():
                     console.print(f"Saved to: {plan_file}")
                 console.print()
-                
+
                 # Auto mode: execute next phase
                 if auto:
                     _execute_next_phase_auto("develop", issue_name)
@@ -1799,7 +1891,9 @@ def develop(
         plan_file_path = _get_latest_versioned_file("plan", issue_name)
         if plan_file_path is None:
             console.print(f"[red]Error: No plan file found for issue '{issue_name}'[/red]")
-            console.print(f"[dim]Hint: Run 'cafe plan' first to create the implementation plan.[/dim]")
+            console.print(
+                f"[dim]Hint: Run 'cafe plan' first to create the implementation plan.[/dim]"
+            )
             raise typer.Exit(1)
 
         # Convert to strings for compatibility
@@ -1807,7 +1901,9 @@ def develop(
         plan_file = str(plan_file_path)
 
         # Initialize components
-        config_dir = str(Path(config_file).parent) if config_file != ".cafe/config.yaml" else ".cafe"
+        config_dir = (
+            str(Path(config_file).parent) if config_file != ".cafe/config.yaml" else ".cafe"
+        )
         config_manager = ConfigManager(config_dir)
         agent_manager = _setup_agents(config_manager, issue_name=issue_name)
         permission_handler = PermissionHandler()
@@ -1844,7 +1940,9 @@ def develop(
                 tools_str = str(approve_denied_tools)
                 approved_denial_indices = [int(idx.strip()) for idx in tools_str.split(",")]
             except (ValueError, AttributeError) as e:
-                console.print(f"[red]Error: --approve-denied-tools must be comma-separated integers (e.g., '0,1,3'). Got: {approve_denied_tools}[/red]")
+                console.print(
+                    f"[red]Error: --approve-denied-tools must be comma-separated integers (e.g., '0,1,3'). Got: {approve_denied_tools}[/red]"
+                )
                 console.print(f"[dim]Debug: type={type(approve_denied_tools)}, error={e}[/dim]")
                 raise typer.Exit(1)
 
@@ -1879,7 +1977,7 @@ def develop(
             console.print(f"Branch: {result.data.get('branch', 'N/A')}")
             console.print(f"Iterations: {result.data.get('iterations', 'N/A')}")
             console.print()
-            
+
             # Auto mode: execute next phase
             if auto:
                 _execute_next_phase_auto("review", issue_name)
@@ -2038,7 +2136,9 @@ def review(
         plan_file_path = _get_latest_versioned_file("plan", issue_name)
         if plan_file_path is None:
             console.print(f"[red]Error: No plan file found for issue '{issue_name}'[/red]")
-            console.print(f"[dim]Hint: Run 'cafe plan' first to create the implementation plan.[/dim]")
+            console.print(
+                f"[dim]Hint: Run 'cafe plan' first to create the implementation plan.[/dim]"
+            )
             raise typer.Exit(1)
 
         # Convert to strings for compatibility
@@ -2046,7 +2146,9 @@ def review(
         plan_file = str(plan_file_path)
 
         # Initialize components
-        config_dir = str(Path(config_file).parent) if config_file != ".cafe/config.yaml" else ".cafe"
+        config_dir = (
+            str(Path(config_file).parent) if config_file != ".cafe/config.yaml" else ".cafe"
+        )
         config_manager = ConfigManager(config_dir)
         agent_manager = _setup_agents(config_manager, issue_name=issue_name)
         permission_handler = PermissionHandler()
@@ -2109,7 +2211,7 @@ def review(
             if status_code == "CAFE_CONFIRMED":
                 console.print("[bold green]✅ Code review passed![/bold green]")
                 console.print()
-                
+
                 # Auto mode: execute PR phase
                 if auto:
                     _execute_next_phase_auto("pr", issue_name)
@@ -2118,7 +2220,9 @@ def review(
                     console.print(f"[dim]  1. Create PR: cafe pr[/dim]")
             else:
                 # CAFE_NEEDS_CHANGES or other status
-                console.print(f"[bold yellow]📝 Code review completed with status: {status_code}[/bold yellow]")
+                console.print(
+                    f"[bold yellow]📝 Code review completed with status: {status_code}[/bold yellow]"
+                )
                 console.print()
 
                 # Find latest review file (review_XXX.md)
@@ -2134,33 +2238,46 @@ def review(
                 console.print("[dim]Review feedback saved to:[/dim]")
                 console.print(f"[dim]  {review_path}[/dim]")
                 console.print()
-                
+
                 # Auto mode: check max_review_iterations and execute develop if not exceeded
                 if auto:
                     # Read max_review_iterations from issue config
                     import yaml
+
                     issue_config_file = Path(f".cafe/issues/{issue_name}/config.yaml")
                     max_iterations = 5  # Default
                     if issue_config_file.exists():
-                        with open(issue_config_file, 'r') as f:
+                        with open(issue_config_file, "r") as f:
                             issue_config = yaml.safe_load(f)
-                            max_iterations = issue_config.get("auto", {}).get("max_review_iterations", 5)
-                    
+                            max_iterations = issue_config.get("auto", {}).get(
+                                "max_review_iterations", 5
+                            )
+
                     # Get current review iteration count
                     current_iteration = _get_latest_review_iteration(issue_name)
-                    
+
                     if current_iteration >= max_iterations:
                         # Exceeded max iterations
                         console.print()
-                        console.print(f"[bold yellow]⚠️  已達到 review 迴圈上限 ({max_iterations} 次)[/bold yellow]")
+                        console.print(
+                            f"[bold yellow]⚠️  已達到 review 迴圈上限 ({max_iterations} 次)[/bold yellow]"
+                        )
                         console.print()
                         console.print("[dim]您可以：[/dim]")
-                        console.print(f"[dim]  • 繼續執行：[bold]cafe review[/bold]（不加 --auto）[/dim]")
-                        console.print(f"[dim]  • 調整上限：[bold]cafe config set auto.max_review_iterations 10[/bold][/dim]")
-                        console.print(f"[dim]  • 或修改 .cafe/issues/{issue_name}/config.yaml[/dim]")
+                        console.print(
+                            f"[dim]  • 繼續執行：[bold]cafe review[/bold]（不加 --auto）[/dim]"
+                        )
+                        console.print(
+                            f"[dim]  • 調整上限：[bold]cafe config set auto.max_review_iterations 10[/bold][/dim]"
+                        )
+                        console.print(
+                            f"[dim]  • 或修改 .cafe/issues/{issue_name}/config.yaml[/dim]"
+                        )
                     else:
                         # Continue with develop phase
-                        console.print(f"[dim]Review iteration: {current_iteration}/{max_iterations}[/dim]")
+                        console.print(
+                            f"[dim]Review iteration: {current_iteration}/{max_iterations}[/dim]"
+                        )
                         _execute_next_phase_auto("develop", issue_name)
                 else:
                     console.print("[dim]Next steps:[/dim]")
@@ -2269,13 +2386,16 @@ def pr(
         plan_file = str(plan_file_path)
 
         # Initialize components
-        config_dir = str(Path(config_file).parent) if config_file != ".cafe/config.yaml" else ".cafe"
+        config_dir = (
+            str(Path(config_file).parent) if config_file != ".cafe/config.yaml" else ".cafe"
+        )
         config_manager = ConfigManager(config_dir)
         agent_manager = _setup_agents(config_manager, issue_name=issue_name)
         permission_handler = PermissionHandler()
         git_ops = GitOperations()
 
         from cafe.utils.github import GitHubOps
+
         github_ops = GitHubOps()
 
         # Determine final draft value
@@ -2327,9 +2447,15 @@ def pr(
                 console.print(f"[bold cyan]{files_url}[/bold cyan]")
                 console.print()
             console.print("[dim]Next steps:[/dim]")
-            console.print(f"[dim]  1. Review PR: open the link above or run [bold]gh pr diff --web[/bold][/dim]")
-            console.print(f"[dim]  2. If OK: [bold]merge[/bold] the PR, then run [bold]cafe close[/bold][/dim]")
-            console.print(f"[dim]  3. If issues found: add comments and submit review, then run [bold]cafe develop --auto[/bold] (or [bold]cafe make[/bold])[/dim]")
+            console.print(
+                f"[dim]  1. Review PR: open the link above or run [bold]gh pr diff --web[/bold][/dim]"
+            )
+            console.print(
+                f"[dim]  2. If OK: [bold]merge[/bold] the PR, then run [bold]cafe close[/bold][/dim]"
+            )
+            console.print(
+                f"[dim]  3. If issues found: add comments and submit review, then run [bold]cafe develop --auto[/bold] (or [bold]cafe make[/bold])[/dim]"
+            )
         else:
             console.print()
             console.print(f"[bold red]❌ PR phase failed: {result.message}[/bold red]")
@@ -2342,7 +2468,9 @@ def pr(
 
 @app.command()
 def config(
-    action: Optional[str] = typer.Argument(None, help="Action: set, get, edit, reset, or config key"),
+    action: Optional[str] = typer.Argument(
+        None, help="Action: set, get, edit, reset, or config key"
+    ),
     key: Optional[str] = typer.Argument(None, help="Configuration key"),
     value: Optional[str] = typer.Argument(None, help="Value to set"),
 ) -> None:
@@ -2400,6 +2528,7 @@ def config(
             console.print(f"[yellow]Key not found: {key}[/yellow]")
         else:
             import json
+
             console.print(f"{key} = {json.dumps(val, indent=2)}")
 
     elif action == "edit":
@@ -2411,7 +2540,7 @@ def config(
             config_manager.save_config(config_manager.get_default_config())
 
         # Use EDITOR env var, or fallback to vim
-        editor = os.environ.get('EDITOR', 'vim')
+        editor = os.environ.get("EDITOR", "vim")
 
         try:
             subprocess.run([editor, str(config_file)], check=True)
@@ -2440,6 +2569,7 @@ def config(
             console.print(f"[yellow]Key not found: {action}[/yellow]")
         else:
             import json
+
             console.print(f"{action} = {json.dumps(val, indent=2)}")
 
 
@@ -2481,6 +2611,7 @@ def list_issues() -> None:
 
         # Get last modified time
         import datetime
+
         mtime = datetime.datetime.fromtimestamp(issue.stat().st_mtime)
         mtime_str = mtime.strftime("%Y-%m-%d %H:%M")
 
@@ -2492,7 +2623,9 @@ def list_issues() -> None:
 
 @app.command(name="rm")
 def remove_issue(
-    issue_names: list[str] = typer.Argument(..., help="Names of the issues to delete (supports wildcards like 'test-*')"),
+    issue_names: list[str] = typer.Argument(
+        ..., help="Names of the issues to delete (supports wildcards like 'test-*')"
+    ),
     force: bool = typer.Option(False, "--force", "-f", help="Skip confirmation prompt"),
 ) -> None:
     """Remove one or more issues and all their data."""
@@ -2503,11 +2636,15 @@ def remove_issue(
     issues_dir = Path(".cafe/issues")
     expanded_issues = []
     for pattern in issue_names:
-        if '*' in pattern or '?' in pattern:
+        if "*" in pattern or "?" in pattern:
             # Wildcard pattern - find matching issues
             if not issues_dir.exists():
                 continue
-            matches = [d.name for d in issues_dir.iterdir() if d.is_dir() and fnmatch.fnmatch(d.name, pattern)]
+            matches = [
+                d.name
+                for d in issues_dir.iterdir()
+                if d.is_dir() and fnmatch.fnmatch(d.name, pattern)
+            ]
             expanded_issues.extend(matches)
         else:
             # Literal issue name
@@ -2567,7 +2704,9 @@ def remove_issue(
 
     # Summary
     if len(existing_issues) > 1:
-        console.print(f"\n[green]{success_count}/{len(existing_issues)} issue(s) deleted successfully[/green]")
+        console.print(
+            f"\n[green]{success_count}/{len(existing_issues)} issue(s) deleted successfully[/green]"
+        )
 
     if success_count < len(existing_issues):
         raise typer.Exit(1)
@@ -2611,12 +2750,16 @@ def template(
         cafe template rm my-template
     """
     try:
-        config_dir = str(Path(config_file).parent) if config_file != ".cafe/config.yaml" else ".cafe"
+        config_dir = (
+            str(Path(config_file).parent) if config_file != ".cafe/config.yaml" else ".cafe"
+        )
         manager = TemplateManager(config_dir)
 
         if action == "add":
             if not source or not name:
-                console.print("[red]Error: 'add' action requires both source file path and template name[/red]")
+                console.print(
+                    "[red]Error: 'add' action requires both source file path and template name[/red]"
+                )
                 console.print("[dim]Usage: cafe template add <source-file> <template-name>[/dim]")
                 raise typer.Exit(1)
 
@@ -2665,6 +2808,7 @@ def template(
 
             # Display template content using pager
             import subprocess
+
             try:
                 subprocess.run(["less", "-R", str(template_path)], check=False)
             except FileNotFoundError:
@@ -2687,7 +2831,7 @@ def template(
             import subprocess
             import os
 
-            editor = os.environ.get('EDITOR', 'vim')
+            editor = os.environ.get("EDITOR", "vim")
             try:
                 subprocess.run([editor, str(template_path)], check=True)
                 console.print(f"[green]✅ Template '{source}' updated[/green]")
