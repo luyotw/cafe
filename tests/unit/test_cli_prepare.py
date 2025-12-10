@@ -80,8 +80,8 @@ class TestPrepareCommand:
 
     def test_prepare_interactive_mode(self, temp_repo_dir, mock_git_ops):
         """測試互動式輸入 issue name"""
-        # Simulate user input: issue name, worktree (n), input method (1), rigor (empty=medium), template (1)
-        result = runner.invoke(app, ["prepare"], input="my-feature\nn\n1\n\n1\n")
+        # Simulate user input: issue name, worktree (n), input method (1), rigor (empty=medium), template (1), pr auto_create (y)
+        result = runner.invoke(app, ["prepare"], input="my-feature\nn\n1\n\n1\ny\n")
 
         assert result.exit_code == 0
         assert "Successfully prepared issue: my-feature" in result.stdout
@@ -324,8 +324,8 @@ class TestPrepareCommandWorktree:
 
     def test_prepare_interactive_worktree_prompt_yes(self, temp_repo_dir, mock_git_ops):
         """測試互動模式詢問是否使用 worktree，使用者選擇 Yes"""
-        # 模擬使用者輸入：issue name, worktree (y), worktree path, input method (1), rigor (empty), template (1)
-        user_input = "my-feature\ny\nworktrees/my-feature\n1\n\n1\n"
+        # 模擬使用者輸入：issue name, worktree (y), worktree path, input method (1), rigor (empty), template (1), pr auto_create (y)
+        user_input = "my-feature\ny\nworktrees/my-feature\n1\n\n1\ny\n"
         result = runner.invoke(app, ["prepare"], input=user_input)
 
         assert result.exit_code == 0
@@ -345,8 +345,8 @@ class TestPrepareCommandWorktree:
 
     def test_prepare_interactive_worktree_prompt_no(self, temp_repo_dir, mock_git_ops):
         """測試互動模式詢問是否使用 worktree，使用者選擇 No"""
-        # 模擬使用者輸入：issue name, worktree (n), input method (1), rigor (empty), template (1)
-        user_input = "normal-feature\nn\n1\n\n1\n"
+        # 模擬使用者輸入：issue name, worktree (n), input method (1), rigor (empty), template (1), pr auto_create (y)
+        user_input = "normal-feature\nn\n1\n\n1\ny\n"
         result = runner.invoke(app, ["prepare"], input=user_input)
 
         assert result.exit_code == 0
@@ -362,8 +362,8 @@ class TestPrepareCommandWorktree:
 
     def test_prepare_interactive_worktree_default_path_suggestion(self, temp_repo_dir, mock_git_ops):
         """測試互動模式建議預設路徑 .cafe/worktrees/{issue-name}"""
-        # 模擬使用者輸入：issue name, worktree (y), default path (empty), input method (1), rigor (empty), template (1)
-        user_input = "test-issue\ny\n\n1\n\n1\n"
+        # 模擬使用者輸入：issue name, worktree (y), default path (empty), input method (1), rigor (empty), template (1), pr auto_create (y)
+        user_input = "test-issue\ny\n\n1\n\n1\ny\n"
         result = runner.invoke(app, ["prepare"], input=user_input)
 
         assert result.exit_code == 0
@@ -409,3 +409,43 @@ class TestPrepareCommandWorktree:
         assert worktree_issue_dir.exists(), "Issue directory should be created in worktree"
         assert (worktree_issue_dir / "spec").exists(), "spec directory should exist"
         assert (worktree_issue_dir / "sessions").exists(), "sessions directory should exist"
+
+    def test_prepare_interactive_saves_pr_auto_create_true(self, temp_repo_dir, mock_git_ops):
+        """測試互動模式選擇自動建立 PR (yes)"""
+        # Simulate: issue name, worktree (n), input method (1), rigor (empty), template (1), pr auto_create (y)
+        result = runner.invoke(app, ["prepare"], input="test-issue\nn\n1\n\n1\ny\n")
+
+        assert result.exit_code == 0
+
+        config_file = temp_repo_dir / ".cafe" / "issues" / "test-issue" / "config.yaml"
+        assert config_file.exists()
+
+        with open(config_file) as f:
+            config_data = yaml.safe_load(f)
+            assert "pr" in config_data
+            assert config_data["pr"]["auto_create"] is True
+
+    def test_prepare_interactive_saves_pr_auto_create_false(self, temp_repo_dir, mock_git_ops):
+        """測試互動模式選擇不自動建立 PR (no)"""
+        # Simulate: issue name, worktree (n), input method (1), rigor (empty), template (1), pr auto_create (n)
+        result = runner.invoke(app, ["prepare"], input="test-issue\nn\n1\n\n1\nn\n")
+
+        assert result.exit_code == 0
+
+        config_file = temp_repo_dir / ".cafe" / "issues" / "test-issue" / "config.yaml"
+        with open(config_file) as f:
+            config_data = yaml.safe_load(f)
+            assert "pr" in config_data
+            assert config_data["pr"]["auto_create"] is False
+
+    def test_prepare_non_interactive_does_not_save_pr_config(self, temp_repo_dir, mock_git_ops):
+        """測試非互動模式不儲存 PR 配置"""
+        result = runner.invoke(app, ["prepare", "test-issue"])
+
+        assert result.exit_code == 0
+
+        config_file = temp_repo_dir / ".cafe" / "issues" / "test-issue" / "config.yaml"
+        with open(config_file) as f:
+            config_data = yaml.safe_load(f)
+            # Non-interactive mode should not have pr config
+            assert "pr" not in config_data

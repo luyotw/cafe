@@ -636,6 +636,7 @@ def prepare(
         # 6. Interactive prompts for spec/plan configuration (only in interactive mode)
         spec_config = {}
         plan_config = {}
+        pr_config = {}
 
         if is_interactive:
             console.print()
@@ -681,6 +682,14 @@ def prepare(
                     "[dim]    Tip: Use 'cafe template add <source> <name>' to add templates.[/dim]"
                 )
 
+            # Prompt for PR auto-create setting
+            console.print()
+            auto_create_pr = typer.confirm(
+                "Automatically create PR on GitHub after development?",
+                default=True
+            )
+            pr_config["auto_create"] = auto_create_pr
+
         # 7. Save config.yaml (in worktree's issue dir if using worktree, else local)
         config_file = issue_dir / "config.yaml"
 
@@ -706,6 +715,10 @@ def prepare(
         # Add plan config if present
         if plan_config:
             config_data["plan"] = plan_config
+
+        # Add pr config if present
+        if pr_config:
+            config_data["pr"] = pr_config
 
         # Add worktree_path if using worktree mode
         if use_worktree:
