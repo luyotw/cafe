@@ -216,57 +216,44 @@ class TestDevelopPhasePRCommentsIntegration:
                 assert result == ""
                 assert count == 0
 
-    def test_load_pr_comments_filters_old_comments(self, mock_components):
-        """測試 PR comments 過濾：只載入比上次 develop 更新的 comments
+    def test_load_pr_comments_returns_all_unresolved_comments(self, mock_components):
+        """測試 PR comments 載入所有 unresolved comments（不再按時間過濾）
 
-        情境：有 3 個 unresolved comments，其中 2 個比上次 develop 舊，1 個比較新
-        預期：只返回 1 個新的 comment
+        情境：有 3 個 unresolved comments
+        預期：返回所有 3 個 comments
         """
-        import json
-
-        # 模擬上次 develop 時間：2025-01-02 10:00:00
-        last_develop_time = "2025-01-02T10:00:00Z"
-        status_file = mock_components["tmp_path"] / ".cafe" / "issues" / "test-issue" / "develop" / "status.json"
-        status_file.parent.mkdir(parents=True, exist_ok=True)
-        status_file.write_text(json.dumps({
-            "phase": "develop",
-            "status": "completed",
-            "timestamp": last_develop_time,
-            "iteration": 1
-        }))
-
         with patch('cafe.phases.develop_phase.get_pr_comments') as mock_get:
             with patch('cafe.phases.develop_phase.filter_unresolved_comments') as mock_filter:
                 with patch('cafe.phases.develop_phase.format_comments_for_prompt') as mock_format:
-                    # 3 個 comments：2 個舊的，1 個新的
+                    # 3 個 unresolved comments
                     mock_comments = [
                         PRComment(
                             id="C1",
-                            body="Old comment 1",
+                            body="Comment 1",
                             author="user1",
-                            created_at="2025-01-01T09:00:00Z",  # 比 develop 舊
+                            created_at="2025-01-01T09:00:00Z",
                             is_resolved=False
                         ),
                         PRComment(
                             id="C2",
-                            body="Old comment 2",
+                            body="Comment 2",
                             author="user2",
-                            created_at="2025-01-02T09:00:00Z",  # 比 develop 舊
+                            created_at="2025-01-02T09:00:00Z",
                             is_resolved=False
                         ),
                         PRComment(
                             id="C3",
-                            body="New comment",
+                            body="Comment 3",
                             author="user3",
-                            created_at="2025-01-02T11:00:00Z",  # 比 develop 新
+                            created_at="2025-01-02T11:00:00Z",
                             is_resolved=False
                         ),
                     ]
                     mock_get.return_value = mock_comments
                     mock_filter.return_value = mock_comments  # 全部都是 unresolved
 
-                    # format_comments_for_prompt 應該只收到新的 comment
-                    mock_format.return_value = "New comment"
+                    # format_comments_for_prompt 應該收到所有 comments
+                    mock_format.return_value = "All comments"
 
                     phase = DevelopPhase(
                         agent_manager=mock_components["agent_manager"],
@@ -282,103 +269,39 @@ class TestDevelopPhasePRCommentsIntegration:
 
                     result, count = phase._load_pr_comments()
 
-                    # 應該只格式化新的 comment
-                    assert count == 1
+                    # 應該格式化所有 comments
+                    assert count == 3
                     mock_format.assert_called_once()
-                    # 檢查傳給 format_comments_for_prompt 的只有新 comment
+                    # 檢查傳給 format_comments_for_prompt 的包含所有 comments
                     formatted_comments = mock_format.call_args[0][0]
-                    assert len(formatted_comments) == 1
-                    assert formatted_comments[0].id == "C3"
+                    assert len(formatted_comments) == 3
+                    assert formatted_comments[0].id == "C1"
+                    assert formatted_comments[1].id == "C2"
+                    assert formatted_comments[2].id == "C3"
 
-    def test_load_pr_comments_filters_old_comments_returns_empty(self, mock_components):
-        """測試當 PR 只有舊的 unresolved comments 時 _load_pr_comments 返回空字串
+    def test_load_pr_comments_with_single_unresolved_comment(self, mock_components):
+        """測試 PR comments 載入單個 unresolved comment
 
-        情境：提供 pr_number 但所有 unresolved comments 都比上次 develop 舊
-        預期：_load_pr_comments() 返回空字串和 count=0（舊 comments 被過濾掉）
+        情境：提供 pr_number 且有 1 個 unresolved comment
+        預期：_load_pr_comments() 返回格式化的 comment 和 count=1
         """
-        import json
-
-        # 模擬上次 develop 時間
-        last_develop_time = "2025-01-02T10:00:00Z"
-        status_file = mock_components["tmp_path"] / ".cafe" / "issues" / "test-issue" / "develop" / "status.json"
-        status_file.parent.mkdir(parents=True, exist_ok=True)
-        status_file.write_text(json.dumps({
-            "phase": "develop",
-            "status": "completed",
-            "timestamp": last_develop_time,
-            "iteration": 1
-        }))
-
-        with patch('cafe.phases.develop_phase.get_pr_comments') as mock_get:
-            with patch('cafe.phases.develop_phase.filter_unresolved_comments') as mock_filter:
-                # 所有 comments 都是舊的
-                mock_comments = [
-                    PRComment(
-                        id="C1",
-                        body="Old comment",
-                        author="user1",
-                        created_at="2025-01-01T09:00:00Z",  # 比 develop 舊
-                        is_resolved=False
-                    )
-                ]
-                mock_get.return_value = mock_comments
-                mock_filter.return_value = mock_comments
-
-                phase = DevelopPhase(
-                    agent_manager=mock_components["agent_manager"],
-                    permission_handler=mock_components["permission_handler"],
-                    git_ops=mock_components["git_ops"],
-                    spec_file=mock_components["spec_file"],
-                    plan_file=mock_components["plan_file"],
-                    workflow_mode=WorkflowMode.LOCAL,
-                    issue_name="test-issue",
-                    dev_agent="David",
-                    pr_number=123,
-                )
-
-                # Load PR comments
-                result, count = phase._load_pr_comments()
-
-                # 應該返回空（所有 comments 都是舊的）
-                assert result == ""
-                assert count == 0
-
-    def test_load_pr_comments_handles_naive_datetime_in_status(self, mock_components):
-        """測試 PR comments 過濾能正確處理 status.json 中的 naive datetime
-
-        情境：status.json 中的 timestamp 沒有時區資訊（naive datetime）
-        預期：應該將 naive datetime 視為 UTC，並能正確與 timezone-aware comment 比較
-        """
-        import json
-
-        # 模擬上次 develop 時間：使用 naive datetime（沒有時區資訊）
-        last_develop_time = "2025-01-02T10:00:00"  # 沒有 'Z' 或 '+00:00'
-        status_file = mock_components["tmp_path"] / ".cafe" / "issues" / "test-issue" / "develop" / "status.json"
-        status_file.parent.mkdir(parents=True, exist_ok=True)
-        status_file.write_text(json.dumps({
-            "phase": "develop",
-            "status": "completed",
-            "timestamp": last_develop_time,
-            "iteration": 1
-        }))
-
         with patch('cafe.phases.develop_phase.get_pr_comments') as mock_get:
             with patch('cafe.phases.develop_phase.filter_unresolved_comments') as mock_filter:
                 with patch('cafe.phases.develop_phase.format_comments_for_prompt') as mock_format:
-                    # 1 個新的 comment（timezone-aware）
+                    # 1 個 unresolved comment
                     mock_comments = [
                         PRComment(
                             id="C1",
-                            body="New comment",
+                            body="Please fix this",
                             author="user1",
-                            created_at="2025-01-02T11:00:00Z",  # 比 develop 新，且帶時區
+                            created_at="2025-01-01T09:00:00Z",
                             is_resolved=False
-                        ),
+                        )
                     ]
                     mock_get.return_value = mock_comments
                     mock_filter.return_value = mock_comments
 
-                    mock_format.return_value = "New comment"
+                    mock_format.return_value = "Comment content"
 
                     phase = DevelopPhase(
                         agent_manager=mock_components["agent_manager"],
@@ -392,63 +315,9 @@ class TestDevelopPhasePRCommentsIntegration:
                         pr_number=123,
                     )
 
+                    # Load PR comments
                     result, count = phase._load_pr_comments()
 
-                    # 應該正確比較並返回新的 comment
+                    # 應該返回格式化的 comment
+                    assert result == "Comment content"
                     assert count == 1
-                    mock_format.assert_called_once()
-
-    def test_load_pr_comments_handles_naive_datetime_in_comment(self, mock_components):
-        """測試 PR comments 過濾能正確處理 comment 中的 naive datetime
-
-        情境：PR comment 的 created_at 沒有時區資訊（雖然實際上 GitHub 總是返回 ISO 8601 格式）
-        預期：應該將 naive datetime 視為 UTC，並能正確比較
-        """
-        import json
-
-        # 模擬上次 develop 時間（timezone-aware）
-        last_develop_time = "2025-01-02T10:00:00Z"
-        status_file = mock_components["tmp_path"] / ".cafe" / "issues" / "test-issue" / "develop" / "status.json"
-        status_file.parent.mkdir(parents=True, exist_ok=True)
-        status_file.write_text(json.dumps({
-            "phase": "develop",
-            "status": "completed",
-            "timestamp": last_develop_time,
-            "iteration": 1
-        }))
-
-        with patch('cafe.phases.develop_phase.get_pr_comments') as mock_get:
-            with patch('cafe.phases.develop_phase.filter_unresolved_comments') as mock_filter:
-                with patch('cafe.phases.develop_phase.format_comments_for_prompt') as mock_format:
-                    # 1 個新的 comment（naive datetime，沒有時區）
-                    mock_comments = [
-                        PRComment(
-                            id="C1",
-                            body="New comment",
-                            author="user1",
-                            created_at="2025-01-02T11:00:00",  # 比 develop 新，但沒有時區
-                            is_resolved=False
-                        ),
-                    ]
-                    mock_get.return_value = mock_comments
-                    mock_filter.return_value = mock_comments
-
-                    mock_format.return_value = "New comment"
-
-                    phase = DevelopPhase(
-                        agent_manager=mock_components["agent_manager"],
-                        permission_handler=mock_components["permission_handler"],
-                        git_ops=mock_components["git_ops"],
-                        spec_file=mock_components["spec_file"],
-                        plan_file=mock_components["plan_file"],
-                        workflow_mode=WorkflowMode.LOCAL,
-                        issue_name="test-issue",
-                        dev_agent="David",
-                        pr_number=123,
-                    )
-
-                    result, count = phase._load_pr_comments()
-
-                    # 應該正確比較並返回新的 comment（不會拋出 TypeError）
-                    assert count == 1
-                    mock_format.assert_called_once()
