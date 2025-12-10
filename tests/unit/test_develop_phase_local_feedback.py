@@ -35,11 +35,9 @@ def temp_issue_dir(tmp_path):
     config_data = {
         "base_branch": "main",
         "feature_branch": "test-issue",
-        "pr": {
-            "auto_create": False
-        }
+        "pr": {"auto_create": False},
     }
-    with open(config_file, 'w') as f:
+    with open(config_file, "w") as f:
         yaml.dump(config_data, f)
 
     return issue_dir
@@ -48,7 +46,7 @@ def temp_issue_dir(tmp_path):
 @pytest.fixture
 def mock_git_ops():
     """Create mock GitOperations."""
-    with patch('cafe.phases.develop_phase.GitOperations') as MockGitOps:
+    with patch("cafe.phases.develop_phase.GitOperations") as MockGitOps:
         mock_git = MagicMock()
         MockGitOps.return_value = mock_git
         mock_git.get_current_branch.return_value = "test-issue"
@@ -76,8 +74,15 @@ def mock_github_ops():
 class TestDevelopPhaseLocalFeedback:
     """Test DevelopPhase local PR feedback reading."""
 
-    def test_reads_latest_pr_file(self, temp_issue_dir, mock_git_ops, mock_agent_manager,
-                                   mock_permission_handler, mock_github_ops, monkeypatch):
+    def test_reads_latest_pr_file(
+        self,
+        temp_issue_dir,
+        mock_git_ops,
+        mock_agent_manager,
+        mock_permission_handler,
+        mock_github_ops,
+        monkeypatch,
+    ):
         """測試讀取最新 pr_XXX.md 檔案（當有多個版本時）"""
         monkeypatch.chdir(temp_issue_dir.parent.parent.parent)
 
@@ -88,7 +93,7 @@ class TestDevelopPhaseLocalFeedback:
         (pr_dir / "pr_002.md").write_text("Second feedback")
         (pr_dir / "pr_003.md").write_text("Latest feedback")
 
-        with patch.object(DevelopPhase, '_get_issue_dir', return_value=temp_issue_dir):
+        with patch.object(DevelopPhase, "_get_issue_dir", return_value=temp_issue_dir):
             develop_phase = DevelopPhase(
                 agent_manager=mock_agent_manager,
                 permission_handler=mock_permission_handler,
@@ -104,12 +109,19 @@ class TestDevelopPhaseLocalFeedback:
 
             assert feedback == "Latest feedback"
 
-    def test_returns_none_when_no_pr_files(self, temp_issue_dir, mock_git_ops, mock_agent_manager,
-                                            mock_permission_handler, mock_github_ops, monkeypatch):
+    def test_returns_none_when_no_pr_files(
+        self,
+        temp_issue_dir,
+        mock_git_ops,
+        mock_agent_manager,
+        mock_permission_handler,
+        mock_github_ops,
+        monkeypatch,
+    ):
         """測試當沒有 pr_XXX.md 檔案時返回 None"""
         monkeypatch.chdir(temp_issue_dir.parent.parent.parent)
 
-        with patch.object(DevelopPhase, '_get_issue_dir', return_value=temp_issue_dir):
+        with patch.object(DevelopPhase, "_get_issue_dir", return_value=temp_issue_dir):
             develop_phase = DevelopPhase(
                 agent_manager=mock_agent_manager,
                 permission_handler=mock_permission_handler,
@@ -124,12 +136,19 @@ class TestDevelopPhaseLocalFeedback:
 
             assert feedback is None
 
-    def test_returns_none_when_pr_dir_not_exists(self, temp_issue_dir, mock_git_ops, mock_agent_manager,
-                                                   mock_permission_handler, mock_github_ops, monkeypatch):
+    def test_returns_none_when_pr_dir_not_exists(
+        self,
+        temp_issue_dir,
+        mock_git_ops,
+        mock_agent_manager,
+        mock_permission_handler,
+        mock_github_ops,
+        monkeypatch,
+    ):
         """測試當 pr 目錄不存在時返回 None"""
         monkeypatch.chdir(temp_issue_dir.parent.parent.parent)
 
-        with patch.object(DevelopPhase, '_get_issue_dir', return_value=temp_issue_dir):
+        with patch.object(DevelopPhase, "_get_issue_dir", return_value=temp_issue_dir):
             develop_phase = DevelopPhase(
                 agent_manager=mock_agent_manager,
                 permission_handler=mock_permission_handler,
@@ -144,9 +163,15 @@ class TestDevelopPhaseLocalFeedback:
 
             assert feedback is None
 
-    def test_uses_local_feedback_when_pr_auto_create_is_false(self, temp_issue_dir, mock_git_ops,
-                                                                mock_agent_manager, mock_permission_handler,
-                                                                mock_github_ops, monkeypatch):
+    def test_uses_local_feedback_when_pr_auto_create_is_false(
+        self,
+        temp_issue_dir,
+        mock_git_ops,
+        mock_agent_manager,
+        mock_permission_handler,
+        mock_github_ops,
+        monkeypatch,
+    ):
         """測試 pr.auto_create: false 時使用本地建議整合至 prompt"""
         monkeypatch.chdir(temp_issue_dir.parent.parent.parent)
 
@@ -155,7 +180,7 @@ class TestDevelopPhaseLocalFeedback:
         pr_dir.mkdir()
         (pr_dir / "pr_001.md").write_text("Local PR feedback")
 
-        with patch.object(DevelopPhase, '_get_issue_dir', return_value=temp_issue_dir):
+        with patch.object(DevelopPhase, "_get_issue_dir", return_value=temp_issue_dir):
             develop_phase = DevelopPhase(
                 agent_manager=mock_agent_manager,
                 permission_handler=mock_permission_handler,
@@ -171,9 +196,15 @@ class TestDevelopPhaseLocalFeedback:
             assert "PR Feedback (Local)" in prompt
             assert "Local PR feedback" in prompt
 
-    def test_skips_local_feedback_when_pr_auto_create_is_true(self, temp_issue_dir, mock_git_ops,
-                                                                mock_agent_manager, mock_permission_handler,
-                                                                mock_github_ops, monkeypatch):
+    def test_skips_local_feedback_when_pr_auto_create_is_true(
+        self,
+        temp_issue_dir,
+        mock_git_ops,
+        mock_agent_manager,
+        mock_permission_handler,
+        mock_github_ops,
+        monkeypatch,
+    ):
         """測試 pr.auto_create: true 時不使用本地建議"""
         monkeypatch.chdir(temp_issue_dir.parent.parent.parent)
 
@@ -182,11 +213,9 @@ class TestDevelopPhaseLocalFeedback:
         config_data = {
             "base_branch": "main",
             "feature_branch": "test-issue",
-            "pr": {
-                "auto_create": True
-            }
+            "pr": {"auto_create": True},
         }
-        with open(config_file, 'w') as f:
+        with open(config_file, "w") as f:
             yaml.dump(config_data, f)
 
         # Create pr file (should be ignored)
@@ -194,7 +223,7 @@ class TestDevelopPhaseLocalFeedback:
         pr_dir.mkdir()
         (pr_dir / "pr_001.md").write_text("Local PR feedback (should be ignored)")
 
-        with patch.object(DevelopPhase, '_get_issue_dir', return_value=temp_issue_dir):
+        with patch.object(DevelopPhase, "_get_issue_dir", return_value=temp_issue_dir):
             develop_phase = DevelopPhase(
                 agent_manager=mock_agent_manager,
                 permission_handler=mock_permission_handler,
