@@ -463,6 +463,25 @@ class DevelopPhase(Phase):
 
         return False
 
+    def _load_local_pr_feedback(self) -> Optional[str]:
+        """Load local PR feedback from pr_XXX.md files.
+
+        Returns:
+            Feedback content if found, None otherwise
+        """
+        pr_dir = self.issue_dir / "pr"
+        if not pr_dir.exists():
+            return None
+
+        # Find all pr_XXX.md files
+        pr_files = sorted(pr_dir.glob("pr_*.md"))
+        if not pr_files:
+            return None
+
+        # Return the latest one
+        latest_pr_file = pr_files[-1]
+        return latest_pr_file.read_text()
+
     def _load_pr_comments(self) -> tuple[str, int]:
         """Load PR comments if pr_number is provided.
 
@@ -544,9 +563,18 @@ class DevelopPhase(Phase):
             },
         )
 
-        # Load PR comments if available
-        pr_comments, _ = self._load_pr_comments()
-        pr_comments_section = f"\n\n{pr_comments}\n" if pr_comments else ""
+        # Load PR feedback (either from GitHub comments or local pr_XXX.md files)
+        config_file = self.issue_dir / "config.yaml"
+        pr_auto_create = self._get_issue_config_value(config_file, "pr.auto_create")
+
+        if pr_auto_create is False:
+            # Use local PR feedback
+            local_feedback = self._load_local_pr_feedback()
+            pr_comments_section = f"\n\n## PR Feedback (Local)\n\n{local_feedback}\n" if local_feedback else ""
+        else:
+            # Use GitHub PR comments
+            pr_comments, _ = self._load_pr_comments()
+            pr_comments_section = f"\n\n{pr_comments}\n" if pr_comments else ""
 
         # Check for existing develop clarification file
         develop_dir = self.issue_dir / "develop"
