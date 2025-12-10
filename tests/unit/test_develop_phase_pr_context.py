@@ -321,3 +321,101 @@ class TestDevelopPhasePRCommentsIntegration:
                     # 應該返回格式化的 comment
                     assert result == "Comment content"
                     assert count == 1
+
+    def test_prompt_mentions_pr_comments_when_present(self, mock_components):
+        """測試當有 PR comments 時，prompt 會明確提示要讀取
+
+        情境：有 PR comments 且有 review file
+        預期：prompt 中包含明確指示要讀取兩者
+        """
+        # 建立 review file
+        review_dir = mock_components["tmp_path"] / ".cafe" / "issues" / "test-issue" / "review"
+        review_dir.mkdir(parents=True, exist_ok=True)
+        review_file = review_dir / "review_001.md"
+        review_file.write_text("Review feedback")
+
+        with patch('cafe.phases.develop_phase.get_pr_comments') as mock_get:
+            with patch('cafe.phases.develop_phase.filter_unresolved_comments') as mock_filter:
+                with patch('cafe.phases.develop_phase.format_comments_for_prompt') as mock_format:
+                    # 模擬有 2 個 unresolved comments
+                    mock_comments = [
+                        PRComment(
+                            id="C1",
+                            body="Comment 1",
+                            author="user1",
+                            created_at="2025-01-01T09:00:00Z",
+                            is_resolved=False
+                        ),
+                        PRComment(
+                            id="C2",
+                            body="Comment 2",
+                            author="user2",
+                            created_at="2025-01-02T09:00:00Z",
+                            is_resolved=False
+                        ),
+                    ]
+                    mock_get.return_value = mock_comments
+                    mock_filter.return_value = mock_comments
+                    mock_format.return_value = "PR Comments:\n- Comment 1\n- Comment 2"
+
+                    phase = DevelopPhase(
+                        agent_manager=mock_components["agent_manager"],
+                        permission_handler=mock_components["permission_handler"],
+                        git_ops=mock_components["git_ops"],
+                        spec_file=mock_components["spec_file"],
+                        plan_file=mock_components["plan_file"],
+                        workflow_mode=WorkflowMode.LOCAL,
+                        issue_name="test-issue",
+                        dev_agent="David",
+                        pr_number=123,
+                    )
+
+                    # 生成 prompt
+                    prompt = phase._generate_prompt()
+
+                    # 驗證 prompt 包含 PR comments 的明確提示
+                    assert "PR comments (見上方 2 則 unresolved comments)" in prompt
+                    assert "PR Comments:\n- Comment 1\n- Comment 2" in prompt
+                    # 應該提示要讀取 review file 和 PR comments
+                    assert ".cafe/issues/test-issue/review/review_001.md 和 PR comments" in prompt
+
+    def test_prompt_mentions_only_pr_comments_when_no_review_file(self, mock_components):
+        """測試當只有 PR comments 沒有 review file 時的 prompt
+
+        情境：有 PR comments 但沒有 review file（正常開發模式）
+        預期：prompt 中包含 PR comments section
+        """
+        with patch('cafe.phases.develop_phase.get_pr_comments') as mock_get:
+            with patch('cafe.phases.develop_phase.filter_unresolved_comments') as mock_filter:
+                with patch('cafe.phases.develop_phase.format_comments_for_prompt') as mock_format:
+                    # 模擬有 1 個 unresolved comment
+                    mock_comments = [
+                        PRComment(
+                            id="C1",
+                            body="Comment 1",
+                            author="user1",
+                            created_at="2025-01-01T09:00:00Z",
+                            is_resolved=False
+                        ),
+                    ]
+                    mock_get.return_value = mock_comments
+                    mock_filter.return_value = mock_comments
+                    mock_format.return_value = "PR Comment: Comment 1"
+
+                    phase = DevelopPhase(
+                        agent_manager=mock_components["agent_manager"],
+                        permission_handler=mock_components["permission_handler"],
+                        git_ops=mock_components["git_ops"],
+                        spec_file=mock_components["spec_file"],
+                        plan_file=mock_components["plan_file"],
+                        workflow_mode=WorkflowMode.LOCAL,
+                        issue_name="test-issue",
+                        dev_agent="David",
+                        pr_number=123,
+                    )
+
+                    # 生成 prompt（正常開發模式，沒有 review file）
+                    prompt = phase._generate_prompt()
+
+                    # 驗證 prompt 包含 PR comments
+                    assert "PR Comment: Comment 1" in prompt
