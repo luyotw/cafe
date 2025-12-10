@@ -505,27 +505,6 @@ class DevelopPhase(Phase):
             unresolved = filter_unresolved_comments(comments)
             print(f"  → {len(unresolved)} unresolved comments")
 
-            # Filter comments that are newer than last develop timestamp
-            last_develop_time = self._get_last_develop_timestamp()
-            if last_develop_time:
-                from datetime import datetime, timezone
-                new_comments = []
-                for comment in unresolved:
-                    comment_time_str = comment.created_at
-                    # Ensure we always get a timezone-aware datetime
-                    if comment_time_str.endswith('Z'):
-                        comment_time_str = comment_time_str.replace('Z', '+00:00')
-                    comment_time = datetime.fromisoformat(comment_time_str)
-                    # If datetime is naive, assume UTC
-                    if comment_time.tzinfo is None:
-                        comment_time = comment_time.replace(tzinfo=timezone.utc)
-
-                    if comment_time > last_develop_time:
-                        new_comments.append(comment)
-
-                print(f"  → {len(new_comments)} new unresolved comments (since last develop)")
-                unresolved = new_comments
-
             result = format_comments_for_prompt(unresolved)
             if result:
                 print(f"  → Formatted result length: {len(result)} chars")
@@ -571,10 +550,13 @@ class DevelopPhase(Phase):
             # Use local PR feedback
             local_feedback = self._load_local_pr_feedback()
             pr_comments_section = f"\n\n## PR Feedback (Local)\n\n{local_feedback}\n" if local_feedback else ""
+            has_pr_comments = bool(local_feedback)
+            unresolved_count = 0  # Not applicable for local feedback
         else:
             # Use GitHub PR comments
-            pr_comments, _ = self._load_pr_comments()
+            pr_comments, unresolved_count = self._load_pr_comments()
             pr_comments_section = f"\n\n{pr_comments}\n" if pr_comments else ""
+            has_pr_comments = bool(pr_comments)
 
         # Check for existing develop clarification file
         develop_dir = self.issue_dir / "develop"
@@ -616,6 +598,20 @@ class DevelopPhase(Phase):
         if has_review_feedback:
             # With review feedback - 修正模式
             user_input_section = f"\n\n**用戶的額外說明：**\n{user_input}\n" if user_input else ""
+
+            # Build review sources instruction
+            review_sources = []
+            if review_file_path:
+                review_sources.append(review_file_path)
+            if has_pr_comments:
+                review_sources.append(f"PR comments (見上方 {unresolved_count} 則 unresolved comments)")
+
+            review_instruction = ""
+            if len(review_sources) == 1:
+                review_instruction = f"2. **首先閱讀** {review_sources[0]}，了解所有需要修正的問題"
+            else:
+                review_instruction = f"2. **首先閱讀** {' 和 '.join(review_sources)}，了解所有需要修正的問題"
+
             return f"""請根據 Code Review 反饋進行修正。
 
 **你的角色：**
@@ -630,7 +626,7 @@ class DevelopPhase(Phase):
 {pr_comments_section}{user_input_section}
 **執行步驟：**
 1. 使用 Read tool 讀取 agents/{self.dev_agent}.md 了解角色定義
-{develop_instruction}2. **首先閱讀** {review_file_path} 或 pr comments，了解所有需要修正的問題
+{develop_instruction}{review_instruction}
 3. 根據 review feedback 逐一修正問題
 4. **嚴格按照既有的 commit message 風格撰寫 commit 訊息**，可分多次 commit
 5. **禁止修改非當前分支的 commit**
