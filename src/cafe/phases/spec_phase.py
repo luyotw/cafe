@@ -933,18 +933,6 @@ class SpecPhase(Phase):
 **你的角色：**
 PM (Product Manager)，負責需求澄清工作。請讀取 agents/{self.pm_agent}.md 了解你的角色定義和工作準則，然後嚴格按照角色定義中的要求執行。"""
 
-        # Build original requirement section for prompt
-        original_req_section = ""
-        if self.original_requirement:
-            original_req_section = f"""
-⚠️ **重要：原始需求描述**
-以下是用戶最初提供的原始需求，**除非用戶明確要求修改，否則絕對不可更動此部分內容**：
-
-```
-{self.original_requirement}
-```
-"""
-
         need_clarification_instruction = f"""**如果需要澄清（status: CAFE_NEED_CLARIFICATION）：**
 將以下內容寫入 {current_spec_file}：
    - 「## 原始需求描述」- **完整保留**用戶最初提供的原始需求，不可修改（除非用戶明確要求）。
@@ -968,7 +956,6 @@ PM (Product Manager)，負責需求澄清工作。請讀取 agents/{self.pm_agen
 {rigor_guidelines}
 
 {non_technical}
-{original_req_section}
 
 {status_code_prompt}
 {restriction}

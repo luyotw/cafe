@@ -1230,41 +1230,6 @@ class TestOriginalRequirement:
         # Assert - 驗證原始需求被保存
         assert phase.original_requirement == original_content
 
-    def test_original_requirement_included_in_prompt(
-        self, tmp_path: Path, mock_git_ops: MagicMock, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """測試 prompt 中包含原始需求描述的指示"""
-        monkeypatch.chdir(tmp_path)
-
-        # Setup
-        spec_file = Path(".cafe/issues/test-issue/spec/spec.md")
-        spec_file.parent.mkdir(parents=True, exist_ok=True)
-        original_content = "身為用戶，我想要匯出 CSV 檔案"
-        spec_file.write_text(original_content, encoding="utf-8")
-
-        agent_manager = MagicMock(spec=AgentManager)
-        permission_handler = MagicMock(spec=PermissionHandler)
-
-        phase = SpecPhase(
-            agent_manager=agent_manager,
-            permission_handler=permission_handler,
-            git_ops=mock_git_ops,
-            workflow_mode=WorkflowMode.LOCAL,
-            interactive=False,
-        )
-
-        # 手動設定 original_requirement（模擬已捕獲）
-        phase.original_requirement = original_content
-        phase.iteration = 1
-
-        # Execute - 生成 prompt
-        prompt = phase._generate_local_prompt(user_input="")
-
-        # Assert - 驗證 prompt 包含原始需求描述
-        assert "原始需求描述" in prompt
-        assert original_content in prompt
-        assert "除非用戶明確要求修改，否則絕對不可更動此部分內容" in prompt
-
     def test_spec_format_includes_original_requirement_section(
         self, tmp_path: Path, mock_git_ops: MagicMock, monkeypatch: pytest.MonkeyPatch
     ) -> None:
