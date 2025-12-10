@@ -310,38 +310,17 @@ class PRPhase(Phase):
                 message="Local review mode requires interactive mode",
             )
 
-        # Process decision
-        if choice == "confirm":
-            # Save confirmation
-            pr_dir = self.issue_dir / "pr"
-            pr_dir.mkdir(exist_ok=True)
+        # Process decision using base class method
+        result = self._process_review_decision(
+            choice=choice,
+            prev_data={},
+            phase_name="Local review",
+            phase_specific_data={},
+        )
 
-            console.print()
-            console.print("[green]✓ Changes confirmed![/green]")
-            console.print()
-            console.print("[bold]Next step:[/bold] cafe close")
-            console.print()
-
-            return PhaseResult(
-                status=PhaseStatus.COMPLETED,
-                message="Local review completed - changes confirmed",
-                data={"status_code": PhaseStatusCode.CONFIRMED.value},
-            )
-
-        elif choice == "reject":
-            console.print()
-            console.print("[red]✗ Changes rejected[/red]")
-            console.print()
-
-            return PhaseResult(
-                status=PhaseStatus.FAILED,
-                message="Local review rejected by user",
-                data={"status_code": "USER_REJECTED"},
-            )
-
-        else:
-            # choice is the modification request
-            modification_request = choice
+        # If result is a string, it's a modification request
+        if isinstance(result, str):
+            modification_request = result
 
             # Save to versioned pr file
             pr_dir = self.issue_dir / "pr"
@@ -366,6 +345,21 @@ class PRPhase(Phase):
                 message=f"Local review completed - modification requested (saved to {pr_file.name})",
                 data={"status_code": PhaseStatusCode.NEEDS_CHANGES.value, "pr_file": str(pr_file)},
             )
+
+        # Otherwise, it's a PhaseResult (confirm or reject)
+        # Add custom messages for local review
+        if result.status == PhaseStatus.COMPLETED:
+            console.print()
+            console.print("[green]✓ Changes confirmed![/green]")
+            console.print()
+            console.print("[bold]Next step:[/bold] cafe close")
+            console.print()
+        elif result.status == PhaseStatus.FAILED:
+            console.print()
+            console.print("[red]✗ Changes rejected[/red]")
+            console.print()
+
+        return result
 
     def _get_branch_name(self) -> str:
         """Get branch name based on workflow mode.
