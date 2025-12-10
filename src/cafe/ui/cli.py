@@ -928,14 +928,14 @@ def close() -> None:
                     # Ensure repo issue dir exists
                     repo_issue_dir.mkdir(parents=True, exist_ok=True)
 
-                    # Copy all subdirectories (spec/, plan/, sessions/, etc.) from worktree to repo root
+                    # Copy all subdirectories and files from worktree to repo root
                     for item in worktree_issue_dir.iterdir():
                         if item.is_dir():
                             dest = repo_issue_dir / item.name
                             if dest.exists():
                                 shutil.rmtree(dest)
                             shutil.copytree(item, dest)
-                        elif item.name != "config.yaml":  # Don't overwrite config.yaml
+                        else:
                             shutil.copy2(item, repo_issue_dir / item.name)
 
                 console.print(f"[green]✓ Synced issue data to repo root[/green]")
