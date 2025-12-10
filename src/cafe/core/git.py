@@ -165,6 +165,17 @@ class GitOperations:
         """
         self.run_git("pull")
 
+    def merge(self, branch_name: str) -> None:
+        """Merge a branch into current branch.
+
+        Args:
+            branch_name: Name of the branch to merge
+
+        Raises:
+            GitError: If merge fails
+        """
+        self.run_git("merge", branch_name)
+
     def get_main_branch(self) -> str:
         """Get the main branch name (main or master).
 
@@ -173,9 +184,7 @@ class GitOperations:
         """
         try:
             # Try to get default branch from remote
-            output = self.run_git(
-                "symbolic-ref", "refs/remotes/origin/HEAD", "--short"
-            )
+            output = self.run_git("symbolic-ref", "refs/remotes/origin/HEAD", "--short")
             # Output format: "origin/main" -> "main"
             return output.split("/")[-1]
         except GitError:
@@ -210,13 +219,12 @@ class GitOperations:
                 return []
 
             commits = []
-            for line in output.split('\n'):
+            for line in output.split("\n"):
                 if line.strip():
-                    parts = line.split(' ', 1)
-                    commits.append({
-                        "hash": parts[0],
-                        "message": parts[1] if len(parts) > 1 else ""
-                    })
+                    parts = line.split(" ", 1)
+                    commits.append(
+                        {"hash": parts[0], "message": parts[1] if len(parts) > 1 else ""}
+                    )
             return commits
         except GitError:
             return []
@@ -282,7 +290,7 @@ class GitOperations:
             worktrees = []
             current_worktree = {}
 
-            for line in output.split('\n'):
+            for line in output.split("\n"):
                 line = line.strip()
                 if not line:
                     # 空行表示一個 worktree 結束
