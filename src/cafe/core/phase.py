@@ -329,16 +329,36 @@ class Phase(ABC):
 
             print(f"⚠️  Agent execution failed: {e}")
 
-            # 4a. 檢查 agent 是否寫入輸出檔案
+            # 4a. Check if it's a rate limit error - fail immediately without recovery
+            if isinstance(e, AgentExecutionError) and hasattr(e, "error_type") and e.error_type == "rate_limit":
+                print(f"❌ Rate limit error detected - stopping execution")
+
+                # Update iteration history with error info
+                if iteration_file.exists():
+                    with open(iteration_file, "r", encoding="utf-8") as f:
+                        history_data = json.load(f)
+
+                    history_data["response"] = None
+                    history_data["status_code"] = None
+                    history_data["error"] = str(e)
+                    history_data["error_type"] = "rate_limit"
+
+                    with open(iteration_file, "w", encoding="utf-8") as f:
+                        json.dump(history_data, f, ensure_ascii=False, indent=2)
+
+                # Re-raise immediately without recovery attempt
+                raise
+
+            # 4b. 檢查 agent 是否寫入輸出檔案
             written_files = self._detect_written_output_files()
 
-            # 4b. 嘗試從寫入的檔案恢復 response
+            # 4c. 嘗試從寫入的檔案恢復 response
             recovered_response, recovered_status_code = self._recover_from_written_files(
                 written_files,
                 valid_status_codes,
             )
 
-            # 4c. 建立 error log 檔案用於除錯
+            # 4d. 建立 error log 檔案用於除錯
             error_log_file = Path(self.history_dir) / f"execution_error_{self.iteration:03d}.log"
             error_log_file.parent.mkdir(parents=True, exist_ok=True)
             error_log_file.write_text(
@@ -351,7 +371,7 @@ class Phase(ABC):
             )
 
             if recovered_response and recovered_status_code:
-                # 4d. 恢復成功 - 視為部分成功
+                # 4e. 恢復成功 - 視為部分成功
                 print(f"✅ Recovered response from {written_files[0].name}")
                 print(f"   Status code: {recovered_status_code.value}")
 
@@ -391,7 +411,7 @@ class Phase(ABC):
                 # 返回恢復的結果
                 return response, status_code
             else:
-                # 4e. 恢復失敗 - 更新 history 並 re-raise
+                # 4f. 恢復失敗 - 更新 history 並 re-raise
                 print(f"❌ Could not recover from error")
 
                 # 更新 iteration history 包含錯誤資訊與 CLI 參數

@@ -619,7 +619,10 @@ class AgentExecutor:
         if result.stderr and "limit reached" in result.stderr.lower():
             print(f"\n❌ Claude API 使用量已達上限\n")
             print(f"錯誤訊息: {result.stderr.strip()}\n")
-            raise AgentExecutionError(f"Claude API rate limit reached: {result.stderr}")
+            raise AgentExecutionError(
+                f"Claude API rate limit reached: {result.stderr}",
+                error_type="rate_limit"
+            )
 
         try:
             response_data = json.loads(result.stdout)
@@ -631,9 +634,10 @@ class AgentExecutor:
                 if "limit" in error_msg.lower():
                     print(f"\n❌ Claude API 使用量已達上限\n")
                     print(f"錯誤訊息: {error_msg}\n")
+                    raise AgentExecutionError(f"Claude API error: {error_msg}", error_type="rate_limit")
                 else:
                     print(f"\n⚠️  Claude API Error: {error_msg}\n")
-                raise AgentExecutionError(f"Claude API error: {error_msg}")
+                    raise AgentExecutionError(f"Claude API error: {error_msg}")
 
             session_id = response_data.get("session_id")
             if not session_id:
