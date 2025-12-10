@@ -169,13 +169,27 @@ class DevelopPhase(Phase):
         return review_dir / "review.md"
 
     def _check_review_feedback_exists(self) -> bool:
-        """檢查是否存在 review feedback.
+        """檢查是否存在需要處理的 review feedback.
+
+        只有當 review file 存在且狀態不是 CONFIRMED 時才返回 True。
+        如果 review 已經 CONFIRMED，表示已經通過，不需要再修正。
 
         Returns:
-            True if review.md exists, False otherwise
+            True if review.md exists and status is not CONFIRMED, False otherwise
         """
         review_file = self._get_review_file_path()
-        return review_file.exists()
+        if not review_file.exists():
+            return False
+
+        # Check review status
+        review_status = self._load_review_status()
+        if review_status:
+            status_code = review_status.get("status_code")
+            # If review is CONFIRMED, no need to address it
+            if status_code == "CAFE_CONFIRMED":
+                return False
+
+        return True
 
     def _load_review_status(self) -> Optional[Dict[str, Any]]:
         """Load review phase status from status.json.
