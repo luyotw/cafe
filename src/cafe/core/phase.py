@@ -481,8 +481,9 @@ class Phase(ABC):
             print(f"\n⚠️  Agent 回應沒有狀態碼，發送繼續訊息...")
             analysis_attempted = True
             try:
-                # 發送簡單的繼續提示（所有 CLI 都支援 session resume）
-                continue_prompt = "若完成了就回應狀態碼，未完成就繼續"
+                # 發送繼續提示，並附加原本的 prompt 作為參考
+                # 這樣即使 session 被重新建立，agent 也能理解完整的 context
+                continue_prompt = f"若完成了就回應狀態碼，未完成就繼續\n\n以下是原本的任務說明供參考：\n\n{prompt}"
                 continue_response, _, _, _, _ = self.agent_manager.execute(
                     agent_name,
                     continue_prompt,
