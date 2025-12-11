@@ -329,7 +329,12 @@ class Phase(ABC):
 
             print(f"⚠️  Agent execution failed: {e}")
 
-            # 4a. Check if it's a rate limit error - fail immediately without recovery
+            # 4a. Check if it's a CLI not found error - fail immediately without recovery
+            if isinstance(e, AgentExecutionError) and hasattr(e, "error_type") and e.error_type == "cli_not_found":
+                print(f"❌ CLI tool not found - stopping execution")
+                raise
+
+            # 4b. Check if it's a rate limit error - fail immediately without recovery
             if isinstance(e, AgentExecutionError) and hasattr(e, "error_type") and e.error_type == "rate_limit":
                 print(f"❌ Rate limit error detected - stopping execution")
 

@@ -311,9 +311,11 @@ class AgentExecutor:
         except FileNotFoundError as e:
             # CLI command not found - provide user-friendly error
             cli_name = cmd[0] if cmd else "unknown"
-            raise AgentExecutionError(
+            err = AgentExecutionError(
                 f"CLI tool '{cli_name}' not found. Please install it or configure a different agent CLI in .cafe/config.yaml"
-            ) from e
+            )
+            err.error_type = "cli_not_found"
+            raise err from e
 
         # Check stderr first for immediate errors (e.g., session locked)
         import select
