@@ -689,7 +689,6 @@ def prepare(
 
             # Prompt for PR auto-create setting (only for GitHub repos)
             console.print()
-            from cafe.utils.git_utils import is_github_repo
             if is_github_repo():
                 auto_create_pr = typer.confirm(
                     "Automatically create PR on GitHub after development?",
