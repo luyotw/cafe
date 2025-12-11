@@ -277,7 +277,7 @@ class PRPhase(Phase):
 
         # Get git diff
         try:
-            diff_output = self.git_ops.run_command(f"git diff {self.base_branch}..HEAD")
+            diff_output = self.git_ops.get_diff(self.base_branch, "HEAD")
         except Exception as e:
             return PhaseResult(
                 status=PhaseStatus.FAILED,
