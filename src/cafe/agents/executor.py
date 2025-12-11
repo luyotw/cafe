@@ -259,6 +259,23 @@ class AgentExecutor:
                 # Other error, re-raise
                 raise
 
+    def _is_rate_limit_error(self, error_text: str) -> bool:
+        """Check if error message indicates a rate limit error.
+
+        Args:
+            error_text: Error message text
+
+        Returns:
+            True if it's a rate limit error
+        """
+        error_lower = error_text.lower()
+        return (
+            "limit reached" in error_lower or
+            "ratelimitexceeded" in error_lower or
+            "resource_exhausted" in error_lower or
+            "status 429" in error_lower
+        )
+
     def _execute_with_streaming(
         self,
         cmd: List[str],
@@ -318,7 +335,8 @@ class AgentExecutor:
                     full_stderr = stderr_line + remaining_stderr
 
                     # Check if it's a rate limit error
-                    if "limit reached" in full_stderr.lower():
+                    is_rate_limit = self._is_rate_limit_error(full_stderr)
+                    if is_rate_limit:
                         print(f"\n❌ {cli_name} API 使用量已達上限\n")
                         print(f"錯誤訊息: {full_stderr.strip()}\n")
                         print(f"{'='*80}\n")
@@ -327,6 +345,9 @@ class AgentExecutor:
                     err = AgentExecutionError(
                         f"{cli_name} execution failed: {full_stderr}"
                     )
+                    # Set error_type for rate limit errors
+                    if is_rate_limit:
+                        err.error_type = "rate_limit"
                     # 不包含可執行檔本身（例如 'gemini' / 'claude'）
                     err.cli_command_args = cmd[1:]
                     raise err
@@ -442,13 +463,17 @@ class AgentExecutor:
 
         if returncode != 0:
             # Check if it's a rate limit error
-            if stderr_output and "limit reached" in stderr_output.lower():
+            is_rate_limit = stderr_output and self._is_rate_limit_error(stderr_output)
+            if is_rate_limit:
                 print(f"\n❌ {cli_name} API 使用量已達上限\n")
                 print(f"錯誤訊息: {stderr_output.strip()}\n")
 
             err = AgentExecutionError(
                 f"{cli_name} execution failed with code {returncode}: {stderr_output}"
             )
+            # Set error_type for rate limit errors
+            if is_rate_limit:
+                err.error_type = "rate_limit"
             # 附上實際 CLI 參數，方便 Phase 在錯誤時寫入 iteration history
             err.cli_command_args = cmd[1:]
             raise err
