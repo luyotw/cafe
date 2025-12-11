@@ -100,7 +100,7 @@ class TestPRPhaseLocalReviewMode:
         monkeypatch.chdir(temp_issue_dir.parent.parent.parent)
 
         # Mock git diff output
-        mock_git_ops.run_command.return_value = "diff --git a/file.py b/file.py\n+new line"
+        mock_git_ops.get_diff.return_value = "diff --git a/file.py b/file.py\n+new line"
 
         # Mock github_ops to prevent PR check
         mock_github_ops.check_gh_auth.return_value = False
@@ -122,7 +122,7 @@ class TestPRPhaseLocalReviewMode:
                 result = pr_phase.execute()
 
                 # Verify git diff was called
-                mock_git_ops.run_command.assert_called_with("git diff main..HEAD")
+                mock_git_ops.get_diff.assert_called_with("main", "HEAD")
 
     def test_returns_confirmed_status_on_confirm(self, temp_issue_dir, mock_git_ops, mock_agent_manager,
                                                    mock_permission_handler, mock_github_ops, monkeypatch):
@@ -130,7 +130,7 @@ class TestPRPhaseLocalReviewMode:
         monkeypatch.chdir(temp_issue_dir.parent.parent.parent)
 
         # Mock git diff
-        mock_git_ops.run_command.return_value = "diff content"
+        mock_git_ops.get_diff.return_value = "diff content"
 
         with patch.object(PRPhase, '_get_issue_dir', return_value=temp_issue_dir):
             pr_phase = PRPhase(
@@ -156,7 +156,7 @@ class TestPRPhaseLocalReviewMode:
         monkeypatch.chdir(temp_issue_dir.parent.parent.parent)
 
         # Mock git diff
-        mock_git_ops.run_command.return_value = "diff content"
+        mock_git_ops.get_diff.return_value = "diff content"
 
         with patch.object(PRPhase, '_get_issue_dir', return_value=temp_issue_dir):
             pr_phase = PRPhase(
@@ -183,7 +183,7 @@ class TestPRPhaseLocalReviewMode:
         modification_request = "Please fix the authentication logic"
 
         # Mock git diff
-        mock_git_ops.run_command.return_value = "diff content"
+        mock_git_ops.get_diff.return_value = "diff content"
 
         with patch.object(PRPhase, '_get_issue_dir', return_value=temp_issue_dir):
             pr_phase = PRPhase(
@@ -216,7 +216,7 @@ class TestPRPhaseLocalReviewMode:
         modification_request = "Please add error handling"
 
         # Mock git diff
-        mock_git_ops.run_command.return_value = "diff content"
+        mock_git_ops.get_diff.return_value = "diff content"
 
         with patch.object(PRPhase, '_get_issue_dir', return_value=temp_issue_dir):
             pr_phase = PRPhase(
