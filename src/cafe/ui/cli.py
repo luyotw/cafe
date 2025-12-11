@@ -650,11 +650,16 @@ def prepare(
             display = Display()
             github_ops = GitHubOps()
 
-            # Prompt for input method and issue ID
-            input_method, issue_id = prompt_for_input_method(display, github_ops)
-            spec_config["input_method"] = input_method
-            if issue_id is not None:
-                spec_config["issue_id"] = str(issue_id)
+            # Prompt for input method and issue ID (only for GitHub repos)
+            from cafe.utils.git_utils import is_github_repo
+            if is_github_repo():
+                input_method, issue_id = prompt_for_input_method(display, github_ops)
+                spec_config["input_method"] = input_method
+                if issue_id is not None:
+                    spec_config["issue_id"] = str(issue_id)
+            else:
+                # Non-GitHub repo: use manual input only
+                spec_config["input_method"] = "manual"
 
             # Prompt for rigor level
             rigor = prompt_for_rigor(display)
@@ -682,13 +687,18 @@ def prepare(
                     "[dim]    Tip: Use 'cafe template add <source> <name>' to add templates.[/dim]"
                 )
 
-            # Prompt for PR auto-create setting
+            # Prompt for PR auto-create setting (only for GitHub repos)
             console.print()
-            auto_create_pr = typer.confirm(
-                "Automatically create PR on GitHub after development?",
-                default=True
-            )
-            pr_config["auto_create"] = auto_create_pr
+            from cafe.utils.git_utils import is_github_repo
+            if is_github_repo():
+                auto_create_pr = typer.confirm(
+                    "Automatically create PR on GitHub after development?",
+                    default=True
+                )
+                pr_config["auto_create"] = auto_create_pr
+            else:
+                # Non-GitHub repo: disable PR creation
+                pr_config["auto_create"] = False
 
         # 7. Save config.yaml (in worktree's issue dir if using worktree, else local)
         config_file = issue_dir / "config.yaml"

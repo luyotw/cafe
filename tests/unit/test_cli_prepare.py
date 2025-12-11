@@ -31,7 +31,8 @@ def change_test_dir(tmp_path, monkeypatch):
 @pytest.fixture
 def mock_git_ops():
     """Create a mock GitOperations instance."""
-    with patch('cafe.ui.cli.GitOperations') as MockGitOperations:
+    with patch('cafe.ui.cli.GitOperations') as MockGitOperations, \
+         patch('cafe.utils.git_utils.is_github_repo') as mock_is_github_repo:
         mock_git = MagicMock()
         MockGitOperations.return_value = mock_git
 
@@ -41,6 +42,9 @@ def mock_git_ops():
         mock_git.branch_exists.return_value = False
         mock_git.create_branch.return_value = None
         mock_git.checkout_branch.return_value = None
+
+        # Mock is_github_repo to return True by default (GitHub repo)
+        mock_is_github_repo.return_value = True
 
         yield mock_git
 

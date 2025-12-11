@@ -390,3 +390,19 @@ def get_github_repo_name(cwd: Optional[Path] = None) -> str:
         return f"{owner}/{repo}"
     else:
         raise ValueError(f"Invalid GitHub URL: {remote_url}")
+
+
+def is_github_repo(cwd: Optional[Path] = None) -> bool:
+    """Check if the repository has a GitHub remote.
+
+    Args:
+        cwd: Working directory (default: current directory)
+
+    Returns:
+        True if a github.com remote is found, False otherwise.
+    """
+    try:
+        get_github_repo_name(cwd=cwd)
+        return True
+    except (FileNotFoundError, ValueError):
+        return False
