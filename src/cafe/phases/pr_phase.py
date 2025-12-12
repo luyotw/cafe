@@ -334,8 +334,16 @@ class PRPhase(Phase):
             # Save modification request
             pr_file.write_text(modification_request)
 
+            # Get relative path (works with both regular and worktree modes)
+            from cafe.utils.git_utils import to_cwd_relative_path
+            try:
+                pr_file_display = to_cwd_relative_path(pr_file)
+            except ValueError:
+                # Fallback to absolute path if not under cwd
+                pr_file_display = str(pr_file)
+
             console.print()
-            console.print(f"[green]✓ Modification request saved to {pr_file.relative_to(Path.cwd())}[/green]")
+            console.print(f"[green]✓ Modification request saved to {pr_file_display}[/green]")
             console.print()
             console.print("[bold]Next step:[/bold] cafe develop --auto (or cafe make)")
             console.print()

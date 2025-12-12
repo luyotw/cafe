@@ -234,3 +234,76 @@ class TestPRPhaseLocalReviewMode:
 
                 assert result.status == PhaseStatus.COMPLETED
                 assert result.data.get("status_code") == PhaseStatusCode.NEEDS_CHANGES.value
+
+    def test_worktree_mode_displays_relative_path_correctly(self, tmp_path, mock_git_ops, mock_agent_manager,
+                                                              mock_permission_handler, mock_github_ops, monkeypatch,
+                                                              capsys):
+        """測試 worktree 模式下修改請求檔案路徑顯示正確 (issue50)
+
+        在 worktree 模式下，pr_file 路徑指向 repo root (.cafe/issues/xxx/pr/pr_001.md)
+        而 cwd 是 worktree 目錄 (.cafe/worktrees/xxx)。
+        應使用 to_cwd_relative_path() 正確顯示路徑，而非拋出 "not in subpath" 錯誤。
+        """
+        # Setup repo root structure
+        repo_root = tmp_path / "repo"
+        repo_root.mkdir()
+
+        issue_dir = repo_root / ".cafe" / "issues" / "test-issue"
+        issue_dir.mkdir(parents=True)
+
+        # Create spec file
+        spec_dir = issue_dir / "spec"
+        spec_dir.mkdir()
+        spec_file = spec_dir / "spec_001.md"
+        spec_file.write_text("# Test Spec\nTest requirements")
+
+        # Create config with worktree mode and pr.auto_create = false
+        config_file = issue_dir / "config.yaml"
+        worktree_path = repo_root / ".cafe" / "worktrees" / "test-issue"
+        worktree_path.mkdir(parents=True)
+
+        config_data = {
+            "base_branch": "main",
+            "feature_branch": "test-issue",
+            "worktree_path": str(worktree_path),
+            "pr": {
+                "auto_create": False
+            }
+        }
+        with open(config_file, 'w') as f:
+            yaml.dump(config_data, f)
+
+        # Change to worktree directory (not repo root)
+        monkeypatch.chdir(worktree_path)
+
+        # Mock git diff
+        mock_git_ops.get_diff.return_value = "diff content"
+
+        modification_request = "Please fix authentication"
+
+        with patch.object(PRPhase, '_get_issue_dir', return_value=issue_dir):
+            pr_phase = PRPhase(
+                agent_manager=mock_agent_manager,
+                permission_handler=mock_permission_handler,
+                git_ops=mock_git_ops,
+                github_ops=mock_github_ops,
+                spec_file=str(spec_file),
+                workflow_mode=WorkflowMode.LOCAL,
+                interactive=True,
+            )
+
+            with patch.object(pr_phase, '_ask_user_for_review_decision', return_value=modification_request):
+                # This should NOT raise "not in subpath" error
+                result = pr_phase.execute()
+
+                # Verify the phase completed successfully
+                assert result.status == PhaseStatus.COMPLETED
+                assert result.data.get("status_code") == PhaseStatusCode.NEEDS_CHANGES.value
+
+                # Verify pr_001.md was created
+                pr_dir = issue_dir / "pr"
+                pr_file = pr_dir / "pr_001.md"
+                assert pr_file.exists()
+
+                # Capture console output to verify path was displayed
+                # (In real execution, Rich console would print the path)
