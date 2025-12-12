@@ -264,6 +264,37 @@ class DevelopPhase(Phase):
         if not existing_progress or existing_progress.status != PhaseStatus.COMPLETED:
             return None
 
+        # Check if PR phase has requested changes after this develop (both GitHub and local mode)
+        # If PR is newer than last develop with NEEDS_CHANGES, we need to execute develop
+        # If develop is newer than PR, changes have been addressed
+        pr_status_file = self.issue_dir / "pr" / "status.json"
+        if pr_status_file.exists():
+            try:
+                from datetime import datetime
+                from cafe.core.status_codes import PhaseStatusCode
+
+                with open(pr_status_file, 'r', encoding='utf-8') as f:
+                    pr_status = json.load(f)
+
+                pr_status_code = pr_status.get("status_code")
+                pr_timestamp = datetime.fromisoformat(pr_status["timestamp"])
+                develop_timestamp = existing_progress.timestamp
+
+                # If PR has NEEDS_CHANGES and is newer than develop, need to execute
+                if pr_status_code == PhaseStatusCode.NEEDS_CHANGES.value and pr_timestamp > develop_timestamp:
+                    print(f"ℹ️  PR feedback detected - changes requested")
+                    return None  # Continue execution
+
+                # If develop is newer than PR, changes have been addressed
+                if develop_timestamp > pr_timestamp:
+                    # Check if there's a newer PR status we haven't seen yet
+                    # (This shouldn't happen in normal flow, but just in case)
+                    pass
+
+            except Exception:
+                # If error, continue with normal flow
+                pass
+
         # If pr_number is provided, always continue execution (user wants to address PR comments)
         if self.pr_number:
             print(f"ℹ️  PR #{self.pr_number} comments will be addressed")

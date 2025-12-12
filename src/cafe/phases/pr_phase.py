@@ -449,8 +449,23 @@ class PRPhase(Phase):
                         )
                     # If develop is newer, continue with normal review flow
 
-                # If previously NEEDS_CHANGES, continue with review
-                # (develop may have addressed the changes, let user review again)
+                # If previously NEEDS_CHANGES, check if develop has addressed the changes
+                elif previous_status_code == PhaseStatusCode.NEEDS_CHANGES.value:
+                    if not self._check_if_develop_is_newer_than_pr():
+                        # Develop hasn't run since last PR review, no new changes to review
+                        console.print()
+                        console.print("[bold yellow]⏳ Waiting for changes to be addressed...[/bold yellow]")
+                        console.print()
+                        console.print("[dim]Last PR review requested changes, but no new development since then.[/dim]")
+                        console.print("[dim]Next step: Run [bold]cafe develop --auto[/bold] to address the changes[/dim]")
+                        console.print()
+
+                        return PhaseResult(
+                            status=PhaseStatus.COMPLETED,
+                            message="Waiting for changes to be addressed",
+                            data={"status_code": PhaseStatusCode.NEEDS_CHANGES.value, "local_review": True},
+                        )
+                    # If develop is newer, continue with normal review flow (developer may have addressed changes)
 
             except Exception:
                 # If error reading status, continue with normal flow
