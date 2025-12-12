@@ -47,15 +47,31 @@ class TestVersionedFileMethods:
         iteration = phase._get_next_iteration_number("spec", phase_dir)
         assert iteration == 1
 
-    def test_get_next_iteration_number_with_existing_files(self, tmp_path: Path):
-        """測試 _get_next_iteration_number() 正確計算編號。"""
+    def test_get_next_iteration_number_no_history_dir(self, tmp_path: Path):
+        """測試 _get_next_iteration_number() 在沒有 history 目錄時返回 1。"""
         phase = ConcretePhase()
         phase_dir = tmp_path / "spec"
         phase_dir.mkdir(parents=True)
 
-        # Create some existing files
+        # Create some output files but no history directory
         (phase_dir / "spec_001.md").touch()
         (phase_dir / "spec_002.md").touch()
+
+        # Should return 1 because there's no history
+        iteration = phase._get_next_iteration_number("spec", phase_dir)
+        assert iteration == 1
+
+    def test_get_next_iteration_number_with_existing_files(self, tmp_path: Path):
+        """測試 _get_next_iteration_number() 基於 iteration history 正確計算編號。"""
+        phase = ConcretePhase()
+        phase_dir = tmp_path / "spec"
+        phase_dir.mkdir(parents=True)
+
+        # Create history directory with iteration files
+        history_dir = phase_dir / "history"
+        history_dir.mkdir(parents=True)
+        (history_dir / "iteration_001.json").touch()
+        (history_dir / "iteration_002.json").touch()
 
         iteration = phase._get_next_iteration_number("spec", phase_dir)
         assert iteration == 3
@@ -66,12 +82,38 @@ class TestVersionedFileMethods:
         phase_dir = tmp_path / "spec"
         phase_dir.mkdir(parents=True)
 
-        # Create 999 files
+        # Create history directory with 999 iteration files
+        history_dir = phase_dir / "history"
+        history_dir.mkdir(parents=True)
         for i in range(1, 1000):
-            (phase_dir / f"spec_{i:03d}.md").touch()
+            (history_dir / f"iteration_{i:03d}.json").touch()
 
         with pytest.raises(ValueError, match="不可超過 999"):
             phase._get_next_iteration_number("spec", phase_dir)
+
+    def test_get_next_iteration_number_ignores_orphaned_output_files(self, tmp_path: Path):
+        """測試 _get_next_iteration_number() 忽略中斷執行時殘留的輸出檔案。
+
+        這個測試驗證當有多餘的輸出檔案（如 plan_002.md, plan_003.md）
+        但 iteration history 只有 iteration_001.json 時，版本號應該基於 history 而不是輸出檔案。
+        """
+        phase = ConcretePhase()
+        phase_dir = tmp_path / "spec"
+        phase_dir.mkdir(parents=True)
+
+        # Create orphaned output files (from interrupted executions)
+        (phase_dir / "spec_001.md").touch()
+        (phase_dir / "spec_002.md").touch()
+        (phase_dir / "spec_003.md").touch()
+
+        # But only have 1 iteration in history
+        history_dir = phase_dir / "history"
+        history_dir.mkdir(parents=True)
+        (history_dir / "iteration_001.json").touch()
+
+        # Should return 2 (based on history), not 4 (based on output files)
+        iteration = phase._get_next_iteration_number("spec", phase_dir)
+        assert iteration == 2
 
     def test_get_next_iteration_number_nonexistent_dir(self, tmp_path: Path):
         """測試 _get_next_iteration_number() 在目錄不存在時返回 1。"""

@@ -1708,9 +1708,14 @@ class Phase(ABC):
         if not phase_dir.exists():
             return 1
 
-        # Count existing {phase_name}_*.md files
-        existing_files = list(phase_dir.glob(f"{phase_name}_*.md"))
-        count = len(existing_files)
+        # Count based on iteration history files, not output files
+        # This prevents interrupted executions from affecting version numbers
+        history_dir = phase_dir / "history"
+        if not history_dir.exists():
+            return 1
+
+        existing_iterations = list(history_dir.glob("iteration_*.json"))
+        count = len(existing_iterations)
 
         # Check if exceeds 999
         if count >= 999:

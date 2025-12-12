@@ -91,9 +91,11 @@ class TestSpecPhaseReturnData:
         spec_dir = issue_dir / "spec"
         spec_dir.mkdir(parents=True, exist_ok=True)
 
-        # 創建 999 個假檔案（模擬已達上限）
+        # 創建 999 個 iteration history 檔案（模擬已達上限）
+        history_dir = spec_dir / "history"
+        history_dir.mkdir(parents=True, exist_ok=True)
         for i in range(1, 1000):
-            (spec_dir / f"spec_{i:03d}.md").touch()
+            (history_dir / f"iteration_{i:03d}.json").write_text(f'{{"iteration": {i}}}')
 
         monkeypatch.chdir(tmp_path)
 

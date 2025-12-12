@@ -143,8 +143,8 @@ class ReviewPhase(Phase):
                         },
                     )
 
-            # Calculate iteration number based on existing review files
-            self.iteration = self._get_next_iteration_number()
+            # Calculate iteration number based on iteration history
+            self.iteration = self._get_next_iteration_number("review", self.review_dir)
 
             # Prepare allowed tools with edit permission for review file
             review_file_name = f"review_{self.iteration:03d}.md"
@@ -269,16 +269,6 @@ class ReviewPhase(Phase):
         self.review_dir = review_dir  # Store for use in other methods
         self.history_dir = review_dir / "history"
         self.history_dir.mkdir(parents=True, exist_ok=True)
-
-    def _get_next_iteration_number(self) -> int:
-        """Get next iteration number based on existing review files.
-
-        Returns:
-            Next iteration number (1-based)
-        """
-        # Count existing review_*.md files in review directory
-        existing_reviews = list(self.review_dir.glob("review_*.md"))
-        return len(existing_reviews) + 1
 
     def _load_pr_comments(self) -> tuple[str, int]:
         """Load PR comments if pr_number is provided.

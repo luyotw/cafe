@@ -77,10 +77,15 @@ class TestReviewIterationNumbering:
         plan_file.parent.mkdir(parents=True, exist_ok=True)
         plan_file.write_text("Plan")
 
-        # Create existing review file
+        # Create existing review file and iteration history
         review_dir = spec_file.parent.parent / "review"
         review_dir.mkdir(parents=True, exist_ok=True)
         (review_dir / "review_001.md").write_text("First review")
+
+        # Create iteration history
+        history_dir = review_dir / "history"
+        history_dir.mkdir(parents=True, exist_ok=True)
+        (history_dir / "iteration_001.json").write_text('{"iteration": 1}')
 
         agent_manager = MagicMock(spec=AgentManager)
         setup_agent_manager_mock(agent_manager)
@@ -1080,6 +1085,12 @@ class TestReviewPhaseIterationRestriction:
         for i in range(1, 4):
             review_file = review_dir / f"review_{i:03d}.md"
             review_file.write_text(f"Review {i}")
+
+        # Create iteration history
+        history_dir = review_dir / "history"
+        history_dir.mkdir(parents=True, exist_ok=True)
+        for i in range(1, 4):
+            (history_dir / f"iteration_{i:03d}.json").write_text(f'{{"iteration": {i}}}')
 
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = ("CAFE_CONFIRMED\n審查通過", TokenUsage(), [], None, [])
