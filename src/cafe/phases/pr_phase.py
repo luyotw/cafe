@@ -100,6 +100,112 @@ class PRPhase(Phase):
         self.phase_name = "pr"
         self.iteration = self._load_iteration_counter()
 
+    def _get_pr_review_timestamp(self) -> Optional["datetime"]:
+        """Get PR review timestamp.
+
+        For GitHub mode: use latest PR comment timestamp
+        For local mode: use pr/status.json timestamp
+
+        Returns:
+            datetime object of PR review, or None if no review exists
+        """
+        from datetime import datetime
+
+        # Try GitHub PR comments first (if pr_number is available)
+        if hasattr(self, 'pr_number') and self.pr_number:
+            try:
+                from cafe.utils.github import get_pr_comments
+                comments = get_pr_comments(self.pr_number)
+                if comments:
+                    latest_timestamp = None
+                    for comment in comments:
+                        timestamp_str = comment.created_at
+                        if timestamp_str.endswith('Z'):
+                            timestamp_str = timestamp_str.replace('Z', '+00:00')
+                        comment_time = datetime.fromisoformat(timestamp_str)
+
+                        if latest_timestamp is None or comment_time > latest_timestamp:
+                            latest_timestamp = comment_time
+
+                    if latest_timestamp:
+                        return latest_timestamp
+            except Exception:
+                pass  # Fall through to local mode
+
+        # Fall back to local pr/status.json
+        pr_status_file = self.issue_dir / "pr" / "status.json"
+        if pr_status_file.exists():
+            try:
+                with open(pr_status_file, encoding='utf-8') as f:
+                    pr_data = json.load(f)
+                return datetime.fromisoformat(pr_data["timestamp"])
+            except Exception:
+                pass
+
+        return None
+
+    def _check_if_develop_is_newer_than_pr(self) -> bool:
+        """檢查 develop phase 的時間戳記是否比上次 PR review 更新。
+
+        Works for both GitHub mode (PR comments) and local mode (pr/status.json).
+
+        Returns:
+            True 如果 develop 更新（需要重新 review），False 否則
+        """
+        from datetime import datetime
+
+        try:
+            # Get develop timestamp
+            develop_status_file = self.issue_dir / "develop" / "status.json"
+            if not develop_status_file.exists():
+                return False  # No develop status, no need to re-review
+
+            with open(develop_status_file, encoding='utf-8') as f:
+                develop_data = json.load(f)
+            develop_time = datetime.fromisoformat(develop_data["timestamp"])
+
+            # Get PR review timestamp (GitHub comments or local status.json)
+            pr_time = self._get_pr_review_timestamp()
+            if pr_time is None:
+                # First PR review, need to review
+                return True
+
+            # If develop is newer than PR review, need to re-review
+            return develop_time > pr_time
+
+        except Exception:
+            # On error, conservatively return True (re-review)
+            return True
+
+    def _save_progress(self, status_code) -> None:
+        """Save phase progress to status.json.
+
+        Args:
+            status_code: Phase status code (CONFIRMED or NEEDS_CHANGES for PR phase)
+        """
+        from datetime import datetime
+        from cafe.core.types import PhaseProgress
+        from cafe.core.status_codes import PhaseStatusCode
+
+        status_file = self.issue_dir / "pr" / "status.json"
+        status_file.parent.mkdir(parents=True, exist_ok=True)
+
+        # Both CONFIRMED and NEEDS_CHANGES are completion statuses for PR
+        complete_codes = [PhaseStatusCode.CONFIRMED, PhaseStatusCode.NEEDS_CHANGES]
+        phase_status = PhaseStatus.COMPLETED if status_code in complete_codes else PhaseStatus.IN_PROGRESS
+
+        progress = PhaseProgress(
+            phase=self.phase_name,
+            status=phase_status,
+            status_code=status_code.value,
+            timestamp=datetime.now(),
+            iteration=self.iteration,
+            message=f"PR phase completed with {status_code.value}" if phase_status == PhaseStatus.COMPLETED else f"Iteration {self.iteration}",
+        )
+
+        with open(status_file, 'w', encoding='utf-8') as f:
+            json.dump(progress.to_dict(), f, ensure_ascii=False, indent=2)
+
     def execute(self) -> PhaseResult:
         """Execute PR creation phase.
 
@@ -113,7 +219,15 @@ class PRPhase(Phase):
 
             # If pr.auto_create is False, use local review mode
             if pr_auto_create is False:
-                return self._execute_local_review_mode()
+                result = self._execute_local_review_mode()
+                # Save progress if there's a status code
+                if result.data and "status_code" in result.data:
+                    from cafe.core.status_codes import PhaseStatusCode
+                    status_code_str = result.data["status_code"]
+                    # Convert string to PhaseStatusCode enum
+                    status_code = PhaseStatusCode(status_code_str)
+                    self._save_progress(status_code)
+                return result
 
             # Otherwise, continue with GitHub PR creation
             # Check gh CLI authentication status
@@ -203,11 +317,17 @@ class PRPhase(Phase):
                 # Update existing PR
                 self.github_ops.update_pr(pr_number, title=pr_title, body=pr_body)
 
-                return PhaseResult(
+                result = PhaseResult(
                     status=PhaseStatus.COMPLETED,
                     message=f"Pull Request #{pr_number} updated successfully",
-                    data={"pr_number": pr_number, "pr_url": pr_url, "branch": branch_name},
+                    data={"pr_number": pr_number, "pr_url": pr_url, "branch": branch_name, "status_code": "CAFE_CONFIRMED"},
                 )
+
+                # Save progress for GitHub PR mode
+                from cafe.core.status_codes import PhaseStatusCode
+                self._save_progress(PhaseStatusCode.CONFIRMED)
+
+                return result
 
             # PR doesn't exist, create new one
             result, content = self._prepare_pr_content()
@@ -245,11 +365,17 @@ class PRPhase(Phase):
                     console = Console()
                     console.print(f"[yellow]⚠️  Warning: Failed to add PR link to issue #{self.issue_id}: {e}[/yellow]")
 
-            return PhaseResult(
+            result = PhaseResult(
                 status=PhaseStatus.COMPLETED,
                 message=f"Pull Request #{pr_number} created successfully",
-                data={"pr_number": pr_number, "pr_url": pr_url, "branch": branch_name},
+                data={"pr_number": pr_number, "pr_url": pr_url, "branch": branch_name, "status_code": "CAFE_CONFIRMED"},
             )
+
+            # Save progress for GitHub PR mode
+            from cafe.core.status_codes import PhaseStatusCode
+            self._save_progress(PhaseStatusCode.CONFIRMED)
+
+            return result
 
         except FileNotFoundError as e:
             return PhaseResult(
@@ -274,6 +400,39 @@ class PRPhase(Phase):
         from cafe.core.status_codes import PhaseStatusCode
 
         console = Console()
+
+        # Check if we already have a status from previous run
+        pr_dir = self.issue_dir / "pr"
+        status_file = pr_dir / "status.json"
+
+        if status_file.exists():
+            try:
+                with open(status_file, 'r', encoding='utf-8') as f:
+                    status_data = json.load(f)
+
+                previous_status_code = status_data.get("status_code")
+
+                # If previously CONFIRMED, check if develop has newer changes
+                if previous_status_code == PhaseStatusCode.CONFIRMED.value:
+                    if not self._check_if_develop_is_newer_than_pr():
+                        # No new changes, just return completion message
+                        console.print()
+                        console.print("[bold green]✅ Local review already completed and confirmed![/bold green]")
+                        console.print()
+
+                        return PhaseResult(
+                            status=PhaseStatus.COMPLETED,
+                            message="Local review completed - changes confirmed",
+                            data={"status_code": PhaseStatusCode.CONFIRMED.value, "local_review": True},
+                        )
+                    # If develop is newer, continue with normal review flow
+
+                # If previously NEEDS_CHANGES, continue with review
+                # (develop may have addressed the changes, let user review again)
+
+            except Exception:
+                # If error reading status, continue with normal flow
+                pass
 
         # Get git diff
         try:
