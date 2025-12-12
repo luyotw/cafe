@@ -148,7 +148,7 @@ class PlanPhase(Phase):
                 if is_first_iteration and not self.template_path:
                     if self.interactive:
                         # Interactive mode: prompt for template selection
-                        from cafe.utils.template import TemplateManager
+                        from cafe.templates.manager import TemplateManager
                         from cafe.ui.template_selector import select_template
                         from rich.console import Console
                         console = Console()
@@ -685,7 +685,7 @@ class PlanPhase(Phase):
 
             if "template" in plan_config:
                 # Resolve template name to path
-                from cafe.utils.template import TemplateManager
+                from cafe.templates.manager import TemplateManager
                 template_manager = TemplateManager(".cafe")
                 template_path = template_manager.get_template_path(plan_config["template"])
                 if template_path and template_path.exists():

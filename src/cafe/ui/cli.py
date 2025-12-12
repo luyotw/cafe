@@ -22,7 +22,7 @@ from cafe.phases.review_phase import ReviewPhase
 from cafe.utils.config import ConfigManager
 from cafe.utils.git_utils import is_branch_initialized
 from cafe.utils.github import GitHubOps, GitHubError
-from cafe.utils.template import TemplateManager
+from cafe.templates.manager import TemplateManager
 from cafe.ui.template_selector import select_template
 from cafe.ui.phase_prompts import prompt_for_input_method, prompt_for_rigor
 from cafe.ui.display import Display

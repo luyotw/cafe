@@ -115,9 +115,15 @@ class TemplateManager:
         if default_template_path.exists():
             return
 
-        # Find the package template directory
-        # The template.py is in src/cafe/utils/, so package templates are in src/cafe/templates/
-        package_template = Path(__file__).parent.parent / "templates" / "plan" / "default.md"
+        # Find the template directory at repository root
+        # The manager.py is in src/cafe/templates/, so root templates are at ../../../templates/
+        # Path(__file__) = src/cafe/templates/manager.py
+        # .parent = src/cafe/templates/
+        # .parent.parent = src/cafe/
+        # .parent.parent.parent = src/
+        # .parent.parent.parent.parent = repository root
+        repo_root = Path(__file__).parent.parent.parent.parent
+        package_template = repo_root / "templates" / "plan" / "default.md"
 
         if package_template.exists():
             shutil.copy2(package_template, default_template_path)
