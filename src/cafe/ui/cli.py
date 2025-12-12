@@ -2460,24 +2460,55 @@ def pr(
         if result.status.value == "completed":
             pr_number = result.data.get("pr_number")
             pr_url = result.data.get("pr_url")
+            is_local_review = result.data.get("local_review", False)
+            status_code = result.data.get("status_code")
+
             console.print()
             console.print(f"[bold green]✅ {result.message}![/bold green]")
             console.print()
-            if pr_url:
-                # Show files diff URL for easier review
+
+            if is_local_review:
+                # Local review mode: Show local-specific next steps
+                if status_code == "CAFE_CONFIRMED":
+                    # Read issue config to get base_branch, feature_branch, worktree_path
+                    import yaml
+                    issue_config_file = Path(f".cafe/issues/{issue_name}/config.yaml")
+                    base_branch = "main"
+                    feature_branch = issue_name
+                    worktree_path = None
+
+                    if issue_config_file.exists():
+                        with open(issue_config_file, "r") as f:
+                            issue_config = yaml.safe_load(f)
+                        base_branch = issue_config.get("base_branch", "main")
+                        feature_branch = issue_config.get("feature_branch", issue_name)
+                        worktree_path = issue_config.get("worktree_path")
+
+                    console.print("[dim]Next steps:[/dim]")
+                    console.print(f"[dim]  1. Close issue: [bold]cafe close[/bold][/dim]")
+                    console.print(f"[dim]     - 切換回 {base_branch}[/dim]")
+                    console.print(f"[dim]     - merge {feature_branch}[/dim]")
+                    if worktree_path:
+                        console.print(f"[dim]     - 刪除 {feature_branch} 及 worktree {worktree_path}[/dim]")
+                    else:
+                        console.print(f"[dim]     - 刪除 {feature_branch}[/dim]")
+                    console.print()
+                # NEEDS_CHANGES and USER_REJECTED are already handled in pr_phase.py
+            elif pr_url:
+                # GitHub PR mode: Show PR URL and GitHub-specific next steps
                 files_url = pr_url + "/files"
                 console.print(f"[bold cyan]{files_url}[/bold cyan]")
                 console.print()
-            console.print("[dim]Next steps:[/dim]")
-            console.print(
-                f"[dim]  1. Review PR: open the link above or run [bold]gh pr diff --web[/bold][/dim]"
-            )
-            console.print(
-                f"[dim]  2. If OK: [bold]merge[/bold] the PR, then run [bold]cafe close[/bold][/dim]"
-            )
-            console.print(
-                f"[dim]  3. If issues found: add comments and submit review, then run [bold]cafe develop --auto[/bold] (or [bold]cafe make[/bold])[/dim]"
-            )
+                console.print("[dim]Next steps:[/dim]")
+                console.print(
+                    f"[dim]  1. Review PR: open the link above or run [bold]gh pr diff --web[/bold][/dim]"
+                )
+                console.print(
+                    f"[dim]  2. If OK: [bold]merge[/bold] the PR, then run [bold]cafe close[/bold][/dim]"
+                )
+                console.print(
+                    f"[dim]  3. If issues found: add comments and submit review, then run [bold]cafe develop --auto[/bold] (or [bold]cafe make[/bold])[/dim]"
+                )
         else:
             console.print()
             console.print(f"[bold red]❌ PR phase failed: {result.message}[/bold red]")
