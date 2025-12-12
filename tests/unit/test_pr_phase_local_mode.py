@@ -1,14 +1,19 @@
 """Tests for PRPhase local review mode (issue45)."""
 
+import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch, call
 
 import pytest
 import yaml
+from typer.testing import CliRunner
 
 from cafe.phases.pr_phase import PRPhase
 from cafe.core.types import PhaseStatus, PhaseResult, WorkflowMode
 from cafe.core.status_codes import PhaseStatusCode
+from cafe.ui.cli import app
+
+runner = CliRunner()
 
 
 @pytest.fixture
@@ -307,3 +312,96 @@ class TestPRPhaseLocalReviewMode:
 
                 # Capture console output to verify path was displayed
                 # (In real execution, Rich console would print the path)
+
+
+class TestPRPhaseAutoMode:
+    """測試 PR phase auto mode 自動執行 develop phase (issue50)"""
+
+    def test_auto_mode_executes_develop_on_needs_changes(self, tmp_path, monkeypatch):
+        """測試 cafe pr --auto 在 local review mode 收到 NEEDS_CHANGES 時自動執行 cafe develop --auto"""
+        # Setup repo structure
+        cafe_dir = tmp_path / ".cafe"
+        cafe_dir.mkdir()
+
+        issue_dir = cafe_dir / "issues" / "test-issue"
+        issue_dir.mkdir(parents=True)
+
+        # Create config with pr.auto_create = false (local review mode)
+        config_file = issue_dir / "config.yaml"
+        config_data = {
+            "base_branch": "main",
+            "feature_branch": "test-issue",
+            "pr": {
+                "auto_create": False
+            }
+        }
+        with open(config_file, 'w') as f:
+            yaml.dump(config_data, f)
+
+        # Create global config
+        global_config = cafe_dir / "config.yaml"
+        global_config_data = {
+            "agents": {
+                "pm": {"name": "Roger", "cli": "copilot"},
+                "developer": {"name": "David", "cli": "copilot"},
+                "reviewer": {"name": "Richard", "cli": "copilot"},
+            }
+        }
+        with open(global_config, 'w') as f:
+            yaml.dump(global_config_data, f)
+
+        # Create spec file
+        spec_dir = issue_dir / "spec"
+        spec_dir.mkdir()
+        spec_file = spec_dir / "spec_001.md"
+        spec_file.write_text("# Test Spec")
+
+        # Create plan file (required for PR phase)
+        plan_dir = issue_dir / "plan"
+        plan_dir.mkdir()
+        plan_file = plan_dir / "plan_001.md"
+        plan_file.write_text("# Test Plan")
+
+        monkeypatch.chdir(tmp_path)
+
+        # Mock PRPhase to return NEEDS_CHANGES status
+        with patch('cafe.ui.cli.PRPhase') as MockPRPhase, \
+             patch('cafe.ui.cli.GitOperations') as MockGitOps, \
+             patch('cafe.ui.cli.PermissionHandler'), \
+             patch('cafe.ui.cli._setup_agents'), \
+             patch('cafe.ui.cli.subprocess.run') as mock_subprocess:
+
+            # Setup git ops mock
+            mock_git = MagicMock()
+            MockGitOps.return_value = mock_git
+            mock_git.get_current_branch.return_value = "test-issue"
+
+            # Setup PR phase mock to return NEEDS_CHANGES
+            mock_phase = MagicMock()
+            MockPRPhase.return_value = mock_phase
+
+            mock_result = MagicMock()
+            mock_result.status = PhaseStatus.COMPLETED
+            mock_result.message = "Local review completed - modification requested"
+            mock_result.data = {
+                "status_code": PhaseStatusCode.NEEDS_CHANGES.value,
+                "local_review": True,
+                "pr_file": str(issue_dir / "pr" / "pr_001.md")
+            }
+            mock_phase.execute.return_value = mock_result
+
+            # Mock subprocess to simulate develop execution
+            mock_subprocess.return_value = MagicMock(returncode=0)
+
+            # Execute pr command with --auto
+            result = runner.invoke(app, ["pr", "--auto", "--no-interactive"])
+
+            # Should succeed (exit code 0)
+            assert result.exit_code == 0, f"Command failed with output:\n{result.output}"
+
+            # Verify _execute_next_phase_auto was called with develop
+            # (it calls subprocess.run with develop --auto)
+            assert mock_subprocess.called, "subprocess.run should have been called to execute develop"
+            call_args = mock_subprocess.call_args[0][0]
+            assert "develop" in call_args, f"Expected 'develop' in subprocess call, got: {call_args}"
+            assert "--auto" in call_args, f"Expected '--auto' in subprocess call, got: {call_args}"

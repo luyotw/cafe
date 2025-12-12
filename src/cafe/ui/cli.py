@@ -2493,7 +2493,18 @@ def pr(
                     else:
                         console.print(f"[dim]     - 刪除 {feature_branch}[/dim]")
                     console.print()
-                # NEEDS_CHANGES and USER_REJECTED are already handled in pr_phase.py
+                elif status_code == "CAFE_NEEDS_CHANGES":
+                    # If in auto mode, automatically run develop phase
+                    if auto:
+                        # Get the pr feedback file path from result
+                        pr_file = result.data.get("pr_file")
+                        if pr_file:
+                            console.print(f"[dim]Using modification request from: {pr_file}[/dim]")
+                            console.print()
+
+                        # Execute develop phase in auto mode
+                        _execute_next_phase_auto("develop", issue_name)
+                # USER_REJECTED is already handled in pr_phase.py
             elif pr_url:
                 # GitHub PR mode: Show PR URL and GitHub-specific next steps
                 files_url = pr_url + "/files"
