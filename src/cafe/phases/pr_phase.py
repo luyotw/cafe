@@ -98,7 +98,23 @@ class PRPhase(Phase):
         pr_dir = self.issue_dir / "pr"
         self.history_dir = pr_dir / "history"
         self.phase_name = "pr"
-        self.iteration = self._load_iteration_counter()
+        # PR phase doesn't use iteration history like conversational phases
+        # Instead, iteration is based on number of pr_XXX.md files (local review mode)
+        self.iteration = self._get_pr_iteration_number()
+
+    def _get_pr_iteration_number(self) -> int:
+        """Get PR iteration number based on pr_XXX.md files.
+
+        Returns:
+            Current iteration number (number of pr_XXX.md files created so far)
+        """
+        pr_dir = self.issue_dir / "pr"
+        if not pr_dir.exists():
+            return 0
+
+        # Count pr_XXX.md files
+        pr_files = list(pr_dir.glob("pr_*.md"))
+        return len(pr_files)
 
     def _get_pr_review_timestamp(self) -> Optional["datetime"]:
         """Get PR review timestamp.
@@ -226,6 +242,8 @@ class PRPhase(Phase):
                     status_code_str = result.data["status_code"]
                     # Convert string to PhaseStatusCode enum
                     status_code = PhaseStatusCode(status_code_str)
+                    # Update iteration count before saving (in case new pr_XXX.md was created)
+                    self.iteration = self._get_pr_iteration_number()
                     self._save_progress(status_code)
                 return result
 
@@ -325,6 +343,8 @@ class PRPhase(Phase):
 
                 # Save progress for GitHub PR mode
                 from cafe.core.status_codes import PhaseStatusCode
+                # GitHub PR update is a single iteration
+                self.iteration = 1
                 self._save_progress(PhaseStatusCode.CONFIRMED)
 
                 return result
@@ -373,6 +393,8 @@ class PRPhase(Phase):
 
             # Save progress for GitHub PR mode
             from cafe.core.status_codes import PhaseStatusCode
+            # GitHub PR creation is a single iteration
+            self.iteration = 1
             self._save_progress(PhaseStatusCode.CONFIRMED)
 
             return result
