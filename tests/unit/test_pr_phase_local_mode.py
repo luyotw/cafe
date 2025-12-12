@@ -1,5 +1,6 @@
 """Tests for PRPhase local review mode (issue45)."""
 
+import json
 import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch, call
@@ -312,6 +313,94 @@ class TestPRPhaseLocalReviewMode:
 
                 # Capture console output to verify path was displayed
                 # (In real execution, Rich console would print the path)
+
+
+class TestPRPhaseStatusTracking:
+    """測試 PR phase 的狀態追蹤和時間戳記比較"""
+
+    def test_skip_review_when_needs_changes_and_no_new_develop(self, tmp_path, mock_git_ops, monkeypatch):
+        """測試當狀態為 NEEDS_CHANGES 且 develop 沒有更新時，跳過 review"""
+        from datetime import datetime, timedelta
+
+        # Setup
+        issue_dir = tmp_path / ".cafe" / "issues" / "test-issue"
+        issue_dir.mkdir(parents=True)
+
+        # Create config with pr.auto_create = false
+        config_file = issue_dir / "config.yaml"
+        config_data = {
+            "base_branch": "main",
+            "feature_branch": "test-issue",
+            "pr": {"auto_create": False}
+        }
+        with open(config_file, 'w') as f:
+            yaml.dump(config_data, f)
+
+        # Create spec file
+        spec_dir = issue_dir / "spec"
+        spec_dir.mkdir()
+        (spec_dir / "spec_001.md").write_text("# Test Spec")
+
+        # Create pr directory with existing status (NEEDS_CHANGES)
+        pr_dir = issue_dir / "pr"
+        pr_dir.mkdir()
+
+        # Create pr status with timestamp (2 hours ago)
+        pr_status_time = datetime.now() - timedelta(hours=2)
+        pr_status = {
+            "phase": "pr",
+            "status": "completed",
+            "status_code": "CAFE_NEEDS_CHANGES",
+            "timestamp": pr_status_time.isoformat(),
+            "iteration": 1,
+            "message": "PR phase completed with CAFE_NEEDS_CHANGES"
+        }
+        with open(pr_dir / "status.json", 'w') as f:
+            json.dump(pr_status, f, indent=2)
+
+        # Create develop status with older timestamp (3 hours ago)
+        develop_dir = issue_dir / "develop"
+        develop_dir.mkdir()
+        develop_status_time = datetime.now() - timedelta(hours=3)
+        develop_status = {
+            "phase": "develop",
+            "status": "completed",
+            "status_code": "CAFE_COMPLETED",
+            "timestamp": develop_status_time.isoformat(),
+            "iteration": 1,
+            "message": "Development completed"
+        }
+        with open(develop_dir / "status.json", 'w') as f:
+            json.dump(develop_status, f, indent=2)
+
+        monkeypatch.chdir(tmp_path)
+
+        # Execute PR phase
+        with patch('cafe.phases.pr_phase.GitOperations') as MockGitOps, \
+             patch('cafe.phases.pr_phase.PermissionHandler'), \
+             patch('cafe.phases.pr_phase.AgentManager'), \
+             patch('cafe.phases.pr_phase.GitHubOps'):
+
+            mock_git = MagicMock()
+            MockGitOps.return_value = mock_git
+            mock_git.get_current_branch.return_value = "test-issue"
+
+            phase = PRPhase(
+                agent_manager=MagicMock(),
+                permission_handler=MagicMock(),
+                git_ops=mock_git,
+                github_ops=MagicMock(),
+                spec_file=str(spec_dir / "spec_001.md"),
+                workflow_mode=WorkflowMode.LOCAL,
+                interactive=True,
+            )
+
+            result = phase.execute()
+
+            # Should skip review and return waiting message
+            assert result.status == PhaseStatus.COMPLETED
+            assert "Waiting for changes" in result.message
+            assert result.data["status_code"] == "CAFE_NEEDS_CHANGES"
 
 
 class TestPRPhaseAutoMode:
