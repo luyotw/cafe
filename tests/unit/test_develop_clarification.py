@@ -26,14 +26,3 @@ class TestDevelopClarificationPrompt:
         
         # Verify NEED_CLARIFICATION is still mentioned
         assert "CAFE_NEED_CLARIFICATION" in source
-
-
-class TestDevelopClarificationAutoMode:
-    """測試 develop --auto 處理 NEED_CLARIFICATION 的行為"""
-    
-    @patch('cafe.ui.cli.typer.prompt')
-    def test_auto_mode_prompts_for_user_input_on_clarification(self, mock_prompt, tmp_path):
-        """測試 auto 模式下收到 NEED_CLARIFICATION 時會提示使用者輸入"""
-        # This will be tested at integration level with CLI
-        # For now, we test that the phase returns IN_PROGRESS status
-        pass  # Will be implemented with CLI integration test
