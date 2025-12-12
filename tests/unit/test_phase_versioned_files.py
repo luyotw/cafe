@@ -67,11 +67,11 @@ class TestVersionedFileMethods:
         phase_dir = tmp_path / "spec"
         phase_dir.mkdir(parents=True)
 
-        # Create history directory with iteration files
+        # Create history directory with completed iteration files
         history_dir = phase_dir / "history"
         history_dir.mkdir(parents=True)
-        (history_dir / "iteration_001.json").touch()
-        (history_dir / "iteration_002.json").touch()
+        (history_dir / "iteration_001.json").write_text('{"iteration": 1, "response": "completed"}')
+        (history_dir / "iteration_002.json").write_text('{"iteration": 2, "response": "completed"}')
 
         iteration = phase._get_next_iteration_number("spec", phase_dir)
         assert iteration == 3
@@ -106,14 +106,33 @@ class TestVersionedFileMethods:
         (phase_dir / "spec_002.md").touch()
         (phase_dir / "spec_003.md").touch()
 
-        # But only have 1 iteration in history
+        # But only have 1 completed iteration in history
         history_dir = phase_dir / "history"
         history_dir.mkdir(parents=True)
-        (history_dir / "iteration_001.json").touch()
+        (history_dir / "iteration_001.json").write_text('{"iteration": 1, "response": "completed"}')
 
         # Should return 2 (based on history), not 4 (based on output files)
         iteration = phase._get_next_iteration_number("spec", phase_dir)
         assert iteration == 2
+
+    def test_get_next_iteration_number_returns_same_if_interrupted(self, tmp_path: Path):
+        """測試 _get_next_iteration_number() 在最後一個 iteration 被中斷時返回相同編號。
+
+        當 iteration_001.json 存在但沒有 response（被中斷），應該返回 1 而不是 2。
+        這樣可以避免在第一輪執行 _copy_previous_version() 創建 plan_002.md。
+        """
+        phase = ConcretePhase()
+        phase_dir = tmp_path / "spec"
+        phase_dir.mkdir(parents=True)
+
+        # Create interrupted iteration (has user_input but no response)
+        history_dir = phase_dir / "history"
+        history_dir.mkdir(parents=True)
+        (history_dir / "iteration_001.json").write_text('{"iteration": 1, "user_input": "test"}')
+
+        # Should return 1 (same iteration), not 2
+        iteration = phase._get_next_iteration_number("spec", phase_dir)
+        assert iteration == 1
 
     def test_get_next_iteration_number_nonexistent_dir(self, tmp_path: Path):
         """測試 _get_next_iteration_number() 在目錄不存在時返回 1。"""
