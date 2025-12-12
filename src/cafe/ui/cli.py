@@ -2041,8 +2041,11 @@ def develop(
             raise typer.Exit(1)
         elif result.status.value == "in_progress":
             # Development paused (e.g., NEED_CLARIFICATION, NEED_PERMISSION)
-            console.print(f"[yellow]⏸️  Development paused: {result.message}[/yellow]")
-            console.print(f"[dim]Resume with: cafe develop[/dim]")
+            if auto:
+                _execute_next_phase_auto("develop", issue_name)
+            else:
+                console.print(f"[yellow]⏸️  Development paused: {result.message}[/yellow]")
+                console.print(f"[dim]Resume with: cafe develop[/dim]")
 
     except Exception as e:
         console.print(f"[red]Error: {e}[/red]")

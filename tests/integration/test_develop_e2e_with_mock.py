@@ -677,3 +677,109 @@ exit 1
 
         # 驗證開發完成
         assert "completed" in output.lower() or "成功" in output.lower()
+
+
+@pytest.mark.e2e
+class TestDevelopAutoModeClarification:
+    """測試 develop --auto 模式處理 IN_PROGRESS 狀態的行為"""
+
+    def test_auto_mode_calls_execute_next_phase_on_in_progress(self, tmp_path):
+        """測試 auto 模式下收到 IN_PROGRESS 狀態時調用 _execute_next_phase_auto
+
+        情境：Agent 返回 CAFE_NEED_CLARIFICATION（IN_PROGRESS 狀態），並且在 auto 模式下
+        指令：cafe develop --auto
+        預期：調用 _execute_next_phase_auto 以繼續流程
+        """
+        issue_name = "test-issue"
+        setup_test_environment(tmp_path, issue_name)
+
+        # Mock _execute_next_phase_auto to prevent actual subprocess call
+        with patch('cafe.ui.cli._execute_next_phase_auto') as mock_execute:
+            args = ["develop", "--auto"]
+            env_vars = {
+                "CAFE_MOCK_AGENTS": "true",
+                "CAFE_MOCK_RESPONSE": "CAFE_NEED_CLARIFICATION\n\nI need clarification on the expected behavior."
+            }
+
+            original_cwd = os.getcwd()
+            try:
+                os.chdir(tmp_path)
+                with patch.dict(os.environ, env_vars):
+                    result = runner.invoke(app, args, catch_exceptions=False)
+            finally:
+                os.chdir(original_cwd)
+
+            output = result.stdout or ""
+            print("\n=== CLI Output ===")
+            print(output)
+            print("==================\n")
+
+            # 驗證調用了 _execute_next_phase_auto
+            mock_execute.assert_called_once_with("develop", issue_name)
+
+    def test_auto_mode_calls_execute_for_need_permission(self, tmp_path):
+        """測試 auto 模式下收到 NEED_PERMISSION 時也會調用 _execute_next_phase_auto
+
+        情境：Agent 返回 CAFE_NEED_PERMISSION（IN_PROGRESS 狀態），並且在 auto 模式下
+        指令：cafe develop --auto
+        預期：調用 _execute_next_phase_auto（與 NEED_CLARIFICATION 行為一致）
+        """
+        issue_name = "test-issue"
+        setup_test_environment(tmp_path, issue_name)
+
+        # Mock _execute_next_phase_auto to prevent actual subprocess call
+        with patch('cafe.ui.cli._execute_next_phase_auto') as mock_execute:
+            args = ["develop", "--auto"]
+            env_vars = {
+                "CAFE_MOCK_AGENTS": "true",
+                "CAFE_MOCK_RESPONSE": "CAFE_NEED_PERMISSION\n\nI need permission to continue."
+            }
+
+            original_cwd = os.getcwd()
+            try:
+                os.chdir(tmp_path)
+                with patch.dict(os.environ, env_vars):
+                    result = runner.invoke(app, args, catch_exceptions=False)
+            finally:
+                os.chdir(original_cwd)
+
+            output = result.stdout or ""
+            print("\n=== CLI Output ===")
+            print(output)
+            print("==================\n")
+
+            # 驗證調用了 _execute_next_phase_auto
+            mock_execute.assert_called_once_with("develop", issue_name)
+
+    def test_non_auto_mode_shows_normal_pause_message_on_in_progress(self, tmp_path):
+        """測試非 auto 模式下收到 IN_PROGRESS 狀態時顯示一般暫停訊息
+
+        情境：Agent 返回 CAFE_NEED_CLARIFICATION，但不在 auto 模式下
+        指令：cafe develop（沒有 --auto）
+        預期：顯示一般的暫停訊息，不會執行 auto mode 的邏輯
+        """
+        issue_name = "test-issue"
+        setup_test_environment(tmp_path, issue_name)
+
+        args = ["develop"]
+        env_vars = {
+            "CAFE_MOCK_AGENTS": "true",
+            "CAFE_MOCK_RESPONSE": "CAFE_NEED_CLARIFICATION\n\nI need clarification on the expected behavior."
+        }
+
+        original_cwd = os.getcwd()
+        try:
+            os.chdir(tmp_path)
+            with patch.dict(os.environ, env_vars):
+                result = runner.invoke(app, args, catch_exceptions=False)
+        finally:
+            os.chdir(original_cwd)
+
+        output = result.stdout or ""
+        print("\n=== CLI Output ===")
+        print(output)
+        print("==================\n")
+
+        # 驗證顯示一般暫停訊息
+        assert "⏸️  Development paused" in output
+        assert "Resume with: cafe develop" in output

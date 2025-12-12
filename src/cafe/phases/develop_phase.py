@@ -282,7 +282,14 @@ class DevelopPhase(Phase):
 
                 # If PR has NEEDS_CHANGES and is newer than develop, need to execute
                 if pr_status_code == PhaseStatusCode.NEEDS_CHANGES.value and pr_timestamp > develop_timestamp:
-                    print(f"ℹ️  PR feedback detected - changes requested")
+                    # Find the latest pr_XXX.md file to show user
+                    pr_dir = self.issue_dir / "pr"
+                    pr_files = sorted(pr_dir.glob("pr_*.md"))
+                    if pr_files:
+                        latest_pr_file = pr_files[-1]
+                        print(f"ℹ️  PR feedback detected - changes requested: {latest_pr_file.name}")
+                    else:
+                        print(f"ℹ️  PR feedback detected - changes requested")
                     return None  # Continue execution
 
                 # If develop is newer than PR, changes have been addressed
