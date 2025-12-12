@@ -2516,12 +2516,11 @@ def pr(
                         worktree_path = issue_config.get("worktree_path")
 
                     console.print("[dim]Next step: [bold]cafe close[/bold] - this will do[/dim]")
-                    console.print(f"[dim]  1. checkout branch {base_branch}[/dim]")
-                    console.print(f"[dim]  2. merge branch {feature_branch}[/dim]")
+                    console.print(f"[dim]  1. checkout branch: {base_branch}[/dim]")
+                    console.print(f"[dim]  2. merge branch: {feature_branch}[/dim]")
+                    console.print(f"[dim]  3. delete branch: {feature_branch}[/dim]")
                     if worktree_path:
-                        console.print(f"[dim]  3. delete branch {feature_branch} and worktree {worktree_path}[/dim]")
-                    else:
-                        console.print(f"[dim]  3. delete branch {feature_branch}[/dim]")
+                        console.print(f"[dim]  4. delete worktree: {worktree_path}[/dim]")
                     console.print()
                 elif status_code == "CAFE_NEEDS_CHANGES":
                     # If in auto mode, automatically run develop phase
