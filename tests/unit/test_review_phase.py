@@ -82,10 +82,10 @@ class TestReviewIterationNumbering:
         review_dir.mkdir(parents=True, exist_ok=True)
         (review_dir / "review_001.md").write_text("First review")
 
-        # Create iteration history
+        # Create iteration history with response
         history_dir = review_dir / "history"
         history_dir.mkdir(parents=True, exist_ok=True)
-        (history_dir / "iteration_001.json").write_text('{"iteration": 1}')
+        (history_dir / "iteration_001.json").write_text('{"iteration": 1, "response": "completed"}')
 
         agent_manager = MagicMock(spec=AgentManager)
         setup_agent_manager_mock(agent_manager)
@@ -1086,11 +1086,11 @@ class TestReviewPhaseIterationRestriction:
             review_file = review_dir / f"review_{i:03d}.md"
             review_file.write_text(f"Review {i}")
 
-        # Create iteration history
+        # Create iteration history with response
         history_dir = review_dir / "history"
         history_dir.mkdir(parents=True, exist_ok=True)
         for i in range(1, 4):
-            (history_dir / f"iteration_{i:03d}.json").write_text(f'{{"iteration": {i}}}')
+            (history_dir / f"iteration_{i:03d}.json").write_text(f'{{"iteration": {i}, "response": "completed"}}')
 
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = ("CAFE_CONFIRMED\n審查通過", TokenUsage(), [], None, [])

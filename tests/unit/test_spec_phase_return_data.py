@@ -95,7 +95,7 @@ class TestSpecPhaseReturnData:
         history_dir = spec_dir / "history"
         history_dir.mkdir(parents=True, exist_ok=True)
         for i in range(1, 1000):
-            (history_dir / f"iteration_{i:03d}.json").write_text(f'{{"iteration": {i}}}')
+            (history_dir / f"iteration_{i:03d}.json").write_text(f'{{"iteration": {i}, "response": "completed"}}')
 
         monkeypatch.chdir(tmp_path)
 

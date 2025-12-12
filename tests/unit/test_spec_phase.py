@@ -1459,12 +1459,12 @@ class TestSpecPhaseVersionedFiles:
         spec_dir = tmp_path / ".cafe" / "issues" / "test-issue" / "spec"
         spec_dir.mkdir(parents=True, exist_ok=True)
 
-        # Create 999 iteration history files
+        # Create 999 iteration history files with response
         history_dir = spec_dir / "history"
         history_dir.mkdir(parents=True, exist_ok=True)
         for i in range(1, 1000):
             history_file = history_dir / f"iteration_{i:03d}.json"
-            history_file.write_text(f'{{"iteration": {i}}}')
+            history_file.write_text(f'{{"iteration": {i}, "response": "completed"}}')
 
         # Setup mocks
         agent_manager = MagicMock(spec=AgentManager)

@@ -1714,12 +1714,30 @@ class Phase(ABC):
         if not history_dir.exists():
             return 1
 
-        existing_iterations = list(history_dir.glob("iteration_*.json"))
+        existing_iterations = sorted(history_dir.glob("iteration_*.json"))
+        if not existing_iterations:
+            return 1
+
         count = len(existing_iterations)
 
         # Check if exceeds 999
         if count >= 999:
             raise ValueError("不可超過 999")
+
+        # Check if the last iteration was interrupted (has no response)
+        last_iteration_file = existing_iterations[-1]
+        try:
+            import json
+            with open(last_iteration_file, 'r', encoding='utf-8') as f:
+                last_iteration_data = json.load(f)
+
+            # If last iteration has no response, it was interrupted
+            # Return the same iteration number to retry (don't increment)
+            if not last_iteration_data.get("response"):
+                return count
+        except (json.JSONDecodeError, KeyError, FileNotFoundError):
+            # If we can't read the file, treat it as corrupted/interrupted
+            return count
 
         return count + 1
 
