@@ -1,6 +1,7 @@
 """Command-line interface for CAFE."""
 
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -470,6 +471,29 @@ def version() -> None:
     console.print("CAFE version 0.1.0")
 
 
+def _ensure_default_content(cafe_dir: Path) -> None:
+    """確保 .cafe/templates 和 .cafe/agents 存在，如不存在則從 repo root 複製。
+
+    Args:
+        cafe_dir: .cafe 目錄的路徑
+    """
+    # Initialize templates if not exists
+    cafe_templates = cafe_dir / "templates"
+    if not cafe_templates.exists():
+        # Find repo root templates
+        repo_templates = Path("templates")
+        if repo_templates.exists():
+            shutil.copytree(repo_templates, cafe_templates)
+
+    # Initialize agents if not exists
+    cafe_agents = cafe_dir / "agents"
+    if not cafe_agents.exists():
+        # Find repo root agents
+        repo_agents = Path("agents")
+        if repo_agents.exists():
+            shutil.copytree(repo_agents, cafe_agents)
+
+
 @app.command()
 def prepare(
     issue_name: Optional[str] = typer.Argument(
@@ -632,6 +656,10 @@ def prepare(
             else:
                 console.print(f"[dim]Creating and switching to branch '{feature_branch}'...[/dim]")
                 git_ops.create_branch(feature_branch)
+
+        # 5.5. Initialize default templates and agents if not exists
+        cafe_dir = Path(".cafe")
+        _ensure_default_content(cafe_dir)
 
         # 6. Interactive prompts for spec/plan configuration (only in interactive mode)
         spec_config = {}
