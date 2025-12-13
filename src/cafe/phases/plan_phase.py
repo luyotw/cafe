@@ -358,12 +358,12 @@ class PlanPhase(Phase):
             return f"""分析 {spec_file_path} 並規劃實作步驟。
 
 **你的角色：**
-請先使用 Read tool 讀取 agents/{self.dev_agent}.md 了解你的角色定義和工作準則，然後嚴格按照角色定義中的要求進行規劃。
+請先使用 Read tool 讀取 .cafe/agents/developer/{self.dev_agent}.md 了解你的角色定義和工作準則，然後嚴格按照角色定義中的要求進行規劃。
 
 這是第 {self.iteration} 輪實作分析。
 
 **執行步驟：**
-1. 使用 Read tool 讀取 agents/{self.dev_agent}.md 了解角色定義
+1. 使用 Read tool 讀取 .cafe/agents/developer/{self.dev_agent}.md 了解角色定義
 2. 使用 Read tool 讀取 {plan_file_path} 的開發指南
 3. 使用 Read tool 讀取需求文件 {spec_file_path}
 4. 根據角色定義中的要求規劃實作步驟（注意：你的工作是「規劃」而非「實作」，只需要寫出計畫和步驟）
@@ -395,13 +395,13 @@ class PlanPhase(Phase):
             return f"""繼續分析 {spec_file_path} 的最新版本。
 
 **你的角色：**
-請使用 Read tool 讀取 agents/{self.dev_agent}.md 了解你的角色定義和工作準則，然後嚴格按照角色定義中的要求進行規劃。
+請使用 Read tool 讀取 .cafe/agents/developer/{self.dev_agent}.md 了解你的角色定義和工作準則，然後嚴格按照角色定義中的要求進行規劃。
 
 這是第 {self.iteration} 輪實作分析。
 
 {user_request_section}
 **執行步驟：**
-1. 使用 Read tool 讀取 agents/{self.dev_agent}.md 了解角色定義（如有必要）
+1. 使用 Read tool 讀取 .cafe/agents/developer/{self.dev_agent}.md 了解角色定義（如有必要）
 2. 使用 Read tool 讀取 {plan_file_path} 的最新版本
 3. 根據使用者的修改要求和角色定義，**更新**現有的實作計畫（不要全部重寫）
 {template_instruction}

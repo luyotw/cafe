@@ -667,7 +667,7 @@ class DevelopPhase(Phase):
             return f"""請根據 Code Review 反饋進行修正。
 
 **你的角色：**
-請使用 Read tool 讀取 agents/{self.dev_agent}.md 了解你的角色定義和工作準則，然後嚴格按照角色定義中的要求進行程式碼修正工作。
+請使用 Read tool 讀取 .cafe/agents/developer/{self.dev_agent}.md 了解你的角色定義和工作準則，然後嚴格按照角色定義中的要求進行程式碼修正工作。
 
 {important_note}
 
@@ -677,7 +677,7 @@ class DevelopPhase(Phase):
 - 實作計畫：{self.plan_file}{develop_file_section}
 {pr_comments_section}{user_input_section}
 **執行步驟：**
-1. 使用 Read tool 讀取 agents/{self.dev_agent}.md 了解角色定義
+1. 使用 Read tool 讀取 .cafe/agents/developer/{self.dev_agent}.md 了解角色定義
 {develop_instruction}{review_instruction}
 3. 根據 review feedback 逐一修正問題
 4. **嚴格按照既有的 commit message 風格撰寫 commit 訊息**，可分多次 commit
@@ -697,7 +697,7 @@ class DevelopPhase(Phase):
         return f"""請按照實作計畫執行開發工作。
 
 **你的角色：**
-請使用 Read tool 讀取 agents/{self.dev_agent}.md 了解你的角色定義和工作準則，然後嚴格按照角色定義中的要求進行開發工作。
+請使用 Read tool 讀取 .cafe/agents/developer/{self.dev_agent}.md 了解你的角色定義和工作準則，然後嚴格按照角色定義中的要求進行開發工作。
 
 {important_note}
 
@@ -706,7 +706,7 @@ class DevelopPhase(Phase):
 - 實作計畫：{self.plan_file}{develop_file_section}
 {pr_comments_section}{user_input_section}
 **執行步驟：**
-1. 使用 Read tool 讀取 agents/{self.dev_agent}.md 了解角色定義
+1. 使用 Read tool 讀取 .cafe/agents/developer/{self.dev_agent}.md 了解角色定義
 {develop_instruction}2. 仔細閱讀 {self.spec_file} 和 {self.plan_file}
 3. 嚴格按照計畫中的順序執行開發任務
 4. **嚴格按照既有的 commit message 風格撰寫 commit 訊息**，可分多次 commit
