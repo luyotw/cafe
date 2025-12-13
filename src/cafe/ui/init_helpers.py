@@ -1,9 +1,10 @@
 """Helper functions for cafe init command."""
 
-import re
 import shutil
 from pathlib import Path
 from typing import Dict, List
+
+import yaml
 
 from cafe.core.types import AgentCLI
 
@@ -41,21 +42,19 @@ def parse_agent_file(file_path: Path) -> Dict[str, str]:
 
     # 嘗試解析 YAML front matter
     # Front matter 格式: ---\nkey: value\n---
-    frontmatter_pattern = r"^---\s*\n(.*?)\n---"
-    match = re.search(frontmatter_pattern, content, re.DOTALL | re.MULTILINE)
-
-    if match:
-        frontmatter_content = match.group(1)
-
-        # 提取 name
-        name_match = re.search(r"^name:\s*(.+)$", frontmatter_content, re.MULTILINE)
-        if name_match:
-            name = name_match.group(1).strip()
-
-        # 提取 description
-        desc_match = re.search(r"^description:\s*(.+)$", frontmatter_content, re.MULTILINE)
-        if desc_match:
-            description = desc_match.group(1).strip()
+    if content.startswith("---"):
+        # 找到第二個 --- 的位置
+        parts = content.split("---", 2)
+        if len(parts) >= 3:
+            frontmatter_content = parts[1]
+            try:
+                frontmatter = yaml.safe_load(frontmatter_content)
+                if isinstance(frontmatter, dict):
+                    name = frontmatter.get("name", name)
+                    description = frontmatter.get("description", description)
+            except yaml.YAMLError:
+                # 如果 YAML 解析失敗，保持預設值
+                pass
 
     return {"name": name, "description": description}
 
