@@ -372,27 +372,6 @@ class TestHandleStandardStatusCodes:
         assert "no response" in result.message.lower()
         assert result.data["status_code"] == "CAFE_NO_RESPONSE"
 
-    def test_handle_rejected_returns_failed(self) -> None:
-        """測試 REJECTED 返回 FAILED 狀態"""
-        class TestPhase(Phase):
-            def __init__(self):
-                self.iteration = 2
-                self.interactive = True
-
-            def execute(self) -> PhaseResult:
-                return PhaseResult(status=PhaseStatus.COMPLETED)
-
-        phase = TestPhase()
-        result = phase._handle_standard_status_codes(
-            status_code=PhaseStatusCode.REJECTED,
-            response="User rejected the plan",
-        )
-
-        assert result is not None
-        assert result.status == PhaseStatus.FAILED
-        assert "rejected" in result.message.lower()
-        assert result.data["status_code"] == "CAFE_REJECTED"
-        assert result.data["final_response"] == "User rejected the plan"
 
     def test_handle_complete_codes_returns_none(self) -> None:
         """測試 complete_codes（如 READY_FOR_REVIEW）返回 COMPLETED（不再循環）"""
@@ -929,6 +908,61 @@ class TestMergeAllowedTools:
 
         # Verify - should only have base tools
         assert set(result) == set(base_tools)
+
+
+class TestPhaseReviewDecision:
+    """測試 Phase 的 review decision 相關方法"""
+
+    def test_process_review_decision_with_confirm(self, tmp_path: Path) -> None:
+        """測試用戶選擇 confirm 時返回 COMPLETED 結果"""
+
+        class TestPhase(Phase):
+            def __init__(self):
+                self.iteration = 2
+                self.interactive = True
+                self.history_dir = tmp_path / "history"
+                self.history_dir.mkdir(parents=True)
+                self.phase_name = "test"
+
+            def execute(self) -> PhaseResult:
+                return PhaseResult(status=PhaseStatus.COMPLETED)
+
+        phase = TestPhase()
+        prev_data = {"response": "Test response"}
+
+        result = phase._process_review_decision(
+            choice="confirm",
+            prev_data=prev_data,
+            phase_name="Test Phase",
+        )
+
+        assert isinstance(result, PhaseResult)
+        assert result.status == PhaseStatus.COMPLETED
+        assert result.data["status_code"] == "CAFE_CONFIRMED"
+
+    def test_process_review_decision_with_modify(self, tmp_path: Path) -> None:
+        """測試用戶選擇 modify 時返回修改意見字串"""
+
+        class TestPhase(Phase):
+            def __init__(self):
+                self.iteration = 2
+                self.interactive = True
+
+            def execute(self) -> PhaseResult:
+                return PhaseResult(status=PhaseStatus.COMPLETED)
+
+        phase = TestPhase()
+        prev_data = {"response": "Test response"}
+        modification_request = "Please change the implementation"
+
+        result = phase._process_review_decision(
+            choice=modification_request,
+            prev_data=prev_data,
+            phase_name="Test Phase",
+        )
+
+        assert isinstance(result, str)
+        assert result == modification_request
 
 
 class TestPhaseAllowedDirectories:

@@ -566,7 +566,7 @@ class Phase(ABC):
             item_name: 要確認的項目名稱（如「計畫」、「程式碼」、「需求」）
 
         Returns:
-            str: "confirm", "reject", 或修改意見內容
+            str: "confirm" 或修改意見內容
         """
         # Use phase's display if available, otherwise create new one
         if hasattr(self, 'display'):
@@ -577,16 +577,13 @@ class Phase(ABC):
 
         print(f"開發者認為{item_name}已完成。請確認：")
         print("  [c] confirm - 確認，繼續")
-        print("  [r] reject - 拒絕，終止")
         print("  [m] modify - 要求修改（輸入修改意見）")
 
         while True:
-            choice = input("\n請選擇 [c/r/m]: ").strip().lower()
+            choice = input("\n請選擇 [c/m]: ").strip().lower()
 
             if choice == 'c':
                 return "confirm"
-            elif choice == 'r':
-                return "reject"
             elif choice == 'm':
                 modification_request = display.get_multiline_input("請輸入修改意見")
 
@@ -600,7 +597,7 @@ class Phase(ABC):
 
                 return modification_request
             else:
-                print("❌ 無效選擇，請輸入 c, r, 或 m")
+                print("❌ 無效選擇，請輸入 c 或 m")
 
     def _ask_user_for_clarification(self) -> str:
         """詢問用戶對 NEED_CLARIFICATION 的回答（interactive 模式）。
@@ -627,13 +624,13 @@ class Phase(ABC):
         """處理用戶對 READY_FOR_REVIEW 的決定。
 
         Args:
-            choice: "confirm", "reject", 或修改意見內容
+            choice: "confirm" 或修改意見內容
             prev_data: 上一輪的 iteration data
             phase_name: Phase 名稱（用於訊息，如 "Implementation plan", "Requirements"）
             phase_specific_data: Phase 特定的資料（用於保存 history）
 
         Returns:
-            PhaseResult: 如果 confirm 或 reject
+            PhaseResult: 如果 confirm
             str: 如果要求修改，返回修改意見
         """
         if choice == "confirm":
@@ -662,16 +659,6 @@ class Phase(ABC):
                     "iterations": self.iteration,
                     "final_response": prev_data.get("response", ""),
                     "status_code": PhaseStatusCode.CONFIRMED.value,
-                },
-            )
-        elif choice == "reject":
-            return PhaseResult(
-                status=PhaseStatus.FAILED,
-                message=f"{phase_name} rejected by user in iteration {self.iteration - 1}",
-                data={
-                    "iterations": self.iteration - 1,
-                    "final_response": prev_data.get("response", ""),
-                    "status_code": "USER_REJECTED",
                 },
             )
         else:

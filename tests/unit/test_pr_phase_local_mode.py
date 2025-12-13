@@ -156,31 +156,6 @@ class TestPRPhaseLocalReviewMode:
                 assert "status_code" in result.data
                 assert result.data["status_code"] == PhaseStatusCode.CONFIRMED.value
 
-    def test_returns_rejected_status_on_reject(self, temp_issue_dir, mock_git_ops, mock_agent_manager,
-                                                 mock_permission_handler, mock_github_ops, monkeypatch):
-        """測試選擇 'r' 時回傳 USER_REJECTED 狀態"""
-        monkeypatch.chdir(temp_issue_dir.parent.parent.parent)
-
-        # Mock git diff
-        mock_git_ops.get_diff.return_value = "diff content"
-
-        with patch.object(PRPhase, '_get_issue_dir', return_value=temp_issue_dir):
-            pr_phase = PRPhase(
-                agent_manager=mock_agent_manager,
-                permission_handler=mock_permission_handler,
-                git_ops=mock_git_ops,
-                github_ops=mock_github_ops,
-                spec_file=str(temp_issue_dir / "spec" / "spec_001.md"),
-                workflow_mode=WorkflowMode.LOCAL,
-                interactive=True,
-            )
-
-            with patch.object(pr_phase, '_ask_user_for_review_decision', return_value="reject"):
-                result = pr_phase.execute()
-
-                assert result.status == PhaseStatus.FAILED
-                assert "USER_REJECTED" in result.message or result.data.get("status_code") == "USER_REJECTED"
-
     def test_saves_versioned_feedback_file_on_modify(self, temp_issue_dir, mock_git_ops, mock_agent_manager,
                                                        mock_permission_handler, mock_github_ops, monkeypatch):
         """測試選擇 'm' 時儲存 versioned 檔案 (pr_001.md, pr_002.md ...)"""
