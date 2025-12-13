@@ -1225,7 +1225,6 @@ class Phase(ABC):
 
         此方法封裝了常見的 status code 處理邏輯：
         - NO_RESPONSE: 返回 FAILED
-        - REJECTED: 返回 FAILED
         - continue_codes 中的 codes: 返回 None（繼續循環）
         - complete_codes 中的 codes: 返回 None（繼續循環，但通常會在下一輪處理完成邏輯）
         - None (沒有 status code): interactive 模式返回 None，non-interactive 返回 IN_PROGRESS
@@ -1257,25 +1256,6 @@ class Phase(ABC):
                     "iterations": self.iteration,
                     "status_code": status_code.value,
                 },
-            )
-
-        # Handle REJECTED
-        if status_code == PhaseStatusCode.REJECTED:
-            result_data = {
-                "iterations": self.iteration,
-                "final_response": response,
-                "status_code": status_code.value,
-            }
-
-            # Allow phases to add phase-specific data (e.g., spec_file)
-            if hasattr(self, '_get_completion_data'):
-                phase_data = self._get_completion_data()
-                result_data.update(phase_data)
-
-            return PhaseResult(
-                status=PhaseStatus.FAILED,
-                message=f"Phase rejected in iteration {self.iteration}",
-                data=result_data,
             )
 
         # Handle complete codes (e.g., CONFIRMED)
