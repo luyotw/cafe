@@ -513,11 +513,14 @@ class ReviewPhase(Phase):
 
         # Build prompt
         try:
+            from cafe.agents.manager import AgentManager
+            agent_file = AgentManager.get_agent_file_path(self.review_agent)
+            
             prompt = f"""**你的角色:**
-請使用 Read tool 讀取 .cafe/agents/reviewer/{self.review_agent}.md 了解你的角色定義和工作準則，然後嚴格按照角色定義中的要求進行程式碼審查工作。
+請使用 Read tool 讀取 {agent_file} 了解你的角色定義和工作準則，然後嚴格按照角色定義中的要求進行程式碼審查工作。
 
 **執行步驟:**
-1. 使用 Read tool 讀取 .cafe/agents/reviewer/{self.review_agent}.md 了解角色定義
+1. 使用 Read tool 讀取 {agent_file} 了解角色定義
 2. 使用 Read tool 讀取需求規格和實作計畫
 3. 根據角色定義中的要求進行第 {self.iteration} 輪程式碼審查
 

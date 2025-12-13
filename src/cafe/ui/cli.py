@@ -508,6 +508,8 @@ def _ensure_default_content(cafe_dir: Path) -> None:
     Args:
         cafe_dir: .cafe 目錄的路徑
     """
+    from cafe.agents.manager import AgentManager
+    
     # Get package data directory
     package_dir = Path(__file__).parent.parent / "data"
 
@@ -524,11 +526,11 @@ def _ensure_default_content(cafe_dir: Path) -> None:
             shutil.copytree(repo_templates, cafe_templates)
 
     # Initialize agents if not exists
-    cafe_agents = cafe_dir / "agents"
+    cafe_agents = cafe_dir / AgentManager.AGENTS_DIR
     if not cafe_agents.exists():
         # Try package data first, then repo root
-        package_agents = package_dir / "agents"
-        repo_agents = Path("agents")
+        package_agents = package_dir / AgentManager.AGENTS_DIR
+        repo_agents = Path(AgentManager.AGENTS_DIR)
 
         if package_agents.exists():
             shutil.copytree(package_agents, cafe_agents)
@@ -823,11 +825,10 @@ def prepare(
 
         # Show next steps
         if use_worktree:
-            console.print(f"[bold]Next steps:[/bold]")
-            console.print(f"  cd {worktree_path}")
-            console.print(f"  cafe spec")
+            console.print(f"[dim]Next step:[/dim]")
+            console.print(f"  [bold]cd {worktree_path}; cafe make[/bold]")
         else:
-            console.print(f"[bold]Next step:[/bold] cafe spec")
+            console.print(f"[dim]Next step:[/dim] [bold]cafe make[/bold]")
         console.print()
 
     except typer.Exit:

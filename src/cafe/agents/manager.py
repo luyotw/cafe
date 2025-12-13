@@ -19,6 +19,18 @@ class AgentNotFoundError(Exception):
 class AgentManager:
     """Manages multiple AI agents and their sessions."""
 
+    # Agent directory constants
+    CAFE_DIR = ".cafe"
+    AGENTS_DIR = "agents"
+    
+    # Agent role to subdirectory mapping
+    AGENT_ROLE_MAP = {
+        "Roger": "pm",
+        "David": "developer",
+        "John": "developer",
+        "Richard": "reviewer",
+    }
+
     def __init__(self, session_manager: Optional[SessionManager] = None, issue_name: Optional[str] = None) -> None:
         """Initialize agent manager.
 
@@ -299,3 +311,36 @@ class AgentManager:
             raise RuntimeError(
                 f"Failed to parse Claude CLI response: {e}"
             ) from e
+
+    @classmethod
+    def get_agent_file_path(cls, agent_name: str, cafe_dir: str = None) -> str:
+        """取得 agent md 檔案的路徑（用於 prompt 中）。
+
+        Args:
+            agent_name: Agent 名稱（如 "Roger", "David", "Richard", "John"）
+            cafe_dir: CAFE 配置目錄路徑（預設為 None，使用 cls.CAFE_DIR）
+
+        Returns:
+            str: Agent 檔案路徑（相對路徑，如 ".cafe/agents/pm/Roger.md"）
+
+        Raises:
+            ValueError: 當 agent 名稱未知時
+
+        Examples:
+            >>> AgentManager.get_agent_file_path("Roger")
+            '.cafe/agents/pm/Roger.md'
+            >>> AgentManager.get_agent_file_path("David")
+            '.cafe/agents/developer/David.md'
+            >>> AgentManager.get_agent_file_path("John")
+            '.cafe/agents/developer/John.md'
+        """
+        if cafe_dir is None:
+            cafe_dir = cls.CAFE_DIR
+        
+        # 獲取 agent 角色目錄
+        agent_role = cls.AGENT_ROLE_MAP.get(agent_name)
+        if not agent_role:
+            raise ValueError(f"Unknown agent name: {agent_name}")
+
+        # 返回相對路徑字串
+        return f"{cafe_dir}/{cls.AGENTS_DIR}/{agent_role}/{agent_name}.md"

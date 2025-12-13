@@ -60,7 +60,7 @@ class TestPrepareCommand:
         assert "Successfully prepared issue: test-issue" in result.stdout
         assert "Feature branch: test-issue" in result.stdout
         assert "Base branch: main" in result.stdout
-        assert "Next step: cafe spec" in result.stdout
+        assert "Next step: cafe make" in result.stdout
 
         # Verify directory structure created
         issue_dir = temp_repo_dir / ".cafe" / "issues" / "test-issue"

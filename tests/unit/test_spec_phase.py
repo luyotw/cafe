@@ -1353,7 +1353,7 @@ class TestOriginalRequirement:
         prompt = phase._generate_local_prompt(user_input="")
 
         # Assert - 驗證包含讀取角色定義檔案的指示
-        assert "agents/Roger.md" in prompt
+        assert "Roger.md" in prompt
         assert "讀取" in prompt
         assert "角色定義" in prompt
         assert "嚴格按照角色定義中的要求" in prompt

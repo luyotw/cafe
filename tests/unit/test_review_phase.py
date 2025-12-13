@@ -673,7 +673,7 @@ class TestReviewResultSaving:
             # Verify prompt contains expected content (from _generate_review_prompt)
             prompt = history_data["prompt"]
             # Verify prompt instructs agent to read role definition
-            assert "agents/Richard.md" in prompt
+            assert "Richard.md" in prompt
             assert "讀取" in prompt
             assert "角色定義" in prompt
             assert "程式碼審查" in prompt

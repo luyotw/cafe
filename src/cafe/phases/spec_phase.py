@@ -910,9 +910,12 @@ class SpecPhase(Phase):
 
         # --- 2. Define common instructions ---
         # Add agent role definition reading instruction
+        from cafe.agents.manager import AgentManager
+        agent_file = AgentManager.get_agent_file_path(self.pm_agent)
+        
         role_reading_instruction = f"""
 **執行步驟：**
-1. 使用 Read tool 讀取 .cafe/agents/pm/{self.pm_agent}.md 了解你的角色定義和工作準則
+1. 使用 Read tool 讀取 {agent_file} 了解你的角色定義和工作準則
 """
         
         if self.iteration == 1:
@@ -927,7 +930,7 @@ class SpecPhase(Phase):
 
         base_prompt = f"""
 **你的角色：**
-PM (Product Manager)，負責需求澄清工作。請讀取 .cafe/agents/pm/{self.pm_agent}.md 了解你的角色定義和工作準則，然後嚴格按照角色定義中的要求執行。"""
+PM (Product Manager)，負責需求澄清工作。請讀取 {agent_file} 了解你的角色定義和工作準則，然後嚴格按照角色定義中的要求執行。"""
 
         need_clarification_instruction = f"""**如果需要澄清（status: CAFE_NEED_CLARIFICATION）：**
 將以下內容寫入 {current_spec_file}：

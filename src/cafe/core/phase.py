@@ -1780,21 +1780,15 @@ def ensure_agent_file_exists(agent_name: str, cafe_dir: Path = Path(".cafe")) ->
         >>> ensure_agent_file_exists("Roger")  # 正常情況，不會拋出錯誤
         >>> ensure_agent_file_exists("Roger")  # 如果檔案不存在，會拋出 FileNotFoundError
     """
-    # Agent 角色映射到目錄
-    agent_role_map = {
-        "Roger": "pm",
-        "David": "developer",
-        "John": "developer",
-        "Richard": "reviewer",
-    }
-
+    from cafe.agents.manager import AgentManager
+    
     # 獲取 agent 角色目錄
-    agent_role = agent_role_map.get(agent_name)
+    agent_role = AgentManager.AGENT_ROLE_MAP.get(agent_name)
     if not agent_role:
         raise ValueError(f"Unknown agent name: {agent_name}")
 
     # 檢查 agent md 檔案是否存在
-    agent_file = cafe_dir / "agents" / agent_role / f"{agent_name}.md"
+    agent_file = cafe_dir / AgentManager.AGENTS_DIR / agent_role / f"{agent_name}.md"
 
     if not agent_file.exists():
         from rich.console import Console
