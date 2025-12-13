@@ -7,7 +7,9 @@ import sys
 from pathlib import Path
 from typing import List, Optional
 
+import inquirer
 import typer
+import yaml
 from rich.console import Console
 
 from cafe.agents.manager import AgentManager
@@ -27,6 +29,12 @@ from cafe.templates.manager import TemplateManager
 from cafe.ui.template_selector import select_template
 from cafe.ui.phase_prompts import prompt_for_input_method, prompt_for_rigor
 from cafe.ui.display import Display
+from cafe.ui import init_helpers
+from cafe.ui.init_helpers import (
+    check_available_clis,
+    list_available_agents,
+    parse_agent_file,
+)
 
 app = typer.Typer(
     name="cafe",
@@ -381,6 +389,181 @@ def _build_workflow(
     )
 
     return workflow
+
+
+@app.command()
+def init() -> None:
+    """Initialize CAFE configuration for the project.
+
+    Creates .cafe/config.yaml and copies default agents and templates.
+    """
+    try:
+        config_manager = ConfigManager()
+
+        # 1. Check if config already exists
+        if config_manager.config_file.exists():
+            console.print("[yellow]設定已存在。如需修改，請使用 `cafe config` 指令集。[/yellow]")
+            console.print("[yellow]詳情請見 `cafe config --help`。[/yellow]")
+            raise typer.Exit(1)
+
+        # 2. Copy agents and templates directories
+        try:
+            # Get package data directory
+            import cafe
+
+            package_dir = Path(cafe.__file__).parent
+            agents_source = package_dir / "data" / "agents"
+            templates_source = package_dir / "data" / "templates"
+
+            console.print("[cyan]正在初始化專案環境...[/cyan]")
+
+            init_helpers.copy_data_directory(str(agents_source), ".cafe/agents")
+            console.print("[green]✓ 已複製 agents 目錄[/green]")
+
+            init_helpers.copy_data_directory(str(templates_source), ".cafe/templates")
+            console.print("[green]✓ 已複製 templates 目錄[/green]")
+
+        except Exception as e:
+            console.print(f"[red]錯誤：複製檔案失敗 - {e}[/red]")
+            raise typer.Exit(1)
+
+        # 3. Check available CLIs
+        available_clis = check_available_clis()
+
+        if not available_clis:
+            console.print(
+                "[red]未找到任何支援的 AI 代理。請先安裝至少一個代理後再重新執行。[/red]"
+            )
+            console.print("[yellow]支援的代理：claude, gemini, cursor-agent, copilot[/yellow]")
+            raise typer.Exit(1)
+
+        console.print(f"[green]找到可用的 AI 代理：{', '.join(available_clis)}[/green]\n")
+
+        # 4. Interactive configuration for three roles
+        config = {
+            "agents": {},
+            "defaults": {
+                "workflow_mode": "local",
+                "interactive": True,
+            },
+        }
+
+        roles = [
+            ("pm", "PM"),
+            ("developer", "Developer"),
+            ("reviewer", "Reviewer"),
+        ]
+
+        for role_key, role_display in roles:
+            console.print(f"[bold cyan]配置 {role_display} 角色：[/bold cyan]")
+
+            # Select CLI
+            cli_question = [
+                inquirer.List(
+                    "cli",
+                    message=f"請為 {role_display} 選擇一個 AI 代理",
+                    choices=available_clis,
+                )
+            ]
+            cli_answer = inquirer.prompt(cli_question)
+            if not cli_answer:
+                # User cancelled (Ctrl+C)
+                console.print("\n[yellow]設定未完成，已取消。[/yellow]")
+                raise typer.Exit(1)
+
+            selected_cli = cli_answer["cli"]
+
+            # Input model name
+            model_question = [
+                inquirer.Text(
+                    "model",
+                    message=f"請為 {selected_cli} 輸入要使用的模型名稱（選填，直接按 Enter 將使用預設模型）",
+                    default="",
+                )
+            ]
+            model_answer = inquirer.prompt(model_question)
+            if model_answer is None:
+                # User cancelled (Ctrl+C)
+                console.print("\n[yellow]設定未完成，已取消。[/yellow]")
+                raise typer.Exit(1)
+
+            model_name = model_answer["model"].strip() if model_answer["model"] else None
+
+            # List available agents for this role
+            agents = list_available_agents(role_key)
+
+            if not agents:
+                console.print(
+                    f"[red]錯誤：找不到 {role_display} 角色的代理人檔案。[/red]"
+                )
+                console.print(
+                    f"[yellow]請確認 .cafe/agents/{role_key}/ 目錄中有有效的 .md 檔案。[/yellow]"
+                )
+                raise typer.Exit(1)
+
+            # Create agent choices in "name: description" format
+            agent_choices = [f"{name}: {desc}" for name, desc, _ in agents]
+
+            # Select agent
+            agent_question = [
+                inquirer.List(
+                    "agent",
+                    message=f"請為 {role_display} 選擇一位代理人",
+                    choices=agent_choices,
+                )
+            ]
+            agent_answer = inquirer.prompt(agent_question)
+            if not agent_answer:
+                # User cancelled (Ctrl+C)
+                console.print("\n[yellow]設定未完成，已取消。[/yellow]")
+                raise typer.Exit(1)
+
+            selected_agent_display = agent_answer["agent"]
+
+            # Find the selected agent details
+            selected_agent_name = selected_agent_display.split(":")[0].strip()
+            selected_agent_file = None
+            for name, desc, file_path in agents:
+                if name == selected_agent_name:
+                    selected_agent_file = file_path
+                    break
+
+            # Store configuration
+            config["agents"][role_key] = {
+                "name": selected_agent_name,
+                "cli": selected_cli,
+            }
+
+            if model_name:
+                config["agents"][role_key]["model"] = model_name
+
+            if selected_agent_file:
+                config["agents"][role_key]["agent_file"] = str(selected_agent_file)
+
+            console.print("")
+
+        # 5. Save configuration
+        config_manager.save_config(config)
+
+        # 6. Display success message
+        console.print("[bold green]設定已成功儲存！[/bold green]\n")
+
+        for role_key, role_display in roles:
+            role_config = config["agents"][role_key]
+            model_display = role_config.get("model") or "預設"
+            console.print(
+                f"- {role_display}: {role_config['cli']} "
+                f"(模型: {model_display}) (代理人: {role_config['name']})"
+            )
+
+        console.print("\n[cyan]您現在可以使用 `cafe prepare` 來開始新的開發任務。[/cyan]")
+        console.print(
+            "[cyan]如需修改設定，請使用 `cafe config` 指令，詳情請見 `cafe config --help`。[/cyan]"
+        )
+
+    except KeyboardInterrupt:
+        console.print("\n[yellow]設定未完成，已取消。[/yellow]")
+        raise typer.Exit(1)
 
 
 @app.command()
