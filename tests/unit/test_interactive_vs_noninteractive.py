@@ -121,61 +121,6 @@ class TestSpecPhaseInteractiveVsNonInteractive:
         assert result_noninteractive.status == PhaseStatus.COMPLETED
         assert result_noninteractive.data.get("status_code") == "CAFE_READY_FOR_REVIEW"
 
-    def test_rejected_status_same_behavior_both_modes(
-        self, tmp_path: Path, mock_git_ops: MagicMock, monkeypatch
-    ) -> None:
-        """測試 REJECTED 狀態在兩種模式下行為相同（都失敗）"""
-        issue_name = "test-rejected"
-        mock_git_ops.get_current_branch.return_value = issue_name
-        monkeypatch.chdir(tmp_path)
-
-        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec_001.md"
-        spec_file.parent.mkdir(parents=True, exist_ok=True)
-        spec_file.write_text("# Requirements\nTest requirements")
-
-        agent_manager = MagicMock(spec=AgentManager)
-        setup_agent_manager_mock_for_spec(agent_manager)
-        agent_manager.execute.return_value = ("CAFE_REJECTED\n需求有問題", TokenUsage(), [], None, [])
-        agent_manager.get_total_token_usage.return_value = TokenUsage()
-
-        permission_handler = MagicMock(spec=PermissionHandler)
-
-        # 測試 interactive mode
-        phase_interactive = SpecPhase(
-            agent_manager=agent_manager,
-            permission_handler=permission_handler,
-            git_ops=mock_git_ops,
-            spec_file=str(spec_file),
-            workflow_mode=WorkflowMode.LOCAL,
-            interactive=True,
-            rigor=SpecRigor.MEDIUM,
-        )
-
-        with patch('builtins.print'), \
-             patch.object(phase_interactive.display, 'get_multiline_input', return_value="需求"):
-            result_interactive = phase_interactive.execute()
-
-        # 測試 non-interactive mode
-        agent_manager.execute.reset_mock()
-        phase_noninteractive = SpecPhase(
-            agent_manager=agent_manager,
-            permission_handler=permission_handler,
-            git_ops=mock_git_ops,
-            spec_file=str(spec_file),
-            workflow_mode=WorkflowMode.LOCAL,
-            interactive=False,
-            rigor=SpecRigor.MEDIUM,
-        )
-
-        with patch('builtins.print'):
-            result_noninteractive = phase_noninteractive.execute()
-
-        # 兩種模式都應該返回 FAILED
-        assert result_interactive.status == PhaseStatus.FAILED
-        assert result_noninteractive.status == PhaseStatus.FAILED
-        assert result_interactive.data.get("status_code") == "CAFE_REJECTED"
-        assert result_noninteractive.data.get("status_code") == "CAFE_REJECTED"
-
     def test_need_clarification_interactive_continues(
         self, tmp_path: Path, mock_git_ops: MagicMock, monkeypatch
     ) -> None:

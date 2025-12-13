@@ -99,7 +99,6 @@ class PlanPhase(Phase):
             from cafe.core.status_codes import PhaseStatusCode
             early_exit_result = self._check_if_already_completed([
                 PhaseStatusCode.CONFIRMED,
-                PhaseStatusCode.REJECTED,
             ])
             if early_exit_result:
                 return early_exit_result
@@ -250,7 +249,6 @@ class PlanPhase(Phase):
                 valid_status_codes=[
                     PhaseStatusCode.READY_FOR_REVIEW,
                     PhaseStatusCode.NEED_CLARIFICATION,
-                    PhaseStatusCode.REJECTED,
                 ],
                 allowed_tools=allowed_tools,
                 complete_codes=[PhaseStatusCode.READY_FOR_REVIEW],
@@ -336,12 +334,10 @@ class PlanPhase(Phase):
             valid_codes=[
                 PhaseStatusCode.READY_FOR_REVIEW,
                 PhaseStatusCode.NEED_CLARIFICATION,
-                PhaseStatusCode.REJECTED,
             ],
             descriptions={
                 PhaseStatusCode.READY_FOR_REVIEW: "實作分析已完成，準備好讓使用者確認",
                 PhaseStatusCode.NEED_CLARIFICATION: "需要更多資訊或確認",
-                PhaseStatusCode.REJECTED: "實作分析無法進行",
             },
         )
 
@@ -436,12 +432,10 @@ class PlanPhase(Phase):
             valid_codes=[
                 PhaseStatusCode.READY_FOR_REVIEW,
                 PhaseStatusCode.NEED_CLARIFICATION,
-                PhaseStatusCode.REJECTED,
             ],
             descriptions={
                 PhaseStatusCode.READY_FOR_REVIEW: "實作分析已完成，準備好讓使用者確認",
                 PhaseStatusCode.NEED_CLARIFICATION: "需要更多資訊或確認",
-                PhaseStatusCode.REJECTED: "實作分析無法進行",
             },
         )
 

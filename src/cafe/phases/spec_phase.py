@@ -173,7 +173,6 @@ class SpecPhase(Phase):
             from cafe.core.status_codes import PhaseStatusCode
             early_exit_result = self._check_if_already_completed([
                 PhaseStatusCode.CONFIRMED,
-                PhaseStatusCode.REJECTED,
             ])
             if early_exit_result:
                 return early_exit_result
@@ -360,7 +359,6 @@ class SpecPhase(Phase):
                 valid_status_codes=[
                     PhaseStatusCode.READY_FOR_REVIEW,
                     PhaseStatusCode.NEED_CLARIFICATION,
-                    PhaseStatusCode.REJECTED,
                 ],
                 allowed_tools=allowed_tools,
                 complete_codes=[PhaseStatusCode.READY_FOR_REVIEW],
@@ -789,12 +787,10 @@ class SpecPhase(Phase):
             valid_codes=[
                 PhaseStatusCode.READY_FOR_REVIEW,
                 PhaseStatusCode.NEED_CLARIFICATION,
-                PhaseStatusCode.REJECTED,
             ],
             descriptions={
                 PhaseStatusCode.READY_FOR_REVIEW: "需求規格已完成，準備好讓使用者確認",
                 PhaseStatusCode.NEED_CLARIFICATION: "需求有不清楚的地方需要澄清",
-                PhaseStatusCode.REJECTED: "需求有嚴重問題，無法進行",
             },
         )
 
@@ -977,12 +973,10 @@ PM (Product Manager)，負責需求澄清工作。請讀取 agents/{self.pm_agen
             valid_codes=[
                 PhaseStatusCode.CONFIRMED,
                 PhaseStatusCode.NEED_CLARIFICATION,
-                PhaseStatusCode.REJECTED,
             ],
             descriptions={
                 PhaseStatusCode.CONFIRMED: "需求已經很清楚，可以進行開發",
                 PhaseStatusCode.NEED_CLARIFICATION: "需求有不清楚的地方需要澄清",
-                PhaseStatusCode.REJECTED: "需求有嚴重問題，無法進行",
             },
         )
 

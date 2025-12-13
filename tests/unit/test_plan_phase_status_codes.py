@@ -72,46 +72,6 @@ class TestPlanPhaseWithStatusCodes:
         assert result.data.get("status_code") == "CAFE_READY_FOR_REVIEW"  # non-interactive mode completes at READY_FOR_REVIEW
         assert result.data.get("iterations") == 1  # Only 1 iteration in non-interactive mode
 
-    def test_rejected_status_code_fails_phase(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
-        """測試 REJECTED 狀態碼導致 phase 失敗"""
-        monkeypatch.chdir(tmp_path)
-        requirements_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
-        requirements_file.parent.mkdir(parents=True, exist_ok=True)
-        requirements_file.write_text("# 需求\n\n## 開發指南\nSome guide")
-
-        # Create plan.md with dev guide
-        plan_file = requirements_file.parent.parent / "plan" / "plan.md"
-        plan_file.parent.mkdir(parents=True, exist_ok=True)
-        plan_file.write_text("## 開發指南\nSome guide\n\n## 實作計畫\nTODO")
-
-        agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("CAFE_REJECTED\n分析無法進行。", TokenUsage(), [], None, [])
-
-        # Mock get_agent to return agent with config
-        mock_agent = MagicMock()
-        mock_agent.config.cli.value = "copilot"
-        mock_agent.config.session_id = "test_session"
-        agent_manager.get_agent.return_value = mock_agent
-        agent_manager.get_total_token_usage.return_value = TokenUsage()
-
-        permission_handler = MagicMock(spec=PermissionHandler)
-
-        phase = PlanPhase(
-            agent_manager=agent_manager,
-            permission_handler=permission_handler,
-                git_ops=mock_git_ops,
-            spec_file=str(requirements_file),
-            workflow_mode=WorkflowMode.LOCAL,
-            interactive=False,
-            template_path=create_template_file(tmp_path),
-        )
-
-        with patch('builtins.print'):
-            result = phase.execute()
-
-        assert result.status == PhaseStatus.FAILED
-        assert result.data.get("status_code") == "CAFE_REJECTED"
-
     def test_need_clarification_continues_iteration(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
         """測試 NEED_CLARIFICATION 繼續迭代"""
         monkeypatch.chdir(tmp_path)

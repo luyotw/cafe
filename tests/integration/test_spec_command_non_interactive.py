@@ -124,43 +124,6 @@ class TestSpecCommandNonInteractiveBasic:
         assert result.status == PhaseStatus.COMPLETED
         assert result.data.get("status_code") == "CAFE_NEED_CLARIFICATION"
 
-    def test_rejected_should_fail(
-        self, mock_env, temp_spec_dir, monkeypatch
-    , mock_git_ops):
-        """測試 agent 返回 REJECTED 應該失敗"""
-        # Arrange
-        spec_file = str(temp_spec_dir / "spec_001.md")
-        user_input = "不合理的需求"
-        
-        monkeypatch.setenv(
-            "CAFE_MOCK_RESPONSE",
-            "CAFE_REJECTED\n\n這個需求不符合專案方向。"
-        )
-        
-        agent_manager = AgentManager()
-        agent_manager.register_agent(
-            AgentConfig(name="Roger", cli=AgentCLI.CLAUDE)
-        )
-        
-        permission_handler = PermissionHandler()
-        
-        phase = SpecPhase(
-            git_ops=mock_git_ops,
-            agent_manager=agent_manager,
-            permission_handler=permission_handler,
-            spec_file=spec_file,
-            workflow_mode=WorkflowMode.LOCAL,
-            interactive=False,
-            user_input=user_input,
-        )
-        
-        # Act
-        result = phase.execute()
-        
-        # Assert - REJECTED 應該導致 phase 失敗
-        assert result.status == PhaseStatus.FAILED
-        assert "rejected" in result.message.lower()
-
     def test_empty_user_input_should_fail(
         self, mock_env, temp_spec_dir
     , mock_git_ops):
