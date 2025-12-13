@@ -414,6 +414,50 @@ class TestPrepareCommandWorktree:
         assert (worktree_issue_dir / "spec").exists(), "spec directory should exist"
         assert (worktree_issue_dir / "sessions").exists(), "sessions directory should exist"
 
+    def test_prepare_copies_agents_to_worktree(self, temp_repo_dir, mock_git_ops):
+        """測試 worktree 模式下會複製 agents 到 worktree 的 .cafe/agents/"""
+        # 創建 worktree 目錄（模擬 git worktree add 的行為）
+        worktree_path = temp_repo_dir / "worktrees" / "test-issue"
+        worktree_path.mkdir(parents=True, exist_ok=True)
+
+        # Mock create_worktree 為空操作
+        mock_git_ops.create_worktree.return_value = None
+
+        result = runner.invoke(app, ["prepare", "test-issue", "--worktree", str(worktree_path)])
+
+        assert result.exit_code == 0
+
+        # 驗證 agents 目錄被複製到 worktree
+        worktree_agents_dir = worktree_path / ".cafe" / "agents"
+        assert worktree_agents_dir.exists(), "agents directory should be copied to worktree"
+        assert worktree_agents_dir.is_dir(), "agents should be a directory"
+
+        # 驗證 agent 檔案存在
+        assert (worktree_agents_dir / "pm" / "Roger.md").exists(), "Roger.md should exist in worktree"
+        assert (worktree_agents_dir / "developer" / "David.md").exists(), "David.md should exist in worktree"
+        assert (worktree_agents_dir / "reviewer" / "Richard.md").exists(), "Richard.md should exist in worktree"
+
+    def test_prepare_copies_templates_to_worktree(self, temp_repo_dir, mock_git_ops):
+        """測試 worktree 模式下會複製 templates 到 worktree 的 .cafe/templates/"""
+        # 創建 worktree 目錄（模擬 git worktree add 的行為）
+        worktree_path = temp_repo_dir / "worktrees" / "test-issue"
+        worktree_path.mkdir(parents=True, exist_ok=True)
+
+        # Mock create_worktree 為空操作
+        mock_git_ops.create_worktree.return_value = None
+
+        result = runner.invoke(app, ["prepare", "test-issue", "--worktree", str(worktree_path)])
+
+        assert result.exit_code == 0
+
+        # 驗證 templates 目錄被複製到 worktree
+        worktree_templates_dir = worktree_path / ".cafe" / "templates"
+        assert worktree_templates_dir.exists(), "templates directory should be copied to worktree"
+        assert worktree_templates_dir.is_dir(), "templates should be a directory"
+
+        # 驗證 default template 存在
+        assert (worktree_templates_dir / "plan" / "default.md").exists(), "default.md should exist in worktree"
+
     def test_prepare_interactive_saves_pr_auto_create_true(self, temp_repo_dir, mock_git_ops):
         """測試互動模式選擇自動建立 PR (yes)"""
         # Simulate: issue name, worktree (n), input method (1), rigor (empty), template (1), pr auto_create (y)

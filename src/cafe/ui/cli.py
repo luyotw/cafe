@@ -648,8 +648,12 @@ def prepare(
             (worktree_issues_dir / "spec").mkdir(exist_ok=True)
             (worktree_issues_dir / "sessions").mkdir(exist_ok=True)
 
+            # Initialize default templates and agents in worktree .cafe
+            _ensure_default_content(worktree_cafe_dir)
+
             # Set issue_dir to worktree location
             issue_dir = worktree_issues_dir
+            cafe_dir = worktree_cafe_dir
         else:
             # Normal branch mode
             issue_dir = Path(f".cafe/issues/{issue_name}")
@@ -668,9 +672,9 @@ def prepare(
                 console.print(f"[dim]Creating and switching to branch '{feature_branch}'...[/dim]")
                 git_ops.create_branch(feature_branch)
 
-        # 5.5. Initialize default templates and agents if not exists
-        cafe_dir = Path(".cafe")
-        _ensure_default_content(cafe_dir)
+            # 5.5. Initialize default templates and agents if not exists
+            cafe_dir = Path(".cafe")
+            _ensure_default_content(cafe_dir)
 
         # 6. Interactive prompts for spec/plan configuration (only in interactive mode)
         spec_config = {}
