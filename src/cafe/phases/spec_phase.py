@@ -483,7 +483,7 @@ class SpecPhase(Phase):
 
         # 根據上一輪狀態，取得用戶輸入
         if prev_status == "CAFE_READY_FOR_REVIEW":
-            # 需要用戶選擇：confirm/reject/modify
+            # 需要用戶選擇：confirm/modify
             if self.interactive:
                 choice = self._ask_user_for_review_decision("需求規格")
             else:
