@@ -1797,3 +1797,44 @@ class Phase(ABC):
         if versioned_files:
             return versioned_files[-1]
         return None
+
+
+def ensure_agent_file_exists(agent_name: str, cafe_dir: Path = Path(".cafe")) -> None:
+    """檢查 agent md 檔案是否存在，如果不存在則報錯並提示使用者重置。
+
+    Args:
+        agent_name: Agent 名稱（如 "Roger", "David", "Richard"）
+        cafe_dir: CAFE 配置目錄路徑（預設為 ".cafe"）
+
+    Raises:
+        FileNotFoundError: 當 agent md 檔案不存在時
+
+    Examples:
+        >>> ensure_agent_file_exists("Roger")  # 正常情況，不會拋出錯誤
+        >>> ensure_agent_file_exists("Roger")  # 如果檔案不存在，會拋出 FileNotFoundError
+    """
+    # Agent 角色映射到目錄
+    agent_role_map = {
+        "Roger": "pm",
+        "David": "developer",
+        "John": "developer",
+        "Richard": "reviewer",
+    }
+
+    # 獲取 agent 角色目錄
+    agent_role = agent_role_map.get(agent_name)
+    if not agent_role:
+        raise ValueError(f"Unknown agent name: {agent_name}")
+
+    # 檢查 agent md 檔案是否存在
+    agent_file = cafe_dir / "agents" / agent_role / f"{agent_name}.md"
+
+    if not agent_file.exists():
+        from rich.console import Console
+        console = Console()
+        console.print(f"[red]✗ Agent file not found: {agent_file}[/red]")
+        console.print(f"[yellow]ℹ Please run 'cafe agent default' to reset default agent files[/yellow]")
+        raise FileNotFoundError(
+            f"Agent file not found: {agent_file}\n"
+            f"Run 'cafe agent default' to reset default agent files"
+        )
