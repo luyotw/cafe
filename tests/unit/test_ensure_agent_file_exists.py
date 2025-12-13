@@ -22,7 +22,7 @@ class TestEnsureAgentFileExists:
         roger_file.write_text("# Roger - PM Agent")
 
         # 應該不會拋出錯誤
-        ensure_agent_file_exists("Roger", cafe_dir)
+        ensure_agent_file_exists("Roger", "pm", cafe_dir)
 
     def test_agent_file_exists_david(self, tmp_path: Path) -> None:
         """測試 David agent 檔案存在時不會拋出錯誤。"""
@@ -36,7 +36,7 @@ class TestEnsureAgentFileExists:
         david_file.write_text("# David - Developer Agent")
 
         # 應該不會拋出錯誤
-        ensure_agent_file_exists("David", cafe_dir)
+        ensure_agent_file_exists("David", "developer", cafe_dir)
 
     def test_agent_file_exists_john(self, tmp_path: Path) -> None:
         """測試 John agent 檔案存在時不會拋出錯誤。"""
@@ -50,7 +50,7 @@ class TestEnsureAgentFileExists:
         john_file.write_text("# John - Developer Agent")
 
         # 應該不會拋出錯誤
-        ensure_agent_file_exists("John", cafe_dir)
+        ensure_agent_file_exists("John", "developer", cafe_dir)
 
     def test_agent_file_exists_richard(self, tmp_path: Path) -> None:
         """測試 Richard agent 檔案存在時不會拋出錯誤。"""
@@ -64,7 +64,7 @@ class TestEnsureAgentFileExists:
         richard_file.write_text("# Richard - Reviewer Agent")
 
         # 應該不會拋出錯誤
-        ensure_agent_file_exists("Richard", cafe_dir)
+        ensure_agent_file_exists("Richard", "reviewer", cafe_dir)
 
     def test_agent_file_not_exists_raises_error(self, tmp_path: Path) -> None:
         """測試 agent 檔案不存在時會拋出 FileNotFoundError。"""
@@ -73,7 +73,7 @@ class TestEnsureAgentFileExists:
 
         # 不建立 agent 檔案，應該拋出錯誤
         with pytest.raises(FileNotFoundError) as exc_info:
-            ensure_agent_file_exists("Roger", cafe_dir)
+            ensure_agent_file_exists("Roger", "pm", cafe_dir)
 
         # 驗證錯誤訊息包含提示
         error_msg = str(exc_info.value)
@@ -86,21 +86,23 @@ class TestEnsureAgentFileExists:
         cafe_dir.mkdir(parents=True)
 
         with pytest.raises(FileNotFoundError) as exc_info:
-            ensure_agent_file_exists("David", cafe_dir)
+            ensure_agent_file_exists("David", "developer", cafe_dir)
 
         error_msg = str(exc_info.value)
         expected_path = str(cafe_dir / "agents" / "developer" / "David.md")
         assert expected_path in error_msg
 
     def test_unknown_agent_name_raises_value_error(self, tmp_path: Path) -> None:
-        """測試未知的 agent 名稱會拋出 ValueError。"""
+        """測試未知的 agent 名稱會拋出 FileNotFoundError（因為檔案不存在）。"""
         cafe_dir = tmp_path / ".cafe"
         cafe_dir.mkdir(parents=True)
 
-        with pytest.raises(ValueError) as exc_info:
-            ensure_agent_file_exists("UnknownAgent", cafe_dir)
+        # 現在不再檢查 agent 名稱，只檢查檔案是否存在
+        # 所以應該拋出 FileNotFoundError 而不是 ValueError
+        with pytest.raises(FileNotFoundError) as exc_info:
+            ensure_agent_file_exists("UnknownAgent", "unknown_role", cafe_dir)
 
-        assert "Unknown agent name" in str(exc_info.value)
+        assert "Agent file not found" in str(exc_info.value)
 
     def test_agent_directory_exists_but_file_missing(self, tmp_path: Path) -> None:
         """測試 agent 目錄存在但檔案不存在的情況。"""
@@ -110,7 +112,7 @@ class TestEnsureAgentFileExists:
 
         # 目錄存在但沒有 Roger.md 檔案
         with pytest.raises(FileNotFoundError) as exc_info:
-            ensure_agent_file_exists("Roger", cafe_dir)
+            ensure_agent_file_exists("Roger", "pm", cafe_dir)
 
         error_msg = str(exc_info.value)
         assert "Agent file not found" in error_msg
@@ -129,7 +131,7 @@ class TestEnsureAgentFileExists:
         roger_file.write_text("# Roger")
 
         # 使用預設參數（應該使用當前目錄的 .cafe）
-        ensure_agent_file_exists("Roger")
+        ensure_agent_file_exists("Roger", "pm")
 
     def test_agents_directory_not_exists(self, tmp_path: Path) -> None:
         """測試 agents 目錄完全不存在的情況。"""
@@ -138,7 +140,7 @@ class TestEnsureAgentFileExists:
 
         # 不建立 agents 目錄
         with pytest.raises(FileNotFoundError):
-            ensure_agent_file_exists("Roger", cafe_dir)
+            ensure_agent_file_exists("Roger", "pm", cafe_dir)
 
     def test_all_known_agents(self, tmp_path: Path) -> None:
         """測試所有已知的 agent 名稱都能正確映射到角色目錄。"""
@@ -159,5 +161,5 @@ class TestEnsureAgentFileExists:
             agent_file.write_text(f"# {agent_name}")
 
         # 驗證所有 agent 都能通過檢查
-        for agent_name in agents_config.keys():
-            ensure_agent_file_exists(agent_name, cafe_dir)
+        for agent_name, role in agents_config.items():
+            ensure_agent_file_exists(agent_name, role, cafe_dir)

@@ -628,7 +628,7 @@ class DevelopPhase(Phase):
 
         # Get agent file path
         from cafe.agents.manager import AgentManager
-        agent_file = AgentManager.get_agent_file_path(self.dev_agent)
+        agent_file = AgentManager.get_agent_file_path(self.dev_agent, "developer")
 
         config_file = self.issue_dir / "config.yaml"
         base_branch = self._get_issue_config_value(config_file, "base_branch") or "main"

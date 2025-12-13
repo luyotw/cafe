@@ -1766,27 +1766,23 @@ class Phase(ABC):
         return None
 
 
-def ensure_agent_file_exists(agent_name: str, cafe_dir: Path = Path(".cafe")) -> None:
+def ensure_agent_file_exists(agent_name: str, agent_role: str, cafe_dir: Path = Path(".cafe")) -> None:
     """檢查 agent md 檔案是否存在，如果不存在則報錯並提示使用者重置。
 
     Args:
         agent_name: Agent 名稱（如 "Roger", "David", "Richard"）
+        agent_role: Agent 角色目錄名稱（如 "pm", "developer", "reviewer"）
         cafe_dir: CAFE 配置目錄路徑（預設為 ".cafe"）
 
     Raises:
         FileNotFoundError: 當 agent md 檔案不存在時
 
     Examples:
-        >>> ensure_agent_file_exists("Roger")  # 正常情況，不會拋出錯誤
-        >>> ensure_agent_file_exists("Roger")  # 如果檔案不存在，會拋出 FileNotFoundError
+        >>> ensure_agent_file_exists("Roger", "pm")  # 正常情況，不會拋出錯誤
+        >>> ensure_agent_file_exists("Roger", "pm")  # 如果檔案不存在，會拋出 FileNotFoundError
     """
     from cafe.agents.manager import AgentManager
     
-    # 獲取 agent 角色目錄
-    agent_role = AgentManager.AGENT_ROLE_MAP.get(agent_name)
-    if not agent_role:
-        raise ValueError(f"Unknown agent name: {agent_name}")
-
     # 檢查 agent md 檔案是否存在
     agent_file = cafe_dir / AgentManager.AGENTS_DIR / agent_role / f"{agent_name}.md"
 

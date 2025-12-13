@@ -911,7 +911,7 @@ class SpecPhase(Phase):
         # --- 2. Define common instructions ---
         # Add agent role definition reading instruction
         from cafe.agents.manager import AgentManager
-        agent_file = AgentManager.get_agent_file_path(self.pm_agent)
+        agent_file = AgentManager.get_agent_file_path(self.pm_agent, "pm")
         
         role_reading_instruction = f"""
 **執行步驟：**

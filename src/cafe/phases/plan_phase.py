@@ -356,7 +356,7 @@ class PlanPhase(Phase):
 
         if self.iteration == 1:
             from cafe.agents.manager import AgentManager
-            agent_file = AgentManager.get_agent_file_path(self.dev_agent)
+            agent_file = AgentManager.get_agent_file_path(self.dev_agent, "developer")
             
             return f"""分析 {spec_file_path} 並規劃實作步驟。
 
@@ -396,7 +396,7 @@ class PlanPhase(Phase):
 """
 
             from cafe.agents.manager import AgentManager
-            agent_file = AgentManager.get_agent_file_path(self.dev_agent)
+            agent_file = AgentManager.get_agent_file_path(self.dev_agent, "developer")
             
             return f"""繼續分析 {spec_file_path} 的最新版本。
 
