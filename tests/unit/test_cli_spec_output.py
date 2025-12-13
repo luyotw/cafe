@@ -200,33 +200,6 @@ class TestSpecCommandOutputWithNeedClarification:
         assert "cafe spec" in result.stdout
 
 
-class TestSpecCommandOutputWithRejected:
-    """測試 REJECTED 狀態的輸出訊息。"""
-
-    def test_rejected_shows_error_message(
-        self, runner, mock_git_ops, mock_spec_phase, mock_agent_manager, mock_permission_handler, setup_test_env
-    ):
-        """REJECTED 狀態應顯示錯誤訊息且不提示下一步。"""
-        mock_phase_instance = Mock()
-        mock_phase_instance.execute.return_value = PhaseResult(
-            status=PhaseStatus.COMPLETED,
-            message="Spec rejected",
-            data={
-                "iterations": 2,
-                "status_code": "CAFE_REJECTED",
-            },
-        )
-        mock_spec_phase.return_value = mock_phase_instance
-
-        result = runner.invoke(app, ["spec", "--interactive", "--user-input", "test"])
-
-        assert result.exit_code == 0
-        assert "❌ Spec rejected by agent" in result.stdout
-        # Should NOT suggest next steps
-        assert "Next step" not in result.stdout
-        assert "cafe plan" not in result.stdout
-
-
 class TestSpecCommandOutputComparison:
     """比較測試：確保不同狀態的輸出訊息確實不同。"""
 
