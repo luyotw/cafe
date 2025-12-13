@@ -153,69 +153,6 @@ class TestSpecAutoMode:
             sys.stdin.isatty = original_isatty
     
     @pytest.mark.skip(reason="Complex CLI mocking - covered by integration tests")
-    def test_auto_mode_stops_on_rejected(self, mock_env):
-        """測試 auto 模式在 CAFE_REJECTED 時停止"""
-        with patch("cafe.ui.cli.GitOperations") as mock_git_cls, \
-             patch("cafe.ui.cli.ConfigManager") as mock_config_cls, \
-             patch("cafe.ui.cli.AgentManager") as mock_agent_cls, \
-             patch("cafe.ui.cli.PermissionHandler") as mock_perm_cls, \
-             patch("cafe.ui.cli.SpecPhase") as mock_phase_cls, \
-             patch("sys.stdin.isatty", return_value=True):
-            
-            # Setup mocks
-            mock_git = MagicMock()
-            mock_git.get_current_branch.return_value = "test-issue"
-            mock_git_cls.return_value = mock_git
-            
-            mock_config = MagicMock()
-            # Mock different return values for different keys
-            def mock_get(key, default=None):
-                if key == "agents.pm.name":
-                    return "Roger"
-                elif key.startswith("agents."):
-                    return {"name": "Roger", "cli": "copilot"}
-                return default
-            mock_config.get.side_effect = mock_get
-            mock_config_cls.return_value = mock_config
-            
-            mock_agent_manager = MagicMock()
-            mock_executor = MagicMock()
-            mock_executor.config.cli.value = "copilot"
-            mock_executor.config.session_id = "test-session"
-            mock_agent_manager.get_agent.return_value = mock_executor
-            mock_agent_cls.return_value = mock_agent_manager
-            
-            mock_perm = MagicMock()
-            mock_perm_cls.return_value = mock_perm
-            
-            # Mock phase to return NEED_CLARIFICATION then REJECTED
-            mock_phase = MagicMock()
-            from cafe.core.types import PhaseStatus, PhaseResult
-            
-            results = [
-                PhaseResult(
-                    status=PhaseStatus.COMPLETED,
-                    data={"status_code": "CAFE_NEED_CLARIFICATION", "iterations": 1}
-                ),
-                PhaseResult(
-                    status=PhaseStatus.COMPLETED,
-                    data={"status_code": "CAFE_REJECTED", "iterations": 2}
-                ),
-            ]
-            mock_phase.execute.side_effect = results
-            mock_phase_cls.return_value = mock_phase
-            
-            # Run command
-            result = runner.invoke(app, [
-                "spec",
-                "--auto"
-            ], input="Initial requirements\n")
-            
-            # Verify
-            assert mock_phase.execute.call_count == 2  # Stopped after REJECTED
-            assert "Spec rejected" in result.stdout
-    
-    @pytest.mark.skip(reason="Complex CLI mocking - covered by integration tests")
     def test_auto_mode_no_infinite_loop_protection_needed(self, mock_env):
         """測試 auto 模式不需要無限迴圈保護（因為每輪都需要使用者輸入）"""
         with patch("cafe.ui.cli.GitOperations") as mock_git_cls, \

@@ -135,7 +135,7 @@ cafe close
 
 1. **SpecPhase**（需求澄清）
    - PM agent (Roger) 透過對話式方式生成需求
-   - 與使用者迭代直到需求明確（狀態碼：CONFIRMED/NEED_CLARIFICATION/REJECTED）
+   - 與使用者迭代直到需求明確（狀態碼：CONFIRMED/NEED_CLARIFICATION）
    - 儲存至本地檔案或 GitHub issue
 
 2. **PlanPhase**（實作計畫）

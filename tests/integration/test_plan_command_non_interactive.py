@@ -407,46 +407,6 @@ class TestPlanCommandNonInteractiveFiles:
 class TestPlanCommandNonInteractiveErrorHandling:
     """測試錯誤處理"""
 
-    def test_rejected_should_fail(
-        self, mock_env, temp_plan_with_template, monkeypatch
-    , mock_git_ops):
-        """測試 agent 返回 REJECTED 應該失敗"""
-        # Arrange
-        plan_dir, default_template = temp_plan_with_template
-        plan_file = str(plan_dir / "plan_001.md")
-        spec_file = str(plan_dir.parent / "spec" / "spec_001.md")
-        
-        monkeypatch.setenv(
-            "CAFE_MOCK_RESPONSE",
-            "CAFE_REJECTED\n\n這個實作方案不可行。"
-        )
-        
-        agent_manager = AgentManager()
-        agent_manager.register_agent(
-            AgentConfig(name="David", cli=AgentCLI.CLAUDE)
-        )
-        
-        permission_handler = PermissionHandler()
-        
-        phase = PlanPhase(
-            git_ops=mock_git_ops,
-            agent_manager=agent_manager,
-            permission_handler=permission_handler,
-
-            spec_file=spec_file,
-            workflow_mode=WorkflowMode.LOCAL,
-            interactive=False,
-            template_path=str(default_template),
-            user_input="這是開發指南內容",
-        )
-
-        # Act
-        result = phase.execute()
-
-        # Assert
-        assert result.status == PhaseStatus.FAILED
-        assert "rejected" in result.message.lower()
-
     def test_spec_file_not_exists_should_fail(
         self, mock_env, temp_plan_with_template
     , mock_git_ops):

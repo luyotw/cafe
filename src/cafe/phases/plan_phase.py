@@ -99,7 +99,6 @@ class PlanPhase(Phase):
             from cafe.core.status_codes import PhaseStatusCode
             early_exit_result = self._check_if_already_completed([
                 PhaseStatusCode.CONFIRMED,
-                PhaseStatusCode.REJECTED,
             ])
             if early_exit_result:
                 return early_exit_result
@@ -250,7 +249,6 @@ class PlanPhase(Phase):
                 valid_status_codes=[
                     PhaseStatusCode.READY_FOR_REVIEW,
                     PhaseStatusCode.NEED_CLARIFICATION,
-                    PhaseStatusCode.REJECTED,
                 ],
                 allowed_tools=allowed_tools,
                 complete_codes=[PhaseStatusCode.READY_FOR_REVIEW],
@@ -336,12 +334,10 @@ class PlanPhase(Phase):
             valid_codes=[
                 PhaseStatusCode.READY_FOR_REVIEW,
                 PhaseStatusCode.NEED_CLARIFICATION,
-                PhaseStatusCode.REJECTED,
             ],
             descriptions={
                 PhaseStatusCode.READY_FOR_REVIEW: "實作分析已完成，準備好讓使用者確認",
                 PhaseStatusCode.NEED_CLARIFICATION: "需要更多資訊或確認",
-                PhaseStatusCode.REJECTED: "實作分析無法進行",
             },
         )
 
@@ -436,12 +432,10 @@ class PlanPhase(Phase):
             valid_codes=[
                 PhaseStatusCode.READY_FOR_REVIEW,
                 PhaseStatusCode.NEED_CLARIFICATION,
-                PhaseStatusCode.REJECTED,
             ],
             descriptions={
                 PhaseStatusCode.READY_FOR_REVIEW: "實作分析已完成，準備好讓使用者確認",
                 PhaseStatusCode.NEED_CLARIFICATION: "需要更多資訊或確認",
-                PhaseStatusCode.REJECTED: "實作分析無法進行",
             },
         )
 
@@ -591,7 +585,7 @@ class PlanPhase(Phase):
 
         # 根據上一輪狀態，取得用戶輸入
         if prev_status == "CAFE_READY_FOR_REVIEW":
-            # 需要用戶選擇：confirm/reject/modify
+            # 需要用戶選擇：confirm/modify
             if self.interactive:
                 choice = self._ask_user_for_review_decision("實作計畫")
             else:
@@ -656,7 +650,6 @@ class PlanPhase(Phase):
 
 - CAFE_READY_FOR_REVIEW: 實作計畫已完成，可以給用戶審核
 - CAFE_NEED_CLARIFICATION: 還有問題需要與用戶確認
-- CAFE_REJECTED: 計畫被拒絕或無法完成
 
 請只回傳一個狀態碼（例如：CAFE_READY_FOR_REVIEW），不要有任何其他內容。"""
 

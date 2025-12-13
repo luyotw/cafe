@@ -20,7 +20,7 @@ class PhaseStatusCode(str, Enum):
     # ========== Requirements & Analysis Phase ==========
     CONFIRMED = "CAFE_CONFIRMED"                   # Requirements/Analysis/Review confirmed
     NEED_CLARIFICATION = "CAFE_NEED_CLARIFICATION" # Need more information
-    REJECTED = "CAFE_REJECTED"                     # Requirements/Analysis/Review rejected
+    REJECTED = "CAFE_REJECTED"                     # DEPRECATED: No longer used
     READY_FOR_REVIEW = "CAFE_READY_FOR_REVIEW"     # Plan ready for user review
 
     # ========== Review Phase ==========
@@ -158,9 +158,7 @@ class StatusCodeParser:
         Returns:
             True if code indicates failure
         """
-        failure_codes = {
-            PhaseStatusCode.REJECTED,
-        }
+        failure_codes: set[PhaseStatusCode] = set()
         return code in failure_codes
 
     @staticmethod

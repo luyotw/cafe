@@ -173,7 +173,6 @@ class SpecPhase(Phase):
             from cafe.core.status_codes import PhaseStatusCode
             early_exit_result = self._check_if_already_completed([
                 PhaseStatusCode.CONFIRMED,
-                PhaseStatusCode.REJECTED,
             ])
             if early_exit_result:
                 return early_exit_result
@@ -360,7 +359,6 @@ class SpecPhase(Phase):
                 valid_status_codes=[
                     PhaseStatusCode.READY_FOR_REVIEW,
                     PhaseStatusCode.NEED_CLARIFICATION,
-                    PhaseStatusCode.REJECTED,
                 ],
                 allowed_tools=allowed_tools,
                 complete_codes=[PhaseStatusCode.READY_FOR_REVIEW],
@@ -485,7 +483,7 @@ class SpecPhase(Phase):
 
         # 根據上一輪狀態，取得用戶輸入
         if prev_status == "CAFE_READY_FOR_REVIEW":
-            # 需要用戶選擇：confirm/reject/modify
+            # 需要用戶選擇：confirm/modify
             if self.interactive:
                 choice = self._ask_user_for_review_decision("需求規格")
             else:
@@ -789,12 +787,10 @@ class SpecPhase(Phase):
             valid_codes=[
                 PhaseStatusCode.READY_FOR_REVIEW,
                 PhaseStatusCode.NEED_CLARIFICATION,
-                PhaseStatusCode.REJECTED,
             ],
             descriptions={
                 PhaseStatusCode.READY_FOR_REVIEW: "需求規格已完成，準備好讓使用者確認",
                 PhaseStatusCode.NEED_CLARIFICATION: "需求有不清楚的地方需要澄清",
-                PhaseStatusCode.REJECTED: "需求有嚴重問題，無法進行",
             },
         )
 
@@ -977,12 +973,10 @@ PM (Product Manager)，負責需求澄清工作。請讀取 .cafe/agents/pm/{sel
             valid_codes=[
                 PhaseStatusCode.CONFIRMED,
                 PhaseStatusCode.NEED_CLARIFICATION,
-                PhaseStatusCode.REJECTED,
             ],
             descriptions={
                 PhaseStatusCode.CONFIRMED: "需求已經很清楚，可以進行開發",
                 PhaseStatusCode.NEED_CLARIFICATION: "需求有不清楚的地方需要澄清",
-                PhaseStatusCode.REJECTED: "需求有嚴重問題，無法進行",
             },
         )
 
@@ -1099,7 +1093,6 @@ PM (Product Manager)，負責需求澄清工作。請讀取 .cafe/agents/pm/{sel
 
 - CAFE_READY_FOR_REVIEW: 需求規格已完成，所有必要資訊都已釐清，沒有待確認的問題
 - CAFE_NEED_CLARIFICATION: 規格中還有問題需要與用戶確認，或有未釐清的細節
-- CAFE_REJECTED: 需求不明確、無法實現、或被明確拒絕
 
 請只回傳一個狀態碼（例如：CAFE_READY_FOR_REVIEW），不要有任何其他內容。"""
 

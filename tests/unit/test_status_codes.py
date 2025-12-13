@@ -211,7 +211,8 @@ class TestStatusCodeClassification:
 
     def test_is_failure(self) -> None:
         """測試失敗狀態碼判斷"""
-        assert StatusCodeParser.is_failure(PhaseStatusCode.REJECTED) is True
+        # REJECTED is deprecated and no longer considered a failure
+        assert StatusCodeParser.is_failure(PhaseStatusCode.REJECTED) is False
 
         assert StatusCodeParser.is_failure(PhaseStatusCode.CONFIRMED) is False
         assert StatusCodeParser.is_failure(PhaseStatusCode.NEED_CLARIFICATION) is False

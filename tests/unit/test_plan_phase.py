@@ -1781,51 +1781,6 @@ class TestExecuteAndHandleAgentResponse:
         assert result is not None
         assert result.status == PhaseStatus.COMPLETED
 
-    def test_returns_failed_for_rejected(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
-        monkeypatch.chdir(tmp_path)
-        mock_git_ops.get_current_branch.return_value = "test-issue"
-        # Setup
-        spec_file = tmp_path / "spec.md"
-        spec_file.write_text("Test spec content")
-
-        agent_manager = MagicMock()
-        mock_agent = MagicMock()
-        mock_agent.config.cli.value = "claude"
-        mock_agent.config.session_id = "test_session"
-        agent_manager.get_agent.return_value = mock_agent
-        agent_manager.execute.return_value = ("CAFE_REJECTED\n需求不明確", TokenUsage(), [], None, [])
-
-        phase = PlanPhase(
-            agent_manager=agent_manager,
-            permission_handler=MagicMock(),
-            spec_file=str(spec_file),
-            workflow_mode=WorkflowMode.LOCAL,
-            issue_name="test-issue",
-            interactive=False,  # Changed to False to avoid hanging
-            git_ops=mock_git_ops,
-        )
-        phase.iteration = 1
-
-        # Execute - call base class method with all required parameters
-        result, _ = phase._execute_and_handle_agent_response(
-            agent_name=phase.dev_agent,
-            user_input="請建立計畫",
-            valid_status_codes=[
-                PhaseStatusCode.READY_FOR_REVIEW,
-                PhaseStatusCode.NEED_CLARIFICATION,
-                PhaseStatusCode.REJECTED,
-            ],
-            allowed_tools=["write", "read"],
-            complete_codes=[PhaseStatusCode.READY_FOR_REVIEW],
-            continue_codes=[PhaseStatusCode.NEED_CLARIFICATION],
-            phase_specific_data={"dev_agent": phase.dev_agent},
-        )
-
-        # Verify
-        assert result is not None
-        assert result.status == PhaseStatus.FAILED
-        assert "rejected" in result.message.lower()
-
     def test_returns_failed_for_no_response(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
         monkeypatch.chdir(tmp_path)
         mock_git_ops.get_current_branch.return_value = "test-issue"

@@ -1447,7 +1447,7 @@ def spec(
                 return result  # No valid status code
 
             # Check if we should continue
-            if status_code in ["CAFE_CONFIRMED", "CAFE_REJECTED"]:
+            if status_code == "CAFE_CONFIRMED":
                 return result  # Reached final state
 
             elif status_code in ["CAFE_NEED_CLARIFICATION", "CAFE_READY_FOR_REVIEW"]:
@@ -1512,12 +1512,6 @@ def spec(
                     console.print(f"Saved to: {spec_file}")
                 console.print()
                 console.print("[dim]To continue, run:[/dim] [bold]cafe spec[/bold]")
-            elif status_code == "CAFE_REJECTED":
-                console.print("[bold red]❌ Spec rejected by agent[/bold red]")
-                console.print(f"Iterations: {result.data.get('iterations', 'N/A')}")
-                if workflow_mode == WorkflowMode.LOCAL:
-                    spec_file = result.data.get("spec_file", spec_dir)
-                    console.print(f"Saved to: {spec_file}")
             elif status_code == "CAFE_READY_FOR_REVIEW":
                 # Spec draft is ready, but needs user confirmation
                 console.print("[bold green]✅ Spec draft completed![/bold green]")
@@ -1797,7 +1791,7 @@ def plan(
                 return result  # No valid status code
 
             # Check if we should continue
-            if status_code in ["CAFE_CONFIRMED", "CAFE_REJECTED"]:
+            if status_code == "CAFE_CONFIRMED":
                 return result  # Reached final state
 
             elif status_code in ["CAFE_NEED_CLARIFICATION", "CAFE_READY_FOR_REVIEW"]:
@@ -1861,11 +1855,6 @@ def plan(
                     console.print(f"Saved to: {plan_file}")
                 console.print()
                 console.print("[dim]To review the plan, run:[/dim] [bold]cafe plan[/bold]")
-            elif status_code == "CAFE_REJECTED":
-                console.print("[bold red]❌ Plan rejected by agent[/bold red]")
-                console.print(f"Iterations: {result.data.get('iterations', 'N/A')}")
-                if Path(plan_file).exists():
-                    console.print(f"Saved to: {plan_file}")
             else:
                 # CAFE_CONFIRMED
                 console.print("[bold green]✅ Implementation plan completed![/bold green]")
@@ -2579,7 +2568,6 @@ def pr(
 
                         # Execute develop phase in auto mode
                         _execute_next_phase_auto("develop", issue_name)
-                # USER_REJECTED is already handled in pr_phase.py
             elif pr_url:
                 # GitHub PR mode: Show PR URL and GitHub-specific next steps
                 files_url = pr_url + "/files"

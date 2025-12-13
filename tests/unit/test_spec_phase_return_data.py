@@ -157,7 +157,6 @@ class TestSpecPhaseReturnData:
     @pytest.mark.parametrize("status_code,expected_status", [
         ("CAFE_READY_FOR_REVIEW", PhaseStatus.COMPLETED),
         ("CAFE_NEED_CLARIFICATION", PhaseStatus.COMPLETED),  # NEED_CLARIFICATION returns COMPLETED (not IN_PROGRESS)
-        ("CAFE_REJECTED", PhaseStatus.FAILED),
     ])
     def test_all_success_paths_include_spec_file(self, status_code, expected_status, spec_phase_setup):
         """所有成功路徑都應包含 spec_file"""

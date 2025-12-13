@@ -550,20 +550,16 @@ class PRPhase(Phase):
                 data={"status_code": PhaseStatusCode.NEEDS_CHANGES.value, "pr_file": str(pr_file), "local_review": True},
             )
 
-        # Otherwise, it's a PhaseResult (confirm or reject)
-        # Add custom messages for local review
+        # Otherwise, it's a PhaseResult (confirm)
+        # Add custom message for local review
         if result.status == PhaseStatus.COMPLETED:
             console.print()
             console.print("[green]✓ Changes confirmed![/green]")
             console.print()
-        elif result.status == PhaseStatus.FAILED:
-            console.print()
-            console.print("[red]✗ Changes rejected[/red]")
-            console.print()
 
         # Mark result.data to indicate this is local review mode
         if "status_code" not in result.data:
-            result.data["status_code"] = PhaseStatusCode.CONFIRMED.value if result.status == PhaseStatus.COMPLETED else "USER_REJECTED"
+            result.data["status_code"] = PhaseStatusCode.CONFIRMED.value
         result.data["local_review"] = True
 
         return result

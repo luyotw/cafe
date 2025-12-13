@@ -77,39 +77,6 @@ class TestSpecPhaseWithStatusCodes:
         assert result.data.get("status_code") == "CAFE_READY_FOR_REVIEW"
         assert agent_manager.execute.call_count == 1
 
-    def test_rejected_status_code_fails_phase(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
-        """測試 REJECTED 狀態碼會失敗 phase"""
-        monkeypatch.chdir(tmp_path)
-        issue_name = "test-rejected-issue"
-        spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec_001.md"
-        spec_file.parent.mkdir(parents=True, exist_ok=True)
-        spec_file.write_text("# Requirements\nTest requirements")
-
-        agent_manager = MagicMock(spec=AgentManager)
-        setup_agent_manager_mock_for_spec(agent_manager)
-        agent_manager.execute.return_value = ("CAFE_REJECTED\n需求有問題，無法進行。", TokenUsage(), [], None, [])
-        agent_manager.get_total_token_usage.return_value = TokenUsage()
-
-        permission_handler = MagicMock(spec=PermissionHandler)
-
-        phase = SpecPhase(
-            agent_manager=agent_manager,
-            permission_handler=permission_handler,
-                git_ops=mock_git_ops,
-            spec_file=str(spec_file),
-            workflow_mode=WorkflowMode.LOCAL,
-            interactive=False,
-            rigor=SpecRigor.MEDIUM,
-            user_input="需求",
-        )
-
-        with patch('builtins.print'):
-            result = phase.execute()
-
-        assert result.status == PhaseStatus.FAILED
-        assert result.data.get("status_code") == "CAFE_REJECTED"
-        assert "rejected" in result.message.lower()
-
     def test_need_clarification_continues_iteration(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
         """測試 NEED_CLARIFICATION 狀態碼回傳 IN_PROGRESS（沒有 while loop）"""
         monkeypatch.chdir(tmp_path)
