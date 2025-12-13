@@ -36,6 +36,37 @@ app = typer.Typer(
 console = Console()
 
 
+def _check_agent_clis_available(config_manager: ConfigManager) -> List[str]:
+    """檢查所有 agent CLI 工具是否已安裝。
+
+    Args:
+        config_manager: 配置管理器
+
+    Returns:
+        缺失的 CLI 工具列表（若無缺失則回傳空列表）
+    """
+    # 讀取所有 agent 配置
+    pm_config = config_manager.get("agents.pm", {"name": "Roger", "cli": "copilot"})
+    dev_config = config_manager.get(
+        "agents.developer", {"name": "David", "cli": "copilot"}
+    )
+    reviewer_config = config_manager.get(
+        "agents.reviewer", {"name": "Richard", "cli": "copilot"}
+    )
+
+    # 收集所有需要檢查的 CLI 工具
+    required_clis = [pm_config["cli"], dev_config["cli"], reviewer_config["cli"]]
+
+    # 檢查每個 CLI 是否存在
+    missing_clis = []
+    for cli in required_clis:
+        if shutil.which(cli) is None:
+            if cli not in missing_clis:  # 避免重複
+                missing_clis.append(cli)
+
+    return missing_clis
+
+
 def _get_and_validate_branch(ctx: typer.Context, phase_name: str) -> str:
     """Get current branch and validate it for core phase commands.
 
