@@ -1,8 +1,7 @@
 """測試 init_helpers 模組的輔助函式"""
 
-import shutil
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -21,12 +20,17 @@ class TestCheckAvailableClis:
         """測試所有 CLI 都已安裝的情況"""
         with patch("shutil.which") as mock_which:
             # 模擬所有 CLI 都已安裝
-            mock_which.side_effect = lambda x: f"/usr/bin/{x}" if x in [
-                "claude",
-                "gemini",
-                "cursor-agent",
-                "copilot",
-            ] else None
+            mock_which.side_effect = lambda x: (
+                f"/usr/bin/{x}"
+                if x
+                in [
+                    "claude",
+                    "gemini",
+                    "cursor-agent",
+                    "copilot",
+                ]
+                else None
+            )
 
             available = check_available_clis()
 
@@ -40,10 +44,15 @@ class TestCheckAvailableClis:
         """測試部分 CLI 已安裝的情況"""
         with patch("shutil.which") as mock_which:
             # 只有 claude 和 gemini 安裝
-            mock_which.side_effect = lambda x: f"/usr/bin/{x}" if x in [
-                "claude",
-                "gemini",
-            ] else None
+            mock_which.side_effect = lambda x: (
+                f"/usr/bin/{x}"
+                if x
+                in [
+                    "claude",
+                    "gemini",
+                ]
+                else None
+            )
 
             available = check_available_clis()
 
@@ -140,7 +149,9 @@ Agent content here.
 class TestListAvailableAgents:
     """測試列出可用 agents 的功能"""
 
-    def test_list_available_agents_with_valid_files(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_list_available_agents_with_valid_files(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """測試列出有效的 agent 檔案"""
         # 建立測試目錄結構
         agents_dir = tmp_path / ".cafe" / "agents"
@@ -176,7 +187,9 @@ description: 注重細節的 PM
         assert "Roger" in names
         assert "Alice" in names
 
-    def test_list_available_agents_with_empty_directory(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_list_available_agents_with_empty_directory(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """測試空的 agent 目錄"""
         agents_dir = tmp_path / ".cafe" / "agents"
         pm_dir = agents_dir / "pm"
@@ -189,7 +202,9 @@ description: 注重細節的 PM
 
         assert len(agents) == 0
 
-    def test_list_available_agents_ignores_non_md_files(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_list_available_agents_ignores_non_md_files(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """測試忽略非 .md 檔案"""
         agents_dir = tmp_path / ".cafe" / "agents"
         pm_dir = agents_dir / "pm"

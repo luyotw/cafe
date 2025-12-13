@@ -1,15 +1,12 @@
 """測試 cafe init 指令"""
 
-import shutil
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
-import typer
-
-from cafe.ui.cli import app
 from typer.testing import CliRunner
 
+from cafe.ui.cli import app
 
 runner = CliRunner()
 
@@ -17,7 +14,9 @@ runner = CliRunner()
 class TestInitCommandEnvironmentChecks:
     """測試 init 指令的環境檢查"""
 
-    def test_init_exits_if_config_exists(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_init_exits_if_config_exists(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """測試當 .cafe/config.yaml 存在時提示並退出"""
         # 建立測試環境
         cafe_dir = tmp_path / ".cafe"
@@ -75,7 +74,7 @@ class TestInitCommandEnvironmentChecks:
                     ("Roger", "PM agent", Path(".cafe/agents/pm/Roger.md"))
                 ]
 
-                result = runner.invoke(app, ["init"])
+                _result = runner.invoke(app, ["init"])
 
         # 驗證 copy_data_directory 被呼叫兩次（agents 和 templates）
         assert mock_copy.call_count == 2
@@ -125,26 +124,24 @@ class TestInitCommandInteractiveFlow:
         mock_which.return_value = "/usr/bin/claude"
 
         # 模擬 agent 列表
-        mock_list_agents.return_value = [
-            ("Roger", "PM agent", Path(".cafe/agents/pm/Roger.md"))
-        ]
+        mock_list_agents.return_value = [("Roger", "PM agent", Path(".cafe/agents/pm/Roger.md"))]
 
         # 模擬用戶選擇 - inquirer.prompt() 返回字典
         mock_prompt.side_effect = [
-            {"cli": "claude"},      # PM CLI
-            {"model": ""},          # PM model
+            {"cli": "claude"},  # PM CLI
+            {"model": ""},  # PM model
             {"agent": "Roger: PM agent"},  # PM agent
-            {"cli": "gemini"},      # Developer CLI
-            {"model": "sonnet"},    # Developer model
+            {"cli": "gemini"},  # Developer CLI
+            {"model": "sonnet"},  # Developer model
             {"agent": "Roger: PM agent"},  # Developer agent
-            {"cli": "copilot"},     # Reviewer CLI
-            {"model": ""},          # Reviewer model
+            {"cli": "copilot"},  # Reviewer CLI
+            {"model": ""},  # Reviewer model
             {"agent": "Roger: PM agent"},  # Reviewer agent
         ]
 
         monkeypatch.chdir(tmp_path)
 
-        result = runner.invoke(app, ["init"])
+        _result = runner.invoke(app, ["init"])
 
         # 驗證 inquirer.prompt 被呼叫 9 次（3 個角色 × 3: CLI + model + agent）
         assert mock_prompt.call_count == 9
@@ -167,9 +164,7 @@ class TestInitCommandInteractiveFlow:
         mock_which.return_value = "/usr/bin/claude"
 
         # 模擬 agent 列表
-        mock_list_agents.return_value = [
-            ("Roger", "PM agent", Path(".cafe/agents/pm/Roger.md"))
-        ]
+        mock_list_agents.return_value = [("Roger", "PM agent", Path(".cafe/agents/pm/Roger.md"))]
 
         # 模擬 Ctrl+C
         mock_prompt.side_effect = KeyboardInterrupt()
@@ -236,20 +231,20 @@ class TestInitCommandConfigSaving:
 
         # 模擬用戶選擇 - inquirer.prompt() 返回字典
         mock_prompt.side_effect = [
-            {"cli": "copilot"},     # PM CLI
-            {"model": ""},          # PM model
+            {"cli": "copilot"},  # PM CLI
+            {"model": ""},  # PM model
             {"agent": "Roger: PM agent"},  # PM agent
-            {"cli": "claude"},      # Developer CLI
-            {"model": "sonnet"},    # Developer model
+            {"cli": "claude"},  # Developer CLI
+            {"model": "sonnet"},  # Developer model
             {"agent": "David: Dev agent"},  # Developer agent
-            {"cli": "gemini"},      # Reviewer CLI
-            {"model": ""},          # Reviewer model
+            {"cli": "gemini"},  # Reviewer CLI
+            {"model": ""},  # Reviewer model
             {"agent": "Richard: Reviewer agent"},  # Reviewer agent
         ]
 
         monkeypatch.chdir(tmp_path)
 
-        result = runner.invoke(app, ["init"])
+        _result = runner.invoke(app, ["init"])
 
         # 驗證配置檔案被建立
         config_file = tmp_path / ".cafe" / "config.yaml"
@@ -287,9 +282,7 @@ class TestInitCommandConfigSaving:
         mock_which.return_value = "/usr/bin/claude"
 
         # 模擬 agent 列表
-        mock_list_agents.return_value = [
-            ("Roger", "PM agent", Path(".cafe/agents/pm/Roger.md"))
-        ]
+        mock_list_agents.return_value = [("Roger", "PM agent", Path(".cafe/agents/pm/Roger.md"))]
 
         # 模擬用戶選擇 - 每個角色都選擇相同的設定
         mock_prompt.side_effect = [
@@ -327,9 +320,7 @@ class TestInitCommandConfigSaving:
         mock_which.return_value = "/usr/bin/claude"
 
         # 模擬 agent 列表
-        mock_list_agents.return_value = [
-            ("Roger", "PM agent", Path(".cafe/agents/pm/Roger.md"))
-        ]
+        mock_list_agents.return_value = [("Roger", "PM agent", Path(".cafe/agents/pm/Roger.md"))]
 
         # 模擬用戶選擇（model 輸入為空）
         mock_prompt.side_effect = [

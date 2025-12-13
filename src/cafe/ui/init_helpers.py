@@ -53,9 +53,7 @@ def parse_agent_file(file_path: Path) -> Dict[str, str]:
             name = name_match.group(1).strip()
 
         # 提取 description
-        desc_match = re.search(
-            r"^description:\s*(.+)$", frontmatter_content, re.MULTILINE
-        )
+        desc_match = re.search(r"^description:\s*(.+)$", frontmatter_content, re.MULTILINE)
         if desc_match:
             description = desc_match.group(1).strip()
 
