@@ -1093,7 +1093,6 @@ PM (Product Manager)，負責需求澄清工作。請讀取 .cafe/agents/pm/{sel
 
 - CAFE_READY_FOR_REVIEW: 需求規格已完成，所有必要資訊都已釐清，沒有待確認的問題
 - CAFE_NEED_CLARIFICATION: 規格中還有問題需要與用戶確認，或有未釐清的細節
-- CAFE_REJECTED: 需求不明確、無法實現、或被明確拒絕
 
 請只回傳一個狀態碼（例如：CAFE_READY_FOR_REVIEW），不要有任何其他內容。"""
 

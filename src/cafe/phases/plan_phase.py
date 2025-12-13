@@ -650,7 +650,6 @@ class PlanPhase(Phase):
 
 - CAFE_READY_FOR_REVIEW: 實作計畫已完成，可以給用戶審核
 - CAFE_NEED_CLARIFICATION: 還有問題需要與用戶確認
-- CAFE_REJECTED: 計畫被拒絕或無法完成
 
 請只回傳一個狀態碼（例如：CAFE_READY_FOR_REVIEW），不要有任何其他內容。"""
 
