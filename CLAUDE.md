@@ -63,6 +63,7 @@ mypy src/
 # Phase 相關指令（自動使用當前 Git branch 名稱作為 issue 識別）
 cafe prepare [issue-name]              # 初始化 issue 環境（建立 branch 和目錄結構）
 cafe prepare [issue-name] --worktree <path>  # 使用 worktree 模式（例如：worktrees/my-feature）
+cafe make                              # 檢查環境並執行完整自動化工作流程（spec → plan → develop → review → pr）
 cafe spec                              # Phase 1: 需求澄清
 cafe plan                              # Phase 2: 實作計畫
 cafe develop                           # Phase 3: 開發實作

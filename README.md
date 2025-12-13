@@ -34,5 +34,39 @@ Gemini CLI 的 `write_file` 工具**不支援路徑限制**。如果在 `--allow
 - ReviewPhase: Prompt 中會明確告知 reviewer 應寫入 `review_XXX.md` 的完整路徑
 
 ## 使用說明
-> TODO
-test fix
+
+### 快速開始
+
+1. **安裝 agent CLI 工具**（至少一個）：
+   - [Claude CLI](https://github.com/anthropics/anthropic-cli)
+   - [Gemini CLI](https://github.com/google-gemini/gemini-cli)
+   - [GitHub Copilot CLI](https://docs.github.com/en/copilot/using-github-copilot/using-github-copilot-in-the-command-line)
+   - [Cursor CLI](https://cursor.com/docs/cli)
+
+2. **配置 agents**：
+   ```bash
+   # 編輯配置檔設定使用的 agent CLI
+   cafe config edit
+   ```
+
+3. **開始開發工作流程**：
+   ```bash
+   # 初始化 issue 環境
+   cafe prepare my-feature
+
+   # 執行完整自動化工作流程
+   cafe make
+   ```
+
+### 核心指令
+
+- `cafe prepare [issue-name]` - 初始化 issue 環境
+- `cafe make` - 檢查環境並執行完整自動化工作流程
+- `cafe spec` - 需求澄清
+- `cafe plan` - 實作計畫
+- `cafe develop` - 開發實作
+- `cafe review` - Code Review
+- `cafe pr` - 建立 PR
+- `cafe close` - 結束 issue
+
+詳細使用說明請參考 [CLAUDE.md](CLAUDE.md)。

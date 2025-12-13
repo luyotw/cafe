@@ -36,6 +36,37 @@ app = typer.Typer(
 console = Console()
 
 
+def _check_agent_clis_available(config_manager: ConfigManager) -> List[str]:
+    """檢查所有 agent CLI 工具是否已安裝。
+
+    Args:
+        config_manager: 配置管理器
+
+    Returns:
+        缺失的 CLI 工具列表（若無缺失則回傳空列表）
+    """
+    # 讀取所有 agent 配置
+    pm_config = config_manager.get("agents.pm", {"name": "Roger", "cli": "copilot"})
+    dev_config = config_manager.get(
+        "agents.developer", {"name": "David", "cli": "copilot"}
+    )
+    reviewer_config = config_manager.get(
+        "agents.reviewer", {"name": "Richard", "cli": "copilot"}
+    )
+
+    # 收集所有需要檢查的 CLI 工具
+    required_clis = [pm_config["cli"], dev_config["cli"], reviewer_config["cli"]]
+
+    # 檢查每個 CLI 是否存在
+    missing_clis = []
+    for cli in required_clis:
+        if shutil.which(cli) is None:
+            if cli not in missing_clis:  # 避免重複
+                missing_clis.append(cli)
+
+    return missing_clis
+
+
 def _get_and_validate_branch(ctx: typer.Context, phase_name: str) -> str:
     """Get current branch and validate it for core phase commands.
 
@@ -2958,6 +2989,74 @@ def template(
 
     except Exception as e:
         console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1)
+
+
+@app.command()
+def make(
+    config_file: str = typer.Option(
+        ".cafe/config.yaml",
+        "--config",
+        "-c",
+        help="Path to configuration file",
+    ),
+) -> None:
+    """🚀 檢查環境並執行完整的開發工作流程。
+
+    這個指令會：
+    1. 檢查所有配置的 agent CLI 工具是否已安裝
+    2. 若環境檢查通過，執行 `cafe spec --auto` 啟動自動化工作流程
+
+    使用前請先執行 `cafe prepare` 初始化 issue 環境。
+
+    Examples:
+        # 使用預設配置執行
+        cafe make
+
+        # 使用自訂配置檔
+        cafe make --config /path/to/config.yaml
+    """
+    # Load configuration
+    config_manager = ConfigManager(Path(config_file).parent)
+    config_manager.load_config()
+
+    # Check if all agent CLIs are available
+    missing_clis = _check_agent_clis_available(config_manager)
+
+    if missing_clis:
+        console.print("[red]Error: The following agent CLI tools are not installed:[/red]")
+        console.print()
+        for cli in missing_clis:
+            console.print(f"  [red]✗[/red] {cli}")
+        console.print()
+        console.print("[yellow]Please install the missing tools before running 'cafe make'.[/yellow]")
+        console.print()
+        console.print("[dim]Installation guides:[/dim]")
+        console.print("[dim]  • claude: https://github.com/anthropics/anthropic-cli[/dim]")
+        console.print("[dim]  • gemini: https://github.com/google-gemini/gemini-cli[/dim]")
+        console.print("[dim]  • cursor-agent: https://cursor.com/docs/cli[/dim]")
+        console.print("[dim]  • copilot: https://docs.github.com/en/copilot/using-github-copilot/using-github-copilot-in-the-command-line[/dim]")
+        raise typer.Exit(1)
+
+    # All CLIs available, execute cafe spec --auto
+    console.print("[green]✓ All agent CLI tools are installed[/green]")
+    console.print()
+    console.print("[bold cyan]🚀 Starting automated workflow...[/bold cyan]")
+    console.print()
+
+    # Build command
+    cmd = [sys.executable, "-m", "cafe.ui.cli", "spec", "--auto"]
+
+    # Execute the command
+    try:
+        result = subprocess.run(cmd, check=False)
+        if result.returncode != 0:
+            console.print(
+                f"[red]Error: spec phase failed with exit code {result.returncode}[/red]"
+            )
+            raise typer.Exit(result.returncode)
+    except Exception as e:
+        console.print(f"[red]Error executing spec phase: {e}[/red]")
         raise typer.Exit(1)
 
 
