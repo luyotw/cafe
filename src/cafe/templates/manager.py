@@ -108,22 +108,25 @@ class TemplateManager:
         return self.get_template_path(template_name) is not None
 
     def _ensure_default_template(self) -> None:
-        """Ensure default template exists by copying from package if needed."""
+        """Ensure default template exists by copying from package data if needed."""
         default_template_path = self.template_dir / "default.md"
 
         # If default template already exists, don't overwrite
         if default_template_path.exists():
             return
 
-        # Find the template directory at repository root
-        # The manager.py is in src/cafe/templates/, so root templates are at ../../../templates/
+        # Find the template in package data directory
         # Path(__file__) = src/cafe/templates/manager.py
         # .parent = src/cafe/templates/
         # .parent.parent = src/cafe/
-        # .parent.parent.parent = src/
-        # .parent.parent.parent.parent = repository root
-        repo_root = Path(__file__).parent.parent.parent.parent
-        package_template = repo_root / "templates" / "plan" / "default.md"
+        # .parent.parent / "data" / "templates" / "plan" / "default.md" = package data template
+        package_data_template = Path(__file__).parent.parent / "data" / "templates" / "plan" / "default.md"
 
-        if package_template.exists():
-            shutil.copy2(package_template, default_template_path)
+        # Try package data first, then repo root (for backward compatibility)
+        repo_root = Path(__file__).parent.parent.parent.parent
+        repo_template = repo_root / "templates" / "plan" / "default.md"
+
+        if package_data_template.exists():
+            shutil.copy2(package_data_template, default_template_path)
+        elif repo_template.exists():
+            shutil.copy2(repo_template, default_template_path)

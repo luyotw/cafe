@@ -472,25 +472,36 @@ def version() -> None:
 
 
 def _ensure_default_content(cafe_dir: Path) -> None:
-    """確保 .cafe/templates 和 .cafe/agents 存在，如不存在則從 repo root 複製。
+    """確保 .cafe/templates 和 .cafe/agents 存在，如不存在則從 package 資料目錄複製。
 
     Args:
         cafe_dir: .cafe 目錄的路徑
     """
+    # Get package data directory
+    package_dir = Path(__file__).parent.parent / "data"
+
     # Initialize templates if not exists
     cafe_templates = cafe_dir / "templates"
     if not cafe_templates.exists():
-        # Find repo root templates
+        # Try package data first, then repo root
+        package_templates = package_dir / "templates"
         repo_templates = Path("templates")
-        if repo_templates.exists():
+
+        if package_templates.exists():
+            shutil.copytree(package_templates, cafe_templates)
+        elif repo_templates.exists():
             shutil.copytree(repo_templates, cafe_templates)
 
     # Initialize agents if not exists
     cafe_agents = cafe_dir / "agents"
     if not cafe_agents.exists():
-        # Find repo root agents
+        # Try package data first, then repo root
+        package_agents = package_dir / "agents"
         repo_agents = Path("agents")
-        if repo_agents.exists():
+
+        if package_agents.exists():
+            shutil.copytree(package_agents, cafe_agents)
+        elif repo_agents.exists():
             shutil.copytree(repo_agents, cafe_agents)
 
 
