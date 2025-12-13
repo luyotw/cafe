@@ -2583,6 +2583,16 @@ def pr(
                 console.print(
                     f"[dim]  3. If issues found: add comments and submit review, then run [bold]cafe develop --auto[/bold] (or [bold]cafe make[/bold])[/dim]"
                 )
+                
+                # Automatically open PR diff in browser
+                try:
+                    subprocess.run(
+                        ["gh", "pr", "diff", "--web"],
+                        capture_output=True,
+                        timeout=5
+                    )
+                except Exception:
+                    pass  # Silently ignore any errors
         else:
             console.print()
             console.print(f"[bold red]❌ PR phase failed: {result.message}[/bold red]")
