@@ -7,26 +7,33 @@ import sys
 from pathlib import Path
 from typing import List, Optional
 
+import inquirer
 import typer
+import yaml
 from rich.console import Console
 
 from cafe.agents.manager import AgentManager
 from cafe.core.git import GitOperations
 from cafe.core.permission import PermissionHandler
-from cafe.core.types import AgentConfig, AgentCLI, WorkflowMode
+from cafe.core.types import AgentCLI, AgentConfig, WorkflowMode
 from cafe.core.workflow import Workflow
-from cafe.phases.plan_phase import PlanPhase
 from cafe.phases.develop_phase import DevelopPhase
+from cafe.phases.plan_phase import PlanPhase
 from cafe.phases.pr_phase import PRPhase
-from cafe.phases.spec_phase import SpecPhase
 from cafe.phases.review_phase import ReviewPhase
+from cafe.phases.spec_phase import SpecPhase
+from cafe.templates.manager import TemplateManager
+from cafe.ui import init_helpers
+from cafe.ui.display import Display
+from cafe.ui.init_helpers import (
+    check_available_clis,
+    list_available_agents,
+)
+from cafe.ui.phase_prompts import prompt_for_input_method, prompt_for_rigor
+from cafe.ui.template_selector import select_template
 from cafe.utils.config import ConfigManager
 from cafe.utils.git_utils import is_branch_initialized
-from cafe.utils.github import GitHubOps, GitHubError
-from cafe.templates.manager import TemplateManager
-from cafe.ui.template_selector import select_template
-from cafe.ui.phase_prompts import prompt_for_input_method, prompt_for_rigor
-from cafe.ui.display import Display
+from cafe.utils.github import GitHubError, GitHubOps
 
 app = typer.Typer(
     name="cafe",
@@ -81,12 +88,8 @@ def _check_agent_clis_available(config_manager: ConfigManager) -> List[str]:
     """
     # 讀取所有 agent 配置
     pm_config = config_manager.get("agents.pm", {"name": "Roger", "cli": "copilot"})
-    dev_config = config_manager.get(
-        "agents.developer", {"name": "David", "cli": "copilot"}
-    )
-    reviewer_config = config_manager.get(
-        "agents.reviewer", {"name": "Richard", "cli": "copilot"}
-    )
+    dev_config = config_manager.get("agents.developer", {"name": "David", "cli": "copilot"})
+    reviewer_config = config_manager.get("agents.reviewer", {"name": "Richard", "cli": "copilot"})
 
     # 收集所有需要檢查的 CLI 工具
     required_clis = [pm_config["cli"], dev_config["cli"], reviewer_config["cli"]]
@@ -137,8 +140,8 @@ def _get_and_validate_branch(ctx: typer.Context, phase_name: str) -> str:
         # Check if branch is initialized
         if not is_branch_initialized(branch_name):
             console.print(
-                f"[red]Error: This branch has not been initialized. "
-                f"Please run 'cafe prepare' first.[/red]"
+                "[red]Error: This branch has not been initialized. "
+                "Please run 'cafe prepare' first.[/red]"
             )
             raise typer.Exit(1)
 
@@ -253,11 +256,11 @@ def _edit_file_with_editor(file_path: Path) -> None:
         subprocess.run([editor, str(file_path)], check=True)
         console.print(f"[green]✓ File edited: {file_path}[/green]")
     except subprocess.CalledProcessError:
-        console.print(f"[red]Error: Failed to edit file[/red]")
+        console.print("[red]Error: Failed to edit file[/red]")
         raise typer.Exit(1)
     except FileNotFoundError:
         console.print(f"[red]Error: Editor '{editor}' not found[/red]")
-        console.print(f"[dim]Set EDITOR environment variable or install vim[/dim]")
+        console.print("[dim]Set EDITOR environment variable or install vim[/dim]")
         raise typer.Exit(1)
 
 
@@ -424,6 +427,170 @@ def _build_workflow(
 
 
 @app.command()
+def init() -> None:
+    """Initialize CAFE configuration for the project.
+
+    Creates .cafe/config.yaml and copies default agents and templates.
+    """
+    try:
+        config_manager = ConfigManager()
+
+        # 1. Check if config already exists
+        if config_manager.config_file.exists():
+            console.print("[yellow]設定已存在。如需修改，請使用 `cafe config` 指令集。[/yellow]")
+            console.print("[yellow]詳情請見 `cafe config --help`。[/yellow]")
+            raise typer.Exit(1)
+
+        # 2. Copy agents and templates directories
+        try:
+            # Get package data directory
+            import cafe
+
+            package_dir = Path(cafe.__file__).parent
+            agents_source = package_dir / "data" / "agents"
+            templates_source = package_dir / "data" / "templates"
+
+            console.print("[cyan]正在初始化專案環境...[/cyan]")
+
+            init_helpers.copy_data_directory(str(agents_source), ".cafe/agents")
+            console.print("[green]✓ 已複製 agents 目錄[/green]")
+
+            init_helpers.copy_data_directory(str(templates_source), ".cafe/templates")
+            console.print("[green]✓ 已複製 templates 目錄[/green]")
+
+        except Exception as e:
+            console.print(f"[red]錯誤：複製檔案失敗 - {e}[/red]")
+            raise typer.Exit(1)
+
+        # 3. Check available CLIs
+        available_clis = check_available_clis()
+
+        if not available_clis:
+            console.print("[red]未找到任何支援的 AI 代理。請先安裝至少一個代理後再重新執行。[/red]")
+            console.print("[yellow]支援的代理：claude, gemini, cursor-agent, copilot[/yellow]")
+            raise typer.Exit(1)
+
+        console.print(f"[green]找到可用的 AI 代理：{', '.join(available_clis)}[/green]\n")
+
+        # 4. Interactive configuration for three roles
+        config = {
+            "agents": {},
+            "defaults": {
+                "workflow_mode": "local",
+                "interactive": True,
+            },
+        }
+
+        roles = [
+            ("pm", "PM"),
+            ("developer", "Developer"),
+            ("reviewer", "Reviewer"),
+        ]
+
+        def prompt_with_cancel_check(questions: list) -> dict:
+            """執行 inquirer prompt 並檢查用戶是否取消。"""
+            answer = inquirer.prompt(questions)
+            if not answer:
+                console.print("\n[yellow]設定未完成，已取消。[/yellow]")
+                raise typer.Exit(1)
+            return answer
+
+        for role_key, role_display in roles:
+            console.print(f"[bold cyan]配置 {role_display} 角色：[/bold cyan]")
+
+            # Select CLI
+            cli_question = [
+                inquirer.List(
+                    "cli",
+                    message=f"請為 {role_display} 選擇一個 AI 代理",
+                    choices=available_clis,
+                )
+            ]
+            cli_answer = prompt_with_cancel_check(cli_question)
+            selected_cli = cli_answer["cli"]
+
+            # Input model name
+            model_question = [
+                inquirer.Text(
+                    "model",
+                    message=f"請為 {selected_cli} 輸入要使用的模型名稱（選填，直接按 Enter 將使用預設模型）",
+                    default="",
+                )
+            ]
+            model_answer = prompt_with_cancel_check(model_question)
+            model_name = model_answer["model"].strip() if model_answer["model"] else None
+
+            # List available agents for this role
+            agents = list_available_agents(role_key)
+
+            if not agents:
+                console.print(f"[red]錯誤：找不到 {role_display} 角色的代理人檔案。[/red]")
+                console.print(
+                    f"[yellow]請確認 .cafe/agents/{role_key}/ 目錄中有有效的 .md 檔案。[/yellow]"
+                )
+                raise typer.Exit(1)
+
+            # Create agent choices in "name: description" format
+            agent_choices = [f"{name}: {desc}" for name, desc, _ in agents]
+
+            # Select agent
+            agent_question = [
+                inquirer.List(
+                    "agent",
+                    message=f"請為 {role_display} 選擇一位代理人",
+                    choices=agent_choices,
+                )
+            ]
+            agent_answer = prompt_with_cancel_check(agent_question)
+            selected_agent_display = agent_answer["agent"]
+
+            # Find the selected agent details
+            selected_agent_name = selected_agent_display.split(":")[0].strip()
+            selected_agent_file = None
+            for name, desc, file_path in agents:
+                if name == selected_agent_name:
+                    selected_agent_file = file_path
+                    break
+
+            # Store configuration
+            config["agents"][role_key] = {
+                "name": selected_agent_name,
+                "cli": selected_cli,
+            }
+
+            if model_name:
+                config["agents"][role_key]["model"] = model_name
+
+            if selected_agent_file:
+                config["agents"][role_key]["agent_file"] = str(selected_agent_file)
+
+            console.print("")
+
+        # 5. Save configuration
+        config_manager.save_config(config)
+
+        # 6. Display success message
+        console.print("[bold green]設定已成功儲存！[/bold green]\n")
+
+        for role_key, role_display in roles:
+            role_config = config["agents"][role_key]
+            model_display = role_config.get("model") or "預設"
+            console.print(
+                f"- {role_display}: {role_config['cli']} "
+                f"(模型: {model_display}) (代理人: {role_config['name']})"
+            )
+
+        console.print("\n[cyan]您現在可以使用 `cafe prepare` 來開始新的開發任務。[/cyan]")
+        console.print(
+            "[cyan]如需修改設定，請使用 `cafe config` 指令，詳情請見 `cafe config --help`。[/cyan]"
+        )
+
+    except KeyboardInterrupt:
+        console.print("\n[yellow]設定未完成，已取消。[/yellow]")
+        raise typer.Exit(1)
+
+
+@app.command()
 def run(
     spec_file: str = typer.Option(
         "spec.md",
@@ -549,7 +716,7 @@ def _ensure_default_content(cafe_dir: Path) -> None:
         cafe_dir: .cafe 目錄的路徑
     """
     from cafe.agents.manager import AgentManager
-    
+
     # Get package data directory
     package_dir = Path(__file__).parent.parent / "data"
 
@@ -619,7 +786,6 @@ def prepare(
         # Skip uncommitted changes check
         cafe prepare my-feature --no-check
     """
-    import yaml
 
     try:
         # 1. Get issue name (from argument or prompt)
@@ -768,6 +934,7 @@ def prepare(
 
             # Prompt for input method and issue ID (only for GitHub repos)
             from cafe.utils.git_utils import is_github_repo
+
             if is_github_repo():
                 input_method, issue_id = prompt_for_input_method(display, github_ops)
                 spec_config["input_method"] = input_method
@@ -807,8 +974,7 @@ def prepare(
             console.print()
             if is_github_repo():
                 auto_create_pr = typer.confirm(
-                    "Automatically create PR on GitHub after development?",
-                    default=True
+                    "Automatically create PR on GitHub after development?", default=True
                 )
                 pr_config["auto_create"] = auto_create_pr
             else:
@@ -865,10 +1031,10 @@ def prepare(
 
         # Show next steps
         if use_worktree:
-            console.print(f"[dim]Next step:[/dim]")
+            console.print("[dim]Next step:[/dim]")
             console.print(f"  [bold]cd {worktree_path}; cafe make[/bold]")
         else:
-            console.print(f"[dim]Next step:[/dim] [bold]cafe make[/bold]")
+            console.print("[dim]Next step:[/dim] [bold]cafe make[/bold]")
         console.print()
 
     except typer.Exit:
@@ -913,7 +1079,6 @@ def close() -> None:
     4. Pulls latest changes from remote
     5. Archives .cafe/issues/<issue-name>/ to ~/.cafe/projects/<project-path>/archived/<issue-name>/
     """
-    import yaml
     import os
     import shutil
 
@@ -962,7 +1127,7 @@ def close() -> None:
         if not config_file.exists():
             console.print(f"[red]Error: Issue config not found: {config_file}[/red]")
             console.print(
-                f"[yellow]Hint: This branch may not be initialized with 'cafe prepare'.[/yellow]"
+                "[yellow]Hint: This branch may not be initialized with 'cafe prepare'.[/yellow]"
             )
             raise typer.Exit(1)
 
@@ -983,7 +1148,7 @@ def close() -> None:
             # === WORKTREE MODE ===
             # Step 1: Switch back to main repository
             try:
-                console.print(f"[dim]Switching to main repository...[/dim]")
+                console.print("[dim]Switching to main repository...[/dim]")
                 # Find the main repository path (parent of .cafe/worktrees)
                 current_dir = Path.cwd()
                 main_repo = current_dir
@@ -999,9 +1164,9 @@ def close() -> None:
                 console.print(f"[red]❌ Failed to switch to main repository: {e}[/red]")
                 console.print()
                 console.print("[yellow]Remaining steps (please execute manually):[/yellow]")
-                console.print(f"  1. cd to main repository")
+                console.print("  1. cd to main repository")
                 console.print(f"  2. git checkout {base_branch}")
-                console.print(f"  3. git pull")
+                console.print("  3. git pull")
                 console.print(f"  4. git worktree remove {worktree_path}")
                 console.print(f"  5. git branch -d {feature_branch}")
                 console.print()
@@ -1019,7 +1184,7 @@ def close() -> None:
                 console.print()
                 console.print("[yellow]Remaining steps (please execute manually):[/yellow]")
                 console.print(f"  1. git checkout {base_branch}")
-                console.print(f"  2. git pull")
+                console.print("  2. git pull")
                 console.print(f"  3. git worktree remove {worktree_path}")
                 console.print(f"  4. git branch -d {feature_branch}")
                 console.print()
@@ -1030,14 +1195,14 @@ def close() -> None:
             try:
                 if pr_auto_create is False:
                     # Local review mode: merge feature branch into base branch
-                    console.print(f"[dim]Merging feature branch into base branch...[/dim]")
+                    console.print("[dim]Merging feature branch into base branch...[/dim]")
                     git_ops.merge(feature_branch)
                     console.print(f"[green]✓ Merged feature branch: {feature_branch}[/green]")
                 else:
                     # GitHub PR mode: pull latest changes
-                    console.print(f"[dim]Updating base branch...[/dim]")
+                    console.print("[dim]Updating base branch...[/dim]")
                     git_ops.pull()
-                    console.print(f"[green]✓ Updated base branch[/green]")
+                    console.print("[green]✓ Updated base branch[/green]")
             except Exception as e:
                 console.print(f"[red]❌ Failed to update base branch: {e}[/red]")
                 console.print()
@@ -1045,7 +1210,7 @@ def close() -> None:
                 if pr_auto_create is False:
                     console.print(f"  1. git merge {feature_branch}")
                 else:
-                    console.print(f"  1. git pull")
+                    console.print("  1. git pull")
                 console.print(f"  2. git worktree remove {worktree_path}")
                 console.print(f"  3. git branch -d {feature_branch}")
                 console.print()
@@ -1053,7 +1218,7 @@ def close() -> None:
 
             # Step 4: Sync .cafe/issues/{issue_name}/ from worktree to repo root
             try:
-                console.print(f"[dim]Syncing issue data from worktree to repo root...[/dim]")
+                console.print("[dim]Syncing issue data from worktree to repo root...[/dim]")
                 import shutil
 
                 worktree_abs = Path(worktree_path).resolve()
@@ -1075,7 +1240,7 @@ def close() -> None:
                         else:
                             shutil.copy2(item, repo_issue_dir / item.name)
 
-                console.print(f"[green]✓ Synced issue data to repo root[/green]")
+                console.print("[green]✓ Synced issue data to repo root[/green]")
             except Exception as e:
                 console.print(f"[yellow]⚠️  Failed to sync issue data: {e}[/yellow]")
                 console.print(
@@ -1104,7 +1269,7 @@ def close() -> None:
                 console.print(f"[green]✓ Deleted feature branch: {feature_branch}[/green]")
             except Exception as e:
                 console.print(f"[red]❌ Failed to delete branch: {e}[/red]")
-                console.print(f"[yellow]The branch may not be fully merged.[/yellow]")
+                console.print("[yellow]The branch may not be fully merged.[/yellow]")
                 console.print()
                 console.print("[yellow]Remaining steps (please execute manually):[/yellow]")
                 console.print(f"  1. git branch -D {feature_branch}  # Force delete if needed")
@@ -1121,12 +1286,12 @@ def close() -> None:
             except Exception as e:
                 console.print(f"[red]❌ Failed to switch to base branch: {e}[/red]")
                 console.print(
-                    f"[yellow]Hint: You may have uncommitted changes. Please commit or stash them first.[/yellow]"
+                    "[yellow]Hint: You may have uncommitted changes. Please commit or stash them first.[/yellow]"
                 )
                 console.print()
                 console.print("[yellow]Remaining steps (please execute manually):[/yellow]")
                 console.print(f"  1. git checkout {base_branch}")
-                console.print(f"  2. git pull")
+                console.print("  2. git pull")
                 console.print(f"  3. git branch -d {feature_branch}")
                 console.print()
                 raise typer.Exit(1)
@@ -1136,14 +1301,14 @@ def close() -> None:
             try:
                 if pr_auto_create is False:
                     # Local review mode: merge feature branch into base branch
-                    console.print(f"[dim]Merging feature branch into base branch...[/dim]")
+                    console.print("[dim]Merging feature branch into base branch...[/dim]")
                     git_ops.merge(feature_branch)
                     console.print(f"[green]✓ Merged feature branch: {feature_branch}[/green]")
                 else:
                     # GitHub PR mode: pull latest changes
-                    console.print(f"[dim]Updating base branch...[/dim]")
+                    console.print("[dim]Updating base branch...[/dim]")
                     git_ops.pull()
-                    console.print(f"[green]✓ Updated base branch[/green]")
+                    console.print("[green]✓ Updated base branch[/green]")
             except Exception as e:
                 console.print(f"[red]❌ Failed to update base branch: {e}[/red]")
                 console.print()
@@ -1151,7 +1316,7 @@ def close() -> None:
                 if pr_auto_create is False:
                     console.print(f"  1. git merge {feature_branch}")
                 else:
-                    console.print(f"  1. git pull")
+                    console.print("  1. git pull")
                 console.print(f"  2. git branch -d {feature_branch}")
                 console.print()
                 raise typer.Exit(1)
@@ -1163,7 +1328,7 @@ def close() -> None:
                 console.print(f"[green]✓ Deleted feature branch: {feature_branch}[/green]")
             except Exception as e:
                 console.print(f"[red]❌ Failed to delete branch: {e}[/red]")
-                console.print(f"[yellow]The branch may not be fully merged.[/yellow]")
+                console.print("[yellow]The branch may not be fully merged.[/yellow]")
                 console.print()
                 console.print("[yellow]Remaining steps (please execute manually):[/yellow]")
                 console.print(f"  1. git branch -D {feature_branch}  # Force delete if needed")
@@ -1172,7 +1337,7 @@ def close() -> None:
 
         # 6. Archive issue data to ~/.cafe/projects/<project-path>/archived/<issue-name>/
         try:
-            console.print(f"[dim]Archiving issue data...[/dim]")
+            console.print("[dim]Archiving issue data...[/dim]")
 
             # Get project path in ~/.claude/projects/ naming format
             project_path = _get_project_path()
@@ -1213,7 +1378,7 @@ def close() -> None:
         if worktree_path:
             console.print()
             console.print(
-                f"[yellow]⚠️  Your terminal is still in the deleted worktree directory.[/yellow]"
+                "[yellow]⚠️  Your terminal is still in the deleted worktree directory.[/yellow]"
             )
             console.print(f"[yellow]   Please run:[/yellow] [bold]cd {main_repo}[/bold]")
 
@@ -1328,7 +1493,7 @@ def spec(
             if not spec_file:
                 console.print(f"[red]Error: No spec file found for issue '{issue_name}'[/red]")
                 console.print(
-                    f"[dim]Hint: Run 'cafe spec' first to create the specification.[/dim]"
+                    "[dim]Hint: Run 'cafe spec' first to create the specification.[/dim]"
                 )
                 raise typer.Exit(1)
 
@@ -1540,7 +1705,7 @@ def spec(
             # 如果沒有有效的 status code，視為失敗
             if not status_code:
                 console.print(
-                    f"[bold red]❌ Spec phase failed: No valid status code returned[/bold red]"
+                    "[bold red]❌ Spec phase failed: No valid status code returned[/bold red]"
                 )
                 raise typer.Exit(1)
 
@@ -1685,7 +1850,7 @@ def plan(
             plan_file = _get_latest_versioned_file("plan", issue_name)
             if not plan_file:
                 console.print(f"[red]Error: No plan file found for issue '{issue_name}'[/red]")
-                console.print(f"[dim]Hint: Run 'cafe plan' first to create the plan.[/dim]")
+                console.print("[dim]Hint: Run 'cafe plan' first to create the plan.[/dim]")
                 raise typer.Exit(1)
 
             # Edit the file
@@ -1713,7 +1878,7 @@ def plan(
         spec_file_path = _get_latest_versioned_file("spec", issue_name)
         if spec_file_path is None:
             console.print(f"[red]Error: No spec file found for issue '{issue_name}'[/red]")
-            console.print(f"[dim]Hint: Run 'cafe spec' first to create the specification.[/dim]")
+            console.print("[dim]Hint: Run 'cafe spec' first to create the specification.[/dim]")
             raise typer.Exit(1)
 
         # Check if plan already exists (any versioned plan file)
@@ -2009,14 +2174,14 @@ def develop(
         spec_file_path = _get_latest_versioned_file("spec", issue_name)
         if spec_file_path is None:
             console.print(f"[red]Error: No spec file found for issue '{issue_name}'[/red]")
-            console.print(f"[dim]Hint: Run 'cafe spec' first to create the specification.[/dim]")
+            console.print("[dim]Hint: Run 'cafe spec' first to create the specification.[/dim]")
             raise typer.Exit(1)
 
         plan_file_path = _get_latest_versioned_file("plan", issue_name)
         if plan_file_path is None:
             console.print(f"[red]Error: No plan file found for issue '{issue_name}'[/red]")
             console.print(
-                f"[dim]Hint: Run 'cafe plan' first to create the implementation plan.[/dim]"
+                "[dim]Hint: Run 'cafe plan' first to create the implementation plan.[/dim]"
             )
             raise typer.Exit(1)
 
@@ -2107,9 +2272,9 @@ def develop(
                 _execute_next_phase_auto("review", issue_name)
             else:
                 console.print("[dim]Next steps:[/dim]")
-                console.print(f"[dim]  1. Review changes: git diff[/dim]")
-                console.print(f"[dim]  2. Run tests: pytest[/dim]")
-                console.print(f"[dim]  3. Code review: cafe review[/dim]")
+                console.print("[dim]  1. Review changes: git diff[/dim]")
+                console.print("[dim]  2. Run tests: pytest[/dim]")
+                console.print("[dim]  3. Code review: cafe review[/dim]")
         elif result.status.value == "failed":
             console.print(f"[red]❌ Development failed: {result.message}[/red]")
             raise typer.Exit(1)
@@ -2119,7 +2284,7 @@ def develop(
                 _execute_next_phase_auto("develop", issue_name)
             else:
                 console.print(f"[yellow]⏸️  Development paused: {result.message}[/yellow]")
-                console.print(f"[dim]Resume with: cafe develop[/dim]")
+                console.print("[dim]Resume with: cafe develop[/dim]")
 
     except Exception as e:
         console.print(f"[red]Error: {e}[/red]")
@@ -2229,7 +2394,7 @@ def review(
             review_file = _get_latest_versioned_file("review", issue_name)
             if not review_file:
                 console.print(f"[red]Error: No review file found for issue '{issue_name}'[/red]")
-                console.print(f"[dim]Hint: Run 'cafe review' first to create the review.[/dim]")
+                console.print("[dim]Hint: Run 'cafe review' first to create the review.[/dim]")
                 raise typer.Exit(1)
 
             # Edit the file
@@ -2257,14 +2422,14 @@ def review(
         spec_file_path = _get_latest_versioned_file("spec", issue_name)
         if spec_file_path is None:
             console.print(f"[red]Error: No spec file found for issue '{issue_name}'[/red]")
-            console.print(f"[dim]Hint: Run 'cafe spec' first to create the specification.[/dim]")
+            console.print("[dim]Hint: Run 'cafe spec' first to create the specification.[/dim]")
             raise typer.Exit(1)
 
         plan_file_path = _get_latest_versioned_file("plan", issue_name)
         if plan_file_path is None:
             console.print(f"[red]Error: No plan file found for issue '{issue_name}'[/red]")
             console.print(
-                f"[dim]Hint: Run 'cafe plan' first to create the implementation plan.[/dim]"
+                "[dim]Hint: Run 'cafe plan' first to create the implementation plan.[/dim]"
             )
             raise typer.Exit(1)
 
@@ -2344,7 +2509,7 @@ def review(
                     _execute_next_phase_auto("pr", issue_name)
                 else:
                     console.print("[dim]Next steps:[/dim]")
-                    console.print(f"[dim]  1. Create PR: cafe pr[/dim]")
+                    console.print("[dim]  1. Create PR: cafe pr[/dim]")
             else:
                 # CAFE_NEEDS_CHANGES or other status
                 console.print(
@@ -2392,10 +2557,10 @@ def review(
                         console.print()
                         console.print("[dim]您可以：[/dim]")
                         console.print(
-                            f"[dim]  • 繼續執行：[bold]cafe review[/bold]（不加 --auto）[/dim]"
+                            "[dim]  • 繼續執行：[bold]cafe review[/bold]（不加 --auto）[/dim]"
                         )
                         console.print(
-                            f"[dim]  • 調整上限：[bold]cafe config set auto.max_review_iterations 10[/bold][/dim]"
+                            "[dim]  • 調整上限：[bold]cafe config set auto.max_review_iterations 10[/bold][/dim]"
                         )
                         console.print(
                             f"[dim]  • 或修改 .cafe/issues/{issue_name}/config.yaml[/dim]"
@@ -2409,8 +2574,8 @@ def review(
                 else:
                     console.print("[dim]Next steps:[/dim]")
                     console.print(f"[dim]  1. Review feedback: cat {review_path}[/dim]")
-                    console.print(f"[dim]  2. Make changes: cafe develop[/dim]")
-                    console.print(f"[dim]  3. Review again: cafe review[/dim]")
+                    console.print("[dim]  2. Make changes: cafe develop[/dim]")
+                    console.print("[dim]  3. Review again: cafe review[/dim]")
         else:
             console.print()
             console.print(f"[bold red]❌ Review phase failed: {result.message}[/bold red]")
@@ -2499,13 +2664,13 @@ def pr(
         spec_file_path = _get_latest_versioned_file("spec", issue_name)
         if spec_file_path is None:
             console.print(f"[red]Error: No spec file found for issue '{issue_name}'[/red]")
-            console.print(f"[dim]Hint: Run 'cafe spec' first to create the specification.[/dim]")
+            console.print("[dim]Hint: Run 'cafe spec' first to create the specification.[/dim]")
             raise typer.Exit(1)
 
         plan_file_path = _get_latest_versioned_file("plan", issue_name)
         if plan_file_path is None:
             console.print(f"[red]Error: No plan file found for issue '{issue_name}'[/red]")
-            console.print(f"[dim]Hint: Run 'cafe plan' first to create the plan.[/dim]")
+            console.print("[dim]Hint: Run 'cafe plan' first to create the plan.[/dim]")
             raise typer.Exit(1)
 
         # Convert to strings for compatibility
@@ -2577,6 +2742,7 @@ def pr(
                 if status_code == "CAFE_CONFIRMED":
                     # Read issue config to get base_branch, feature_branch, worktree_path
                     import yaml
+
                     issue_config_file = Path(f".cafe/issues/{issue_name}/config.yaml")
                     base_branch = "main"
                     feature_branch = issue_name
@@ -2614,22 +2780,18 @@ def pr(
                 console.print()
                 console.print("[dim]Next steps:[/dim]")
                 console.print(
-                    f"[dim]  1. Review PR: open the link above or run [bold]gh pr diff --web[/bold][/dim]"
+                    "[dim]  1. Review PR: open the link above or run [bold]gh pr diff --web[/bold][/dim]"
                 )
                 console.print(
-                    f"[dim]  2. If OK: [bold]merge[/bold] the PR, then run [bold]cafe close[/bold][/dim]"
+                    "[dim]  2. If OK: [bold]merge[/bold] the PR, then run [bold]cafe close[/bold][/dim]"
                 )
                 console.print(
-                    f"[dim]  3. If issues found: add comments and submit review, then run [bold]cafe develop --auto[/bold] (or [bold]cafe make[/bold])[/dim]"
+                    "[dim]  3. If issues found: add comments and submit review, then run [bold]cafe develop --auto[/bold] (or [bold]cafe make[/bold])[/dim]"
                 )
-                
+
                 # Automatically open PR diff in browser
                 try:
-                    subprocess.run(
-                        ["gh", "pr", "diff", "--web"],
-                        capture_output=True,
-                        timeout=5
-                    )
+                    subprocess.run(["gh", "pr", "diff", "--web"], capture_output=True, timeout=5)
                 except Exception:
                     pass  # Silently ignore any errors
         else:
@@ -2672,9 +2834,8 @@ def config(
         cafe config reset
     """
     config_manager = ConfigManager()
-    import yaml
-    import subprocess
     import os
+    import subprocess
 
     # No arguments: show all config
     if not action:
@@ -2722,11 +2883,11 @@ def config(
             subprocess.run([editor, str(config_file)], check=True)
             console.print(f"[green]✓ Config file edited: {config_file}[/green]")
         except subprocess.CalledProcessError:
-            console.print(f"[red]Error: Failed to edit config[/red]")
+            console.print("[red]Error: Failed to edit config[/red]")
             raise typer.Exit(1)
         except FileNotFoundError:
             console.print(f"[red]Error: Editor '{editor}' not found[/red]")
-            console.print(f"[dim]Set EDITOR environment variable or install vim[/dim]")
+            console.print("[dim]Set EDITOR environment variable or install vim[/dim]")
             raise typer.Exit(1)
 
     elif action == "reset":
@@ -2805,8 +2966,8 @@ def remove_issue(
     force: bool = typer.Option(False, "--force", "-f", help="Skip confirmation prompt"),
 ) -> None:
     """Remove one or more issues and all their data."""
-    import shutil
     import fnmatch
+    import shutil
 
     # Expand wildcards
     issues_dir = Path(".cafe/issues")
@@ -3004,19 +3165,19 @@ def template(
                 raise typer.Exit(1)
 
             # Open template in editor
-            import subprocess
             import os
+            import subprocess
 
             editor = os.environ.get("EDITOR", "vim")
             try:
                 subprocess.run([editor, str(template_path)], check=True)
                 console.print(f"[green]✅ Template '{source}' updated[/green]")
             except subprocess.CalledProcessError:
-                console.print(f"[red]Error: Failed to edit template[/red]")
+                console.print("[red]Error: Failed to edit template[/red]")
                 raise typer.Exit(1)
             except FileNotFoundError:
                 console.print(f"[red]Error: Editor '{editor}' not found[/red]")
-                console.print(f"[dim]Set EDITOR environment variable or install vim[/dim]")
+                console.print("[dim]Set EDITOR environment variable or install vim[/dim]")
                 raise typer.Exit(1)
 
         else:
@@ -3066,13 +3227,17 @@ def make(
         for cli in missing_clis:
             console.print(f"  [red]✗[/red] {cli}")
         console.print()
-        console.print("[yellow]Please install the missing tools before running 'cafe make'.[/yellow]")
+        console.print(
+            "[yellow]Please install the missing tools before running 'cafe make'.[/yellow]"
+        )
         console.print()
         console.print("[dim]Installation guides:[/dim]")
         console.print("[dim]  • claude: https://github.com/anthropics/anthropic-cli[/dim]")
         console.print("[dim]  • gemini: https://github.com/google-gemini/gemini-cli[/dim]")
         console.print("[dim]  • cursor-agent: https://cursor.com/docs/cli[/dim]")
-        console.print("[dim]  • copilot: https://docs.github.com/en/copilot/using-github-copilot/using-github-copilot-in-the-command-line[/dim]")
+        console.print(
+            "[dim]  • copilot: https://docs.github.com/en/copilot/using-github-copilot/using-github-copilot-in-the-command-line[/dim]"
+        )
         raise typer.Exit(1)
 
     # All CLIs available, execute cafe spec --auto
@@ -3088,9 +3253,7 @@ def make(
     try:
         result = subprocess.run(cmd, check=False)
         if result.returncode != 0:
-            console.print(
-                f"[red]Error: spec phase failed with exit code {result.returncode}[/red]"
-            )
+            console.print(f"[red]Error: spec phase failed with exit code {result.returncode}[/red]")
             raise typer.Exit(result.returncode)
     except Exception as e:
         console.print(f"[red]Error executing spec phase: {e}[/red]")
@@ -3155,8 +3318,8 @@ def _check_dependencies() -> None:
         import tomllib  # Python 3.11+
     except ImportError:
         import tomli as tomllib  # Python 3.10
-    from pathlib import Path
     import importlib.metadata
+    from pathlib import Path
 
     # Find pyproject.toml (should be in project root)
     # Try from current file location
@@ -3185,7 +3348,7 @@ def _check_dependencies() -> None:
 
         if missing:
             console.print(f"[red]Error: Missing required dependencies: {', '.join(missing)}[/red]")
-            console.print(f"[yellow]Please run: pip install -e .[/yellow]")
+            console.print("[yellow]Please run: pip install -e .[/yellow]")
             sys.exit(1)
 
     except Exception:
