@@ -441,13 +441,8 @@ def init() -> None:
             agent_answer = prompt_with_cancel_check(agent_question)
             selected_agent_display = agent_answer["agent"]
 
-            # Find the selected agent details
+            # Extract agent name from display string
             selected_agent_name = selected_agent_display.split(":")[0].strip()
-            selected_agent_file = None
-            for name, desc, file_path in agents:
-                if name == selected_agent_name:
-                    selected_agent_file = file_path
-                    break
 
             # Store configuration
             config["agents"][role_key] = {
@@ -457,9 +452,6 @@ def init() -> None:
 
             if model_name:
                 config["agents"][role_key]["model"] = model_name
-
-            if selected_agent_file:
-                config["agents"][role_key]["agent_file"] = str(selected_agent_file)
 
             console.print("")
 
