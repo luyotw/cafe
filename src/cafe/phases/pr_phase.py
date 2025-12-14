@@ -405,10 +405,7 @@ class PRPhase(Phase):
                 message=f"gh CLI not found: {e}",
             )
         except Exception as e:
-            return PhaseResult(
-                status=PhaseStatus.FAILED,
-                message=f"PR phase failed: {e}",
-            )
+            return self._handle_exception_in_execute(e, "PR phase failed")
 
     def _execute_local_review_mode(self) -> PhaseResult:
         """Execute local review mode (no GitHub PR).

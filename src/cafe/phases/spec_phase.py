@@ -407,13 +407,13 @@ class SpecPhase(Phase):
                 },
             )
         except Exception as e:
-            # 即使發生 exception，也嘗試包含 spec_file 以便 CLI 顯示
+            # Use base class helper to handle critical errors
+            result = self._handle_exception_in_execute(e, "Spec phase failed")
+            # Add phase-specific data
             spec_file = self.spec_file if hasattr(self, 'spec_file') else None
-            return PhaseResult(
-                status=PhaseStatus.FAILED,
-                message=f"Requirements phase failed: {e}",
-                data={"spec_file": spec_file},
-            )
+            if spec_file:
+                result.data["spec_file"] = spec_file
+            return result
 
     def _get_completion_data(self) -> dict:
         """取得 phase 完成時的額外資料（提供給 base class 的 _handle_standard_status_codes）。

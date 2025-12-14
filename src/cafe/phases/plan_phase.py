@@ -274,10 +274,7 @@ class PlanPhase(Phase):
             )
 
         except Exception as e:
-            return PhaseResult(
-                status=PhaseStatus.FAILED,
-                message=f"Plan phase failed: {e}",
-            )
+            return self._handle_exception_in_execute(e, "Plan phase failed")
 
     def _generate_prompt(self, user_input: str) -> str:
         """Generate prompt for current iteration.

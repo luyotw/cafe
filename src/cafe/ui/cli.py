@@ -43,6 +43,40 @@ app = typer.Typer(
 console = Console()
 
 
+def _handle_phase_exception(e: Exception, phase_name: str) -> None:
+    """統一處理 phase 執行時的例外。
+    
+    Args:
+        e: 捕獲的例外
+        phase_name: Phase 名稱（用於錯誤訊息）
+        
+    Raises:
+        typer.Exit: 總是拋出 exit(1)
+    """
+    from cafe.core.types import CriticalPhaseError
+    
+    console.print()
+    
+    # Check if it's a critical error that should stop the entire workflow
+    if isinstance(e, CriticalPhaseError):
+        console.print(f"[bold red]❌ Critical error in {phase_name} phase[/bold red]")
+        console.print()
+        if e.error_type == "rate_limit":
+            console.print("[yellow]⚠️  API rate limit reached. Please try again later.[/yellow]")
+        elif e.error_type == "cli_not_found":
+            console.print("[yellow]⚠️  Required CLI tool not found. Please install it and try again.[/yellow]")
+        else:
+            console.print(f"[yellow]⚠️  {e}[/yellow]")
+        console.print()
+        console.print("[dim]ℹ️  The workflow has been stopped to prevent wasting resources.[/dim]")
+        console.print()
+    else:
+        console.print(f"[bold red]❌ Error in {phase_name} phase: {e}[/bold red]")
+        console.print()
+    
+    raise typer.Exit(1)
+
+
 def _check_agent_clis_available(config_manager: ConfigManager) -> List[str]:
     """檢查所有 agent CLI 工具是否已安裝。
 
@@ -275,12 +309,18 @@ def _execute_next_phase_auto(next_phase: str, issue_name: str) -> None:
     try:
         result = subprocess.run(cmd, check=False)
         if result.returncode != 0:
+            console.print()
             console.print(
-                f"[red]Error: {next_phase} phase failed with exit code {result.returncode}[/red]"
+                f"[bold red]❌ {next_phase.capitalize()} phase failed with exit code {result.returncode}[/bold red]"
             )
+            console.print()
+            console.print("[yellow]⚠️  Stopping automated workflow due to error[/yellow]")
+            console.print()
             raise typer.Exit(result.returncode)
+    except typer.Exit:
+        raise
     except Exception as e:
-        console.print(f"[red]Error executing {next_phase}: {e}[/red]")
+        console.print(f"[bold red]❌ Error executing {next_phase}: {e}[/bold red]")
         raise typer.Exit(1)
 
 
@@ -1723,8 +1763,7 @@ def spec(
             raise typer.Exit(1)
 
     except Exception as e:
-        console.print(f"[red]Error: {e}[/red]")
-        raise typer.Exit(1)
+        _handle_phase_exception(e, "spec")
 
 
 @app.command()
@@ -2040,8 +2079,7 @@ def plan(
             raise typer.Exit(1)
 
     except Exception as e:
-        console.print(f"[red]Error: {e}[/red]")
-        raise typer.Exit(1)
+        _handle_phase_exception(e, "plan")
 
 
 @app.command()

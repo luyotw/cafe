@@ -33,6 +33,19 @@ class PhaseStatus(str, Enum):
     SKIPPED = "skipped"
 
 
+class CriticalPhaseError(Exception):
+    """Critical error that should stop the entire workflow.
+    
+    This is used for errors like API rate limits or missing CLI tools,
+    where continuing to the next phase would be pointless.
+    """
+    
+    def __init__(self, message: str, error_type: str, phase_name: str):
+        super().__init__(message)
+        self.error_type = error_type
+        self.phase_name = phase_name
+
+
 class SpecRigor(str, Enum):
     """Specification rigor level."""
 

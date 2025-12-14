@@ -245,12 +245,7 @@ class ReviewPhase(Phase):
             )
 
         except Exception as e:
-            import traceback
-            traceback_str = traceback.format_exc()
-            return PhaseResult(
-                status=PhaseStatus.FAILED,
-                message=f"Review phase failed: {e}\n{traceback_str}",
-            )
+            return self._handle_exception_in_execute(e, "Review phase failed")
 
     def _initialize_history_dir(self) -> None:
         """Initialize history directory for review."""
