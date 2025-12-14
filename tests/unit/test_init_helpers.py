@@ -272,7 +272,7 @@ class TestCopyDataDirectory:
                 copy_data_directory(str(source), str(dest))
 
     def test_copy_data_directory_overwrites_existing(self, tmp_path: Path) -> None:
-        """測試覆蓋既有目錄"""
+        """測試增量拷貝既有目錄"""
         source = tmp_path / "source"
         source.mkdir()
         (source / "file.txt").write_text("new content")
@@ -285,5 +285,6 @@ class TestCopyDataDirectory:
 
         assert dest.exists()
         assert (dest / "file.txt").read_text() == "new content"
-        # 舊檔案應該被移除（因為 copytree 會覆蓋整個目錄）
-        assert not (dest / "old_file.txt").exists()
+        # 舊檔案會被保留（因為使用增量拷貝）
+        assert (dest / "old_file.txt").exists()
+        assert (dest / "old_file.txt").read_text() == "old content"

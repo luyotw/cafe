@@ -98,9 +98,5 @@ def copy_data_directory(source: str, destination: str) -> None:
     if not source_path.exists():
         raise FileNotFoundError(f"Source directory not found: {source}")
 
-    # 如果目標已存在，先刪除
-    if dest_path.exists():
-        shutil.rmtree(dest_path)
-
-    # 複製目錄
-    shutil.copytree(source_path, dest_path)
+    # 複製目錄 (增量拷貝)
+    shutil.copytree(source_path, dest_path, dirs_exist_ok=True)
