@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 import yaml
 
-from cafe.core.types import WorkflowMode, AgentCLI
+from cafe.core.types import AgentCLI
 
 
 class ConfigError(Exception):
@@ -71,10 +71,6 @@ class ConfigManager:
             "auto": {
                 "max_review_iterations": 5,
             },
-            "defaults": {
-                "workflow_mode": "local",
-                "interactive": True,
-            },
             "python_bin": "python3",
         }
 
@@ -101,19 +97,10 @@ class ConfigManager:
             ConfigError: If configuration is invalid
         """
         # Check required fields
-        required_fields = ["workflow_mode", "agents"]
+        required_fields = ["agents"]
         for field in required_fields:
             if field not in config:
                 raise ConfigError(f"Missing required field: {field}")
-
-        # Validate workflow_mode
-        try:
-            WorkflowMode(config["workflow_mode"])
-        except ValueError:
-            raise ConfigError(
-                f"Invalid workflow_mode: {config['workflow_mode']}. "
-                f"Must be one of: {[m.value for m in WorkflowMode]}"
-            )
 
         # Validate agents
         if isinstance(config["agents"], list):

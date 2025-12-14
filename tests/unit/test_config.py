@@ -62,8 +62,6 @@ class TestLoadConfig:
 
         assert config is not None
         assert "agents" in config
-        assert "defaults" in config
-        assert "workflow_mode" in config["defaults"]
 
     def test_load_invalid_yaml_raises_error(self, tmp_path: Path) -> None:
         """測試載入無效的 YAML 拋出錯誤"""
@@ -88,7 +86,6 @@ class TestDefaultConfig:
 
         assert "agents" in config
         assert isinstance(config["agents"], dict)
-        assert "defaults" in config
 
     def test_default_config_structure(self) -> None:
         """測試預設設定結構"""
@@ -109,14 +106,6 @@ class TestDefaultConfig:
 
         assert config["agents"]["reviewer"]["name"] == "Richard"
         assert "cli" in config["agents"]["reviewer"]
-
-    def test_default_config_defaults_section(self) -> None:
-        """測試預設設定的 defaults 區塊"""
-        manager = ConfigManager()
-        config = manager.get_default_config()
-
-        assert config["defaults"]["workflow_mode"] == "local"
-        assert config["defaults"]["interactive"] is True
 
 
 class TestSaveConfig:
@@ -177,22 +166,10 @@ class TestValidateConfig:
 
         assert result is True
 
-    def test_validate_invalid_workflow_mode(self) -> None:
-        """測試驗證無效的 workflow_mode"""
-        manager = ConfigManager()
-        config = {
-            "workflow_mode": "invalid_mode",
-            "agents": [],
-        }
-
-        with pytest.raises(ConfigError, match="Invalid workflow_mode"):
-            manager.validate_config(config)
-
     def test_validate_invalid_agent_tool(self) -> None:
         """測試驗證無效的 agent cli"""
         manager = ConfigManager()
         config = {
-            "workflow_mode": "local",
             "agents": [
                 {"name": "Roger", "cli": "invalid_cli"},
             ],
@@ -205,8 +182,7 @@ class TestValidateConfig:
         """測試驗證缺少必要欄位"""
         manager = ConfigManager()
         config = {
-            # Missing workflow_mode
-            "agents": [],
+            # Missing agents
         }
 
         with pytest.raises(ConfigError, match="Missing required field"):

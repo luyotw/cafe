@@ -372,10 +372,6 @@ def init() -> None:
         # 4. Interactive configuration for three roles
         config = {
             "agents": {},
-            "defaults": {
-                "workflow_mode": "local",
-                "interactive": True,
-            },
         }
 
         roles = [
