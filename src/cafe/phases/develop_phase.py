@@ -954,10 +954,7 @@ class DevelopPhase(Phase):
                 data={"iterations": self.iteration},
             )
         except Exception as e:
-            return PhaseResult(
-                status=PhaseStatus.FAILED,
-                message=f"Development phase failed: {e}",
-            )
+            return self._handle_exception_in_execute(e, "Development phase failed")
 
     def _get_branch_name(self) -> str:
         """Get branch name based on workflow mode.

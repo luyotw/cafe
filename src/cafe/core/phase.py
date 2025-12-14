@@ -36,6 +36,35 @@ class Phase(ABC):
         # Automatically set issue_dir from current branch if git_ops is provided
         if git_ops is not None:
             self.issue_dir = self._get_issue_dir(git_ops)
+    
+    def _handle_exception_in_execute(self, e: Exception, default_message: str = "Phase failed") -> PhaseResult:
+        """統一處理 phase execute() 中的例外。
+        
+        這個方法應該在每個 phase 的 execute() 中的 except Exception 區塊呼叫。
+        它會檢查是否為 CriticalPhaseError，如果是則 re-raise，否則返回 FAILED result。
+        
+        Args:
+            e: 捕獲的例外
+            default_message: 預設的錯誤訊息前綴
+            
+        Returns:
+            PhaseResult with FAILED status (only for non-critical errors)
+            
+        Raises:
+            CriticalPhaseError: 如果是 critical error 則 re-raise
+        """
+        from cafe.core.types import CriticalPhaseError
+        
+        # Re-raise critical errors to stop the workflow
+        if isinstance(e, CriticalPhaseError):
+            raise e
+        
+        # Non-critical error - return FAILED result
+        return PhaseResult(
+            status=PhaseStatus.FAILED,
+            message=f"{default_message}: {e}",
+            data={},
+        )
 
     @abstractmethod
     def execute(self) -> PhaseResult:
@@ -329,14 +358,15 @@ class Phase(ABC):
 
             print(f"⚠️  Agent execution failed: {e}")
 
-            # 4a. Check if it's a CLI not found error - fail immediately without recovery
-            if isinstance(e, AgentExecutionError) and hasattr(e, "error_type") and e.error_type == "cli_not_found":
-                print(f"❌ CLI tool not found - stopping execution")
-                raise
-
-            # 4b. Check if it's a rate limit error - fail immediately without recovery
-            if isinstance(e, AgentExecutionError) and hasattr(e, "error_type") and e.error_type == "rate_limit":
-                print(f"❌ Rate limit error detected - stopping execution")
+            # 4a. Check if it's a critical error - fail immediately without recovery
+            is_critical_error = (
+                isinstance(e, AgentExecutionError) and 
+                hasattr(e, "error_type") and 
+                e.error_type in ("rate_limit", "cli_not_found")
+            )
+            
+            if is_critical_error:
+                print(f"❌ Critical error detected ({e.error_type}) - stopping execution\n")
 
                 # Update iteration history with error info
                 if iteration_file.exists():
@@ -346,13 +376,19 @@ class Phase(ABC):
                     history_data["response"] = None
                     history_data["status_code"] = None
                     history_data["error"] = str(e)
-                    history_data["error_type"] = "rate_limit"
+                    history_data["error_type"] = e.error_type
+                    history_data["is_critical"] = True
 
                     with open(iteration_file, "w", encoding="utf-8") as f:
                         json.dump(history_data, f, ensure_ascii=False, indent=2)
 
-                # Re-raise immediately without recovery attempt
-                raise
+                # Create a CriticalError wrapper to signal this should stop the workflow
+                from cafe.core.types import CriticalPhaseError
+                raise CriticalPhaseError(
+                    message=str(e),
+                    error_type=e.error_type,
+                    phase_name=getattr(self, '__class__', type(self)).__name__
+                ) from e
 
             # 4b. 檢查 agent 是否寫入輸出檔案
             written_files = self._detect_written_output_files()
