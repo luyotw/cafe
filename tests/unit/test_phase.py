@@ -239,7 +239,7 @@ class TestExecuteAgentIteration:
         assert history_data["response"] == ""
 
     def test_execute_agent_iteration_no_status_code(self, tmp_path: Path) -> None:
-        """測試 agent 回應中沒有 status code 的情況"""
+        """測試 agent 回應中沒有 status code 的情況（會重試 5 次後拋出錯誤）"""
         history_dir = tmp_path / "history"
         history_dir.mkdir(parents=True)
 
@@ -257,32 +257,19 @@ class TestExecuteAgentIteration:
         mock_agent.config.cli.value = "claude"
         mock_agent.config.session_id = "test_session"
         agent_manager.get_agent.return_value = mock_agent
-        # Response without status code
+        # Response without status code - 提供 6 次回應（1 次原始 + 5 次重試）
         agent_manager.execute.return_value = ("Some response without status code", TokenUsage(), [], None, [])
 
         phase = TestPhase(agent_manager, history_dir)
 
-        # Execute
-        response, status_code = phase._execute_agent_iteration(
-            agent_name="test_agent",
-            prompt="Test prompt",
-            user_input="Test input",
-            valid_status_codes=[PhaseStatusCode.CONFIRMED],
-        )
-
-        # Verify
-        assert response == "Some response without status code"
-        assert status_code is None
-
-        # Check history was saved without status_code
-        iteration_file = history_dir / "iteration_001.json"
-        assert iteration_file.exists()
-
-        with open(iteration_file) as f:
-            history_data = json.load(f)
-
-        assert history_data["status_code"] is None
-        assert history_data["response"] == "Some response without status code"
+        # Execute - 應該拋出 ValueError 因為 5 次重試後仍無 status code
+        with pytest.raises(ValueError, match="Agent 在 5 次嘗試後仍未回傳有效的 status code"):
+            phase._execute_agent_iteration(
+                agent_name="test_agent",
+                prompt="Test prompt",
+                user_input="Test input",
+                valid_status_codes=[PhaseStatusCode.CONFIRMED],
+            )
 
     def test_execute_agent_iteration_missing_attributes(self, tmp_path: Path) -> None:
         """測試缺少必要屬性時拋出錯誤"""
