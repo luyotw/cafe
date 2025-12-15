@@ -514,43 +514,51 @@ class Phase(ABC):
 
         # 6.2. 如果沒有 status code（包含多個 status codes 的情況），發送繼續訊息
         # 因為多個 status codes 也代表狀態不明確，需要 agent 確認
+        # 最多重試 5 次
         analysis_attempted = False
         analysis_response = None
         original_status_code_missing = (status_code is None)  # 記錄原始狀態
+        max_retries = 5
+        retry_count = 0
 
         if original_status_code_missing:  # 包含：沒有 status code 或有多個 status codes
-            print(f"\n⚠️  Agent 回應沒有狀態碼，發送繼續訊息...")
             analysis_attempted = True
-            try:
-                # 發送繼續提示，並附加原本的 prompt 作為參考
-                # 這樣即使 session 被重新建立，agent 也能理解完整的 context
-                continue_prompt = f"若完成了就回應狀態碼，未完成就繼續\n\n以下是原本的任務說明供參考：\n\n{prompt}"
-                continue_response, _, _, _, _ = self.agent_manager.execute(
-                    agent_name,
-                    continue_prompt,
-                    allowed_tools=allowed_tools,
-                    allowed_directories=self._get_allowed_directories(),
-                )
 
-                # 嘗試從繼續的回應中提取狀態碼
-                continue_status_code = StatusCodeParser.extract(
-                    continue_response,
-                    valid_codes=valid_status_codes,
-                )
+            while retry_count < max_retries and status_code is None:
+                retry_count += 1
+                print(f"\n⚠️  Agent 回應沒有狀態碼，發送繼續訊息... (嘗試 {retry_count}/{max_retries})")
 
-                if continue_status_code:
-                    print(f"✅ 繼續執行後獲得狀態碼: {continue_status_code.value}")
-                    # 將原始回應和繼續回應合併
-                    response = response + "\n\n" + continue_response
-                    status_code = continue_status_code
-                    analysis_response = continue_response
-                else:
-                    print(f"⚠️  繼續執行後仍未獲得狀態碼")
-                    analysis_response = continue_response
+                try:
+                    # 發送繼續提示，並附加原本的 prompt 作為參考
+                    # 這樣即使 session 被重新建立，agent 也能理解完整的 context
+                    continue_prompt = f"若完成了就回應狀態碼，未完成就繼續\n\n以下是原本的任務說明供參考：\n\n{prompt}"
+                    continue_response, _, _, _, _ = self.agent_manager.execute(
+                        agent_name,
+                        continue_prompt,
+                        allowed_tools=allowed_tools,
+                        allowed_directories=self._get_allowed_directories(),
+                    )
 
-            except Exception as e:
-                print(f"⚠️  繼續訊息發送失敗: {e}")
-                analysis_response = None
+                    # 嘗試從繼續的回應中提取狀態碼
+                    continue_status_code = StatusCodeParser.extract(
+                        continue_response,
+                        valid_codes=valid_status_codes,
+                    )
+
+                    if continue_status_code:
+                        print(f"✅ 繼續執行後獲得狀態碼: {continue_status_code.value}")
+                        # 將原始回應和繼續回應合併
+                        response = response + "\n\n" + continue_response
+                        status_code = continue_status_code
+                        analysis_response = continue_response
+                        break
+                    else:
+                        print(f"⚠️  繼續執行後仍未獲得狀態碼")
+                        analysis_response = continue_response
+
+                except Exception as e:
+                    print(f"⚠️  繼續訊息發送失敗: {e}")
+                    analysis_response = None
 
         # 6.3. 寫入 error log（如果原始回應有問題：沒有 status code、多個 codes、或分析後仍無 status code）
         # 注意：即使分析成功找到 status code，我們仍然記錄原始回應的問題
@@ -564,6 +572,12 @@ class Phase(ABC):
                 cli_command_args=cli_command_args,
                 multiple_codes_found=list(all_status_codes) if has_multiple_codes else None,
             )
+
+        # 6.4. 如果重試 5 次後仍沒有 status code，拋出錯誤
+        if original_status_code_missing and status_code is None and retry_count >= max_retries:
+            error_msg = f"Agent 在 {max_retries} 次嘗試後仍未回傳有效的 status code"
+            print(f"\n❌ {error_msg}")
+            raise ValueError(error_msg)
 
         # 7. 更新 history（總是保存，即使沒有 status code）
         phase_data = {

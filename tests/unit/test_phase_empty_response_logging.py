@@ -233,6 +233,7 @@ class TestMissingStatusCodeLogging:
         monkeypatch.chdir(temp_dir)
 
         # Response without status code, and continuation also fails
+        # 需要提供 6 次回應（1 次原始 + 5 次重試）
         mock_agent_manager.execute.side_effect = [
             (
                 "沒有 status code 的回應",
@@ -241,6 +242,7 @@ class TestMissingStatusCodeLogging:
                 ["-p", "test prompt"],
                 None,
             ),
+        ] + [
             (
                 "繼續結果也沒有 status code",  # Continuation also returns no status code
                 MagicMock(),
@@ -248,7 +250,7 @@ class TestMissingStatusCodeLogging:
                 ["-p", "若完成了就回應狀態碼，未完成就繼續"],
                 None,
             ),
-        ]
+        ] * 5  # 5 次重試
 
         phase = SpecPhase(
             agent_manager=mock_agent_manager,
@@ -260,9 +262,14 @@ class TestMissingStatusCodeLogging:
             user_input="測試輸入",
         )
 
+        # 執行應該返回 FAILED 狀態（因為 ValueError 被 SpecPhase.execute() 捕捉）
         result = phase.execute()
 
-        # 驗證應該有 error log
+        # 驗證返回 FAILED 狀態
+        assert result.status == PhaseStatus.FAILED
+        assert "Agent 在 5 次嘗試後仍未回傳有效的 status code" in result.message
+
+        # 即使拋出錯誤，error log 仍應該被寫入（在拋出錯誤之前）
         error_log = temp_dir / ".cafe/issues/test-issue/spec/history/execution_error_001.log"
         assert error_log.exists()
 
@@ -275,6 +282,7 @@ class TestMissingStatusCodeLogging:
         assert "沒有 status code 的回應" in error_content
         assert "Analysis attempted: True" in error_content
         assert "Analysis response:" in error_content
+        # 最後一次重試的結果應該被記錄
         assert "繼續結果也沒有 status code" in error_content
     
     def test_multiple_status_codes_logs_to_error_log(
