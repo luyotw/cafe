@@ -113,8 +113,9 @@ class TestPlanPhaseVersionedFiles:
             content = plan_001.read_text(encoding="utf-8")
             assert content == "## 開發指南\n\nInitial plan\n"
 
-            # In non-interactive mode, phase returns IN_PROGRESS after one iteration
-            assert result.status == PhaseStatus.IN_PROGRESS
+            # In non-interactive mode, after 5 retries without status code, returns FAILED
+            assert result.status == PhaseStatus.FAILED
+            assert "Agent 在 5 次嘗試後仍未回傳有效的 status code" in result.message
         finally:
             os.chdir(original_cwd)
 
@@ -179,8 +180,9 @@ class TestPlanPhaseVersionedFiles:
             # Since plan_001.md has "## 開發指南" section, plan_002 should just be a copy
             assert plan_002.read_text(encoding="utf-8") == "## 開發指南\n\nFirst iteration content"
 
-            # In non-interactive mode, phase returns IN_PROGRESS after one iteration
-            assert result.status == PhaseStatus.IN_PROGRESS
+            # In non-interactive mode, after 5 retries without status code, returns FAILED
+            assert result.status == PhaseStatus.FAILED
+            assert "Agent 在 5 次嘗試後仍未回傳有效的 status code" in result.message
         finally:
             os.chdir(original_cwd)
 

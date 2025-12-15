@@ -213,7 +213,8 @@ class TestSpecPhaseInteractiveVsNonInteractive:
 
         agent_manager = MagicMock(spec=AgentManager)
         setup_agent_manager_mock_for_spec(agent_manager)
-        # 第一次執行沒有狀態碼
+        # 第一次執行沒有狀態碼，第二次繼續也沒有狀態碼，經過 5 次重試後會拋出 ValueError
+        # ValueError 會被 SpecPhase.execute() 的 except 捕捉並轉為 FAILED
         agent_manager.execute.return_value = ("這是回應但沒有狀態碼", TokenUsage(), [], None, [])
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 
@@ -234,16 +235,16 @@ class TestSpecPhaseInteractiveVsNonInteractive:
              patch.object(phase.display, 'get_multiline_input', return_value="需求"):
             result = phase.execute()
 
-        # Interactive 模式：第一次執行沒有狀態碼，回傳 IN_PROGRESS
-        assert result.status == PhaseStatus.IN_PROGRESS
-        assert result.data.get("status_code") is None
-        # Agent 被呼叫2次：1次正常執行，1次分析missing status code
-        assert agent_manager.execute.call_count == 2
+        # Interactive 模式：經過 5 次重試後仍無 status code，返回 FAILED
+        assert result.status == PhaseStatus.FAILED
+        assert "Agent 在 5 次嘗試後仍未回傳有效的 status code" in result.message
+        # Agent 被呼叫 6 次：1次正常執行 + 5次重試
+        assert agent_manager.execute.call_count == 6
 
     def test_no_status_code_noninteractive_stops(
         self, tmp_path: Path, mock_git_ops: MagicMock, monkeypatch
     ) -> None:
-        """測試沒有狀態碼時 non-interactive 模式會停止並返回 IN_PROGRESS"""
+        """測試沒有狀態碼時 non-interactive 模式會停止並返回 FAILED（經過 5 次重試）"""
         issue_name = "test-no-code-noninteractive"
         mock_git_ops.get_current_branch.return_value = issue_name
         monkeypatch.chdir(tmp_path)
@@ -272,12 +273,11 @@ class TestSpecPhaseInteractiveVsNonInteractive:
         with patch('builtins.print'):
             result = phase.execute()
 
-        # Non-interactive 模式應該停止在第一輪
-        assert result.status == PhaseStatus.IN_PROGRESS
-        assert result.data.get("iterations") == 1
-        assert result.data.get("status_code") is None
-        # 呼叫 2 次：原始 prompt + _analyze_missing_status_code 分析
-        assert agent_manager.execute.call_count == 2
+        # Non-interactive 模式經過 5 次重試後返回 FAILED
+        assert result.status == PhaseStatus.FAILED
+        assert "Agent 在 5 次嘗試後仍未回傳有效的 status code" in result.message
+        # 呼叫 6 次：原始 prompt + 5 次重試
+        assert agent_manager.execute.call_count == 6
 
 
 class TestPlanPhaseInteractiveVsNonInteractive:
@@ -454,7 +454,7 @@ class TestPlanPhaseInteractiveVsNonInteractive:
     def test_no_status_code_noninteractive_stops(
         self, tmp_path: Path, mock_git_ops: MagicMock, monkeypatch
     ) -> None:
-        """測試沒有狀態碼時 non-interactive 模式會停止並返回 IN_PROGRESS"""
+        """測試沒有狀態碼時 non-interactive 模式經過 5 次重試後返回 FAILED (PlanPhase)"""
         issue_name = "test-plan-no-code-noninteractive"
         mock_git_ops.get_current_branch.return_value = issue_name
         monkeypatch.chdir(tmp_path)
@@ -493,8 +493,8 @@ class TestPlanPhaseInteractiveVsNonInteractive:
         with patch('builtins.print'):
             result = phase.execute()
 
-        # Non-interactive 模式沒有狀態碼時應該 IN_PROGRESS（需要用戶輸入）
-        assert result.status == PhaseStatus.IN_PROGRESS
-        assert result.data.get("iterations") == 1
-        # 呼叫 2 次：原始 prompt + _analyze_missing_status_code 分析
-        assert agent_manager.execute.call_count == 2
+        # Non-interactive 模式經過 5 次重試後返回 FAILED
+        assert result.status == PhaseStatus.FAILED
+        assert "Agent 在 5 次嘗試後仍未回傳有效的 status code" in result.message
+        # 呼叫 6 次：原始 prompt + 5 次重試
+        assert agent_manager.execute.call_count == 6

@@ -1366,6 +1366,7 @@ class TestDeveloperPermissions:
 
             agent_manager = MagicMock()
             agent_manager.get_agent.return_value = mock_executor
+            agent_manager.get_total_token_usage.return_value = TokenUsage()
 
             # Track what allowed_tools were passed to execute (capture all calls)
             captured_calls = []
@@ -1406,14 +1407,31 @@ class TestDeveloperPermissions:
             # Execute second iteration (should inherit tools from iteration 1)
             phase._get_or_prompt_user_input = MagicMock(return_value="Second iteration")
 
+            from cafe.core.status_codes import PhaseStatusCode
+            # Update the mock to return CONFIRMED status instead of DONE
+            def capture_execute(*args, **kwargs):
+                captured_calls.append({
+                    "args": args,
+                    "kwargs": kwargs,
+                    "allowed_tools": kwargs.get("allowed_tools", [])
+                })
+                return (
+                    "CAFE_CONFIRMED\nImplementation complete",
+                    TokenUsage(),
+                    [],
+                    None,
+                    []
+                )
+            agent_manager.execute.side_effect = capture_execute
+
             result, response = phase._execute_and_handle_agent_response(
                 agent_name="dev",
                 user_input="Second iteration",
-                valid_status_codes=[],
+                valid_status_codes=[PhaseStatusCode.CONFIRMED],
                 allowed_tools=list(set(["write", "read", "edit", "bash"] +
                                       iteration_001["allowed_tools"])),
                 continue_codes=[],
-                complete_codes=[],
+                complete_codes=[PhaseStatusCode.CONFIRMED],
             )
 
             # Verify that allowed_tools includes both base tools and previous iteration's tools

@@ -146,7 +146,7 @@ class TestSpecPhaseWithStatusCodes:
         assert result.data.get("status_code") == "CAFE_READY_FOR_REVIEW"
 
     def test_no_status_code_continues_iteration(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
-        """測試沒有狀態碼時回傳 IN_PROGRESS（沒有 while loop）"""
+        """測試沒有狀態碼時經過 5 次重試後回傳 FAILED"""
         monkeypatch.chdir(tmp_path)
         issue_name = "test-no-status-issue"
         spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec_001.md"
@@ -155,7 +155,7 @@ class TestSpecPhaseWithStatusCodes:
 
         agent_manager = MagicMock(spec=AgentManager)
         setup_agent_manager_mock_for_spec(agent_manager)
-        # 第一次沒有狀態碼
+        # 所有執行都沒有狀態碼，經過 5 次重試後會拋出 ValueError
         agent_manager.execute.return_value = ("我覺得需求不夠清楚。", TokenUsage(), [], None, [])
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 
@@ -175,9 +175,9 @@ class TestSpecPhaseWithStatusCodes:
         with patch('builtins.print'):
             result = phase.execute()
 
-        # 沒有 while loop，沒有狀態碼回傳 IN_PROGRESS
-        assert result.status == PhaseStatus.IN_PROGRESS
-        assert result.data.get("status_code") is None
+        # 經過 5 次重試後，沒有狀態碼回傳 FAILED
+        assert result.status == PhaseStatus.FAILED
+        assert "Agent 在 5 次嘗試後仍未回傳有效的 status code" in result.message
 
     def test_case_insensitive_status_code(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
         """測試狀態碼不分大小寫"""
