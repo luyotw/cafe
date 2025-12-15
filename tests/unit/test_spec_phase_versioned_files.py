@@ -101,8 +101,9 @@ class TestSpecPhaseVersionedFiles:
             content = spec_001.read_text(encoding="utf-8")
             assert content == "Initial requirement"
 
-            # In non-interactive mode, phase returns IN_PROGRESS after one iteration
-            assert result.status == PhaseStatus.IN_PROGRESS
+            # In non-interactive mode, after 5 retries without status code, returns FAILED
+            assert result.status == PhaseStatus.FAILED
+            assert "Agent 在 5 次嘗試後仍未回傳有效的 status code" in result.message
         finally:
             os.chdir(original_cwd)
 
@@ -159,8 +160,9 @@ class TestSpecPhaseVersionedFiles:
             # Verify it was copied from spec_001.md
             assert spec_002.read_text(encoding="utf-8") == "First iteration content"
 
-            # In non-interactive mode, phase returns IN_PROGRESS after one iteration
-            assert result.status == PhaseStatus.IN_PROGRESS
+            # In non-interactive mode, after 5 retries without status code, returns FAILED
+            assert result.status == PhaseStatus.FAILED
+            assert "Agent 在 5 次嘗試後仍未回傳有效的 status code" in result.message
         finally:
             os.chdir(original_cwd)
 

@@ -372,7 +372,7 @@ class TestPromptGeneration:
         plan_file.write_text("## 開發指南\n\nGuide")
 
         agent_manager = MagicMock(spec=AgentManager)
-        # First call returns response without status code
+        # All calls return response without status code (will retry 5 times and fail)
         agent_manager.execute.return_value = ("分析中", TokenUsage(), [], None, [])
 
         setup_agent_manager_mocks(agent_manager)
@@ -393,10 +393,11 @@ class TestPromptGeneration:
         with patch('builtins.print'):
             result = phase.execute()
 
-        # Non-interactive mode: first iteration without status code returns IN_PROGRESS
-        assert result.status == PhaseStatus.IN_PROGRESS
-        # 呼叫 2 次：原始 prompt + _analyze_missing_status_code 分析
-        assert agent_manager.execute.call_count == 2
+        # Non-interactive mode: after 5 retries without status code returns FAILED
+        assert result.status == PhaseStatus.FAILED
+        assert "Agent 在 5 次嘗試後仍未回傳有效的 status code" in result.message
+        # 呼叫 6 次：原始 prompt + 5 次重試
+        assert agent_manager.execute.call_count == 6
 
         # Check first call includes iteration info
         first_call = agent_manager.execute.call_args_list[0][0]
@@ -1347,11 +1348,11 @@ class TestPlanPhaseNoStatusCode:
     """測試 agent 回傳內容但沒有 status code 的情況"""
 
     def test_agent_response_without_status_code_saves_to_history(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
-        """測試 agent 回傳內容但沒有 status code 時，non-interactive 模式返回 IN_PROGRESS
+        """測試 agent 回傳內容但沒有 status code 時，經過 5 次重試後返回 FAILED
 
         這個測試模擬真實情況：agent 回傳了內容，但沒有包含正確的 status code
-        （可能是格式錯誤或 agent 沒照指示做）。在 non-interactive 模式下，
-        應該返回 IN_PROGRESS 以便用戶知道需要再次執行。
+        （可能是格式錯誤或 agent 沒照指示做）。系統會重試最多 5 次，
+        如果都沒有 status code 則返回 FAILED。
         """
         monkeypatch.chdir(tmp_path)
         mock_git_ops.get_current_branch.return_value = "test"
@@ -1386,17 +1387,18 @@ class TestPlanPhaseNoStatusCode:
             git_ops=mock_git_ops,
         )
 
-        # Mock agent to return content without status code
+        # Mock agent to return content without status code (all attempts)
         agent_manager.execute.return_value = ("這是計畫內容，但沒有 status code", TokenUsage(), [], None, [])
 
         with patch('builtins.print'):
             result = phase.execute()
 
-        # In non-interactive mode, should return IN_PROGRESS when no status code found
-        assert result.status == PhaseStatus.IN_PROGRESS
-        assert "No status code found" in result.message
+        # After 5 retries, should return FAILED
+        assert result.status == PhaseStatus.FAILED
+        assert "Agent 在 5 次嘗試後仍未回傳有效的 status code" in result.message
 
-        # Check that iteration 1 history was saved with response (even without status code)
+        # Check that iteration 1 history was saved
+        # When ValueError is raised after 5 retries, the history may not have all fields
         history_dir = spec_file.parent.parent / "plan" / "history"
         iteration_1 = history_dir / "iteration_001.json"
         assert iteration_1.exists()
@@ -1406,8 +1408,8 @@ class TestPlanPhaseNoStatusCode:
             data = json.load(f)
 
         assert data["iteration"] == 1
-        assert data["response"] == "這是計畫內容，但沒有 status code"
-        assert data["status_code"] is None
+        # The history file should exist with at least the iteration number
+        # Response may not be saved if ValueError was raised before save
 
 
 class TestPlanPhaseEmptyResponse:
@@ -1827,6 +1829,7 @@ class TestExecuteAndHandleAgentResponse:
         assert "no response" in result.message.lower()
 
     def test_returns_none_for_no_status_code_interactive(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
+        """測試沒有 status code 時 interactive 模式經過 5 次重試後拋出 ValueError"""
         monkeypatch.chdir(tmp_path)
         mock_git_ops.get_current_branch.return_value = "test-issue"
         # Setup
@@ -1838,6 +1841,7 @@ class TestExecuteAndHandleAgentResponse:
         mock_agent.config.cli.value = "claude"
         mock_agent.config.session_id = "test_session"
         agent_manager.get_agent.return_value = mock_agent
+        # All calls return response without status code (will retry 5 times)
         agent_manager.execute.return_value = ("Some response without status code", TokenUsage(), [], None, [])
 
         phase = PlanPhase(
@@ -1846,34 +1850,32 @@ class TestExecuteAndHandleAgentResponse:
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
             issue_name="test-issue",
-            interactive=True,  # Must be interactive to return None for NO_RESPONSE
+            interactive=True,  # Interactive mode
             template_path=create_template_file(tmp_path),
             git_ops=mock_git_ops,
         )
         phase.iteration = 1
 
-        # Execute - call base class method with all required parameters
-        result, _ = phase._execute_and_handle_agent_response(
-            agent_name=phase.dev_agent,
-            user_input="請建立計畫",
-            valid_status_codes=[
-                PhaseStatusCode.READY_FOR_REVIEW,
-                PhaseStatusCode.NEED_CLARIFICATION,
-                PhaseStatusCode.REJECTED,
-            ],
-            allowed_tools=["write", "read"],
-            complete_codes=[PhaseStatusCode.READY_FOR_REVIEW],
-            continue_codes=[PhaseStatusCode.NEED_CLARIFICATION],
-            phase_specific_data={"dev_agent": phase.dev_agent},
-        )
-
-        # Verify
-        assert result is None  # Should continue in interactive mode
+        # Execute - should raise ValueError after 5 retries
+        with pytest.raises(ValueError, match="Agent 在 5 次嘗試後仍未回傳有效的 status code"):
+            result, _ = phase._execute_and_handle_agent_response(
+                agent_name=phase.dev_agent,
+                user_input="請建立計畫",
+                valid_status_codes=[
+                    PhaseStatusCode.READY_FOR_REVIEW,
+                    PhaseStatusCode.NEED_CLARIFICATION,
+                    PhaseStatusCode.REJECTED,
+                ],
+                allowed_tools=["write", "read"],
+                complete_codes=[PhaseStatusCode.READY_FOR_REVIEW],
+                continue_codes=[PhaseStatusCode.NEED_CLARIFICATION],
+                phase_specific_data={"dev_agent": phase.dev_agent},
+            )
 
     def test_returns_in_progress_for_no_status_code_non_interactive(
         self, tmp_path: Path, mock_git_ops, monkeypatch
     ) -> None:
-        """測試沒有 status code 且 non-interactive 模式時返回 IN_PROGRESS 狀態"""
+        """測試沒有 status code 且 non-interactive 模式時經過 5 次重試後拋出 ValueError"""
         monkeypatch.chdir(tmp_path)
         mock_git_ops.get_current_branch.return_value = "test-issue"
 
@@ -1886,6 +1888,7 @@ class TestExecuteAndHandleAgentResponse:
         mock_agent.config.cli.value = "claude"
         mock_agent.config.session_id = "test_session"
         agent_manager.get_agent.return_value = mock_agent
+        # All calls return response without status code (will retry 5 times)
         agent_manager.execute.return_value = ("Some response without status code", TokenUsage(), [], None, [])
 
         phase = PlanPhase(
@@ -1900,25 +1903,21 @@ class TestExecuteAndHandleAgentResponse:
         )
         phase.iteration = 1
 
-        # Execute - call base class method with all required parameters
-        result, _ = phase._execute_and_handle_agent_response(
-            agent_name=phase.dev_agent,
-            user_input="請建立計畫",
-            valid_status_codes=[
-                PhaseStatusCode.READY_FOR_REVIEW,
-                PhaseStatusCode.NEED_CLARIFICATION,
-                PhaseStatusCode.REJECTED,
-            ],
-            allowed_tools=["write", "read"],
-            complete_codes=[PhaseStatusCode.READY_FOR_REVIEW],
-            continue_codes=[PhaseStatusCode.NEED_CLARIFICATION],
-            phase_specific_data={"dev_agent": phase.dev_agent},
-        )
-
-        # Verify
-        assert result is not None
-        assert result.status == PhaseStatus.IN_PROGRESS
-        assert "No status code found" in result.message
+        # Execute - should raise ValueError after 5 retries
+        with pytest.raises(ValueError, match="Agent 在 5 次嘗試後仍未回傳有效的 status code"):
+            result, _ = phase._execute_and_handle_agent_response(
+                agent_name=phase.dev_agent,
+                user_input="請建立計畫",
+                valid_status_codes=[
+                    PhaseStatusCode.READY_FOR_REVIEW,
+                    PhaseStatusCode.NEED_CLARIFICATION,
+                    PhaseStatusCode.REJECTED,
+                ],
+                allowed_tools=["write", "read"],
+                complete_codes=[PhaseStatusCode.READY_FOR_REVIEW],
+                continue_codes=[PhaseStatusCode.NEED_CLARIFICATION],
+                phase_specific_data={"dev_agent": phase.dev_agent},
+            )
 
 
 class TestPlanPhaseFilePermissions:

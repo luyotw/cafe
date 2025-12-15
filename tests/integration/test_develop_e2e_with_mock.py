@@ -120,39 +120,39 @@ class TestDevelopE2EMockStatusCodes:
             assert status_data["status_code"] == "CAFE_CONFIRMED"
 
     def test_invalid_status_code_pauses(self, tmp_path):
-        """測試 agent 返回無效狀態碼會暫停（non-interactive 模式）
+        """測試 agent 返回無效狀態碼經過 5 次重試後失敗
 
         情境：Agent 返回無法識別的狀態碼
         指令：cafe develop test-issue --no-interactive
-        預期：暫停（paused），輸出包含 "paused" 或 "no status code"
+        預期：失敗，經過 5 次重試後輸出包含 "Agent 在 5 次嘗試後仍未回傳有效的 status code"
         """
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
 
         result = run_cafe_develop(tmp_path, issue_name, "CAFE_INVALID_CODE\n\n開發中...")
 
-        # Non-interactive mode pauses on missing/invalid status code
-        assert result.returncode == 0
+        # Non-interactive mode fails after 5 retries
+        assert result.returncode == 1
         output = result.stdout + result.stderr
-        # The parser treats invalid status codes as "no status code"
-        assert "paused" in output.lower() or "no status code" in output.lower()
+        # After retries, should fail with status code error
+        assert "Agent 在 5 次嘗試後仍未回傳有效的 status code" in output or "failed" in output.lower()
 
     def test_no_status_code_pauses(self, tmp_path):
-        """測試 agent 回應沒有狀態碼會暫停（non-interactive 模式）
+        """測試 agent 回應沒有狀態碼經過 5 次重試後失敗
 
         情境：Agent 回應內容沒有包含任何狀態碼
         指令：cafe develop test-issue --no-interactive
-        預期：暫停（paused），輸出包含 "paused" 或 "no status code"
+        預期：失敗，經過 5 次重試後輸出包含 "Agent 在 5 次嘗試後仍未回傳有效的 status code"
         """
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
 
         result = run_cafe_develop(tmp_path, issue_name, "開發中，正在實作功能...")
 
-        # Non-interactive mode pauses on missing status code
-        assert result.returncode == 0
+        # Non-interactive mode fails after 5 retries
+        assert result.returncode == 1
         output = result.stdout + result.stderr
-        assert "paused" in output.lower() or "no status code" in output.lower()
+        assert "Agent 在 5 次嘗試後仍未回傳有效的 status code" in output or "failed" in output.lower()
 
     def test_whitespace_only_response_should_fail(self, tmp_path):
         """測試 agent 返回僅空白字符的回應應該失敗
