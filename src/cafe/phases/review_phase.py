@@ -564,8 +564,8 @@ class ReviewPhase(Phase):
      ' && rm -f ./commit_msg.txt
      ```
 
-3. **仔細比對需求及實作文件**
-   - 確認所有需求都已實作，且實作方式符合規劃
+3. **確認實作是否完成**
+   - 仔細確認實作計畫中是否有未完成的項目，若有則視為開發未完成，請列出
 
 4. **找出潛在問題**
    - 確認是否符合專案既有 coding style
@@ -575,6 +575,7 @@ class ReviewPhase(Phase):
    - 檢查是否有不應該被提交的檔案，例如個人設定檔、log 檔案等
      - 若未 push 則要求使用 `git rebase` 或 `git filter-branch` 移除
      - 若已 push 則要求使用 `git rm --cached` 移除並更新 .gitignore 後 commit
+   - 檢查是否有不該被刪除的檔案或程式碼
 
 5. **簡要說明問題**
    - 列出檔案路徑和行號並說明問題
