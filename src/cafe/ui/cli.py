@@ -3208,6 +3208,67 @@ description: {description}
     console.print(f"[green]✓[/green] Agent '{role}/{name}.md' created successfully")
 
 
+@agent_app.command(name="edit")
+def agent_edit() -> None:
+    """Edit an existing agent."""
+    from pathlib import Path
+    import os
+
+    # Get agents directory from home
+    agents_dir = Path.home() / ".cafe" / "agents"
+
+    # Prompt for role
+    role_questions = [
+        inquirer.List(
+            "role",
+            message="Select agent role",
+            choices=["pm", "developer", "reviewer"],
+        )
+    ]
+    role_answer = inquirer.prompt(role_questions)
+    if not role_answer:
+        console.print("[dim]Cancelled[/dim]")
+        raise typer.Exit(0)
+    role = role_answer["role"]
+
+    # Get agents in this role
+    role_dir = agents_dir / role
+    if not role_dir.exists():
+        console.print(f"[red]No agents found in role '{role}'[/red]")
+        raise typer.Exit(1)
+
+    agent_files = sorted([f.name for f in role_dir.glob("*.md")])
+    if not agent_files:
+        console.print(f"[red]No agents found in role '{role}'[/red]")
+        raise typer.Exit(1)
+
+    # Prompt for agent
+    agent_questions = [
+        inquirer.List(
+            "agent",
+            message="Select agent to edit",
+            choices=agent_files,
+        )
+    ]
+    agent_answer = inquirer.prompt(agent_questions)
+    if not agent_answer:
+        console.print("[dim]Cancelled[/dim]")
+        raise typer.Exit(0)
+    agent_file = role_dir / agent_answer["agent"]
+
+    # Open editor
+    editor = os.environ.get("EDITOR", "vim")
+    try:
+        subprocess.run([editor, str(agent_file)], check=True)
+        console.print(f"[green]✓[/green] Agent '{role}/{agent_answer['agent']}' updated successfully")
+    except subprocess.CalledProcessError:
+        console.print("[red]Error: Failed to edit agent[/red]")
+        raise typer.Exit(1)
+    except FileNotFoundError:
+        console.print(f"[red]Error: Editor '{editor}' not found[/red]")
+        raise typer.Exit(1)
+
+
 @app.command()
 def test() -> None:
     """🧪 模擬 agent 執行測試（用於重現污染問題）。

@@ -209,3 +209,38 @@ class TestAgentCreateCommand:
 
         assert result.exit_code == 1
         assert "already exists" in result.stdout
+
+
+class TestAgentEditCommand:
+    """測試 cafe agent edit 指令。"""
+
+    def test_agent_edit_success(self, runner, temp_cafe_dir, monkeypatch):
+        """測試成功編輯 agent 檔案。"""
+        # 將 HOME 設定為 temp_cafe_dir 的父目錄
+        monkeypatch.setenv("HOME", str(temp_cafe_dir.parent))
+
+        # 建立測試用的 agent 檔案
+        agents_dir = temp_cafe_dir / "agents"
+        pm_dir = agents_dir / "pm"
+        pm_dir.mkdir(parents=True, exist_ok=True)
+        (pm_dir / "Roger.md").write_text("---\nname: Roger\n---\nPM rules")
+
+        dev_dir = agents_dir / "developer"
+        dev_dir.mkdir(parents=True, exist_ok=True)
+        (dev_dir / "David.md").write_text("---\nname: David\n---\nDev rules")
+
+        # Mock inquirer.prompt 回傳使用者輸入
+        with patch("inquirer.prompt") as mock_prompt:
+            mock_prompt.side_effect = [
+                {"role": "developer"},
+                {"agent": "David.md"},
+            ]
+
+            # Mock subprocess.run for editor
+            with patch("subprocess.run") as mock_run:
+                mock_run.return_value = Mock(returncode=0)
+
+                result = runner.invoke(app, ["agent", "edit"])
+
+        assert result.exit_code == 0
+        assert "updated successfully" in result.stdout or "Updated" in result.stdout
