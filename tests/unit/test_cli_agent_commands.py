@@ -35,8 +35,8 @@ class TestAgentLsCommand:
 
     def test_agent_ls_with_no_agents(self, runner, temp_cafe_dir, monkeypatch):
         """測試沒有任何 agent 時的 ls 輸出。"""
-        # 將 HOME 設定為 temp_cafe_dir 的父目錄
-        monkeypatch.setenv("HOME", str(temp_cafe_dir.parent))
+        # 將工作目錄設定為 temp_cafe_dir 的父目錄
+        monkeypatch.chdir(temp_cafe_dir.parent)
 
         result = runner.invoke(app, ["agent", "ls"])
 
@@ -45,8 +45,8 @@ class TestAgentLsCommand:
 
     def test_agent_ls_with_multiple_agents(self, runner, temp_cafe_dir, monkeypatch):
         """測試有多個 agents 時按角色分類列出。"""
-        # 將 HOME 設定為 temp_cafe_dir 的父目錄
-        monkeypatch.setenv("HOME", str(temp_cafe_dir.parent))
+        # 將工作目錄設定為 temp_cafe_dir 的父目錄
+        monkeypatch.chdir(temp_cafe_dir.parent)
 
         # 建立測試用的 agent 檔案
         agents_dir = temp_cafe_dir / "agents"
@@ -88,45 +88,65 @@ class TestAgentRmCommand:
 
     def test_agent_rm_success(self, runner, temp_cafe_dir, monkeypatch):
         """測試成功刪除 agent 檔案。"""
-        # 將 HOME 設定為 temp_cafe_dir 的父目錄
-        monkeypatch.setenv("HOME", str(temp_cafe_dir.parent))
+        # 將工作目錄設定為 temp_cafe_dir 的父目錄
+        monkeypatch.chdir(temp_cafe_dir.parent)
 
         # 建立測試用的 agent 檔案
         agents_dir = temp_cafe_dir / "agents"
         agent_file = agents_dir / "developer" / "John.md"
         agent_file.write_text("---\nname: John\n---\nRules")
 
-        # Mock typer.confirm 回傳 True
-        with patch("typer.confirm", return_value=True):
-            result = runner.invoke(app, ["agent", "rm", "developer/John.md"])
+        # Mock InquirerPy 和 typer.confirm
+        with patch("cafe.ui.cli.inquirer.select") as mock_select, patch(
+            "typer.confirm", return_value=True
+        ):
+            mock_select_instance = MagicMock()
+            # 模擬使用者選擇角色和 agent
+            mock_select_instance.execute.side_effect = ["developer", "John.md"]
+            mock_select.return_value = mock_select_instance
+
+            result = runner.invoke(app, ["agent", "rm"])
 
         assert result.exit_code == 0
         assert "deleted successfully" in result.stdout
         assert not agent_file.exists()
 
     def test_agent_rm_file_not_found(self, runner, temp_cafe_dir, monkeypatch):
-        """測試刪除不存在的 agent 檔案。"""
-        # 將 HOME 設定為 temp_cafe_dir 的父目錄
-        monkeypatch.setenv("HOME", str(temp_cafe_dir.parent))
+        """測試刪除不存在的 agent 檔案（選擇的 role 沒有任何 agent）。"""
+        # 將工作目錄設定為 temp_cafe_dir 的父目錄
+        monkeypatch.chdir(temp_cafe_dir.parent)
 
-        result = runner.invoke(app, ["agent", "rm", "developer/NonExistent.md"])
+        # Mock InquirerPy 選擇一個沒有 agents 的 role
+        with patch("cafe.ui.cli.inquirer.select") as mock_select:
+            mock_select_instance = MagicMock()
+            mock_select_instance.execute.return_value = "developer"
+            mock_select.return_value = mock_select_instance
+
+            result = runner.invoke(app, ["agent", "rm"])
 
         assert result.exit_code == 1
-        assert "not found" in result.stdout.lower()
+        assert "no agents found" in result.stdout.lower()
 
     def test_agent_rm_user_cancels(self, runner, temp_cafe_dir, monkeypatch):
         """測試使用者取消刪除操作。"""
-        # 將 HOME 設定為 temp_cafe_dir 的父目錄
-        monkeypatch.setenv("HOME", str(temp_cafe_dir.parent))
+        # 將工作目錄設定為 temp_cafe_dir 的父目錄
+        monkeypatch.chdir(temp_cafe_dir.parent)
 
         # 建立測試用的 agent 檔案
         agents_dir = temp_cafe_dir / "agents"
         agent_file = agents_dir / "developer" / "John.md"
         agent_file.write_text("---\nname: John\n---\nRules")
 
-        # Mock typer.confirm 回傳 False
-        with patch("typer.confirm", return_value=False):
-            result = runner.invoke(app, ["agent", "rm", "developer/John.md"])
+        # Mock InquirerPy 和 typer.confirm (回傳 False)
+        with patch("cafe.ui.cli.inquirer.select") as mock_select, patch(
+            "typer.confirm", return_value=False
+        ):
+            mock_select_instance = MagicMock()
+            # 模擬使用者選擇角色和 agent
+            mock_select_instance.execute.side_effect = ["developer", "John.md"]
+            mock_select.return_value = mock_select_instance
+
+            result = runner.invoke(app, ["agent", "rm"])
 
         assert result.exit_code == 0
         assert "cancelled" in result.stdout.lower()
@@ -138,43 +158,39 @@ class TestAgentCreateCommand:
 
     def test_agent_create_success(self, runner, temp_cafe_dir, monkeypatch):
         """測試成功建立 agent 檔案。"""
-        # 將 HOME 設定為 temp_cafe_dir 的父目錄
-        monkeypatch.setenv("HOME", str(temp_cafe_dir.parent))
+        # 將工作目錄設定為 temp_cafe_dir 的父目錄
+        monkeypatch.chdir(temp_cafe_dir.parent)
 
-        # Mock inquirer.prompt 回傳使用者輸入
-        with patch("inquirer.prompt") as mock_prompt:
-            mock_prompt.side_effect = [
-                {"role": "developer"},
-                {"name": "Michael"},
-                {"description": "A senior Rust developer"},
-            ]
+        # Mock InquirerPy
+        with patch("cafe.ui.cli.inquirer.select") as mock_select, patch(
+            "cafe.ui.cli.inquirer.text"
+        ) as mock_text:
+            mock_select_instance = MagicMock()
+            mock_text_instance = MagicMock()
+
+            # 模擬使用者選擇角色和輸入 name/description
+            mock_select_instance.execute.return_value = "developer"
+            mock_text_instance.execute.side_effect = ["Michael", "A senior Rust developer"]
+
+            mock_select.return_value = mock_select_instance
+            mock_text.return_value = mock_text_instance
 
             # Mock subprocess.run for editor
             with patch("subprocess.run") as mock_run:
-                # Create temp file with code of conduct
-                import tempfile
-                import os
-
-                with tempfile.NamedTemporaryFile(mode="w+", delete=False) as tf:
-                    tf.write("Always write safe Rust code")
-                    temp_path = tf.name
 
                 def side_effect(cmd, **kwargs):
                     # Write to the temp file when "editor" is called
                     if len(cmd) >= 2:
+                        # Read existing content and append custom code
+                        with open(cmd[1], "r") as f:
+                            existing_content = f.read()
                         with open(cmd[1], "w") as f:
-                            f.write("Always write safe Rust code")
+                            f.write(existing_content + "\nAlways write safe Rust code\n")
                     return Mock(returncode=0)
 
                 mock_run.side_effect = side_effect
 
                 result = runner.invoke(app, ["agent", "create"])
-
-                # Clean up temp file
-                try:
-                    os.unlink(temp_path)
-                except:
-                    pass
 
         assert result.exit_code == 0
         assert "created successfully" in result.stdout
@@ -190,20 +206,26 @@ class TestAgentCreateCommand:
 
     def test_agent_create_file_already_exists(self, runner, temp_cafe_dir, monkeypatch):
         """測試建立已存在的 agent 檔案。"""
-        # 將 HOME 設定為 temp_cafe_dir 的父目錄
-        monkeypatch.setenv("HOME", str(temp_cafe_dir.parent))
+        # 將工作目錄設定為 temp_cafe_dir 的父目錄
+        monkeypatch.chdir(temp_cafe_dir.parent)
 
         # 建立已存在的 agent 檔案
         agents_dir = temp_cafe_dir / "agents"
         agent_file = agents_dir / "developer" / "Michael.md"
         agent_file.write_text("---\nname: Michael\n---\nExisting")
 
-        # Mock inquirer.prompt 回傳使用者輸入
-        with patch("inquirer.prompt") as mock_prompt:
-            mock_prompt.side_effect = [
-                {"role": "developer"},
-                {"name": "Michael"},
-            ]
+        # Mock InquirerPy
+        with patch("cafe.ui.cli.inquirer.select") as mock_select, patch(
+            "cafe.ui.cli.inquirer.text"
+        ) as mock_text:
+            mock_select_instance = MagicMock()
+            mock_text_instance = MagicMock()
+
+            mock_select_instance.execute.return_value = "developer"
+            mock_text_instance.execute.side_effect = ["Michael", "A developer"]
+
+            mock_select.return_value = mock_select_instance
+            mock_text.return_value = mock_text_instance
 
             result = runner.invoke(app, ["agent", "create"])
 
@@ -216,8 +238,8 @@ class TestAgentEditCommand:
 
     def test_agent_edit_success(self, runner, temp_cafe_dir, monkeypatch):
         """測試成功編輯 agent 檔案。"""
-        # 將 HOME 設定為 temp_cafe_dir 的父目錄
-        monkeypatch.setenv("HOME", str(temp_cafe_dir.parent))
+        # 將工作目錄設定為 temp_cafe_dir 的父目錄
+        monkeypatch.chdir(temp_cafe_dir.parent)
 
         # 建立測試用的 agent 檔案
         agents_dir = temp_cafe_dir / "agents"
@@ -229,12 +251,14 @@ class TestAgentEditCommand:
         dev_dir.mkdir(parents=True, exist_ok=True)
         (dev_dir / "David.md").write_text("---\nname: David\n---\nDev rules")
 
-        # Mock inquirer.prompt 回傳使用者輸入
-        with patch("inquirer.prompt") as mock_prompt:
-            mock_prompt.side_effect = [
-                {"role": "developer"},
-                {"agent": "David.md"},
-            ]
+        # Mock InquirerPy
+        with patch("cafe.ui.cli.inquirer.select") as mock_select:
+            mock_select_instance = MagicMock()
+
+            # 模擬使用者選擇角色和 agent
+            mock_select_instance.execute.side_effect = ["developer", "David.md"]
+
+            mock_select.return_value = mock_select_instance
 
             # Mock subprocess.run for editor
             with patch("subprocess.run") as mock_run:

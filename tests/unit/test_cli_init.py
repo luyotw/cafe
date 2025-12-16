@@ -108,12 +108,10 @@ class TestInitCommandInteractiveFlow:
 
     @patch("cafe.ui.cli.shutil.which")
     @patch("cafe.ui.cli.init_helpers.copy_data_directory")
-    @patch("cafe.ui.cli.inquirer.prompt")
     @patch("cafe.ui.cli.list_available_agents")
     def test_init_prompts_for_all_three_roles(
         self,
         mock_list_agents: MagicMock,
-        mock_prompt: MagicMock,
         mock_copy: MagicMock,
         mock_which: MagicMock,
         tmp_path: Path,
@@ -126,34 +124,45 @@ class TestInitCommandInteractiveFlow:
         # 模擬 agent 列表
         mock_list_agents.return_value = [("Roger", "PM agent", Path(".cafe/agents/pm/Roger.md"))]
 
-        # 模擬用戶選擇 - inquirer.prompt() 返回字典
-        mock_prompt.side_effect = [
-            {"cli": "claude"},  # PM CLI
-            {"model": ""},  # PM model
-            {"agent": "Roger: PM agent"},  # PM agent
-            {"cli": "gemini"},  # Developer CLI
-            {"model": "sonnet"},  # Developer model
-            {"agent": "Roger: PM agent"},  # Developer agent
-            {"cli": "copilot"},  # Reviewer CLI
-            {"model": ""},  # Reviewer model
-            {"agent": "Roger: PM agent"},  # Reviewer agent
-        ]
-
         monkeypatch.chdir(tmp_path)
 
-        _result = runner.invoke(app, ["init"])
+        # 模擬 InquirerPy 的 select 和 text 方法
+        with patch("cafe.ui.cli.inquirer.select") as mock_select, patch(
+            "cafe.ui.cli.inquirer.text"
+        ) as mock_text:
+            # 模擬每個角色的 CLI/agent 選擇和 model 輸入
+            mock_select_instance = MagicMock()
+            mock_text_instance = MagicMock()
 
-        # 驗證 inquirer.prompt 被呼叫 9 次（3 個角色 × 3: CLI + model + agent）
-        assert mock_prompt.call_count == 9
+            # 設定 select 的返回值（CLI 和 agent 選擇）
+            mock_select_instance.execute.side_effect = [
+                "claude",  # PM CLI
+                "Roger: PM agent",  # PM agent
+                "gemini",  # Developer CLI
+                "Roger: PM agent",  # Developer agent
+                "copilot",  # Reviewer CLI
+                "Roger: PM agent",  # Reviewer agent
+            ]
+
+            # 設定 text 的返回值（model 輸入）
+            mock_text_instance.execute.side_effect = ["", "sonnet", ""]
+
+            mock_select.return_value = mock_select_instance
+            mock_text.return_value = mock_text_instance
+
+            _result = runner.invoke(app, ["init"])
+
+        # 驗證 select 被呼叫 6 次（3 個角色 × 2: CLI + agent）
+        assert mock_select.call_count == 6
+        # 驗證 text 被呼叫 3 次（3 個角色 × 1: model）
+        assert mock_text.call_count == 3
 
     @patch("cafe.ui.cli.shutil.which")
     @patch("cafe.ui.cli.init_helpers.copy_data_directory")
-    @patch("cafe.ui.cli.inquirer.prompt")
     @patch("cafe.ui.cli.list_available_agents")
     def test_init_handles_keyboard_interrupt(
         self,
         mock_list_agents: MagicMock,
-        mock_prompt: MagicMock,
         mock_copy: MagicMock,
         mock_which: MagicMock,
         tmp_path: Path,
@@ -166,12 +175,15 @@ class TestInitCommandInteractiveFlow:
         # 模擬 agent 列表
         mock_list_agents.return_value = [("Roger", "PM agent", Path(".cafe/agents/pm/Roger.md"))]
 
-        # 模擬 Ctrl+C
-        mock_prompt.side_effect = KeyboardInterrupt()
-
         monkeypatch.chdir(tmp_path)
 
-        result = runner.invoke(app, ["init"])
+        # 模擬 Ctrl+C
+        with patch("cafe.ui.cli.inquirer.select") as mock_select:
+            mock_select_instance = MagicMock()
+            mock_select_instance.execute.side_effect = KeyboardInterrupt()
+            mock_select.return_value = mock_select_instance
+
+            result = runner.invoke(app, ["init"])
 
         assert result.exit_code == 1
         assert "已取消" in result.stdout or "未完成" in result.stdout
@@ -207,12 +219,10 @@ class TestInitCommandConfigSaving:
 
     @patch("cafe.ui.cli.shutil.which")
     @patch("cafe.ui.cli.init_helpers.copy_data_directory")
-    @patch("cafe.ui.cli.inquirer.prompt")
     @patch("cafe.ui.cli.list_available_agents")
     def test_init_saves_config_correctly(
         self,
         mock_list_agents: MagicMock,
-        mock_prompt: MagicMock,
         mock_copy: MagicMock,
         mock_which: MagicMock,
         tmp_path: Path,
@@ -229,22 +239,32 @@ class TestInitCommandConfigSaving:
             ("Richard", "Reviewer agent", Path(".cafe/agents/reviewer/Richard.md")),
         ]
 
-        # 模擬用戶選擇 - inquirer.prompt() 返回字典
-        mock_prompt.side_effect = [
-            {"cli": "copilot"},  # PM CLI
-            {"model": ""},  # PM model
-            {"agent": "Roger: PM agent"},  # PM agent
-            {"cli": "claude"},  # Developer CLI
-            {"model": "sonnet"},  # Developer model
-            {"agent": "David: Dev agent"},  # Developer agent
-            {"cli": "gemini"},  # Reviewer CLI
-            {"model": ""},  # Reviewer model
-            {"agent": "Richard: Reviewer agent"},  # Reviewer agent
-        ]
-
         monkeypatch.chdir(tmp_path)
 
-        _result = runner.invoke(app, ["init"])
+        # 模擬 InquirerPy 的 select 和 text 方法
+        with patch("cafe.ui.cli.inquirer.select") as mock_select, patch(
+            "cafe.ui.cli.inquirer.text"
+        ) as mock_text:
+            mock_select_instance = MagicMock()
+            mock_text_instance = MagicMock()
+
+            # 設定 select 的返回值（CLI 和 agent 選擇）
+            mock_select_instance.execute.side_effect = [
+                "copilot",  # PM CLI
+                "Roger: PM agent",  # PM agent
+                "claude",  # Developer CLI
+                "David: Dev agent",  # Developer agent
+                "gemini",  # Reviewer CLI
+                "Richard: Reviewer agent",  # Reviewer agent
+            ]
+
+            # 設定 text 的返回值（model 輸入）
+            mock_text_instance.execute.side_effect = ["", "sonnet", ""]
+
+            mock_select.return_value = mock_select_instance
+            mock_text.return_value = mock_text_instance
+
+            _result = runner.invoke(app, ["init"])
 
         # 驗證配置檔案被建立
         config_file = tmp_path / ".cafe" / "config.yaml"
@@ -266,12 +286,10 @@ class TestInitCommandConfigSaving:
 
     @patch("cafe.ui.cli.shutil.which")
     @patch("cafe.ui.cli.init_helpers.copy_data_directory")
-    @patch("cafe.ui.cli.inquirer.prompt")
     @patch("cafe.ui.cli.list_available_agents")
     def test_init_displays_success_message(
         self,
         mock_list_agents: MagicMock,
-        mock_prompt: MagicMock,
         mock_copy: MagicMock,
         mock_which: MagicMock,
         tmp_path: Path,
@@ -284,16 +302,30 @@ class TestInitCommandConfigSaving:
         # 模擬 agent 列表
         mock_list_agents.return_value = [("Roger", "PM agent", Path(".cafe/agents/pm/Roger.md"))]
 
-        # 模擬用戶選擇 - 每個角色都選擇相同的設定
-        mock_prompt.side_effect = [
-            {"cli": "claude"},
-            {"model": ""},
-            {"agent": "Roger: PM agent"},
-        ] * 3
-
         monkeypatch.chdir(tmp_path)
 
-        result = runner.invoke(app, ["init"])
+        # 模擬 InquirerPy 的 select 和 text 方法
+        with patch("cafe.ui.cli.inquirer.select") as mock_select, patch(
+            "cafe.ui.cli.inquirer.text"
+        ) as mock_text:
+            mock_select_instance = MagicMock()
+            mock_text_instance = MagicMock()
+
+            # 每個角色都選擇相同的設定
+            mock_select_instance.execute.side_effect = [
+                "claude",
+                "Roger: PM agent",
+                "claude",
+                "Roger: PM agent",
+                "claude",
+                "Roger: PM agent",
+            ]
+            mock_text_instance.execute.side_effect = ["", "", ""]
+
+            mock_select.return_value = mock_select_instance
+            mock_text.return_value = mock_text_instance
+
+            result = runner.invoke(app, ["init"])
 
         assert result.exit_code == 0
         assert "設定已成功儲存" in result.stdout
@@ -304,12 +336,10 @@ class TestInitCommandConfigSaving:
 
     @patch("cafe.ui.cli.shutil.which")
     @patch("cafe.ui.cli.init_helpers.copy_data_directory")
-    @patch("cafe.ui.cli.inquirer.prompt")
     @patch("cafe.ui.cli.list_available_agents")
     def test_init_displays_model_as_default_when_empty(
         self,
         mock_list_agents: MagicMock,
-        mock_prompt: MagicMock,
         mock_copy: MagicMock,
         mock_which: MagicMock,
         tmp_path: Path,
@@ -322,16 +352,29 @@ class TestInitCommandConfigSaving:
         # 模擬 agent 列表
         mock_list_agents.return_value = [("Roger", "PM agent", Path(".cafe/agents/pm/Roger.md"))]
 
-        # 模擬用戶選擇（model 輸入為空）
-        mock_prompt.side_effect = [
-            {"cli": "claude"},
-            {"model": ""},  # empty model
-            {"agent": "Roger: PM agent"},
-        ] * 3
-
         monkeypatch.chdir(tmp_path)
 
-        result = runner.invoke(app, ["init"])
+        # 模擬 InquirerPy 的 select 和 text 方法（model 輸入為空）
+        with patch("cafe.ui.cli.inquirer.select") as mock_select, patch(
+            "cafe.ui.cli.inquirer.text"
+        ) as mock_text:
+            mock_select_instance = MagicMock()
+            mock_text_instance = MagicMock()
+
+            mock_select_instance.execute.side_effect = [
+                "claude",
+                "Roger: PM agent",
+                "claude",
+                "Roger: PM agent",
+                "claude",
+                "Roger: PM agent",
+            ]
+            mock_text_instance.execute.side_effect = ["", "", ""]  # empty models
+
+            mock_select.return_value = mock_select_instance
+            mock_text.return_value = mock_text_instance
+
+            result = runner.invoke(app, ["init"])
 
         assert result.exit_code == 0
         assert "預設" in result.stdout

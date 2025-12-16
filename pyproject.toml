@@ -11,7 +11,7 @@ dependencies = [
     "pydantic>=2.5.0",
     "pyyaml>=6.0",
     "prompt_toolkit>=3.0.0",
-    "inquirer>=2.9.0",
+    "InquirerPy>=0.3.4",
     "tomli>=2.0.0; python_version<'3.11'",
 ]
 

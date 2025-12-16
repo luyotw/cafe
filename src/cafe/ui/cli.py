@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 from typing import List, Optional
 
-import inquirer
+from InquirerPy import inquirer
 import typer
 import yaml
 from rich.console import Console
@@ -380,38 +380,27 @@ def init() -> None:
             ("reviewer", "Reviewer"),
         ]
 
-        def prompt_with_cancel_check(questions: list) -> dict:
-            """執行 inquirer prompt 並檢查用戶是否取消。"""
-            answer = inquirer.prompt(questions)
-            if not answer:
-                console.print("\n[yellow]設定未完成，已取消。[/yellow]")
-                raise typer.Exit(1)
-            return answer
-
         for role_key, role_display in roles:
             console.print(f"[bold cyan]配置 {role_display} 角色：[/bold cyan]")
 
             # Select CLI
-            cli_question = [
-                inquirer.List(
-                    "cli",
-                    message=f"請為 {role_display} 選擇一個 AI 代理",
-                    choices=available_clis,
-                )
-            ]
-            cli_answer = prompt_with_cancel_check(cli_question)
-            selected_cli = cli_answer["cli"]
+            selected_cli = inquirer.select(
+                message=f"請為 {role_display} 選擇一個 AI 代理",
+                choices=available_clis,
+            ).execute()
+            if not selected_cli:
+                console.print("\n[yellow]設定未完成，已取消。[/yellow]")
+                raise typer.Exit(1)
 
             # Input model name
-            model_question = [
-                inquirer.Text(
-                    "model",
-                    message=f"請為 {selected_cli} 輸入要使用的模型名稱（選填，直接按 Enter 將使用預設模型）",
-                    default="",
-                )
-            ]
-            model_answer = prompt_with_cancel_check(model_question)
-            model_name = model_answer["model"].strip() if model_answer["model"] else None
+            model_name_input = inquirer.text(
+                message=f"請為 {selected_cli} 輸入要使用的模型名稱（選填，直接按 Enter 將使用預設模型）",
+                default="",
+            ).execute()
+            if model_name_input is None:
+                console.print("\n[yellow]設定未完成，已取消。[/yellow]")
+                raise typer.Exit(1)
+            model_name = model_name_input.strip() if model_name_input else None
 
             # List available agents for this role
             agents = list_available_agents(role_key)
@@ -427,15 +416,13 @@ def init() -> None:
             agent_choices = [f"{name}: {desc}" for name, desc, _ in agents]
 
             # Select agent
-            agent_question = [
-                inquirer.List(
-                    "agent",
-                    message=f"請為 {role_display} 選擇一位代理人",
-                    choices=agent_choices,
-                )
-            ]
-            agent_answer = prompt_with_cancel_check(agent_question)
-            selected_agent_display = agent_answer["agent"]
+            selected_agent_display = inquirer.select(
+                message=f"請為 {role_display} 選擇一位代理人",
+                choices=agent_choices,
+            ).execute()
+            if not selected_agent_display:
+                console.print("\n[yellow]設定未完成，已取消。[/yellow]")
+                raise typer.Exit(1)
 
             # Extract agent name from display string
             selected_agent_name = selected_agent_display.split(":")[0].strip()
@@ -3043,8 +3030,8 @@ def agent_ls() -> None:
     from pathlib import Path
     from rich.table import Table
 
-    # Get agents directory from home
-    agents_dir = Path.home() / ".cafe" / "agents"
+    # Get agents directory from current working directory (project)
+    agents_dir = Path.cwd() / ".cafe" / "agents"
 
     if not agents_dir.exists():
         console.print("[yellow]No agents found.[/yellow]")
@@ -3095,19 +3082,44 @@ def agent_ls() -> None:
 
 
 @agent_app.command(name="rm")
-def agent_rm(
-    agent_path: str = typer.Argument(..., help="Agent path in format: role/name.md")
-) -> None:
-    """Remove an agent."""
+def agent_rm() -> None:
+    """Remove an agent interactively."""
     from pathlib import Path
 
-    # Get agents directory from home
-    agents_dir = Path.home() / ".cafe" / "agents"
-    agent_file = agents_dir / agent_path
+    # Get agents directory from current working directory (project)
+    agents_dir = Path.cwd() / ".cafe" / "agents"
 
-    if not agent_file.exists():
-        console.print(f"[red]Error: Agent '{agent_path}' not found[/red]")
+    # Prompt for role
+    role = inquirer.select(
+        message="Select agent role:",
+        choices=["pm", "developer", "reviewer"],
+    ).execute()
+    if not role:
+        console.print("[dim]Cancelled[/dim]")
+        raise typer.Exit(0)
+
+    # Get agents in this role
+    role_dir = agents_dir / role
+    if not role_dir.exists():
+        console.print(f"[red]No agents found in role '{role}'[/red]")
         raise typer.Exit(1)
+
+    agent_files = sorted([f.name for f in role_dir.glob("*.md")])
+    if not agent_files:
+        console.print(f"[red]No agents found in role '{role}'[/red]")
+        raise typer.Exit(1)
+
+    # Prompt for agent
+    agent_filename = inquirer.select(
+        message="Select agent to delete:",
+        choices=agent_files,
+    ).execute()
+    if not agent_filename:
+        console.print("[dim]Cancelled[/dim]")
+        raise typer.Exit(0)
+
+    agent_file = role_dir / agent_filename
+    agent_path = f"{role}/{agent_filename}"
 
     # Confirm deletion
     confirm = typer.confirm(f"Are you sure you want to delete agent '{agent_path}'?")
@@ -3130,32 +3142,31 @@ def agent_create() -> None:
     from pathlib import Path
     import os
 
-    # Get agents directory from home
-    agents_dir = Path.home() / ".cafe" / "agents"
+    # Get agents directory from current working directory (project)
+    agents_dir = Path.cwd() / ".cafe" / "agents"
 
     # Prompt for role
-    role_questions = [
-        inquirer.List(
-            "role",
-            message="Select agent role",
-            choices=["pm", "developer", "reviewer"],
-        )
-    ]
-    role_answer = inquirer.prompt(role_questions)
-    if not role_answer:
+    role = inquirer.select(
+        message="Select agent role:",
+        choices=["pm", "developer", "reviewer"],
+    ).execute()
+    if not role:
         console.print("[dim]Cancelled[/dim]")
         raise typer.Exit(0)
-    role = role_answer["role"]
 
     # Prompt for name
-    name_questions = [
-        inquirer.Text("name", message="Agent name (eg: Michael)")
-    ]
-    name_answer = inquirer.prompt(name_questions)
-    if not name_answer:
+    name = inquirer.text(
+        message="Agent name (eg: Michael):"
+    ).execute()
+    if not name:
         console.print("[dim]Cancelled[/dim]")
         raise typer.Exit(0)
-    name = name_answer["name"]
+
+    # Strip whitespace from name
+    name = name.strip()
+    if not name:
+        console.print("[red]Error: Agent name cannot be empty[/red]")
+        raise typer.Exit(1)
 
     # Check if agent already exists
     agent_file = agents_dir / role / f"{name}.md"
@@ -3164,40 +3175,61 @@ def agent_create() -> None:
         raise typer.Exit(1)
 
     # Prompt for description
-    description_questions = [
-        inquirer.Text("description", message="Description (eg: A senior Rust developer)")
-    ]
-    description_answer = inquirer.prompt(description_questions)
-    if not description_answer:
+    description = inquirer.text(
+        message="Description (eg: A senior Rust developer):"
+    ).execute()
+    if not description:
         console.print("[dim]Cancelled[/dim]")
         raise typer.Exit(0)
-    description = description_answer["description"]
+
+    # Strip whitespace from description
+    description = description.strip()
+    if not description:
+        console.print("[red]Error: Description cannot be empty[/red]")
+        raise typer.Exit(1)
 
     # Prompt for code of conduct (using editor)
     editor = os.environ.get("EDITOR", "vim")
     import tempfile
-    with tempfile.NamedTemporaryFile(mode="w+", suffix=".txt", delete=False) as tf:
+
+    # Create temp file with agent template
+    template_content = f"""---
+name: {name}
+description: {description}
+---
+
+# Please write the agent's code of conduct below
+# Delete this comment and write the agent's behavior guidelines and responsibilities
+#
+# Example:
+# You are a {description}.
+# Your responsibilities include:
+# - Writing clean and maintainable code
+# - Following best practices and coding standards
+# - Providing helpful and accurate responses
+
+"""
+
+    with tempfile.NamedTemporaryFile(mode="w+", suffix=".md", delete=False) as tf:
+        tf.write(template_content)
         temp_path = tf.name
 
     try:
         # Open editor for code of conduct
         subprocess.run([editor, temp_path], check=True)
 
-        # Read the code of conduct
+        # Read the entire agent file content (including frontmatter)
         with open(temp_path, "r") as f:
-            code_of_conduct = f.read().strip()
+            content = f.read().strip()
+
+        # Remove template comments if user didn't modify
+        if "# Please write the agent's code of conduct below" in content:
+            # Remove comment lines
+            lines = [line for line in content.split('\n') if not (line.strip().startswith('#') and 'Please write' in line or 'Delete this comment' in line or 'Example:' in line or 'Your responsibilities' in line or line.strip().startswith('# - '))]
+            content = '\n'.join(lines).strip()
     finally:
         # Clean up temp file
         os.unlink(temp_path)
-
-    # Create agent file with YAML frontmatter
-    content = f"""---
-name: {name}
-description: {description}
----
-
-{code_of_conduct}
-"""
 
     # Ensure directory exists
     agent_file.parent.mkdir(parents=True, exist_ok=True)
@@ -3205,7 +3237,9 @@ description: {description}
     # Write agent file
     agent_file.write_text(content)
 
-    console.print(f"[green]✓[/green] Agent '{role}/{name}.md' created successfully")
+    # Show relative path from current directory
+    relative_path = agent_file.relative_to(Path.cwd())
+    console.print(f"[green]✓[/green] Agent created successfully: {relative_path}")
 
 
 @agent_app.command(name="edit")
@@ -3214,22 +3248,17 @@ def agent_edit() -> None:
     from pathlib import Path
     import os
 
-    # Get agents directory from home
-    agents_dir = Path.home() / ".cafe" / "agents"
+    # Get agents directory from current working directory (project)
+    agents_dir = Path.cwd() / ".cafe" / "agents"
 
     # Prompt for role
-    role_questions = [
-        inquirer.List(
-            "role",
-            message="Select agent role",
-            choices=["pm", "developer", "reviewer"],
-        )
-    ]
-    role_answer = inquirer.prompt(role_questions)
-    if not role_answer:
+    role = inquirer.select(
+        message="Select agent role:",
+        choices=["pm", "developer", "reviewer"],
+    ).execute()
+    if not role:
         console.print("[dim]Cancelled[/dim]")
         raise typer.Exit(0)
-    role = role_answer["role"]
 
     # Get agents in this role
     role_dir = agents_dir / role
@@ -3243,24 +3272,22 @@ def agent_edit() -> None:
         raise typer.Exit(1)
 
     # Prompt for agent
-    agent_questions = [
-        inquirer.List(
-            "agent",
-            message="Select agent to edit",
-            choices=agent_files,
-        )
-    ]
-    agent_answer = inquirer.prompt(agent_questions)
-    if not agent_answer:
+    agent_filename = inquirer.select(
+        message="Select agent to edit:",
+        choices=agent_files,
+    ).execute()
+    if not agent_filename:
         console.print("[dim]Cancelled[/dim]")
         raise typer.Exit(0)
-    agent_file = role_dir / agent_answer["agent"]
+    agent_file = role_dir / agent_filename
 
     # Open editor
     editor = os.environ.get("EDITOR", "vim")
     try:
         subprocess.run([editor, str(agent_file)], check=True)
-        console.print(f"[green]✓[/green] Agent '{role}/{agent_answer['agent']}' updated successfully")
+        # Show relative path from current directory
+        relative_path = agent_file.relative_to(Path.cwd())
+        console.print(f"[green]✓[/green] Agent updated successfully: {relative_path}")
     except subprocess.CalledProcessError:
         console.print("[red]Error: Failed to edit agent[/red]")
         raise typer.Exit(1)
