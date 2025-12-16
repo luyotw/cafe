@@ -9,6 +9,8 @@ from typing import List, Optional
 
 from InquirerPy import inquirer
 import typer
+
+from cafe.ui.inquirer_prompts import prompt_confirm, prompt_list, prompt_text
 import yaml
 from rich.console import Console
 
@@ -384,19 +386,19 @@ def init() -> None:
             console.print(f"[bold cyan]配置 {role_display} 角色：[/bold cyan]")
 
             # Select CLI
-            selected_cli = inquirer.select(
+            selected_cli = prompt_list(
                 message=f"請為 {role_display} 選擇一個 AI 代理",
                 choices=available_clis,
-            ).execute()
+            )
             if not selected_cli:
                 console.print("\n[yellow]設定未完成，已取消。[/yellow]")
                 raise typer.Exit(1)
 
             # Input model name
-            model_name_input = inquirer.text(
+            model_name_input = prompt_text(
                 message=f"請為 {selected_cli} 輸入要使用的模型名稱（選填，直接按 Enter 將使用預設模型）",
                 default="",
-            ).execute()
+            )
             if model_name_input is None:
                 console.print("\n[yellow]設定未完成，已取消。[/yellow]")
                 raise typer.Exit(1)
@@ -416,10 +418,10 @@ def init() -> None:
             agent_choices = [f"{name}: {desc}" for name, desc, _ in agents]
 
             # Select agent
-            selected_agent_display = inquirer.select(
+            selected_agent_display = prompt_list(
                 message=f"請為 {role_display} 選擇一位代理人",
                 choices=agent_choices,
-            ).execute()
+            )
             if not selected_agent_display:
                 console.print("\n[yellow]設定未完成，已取消。[/yellow]")
                 raise typer.Exit(1)
@@ -1436,10 +1438,8 @@ def spec(
                     should_continue = True
                 else:
                     # Interactive mode: ask user
-                    from rich.prompt import Confirm
-
-                    should_continue = Confirm.ask(
-                        "\n[bold]Continue to next iteration?[/bold]", default=True
+                    should_continue = prompt_confirm(
+                        message="Continue to next iteration?", default=True
                     )
 
                 if should_continue:
@@ -1779,10 +1779,8 @@ def plan(
                     should_continue = True
                 else:
                     # Interactive mode: ask user
-                    from rich.prompt import Confirm
-
-                    should_continue = Confirm.ask(
-                        "\n[bold]Continue to next iteration?[/bold]", default=True
+                    should_continue = prompt_confirm(
+                        message="Continue to next iteration?", default=True
                     )
 
                 if should_continue:

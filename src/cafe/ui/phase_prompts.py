@@ -8,6 +8,7 @@ from typing import Optional
 
 from cafe.core.types import SpecRigor
 from cafe.ui.display import Display
+from cafe.ui.inquirer_prompts import prompt_list, prompt_text
 from cafe.utils.github import GitHubOps, GitHubError
 
 
@@ -23,27 +24,30 @@ def prompt_for_input_method(display: Display, github_ops: GitHubOps) -> tuple[st
         - method: "manual" 或 "github"
         - issue_id: Issue ID (int) 如果選擇 GitHub，否則 None
     """
-    print("\n" + "="*70)
-    print("請選擇需求輸入方式：")
-    print("="*70)
-    print()
-    print("1. 手動輸入需求")
-    print("2. 從 GitHub Issue 抓取")
-    print()
+    choices = [
+        "1. 手動輸入需求",
+        "2. 從 GitHub Issue 抓取",
+    ]
 
-    while True:
-        choice = input("請選擇 (1 或 2): ").strip()
+    choice = prompt_list(
+        message="請選擇需求輸入方式：",
+        choices=choices,
+    )
 
-        if choice == "1":
-            return ("manual", None)
-        elif choice == "2":
-            # 先顯示警告
-            print()
-            print("⚠️  注意：完成後會將 spec.md 以 comment 方式貼回 GitHub Issue")
-            print()
+    if choice.startswith("1"):
+        return ("manual", None)
+    else:
+        # GitHub Issue mode
+        print()
+        print("⚠️  注意：完成後會將 spec.md 以 comment 方式貼回 GitHub Issue")
+        print()
 
-            # 詢問 Issue ID 或 URL
-            issue_input = input("請輸入 GitHub Issue ID 或 URL: ").strip()
+        # 詢問 Issue ID 或 URL，並處理錯誤重試
+        while True:
+            issue_input = prompt_text(
+                message="請輸入 GitHub Issue ID 或 URL",
+                default="",
+            )
 
             try:
                 # 使用 GitHubOps 提取 issue number
@@ -57,10 +61,8 @@ def prompt_for_input_method(display: Display, github_ops: GitHubOps) -> tuple[st
                 return ("github", issue_id)
             except (ValueError, GitHubError) as e:
                 print(f"❌ 無效的 Issue ID 或 URL: {e}")
-                print("請重新選擇...")
+                print("請重新輸入...")
                 print()
-        else:
-            print("❌ 無效選擇，請輸入 1 或 2")
 
 
 def prompt_for_rigor(display: Display) -> str:
@@ -72,41 +74,28 @@ def prompt_for_rigor(display: Display) -> str:
     Returns:
         嚴謹程度字串：'low' | 'medium' | 'high'
     """
-    print("\n" + "="*70)
-    print("請選擇規格嚴謹程度：")
-    print("="*70)
-    print()
-    print("1. Low (低) - 快速開發模式")
-    print("   • 只問最關鍵的資訊")
-    print("   • 允許模糊地帶，讓開發者自行判斷")
-    print("   • 適合：快速原型、MVP、內部工具")
-    print()
-    print("2. Medium (中) - 平衡模式 [預設]")
-    print("   • 詢問重要細節和關鍵場景")
-    print("   • 在速度和精確度間取得平衡")
-    print("   • 適合：一般功能開發")
-    print()
-    print("3. High (高) - 精確規格模式")
-    print("   • 詳細詢問所有細節和邊界情況")
-    print("   • 確保需求可測試、無模糊")
-    print("   • 適合：核心功能、API 設計、對外產品")
-    print()
-    print("="*70)
+    choices = [
+        "Low (低) - 快速開發模式\n   • 只問最關鍵的資訊\n   • 允許模糊地帶，讓開發者自行判斷\n   • 適合：快速原型、MVP、內部工具",
+        "Medium (中) - 平衡模式 [預設]\n   • 詢問重要細節和關鍵場景\n   • 在速度和精確度間取得平衡\n   • 適合：一般功能開發",
+        "High (高) - 精確規格模式\n   • 詳細詢問所有細節和邊界情況\n   • 確保需求可測試、無模糊\n   • 適合：核心功能、API 設計、對外產品",
+    ]
 
-    while True:
-        choice = input("請選擇 (1-3, 直接按 Enter 使用預設值 2): ").strip()
+    choice = prompt_list(
+        message="請選擇規格嚴謹程度：",
+        choices=choices,
+        default=choices[1],  # Default to Medium
+    )
 
-        if choice == "" or choice == "2":
-            print(f"✓ 已選擇：Medium (中) - 平衡模式\n")
-            return "medium"
-        elif choice == "1":
-            print(f"✓ 已選擇：Low (低) - 快速開發模式\n")
-            return "low"
-        elif choice == "3":
-            print(f"✓ 已選擇：High (高) - 精確規格模式\n")
-            return "high"
-        else:
-            print("❌ 無效選擇，請輸入 1, 2, 或 3")
+    # Parse the choice to get rigor level
+    if choice.startswith("Low"):
+        print(f"✓ 已選擇：Low (低) - 快速開發模式\n")
+        return "low"
+    elif choice.startswith("High"):
+        print(f"✓ 已選擇：High (高) - 精確規格模式\n")
+        return "high"
+    else:
+        print(f"✓ 已選擇：Medium (中) - 平衡模式\n")
+        return "medium"
 
 
 def fetch_github_issue(github_ops: GitHubOps, issue_id: int) -> str:
