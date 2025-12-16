@@ -131,3 +131,81 @@ class TestAgentRmCommand:
         assert result.exit_code == 0
         assert "cancelled" in result.stdout.lower()
         assert agent_file.exists()  # 檔案仍然存在
+
+
+class TestAgentCreateCommand:
+    """測試 cafe agent create 指令。"""
+
+    def test_agent_create_success(self, runner, temp_cafe_dir, monkeypatch):
+        """測試成功建立 agent 檔案。"""
+        # 將 HOME 設定為 temp_cafe_dir 的父目錄
+        monkeypatch.setenv("HOME", str(temp_cafe_dir.parent))
+
+        # Mock inquirer.prompt 回傳使用者輸入
+        with patch("inquirer.prompt") as mock_prompt:
+            mock_prompt.side_effect = [
+                {"role": "developer"},
+                {"name": "Michael"},
+                {"description": "A senior Rust developer"},
+            ]
+
+            # Mock subprocess.run for editor
+            with patch("subprocess.run") as mock_run:
+                # Create temp file with code of conduct
+                import tempfile
+                import os
+
+                with tempfile.NamedTemporaryFile(mode="w+", delete=False) as tf:
+                    tf.write("Always write safe Rust code")
+                    temp_path = tf.name
+
+                def side_effect(cmd, **kwargs):
+                    # Write to the temp file when "editor" is called
+                    if len(cmd) >= 2:
+                        with open(cmd[1], "w") as f:
+                            f.write("Always write safe Rust code")
+                    return Mock(returncode=0)
+
+                mock_run.side_effect = side_effect
+
+                result = runner.invoke(app, ["agent", "create"])
+
+                # Clean up temp file
+                try:
+                    os.unlink(temp_path)
+                except:
+                    pass
+
+        assert result.exit_code == 0
+        assert "created successfully" in result.stdout
+
+        # 驗證檔案內容
+        agent_file = temp_cafe_dir / "agents" / "developer" / "Michael.md"
+        assert agent_file.exists()
+
+        content = agent_file.read_text()
+        assert "name: Michael" in content
+        assert "description: A senior Rust developer" in content
+        assert "Always write safe Rust code" in content
+
+    def test_agent_create_file_already_exists(self, runner, temp_cafe_dir, monkeypatch):
+        """測試建立已存在的 agent 檔案。"""
+        # 將 HOME 設定為 temp_cafe_dir 的父目錄
+        monkeypatch.setenv("HOME", str(temp_cafe_dir.parent))
+
+        # 建立已存在的 agent 檔案
+        agents_dir = temp_cafe_dir / "agents"
+        agent_file = agents_dir / "developer" / "Michael.md"
+        agent_file.write_text("---\nname: Michael\n---\nExisting")
+
+        # Mock inquirer.prompt 回傳使用者輸入
+        with patch("inquirer.prompt") as mock_prompt:
+            mock_prompt.side_effect = [
+                {"role": "developer"},
+                {"name": "Michael"},
+            ]
+
+            result = runner.invoke(app, ["agent", "create"])
+
+        assert result.exit_code == 1
+        assert "already exists" in result.stdout

@@ -3124,6 +3124,90 @@ def agent_rm(
         raise typer.Exit(1)
 
 
+@agent_app.command(name="create")
+def agent_create() -> None:
+    """Create a new agent interactively."""
+    from pathlib import Path
+    import os
+
+    # Get agents directory from home
+    agents_dir = Path.home() / ".cafe" / "agents"
+
+    # Prompt for role
+    role_questions = [
+        inquirer.List(
+            "role",
+            message="Select agent role",
+            choices=["pm", "developer", "reviewer"],
+        )
+    ]
+    role_answer = inquirer.prompt(role_questions)
+    if not role_answer:
+        console.print("[dim]Cancelled[/dim]")
+        raise typer.Exit(0)
+    role = role_answer["role"]
+
+    # Prompt for name
+    name_questions = [
+        inquirer.Text("name", message="Agent name (eg: Michael)")
+    ]
+    name_answer = inquirer.prompt(name_questions)
+    if not name_answer:
+        console.print("[dim]Cancelled[/dim]")
+        raise typer.Exit(0)
+    name = name_answer["name"]
+
+    # Check if agent already exists
+    agent_file = agents_dir / role / f"{name}.md"
+    if agent_file.exists():
+        console.print(f"[red]Error: Agent '{role}/{name}.md' already exists[/red]")
+        raise typer.Exit(1)
+
+    # Prompt for description
+    description_questions = [
+        inquirer.Text("description", message="Description (eg: A senior Rust developer)")
+    ]
+    description_answer = inquirer.prompt(description_questions)
+    if not description_answer:
+        console.print("[dim]Cancelled[/dim]")
+        raise typer.Exit(0)
+    description = description_answer["description"]
+
+    # Prompt for code of conduct (using editor)
+    editor = os.environ.get("EDITOR", "vim")
+    import tempfile
+    with tempfile.NamedTemporaryFile(mode="w+", suffix=".txt", delete=False) as tf:
+        temp_path = tf.name
+
+    try:
+        # Open editor for code of conduct
+        subprocess.run([editor, temp_path], check=True)
+
+        # Read the code of conduct
+        with open(temp_path, "r") as f:
+            code_of_conduct = f.read().strip()
+    finally:
+        # Clean up temp file
+        os.unlink(temp_path)
+
+    # Create agent file with YAML frontmatter
+    content = f"""---
+name: {name}
+description: {description}
+---
+
+{code_of_conduct}
+"""
+
+    # Ensure directory exists
+    agent_file.parent.mkdir(parents=True, exist_ok=True)
+
+    # Write agent file
+    agent_file.write_text(content)
+
+    console.print(f"[green]✓[/green] Agent '{role}/{name}.md' created successfully")
+
+
 @app.command()
 def test() -> None:
     """🧪 模擬 agent 執行測試（用於重現污染問題）。
