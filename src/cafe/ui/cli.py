@@ -3032,6 +3032,68 @@ def make(
         raise typer.Exit(1)
 
 
+# Agent management commands (similar to template commands)
+agent_app = typer.Typer(help="Manage agents")
+app.add_typer(agent_app, name="agent")
+
+
+@agent_app.command(name="ls")
+def agent_ls() -> None:
+    """List all available agents."""
+    from pathlib import Path
+    from rich.table import Table
+
+    # Get agents directory from home
+    agents_dir = Path.home() / ".cafe" / "agents"
+
+    if not agents_dir.exists():
+        console.print("[yellow]No agents found.[/yellow]")
+        return
+
+    # Get all role directories
+    roles = ["pm", "developer", "reviewer"]
+    has_agents = False
+
+    # Create table
+    table = Table(title="Available Agents", show_header=True, header_style="bold cyan")
+    table.add_column("Role", style="green")
+    table.add_column("Agent", style="yellow")
+    table.add_column("Description", style="dim")
+
+    for role in roles:
+        role_dir = agents_dir / role
+        if not role_dir.exists():
+            continue
+
+        # Get all .md files in role directory
+        agent_files = sorted(role_dir.glob("*.md"))
+
+        for agent_file in agent_files:
+            has_agents = True
+            agent_name = agent_file.stem
+
+            # Try to extract description from frontmatter
+            description = ""
+            try:
+                import yaml
+                content = agent_file.read_text()
+                if content.startswith("---"):
+                    parts = content.split("---", 2)
+                    if len(parts) >= 3:
+                        frontmatter = yaml.safe_load(parts[1])
+                        description = frontmatter.get("description", "")
+            except Exception:
+                pass
+
+            table.add_row(role, agent_name, description)
+
+    if not has_agents:
+        console.print("[yellow]No agents found.[/yellow]")
+        return
+
+    console.print(table)
+
+
 @app.command()
 def test() -> None:
     """🧪 模擬 agent 執行測試（用於重現污染問題）。
