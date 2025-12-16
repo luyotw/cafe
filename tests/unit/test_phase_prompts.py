@@ -10,9 +10,10 @@ from cafe.utils.github import GitHubOps, GitHubError
 class TestPromptForInputMethod:
     """測試 prompt_for_input_method 函式"""
 
-    @patch("builtins.input", side_effect=["1"])
-    def test_選擇手動輸入(self, mock_input):
+    @patch("cafe.ui.phase_prompts.prompt_list")
+    def test_選擇手動輸入(self, mock_prompt_list):
         """測試用戶選擇手動輸入"""
+        mock_prompt_list.return_value = "1. 手動輸入需求"
         display = Display()
         github_ops = Mock(spec=GitHubOps)
 
@@ -21,9 +22,12 @@ class TestPromptForInputMethod:
         assert method == "manual"
         assert issue_id is None
 
-    @patch("builtins.input", side_effect=["2", "123"])
-    def test_選擇GitHub_Issue並提供有效ID(self, mock_input):
+    @patch("cafe.ui.phase_prompts.prompt_text")
+    @patch("cafe.ui.phase_prompts.prompt_list")
+    def test_選擇GitHub_Issue並提供有效ID(self, mock_prompt_list, mock_prompt_text):
         """測試用戶選擇 GitHub Issue 並提供有效的 Issue ID"""
+        mock_prompt_list.return_value = "2. 從 GitHub Issue 抓取"
+        mock_prompt_text.return_value = "123"
         display = Display()
         github_ops = Mock(spec=GitHubOps)
         github_ops.extract_issue_number.return_value = "123"
@@ -34,9 +38,12 @@ class TestPromptForInputMethod:
         assert issue_id == 123
         github_ops.extract_issue_number.assert_called_once_with("123")
 
-    @patch("builtins.input", side_effect=["2", "https://github.com/user/repo/issues/456"])
-    def test_選擇GitHub_Issue並提供URL(self, mock_input):
+    @patch("cafe.ui.phase_prompts.prompt_text")
+    @patch("cafe.ui.phase_prompts.prompt_list")
+    def test_選擇GitHub_Issue並提供URL(self, mock_prompt_list, mock_prompt_text):
         """測試用戶選擇 GitHub Issue 並提供 URL"""
+        mock_prompt_list.return_value = "2. 從 GitHub Issue 抓取"
+        mock_prompt_text.return_value = "https://github.com/user/repo/issues/456"
         display = Display()
         github_ops = Mock(spec=GitHubOps)
         github_ops.extract_issue_number.return_value = "456"
@@ -49,9 +56,12 @@ class TestPromptForInputMethod:
             "https://github.com/user/repo/issues/456"
         )
 
-    @patch("builtins.input", side_effect=["2", "invalid", "2", "789"])
-    def test_無效Issue_ID後重試(self, mock_input):
+    @patch("cafe.ui.phase_prompts.prompt_text")
+    @patch("cafe.ui.phase_prompts.prompt_list")
+    def test_無效Issue_ID後重試(self, mock_prompt_list, mock_prompt_text):
         """測試輸入無效 Issue ID 後重新選擇"""
+        mock_prompt_list.return_value = "2. 從 GitHub Issue 抓取"
+        mock_prompt_text.side_effect = ["invalid", "789"]
         display = Display()
         github_ops = Mock(spec=GitHubOps)
         # First call raises error, second call succeeds
@@ -65,9 +75,10 @@ class TestPromptForInputMethod:
         assert method == "github"
         assert issue_id == 789
 
-    @patch("builtins.input", side_effect=["3", "1"])
-    def test_無效選擇後重試(self, mock_input):
+    @patch("cafe.ui.phase_prompts.prompt_list")
+    def test_無效選擇後重試(self, mock_prompt_list):
         """測試輸入無效選擇後重試"""
+        mock_prompt_list.return_value = "1. 手動輸入需求"
         display = Display()
         github_ops = Mock(spec=GitHubOps)
 
@@ -80,45 +91,50 @@ class TestPromptForInputMethod:
 class TestPromptForRigor:
     """測試 prompt_for_rigor 函式"""
 
-    @patch("builtins.input", return_value="")
-    def test_使用預設值Medium(self, mock_input):
-        """測試按 Enter 使用預設值 medium"""
+    @patch("cafe.ui.phase_prompts.prompt_list")
+    def test_使用預設值Medium(self, mock_prompt_list):
+        """測試使用預設值 medium"""
+        mock_prompt_list.return_value = "Medium (中) - 平衡模式 [預設]\n   • 詢問重要細節和關鍵場景\n   • 在速度和精確度間取得平衡\n   • 適合：一般功能開發"
         display = Display()
 
         rigor = prompt_for_rigor(display)
 
         assert rigor == "medium"
 
-    @patch("builtins.input", return_value="2")
-    def test_明確選擇Medium(self, mock_input):
+    @patch("cafe.ui.phase_prompts.prompt_list")
+    def test_明確選擇Medium(self, mock_prompt_list):
         """測試明確選擇 medium"""
+        mock_prompt_list.return_value = "Medium (中) - 平衡模式 [預設]\n   • 詢問重要細節和關鍵場景\n   • 在速度和精確度間取得平衡\n   • 適合：一般功能開發"
         display = Display()
 
         rigor = prompt_for_rigor(display)
 
         assert rigor == "medium"
 
-    @patch("builtins.input", return_value="1")
-    def test_選擇Low(self, mock_input):
+    @patch("cafe.ui.phase_prompts.prompt_list")
+    def test_選擇Low(self, mock_prompt_list):
         """測試選擇 low"""
+        mock_prompt_list.return_value = "Low (低) - 快速開發模式\n   • 只問最關鍵的資訊\n   • 允許模糊地帶，讓開發者自行判斷\n   • 適合：快速原型、MVP、內部工具"
         display = Display()
 
         rigor = prompt_for_rigor(display)
 
         assert rigor == "low"
 
-    @patch("builtins.input", return_value="3")
-    def test_選擇High(self, mock_input):
+    @patch("cafe.ui.phase_prompts.prompt_list")
+    def test_選擇High(self, mock_prompt_list):
         """測試選擇 high"""
+        mock_prompt_list.return_value = "High (高) - 精確規格模式\n   • 詳細詢問所有細節和邊界情況\n   • 確保需求可測試、無模糊\n   • 適合：核心功能、API 設計、對外產品"
         display = Display()
 
         rigor = prompt_for_rigor(display)
 
         assert rigor == "high"
 
-    @patch("builtins.input", side_effect=["4", "2"])
-    def test_無效選擇後重試(self, mock_input):
+    @patch("cafe.ui.phase_prompts.prompt_list")
+    def test_無效選擇後重試(self, mock_prompt_list):
         """測試輸入無效選擇後重試"""
+        mock_prompt_list.return_value = "Medium (中) - 平衡模式 [預設]\n   • 詢問重要細節和關鍵場景\n   • 在速度和精確度間取得平衡\n   • 適合：一般功能開發"
         display = Display()
 
         rigor = prompt_for_rigor(display)

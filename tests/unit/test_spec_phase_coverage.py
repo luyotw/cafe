@@ -56,9 +56,8 @@ class TestSpecPhaseRigorPrompt:
             git_ops=mock_git_ops,
         )
 
-        with patch('builtins.input', return_value=""):
-            with patch('builtins.print'):
-                phase._prompt_for_rigor()
+        with patch('cafe.ui.phase_prompts.prompt_list', return_value="Medium (中) - 平衡模式 [預設]\n   • 詢問重要細節和關鍵場景\n   • 在速度和精確度間取得平衡\n   • 適合：一般功能開發"):
+            phase._prompt_for_rigor()
 
         assert phase.rigor == SpecRigor.MEDIUM
 
@@ -81,9 +80,8 @@ class TestSpecPhaseRigorPrompt:
             git_ops=mock_git_ops,
         )
 
-        with patch('builtins.input', return_value="1"):
-            with patch('builtins.print'):
-                phase._prompt_for_rigor()
+        with patch('cafe.ui.phase_prompts.prompt_list', return_value="Low (低) - 快速開發模式\n   • 只問最關鍵的資訊\n   • 允許模糊地帶，讓開發者自行判斷\n   • 適合：快速原型、MVP、內部工具"):
+            phase._prompt_for_rigor()
 
         assert phase.rigor == SpecRigor.LOW
 
@@ -106,9 +104,8 @@ class TestSpecPhaseRigorPrompt:
             git_ops=mock_git_ops,
         )
 
-        with patch('builtins.input', return_value="3"):
-            with patch('builtins.print'):
-                phase._prompt_for_rigor()
+        with patch('cafe.ui.phase_prompts.prompt_list', return_value="High (高) - 精確規格模式\n   • 詳細詢問所有細節和邊界情況\n   • 確保需求可測試、無模糊\n   • 適合：核心功能、API 設計、對外產品"):
+            phase._prompt_for_rigor()
 
         assert phase.rigor == SpecRigor.HIGH
 
@@ -131,7 +128,7 @@ class TestSpecPhaseRigorPrompt:
             git_ops=mock_git_ops,
         )
 
-        with patch('builtins.input', side_effect=["invalid", "4", "2"]):
+        with patch('cafe.ui.phase_prompts.prompt_list', return_value="Medium (中) - 平衡模式 [預設]\n   • 詢問重要細節和關鍵場景\n   • 在速度和精確度間取得平衡\n   • 適合：一般功能開發"):
             with patch('builtins.print'):
                 phase._prompt_for_rigor()
 

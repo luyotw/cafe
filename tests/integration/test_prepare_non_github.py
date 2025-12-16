@@ -50,13 +50,22 @@ def mock_git_ops_non_github():
 class TestPrepareNonGitHubRepo:
     """測試 prepare 指令在非 GitHub repo 的行為."""
 
+    @patch("cafe.ui.cli.prompt_confirm")
+    @patch("cafe.ui.template_selector.prompt_list")
+    @patch("cafe.ui.phase_prompts.prompt_list")
+    @patch("cafe.ui.cli.prompt_text")
     def test_prepare_non_github_repo_interactive_skips_input_method_prompt(
-        self, temp_repo_dir, mock_git_ops_non_github
+        self, mock_prompt_text, mock_phase_list, mock_template_list, mock_prompt_confirm, temp_repo_dir, mock_git_ops_non_github
     ):
         """測試在非 GitHub repo 中執行 prepare 會自動設定 spec.input_method 為 manual."""
-        # Simulate user input: issue name, worktree (n), rigor (empty=medium), template (1)
+        # Mock user inputs: issue name, worktree (n), rigor, template
         # Note: Should NOT ask for input method or PR auto-create in non-GitHub repos
-        result = runner.invoke(app, ["prepare"], input="test-issue\nn\n\n1\n")
+        mock_prompt_text.return_value = "test-issue"
+        mock_prompt_confirm.return_value = False  # worktree (n)
+        mock_phase_list.return_value = "Medium (中) - 平衡模式 [預設]\n   • 詢問重要細節和關鍵場景\n   • 在速度和精確度間取得平衡\n   • 適合：一般功能開發"
+        mock_template_list.return_value = "1. default"
+
+        result = runner.invoke(app, ["prepare"])
 
         assert result.exit_code == 0
         assert "Successfully prepared issue: test-issue" in result.stdout
@@ -73,12 +82,21 @@ class TestPrepareNonGitHubRepo:
         # Should not have issue_id in config
         assert "issue_id" not in config_data.get("spec", {})
 
+    @patch("cafe.ui.cli.prompt_confirm")
+    @patch("cafe.ui.template_selector.prompt_list")
+    @patch("cafe.ui.phase_prompts.prompt_list")
+    @patch("cafe.ui.cli.prompt_text")
     def test_prepare_non_github_repo_sets_pr_auto_create_false(
-        self, temp_repo_dir, mock_git_ops_non_github
+        self, mock_prompt_text, mock_phase_list, mock_template_list, mock_prompt_confirm, temp_repo_dir, mock_git_ops_non_github
     ):
         """測試在非 GitHub repo 中執行 prepare 會自動設定 pr.auto_create 為 False."""
-        # Simulate user input: issue name, worktree (n), rigor (empty=medium), template (1)
-        result = runner.invoke(app, ["prepare"], input="my-feature\nn\n\n1\n")
+        # Mock user inputs
+        mock_prompt_text.return_value = "my-feature"
+        mock_prompt_confirm.return_value = False  # worktree (n)
+        mock_phase_list.return_value = "Medium (中) - 平衡模式 [預設]\n   • 詢問重要細節和關鍵場景\n   • 在速度和精確度間取得平衡\n   • 適合：一般功能開發"
+        mock_template_list.return_value = "1. default"
+
+        result = runner.invoke(app, ["prepare"])
 
         assert result.exit_code == 0
 
@@ -138,12 +156,25 @@ def mock_git_ops_github():
 class TestPrepareGitHubRepo:
     """測試 prepare 指令在 GitHub repo 的行為保持不變."""
 
+    @patch("cafe.ui.cli.prompt_confirm")
+    @patch("cafe.ui.template_selector.prompt_list")
+    @patch("cafe.ui.phase_prompts.prompt_list")
+    @patch("cafe.ui.cli.prompt_text")
     def test_prepare_github_repo_interactive_asks_input_method(
-        self, temp_repo_dir, mock_git_ops_github
+        self, mock_prompt_text, mock_phase_list, mock_template_list, mock_prompt_confirm, temp_repo_dir, mock_git_ops_github
     ):
         """測試在 GitHub repo 中執行 prepare 會詢問 input method."""
-        # Simulate user input: issue name, worktree (n), input method (1=manual), rigor (empty), template (1), pr (y)
-        result = runner.invoke(app, ["prepare"], input="gh-issue\nn\n1\n\n1\ny\n")
+        # Mock user inputs: issue name, worktree (n), input method (manual), rigor, template, pr (y)
+        mock_prompt_text.return_value = "gh-issue"
+        mock_prompt_confirm.side_effect = [False, True]  # worktree (n), pr (y)
+        # Note: phase_prompts has input method selection too, need to handle both
+        mock_phase_list.side_effect = [
+            "1. 手動輸入需求",  # input method
+            "Medium (中) - 平衡模式 [預設]\n   • 詢問重要細節和關鍵場景\n   • 在速度和精確度間取得平衡\n   • 適合：一般功能開發",  # rigor
+        ]
+        mock_template_list.return_value = "1. default"  # template
+
+        result = runner.invoke(app, ["prepare"])
 
         assert result.exit_code == 0
 

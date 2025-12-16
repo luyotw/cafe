@@ -153,11 +153,11 @@ class TestSpecCommandNonInteractiveBasic:
         
         # Assert - 沒有 user_input 應該失敗
         assert result.status == PhaseStatus.FAILED
-        # 錯誤訊息應該包含 "input", "require", 或 "stdin" (pytest 環境下的錯誤)
+        # 錯誤訊息應該說明沒有提供 user story/input
         assert (
-            "input" in result.message.lower() 
-            or "require" in result.message.lower()
-            or "stdin" in result.message.lower()
+            "user story" in result.message.lower()
+            or "user input" in result.message.lower()
+            or "provided" in result.message.lower()
         )
 
 

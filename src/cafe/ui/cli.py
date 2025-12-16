@@ -552,7 +552,7 @@ def prepare(
         # 1. Get issue name (from argument or prompt)
         is_interactive = not issue_name  # Track if we're in interactive mode
         if not issue_name:
-            issue_name = typer.prompt("Issue name")
+            issue_name = prompt_text("Issue name")
             if not issue_name or not issue_name.strip():
                 console.print("[red]Error: Issue name cannot be empty.[/red]")
                 raise typer.Exit(1)
@@ -575,7 +575,7 @@ def prepare(
             console.print()
 
             # Ask if user wants to continue
-            continue_anyway = typer.confirm("Continue anyway?", default=False)
+            continue_anyway = prompt_confirm("Continue anyway?", default=False)
             if not continue_anyway:
                 console.print("[dim]Cancelled.[/dim]")
                 raise typer.Exit(0)
@@ -595,7 +595,7 @@ def prepare(
         # If in interactive mode and no --worktree parameter
         elif is_interactive and not worktree:
             # Ask user if they want to use worktree mode
-            use_worktree = typer.confirm("Use Git worktree mode for this issue?", default=False)
+            use_worktree = prompt_confirm("Use Git worktree mode for this issue?", default=False)
 
             if use_worktree:
                 # Suggest default path
@@ -603,10 +603,9 @@ def prepare(
                 console.print(f"[dim]Default path: {default_path}[/dim]")
 
                 # Prompt for path (allow empty input to use default)
-                user_path = typer.prompt(
+                user_path = prompt_text(
                     "Worktree path (press Enter for default)",
                     default=default_path,
-                    show_default=False,
                 )
                 worktree_path = user_path.strip() if user_path.strip() else default_path
 
@@ -734,7 +733,7 @@ def prepare(
             # Prompt for PR auto-create setting (only for GitHub repos)
             console.print()
             if is_github_repo():
-                auto_create_pr = typer.confirm(
+                auto_create_pr = prompt_confirm(
                     "Automatically create PR on GitHub after development?", default=True
                 )
                 pr_config["auto_create"] = auto_create_pr
