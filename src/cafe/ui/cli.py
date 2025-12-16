@@ -3032,6 +3032,243 @@ def make(
         raise typer.Exit(1)
 
 
+# Agent management commands (similar to template commands)
+agent_app = typer.Typer(help="Manage agents")
+app.add_typer(agent_app, name="agent")
+
+
+@agent_app.command(name="ls")
+def agent_ls() -> None:
+    """List all available agents."""
+    from pathlib import Path
+    from rich.table import Table
+
+    # Get agents directory from home
+    agents_dir = Path.home() / ".cafe" / "agents"
+
+    if not agents_dir.exists():
+        console.print("[yellow]No agents found.[/yellow]")
+        return
+
+    # Get all role directories
+    roles = ["pm", "developer", "reviewer"]
+    has_agents = False
+
+    # Create table
+    table = Table(title="Available Agents", show_header=True, header_style="bold cyan")
+    table.add_column("Role", style="green")
+    table.add_column("Agent", style="yellow")
+    table.add_column("Description", style="dim")
+
+    for role in roles:
+        role_dir = agents_dir / role
+        if not role_dir.exists():
+            continue
+
+        # Get all .md files in role directory
+        agent_files = sorted(role_dir.glob("*.md"))
+
+        for agent_file in agent_files:
+            has_agents = True
+            agent_name = agent_file.stem
+
+            # Try to extract description from frontmatter
+            description = ""
+            try:
+                import yaml
+                content = agent_file.read_text()
+                if content.startswith("---"):
+                    parts = content.split("---", 2)
+                    if len(parts) >= 3:
+                        frontmatter = yaml.safe_load(parts[1])
+                        description = frontmatter.get("description", "")
+            except Exception:
+                pass
+
+            table.add_row(role, agent_name, description)
+
+    if not has_agents:
+        console.print("[yellow]No agents found.[/yellow]")
+        return
+
+    console.print(table)
+
+
+@agent_app.command(name="rm")
+def agent_rm(
+    agent_path: str = typer.Argument(..., help="Agent path in format: role/name.md")
+) -> None:
+    """Remove an agent."""
+    from pathlib import Path
+
+    # Get agents directory from home
+    agents_dir = Path.home() / ".cafe" / "agents"
+    agent_file = agents_dir / agent_path
+
+    if not agent_file.exists():
+        console.print(f"[red]Error: Agent '{agent_path}' not found[/red]")
+        raise typer.Exit(1)
+
+    # Confirm deletion
+    confirm = typer.confirm(f"Are you sure you want to delete agent '{agent_path}'?")
+    if not confirm:
+        console.print("[dim]Cancelled[/dim]")
+        raise typer.Exit(0)
+
+    # Delete the agent file
+    try:
+        agent_file.unlink()
+        console.print(f"[green]✓[/green] Agent '{agent_path}' deleted successfully")
+    except Exception as e:
+        console.print(f"[red]Error: Failed to delete agent: {e}[/red]")
+        raise typer.Exit(1)
+
+
+@agent_app.command(name="create")
+def agent_create() -> None:
+    """Create a new agent interactively."""
+    from pathlib import Path
+    import os
+
+    # Get agents directory from home
+    agents_dir = Path.home() / ".cafe" / "agents"
+
+    # Prompt for role
+    role_questions = [
+        inquirer.List(
+            "role",
+            message="Select agent role",
+            choices=["pm", "developer", "reviewer"],
+        )
+    ]
+    role_answer = inquirer.prompt(role_questions)
+    if not role_answer:
+        console.print("[dim]Cancelled[/dim]")
+        raise typer.Exit(0)
+    role = role_answer["role"]
+
+    # Prompt for name
+    name_questions = [
+        inquirer.Text("name", message="Agent name (eg: Michael)")
+    ]
+    name_answer = inquirer.prompt(name_questions)
+    if not name_answer:
+        console.print("[dim]Cancelled[/dim]")
+        raise typer.Exit(0)
+    name = name_answer["name"]
+
+    # Check if agent already exists
+    agent_file = agents_dir / role / f"{name}.md"
+    if agent_file.exists():
+        console.print(f"[red]Error: Agent '{role}/{name}.md' already exists[/red]")
+        raise typer.Exit(1)
+
+    # Prompt for description
+    description_questions = [
+        inquirer.Text("description", message="Description (eg: A senior Rust developer)")
+    ]
+    description_answer = inquirer.prompt(description_questions)
+    if not description_answer:
+        console.print("[dim]Cancelled[/dim]")
+        raise typer.Exit(0)
+    description = description_answer["description"]
+
+    # Prompt for code of conduct (using editor)
+    editor = os.environ.get("EDITOR", "vim")
+    import tempfile
+    with tempfile.NamedTemporaryFile(mode="w+", suffix=".txt", delete=False) as tf:
+        temp_path = tf.name
+
+    try:
+        # Open editor for code of conduct
+        subprocess.run([editor, temp_path], check=True)
+
+        # Read the code of conduct
+        with open(temp_path, "r") as f:
+            code_of_conduct = f.read().strip()
+    finally:
+        # Clean up temp file
+        os.unlink(temp_path)
+
+    # Create agent file with YAML frontmatter
+    content = f"""---
+name: {name}
+description: {description}
+---
+
+{code_of_conduct}
+"""
+
+    # Ensure directory exists
+    agent_file.parent.mkdir(parents=True, exist_ok=True)
+
+    # Write agent file
+    agent_file.write_text(content)
+
+    console.print(f"[green]✓[/green] Agent '{role}/{name}.md' created successfully")
+
+
+@agent_app.command(name="edit")
+def agent_edit() -> None:
+    """Edit an existing agent."""
+    from pathlib import Path
+    import os
+
+    # Get agents directory from home
+    agents_dir = Path.home() / ".cafe" / "agents"
+
+    # Prompt for role
+    role_questions = [
+        inquirer.List(
+            "role",
+            message="Select agent role",
+            choices=["pm", "developer", "reviewer"],
+        )
+    ]
+    role_answer = inquirer.prompt(role_questions)
+    if not role_answer:
+        console.print("[dim]Cancelled[/dim]")
+        raise typer.Exit(0)
+    role = role_answer["role"]
+
+    # Get agents in this role
+    role_dir = agents_dir / role
+    if not role_dir.exists():
+        console.print(f"[red]No agents found in role '{role}'[/red]")
+        raise typer.Exit(1)
+
+    agent_files = sorted([f.name for f in role_dir.glob("*.md")])
+    if not agent_files:
+        console.print(f"[red]No agents found in role '{role}'[/red]")
+        raise typer.Exit(1)
+
+    # Prompt for agent
+    agent_questions = [
+        inquirer.List(
+            "agent",
+            message="Select agent to edit",
+            choices=agent_files,
+        )
+    ]
+    agent_answer = inquirer.prompt(agent_questions)
+    if not agent_answer:
+        console.print("[dim]Cancelled[/dim]")
+        raise typer.Exit(0)
+    agent_file = role_dir / agent_answer["agent"]
+
+    # Open editor
+    editor = os.environ.get("EDITOR", "vim")
+    try:
+        subprocess.run([editor, str(agent_file)], check=True)
+        console.print(f"[green]✓[/green] Agent '{role}/{agent_answer['agent']}' updated successfully")
+    except subprocess.CalledProcessError:
+        console.print("[red]Error: Failed to edit agent[/red]")
+        raise typer.Exit(1)
+    except FileNotFoundError:
+        console.print(f"[red]Error: Editor '{editor}' not found[/red]")
+        raise typer.Exit(1)
+
+
 @app.command()
 def test() -> None:
     """🧪 模擬 agent 執行測試（用於重現污染問題）。
