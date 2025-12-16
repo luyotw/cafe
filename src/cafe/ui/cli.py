@@ -3094,6 +3094,36 @@ def agent_ls() -> None:
     console.print(table)
 
 
+@agent_app.command(name="rm")
+def agent_rm(
+    agent_path: str = typer.Argument(..., help="Agent path in format: role/name.md")
+) -> None:
+    """Remove an agent."""
+    from pathlib import Path
+
+    # Get agents directory from home
+    agents_dir = Path.home() / ".cafe" / "agents"
+    agent_file = agents_dir / agent_path
+
+    if not agent_file.exists():
+        console.print(f"[red]Error: Agent '{agent_path}' not found[/red]")
+        raise typer.Exit(1)
+
+    # Confirm deletion
+    confirm = typer.confirm(f"Are you sure you want to delete agent '{agent_path}'?")
+    if not confirm:
+        console.print("[dim]Cancelled[/dim]")
+        raise typer.Exit(0)
+
+    # Delete the agent file
+    try:
+        agent_file.unlink()
+        console.print(f"[green]✓[/green] Agent '{agent_path}' deleted successfully")
+    except Exception as e:
+        console.print(f"[red]Error: Failed to delete agent: {e}[/red]")
+        raise typer.Exit(1)
+
+
 @app.command()
 def test() -> None:
     """🧪 模擬 agent 執行測試（用於重現污染問題）。

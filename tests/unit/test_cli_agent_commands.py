@@ -81,3 +81,53 @@ class TestAgentLsCommand:
         assert "David" in result.stdout
         assert "John" in result.stdout
         assert "Richard" in result.stdout
+
+
+class TestAgentRmCommand:
+    """測試 cafe agent rm 指令。"""
+
+    def test_agent_rm_success(self, runner, temp_cafe_dir, monkeypatch):
+        """測試成功刪除 agent 檔案。"""
+        # 將 HOME 設定為 temp_cafe_dir 的父目錄
+        monkeypatch.setenv("HOME", str(temp_cafe_dir.parent))
+
+        # 建立測試用的 agent 檔案
+        agents_dir = temp_cafe_dir / "agents"
+        agent_file = agents_dir / "developer" / "John.md"
+        agent_file.write_text("---\nname: John\n---\nRules")
+
+        # Mock typer.confirm 回傳 True
+        with patch("typer.confirm", return_value=True):
+            result = runner.invoke(app, ["agent", "rm", "developer/John.md"])
+
+        assert result.exit_code == 0
+        assert "deleted successfully" in result.stdout
+        assert not agent_file.exists()
+
+    def test_agent_rm_file_not_found(self, runner, temp_cafe_dir, monkeypatch):
+        """測試刪除不存在的 agent 檔案。"""
+        # 將 HOME 設定為 temp_cafe_dir 的父目錄
+        monkeypatch.setenv("HOME", str(temp_cafe_dir.parent))
+
+        result = runner.invoke(app, ["agent", "rm", "developer/NonExistent.md"])
+
+        assert result.exit_code == 1
+        assert "not found" in result.stdout.lower()
+
+    def test_agent_rm_user_cancels(self, runner, temp_cafe_dir, monkeypatch):
+        """測試使用者取消刪除操作。"""
+        # 將 HOME 設定為 temp_cafe_dir 的父目錄
+        monkeypatch.setenv("HOME", str(temp_cafe_dir.parent))
+
+        # 建立測試用的 agent 檔案
+        agents_dir = temp_cafe_dir / "agents"
+        agent_file = agents_dir / "developer" / "John.md"
+        agent_file.write_text("---\nname: John\n---\nRules")
+
+        # Mock typer.confirm 回傳 False
+        with patch("typer.confirm", return_value=False):
+            result = runner.invoke(app, ["agent", "rm", "developer/John.md"])
+
+        assert result.exit_code == 0
+        assert "cancelled" in result.stdout.lower()
+        assert agent_file.exists()  # 檔案仍然存在
