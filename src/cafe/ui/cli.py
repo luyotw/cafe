@@ -613,66 +613,9 @@ def prepare(
         console.print(f"Base branch: {base_branch}")
         console.print()
 
-        # 5. Create issue directory structure
-        # In worktree mode, we'll set issue_dir after creating the worktree
-        # In normal mode, use local .cafe/issues/
-        feature_branch = issue_name
-
-        if use_worktree:
-            # Worktree mode - create worktree first, then set issue_dir to point there
-            console.print(f"[dim]Creating worktree at '{worktree_path}'...[/dim]")
-            git_ops.create_worktree(worktree_path, feature_branch, base_branch)
-
-            # Create actual .cafe directory in worktree instead of symlink
-            # This avoids permission issues with agent CLIs that resolve symlinks
-            import shutil
-
-            worktree_abs = Path(worktree_path).resolve()
-            repo_cafe_dir = Path(".cafe").resolve()
-            worktree_cafe_dir = worktree_abs / ".cafe"
-
-            # Create .cafe directory structure in worktree
-            worktree_cafe_dir.mkdir(parents=True, exist_ok=True)
-
-            # Copy config.yaml from repo root
-            repo_config = repo_cafe_dir / "config.yaml"
-            worktree_config = worktree_cafe_dir / "config.yaml"
-            if repo_config.exists():
-                shutil.copy2(repo_config, worktree_config)
-
-            # Create issues directory structure in worktree
-            worktree_issues_dir = worktree_cafe_dir / "issues" / issue_name
-            worktree_issues_dir.mkdir(parents=True, exist_ok=True)
-            (worktree_issues_dir / "spec").mkdir(exist_ok=True)
-            (worktree_issues_dir / "sessions").mkdir(exist_ok=True)
-
-            # Initialize default templates and agents in worktree .cafe
-            _ensure_default_content(worktree_cafe_dir)
-
-            # Set issue_dir to worktree location
-            issue_dir = worktree_issues_dir
-            cafe_dir = worktree_cafe_dir
-        else:
-            # Normal branch mode
-            issue_dir = Path(f".cafe/issues/{issue_name}")
-            spec_dir = issue_dir / "spec"
-            sessions_dir = issue_dir / "sessions"
-
-            spec_dir.mkdir(parents=True, exist_ok=True)
-            sessions_dir.mkdir(parents=True, exist_ok=True)
-
-            if git_ops.branch_exists(feature_branch):
-                console.print(
-                    f"[dim]Branch '{feature_branch}' already exists, switching to it...[/dim]"
-                )
-                git_ops.checkout_branch(feature_branch)
-            else:
-                console.print(f"[dim]Creating and switching to branch '{feature_branch}'...[/dim]")
-                git_ops.create_branch(feature_branch)
-
-            # 5.5. Initialize default templates and agents if not exists
-            cafe_dir = Path(".cafe")
-            _ensure_default_content(cafe_dir)
+        # 5. Initialize default templates and agents if not exists (in repo root)
+        cafe_dir = Path(".cafe")
+        _ensure_default_content(cafe_dir)
 
         # 6. Interactive prompts for spec/plan configuration (only in interactive mode)
         spec_config = {}
@@ -740,8 +683,8 @@ def prepare(
                 # Non-GitHub repo: disable PR creation
                 pr_config["auto_create"] = False
 
-        # 7. Save config.yaml (in worktree's issue dir if using worktree, else local)
-        config_file = issue_dir / "config.yaml"
+        # 7. Prepare config data (but don't write yet)
+        feature_branch = issue_name
 
         # Load global config to get default auto settings
         from cafe.utils.config import ConfigManager
@@ -774,10 +717,81 @@ def prepare(
         if use_worktree:
             config_data["worktree_path"] = worktree_path
 
+        # 8. Perform Git operations (before writing config)
+        if use_worktree:
+            # Worktree mode - check if worktree already exists
+            if git_ops.worktree_exists(worktree_path):
+                console.print(f"[yellow]⚠️  Worktree at '{worktree_path}' already exists[/yellow]")
+                console.print("[dim]Reusing existing worktree. Config will be updated.[/dim]")
+            else:
+                # Check if branch already exists
+                if git_ops.branch_exists(feature_branch):
+                    # Branch exists but worktree doesn't - create worktree with existing branch
+                    console.print(f"[dim]Branch '{feature_branch}' exists, creating worktree...[/dim]")
+                    git_ops.run_git("worktree", "add", worktree_path, feature_branch)
+                else:
+                    # Neither branch nor worktree exists - create both
+                    console.print(f"[dim]Creating worktree at '{worktree_path}' with new branch...[/dim]")
+                    git_ops.create_worktree(worktree_path, feature_branch, base_branch)
+
+            # Create actual .cafe directory in worktree instead of symlink
+            # This avoids permission issues with agent CLIs that resolve symlinks
+            import shutil
+
+            worktree_abs = Path(worktree_path).resolve()
+            repo_cafe_dir = Path(".cafe").resolve()
+            worktree_cafe_dir = worktree_abs / ".cafe"
+
+            # Create .cafe directory structure in worktree
+            worktree_cafe_dir.mkdir(parents=True, exist_ok=True)
+
+            # Copy config.yaml from repo root
+            repo_config = repo_cafe_dir / "config.yaml"
+            worktree_config = worktree_cafe_dir / "config.yaml"
+            if repo_config.exists():
+                shutil.copy2(repo_config, worktree_config)
+
+            # Create issues directory structure in worktree
+            worktree_issues_dir = worktree_cafe_dir / "issues" / issue_name
+            worktree_issues_dir.mkdir(parents=True, exist_ok=True)
+            (worktree_issues_dir / "spec").mkdir(exist_ok=True)
+            (worktree_issues_dir / "sessions").mkdir(exist_ok=True)
+
+            # Initialize default templates and agents in worktree .cafe
+            _ensure_default_content(worktree_cafe_dir)
+
+            # Set issue_dir to worktree location for config writing
+            issue_dir = worktree_issues_dir
+        else:
+            # Normal branch mode
+            # First create issue directory structure
+            issue_dir = Path(f".cafe/issues/{issue_name}")
+            spec_dir = issue_dir / "spec"
+            sessions_dir = issue_dir / "sessions"
+
+            spec_dir.mkdir(parents=True, exist_ok=True)
+            sessions_dir.mkdir(parents=True, exist_ok=True)
+
+            # Then perform git operations
+            if git_ops.branch_exists(feature_branch):
+                console.print(
+                    f"[dim]Branch '{feature_branch}' already exists, switching to it...[/dim]"
+                )
+                git_ops.checkout_branch(feature_branch)
+            else:
+                console.print(f"[dim]Creating and switching to branch '{feature_branch}'...[/dim]")
+                git_ops.create_branch(feature_branch)
+
+        # 9. Write config.yaml (after git operations succeed)
+        config_file = issue_dir / "config.yaml"
         with open(config_file, "w", encoding="utf-8") as f:
             yaml.dump(config_data, f, allow_unicode=True, default_flow_style=False)
 
-        # 8. Display success message
+        console.print()
+        console.print(f"[green]✓ Config saved to {config_file}[/green]")
+        console.print()
+
+        # 10. Display success message
         console.print()
         console.print(f"[green]✓ Successfully prepared issue: {issue_name}[/green]")
         console.print(f"  📁 Directory: .cafe/issues/{issue_name}/")

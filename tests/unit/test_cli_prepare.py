@@ -42,6 +42,7 @@ def mock_git_ops():
         mock_git.branch_exists.return_value = False
         mock_git.create_branch.return_value = None
         mock_git.checkout_branch.return_value = None
+        mock_git.worktree_exists.return_value = False  # Default: worktree doesn't exist
 
         # Mock is_github_repo to return True by default (GitHub repo)
         mock_is_github_repo.return_value = True
