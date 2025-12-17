@@ -15,27 +15,10 @@ runner = CliRunner()
 @pytest.fixture
 def temp_repo_dir(tmp_path):
     """Create a temporary git repository directory."""
-    # Create .cafe directory
-    cafe_dir = tmp_path / ".cafe"
-    cafe_dir.mkdir(parents=True)
+    from tests.conftest import create_minimal_config
 
     # Create config.yaml (required by prepare command)
-    config_file = cafe_dir / "config.yaml"
-    config_file.write_text("""
-agents:
-  pm:
-    name: Roger
-    cli: copilot
-  developer:
-    name: David
-    cli: copilot
-  reviewer:
-    name: Richard
-    cli: copilot
-
-auto:
-  max_review_iterations: 5
-""")
+    create_minimal_config(tmp_path)
 
     return tmp_path
 

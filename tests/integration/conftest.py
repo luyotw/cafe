@@ -81,23 +81,8 @@ def prepared_repo_factory(tmp_path, monkeypatch):
         git.run_git("checkout", "-b", issue_name)
 
         # Create config.yaml (required by cafe commands)
-        cafe_dir = repo_path / ".cafe"
-        cafe_dir.mkdir(parents=True, exist_ok=True)
-        (cafe_dir / "config.yaml").write_text("""
-agents:
-  pm:
-    name: Roger
-    cli: copilot
-  developer:
-    name: David
-    cli: copilot
-  reviewer:
-    name: Richard
-    cli: copilot
-
-auto:
-  max_review_iterations: 5
-""")
+        from tests.conftest import create_minimal_config
+        create_minimal_config(repo_path)
 
         # Create .cafe/issues/{issue_name}/ directory structure
         issue_dir = repo_path / ".cafe" / "issues" / issue_name

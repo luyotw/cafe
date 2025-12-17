@@ -20,6 +20,23 @@ def _ensure_src_on_path() -> None:
 _ensure_src_on_path()
 
 
+def create_minimal_config(base_dir: Path) -> None:
+    """建立最小的 .cafe/config.yaml 檔案。
+
+    Args:
+        base_dir: 基礎目錄，會在此目錄下建立 .cafe/config.yaml
+    """
+    cafe_dir = base_dir / ".cafe"
+    cafe_dir.mkdir(exist_ok=True, parents=True)
+
+    # 從 fixtures 目錄讀取範本
+    fixture_file = Path(__file__).parent / "fixtures" / "minimal_config.yaml"
+    config_file = cafe_dir / "config.yaml"
+
+    # 複製檔案內容
+    config_file.write_text(fixture_file.read_text())
+
+
 @pytest.fixture(autouse=True, scope="function")
 def cleanup_mock_issue_dirs():
     """自動清理測試產生的 MagicMock issue directories。

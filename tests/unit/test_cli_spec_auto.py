@@ -27,19 +27,8 @@ def mock_env(tmp_path, monkeypatch):
     issue_dir.mkdir(parents=True)
     
     # Create config
-    config_file = cafe_dir / "config.yaml"
-    config_file.write_text("""
-agents:
-  pm:
-    name: Roger
-    cli: copilot
-  dev:
-    name: David
-    cli: copilot
-  reviewer:
-    name: Richard
-    cli: copilot
-""")
+    from tests.conftest import create_minimal_config
+    create_minimal_config(tmp_path)
     
     # Create issue config
     issue_config = issue_dir / "config.yaml"

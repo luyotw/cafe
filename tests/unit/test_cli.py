@@ -48,9 +48,8 @@ auto:
 
 def _create_minimal_config(tmp_path: Path):
     """Helper to create minimal config.yaml in tmp_path/.cafe/"""
-    cafe_dir = tmp_path / ".cafe"
-    cafe_dir.mkdir(exist_ok=True)
-    (cafe_dir / "config.yaml").write_text("agents: {}")
+    from tests.conftest import create_minimal_config
+    create_minimal_config(tmp_path)
 
 
 class TestSetupAgents:

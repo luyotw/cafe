@@ -50,23 +50,8 @@ def run_cafe_spec(
         env_vars["CAFE_MOCK_RESPONSE"] = mock_response
 
     # Setup: Create config.yaml and directory structure
-    cafe_dir = tmp_path / ".cafe"
-    cafe_dir.mkdir(parents=True, exist_ok=True)
-    (cafe_dir / "config.yaml").write_text("""
-agents:
-  pm:
-    name: Roger
-    cli: copilot
-  developer:
-    name: David
-    cli: copilot
-  reviewer:
-    name: Richard
-    cli: copilot
-
-auto:
-  max_review_iterations: 5
-""")
+    from tests.conftest import create_minimal_config
+    create_minimal_config(tmp_path)
 
     issue_dir = tmp_path / ".cafe" / "issues" / issue_name
     issue_dir.mkdir(parents=True, exist_ok=True)

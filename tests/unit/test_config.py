@@ -12,25 +12,10 @@ from cafe.core.types import WorkflowMode, AgentCLI
 @pytest.fixture
 def config_with_file(tmp_path):
     """Create a ConfigManager with an existing config file."""
-    config_dir = tmp_path / ".cafe"
-    config_dir.mkdir(parents=True, exist_ok=True)
-    config_file = config_dir / "config.yaml"
-    config_file.write_text("""
-agents:
-  pm:
-    name: Roger
-    cli: copilot
-  developer:
-    name: David
-    cli: copilot
-  reviewer:
-    name: Richard
-    cli: copilot
+    from tests.conftest import create_minimal_config
 
-auto:
-  max_review_iterations: 5
-""")
-    return ConfigManager(config_dir=str(config_dir))
+    create_minimal_config(tmp_path)
+    return ConfigManager(config_dir=str(tmp_path / ".cafe"))
 
 
 class TestConfigManagerBasics:

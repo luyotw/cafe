@@ -481,22 +481,9 @@ class TestDevelopE2EMockErrorRecovery:
 
         # Create config.yaml (required by cafe commands)
         cafe_dir = tmp_path / ".cafe"
-        cafe_dir.mkdir(parents=True, exist_ok=True)
-        (cafe_dir / "config.yaml").write_text("""
-agents:
-  pm:
-    name: Roger
-    cli: copilot
-  developer:
-    name: David
-    cli: copilot
-  reviewer:
-    name: Richard
-    cli: copilot
+        from tests.conftest import create_minimal_config
 
-auto:
-  max_review_iterations: 5
-""")
+        create_minimal_config(tmp_path)
 
         # 只創建最基本的 spec 和 plan
         spec_dir = tmp_path / ".cafe" / "issues" / issue_name / "spec"

@@ -19,21 +19,9 @@ def temp_repo_dir(tmp_path):
     cafe_dir.mkdir(parents=True)
 
     # Create config.yaml (required by prepare command)
-    (cafe_dir / "config.yaml").write_text("""
-agents:
-  pm:
-    name: Roger
-    cli: copilot
-  developer:
-    name: David
-    cli: copilot
-  reviewer:
-    name: Richard
-    cli: copilot
+    from tests.conftest import create_minimal_config
 
-auto:
-  max_review_iterations: 5
-""")
+    create_minimal_config(tmp_path)
 
     return tmp_path
 
