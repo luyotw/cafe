@@ -29,7 +29,7 @@ class TestAutoCreatePrompt:
         spec_file = spec_dir / "spec_001.md"
         spec_file.write_text("# Feature\n")
 
-        config_file = issue_dir / "config.yaml"
+        config_file = issue_dir / "issue.yaml"
 
         # Create mocks
         agent_manager = MagicMock(spec=AgentManager)
