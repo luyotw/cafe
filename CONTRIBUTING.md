@@ -62,7 +62,3 @@ You can contribute to this project in several ways:
 
 *   This project follows the [PEP 8](https://www.python.org/dev/peps/pep-0008/) style guide.
 *   We use pre-commit hooks to automatically check and format code. Please ensure you have them set up before committing.
-
-## Code of Conduct
-
-All participants in this project are expected to adhere to our [Code of Conduct](CODE_OF_CONDUCT.md). Please take the time to read it to ensure we can maintain a friendly and respectful community environment.
