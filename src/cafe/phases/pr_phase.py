@@ -14,7 +14,6 @@ from cafe.core.permission import PermissionHandler
 from cafe.core.phase import Phase
 from cafe.core.types import PhaseResult, PhaseStatus, WorkflowMode
 from cafe.ui.inquirer_prompts import prompt_confirm
-from cafe.utils.git_utils import is_github_repo
 from cafe.utils.github import GitHubOps, GitHubError
 
 
@@ -237,36 +236,9 @@ class PRPhase(Phase):
 
             if pr_auto_create is None:
                 if self.interactive:
-                    # Interactive mode: ask user
-                    from rich.console import Console
-
-                    console = Console()
-                    console.print()
-
-                    if is_github_repo():
-                        # Ask user if they want auto PR creation
-                        auto_create_pr = prompt_confirm(
-                            "Automatically create PR on GitHub after development?", default=True
-                        )
-                        pr_auto_create = auto_create_pr
-                    else:
-                        # Non-GitHub repo: disable PR creation
-                        pr_auto_create = False
-
-                    # Save the choice to issue.yaml
-                    if config_file.exists():
-                        with open(config_file, 'r', encoding='utf-8') as f:
-                            config_data = yaml.safe_load(f) or {}
-                    else:
-                        config_data = {}
-
-                    if "pr" not in config_data:
-                        config_data["pr"] = {}
-                    config_data["pr"]["auto_create"] = pr_auto_create
-
-                    config_file.parent.mkdir(parents=True, exist_ok=True)
-                    with open(config_file, 'w', encoding='utf-8') as f:
-                        yaml.dump(config_data, f, default_flow_style=False, allow_unicode=True)
+                    # Interactive mode: ask user using shared prompt function
+                    from cafe.ui.phase_prompts import prompt_and_save_auto_create
+                    pr_auto_create = prompt_and_save_auto_create(config_file, "pr.auto_create")
                 else:
                     # Non-interactive mode: default to True (GitHub PR mode)
                     pr_auto_create = True

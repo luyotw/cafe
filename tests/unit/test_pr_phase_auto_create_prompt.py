@@ -62,8 +62,8 @@ class TestAutoCreatePrompt:
             "issue_dir": issue_dir,
         }
 
-    @patch('cafe.phases.pr_phase.is_github_repo')
-    @patch('cafe.phases.pr_phase.prompt_confirm')
+    @patch('cafe.ui.phase_prompts.is_github_repo')
+    @patch('cafe.ui.phase_prompts.prompt_confirm')
     def test_prompt_auto_create_on_github_repo_when_not_set(
         self, mock_prompt_confirm, mock_is_github_repo, tmp_path, setup_phase_mocks
     ):
@@ -105,8 +105,8 @@ class TestAutoCreatePrompt:
         # Verify PR creation was attempted (since user chose True)
         assert result.status == PhaseStatus.COMPLETED
 
-    @patch('cafe.phases.pr_phase.is_github_repo')
-    @patch('cafe.phases.pr_phase.prompt_confirm')
+    @patch('cafe.ui.phase_prompts.is_github_repo')
+    @patch('cafe.ui.phase_prompts.prompt_confirm')
     def test_prompt_auto_create_user_chooses_no(
         self, mock_prompt_confirm, mock_is_github_repo, tmp_path, setup_phase_mocks
     ):
@@ -150,8 +150,8 @@ class TestAutoCreatePrompt:
         # that the config was saved and PR creation was not attempted
         assert result.status in [PhaseStatus.FAILED, PhaseStatus.COMPLETED]
 
-    @patch('cafe.phases.pr_phase.is_github_repo')
-    @patch('cafe.phases.pr_phase.prompt_confirm')
+    @patch('cafe.ui.phase_prompts.is_github_repo')
+    @patch('cafe.ui.phase_prompts.prompt_confirm')
     def test_no_prompt_on_non_github_repo(
         self, mock_prompt_confirm, mock_is_github_repo, tmp_path, setup_phase_mocks
     ):
@@ -188,8 +188,8 @@ class TestAutoCreatePrompt:
         # Verify local review mode was used
         mocks["github_ops"].create_pr.assert_not_called()
 
-    @patch('cafe.phases.pr_phase.is_github_repo')
-    @patch('cafe.phases.pr_phase.prompt_confirm')
+    @patch('cafe.ui.phase_prompts.is_github_repo')
+    @patch('cafe.ui.phase_prompts.prompt_confirm')
     def test_no_prompt_when_already_set_to_true(
         self, mock_prompt_confirm, mock_is_github_repo, tmp_path, setup_phase_mocks
     ):
@@ -225,8 +225,8 @@ class TestAutoCreatePrompt:
         assert result.status == PhaseStatus.COMPLETED
         mocks["github_ops"].create_pr.assert_called_once()
 
-    @patch('cafe.phases.pr_phase.is_github_repo')
-    @patch('cafe.phases.pr_phase.prompt_confirm')
+    @patch('cafe.ui.phase_prompts.is_github_repo')
+    @patch('cafe.ui.phase_prompts.prompt_confirm')
     def test_no_prompt_when_already_set_to_false(
         self, mock_prompt_confirm, mock_is_github_repo, tmp_path, setup_phase_mocks
     ):

@@ -1905,8 +1905,8 @@ class TestIssueCommentIntegration:
 class TestInteractiveModeBehavior:
     """Test interactive mode specific behaviors."""
 
-    @patch('cafe.phases.pr_phase.is_github_repo')
-    @patch('cafe.phases.pr_phase.prompt_confirm')
+    @patch('cafe.ui.phase_prompts.is_github_repo')
+    @patch('cafe.ui.phase_prompts.prompt_confirm')
     def test_interactive_mode_auto_generates_without_asking(
         self, mock_prompt_confirm, mock_is_github_repo, tmp_path: Path, monkeypatch
     ) -> None:

@@ -4,12 +4,14 @@
 """
 
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Any, Dict
+import yaml
 
 from cafe.core.types import SpecRigor
 from cafe.ui.display import Display
-from cafe.ui.inquirer_prompts import prompt_list, prompt_text
+from cafe.ui.inquirer_prompts import prompt_list, prompt_text, prompt_confirm
 from cafe.utils.github import GitHubOps, GitHubError
+from cafe.utils.git_utils import is_github_repo
 
 
 def prompt_for_input_method(display: Display, github_ops: GitHubOps) -> tuple[str, Optional[int]]:
@@ -124,3 +126,59 @@ def fetch_github_issue(github_ops: GitHubOps, issue_id: int) -> str:
     fetched_content = f"# {issue_title}\n\n{issue_body}" if issue_title else issue_body
 
     return fetched_content
+
+
+def prompt_and_save_auto_create(config_file: Path, config_key: str) -> bool:
+    """詢問用戶 auto_create 設定並保存到配置文件
+
+    檢測 GitHub 儲存庫上下文，只在適用時提示用戶。
+    將用戶選擇保存到 issue 配置文件。
+
+    Args:
+        config_file: issue.yaml 文件的路徑
+        config_key: 配置鍵名（例如："pr.auto_create"）
+
+    Returns:
+        bool: True 如果用戶希望自動建立，False 否則
+    """
+    from rich.console import Console
+
+    console = Console()
+    console.print()
+
+    if is_github_repo():
+        auto_create = prompt_confirm(
+            "Automatically create PR on GitHub after development?", default=True
+        )
+    else:
+        # Non-GitHub repo: disable auto creation
+        auto_create = False
+
+    # Save the choice to issue config
+    try:
+        if config_file.exists():
+            with open(config_file, 'r', encoding='utf-8') as f:
+                config_data = yaml.safe_load(f) or {}
+        else:
+            config_data = {}
+    except Exception:
+        config_data = {}
+
+    # Support dot notation for nested keys (e.g., "pr.auto_create")
+    if '.' in config_key:
+        keys = config_key.split('.')
+        current = config_data
+        for key in keys[:-1]:
+            if key not in current:
+                current[key] = {}
+            current = current[key]
+        current[keys[-1]] = auto_create
+    else:
+        config_data[config_key] = auto_create
+
+    # Write back to config file
+    config_file.parent.mkdir(parents=True, exist_ok=True)
+    with open(config_file, 'w', encoding='utf-8') as f:
+        yaml.dump(config_data, f, default_flow_style=False, allow_unicode=True)
+
+    return auto_create
