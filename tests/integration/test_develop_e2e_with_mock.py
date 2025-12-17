@@ -33,6 +33,26 @@ def setup_test_environment(tmp_path: Path, issue_name: str):
     # Initialize git repo (with GIT_CEILING_DIRECTORIES protection)
     init_git_repo_for_issue(tmp_path, issue_name)
 
+    # Create config.yaml (required by cafe commands)
+    cafe_dir = tmp_path / ".cafe"
+    cafe_dir.mkdir(parents=True, exist_ok=True)
+    config_file = cafe_dir / "config.yaml"
+    config_file.write_text("""
+agents:
+  pm:
+    name: Roger
+    cli: copilot
+  developer:
+    name: David
+    cli: copilot
+  reviewer:
+    name: Richard
+    cli: copilot
+
+auto:
+  max_review_iterations: 5
+""")
+
     # 創建 spec.md
     spec_dir = tmp_path / ".cafe" / "issues" / issue_name / "spec"
     spec_dir.mkdir(parents=True, exist_ok=True)
@@ -458,6 +478,25 @@ class TestDevelopE2EMockErrorRecovery:
 
         # Initialize git repo (with GIT_CEILING_DIRECTORIES protection)
         init_git_repo_for_issue(tmp_path, issue_name)
+
+        # Create config.yaml (required by cafe commands)
+        cafe_dir = tmp_path / ".cafe"
+        cafe_dir.mkdir(parents=True, exist_ok=True)
+        (cafe_dir / "config.yaml").write_text("""
+agents:
+  pm:
+    name: Roger
+    cli: copilot
+  developer:
+    name: David
+    cli: copilot
+  reviewer:
+    name: Richard
+    cli: copilot
+
+auto:
+  max_review_iterations: 5
+""")
 
         # 只創建最基本的 spec 和 plan
         spec_dir = tmp_path / ".cafe" / "issues" / issue_name / "spec"

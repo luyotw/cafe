@@ -27,7 +27,26 @@ class MockResult:
 
 
 def setup_test_environment(tmp_path: Path, issue_name: str):
-    """設置測試環境：創建 spec.md 和 plan.md"""
+    """設置測試環境：創建 config.yaml、spec.md 和 plan.md"""
+
+    # Create config.yaml (required by cafe commands)
+    cafe_dir = tmp_path / ".cafe"
+    cafe_dir.mkdir(parents=True, exist_ok=True)
+    (cafe_dir / "config.yaml").write_text("""
+agents:
+  pm:
+    name: Roger
+    cli: copilot
+  developer:
+    name: David
+    cli: copilot
+  reviewer:
+    name: Richard
+    cli: copilot
+
+auto:
+  max_review_iterations: 5
+""")
 
     # 創建 spec.md
     spec_dir = tmp_path / ".cafe" / "issues" / issue_name / "spec"

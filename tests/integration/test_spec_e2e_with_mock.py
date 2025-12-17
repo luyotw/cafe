@@ -49,7 +49,25 @@ def run_cafe_spec(
     if mock_response:
         env_vars["CAFE_MOCK_RESPONSE"] = mock_response
 
-    # Setup: Create directory structure for the branch
+    # Setup: Create config.yaml and directory structure
+    cafe_dir = tmp_path / ".cafe"
+    cafe_dir.mkdir(parents=True, exist_ok=True)
+    (cafe_dir / "config.yaml").write_text("""
+agents:
+  pm:
+    name: Roger
+    cli: copilot
+  developer:
+    name: David
+    cli: copilot
+  reviewer:
+    name: Richard
+    cli: copilot
+
+auto:
+  max_review_iterations: 5
+""")
+
     issue_dir = tmp_path / ".cafe" / "issues" / issue_name
     issue_dir.mkdir(parents=True, exist_ok=True)
 

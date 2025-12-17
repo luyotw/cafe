@@ -2648,9 +2648,11 @@ def config(
         # Open config file in editor
         config_file = config_manager.config_file
 
-        # Ensure config file exists
+        # Check if config file exists
         if not config_file.exists():
-            config_manager.save_config(config_manager.get_default_config())
+            console.print("[red]Error: Configuration file not found.[/red]")
+            console.print("[yellow]Please run 'cafe init' first to initialize CAFE.[/yellow]")
+            raise typer.Exit(1)
 
         # Use EDITOR env var, or fallback to vim
         editor = os.environ.get("EDITOR", "vim")

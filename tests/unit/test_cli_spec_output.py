@@ -59,6 +59,25 @@ def mock_permission_handler():
 @pytest.fixture
 def setup_test_env(tmp_path, monkeypatch):
     """Setup test environment with issue config."""
+    # Create global config.yaml
+    cafe_dir = tmp_path / ".cafe"
+    cafe_dir.mkdir(parents=True, exist_ok=True)
+    global_config = cafe_dir / "config.yaml"
+    global_config.write_text("""agents:
+  pm:
+    name: Roger
+    cli: copilot
+  developer:
+    name: David
+    cli: copilot
+  reviewer:
+    name: Richard
+    cli: copilot
+
+auto:
+  max_review_iterations: 5
+""")
+
     # Create issue directory and config
     issue_dir = tmp_path / ".cafe" / "issues" / "test-branch"
     issue_dir.mkdir(parents=True, exist_ok=True)
@@ -244,6 +263,25 @@ class TestSpecRigorConfigLoading:
     def setup_env_with_rigor(self, tmp_path, monkeypatch):
         """Setup test environment with issue config containing rigor setting."""
         import yaml
+        # Create global config.yaml
+        cafe_dir = tmp_path / ".cafe"
+        cafe_dir.mkdir(parents=True, exist_ok=True)
+        global_config = cafe_dir / "config.yaml"
+        global_config.write_text("""agents:
+  pm:
+    name: Roger
+    cli: copilot
+  developer:
+    name: David
+    cli: copilot
+  reviewer:
+    name: Richard
+    cli: copilot
+
+auto:
+  max_review_iterations: 5
+""")
+
         # Create issue directory and config
         issue_dir = tmp_path / ".cafe" / "issues" / "test-branch"
         issue_dir.mkdir(parents=True, exist_ok=True)
@@ -267,6 +305,25 @@ class TestSpecRigorConfigLoading:
     def setup_env_without_rigor(self, tmp_path, monkeypatch):
         """Setup test environment with issue config without rigor setting."""
         import yaml
+        # Create global config.yaml
+        cafe_dir = tmp_path / ".cafe"
+        cafe_dir.mkdir(parents=True, exist_ok=True)
+        global_config = cafe_dir / "config.yaml"
+        global_config.write_text("""agents:
+  pm:
+    name: Roger
+    cli: copilot
+  developer:
+    name: David
+    cli: copilot
+  reviewer:
+    name: Richard
+    cli: copilot
+
+auto:
+  max_review_iterations: 5
+""")
+
         # Create issue directory and config
         issue_dir = tmp_path / ".cafe" / "issues" / "test-branch"
         issue_dir.mkdir(parents=True, exist_ok=True)

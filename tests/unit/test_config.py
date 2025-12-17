@@ -9,6 +9,30 @@ from cafe.utils.config import ConfigManager, ConfigError
 from cafe.core.types import WorkflowMode, AgentCLI
 
 
+@pytest.fixture
+def config_with_file(tmp_path):
+    """Create a ConfigManager with an existing config file."""
+    config_dir = tmp_path / ".cafe"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    config_file = config_dir / "config.yaml"
+    config_file.write_text("""
+agents:
+  pm:
+    name: Roger
+    cli: copilot
+  developer:
+    name: David
+    cli: copilot
+  reviewer:
+    name: Richard
+    cli: copilot
+
+auto:
+  max_review_iterations: 5
+""")
+    return ConfigManager(config_dir=str(config_dir))
+
+
 class TestConfigManagerBasics:
     """Test basic ConfigManager functionality."""
 
@@ -53,15 +77,13 @@ class TestLoadConfig:
         assert config["default_agent"] == "claude"
         assert config["auto_approve_read"] is True
 
-    def test_load_nonexistent_config_returns_defaults(self, tmp_path: Path) -> None:
-        """測試載入不存在的設定檔回傳預設值"""
+    def test_load_nonexistent_config_raises_error(self, tmp_path: Path) -> None:
+        """測試載入不存在的設定檔拋出錯誤"""
         config_dir = tmp_path / ".cafe"
         manager = ConfigManager(config_dir=str(config_dir))
 
-        config = manager.load_config()
-
-        assert config is not None
-        assert "agents" in config
+        with pytest.raises(ConfigError, match="Configuration file not found"):
+            manager.load_config()
 
     def test_load_invalid_yaml_raises_error(self, tmp_path: Path) -> None:
         """測試載入無效的 YAML 拋出錯誤"""
@@ -204,10 +226,9 @@ class TestGetConfigValue:
 
         assert value == "github"
 
-    def test_get_nonexistent_value_returns_default(self, tmp_path: Path) -> None:
+    def test_get_nonexistent_value_returns_default(self, config_with_file) -> None:
         """測試取得不存在的值回傳預設"""
-        manager = ConfigManager(config_dir=str(tmp_path / ".cafe"))
-        value = manager.get("nonexistent_key", default="default_value")
+        value = config_with_file.get("nonexistent_key", default="default_value")
 
         assert value == "default_value"
 
@@ -233,30 +254,26 @@ class TestGetConfigValue:
 class TestSetConfigValue:
     """Test setting config values."""
 
-    def test_set_value(self, tmp_path: Path) -> None:
+    def test_set_value(self, config_with_file) -> None:
         """測試設定值"""
-        manager = ConfigManager(config_dir=str(tmp_path / ".cafe"))
-        manager.set("workflow_mode", "github")
+        config_with_file.set("workflow_mode", "github")
 
-        value = manager.get("workflow_mode")
+        value = config_with_file.get("workflow_mode")
         assert value == "github"
 
-    def test_set_nested_value(self, tmp_path: Path) -> None:
+    def test_set_nested_value(self, config_with_file) -> None:
         """測試設定巢狀值"""
-        manager = ConfigManager(config_dir=str(tmp_path / ".cafe"))
-        manager.set("database.host", "localhost")
+        config_with_file.set("database.host", "localhost")
 
-        value = manager.get("database.host")
+        value = config_with_file.get("database.host")
         assert value == "localhost"
 
-    def test_set_persists_to_file(self, tmp_path: Path) -> None:
+    def test_set_persists_to_file(self, config_with_file) -> None:
         """測試設定會持久化到檔案"""
-        config_dir = tmp_path / ".cafe"
-        manager = ConfigManager(config_dir=str(config_dir))
-        manager.set("workflow_mode", "github")
+        config_with_file.set("workflow_mode", "github")
 
         # Create new manager to load from file
-        manager2 = ConfigManager(config_dir=str(config_dir))
+        manager2 = ConfigManager(config_dir=str(config_with_file.config_dir))
         value = manager2.get("workflow_mode")
 
         assert value == "github"
@@ -265,36 +282,29 @@ class TestSetConfigValue:
 class TestResetConfig:
     """Test config reset."""
 
-    def test_reset_to_defaults(self, tmp_path: Path) -> None:
+    def test_reset_to_defaults(self, config_with_file) -> None:
         """測試重置為預設值"""
-        manager = ConfigManager(config_dir=str(tmp_path / ".cafe"))
-        original_cli = manager.get("agents.pm.cli")
-
         # Set some custom values
-        manager.set("agents.pm.cli", "gemini")
-        assert manager.get("agents.pm.cli") == "gemini"
+        config_with_file.set("agents.pm.cli", "claude")
+        assert config_with_file.get("agents.pm.cli") == "claude"
 
         # Reset
-        manager.reset()
+        config_with_file.reset()
 
-        # Should be back to default
-        config = manager.get("agents")
-        assert config["pm"]["cli"] == original_cli
+        # Should be back to default (from get_default_config)
+        config = config_with_file.get("agents")
+        assert config["pm"]["cli"] == "gemini"  # Default from get_default_config()
 
-    def test_reset_persists_to_file(self, tmp_path: Path) -> None:
+    def test_reset_persists_to_file(self, config_with_file) -> None:
         """測試重置會持久化到檔案"""
-        config_dir = tmp_path / ".cafe"
-        manager = ConfigManager(config_dir=str(config_dir))
-        original_cli = manager.get("agents.pm.cli")
-
-        manager.set("agents.pm.cli", "gemini")
-        manager.reset()
+        config_with_file.set("agents.pm.cli", "claude")
+        config_with_file.reset()
 
         # Load with new manager
-        manager2 = ConfigManager(config_dir=str(config_dir))
+        manager2 = ConfigManager(config_dir=str(config_with_file.config_dir))
         config = manager2.load_config()
 
-        assert config["agents"]["pm"]["cli"] == original_cli
+        assert config["agents"]["pm"]["cli"] == "gemini"  # Default from get_default_config()
 
 
 class TestAliasResolution:
@@ -323,25 +333,21 @@ class TestAliasResolution:
         assert manager._resolve_alias("defaults.workflow_mode") == "defaults.workflow_mode"
         assert manager._resolve_alias("other.key") == "other.key"
 
-    def test_set_with_alias(self, tmp_path: Path) -> None:
+    def test_set_with_alias(self, config_with_file) -> None:
         """測試使用 alias 設定值"""
-        manager = ConfigManager(config_dir=str(tmp_path / ".cafe"))
-
         # Use alias
-        manager.set("pm", "gemini")
+        config_with_file.set("pm", "gemini")
 
         # Should be stored in agents.pm.cli
-        assert manager.get("agents.pm.cli") == "gemini"
+        assert config_with_file.get("agents.pm.cli") == "gemini"
 
-    def test_set_with_agent_property_alias(self, tmp_path: Path) -> None:
+    def test_set_with_agent_property_alias(self, config_with_file) -> None:
         """測試使用 agent.property alias 設定值"""
-        manager = ConfigManager(config_dir=str(tmp_path / ".cafe"))
-
         # Use shorthand
-        manager.set("pm.name", "NewPM")
+        config_with_file.set("pm.name", "NewPM")
 
         # Should be stored in agents.pm.name
-        assert manager.get("agents.pm.name") == "NewPM"
+        assert config_with_file.get("agents.pm.name") == "NewPM"
 
 
 class TestMergeConfig:

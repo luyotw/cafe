@@ -34,11 +34,13 @@ class ConfigManager:
             Configuration dictionary
 
         Raises:
-            ConfigError: If config file is invalid
+            ConfigError: If config file is invalid or doesn't exist
         """
         if not self.config_file.exists():
-            self._config = self.get_default_config()
-            return self._config
+            raise ConfigError(
+                f"Configuration file not found: {self.config_file}\n"
+                "Please run 'cafe init' first to initialize CAFE."
+            )
 
         try:
             with open(self.config_file, "r") as f:

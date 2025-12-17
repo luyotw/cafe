@@ -23,13 +23,42 @@ def mock_git_ops() -> MagicMock:
     return git_ops
 
 
+@pytest.fixture
+def config_dir_with_file(tmp_path):
+    """Create a config directory with a valid config.yaml file."""
+    config_dir = tmp_path / ".cafe"
+    config_dir.mkdir(parents=True)
+    (config_dir / "config.yaml").write_text("""
+agents:
+  pm:
+    name: Roger
+    cli: copilot
+  developer:
+    name: David
+    cli: copilot
+  reviewer:
+    name: Richard
+    cli: copilot
+
+auto:
+  max_review_iterations: 5
+""")
+    return config_dir
+
+
+def _create_minimal_config(tmp_path: Path):
+    """Helper to create minimal config.yaml in tmp_path/.cafe/"""
+    cafe_dir = tmp_path / ".cafe"
+    cafe_dir.mkdir(exist_ok=True)
+    (cafe_dir / "config.yaml").write_text("agents: {}")
+
+
 class TestSetupAgents:
     """Test agent setup functionality."""
 
-    def test_setup_agents_with_default_config(self, tmp_path: Path) -> None:
+    def test_setup_agents_with_default_config(self, config_dir_with_file) -> None:
         """測試使用預設設定建立 agents"""
-        config_file = tmp_path / "config.yaml"
-        config_manager = ConfigManager(str(config_file))
+        config_manager = ConfigManager(str(config_dir_with_file))
 
         agent_manager = _setup_agents(config_manager)
 
@@ -88,6 +117,11 @@ class TestConfigCommand:
         old_cwd = os.getcwd()
         try:
             os.chdir(tmp_path)
+            # Create basic config first
+            cafe_dir = tmp_path / ".cafe"
+            cafe_dir.mkdir()
+            (cafe_dir / "config.yaml").write_text("agents: {}")
+
             # Now ConfigManager will use .cafe in current directory
             config_manager = ConfigManager()
             config_manager.set("test.key", "value")  # set() already calls save_config()
@@ -128,6 +162,7 @@ class TestConfigCommand:
         old_cwd = os.getcwd()
         try:
             os.chdir(tmp_path)
+            _create_minimal_config(tmp_path)
             result = runner.invoke(app, ["config", "get", "nonexistent.key"])
         finally:
             os.chdir(old_cwd)
@@ -141,6 +176,7 @@ class TestConfigCommand:
         old_cwd = os.getcwd()
         try:
             os.chdir(tmp_path)
+            _create_minimal_config(tmp_path)
             result = runner.invoke(app, ["config", "set", "test.key", "test_value"])
 
             # 驗證設定已儲存
@@ -158,6 +194,7 @@ class TestConfigCommand:
         old_cwd = os.getcwd()
         try:
             os.chdir(tmp_path)
+            _create_minimal_config(tmp_path)
             result = runner.invoke(app, ["config"])
         finally:
             os.chdir(old_cwd)
@@ -181,6 +218,9 @@ class TestPlanCommand:
         tmp_path: Path,
     ) -> None:
         """測試 plan 指令 local mode 成功執行"""
+        # Setup: Create config.yaml
+        _create_minimal_config(tmp_path)
+
         # Setup: Create versioned spec file in the expected location
         branch_name = "test-issue"
         spec_dir = tmp_path / ".cafe" / "issues" / branch_name / "spec"
@@ -237,6 +277,9 @@ class TestPlanCommand:
         tmp_path: Path,
     ) -> None:
         """測試 plan 指令 github mode 使用 issue ID"""
+        # Setup: Create config.yaml
+        _create_minimal_config(tmp_path)
+
         # Setup: GitHub mode still checks if versioned spec file exists first
         branch_name = "test-issue"
         spec_dir = tmp_path / ".cafe" / "issues" / branch_name / "spec"
@@ -292,6 +335,9 @@ class TestPlanCommand:
         tmp_path: Path,
     ) -> None:
         """測試 plan 指令執行失敗"""
+        # Setup: Create config.yaml
+        _create_minimal_config(tmp_path)
+
         # Setup: Create versioned spec file in the expected location
         branch_name = "test-issue"
         spec_dir = tmp_path / ".cafe" / "issues" / branch_name / "spec"
