@@ -789,13 +789,13 @@ def prepare(
                 console.print(f"[dim]Creating and switching to branch '{feature_branch}'...[/dim]")
                 git_ops.create_branch(feature_branch)
 
-        # 11. Write config.yaml (after git operations succeed)
-        config_file = issue_dir / "config.yaml"
-        with open(config_file, "w", encoding="utf-8") as f:
+        # 11. Write issue.yaml (after git operations succeed)
+        issue_config_file = issue_dir / "issue.yaml"
+        with open(issue_config_file, "w", encoding="utf-8") as f:
             yaml.dump(config_data, f, allow_unicode=True, default_flow_style=False)
 
         console.print()
-        console.print(f"[green]✓ Config saved to {config_file}[/green]")
+        console.print(f"[green]✓ Issue config saved to {issue_config_file}[/green]")
         console.print()
 
         # 12. Display success message
@@ -806,7 +806,7 @@ def prepare(
         console.print(f"  ⚓ Base branch: {base_branch}")
         if use_worktree:
             console.print(f"  📂 Worktree: {worktree_path}")
-        console.print(f"  ⚙️  Config: .cafe/issues/{issue_name}/config.yaml")
+        console.print(f"  ⚙️  Config: .cafe/issues/{issue_name}/issue.yaml")
         console.print()
 
         # Show next steps
@@ -903,15 +903,15 @@ def close() -> None:
             pass
 
         # 4. Load issue config
-        config_file = Path(f".cafe/issues/{current_branch}/config.yaml")
-        if not config_file.exists():
-            console.print(f"[red]Error: Issue config not found: {config_file}[/red]")
+        issue_config_file = Path(f".cafe/issues/{current_branch}/issue.yaml")
+        if not issue_config_file.exists():
+            console.print(f"[red]Error: Issue config not found: {issue_config_file}[/red]")
             console.print(
                 "[yellow]Hint: This branch may not be initialized with 'cafe prepare'.[/yellow]"
             )
             raise typer.Exit(1)
 
-        with open(config_file, "r", encoding="utf-8") as f:
+        with open(issue_config_file, "r", encoding="utf-8") as f:
             config_data = yaml.safe_load(f)
 
         base_branch = config_data.get("base_branch", "main")
@@ -1301,7 +1301,7 @@ def spec(
         # Load issue config to get saved rigor setting
         import yaml
 
-        issue_config_file = Path(f".cafe/issues/{issue_name}/config.yaml")
+        issue_config_file = Path(f".cafe/issues/{issue_name}/issue.yaml")
         saved_rigor = None
         if issue_config_file.exists():
             with open(issue_config_file, "r", encoding="utf-8") as f:
@@ -2312,7 +2312,7 @@ def review(
                     # Read max_review_iterations from issue config
                     import yaml
 
-                    issue_config_file = Path(f".cafe/issues/{issue_name}/config.yaml")
+                    issue_config_file = Path(f".cafe/issues/{issue_name}/issue.yaml")
                     max_iterations = 5  # Default
                     if issue_config_file.exists():
                         with open(issue_config_file, "r") as f:
@@ -2339,7 +2339,7 @@ def review(
                             "[dim]  • 調整上限：[bold]cafe config set auto.max_review_iterations 10[/bold][/dim]"
                         )
                         console.print(
-                            f"[dim]  • 或修改 .cafe/issues/{issue_name}/config.yaml[/dim]"
+                            f"[dim]  • 或修改 .cafe/issues/{issue_name}/issue.yaml[/dim]"
                         )
                     else:
                         # Continue with develop phase
@@ -2519,7 +2519,7 @@ def pr(
                     # Read issue config to get base_branch, feature_branch, worktree_path
                     import yaml
 
-                    issue_config_file = Path(f".cafe/issues/{issue_name}/config.yaml")
+                    issue_config_file = Path(f".cafe/issues/{issue_name}/issue.yaml")
                     base_branch = "main"
                     feature_branch = issue_name
                     worktree_path = None

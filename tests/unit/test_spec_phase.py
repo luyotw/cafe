@@ -1123,7 +1123,7 @@ class TestFetchGitHubIssue:
         # Setup - 先建立有 base_branch 和 feature_branch 的 config.yaml
         issue_dir = Path(".cafe/issues/test-issue")
         issue_dir.mkdir(parents=True, exist_ok=True)
-        config_file = issue_dir / "config.yaml"
+        config_file = issue_dir / "issue.yaml"
 
         initial_config = {
             "base_branch": "main",

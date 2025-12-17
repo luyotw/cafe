@@ -672,7 +672,7 @@ class PlanPhase(Phase):
             return
 
         # Path: .cafe/issues/{issue_name}/config.yaml
-        config_file = self.issue_dir / "config.yaml"
+        config_file = self.issue_dir / "issue.yaml"
 
         config_data = self._read_issue_config(config_file)
         if config_data:

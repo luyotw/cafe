@@ -242,7 +242,7 @@ class DevelopPhase(Phase):
             base_branch: Base branch name (e.g., 'main')
             feature_branch: Feature branch name (e.g., 'my-feature')
         """
-        config_file = self.history_dir.parent.parent / "config.yaml"
+        config_file = self.history_dir.parent.parent / "issue.yaml"
 
         # Read existing config to preserve worktree_path, issue_id, and rigor
         existing_config = self._read_issue_config(config_file) or {}
@@ -595,7 +595,7 @@ class DevelopPhase(Phase):
         )
 
         # Load PR feedback (either from GitHub comments or local pr_XXX.md files)
-        config_file = self.issue_dir / "config.yaml"
+        config_file = self.issue_dir / "issue.yaml"
         pr_auto_create = self._get_issue_config_value(config_file, "pr.auto_create")
 
         if pr_auto_create is False:
@@ -630,7 +630,7 @@ class DevelopPhase(Phase):
         from cafe.agents.manager import AgentManager
         agent_file = AgentManager.get_agent_file_path(self.dev_agent, "developer")
 
-        config_file = self.issue_dir / "config.yaml"
+        config_file = self.issue_dir / "issue.yaml"
         base_branch = self._get_issue_config_value(config_file, "base_branch") or "main"
         important_note = f"""
 **重要**

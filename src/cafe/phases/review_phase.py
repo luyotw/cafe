@@ -87,7 +87,7 @@ class ReviewPhase(Phase):
         self.plan_file = str(latest_plan) if latest_plan else plan_file
 
         # Try to read base branch from issue config
-        config_file = self.issue_dir / "config.yaml"
+        config_file = self.issue_dir / "issue.yaml"
         config_base_branch = self._get_issue_config_value(config_file, "base_branch")
         self.base_branch = config_base_branch if config_base_branch else base_branch
 

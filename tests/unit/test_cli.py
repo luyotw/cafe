@@ -426,7 +426,7 @@ class TestCloseCommand:
         """測試 close 指令在一般模式（非 worktree）下成功執行"""
         # Setup: Create issue config
         branch_name = "test-issue"
-        config_file = tmp_path / ".cafe" / "issues" / branch_name / "config.yaml"
+        config_file = tmp_path / ".cafe" / "issues" / branch_name / "issue.yaml"
         config_file.parent.mkdir(parents=True, exist_ok=True)
         config_file.write_text("""
 base_branch: main
@@ -476,7 +476,7 @@ feature_branch: test-issue
         # Setup: Create issue config with worktree_path
         branch_name = "test-issue"
         worktree_path = ".cafe/worktrees/test-issue"
-        config_file = tmp_path / ".cafe" / "issues" / branch_name / "config.yaml"
+        config_file = tmp_path / ".cafe" / "issues" / branch_name / "issue.yaml"
         config_file.parent.mkdir(parents=True, exist_ok=True)
         config_file.write_text(f"""
 base_branch: main
@@ -532,7 +532,7 @@ worktree_path: {worktree_path}
         """測試 close 在 checkout 失敗時中斷（一般模式）"""
         # Setup
         branch_name = "test-issue"
-        config_file = tmp_path / ".cafe" / "issues" / branch_name / "config.yaml"
+        config_file = tmp_path / ".cafe" / "issues" / branch_name / "issue.yaml"
         config_file.parent.mkdir(parents=True, exist_ok=True)
         config_file.write_text("base_branch: main\nfeature_branch: test-issue\n")
 
@@ -579,7 +579,7 @@ worktree_path: {worktree_path}
         """測試 close 在 pull 失敗時中斷（一般模式）"""
         # Setup
         branch_name = "test-issue"
-        config_file = tmp_path / ".cafe" / "issues" / branch_name / "config.yaml"
+        config_file = tmp_path / ".cafe" / "issues" / branch_name / "issue.yaml"
         config_file.parent.mkdir(parents=True, exist_ok=True)
         config_file.write_text("base_branch: main\nfeature_branch: test-issue\n")
 
@@ -625,7 +625,7 @@ worktree_path: {worktree_path}
         """測試 close 在刪除分支失敗時顯示錯誤"""
         # Setup
         branch_name = "test-issue"
-        config_file = tmp_path / ".cafe" / "issues" / branch_name / "config.yaml"
+        config_file = tmp_path / ".cafe" / "issues" / branch_name / "issue.yaml"
         config_file.parent.mkdir(parents=True, exist_ok=True)
         config_file.write_text("base_branch: main\nfeature_branch: test-issue\n")
 
@@ -669,7 +669,7 @@ worktree_path: {worktree_path}
         # Setup
         branch_name = "test-issue"
         worktree_path = ".cafe/worktrees/test-issue"
-        config_file = tmp_path / ".cafe" / "issues" / branch_name / "config.yaml"
+        config_file = tmp_path / ".cafe" / "issues" / branch_name / "issue.yaml"
         config_file.parent.mkdir(parents=True, exist_ok=True)
         config_file.write_text(f"""
 base_branch: main
@@ -724,7 +724,7 @@ worktree_path: {worktree_path}
         """測試 close 在有 open PR 時被阻擋"""
         # Setup
         branch_name = "test-issue"
-        config_file = tmp_path / ".cafe" / "issues" / branch_name / "config.yaml"
+        config_file = tmp_path / ".cafe" / "issues" / branch_name / "issue.yaml"
         config_file.parent.mkdir(parents=True, exist_ok=True)
         config_file.write_text("base_branch: main\n")
 

@@ -31,7 +31,7 @@ def temp_issue_dir(tmp_path):
     plan_file.write_text("# Test Plan\nImplementation guide")
 
     # Create config.yaml with pr.auto_create = false
-    config_file = issue_dir / "config.yaml"
+    config_file = issue_dir / "issue.yaml"
     config_data = {
         "base_branch": "main",
         "feature_branch": "test-issue",
@@ -209,7 +209,7 @@ class TestDevelopPhaseLocalFeedback:
         monkeypatch.chdir(temp_issue_dir.parent.parent.parent)
 
         # Update config to pr.auto_create: true
-        config_file = temp_issue_dir / "config.yaml"
+        config_file = temp_issue_dir / "issue.yaml"
         config_data = {
             "base_branch": "main",
             "feature_branch": "test-issue",

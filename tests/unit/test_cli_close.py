@@ -62,7 +62,7 @@ def issue_with_config(temp_repo_dir):
     issue_dir = temp_repo_dir / ".cafe" / "issues" / "test-issue"
     issue_dir.mkdir(parents=True)
 
-    config_file = issue_dir / "config.yaml"
+    config_file = issue_dir / "issue.yaml"
     config_data = {
         "base_branch": "main",
         "feature_branch": "test-issue"
@@ -183,7 +183,7 @@ class TestCloseCommand:
         issue_dir = temp_repo_dir / ".cafe" / "issues" / "custom-issue"
         issue_dir.mkdir(parents=True)
 
-        config_file = issue_dir / "config.yaml"
+        config_file = issue_dir / "issue.yaml"
         config_data = {
             "base_branch": "develop",
             "feature_branch": "custom-issue"
@@ -332,7 +332,7 @@ class TestCloseCommandWorktree:
         issue_dir = temp_repo_dir / ".cafe" / "issues" / "test-worktree-issue"
         issue_dir.mkdir(parents=True)
 
-        config_file = issue_dir / "config.yaml"
+        config_file = issue_dir / "issue.yaml"
         config_data = {
             "base_branch": "main",
             "feature_branch": "test-worktree-issue",
@@ -385,7 +385,7 @@ class TestCloseCommandWorktree:
         issue_dir = temp_repo_dir / ".cafe" / "issues" / "normal-issue"
         issue_dir.mkdir(parents=True)
 
-        config_file = issue_dir / "config.yaml"
+        config_file = issue_dir / "issue.yaml"
         config_data = {
             "base_branch": "main",
             "feature_branch": "normal-issue",
@@ -435,19 +435,19 @@ class TestCloseCommandWorktree:
         (worktree_cafe_issue / "plan").mkdir()
         (worktree_cafe_issue / "plan" / "plan_001.md").write_text("Worktree plan content")
 
-        # 創建 worktree 的 config.yaml
+        # 創建 worktree 的 issue.yaml
         worktree_config_data = {
             "base_branch": "main",
             "feature_branch": "sync-test",
             "worktree_path": str(worktree_path),
         }
-        with open(worktree_cafe_issue / "config.yaml", 'w', encoding='utf-8') as f:
+        with open(worktree_cafe_issue / "issue.yaml", 'w', encoding='utf-8') as f:
             yaml.dump(worktree_config_data, f)
 
         # 創建 repo root 的 issue config
         repo_issue_dir = temp_repo_dir / ".cafe" / "issues" / "sync-test"
         repo_issue_dir.mkdir(parents=True)
-        config_file = repo_issue_dir / "config.yaml"
+        config_file = repo_issue_dir / "issue.yaml"
         config_data = {
             "base_branch": "main",
             "feature_branch": "sync-test",
@@ -475,9 +475,9 @@ class TestCloseCommandWorktree:
 
         archive_spec = archive_path / "spec" / "spec_001.md"
         archive_plan = archive_path / "plan" / "plan_001.md"
-        archive_config = archive_path / "config.yaml"
+        archive_config = archive_path / "issue.yaml"
         assert archive_spec.exists(), "spec_001.md should be in archive"
         assert archive_spec.read_text() == "Worktree spec content"
         assert archive_plan.exists(), "plan_001.md should be in archive"
         assert archive_plan.read_text() == "Worktree plan content"
-        assert archive_config.exists(), "config.yaml should be in archive"
+        assert archive_config.exists(), "issue.yaml should be in archive"

@@ -91,7 +91,7 @@ class PRPhase(Phase):
             self.base_branch = base_branch
         else:
             # Try to read from config.yaml, fallback to "main"
-            config_file = self.issue_dir / "config.yaml"
+            config_file = self.issue_dir / "issue.yaml"
             config_base = self._get_issue_config_value(config_file, "base_branch")
             self.base_branch = config_base if config_base else "main"
 
@@ -231,7 +231,7 @@ class PRPhase(Phase):
         """
         try:
             # Check if local review mode is enabled
-            config_file = self.issue_dir / "config.yaml"
+            config_file = self.issue_dir / "issue.yaml"
             pr_auto_create = self._get_issue_config_value(config_file, "pr.auto_create")
 
             # If pr.auto_create is False, use local review mode
@@ -264,7 +264,7 @@ class PRPhase(Phase):
 
             # Read issue_id from config if not provided
             if not self.issue_id:
-                config_file = self.issue_dir / "config.yaml"
+                config_file = self.issue_dir / "issue.yaml"
                 self.issue_id = self._get_issue_config_value(config_file, "issue_id")
 
             # Validate inputs

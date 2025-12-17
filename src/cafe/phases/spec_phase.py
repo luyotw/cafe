@@ -1024,7 +1024,7 @@ PM (Product Manager)，負責需求澄清工作。請讀取 {agent_file} 了解�
         from cafe.core.types import SpecRigor
 
         # Path: .cafe/issues/{issue_name}/config.yaml
-        config_file = self.issue_dir / "config.yaml"
+        config_file = self.issue_dir / "issue.yaml"
 
         config_data = self._read_issue_config(config_file)
         if config_data:
@@ -1061,7 +1061,7 @@ PM (Product Manager)，負責需求澄清工作。請讀取 {agent_file} 了解�
     def _save_issue_config(self) -> None:
         """Save issue configuration (issue_id, rigor) to config.yaml."""
         # Path: .cafe/issues/{issue_name}/config.yaml
-        config_file = self.issue_dir / "config.yaml"
+        config_file = self.issue_dir / "issue.yaml"
 
         # Read existing config to preserve base_branch, feature_branch, and worktree_path
         existing_config = self._read_issue_config(config_file) or {}

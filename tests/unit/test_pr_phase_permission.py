@@ -28,7 +28,7 @@ def test_prepare_pr_content_stops_on_need_permission(tmp_path):
     pr_dir.mkdir(parents=True)
     (pr_dir / "history").mkdir()
     
-    config_file = issue_dir / "config.yaml"
+    config_file = issue_dir / "issue.yaml"
     config_file.write_text("base_branch: main\n")
     
     # Mock dependencies
@@ -105,7 +105,7 @@ def test_pr_phase_stops_on_need_permission(tmp_path):
     # Create empty history dir to avoid iteration counter issues
     (pr_dir / "history").mkdir()
     
-    config_file = issue_dir / "config.yaml"
+    config_file = issue_dir / "issue.yaml"
     config_file.write_text("base_branch: main\n")
     
     # Mock dependencies

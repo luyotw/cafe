@@ -698,7 +698,7 @@ class TestIssueConfigReading:
         spec_file.write_text("Requirements")
 
         # Create config file with base branch
-        config_file = issues_dir / "config.yaml"
+        config_file = issues_dir / "issue.yaml"
         config_data = {
             "base_branch": "develop",
             "feature_branch": "myissue"

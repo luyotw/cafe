@@ -521,7 +521,7 @@ class TestSpecPhaseRigorPersistence:
             phase.execute()
 
         # Check that rigor was saved to config
-        config_file = tmp_path / ".cafe" / "issues" / "test-issue" / "config.yaml"
+        config_file = tmp_path / ".cafe" / "issues" / "test-issue" / "issue.yaml"
         assert config_file.exists()
 
         import yaml
@@ -544,7 +544,7 @@ class TestSpecPhaseRigorPersistence:
         spec_001.write_text("# 需求\n\n## 待釐清的問題\n測試問題")
 
         # Create config with rigor=low
-        config_file = issue_dir / "config.yaml"
+        config_file = issue_dir / "issue.yaml"
         import yaml
         with open(config_file, 'w') as f:
             yaml.dump({"rigor": "low"}, f)
@@ -613,7 +613,7 @@ class TestSpecPhaseRigorPersistence:
         issue_dir.mkdir(parents=True)
 
         # Create config with rigor=low
-        config_file = issue_dir / "config.yaml"
+        config_file = issue_dir / "issue.yaml"
         import yaml
         with open(config_file, 'w') as f:
             yaml.dump({"rigor": "low"}, f)

@@ -31,7 +31,7 @@ def mock_env(tmp_path, monkeypatch):
     create_minimal_config(tmp_path)
     
     # Create issue config
-    issue_config = issue_dir / "config.yaml"
+    issue_config = issue_dir / "issue.yaml"
     issue_config.write_text("""
 base_branch: main
 feature_branch: test-issue

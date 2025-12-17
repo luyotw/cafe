@@ -1374,7 +1374,7 @@ class TestBaseBranchFromConfig:
         spec_file.write_text("# Feature\n")
 
         # Setup config.yaml with base_branch
-        config_file = spec_file.parent.parent / "config.yaml"
+        config_file = spec_file.parent.parent / "issue.yaml"
         config_file.write_text('base_branch: develop\nfeature_branch: fix-branch\n')
 
         agent_manager = MagicMock(spec=AgentManager)
@@ -1465,7 +1465,7 @@ class TestBaseBranchFromConfig:
         spec_file.write_text("# Feature\n")
 
         # Setup config.yaml without base_branch field
-        config_file = spec_file.parent.parent / "config.yaml"
+        config_file = spec_file.parent.parent / "issue.yaml"
         config_file.write_text('feature_branch: test-feature\n')
 
         agent_manager = MagicMock(spec=AgentManager)
@@ -1512,7 +1512,7 @@ class TestBaseBranchFromConfig:
         spec_file.write_text("# Feature\n")
 
         # Setup config.yaml with base_branch="develop"
-        config_file = spec_file.parent.parent / "config.yaml"
+        config_file = spec_file.parent.parent / "issue.yaml"
         config_file.write_text('base_branch: develop\nfeature_branch: test-feature\n')
 
         agent_manager = MagicMock(spec=AgentManager)
@@ -1568,7 +1568,7 @@ class TestIssueCommentIntegration:
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Feature\n")
 
-        config_file = issue_dir / "config.yaml"
+        config_file = issue_dir / "issue.yaml"
         config_file.write_text("issue_id: '123'\nbase_branch: 'main'\n")
 
         agent_manager = MagicMock(spec=AgentManager)
@@ -1621,7 +1621,7 @@ class TestIssueCommentIntegration:
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Feature\n")
 
-        config_file = issue_dir / "config.yaml"
+        config_file = issue_dir / "issue.yaml"
         config_file.write_text("base_branch: 'main'\n")  # No issue_id
 
         agent_manager = MagicMock(spec=AgentManager)
@@ -1674,7 +1674,7 @@ class TestIssueCommentIntegration:
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Feature\n")
 
-        config_file = issue_dir / "config.yaml"
+        config_file = issue_dir / "issue.yaml"
         config_file.write_text("issue_id: '123'\nbase_branch: 'main'\n")
 
         agent_manager = MagicMock(spec=AgentManager)

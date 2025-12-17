@@ -318,7 +318,7 @@ class TestDevelopE2EMockBranchManagement:
 
         # Note: This test may fail in CI without git repo, skip or mock git
         if result.returncode == 0:
-            config_file = tmp_path / ".cafe" / "issues" / issue_name / "config.yaml"
+            config_file = tmp_path / ".cafe" / "issues" / issue_name / "issue.yaml"
             if config_file.exists():
                 import yaml
                 with open(config_file) as f:

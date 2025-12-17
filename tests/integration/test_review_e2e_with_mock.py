@@ -444,7 +444,7 @@ class TestReviewE2EMockBaseBranch:
 
         # 創建 config.yaml with custom base_branch
         import yaml
-        config_file = repo_path / ".cafe" / "issues" / issue_name / "config.yaml"
+        config_file = repo_path / ".cafe" / "issues" / issue_name / "issue.yaml"
         config_file.write_text(yaml.dump({
             "base_branch": "develop",
             "feature_branch": issue_name

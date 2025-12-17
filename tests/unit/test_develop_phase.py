@@ -498,7 +498,7 @@ class TestBranchManagement:
         result = phase.execute()
 
         # Should save issue config with base branch
-        config_file = tmp_path / ".cafe" / "issues" / "test-issue" / "config.yaml"
+        config_file = tmp_path / ".cafe" / "issues" / "test-issue" / "issue.yaml"
         assert config_file.exists()
 
         import yaml
@@ -514,9 +514,9 @@ class TestBranchManagement:
         monkeypatch.chdir(tmp_path)
         
         # Setup
-        config_file = Path(".cafe/issues/test-issue/config.yaml")
+        config_file = Path(".cafe/issues/test-issue/issue.yaml")
         config_file.parent.mkdir(parents=True)
-        
+
         # Create existing config with worktree_path, issue_id, and rigor
         existing_config = {
             "base_branch": "main",
@@ -536,8 +536,8 @@ class TestBranchManagement:
         # Create phase with minimal files
         spec_file = Path(".cafe/issues/test-issue/spec/spec.md")
         plan_file = Path(".cafe/issues/test-issue/plan/plan.md")
-        spec_file.parent.mkdir(exist_ok=True)
-        plan_file.parent.mkdir(exist_ok=True)
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
+        plan_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("spec")
         plan_file.write_text("plan")
         

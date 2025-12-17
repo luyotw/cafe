@@ -30,7 +30,7 @@ def temp_issue_dir(tmp_path):
     spec_file.write_text("# Test Spec\nTest requirements")
 
     # Create config.yaml with pr.auto_create = false
-    config_file = issue_dir / "config.yaml"
+    config_file = issue_dir / "issue.yaml"
     config_data = {
         "base_branch": "main",
         "feature_branch": "test-issue",
@@ -93,7 +93,7 @@ class TestPRPhaseLocalReviewMode:
             )
 
             # Read config
-            config_file = temp_issue_dir / "config.yaml"
+            config_file = temp_issue_dir / "issue.yaml"
             with open(config_file) as f:
                 config = yaml.safe_load(f)
 
@@ -239,7 +239,7 @@ class TestPRPhaseLocalReviewMode:
         spec_file.write_text("# Test Spec\nTest requirements")
 
         # Create config with worktree mode and pr.auto_create = false
-        config_file = issue_dir / "config.yaml"
+        config_file = issue_dir / "issue.yaml"
         worktree_path = repo_root / ".cafe" / "worktrees" / "test-issue"
         worktree_path.mkdir(parents=True)
 
@@ -302,7 +302,7 @@ class TestPRPhaseStatusTracking:
         issue_dir.mkdir(parents=True)
 
         # Create config with pr.auto_create = false
-        config_file = issue_dir / "config.yaml"
+        config_file = issue_dir / "issue.yaml"
         config_data = {
             "base_branch": "main",
             "feature_branch": "test-issue",
@@ -391,7 +391,7 @@ class TestPRPhaseAutoMode:
         issue_dir.mkdir(parents=True)
 
         # Create config with pr.auto_create = false (local review mode)
-        config_file = issue_dir / "config.yaml"
+        config_file = issue_dir / "issue.yaml"
         config_data = {
             "base_branch": "main",
             "feature_branch": "test-issue",

@@ -77,7 +77,7 @@ class TestPrepareNonGitHubRepo:
         assert "Successfully prepared issue: test-issue" in result.stdout
 
         # Verify config.yaml
-        config_file = temp_repo_dir / ".cafe" / "issues" / "test-issue" / "config.yaml"
+        config_file = temp_repo_dir / ".cafe" / "issues" / "test-issue" / "issue.yaml"
         assert config_file.exists()
 
         with open(config_file) as f:
@@ -107,7 +107,7 @@ class TestPrepareNonGitHubRepo:
         assert result.exit_code == 0
 
         # Verify config.yaml
-        config_file = temp_repo_dir / ".cafe" / "issues" / "my-feature" / "config.yaml"
+        config_file = temp_repo_dir / ".cafe" / "issues" / "my-feature" / "issue.yaml"
         assert config_file.exists()
 
         with open(config_file) as f:
@@ -127,7 +127,7 @@ class TestPrepareNonGitHubRepo:
         assert "Successfully prepared issue: quick-fix" in result.stdout
 
         # Verify config.yaml
-        config_file = temp_repo_dir / ".cafe" / "issues" / "quick-fix" / "config.yaml"
+        config_file = temp_repo_dir / ".cafe" / "issues" / "quick-fix" / "issue.yaml"
         assert config_file.exists()
 
         with open(config_file) as f:
@@ -185,7 +185,7 @@ class TestPrepareGitHubRepo:
         assert result.exit_code == 0
 
         # Verify config.yaml
-        config_file = temp_repo_dir / ".cafe" / "issues" / "gh-issue" / "config.yaml"
+        config_file = temp_repo_dir / ".cafe" / "issues" / "gh-issue" / "issue.yaml"
         assert config_file.exists()
 
         with open(config_file) as f:

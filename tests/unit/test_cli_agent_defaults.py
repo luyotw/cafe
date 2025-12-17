@@ -56,7 +56,7 @@ def setup_test_env(tmp_path, monkeypatch):
     issue_dir = tmp_path / ".cafe" / "issues" / "test-branch"
     issue_dir.mkdir(parents=True, exist_ok=True)
 
-    config_file = issue_dir / "config.yaml"
+    config_file = issue_dir / "issue.yaml"
     config_file.write_text("issue_name: test-branch\nbase_branch: main\n")
 
     # Create spec directory with spec file (required for plan command)

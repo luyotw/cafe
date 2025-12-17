@@ -71,7 +71,7 @@ class TestPrepareCommand:
         assert (issue_dir / "sessions").exists()
 
         # Verify config.yaml created
-        config_file = issue_dir / "config.yaml"
+        config_file = issue_dir / "issue.yaml"
         assert config_file.exists()
 
         with open(config_file) as f:
@@ -116,7 +116,7 @@ class TestPrepareCommand:
         assert "Base branch: develop" in result.stdout
 
         # Verify config contains custom base branch
-        config_file = temp_repo_dir / ".cafe" / "issues" / "feature-x" / "config.yaml"
+        config_file = temp_repo_dir / ".cafe" / "issues" / "feature-x" / "issue.yaml"
         with open(config_file) as f:
             config_data = yaml.safe_load(f)
             assert config_data["base_branch"] == "develop"
@@ -220,7 +220,7 @@ class TestPrepareCommand:
 
         assert result.exit_code == 0
 
-        config_file = temp_repo_dir / ".cafe" / "issues" / "format-test" / "config.yaml"
+        config_file = temp_repo_dir / ".cafe" / "issues" / "format-test" / "issue.yaml"
         assert config_file.exists()
 
         # Read and verify YAML format
@@ -251,7 +251,7 @@ class TestPrepareCommand:
         assert "already exists" in result2.stdout
 
         # Config should still exist and be valid
-        config_file = temp_repo_dir / ".cafe" / "issues" / "idempotent-test" / "config.yaml"
+        config_file = temp_repo_dir / ".cafe" / "issues" / "idempotent-test" / "issue.yaml"
         assert config_file.exists()
 
     def test_prepare_with_different_base_branches(self, temp_repo_dir, mock_git_ops):
@@ -268,7 +268,7 @@ class TestPrepareCommand:
             assert result.exit_code == 0
             assert f"Base branch: {base_branch}" in result.stdout
 
-            config_file = temp_repo_dir / ".cafe" / "issues" / f"issue-{issue_name}" / "config.yaml"
+            config_file = temp_repo_dir / ".cafe" / "issues" / f"issue-{issue_name}" / "issue.yaml"
             with open(config_file) as f:
                 config_data = yaml.safe_load(f)
                 assert config_data["base_branch"] == base_branch
@@ -288,7 +288,7 @@ class TestPrepareCommandWorktree:
         mock_git_ops.create_branch.assert_not_called()
 
         # 驗證 worktree_path 儲存到 config.yaml（在 worktree 內）
-        config_file = temp_repo_dir / worktree_path / ".cafe" / "issues" / "test-issue" / "config.yaml"
+        config_file = temp_repo_dir / worktree_path / ".cafe" / "issues" / "test-issue" / "issue.yaml"
         with open(config_file) as f:
             config_data = yaml.safe_load(f)
             assert config_data["worktree_path"] == worktree_path
@@ -315,7 +315,7 @@ class TestPrepareCommandWorktree:
         assert not hasattr(mock_git_ops, 'create_worktree') or not mock_git_ops.create_worktree.called
 
         # 驗證 config.yaml 不包含 worktree_path
-        config_file = temp_repo_dir / ".cafe" / "issues" / "normal-issue" / "config.yaml"
+        config_file = temp_repo_dir / ".cafe" / "issues" / "normal-issue" / "issue.yaml"
         with open(config_file) as f:
             config_data = yaml.safe_load(f)
             assert "worktree_path" not in config_data
@@ -371,7 +371,7 @@ class TestPrepareCommandWorktree:
         mock_git_ops.create_branch.assert_not_called()
 
         # 驗證 config.yaml 包含 worktree_path（在 worktree 內）
-        config_file = temp_repo_dir / "worktrees/my-feature" / ".cafe" / "issues" / "my-feature" / "config.yaml"
+        config_file = temp_repo_dir / "worktrees/my-feature" / ".cafe" / "issues" / "my-feature" / "issue.yaml"
         with open(config_file) as f:
             config_data = yaml.safe_load(f)
             assert config_data["worktree_path"] == "worktrees/my-feature"
@@ -399,7 +399,7 @@ class TestPrepareCommandWorktree:
         assert not hasattr(mock_git_ops, 'create_worktree') or not mock_git_ops.create_worktree.called
 
         # 驗證 config.yaml 不包含 worktree_path
-        config_file = temp_repo_dir / ".cafe" / "issues" / "normal-feature" / "config.yaml"
+        config_file = temp_repo_dir / ".cafe" / "issues" / "normal-feature" / "issue.yaml"
         with open(config_file) as f:
             config_data = yaml.safe_load(f)
             assert "worktree_path" not in config_data
@@ -528,7 +528,7 @@ class TestPrepareCommandWorktree:
 
         assert result.exit_code == 0
 
-        config_file = temp_repo_dir / ".cafe" / "issues" / "test-issue" / "config.yaml"
+        config_file = temp_repo_dir / ".cafe" / "issues" / "test-issue" / "issue.yaml"
         assert config_file.exists()
 
         with open(config_file) as f:
@@ -555,7 +555,7 @@ class TestPrepareCommandWorktree:
 
         assert result.exit_code == 0
 
-        config_file = temp_repo_dir / ".cafe" / "issues" / "test-issue" / "config.yaml"
+        config_file = temp_repo_dir / ".cafe" / "issues" / "test-issue" / "issue.yaml"
         with open(config_file) as f:
             config_data = yaml.safe_load(f)
             assert "pr" in config_data
@@ -567,7 +567,7 @@ class TestPrepareCommandWorktree:
 
         assert result.exit_code == 0
 
-        config_file = temp_repo_dir / ".cafe" / "issues" / "test-issue" / "config.yaml"
+        config_file = temp_repo_dir / ".cafe" / "issues" / "test-issue" / "issue.yaml"
         with open(config_file) as f:
             config_data = yaml.safe_load(f)
             # Non-interactive mode should not have pr config

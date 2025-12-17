@@ -69,7 +69,7 @@ def prepared_issue(temp_repo_dir):
     spec_dir.mkdir(exist_ok=True)
     
     # Create issue config
-    config_file = issue_dir / "config.yaml"
+    config_file = issue_dir / "issue.yaml"
     config_data = {
         "base_branch": "main",
         "feature_branch": "test-issue",
@@ -119,7 +119,7 @@ class TestAutoModeConfigPreservation:
         from cafe.core.permission import PermissionHandler
         
         # Add worktree_path to config
-        config_file = prepared_issue / "config.yaml"
+        config_file = prepared_issue / "issue.yaml"
         with open(config_file, 'r') as f:
             config_data = yaml.safe_load(f)
         
@@ -160,7 +160,7 @@ class TestAutoModeConfigPreservation:
     def test_plan_phase_preserves_issue_config(self, temp_repo_dir, mock_git_ops, prepared_issue):
         """測試 plan phase 不會覆寫 issue config"""
         # Add worktree_path to config
-        config_file = prepared_issue / "config.yaml"
+        config_file = prepared_issue / "issue.yaml"
         with open(config_file, 'r') as f:
             config_data = yaml.safe_load(f)
         

@@ -68,7 +68,7 @@ class TestCloseCommandPRMode:
         # Setup issue config with pr.auto_create: true
         issue_dir = temp_repo_dir / ".cafe" / "issues" / "test-issue"
         issue_dir.mkdir(parents=True)
-        config_file = issue_dir / "config.yaml"
+        config_file = issue_dir / "issue.yaml"
         config_data = {
             "base_branch": "main",
             "feature_branch": "test-issue",
@@ -94,7 +94,7 @@ class TestCloseCommandPRMode:
         # Setup issue config with pr.auto_create: false
         issue_dir = temp_repo_dir / ".cafe" / "issues" / "test-issue"
         issue_dir.mkdir(parents=True)
-        config_file = issue_dir / "config.yaml"
+        config_file = issue_dir / "issue.yaml"
         config_data = {
             "base_branch": "main",
             "feature_branch": "test-issue",
@@ -120,7 +120,7 @@ class TestCloseCommandPRMode:
         # Setup issue config without pr config
         issue_dir = temp_repo_dir / ".cafe" / "issues" / "test-issue"
         issue_dir.mkdir(parents=True)
-        config_file = issue_dir / "config.yaml"
+        config_file = issue_dir / "issue.yaml"
         config_data = {"base_branch": "main", "feature_branch": "test-issue"}
         with open(config_file, "w", encoding="utf-8") as f:
             yaml.dump(config_data, f)
@@ -144,7 +144,7 @@ class TestCloseCommandPRMode:
         # Setup issue config with worktree and pr.auto_create: false
         issue_dir = temp_repo_dir / ".cafe" / "issues" / "test-issue"
         issue_dir.mkdir(parents=True)
-        config_file = issue_dir / "config.yaml"
+        config_file = issue_dir / "issue.yaml"
         config_data = {
             "base_branch": "main",
             "feature_branch": "test-issue",
