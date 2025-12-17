@@ -395,7 +395,7 @@ def init() -> None:
 
             # Input model name
             model_name_input = prompt_text(
-                message=f"請為 {selected_cli} 輸入要使用的模型名稱（選填，直接按 Enter 將使用預設模型）",
+                message=f"請為 {selected_cli} 輸入要使用的模型名稱（選填，直接按 Enter 將使用預設模型）:",
                 default="",
             )
             if model_name_input is None:
@@ -551,7 +551,7 @@ def prepare(
         # 1. Get issue name (from argument or prompt)
         is_interactive = not issue_name  # Track if we're in interactive mode
         if not issue_name:
-            issue_name = prompt_text("Issue name")
+            issue_name = prompt_text("Issue name:")
             if not issue_name or not issue_name.strip():
                 console.print("[red]Error: Issue name cannot be empty.[/red]")
                 raise typer.Exit(1)
@@ -603,7 +603,7 @@ def prepare(
 
                 # Prompt for path (allow empty input to use default)
                 user_path = prompt_text(
-                    "Worktree path (press Enter for default)",
+                    "Worktree path (press Enter for default):",
                     default=default_path,
                 )
                 worktree_path = user_path.strip() if user_path.strip() else default_path
