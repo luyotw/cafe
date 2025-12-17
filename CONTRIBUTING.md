@@ -21,8 +21,8 @@ You can contribute to this project in several ways:
     # Navigate to the project directory
     cd cafe
 
-    # Create a Python virtual environment (Python 3.11+)
-    python3.11 -m venv venv
+    # Create a Python virtual environment (Python 3.10+)
+    python3.10 -m venv venv
     source venv/bin/activate
 
     # Install project dependencies (including development tools)

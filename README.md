@@ -17,7 +17,7 @@ You can fetch requirements directly from GitHub issues and automatically create 
 ## System Requirements
 
 ### Prerequisites
-- **Python 3.11+**
+- **Python 3.10+**
 - [git](https://git-scm.com/) - for version control
 - [gh](https://cli.github.com/) - GitHub CLI (for PR creation and issue management)
 
