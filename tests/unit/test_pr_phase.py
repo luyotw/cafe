@@ -15,8 +15,13 @@ from cafe.utils.github import GitHubOps
 class TestPRPhaseBasics:
     """Test basic PRPhase functionality."""
 
-    def test_init_pr_phase(self) -> None:
+    def test_init_pr_phase(self, tmp_path: Path, monkeypatch) -> None:
         """測試初始化 PRPhase"""
+        monkeypatch.chdir(tmp_path)
+        # Create spec file for fallback
+        spec_file = tmp_path / "spec.md"
+        spec_file.write_text("# Spec\n")
+
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None, [])
         mock_executor = MagicMock()
@@ -26,7 +31,9 @@ class TestPRPhaseBasics:
         agent_manager.get_total_token_usage.return_value = TokenUsage()
         permission_handler = MagicMock(spec=PermissionHandler)
         git_ops = MagicMock(spec=GitOperations)
+        git_ops.get_current_branch.return_value = "test-issue"
         github_ops = MagicMock(spec=GitHubOps)
+        github_ops.check_gh_auth.return_value = True
         github_ops.get_pr_for_branch.return_value = None  # No existing PR
         github_ops.create_pr.return_value = "https://github.com/user/repo/pull/1"
 
@@ -35,13 +42,14 @@ class TestPRPhaseBasics:
             permission_handler=permission_handler,
             git_ops=git_ops,
             github_ops=github_ops,
-            spec_file="spec.md",
+            spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
+            interactive=False,
         )
 
         assert phase.agent_manager == agent_manager
         assert phase.git_ops == git_ops
-        assert phase.spec_file == "spec.md"
+        assert phase.spec_file == str(spec_file)
         assert phase.workflow_mode == WorkflowMode.LOCAL
 
     def test_init_with_github_mode(self) -> None:
@@ -55,7 +63,9 @@ class TestPRPhaseBasics:
         agent_manager.get_total_token_usage.return_value = TokenUsage()
         permission_handler = MagicMock(spec=PermissionHandler)
         git_ops = MagicMock(spec=GitOperations)
+        git_ops.get_current_branch.return_value = "test-issue"
         github_ops = MagicMock(spec=GitHubOps)
+        github_ops.check_gh_auth.return_value = True
         github_ops.get_pr_for_branch.return_value = None  # No existing PR
         github_ops.create_pr.return_value = "https://github.com/user/repo/pull/1"
 
@@ -67,6 +77,7 @@ class TestPRPhaseBasics:
             spec_file="spec.md",
             workflow_mode=WorkflowMode.GITHUB,
             issue_id="123",
+        interactive=False,
         )
 
         assert phase.workflow_mode == WorkflowMode.GITHUB
@@ -76,8 +87,9 @@ class TestPRPhaseBasics:
 class TestBranchPushing:
     """Test pushing branch to remote."""
 
-    def test_push_branch_github_mode(self, tmp_path: Path) -> None:
+    def test_push_branch_github_mode(self, tmp_path: Path, monkeypatch) -> None:
         """測試推送 GitHub mode 分支到 remote"""
+        monkeypatch.chdir(tmp_path)
         # Setup issue directory structure
         spec_file = tmp_path / ".cafe" / "issues" / "issue-123" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
@@ -93,12 +105,14 @@ class TestBranchPushing:
         permission_handler = MagicMock(spec=PermissionHandler)
 
         git_ops = MagicMock(spec=GitOperations)
-        github_ops = MagicMock(spec=GitHubOps)
-        github_ops.get_pr_for_branch.return_value = None  # No existing PR
-        github_ops.create_pr.return_value = "https://github.com/user/repo/pull/1"
-        github_ops.create_pr.return_value = "https://github.com/user/repo/pull/1"
+        git_ops.get_current_branch.return_value = "issue-123"
         git_ops.get_main_branch.return_value = "main"
         git_ops.get_commits_between.return_value = "commit1\ncommit2"
+
+        github_ops = MagicMock(spec=GitHubOps)
+        github_ops.check_gh_auth.return_value = True
+        github_ops.get_pr_for_branch.return_value = None  # No existing PR
+        github_ops.create_pr.return_value = "https://github.com/user/repo/pull/1"
 
         phase = PRPhase(
             agent_manager=agent_manager,
@@ -110,6 +124,7 @@ class TestBranchPushing:
             issue_id="123",
             custom_title="Test PR",
             custom_body="Test body",
+            interactive=False,
         )
 
         result = phase.execute()
@@ -118,10 +133,15 @@ class TestBranchPushing:
         git_ops.push.assert_called_once_with("issue-123", set_upstream=True, force=False)
         assert result.status == PhaseStatus.COMPLETED
 
-    def test_push_branch_local_mode(self, tmp_path: Path) -> None:
+    def test_push_branch_local_mode(self, tmp_path: Path, monkeypatch) -> None:
         """測試推送 local mode 分支到 remote"""
+        monkeypatch.chdir(tmp_path)
         requirements_file = tmp_path / "20250101-feature.md"
         requirements_file.write_text("# Feature Title\n")
+
+        # Create spec directory for the feature branch
+        spec_dir = tmp_path / ".cafe" / "issues" / "feature" / "spec"
+        spec_dir.mkdir(parents=True, exist_ok=True)
 
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None, [])
@@ -133,11 +153,14 @@ class TestBranchPushing:
         permission_handler = MagicMock(spec=PermissionHandler)
 
         git_ops = MagicMock(spec=GitOperations)
-        github_ops = MagicMock(spec=GitHubOps)
-        github_ops.get_pr_for_branch.return_value = None  # No existing PR
-        github_ops.create_pr.return_value = "https://github.com/user/repo/pull/1"
+        git_ops.get_current_branch.return_value = "feature"
         git_ops.get_main_branch.return_value = "main"
         git_ops.get_commits_between.return_value = "commit1"
+
+        github_ops = MagicMock(spec=GitHubOps)
+        github_ops.check_gh_auth.return_value = True
+        github_ops.get_pr_for_branch.return_value = None  # No existing PR
+        github_ops.create_pr.return_value = "https://github.com/user/repo/pull/1"
 
         phase = PRPhase(
             agent_manager=agent_manager,
@@ -146,6 +169,7 @@ class TestBranchPushing:
             github_ops=github_ops,
             spec_file=str(requirements_file),
             workflow_mode=WorkflowMode.LOCAL,
+            interactive=False,
         )
 
         result = phase.execute()
@@ -153,8 +177,13 @@ class TestBranchPushing:
         # Should push branch named "feature"
         git_ops.push.assert_called_once_with("feature", set_upstream=True, force=False)
 
-    def test_push_failure_fails_phase(self) -> None:
+    def test_push_failure_fails_phase(self, tmp_path: Path, monkeypatch) -> None:
         """測試 push 失敗時 phase 失敗"""
+        monkeypatch.chdir(tmp_path)
+        # Create spec file
+        spec_file = tmp_path / "spec.md"
+        spec_file.write_text("# Spec\n")
+
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None, [])
         mock_executor = MagicMock()
@@ -165,19 +194,23 @@ class TestBranchPushing:
         permission_handler = MagicMock(spec=PermissionHandler)
 
         git_ops = MagicMock(spec=GitOperations)
+        git_ops.get_current_branch.return_value = "test-issue"
+        git_ops.push.side_effect = Exception("Push failed")
+
         github_ops = MagicMock(spec=GitHubOps)
+        github_ops.check_gh_auth.return_value = True
         github_ops.get_pr_for_branch.return_value = None  # No existing PR
         github_ops.create_pr.return_value = "https://github.com/user/repo/pull/1"
-        git_ops.push.side_effect = Exception("Push failed")
 
         phase = PRPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
             github_ops=github_ops,
-            spec_file="spec.md",
+            spec_file=str(spec_file),
             workflow_mode=WorkflowMode.GITHUB,
             issue_id="123",
+            interactive=False,
         )
 
         result = phase.execute()
@@ -189,8 +222,9 @@ class TestBranchPushing:
 class TestPRCreation:
     """Test PR creation."""
 
-    def test_create_pr_github_mode(self, tmp_path: Path) -> None:
+    def test_create_pr_github_mode(self, tmp_path: Path, monkeypatch) -> None:
         """測試 GitHub mode 建立 PR（使用 custom title/body）"""
+        monkeypatch.chdir(tmp_path)
         # Setup issue directory structure
         spec_file = tmp_path / ".cafe" / "issues" / "issue-123" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
@@ -206,11 +240,14 @@ class TestPRCreation:
         permission_handler = MagicMock(spec=PermissionHandler)
 
         git_ops = MagicMock(spec=GitOperations)
-        github_ops = MagicMock(spec=GitHubOps)
-        github_ops.get_pr_for_branch.return_value = None  # No existing PR
-        github_ops.create_pr.return_value = "https://github.com/user/repo/pull/1"
+        git_ops.get_current_branch.return_value = "issue-123"
         git_ops.get_main_branch.return_value = "main"
         git_ops.get_commits_between.return_value = "commit1\ncommit2"
+
+        github_ops = MagicMock(spec=GitHubOps)
+        github_ops.check_gh_auth.return_value = True
+        github_ops.get_pr_for_branch.return_value = None  # No existing PR
+        github_ops.create_pr.return_value = "https://github.com/user/repo/pull/1"
 
         phase = PRPhase(
             agent_manager=agent_manager,
@@ -222,6 +259,7 @@ class TestPRCreation:
             issue_id="123",
             custom_title="Issue Title",
             custom_body="Closes #123\n\ncommit1\ncommit2",
+            interactive=False,
         )
 
         result = phase.execute()
@@ -251,7 +289,9 @@ class TestPRCreation:
         permission_handler = MagicMock(spec=PermissionHandler)
 
         git_ops = MagicMock(spec=GitOperations)
+        git_ops.get_current_branch.return_value = "test-issue"
         github_ops = MagicMock(spec=GitHubOps)
+        github_ops.check_gh_auth.return_value = True
         github_ops.get_pr_for_branch.return_value = None  # No existing PR
         github_ops.create_pr.return_value = "https://github.com/user/repo/pull/1"
         git_ops.get_main_branch.return_value = "main"
@@ -266,6 +306,7 @@ class TestPRCreation:
             workflow_mode=WorkflowMode.LOCAL,
             custom_title="Feature Title",
             custom_body="commit1",
+        interactive=False,
         )
 
         result = phase.execute()
@@ -274,8 +315,12 @@ class TestPRCreation:
 
         assert result.status == PhaseStatus.COMPLETED
 
-    def test_gh_not_available_fails(self) -> None:
+    def test_gh_not_available_fails(self, tmp_path: Path, monkeypatch) -> None:
         """測試 gh 不可用時失敗"""
+        monkeypatch.chdir(tmp_path)
+        spec_file = tmp_path / "spec.md"
+        spec_file.write_text("# Spec\n")
+
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None, [])
         mock_executor = MagicMock()
@@ -286,25 +331,29 @@ class TestPRCreation:
         permission_handler = MagicMock(spec=PermissionHandler)
 
         git_ops = MagicMock(spec=GitOperations)
-        github_ops = MagicMock(spec=GitHubOps)
-        github_ops.get_pr_for_branch.return_value = None  # No existing PR
-        github_ops.create_pr.return_value = "https://github.com/user/repo/pull/1"
+        git_ops.get_current_branch.return_value = "test-issue"
         git_ops.get_main_branch.return_value = "main"
         git_ops.get_commits_between.return_value = "commits"
+
+        github_ops = MagicMock(spec=GitHubOps)
+        github_ops.check_gh_auth.return_value = False  # gh not available
+        github_ops.get_pr_for_branch.return_value = None  # No existing PR
+        github_ops.create_pr.return_value = "https://github.com/user/repo/pull/1"
 
         phase = PRPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
             github_ops=github_ops,
-            spec_file="spec.md",
+            spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
+            interactive=False,
         )
 
         result = phase.execute()
 
         assert result.status == PhaseStatus.FAILED
-        assert "gh" in result.message.lower() or "not found" in result.message.lower()
+        assert "gh" in result.message.lower() or "auth" in result.message.lower()
 
 
 class TestPRTitleGeneration:
@@ -327,7 +376,9 @@ class TestPRTitleGeneration:
         permission_handler = MagicMock(spec=PermissionHandler)
 
         git_ops = MagicMock(spec=GitOperations)
+        git_ops.get_current_branch.return_value = "test-issue"
         github_ops = MagicMock(spec=GitHubOps)
+        github_ops.check_gh_auth.return_value = True
         github_ops.get_pr_for_branch.return_value = None  # No existing PR
         github_ops.create_pr.return_value = "https://github.com/user/repo/pull/1"
         git_ops.get_main_branch.return_value = "main"
@@ -343,6 +394,7 @@ class TestPRTitleGeneration:
             issue_id="456",
             custom_title="Add new feature",
             custom_body="Closes #456\n\ncommits",
+        interactive=False,
         )
 
         result = phase.execute()
@@ -366,7 +418,9 @@ class TestPRTitleGeneration:
         permission_handler = MagicMock(spec=PermissionHandler)
 
         git_ops = MagicMock(spec=GitOperations)
+        git_ops.get_current_branch.return_value = "test-issue"
         github_ops = MagicMock(spec=GitHubOps)
+        github_ops.check_gh_auth.return_value = True
         github_ops.get_pr_for_branch.return_value = None  # No existing PR
         github_ops.create_pr.return_value = "https://github.com/user/repo/pull/1"
         git_ops.get_main_branch.return_value = "main"
@@ -381,6 +435,7 @@ class TestPRTitleGeneration:
             workflow_mode=WorkflowMode.LOCAL,
             custom_title="Add User Authentication",
             custom_body="commits",
+        interactive=False,
         )
 
         result = phase.execute()
@@ -409,7 +464,9 @@ class TestPRBodyGeneration:
         permission_handler = MagicMock(spec=PermissionHandler)
 
         git_ops = MagicMock(spec=GitOperations)
+        git_ops.get_current_branch.return_value = "test-issue"
         github_ops = MagicMock(spec=GitHubOps)
+        github_ops.check_gh_auth.return_value = True
         github_ops.get_pr_for_branch.return_value = None  # No existing PR
         github_ops.create_pr.return_value = "https://github.com/user/repo/pull/1"
         git_ops.get_main_branch.return_value = "main"
@@ -426,6 +483,7 @@ class TestPRBodyGeneration:
             workflow_mode=WorkflowMode.LOCAL,
             custom_title="Feature Title",
             custom_body="abc123 Add feature A\ndef456 Fix bug B",
+        interactive=False,
         )
 
         result = phase.execute()
@@ -438,8 +496,10 @@ class TestPRBodyGeneration:
 class TestErrorHandling:
     """Test error handling."""
 
-    def test_github_mode_without_issue_id_fails(self) -> None:
+    def test_github_mode_without_issue_id_fails(self, tmp_path: Path, monkeypatch) -> None:
         """測試 GitHub mode 沒有 issue_id 時失敗"""
+        monkeypatch.chdir(tmp_path)
+
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None, [])
         mock_executor = MagicMock()
@@ -448,9 +508,14 @@ class TestErrorHandling:
         agent_manager.get_agent.return_value = mock_executor
         agent_manager.get_total_token_usage.return_value = TokenUsage()
         permission_handler = MagicMock(spec=PermissionHandler)
+
         git_ops = MagicMock(spec=GitOperations)
+        git_ops.get_current_branch.return_value = "test-issue"
+        git_ops.get_main_branch.return_value = "main"
+
         github_ops = MagicMock(spec=GitHubOps)
-        github_ops.get_pr_for_branch.return_value = None  # No existing PR
+        github_ops.check_gh_auth.return_value = True
+        github_ops.get_pr_for_branch.return_value = None
         github_ops.create_pr.return_value = "https://github.com/user/repo/pull/1"
 
         phase = PRPhase(
@@ -461,6 +526,7 @@ class TestErrorHandling:
             spec_file="spec.md",
             workflow_mode=WorkflowMode.GITHUB,
             issue_id=None,
+            interactive=False,
         )
 
         result = phase.execute()
@@ -468,8 +534,10 @@ class TestErrorHandling:
         assert result.status == PhaseStatus.FAILED
         assert "issue_id" in result.message.lower()
 
-    def test_missing_requirements_file_fails(self) -> None:
+    def test_missing_requirements_file_fails(self, tmp_path: Path, monkeypatch) -> None:
         """測試缺少需求檔案時失敗"""
+        monkeypatch.chdir(tmp_path)
+
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None, [])
         mock_executor = MagicMock()
@@ -478,9 +546,14 @@ class TestErrorHandling:
         agent_manager.get_agent.return_value = mock_executor
         agent_manager.get_total_token_usage.return_value = TokenUsage()
         permission_handler = MagicMock(spec=PermissionHandler)
+
         git_ops = MagicMock(spec=GitOperations)
+        git_ops.get_current_branch.return_value = "test-issue"
+        git_ops.get_main_branch.return_value = "main"
+
         github_ops = MagicMock(spec=GitHubOps)
-        github_ops.get_pr_for_branch.return_value = None  # No existing PR
+        github_ops.check_gh_auth.return_value = True
+        github_ops.get_pr_for_branch.return_value = None
         github_ops.create_pr.return_value = "https://github.com/user/repo/pull/1"
 
         phase = PRPhase(
@@ -490,6 +563,7 @@ class TestErrorHandling:
             github_ops=github_ops,
             spec_file="/nonexistent/spec.md",
             workflow_mode=WorkflowMode.LOCAL,
+            interactive=False,
         )
 
         result = phase.execute()
@@ -497,8 +571,10 @@ class TestErrorHandling:
         assert result.status == PhaseStatus.FAILED
         assert "not found" in result.message.lower()
 
-    def test_git_error_fails_phase(self) -> None:
+    def test_git_error_fails_phase(self, tmp_path: Path, monkeypatch) -> None:
         """測試 git 操作錯誤時 phase 失敗"""
+        monkeypatch.chdir(tmp_path)
+
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None, [])
         mock_executor = MagicMock()
@@ -509,10 +585,14 @@ class TestErrorHandling:
         permission_handler = MagicMock(spec=PermissionHandler)
 
         git_ops = MagicMock(spec=GitOperations)
-        github_ops = MagicMock(spec=GitHubOps)
-        github_ops.get_pr_for_branch.return_value = None  # No existing PR
-        github_ops.create_pr.return_value = "https://github.com/user/repo/pull/1"
+        git_ops.get_current_branch.return_value = "test-issue"
+        git_ops.get_main_branch.return_value = "main"
         git_ops.push.side_effect = Exception("Git push error")
+
+        github_ops = MagicMock(spec=GitHubOps)
+        github_ops.check_gh_auth.return_value = True
+        github_ops.get_pr_for_branch.return_value = None
+        github_ops.create_pr.return_value = "https://github.com/user/repo/pull/1"
 
         phase = PRPhase(
             agent_manager=agent_manager,
@@ -522,6 +602,7 @@ class TestErrorHandling:
             spec_file="spec.md",
             workflow_mode=WorkflowMode.GITHUB,
             issue_id="123",
+            interactive=False,
         )
 
         result = phase.execute()
@@ -551,6 +632,7 @@ class TestErrorHandling:
         permission_handler = MagicMock(spec=PermissionHandler)
 
         git_ops = MagicMock(spec=GitOperations)
+        git_ops.get_current_branch.return_value = "test-issue"
         github_ops = MagicMock(spec=GitHubOps)
         github_ops.get_pr_for_branch.return_value = None  # No existing PR
         github_ops.check_gh_auth.return_value = True
@@ -580,6 +662,7 @@ class TestErrorHandling:
             workflow_mode=WorkflowMode.GITHUB,
             issue_id="123",
             issue_name="test-issue",
+        interactive=False,
         )
 
         result = phase.execute()
@@ -587,8 +670,10 @@ class TestErrorHandling:
         assert result.status == PhaseStatus.FAILED
         assert "failed" in result.message.lower() or "error" in result.message.lower()
 
-    def test_execute_fails_when_not_authenticated(self, tmp_path: Path) -> None:
+    def test_execute_fails_when_not_authenticated(self, tmp_path: Path, monkeypatch) -> None:
         """測試當 gh 未登入時，execute() 正確回傳失敗狀態"""
+        monkeypatch.chdir(tmp_path)
+
         # Setup issue directory structure
         spec_file = tmp_path / ".cafe" / "issues" / "test-issue" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
@@ -596,9 +681,12 @@ class TestErrorHandling:
 
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
+
         git_ops = MagicMock(spec=GitOperations)
+        git_ops.get_current_branch.return_value = "test-issue"
+        git_ops.get_main_branch.return_value = "main"
+
         github_ops = MagicMock(spec=GitHubOps)
-        # check_gh_auth() returns False (not authenticated)
         github_ops.check_gh_auth.return_value = False
 
         phase = PRPhase(
@@ -608,6 +696,7 @@ class TestErrorHandling:
             github_ops=github_ops,
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
+            interactive=False,
         )
 
         # Execute
@@ -620,9 +709,11 @@ class TestErrorHandling:
         git_ops.push.assert_not_called()
         github_ops.create_pr.assert_not_called()
 
-    def test_execute_handles_github_error_from_check_auth(self, tmp_path: Path) -> None:
+    def test_execute_handles_github_error_from_check_auth(self, tmp_path: Path, monkeypatch) -> None:
         """測試當 check_gh_auth() 拋出 GitHubError 時，execute() 正確處理並回傳錯誤訊息"""
         from cafe.utils.github import GitHubError
+
+        monkeypatch.chdir(tmp_path)
 
         # Setup issue directory structure
         spec_file = tmp_path / ".cafe" / "issues" / "test-issue" / "spec" / "spec.md"
@@ -631,9 +722,12 @@ class TestErrorHandling:
 
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
+
         git_ops = MagicMock(spec=GitOperations)
+        git_ops.get_current_branch.return_value = "test-issue"
+        git_ops.get_main_branch.return_value = "main"
+
         github_ops = MagicMock(spec=GitHubOps)
-        # check_gh_auth() raises GitHubError
         github_ops.check_gh_auth.side_effect = GitHubError("Network error")
 
         phase = PRPhase(
@@ -643,6 +737,7 @@ class TestErrorHandling:
             github_ops=github_ops,
             spec_file=str(spec_file),
             workflow_mode=WorkflowMode.LOCAL,
+            interactive=False,
         )
 
         # Execute
@@ -660,8 +755,10 @@ class TestErrorHandling:
 class TestIssueNameBranchNaming:
     """Test issue_name parameter for branch naming."""
 
-    def test_branch_name_from_issue_name(self, tmp_path: Path) -> None:
+    def test_branch_name_from_issue_name(self, tmp_path: Path, monkeypatch) -> None:
         """測試使用 issue_name 參數產生 branch name"""
+        monkeypatch.chdir(tmp_path)
+
         # Setup issue directory structure
         spec_file = tmp_path / ".cafe" / "issues" / "my-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
@@ -677,11 +774,14 @@ class TestIssueNameBranchNaming:
         permission_handler = MagicMock(spec=PermissionHandler)
 
         git_ops = MagicMock(spec=GitOperations)
-        github_ops = MagicMock(spec=GitHubOps)
-        github_ops.get_pr_for_branch.return_value = None  # No existing PR
-        github_ops.create_pr.return_value = "https://github.com/user/repo/pull/1"
+        git_ops.get_current_branch.return_value = "my-feature"
         git_ops.get_main_branch.return_value = "main"
         git_ops.get_commits_between.return_value = "commit1"
+
+        github_ops = MagicMock(spec=GitHubOps)
+        github_ops.check_gh_auth.return_value = True
+        github_ops.get_pr_for_branch.return_value = None
+        github_ops.create_pr.return_value = "https://github.com/user/repo/pull/1"
 
         phase = PRPhase(
             agent_manager=agent_manager,
@@ -693,6 +793,7 @@ class TestIssueNameBranchNaming:
             issue_name="my-feature",
             custom_title="Test PR",
             custom_body="Test body",
+            interactive=False,
         )
 
         result = phase.execute()
@@ -701,8 +802,10 @@ class TestIssueNameBranchNaming:
         git_ops.push.assert_called_once_with("my-feature", set_upstream=True, force=False)
         assert result.status == PhaseStatus.COMPLETED
 
-    def test_branch_name_fallback_to_filename(self, tmp_path: Path) -> None:
+    def test_branch_name_fallback_to_filename(self, tmp_path: Path, monkeypatch) -> None:
         """測試當沒有 issue_name 時回退到從檔名提取"""
+        monkeypatch.chdir(tmp_path)
+
         # Setup directory structure with dated filename
         spec_file = tmp_path / ".cafe" / "issues" / "feature" / "spec" / "20250101-feature.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
@@ -718,11 +821,14 @@ class TestIssueNameBranchNaming:
         permission_handler = MagicMock(spec=PermissionHandler)
 
         git_ops = MagicMock(spec=GitOperations)
-        github_ops = MagicMock(spec=GitHubOps)
-        github_ops.get_pr_for_branch.return_value = None  # No existing PR
-        github_ops.create_pr.return_value = "https://github.com/user/repo/pull/1"
+        git_ops.get_current_branch.return_value = "feature"
         git_ops.get_main_branch.return_value = "main"
         git_ops.get_commits_between.return_value = "commit1"
+
+        github_ops = MagicMock(spec=GitHubOps)
+        github_ops.check_gh_auth.return_value = True
+        github_ops.get_pr_for_branch.return_value = None
+        github_ops.create_pr.return_value = "https://github.com/user/repo/pull/1"
 
         phase = PRPhase(
             agent_manager=agent_manager,
@@ -734,6 +840,7 @@ class TestIssueNameBranchNaming:
             custom_title="Test PR",
             custom_body="Test body",
             # No issue_name provided
+            interactive=False,
         )
 
         result = phase.execute()
@@ -746,8 +853,10 @@ class TestIssueNameBranchNaming:
 class TestDraftPRCreation:
     """Test draft PR creation."""
 
-    def test_draft_pr_default_true(self, tmp_path: Path) -> None:
+    def test_draft_pr_default_true(self, tmp_path: Path, monkeypatch) -> None:
         """測試預設創建 draft PR (draft=True)"""
+        monkeypatch.chdir(tmp_path)
+
         # Setup issue directory structure
         spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
@@ -763,11 +872,14 @@ class TestDraftPRCreation:
         permission_handler = MagicMock(spec=PermissionHandler)
 
         git_ops = MagicMock(spec=GitOperations)
-        github_ops = MagicMock(spec=GitHubOps)
-        github_ops.get_pr_for_branch.return_value = None  # No existing PR
-        github_ops.create_pr.return_value = "https://github.com/user/repo/pull/1"
+        git_ops.get_current_branch.return_value = "test-feature"
         git_ops.get_main_branch.return_value = "main"
         git_ops.get_commits_between.return_value = "commit1"
+
+        github_ops = MagicMock(spec=GitHubOps)
+        github_ops.check_gh_auth.return_value = True
+        github_ops.get_pr_for_branch.return_value = None
+        github_ops.create_pr.return_value = "https://github.com/user/repo/pull/1"
 
         phase = PRPhase(
             agent_manager=agent_manager,
@@ -780,6 +892,7 @@ class TestDraftPRCreation:
             draft=True,  # Default value
             custom_title="Test PR",
             custom_body="Test body",
+            interactive=False,
         )
 
         result = phase.execute()
@@ -790,8 +903,10 @@ class TestDraftPRCreation:
         assert call_args.kwargs['draft'] is True
         assert result.status == PhaseStatus.COMPLETED
 
-    def test_non_draft_pr(self, tmp_path: Path) -> None:
+    def test_non_draft_pr(self, tmp_path: Path, monkeypatch) -> None:
         """測試創建非 draft PR (draft=False)"""
+        monkeypatch.chdir(tmp_path)
+
         # Setup issue directory structure
         spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
@@ -807,11 +922,14 @@ class TestDraftPRCreation:
         permission_handler = MagicMock(spec=PermissionHandler)
 
         git_ops = MagicMock(spec=GitOperations)
-        github_ops = MagicMock(spec=GitHubOps)
-        github_ops.get_pr_for_branch.return_value = None  # No existing PR
-        github_ops.create_pr.return_value = "https://github.com/user/repo/pull/1"
+        git_ops.get_current_branch.return_value = "test-feature"
         git_ops.get_main_branch.return_value = "main"
         git_ops.get_commits_between.return_value = "commit1"
+
+        github_ops = MagicMock(spec=GitHubOps)
+        github_ops.check_gh_auth.return_value = True
+        github_ops.get_pr_for_branch.return_value = None
+        github_ops.create_pr.return_value = "https://github.com/user/repo/pull/1"
 
         phase = PRPhase(
             agent_manager=agent_manager,
@@ -824,6 +942,7 @@ class TestDraftPRCreation:
             draft=False,
             custom_title="Test PR",
             custom_body="Test body",
+            interactive=False,
         )
 
         result = phase.execute()
@@ -838,8 +957,10 @@ class TestDraftPRCreation:
 class TestCustomTitleAndBody:
     """Test custom title and body parameters."""
 
-    def test_custom_title_and_body(self, tmp_path: Path) -> None:
+    def test_custom_title_and_body(self, tmp_path: Path, monkeypatch) -> None:
         """測試使用自訂 title 和 body（會寫入檔案後再讀取）"""
+        monkeypatch.chdir(tmp_path)
+
         # Setup issue directory structure
         spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
@@ -855,11 +976,14 @@ class TestCustomTitleAndBody:
         permission_handler = MagicMock(spec=PermissionHandler)
 
         git_ops = MagicMock(spec=GitOperations)
-        github_ops = MagicMock(spec=GitHubOps)
-        github_ops.get_pr_for_branch.return_value = None  # No existing PR
-        github_ops.create_pr.return_value = "https://github.com/user/repo/pull/1"
+        git_ops.get_current_branch.return_value = "test-feature"
         git_ops.get_main_branch.return_value = "main"
         git_ops.get_commits_between.return_value = "commit1"
+
+        github_ops = MagicMock(spec=GitHubOps)
+        github_ops.check_gh_auth.return_value = True
+        github_ops.get_pr_for_branch.return_value = None
+        github_ops.create_pr.return_value = "https://github.com/user/repo/pull/1"
 
         custom_title = "Custom PR Title"
         custom_body = "Custom PR Body\nWith multiple lines"
@@ -874,6 +998,7 @@ class TestCustomTitleAndBody:
             issue_name="test-feature",
             custom_title=custom_title,
             custom_body=custom_body,
+            interactive=False,
         )
 
         result = phase.execute()
@@ -894,8 +1019,10 @@ class TestCustomTitleAndBody:
         assert call_args.kwargs['body'] == custom_body
         assert result.status == PhaseStatus.COMPLETED
 
-    def test_auto_generate_title_and_body(self, tmp_path: Path) -> None:
+    def test_auto_generate_title_and_body(self, tmp_path: Path, monkeypatch) -> None:
         """測試自動產生 title 和 body (custom_title=None, custom_body=None)"""
+        monkeypatch.chdir(tmp_path)
+
         # Setup issue directory structure
         spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
@@ -916,11 +1043,14 @@ class TestCustomTitleAndBody:
         permission_handler = MagicMock(spec=PermissionHandler)
 
         git_ops = MagicMock(spec=GitOperations)
-        github_ops = MagicMock(spec=GitHubOps)
-        github_ops.get_pr_for_branch.return_value = None  # No existing PR
-        github_ops.create_pr.return_value = "https://github.com/user/repo/pull/1"
+        git_ops.get_current_branch.return_value = "test-feature"
         git_ops.get_main_branch.return_value = "main"
         git_ops.get_commits_between.return_value = "commit1\ncommit2"
+
+        github_ops = MagicMock(spec=GitHubOps)
+        github_ops.check_gh_auth.return_value = True
+        github_ops.get_pr_for_branch.return_value = None
+        github_ops.create_pr.return_value = "https://github.com/user/repo/pull/1"
 
         # Mock agent to write title and body files
         def mock_agent_execute(agent_name, prompt, allowed_tools, allowed_directories=None):
@@ -966,8 +1096,10 @@ class TestCustomTitleAndBody:
 class TestPartialCustomTitleOrBody:
     """Test partial custom title or body (one provided, one generated)."""
 
-    def test_custom_title_only_body_generated(self, tmp_path: Path) -> None:
+    def test_custom_title_only_body_generated(self, tmp_path: Path, monkeypatch) -> None:
         """測試只提供 custom title，body 由 agent 生成"""
+        monkeypatch.chdir(tmp_path)
+
         # Setup issue directory structure
         spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
@@ -988,11 +1120,14 @@ class TestPartialCustomTitleOrBody:
         permission_handler = MagicMock(spec=PermissionHandler)
 
         git_ops = MagicMock(spec=GitOperations)
-        github_ops = MagicMock(spec=GitHubOps)
-        github_ops.get_pr_for_branch.return_value = None  # No existing PR
-        github_ops.create_pr.return_value = "https://github.com/user/repo/pull/1"
+        git_ops.get_current_branch.return_value = "test-feature"
         git_ops.get_main_branch.return_value = "main"
         git_ops.get_commits_between.return_value = "commit1\ncommit2"
+
+        github_ops = MagicMock(spec=GitHubOps)
+        github_ops.check_gh_auth.return_value = True
+        github_ops.get_pr_for_branch.return_value = None
+        github_ops.create_pr.return_value = "https://github.com/user/repo/pull/1"
 
         # Mock agent to write only body file (title is custom)
         def mock_agent_execute(agent_name, prompt, allowed_tools, allowed_directories=None):
@@ -1042,8 +1177,10 @@ class TestPartialCustomTitleOrBody:
         assert call_args.kwargs['title'] == "Custom Title"
         assert result.status == PhaseStatus.COMPLETED
 
-    def test_custom_body_only_title_generated(self, tmp_path: Path) -> None:
+    def test_custom_body_only_title_generated(self, tmp_path: Path, monkeypatch) -> None:
         """測試只提供 custom body，title 由 agent 生成"""
+        monkeypatch.chdir(tmp_path)
+
         # Setup issue directory structure
         spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
@@ -1064,11 +1201,14 @@ class TestPartialCustomTitleOrBody:
         permission_handler = MagicMock(spec=PermissionHandler)
 
         git_ops = MagicMock(spec=GitOperations)
-        github_ops = MagicMock(spec=GitHubOps)
-        github_ops.get_pr_for_branch.return_value = None  # No existing PR
-        github_ops.create_pr.return_value = "https://github.com/user/repo/pull/1"
+        git_ops.get_current_branch.return_value = "test-feature"
         git_ops.get_main_branch.return_value = "main"
         git_ops.get_commits_between.return_value = "commit1\ncommit2"
+
+        github_ops = MagicMock(spec=GitHubOps)
+        github_ops.check_gh_auth.return_value = True
+        github_ops.get_pr_for_branch.return_value = None
+        github_ops.create_pr.return_value = "https://github.com/user/repo/pull/1"
 
         # Mock agent to write only title file (body is custom)
         def mock_agent_execute(agent_name, prompt, allowed_tools, allowed_directories=None):
@@ -1123,8 +1263,10 @@ class TestPartialCustomTitleOrBody:
 class TestPRExistingFiles:
     """Test behavior when PR files already exist."""
 
-    def test_pr_exists_non_interactive_without_update_fails(self, tmp_path: Path) -> None:
+    def test_pr_exists_non_interactive_without_update_fails(self, tmp_path: Path, monkeypatch) -> None:
         """測試 PR 檔案已存在且非互動模式下沒有 --update 會失敗"""
+        monkeypatch.chdir(tmp_path)
+
         # Setup issue directory structure with existing PR files
         spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
@@ -1145,15 +1287,17 @@ class TestPRExistingFiles:
         permission_handler = MagicMock(spec=PermissionHandler)
 
         git_ops = MagicMock(spec=GitOperations)
+        git_ops.get_current_branch.return_value = "test-feature"
+        git_ops.get_main_branch.return_value = "main"
+
         github_ops = MagicMock(spec=GitHubOps)
-        # Mock existing PR on GitHub
+        github_ops.check_gh_auth.return_value = True
         github_ops.get_pr_for_branch.return_value = {
             "number": 123,
             "url": "https://github.com/user/repo/pull/123",
             "title": "Existing Title",
             "body": "Existing Body"
         }
-        git_ops.get_main_branch.return_value = "main"
 
         phase = PRPhase(
             agent_manager=agent_manager,
@@ -1175,8 +1319,10 @@ class TestPRExistingFiles:
         assert result.status == PhaseStatus.FAILED
         assert "--update" in result.message
 
-    def test_pr_exists_with_update_flag_regenerates(self, tmp_path: Path) -> None:
+    def test_pr_exists_with_update_flag_regenerates(self, tmp_path: Path, monkeypatch) -> None:
         """測試 PR 檔案已存在且使用 --update 會重新生成"""
+        monkeypatch.chdir(tmp_path)
+
         # Setup issue directory structure with existing PR files
         spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
@@ -1202,16 +1348,18 @@ class TestPRExistingFiles:
         permission_handler = MagicMock(spec=PermissionHandler)
 
         git_ops = MagicMock(spec=GitOperations)
+        git_ops.get_current_branch.return_value = "test-feature"
+        git_ops.get_main_branch.return_value = "main"
+        git_ops.get_commits_between.return_value = "commit1\ncommit2"
+
         github_ops = MagicMock(spec=GitHubOps)
-        # Mock existing PR on GitHub
+        github_ops.check_gh_auth.return_value = True
         github_ops.get_pr_for_branch.return_value = {
             "number": 123,
             "url": "https://github.com/user/repo/pull/123",
             "title": "Old Title",
             "body": "Old Body"
         }
-        git_ops.get_main_branch.return_value = "main"
-        git_ops.get_commits_between.return_value = "commit1\ncommit2"
 
         # Mock agent to write new files
         def mock_agent_execute(agent_name, prompt, allowed_tools, allowed_directories=None):
@@ -1249,8 +1397,10 @@ class TestPRExistingFiles:
             body="New Generated Body"
         )
 
-    def test_pr_exists_with_update_and_custom_values(self, tmp_path: Path) -> None:
+    def test_pr_exists_with_update_and_custom_values(self, tmp_path: Path, monkeypatch) -> None:
         """測試 PR 檔案已存在，使用 --update 和 custom title/body 會覆蓋舊檔案"""
+        monkeypatch.chdir(tmp_path)
+
         # Setup issue directory structure with existing PR files
         spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
@@ -1271,15 +1421,17 @@ class TestPRExistingFiles:
         permission_handler = MagicMock(spec=PermissionHandler)
 
         git_ops = MagicMock(spec=GitOperations)
+        git_ops.get_current_branch.return_value = "test-feature"
+        git_ops.get_main_branch.return_value = "main"
+
         github_ops = MagicMock(spec=GitHubOps)
-        # Mock existing PR on GitHub
+        github_ops.check_gh_auth.return_value = True
         github_ops.get_pr_for_branch.return_value = {
             "number": 123,
             "url": "https://github.com/user/repo/pull/123",
             "title": "Old Title",
             "body": "Old Body"
         }
-        git_ops.get_main_branch.return_value = "main"
 
         phase = PRPhase(
             agent_manager=agent_manager,
@@ -1318,8 +1470,10 @@ class TestPRExistingFiles:
 class TestPRURLInResult:
     """測試 PR URL 是否包含在結果中"""
 
-    def test_pr_url_included_in_result(self, tmp_path: Path) -> None:
+    def test_pr_url_included_in_result(self, tmp_path: Path, monkeypatch) -> None:
         """測試 PR 建立成功後，結果中包含 PR URL"""
+        monkeypatch.chdir(tmp_path)
+
         spec_file = tmp_path / ".cafe" / "issues" / "test-issue" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Feature\n\nAdd new feature")
@@ -1334,11 +1488,14 @@ class TestPRURLInResult:
         permission_handler = MagicMock(spec=PermissionHandler)
 
         git_ops = MagicMock(spec=GitOperations)
-        github_ops = MagicMock(spec=GitHubOps)
-        github_ops.get_pr_for_branch.return_value = None  # No existing PR
-        github_ops.create_pr.return_value = "https://github.com/user/repo/pull/42"
+        git_ops.get_current_branch.return_value = "test-issue"
         git_ops.get_main_branch.return_value = "main"
         git_ops.get_commits_between.return_value = "commit1\ncommit2"
+
+        github_ops = MagicMock(spec=GitHubOps)
+        github_ops.check_gh_auth.return_value = True
+        github_ops.get_pr_for_branch.return_value = None
+        github_ops.create_pr.return_value = "https://github.com/user/repo/pull/42"
 
         phase = PRPhase(
             agent_manager=agent_manager,
@@ -1350,6 +1507,7 @@ class TestPRURLInResult:
             issue_name="test-issue",
             custom_title="Test PR",
             custom_body="Test body",
+            interactive=False,
         )
 
         result = phase.execute()
@@ -1389,6 +1547,7 @@ class TestBaseBranchFromConfig:
         git_ops = MagicMock(spec=GitOperations)
         git_ops.get_current_branch.return_value = "fix-branch"
         github_ops = MagicMock(spec=GitHubOps)
+        github_ops.check_gh_auth.return_value = True
         github_ops.get_pr_for_branch.return_value = None  # No existing PR
         github_ops.create_pr.return_value = "https://github.com/user/repo/pull/1"
         git_ops.get_main_branch.return_value = "main"
@@ -1404,6 +1563,7 @@ class TestBaseBranchFromConfig:
             issue_name="fix-branch",
             custom_title="Test PR",
             custom_body="Test body",
+        interactive=False,
         )
 
         result = phase.execute()
@@ -1414,8 +1574,10 @@ class TestBaseBranchFromConfig:
         assert call_args.kwargs['base'] == "develop"
         assert result.status == PhaseStatus.COMPLETED
 
-    def test_base_branch_default_when_config_missing(self, tmp_path: Path) -> None:
+    def test_base_branch_default_when_config_missing(self, tmp_path: Path, monkeypatch) -> None:
         """測試當 config.yaml 不存在時，應使用預設值 'main'"""
+        monkeypatch.chdir(tmp_path)
+
         # Setup issue directory structure (no config.yaml)
         spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
@@ -1431,11 +1593,14 @@ class TestBaseBranchFromConfig:
         permission_handler = MagicMock(spec=PermissionHandler)
 
         git_ops = MagicMock(spec=GitOperations)
-        github_ops = MagicMock(spec=GitHubOps)
-        github_ops.get_pr_for_branch.return_value = None  # No existing PR
-        github_ops.create_pr.return_value = "https://github.com/user/repo/pull/1"
+        git_ops.get_current_branch.return_value = "test-feature"
         git_ops.get_main_branch.return_value = "main"
         git_ops.get_commits_between.return_value = "commit1"
+
+        github_ops = MagicMock(spec=GitHubOps)
+        github_ops.check_gh_auth.return_value = True
+        github_ops.get_pr_for_branch.return_value = None
+        github_ops.create_pr.return_value = "https://github.com/user/repo/pull/1"
 
         phase = PRPhase(
             agent_manager=agent_manager,
@@ -1447,6 +1612,7 @@ class TestBaseBranchFromConfig:
             issue_name="test-feature",
             custom_title="Test PR",
             custom_body="Test body",
+            interactive=False,
         )
 
         result = phase.execute()
@@ -1457,8 +1623,10 @@ class TestBaseBranchFromConfig:
         assert call_args.kwargs['base'] == "main"
         assert result.status == PhaseStatus.COMPLETED
 
-    def test_base_branch_default_when_config_no_base_branch_field(self, tmp_path: Path) -> None:
+    def test_base_branch_default_when_config_no_base_branch_field(self, tmp_path: Path, monkeypatch) -> None:
         """測試當 config.yaml 存在但無 base_branch 欄位時，應使用預設值 'main'"""
+        monkeypatch.chdir(tmp_path)
+
         # Setup issue directory structure
         spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
@@ -1478,11 +1646,14 @@ class TestBaseBranchFromConfig:
         permission_handler = MagicMock(spec=PermissionHandler)
 
         git_ops = MagicMock(spec=GitOperations)
-        github_ops = MagicMock(spec=GitHubOps)
-        github_ops.get_pr_for_branch.return_value = None  # No existing PR
-        github_ops.create_pr.return_value = "https://github.com/user/repo/pull/1"
+        git_ops.get_current_branch.return_value = "test-feature"
         git_ops.get_main_branch.return_value = "main"
         git_ops.get_commits_between.return_value = "commit1"
+
+        github_ops = MagicMock(spec=GitHubOps)
+        github_ops.check_gh_auth.return_value = True
+        github_ops.get_pr_for_branch.return_value = None
+        github_ops.create_pr.return_value = "https://github.com/user/repo/pull/1"
 
         phase = PRPhase(
             agent_manager=agent_manager,
@@ -1494,6 +1665,7 @@ class TestBaseBranchFromConfig:
             issue_name="test-feature",
             custom_title="Test PR",
             custom_body="Test body",
+            interactive=False,
         )
 
         result = phase.execute()
@@ -1504,8 +1676,10 @@ class TestBaseBranchFromConfig:
         assert call_args.kwargs['base'] == "main"
         assert result.status == PhaseStatus.COMPLETED
 
-    def test_cli_base_param_overrides_config(self, tmp_path: Path) -> None:
+    def test_cli_base_param_overrides_config(self, tmp_path: Path, monkeypatch) -> None:
         """測試 CLI --base 參數能覆蓋 config.yaml 中的值（CLI 參數優先）"""
+        monkeypatch.chdir(tmp_path)
+
         # Setup issue directory structure
         spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
@@ -1525,11 +1699,14 @@ class TestBaseBranchFromConfig:
         permission_handler = MagicMock(spec=PermissionHandler)
 
         git_ops = MagicMock(spec=GitOperations)
-        github_ops = MagicMock(spec=GitHubOps)
-        github_ops.get_pr_for_branch.return_value = None  # No existing PR
-        github_ops.create_pr.return_value = "https://github.com/user/repo/pull/1"
+        git_ops.get_current_branch.return_value = "test-feature"
         git_ops.get_main_branch.return_value = "main"
         git_ops.get_commits_between.return_value = "commit1"
+
+        github_ops = MagicMock(spec=GitHubOps)
+        github_ops.check_gh_auth.return_value = True
+        github_ops.get_pr_for_branch.return_value = None
+        github_ops.create_pr.return_value = "https://github.com/user/repo/pull/1"
 
         # Pass base_branch="staging" via CLI parameter (should override config)
         phase = PRPhase(
@@ -1543,6 +1720,7 @@ class TestBaseBranchFromConfig:
             custom_title="Test PR",
             custom_body="Test body",
             base_branch="staging",  # CLI parameter overrides config
+            interactive=False,
         )
 
         result = phase.execute()
@@ -1586,6 +1764,7 @@ class TestIssueCommentIntegration:
         git_ops.get_commits_between.return_value = "commit1\ncommit2"
 
         github_ops = MagicMock(spec=GitHubOps)
+        github_ops.check_gh_auth.return_value = True
         github_ops.get_pr_for_branch.return_value = None  # No existing PR
         github_ops.create_pr.return_value = "https://github.com/user/repo/pull/42"
 
@@ -1599,6 +1778,7 @@ class TestIssueCommentIntegration:
             issue_name="test-feature",
             custom_title="Test PR",
             custom_body="Test body",
+        interactive=False,
         )
 
         result = phase.execute()
@@ -1639,6 +1819,7 @@ class TestIssueCommentIntegration:
         git_ops.get_commits_between.return_value = "commit1\ncommit2"
 
         github_ops = MagicMock(spec=GitHubOps)
+        github_ops.check_gh_auth.return_value = True
         github_ops.get_pr_for_branch.return_value = None  # No existing PR
         github_ops.create_pr.return_value = "https://github.com/user/repo/pull/42"
 
@@ -1652,6 +1833,7 @@ class TestIssueCommentIntegration:
             issue_name="test-feature",
             custom_title="Test PR",
             custom_body="Test body",
+        interactive=False,
         )
 
         result = phase.execute()
@@ -1692,6 +1874,7 @@ class TestIssueCommentIntegration:
         git_ops.get_commits_between.return_value = "commit1\ncommit2"
 
         github_ops = MagicMock(spec=GitHubOps)
+        github_ops.check_gh_auth.return_value = True
         github_ops.get_pr_for_branch.return_value = None  # No existing PR
         github_ops.create_pr.return_value = "https://github.com/user/repo/pull/42"
         # Simulate issue comment failure
@@ -1707,6 +1890,7 @@ class TestIssueCommentIntegration:
             issue_name="test-feature",
             custom_title="Test PR",
             custom_body="Test body",
+        interactive=False,
         )
 
         result = phase.execute()
@@ -1721,10 +1905,20 @@ class TestIssueCommentIntegration:
 class TestInteractiveModeBehavior:
     """Test interactive mode specific behaviors."""
 
-    def test_interactive_mode_auto_generates_without_asking(self, tmp_path: Path) -> None:
+    @patch('cafe.phases.pr_phase.is_github_repo')
+    @patch('cafe.phases.pr_phase.prompt_confirm')
+    def test_interactive_mode_auto_generates_without_asking(
+        self, mock_prompt_confirm, mock_is_github_repo, tmp_path: Path, monkeypatch
+    ) -> None:
         """
         測試互動模式下，若無 --title 或 --body，應直接由 agent 生成，不再詢問。
         """
+        monkeypatch.chdir(tmp_path)
+
+        # Mock GitHub repo and auto_create prompt
+        mock_is_github_repo.return_value = True
+        mock_prompt_confirm.return_value = True
+
         # Setup
         spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
@@ -1741,15 +1935,16 @@ class TestInteractiveModeBehavior:
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 
         permission_handler = MagicMock(spec=PermissionHandler)
-        git_ops = MagicMock(spec=GitOperations)
-        github_ops = MagicMock(spec=GitHubOps)
 
+        git_ops = MagicMock(spec=GitOperations)
+        git_ops.get_current_branch.return_value = "test-feature"
+        git_ops.get_main_branch.return_value = "main"
+        git_ops.get_commits_between.return_value = "commit1"
+
+        github_ops = MagicMock(spec=GitHubOps)
         github_ops.get_pr_for_branch.return_value = None
         github_ops.create_pr.return_value = "https://github.com/user/repo/pull/1"
         github_ops.check_gh_auth.return_value = True
-        git_ops.get_main_branch.return_value = "main"
-        git_ops.get_commits_between.return_value = "commit1"
-        git_ops.get_current_branch.return_value = "test-feature"
 
         # Mock agent to write title and body files
         def mock_agent_execute(agent_name, prompt, allowed_tools, allowed_directories=None):

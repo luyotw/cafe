@@ -14,6 +14,7 @@ from cafe.core.permission import PermissionHandler
 from cafe.core.phase import Phase
 from cafe.core.types import PhaseResult, PhaseStatus, WorkflowMode
 from cafe.ui.inquirer_prompts import prompt_confirm
+from cafe.utils.git_utils import is_github_repo
 from cafe.utils.github import GitHubOps, GitHubError
 
 
@@ -230,9 +231,45 @@ class PRPhase(Phase):
             Phase result
         """
         try:
-            # Check if local review mode is enabled
+            # Prompt for auto_create if not set (only in interactive mode)
             config_file = self.issue_dir / "issue.yaml"
             pr_auto_create = self._get_issue_config_value(config_file, "pr.auto_create")
+
+            if pr_auto_create is None:
+                if self.interactive:
+                    # Interactive mode: ask user
+                    from rich.console import Console
+
+                    console = Console()
+                    console.print()
+
+                    if is_github_repo():
+                        # Ask user if they want auto PR creation
+                        auto_create_pr = prompt_confirm(
+                            "Automatically create PR on GitHub after development?", default=True
+                        )
+                        pr_auto_create = auto_create_pr
+                    else:
+                        # Non-GitHub repo: disable PR creation
+                        pr_auto_create = False
+
+                    # Save the choice to issue.yaml
+                    if config_file.exists():
+                        with open(config_file, 'r', encoding='utf-8') as f:
+                            config_data = yaml.safe_load(f) or {}
+                    else:
+                        config_data = {}
+
+                    if "pr" not in config_data:
+                        config_data["pr"] = {}
+                    config_data["pr"]["auto_create"] = pr_auto_create
+
+                    config_file.parent.mkdir(parents=True, exist_ok=True)
+                    with open(config_file, 'w', encoding='utf-8') as f:
+                        yaml.dump(config_data, f, default_flow_style=False, allow_unicode=True)
+                else:
+                    # Non-interactive mode: default to True (GitHub PR mode)
+                    pr_auto_create = True
 
             # If pr.auto_create is False, use local review mode
             if pr_auto_create is False:
