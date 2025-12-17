@@ -7,7 +7,6 @@ import sys
 from pathlib import Path
 from typing import List, Optional
 
-from InquirerPy import inquirer
 import typer
 
 from cafe.ui.inquirer_prompts import prompt_confirm, prompt_list, prompt_text
@@ -3087,12 +3086,13 @@ def agent_rm() -> None:
     agents_dir = Path.cwd() / ".cafe" / "agents"
 
     # Prompt for role
-    role = inquirer.select(
-        message="Select agent role:",
-        choices=["pm", "developer", "reviewer"],
-    ).execute()
-    if not role:
-        console.print("[dim]Cancelled[/dim]")
+    try:
+        role = prompt_list(
+            message="Select agent role:",
+            choices=["pm", "developer", "reviewer"],
+        )
+    except (KeyboardInterrupt, EOFError):
+        console.print("\n[dim]Cancelled[/dim]")
         raise typer.Exit(0)
 
     # Get agents in this role
@@ -3107,12 +3107,13 @@ def agent_rm() -> None:
         raise typer.Exit(1)
 
     # Prompt for agent
-    agent_filename = inquirer.select(
-        message="Select agent to delete:",
-        choices=agent_files,
-    ).execute()
-    if not agent_filename:
-        console.print("[dim]Cancelled[/dim]")
+    try:
+        agent_filename = prompt_list(
+            message="Select agent to delete:",
+            choices=agent_files,
+        )
+    except (KeyboardInterrupt, EOFError):
+        console.print("\n[dim]Cancelled[/dim]")
         raise typer.Exit(0)
 
     agent_file = role_dir / agent_filename
@@ -3143,20 +3144,23 @@ def agent_create() -> None:
     agents_dir = Path.cwd() / ".cafe" / "agents"
 
     # Prompt for role
-    role = inquirer.select(
-        message="Select agent role:",
-        choices=["pm", "developer", "reviewer"],
-    ).execute()
-    if not role:
-        console.print("[dim]Cancelled[/dim]")
+    try:
+        role = prompt_list(
+            message="Select agent role:",
+            choices=["pm", "developer", "reviewer"],
+        )
+    except (KeyboardInterrupt, EOFError):
+        console.print("\n[dim]Cancelled[/dim]")
         raise typer.Exit(0)
 
     # Prompt for name
-    name = inquirer.text(
-        message="Agent name (eg: Michael):"
-    ).execute()
-    if not name:
-        console.print("[dim]Cancelled[/dim]")
+    try:
+        name = prompt_text(
+            message="Agent name (eg: Michael):",
+            default="",
+        )
+    except (KeyboardInterrupt, EOFError):
+        console.print("\n[dim]Cancelled[/dim]")
         raise typer.Exit(0)
 
     # Strip whitespace from name
@@ -3172,11 +3176,13 @@ def agent_create() -> None:
         raise typer.Exit(1)
 
     # Prompt for description
-    description = inquirer.text(
-        message="Description (eg: A senior Rust developer):"
-    ).execute()
-    if not description:
-        console.print("[dim]Cancelled[/dim]")
+    try:
+        description = prompt_text(
+            message="Description (eg: A senior Rust developer):",
+            default="",
+        )
+    except (KeyboardInterrupt, EOFError):
+        console.print("\n[dim]Cancelled[/dim]")
         raise typer.Exit(0)
 
     # Strip whitespace from description
@@ -3249,12 +3255,13 @@ def agent_edit() -> None:
     agents_dir = Path.cwd() / ".cafe" / "agents"
 
     # Prompt for role
-    role = inquirer.select(
-        message="Select agent role:",
-        choices=["pm", "developer", "reviewer"],
-    ).execute()
-    if not role:
-        console.print("[dim]Cancelled[/dim]")
+    try:
+        role = prompt_list(
+            message="Select agent role:",
+            choices=["pm", "developer", "reviewer"],
+        )
+    except (KeyboardInterrupt, EOFError):
+        console.print("\n[dim]Cancelled[/dim]")
         raise typer.Exit(0)
 
     # Get agents in this role
@@ -3269,12 +3276,13 @@ def agent_edit() -> None:
         raise typer.Exit(1)
 
     # Prompt for agent
-    agent_filename = inquirer.select(
-        message="Select agent to edit:",
-        choices=agent_files,
-    ).execute()
-    if not agent_filename:
-        console.print("[dim]Cancelled[/dim]")
+    try:
+        agent_filename = prompt_list(
+            message="Select agent to edit:",
+            choices=agent_files,
+        )
+    except (KeyboardInterrupt, EOFError):
+        console.print("\n[dim]Cancelled[/dim]")
         raise typer.Exit(0)
     agent_file = role_dir / agent_filename
 

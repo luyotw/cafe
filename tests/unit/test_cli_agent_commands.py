@@ -96,14 +96,12 @@ class TestAgentRmCommand:
         agent_file = agents_dir / "developer" / "John.md"
         agent_file.write_text("---\nname: John\n---\nRules")
 
-        # Mock InquirerPy 和 typer.confirm
-        with patch("cafe.ui.cli.inquirer.select") as mock_select, patch(
+        # Mock prompt_list 和 typer.confirm
+        with patch("cafe.ui.cli.prompt_list") as mock_prompt_list, patch(
             "typer.confirm", return_value=True
         ):
-            mock_select_instance = MagicMock()
             # 模擬使用者選擇角色和 agent
-            mock_select_instance.execute.side_effect = ["developer", "John.md"]
-            mock_select.return_value = mock_select_instance
+            mock_prompt_list.side_effect = ["developer", "John.md"]
 
             result = runner.invoke(app, ["agent", "rm"])
 
@@ -116,11 +114,9 @@ class TestAgentRmCommand:
         # 將工作目錄設定為 temp_cafe_dir 的父目錄
         monkeypatch.chdir(temp_cafe_dir.parent)
 
-        # Mock InquirerPy 選擇一個沒有 agents 的 role
-        with patch("cafe.ui.cli.inquirer.select") as mock_select:
-            mock_select_instance = MagicMock()
-            mock_select_instance.execute.return_value = "developer"
-            mock_select.return_value = mock_select_instance
+        # Mock prompt_list 選擇一個沒有 agents 的 role
+        with patch("cafe.ui.cli.prompt_list") as mock_prompt_list:
+            mock_prompt_list.return_value = "developer"
 
             result = runner.invoke(app, ["agent", "rm"])
 
@@ -137,14 +133,12 @@ class TestAgentRmCommand:
         agent_file = agents_dir / "developer" / "John.md"
         agent_file.write_text("---\nname: John\n---\nRules")
 
-        # Mock InquirerPy 和 typer.confirm (回傳 False)
-        with patch("cafe.ui.cli.inquirer.select") as mock_select, patch(
+        # Mock prompt_list 和 typer.confirm (回傳 False)
+        with patch("cafe.ui.cli.prompt_list") as mock_prompt_list, patch(
             "typer.confirm", return_value=False
         ):
-            mock_select_instance = MagicMock()
             # 模擬使用者選擇角色和 agent
-            mock_select_instance.execute.side_effect = ["developer", "John.md"]
-            mock_select.return_value = mock_select_instance
+            mock_prompt_list.side_effect = ["developer", "John.md"]
 
             result = runner.invoke(app, ["agent", "rm"])
 
@@ -161,19 +155,13 @@ class TestAgentCreateCommand:
         # 將工作目錄設定為 temp_cafe_dir 的父目錄
         monkeypatch.chdir(temp_cafe_dir.parent)
 
-        # Mock InquirerPy
-        with patch("cafe.ui.cli.inquirer.select") as mock_select, patch(
-            "cafe.ui.cli.inquirer.text"
-        ) as mock_text:
-            mock_select_instance = MagicMock()
-            mock_text_instance = MagicMock()
-
+        # Mock prompt_list and prompt_text
+        with patch("cafe.ui.cli.prompt_list") as mock_prompt_list, patch(
+            "cafe.ui.cli.prompt_text"
+        ) as mock_prompt_text:
             # 模擬使用者選擇角色和輸入 name/description
-            mock_select_instance.execute.return_value = "developer"
-            mock_text_instance.execute.side_effect = ["Michael", "A senior Rust developer"]
-
-            mock_select.return_value = mock_select_instance
-            mock_text.return_value = mock_text_instance
+            mock_prompt_list.return_value = "developer"
+            mock_prompt_text.side_effect = ["Michael", "A senior Rust developer"]
 
             # Mock subprocess.run for editor
             with patch("subprocess.run") as mock_run:
@@ -214,18 +202,12 @@ class TestAgentCreateCommand:
         agent_file = agents_dir / "developer" / "Michael.md"
         agent_file.write_text("---\nname: Michael\n---\nExisting")
 
-        # Mock InquirerPy
-        with patch("cafe.ui.cli.inquirer.select") as mock_select, patch(
-            "cafe.ui.cli.inquirer.text"
-        ) as mock_text:
-            mock_select_instance = MagicMock()
-            mock_text_instance = MagicMock()
-
-            mock_select_instance.execute.return_value = "developer"
-            mock_text_instance.execute.side_effect = ["Michael", "A developer"]
-
-            mock_select.return_value = mock_select_instance
-            mock_text.return_value = mock_text_instance
+        # Mock prompt_list and prompt_text
+        with patch("cafe.ui.cli.prompt_list") as mock_prompt_list, patch(
+            "cafe.ui.cli.prompt_text"
+        ) as mock_prompt_text:
+            mock_prompt_list.return_value = "developer"
+            mock_prompt_text.side_effect = ["Michael", "A developer"]
 
             result = runner.invoke(app, ["agent", "create"])
 
@@ -251,14 +233,10 @@ class TestAgentEditCommand:
         dev_dir.mkdir(parents=True, exist_ok=True)
         (dev_dir / "David.md").write_text("---\nname: David\n---\nDev rules")
 
-        # Mock InquirerPy
-        with patch("cafe.ui.cli.inquirer.select") as mock_select:
-            mock_select_instance = MagicMock()
-
+        # Mock prompt_list
+        with patch("cafe.ui.cli.prompt_list") as mock_prompt_list:
             # 模擬使用者選擇角色和 agent
-            mock_select_instance.execute.side_effect = ["developer", "David.md"]
-
-            mock_select.return_value = mock_select_instance
+            mock_prompt_list.side_effect = ["developer", "David.md"]
 
             # Mock subprocess.run for editor
             with patch("subprocess.run") as mock_run:
