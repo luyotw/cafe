@@ -74,27 +74,33 @@ class TestRmCommand:
         assert result.exit_code == 1
         assert "not found" in result.stdout
 
-    def test_rm_with_confirmation(self, temp_issues_dir):
+    @patch("cafe.ui.cli.prompt_confirm")
+    def test_rm_with_confirmation(self, mock_prompt_confirm, temp_issues_dir):
         """Test rm with confirmation prompt."""
         # Create test issue
         issue = temp_issues_dir / "test-issue"
         issue.mkdir()
 
-        # Confirm deletion
-        result = runner.invoke(app, ["rm", "test-issue"], input="y\n")
+        # Mock user confirming deletion
+        mock_prompt_confirm.return_value = True
+
+        result = runner.invoke(app, ["rm", "test-issue"])
 
         assert result.exit_code == 0
         assert "deleted successfully" in result.stdout
         assert not issue.exists()
 
-    def test_rm_cancelled(self, temp_issues_dir):
+    @patch("cafe.ui.cli.prompt_confirm")
+    def test_rm_cancelled(self, mock_prompt_confirm, temp_issues_dir):
         """Test rm when user cancels."""
         # Create test issue
         issue = temp_issues_dir / "test-issue"
         issue.mkdir()
 
-        # Cancel deletion
-        result = runner.invoke(app, ["rm", "test-issue"], input="n\n")
+        # Mock user cancelling deletion
+        mock_prompt_confirm.return_value = False
+
+        result = runner.invoke(app, ["rm", "test-issue"])
 
         assert result.exit_code == 0
         assert "Cancelled" in result.stdout
@@ -112,7 +118,8 @@ class TestRmCommand:
         assert "deleted successfully" in result.stdout
         assert not issue.exists()
 
-    def test_rm_multiple_issues(self, temp_issues_dir):
+    @patch("cafe.ui.cli.prompt_confirm")
+    def test_rm_multiple_issues(self, mock_prompt_confirm, temp_issues_dir):
         """Test rm with multiple issues."""
         # Create test issues
         issue1 = temp_issues_dir / "test-issue-1"
@@ -122,8 +129,11 @@ class TestRmCommand:
         issue3 = temp_issues_dir / "test-issue-3"
         issue3.mkdir()
 
+        # Mock user confirming deletion
+        mock_prompt_confirm.return_value = True
+
         # Delete multiple issues with confirmation
-        result = runner.invoke(app, ["rm", "test-issue-1", "test-issue-2", "test-issue-3"], input="y\n")
+        result = runner.invoke(app, ["rm", "test-issue-1", "test-issue-2", "test-issue-3"])
 
         assert result.exit_code == 0
         assert "About to delete 3 issue(s)" in result.stdout
@@ -151,14 +161,18 @@ class TestRmCommand:
         assert not issue1.exists()
         assert not issue2.exists()
 
-    def test_rm_multiple_issues_some_missing(self, temp_issues_dir):
+    @patch("cafe.ui.cli.prompt_confirm")
+    def test_rm_multiple_issues_some_missing(self, mock_prompt_confirm, temp_issues_dir):
         """Test rm with multiple issues where some don't exist."""
         # Create only one issue
         issue1 = temp_issues_dir / "test-issue-1"
         issue1.mkdir()
 
+        # Mock user confirming deletion
+        mock_prompt_confirm.return_value = True
+
         # Try to delete one existing and two non-existing
-        result = runner.invoke(app, ["rm", "test-issue-1", "nonexistent-1", "nonexistent-2"], input="y\n")
+        result = runner.invoke(app, ["rm", "test-issue-1", "nonexistent-1", "nonexistent-2"])
 
         assert result.exit_code == 0  # Still succeeds because at least one was deleted
         assert "not found" in result.stdout
@@ -176,7 +190,8 @@ class TestRmCommand:
         assert "nonexistent-1" in result.stdout
         assert "nonexistent-2" in result.stdout
 
-    def test_rm_multiple_issues_cancel(self, temp_issues_dir):
+    @patch("cafe.ui.cli.prompt_confirm")
+    def test_rm_multiple_issues_cancel(self, mock_prompt_confirm, temp_issues_dir):
         """Test rm with multiple issues when user cancels."""
         # Create test issues
         issue1 = temp_issues_dir / "test-issue-1"
@@ -184,8 +199,11 @@ class TestRmCommand:
         issue2 = temp_issues_dir / "test-issue-2"
         issue2.mkdir()
 
+        # Mock user cancelling deletion
+        mock_prompt_confirm.return_value = False
+
         # Cancel deletion
-        result = runner.invoke(app, ["rm", "test-issue-1", "test-issue-2"], input="n\n")
+        result = runner.invoke(app, ["rm", "test-issue-1", "test-issue-2"])
 
         assert result.exit_code == 0
         assert "Cancelled" in result.stdout

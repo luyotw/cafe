@@ -96,9 +96,9 @@ class TestAgentRmCommand:
         agent_file = agents_dir / "developer" / "John.md"
         agent_file.write_text("---\nname: John\n---\nRules")
 
-        # Mock prompt_list 和 typer.confirm
+        # Mock prompt_list 和 prompt_confirm
         with patch("cafe.ui.cli.prompt_list") as mock_prompt_list, patch(
-            "typer.confirm", return_value=True
+            "cafe.ui.cli.prompt_confirm", return_value=True
         ):
             # 模擬使用者選擇角色和 agent
             mock_prompt_list.side_effect = ["developer", "John.md"]

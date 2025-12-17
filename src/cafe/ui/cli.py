@@ -2646,12 +2646,17 @@ def config(
             raise typer.Exit(1)
 
     elif action == "reset":
-        confirm = typer.confirm("Reset configuration to defaults?")
+        try:
+            confirm = prompt_confirm("Reset configuration to defaults?", default=False)
+        except (KeyboardInterrupt, EOFError):
+            console.print("\n[dim]Cancelled[/dim]")
+            raise typer.Exit(0)
+
         if confirm:
             config_manager.reset()
             console.print("[green]✓ Configuration reset to defaults[/green]")
         else:
-            console.print("Cancelled")
+            console.print("[dim]Cancelled[/dim]")
 
     else:
         # Treat action as a key for backward compatibility
@@ -2779,7 +2784,12 @@ def remove_issue(
             console.print(f"  • {issue_name} [dim]({issue_path})[/dim]")
         console.print()
 
-        confirm = typer.confirm(f"Are you sure you want to delete {len(existing_issues)} issue(s)?")
+        try:
+            confirm = prompt_confirm(f"Are you sure you want to delete {len(existing_issues)} issue(s)?", default=False)
+        except (KeyboardInterrupt, EOFError):
+            console.print("\n[dim]Cancelled[/dim]")
+            raise typer.Exit(0)
+
         if not confirm:
             console.print("[dim]Cancelled[/dim]")
             raise typer.Exit(0)
@@ -3120,7 +3130,12 @@ def agent_rm() -> None:
     agent_path = f"{role}/{agent_filename}"
 
     # Confirm deletion
-    confirm = typer.confirm(f"Are you sure you want to delete agent '{agent_path}'?")
+    try:
+        confirm = prompt_confirm(f"Are you sure you want to delete agent '{agent_path}'?", default=False)
+    except (KeyboardInterrupt, EOFError):
+        console.print("\n[dim]Cancelled[/dim]")
+        raise typer.Exit(0)
+
     if not confirm:
         console.print("[dim]Cancelled[/dim]")
         raise typer.Exit(0)
