@@ -24,6 +24,25 @@ class TestPrepareAutoInitialization:
         """建立 mock git repository。"""
         monkeypatch.chdir(tmp_path)
 
+        # Create .cafe directory with config.yaml (required by prepare command)
+        cafe_dir = tmp_path / ".cafe"
+        cafe_dir.mkdir(parents=True)
+        (cafe_dir / "config.yaml").write_text("""
+agents:
+  pm:
+    name: Roger
+    cli: copilot
+  developer:
+    name: David
+    cli: copilot
+  reviewer:
+    name: Richard
+    cli: copilot
+
+auto:
+  max_review_iterations: 5
+""")
+
         # Create templates and agents at repo root
         (tmp_path / "templates" / "plan").mkdir(parents=True)
         (tmp_path / "templates" / "plan" / "default.md").write_text("# Template")

@@ -17,6 +17,24 @@ def temp_repo_dir(tmp_path):
     """建立臨時 repository 目錄."""
     cafe_dir = tmp_path / ".cafe"
     cafe_dir.mkdir(parents=True)
+
+    # Create config.yaml (required by prepare command)
+    (cafe_dir / "config.yaml").write_text("""
+agents:
+  pm:
+    name: Roger
+    cli: copilot
+  developer:
+    name: David
+    cli: copilot
+  reviewer:
+    name: Richard
+    cli: copilot
+
+auto:
+  max_review_iterations: 5
+""")
+
     return tmp_path
 
 

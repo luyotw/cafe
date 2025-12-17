@@ -548,7 +548,14 @@ def prepare(
     """
 
     try:
-        # 1. Get issue name (from argument or prompt)
+        # 1. Check if .cafe/config.yaml exists
+        config_file_path = Path(".cafe/config.yaml")
+        if not config_file_path.exists():
+            console.print("[red]Error: CAFE is not initialized in this repository.[/red]")
+            console.print("[yellow]Please run 'cafe init' first to set up CAFE.[/yellow]")
+            raise typer.Exit(1)
+
+        # 2. Get issue name (from argument or prompt)
         is_interactive = not issue_name  # Track if we're in interactive mode
         if not issue_name:
             issue_name = prompt_text("Issue name:")
@@ -557,7 +564,7 @@ def prepare(
                 raise typer.Exit(1)
             issue_name = issue_name.strip()
 
-        # 2. Initialize Git operations
+        # 3. Initialize Git operations
         try:
             git_ops = GitOperations()
         except Exception as e:
@@ -565,7 +572,7 @@ def prepare(
             console.print("[yellow]Hint: Run 'git init' to initialize a git repository.[/yellow]")
             raise typer.Exit(1)
 
-        # 3. Check for uncommitted changes (warning only)
+        # 4. Check for uncommitted changes (warning only)
         if check_uncommitted and git_ops.has_uncommitted_changes():
             console.print("[yellow]⚠️  Warning: You have uncommitted changes.[/yellow]")
             console.print(
@@ -579,11 +586,11 @@ def prepare(
                 console.print("[dim]Cancelled.[/dim]")
                 raise typer.Exit(0)
 
-        # 4. Determine base branch
+        # 5. Determine base branch
         if not base_branch:
             base_branch = git_ops.get_current_branch()
 
-        # 4.5. Determine worktree mode (interactive or from parameter)
+        # 6. Determine worktree mode (interactive or from parameter)
         use_worktree = False
         worktree_path = None
 
@@ -613,11 +620,11 @@ def prepare(
         console.print(f"Base branch: {base_branch}")
         console.print()
 
-        # 5. Initialize default templates and agents if not exists (in repo root)
+        # 7. Initialize default templates and agents if not exists (in repo root)
         cafe_dir = Path(".cafe")
         _ensure_default_content(cafe_dir)
 
-        # 6. Interactive prompts for spec/plan configuration (only in interactive mode)
+        # 8. Interactive prompts for spec/plan configuration (only in interactive mode)
         spec_config = {}
         plan_config = {}
         pr_config = {}
@@ -683,7 +690,7 @@ def prepare(
                 # Non-GitHub repo: disable PR creation
                 pr_config["auto_create"] = False
 
-        # 7. Prepare config data (but don't write yet)
+        # 9. Prepare config data (but don't write yet)
         feature_branch = issue_name
 
         # Load global config to get default auto settings
@@ -717,7 +724,7 @@ def prepare(
         if use_worktree:
             config_data["worktree_path"] = worktree_path
 
-        # 8. Perform Git operations (before writing config)
+        # 10. Perform Git operations (before writing config)
         if use_worktree:
             # Worktree mode - check if worktree already exists
             if git_ops.worktree_exists(worktree_path):
@@ -782,7 +789,7 @@ def prepare(
                 console.print(f"[dim]Creating and switching to branch '{feature_branch}'...[/dim]")
                 git_ops.create_branch(feature_branch)
 
-        # 9. Write config.yaml (after git operations succeed)
+        # 11. Write config.yaml (after git operations succeed)
         config_file = issue_dir / "config.yaml"
         with open(config_file, "w", encoding="utf-8") as f:
             yaml.dump(config_data, f, allow_unicode=True, default_flow_style=False)
@@ -791,7 +798,7 @@ def prepare(
         console.print(f"[green]✓ Config saved to {config_file}[/green]")
         console.print()
 
-        # 10. Display success message
+        # 12. Display success message
         console.print()
         console.print(f"[green]✓ Successfully prepared issue: {issue_name}[/green]")
         console.print(f"  📁 Directory: .cafe/issues/{issue_name}/")
