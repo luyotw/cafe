@@ -13,6 +13,7 @@ from cafe.core.git import GitOperations
 from cafe.core.permission import PermissionHandler
 from cafe.core.phase import Phase
 from cafe.core.types import PhaseResult, PhaseStatus, WorkflowMode
+from cafe.ui.inquirer_prompts import prompt_confirm
 from cafe.utils.github import GitHubOps, GitHubError
 
 
@@ -304,9 +305,18 @@ class PRPhase(Phase):
                         console.print(f"\n[yellow]⚠️  PR #{pr_number} already exists for branch '{branch_name}'.[/yellow]")
                         console.print(f"  URL: {pr_url}")
                         console.print()
-                        choice = input("Do you want to update it? [y/N]: ").strip().lower()
 
-                        if choice not in ['y', 'yes']:
+                        try:
+                            update_pr = prompt_confirm("Do you want to update it?", default=False)
+                        except (KeyboardInterrupt, EOFError):
+                            console.print("\n[dim]Cancelled[/dim]")
+                            return PhaseResult(
+                                status=PhaseStatus.COMPLETED,
+                                message=f"Pull Request #{pr_number} already exists (no update)",
+                                data={"pr_number": pr_number, "pr_url": pr_url, "branch": branch_name},
+                            )
+
+                        if not update_pr:
                             return PhaseResult(
                                 status=PhaseStatus.COMPLETED,
                                 message=f"Pull Request #{pr_number} already exists (no update)",
