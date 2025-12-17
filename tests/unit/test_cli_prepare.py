@@ -82,10 +82,22 @@ class TestPrepareCommand:
         mock_git_ops.branch_exists.assert_called_once_with("test-issue")
         mock_git_ops.create_branch.assert_called_once_with("test-issue")
 
-    def test_prepare_interactive_mode(self, temp_repo_dir, mock_git_ops):
+    @patch("cafe.ui.cli.prompt_confirm")
+    @patch("cafe.ui.template_selector.prompt_list")
+    @patch("cafe.ui.phase_prompts.prompt_list")
+    @patch("cafe.ui.cli.prompt_text")
+    def test_prepare_interactive_mode(self, mock_prompt_text, mock_phase_list, mock_template_list, mock_prompt_confirm, temp_repo_dir, mock_git_ops):
         """測試互動式輸入 issue name"""
-        # Simulate user input: issue name, worktree (n), input method (1), rigor (empty=medium), template (1), pr auto_create (y)
-        result = runner.invoke(app, ["prepare"], input="my-feature\nn\n1\n\n1\ny\n")
+        # Mock user inputs
+        mock_prompt_text.return_value = "my-feature"
+        mock_prompt_confirm.side_effect = [False, True]  # worktree (n), pr auto_create (y)
+        mock_phase_list.side_effect = [
+            "1. 手動輸入需求",  # input method (manual)
+            "Medium (中) - 平衡模式 [預設]\n   • 詢問重要細節和關鍵場景\n   • 在速度和精確度間取得平衡\n   • 適合：一般功能開發",  # rigor
+        ]
+        mock_template_list.return_value = "1. default"  # template
+
+        result = runner.invoke(app, ["prepare"])
 
         assert result.exit_code == 0
         assert "Successfully prepared issue: my-feature" in result.stdout
@@ -124,12 +136,14 @@ class TestPrepareCommand:
         mock_git_ops.checkout_branch.assert_called_once_with("existing-issue")
         mock_git_ops.create_branch.assert_not_called()
 
-    def test_prepare_with_uncommitted_changes_cancel(self, temp_repo_dir, mock_git_ops):
+    @patch("cafe.ui.cli.prompt_confirm")
+    def test_prepare_with_uncommitted_changes_cancel(self, mock_prompt_confirm, temp_repo_dir, mock_git_ops):
         """測試有未 commit 變更時取消"""
         mock_git_ops.has_uncommitted_changes.return_value = True
+        mock_prompt_confirm.return_value = False  # User cancels
 
         # User cancels when prompted
-        result = runner.invoke(app, ["prepare", "test-issue"], input="n\n")
+        result = runner.invoke(app, ["prepare", "test-issue"])
 
         assert result.exit_code == 0
         assert "Warning: You have uncommitted changes" in result.stdout
@@ -140,12 +154,14 @@ class TestPrepareCommand:
         assert not issue_dir.exists()
         mock_git_ops.create_branch.assert_not_called()
 
-    def test_prepare_with_uncommitted_changes_continue(self, temp_repo_dir, mock_git_ops):
+    @patch("cafe.ui.cli.prompt_confirm")
+    def test_prepare_with_uncommitted_changes_continue(self, mock_prompt_confirm, temp_repo_dir, mock_git_ops):
         """測試有未 commit 變更時繼續執行"""
         mock_git_ops.has_uncommitted_changes.return_value = True
+        mock_prompt_confirm.return_value = True  # User continues
 
         # User continues when prompted
-        result = runner.invoke(app, ["prepare", "test-issue"], input="y\n")
+        result = runner.invoke(app, ["prepare", "test-issue"])
 
         assert result.exit_code == 0
         assert "Warning: You have uncommitted changes" in result.stdout
@@ -326,11 +342,22 @@ class TestPrepareCommandWorktree:
             worktree_path, "test-branch", base_branch
         )
 
-    def test_prepare_interactive_worktree_prompt_yes(self, temp_repo_dir, mock_git_ops):
+    @patch("cafe.ui.cli.prompt_confirm")
+    @patch("cafe.ui.template_selector.prompt_list")
+    @patch("cafe.ui.phase_prompts.prompt_list")
+    @patch("cafe.ui.cli.prompt_text")
+    def test_prepare_interactive_worktree_prompt_yes(self, mock_prompt_text, mock_phase_list, mock_template_list, mock_prompt_confirm, temp_repo_dir, mock_git_ops):
         """測試互動模式詢問是否使用 worktree，使用者選擇 Yes"""
-        # 模擬使用者輸入：issue name, worktree (y), worktree path, input method (1), rigor (empty), template (1), pr auto_create (y)
-        user_input = "my-feature\ny\nworktrees/my-feature\n1\n\n1\ny\n"
-        result = runner.invoke(app, ["prepare"], input=user_input)
+        # Mock user inputs: issue name, worktree path
+        mock_prompt_text.side_effect = ["my-feature", "worktrees/my-feature"]
+        mock_prompt_confirm.side_effect = [True, True]  # worktree (y), pr auto_create (y)
+        mock_phase_list.side_effect = [
+            "1. 手動輸入需求",  # input method (manual)
+            "Medium (中) - 平衡模式 [預設]\n   • 詢問重要細節和關鍵場景\n   • 在速度和精確度間取得平衡\n   • 適合：一般功能開發",  # rigor
+        ]
+        mock_template_list.return_value = "1. default"
+
+        result = runner.invoke(app, ["prepare"])
 
         assert result.exit_code == 0
         # 驗證有詢問 worktree 相關問題
@@ -347,11 +374,22 @@ class TestPrepareCommandWorktree:
             config_data = yaml.safe_load(f)
             assert config_data["worktree_path"] == "worktrees/my-feature"
 
-    def test_prepare_interactive_worktree_prompt_no(self, temp_repo_dir, mock_git_ops):
+    @patch("cafe.ui.cli.prompt_confirm")
+    @patch("cafe.ui.template_selector.prompt_list")
+    @patch("cafe.ui.phase_prompts.prompt_list")
+    @patch("cafe.ui.cli.prompt_text")
+    def test_prepare_interactive_worktree_prompt_no(self, mock_prompt_text, mock_phase_list, mock_template_list, mock_prompt_confirm, temp_repo_dir, mock_git_ops):
         """測試互動模式詢問是否使用 worktree，使用者選擇 No"""
-        # 模擬使用者輸入：issue name, worktree (n), input method (1), rigor (empty), template (1), pr auto_create (y)
-        user_input = "normal-feature\nn\n1\n\n1\ny\n"
-        result = runner.invoke(app, ["prepare"], input=user_input)
+        # Mock user inputs
+        mock_prompt_text.return_value = "normal-feature"
+        mock_prompt_confirm.side_effect = [False, True]  # worktree (n), pr auto_create (y)
+        mock_phase_list.side_effect = [
+            "1. 手動輸入需求",  # input method (manual)
+            "Medium (中) - 平衡模式 [預設]\n   • 詢問重要細節和關鍵場景\n   • 在速度和精確度間取得平衡\n   • 適合：一般功能開發",  # rigor
+        ]
+        mock_template_list.return_value = "1. default"
+
+        result = runner.invoke(app, ["prepare"])
 
         assert result.exit_code == 0
         # 驗證呼叫 create_branch 而非 create_worktree
@@ -364,11 +402,22 @@ class TestPrepareCommandWorktree:
             config_data = yaml.safe_load(f)
             assert "worktree_path" not in config_data
 
-    def test_prepare_interactive_worktree_default_path_suggestion(self, temp_repo_dir, mock_git_ops):
+    @patch("cafe.ui.cli.prompt_confirm")
+    @patch("cafe.ui.template_selector.prompt_list")
+    @patch("cafe.ui.phase_prompts.prompt_list")
+    @patch("cafe.ui.cli.prompt_text")
+    def test_prepare_interactive_worktree_default_path_suggestion(self, mock_prompt_text, mock_phase_list, mock_template_list, mock_prompt_confirm, temp_repo_dir, mock_git_ops):
         """測試互動模式建議預設路徑 .cafe/worktrees/{issue-name}"""
-        # 模擬使用者輸入：issue name, worktree (y), default path (empty), input method (1), rigor (empty), template (1), pr auto_create (y)
-        user_input = "test-issue\ny\n\n1\n\n1\ny\n"
-        result = runner.invoke(app, ["prepare"], input=user_input)
+        # Mock user inputs: issue name, default path (empty string)
+        mock_prompt_text.side_effect = ["test-issue", ".cafe/worktrees/test-issue"]
+        mock_prompt_confirm.side_effect = [True, True]  # worktree (y), pr auto_create (y)
+        mock_phase_list.side_effect = [
+            "1. 手動輸入需求",  # input method (manual)
+            "Medium (中) - 平衡模式 [預設]\n   • 詢問重要細節和關鍵場景\n   • 在速度和精確度間取得平衡\n   • 適合：一般功能開發",  # rigor
+        ]
+        mock_template_list.return_value = "1. default"
+
+        result = runner.invoke(app, ["prepare"])
 
         assert result.exit_code == 0
         # 驗證輸出中有顯示預設路徑建議
@@ -458,10 +507,22 @@ class TestPrepareCommandWorktree:
         # 驗證 default template 存在
         assert (worktree_templates_dir / "plan" / "default.md").exists(), "default.md should exist in worktree"
 
-    def test_prepare_interactive_saves_pr_auto_create_true(self, temp_repo_dir, mock_git_ops):
+    @patch("cafe.ui.cli.prompt_confirm")
+    @patch("cafe.ui.template_selector.prompt_list")
+    @patch("cafe.ui.phase_prompts.prompt_list")
+    @patch("cafe.ui.cli.prompt_text")
+    def test_prepare_interactive_saves_pr_auto_create_true(self, mock_prompt_text, mock_phase_list, mock_template_list, mock_prompt_confirm, temp_repo_dir, mock_git_ops):
         """測試互動模式選擇自動建立 PR (yes)"""
-        # Simulate: issue name, worktree (n), input method (1), rigor (empty), template (1), pr auto_create (y)
-        result = runner.invoke(app, ["prepare"], input="test-issue\nn\n1\n\n1\ny\n")
+        # Mock user inputs
+        mock_prompt_text.return_value = "test-issue"
+        mock_prompt_confirm.side_effect = [False, True]  # worktree (n), pr auto_create (y)
+        mock_phase_list.side_effect = [
+            "1. 手動輸入需求",  # input method (manual)
+            "Medium (中) - 平衡模式 [預設]\n   • 詢問重要細節和關鍵場景\n   • 在速度和精確度間取得平衡\n   • 適合：一般功能開發",  # rigor
+        ]
+        mock_template_list.return_value = "1. default"
+
+        result = runner.invoke(app, ["prepare"])
 
         assert result.exit_code == 0
 
@@ -473,10 +534,22 @@ class TestPrepareCommandWorktree:
             assert "pr" in config_data
             assert config_data["pr"]["auto_create"] is True
 
-    def test_prepare_interactive_saves_pr_auto_create_false(self, temp_repo_dir, mock_git_ops):
+    @patch("cafe.ui.cli.prompt_confirm")
+    @patch("cafe.ui.template_selector.prompt_list")
+    @patch("cafe.ui.phase_prompts.prompt_list")
+    @patch("cafe.ui.cli.prompt_text")
+    def test_prepare_interactive_saves_pr_auto_create_false(self, mock_prompt_text, mock_phase_list, mock_template_list, mock_prompt_confirm, temp_repo_dir, mock_git_ops):
         """測試互動模式選擇不自動建立 PR (no)"""
-        # Simulate: issue name, worktree (n), input method (1), rigor (empty), template (1), pr auto_create (n)
-        result = runner.invoke(app, ["prepare"], input="test-issue\nn\n1\n\n1\nn\n")
+        # Mock user inputs
+        mock_prompt_text.return_value = "test-issue"
+        mock_prompt_confirm.side_effect = [False, False]  # worktree (n), pr auto_create (n)
+        mock_phase_list.side_effect = [
+            "1. 手動輸入需求",  # input method (manual)
+            "Medium (中) - 平衡模式 [預設]\n   • 詢問重要細節和關鍵場景\n   • 在速度和精確度間取得平衡\n   • 適合：一般功能開發",  # rigor
+        ]
+        mock_template_list.return_value = "1. default"
+
+        result = runner.invoke(app, ["prepare"])
 
         assert result.exit_code == 0
 

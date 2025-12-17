@@ -62,11 +62,13 @@ class TestInitCommandEnvironmentChecks:
 
         monkeypatch.chdir(tmp_path)
 
-        # Mock inquirer to avoid actual interaction
-        with patch("cafe.ui.cli.inquirer") as mock_inquirer:
+        # Mock prompt functions to avoid actual interaction
+        with patch("cafe.ui.cli.prompt_list") as mock_prompt_list, patch(
+            "cafe.ui.cli.prompt_text"
+        ) as mock_prompt_text:
             # 模擬用戶選擇
-            mock_inquirer.list_input.return_value = "claude"
-            mock_inquirer.text.return_value = ""
+            mock_prompt_list.return_value = "claude"
+            mock_prompt_text.return_value = ""
 
             # Mock list_available_agents to return test data
             with patch("cafe.ui.cli.list_available_agents") as mock_list_agents:
@@ -126,16 +128,12 @@ class TestInitCommandInteractiveFlow:
 
         monkeypatch.chdir(tmp_path)
 
-        # 模擬 InquirerPy 的 select 和 text 方法
-        with patch("cafe.ui.cli.inquirer.select") as mock_select, patch(
-            "cafe.ui.cli.inquirer.text"
-        ) as mock_text:
-            # 模擬每個角色的 CLI/agent 選擇和 model 輸入
-            mock_select_instance = MagicMock()
-            mock_text_instance = MagicMock()
-
-            # 設定 select 的返回值（CLI 和 agent 選擇）
-            mock_select_instance.execute.side_effect = [
+        # 模擬 prompt_list 和 prompt_text 方法
+        with patch("cafe.ui.cli.prompt_list") as mock_prompt_list, patch(
+            "cafe.ui.cli.prompt_text"
+        ) as mock_prompt_text:
+            # 設定 prompt_list 的返回值（CLI 和 agent 選擇）
+            mock_prompt_list.side_effect = [
                 "claude",  # PM CLI
                 "Roger: PM agent",  # PM agent
                 "gemini",  # Developer CLI
@@ -144,18 +142,15 @@ class TestInitCommandInteractiveFlow:
                 "Roger: PM agent",  # Reviewer agent
             ]
 
-            # 設定 text 的返回值（model 輸入）
-            mock_text_instance.execute.side_effect = ["", "sonnet", ""]
-
-            mock_select.return_value = mock_select_instance
-            mock_text.return_value = mock_text_instance
+            # 設定 prompt_text 的返回值（model 輸入）
+            mock_prompt_text.side_effect = ["", "sonnet", ""]
 
             _result = runner.invoke(app, ["init"])
 
-        # 驗證 select 被呼叫 6 次（3 個角色 × 2: CLI + agent）
-        assert mock_select.call_count == 6
-        # 驗證 text 被呼叫 3 次（3 個角色 × 1: model）
-        assert mock_text.call_count == 3
+        # 驗證 prompt_list 被呼叫 6 次（3 個角色 × 2: CLI + agent）
+        assert mock_prompt_list.call_count == 6
+        # 驗證 prompt_text 被呼叫 3 次（3 個角色 × 1: model）
+        assert mock_prompt_text.call_count == 3
 
     @patch("cafe.ui.cli.shutil.which")
     @patch("cafe.ui.cli.init_helpers.copy_data_directory")
@@ -178,10 +173,8 @@ class TestInitCommandInteractiveFlow:
         monkeypatch.chdir(tmp_path)
 
         # 模擬 Ctrl+C
-        with patch("cafe.ui.cli.inquirer.select") as mock_select:
-            mock_select_instance = MagicMock()
-            mock_select_instance.execute.side_effect = KeyboardInterrupt()
-            mock_select.return_value = mock_select_instance
+        with patch("cafe.ui.cli.prompt_list") as mock_prompt_list:
+            mock_prompt_list.side_effect = KeyboardInterrupt()
 
             result = runner.invoke(app, ["init"])
 
@@ -241,15 +234,12 @@ class TestInitCommandConfigSaving:
 
         monkeypatch.chdir(tmp_path)
 
-        # 模擬 InquirerPy 的 select 和 text 方法
-        with patch("cafe.ui.cli.inquirer.select") as mock_select, patch(
-            "cafe.ui.cli.inquirer.text"
-        ) as mock_text:
-            mock_select_instance = MagicMock()
-            mock_text_instance = MagicMock()
-
-            # 設定 select 的返回值（CLI 和 agent 選擇）
-            mock_select_instance.execute.side_effect = [
+        # 模擬 prompt_list 和 prompt_text 方法
+        with patch("cafe.ui.cli.prompt_list") as mock_prompt_list, patch(
+            "cafe.ui.cli.prompt_text"
+        ) as mock_prompt_text:
+            # 設定 prompt_list 的返回值（CLI 和 agent 選擇）
+            mock_prompt_list.side_effect = [
                 "copilot",  # PM CLI
                 "Roger: PM agent",  # PM agent
                 "claude",  # Developer CLI
@@ -258,11 +248,8 @@ class TestInitCommandConfigSaving:
                 "Richard: Reviewer agent",  # Reviewer agent
             ]
 
-            # 設定 text 的返回值（model 輸入）
-            mock_text_instance.execute.side_effect = ["", "sonnet", ""]
-
-            mock_select.return_value = mock_select_instance
-            mock_text.return_value = mock_text_instance
+            # 設定 prompt_text 的返回值（model 輸入）
+            mock_prompt_text.side_effect = ["", "sonnet", ""]
 
             _result = runner.invoke(app, ["init"])
 
@@ -304,15 +291,12 @@ class TestInitCommandConfigSaving:
 
         monkeypatch.chdir(tmp_path)
 
-        # 模擬 InquirerPy 的 select 和 text 方法
-        with patch("cafe.ui.cli.inquirer.select") as mock_select, patch(
-            "cafe.ui.cli.inquirer.text"
-        ) as mock_text:
-            mock_select_instance = MagicMock()
-            mock_text_instance = MagicMock()
-
+        # 模擬 prompt_list 和 prompt_text 方法
+        with patch("cafe.ui.cli.prompt_list") as mock_prompt_list, patch(
+            "cafe.ui.cli.prompt_text"
+        ) as mock_prompt_text:
             # 每個角色都選擇相同的設定
-            mock_select_instance.execute.side_effect = [
+            mock_prompt_list.side_effect = [
                 "claude",
                 "Roger: PM agent",
                 "claude",
@@ -320,10 +304,7 @@ class TestInitCommandConfigSaving:
                 "claude",
                 "Roger: PM agent",
             ]
-            mock_text_instance.execute.side_effect = ["", "", ""]
-
-            mock_select.return_value = mock_select_instance
-            mock_text.return_value = mock_text_instance
+            mock_prompt_text.side_effect = ["", "", ""]
 
             result = runner.invoke(app, ["init"])
 
@@ -354,14 +335,11 @@ class TestInitCommandConfigSaving:
 
         monkeypatch.chdir(tmp_path)
 
-        # 模擬 InquirerPy 的 select 和 text 方法（model 輸入為空）
-        with patch("cafe.ui.cli.inquirer.select") as mock_select, patch(
-            "cafe.ui.cli.inquirer.text"
-        ) as mock_text:
-            mock_select_instance = MagicMock()
-            mock_text_instance = MagicMock()
-
-            mock_select_instance.execute.side_effect = [
+        # 模擬 prompt_list 和 prompt_text 方法（model 輸入為空）
+        with patch("cafe.ui.cli.prompt_list") as mock_prompt_list, patch(
+            "cafe.ui.cli.prompt_text"
+        ) as mock_prompt_text:
+            mock_prompt_list.side_effect = [
                 "claude",
                 "Roger: PM agent",
                 "claude",
@@ -369,10 +347,7 @@ class TestInitCommandConfigSaving:
                 "claude",
                 "Roger: PM agent",
             ]
-            mock_text_instance.execute.side_effect = ["", "", ""]  # empty models
-
-            mock_select.return_value = mock_select_instance
-            mock_text.return_value = mock_text_instance
+            mock_prompt_text.side_effect = ["", "", ""]  # empty models
 
             result = runner.invoke(app, ["init"])
 

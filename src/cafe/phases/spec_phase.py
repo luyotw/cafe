@@ -264,10 +264,19 @@ class SpecPhase(Phase):
                             self._prompt_for_user_story()
 
                     else:
-                        # Non-interactive mode: use user_input if provided, otherwise read from stdin
-                        if self.user_input:
+                        # Non-interactive mode: use user_input if provided, otherwise try stdin
+                        if self.user_input is None:
+                            # Explicitly set to None - not allowed to read from stdin
+                            return PhaseResult(
+                                status=PhaseStatus.FAILED,
+                                message="No user story provided in non-interactive mode",
+                                data={"iterations": 0},
+                            )
+                        elif self.user_input:
+                            # User input provided
                             user_story = self.user_input.strip()
                         else:
+                            # Try reading from stdin
                             import sys
                             user_story = sys.stdin.read().strip()
 

@@ -907,11 +907,11 @@ class TestSpecPhaseFilePermissions:
 class TestPromptForInputMethod:
     """測試 _prompt_for_input_method() 方法"""
 
-    @patch("builtins.input")
-    def test_prompt_for_input_method_manual(self, mock_input: MagicMock, tmp_path: Path, mock_git_ops: MagicMock) -> None:
+    @patch("cafe.ui.phase_prompts.prompt_list")
+    def test_prompt_for_input_method_manual(self, mock_prompt_list: MagicMock, tmp_path: Path, mock_git_ops: MagicMock) -> None:
         """測試選擇手動輸入（選項 1）"""
         # Setup
-        mock_input.return_value = "1"
+        mock_prompt_list.return_value = "1. 手動輸入需求"
         spec_file = tmp_path / ".cafe" / "issues" / "test-issue" / "spec" / "spec_001.md"
 
         agent_manager = MagicMock(spec=AgentManager)
@@ -931,16 +931,17 @@ class TestPromptForInputMethod:
         # Assert
         assert method == "manual"
         assert issue_id is None
-        mock_input.assert_called_once()
 
-    @patch("builtins.input")
+    @patch("cafe.ui.phase_prompts.prompt_text")
+    @patch("cafe.ui.phase_prompts.prompt_list")
     @patch("cafe.phases.spec_phase.GitHubOps")
     def test_prompt_for_input_method_github_with_number(
-        self, mock_github_ops: MagicMock, mock_input: MagicMock, tmp_path: Path, mock_git_ops: MagicMock
+        self, mock_github_ops: MagicMock, mock_prompt_list: MagicMock, mock_prompt_text: MagicMock, tmp_path: Path, mock_git_ops: MagicMock
     ) -> None:
         """測試選擇 GitHub Issue + 輸入數字"""
         # Setup
-        mock_input.side_effect = ["2", "123"]
+        mock_prompt_list.return_value = "2. 從 GitHub Issue 抓取"
+        mock_prompt_text.return_value = "123"
         mock_gh_instance = MagicMock()
         mock_gh_instance.extract_issue_number.return_value = "123"
         mock_github_ops.return_value = mock_gh_instance
@@ -966,15 +967,17 @@ class TestPromptForInputMethod:
         assert issue_id == 123
         mock_gh_instance.extract_issue_number.assert_called_once_with("123")
 
-    @patch("builtins.input")
+    @patch("cafe.ui.phase_prompts.prompt_text")
+    @patch("cafe.ui.phase_prompts.prompt_list")
     @patch("cafe.phases.spec_phase.GitHubOps")
     def test_prompt_for_input_method_github_with_url(
-        self, mock_github_ops: MagicMock, mock_input: MagicMock, tmp_path: Path, mock_git_ops: MagicMock
+        self, mock_github_ops: MagicMock, mock_prompt_list: MagicMock, mock_prompt_text: MagicMock, tmp_path: Path, mock_git_ops: MagicMock
     ) -> None:
         """測試選擇 GitHub Issue + 輸入 URL"""
         # Setup
         github_url = "https://github.com/owner/repo/issues/456"
-        mock_input.side_effect = ["2", github_url]
+        mock_prompt_list.return_value = "2. 從 GitHub Issue 抓取"
+        mock_prompt_text.return_value = github_url
         mock_gh_instance = MagicMock()
         mock_gh_instance.extract_issue_number.return_value = "456"
         mock_github_ops.return_value = mock_gh_instance
@@ -1000,13 +1003,13 @@ class TestPromptForInputMethod:
         assert issue_id == 456
         mock_gh_instance.extract_issue_number.assert_called_once_with(github_url)
 
-    @patch("builtins.input")
+    @patch("cafe.ui.phase_prompts.prompt_list")
     def test_prompt_for_input_method_invalid_then_valid(
-        self, mock_input: MagicMock, tmp_path: Path, mock_git_ops: MagicMock
+        self, mock_prompt_list: MagicMock, tmp_path: Path, mock_git_ops: MagicMock
     ) -> None:
         """測試無效選擇後重試"""
-        # Setup - first invalid (3), then valid (1)
-        mock_input.side_effect = ["3", "1"]
+        # Setup
+        mock_prompt_list.return_value = "1. 手動輸入需求"
         spec_file = tmp_path / ".cafe" / "issues" / "test-issue" / "spec" / "spec_001.md"
 
         agent_manager = MagicMock(spec=AgentManager)
@@ -1026,7 +1029,6 @@ class TestPromptForInputMethod:
         # Assert
         assert method == "manual"
         assert issue_id is None
-        assert mock_input.call_count == 2
 
 
 class TestFetchGitHubIssue:

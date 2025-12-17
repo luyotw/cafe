@@ -7,8 +7,9 @@ import sys
 from pathlib import Path
 from typing import List, Optional
 
-from InquirerPy import inquirer
 import typer
+
+from cafe.ui.inquirer_prompts import prompt_confirm, prompt_list, prompt_text
 import yaml
 from rich.console import Console
 
@@ -384,19 +385,19 @@ def init() -> None:
             console.print(f"[bold cyan]配置 {role_display} 角色：[/bold cyan]")
 
             # Select CLI
-            selected_cli = inquirer.select(
+            selected_cli = prompt_list(
                 message=f"請為 {role_display} 選擇一個 AI 代理",
                 choices=available_clis,
-            ).execute()
+            )
             if not selected_cli:
                 console.print("\n[yellow]設定未完成，已取消。[/yellow]")
                 raise typer.Exit(1)
 
             # Input model name
-            model_name_input = inquirer.text(
+            model_name_input = prompt_text(
                 message=f"請為 {selected_cli} 輸入要使用的模型名稱（選填，直接按 Enter 將使用預設模型）",
                 default="",
-            ).execute()
+            )
             if model_name_input is None:
                 console.print("\n[yellow]設定未完成，已取消。[/yellow]")
                 raise typer.Exit(1)
@@ -416,10 +417,10 @@ def init() -> None:
             agent_choices = [f"{name}: {desc}" for name, desc, _ in agents]
 
             # Select agent
-            selected_agent_display = inquirer.select(
+            selected_agent_display = prompt_list(
                 message=f"請為 {role_display} 選擇一位代理人",
                 choices=agent_choices,
-            ).execute()
+            )
             if not selected_agent_display:
                 console.print("\n[yellow]設定未完成，已取消。[/yellow]")
                 raise typer.Exit(1)
@@ -550,7 +551,7 @@ def prepare(
         # 1. Get issue name (from argument or prompt)
         is_interactive = not issue_name  # Track if we're in interactive mode
         if not issue_name:
-            issue_name = typer.prompt("Issue name")
+            issue_name = prompt_text("Issue name")
             if not issue_name or not issue_name.strip():
                 console.print("[red]Error: Issue name cannot be empty.[/red]")
                 raise typer.Exit(1)
@@ -573,7 +574,7 @@ def prepare(
             console.print()
 
             # Ask if user wants to continue
-            continue_anyway = typer.confirm("Continue anyway?", default=False)
+            continue_anyway = prompt_confirm("Continue anyway?", default=False)
             if not continue_anyway:
                 console.print("[dim]Cancelled.[/dim]")
                 raise typer.Exit(0)
@@ -593,7 +594,7 @@ def prepare(
         # If in interactive mode and no --worktree parameter
         elif is_interactive and not worktree:
             # Ask user if they want to use worktree mode
-            use_worktree = typer.confirm("Use Git worktree mode for this issue?", default=False)
+            use_worktree = prompt_confirm("Use Git worktree mode for this issue?", default=False)
 
             if use_worktree:
                 # Suggest default path
@@ -601,10 +602,9 @@ def prepare(
                 console.print(f"[dim]Default path: {default_path}[/dim]")
 
                 # Prompt for path (allow empty input to use default)
-                user_path = typer.prompt(
+                user_path = prompt_text(
                     "Worktree path (press Enter for default)",
                     default=default_path,
-                    show_default=False,
                 )
                 worktree_path = user_path.strip() if user_path.strip() else default_path
 
@@ -732,7 +732,7 @@ def prepare(
             # Prompt for PR auto-create setting (only for GitHub repos)
             console.print()
             if is_github_repo():
-                auto_create_pr = typer.confirm(
+                auto_create_pr = prompt_confirm(
                     "Automatically create PR on GitHub after development?", default=True
                 )
                 pr_config["auto_create"] = auto_create_pr
@@ -1436,10 +1436,8 @@ def spec(
                     should_continue = True
                 else:
                     # Interactive mode: ask user
-                    from rich.prompt import Confirm
-
-                    should_continue = Confirm.ask(
-                        "\n[bold]Continue to next iteration?[/bold]", default=True
+                    should_continue = prompt_confirm(
+                        message="Continue to next iteration?", default=True
                     )
 
                 if should_continue:
@@ -1779,10 +1777,8 @@ def plan(
                     should_continue = True
                 else:
                     # Interactive mode: ask user
-                    from rich.prompt import Confirm
-
-                    should_continue = Confirm.ask(
-                        "\n[bold]Continue to next iteration?[/bold]", default=True
+                    should_continue = prompt_confirm(
+                        message="Continue to next iteration?", default=True
                     )
 
                 if should_continue:
@@ -2650,12 +2646,17 @@ def config(
             raise typer.Exit(1)
 
     elif action == "reset":
-        confirm = typer.confirm("Reset configuration to defaults?")
+        try:
+            confirm = prompt_confirm("Reset configuration to defaults?", default=False)
+        except (KeyboardInterrupt, EOFError):
+            console.print("\n[dim]Cancelled[/dim]")
+            raise typer.Exit(0)
+
         if confirm:
             config_manager.reset()
             console.print("[green]✓ Configuration reset to defaults[/green]")
         else:
-            console.print("Cancelled")
+            console.print("[dim]Cancelled[/dim]")
 
     else:
         # Treat action as a key for backward compatibility
@@ -2783,7 +2784,12 @@ def remove_issue(
             console.print(f"  • {issue_name} [dim]({issue_path})[/dim]")
         console.print()
 
-        confirm = typer.confirm(f"Are you sure you want to delete {len(existing_issues)} issue(s)?")
+        try:
+            confirm = prompt_confirm(f"Are you sure you want to delete {len(existing_issues)} issue(s)?", default=False)
+        except (KeyboardInterrupt, EOFError):
+            console.print("\n[dim]Cancelled[/dim]")
+            raise typer.Exit(0)
+
         if not confirm:
             console.print("[dim]Cancelled[/dim]")
             raise typer.Exit(0)
@@ -3090,12 +3096,13 @@ def agent_rm() -> None:
     agents_dir = Path.cwd() / ".cafe" / "agents"
 
     # Prompt for role
-    role = inquirer.select(
-        message="Select agent role:",
-        choices=["pm", "developer", "reviewer"],
-    ).execute()
-    if not role:
-        console.print("[dim]Cancelled[/dim]")
+    try:
+        role = prompt_list(
+            message="Select agent role:",
+            choices=["pm", "developer", "reviewer"],
+        )
+    except (KeyboardInterrupt, EOFError):
+        console.print("\n[dim]Cancelled[/dim]")
         raise typer.Exit(0)
 
     # Get agents in this role
@@ -3110,19 +3117,25 @@ def agent_rm() -> None:
         raise typer.Exit(1)
 
     # Prompt for agent
-    agent_filename = inquirer.select(
-        message="Select agent to delete:",
-        choices=agent_files,
-    ).execute()
-    if not agent_filename:
-        console.print("[dim]Cancelled[/dim]")
+    try:
+        agent_filename = prompt_list(
+            message="Select agent to delete:",
+            choices=agent_files,
+        )
+    except (KeyboardInterrupt, EOFError):
+        console.print("\n[dim]Cancelled[/dim]")
         raise typer.Exit(0)
 
     agent_file = role_dir / agent_filename
     agent_path = f"{role}/{agent_filename}"
 
     # Confirm deletion
-    confirm = typer.confirm(f"Are you sure you want to delete agent '{agent_path}'?")
+    try:
+        confirm = prompt_confirm(f"Are you sure you want to delete agent '{agent_path}'?", default=False)
+    except (KeyboardInterrupt, EOFError):
+        console.print("\n[dim]Cancelled[/dim]")
+        raise typer.Exit(0)
+
     if not confirm:
         console.print("[dim]Cancelled[/dim]")
         raise typer.Exit(0)
@@ -3146,20 +3159,23 @@ def agent_create() -> None:
     agents_dir = Path.cwd() / ".cafe" / "agents"
 
     # Prompt for role
-    role = inquirer.select(
-        message="Select agent role:",
-        choices=["pm", "developer", "reviewer"],
-    ).execute()
-    if not role:
-        console.print("[dim]Cancelled[/dim]")
+    try:
+        role = prompt_list(
+            message="Select agent role:",
+            choices=["pm", "developer", "reviewer"],
+        )
+    except (KeyboardInterrupt, EOFError):
+        console.print("\n[dim]Cancelled[/dim]")
         raise typer.Exit(0)
 
     # Prompt for name
-    name = inquirer.text(
-        message="Agent name (eg: Michael):"
-    ).execute()
-    if not name:
-        console.print("[dim]Cancelled[/dim]")
+    try:
+        name = prompt_text(
+            message="Agent name (eg: Michael):",
+            default="",
+        )
+    except (KeyboardInterrupt, EOFError):
+        console.print("\n[dim]Cancelled[/dim]")
         raise typer.Exit(0)
 
     # Strip whitespace from name
@@ -3175,11 +3191,13 @@ def agent_create() -> None:
         raise typer.Exit(1)
 
     # Prompt for description
-    description = inquirer.text(
-        message="Description (eg: A senior Rust developer):"
-    ).execute()
-    if not description:
-        console.print("[dim]Cancelled[/dim]")
+    try:
+        description = prompt_text(
+            message="Description (eg: A senior Rust developer):",
+            default="",
+        )
+    except (KeyboardInterrupt, EOFError):
+        console.print("\n[dim]Cancelled[/dim]")
         raise typer.Exit(0)
 
     # Strip whitespace from description
@@ -3252,12 +3270,13 @@ def agent_edit() -> None:
     agents_dir = Path.cwd() / ".cafe" / "agents"
 
     # Prompt for role
-    role = inquirer.select(
-        message="Select agent role:",
-        choices=["pm", "developer", "reviewer"],
-    ).execute()
-    if not role:
-        console.print("[dim]Cancelled[/dim]")
+    try:
+        role = prompt_list(
+            message="Select agent role:",
+            choices=["pm", "developer", "reviewer"],
+        )
+    except (KeyboardInterrupt, EOFError):
+        console.print("\n[dim]Cancelled[/dim]")
         raise typer.Exit(0)
 
     # Get agents in this role
@@ -3272,12 +3291,13 @@ def agent_edit() -> None:
         raise typer.Exit(1)
 
     # Prompt for agent
-    agent_filename = inquirer.select(
-        message="Select agent to edit:",
-        choices=agent_files,
-    ).execute()
-    if not agent_filename:
-        console.print("[dim]Cancelled[/dim]")
+    try:
+        agent_filename = prompt_list(
+            message="Select agent to edit:",
+            choices=agent_files,
+        )
+    except (KeyboardInterrupt, EOFError):
+        console.print("\n[dim]Cancelled[/dim]")
         raise typer.Exit(0)
     agent_file = role_dir / agent_filename
 
