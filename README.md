@@ -29,6 +29,8 @@ You can fetch requirements directly from GitHub issues and automatically create 
 
 Support for more CLI agent tools is planned for the future. Stay tuned!
 
+> **Note**: CAFE leverages the **headless mode** of these CLI tools, which means CAFE operates without requiring interactive sessions or IDE integrations. The CLI tools execute commands and return results to CAFE for processing, enabling seamless automation of the entire development workflow.
+
 ## Installation
 
 ### From Source
