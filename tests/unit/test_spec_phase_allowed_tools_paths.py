@@ -1,7 +1,7 @@
-"""測試 SpecPhase 和 PlanPhase 使用相對路徑（git ignore 格式）。
+"""測試 SpecPhase and PlanPhase 使用相對路徑（git ignore 格式）.
 
-確保 allowed_tools 中的檔案路徑使用：
-- 相對於 repository root 的路徑
+確保 allowed_tools 中檔案路徑使用：
+- 相對於 repository root 路徑
 - Git ignore 格式（以 / 開頭）
 - 支援 worktree 環境
 """
@@ -66,7 +66,7 @@ def mock_git():
 
 
 class TestSpecPhaseAllowedToolsPaths:
-    """測試 SpecPhase 的 allowed_tools 使用相對路徑"""
+    """測試 SpecPhase  allowed_tools 使用相對路徑"""
 
     def test_spec_phase_uses_relative_paths_in_normal_repo(self, tmp_path, mock_agent_manager, mock_permission, mock_git, monkeypatch):
         """一般 repo：allowed_tools 應使用相對路徑（git ignore 格式）"""
@@ -117,11 +117,11 @@ class TestSpecPhaseAllowedToolsPaths:
         assert result.status == PhaseStatus.COMPLETED
         assert len(captured_tools) > 0
 
-        # 檢查最後一次呼叫的 allowed_tools (write removed, only edit remains)
+        # 檢查最後一次呼叫 allowed_tools (write removed, only edit remains)
         tools = captured_tools[-1]
         assert any("edit(" in tool for tool in tools), f"No edit tool found in {tools}"
 
-        # 找出 edit 工具的路徑
+        # 找出 edit 工具路徑
         edit_tool = next(t for t in tools if "edit(" in t)
 
         # 關鍵斷言：路徑應該是相對路徑（git ignore 格式：以 / 開頭但不包含絕對路徑）
@@ -131,19 +131,19 @@ class TestSpecPhaseAllowedToolsPaths:
         # 提取路徑（去掉 edit() 包裝）
         edit_path = edit_tool.replace("edit(", "").replace(")", "")
 
-        # 路徑應該以 .cafe 開頭（普通相對路徑，不帶 / 前綴）
+        # 路徑應該以 .cafe 開頭（普通相對路徑, 不帶 / 前綴）
         assert edit_path.startswith(".cafe"), f"Expected path to start with '.cafe' but got: {edit_path}"
 
         # 路徑不應該以 / 開頭（不是 git ignore 格式）
         assert not edit_path.startswith("/"), f"Path should not start with '/' but got: {edit_path}"
 
-        # 路徑應該包含正確的 issue 路徑
+        # 路徑應該包含正確 issue 路徑
         assert ".cafe/issues/test-issue/spec/" in edit_path, f"Expected .cafe/issues/test-issue/spec/ in {edit_path}"
 
     @pytest.mark.skip(reason="Worktree support requires Phase base class refactor - tracked in issue #TODO")
     def test_spec_phase_uses_relative_paths_in_worktree(self, tmp_path, mock_agent_manager, mock_permission, mock_git, monkeypatch):
-        """Worktree：allowed_tools 應使用相對於主 repo 的路徑"""
-        # Setup: 創建主 repo 和 worktree 結構
+        """Worktree：allowed_tools 應使用相對於主 repo 路徑"""
+        # Setup: 創建主 repo and worktree 結構
         main_repo = tmp_path / "main-repo"
         main_git_dir = main_repo / ".git"
         main_git_dir.mkdir(parents=True)
@@ -218,7 +218,7 @@ class TestSpecPhaseAllowedToolsPaths:
         write_path = write_tool.replace("write(", "").replace(")", "")
         edit_path = edit_tool.replace("edit(", "").replace(")", "")
 
-        # 關鍵斷言：即使在 worktree 中，路徑也應該是相對於主 repo 的 git ignore 格式
+        # 關鍵斷言：即使在 worktree 中, 路徑也應該是相對於主 repo  git ignore 格式
         # 格式應該是：write(/.cafe/issues/test-issue/spec/spec_001.md)
         assert write_path.startswith("/."), f"Expected path to start with '/.' but got: {write_path}"
         assert edit_path.startswith("/."), f"Expected path to start with '/.' but got: {edit_path}"
@@ -228,7 +228,7 @@ class TestSpecPhaseAllowedToolsPaths:
 
 
 class TestPlanPhaseAllowedToolsPaths:
-    """測試 PlanPhase 的 allowed_tools 使用相對路徑"""
+    """測試 PlanPhase  allowed_tools 使用相對路徑"""
 
     def test_plan_phase_uses_relative_paths_in_normal_repo(self, tmp_path, mock_agent_manager, mock_permission, mock_git, monkeypatch):
         """一般 repo：allowed_tools 應使用相對路徑（git ignore 格式）"""
@@ -305,8 +305,8 @@ class TestPlanPhaseAllowedToolsPaths:
 
     @pytest.mark.skip(reason="Worktree support requires Phase base class refactor - tracked in issue #TODO")
     def test_plan_phase_uses_relative_paths_in_worktree(self, tmp_path, mock_agent_manager, mock_permission, mock_git, monkeypatch):
-        """Worktree：allowed_tools 應使用相對於主 repo 的路徑"""
-        # Setup: 創建主 repo 和 worktree 結構
+        """Worktree：allowed_tools 應使用相對於主 repo 路徑"""
+        # Setup: 創建主 repo and worktree 結構
         main_repo = tmp_path / "main-repo"
         main_git_dir = main_repo / ".git"
         main_git_dir.mkdir(parents=True)
@@ -382,7 +382,7 @@ class TestPlanPhaseAllowedToolsPaths:
         write_path = write_tool.replace("write(", "").replace(")", "")
         edit_path = edit_tool.replace("edit(", "").replace(")", "")
 
-        # 關鍵斷言：即使在 worktree 中，路徑也應該是相對於主 repo 的 git ignore 格式
+        # 關鍵斷言：即使在 worktree 中, 路徑也應該是相對於主 repo  git ignore 格式
         assert write_path.startswith("/."), f"Expected path to start with '/.' but got: {write_path}"
         assert edit_path.startswith("/."), f"Expected path to start with '/.' but got: {edit_path}"
 

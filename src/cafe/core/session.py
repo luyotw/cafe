@@ -11,7 +11,7 @@ from cafe.core.types import AgentCLI, AgentConfig, SessionData
 class SessionManager:
     """Manages agent sessions and their persistence.
 
-    每個 issue 有獨立的 session 目錄，每個 agent+CLI 組合有獨立的 session 檔案。
+    Each issue has an independent session directory, and each agent+CLI combination has an independent session file.
     """
 
     def __init__(self, sessions_dir: str = ".cafe/sessions") -> None:

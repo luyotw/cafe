@@ -50,7 +50,7 @@ class TestMultilineInput:
         assert result == "你好世界\n測試中文"
 
     def test_get_multiline_input_empty_lines(self) -> None:
-        """測試包含空行的輸入"""
+        """測試包含空行輸入"""
         display = Display()
 
         with patch('cafe.ui.display.pt_prompt', return_value="Line 1\n\nLine 3"):
@@ -92,7 +92,7 @@ class TestAgentResponseFormatting:
         assert "This is a response" in formatted
 
     def test_format_agent_response_with_status(self) -> None:
-        """測試格式化帶狀態碼的回應"""
+        """測試格式化帶狀態碼回應"""
         display = Display()
 
         formatted = display.format_agent_response(

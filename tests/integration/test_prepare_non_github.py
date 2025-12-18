@@ -1,4 +1,4 @@
-"""測試 cafe prepare 在非 GitHub repo 的行為."""
+"""測試 cafe prepare 在非 GitHub repo 行為."""
 
 from pathlib import Path
 from unittest.mock import patch, MagicMock
@@ -34,7 +34,7 @@ def change_test_dir(tmp_path, monkeypatch):
 
 @pytest.fixture
 def mock_git_ops_non_github():
-    """建立 mock GitOperations 和 non-GitHub repo 環境."""
+    """建立 mock GitOperations and non-GitHub repo 環境."""
     with patch('cafe.ui.cli.GitOperations') as MockGitOperations, \
          patch('cafe.utils.git_utils.is_github_repo') as mock_is_github_repo:
         mock_git = MagicMock()
@@ -54,7 +54,7 @@ def mock_git_ops_non_github():
 
 
 class TestPrepareNonGitHubRepo:
-    """測試 prepare 指令在非 GitHub repo 的行為."""
+    """測試 prepare 指令在非 GitHub repo 行為."""
 
     @patch("cafe.ui.cli.prompt_confirm")
     @patch("cafe.ui.template_selector.prompt_list")
@@ -68,7 +68,7 @@ class TestPrepareNonGitHubRepo:
         # Note: Should NOT ask for input method or PR auto-create in non-GitHub repos
         mock_prompt_text.return_value = "test-issue"
         mock_prompt_confirm.return_value = False  # worktree (n)
-        mock_phase_list.return_value = "Medium (中) - 平衡模式 [預設]\n   • 詢問重要細節和關鍵場景\n   • 在速度和精確度間取得平衡\n   • 適合：一般功能開發"
+        mock_phase_list.return_value = "Medium (中) - balanced mode [預設]\n   • 詢問重要細節and關鍵場景\n   • 在速度and精確度間取得平衡\n   • 適合：一般功能開發"
         mock_template_list.return_value = "1. default"
 
         result = runner.invoke(app, ["prepare"])
@@ -99,7 +99,7 @@ class TestPrepareNonGitHubRepo:
         # Mock user inputs
         mock_prompt_text.return_value = "my-feature"
         mock_prompt_confirm.return_value = False  # worktree (n)
-        mock_phase_list.return_value = "Medium (中) - 平衡模式 [預設]\n   • 詢問重要細節和關鍵場景\n   • 在速度和精確度間取得平衡\n   • 適合：一般功能開發"
+        mock_phase_list.return_value = "Medium (中) - balanced mode [預設]\n   • 詢問重要細節and關鍵場景\n   • 在速度and精確度間取得平衡\n   • 適合：一般功能開發"
         mock_template_list.return_value = "1. default"
 
         result = runner.invoke(app, ["prepare"])
@@ -119,7 +119,7 @@ class TestPrepareNonGitHubRepo:
     def test_prepare_non_github_repo_non_interactive_mode(
         self, temp_repo_dir, mock_git_ops_non_github
     ):
-        """測試在非 GitHub repo 的非互動模式下 prepare 的行為."""
+        """測試在非 GitHub repo 非互動模式下 prepare 行為."""
         # Non-interactive mode: provide issue name as argument
         result = runner.invoke(app, ["prepare", "quick-fix"])
 
@@ -140,7 +140,7 @@ class TestPrepareNonGitHubRepo:
 
 @pytest.fixture
 def mock_git_ops_github():
-    """建立 mock GitOperations 和 GitHub repo 環境."""
+    """建立 mock GitOperations and GitHub repo 環境."""
     with patch('cafe.ui.cli.GitOperations') as MockGitOperations, \
          patch('cafe.utils.git_utils.is_github_repo') as mock_is_github_repo:
         mock_git = MagicMock()
@@ -160,7 +160,7 @@ def mock_git_ops_github():
 
 
 class TestPrepareGitHubRepo:
-    """測試 prepare 指令在 GitHub repo 的行為保持不變."""
+    """測試 prepare 指令在 GitHub repo 行為保持不變."""
 
     @patch("cafe.ui.cli.prompt_confirm")
     @patch("cafe.ui.template_selector.prompt_list")
@@ -176,7 +176,7 @@ class TestPrepareGitHubRepo:
         # Note: phase_prompts has input method selection too, need to handle both
         mock_phase_list.side_effect = [
             "1. 手動輸入需求",  # input method
-            "Medium (中) - 平衡模式 [預設]\n   • 詢問重要細節和關鍵場景\n   • 在速度和精確度間取得平衡\n   • 適合：一般功能開發",  # rigor
+            "Medium (中) - balanced mode [預設]\n   • 詢問重要細節and關鍵場景\n   • 在速度and精確度間取得平衡\n   • 適合：一般功能開發",  # rigor
         ]
         mock_template_list.return_value = "1. default"  # template
 

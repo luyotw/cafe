@@ -306,15 +306,15 @@ class AgentManager:
 
     @classmethod
     def get_agent_file_path(cls, agent_name: str, role: str, cafe_dir: str = None) -> str:
-        """取得 agent md 檔案的路徑（用於 prompt 中）。
+        """Get the path to agent md file (for use in prompts).
 
         Args:
-            agent_name: Agent 名稱（如 "Roger", "David", "Richard", "John"）
-            role: Agent 角色目錄名稱（如 "pm", "developer", "reviewer"）
-            cafe_dir: CAFE 配置目錄路徑（預設為 None，使用 cls.CAFE_DIR）
+            agent_name: Agent name (e.g. "Roger", "David", "Richard", "John")
+            role: Agent role directory name (e.g. "pm", "developer", "reviewer")
+            cafe_dir: CAFE config directory path (default None, uses cls.CAFE_DIR)
 
         Returns:
-            str: Agent 檔案路徑（相對路徑，如 ".cafe/agents/pm/Roger.md"）
+            str: Agent file path (relative path, e.g. ".cafe/agents/pm/Roger.md")
 
         Examples:
             >>> AgentManager.get_agent_file_path("Roger", "pm")
@@ -327,5 +327,5 @@ class AgentManager:
         if cafe_dir is None:
             cafe_dir = cls.CAFE_DIR
         
-        # 返回相對路徑字串
+        # Return relative path string
         return f"{cafe_dir}/{cls.AGENTS_DIR}/{role}/{agent_name}.md"

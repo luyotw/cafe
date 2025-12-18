@@ -67,7 +67,7 @@ class TestReviewPhaseWithStatusCodes:
 
         agent_manager = MagicMock(spec=AgentManager)
         setup_agent_manager_mock(agent_manager)
-        agent_manager.execute.return_value = ("CAFE_NEEDS_CHANGES\n需要修正問題。", TokenUsage(), [], None, [])
+        agent_manager.execute.return_value = ("CAFE_NEEDS_CHANGES\n需要修正問題.", TokenUsage(), [], None, [])
 
 
         git_ops = MagicMock(spec=GitOperations)

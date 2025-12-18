@@ -1,4 +1,4 @@
-"""測試 phase_prompts.py 中的共用 UI 函式"""
+"""測試 phase_prompts.py 中共用 UI 函式"""
 
 import pytest
 from unittest.mock import Mock, patch, MagicMock
@@ -25,7 +25,7 @@ class TestPromptForInputMethod:
     @patch("cafe.ui.phase_prompts.prompt_text")
     @patch("cafe.ui.phase_prompts.prompt_list")
     def test_選擇GitHub_Issue並提供有效ID(self, mock_prompt_list, mock_prompt_text):
-        """測試用戶選擇 GitHub Issue 並提供有效的 Issue ID"""
+        """測試用戶選擇 GitHub Issue 並提供有效 Issue ID"""
         mock_prompt_list.return_value = "2. 從 GitHub Issue 抓取"
         mock_prompt_text.return_value = "123"
         display = Display()
@@ -94,7 +94,7 @@ class TestPromptForRigor:
     @patch("cafe.ui.phase_prompts.prompt_list")
     def test_使用預設值Medium(self, mock_prompt_list):
         """測試使用預設值 medium"""
-        mock_prompt_list.return_value = "Medium (中) - 平衡模式 [預設]\n   • 詢問重要細節和關鍵場景\n   • 在速度和精確度間取得平衡\n   • 適合：一般功能開發"
+        mock_prompt_list.return_value = "Medium (中) - balanced mode [預設]\n   • 詢問重要細節and關鍵場景\n   • 在速度and精確度間取得平衡\n   • 適合：一般功能開發"
         display = Display()
 
         rigor = prompt_for_rigor(display)
@@ -104,7 +104,7 @@ class TestPromptForRigor:
     @patch("cafe.ui.phase_prompts.prompt_list")
     def test_明確選擇Medium(self, mock_prompt_list):
         """測試明確選擇 medium"""
-        mock_prompt_list.return_value = "Medium (中) - 平衡模式 [預設]\n   • 詢問重要細節和關鍵場景\n   • 在速度和精確度間取得平衡\n   • 適合：一般功能開發"
+        mock_prompt_list.return_value = "Medium (中) - balanced mode [預設]\n   • 詢問重要細節and關鍵場景\n   • 在速度and精確度間取得平衡\n   • 適合：一般功能開發"
         display = Display()
 
         rigor = prompt_for_rigor(display)
@@ -114,7 +114,7 @@ class TestPromptForRigor:
     @patch("cafe.ui.phase_prompts.prompt_list")
     def test_選擇Low(self, mock_prompt_list):
         """測試選擇 low"""
-        mock_prompt_list.return_value = "Low (低) - 快速開發模式\n   • 只問最關鍵的資訊\n   • 允許模糊地帶，讓開發者自行判斷\n   • 適合：快速原型、MVP、內部工具"
+        mock_prompt_list.return_value = "Low (低) - fast development模式\n   • 只問最關鍵資訊\n   • 允許模糊地帶, 讓開發者自行判斷\n   • 適合：快速原型、MVP、內部工具"
         display = Display()
 
         rigor = prompt_for_rigor(display)
@@ -124,7 +124,7 @@ class TestPromptForRigor:
     @patch("cafe.ui.phase_prompts.prompt_list")
     def test_選擇High(self, mock_prompt_list):
         """測試選擇 high"""
-        mock_prompt_list.return_value = "High (高) - 精確規格模式\n   • 詳細詢問所有細節和邊界情況\n   • 確保需求可測試、無模糊\n   • 適合：核心功能、API 設計、對外產品"
+        mock_prompt_list.return_value = "High (高) - precise specification模式\n   • 詳細詢問所有細節and邊界情況\n   • 確保需求可測試、無模糊\n   • 適合：核心功能、API 設計、對外產品"
         display = Display()
 
         rigor = prompt_for_rigor(display)
@@ -134,7 +134,7 @@ class TestPromptForRigor:
     @patch("cafe.ui.phase_prompts.prompt_list")
     def test_無效選擇後重試(self, mock_prompt_list):
         """測試輸入無效選擇後重試"""
-        mock_prompt_list.return_value = "Medium (中) - 平衡模式 [預設]\n   • 詢問重要細節和關鍵場景\n   • 在速度和精確度間取得平衡\n   • 適合：一般功能開發"
+        mock_prompt_list.return_value = "Medium (中) - balanced mode [預設]\n   • 詢問重要細節and關鍵場景\n   • 在速度and精確度間取得平衡\n   • 適合：一般功能開發"
         display = Display()
 
         rigor = prompt_for_rigor(display)
@@ -161,7 +161,7 @@ class TestFetchGithubIssue:
         github_ops.get_issue.assert_called_once_with("123", include_comments=False)
 
     def test_Issue沒有body(self):
-        """測試 Issue 沒有 body 的情況"""
+        """測試 Issue 沒有 body 情況"""
         github_ops = Mock(spec=GitHubOps)
         github_ops.check_gh_auth.return_value = True
         github_ops.get_issue.return_value = {

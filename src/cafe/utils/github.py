@@ -43,7 +43,7 @@ class GitHubOps:
             return False
 
     def check_gh_auth(self) -> bool:
-        """檢查 gh CLI 是否已登入
+        """Check if gh CLI is authenticated
 
         Returns:
             True if authenticated, False otherwise

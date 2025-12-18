@@ -8,7 +8,7 @@ class TestApproveDeniedToolsParsing:
     """測試 --approve-denied-tools 參數解析邏輯"""
 
     def test_parse_comma_separated_integers(self):
-        """測試正確解析逗號分隔的整數"""
+        """測試正確解析逗號分隔整數"""
         input_str = "0,1,3"
         approved_denial_indices: List[int] = []
 
@@ -33,7 +33,7 @@ class TestApproveDeniedToolsParsing:
         assert approved_denial_indices == [5]
 
     def test_parse_with_spaces(self):
-        """測試解析含空格的輸入"""
+        """測試解析含空格輸入"""
         input_str = " 0 , 1 , 3 "
         approved_denial_indices: List[int] = []
 
@@ -84,7 +84,7 @@ class TestApproveDeniedToolsParsing:
 
 
 class TestDevelopPhaseParameterDefaults:
-    """測試 DevelopPhase 參數的預設值"""
+    """測試 DevelopPhase 參數預設值"""
 
     def test_approved_denial_indices_defaults_to_none(self):
         """測試 approved_denial_indices 預設為 None"""

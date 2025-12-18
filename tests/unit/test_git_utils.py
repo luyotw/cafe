@@ -41,12 +41,12 @@ class TestRewriteCommitMessage:
             
             assert success is True
             
-            # 確認使用了正確的 base branch
+            # 確認使用了正確 base branch
             call_args = mock_run.call_args[0][0]
             assert 'develop' in call_args
 
     def test_rewrite_commit_message_rebase_fails(self, tmp_path):
-        """測試 rebase 失敗的情況"""
+        """測試 rebase 失敗情況"""
         with patch('cafe.utils.git_utils.subprocess.run') as mock_run:
             # 第一次呼叫 (rebase) 失敗
             # 第二次呼叫 (rebase --abort) 成功
@@ -115,7 +115,7 @@ class TestRewriteCommitMessage:
                 with patch('os.unlink'):
                     rewrite_commit_message("abc123", "fix: message")
                     
-                    # 檢查 exec 指令包含正確的 SHA 和 message file
+                    # 檢查 exec 指令包含正確 SHA and message file
                     call_args = mock_run.call_args[0][0]
                     exec_cmd = call_args[-1]  # 最後一個參數是 exec 指令
                     
@@ -171,8 +171,8 @@ class TestIsBranchInitialized:
             assert is_branch_initialized("test-branch") is True
 
     def test_is_branch_initialized_special_characters_in_branch_name(self, tmp_path):
-        """測試包含特殊字元的 branch 名稱"""
-        # 建立包含特殊字元的 branch 目錄
+        """測試包含特殊字元 branch 名稱"""
+        # 建立包含特殊字元 branch 目錄
         branch_name = "feature/new-login"
         issue_dir = tmp_path / ".cafe" / "issues" / branch_name
         issue_dir.mkdir(parents=True)
@@ -197,7 +197,7 @@ class TestToCwdRelativePath:
         assert result == ".cafe/issues/test/spec.md"
 
     def test_handles_already_relative_path(self, tmp_path, monkeypatch):
-        """測試處理已經是相對路徑的情況"""
+        """測試處理已經是相對路徑情況"""
         monkeypatch.chdir(tmp_path)
         
         # 使用相對路徑
@@ -267,10 +267,10 @@ class TestToCwdRelativePath:
         assert "\\" not in result
 
     def test_handles_path_with_dots(self, tmp_path, monkeypatch):
-        """測試處理包含點的路徑"""
+        """測試處理包含點路徑"""
         monkeypatch.chdir(tmp_path)
         
-        # 包含點的目錄名稱
+        # 包含點目錄名稱
         test_file = tmp_path / ".hidden" / "spec_001.md"
         
         result = to_cwd_relative_path(test_file)

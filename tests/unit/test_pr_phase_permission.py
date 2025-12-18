@@ -87,7 +87,7 @@ def test_prepare_pr_content_stops_on_need_permission(tmp_path):
 
 
 def test_pr_phase_stops_on_need_permission(tmp_path):
-    """測試：PR phase 在收到 NEED_PERMISSION 時應該停止，不建立 PR"""
+    """測試：PR phase 在收到 NEED_PERMISSION 時應該停止, 不建立 PR"""
     # Setup
     issue_dir = tmp_path / ".cafe" / "issues" / "test-issue"
     spec_dir = issue_dir / "spec"

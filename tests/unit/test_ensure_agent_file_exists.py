@@ -1,4 +1,4 @@
-"""測試 ensure_agent_file_exists 函數。"""
+"""測試 ensure_agent_file_exists 函數."""
 
 from pathlib import Path
 
@@ -8,10 +8,10 @@ from cafe.core.phase import ensure_agent_file_exists
 
 
 class TestEnsureAgentFileExists:
-    """測試 ensure_agent_file_exists 函數。"""
+    """測試 ensure_agent_file_exists 函數."""
 
     def test_agent_file_exists_roger(self, tmp_path: Path) -> None:
-        """測試 Roger agent 檔案存在時不會拋出錯誤。"""
+        """測試 Roger agent 檔案存在時不會拋出錯誤."""
         # 建立 agent 目錄結構
         cafe_dir = tmp_path / ".cafe"
         pm_dir = cafe_dir / "agents" / "pm"
@@ -25,7 +25,7 @@ class TestEnsureAgentFileExists:
         ensure_agent_file_exists("Roger", "pm", cafe_dir)
 
     def test_agent_file_exists_david(self, tmp_path: Path) -> None:
-        """測試 David agent 檔案存在時不會拋出錯誤。"""
+        """測試 David agent 檔案存在時不會拋出錯誤."""
         # 建立 agent 目錄結構
         cafe_dir = tmp_path / ".cafe"
         dev_dir = cafe_dir / "agents" / "developer"
@@ -39,7 +39,7 @@ class TestEnsureAgentFileExists:
         ensure_agent_file_exists("David", "developer", cafe_dir)
 
     def test_agent_file_exists_john(self, tmp_path: Path) -> None:
-        """測試 John agent 檔案存在時不會拋出錯誤。"""
+        """測試 John agent 檔案存在時不會拋出錯誤."""
         # 建立 agent 目錄結構
         cafe_dir = tmp_path / ".cafe"
         dev_dir = cafe_dir / "agents" / "developer"
@@ -53,7 +53,7 @@ class TestEnsureAgentFileExists:
         ensure_agent_file_exists("John", "developer", cafe_dir)
 
     def test_agent_file_exists_richard(self, tmp_path: Path) -> None:
-        """測試 Richard agent 檔案存在時不會拋出錯誤。"""
+        """測試 Richard agent 檔案存在時不會拋出錯誤."""
         # 建立 agent 目錄結構
         cafe_dir = tmp_path / ".cafe"
         reviewer_dir = cafe_dir / "agents" / "reviewer"
@@ -67,11 +67,11 @@ class TestEnsureAgentFileExists:
         ensure_agent_file_exists("Richard", "reviewer", cafe_dir)
 
     def test_agent_file_not_exists_raises_error(self, tmp_path: Path) -> None:
-        """測試 agent 檔案不存在時會拋出 FileNotFoundError。"""
+        """測試 agent 檔案不存在時會拋出 FileNotFoundError."""
         cafe_dir = tmp_path / ".cafe"
         cafe_dir.mkdir(parents=True)
 
-        # 不建立 agent 檔案，應該拋出錯誤
+        # 不建立 agent 檔案, 應該拋出錯誤
         with pytest.raises(FileNotFoundError) as exc_info:
             ensure_agent_file_exists("Roger", "pm", cafe_dir)
 
@@ -81,7 +81,7 @@ class TestEnsureAgentFileExists:
         assert "cafe agent default" in error_msg
 
     def test_agent_file_not_exists_error_message_content(self, tmp_path: Path) -> None:
-        """測試 agent 檔案不存在時錯誤訊息包含完整路徑。"""
+        """測試 agent 檔案不存在時錯誤訊息包含完整路徑."""
         cafe_dir = tmp_path / ".cafe"
         cafe_dir.mkdir(parents=True)
 
@@ -93,11 +93,11 @@ class TestEnsureAgentFileExists:
         assert expected_path in error_msg
 
     def test_unknown_agent_name_raises_value_error(self, tmp_path: Path) -> None:
-        """測試未知的 agent 名稱會拋出 FileNotFoundError（因為檔案不存在）。"""
+        """測試未知 agent 名稱會拋出 FileNotFoundError（因為檔案不存在）."""
         cafe_dir = tmp_path / ".cafe"
         cafe_dir.mkdir(parents=True)
 
-        # 現在不再檢查 agent 名稱，只檢查檔案是否存在
+        # 現在不再檢查 agent 名稱, 只檢查檔案是否存在
         # 所以應該拋出 FileNotFoundError 而不是 ValueError
         with pytest.raises(FileNotFoundError) as exc_info:
             ensure_agent_file_exists("UnknownAgent", "unknown_role", cafe_dir)
@@ -105,7 +105,7 @@ class TestEnsureAgentFileExists:
         assert "Agent file not found" in str(exc_info.value)
 
     def test_agent_directory_exists_but_file_missing(self, tmp_path: Path) -> None:
-        """測試 agent 目錄存在但檔案不存在的情況。"""
+        """測試 agent 目錄存在但檔案不存在情況."""
         cafe_dir = tmp_path / ".cafe"
         pm_dir = cafe_dir / "agents" / "pm"
         pm_dir.mkdir(parents=True)
@@ -119,7 +119,7 @@ class TestEnsureAgentFileExists:
         assert "Roger.md" in error_msg
 
     def test_default_cafe_dir_parameter(self, tmp_path: Path, monkeypatch) -> None:
-        """測試使用預設的 cafe_dir 參數（Path('.cafe')）。"""
+        """測試使用預設 cafe_dir 參數（Path('.cafe')）."""
         # 切換到 tmp_path 目錄
         monkeypatch.chdir(tmp_path)
 
@@ -130,11 +130,11 @@ class TestEnsureAgentFileExists:
         roger_file = pm_dir / "Roger.md"
         roger_file.write_text("# Roger")
 
-        # 使用預設參數（應該使用當前目錄的 .cafe）
+        # 使用預設參數（應該使用當前目錄 .cafe）
         ensure_agent_file_exists("Roger", "pm")
 
     def test_agents_directory_not_exists(self, tmp_path: Path) -> None:
-        """測試 agents 目錄完全不存在的情況。"""
+        """測試 agents 目錄完全不存在情況."""
         cafe_dir = tmp_path / ".cafe"
         cafe_dir.mkdir(parents=True)
 
@@ -143,7 +143,7 @@ class TestEnsureAgentFileExists:
             ensure_agent_file_exists("Roger", "pm", cafe_dir)
 
     def test_all_known_agents(self, tmp_path: Path) -> None:
-        """測試所有已知的 agent 名稱都能正確映射到角色目錄。"""
+        """測試所有已知 agent 名稱都能正確映射到角色目錄."""
         cafe_dir = tmp_path / ".cafe"
 
         # 建立所有 agent 檔案

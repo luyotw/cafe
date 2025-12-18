@@ -52,7 +52,7 @@ class TestPermissionDenialUserInteraction:
     """Test user interaction for permission denials."""
 
     def test_user_approves_all_denied_tools_and_they_are_added_to_allowed_tools(self, tmp_path: Path, monkeypatch):
-        """測試用戶批准所有被拒絕的工具，這些工具會被加入 allowed_tools"""
+        """測試用戶批准所有被拒絕工具, 這些工具會被加入 allowed_tools"""
         issue_name = "test-permission-approval"
         monkeypatch.chdir(tmp_path)
         spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
@@ -137,7 +137,7 @@ class TestPermissionDenialUserInteraction:
         assert "bash(git status)" in called_allowed_tools
 
     def test_user_rejects_some_tools_only_approved_ones_added_to_allowed_tools(self, tmp_path: Path, monkeypatch):
-        """測試用戶只批准部分工具，只有被批准的工具被加入 allowed_tools"""
+        """測試用戶只批准部分工具, 只有被批准工具被加入 allowed_tools"""
         issue_name = "test-partial-approval"
         monkeypatch.chdir(tmp_path)
         spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
@@ -198,7 +198,7 @@ class TestPermissionDenialUserInteraction:
         # Mock input(): 'n', 'n', 'y' for permissions, then '' for additional input
         with patch('builtins.print'), \
              patch('builtins.input', side_effect=['n', 'n', 'y', '']), \
-             patch.object(phase.display, 'get_multiline_input', return_value="只用安全的檔案"):
+             patch.object(phase.display, 'get_multiline_input', return_value="只用安全檔案"):
 
             phase.iteration = 1
             result = phase.execute()
@@ -212,7 +212,7 @@ class TestPermissionDenialUserInteraction:
         assert "read(/home/user/safe_file.txt)" in called_allowed_tools
 
     def test_user_rejects_all_tools_phase_fails(self, tmp_path: Path, monkeypatch):
-        """測試用戶拒絕所有工具，phase 失敗"""
+        """測試用戶拒絕所有工具, phase 失敗"""
         issue_name = "test-reject-all"
         monkeypatch.chdir(tmp_path)
         spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
@@ -282,7 +282,7 @@ class TestPermissionDenialUserInteraction:
         assert "permission denied" in result.message.lower() or "no tools approved" in result.message.lower()
 
     def test_permission_denials_displayed_with_clear_format(self, tmp_path: Path, monkeypatch):
-        """測試權限請求以清楚的格式顯示給用戶"""
+        """測試權限請求以清楚格式顯示給用戶"""
         issue_name = "test-display-format"
         monkeypatch.chdir(tmp_path)
         spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
@@ -408,7 +408,7 @@ class TestPermissionDenialUserInteraction:
             assert "non-interactive" in result.message.lower() or "permission" in result.message.lower()
 
     def test_non_interactive_without_approved_indices_fails_on_second_run(self, tmp_path: Path, monkeypatch):
-        """測試 non-interactive 模式下，第二輪沒有提供 approved_denial_indices 會失敗"""
+        """測試 non-interactive 模式下, Round 2沒有提供 approved_denial_indices 會失敗"""
         issue_name = "test-no-approved-indices"
         monkeypatch.chdir(tmp_path)
         spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
@@ -465,7 +465,7 @@ class TestPermissionDenialUserInteraction:
         assert "approve-denied-tools" in result.message.lower()
 
     def test_user_input_merged_with_permission_context(self, tmp_path: Path, monkeypatch):
-        """測試用戶的 permission context 會被合併到 prompt"""
+        """測試用戶 permission context 會被合併到 prompt"""
         issue_name = "test-merge-input"
         monkeypatch.chdir(tmp_path)
         spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
@@ -513,7 +513,7 @@ class TestPermissionDenialUserInteraction:
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
             approved_denial_indices=[0],  # Approve the Edit tool
-            user_input="請小心修改，不要破壞現有功能",  # Additional context
+            user_input="請小心修改, 不要破壞現有功能",  # Additional context
         )
 
         result = phase.execute()

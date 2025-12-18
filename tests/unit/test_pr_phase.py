@@ -350,7 +350,7 @@ class TestPRTitleGeneration:
         assert result.status == PhaseStatus.COMPLETED
 
     def test_pr_title_from_requirements_file_via_custom(self, tmp_path: Path) -> None:
-        """測試 local mode 使用 custom title（模擬從 spec.md 提取的內容）"""
+        """測試 local mode 使用 custom title（模擬從 spec.md 提取內容）"""
         # Setup issue directory structure
         spec_file = tmp_path / ".cafe" / "issues" / "auth" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
@@ -588,7 +588,7 @@ class TestErrorHandling:
         assert "failed" in result.message.lower() or "error" in result.message.lower()
 
     def test_execute_fails_when_not_authenticated(self, tmp_path: Path) -> None:
-        """測試當 gh 未登入時，execute() 正確回傳失敗狀態"""
+        """測試當 gh 未登入時, execute() 正確回傳失敗狀態"""
         # Setup issue directory structure
         spec_file = tmp_path / ".cafe" / "issues" / "test-issue" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
@@ -621,7 +621,7 @@ class TestErrorHandling:
         github_ops.create_pr.assert_not_called()
 
     def test_execute_handles_github_error_from_check_auth(self, tmp_path: Path) -> None:
-        """測試當 check_gh_auth() 拋出 GitHubError 時，execute() 正確處理並回傳錯誤訊息"""
+        """測試當 check_gh_auth() 拋出 GitHubError 時, execute() 正確處理並回傳錯誤訊息"""
         from cafe.utils.github import GitHubError
 
         # Setup issue directory structure
@@ -839,7 +839,7 @@ class TestCustomTitleAndBody:
     """Test custom title and body parameters."""
 
     def test_custom_title_and_body(self, tmp_path: Path) -> None:
-        """測試使用自訂 title 和 body（會寫入檔案後再讀取）"""
+        """測試使用自訂 title and body（會寫入檔案後再讀取）"""
         # Setup issue directory structure
         spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
@@ -895,7 +895,7 @@ class TestCustomTitleAndBody:
         assert result.status == PhaseStatus.COMPLETED
 
     def test_auto_generate_title_and_body(self, tmp_path: Path) -> None:
-        """測試自動產生 title 和 body (custom_title=None, custom_body=None)"""
+        """測試自動產生 title and body (custom_title=None, custom_body=None)"""
         # Setup issue directory structure
         spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
@@ -967,7 +967,7 @@ class TestPartialCustomTitleOrBody:
     """Test partial custom title or body (one provided, one generated)."""
 
     def test_custom_title_only_body_generated(self, tmp_path: Path) -> None:
-        """測試只提供 custom title，body 由 agent 生成"""
+        """測試只提供 custom title, body 由 agent 生成"""
         # Setup issue directory structure
         spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
@@ -1043,7 +1043,7 @@ class TestPartialCustomTitleOrBody:
         assert result.status == PhaseStatus.COMPLETED
 
     def test_custom_body_only_title_generated(self, tmp_path: Path) -> None:
-        """測試只提供 custom body，title 由 agent 生成"""
+        """測試只提供 custom body, title 由 agent 生成"""
         # Setup issue directory structure
         spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
@@ -1250,7 +1250,7 @@ class TestPRExistingFiles:
         )
 
     def test_pr_exists_with_update_and_custom_values(self, tmp_path: Path) -> None:
-        """測試 PR 檔案已存在，使用 --update 和 custom title/body 會覆蓋舊檔案"""
+        """測試 PR 檔案已存在, 使用 --update and custom title/body 會覆蓋舊檔案"""
         # Setup issue directory structure with existing PR files
         spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
@@ -1319,7 +1319,7 @@ class TestPRURLInResult:
     """測試 PR URL 是否包含在結果中"""
 
     def test_pr_url_included_in_result(self, tmp_path: Path) -> None:
-        """測試 PR 建立成功後，結果中包含 PR URL"""
+        """測試 PR 建立成功後, 結果中包含 PR URL"""
         spec_file = tmp_path / ".cafe" / "issues" / "test-issue" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("# Feature\n\nAdd new feature")
@@ -1364,7 +1364,7 @@ class TestBaseBranchFromConfig:
     """測試從 config.yaml 讀取 base_branch"""
 
     def test_base_branch_from_config_used(self, tmp_path: Path, monkeypatch) -> None:
-        """測試當 config.yaml 存在且有 base_branch 時，應使用該值"""
+        """測試當 config.yaml 存在且有 base_branch 時, 應使用該值"""
         # Change to tmp_path so relative paths work
         monkeypatch.chdir(tmp_path)
 
@@ -1415,7 +1415,7 @@ class TestBaseBranchFromConfig:
         assert result.status == PhaseStatus.COMPLETED
 
     def test_base_branch_default_when_config_missing(self, tmp_path: Path) -> None:
-        """測試當 config.yaml 不存在時，應使用預設值 'main'"""
+        """測試當 config.yaml 不存在時, 應使用預設值 'main'"""
         # Setup issue directory structure (no config.yaml)
         spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
@@ -1458,7 +1458,7 @@ class TestBaseBranchFromConfig:
         assert result.status == PhaseStatus.COMPLETED
 
     def test_base_branch_default_when_config_no_base_branch_field(self, tmp_path: Path) -> None:
-        """測試當 config.yaml 存在但無 base_branch 欄位時，應使用預設值 'main'"""
+        """測試當 config.yaml 存在但無 base_branch 欄位時, 應使用預設值 'main'"""
         # Setup issue directory structure
         spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
@@ -1505,7 +1505,7 @@ class TestBaseBranchFromConfig:
         assert result.status == PhaseStatus.COMPLETED
 
     def test_cli_base_param_overrides_config(self, tmp_path: Path) -> None:
-        """測試 CLI --base 參數能覆蓋 config.yaml 中的值（CLI 參數優先）"""
+        """測試 CLI --base 參數能覆蓋 config.yaml 中值（CLI 參數優先）"""
         # Setup issue directory structure
         spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
@@ -1558,7 +1558,7 @@ class TestIssueCommentIntegration:
     """Test issue comment integration when PR is created."""
 
     def test_add_issue_comment_when_issue_id_configured(self, tmp_path: Path, monkeypatch) -> None:
-        """測試當 issue_id 有設定時，PR 建立後會自動加上 issue comment"""
+        """測試當 issue_id 有設定時, PR 建立後會自動加上 issue comment"""
         # Change to tmp_path so relative paths work
         monkeypatch.chdir(tmp_path)
 
@@ -1614,7 +1614,7 @@ class TestIssueCommentIntegration:
         )
 
     def test_no_issue_comment_when_issue_id_not_configured(self, tmp_path: Path) -> None:
-        """測試當 issue_id 未設定時，不會加 issue comment"""
+        """測試當 issue_id 未設定時, 不會加 issue comment"""
         # Setup issue directory structure without issue_id in config
         issue_dir = tmp_path / ".cafe" / "issues" / "test-feature"
         spec_file = issue_dir / "spec" / "spec.md"
@@ -1664,7 +1664,7 @@ class TestIssueCommentIntegration:
         github_ops.add_issue_comment.assert_not_called()
 
     def test_pr_succeeds_even_if_issue_comment_fails(self, tmp_path: Path, monkeypatch) -> None:
-        """測試即使 issue comment 失敗，PR 建立仍然成功"""
+        """測試即使 issue comment 失敗, PR 建立仍然成功"""
         # Change to tmp_path so relative paths work
         monkeypatch.chdir(tmp_path)
 
@@ -1723,7 +1723,7 @@ class TestInteractiveModeBehavior:
 
     def test_interactive_mode_auto_generates_without_asking(self, tmp_path: Path) -> None:
         """
-        測試互動模式下，若無 --title 或 --body，應直接由 agent 生成，不再詢問。
+        測試互動模式下, 若無 --title or --body, 應直接由 agent 生成, 不再詢問.
         """
         # Setup
         spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"

@@ -215,7 +215,7 @@ def generate_status_code_prompt(valid_codes: List[PhaseStatusCode], descriptions
         >>> print(generate_status_code_prompt(codes, desc))
     """
     lines = [
-        "請在回應的第一行明確標示狀態碼（必須包含 CAFE_ 前綴）：",
+        "Please clearly indicate the status code on the first line of your response (must include CAFE_ prefix):",
         ""
     ]
 
@@ -225,9 +225,9 @@ def generate_status_code_prompt(valid_codes: List[PhaseStatusCode], descriptions
 
     lines.extend([
         "",
-        "範例回應格式：",
+        "Example response format:",
         f"{valid_codes[0].value}",
-        "（只回應狀態碼，不要做何任總結及說明...）"
+        "(Only respond with the status code, no summary or explanation...)"
     ])
 
     return "\n".join(lines)

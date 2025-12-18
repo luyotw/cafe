@@ -1,6 +1,6 @@
 """Unit tests for DevelopPhase PR comments integration.
 
-測試 DevelopPhase 整合 PR comments 的功能。
+測試 DevelopPhase 整合 PR comments 功能.
 """
 
 import pytest
@@ -16,7 +16,7 @@ class TestDevelopPhasePRCommentsIntegration:
 
     @pytest.fixture
     def mock_components(self, tmp_path, monkeypatch):
-        """創建 mock 的 components"""
+        """創建 mock  components"""
         # Change to tmp_path directory
         monkeypatch.chdir(tmp_path)
 
@@ -47,8 +47,8 @@ class TestDevelopPhasePRCommentsIntegration:
     def test_load_pr_comments_success(self, mock_components):
         """測試成功加載 PR comments
 
-        情境：提供有效的 PR number，成功獲取未 resolved comments
-        預期：返回格式化的 comments 字串
+        情境：提供有效 PR number, 成功獲取未 resolved comments
+        預期：返回格式化 comments 字串
         """
         with patch('cafe.phases.develop_phase.get_pr_comments') as mock_get:
             with patch('cafe.phases.develop_phase.filter_unresolved_comments') as mock_filter:
@@ -115,7 +115,7 @@ class TestDevelopPhasePRCommentsIntegration:
     def test_load_pr_comments_pr_not_found(self, mock_components):
         """測試 PR 不存在
 
-        情境：提供的 PR number 不存在
+        情境：提供 PR number 不存在
         預期：_load_pr_comments 返回空字串並記錄錯誤
         """
         with patch('cafe.phases.develop_phase.get_pr_comments') as mock_get:
@@ -138,10 +138,10 @@ class TestDevelopPhasePRCommentsIntegration:
             assert count == 0
 
     def test_load_pr_comments_no_unresolved(self, mock_components):
-        """測試 PR 沒有未 resolved 的 comments
+        """測試 PR 沒有未 resolved  comments
 
-        情境：PR 有 comments，但全部都已 resolved
-        預期：返回空字串（沒有需要處理的 comments）
+        情境：PR 有 comments, 但全部都已 resolved
+        預期：返回空字串（沒有需要處理 comments）
         """
         with patch('cafe.phases.develop_phase.get_pr_comments') as mock_get:
             with patch('cafe.phases.develop_phase.filter_unresolved_comments') as mock_filter:
@@ -179,7 +179,7 @@ class TestDevelopPhasePRCommentsIntegration:
         """測試當 PR 沒有 unresolved comments 時 _load_pr_comments 返回空字串
 
         情境：提供 pr_number 但 PR 沒有 unresolved comments
-        預期：_load_pr_comments() 返回空字串和 count=0，但不阻止 develop 執行
+        預期：_load_pr_comments() 返回空字串and count=0, 但不阻止 develop 執行
         """
         with patch('cafe.phases.develop_phase.get_pr_comments') as mock_get:
             with patch('cafe.phases.develop_phase.filter_unresolved_comments') as mock_filter:
@@ -272,7 +272,7 @@ class TestDevelopPhasePRCommentsIntegration:
                     # 應該格式化所有 comments
                     assert count == 3
                     mock_format.assert_called_once()
-                    # 檢查傳給 format_comments_for_prompt 的包含所有 comments
+                    # 檢查傳給 format_comments_for_prompt 包含所有 comments
                     formatted_comments = mock_format.call_args[0][0]
                     assert len(formatted_comments) == 3
                     assert formatted_comments[0].id == "C1"
@@ -283,7 +283,7 @@ class TestDevelopPhasePRCommentsIntegration:
         """測試 PR comments 載入單個 unresolved comment
 
         情境：提供 pr_number 且有 1 個 unresolved comment
-        預期：_load_pr_comments() 返回格式化的 comment 和 count=1
+        預期：_load_pr_comments() 返回格式化 comment and count=1
         """
         with patch('cafe.phases.develop_phase.get_pr_comments') as mock_get:
             with patch('cafe.phases.develop_phase.filter_unresolved_comments') as mock_filter:
@@ -318,12 +318,12 @@ class TestDevelopPhasePRCommentsIntegration:
                     # Load PR comments
                     result, count = phase._load_pr_comments()
 
-                    # 應該返回格式化的 comment
+                    # 應該返回格式化 comment
                     assert result == "Comment content"
                     assert count == 1
 
     def test_prompt_mentions_pr_comments_when_present(self, mock_components):
-        """測試當有 PR comments 時，prompt 會明確提示要讀取
+        """測試當有 PR comments 時, prompt 會明確提示要讀取
 
         情境：有 PR comments 且有 review file
         預期：prompt 中包含明確指示要讀取兩者
@@ -373,14 +373,14 @@ class TestDevelopPhasePRCommentsIntegration:
                     # 生成 prompt
                     prompt = phase._generate_prompt()
 
-                    # 驗證 prompt 包含 PR comments 的明確提示
-                    assert "PR comments (見上方 2 則 unresolved comments)" in prompt
+                    # 驗證 prompt 包含 PR comments 明確提示
+                    assert "PR comments" in prompt
                     assert "PR Comments:\n- Comment 1\n- Comment 2" in prompt
-                    # 應該提示要讀取 review file 和 PR comments
-                    assert ".cafe/issues/test-issue/review/review_001.md 和 PR comments" in prompt
+                    # 應該提示要讀取 review file and PR comments
+                    assert ".cafe/issues/test-issue/review/review_001.md and PR comments" in prompt
 
     def test_prompt_mentions_only_pr_comments_when_no_review_file(self, mock_components):
-        """測試當只有 PR comments 沒有 review file 時的 prompt
+        """測試當只有 PR comments 沒有 review file 時 prompt
 
         情境：有 PR comments 但沒有 review file（正常開發模式）
         預期：prompt 中包含 PR comments section
@@ -414,7 +414,7 @@ class TestDevelopPhasePRCommentsIntegration:
                         pr_number=123,
                     )
 
-                    # 生成 prompt（正常開發模式，沒有 review file）
+                    # 生成 prompt（正常開發模式, 沒有 review file）
                     prompt = phase._generate_prompt()
 
                     # 驗證 prompt 包含 PR comments

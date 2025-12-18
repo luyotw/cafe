@@ -1,6 +1,6 @@
-"""測試 Phase 在 non-interactive 模式下的行為
+"""測試 Phase 在 non-interactive 模式下行為
 
-TDD: 先寫測試定義預期行為，然後修復實作
+TDD: 先寫測試定義預期行為, 然後修復實作
 """
 
 import os
@@ -36,18 +36,18 @@ def setup_plan_phase(tmp_path, monkeypatch):
     # 切換到 tmp_path 目錄
     monkeypatch.chdir(tmp_path)
 
-    # 創建必要的目錄結構
+    # 創建必要目錄結構
     plan_dir = tmp_path / ".cafe" / "issues" / "test" / "plan"
     plan_dir.mkdir(parents=True)
 
     spec_dir = tmp_path / ".cafe" / "issues" / "test" / "spec"
     spec_dir.mkdir(parents=True)
     spec_file = spec_dir / "spec.md"
-    spec_file.write_text("# 測試需求\n\n這是測試內容。\n\n## 開發指南\n\n開發指南內容。")
+    spec_file.write_text("# 測試需求\n\n這是測試內容.\n\n## 開發指南\n\n開發指南內容.")
 
-    # 創建已存在的 plan.md（包含開發指南）
+    # 創建已存在 plan.md（包含開發指南）
     plan_file = plan_dir / "plan.md"
-    plan_file.write_text("## 開發指南\n\n開發指南內容。\n\n## 實作計畫\n\nTODO")
+    plan_file.write_text("## 開發指南\n\n開發指南內容.\n\n## 實作計畫\n\nTODO")
 
     # 創建 template
     template_dir = tmp_path / ".cafe" / "templates" / "plan"
@@ -63,14 +63,14 @@ def setup_plan_phase(tmp_path, monkeypatch):
 
 
 class TestNonInteractiveModeWithNeedClarification:
-    """測試 non-interactive 模式收到 NEED_CLARIFICATION 的行為"""
+    """測試 non-interactive 模式收到 NEED_CLARIFICATION 行為"""
     
     def test_should_fail_immediately_when_need_clarification_without_user_input(
         self, mock_env, setup_plan_phase, mock_git_ops, monkeypatch
     ):
         """
         測試：non-interactive 模式收到 NEED_CLARIFICATION 但沒有 user_input
-        預期：立即失敗（因為無法與用戶交互）
+        預期：立即失敗（因為無法and用戶交互）
         """
         # Arrange
         setup = setup_plan_phase
@@ -98,7 +98,7 @@ class TestNonInteractiveModeWithNeedClarification:
 
         result = phase.execute()
 
-        # 移除 while loop 後，NEED_CLARIFICATION 返回 COMPLETED（不再自動繼續）
+        # 移除 while loop 後, NEED_CLARIFICATION 返回 COMPLETED（不再自動繼續）
         assert result.status == PhaseStatus.COMPLETED
         assert result.data.get("status_code") == "CAFE_NEED_CLARIFICATION"
     
@@ -107,7 +107,7 @@ class TestNonInteractiveModeWithNeedClarification:
     ):
         """
         測試：non-interactive 模式收到 NEED_CLARIFICATION 且有提供 user_input
-        預期：使用 user_input 繼續一輪，然後如果再次收到 NEED_CLARIFICATION 應失敗（因為 user_input 已被消耗）
+        預期：使用 user_input 繼續一輪, 然後如果再次收到 NEED_CLARIFICATION 應失敗（因為 user_input 已被消耗）
         """
         # Arrange
         setup = setup_plan_phase
@@ -121,7 +121,7 @@ class TestNonInteractiveModeWithNeedClarification:
         agent_manager.register_agent(AgentConfig(name="David", cli=AgentCLI.CLAUDE))
         permission_handler = PermissionHandler()
 
-        # Act - 第一輪執行：提供 user_input
+        # Act - Round 1執行：提供 user_input
         phase = PlanPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
@@ -135,7 +135,7 @@ class TestNonInteractiveModeWithNeedClarification:
 
         result = phase.execute()
 
-        # 移除 while loop 後，只執行一次，返回 COMPLETED（不再自動繼續）
+        # 移除 while loop 後, 只執行一次, 返回 COMPLETED（不再自動繼續）
         assert result.status == PhaseStatus.COMPLETED
         assert result.data.get("status_code") == "CAFE_NEED_CLARIFICATION"
 
@@ -155,7 +155,7 @@ class TestNonInteractiveModeCompleteImmediately:
 
         monkeypatch.setenv(
             "CAFE_MOCK_RESPONSE",
-            "CAFE_READY_FOR_REVIEW\n\n# 實作計畫\n\n完整的計畫內容。"
+            "CAFE_READY_FOR_REVIEW\n\n# 實作計畫\n\n完整計畫內容."
         )
 
         agent_manager = AgentManager()

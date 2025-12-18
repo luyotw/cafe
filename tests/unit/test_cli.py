@@ -76,7 +76,7 @@ class TestSetupAgents:
         config_file = tmp_path / "config.yaml"
         config_manager = ConfigManager(str(config_file))
 
-        # 設定自訂 agent 設定（使用 dict 結構而非預設的 list）
+        # 設定自訂 agent 設定（使用 dict 結構而非預設 list）
         custom_config = {
             "agents": {
                 "pm": {"name": "CustomPM", "cli": "gemini"},
@@ -134,7 +134,7 @@ class TestConfigCommand:
         assert "value" in result.stdout
 
     def test_config_get_existing_key(self, tmp_path: Path) -> None:
-        """測試取得存在的設定值"""
+        """測試取得存在設定值"""
         import os
         old_cwd = os.getcwd()
         try:
@@ -156,7 +156,7 @@ class TestConfigCommand:
         assert "Roger" in result.stdout
 
     def test_config_get_nonexistent_key(self, tmp_path: Path) -> None:
-        """測試取得不存在的設定值"""
+        """測試取得不存在設定值"""
         import os
         old_cwd = os.getcwd()
         try:
@@ -809,7 +809,7 @@ class TestEditFileWithEditor:
     def test_edit_file_editor_not_found(
         self, mock_subprocess: Mock, tmp_path: Path
     ) -> None:
-        """測試編輯器不存在時的錯誤處理"""
+        """測試編輯器不存在時錯誤處理"""
         from cafe.ui.cli import _edit_file_with_editor
 
         # Setup
@@ -827,7 +827,7 @@ class TestEditFileWithEditor:
     def test_edit_file_editor_execution_failed(
         self, mock_subprocess: Mock, tmp_path: Path
     ) -> None:
-        """測試編輯器執行失敗時的錯誤處理"""
+        """測試編輯器執行失敗時錯誤處理"""
         from cafe.ui.cli import _edit_file_with_editor
         import subprocess
 
@@ -850,7 +850,7 @@ class TestSpecEditCommand:
     def test_spec_edit_opens_latest_file(
         self, mock_edit: Mock, mock_git_ops_class: Mock, tmp_path: Path
     ) -> None:
-        """測試正確找到並開啟最新的 spec_XXX.md 檔案"""
+        """測試正確找到並開啟最新 spec_XXX.md 檔案"""
         import os
 
         # Setup
@@ -982,7 +982,7 @@ class TestPlanEditCommand:
     def test_plan_edit_opens_latest_file(
         self, mock_edit: Mock, mock_git_ops_class: Mock, tmp_path: Path
     ) -> None:
-        """測試正確找到並開啟最新的 plan_XXX.md 檔案"""
+        """測試正確找到並開啟最新 plan_XXX.md 檔案"""
         import os
 
         # Setup
@@ -1114,7 +1114,7 @@ class TestReviewEditCommand:
     def test_review_edit_opens_latest_file(
         self, mock_edit: Mock, mock_git_ops_class: Mock, tmp_path: Path
     ) -> None:
-        """測試正確找到並開啟最新的 review_XXX.md 檔案"""
+        """測試正確找到並開啟最新 review_XXX.md 檔案"""
         import os
 
         # Setup

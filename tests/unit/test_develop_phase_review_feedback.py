@@ -1,4 +1,4 @@
-"""測試 DevelopPhase 的 review feedback 檢查邏輯。"""
+"""測試 DevelopPhase  review feedback 檢查邏輯."""
 
 import json
 import pytest
@@ -11,7 +11,7 @@ from cafe.core.types import WorkflowMode
 
 @pytest.fixture
 def mock_components(tmp_path):
-    """建立測試用的 mock 元件。"""
+    """建立測試用 mock 元件."""
     # Create issue directory structure
     issue_dir = tmp_path / ".cafe" / "issues" / "test-issue"
     spec_dir = issue_dir / "spec"
@@ -50,7 +50,7 @@ class TestDevelopPhaseReviewFeedbackCheck:
     def test_no_review_file_returns_false(self, mock_components):
         """測試當沒有 review file 時返回 False
 
-        情境：review 目錄是空的
+        情境：review 目錄是空
         預期：_check_review_feedback_exists() 返回 False
         """
         phase = DevelopPhase(
@@ -69,14 +69,14 @@ class TestDevelopPhaseReviewFeedbackCheck:
     def test_review_file_exists_with_confirmed_status_returns_false(self, mock_components):
         """測試當 review file 存在但狀態是 CONFIRMED 時返回 False
 
-        情境：有 review file，但 review 已經 CONFIRMED（已通過）
+        情境：有 review file, 但 review 已經 CONFIRMED（已通過）
         預期：_check_review_feedback_exists() 返回 False（不需要修正）
         """
         # 建立 review file
         review_file = mock_components["review_dir"] / "review_001.md"
         review_file.write_text("Review feedback - already confirmed")
 
-        # 建立 status.json，狀態為 CONFIRMED
+        # 建立 status.json, 狀態為 CONFIRMED
         status_file = mock_components["review_dir"] / "status.json"
         status_file.write_text(json.dumps({
             "phase": "review",
@@ -102,14 +102,14 @@ class TestDevelopPhaseReviewFeedbackCheck:
     def test_review_file_exists_with_needs_changes_status_returns_true(self, mock_components):
         """測試當 review file 存在且狀態是 NEEDS_CHANGES 時返回 True
 
-        情境：有 review file，且 review 狀態是 NEEDS_CHANGES（需要修正）
+        情境：有 review file, 且 review 狀態是 NEEDS_CHANGES（需要修正）
         預期：_check_review_feedback_exists() 返回 True
         """
         # 建立 review file
         review_file = mock_components["review_dir"] / "review_001.md"
         review_file.write_text("Review feedback - needs changes")
 
-        # 建立 status.json，狀態為 NEEDS_CHANGES
+        # 建立 status.json, 狀態為 NEEDS_CHANGES
         status_file = mock_components["review_dir"] / "status.json"
         status_file.write_text(json.dumps({
             "phase": "review",
@@ -135,8 +135,8 @@ class TestDevelopPhaseReviewFeedbackCheck:
     def test_review_file_exists_without_status_file_returns_true(self, mock_components):
         """測試當 review file 存在但沒有 status.json 時返回 True
 
-        情境：有 review file，但沒有 status.json（可能是舊版本或異常情況）
-        預期：_check_review_feedback_exists() 返回 True（保守處理，視為需要處理）
+        情境：有 review file, 但沒有 status.json（可能是舊版本or異常情況）
+        預期：_check_review_feedback_exists() 返回 True（保守處理, 視為需要處理）
         """
         # 建立 review file（沒有 status.json）
         review_file = mock_components["review_dir"] / "review_001.md"

@@ -45,10 +45,10 @@ class MockPhase(Phase):
 
 
 class TestCriticalPhaseError:
-    """測試 CriticalPhaseError 的建立和屬性。"""
+    """測試 CriticalPhaseError 建立and屬性."""
 
     def test_critical_error_creation(self):
-        """測試 CriticalPhaseError 可以正確建立並包含必要屬性。"""
+        """測試 CriticalPhaseError 可以正確建立並包含必要屬性."""
         error = CriticalPhaseError(
             message="API rate limit exceeded",
             error_type="rate_limit",
@@ -60,7 +60,7 @@ class TestCriticalPhaseError:
         assert error.phase_name == "SpecPhase"
 
     def test_critical_error_is_exception(self):
-        """測試 CriticalPhaseError 是 Exception 的子類。"""
+        """測試 CriticalPhaseError 是 Exception 子類."""
         error = CriticalPhaseError(
             message="CLI not found",
             error_type="cli_not_found",
@@ -71,10 +71,10 @@ class TestCriticalPhaseError:
 
 
 class TestAgentExecutionCriticalErrors:
-    """測試 _execute_agent_iteration 如何處理 critical errors。"""
+    """測試 _execute_agent_iteration 如何處理 critical errors."""
 
     def test_rate_limit_error_raises_critical_phase_error(self, tmp_path):
-        """當 agent 執行遇到 rate_limit 錯誤時，應拋出 CriticalPhaseError。"""
+        """當 agent 執行遇到 rate_limit 錯誤時, 應拋出 CriticalPhaseError."""
         agent_manager = Mock(spec=AgentManager)
         rate_limit_error = AgentExecutionError(
             "Claude execution failed: Limit reached · resets 2am",
@@ -96,14 +96,14 @@ class TestAgentExecutionCriticalErrors:
                 valid_status_codes=[PhaseStatusCode.CONFIRMED],
             )
 
-        # 驗證 CriticalPhaseError 的屬性
+        # 驗證 CriticalPhaseError 屬性
         error = exc_info.value
         assert error.error_type == "rate_limit"
         assert "MockPhase" in error.phase_name
         assert "Limit reached" in str(error)
 
     def test_cli_not_found_error_raises_critical_phase_error(self, tmp_path):
-        """當 CLI 工具找不到時，應拋出 CriticalPhaseError。"""
+        """當 CLI 工具找不到時, 應拋出 CriticalPhaseError."""
         agent_manager = Mock(spec=AgentManager)
         cli_error = AgentExecutionError(
             "CLI tool 'claude' not found",
@@ -130,7 +130,7 @@ class TestAgentExecutionCriticalErrors:
         assert "not found" in str(error)
 
     def test_critical_error_updates_iteration_history(self, tmp_path):
-        """Critical error 發生時，應更新 iteration history 並標記為 critical。"""
+        """Critical error 發生時, 應更新 iteration history 並標記為 critical."""
         agent_manager = Mock(spec=AgentManager)
         rate_limit_error = AgentExecutionError(
             "Rate limit exceeded",
@@ -166,7 +166,7 @@ class TestAgentExecutionCriticalErrors:
         assert history_data["is_critical"] is True
 
     def test_non_critical_error_not_converted(self, tmp_path):
-        """非 critical error 不應被轉換為 CriticalPhaseError。"""
+        """非 critical error 不應被轉換為 CriticalPhaseError."""
         agent_manager = Mock(spec=AgentManager)
         normal_error = AgentExecutionError(
             "Some other error",
@@ -180,7 +180,7 @@ class TestAgentExecutionCriticalErrors:
         phase = MockPhase(tmp_path, agent_manager)
         phase.history_dir.mkdir(parents=True, exist_ok=True)
 
-        # 應該拋出原始的 AgentExecutionError，不是 CriticalPhaseError
+        # 應該拋出原始 AgentExecutionError, 不是 CriticalPhaseError
         with pytest.raises(AgentExecutionError) as exc_info:
             phase._execute_agent_iteration(
                 agent_name="test_agent",
@@ -195,10 +195,10 @@ class TestAgentExecutionCriticalErrors:
 
 
 class TestHandleExceptionInExecute:
-    """測試 Phase._handle_exception_in_execute() 方法。"""
+    """測試 Phase._handle_exception_in_execute() 方法."""
 
     def test_critical_error_is_reraised(self, tmp_path):
-        """CriticalPhaseError 應該被 re-raise，不會被轉換為 PhaseResult。"""
+        """CriticalPhaseError 應該被 re-raise, 不會被轉換為 PhaseResult."""
         agent_manager = Mock(spec=AgentManager)
         phase = MockPhase(tmp_path, agent_manager)
 
@@ -215,7 +215,7 @@ class TestHandleExceptionInExecute:
         assert exc_info.value is critical_error
 
     def test_normal_exception_returns_failed_result(self, tmp_path):
-        """一般的 Exception 應該被轉換為 PhaseResult(FAILED)。"""
+        """一般 Exception 應該被轉換為 PhaseResult(FAILED)."""
         agent_manager = Mock(spec=AgentManager)
         phase = MockPhase(tmp_path, agent_manager)
 
@@ -229,7 +229,7 @@ class TestHandleExceptionInExecute:
         assert "Some validation error" in result.message
 
     def test_agent_execution_error_non_critical_returns_failed(self, tmp_path):
-        """非 critical 的 AgentExecutionError 應返回 FAILED result。"""
+        """非 critical  AgentExecutionError 應返回 FAILED result."""
         agent_manager = Mock(spec=AgentManager)
         phase = MockPhase(tmp_path, agent_manager)
 
@@ -243,10 +243,10 @@ class TestHandleExceptionInExecute:
 
 
 class TestPhaseExecuteWithCriticalError:
-    """測試 Phase.execute() 方法如何處理 critical errors。"""
+    """測試 Phase.execute() 方法如何處理 critical errors."""
 
     def test_phase_execute_reraises_critical_error(self, tmp_path):
-        """Phase.execute() 中遇到 CriticalPhaseError 時應該 re-raise。"""
+        """Phase.execute() 中遇到 CriticalPhaseError 時應該 re-raise."""
         agent_manager = Mock(spec=AgentManager)
         rate_limit_error = AgentExecutionError(
             "Rate limit exceeded",
@@ -267,7 +267,7 @@ class TestPhaseExecuteWithCriticalError:
         assert exc_info.value.error_type == "rate_limit"
 
     def test_phase_execute_returns_failed_for_normal_error(self, tmp_path):
-        """Phase.execute() 遇到一般錯誤時應返回 FAILED result。"""
+        """Phase.execute() 遇到一般錯誤時應返回 FAILED result."""
         agent_manager = Mock(spec=AgentManager)
         normal_error = ValueError("Config error")
         agent_manager.execute.side_effect = normal_error
@@ -286,10 +286,10 @@ class TestPhaseExecuteWithCriticalError:
 
 
 class TestCriticalErrorPropagation:
-    """測試 critical error 如何在整個調用鏈中傳播。"""
+    """測試 critical error 如何在整個調用鏈中傳播."""
 
     def test_error_propagates_through_execute_and_handle_agent_response(self, tmp_path):
-        """CriticalPhaseError 應該能穿過 _execute_and_handle_agent_response。"""
+        """CriticalPhaseError 應該能穿過 _execute_and_handle_agent_response."""
         agent_manager = Mock(spec=AgentManager)
         rate_limit_error = AgentExecutionError(
             "API limit reached",

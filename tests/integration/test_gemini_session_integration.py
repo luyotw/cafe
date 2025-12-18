@@ -13,7 +13,7 @@ class TestGeminiSessionIntegration:
     """Test Gemini session management with AgentManager."""
 
     def test_different_agents_use_separate_sessions(self, tmp_path: Path) -> None:
-        """測試不同 Agent 使用各自的 session"""
+        """測試不同 Agent 使用各自 session"""
         # Setup
         session_manager = SessionManager(sessions_dir=str(tmp_path / ".cafe" / "sessions"))
         agent_manager = AgentManager(session_manager=session_manager)
@@ -68,7 +68,7 @@ class TestGeminiSessionIntegration:
             assert pm_executor.config.session_id != dev_executor.config.session_id
 
     def test_same_agent_continues_session_across_executions(self, tmp_path: Path) -> None:
-        """測試相同 Agent 的連續執行能接續對話"""
+        """測試相同 Agent 連續執行能接續對話"""
         # Setup
         session_manager = SessionManager(sessions_dir=str(tmp_path / ".cafe" / "sessions"))
         agent_manager = AgentManager(session_manager=session_manager)

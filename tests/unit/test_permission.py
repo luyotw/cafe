@@ -16,7 +16,7 @@ class TestPermissionHandlerBasics:
         assert handler is not None
 
     def test_request_permission_with_tool_name_and_input(self) -> None:
-        """測試使用工具名稱和輸入請求權限"""
+        """測試使用工具名稱and輸入請求權限"""
         handler = PermissionHandler()
         request = PermissionRequest(
             tool_name="Bash",
@@ -36,7 +36,7 @@ class TestPermissionDisplay:
     """Test permission request display."""
 
     def test_format_permission_request_bash(self) -> None:
-        """測試格式化 Bash 工具的權限請求"""
+        """測試格式化 Bash 工具權限請求"""
         handler = PermissionHandler()
         request = PermissionRequest(
             tool_name="Bash",
@@ -50,7 +50,7 @@ class TestPermissionDisplay:
         assert "Show git status" in formatted
 
     def test_format_permission_request_read(self) -> None:
-        """測試格式化 Read 工具的權限請求"""
+        """測試格式化 Read 工具權限請求"""
         handler = PermissionHandler()
         request = PermissionRequest(
             tool_name="Read",
@@ -63,7 +63,7 @@ class TestPermissionDisplay:
         assert "/path/to/file.py" in formatted
 
     def test_format_permission_request_write(self) -> None:
-        """測試格式化 Write 工具的權限請求"""
+        """測試格式化 Write 工具權限請求"""
         handler = PermissionHandler()
         request = PermissionRequest(
             tool_name="Write",
@@ -144,7 +144,7 @@ class TestAutoApproveRules:
         assert action == PermissionAction.AUTHORIZE
 
     def test_auto_approve_safe_git_commands(self) -> None:
-        """測試自動授權安全的 git 指令"""
+        """測試自動授權安全 git 指令"""
         handler = PermissionHandler(auto_approve_safe_git=True)
         request = PermissionRequest(
             tool_name="Bash",
@@ -196,7 +196,7 @@ class TestAllowedToolsPattern:
         assert not handler.is_tool_allowed("Bash", {"command": "git push"})
 
     def test_allowed_tool_skips_prompt(self) -> None:
-        """測試允許的工具跳過提示直接授權"""
+        """測試允許工具跳過提示直接授權"""
         handler = PermissionHandler(allowed_tools=["Read(*)"])
         request = PermissionRequest(
             tool_name="Read",

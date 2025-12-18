@@ -1,4 +1,4 @@
-"""測試 SpecPhase 使用版本化檔案。"""
+"""測試 SpecPhase 使用版本化檔案."""
 
 import pytest
 from pathlib import Path
@@ -58,12 +58,12 @@ def mock_git_ops():
 
 
 class TestSpecPhaseVersionedFiles:
-    """測試 SpecPhase 的版本化檔案功能。"""
+    """測試 SpecPhase 版本化檔案功能."""
 
     def test_first_iteration_creates_spec_001(
         self, tmp_path, mock_agent_manager, mock_permission_handler, mock_git_ops
     ):
-        """測試第一輪產生 spec_001.md。"""
+        """測試Round 1產生 spec_001.md."""
         # Setup issue directory
         issue_dir = tmp_path / ".cafe" / "issues" / "test-issue"
         spec_dir = issue_dir / "spec"
@@ -103,14 +103,14 @@ class TestSpecPhaseVersionedFiles:
 
             # In non-interactive mode, after 5 retries without status code, returns FAILED
             assert result.status == PhaseStatus.FAILED
-            assert "Agent 在 5 次嘗試後仍未回傳有效的 status code" in result.message
+            assert "Still did not return valid status code after" in result.message
         finally:
             os.chdir(original_cwd)
 
     def test_second_iteration_creates_spec_002_by_copying(
         self, tmp_path, mock_agent_manager, mock_permission_handler, mock_git_ops
     ):
-        """測試第二輪產生 spec_002.md（內容為 spec_001.md 的複製）。"""
+        """測試Round 2產生 spec_002.md（內容為 spec_001.md 複製）."""
         # Setup issue directory
         issue_dir = tmp_path / ".cafe" / "issues" / "test-issue"
         spec_dir = issue_dir / "spec"
@@ -162,14 +162,14 @@ class TestSpecPhaseVersionedFiles:
 
             # In non-interactive mode, after 5 retries without status code, returns FAILED
             assert result.status == PhaseStatus.FAILED
-            assert "Agent 在 5 次嘗試後仍未回傳有效的 status code" in result.message
+            assert "Still did not return valid status code after" in result.message
         finally:
             os.chdir(original_cwd)
 
     def test_exceeds_999_iterations_raises_error(
         self, tmp_path, mock_agent_manager, mock_permission_handler, mock_git_ops
     ):
-        """測試超過 999 輪時拋出錯誤。"""
+        """測試超過 999 輪時拋出錯誤."""
         # Setup issue directory
         issue_dir = tmp_path / ".cafe" / "issues" / "test-issue"
         spec_dir = issue_dir / "spec"
@@ -211,6 +211,6 @@ class TestSpecPhaseVersionedFiles:
 
             # Should return FAILED status
             assert result.status == PhaseStatus.FAILED
-            assert "不可超過 999" in result.message
+            assert "Cannot exceed 999" in result.message
         finally:
             os.chdir(original_cwd)

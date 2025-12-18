@@ -1,6 +1,6 @@
-"""測試 SpecPhase 所有 return 語句都包含 spec_file。
+"""測試 SpecPhase 所有 return 語句都包含 spec_file.
 
-確保 CLI 可以正確顯示完整的檔案路徑。
+確保 CLI 可以正確顯示完整檔案路徑.
 """
 
 import pytest
@@ -115,7 +115,7 @@ class TestSpecPhaseReturnData:
 
         # Assert
         assert result.status == PhaseStatus.FAILED
-        # The error message is in Chinese: "不可超過 999"
+        # The error message is in Chinese: "Cannot exceed 999"
         assert "spec_file" in result.data
         # spec_file should be None since we exceeded iterations before setting it
         assert result.data["spec_file"] is None or result.data["spec_file"] == ""
@@ -150,7 +150,7 @@ class TestSpecPhaseReturnData:
         assert result.status == PhaseStatus.FAILED
         assert "failed" in result.message.lower()
         # 關鍵斷言：應包含 spec_file（即使發生 exception）
-        # 注意：在 exception 時，spec_file 可能尚未設定，所以可能是 None
+        # 注意：在 exception 時, spec_file 可能尚未設定, 所以可能是 None
         # 但 data 字典應該包含這個 key（即使值為 None）
         assert "spec_file" in result.data
 
@@ -214,6 +214,6 @@ class TestSpecPhaseReturnData:
         # Assert
         assert result.status == PhaseStatus.IN_PROGRESS
         assert "Paused" in result.message or "paused" in result.message
-        # 這個已經由 b602bab 修復，應該通過
+        # 這個已經由 b602bab 修復, 應該通過
         assert "spec_file" in result.data
         assert result.data["spec_file"] is not None

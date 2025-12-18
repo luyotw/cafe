@@ -38,20 +38,20 @@ class Phase(ABC):
             self.issue_dir = self._get_issue_dir(git_ops)
     
     def _handle_exception_in_execute(self, e: Exception, default_message: str = "Phase failed") -> PhaseResult:
-        """統一處理 phase execute() 中的例外。
+        """Unified exception handling for phase execute().
         
-        這個方法應該在每個 phase 的 execute() 中的 except Exception 區塊呼叫。
-        它會檢查是否為 CriticalPhaseError，如果是則 re-raise，否則返回 FAILED result。
+        This method should be called in the except Exception block of each phase's execute().
+        It checks if it is CriticalPhaseError, if so re-raises, otherwise returns FAILED result.
         
         Args:
-            e: 捕獲的例外
-            default_message: 預設的錯誤訊息前綴
+            e: Caught exception
+            default_message: Default error message prefix
             
         Returns:
             PhaseResult with FAILED status (only for non-critical errors)
             
         Raises:
-            CriticalPhaseError: 如果是 critical error 則 re-raise
+            CriticalPhaseError: Re-raise if critical error
         """
         from cafe.core.types import CriticalPhaseError
         
@@ -85,16 +85,16 @@ class Phase(ABC):
     ) -> None:
         """Save user input at the start of an iteration.
 
-        在每一輪開始時，先儲存 user_input。這樣可以確保：
-        1. 即使 agent 執行失敗，user_input 也被記錄了
-        2. 下一輪可以從 history 讀取上一輪的 user_input
-        3. History 檔案完整記錄每一輪的開始（user input）和結束（agent response）
+        Save user_input at the beginning of each round. This ensures:
+        1. Even if agent execution fails, user_input is recorded
+        2. Next round can read previous round's user_input from history
+        3. History file completely records start (user input) and end (agent response) of each round
 
         Args:
-            user_input: 用戶在這一輪開始時的輸入
-            phase_specific_data: Phase 特定的初始資料（可選）
+            user_input: User input at the start of this round
+            phase_specific_data: Phase-specific initial data (optional)
         """
-        # 確保 history_dir 存在
+        # Ensure history_dir exists
         if not hasattr(self, "history_dir"):
             raise AttributeError(
                 "Phase must have 'history_dir' attribute to use _save_user_input"
@@ -103,24 +103,24 @@ class Phase(ABC):
         history_dir = Path(self.history_dir)
         history_dir.mkdir(parents=True, exist_ok=True)
 
-        # 確保 iteration 存在
+        # Ensure iteration exists
         if not hasattr(self, "iteration"):
             raise AttributeError(
                 "Phase must have 'iteration' attribute to use _save_user_input"
             )
 
-        # 建立初始 history data
+        # Create initial history data
         history_data: Dict[str, Any] = {
             "iteration": self.iteration,
             "timestamp": datetime.now().isoformat(),
             "user_input": user_input,
         }
 
-        # 加入 phase 特定的初始資料
+        # Add phase-specific initial data
         if phase_specific_data:
             history_data.update(phase_specific_data)
 
-        # 儲存為 JSON 檔案
+        # Save as JSON file
         iteration_file = history_dir / f"iteration_{self.iteration:03d}.json"
         with open(iteration_file, "w", encoding="utf-8") as f:
             json.dump(history_data, f, ensure_ascii=False, indent=2)
@@ -138,19 +138,19 @@ class Phase(ABC):
     ) -> None:
         """Update iteration history with agent response and metadata.
 
-        在 agent 回應後，更新已存在的 history 檔案。
+        After agent responds, update existing history file.
 
         Args:
-            phase_specific_data: Phase 特定的資料（如 response 等）
-            prompt: Agent 實際收到的 prompt
-            agent_cli: Agent 使用的 CLI tool (如 "copilot", "claude")
-            agent_session_id: Agent 的 session ID
-            allowed_tools: Agent 可使用的 tools 列表
-            denied_tools: Agent 不可使用的 tools 列表
-            cli_command_args: CLI 命令參數 list（除了 prompt）
-            status_code: Phase 狀態碼（如 CONFIRMED, NEED_CLARIFICATION）
+            phase_specific_data: Phase-specific data (such as response etc.)
+            prompt: Actual prompt received by agent
+            agent_cli: CLI tool used by agent (e.g. "copilot", "claude")
+            agent_session_id: Agent's session ID
+            allowed_tools: List of tools available to agent
+            denied_tools: List of tools unavailable to agent
+            cli_command_args: CLI command argument list (excluding prompt)
+            status_code: Phase status code (e.g. CONFIRMED, NEED_CLARIFICATION)
         """
-        # 確保 history_dir 存在
+        # Ensure history_dir exists
         if not hasattr(self, "history_dir"):
             raise AttributeError(
                 "Phase must have 'history_dir' attribute to use _update_iteration_history"
@@ -160,22 +160,22 @@ class Phase(ABC):
         history_dir.mkdir(parents=True, exist_ok=True)
         iteration_file = history_dir / f"iteration_{self.iteration:03d}.json"
 
-        # 讀取現有的 history data
+        # Read existing history data
         if iteration_file.exists():
             with open(iteration_file, "r", encoding="utf-8") as f:
                 history_data = json.load(f)
         else:
-            # 如果檔案不存在，建立基本結構
+            # If file does not exist, create basic structure
             history_data = {
                 "iteration": self.iteration,
                 "timestamp": datetime.now().isoformat(),
             }
 
-        # 更新 phase 特定資料
+        # Update phase-specific data
         history_data.update(phase_specific_data)
 
-        # 確保必須儲存的欄位存在（如果 phase_specific_data 沒有提供，則設為預設值）
-        # 這些欄位在除錯和追蹤時非常重要，應該總是存在
+        # Ensure required fields exist (if phase_specific_data does not provide, set to default values)
+        # These fields are very important for debugging and tracking, should always exist
         if "response" not in history_data:
             history_data["response"] = None
         if "permission_denials" not in history_data:
@@ -183,7 +183,7 @@ class Phase(ABC):
         if "streaming_log" not in history_data:
             history_data["streaming_log"] = []
 
-        # 更新共用的 agent metadata
+        # Update shared agent metadata
         history_data["prompt"] = prompt
         history_data["cli"] = agent_cli
         history_data["session_id"] = agent_session_id
@@ -192,7 +192,7 @@ class Phase(ABC):
         history_data["cli_command_args"] = cli_command_args
         history_data["status_code"] = status_code.value if status_code is not None else None
 
-        # 儲存更新後的 JSON 檔案
+        # Save updated JSON file
         with open(iteration_file, "w", encoding="utf-8") as f:
             json.dump(history_data, f, ensure_ascii=False, indent=2)
 
@@ -206,21 +206,21 @@ class Phase(ABC):
         denied_tools: Optional[List[str]] = None,
         status_code: Optional[PhaseStatusCode] = None,
     ) -> None:
-        """Save iteration history to JSON file (共用方法 - 保留向後兼容).
+        """Save iteration history to JSON file (common method - Maintain backward compatibility).
 
-        此方法保留向後兼容性，直接建立完整的 history 檔案。
-        建議新程式碼使用 _save_user_input + _update_iteration_history 的兩階段方式。
+        This method maintains backward compatibility, directly creates complete history file.
+        Recommended that new code uses two-stage approach of _save_user_input + _update_iteration_history.
 
         Args:
-            phase_specific_data: Phase 特定的資料（如 user_input, response 等）
-            prompt: Agent 實際收到的 prompt
-            agent_cli: Agent 使用的 CLI tool (如 "copilot", "claude")
-            agent_session_id: Agent 的 session ID
-            allowed_tools: Agent 可使用的 tools 列表
-            denied_tools: Agent 不可使用的 tools 列表
-            status_code: Phase 狀態碼（如 CONFIRMED, NEED_CLARIFICATION）
+            phase_specific_data: Phase-specific data (e.g. user_input, response etc.)
+            prompt: Actual prompt received by agent
+            agent_cli: CLI tool used by agent (e.g. "copilot", "claude")
+            agent_session_id: Agent's session ID
+            allowed_tools: List of tools available to agent
+            denied_tools: List of tools unavailable to agent
+            status_code: Phase status code (e.g. CONFIRMED, NEED_CLARIFICATION)
         """
-        # 確保 history_dir 存在
+        # Ensure history_dir exists
         if not hasattr(self, "history_dir"):
             raise AttributeError(
                 "Phase must have 'history_dir' attribute to use _save_iteration_history"
@@ -229,22 +229,22 @@ class Phase(ABC):
         history_dir = Path(self.history_dir)
         history_dir.mkdir(parents=True, exist_ok=True)
 
-        # 確保 iteration 存在
+        # Ensure iteration exists
         if not hasattr(self, "iteration"):
             raise AttributeError(
                 "Phase must have 'iteration' attribute to use _save_iteration_history"
             )
 
-        # 建立 history data，包含共用欄位和 phase 特定資料
+        # Create history data, including common fields and phase-specific data
         history_data: Dict[str, Any] = {
             "iteration": self.iteration,
             "timestamp": datetime.now().isoformat(),
         }
 
-        # 加入 phase 特定資料
+        # Add phase-specific data
         history_data.update(phase_specific_data)
 
-        # 加入共用的 agent metadata
+        # Add shared agent metadata
         history_data["prompt"] = prompt
         history_data["cli"] = agent_cli
         history_data["session_id"] = agent_session_id
@@ -252,22 +252,22 @@ class Phase(ABC):
         history_data["denied_tools"] = denied_tools
         history_data["status_code"] = status_code.value if status_code is not None else None
 
-        # 儲存為 JSON 檔案
+        # Save as JSON file
         iteration_file = history_dir / f"iteration_{self.iteration:03d}.json"
         with open(iteration_file, "w", encoding="utf-8") as f:
             json.dump(history_data, f, ensure_ascii=False, indent=2)
 
     def _check_empty_response(self, response: str) -> Optional[PhaseStatusCode]:
-        """檢查 agent response 是否為空，如果為空返回 NO_RESPONSE 狀態碼。
+        """Check if agent response is empty, if empty return NO_RESPONSE status code.
 
-        這是一個通用的 helper 方法，所有 phases 都可以使用。
+        This is a common helper method that all phases can use.
 
         Args:
-            response: Agent 的回應內容
+            response: Agent's response content
 
         Returns:
-            如果 response 為空（空字串或只有空白），返回 PhaseStatusCode.NO_RESPONSE
-            否則返回 None
+            If response is empty (empty string or only whitespace), return PhaseStatusCode.NO_RESPONSE
+            Otherwise return None
         """
         if not response or not response.strip():
             return PhaseStatusCode.NO_RESPONSE
@@ -283,36 +283,36 @@ class Phase(ABC):
         denied_tools: Optional[List[str]] = None,
         phase_specific_data: Optional[Dict[str, Any]] = None,
     ) -> tuple[str, Optional[PhaseStatusCode]]:
-        """通用的 agent 執行流程，所有 phases 都可以使用。
+        """Common agent execution flow that all phases can use.
 
-        此方法封裝了執行 agent 的標準流程：
-        1. 保存 user_input 到 history
-        2. 獲取 agent metadata
-        3. 保存 prompt 到 history
-        4. 執行 agent
-        5. 檢查空回應
-        6. 提取 status code
-        7. 更新 history
-        8. 保存 progress
+        This method encapsulates the standard process of executing agent:
+        1. Save user_input to history
+        2. Get agent metadata
+        3. Save prompt to history
+        4. Execute agent
+        5. Check empty response
+        6. Extract status code
+        7. Update history
+        8. Save progress
 
         Args:
-            agent_name: Agent 名稱（如 pm_agent, dev_agent）
-            prompt: 要發送給 agent 的 prompt
-            user_input: 用戶在這一輪的輸入
-            valid_status_codes: 此 phase 接受的有效 status codes
-            allowed_tools: Agent 可使用的 tools（預設為 None）
-            denied_tools: Agent 不可使用的 tools（預設為 None）
-            phase_specific_data: Phase 特定的初始資料（預設為 None）
+            agent_name: Agent name (e.g. pm_agent, dev_agent)
+            prompt: Prompt to send to agent
+            user_input: User input for this round
+            valid_status_codes: Valid status codes accepted by this phase
+            allowed_tools: Tools available to agent (default None)
+            denied_tools: Tools unavailable to agent (default None)
+            phase_specific_data: Phase-specific initial data (default None)
 
         Returns:
             tuple[response, status_code]:
-                - response: Agent 的回應內容
-                - status_code: 提取的 status code，如果沒有找到則為 None
+                - response: Agent's response content
+                - status_code: Extracted status code, None if not found
 
         Raises:
-            AttributeError: 如果 phase 缺少必要的屬性（history_dir, iteration, agent_manager）
+            AttributeError: If phase lacks required attributes（history_dir, iteration, agent_manager）
         """
-        # 檢查必要的屬性
+        # Check required attributes
         if not hasattr(self, "history_dir"):
             raise AttributeError("Phase must have 'history_dir' attribute")
         if not hasattr(self, "iteration"):
@@ -320,18 +320,18 @@ class Phase(ABC):
         if not hasattr(self, "agent_manager"):
             raise AttributeError("Phase must have 'agent_manager' attribute")
 
-        # 1. 保存 user_input 到 history
+        # 1. Save user_input to history
         self._save_user_input(
             user_input=user_input,
             phase_specific_data=phase_specific_data or {},
         )
 
-        # 2. 獲取 agent metadata
+        # 2. Get agent metadata
         agent_executor = self.agent_manager.get_agent(agent_name)
         agent_cli = agent_executor.config.cli.value
         agent_session_id = agent_executor.config.session_id
 
-        # 3. 保存 prompt 到 history（在執行 agent 之前）
+        # 3. Save prompt to history（Before executing agent）
         iteration_file = Path(self.history_dir) / f"iteration_{self.iteration:03d}.json"
         if iteration_file.exists():
             with open(iteration_file, "r", encoding="utf-8") as f:
@@ -344,7 +344,7 @@ class Phase(ABC):
             with open(iteration_file, "w", encoding="utf-8") as f:
                 json.dump(history_data, f, ensure_ascii=False, indent=2)
 
-        # 4. 執行 agent（with error recovery）
+        # 4. Execute agent（with error recovery）
         try:
             response, token_usage, permission_denials, cli_command_args, streaming_log = self.agent_manager.execute(
                 agent_name,
@@ -390,16 +390,16 @@ class Phase(ABC):
                     phase_name=getattr(self, '__class__', type(self)).__name__
                 ) from e
 
-            # 4b. 檢查 agent 是否寫入輸出檔案
+            # 4b. Check if agent wrote output files
             written_files = self._detect_written_output_files()
 
-            # 4c. 嘗試從寫入的檔案恢復 response
+            # 4c. Attempt to recover response from written files
             recovered_response, recovered_status_code = self._recover_from_written_files(
                 written_files,
                 valid_status_codes,
             )
 
-            # 4d. 建立 error log 檔案用於除錯
+            # 4d. Create error log file for debugging
             error_log_file = Path(self.history_dir) / f"execution_error_{self.iteration:03d}.log"
             error_log_file.parent.mkdir(parents=True, exist_ok=True)
             error_log_file.write_text(
@@ -412,24 +412,24 @@ class Phase(ABC):
             )
 
             if recovered_response and recovered_status_code:
-                # 4e. 恢復成功 - 視為部分成功
+                # 4e. Recovery successful - treat as partial success
                 print(f"✅ Recovered response from {written_files[0].name}")
                 print(f"   Status code: {recovered_status_code.value}")
 
                 response = recovered_response
                 status_code = recovered_status_code
-                permission_denials = []  # 無權限資訊
+                permission_denials = []  # No permission information
                 token_usage = TokenUsage()  # Empty token usage
 
-                # 加入恢復 metadata 到 iteration history
+                # Add recovery metadata to iteration history
                 phase_specific_data = phase_specific_data or {}
                 phase_specific_data["response"] = response
                 phase_specific_data["permission_denials"] = []
                 phase_specific_data["recovered_from_error"] = True
                 phase_specific_data["original_error"] = str(e)
 
-                # 更新 history（包含恢復的 response 和 status）
-                # 儘可能記錄實際的 CLI 參數（如果錯誤物件有附帶）
+                # Update history（Including recovered response and status）
+                # Record actual CLI arguments if possible (if error object has them)
                 cli_args: List[str] = []
                 if isinstance(e, AgentExecutionError) and hasattr(e, "cli_command_args"):
                     cli_args = getattr(e, "cli_command_args") or []
@@ -445,17 +445,17 @@ class Phase(ABC):
                     status_code=status_code,
                 )
 
-                # 保存 progress
+                # Save progress
                 if hasattr(self, "_save_progress"):
                     self._save_progress(status_code)
 
-                # 返回恢復的結果
+                # Return recovered result
                 return response, status_code
             else:
-                # 4f. 恢復失敗 - 更新 history 並 re-raise
+                # 4f. Recovery failed - Update history and re-raise
                 print(f"❌ Could not recover from error")
 
-                # 更新 iteration history 包含錯誤資訊與 CLI 參數
+                # Update iteration history including error information and CLI arguments
                 if iteration_file.exists():
                     with open(iteration_file, "r", encoding="utf-8") as f:
                         history_data = json.load(f)
@@ -464,27 +464,27 @@ class Phase(ABC):
                     history_data["status_code"] = None
                     history_data["error"] = str(e)
 
-                    # 記錄錯誤類型（如果有）
+                    # Record error type (if any)
                     if isinstance(e, AgentExecutionError) and hasattr(e, "error_type"):
                         history_data["error_type"] = e.error_type
 
-                    # 儘可能記錄實際使用的 CLI 命令參數
+                    # Record actually used CLI command arguments if possible
                     if isinstance(e, AgentExecutionError) and hasattr(e, "cli_command_args"):
                         history_data["cli_command_args"] = getattr(e, "cli_command_args")
                     else:
-                        # 明確標記為 None，方便後續偵錯時看出「沒有可用的 CLI 參數」
+                        # Explicitly mark as None, convenient for subsequent debugging to see "no available CLI arguments"
                         history_data.setdefault("cli_command_args", None)
 
                     with open(iteration_file, "w", encoding="utf-8") as f:
                         json.dump(history_data, f, ensure_ascii=False, indent=2)
 
-                # Re-raise 讓 phase 處理失敗
+                # Re-raise to let phase handle failure
                 raise
 
-        # 5. 檢查空回應
+        # 5. Check empty response
         no_response_status = self._check_empty_response(response)
         if no_response_status:
-            # Agent 返回空回應 - 保存並返回 NO_RESPONSE
+            # Agent returned empty response - save and return NO_RESPONSE
             self._update_iteration_history(
                 phase_specific_data={
                     "response": response,
@@ -501,37 +501,37 @@ class Phase(ABC):
             )
             return response, no_response_status
 
-        # 6. 提取 status code
+        # 6. Extract status code
         from cafe.core.status_codes import StatusCodeParser
         status_code = StatusCodeParser.extract(
             response,
             valid_codes=valid_status_codes,
         )
 
-        # 6.1. 檢查是否有多個不同的 status codes
+        # 6.1. Check if there are multiple different status codes
         all_status_codes = StatusCodeParser.extract_all(response, valid_codes=valid_status_codes)
         has_multiple_codes = len(all_status_codes) > 1
 
-        # 6.2. 如果沒有 status code（包含多個 status codes 的情況），發送繼續訊息
-        # 因為多個 status codes 也代表狀態不明確，需要 agent 確認
-        # 最多重試 5 次
+        # 6.2. If no status code (including case of multiple status codes), send continue message
+        # Because multiple status codes also means status is unclear, needs agent confirmation
+        # Maximum 5 retries
         analysis_attempted = False
         analysis_response = None
-        original_status_code_missing = (status_code is None)  # 記錄原始狀態
+        original_status_code_missing = (status_code is None)  # Record original status
         max_retries = 5
         retry_count = 0
 
-        if original_status_code_missing:  # 包含：沒有 status code 或有多個 status codes
+        if original_status_code_missing:  # Including: no status code or multiple status codes
             analysis_attempted = True
 
             while retry_count < max_retries and status_code is None:
                 retry_count += 1
-                print(f"\n⚠️  Agent 回應沒有狀態碼，發送繼續訊息... (嘗試 {retry_count}/{max_retries})")
+                print(f"\n⚠️  Agent response has no status code, sending continue message... (attempt {retry_count}/{max_retries})")
 
                 try:
-                    # 發送繼續提示，並附加原本的 prompt 作為參考
-                    # 這樣即使 session 被重新建立，agent 也能理解完整的 context
-                    continue_prompt = f"若完成了就回應狀態碼，未完成就繼續\n\n以下是原本的任務說明供參考：\n\n{prompt}"
+                    # Send continue prompt and attach original prompt as reference
+                    # This way even if session is recreated, agent can understand complete context
+                    continue_prompt = f"If completed respond with status code, if not continue\n\nBelow is the original task description for reference:\n\n{prompt}"
                     continue_response, _, _, _, _ = self.agent_manager.execute(
                         agent_name,
                         continue_prompt,
@@ -539,29 +539,29 @@ class Phase(ABC):
                         allowed_directories=self._get_allowed_directories(),
                     )
 
-                    # 嘗試從繼續的回應中提取狀態碼
+                    # Try to extract status code from continue response
                     continue_status_code = StatusCodeParser.extract(
                         continue_response,
                         valid_codes=valid_status_codes,
                     )
 
                     if continue_status_code:
-                        print(f"✅ 繼續執行後獲得狀態碼: {continue_status_code.value}")
-                        # 將原始回應和繼續回應合併
+                        print(f"✅ Obtained status code after continue execution: {continue_status_code.value}")
+                        # Merge original response and continue response
                         response = response + "\n\n" + continue_response
                         status_code = continue_status_code
                         analysis_response = continue_response
                         break
                     else:
-                        print(f"⚠️  繼續執行後仍未獲得狀態碼")
+                        print(f"⚠️  Still no status code after continue execution")
                         analysis_response = continue_response
 
                 except Exception as e:
-                    print(f"⚠️  繼續訊息發送失敗: {e}")
+                    print(f"⚠️  Failed to send continue message: {e}")
                     analysis_response = None
 
-        # 6.3. 寫入 error log（如果原始回應有問題：沒有 status code、多個 codes、或分析後仍無 status code）
-        # 注意：即使分析成功找到 status code，我們仍然記錄原始回應的問題
+        # 6.3. Write error log (if original response has issues: no status code, multiple codes, or still no status code after analysis)
+        # Note: Even if analysis successfully finds status code, we still record issues with original response
         if analysis_attempted or original_status_code_missing:
             self._write_status_code_error_log(
                 original_response=response,
@@ -573,20 +573,20 @@ class Phase(ABC):
                 multiple_codes_found=list(all_status_codes) if has_multiple_codes else None,
             )
 
-        # 6.4. 如果重試 5 次後仍沒有 status code，拋出錯誤
+        # 6.4. If still no status code after 5 retries, throw error
         if original_status_code_missing and status_code is None and retry_count >= max_retries:
-            error_msg = f"Agent 在 {max_retries} 次嘗試後仍未回傳有效的 status code"
+            error_msg = f"Agent Still did not return valid status code after {max_retries} attempts"
             print(f"\n❌ {error_msg}")
             raise ValueError(error_msg)
 
-        # 7. 更新 history（總是保存，即使沒有 status code）
+        # 7. Update history（Always save, even if no status code）
         phase_data = {
             "response": response,
             "permission_denials": [denial.model_dump() for denial in permission_denials],
             "streaming_log": streaming_log
         }
         
-        # 如果進行了 status code 分析，記錄到 history
+        # If status code analysis was performed, record to history
         if analysis_attempted:
             phase_data["status_code_analyzed"] = True
             if analysis_response:
@@ -603,20 +603,20 @@ class Phase(ABC):
             status_code=status_code,
         )
 
-        # 8. 保存 progress（如果有 status code 且 phase 有 _save_progress 方法）
+        # 8. Save progress（If has status code and phase has _save_progress method）
         if status_code and hasattr(self, "_save_progress"):
             self._save_progress(status_code)  # type: ignore
 
         return response, status_code
 
-    def _ask_user_for_review_decision(self, item_name: str = "內容") -> str:
-        """詢問用戶對 READY_FOR_REVIEW 的決定（interactive 模式）。
+    def _ask_user_for_review_decision(self, item_name: str = "content") -> str:
+        """Ask user for decision on READY_FOR_REVIEW (interactive mode).
 
         Args:
-            item_name: 要確認的項目名稱（如「計畫」、「程式碼」、「需求」）
+            item_name: Item name to confirm (e.g. "plan", "code", "requirements")
 
         Returns:
-            str: "confirm" 或修改意見內容
+            str: "confirm" or modification opinion content
         """
         # Use phase's display if available, otherwise create new one
         if hasattr(self, 'display'):
@@ -625,35 +625,35 @@ class Phase(ABC):
             from cafe.ui.display import Display
             display = Display()
 
-        print(f"開發者認為{item_name}已完成。請確認：")
-        print("  [c] confirm - 確認，繼續")
-        print("  [m] modify - 要求修改（輸入修改意見）")
+        print(f"Developer thinks {item_name} is complete. Please confirm:")
+        print("  [c] confirm - Confirm, continue")
+        print("  [m] modify - Request modification (enter modification opinion)")
 
         while True:
-            choice = input("\n請選擇 [c/m]: ").strip().lower()
+            choice = input("\nPlease select [c/m]: ").strip().lower()
 
             if choice == 'c':
                 return "confirm"
             elif choice == 'm':
-                modification_request = display.get_multiline_input("請輸入修改意見")
+                modification_request = display.get_multiline_input("Please enter modification opinion")
 
                 if not modification_request.strip():
-                    print("\n⚠️  沒有輸入修改意見，請重新選擇。")
+                    print("\n⚠️  No modification opinion entered, please reselect.")
                     continue
 
                 print()
-                print("✅ 已收到您的修改意見...")
+                print("✅ Received your modification opinion...")
                 print()
 
                 return modification_request
             else:
-                print("❌ 無效選擇，請輸入 c 或 m")
+                print("❌ Invalid choice, please enter c or m")
 
     def _ask_user_for_clarification(self) -> str:
-        """詢問用戶對 NEED_CLARIFICATION 的回答（interactive 模式）。
+        """Ask user for answer to NEED_CLARIFICATION (interactive mode).
 
         Returns:
-            str: 用戶的回答
+            str: User's answer
         """
         # Use phase's display if available, otherwise create new one
         if hasattr(self, 'display'):
@@ -662,7 +662,7 @@ class Phase(ABC):
             from cafe.ui.display import Display
             display = Display()
 
-        return display.get_multiline_input("請回答問題")
+        return display.get_multiline_input("Please answer the question")
 
     def _process_review_decision(
         self,
@@ -671,17 +671,17 @@ class Phase(ABC):
         phase_name: str,
         phase_specific_data: Optional[Dict[str, Any]] = None,
     ) -> "PhaseResult | str":
-        """處理用戶對 READY_FOR_REVIEW 的決定。
+        """Handle user's decision on READY_FOR_REVIEW.
 
         Args:
-            choice: "confirm" 或修改意見內容
-            prev_data: 上一輪的 iteration data
-            phase_name: Phase 名稱（用於訊息，如 "Implementation plan", "Requirements"）
-            phase_specific_data: Phase 特定的資料（用於保存 history）
+            choice: "confirm" or modification opinion content
+            prev_data: Previous round iteration data
+            phase_name: Phase name (for messages, e.g. "Implementation plan", "Requirements")
+            phase_specific_data: Phase-specific data (for saving history)
 
         Returns:
-            PhaseResult: 如果 confirm
-            str: 如果要求修改，返回修改意見
+            PhaseResult: If confirm
+            str: If requesting modification, return modification opinion
         """
         if choice == "confirm":
             # Save user confirmation as a new iteration
@@ -731,13 +731,13 @@ class Phase(ABC):
         return Path(self.history_dir).parent / "status.json"
 
     def _detect_written_output_files(self) -> List[Path]:
-        """偵測 agent 在失敗前是否已寫入輸出檔案。
+        """Detect if agent wrote output files before failure.
 
-        Base implementation 返回空列表（不進行 recovery）。
-        子類應覆寫此方法以檢查 phase-specific 的輸出檔案。
+        Base implementation returns empty list (No recovery).
+        Subclasses should override this method to check phase-specific output files.
 
         Returns:
-            List[Path]: Agent 寫入的檔案路徑列表
+            List[Path]: List of file paths written by agent
         """
         return []
 
@@ -746,27 +746,27 @@ class Phase(ABC):
         written_files: List[Path],
         valid_status_codes: List[PhaseStatusCode],
     ) -> tuple[Optional[str], Optional[PhaseStatusCode]]:
-        """嘗試從已寫入的檔案中恢復 agent response。
+        """Attempt to recover agent response from written files.
 
         Args:
-            written_files: Agent 在失敗前寫入的檔案列表
-            valid_status_codes: 此 phase 有效的 status codes
+            written_files: List of files written by agent before failure
+            valid_status_codes: Valid status codes for this phase
 
         Returns:
             Tuple[Optional[str], Optional[PhaseStatusCode]]:
-                - recovered_response: 恢復的 response 內容
-                - extracted_status_code: 從檔案中提取的 status code
-                如果恢復失敗則返回 (None, None)
+                - recovered_response: Recovered response content
+                - extracted_status_code: Status code extracted from file
+                Return if recovery fails (None, None)
         """
         if not written_files:
             return None, None
 
-        # 讀取第一個（主要）輸出檔案
+        # Read first (primary) output file
         try:
             primary_file = written_files[0]
             recovered_response = primary_file.read_text(encoding="utf-8")
 
-            # 從檔案內容提取 status code
+            # Extract status code from file content
             from cafe.core.status_codes import StatusCodeParser
             status_code = StatusCodeParser.extract(
                 recovered_response,
@@ -775,12 +775,12 @@ class Phase(ABC):
 
             return recovered_response, status_code
         except Exception as e:
-            # 記錄恢復失敗但不 raise
+            # Log recovery failure but do not raise
             print(f"⚠️  Failed to recover from written files: {e}")
             return None, None
 
     def _save_progress(self, status_code: PhaseStatusCode) -> None:
-        """Save phase progress to status.json（通用方法）。
+        """Save phase progress to status.json（common method）。
 
         Args:
             status_code: Phase status code (CONFIRMED, READY_FOR_REVIEW, NEED_CLARIFICATION, etc.)
@@ -810,7 +810,7 @@ class Phase(ABC):
             json.dump(progress.to_dict(), f, ensure_ascii=False, indent=2)
 
     def _load_progress(self) -> Optional["PhaseProgress"]:
-        """Load phase progress from status.json（通用方法）。
+        """Load phase progress from status.json（common method）。
 
         Returns:
             PhaseProgress if file exists, None otherwise
@@ -826,10 +826,10 @@ class Phase(ABC):
         return PhaseProgress.from_dict(data)
 
     def _print_token_usage_summary(self) -> None:
-        """顯示 token usage 摘要（通用方法）。
+        """Display token usage summary (common method).
 
-        此方法會從 agent_manager 取得總 token usage 並顯示摘要。
-        適用於 phase 完成時顯示成本統計。
+        This method gets total token usage from agent_manager and displays summary.
+        Suitable for displaying cost statistics when phase completes.
         """
         if not hasattr(self, "agent_manager"):
             return
@@ -853,23 +853,23 @@ class Phase(ABC):
         prev_data: dict,
         agent_display_name: str = "agent",
     ) -> Any:
-        """處理 NEED_CLARIFICATION 狀態的用戶輸入（通用方法）。
+        """Handle user input for NEED_CLARIFICATION status (common method).
 
-        此方法封裝了 NEED_CLARIFICATION 狀態的標準處理流程：
-        1. Interactive 模式：呼叫 _ask_user_for_clarification() 提示用戶輸入
-        2. Non-interactive 模式：使用 self.user_input（用完後清空）
-        3. 驗證用戶輸入不為空
-        4. 返回用戶輸入或 PhaseResult（錯誤狀態）
+        This method encapsulates standard processing flow for NEED_CLARIFICATION status:
+        1. Interactive mode: Call _ask_user_for_clarification() to prompt user input
+        2. Non-interactive mode: Use self.user_input (clear after use)
+        3. Validate user input is not empty
+        4. Return user input or PhaseResult (error status)
 
         Args:
-            prev_data: 上一輪 iteration 的資料（從 history JSON 讀取）
-            agent_display_name: Agent 顯示名稱（如 "PM"、"開發者"），用於確認訊息
+            prev_data: Previous round iteration data (read from history JSON)
+            agent_display_name: Agent display name (e.g. "PM", "Developer"), used for confirmation messages
 
         Returns:
-            str: 用戶輸入的 clarification
-            PhaseResult: 如果失敗（FAILED）
+            str: User-entered clarification
+            PhaseResult: If failed (FAILED)
         """
-        # 檢查必要的屬性
+        # Check required attributes
         if not hasattr(self, "iteration"):
             raise AttributeError("Phase must have 'iteration' attribute")
         if not hasattr(self, "interactive"):
@@ -877,18 +877,18 @@ class Phase(ABC):
         if not hasattr(self, "user_input"):
             raise AttributeError("Phase must have 'user_input' attribute")
 
-        # 需要用戶回答問題
+        # Need user to answer question
         if self.interactive:
             if not hasattr(self, "_ask_user_for_clarification"):
                 raise AttributeError("Phase must implement '_ask_user_for_clarification' method")
             clarification = self._ask_user_for_clarification()
         else:
             clarification = self.user_input
-            # Non-interactive 模式：用完後清空，確保不重複使用
+            # Non-interactive mode: Clear after use to ensure no reuse
             self.user_input = ""
             
             if not clarification:
-                # Non-interactive 但沒提供輸入 → 立即失敗
+                # Non-interactive but no input provided → Fail immediately
                 return PhaseResult(
                     status=PhaseStatus.FAILED,
                     message=f"{self.phase_name.capitalize()} phase failed after iteration {self.iteration - 1}: received NEED_CLARIFICATION in non-interactive mode without user input",
@@ -899,7 +899,7 @@ class Phase(ABC):
                     },
                 )
 
-        # 處理用戶回答（不再區分 interactive/non-interactive）
+        # Handle user answer (no longer distinguish interactive/non-interactive)
         if not clarification.strip():
             return PhaseResult(
                 status=PhaseStatus.FAILED,
@@ -912,16 +912,16 @@ class Phase(ABC):
 
         if self.interactive:
             print()
-            print(f"✅ 已收到您的回答，正在發送給{agent_display_name}處理...")
+            print(f"✅ Received your answer, sending to {agent_display_name} for processing...")
             print()
 
         return clarification
 
     def _load_previous_iteration_data(self) -> Optional[dict]:
-        """載入上一輪 iteration 的資料（通用方法）。
+        """Load previous round iteration data (common method).
 
         Returns:
-            dict: 上一輪 iteration 的資料，如果不存在則返回 None
+            dict: Previous round iteration data, return None if not exists
         """
         if not hasattr(self, "iteration"):
             raise AttributeError("Phase must have 'iteration' attribute")
@@ -943,19 +943,19 @@ class Phase(ABC):
         base_allowed_tools: List[str],
         approved_tools_from_denials: Optional[List[str]] = None,
     ) -> List[str]:
-        """合併 base allowed tools 和前一輪的 allowed tools（通用方法）。
+        """Merge base allowed tools and previous round's allowed tools (common method).
 
-        這個方法會：
-        1. 從前一輪 iteration 讀取 allowed_tools
-        2. 合併 base_allowed_tools + 前一輪的 allowed_tools + 新批准的 tools
-        3. 去除重複項目
+        This method will:
+        1. Read allowed_tools from previous iteration
+        2. Merge base_allowed_tools + previous iteration's allowed_tools + newly approved tools
+        3. Remove duplicates
 
         Args:
-            base_allowed_tools: 此 phase 的基礎工具列表
-            approved_tools_from_denials: 從這一輪 permission denials 新批准的工具（預設為空列表）
+            base_allowed_tools: Base tool list for this phase
+            approved_tools_from_denials: Newly approved tools from this round's permission denials (default empty list)
 
         Returns:
-            合併且去重後的工具列表
+            Merged and deduplicated tool list
         """
         approved_tools_from_denials = approved_tools_from_denials or []
 
@@ -970,51 +970,51 @@ class Phase(ABC):
         return list(set(base_allowed_tools + prev_allowed_tools + approved_tools_from_denials))
 
     def _get_allowed_directories(self) -> List[str]:
-        """取得允許的目錄列表。
+        """Get list of allowed directories.
 
-        回傳需要讓底層 CLI 工具存取的目錄列表。
-        預設回傳 [".cafe"]，讓所有 CLI 工具都能讀取 .cafe 目錄。
+        Return list of directories that need to be accessed by underlying CLI tools.
+        Default returns [".cafe"], allowing all CLI tools to read .cafe directory.
 
         Returns:
-            允許的目錄列表
+            List of allowed directories
         """
         return [".cafe"]
 
     def _handle_previous_permission_denials(self) -> tuple[List[str], str]:
-        """處理上一輪的 permission denials，返回批准的工具和用戶輸入。
+        """Handle previous round's permission denials, return approved tools and user input.
 
-        這個方法處理兩種模式：
-        1. Interactive 模式：逐一詢問用戶是否批准每個被拒絕的工具
-        2. Non-interactive 模式：使用 self.approved_denial_indices 批准工具
+        This method handles two modes:
+        1. Interactive mode: Ask user one by one whether to approve each denied tool
+        2. Non-interactive mode: Use self.approved_denial_indices to approve tools
 
         Returns:
-            tuple[List[str], str]: (批准的工具列表, 用戶關於權限的額外說明)
+            tuple[List[str], str]: (List of approved tools, user's additional notes about permissions)
         """
         from cafe.core.types import PermissionDenial
 
-        # 載入上一輪的 iteration 資料
+        # Load previous round iteration data
         prev_data = self._load_previous_iteration_data()
         if not prev_data:
             return ([], "")
 
-        # 檢查是否有 permission_denials
+        # Check if there are permission_denials
         permission_denials_data = prev_data.get("permission_denials", [])
         if not permission_denials_data:
             return ([], "")
 
-        # 將 dict 轉換為 PermissionDenial 物件
+        # Convert dict to PermissionDenial objects
         permission_denials = [
             PermissionDenial(**denial_data) for denial_data in permission_denials_data
         ]
 
-        # 收集被批准的 indices
+        # Collect approved indices
         approved_indices: List[int] = []
 
         if self.interactive:
-            # Interactive 模式：先顯示所有權限請求，然後逐一詢問
-            print("\n上一輪執行中有以下權限請求被拒絕：\n")
+            # Interactive mode: First display all permission requests, then ask one by one
+            print("\nThe following permission requests were denied in previous execution:\n")
             for idx, denial in enumerate(permission_denials):
-                # 顯示工具名稱和主要參數
+                # Display tool name and main parameters
                 if "file_path" in denial.tool_input:
                     print(f"[{idx}] {denial.tool_name}({denial.tool_input['file_path']})")
                 elif "command" in denial.tool_input:
@@ -1022,11 +1022,11 @@ class Phase(ABC):
                 else:
                     print(f"[{idx}] {denial.tool_name}(...)")
 
-            print()  # 空行分隔
+            print()  # Empty line separator
 
-            # 逐一詢問每個權限
+            # Ask for each permission one by one
             for idx, denial in enumerate(permission_denials):
-                # 顯示要授權的工具
+                # Display tool to authorize
                 if "file_path" in denial.tool_input:
                     tool_desc = f"{denial.tool_name}({denial.tool_input['file_path']})"
                 elif "command" in denial.tool_input:
@@ -1034,17 +1034,17 @@ class Phase(ABC):
                 else:
                     tool_desc = f"{denial.tool_name}"
 
-                response = input(f"是否批准 [{idx}] {tool_desc}？(y/n): ").strip().lower()
+                response = input(f"Approve or not [{idx}] {tool_desc}？(y/n): ").strip().lower()
                 if response == 'y':
                     approved_indices.append(idx)
 
-            # 詢問用戶是否有額外說明
+            # Ask user if there are additional notes
             print()
             user_input = self.display.get_multiline_input(
-                "關於這些權限，是否有額外的說明或指示要給 agent？（可留空）"
+                "Regarding these permissions, any additional notes or instructions for agent? (Can be left blank)"
             )
         else:
-            # Non-interactive 模式：使用預設的 approved_denial_indices
+            # Non-interactive mode: Use default approved_denial_indices
             if not hasattr(self, "approved_denial_indices"):
                 raise AttributeError("Phase must have 'approved_denial_indices' attribute in non-interactive mode")
             if not hasattr(self, "user_input"):
@@ -1053,7 +1053,7 @@ class Phase(ABC):
             approved_indices = self.approved_denial_indices
             user_input = self.user_input
 
-        # 將批准的 indices 轉換為 allowed_tools 格式
+        # Convert approved indices to allowed_tools format
         approved_tools: List[str] = []
         for idx in approved_indices:
             if idx < len(permission_denials):
@@ -1063,12 +1063,12 @@ class Phase(ABC):
         return (approved_tools, user_input)
 
     def _load_current_iteration_data(self) -> Optional[dict]:
-        """載入當前 iteration 的資料（通用方法）。
+        """Load current iteration data (common method).
 
-        用於恢復被中斷的 iteration（有 user_input 但沒有 response）。
+        Used to resume interrupted iteration (has user_input but no response).
 
         Returns:
-            dict: 當前 iteration 的資料，如果不存在則返回 None
+            dict: Current iteration data, return None if not exists
         """
         if not hasattr(self, "iteration"):
             raise AttributeError("Phase must have 'iteration' attribute")
@@ -1083,13 +1083,13 @@ class Phase(ABC):
             return json.load(f)
 
     def _load_iteration_counter(self) -> int:
-        """從 history 檔案載入最新的 iteration 數字（通用方法）。
+        """Load latest iteration number from history files (common method).
 
-        如果最後一個 iteration 沒有 response（被中斷），則返回前一個完整 iteration 的數字，
-        這樣下次執行時會重用被中斷的 iteration 編號。
+        If last iteration has no response (interrupted), return previous complete iteration number,
+        this way next execution will reuse interrupted iteration number.
 
         Returns:
-            最新完整 iteration 的數字，如果沒有 history 則返回 0
+            Latest complete iteration number, return 0 if no history
         """
         if not hasattr(self, "history_dir"):
             raise AttributeError("Phase must have 'history_dir' attribute")
@@ -1102,16 +1102,16 @@ class Phase(ABC):
         if not iteration_files:
             return 0
 
-        # 從後往前尋找第一個完整的 iteration（有 response）
+        # Search from back to front for first complete iteration (has response)
         for iteration_file in reversed(iteration_files):
             with open(iteration_file, "r", encoding="utf-8") as f:
                 data = json.load(f)
 
-            # 檢查是否有 response（完整的 iteration）
+            # Check if has response (complete iteration)
             if "response" in data and data["response"]:
                 return data.get("iteration", 0)
 
-        # 所有 iteration 都不完整，返回 0
+        # All iterations incomplete, return 0
         return 0
 
     def _check_if_already_completed(
@@ -1119,17 +1119,17 @@ class Phase(ABC):
         complete_status_codes: List[PhaseStatusCode],
         force: bool = False,
     ) -> Optional[PhaseResult]:
-        """檢查 phase 是否已經完成（通用方法）。
+        """Check if phase is already completed (common method).
 
-        如果 status.json 顯示 phase 已完成且狀態碼在 complete_status_codes 中，
-        則返回 COMPLETED 結果，否則返回 None。
+        If status.json shows phase is completed and status code is in complete_status_codes,
+        return COMPLETED result, otherwise return None.
 
         Args:
-            complete_status_codes: 表示完成的狀態碼列表（如 [CONFIRMED] 或 [READY_FOR_REVIEW]）
-            force: 如果為 True，則跳過已完成檢查，允許重新執行（預設：False）
+            complete_status_codes: List of status codes indicating completion (e.g. [CONFIRMED] or [READY_FOR_REVIEW])
+            force: If True, skip completion check and allow re-execution (default: False)
 
         Returns:
-            PhaseResult 如果已完成，None 如果未完成
+            PhaseResult If completed, None if not completed
         """
         # If force is True, skip the check and allow re-execution
         if force:
@@ -1145,14 +1145,14 @@ class Phase(ABC):
         with open(status_file, "r", encoding="utf-8") as f:
             status_data = json.load(f)
 
-        # 檢查是否已完成且狀態碼符合
+        # Check if completed and status code matches
         if status_data.get("status") != "completed":
             return None
 
         status_code_value = status_data.get("status_code", "")
         for complete_code in complete_status_codes:
             if status_code_value == complete_code.value:
-                # 已完成，返回結果
+                # Completed, return result
                 token_usage = self.agent_manager.get_total_token_usage()
                 return PhaseResult(
                     status=PhaseStatus.COMPLETED,
@@ -1177,14 +1177,14 @@ class Phase(ABC):
         max_iterations: int,
         phase_name: str = "Phase",
     ) -> Optional[PhaseResult]:
-        """檢查是否超過最大迭代次數（通用方法）。
+        """Check if maximum iteration count exceeded (common method).
 
         Args:
-            max_iterations: 最大迭代次數
-            phase_name: Phase 名稱（用於錯誤訊息）
+            max_iterations: Maximum iteration count
+            phase_name: Phase name (for error messages)
 
         Returns:
-            PhaseResult 如果超過最大次數，None 如果未超過
+            PhaseResult If exceeded maximum, None if not exceeded
         """
         if not hasattr(self, "iteration"):
             raise AttributeError("Phase must have 'iteration' attribute")
@@ -1211,25 +1211,25 @@ class Phase(ABC):
         complete_codes: Optional[List[PhaseStatusCode]] = None,
         phase_specific_data: Optional[Dict[str, Any]] = None,
     ) -> tuple[Optional[PhaseResult], str]:
-        """執行完整的 agent 互動循環：生成 prompt、執行 agent、處理 status code（通用方法）。
+        """Execute complete agent interaction loop: generate prompt, execute agent, handle status code (common method).
 
-        此方法封裝了標準的 agent 執行流程，供所有 phases 使用。
-        Phase-specific 邏輯應該透過：
-        1. _generate_prompt() - 生成 phase-specific 的 prompt
-        2. _get_completion_data() - 提供 phase-specific 的完成資料
-        3. 在呼叫後執行 phase-specific 的後處理（如 sync to GitHub）
+        This method encapsulates standard agent execution flow for all phases to use.
+        Phase-specific logic should be through:
+        1. _generate_prompt() - Generate phase-specific prompt
+        2. _get_completion_data() - Provide phase-specific completion data
+        3. Execute phase-specific post-processing after call (e.g. sync to GitHub)
 
         Args:
-            agent_name: Agent 名稱
-            user_input: 用戶在這一輪的輸入
-            valid_status_codes: 有效的狀態碼列表
-            allowed_tools: 允許的工具列表
-            continue_codes: 應該繼續循環的 status codes
-            complete_codes: 表示即將完成的 status codes
-            phase_specific_data: Phase-specific 資料（傳給 _execute_agent_iteration）
+            agent_name: Agent name
+            user_input: User input for this round
+            valid_status_codes: List of valid status codes
+            allowed_tools: List of allowed tools
+            continue_codes: Status codes that should continue loop
+            complete_codes: Status codes indicating near completion
+            phase_specific_data: Phase-specific data (passed to _execute_agent_iteration)
 
         Returns:
-            (PhaseResult 如果應該結束 phase，None 如果應該繼續下一輪循環, agent response)
+            (PhaseResult If should end phase, None if should continue next round, agent response)
         """
         # Generate prompt for this iteration (subclass implements this)
         if not hasattr(self, '_generate_prompt'):
@@ -1271,24 +1271,24 @@ class Phase(ABC):
         continue_codes: Optional[List[PhaseStatusCode]] = None,
         complete_codes: Optional[List[PhaseStatusCode]] = None,
     ) -> Optional[PhaseResult]:
-        """處理標準的 status codes，返回 PhaseResult 或 None（表示繼續循環）。
+        """Handle standard status codes, return PhaseResult or None (indicates continue loop).
 
-        此方法封裝了常見的 status code 處理邏輯：
-        - NO_RESPONSE: 返回 FAILED
-        - continue_codes 中的 codes: 返回 None（繼續循環）
-        - complete_codes 中的 codes: 返回 None（繼續循環，但通常會在下一輪處理完成邏輯）
-        - None (沒有 status code): interactive 模式返回 None，non-interactive 返回 IN_PROGRESS
+        This method encapsulates common status code handling logic:
+        - NO_RESPONSE: Return FAILED
+        - codes in continue_codes: Return None (continue loop)
+        - codes in complete_codes: Return None (continue loop, but usually handle completion logic in next round)
+        - None (no status code): interactive mode returns None, non-interactive returns IN_PROGRESS
 
         Args:
-            status_code: 從 agent 回應中提取的 status code
-            response: Agent 的回應內容
-            continue_codes: 應該繼續循環的 status codes（如 NEED_CLARIFICATION）
-            complete_codes: 表示即將完成的 status codes（如 READY_FOR_REVIEW, CONFIRMED）
+            status_code: Status code extracted from agent response
+            response: Agent's response content
+            continue_codes: Status codes that should continue loop（e.g. NEED_CLARIFICATION）
+            complete_codes: Status codes indicating near completion（e.g. READY_FOR_REVIEW, CONFIRMED）
 
         Returns:
-            PhaseResult 如果應該結束 phase，None 如果應該繼續下一輪循環
+            PhaseResult If should end phase, None if should continue next round
         """
-        # 檢查必要的屬性
+        # Check required attributes
         if not hasattr(self, "iteration"):
             raise AttributeError("Phase must have 'iteration' attribute")
         if not hasattr(self, "interactive"):
@@ -1420,29 +1420,29 @@ class Phase(ABC):
         agent_name: str,
         valid_status_codes: List[PhaseStatusCode],
     ) -> Optional[PhaseStatusCode]:
-        """當 response 沒有 status code 時，呼叫 agent 分析狀態。
+        """When response has no status code, call agent to analyze status.
 
-        此方法用於處理某些 agent 不在 response 中回傳 status code 的情況。
-        它會使用 phase-specific 的 prompt 來請 agent 分析目前的狀態。
+        This method handles cases where some agents do not return status code in response.
+        It uses phase-specific prompt to ask agent to analyze current status.
 
         Args:
-            agent_name: Agent 名稱
-            valid_status_codes: 此 phase 有效的 status codes
+            agent_name: Agent name
+            valid_status_codes: Valid status codes for this phase
 
         Returns:
-            分析出的 PhaseStatusCode，如果無法分析則返回 None
+            Analyzed PhaseStatusCode, return None if cannot analyze
         """
-        # 取得 phase-specific 的分析 prompt
+        # Get phase-specific analysis prompt
         prompt = self._get_status_analysis_prompt()
         if not prompt:
             return None
 
-        # 呼叫 agent 分析狀態（只需要 response）
+        # Call agent to analyze status (only needs response)
         response, _, _, _, _ = self.agent_manager.execute(
             agent_name, prompt, allowed_directories=self._get_allowed_directories()
         )
 
-        # 從回應中提取 status code
+        # Extract status code from response
         from cafe.core.status_codes import StatusCodeParser
         return StatusCodeParser.extract(response, valid_codes=valid_status_codes)
 
@@ -1452,27 +1452,27 @@ class Phase(ABC):
         valid_status_codes: List[PhaseStatusCode],
         original_response: str,
     ) -> tuple[Optional[str], Optional[PhaseStatusCode]]:
-        """當 response 沒有 status code 時，呼叫 agent 分析狀態（帶日誌）。
+        """When response has no status code, call agent to analyze status (with logging).
 
-        此方法是 _analyze_missing_status_code 的加強版本，會返回分析 response 以便記錄。
+        This method is enhanced version of _analyze_missing_status_code, returns analysis response for recording.
 
         Args:
-            agent_name: Agent 名稱
-            valid_status_codes: 此 phase 有效的 status codes
-            original_response: 原始回應（用於日誌）
+            agent_name: Agent name
+            valid_status_codes: Valid status codes for this phase
+            original_response: Original response (for logging)
 
         Returns:
             tuple[analysis_response, status_code]:
-                - analysis_response: 分析呼叫的回應內容（可能為 None）
-                - status_code: 提取的 status code（可能為 None）
+                - analysis_response: Analysis call response content (may be None)
+                - status_code: Extracted status code (may be None)
         """
-        # 取得 phase-specific 的分析 prompt
+        # Get phase-specific analysis prompt
         prompt = self._get_status_analysis_prompt()
         if not prompt:
             return None, None
 
         try:
-            # 呼叫 agent 分析狀態（需要 read 權限）
+            # Call agent to analyze status (needs read permission)
             allowed_tools = ["read", "grep", "glob", "ls"]
             response, _, _, _, _ = self.agent_manager.execute(
                 agent_name,
@@ -1481,13 +1481,13 @@ class Phase(ABC):
                 allowed_directories=self._get_allowed_directories()
             )
 
-            # 從回應中提取 status code
+            # Extract status code from response
             from cafe.core.status_codes import StatusCodeParser
             status_code = StatusCodeParser.extract(response, valid_codes=valid_status_codes)
 
             return response, status_code
         except Exception as e:
-            # 分析失敗，返回 None
+            # Analysis failed, return None
             print(f"⚠️  Status code analysis failed: {e}")
             return None, None
 
@@ -1501,33 +1501,33 @@ class Phase(ABC):
         cli_command_args: Optional[List[str]],
         multiple_codes_found: Optional[List[PhaseStatusCode]] = None,
     ) -> None:
-        """寫入 status code 錯誤日誌到 execution_error_{num}.log。
+        """Write status code error log to execution_error_{num}.log.
 
-        當遇到以下情況時寫入日誌：
-        - 原始回應沒有 status code
-        - 原始回應有多個 status code
-        - 分析嘗試失敗
+        Write log when encountering the following situations:
+        - Original response has no status code
+        - Original response has multiple status codes
+        - Analysis attempt failed
 
         Args:
-            original_response: 原始 agent 回應
-            valid_status_codes: 有效的 status codes
-            status_code: 最終提取的 status code（可能為 None）
-            analysis_attempted: 是否嘗試了分析
-            analysis_response: 分析呼叫的回應（如果有）
-            cli_command_args: CLI 命令參數
-            multiple_codes_found: 如果發現多個 status codes，列出所有找到的 codes
+            original_response: Original agent response
+            valid_status_codes: Valid status codes
+            status_code: Final extracted status code (may be None)
+            analysis_attempted: Whether analysis was attempted
+            analysis_response: Analysis call response (if any)
+            cli_command_args: CLI command arguments
+            multiple_codes_found: If multiple status codes found, list all found codes
         """
         if not hasattr(self, "history_dir") or not hasattr(self, "iteration"):
             return
 
-        # 只在需要時寫入 log：沒有 status code、進行了分析、或發現多個 codes
+        # Only write log when needed: no status code, performed analysis, or found multiple codes
         if status_code is not None and not analysis_attempted and not multiple_codes_found:
             return
 
         error_log_file = Path(self.history_dir) / f"execution_error_{self.iteration:03d}.log"
         error_log_file.parent.mkdir(parents=True, exist_ok=True)
 
-        # 決定錯誤類型
+        # Determine error type
         if multiple_codes_found:
             error_type = "Multiple status codes"
         elif status_code is None:
@@ -1535,7 +1535,7 @@ class Phase(ABC):
         else:
             error_type = "Status code required analysis"
 
-        # 建立日誌內容
+        # Create log content
         log_lines = [
             f"Timestamp: {datetime.now().isoformat()}",
             f"Issue: {self.issue_dir.name if hasattr(self, 'issue_dir') else 'unknown'}",
@@ -1582,18 +1582,18 @@ class Phase(ABC):
         error_log_file.write_text("\n".join(log_lines), encoding="utf-8")
 
     def _get_status_analysis_prompt(self) -> Optional[str]:
-        """取得分析 status code 的 prompt（子類覆寫）。
+        """Get prompt for analyzing status code (subclass override).
 
-        當 agent response 中沒有 status code 時，會使用此 prompt 再呼叫一次 agent。
-        子類應該覆寫此方法，提供 phase-specific 的分析 prompt。
+        When agent response has no status code, this prompt is used to call agent again.
+        Subclasses should override this method to provide phase-specific analysis prompt.
 
         Returns:
-            分析 status code 的 prompt，如果不支援分析則返回 None
+            Prompt for analyzing status code, return None if analysis not supported
         """
         return None
 
     def _read_issue_config(self, config_path: Path) -> Optional[Dict[str, Any]]:
-        """Read issue configuration from config.yaml（共用方法）。
+        """Read issue configuration from config.yaml (common method).
 
         Args:
             config_path: Path to config.yaml file
@@ -1612,7 +1612,7 @@ class Phase(ABC):
             return None
 
     def _write_issue_config(self, config_path: Path, config_data: Dict[str, Any]) -> None:
-        """Write issue configuration to config.yaml（共用方法）。
+        """Write issue configuration to config.yaml (common method).
 
         Args:
             config_path: Path to config.yaml file
@@ -1624,7 +1624,7 @@ class Phase(ABC):
             yaml.dump(config_data, f, allow_unicode=True, default_flow_style=False)
 
     def _get_issue_config_value(self, config_file: Path, key: str) -> Optional[Any]:
-        """Read a value from issue config file（共用方法）。
+        """Read a value from issue config file (common method).
 
         Args:
             config_file: Path to config.yaml file
@@ -1654,7 +1654,7 @@ class Phase(ABC):
             return config_data.get(key)
 
     def _get_issue_dir(self, git_ops: "GitOperations") -> Path:
-        """Get issue directory path based on current Git branch（共用方法）。
+        """Get issue directory path based on current Git branch (common method).
 
         Args:
             git_ops: GitOperations instance to get current branch
@@ -1667,10 +1667,10 @@ class Phase(ABC):
         return Path(f".cafe/issues/{current_branch}")
 
     def _get_current_branch_commits(self, git_ops: "GitOperations", base_branch: str) -> str:
-        """Get commits from current branch that are not in base branch（共用方法）。
+        """Get commits from current branch that are not in base branch (common method).
 
-        這個方法用於獲取當前 feature branch 上新增的 commits，不包含 base branch 上的 commits。
-        使用 git log base_branch..HEAD 格式來只顯示當前 branch 的 commits。
+        This method gets new commits added on current feature branch, excluding commits on base branch.
+        Use git log base_branch..HEAD format to only show current branch commits.
 
         Args:
             git_ops: GitOperations instance to get commits
@@ -1687,15 +1687,15 @@ class Phase(ABC):
         iteration: int,
         phase_dir: Path,
     ) -> Path:
-        """取得版本化檔案的路徑（共用方法）。
+        """Get path of versioned file (common method).
 
         Args:
-            phase_name: Phase 名稱（如 "spec", "plan", "review"）
-            iteration: Iteration 編號（1-based）
-            phase_dir: Phase 目錄路徑
+            phase_name: Phase name (e.g. "spec", "plan", "review")
+            iteration: Iteration number (1-based)
+            phase_dir: Phase directory path
 
         Returns:
-            版本化檔案的 Path 物件（格式：{phase_name}_{iteration:03d}.md）
+            Path object of versioned file (format: {phase_name}_{iteration:03d}.md)
 
         Examples:
             >>> _get_versioned_file_path("spec", 1, Path(".cafe/issues/myissue/spec"))
@@ -1709,17 +1709,17 @@ class Phase(ABC):
         phase_name: str,
         phase_dir: Path,
     ) -> int:
-        """取得下一個 iteration 編號（共用方法）。
+        """Get next iteration number (common method).
 
         Args:
-            phase_name: Phase 名稱（如 "spec", "plan", "review"）
-            phase_dir: Phase 目錄路徑
+            phase_name: Phase name (e.g. "spec", "plan", "review")
+            phase_dir: Phase directory path
 
         Returns:
-            下一個 iteration 編號（從 1 開始）
+            Next iteration number (starting from 1)
 
         Raises:
-            ValueError: 如果已有 999 個檔案
+            ValueError: If already has 999 files
         """
         # Check if directory exists
         if not phase_dir.exists():
@@ -1739,7 +1739,7 @@ class Phase(ABC):
 
         # Check if exceeds 999
         if count >= 999:
-            raise ValueError("不可超過 999")
+            raise ValueError("Cannot exceed 999")
 
         # Check if the last iteration was interrupted (has no response)
         last_iteration_file = existing_iterations[-1]
@@ -1764,16 +1764,16 @@ class Phase(ABC):
         iteration: int,
         phase_dir: Path,
     ) -> None:
-        """複製前一版本的檔案到新版本（共用方法）。
+        """Copy previous version file to new version (common method).
 
         Args:
-            phase_name: Phase 名稱（如 "spec", "plan", "review"）
-            iteration: 當前 iteration 編號
-            phase_dir: Phase 目錄路徑
+            phase_name: Phase name (e.g. "spec", "plan", "review")
+            iteration: Current iteration number
+            phase_dir: Phase directory path
 
         Note:
-            - 如果是第一輪（iteration=1），不執行任何動作
-            - 如果前一版本不存在，不執行任何動作
+            - If first round (iteration=1), do not perform any action
+            - If previous version does not exist, do not perform any action
         """
         # Do nothing for first iteration
         if iteration == 1:
@@ -1793,18 +1793,18 @@ class Phase(ABC):
         phase_name: str,
         phase_dir: Path,
     ) -> Optional[Path]:
-        """取得最新版本的檔案路徑（共用方法）。
+        """Get path of latest version file (common method).
 
         Args:
-            phase_name: Phase 名稱（如 "spec", "plan", "review"）
-            phase_dir: Phase 目錄路徑
+            phase_name: Phase name (e.g. "spec", "plan", "review")
+            phase_dir: Phase directory path
 
         Returns:
-            最新版本檔案的 Path 物件，如果沒有任何版本則返回 None
+            Path object of latest version file, return None if no versions exist
 
         Examples:
             >>> _get_latest_versioned_file("spec", Path(".cafe/issues/myissue/spec"))
-            Path('.cafe/issues/myissue/spec/spec_003.md')  # 假設有 3 個版本
+            Path('.cafe/issues/myissue/spec/spec_003.md')  # Assuming 3 versions
         """
         # Find all versioned files
         pattern = f"{phase_name}_*.md"
@@ -1817,23 +1817,23 @@ class Phase(ABC):
 
 
 def ensure_agent_file_exists(agent_name: str, agent_role: str, cafe_dir: Path = Path(".cafe")) -> None:
-    """檢查 agent md 檔案是否存在，如果不存在則報錯並提示使用者重置。
+    """Check if agent md file exists, if not report error and prompt user to reset.
 
     Args:
-        agent_name: Agent 名稱（如 "Roger", "David", "Richard"）
-        agent_role: Agent 角色目錄名稱（如 "pm", "developer", "reviewer"）
-        cafe_dir: CAFE 配置目錄路徑（預設為 ".cafe"）
+        agent_name: Agent name (e.g. "Roger", "David", "Richard")
+        agent_role: Agent role directory name (e.g. "pm", "developer", "reviewer")
+        cafe_dir: CAFE config directory path (default ".cafe")
 
     Raises:
-        FileNotFoundError: 當 agent md 檔案不存在時
+        FileNotFoundError: When agent md file does not exist
 
     Examples:
-        >>> ensure_agent_file_exists("Roger", "pm")  # 正常情況，不會拋出錯誤
-        >>> ensure_agent_file_exists("Roger", "pm")  # 如果檔案不存在，會拋出 FileNotFoundError
+        >>> ensure_agent_file_exists("Roger", "pm")  # Normal case, will not throw error
+        >>> ensure_agent_file_exists("Roger", "pm")  # If file does not exist, will throw FileNotFoundError
     """
     from cafe.agents.manager import AgentManager
     
-    # 檢查 agent md 檔案是否存在
+    # Check if agent md file exists
     agent_file = cafe_dir / AgentManager.AGENTS_DIR / agent_role / f"{agent_name}.md"
 
     if not agent_file.exists():

@@ -15,7 +15,7 @@ class ConcretePhase(Phase):
     """Concrete implementation for testing."""
 
     def execute(self) -> PhaseResult:
-        """測試用的簡單實作"""
+        """測試用簡單實作"""
         return PhaseResult(status=PhaseStatus.COMPLETED, message="Test phase completed")
 
 
@@ -23,12 +23,12 @@ class TestPhase:
     """Test Phase base class."""
 
     def test_phase_is_abstract(self) -> None:
-        """測試 Phase 是抽象基礎類別，無法直接實例化"""
+        """測試 Phase 是抽象基礎類別, 無法直接實例化"""
         with pytest.raises(TypeError):
             Phase()  # type: ignore
 
     def test_concrete_phase_can_be_instantiated(self) -> None:
-        """測試具體實作的 Phase 可以被實例化"""
+        """測試具體實作 Phase 可以被實例化"""
         phase = ConcretePhase()
         assert isinstance(phase, Phase)
 
@@ -118,7 +118,7 @@ class TestPhaseErrorHandling:
         assert result.data["files_changed"] == 5
 
     def test_phase_exception_propagates_to_caller(self) -> None:
-        """測試 Phase 執行時的例外會傳播給呼叫者處理"""
+        """測試 Phase 執行時例外會傳播給呼叫者處理"""
 
         class ExceptionPhase(Phase):
             def execute(self) -> PhaseResult:
@@ -126,7 +126,7 @@ class TestPhaseErrorHandling:
 
         phase = ExceptionPhase()
 
-        # Phase 不處理例外，由外層的 workflow 處理
+        # Phase 不處理例外, 由外層 workflow 處理
         with pytest.raises(ValueError, match="Test error"):
             phase.execute()
 
@@ -135,7 +135,7 @@ class TestExecuteAgentIteration:
     """測試 Phase._execute_agent_iteration() 通用方法"""
 
     def test_execute_agent_iteration_success(self, tmp_path: Path) -> None:
-        """測試成功執行 agent iteration 的完整流程"""
+        """測試成功執行 agent iteration 完整流程"""
         # Setup
         history_dir = tmp_path / "history"
         history_dir.mkdir(parents=True)
@@ -193,7 +193,7 @@ class TestExecuteAgentIteration:
         assert history_data["allowed_tools"] == ["write", "read"]
 
     def test_execute_agent_iteration_empty_response(self, tmp_path: Path) -> None:
-        """測試 agent 返回空回應時的處理"""
+        """測試 agent 返回空回應時處理"""
         history_dir = tmp_path / "history"
         history_dir.mkdir(parents=True)
 
@@ -239,7 +239,7 @@ class TestExecuteAgentIteration:
         assert history_data["response"] == ""
 
     def test_execute_agent_iteration_no_status_code(self, tmp_path: Path) -> None:
-        """測試 agent 回應中沒有 status code 的情況（會重試 5 次後拋出錯誤）"""
+        """測試 agent 回應中沒有 status code 情況（會重試 5 次後拋出錯誤）"""
         history_dir = tmp_path / "history"
         history_dir.mkdir(parents=True)
 
@@ -263,7 +263,7 @@ class TestExecuteAgentIteration:
         phase = TestPhase(agent_manager, history_dir)
 
         # Execute - 應該拋出 ValueError 因為 5 次重試後仍無 status code
-        with pytest.raises(ValueError, match="Agent 在 5 次嘗試後仍未回傳有效的 status code"):
+        with pytest.raises(ValueError, match="Still did not return valid status code after"):
             phase._execute_agent_iteration(
                 agent_name="test_agent",
                 prompt="Test prompt",
@@ -486,10 +486,10 @@ class TestHandleStandardStatusCodes:
 
 
 class TestHandlePreviousPermissionDenials:
-    """測試 Phase._handle_previous_permission_denials() 處理上一輪的權限請求"""
+    """測試 Phase._handle_previous_permission_denials() 處理上一輪權限請求"""
 
     def test_no_previous_iteration_returns_empty(self, tmp_path: Path) -> None:
-        """測試沒有上一輪 iteration 時返回空的 approved tools 和 user_input"""
+        """測試沒有上一輪 iteration 時返回空 approved tools and user_input"""
         history_dir = tmp_path / "history"
         history_dir.mkdir(parents=True)
 
@@ -548,7 +548,7 @@ class TestHandlePreviousPermissionDenials:
         assert user_input == ""
 
     def test_non_interactive_with_approved_indices_returns_tools(self, tmp_path: Path) -> None:
-        """測試 non-interactive 模式，使用 approved_denial_indices 批准權限"""
+        """測試 non-interactive 模式, 使用 approved_denial_indices 批准權限"""
         history_dir = tmp_path / "history"
         history_dir.mkdir(parents=True)
 
@@ -644,7 +644,7 @@ class TestHandlePreviousPermissionDenials:
         mock_display.get_multiline_input.assert_called_once()
 
     def test_bash_command_pattern_uses_first_two_words(self, tmp_path: Path) -> None:
-        """測試 Bash 命令的 pattern 使用前兩個詞"""
+        """測試 Bash 命令 pattern 使用前兩個詞"""
         history_dir = tmp_path / "history"
         history_dir.mkdir(parents=True)
 
@@ -678,10 +678,10 @@ class TestHandlePreviousPermissionDenials:
 
 
 class TestIterationHistoryCLICommandArgs:
-    """測試 iteration history 記錄實際的 CLI 命令參數"""
+    """測試 iteration history 記錄實際 CLI 命令參數"""
 
     def test_records_cli_command_args_in_iteration_history(self, tmp_path: Path) -> None:
-        """測試記錄實際的 CLI 命令參數到 iteration history"""
+        """測試記錄實際 CLI 命令參數到 iteration history"""
         history_dir = tmp_path / "history"
         history_dir.mkdir(parents=True)
 
@@ -704,7 +704,7 @@ class TestIterationHistoryCLICommandArgs:
         mock_agent.config.session_id = "test-session-123"
         agent_manager.get_agent.return_value = mock_agent
 
-        # Mock agent_manager.execute() 返回包含 cli_command_args 的 AgentResponse
+        # Mock agent_manager.execute() 返回包含 cli_command_args  AgentResponse
         from cafe.core.types import AgentResponse
         mock_response = AgentResponse(
             response="CAFE_CONFIRMED\n完成",
@@ -743,7 +743,7 @@ class TestIterationHistoryCLICommandArgs:
         with open(iteration_file, "r", encoding="utf-8") as f:
             saved_data = json.load(f)
 
-        # Should record cli_command_args as list (實際的 CLI 參數)
+        # Should record cli_command_args as list (實際 CLI 參數)
         assert "cli_command_args" in saved_data
         cli_args = saved_data["cli_command_args"]
 
@@ -754,7 +754,7 @@ class TestIterationHistoryCLICommandArgs:
         assert "--resume" in cli_args
         assert "test-session-123" in cli_args
         assert "--allowed-tools" in cli_args
-        # allowed-tools 的值必須有雙引號，否則授權無效
+        # allowed-tools 值必須有雙引號, 否則授權無效
         assert '"Write,Read,Edit(/home/user/test.php)"' in cli_args
         assert "--output-format" in cli_args
         assert "stream-json" in cli_args
@@ -767,7 +767,7 @@ class TestMergeAllowedTools:
     """測試 _merge_allowed_tools 方法"""
 
     def test_merge_with_no_previous_iteration(self, tmp_path: Path) -> None:
-        """測試第一次 iteration 時，只返回 base_allowed_tools"""
+        """測試第一次 iteration 時, 只返回 base_allowed_tools"""
         # Setup
         phase = ConcretePhase()
         phase.iteration = 1
@@ -783,7 +783,7 @@ class TestMergeAllowedTools:
         assert set(result) == set(base_tools)
 
     def test_merge_with_previous_iteration_tools(self, tmp_path: Path) -> None:
-        """測試繼承上一輪的 allowed_tools"""
+        """測試繼承上一輪 allowed_tools"""
         # Setup
         history_dir = tmp_path / "history"
         history_dir.mkdir(parents=True)
@@ -811,7 +811,7 @@ class TestMergeAllowedTools:
         assert set(result) == {"write", "read", "bash", "grep"}
 
     def test_merge_with_approved_tools_from_denials(self, tmp_path: Path) -> None:
-        """測試加入新批准的 tools"""
+        """測試加入新批准 tools"""
         # Setup
         history_dir = tmp_path / "history"
         history_dir.mkdir(parents=True)
@@ -840,7 +840,7 @@ class TestMergeAllowedTools:
         assert set(result) == {"write", "read", "bash", "grep"}
 
     def test_merge_removes_duplicates(self, tmp_path: Path) -> None:
-        """測試去除重複的工具"""
+        """測試去除重複工具"""
         # Setup
         history_dir = tmp_path / "history"
         history_dir.mkdir(parents=True)
@@ -898,7 +898,7 @@ class TestMergeAllowedTools:
 
 
 class TestPhaseReviewDecision:
-    """測試 Phase 的 review decision 相關方法"""
+    """測試 Phase  review decision 相關方法"""
 
     def test_process_review_decision_with_confirm(self, tmp_path: Path) -> None:
         """測試用戶選擇 confirm 時返回 COMPLETED 結果"""
@@ -953,7 +953,7 @@ class TestPhaseReviewDecision:
 
 
 class TestPhaseAllowedDirectories:
-    """測試 Phase 的 _get_allowed_directories 方法"""
+    """測試 Phase  _get_allowed_directories 方法"""
 
     def test_get_allowed_directories_returns_cafe_directory(self, tmp_path: Path) -> None:
         """測試 _get_allowed_directories 回傳 .cafe 目錄"""

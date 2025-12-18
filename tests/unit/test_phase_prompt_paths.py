@@ -1,4 +1,4 @@
-"""測試 SpecPhase 和 PlanPhase 的 prompt 使用相對路徑而非絕對路徑。"""
+"""測試 SpecPhase and PlanPhase  prompt 使用相對路徑而非絕對路徑."""
 
 import pytest
 from pathlib import Path
@@ -47,10 +47,10 @@ def mock_git():
 
 
 class TestSpecPhasePromptPaths:
-    """測試 SpecPhase 的 prompt 使用相對路徑"""
+    """測試 SpecPhase  prompt 使用相對路徑"""
 
     def test_first_iteration_prompt_uses_relative_paths(self, tmp_path, mock_agent_manager, mock_permission, mock_git, monkeypatch):
-        """第一輪 prompt 應使用相對路徑而非絕對路徑"""
+        """Round 1 prompt 應使用相對路徑而非絕對路徑"""
         # Setup
         repo_root = tmp_path / "my-repo"
         git_dir = repo_root / ".git"
@@ -99,18 +99,18 @@ class TestSpecPhasePromptPaths:
         prompt = captured_prompts[-1]
 
         # 關鍵斷言：prompt 不應包含絕對路徑
-        # 絕對路徑會包含 tmp_path 的完整路徑（例如 /tmp/pytest-xxx/）
+        # 絕對路徑會包含 tmp_path 完整路徑（例如 /tmp/pytest-xxx/）
         assert str(tmp_path) not in prompt, f"Prompt should not contain absolute path {tmp_path}"
 
         # Prompt 應該包含相對路徑（.cafe/issues/...）
         assert ".cafe/issues/test-issue/spec/" in prompt, f"Prompt should contain relative path, got: {prompt[:500]}"
 
-        # 確保不是 git ignore 格式（不應以 /. 開頭）- prompt 中的路徑不需要 git ignore 格式
+        # 確保不是 git ignore 格式（不應以 /. 開頭）- prompt 中路徑不需要 git ignore 格式
         # 只要是相對路徑即可
         assert "/.cafe/issues/test-issue/spec/" not in prompt, f"Prompt should not use git ignore format (/.cafe)"
 
     def test_worktree_prompt_uses_cwd_relative_paths(self, tmp_path, mock_agent_manager, mock_permission, mock_git, monkeypatch):
-        """在 worktree 中，prompt 應使用相對於當前工作目錄的路徑，而非包含 worktree 路徑"""
+        """在 worktree 中, prompt 應使用相對於當前工作目錄路徑, 而非包含 worktree 路徑"""
         # Setup: 模擬 worktree 環境
         # 主 repo 在 tmp_path/my-repo
         # worktree 在 tmp_path/my-repo/.cafe/worktrees/test-issue
@@ -168,13 +168,13 @@ class TestSpecPhasePromptPaths:
         # 檢查 prompt 內容
         prompt = captured_prompts[-1]
         
-        # 關鍵斷言：在 worktree 中，prompt 不應包含 worktree 路徑
-        # 錯誤的格式：.cafe/worktrees/test-issue/.cafe/issues/test-issue/spec/
-        # 正確的格式：.cafe/issues/test-issue/spec/
+        # 關鍵斷言：在 worktree 中, prompt 不應包含 worktree 路徑
+        # 錯誤格式：.cafe/worktrees/test-issue/.cafe/issues/test-issue/spec/
+        # 正確格式：.cafe/issues/test-issue/spec/
         assert ".cafe/worktrees/test-issue/.cafe/issues/test-issue/spec/" not in prompt, \
             f"Prompt should not contain worktree path prefix in worktree environment"
         
-        # Prompt 應該只包含相對於 worktree 根目錄的路徑
+        # Prompt 應該只包含相對於 worktree 根目錄路徑
         assert ".cafe/issues/test-issue/spec/" in prompt, \
             f"Prompt should contain cwd-relative path, got: {prompt[:500]}"
         
@@ -184,7 +184,7 @@ class TestSpecPhasePromptPaths:
 
 
 class TestPlanPhasePromptPaths:
-    """測試 PlanPhase 的 prompt 使用相對路徑"""
+    """測試 PlanPhase  prompt 使用相對路徑"""
 
     def create_template_file(self, repo_root: Path) -> str:
         """Create a dummy template file for tests inside the repo."""
@@ -193,7 +193,7 @@ class TestPlanPhasePromptPaths:
         return str(template_file)
 
     def test_first_iteration_prompt_uses_relative_paths(self, tmp_path, mock_agent_manager, mock_permission, mock_git, monkeypatch):
-        """PlanPhase 的 prompt 應使用相對路徑而非絕對路徑"""
+        """PlanPhase  prompt 應使用相對路徑而非絕對路徑"""
         # Setup
         repo_root = tmp_path / "my-repo"
         git_dir = repo_root / ".git"
@@ -254,14 +254,14 @@ class TestPlanPhasePromptPaths:
         # Prompt 應該包含相對路徑
         assert ".cafe/issues/test-issue/" in prompt, f"Prompt should contain relative path"
 
-        # 確保 spec 和 plan 的路徑都是相對路徑
+        # 確保 spec and plan 路徑都是相對路徑
         # spec 路徑
         assert ".cafe/issues/test-issue/spec/" in prompt, f"Prompt should contain relative spec path"
         # plan 路徑
         assert ".cafe/issues/test-issue/plan/" in prompt, f"Prompt should contain relative plan path"
 
     def test_worktree_prompt_uses_cwd_relative_paths(self, tmp_path, mock_agent_manager, mock_permission, mock_git, monkeypatch):
-        """在 worktree 中，PlanPhase 的 prompt 應使用相對於當前工作目錄的路徑"""
+        """在 worktree 中, PlanPhase  prompt 應使用相對於當前工作目錄路徑"""
         # Setup: 模擬 worktree 環境
         repo_root = tmp_path / "my-repo"
         git_dir = repo_root / ".git"
@@ -323,13 +323,13 @@ class TestPlanPhasePromptPaths:
         # 檢查 prompt 內容
         prompt = captured_prompts[-1]
         
-        # 關鍵斷言：在 worktree 中，prompt 不應包含 worktree 路徑
-        # 錯誤的格式：.cafe/worktrees/test-issue/.cafe/issues/test-issue/
-        # 正確的格式：.cafe/issues/test-issue/
+        # 關鍵斷言：在 worktree 中, prompt 不應包含 worktree 路徑
+        # 錯誤格式：.cafe/worktrees/test-issue/.cafe/issues/test-issue/
+        # 正確格式：.cafe/issues/test-issue/
         assert ".cafe/worktrees/test-issue/.cafe/issues/test-issue/" not in prompt, \
             f"Prompt should not contain worktree path prefix in worktree environment"
         
-        # Prompt 應該只包含相對於 worktree 根目錄的路徑
+        # Prompt 應該只包含相對於 worktree 根目錄路徑
         assert ".cafe/issues/test-issue/spec/" in prompt, \
             f"Prompt should contain cwd-relative spec path"
         assert ".cafe/issues/test-issue/plan/" in prompt, \

@@ -53,7 +53,7 @@ class Display:
 
     def get_multiline_input(
         self,
-        prompt: str = "請輸入內容",
+        prompt: str = "Please enter content",
         end_marker: str = "END",
         show_line_numbers: bool = True
     ) -> str:
@@ -80,7 +80,7 @@ class Display:
 
         # Display prompt
         print(f"\033[1m{prompt}\033[0m")
-        print(f"\033[2m（按 Enter 送出，Shift+Enter 或 Alt+Enter 換行）\033[0m")
+        print(f"\033[2m(Press Enter to submit, Shift+Enter or Alt+Enter for new line)\033[0m")
         print("─" * terminal_width)
 
         # Create key bindings

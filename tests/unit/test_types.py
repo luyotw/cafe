@@ -25,18 +25,18 @@ class TestEnums:
     """Test enum types."""
 
     def test_workflow_mode_values(self) -> None:
-        """測試 WorkflowMode enum 的值是否正確"""
+        """測試 WorkflowMode enum 值是否正確"""
         assert WorkflowMode.GITHUB == "github"
         assert WorkflowMode.LOCAL == "local"
 
     def test_agent_tool_values(self) -> None:
-        """測試 AgentCLI enum 的值是否正確"""
+        """測試 AgentCLI enum 值是否正確"""
         assert AgentCLI.CLAUDE == "claude"
         assert AgentCLI.GEMINI == "gemini"
         assert AgentCLI.CURSOR == "cursor-agent"
 
     def test_phase_status_values(self) -> None:
-        """測試 PhaseStatus enum 的值是否正確"""
+        """測試 PhaseStatus enum 值是否正確"""
         assert PhaseStatus.PENDING == "pending"
         assert PhaseStatus.IN_PROGRESS == "in_progress"
         assert PhaseStatus.COMPLETED == "completed"
@@ -44,7 +44,7 @@ class TestEnums:
         assert PhaseStatus.SKIPPED == "skipped"
 
     def test_permission_action_values(self) -> None:
-        """測試 PermissionAction enum 的值是否正確 (y/t/s)"""
+        """測試 PermissionAction enum 值是否正確 (y/t/s)"""
         assert PermissionAction.AUTHORIZE == "y"
         assert PermissionAction.DIALOG == "t"
         assert PermissionAction.SKIP == "s"
@@ -86,14 +86,14 @@ class TestPhaseResult:
     """Test PhaseResult model."""
 
     def test_create_phase_result_minimal(self) -> None:
-        """測試只提供 status 時可以成功建立 PhaseResult，其他欄位使用預設值"""
+        """測試只提供 status 時可以成功建立 PhaseResult, 其他欄位使用預設值"""
         result = PhaseResult(status=PhaseStatus.COMPLETED)
         assert result.status == PhaseStatus.COMPLETED
         assert result.message == ""
         assert result.data == {}
 
     def test_create_phase_result_with_message(self) -> None:
-        """測試可以成功建立帶有錯誤訊息的 PhaseResult"""
+        """測試可以成功建立帶有錯誤訊息 PhaseResult"""
         result = PhaseResult(
             status=PhaseStatus.FAILED, message="Something went wrong"
         )
@@ -101,7 +101,7 @@ class TestPhaseResult:
         assert result.message == "Something went wrong"
 
     def test_create_phase_result_with_data(self) -> None:
-        """測試可以成功建立帶有額外資料的 PhaseResult"""
+        """測試可以成功建立帶有額外資料 PhaseResult"""
         result = PhaseResult(
             status=PhaseStatus.COMPLETED,
             message="Success",
@@ -116,7 +116,7 @@ class TestPermissionRequest:
     """Test PermissionRequest model."""
 
     def test_create_permission_request(self) -> None:
-        """測試可以成功建立權限請求，包含工具名稱和輸入參數"""
+        """測試可以成功建立權限請求, 包含工具名稱and輸入參數"""
         request = PermissionRequest(
             tool_name="Bash", tool_input={"command": "git status"}
         )
@@ -133,7 +133,7 @@ class TestSessionConfig:
     """Test SessionConfig model."""
 
     def test_create_session_config_github_mode(self) -> None:
-        """測試可以成功建立 GitHub 工作流程的 SessionConfig"""
+        """測試可以成功建立 GitHub 工作流程 SessionConfig"""
         config = SessionConfig(workflow_mode=WorkflowMode.GITHUB, issue_id="123")
         assert config.workflow_mode == WorkflowMode.GITHUB
         assert config.issue_id == "123"
@@ -141,7 +141,7 @@ class TestSessionConfig:
         assert config.sessions_dir == ".cafe/sessions"
 
     def test_create_session_config_local_mode(self) -> None:
-        """測試可以成功建立 Local 工作流程的 SessionConfig"""
+        """測試可以成功建立 Local 工作流程 SessionConfig"""
         config = SessionConfig(
             workflow_mode=WorkflowMode.LOCAL,
             spec_file="requirements.md",
@@ -151,7 +151,7 @@ class TestSessionConfig:
         assert config.issue_id is None
 
     def test_create_session_config_custom_dirs(self) -> None:
-        """測試可以自訂 sessions 和 issues 目錄路徑"""
+        """測試可以自訂 sessions and issues 目錄路徑"""
         config = SessionConfig(
             workflow_mode=WorkflowMode.GITHUB,
             issue_id="456",
@@ -237,7 +237,7 @@ class TestPhaseProgress:
         assert progress.message == "Success"
 
     def test_phase_progress_roundtrip(self) -> None:
-        """測試 to_dict 和 from_dict 的往返轉換"""
+        """測試 to_dict and from_dict 往返轉換"""
         now = datetime.now()
         original = PhaseProgress(
             phase="spec",
@@ -259,7 +259,7 @@ class TestPermissionDenial:
     """Test PermissionDenial model."""
 
     def test_to_allowed_tool_pattern_with_absolute_path(self, tmp_path: Path) -> None:
-        """測試絕對路徑應轉換成相對於專案根目錄的路徑"""
+        """測試絕對路徑應轉換成相對於專案根目錄路徑"""
         # 模擬專案根目錄
         project_root = tmp_path / "project"
         project_root.mkdir()

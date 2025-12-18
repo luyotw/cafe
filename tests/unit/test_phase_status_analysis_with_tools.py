@@ -1,4 +1,4 @@
-"""測試 Phase 的 status code 分析功能（帶 allowed_tools）。"""
+"""測試 Phase  status code 分析功能（帶 allowed_tools）."""
 
 import pytest
 from pathlib import Path
@@ -12,14 +12,14 @@ from cafe.core.git import GitOperations
 
 
 class TestPhaseStatusAnalysisWithTools:
-    """測試 Phase 的 status code 分析功能在傳遞 allowed_tools 時的行為。"""
+    """測試 Phase  status code 分析功能在傳遞 allowed_tools 時行為."""
 
     def test_analyze_with_allowed_tools_passed_to_agent(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """測試分析時會傳遞 allowed_tools 給 agent。
+        """測試分析時會傳遞 allowed_tools 給 agent.
         
-        情境：當 agent 回應沒有 status code 時，系統呼叫分析
+        情境：當 agent 回應沒有 status code 時, 系統呼叫分析
         驗證：分析呼叫時有傳遞 allowed_tools（包含 read 等工具）
         """
         monkeypatch.chdir(tmp_path)
@@ -38,7 +38,7 @@ class TestPhaseStatusAnalysisWithTools:
         # Mock agent manager
         mock_agent_manager = MagicMock(spec=AgentManager)
         
-        # 只設定分析執行的返回值（測試只呼叫分析，不呼叫原始執行）
+        # 只設定分析執行返回值（測試只呼叫分析, 不呼叫原始執行）
         mock_agent_manager.execute.return_value = (
             "CAFE_READY_FOR_REVIEW", None, [], {}, []
         )
@@ -47,7 +47,7 @@ class TestPhaseStatusAnalysisWithTools:
         mock_permission_handler = MagicMock(spec=PermissionHandler)
         mock_git_ops = MagicMock(spec=GitOperations)
         
-        # 創建一個簡單的 Phase 子類來測試
+        # 創建一個簡單 Phase 子類來測試
         class TestPhase(Phase):
             def __init__(self, git_ops):
                 super().__init__(interactive=True, git_ops=git_ops)
@@ -92,10 +92,10 @@ class TestPhaseStatusAnalysisWithTools:
     def test_analyze_with_absolute_path_in_prompt(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """測試分析 prompt 使用絕對路徑。
+        """測試分析 prompt 使用絕對路徑.
         
-        情境：在 worktree 環境中，分析 prompt 應該使用絕對路徑
-        驗證：分析 prompt 中的檔案路徑是絕對路徑
+        情境：在 worktree 環境中, 分析 prompt 應該使用絕對路徑
+        驗證：分析 prompt 中檔案路徑是絕對路徑
         """
         monkeypatch.chdir(tmp_path)
         
@@ -164,7 +164,7 @@ class TestPhaseStatusAnalysisWithTools:
         # 驗證分析成功
         assert status_code == PhaseStatusCode.READY_FOR_REVIEW
         
-        # 驗證傳遞給 agent 的 prompt 包含絕對路徑
+        # 驗證傳遞給 agent  prompt 包含絕對路徑
         call_args = mock_agent_manager.execute.call_args[0]
         prompt_arg = call_args[1]  # 第二個參數是 prompt
         assert str(tmp_path) in prompt_arg
@@ -172,7 +172,7 @@ class TestPhaseStatusAnalysisWithTools:
     def test_analyze_failure_returns_none(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """測試分析失敗時返回 None。
+        """測試分析失敗時返回 None.
         
         情境：agent 執行拋出異常
         驗證：返回 (None, None) 並不會中斷程式
@@ -229,9 +229,9 @@ class TestPhaseStatusAnalysisWithTools:
     def test_analyze_extracts_status_code_from_response(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """測試分析能正確從回應中提取 status code。
+        """測試分析能正確從回應中提取 status code.
         
-        情境：agent 回應包含有效的 status code
+        情境：agent 回應包含有效 status code
         驗證：正確提取並返回 status code
         """
         monkeypatch.chdir(tmp_path)

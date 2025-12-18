@@ -95,7 +95,7 @@ class TestPrepareCommand:
         mock_prompt_confirm.side_effect = [False, True]  # worktree (n), pr auto_create (y)
         mock_phase_list.side_effect = [
             "1. 手動輸入需求",  # input method (manual)
-            "Medium (中) - 平衡模式 [預設]\n   • 詢問重要細節和關鍵場景\n   • 在速度和精確度間取得平衡\n   • 適合：一般功能開發",  # rigor
+            "Medium (中) - balanced mode [預設]\n   • 詢問重要細節and關鍵場景\n   • 在速度and精確度間取得平衡\n   • 適合：一般功能開發",  # rigor
         ]
         mock_template_list.return_value = "1. default"  # template
 
@@ -125,7 +125,7 @@ class TestPrepareCommand:
         mock_git_ops.get_current_branch.assert_not_called()
 
     def test_prepare_branch_already_exists(self, temp_repo_dir, mock_git_ops):
-        """測試切換到已存在的 branch"""
+        """測試切換到已存在 branch"""
         # Mock branch exists
         mock_git_ops.branch_exists.return_value = True
 
@@ -201,7 +201,7 @@ class TestPrepareCommand:
             assert "git init" in result.stdout
 
     def test_prepare_creates_proper_directory_structure(self, temp_repo_dir, mock_git_ops):
-        """測試創建正確的目錄結構"""
+        """測試創建正確目錄結構"""
         result = runner.invoke(app, ["prepare", "my-issue"])
 
         assert result.exit_code == 0
@@ -255,7 +255,7 @@ class TestPrepareCommand:
         assert config_file.exists()
 
     def test_prepare_with_different_base_branches(self, temp_repo_dir, mock_git_ops):
-        """測試不同 base branches 的配置"""
+        """測試不同 base branches 配置"""
         test_cases = [
             ("develop", "develop"),
             ("staging", "staging"),
@@ -295,13 +295,13 @@ class TestPrepareCommandWorktree:
 
     def test_prepare_with_worktree_default_path_suggestion(self, temp_repo_dir, mock_git_ops):
         """測試 --worktree 使用預設路徑格式 worktrees/{issue-name}"""
-        # 非互動模式下，--worktree 必須帶路徑參數
-        # 這個測試驗證使用預設路徑格式的情況
+        # 非互動模式下, --worktree 必須帶路徑參數
+        # 這個測試驗證使用預設路徑格式情況
         default_worktree_path = "worktrees/my-feature"
         result = runner.invoke(app, ["prepare", "my-feature", "--worktree", default_worktree_path])
 
         assert result.exit_code == 0
-        # 應使用指定的路徑
+        # 應使用指定路徑
         call_args = mock_git_ops.create_worktree.call_args
         assert call_args[0][0] == default_worktree_path  # 第一個參數是路徑
 
@@ -329,7 +329,7 @@ class TestPrepareCommandWorktree:
         assert "worktree" in result.stdout.lower() or worktree_path in result.stdout
 
     def test_prepare_with_worktree_calls_create_worktree_with_correct_params(self, temp_repo_dir, mock_git_ops):
-        """測試 create_worktree 使用正確的參數"""
+        """測試 create_worktree 使用正確參數"""
         worktree_path = "worktrees/test-branch"
         base_branch = "develop"
         result = runner.invoke(app, [
@@ -349,13 +349,13 @@ class TestPrepareCommandWorktree:
     @patch("cafe.ui.phase_prompts.prompt_list")
     @patch("cafe.ui.cli.prompt_text")
     def test_prepare_interactive_worktree_prompt_yes(self, mock_prompt_text, mock_phase_list, mock_template_list, mock_prompt_confirm, temp_repo_dir, mock_git_ops):
-        """測試互動模式詢問是否使用 worktree，使用者選擇 Yes"""
+        """測試互動模式詢問是否使用 worktree, 使用者選擇 Yes"""
         # Mock user inputs: issue name, worktree path
         mock_prompt_text.side_effect = ["my-feature", "worktrees/my-feature"]
         mock_prompt_confirm.side_effect = [True, True]  # worktree (y), pr auto_create (y)
         mock_phase_list.side_effect = [
             "1. 手動輸入需求",  # input method (manual)
-            "Medium (中) - 平衡模式 [預設]\n   • 詢問重要細節和關鍵場景\n   • 在速度和精確度間取得平衡\n   • 適合：一般功能開發",  # rigor
+            "Medium (中) - balanced mode [預設]\n   • 詢問重要細節and關鍵場景\n   • 在速度and精確度間取得平衡\n   • 適合：一般功能開發",  # rigor
         ]
         mock_template_list.return_value = "1. default"
 
@@ -381,13 +381,13 @@ class TestPrepareCommandWorktree:
     @patch("cafe.ui.phase_prompts.prompt_list")
     @patch("cafe.ui.cli.prompt_text")
     def test_prepare_interactive_worktree_prompt_no(self, mock_prompt_text, mock_phase_list, mock_template_list, mock_prompt_confirm, temp_repo_dir, mock_git_ops):
-        """測試互動模式詢問是否使用 worktree，使用者選擇 No"""
+        """測試互動模式詢問是否使用 worktree, 使用者選擇 No"""
         # Mock user inputs
         mock_prompt_text.return_value = "normal-feature"
         mock_prompt_confirm.side_effect = [False, True]  # worktree (n), pr auto_create (y)
         mock_phase_list.side_effect = [
             "1. 手動輸入需求",  # input method (manual)
-            "Medium (中) - 平衡模式 [預設]\n   • 詢問重要細節和關鍵場景\n   • 在速度和精確度間取得平衡\n   • 適合：一般功能開發",  # rigor
+            "Medium (中) - balanced mode [預設]\n   • 詢問重要細節and關鍵場景\n   • 在速度and精確度間取得平衡\n   • 適合：一般功能開發",  # rigor
         ]
         mock_template_list.return_value = "1. default"
 
@@ -415,7 +415,7 @@ class TestPrepareCommandWorktree:
         mock_prompt_confirm.side_effect = [True, True]  # worktree (y), pr auto_create (y)
         mock_phase_list.side_effect = [
             "1. 手動輸入需求",  # input method (manual)
-            "Medium (中) - 平衡模式 [預設]\n   • 詢問重要細節和關鍵場景\n   • 在速度和精確度間取得平衡\n   • 適合：一般功能開發",  # rigor
+            "Medium (中) - balanced mode [預設]\n   • 詢問重要細節and關鍵場景\n   • 在速度and精確度間取得平衡\n   • 適合：一般功能開發",  # rigor
         ]
         mock_template_list.return_value = "1. default"
 
@@ -430,14 +430,14 @@ class TestPrepareCommandWorktree:
         )
 
     def test_prepare_creates_cafe_directory_in_worktree_not_symlink(self, temp_repo_dir, mock_git_ops):
-        """測試 worktree 中創建實際的 .cafe/ 目錄而非符號連結"""
-        # Setup: 創建 repo root 的 .cafe/config.yaml
+        """測試 worktree 中創建實際 .cafe/ 目錄而非符號連結"""
+        # Setup: 創建 repo root  .cafe/config.yaml
         repo_cafe_dir = temp_repo_dir / ".cafe"
         repo_cafe_dir.mkdir(parents=True, exist_ok=True)
         repo_config = repo_cafe_dir / "config.yaml"
         repo_config.write_text("test_config: value\n")
 
-        # 創建 worktree 目錄（模擬 git worktree add 的行為）
+        # 創建 worktree 目錄（模擬 git worktree add 行為）
         worktree_path = temp_repo_dir / "worktrees" / "test-issue"
         worktree_path.mkdir(parents=True, exist_ok=True)
 
@@ -448,7 +448,7 @@ class TestPrepareCommandWorktree:
 
         assert result.exit_code == 0
 
-        # 驗證 worktree 中有實際的 .cafe/ 目錄（不是符號連結）
+        # 驗證 worktree 中有實際 .cafe/ 目錄（不是符號連結）
         worktree_cafe_dir = worktree_path / ".cafe"
         assert worktree_cafe_dir.exists(), ".cafe directory should exist in worktree"
         assert worktree_cafe_dir.is_dir(), ".cafe should be a real directory, not a symlink"
@@ -466,8 +466,8 @@ class TestPrepareCommandWorktree:
         assert (worktree_issue_dir / "sessions").exists(), "sessions directory should exist"
 
     def test_prepare_copies_agents_to_worktree(self, temp_repo_dir, mock_git_ops):
-        """測試 worktree 模式下會複製 agents 到 worktree 的 .cafe/agents/"""
-        # 創建 worktree 目錄（模擬 git worktree add 的行為）
+        """測試 worktree 模式下會複製 agents 到 worktree  .cafe/agents/"""
+        # 創建 worktree 目錄（模擬 git worktree add 行為）
         worktree_path = temp_repo_dir / "worktrees" / "test-issue"
         worktree_path.mkdir(parents=True, exist_ok=True)
 
@@ -489,8 +489,8 @@ class TestPrepareCommandWorktree:
         assert (worktree_agents_dir / "reviewer" / "Richard.md").exists(), "Richard.md should exist in worktree"
 
     def test_prepare_copies_templates_to_worktree(self, temp_repo_dir, mock_git_ops):
-        """測試 worktree 模式下會複製 templates 到 worktree 的 .cafe/templates/"""
-        # 創建 worktree 目錄（模擬 git worktree add 的行為）
+        """測試 worktree 模式下會複製 templates 到 worktree  .cafe/templates/"""
+        # 創建 worktree 目錄（模擬 git worktree add 行為）
         worktree_path = temp_repo_dir / "worktrees" / "test-issue"
         worktree_path.mkdir(parents=True, exist_ok=True)
 
@@ -520,7 +520,7 @@ class TestPrepareCommandWorktree:
         mock_prompt_confirm.side_effect = [False, True]  # worktree (n), pr auto_create (y)
         mock_phase_list.side_effect = [
             "1. 手動輸入需求",  # input method (manual)
-            "Medium (中) - 平衡模式 [預設]\n   • 詢問重要細節和關鍵場景\n   • 在速度和精確度間取得平衡\n   • 適合：一般功能開發",  # rigor
+            "Medium (中) - balanced mode [預設]\n   • 詢問重要細節and關鍵場景\n   • 在速度and精確度間取得平衡\n   • 適合：一般功能開發",  # rigor
         ]
         mock_template_list.return_value = "1. default"
 
@@ -547,7 +547,7 @@ class TestPrepareCommandWorktree:
         mock_prompt_confirm.side_effect = [False, False]  # worktree (n), pr auto_create (n)
         mock_phase_list.side_effect = [
             "1. 手動輸入需求",  # input method (manual)
-            "Medium (中) - 平衡模式 [預設]\n   • 詢問重要細節和關鍵場景\n   • 在速度和精確度間取得平衡\n   • 適合：一般功能開發",  # rigor
+            "Medium (中) - balanced mode [預設]\n   • 詢問重要細節and關鍵場景\n   • 在速度and精確度間取得平衡\n   • 適合：一般功能開發",  # rigor
         ]
         mock_template_list.return_value = "1. default"
 

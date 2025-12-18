@@ -407,31 +407,31 @@ class ReviewPhase(Phase):
             json.dump(progress.to_dict(), f, ensure_ascii=False, indent=2)
 
     def _check_if_develop_is_newer(self) -> bool:
-        """檢查 develop phase 的時間戳記是否比上次 review 更新。
+        """Check if develop phase timestamp is newer than last review.
 
         Returns:
-            True 如果 develop 更新（需要重新執行所有檢查），False 否則
+            True if develop is newer (need to re-run all checks), False otherwise
         """
         try:
-            # 取得 issue name
+            # Get issue name
             if not self.spec_file:
                 return False  # No spec file, cannot compare timestamps
             spec_path = Path(self.spec_file).resolve()
             issue_name = spec_path.parent.parent.name
 
-            # 讀取 develop/status.json（使用相對於 spec_file 的路徑）
+            # Read develop/status.json (using path relative to spec_file)
             issue_dir = spec_path.parent.parent
             develop_status_file = issue_dir / "develop" / "status.json"
             if not develop_status_file.exists():
                 return False
 
-            # 讀取 review/status.json
+            # Read review/status.json
             review_status_file = issue_dir / "review" / "status.json"
             if not review_status_file.exists():
-                # 第一次 review，需要重新執行所有檢查
+                # First review, need to re-run all checks
                 return True
 
-            # 比較時間戳記
+            # Compare timestamps
             with open(develop_status_file) as f:
                 develop_data = json.load(f)
             with open(review_status_file) as f:
@@ -440,11 +440,11 @@ class ReviewPhase(Phase):
             develop_time = datetime.fromisoformat(develop_data["timestamp"])
             review_time = datetime.fromisoformat(review_data["timestamp"])
 
-            # 如果 develop 的時間比 review 新，說明有新的變更
+            # If develop time is newer than review, there are new changes
             return develop_time > review_time
 
         except Exception:
-            # 如果出錯，保守起見返回 True（重新執行檢查）
+            # If error occurs, return True to be safe (re-run checks)
             return True
 
     def _generate_review_prompt(self) -> str:
@@ -463,16 +463,16 @@ class ReviewPhase(Phase):
         except Exception as e:
             raise RuntimeError(f"Error in _get_requirements_section: {e}") from e
 
-        # 檢查是否需要重新執行檢查（develop 比 review 新）
+        # Check if need to re-run checks (develop is newer than review)
         develop_is_newer = self._check_if_develop_is_newer()
         recheck_instruction = ""
-        # 只在第 4 輪之前顯示 recheck_instruction
+        # Only show recheck_instruction before iteration 4
         if develop_is_newer and self.iteration < 4:
             recheck_instruction = """
-**【重要提示】develop phase 在上次 review 之後有新的變更，請重新執行所有檢查：**
-- **必須重新執行 git log 指令**，不要使用之前的快取結果
-- 檢查最新的 commit messages 和程式碼變更
-- 這是一次全新的審查，請忽略之前的審查記錄
+**[Important Notice] Develop phase has new changes after last review, please re-run all checks:**
+- **Must re-run git log command**, do not use cached results
+- Check the latest commit messages and code changes
+- This is a fresh review, please ignore previous review records
 
 """
 
@@ -483,23 +483,23 @@ class ReviewPhase(Phase):
                 PhaseStatusCode.NEEDS_CHANGES,
             ],
             descriptions={
-                PhaseStatusCode.CONFIRMED: "程式碼審查通過，沒有問題",
-                PhaseStatusCode.NEEDS_CHANGES: "需要修正問題",
+                PhaseStatusCode.CONFIRMED: "Code review passed, no issues",
+                PhaseStatusCode.NEEDS_CHANGES: "Changes needed",
             },
         )
 
         # Add restriction for iteration 4+
         restriction = ""
         if self.iteration >= 4:
-            # 上一輪的 review 檔案
+            # Previous review file
             previous_review_file = f"review_{self.iteration - 1:03d}.md"
             previous_review_path = self.review_dir / previous_review_file
             restriction = f"""
-⚠️ **重要限制：**
-- 你現在是第 {self.iteration} 輪審查，只能針對「上一輪提出的問題」繼續追問
-- 上一輪的審查內容在：{previous_review_path}
-- **不可以提出新的問題**（除非是 critical 的問題，如安全性漏洞、資料損毀等）
-- 只能深入釐清已經提出的問題
+⚠️ **Important Restriction:**
+- You are now in iteration {self.iteration}, only follow up on "issues raised in the previous round"
+- Previous review content is at: {previous_review_path}
+- **Cannot raise new issues** (unless they are critical issues like security vulnerabilities, data corruption, etc.)
+- Only clarify issues that have already been raised
 """
 
         # Generate review file path
@@ -511,51 +511,51 @@ class ReviewPhase(Phase):
             from cafe.agents.manager import AgentManager
             agent_file = AgentManager.get_agent_file_path(self.review_agent, "reviewer")
             
-            prompt = f"""**你的角色:**
-請使用 Read tool 讀取 {agent_file} 了解你的角色定義和工作準則，然後嚴格按照角色定義中的要求進行程式碼審查工作。
+            prompt = f"""**Your Role:**
+Please use Read tool to read {agent_file} to understand your role definition and work guidelines, then strictly follow the requirements in the role definition to perform code review.
 
-**執行步驟:**
-1. 使用 Read tool 讀取 {agent_file} 了解角色定義
-2. 使用 Read tool 讀取需求規格和實作計畫
-3. 根據角色定義中的要求進行第 {self.iteration} 輪程式碼審查
+**Execution Steps:**
+1. Use Read tool to read {agent_file} to understand the role definition
+2. Use Read tool to read the requirements specification and implementation plan
+3. Perform iteration {self.iteration} code review according to the role definition requirements
 
-你正在進行第 {self.iteration} 輪程式碼審查 (Code Review)。你只會檢查當前分支有，且基礎分支 ({self.base_branch}) 沒有的 commit。
+You are conducting iteration {self.iteration} of the code review. You will only check commits that exist in the current branch but not in the base branch ({self.base_branch}).
 
 {status_code_prompt}
 {recheck_instruction}
 {restriction}
-**審查結果儲存:**
-- **必須**將完整的審查結果儲存到：`{review_file_path}`
-- 檔案格式為 Markdown
-- 內容包含所有審查發現的問題和建議
+**Review Result Storage:**
+- **Must** save the complete review result to: `{review_file_path}`
+- File format is Markdown
+- Content includes all issues and suggestions found during review
 
-**需求規格與實作計畫:**
+**Requirements Specification and Implementation Plan:**
 {requirements_section}
 {pr_comments_section}
 
-**你的審查任務（依優先順序）:**
+**Your Review Tasks (in priority order):**
 
-1. **git 狀態檢查**
-   - **檢查是否有未提交的變更，若有則視為開發未完成，請列出**
-   - **檢查是否有機敏資訊被提交（如密碼、API key、憑證等），若有則視為 critical issue，請列出並要求立即移除，不可留在 commit 歷史中**
+1. **Git Status Check**
+   - **Check for uncommitted changes, if any, consider development incomplete and list them**
+   - **Check for sensitive information being committed (such as passwords, API keys, credentials, etc.), if any, treat as critical issue, list them and require immediate removal, must not remain in commit history**
 
-2. **【重要】檢查 commit message 風格一致性**
-   - 用 `git log {self.base_branch}..HEAD` 取得當前分支新增的 commit
-   - 用 `git log {self.base_branch} --max-count=5` 取得基礎分支的 commit
-   - 計算基礎分支最近 5 個 commit message 是單行或多行，計算方式為 **subject 行數 + body 行數**，只有 subject 行的視為單行，有 body 的視為多行，中間分隔的空行不計算在內。建議用 `git log <sha> -1 --format="%B" | wc -l` 計算，超過 2 的視為多行
-   - 計算當前分支所有 commit message 是單行或多行，計算方式同上
-   - **只比較以下兩個項目是否一致：**
-     - 有 body 或沒有 body（多行描述）的情況是否與基礎分支一致，自動生成的 commit 例如 merge commit 可以忽略不檢查
-     - 語言（中文/英文/...）是否一致
-   - **如果發現風格不一致：**
-     - 明確列出哪些 commit SHA 和 message 不符合風格
-     - 說明正確的風格範例（根據基礎分支的實際風格）
-     - **重要：提供完整的更新指令讓 developer 直接執行（每個 commit 一條），禁止使用專案目錄外的檔案路徑**
-     - **Developer 可以直接執行這些指令，不需要請求權限，也不要用互動式 rebase**
+2. **[Important] Check Commit Message Style Consistency**
+   - Use `git log {self.base_branch}..HEAD` to get commits added in current branch
+   - Use `git log {self.base_branch} --max-count=5` to get commits from base branch
+   - Calculate whether the last 5 commit messages in base branch are single-line or multi-line, calculation method is **subject lines + body lines**, only subject line is single-line, with body is multi-line, blank lines in between are not counted. Recommended to use `git log <sha> -1 --format="%B" | wc -l` to calculate, more than 2 is multi-line
+   - Calculate whether all commit messages in current branch are single-line or multi-line, same calculation method
+   - **Only compare the following two items for consistency:**
+     - Whether having body or not (multi-line description) is consistent with base branch, auto-generated commits like merge commits can be ignored
+     - Whether language (Chinese/English/...) is consistent
+   - **If style inconsistency is found:**
+     - Clearly list which commit SHAs and messages do not conform to the style
+     - Explain correct style examples (based on actual base branch style)
+     - **Important: Provide complete update commands for developer to execute directly (one command per commit), do not use file paths outside project directory**
+     - **Developer can execute these commands directly without requesting permission, do not use interactive rebase**
 
-     指令範例：
+     Command example:
      ```bash
-     # 修改 commit abc123 的 message
+     # Modify commit abc123 message
      echo "Fix login logic" > ./commit_msg.txt && \\
      git rebase --onto {self.base_branch} {self.base_branch} HEAD --exec '
        if test $(git rev-parse HEAD) = abc123 || test $(git rev-parse HEAD) = $(git rev-parse abc123); then
@@ -564,26 +564,26 @@ class ReviewPhase(Phase):
      ' && rm -f ./commit_msg.txt
      ```
 
-3. **確認實作是否完成**
-   - 仔細確認實作計畫中是否有未完成的項目，若有則視為開發未完成，請列出
+3. **Confirm Implementation Completion**
+   - Carefully check if there are unfinished items in the implementation plan, if any, consider development incomplete and list them
 
-4. **找出潛在問題**
-   - 確認是否符合專案既有 coding style
-   - 檢查是否有大量重複的程式碼
-   - 檢查程式碼的正確性、可讀性、效能、安全性
-   - 檢查是否有遺漏的部分，例如錯誤訊息、提示、文件、範例需要更新卻沒改到
-   - 檢查是否有不應該被提交的檔案，例如個人設定檔、log 檔案等
-     - 若未 push 則要求使用 `git rebase` 或 `git filter-branch` 移除
-     - 若已 push 則要求使用 `git rm --cached` 移除並更新 .gitignore 後 commit
-   - 檢查是否有不該被刪除的檔案或程式碼
+4. **Find Potential Issues**
+   - Check if it conforms to existing project coding style
+   - Check for excessive duplicate code
+   - Check code correctness, readability, performance, security
+   - Check for missing parts, such as error messages, prompts, documentation, examples that need updates but were not changed
+   - Check for files that should not be committed, such as personal config files, log files, etc.
+     - If not pushed, require using `git rebase` or `git filter-branch` to remove
+     - If already pushed, require using `git rm --cached` to remove and update .gitignore then commit
+   - Check for files or code that should not be deleted
 
-5. **簡要說明問題**
-   - 列出檔案路徑和行號並說明問題
-   - 不要提供程式碼解決方案
+5. **Brief Explanation of Issues**
+   - List file paths and line numbers with issue explanation
+   - Do not provide code solutions
 
-**重要：**
-- Commit message 風格問題視為 critical issue，必須修正後才能通過審查
-- 審查完成後請回傳狀態碼，不要做任何總結或額外說明
+**Important:**
+- Commit message style issues are considered critical issues and must be fixed before passing review
+- After review is complete, return status code without any summary or additional explanation
 """
         except Exception as e:
             raise RuntimeError(f"Error building prompt: {e}") from e
@@ -599,35 +599,35 @@ class ReviewPhase(Phase):
             Requirements and plan section string
         """
         if self.workflow_mode == WorkflowMode.GITHUB:
-            return f"請用 `gh issue view {self.issue_id}` 查看 Issue 內容（包含需求與實作分析）。"
+            return f"Please use `gh issue view {self.issue_id}` to view Issue content (including requirements and implementation analysis)."
         else:
-            # 只提供檔案路徑，讓 agent 自己去讀取
-            # 避免 prompt 過長
-            return f"""請閱讀以下檔案來了解需求與實作計畫：
-- 需求規格 (Spec): {self.spec_file}
-- 實作計畫 (Plan): {self.plan_file}"""
+            # Only provide file paths, let agent read them
+            # Avoid overly long prompts
+            return f"""Please read the following files to understand requirements and implementation plan:
+- Requirements Spec: {self.spec_file}
+- Implementation Plan: {self.plan_file}"""
 
     def _get_status_analysis_prompt(self) -> str:
-        """取得分析 status code 的 prompt.
+        """Get prompt for analyzing status code.
 
         Returns:
-            分析 prompt 字串
+            Analysis prompt string
         """
         review_file = self.review_dir / f"review_{self.iteration:03d}.md"
-        return f"""請閱讀 {review_file} 並分析 Code Review 的結果。
+        return f"""Please read {review_file} and analyze the code review results.
 
-根據以下條件判斷應該回傳哪個狀態碼：
+Based on the following conditions, determine which status code to return:
 
-- CAFE_CONFIRMED: 程式碼審查通過，沒有需要修正的問題
-- CAFE_NEEDS_CHANGES: 有問題需要修正
+- CAFE_CONFIRMED: Code review passed, no issues to fix
+- CAFE_NEEDS_CHANGES: Issues need to be fixed
 
-請只回傳一個狀態碼（例如：CAFE_CONFIRMED），不要有任何其他內容。"""
+Please only return one status code (e.g., CAFE_CONFIRMED) without any other content."""
 
     def _detect_written_output_files(self) -> List[Path]:
-        """檢查 review file 是否在失敗前已寫入。
+        """Check if review file was written before failure.
 
         Returns:
-            List[Path]: 如果 review_{iteration}.md 存在則返回包含它的列表，否則返回空列表
+            List[Path]: Returns list containing review_{iteration}.md if it exists, otherwise empty list
         """
         review_file = self.review_dir / f"review_{self.iteration:03d}.md"
         return [review_file] if review_file.exists() else []

@@ -277,7 +277,7 @@ class TestPermissionDenialStorage:
         assert iteration_data["permission_denials"] == []
 
     def test_multiple_permission_denials_storage(self, tmp_path: Path):
-        """測試多個 permission denials 的儲存"""
+        """測試多個 permission denials 儲存"""
         class TestPhase(Phase):
             def __init__(self, agent_manager: MagicMock, permission_handler: MagicMock, history_dir: str):
                 self.agent_manager = agent_manager

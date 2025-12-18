@@ -42,7 +42,7 @@ class TestAgentExecutorWithSession:
     """Test AgentExecutor with session management."""
 
     def test_uses_session_id_from_config(self) -> None:
-        """測試使用 config 中的 session ID"""
+        """測試使用 config 中 session ID"""
         config = AgentConfig(
             name="Roger",
             cli=AgentCLI.CLAUDE,
@@ -181,7 +181,7 @@ class TestClaudeExecution:
             assert agent_response.token_usage.input_tokens == 0
 
     def test_execute_claude_session_already_in_use_raises_conflict_error(self) -> None:
-        """測試當 session 已被使用時，拋出 AgentExecutionError"""
+        """測試當 session 已被使用時, 拋出 AgentExecutionError"""
         config = AgentConfig(
             name="Roger",
             cli=AgentCLI.CLAUDE,
@@ -335,7 +335,7 @@ class TestGeminiExecution:
             assert isinstance(agent_response.token_usage, TokenUsage)
 
     def test_execute_gemini_extracts_only_assistant_messages(self) -> None:
-        """測試 Gemini 只提取 assistant 的 messages，過濾掉 tool output 和 user messages"""
+        """測試 Gemini 只提取 assistant  messages, 過濾掉 tool output and user messages"""
         config = AgentConfig(name="Roger", cli=AgentCLI.GEMINI)
         executor = AgentExecutor(config)
 
@@ -492,7 +492,7 @@ class TestTokenUsageTracking:
             assert agent_response.token_usage.total_cost_usd == 0.05
 
     def test_execute_without_usage_data_returns_empty_token_usage(self) -> None:
-        """測試當 CLI 沒有回傳 usage 資料時，回傳空的 TokenUsage"""
+        """測試當 CLI 沒有回傳 usage 資料時, 回傳空 TokenUsage"""
         config = AgentConfig(name="Roger", cli=AgentCLI.CLAUDE)
         executor = AgentExecutor(config)
 
@@ -519,7 +519,7 @@ class TestTokenUsageTracking:
             assert agent_response.token_usage.total_cost_usd == 0.0
 
     def test_get_total_token_usage_sums_across_calls(self) -> None:
-        """測試 get_total_token_usage 會累計所有呼叫的 token usage"""
+        """測試 get_total_token_usage 會累計所有呼叫 token usage"""
         config = AgentConfig(name="Roger", cli=AgentCLI.CLAUDE)
         executor = AgentExecutor(config)
 
@@ -682,7 +682,7 @@ class TestStreamingExecution:
                 )
 
     def test_execute_with_streaming_handles_malformed_json(self, capsys) -> None:
-        """測試處理格式錯誤的 JSON（回退到 plain text）"""
+        """測試處理格式錯誤 JSON（回退到 plain text）"""
         config = AgentConfig(name="David", cli=AgentCLI.CLAUDE)
         executor = AgentExecutor(config)
 
@@ -750,7 +750,7 @@ class TestClaudeStreamingExecution:
         assert "Claude Response (streaming):" in captured.out
 
     def test_execute_claude_with_new_message_format(self) -> None:
-        """測試 Claude 新的 message.content[] JSON 格式能正確解析"""
+        """測試 Claude 新 message.content[] JSON 格式能正確解析"""
         config = AgentConfig(
             name="David",
             cli=AgentCLI.CLAUDE,
@@ -847,7 +847,7 @@ class TestCLICommandArgsGeneration:
     """測試 CLI command args 生成功能"""
 
     def test_execute_claude_generates_cli_command_args_without_allowed_tools(self) -> None:
-        """測試 Claude 在沒有 allowed_tools 時生成正確的 cli_command_args"""
+        """測試 Claude 在沒有 allowed_tools 時生成正確 cli_command_args"""
         config = AgentConfig(
             name="Roger",
             cli=AgentCLI.CLAUDE,
@@ -887,7 +887,7 @@ class TestCLICommandArgsGeneration:
             assert "--add-dir" not in agent_response.cli_command_args
 
     def test_execute_claude_generates_cli_command_args_with_allowed_tools(self) -> None:
-        """測試 Claude 在有 allowed_tools 時生成正確的 cli_command_args"""
+        """測試 Claude 在有 allowed_tools 時生成正確 cli_command_args"""
         config = AgentConfig(
             name="Roger",
             cli=AgentCLI.CLAUDE,
@@ -911,7 +911,7 @@ class TestCLICommandArgsGeneration:
              patch("sys.platform", "win32"):
             agent_response = executor._execute_claude("Test prompt", allowed_tools=allowed_tools)
 
-            # Verify cli_command_args contains allowed-tools，值與實際命令參數一致
+            # Verify cli_command_args contains allowed-tools, 值and實際命令參數一致
             assert agent_response.cli_command_args is not None
             assert "--allowed-tools" in agent_response.cli_command_args
 
@@ -919,11 +919,11 @@ class TestCLICommandArgsGeneration:
             allowed_tools_idx = agent_response.cli_command_args.index("--allowed-tools")
             allowed_tools_value = agent_response.cli_command_args[allowed_tools_idx + 1]
 
-            # 不再額外加雙引號，應直接是傳給 CLI 的參數值
+            # 不再額外加雙引號, 應直接是傳給 CLI 參數值
             assert allowed_tools_value == "Write,Read,Edit(/views/admin/topics.php)"
 
     def test_execute_gemini_generates_cli_command_args_without_allowed_tools(self) -> None:
-        """測試 Gemini 在沒有 allowed_tools 時生成正確的 cli_command_args"""
+        """測試 Gemini 在沒有 allowed_tools 時生成正確 cli_command_args"""
         config = AgentConfig(
             name="Roger",
             cli=AgentCLI.GEMINI,
@@ -959,7 +959,7 @@ class TestCLICommandArgsGeneration:
             assert "--include-directories" not in agent_response.cli_command_args
 
     def test_execute_gemini_generates_cli_command_args_with_allowed_tools(self) -> None:
-        """測試 Gemini 在有 allowed_tools 時生成正確的 cli_command_args"""
+        """測試 Gemini 在有 allowed_tools 時生成正確 cli_command_args"""
         config = AgentConfig(
             name="Roger",
             cli=AgentCLI.GEMINI,
@@ -982,7 +982,7 @@ class TestCLICommandArgsGeneration:
              patch("sys.platform", "win32"):
             agent_response = executor._execute_gemini("Test prompt", allowed_tools=allowed_tools)
 
-            # Verify cli_command_args contains allowed-tools，值與實際命令參數一致
+            # Verify cli_command_args contains allowed-tools, 值and實際命令參數一致
             assert agent_response.cli_command_args is not None
             assert "--allowed-tools" in agent_response.cli_command_args
 
@@ -990,11 +990,11 @@ class TestCLICommandArgsGeneration:
             allowed_tools_idx = agent_response.cli_command_args.index("--allowed-tools")
             allowed_tools_value = agent_response.cli_command_args[allowed_tools_idx + 1]
 
-            # 不再額外加雙引號，應直接是傳給 CLI 的參數值
+            # 不再額外加雙引號, 應直接是傳給 CLI 參數值
             assert allowed_tools_value == "write_file,read_file,replace(/views/admin/topics.php)"
 
     def test_execute_cursor_generates_cli_command_args(self) -> None:
-        """測試 Cursor 生成正確的 cli_command_args"""
+        """測試 Cursor 生成正確 cli_command_args"""
         config = AgentConfig(
             name="David",
             cli=AgentCLI.CURSOR,
@@ -1227,7 +1227,7 @@ class TestDefaultEditPermission:
             assert "Edit" not in allowed_tools_value
 
     def test_respects_explicit_edit_permission_for_claude(self):
-        """測試 Claude 會保留明確指定的 Edit 權限"""
+        """測試 Claude 會保留明確指定 Edit 權限"""
         config = AgentConfig(name="test", cli=AgentCLI.CLAUDE)
         executor = AgentExecutor(config)
 
@@ -1288,7 +1288,7 @@ class TestDefaultEditPermission:
             assert "replace" not in allowed_tools_value
 
     def test_does_not_add_write_permission_for_copilot(self):
-        """測試 Copilot 不會自動加入額外的 write 權限"""
+        """測試 Copilot 不會自動加入額外 write 權限"""
         config = AgentConfig(name="test", cli=AgentCLI.COPILOT)
         executor = AgentExecutor(config)
 
@@ -1332,7 +1332,7 @@ class TestToolNameTranslation:
         assert translated == ["Write", "Read", "Bash", "Edit"]
 
     def test_translate_tool_names_with_file_patterns_for_claude(self):
-        """測試轉換帶檔案 pattern 的工具名給 Claude"""
+        """測試轉換帶檔案 pattern 工具名給 Claude"""
         config = AgentConfig(
             name="test",
             cli=AgentCLI.CLAUDE,
@@ -1356,7 +1356,7 @@ class TestToolNameTranslation:
         ]
 
     def test_translate_tool_names_with_command_patterns_for_claude(self):
-        """測試轉換帶命令 pattern 的工具名給 Claude"""
+        """測試轉換帶命令 pattern 工具名給 Claude"""
         config = AgentConfig(
             name="test",
             cli=AgentCLI.CLAUDE,
@@ -1390,7 +1390,7 @@ class TestToolNameTranslation:
         assert translated == ["write_file", "read_file", "write_file"]
 
     def test_translate_tool_names_with_patterns_for_gemini(self):
-        """測試轉換帶 pattern 的工具名給 Gemini"""
+        """測試轉換帶 pattern 工具名給 Gemini"""
         config = AgentConfig(
             name="test",
             cli=AgentCLI.GEMINI,
@@ -1572,7 +1572,7 @@ class TestWriteToolPathStripping:
             assert tools_list.count("write_file") == 1
 
     def test_write_deduplication_with_mixed_tools(self) -> None:
-        """測試混合使用 Write 和 Write(/path) 時的去重"""
+        """測試混合使用 Write and Write(/path) 時去重"""
         executor = AgentExecutor(
             AgentConfig(name="test", cli=AgentCLI.CLAUDE, session_id="test123")
         )
@@ -1611,7 +1611,7 @@ class TestGeminiSessionManagement:
     """Test Gemini session management functionality."""
 
     def test_gemini_passes_resume_parameter_when_session_id_exists(self) -> None:
-        """測試當 config.session_id 存在時，CLI 指令包含 --resume {session_id}"""
+        """測試當 config.session_id 存在時, CLI 指令包含 --resume {session_id}"""
         config = AgentConfig(
             name="Roger",
             cli=AgentCLI.GEMINI,
@@ -1642,7 +1642,7 @@ class TestGeminiSessionManagement:
             assert call_args[resume_index + 1] == "test-session-123"
 
     def test_gemini_does_not_pass_resume_parameter_when_no_session_id(self) -> None:
-        """測試當 config.session_id 不存在時，CLI 指令不包含 --resume"""
+        """測試當 config.session_id 不存在時, CLI 指令不包含 --resume"""
         config = AgentConfig(name="Roger", cli=AgentCLI.GEMINI)
         executor = AgentExecutor(config)
 
@@ -1692,7 +1692,7 @@ class TestGeminiSessionManagement:
             assert executor.config.session_id == "extracted-session-789"
 
     def test_gemini_complete_session_flow(self) -> None:
-        """測試完整的 session 流程：第一次執行提取 session_id，第二次執行帶上 session_id"""
+        """測試完整 session 流程：第一次執行提取 session_id, 第二次執行帶上 session_id"""
         config = AgentConfig(name="Roger", cli=AgentCLI.GEMINI)
         executor = AgentExecutor(config)
 
@@ -1741,7 +1741,7 @@ class TestGeminiSessionManagement:
             assert second_call_args[resume_index + 1] == "first-session-abc"
 
     def test_gemini_updates_session_id_when_changed(self) -> None:
-        """測試當 Gemini 回傳新的 session_id 時（例如 session 過期），能正確更新"""
+        """測試當 Gemini 回傳新 session_id 時（例如 session 過期）, 能正確更新"""
         config = AgentConfig(
             name="Roger",
             cli=AgentCLI.GEMINI,
@@ -1835,7 +1835,7 @@ class TestPromptTooLongErrorHandling:
             assert response.response == "Success with new session"
 
     def test_prompt_too_long_error_includes_cli_command_args(self) -> None:
-        """測試 prompt too long 錯誤時，錯誤物件包含 CLI 參數"""
+        """測試 prompt too long 錯誤時, 錯誤物件包含 CLI 參數"""
         config = AgentConfig(
             name="Roger",
             cli=AgentCLI.CLAUDE,

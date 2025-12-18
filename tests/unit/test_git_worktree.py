@@ -1,4 +1,4 @@
-"""GitOperations worktree 方法的單元測試 (TDD Red phase)."""
+"""GitOperations worktree 方法單元測試 (TDD Red phase)."""
 
 import pytest
 from pathlib import Path
@@ -15,7 +15,7 @@ def ensure_clean_working_dir(tmp_path, monkeypatch):
 
 
 class TestGitWorktree:
-    """測試 GitOperations 的 worktree 相關操作."""
+    """測試 GitOperations  worktree 相關操作."""
 
     def test_create_worktree(self, tmp_path):
         """測試建立 worktree."""
@@ -39,7 +39,7 @@ class TestGitWorktree:
         assert worktree_path.exists()
         assert worktree_path.is_dir()
 
-        # 驗證 worktree 中有正確的 branch
+        # 驗證 worktree 中有正確 branch
         worktree_git = GitOperations(str(worktree_path))
         assert worktree_git.get_current_branch() == "test-branch"
 
@@ -83,7 +83,7 @@ class TestGitWorktree:
         assert not worktree_path.exists()
 
     def test_remove_worktree_nonexistent(self, tmp_path):
-        """測試移除不存在的 worktree 應該拋出錯誤."""
+        """測試移除不存在 worktree 應該拋出錯誤."""
         git_ops = GitOperations(str(tmp_path))
         git_ops.run_git("init", "-b", "main")
 
@@ -144,7 +144,7 @@ class TestGitWorktree:
         assert str(worktree2.resolve()) in worktree_paths
 
     def test_list_worktrees_structure(self, tmp_path):
-        """測試 list_worktrees 返回的資料結構."""
+        """測試 list_worktrees 返回資料結構."""
         git_ops = GitOperations(str(tmp_path))
         git_ops.run_git("init", "-b", "main")
         git_ops.run_git("config", "user.email", "test@test.com")
@@ -160,7 +160,7 @@ class TestGitWorktree:
 
         worktrees = git_ops.list_worktrees()
 
-        # 每個 worktree 應該包含 path 和 branch
+        # 每個 worktree 應該包含 path and branch
         for wt in worktrees:
             assert "path" in wt
             assert "branch" in wt

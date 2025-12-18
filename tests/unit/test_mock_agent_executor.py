@@ -6,7 +6,7 @@ from cafe.core.types import AgentConfig, AgentCLI, TokenUsage
 
 
 class TestMockAgentExecutor:
-    """測試 MockAgentExecutor 的基本功能"""
+    """測試 MockAgentExecutor 基本功能"""
 
     def test_default_response(self):
         """測試預設回應為 READY_FOR_REVIEW"""
@@ -52,7 +52,7 @@ class TestMockAgentExecutor:
         assert executor.call_count == 3
 
     def test_saves_last_prompt(self):
-        """測試儲存最後一次的 prompt"""
+        """測試儲存最後一次 prompt"""
         # Arrange
         config = AgentConfig(name="TestAgent", cli=AgentCLI.CLAUDE)
         executor = MockAgentExecutor(config=config)
@@ -65,7 +65,7 @@ class TestMockAgentExecutor:
         assert executor.last_prompt == "second prompt"
 
     def test_saves_last_tools(self):
-        """測試儲存最後一次的 tools"""
+        """測試儲存最後一次 tools"""
         # Arrange
         config = AgentConfig(name="TestAgent", cli=AgentCLI.CLAUDE)
         executor = MockAgentExecutor(config=config)

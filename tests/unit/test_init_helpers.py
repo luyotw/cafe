@@ -1,4 +1,4 @@
-"""測試 init_helpers 模組的輔助函式"""
+"""測試 init_helpers 模組輔助函式"""
 
 from pathlib import Path
 from unittest.mock import patch
@@ -14,10 +14,10 @@ from cafe.ui.init_helpers import (
 
 
 class TestCheckAvailableClis:
-    """測試檢查可用 CLI 工具的功能"""
+    """測試檢查可用 CLI 工具功能"""
 
     def test_check_available_clis_with_all_installed(self) -> None:
-        """測試所有 CLI 都已安裝的情況"""
+        """測試所有 CLI 都已安裝情況"""
         with patch("shutil.which") as mock_which:
             # 模擬所有 CLI 都已安裝
             mock_which.side_effect = lambda x: (
@@ -41,9 +41,9 @@ class TestCheckAvailableClis:
             assert len(available) == 4
 
     def test_check_available_clis_with_partial_installed(self) -> None:
-        """測試部分 CLI 已安裝的情況"""
+        """測試部分 CLI 已安裝情況"""
         with patch("shutil.which") as mock_which:
-            # 只有 claude 和 gemini 安裝
+            # 只有 claude and gemini 安裝
             mock_which.side_effect = lambda x: (
                 f"/usr/bin/{x}"
                 if x
@@ -63,7 +63,7 @@ class TestCheckAvailableClis:
             assert len(available) == 2
 
     def test_check_available_clis_with_none_installed(self) -> None:
-        """測試沒有 CLI 安裝的情況"""
+        """測試沒有 CLI 安裝情況"""
         with patch("shutil.which", return_value=None):
             available = check_available_clis()
 
@@ -71,15 +71,15 @@ class TestCheckAvailableClis:
 
 
 class TestParseAgentFile:
-    """測試解析 agent 檔案的功能"""
+    """測試解析 agent 檔案功能"""
 
     def test_parse_agent_file_with_complete_frontmatter(self, tmp_path: Path) -> None:
-        """測試解析包含完整 front matter 的檔案"""
+        """測試解析包含完整 front matter 檔案"""
         agent_file = tmp_path / "Roger.md"
         agent_file.write_text(
             """---
 name: Roger
-description: 經驗豐富的 Product Manager
+description: 經驗豐富 Product Manager
 ---
 
 Agent content here.
@@ -89,14 +89,14 @@ Agent content here.
         result = parse_agent_file(agent_file)
 
         assert result["name"] == "Roger"
-        assert result["description"] == "經驗豐富的 Product Manager"
+        assert result["description"] == "經驗豐富 Product Manager"
 
     def test_parse_agent_file_missing_name(self, tmp_path: Path) -> None:
         """測試 front matter 缺少 name 時使用檔名"""
         agent_file = tmp_path / "David.md"
         agent_file.write_text(
             """---
-description: 專門負責功能開發的 agent
+description: 專門負責功能開發 agent
 ---
 
 Agent content here.
@@ -106,7 +106,7 @@ Agent content here.
         result = parse_agent_file(agent_file)
 
         assert result["name"] == "David"
-        assert result["description"] == "專門負責功能開發的 agent"
+        assert result["description"] == "專門負責功能開發 agent"
 
     def test_parse_agent_file_missing_description(self, tmp_path: Path) -> None:
         """測試 front matter 缺少 description 時顯示預設值"""
@@ -123,17 +123,17 @@ Agent content here.
         result = parse_agent_file(agent_file)
 
         assert result["name"] == "Richard"
-        assert result["description"] == "(無描述)"
+        assert result["description"] == "(No description)"
 
     def test_parse_agent_file_no_frontmatter(self, tmp_path: Path) -> None:
-        """測試沒有 front matter 的檔案"""
+        """測試沒有 front matter 檔案"""
         agent_file = tmp_path / "John.md"
         agent_file.write_text("Just content without frontmatter.\n")
 
         result = parse_agent_file(agent_file)
 
         assert result["name"] == "John"
-        assert result["description"] == "(無描述)"
+        assert result["description"] == "(No description)"
 
     def test_parse_agent_file_empty_file(self, tmp_path: Path) -> None:
         """測試空檔案"""
@@ -143,16 +143,16 @@ Agent content here.
         result = parse_agent_file(agent_file)
 
         assert result["name"] == "Empty"
-        assert result["description"] == "(無描述)"
+        assert result["description"] == "(No description)"
 
 
 class TestListAvailableAgents:
-    """測試列出可用 agents 的功能"""
+    """測試列出可用 agents 功能"""
 
     def test_list_available_agents_with_valid_files(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """測試列出有效的 agent 檔案"""
+        """測試列出有效 agent 檔案"""
         # 建立測試目錄結構
         agents_dir = tmp_path / ".cafe" / "agents"
         pm_dir = agents_dir / "pm"
@@ -163,7 +163,7 @@ class TestListAvailableAgents:
         roger.write_text(
             """---
 name: Roger
-description: 經驗豐富的 PM
+description: 經驗豐富 PM
 ---
 """
         )
@@ -172,7 +172,7 @@ description: 經驗豐富的 PM
         alice.write_text(
             """---
 name: Alice
-description: 注重細節的 PM
+description: 注重細節 PM
 ---
 """
         )
@@ -190,7 +190,7 @@ description: 注重細節的 PM
     def test_list_available_agents_with_empty_directory(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """測試空的 agent 目錄"""
+        """測試空 agent 目錄"""
         agents_dir = tmp_path / ".cafe" / "agents"
         pm_dir = agents_dir / "pm"
         pm_dir.mkdir(parents=True)
@@ -234,7 +234,7 @@ description: PM
 
 
 class TestCopyDataDirectory:
-    """測試複製目錄的功能"""
+    """測試複製目錄功能"""
 
     def test_copy_data_directory_success(self, tmp_path: Path) -> None:
         """測試成功複製目錄"""

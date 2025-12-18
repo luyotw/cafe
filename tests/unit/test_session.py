@@ -20,7 +20,7 @@ class TestSessionManager:
         assert sessions_dir.is_dir()
 
     def test_get_session_file_returns_correct_path(self, tmp_path: Path) -> None:
-        """測試 get_session_file 回傳正確的檔案路徑（包含 CLI 類型）"""
+        """測試 get_session_file 回傳正確檔案路徑（包含 CLI 類型）"""
         sessions_dir = tmp_path / "sessions"
         manager = SessionManager(str(sessions_dir))
 
@@ -40,7 +40,7 @@ class TestSessionManager:
         assert session_file == expected_path
 
     def test_load_session_returns_none_when_file_not_exists(self, tmp_path: Path) -> None:
-        """測試當 session 檔案不存在時，load_session 回傳 None"""
+        """測試當 session 檔案不存在時, load_session 回傳 None"""
         manager = SessionManager(str(tmp_path / "sessions"))
 
         session_data = manager.load_session("NonExistentAgent", AgentCLI.CLAUDE)
@@ -112,14 +112,14 @@ class TestSessionManager:
         assert not session_file.exists()
 
     def test_delete_session_when_file_not_exists(self, tmp_path: Path) -> None:
-        """測試刪除不存在的 session 不會拋出錯誤"""
+        """測試刪除不存在 session 不會拋出錯誤"""
         manager = SessionManager(str(tmp_path / "sessions"))
 
         # Should not raise any error
         manager.delete_session("NonExistent", AgentCLI.CLAUDE)
 
     def test_different_cli_sessions_are_independent(self, tmp_path: Path) -> None:
-        """測試同一個 agent 使用不同 CLI 的 session 是獨立的"""
+        """測試同一個 agent 使用不同 CLI  session 是獨立"""
         manager = SessionManager(str(tmp_path / "sessions"))
 
         # Save sessions with different CLIs
@@ -151,7 +151,7 @@ class TestSessionManager:
         assert issue2_session.session_id == "session-issue2"
 
     def test_load_session_handles_invalid_json(self, tmp_path: Path) -> None:
-        """測試載入無效的 JSON 檔案時回傳 None"""
+        """測試載入無效 JSON 檔案時回傳 None"""
         sessions_dir = tmp_path / "sessions"
         manager = SessionManager(str(sessions_dir))
 

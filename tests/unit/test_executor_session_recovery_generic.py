@@ -1,4 +1,4 @@
-"""測試通用 session recovery 機制，適用於所有 CLI"""
+"""測試通用 session recovery 機制, 適用於所有 CLI"""
 
 import pytest
 from pathlib import Path
@@ -11,7 +11,7 @@ class TestGenericSessionRecovery:
     """測試通用 session recovery 機制"""
 
     def test_session_recovery_with_custom_error_message(self, monkeypatch):
-        """測試能識別不同的 session 錯誤訊息"""
+        """測試能識別不同 session 錯誤訊息"""
         config = AgentConfig(
             name="TestAgent",
             cli=AgentCLI.CLAUDE,
@@ -60,7 +60,7 @@ class TestGenericSessionRecovery:
 
 
     def test_copilot_session_recovery(self):
-        """測試 Copilot 的 session recovery"""
+        """測試 Copilot  session recovery"""
         config = AgentConfig(
             name="TestAgent",
             cli=AgentCLI.COPILOT,
@@ -134,7 +134,7 @@ class TestGenericSessionRecovery:
 
 
     def test_session_recovery_updates_config(self):
-        """測試 session recovery 會更新 config 中的 session_id"""
+        """測試 session recovery 會更新 config 中 session_id"""
         config = AgentConfig(
             name="TestAgent",
             cli=AgentCLI.CLAUDE,
@@ -273,5 +273,5 @@ class TestGenericSessionRecovery:
                     with pytest.raises(AgentExecutionError):
                         executor.execute("Test prompt")
 
-        # 驗證達到最大 retry 次數（3 次，因為 max_retries=3）
+        # 驗證達到最大 retry 次數（3 次, 因為 max_retries=3）
         assert session_creation_count[0] == 3

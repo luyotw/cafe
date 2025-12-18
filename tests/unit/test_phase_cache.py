@@ -81,7 +81,7 @@ class TestPhaseCache:
         assert expected_dir.is_dir()
 
     def test_get_cache_file_returns_correct_path(self, tmp_path: Path) -> None:
-        """測試 get_cache_file 回傳正確的檔案路徑"""
+        """測試 get_cache_file 回傳正確檔案路徑"""
         cache = PhaseCache("session_123", str(tmp_path))
 
         cache_file = cache.get_cache_file("requirements")
@@ -123,7 +123,7 @@ class TestPhaseCache:
         assert entry.content_hash == "hash456"
 
     def test_load_returns_none_when_cache_not_exists(self, tmp_path: Path) -> None:
-        """測試當 cache 不存在時，load 回傳 None"""
+        """測試當 cache 不存在時, load 回傳 None"""
         cache = PhaseCache("test_noexist", str(tmp_path))
 
         entry = cache.load("nonexistent_phase")
@@ -131,7 +131,7 @@ class TestPhaseCache:
         assert entry is None
 
     def test_is_valid_returns_true_for_matching_hash(self, tmp_path: Path) -> None:
-        """測試當 hash 匹配時，is_valid 回傳 True"""
+        """測試當 hash 匹配時, is_valid 回傳 True"""
         cache = PhaseCache("test_valid", str(tmp_path))
 
         cache.save(
@@ -144,7 +144,7 @@ class TestPhaseCache:
         assert cache.is_valid("requirements", "same_hash") is True
 
     def test_is_valid_returns_false_for_different_hash(self, tmp_path: Path) -> None:
-        """測試當 hash 不匹配時，is_valid 回傳 False"""
+        """測試當 hash 不匹配時, is_valid 回傳 False"""
         cache = PhaseCache("test_invalid", str(tmp_path))
 
         cache.save(
@@ -157,13 +157,13 @@ class TestPhaseCache:
         assert cache.is_valid("requirements", "new_hash") is False
 
     def test_is_valid_returns_false_when_cache_not_exists(self, tmp_path: Path) -> None:
-        """測試當 cache 不存在時，is_valid 回傳 False"""
+        """測試當 cache 不存在時, is_valid 回傳 False"""
         cache = PhaseCache("test_nofile", str(tmp_path))
 
         assert cache.is_valid("nonexistent", "any_hash") is False
 
     def test_clear_removes_cache_file(self, tmp_path: Path) -> None:
-        """測試 clear 會刪除指定的 cache 檔案"""
+        """測試 clear 會刪除指定 cache 檔案"""
         cache = PhaseCache("test_clear", str(tmp_path))
 
         cache.save(
@@ -181,7 +181,7 @@ class TestPhaseCache:
         assert not cache_file.exists()
 
     def test_clear_does_not_raise_if_file_not_exists(self, tmp_path: Path) -> None:
-        """測試 clear 不存在的檔案時不會報錯"""
+        """測試 clear 不存在檔案時不會報錯"""
         cache = PhaseCache("test_clear_safe", str(tmp_path))
 
         # Should not raise
@@ -211,7 +211,7 @@ class TestPhaseCache:
         cache.clear_all()
 
     def test_save_overwrites_existing_cache(self, tmp_path: Path) -> None:
-        """測試 save 會覆寫既有的 cache"""
+        """測試 save 會覆寫既有 cache"""
         cache = PhaseCache("test_overwrite", str(tmp_path))
 
         cache.save("requirements", PhaseStatusCode.NEED_CLARIFICATION, "Need info", "h1")
@@ -238,7 +238,7 @@ class TestPhaseCache:
         assert before_save <= entry.timestamp <= after_save
 
     def test_get_phase_number_returns_correct_index(self, tmp_path: Path) -> None:
-        """測試 get_phase_number 回傳正確的 phase 索引"""
+        """測試 get_phase_number 回傳正確 phase 索引"""
         cache = PhaseCache("test_index", str(tmp_path))
 
         assert cache.get_phase_number("requirements") == 0

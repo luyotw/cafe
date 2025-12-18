@@ -114,10 +114,10 @@ class DevelopPhase(Phase):
         return False
 
     def _save_develop_clarification(self, agent_response: str) -> None:
-        """儲存 developer 需要澄清的問題到 develop_{it_num}.md 檔案.
+        """Save developer clarification questions to develop_{it_num}.md file.
 
         Args:
-            agent_response: Agent 回應內容（包含狀態碼）
+            agent_response: Agent response content (including status code)
         """
         # Remove status code line from response
         lines = agent_response.strip().split('\n')
@@ -147,12 +147,12 @@ class DevelopPhase(Phase):
         develop_file.write_text(content, encoding='utf-8')
 
     def _get_review_file_path(self) -> Path:
-        """取得 review 檔案的完整路徑.
+        """Get full path to review file.
 
-        優先返回最新的 review_XXX.md 檔案。如果沒有編號檔案，則 fallback 到 review.md（向後兼容）。
+        Prioritizes returning the latest review_XXX.md file. Falls back to review.md if no numbered file exists (backward compatible).
 
         Returns:
-            review 檔案的 Path 物件
+            Path object of review file
         """
         spec_path = Path(self.spec_file)
         issue_dir = spec_path.parent.parent  # .cafe/issues/{issue_name}
@@ -169,10 +169,10 @@ class DevelopPhase(Phase):
         return review_dir / "review.md"
 
     def _check_review_feedback_exists(self) -> bool:
-        """檢查是否存在需要處理的 review feedback.
+        """Check if review feedback exists that needs to be addressed.
 
-        只有當 review file 存在且狀態不是 CONFIRMED 時才返回 True。
-        如果 review 已經 CONFIRMED，表示已經通過，不需要再修正。
+        Returns True only if review file exists and status is not CONFIRMED.
+        If review is already CONFIRMED, it means it has passed and no corrections are needed.
 
         Returns:
             True if review.md exists and status is not CONFIRMED, False otherwise
@@ -255,10 +255,10 @@ class DevelopPhase(Phase):
         self._write_issue_config(config_file, config_data)
 
     def _check_if_already_completed_with_review(self) -> Optional[PhaseResult]:
-        """檢查 phase 是否已完成，考慮 review feedback 和 PR comments 的特殊邏輯。
+        """Check if phase is already completed, considering special logic for review feedback and PR comments.
 
         Returns:
-            PhaseResult 如果已完成且無需處理 review feedback/PR comments，None 如果需要繼續執行
+            PhaseResult if completed and no review feedback/PR comments need to be handled, None if should continue execution
         """
         existing_progress = self._load_progress()
         if not existing_progress or existing_progress.status != PhaseStatus.COMPLETED:
@@ -349,10 +349,10 @@ class DevelopPhase(Phase):
         )
 
     def _get_completion_data(self) -> dict:
-        """取得 phase 完成時的額外資料（提供給 base class 的 _handle_standard_status_codes）。
+        """Get additional data when phase completes (provided to base class _handle_standard_status_codes).
 
         Returns:
-            包含 phase-specific 資料的 dict，會被合併到 PhaseResult.data 中
+            dict containing phase-specific data, will be merged into PhaseResult.data
         """
         data = {
             "branch": self._get_branch_name(),
@@ -360,15 +360,15 @@ class DevelopPhase(Phase):
         return data
 
     def _prepare_user_input_for_iteration(self) -> "PhaseResult | str":
-        """準備當前迭代的 user input。
+        """Prepare user input for current iteration.
 
-        Develop phase 的特殊邏輯：
-        - Iteration 1（沒有 previous data）: 使用 self.user_input（如果有提供 --user-input 參數）
-        - Iteration 2+（有 previous data）: 檢查是否有待處理的 NEED_PERMISSION
+        Special logic for develop phase:
+        - Iteration 1 (no previous data): Use self.user_input (if --user-input parameter provided)
+        - Iteration 2+ (with previous data): Check if there's pending NEED_PERMISSION to handle
 
         Returns:
-            PhaseResult: 如果需要結束/暫停 phase
-            str: 用戶輸入內容（通常為空，除非處理 NEED_PERMISSION 或提供了 --user-input）
+            PhaseResult: If phase needs to be ended/paused
+            str: User input content (usually empty, unless handling NEED_PERMISSION or --user-input provided)
         """
         # Check for previous iteration data
         prev_data = self._load_previous_iteration_data()
@@ -407,19 +407,19 @@ class DevelopPhase(Phase):
 
         # Handle NEED_CLARIFICATION - use base class method
         if prev_status == "CAFE_NEED_CLARIFICATION":
-            return self._handle_need_clarification_input(prev_data, agent_display_name="開發者")
+            return self._handle_need_clarification_input(prev_data, agent_display_name="Developer")
 
         # No special handling needed - clear user_input to avoid misuse
         self.user_input = ""
         return ""
 
     def _ask_user_for_clarification(self) -> str:
-        """詢問用戶對 NEED_CLARIFICATION 的回答，並顯示 develop 檔案內容。
+        """Ask user for response to NEED_CLARIFICATION and display develop file content.
 
-        Override 基類方法以顯示 develop clarification 檔案內容。
+        Override base class method to display develop clarification file content.
 
         Returns:
-            str: 用戶的回答
+            str: User's answer
         """
         # Find the latest develop clarification file
         develop_dir = self.issue_dir / "develop"
@@ -433,10 +433,10 @@ class DevelopPhase(Phase):
             develop_content = latest_develop_file.read_text(encoding='utf-8')
             print(develop_content)
             print(f"{'='*60}\n")
-            print("💡 開發者需要澄清。")
+            print("💡 Developer needs clarification.")
             print()
 
-        return self.display.get_multiline_input("請回答問題")
+        return self.display.get_multiline_input("Please answer the question")
 
     def _get_last_develop_timestamp(self):
         """Get timestamp from last develop/status.json.
@@ -467,16 +467,16 @@ class DevelopPhase(Phase):
         return None
 
     def _is_clarification_answered(self, develop_file: Path) -> bool:
-        """檢查 develop clarification 是否已經被回答.
+        """Check if develop clarification has already been answered.
 
-        邏輯：如果在 clarification 之後的任何 iteration 中有 user_input，
-        表示用戶已經回答了該澄清問題。
+        Logic: If there is user_input in any iteration after the clarification,
+        it means the user has already answered the clarification question.
 
         Args:
-            develop_file: develop clarification 文件路徑（例如 develop_001.md）
+            develop_file: develop clarification file path (e.g. develop_001.md)
 
         Returns:
-            True 如果已經在任何後續 iteration 中被回答，False 否則
+            True if already answered in any subsequent iteration, False otherwise
         """
         # Extract iteration number from develop file name
         # develop_001.md -> 1
@@ -588,9 +588,9 @@ class DevelopPhase(Phase):
                 PhaseStatusCode.NEED_CLARIFICATION,
             ],
             descriptions={
-                PhaseStatusCode.CONFIRMED: "開發工作已完成",
-                PhaseStatusCode.NEED_PERMISSION: "需要請求工具使用權限",
-                PhaseStatusCode.NEED_CLARIFICATION: "需要 user 澄清下一步",
+                PhaseStatusCode.CONFIRMED: "Development work completed",
+                PhaseStatusCode.NEED_PERMISSION: "Need to request tool usage permissions",
+                PhaseStatusCode.NEED_CLARIFICATION: "Need user to clarify next steps",
             },
         )
 
@@ -619,8 +619,8 @@ class DevelopPhase(Phase):
             # Check if this clarification has already been answered
             # by looking for a subsequent iteration with user_input
             if not self._is_clarification_answered(develop_file):
-                develop_file_section = f"\n- Developer 問題記錄：{develop_file}"
-                develop_instruction = f"1. **首先閱讀** {develop_file} 中的問題（如果有）\n"
+                develop_file_section = f"\n- Developer questions record: {develop_file}"
+                develop_instruction = f"1. **First read** questions in {develop_file} (if any)\n"
 
         # Check if review feedback exists (every iteration, not just first)
         has_review_feedback = self._check_review_feedback_exists()
@@ -633,96 +633,96 @@ class DevelopPhase(Phase):
         config_file = self.issue_dir / "issue.yaml"
         base_branch = self._get_issue_config_value(config_file, "base_branch") or "main"
         important_note = f"""
-**重要**
-- **嚴格與 {base_branch} 的 commit message 保持一致性**，可分多次 commit，一致性包括：
-  - 語言（英文/中文）
-  - message 為一行 (只有 subject line) 或多行 (subject + body)
+**Important**
+- **Strictly maintain consistency with {base_branch}'s commit message format**, can commit multiple times, consistency includes:
+  - Language (English/Chinese)
+  - Message is one line (subject line only) or multiple lines (subject + body)
 """
 
         clarification_note = """
-遇到以下兩種情況時方可請求澄清，**其餘狀況一律禁止請求澄清**：
-- 被要求執行的事項與角色的行為準則產生衝突
-- 遇到超出能力範圍的技術問題
+Clarification can be requested only in these two cases, **any other situation strictly prohibits clarification requests**:
+- Requested actions conflict with the agent's behavioral guidelines
+- Encountering technical problems beyond current capability
 
-請求澄清的步驟：
-1. 回傳 `CAFE_NEED_CLARIFICATION` 狀態碼
-2. 在回應中清楚描述需要澄清的問題（可使用條列式）
-3. 系統會將你的問題儲存到 develop_XXX.md 檔案中
-4. User 回覆後，系統會在下次執行時提供該檔案供你閱讀
+Steps for requesting clarification:
+1. Return `CAFE_NEED_CLARIFICATION` status code
+2. Clearly describe the clarification questions in the response (can use bullet points)
+3. The system will save your questions to develop_XXX.md file
+4. After user replies, the system will provide the file for you to read on next execution
 """
 
         if has_review_feedback:
-            # With review feedback - 修正模式
-            user_input_section = f"\n\n**用戶的額外說明：**\n{user_input}\n" if user_input else ""
+            # With review feedback - correction mode
+            user_input_section = f"\n\n**Additional user notes:**\n{user_input}\n" if user_input else ""
 
             # Build review sources instruction
             review_sources = []
             if review_file_path:
                 review_sources.append(str(review_file_path))
             if has_pr_comments:
-                review_sources.append(f"PR comments (見上方 {unresolved_count} 則 unresolved comments)")
+                review_sources.append(f"PR comments (see {unresolved_count} unresolved comments above)")
 
             review_instruction = ""
             if len(review_sources) == 1:
-                review_instruction = f"2. **首先閱讀** {review_sources[0]}，了解所有需要修正的問題"
+                review_instruction = f"2. **First read** {review_sources[0]}, understand all issues needing correction"
             else:
-                review_instruction = f"2. **首先閱讀** {' 和 '.join(review_sources)}，了解所有需要修正的問題"
+                review_instruction = f"2. **First read** {' and '.join(review_sources)}, understand all issues needing correction"
 
-            return f"""請根據 Code Review 反饋進行修正。
+            return f"""Please make corrections based on Code Review feedback.
 
-**你的角色：**
-請使用 Read tool 讀取 {agent_file} 了解你的角色定義和工作準則，然後嚴格按照角色定義中的要求進行程式碼修正工作。
+**Your role:**
+Please use Read tool to read {agent_file} to understand your role definition and work guidelines, then strictly follow the requirements in the role definition to perform code corrections.
 
 {important_note}
 
-**檔案路徑：**
-- Review Feedback：{review_file_path}
-- 需求規格：{self.spec_file}
-- 實作計畫：{self.plan_file}{develop_file_section}
+**File paths:**
+- Review Feedback: {review_file_path}
+- Requirements Specification: {self.spec_file}
+- Implementation Plan: {self.plan_file}{develop_file_section}
 {pr_comments_section}{user_input_section}
-**執行步驟：**
-1. 使用 Read tool 讀取 {agent_file} 了解角色定義
+**Execution steps:**
+1. Use Read tool to read {agent_file} to understand role definition
 {develop_instruction}{review_instruction}
-3. 根據 review feedback 逐一修正問題
-4. **嚴格按照既有的 commit message 風格撰寫 commit 訊息**，可分多次 commit
-5. **禁止修改非當前分支的 commit**
-6. 如果需要，可參考 {self.spec_file} 和 {self.plan_file}
-7. 完成所有修正後回傳狀態碼
+3. Address issues one by one based on review feedback
+4. **Strictly follow existing commit message style**, can commit multiple times
+5. **Do not modify commits from other branches**
+6. If needed, refer to {self.spec_file} and {self.plan_file}
+7. Return status code after completing all corrections
 
 {status_code_prompt}
 
 {clarification_note}
 
-**完成後回傳狀態碼就好，不要做任何總結**
+**Return status code only, do not provide any summary**
 """
 
         # No review feedback - normal development mode
-        user_input_section = f"\n\n**用戶的額外說明：**\n{user_input}\n" if user_input else ""
-        return f"""請按照實作計畫執行開發工作。
+        user_input_section = f"\n\n**Additional user notes:**\n{user_input}\n" if user_input else ""
+        return f"""Please execute development work according to the implementation plan.
 
-**你的角色：**
-請使用 Read tool 讀取 {agent_file} 了解你的角色定義和工作準則，然後嚴格按照角色定義中的要求進行開發工作。
+**Your role:**
+Please use Read tool to read {agent_file} to understand your role definition and work guidelines, then strictly follow the requirements in the role definition to perform development work.
 
 {important_note}
 
-**檔案路徑：**
-- 需求規格：{self.spec_file}
-- 實作計畫：{self.plan_file}{develop_file_section}
+**File paths:**
+- Requirements Specification: {self.spec_file}
+- Implementation Plan: {self.plan_file}{develop_file_section}
 {pr_comments_section}{user_input_section}
-**執行步驟：**
-1. 使用 Read tool 讀取 {agent_file} 了解角色定義
-{develop_instruction}2. 仔細閱讀 {self.spec_file} 和 {self.plan_file}
-3. 嚴格按照計畫中的順序執行開發任務
-4. **嚴格按照既有的 commit message 風格撰寫 commit 訊息**，可分多次 commit
-5. 完成每個任務後，在 {self.plan_file} 中將該項目打勾（- [ ] 改為 - [x]）
-6. **禁止修改非當前分支的 commit**
-7. 所有任務完成後回傳狀態碼
+**Execution steps:**
+1. Use Read tool to read {agent_file} to understand role definition
+{develop_instruction}2. Carefully read {self.spec_file} and {self.plan_file}
+3. Execute development tasks in strict order according to the plan
+4. **Strictly follow existing commit message style**, can commit multiple times
+5. After completing each task, mark it checked in {self.plan_file} (change - [ ] to - [x])
+6. **Do not modify commits from other branches**
+7. Return status code after completing all tasks
 
 {status_code_prompt}
 
 {clarification_note}
 
-**完成後回傳狀態碼就好，不要做任何總結**
+**Return status code only, do not provide any summary**
 """
 
     def execute(self) -> PhaseResult:
@@ -870,7 +870,7 @@ class DevelopPhase(Phase):
                         print(f"{'='*60}")
                         print(response)
                         print(f"{'='*60}\n")
-                        print("💡 開發者請求權限。請再次執行 'cafe develop' 來回應。")
+                        print("💡 Developer requested permissions. Run 'cafe develop' again to respond.")
 
                         return PhaseResult(
                             status=PhaseStatus.IN_PROGRESS,
@@ -901,7 +901,7 @@ class DevelopPhase(Phase):
                         print(f"{'='*60}")
                         print(response)
                         print(f"{'='*60}\n")
-                        print("💡 開發者需要澄清。請再次執行 'cafe develop' 來回應。")
+                        print("💡 Developer needs clarification. Run 'cafe develop' again to respond.")
 
                         return PhaseResult(
                             status=PhaseStatus.IN_PROGRESS,
@@ -969,27 +969,27 @@ class DevelopPhase(Phase):
             return self.issue_name
 
     def _get_status_analysis_prompt(self) -> str:
-        """取得分析 status code 的 prompt.
+        """Get prompt for analyzing status code.
 
         Returns:
-            分析 prompt 字串
+            Analysis prompt string
         """
-        return f"""請閱讀 {self.plan_file} 並檢查開發進度。
+        return f"""Please read {self.plan_file} and check development progress.
 
-根據以下條件判斷應該回傳哪個狀態碼：
+Based on the following conditions, determine which status code to return:
 
-- CAFE_CONFIRMED: 所有任務都已完成（plan.md 中的項目都已打勾）
-- CAFE_NEED_PERMISSION: 需要請求額外的工具使用權限
+- CAFE_CONFIRMED: All tasks completed (all items checked in plan.md)
+- CAFE_NEED_PERMISSION: Need to request additional tool usage permissions
 
-請只回傳一個狀態碼（例如：CAFE_CONFIRMED），不要有任何其他內容。"""
+Please return only one status code (example: CAFE_CONFIRMED), with no other content."""
 
     def _detect_written_output_files(self) -> List[Path]:
-        """檢查 develop file 是否在失敗前已寫入。
+        """Check if develop file was written before failure.
 
-        DevelopPhase 使用 develop_{iteration}.md 來記錄 CAFE_NEED_CLARIFICATION 的問題。
+        DevelopPhase uses develop_{iteration}.md to record CAFE_NEED_CLARIFICATION questions.
 
         Returns:
-            List[Path]: 如果 develop_{iteration}.md 存在則返回包含它的列表，否則返回空列表
+            List[Path]: Return list containing develop_{iteration}.md if it exists, otherwise empty list
         """
         develop_dir = self.issue_dir / "develop"
         develop_file = develop_dir / f"develop_{self.iteration:03d}.md"

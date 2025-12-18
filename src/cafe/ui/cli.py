@@ -44,14 +44,14 @@ console = Console()
 
 
 def _handle_phase_exception(e: Exception, phase_name: str) -> None:
-    """統一處理 phase 執行時的例外。
+    """Unified exception handling for phase execution.
     
     Args:
-        e: 捕獲的例外
-        phase_name: Phase 名稱（用於錯誤訊息）
+        e: Caught exception
+        phase_name: Phase name (for error messages)
         
     Raises:
-        typer.Exit: 總是拋出 exit(1)
+        typer.Exit: Always raises exit(1)
     """
     from cafe.core.types import CriticalPhaseError
     
@@ -78,27 +78,27 @@ def _handle_phase_exception(e: Exception, phase_name: str) -> None:
 
 
 def _check_agent_clis_available(config_manager: ConfigManager) -> List[str]:
-    """檢查所有 agent CLI 工具是否已安裝。
+    """Check if all agent CLI tools are installed.
 
     Args:
-        config_manager: 配置管理器
+        config_manager: Configuration manager
 
     Returns:
-        缺失的 CLI 工具列表（若無缺失則回傳空列表）
+        List of missing CLI tools (empty list if none missing)
     """
-    # 讀取所有 agent 配置
+    # Read all agent configurations
     pm_config = config_manager.get("agents.pm", {"name": "Roger", "cli": "copilot"})
     dev_config = config_manager.get("agents.developer", {"name": "David", "cli": "copilot"})
     reviewer_config = config_manager.get("agents.reviewer", {"name": "Richard", "cli": "copilot"})
 
-    # 收集所有需要檢查的 CLI 工具
+    # Collect all CLI tools to check
     required_clis = [pm_config["cli"], dev_config["cli"], reviewer_config["cli"]]
 
-    # 檢查每個 CLI 是否存在
+    # Check if each CLI exists
     missing_clis = []
     for cli in required_clis:
         if shutil.which(cli) is None:
-            if cli not in missing_clis:  # 避免重複
+            if cli not in missing_clis:  # Avoid duplicates
                 missing_clis.append(cli)
 
     return missing_clis
@@ -335,8 +335,8 @@ def init() -> None:
 
         # 1. Check if config already exists
         if config_manager.config_file.exists():
-            console.print("[yellow]設定已存在。如需修改，請使用 `cafe config` 指令集。[/yellow]")
-            console.print("[yellow]詳情請見 `cafe config --help`。[/yellow]")
+            console.print("[yellow]Configuration already exists. To modify, use the `cafe config` commands.[/yellow]")
+            console.print("[yellow]See `cafe config --help` for details.[/yellow]")
             raise typer.Exit(1)
 
         # 2. Copy agents and templates directories
@@ -348,27 +348,27 @@ def init() -> None:
             agents_source = package_dir / "data" / "agents"
             templates_source = package_dir / "data" / "templates"
 
-            console.print("[cyan]正在初始化專案環境...[/cyan]")
+            console.print("[cyan]Initializing project environment...[/cyan]")
 
             init_helpers.copy_data_directory(str(agents_source), ".cafe/agents")
-            console.print("[green]✓ 已複製 agents 目錄[/green]")
+            console.print("[green]✓ Copied agents directory[/green]")
 
             init_helpers.copy_data_directory(str(templates_source), ".cafe/templates")
-            console.print("[green]✓ 已複製 templates 目錄[/green]")
+            console.print("[green]✓ Copied templates directory[/green]")
 
         except Exception as e:
-            console.print(f"[red]錯誤：複製檔案失敗 - {e}[/red]")
+            console.print(f"[red]Error: Failed to copy files - {e}[/red]")
             raise typer.Exit(1)
 
         # 3. Check available CLIs
         available_clis = check_available_clis()
 
         if not available_clis:
-            console.print("[red]未找到任何支援的 AI 代理。請先安裝至少一個代理後再重新執行。[/red]")
-            console.print("[yellow]支援的代理：claude, gemini, cursor-agent, copilot[/yellow]")
+            console.print("[red]No supported AI agents found. Please install at least one agent before retrying.[/red]")
+            console.print("[yellow]Supported agents: claude, gemini, cursor-agent, copilot[/yellow]")
             raise typer.Exit(1)
 
-        console.print(f"[green]找到可用的 AI 代理：{', '.join(available_clis)}[/green]\n")
+        console.print(f"[green]Found available AI agents: {', '.join(available_clis)}[/green]\n")
 
         # 4. Interactive configuration for three roles
         config = {
@@ -382,24 +382,24 @@ def init() -> None:
         ]
 
         for role_key, role_display in roles:
-            console.print(f"[bold cyan]配置 {role_display} 角色：[/bold cyan]")
+            console.print(f"[bold cyan]Configuring {role_display} role:[/bold cyan]")
 
             # Select CLI
             selected_cli = prompt_list(
-                message=f"請為 {role_display} 選擇一個 AI 代理",
+                message=f"Please select an AI agent for {role_display}",
                 choices=available_clis,
             )
             if not selected_cli:
-                console.print("\n[yellow]設定未完成，已取消。[/yellow]")
+                console.print("\n[yellow]Configuration incomplete, cancelled.[/yellow]")
                 raise typer.Exit(1)
 
             # Input model name
             model_name_input = prompt_text(
-                message=f"請為 {selected_cli} 輸入要使用的模型名稱（選填，直接按 Enter 將使用預設模型）:",
+                message=f"Enter model name for {selected_cli} (optional, press Enter to use default):",
                 default="",
             )
             if model_name_input is None:
-                console.print("\n[yellow]設定未完成，已取消。[/yellow]")
+                console.print("\n[yellow]Configuration incomplete, cancelled.[/yellow]")
                 raise typer.Exit(1)
             model_name = model_name_input.strip() if model_name_input else None
 
@@ -407,9 +407,9 @@ def init() -> None:
             agents = list_available_agents(role_key)
 
             if not agents:
-                console.print(f"[red]錯誤：找不到 {role_display} 角色的代理人檔案。[/red]")
+                console.print(f"[red]Error: Agent files not found for {role_display} role.[/red]")
                 console.print(
-                    f"[yellow]請確認 .cafe/agents/{role_key}/ 目錄中有有效的 .md 檔案。[/yellow]"
+                    f"[yellow]Please ensure valid .md files exist in .cafe/agents/{role_key}/ directory.[/yellow]"
                 )
                 raise typer.Exit(1)
 
@@ -418,11 +418,11 @@ def init() -> None:
 
             # Select agent
             selected_agent_display = prompt_list(
-                message=f"請為 {role_display} 選擇一位代理人",
+                message=f"Please select an agent for {role_display}",
                 choices=agent_choices,
             )
             if not selected_agent_display:
-                console.print("\n[yellow]設定未完成，已取消。[/yellow]")
+                console.print("\n[yellow]Configuration incomplete, cancelled.[/yellow]")
                 raise typer.Exit(1)
 
             # Extract agent name from display string
@@ -443,23 +443,23 @@ def init() -> None:
         config_manager.save_config(config)
 
         # 6. Display success message
-        console.print("[bold green]設定已成功儲存！[/bold green]\n")
+        console.print("[bold green]Configuration saved successfully![/bold green]\n")
 
         for role_key, role_display in roles:
             role_config = config["agents"][role_key]
-            model_display = role_config.get("model") or "預設"
+            model_display = role_config.get("model") or "default"
             console.print(
                 f"- {role_display}: {role_config['cli']} "
-                f"(模型: {model_display}) (代理人: {role_config['name']})"
+                f"(model: {model_display}) (agent: {role_config['name']})"
             )
 
-        console.print("\n[cyan]您現在可以使用 `cafe prepare` 來開始新的開發任務。[/cyan]")
+        console.print("\n[cyan]You can now use `cafe prepare` to start a new development task.[/cyan]")
         console.print(
-            "[cyan]如需修改設定，請使用 `cafe config` 指令，詳情請見 `cafe config --help`。[/cyan]"
+            "[cyan]To modify settings, use `cafe config` commands. See `cafe config --help` for details.[/cyan]"
         )
 
     except KeyboardInterrupt:
-        console.print("\n[yellow]設定未完成，已取消。[/yellow]")
+        console.print("\n[yellow]Configuration incomplete, cancelled.[/yellow]")
         raise typer.Exit(1)
 
 
@@ -470,10 +470,10 @@ def version() -> None:
 
 
 def _ensure_default_content(cafe_dir: Path) -> None:
-    """確保 .cafe/templates 和 .cafe/agents 存在，如不存在則從 package 資料目錄複製。
+    """Ensure .cafe/templates and .cafe/agents exist, copy from package data directory if not.
 
     Args:
-        cafe_dir: .cafe 目錄的路徑
+        cafe_dir: Path to .cafe directory
     """
     from cafe.agents.manager import AgentManager
 
@@ -1480,7 +1480,7 @@ def spec(
             console.print()
             status_code = result.data.get("status_code")
 
-            # 如果沒有有效的 status code，視為失敗
+            # If no valid status code, treat as failure
             if not status_code:
                 console.print(
                     "[bold red]❌ Spec phase failed: No valid status code returned[/bold red]"
@@ -1491,7 +1491,7 @@ def spec(
                 console.print("[bold yellow]💬 Agent needs clarification[/bold yellow]")
                 console.print(f"Iterations: {result.data.get('iterations', 'N/A')}")
                 if workflow_mode == WorkflowMode.LOCAL:
-                    # 顯示完整檔案路徑
+                    # Display full file path
                     spec_file = result.data.get("spec_file", spec_dir)
                     console.print(f"Saved to: {spec_file}")
                 console.print()
@@ -1933,7 +1933,7 @@ def develop(
         cafe develop --pr-number 123
 
         # Non-interactive mode with permission approval
-        cafe develop --no-interactive --approve-denied-tools 0,2 --user-input "請小心處理"
+        cafe develop --no-interactive --approve-denied-tools 0,2 --user-input "Please be careful"
     """
     try:
         # Get and validate current branch
@@ -2328,18 +2328,18 @@ def review(
                         # Exceeded max iterations
                         console.print()
                         console.print(
-                            f"[bold yellow]⚠️  已達到 review 迴圈上限 ({max_iterations} 次)[/bold yellow]"
+                            f"[bold yellow]⚠️  Review loop limit reached ({max_iterations} times)[/bold yellow]"
                         )
                         console.print()
-                        console.print("[dim]您可以：[/dim]")
+                        console.print("[dim]You can:[/dim]")
                         console.print(
-                            "[dim]  • 繼續執行：[bold]cafe review[/bold]（不加 --auto）[/dim]"
+                            "[dim]  • Continue: [bold]cafe review[/bold] (without --auto)[/dim]"
                         )
                         console.print(
-                            "[dim]  • 調整上限：[bold]cafe config set auto.max_review_iterations 10[/bold][/dim]"
+                            "[dim]  • Adjust limit: [bold]cafe config set auto.max_review_iterations 10[/bold][/dim]"
                         )
                         console.print(
-                            f"[dim]  • 或修改 .cafe/issues/{issue_name}/issue.yaml[/dim]"
+                            f"[dim]  • Or modify .cafe/issues/{issue_name}/issue.yaml[/dim]"
                         )
                     else:
                         # Continue with develop phase
@@ -2987,19 +2987,19 @@ def make(
         help="Path to configuration file",
     ),
 ) -> None:
-    """🚀 檢查環境並執行完整的開發工作流程。
+    """🚀 Check environment and execute complete development workflow.
 
-    這個指令會：
-    1. 檢查所有配置的 agent CLI 工具是否已安裝
-    2. 若環境檢查通過，執行 `cafe spec --auto` 啟動自動化工作流程
+    This command will:
+    1. Check if all configured agent CLI tools are installed
+    2. If environment check passes, execute `cafe spec --auto` to start automated workflow
 
-    使用前請先執行 `cafe prepare` 初始化 issue 環境。
+    Please run `cafe prepare` first to initialize issue environment.
 
     Examples:
-        # 使用預設配置執行
+        # Execute with default configuration
         cafe make
 
-        # 使用自訂配置檔
+        # Use custom config file
         cafe make --config /path/to/config.yaml
     """
     # Load configuration
@@ -3341,42 +3341,42 @@ def agent_edit() -> None:
 
 @app.command()
 def test() -> None:
-    """🧪 模擬 agent 執行測試（用於重現污染問題）。
+    """🧪 Simulate agent execution test (for reproducing contamination issues).
 
-    執行 scripts/simulate_agent_test.sh 來模擬 agent 在 worktree 中的行為。
-    這個指令會：
-    1. 執行測試
-    2. 嘗試 commit（觸發 pre-commit hook）
-    3. 檢查是否產生污染 commits
+    Execute scripts/simulate_agent_test.sh to simulate agent behavior in worktree.
+    This command will:
+    1. Execute tests
+    2. Attempt commit (triggers pre-commit hook)
+    3. Check for contaminated commits
     """
     import subprocess
     from pathlib import Path
 
-    # 找到 script 檔案
+    # Find script file
     script_path = Path(__file__).parent.parent.parent.parent / "scripts" / "simulate_agent_test.sh"
 
     if not script_path.exists():
         console.print(f"[red]Error: Script not found at {script_path}[/red]")
         raise typer.Exit(1)
 
-    console.print("[bold blue]🤖 模擬 Agent 執行測試...[/bold blue]")
+    console.print("[bold blue]🤖 Simulating Agent execution test...[/bold blue]")
     console.print(f"[dim]Script: {script_path}[/dim]")
     console.print("")
 
     try:
-        # 執行 script（不指定 cwd，使用當前目錄）
+        # Execute script (no cwd specified, use current directory)
         result = subprocess.run(
             ["bash", str(script_path)],
-            # 不指定 cwd，讓它從當前目錄執行（這樣可以測試 worktree）
-            # 不指定 env，讓它繼承當前環境（模擬 agent 行為）
+            # No cwd specified, execute from current directory (for testing worktree)
+            # No env specified, inherit current environment (simulate agent behavior)
         )
 
         if result.returncode == 0:
             console.print("")
-            console.print("[green]✅ 測試完成，沒有偵測到污染[/green]")
+            console.print("[green]✅ Test completed, no contamination detected[/green]")
         else:
             console.print("")
-            console.print("[red]❌ 偵測到污染或測試失敗！[/red]")
+            console.print("[red]❌ Contamination detected or test failed![/red]")
             raise typer.Exit(1)
 
     except Exception as e:

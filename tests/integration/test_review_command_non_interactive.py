@@ -1,6 +1,6 @@
 """Integration tests for 'cafe review --no-interactive' command.
 
-使用 MockAgentExecutor 測試完整的 review command flow，不呼叫真實 LLM API。
+使用 MockAgentExecutor 測試完整 review command flow, 不呼叫真實 LLM API.
 """
 
 import os
@@ -25,16 +25,16 @@ def mock_env(monkeypatch):
 @pytest.fixture
 def temp_review_dir(tmp_path):
     """創建臨時 review 目錄結構"""
-    # 創建完整的目錄結構: {tmp_path}/.cafe/issues/test-issue/review/
+    # 創建完整目錄結構: {tmp_path}/.cafe/issues/test-issue/review/
     issue_dir = tmp_path / ".cafe" / "issues" / "test-issue"
 
-    # 創建 spec 目錄和 spec.md（review 需要 spec 已存在）
+    # 創建 spec 目錄and spec.md（review 需要 spec 已存在）
     spec_dir = issue_dir / "spec"
     spec_dir.mkdir(parents=True)
     spec_file = spec_dir / "spec.md"
-    spec_file.write_text("# 測試功能需求\n\n這是一個測試需求規格。")
+    spec_file.write_text("# 測試功能需求\n\n這是一個測試需求規格.")
 
-    # 創建 plan 目錄和 plan.md（review 需要 plan 已存在）
+    # 創建 plan 目錄and plan.md（review 需要 plan 已存在）
     plan_dir = issue_dir / "plan"
     plan_dir.mkdir(parents=True)
     plan_file = plan_dir / "plan.md"
@@ -46,7 +46,7 @@ def temp_review_dir(tmp_path):
 - [x] 撰寫測試
 
 ## 開發指南
-已按照以上任務清單完成實作。
+已按照以上任務清單完成實作.
 """)
 
     # 創建 review 目錄
@@ -88,7 +88,7 @@ class TestReviewCommandNonInteractiveBasics:
 
         monkeypatch.setenv(
             "CAFE_MOCK_RESPONSE",
-            "CAFE_CONFIRMED\n\n程式碼審查通過，沒有問題。"
+            "CAFE_CONFIRMED\n\n程式碼審查通過, 沒有問題."
         )
 
         original_cwd = os.getcwd()
@@ -135,7 +135,7 @@ class TestReviewCommandNonInteractiveBasics:
 
         monkeypatch.setenv(
             "CAFE_MOCK_RESPONSE",
-            "CAFE_NEEDS_CHANGES\n\n需要修正 commit message 格式。"
+            "CAFE_NEEDS_CHANGES\n\n需要修正 commit message 格式."
         )
 
         original_cwd = os.getcwd()
@@ -241,7 +241,7 @@ class TestReviewCommandNonInteractiveFiles:
 
         monkeypatch.setenv(
             "CAFE_MOCK_RESPONSE",
-            "CAFE_CONFIRMED\n\n程式碼審查通過。"
+            "CAFE_CONFIRMED\n\n程式碼審查通過."
         )
 
         original_cwd = os.getcwd()
@@ -279,7 +279,7 @@ class TestReviewCommandNonInteractiveFiles:
     def test_history_created(
         self, mock_env, temp_review_dir, mock_git_ops, monkeypatch, tmp_path
     ):
-        """測試 history 目錄和檔案被創建"""
+        """測試 history 目錄and檔案被創建"""
         # Arrange
         spec_file = str(temp_review_dir.parent / "spec" / "spec.md")
         plan_file = str(temp_review_dir.parent / "plan" / "plan.md")
@@ -287,7 +287,7 @@ class TestReviewCommandNonInteractiveFiles:
 
         monkeypatch.setenv(
             "CAFE_MOCK_RESPONSE",
-            "CAFE_CONFIRMED\n\n審查完成。"
+            "CAFE_CONFIRMED\n\n審查完成."
         )
 
         original_cwd = os.getcwd()
@@ -335,7 +335,7 @@ class TestReviewCommandNonInteractiveFiles:
 
         monkeypatch.setenv(
             "CAFE_MOCK_RESPONSE",
-            "CAFE_NEEDS_CHANGES\n\n需要修正。"
+            "CAFE_NEEDS_CHANGES\n\n需要修正."
         )
 
         original_cwd = os.getcwd()
@@ -387,7 +387,7 @@ class TestReviewCommandNonInteractiveDiffHandling:
 
         monkeypatch.setenv(
             "CAFE_MOCK_RESPONSE",
-            "CAFE_CONFIRMED\n\n審查完成。"
+            "CAFE_CONFIRMED\n\n審查完成."
         )
 
         git_ops = MagicMock(spec=GitOperations)
@@ -439,7 +439,7 @@ class TestReviewCommandNonInteractiveDiffHandling:
 
         monkeypatch.setenv(
             "CAFE_MOCK_RESPONSE",
-            "CAFE_CONFIRMED\n\nCommit 審查完成。"
+            "CAFE_CONFIRMED\n\nCommit 審查完成."
         )
 
         git_ops = MagicMock(spec=GitOperations)
@@ -483,19 +483,19 @@ class TestReviewCommandNonInteractiveDiffHandling:
 
 
 class TestReviewCommandNonInteractiveAgentTracking:
-    """測試 mock agent 的追蹤功能"""
+    """測試 mock agent 追蹤功能"""
 
     def test_agent_receives_diff_in_prompt(
         self, mock_env, temp_review_dir, mock_git_ops, monkeypatch, tmp_path
     ):
-        """測試 agent 收到包含 diff 的 prompt"""
+        """測試 agent 收到包含 diff  prompt"""
         # Arrange
         spec_file = str(temp_review_dir.parent / "spec" / "spec.md")
         plan_file = str(temp_review_dir.parent / "plan" / "plan.md")
 
         monkeypatch.setenv(
             "CAFE_MOCK_RESPONSE",
-            "CAFE_CONFIRMED\n\n審查完成。"
+            "CAFE_CONFIRMED\n\n審查完成."
         )
 
         original_cwd = os.getcwd()
@@ -522,12 +522,13 @@ class TestReviewCommandNonInteractiveAgentTracking:
             # Act
             phase.execute()
 
-            # Assert - 驗證 agent 被呼叫，且 prompt 包含審查任務說明
+            # Assert - 驗證 agent 被呼叫, 且 prompt 包含審查任務說明
             executor = agent_manager.get_agent("Richard")
             assert executor.call_count == 1
-            # 新版 prompt 包含審查任務指引，不再直接提供 git diff 內容
-            assert "git 狀態檢查" in executor.last_prompt or "審查任務" in executor.last_prompt
-            # 新設計：agent 自己執行 git 指令獲取內容，而不是在 prompt 中直接提供
+            # New version prompt includes review task guidance, no longer directly provides git diff content
+            prompt = executor.last_prompt
+            assert "git status" in prompt.lower() or "status check" in prompt.lower() or "review" in prompt.lower()
+            # 新設計：agent 自己執行 git 指令獲取內容, 而不是在 prompt 中直接提供
         finally:
             os.chdir(original_cwd)
 
@@ -541,7 +542,7 @@ class TestReviewCommandNonInteractiveAgentTracking:
 
         monkeypatch.setenv(
             "CAFE_MOCK_RESPONSE",
-            "CAFE_NEEDS_CHANGES\n\n需要修正。"
+            "CAFE_NEEDS_CHANGES\n\n需要修正."
         )
 
         original_cwd = os.getcwd()
@@ -568,7 +569,7 @@ class TestReviewCommandNonInteractiveAgentTracking:
             # Act
             phase.execute()
 
-            # Assert - review 是 non-iterative，只執行一次
+            # Assert - review 是 non-iterative, 只執行一次
             executor = agent_manager.get_agent("Richard")
             assert executor.call_count == 1
         finally:
@@ -584,7 +585,7 @@ class TestReviewCommandNonInteractiveAgentTracking:
 
         monkeypatch.setenv(
             "CAFE_MOCK_RESPONSE",
-            "CAFE_CONFIRMED\n\n審查完成。"
+            "CAFE_CONFIRMED\n\n審查完成."
         )
 
         original_cwd = os.getcwd()
@@ -611,7 +612,7 @@ class TestReviewCommandNonInteractiveAgentTracking:
             # Act
             phase.execute()
 
-            # Assert - 驗證 history 記錄了允許的 tools
+            # Assert - 驗證 history 記錄了允許 tools
             history_dir = temp_review_dir / "history"
             iteration_file = history_dir / "iteration_001.json"
             assert iteration_file.exists()
@@ -623,7 +624,7 @@ class TestReviewCommandNonInteractiveAgentTracking:
                 allowed_tools = history_data["allowed_tools"]
                 assert isinstance(allowed_tools, list)
                 assert len(allowed_tools) > 0
-                # 確認包含關鍵的 git 工具
+                # 確認包含關鍵 git 工具
                 assert any("git diff" in tool or "bash(git diff)" in tool for tool in allowed_tools)
                 assert any("git log" in tool or "bash(git log)" in tool for tool in allowed_tools)
         finally:

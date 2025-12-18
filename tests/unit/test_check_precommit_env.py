@@ -1,4 +1,4 @@
-"""檢查 pre-commit hook 執行時的環境變數"""
+"""檢查 pre-commit hook 執行時環境變數"""
 import os
 from pathlib import Path
 
@@ -25,5 +25,5 @@ def test_check_git_ceiling_directories():
         content = git_file.read_text()
         print(f"✓ 在 worktree 中: {content.strip()}")
 
-    # 這個測試總是通過，只是為了顯示資訊
+    # 這個測試總是通過, 只是為了顯示資訊
     assert True

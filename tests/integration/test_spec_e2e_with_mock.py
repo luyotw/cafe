@@ -1,6 +1,6 @@
 """E2E tests for 'cafe spec' command with mock agents.
 
-使用 CliRunner 測試 CLI 命令執行，用 CAFE_MOCK_AGENTS=true 避免真實 LLM 呼叫。
+使用 CliRunner 測試 CLI 命令執行, 用 CAFE_MOCK_AGENTS=true 避免真實 LLM 呼叫.
 """
 
 import os
@@ -21,7 +21,7 @@ runner = CliRunner()
 
 @dataclass
 class MockResult:
-    """模擬 subprocess.run 的結果格式"""
+    """模擬 subprocess.run 結果格式"""
     returncode: int
     stdout: str
     stderr: str
@@ -84,9 +84,9 @@ class TestSpecE2EMockStatusCodes:
     def test_invalid_status_code_should_fail(self, tmp_path):
         """測試 agent 返回無效狀態碼應該失敗
 
-        情境：Agent 返回無法識別的狀態碼 (CAFE_INVALID_CODE)
+        情境：Agent 返回無法識別狀態碼 (CAFE_INVALID_CODE)
         指令：cafe spec test-issue --no-interactive --user-input "我想要一個登入功能"
-        預期：失敗，錯誤訊息包含 "no status code" 或 "failed"
+        預期：失敗, 錯誤訊息包含 "no status code" or "failed"
         """
         issue_name = "test-issue"
         user_input = "我想要一個登入功能"
@@ -102,12 +102,12 @@ class TestSpecE2EMockStatusCodes:
 
         情境：Agent 回應內容沒有包含任何狀態碼
         指令：cafe spec test-issue --no-interactive --user-input "我想要一個登入功能"
-        預期：失敗，錯誤訊息包含 "no status code" 或 "failed"
+        預期：失敗, 錯誤訊息包含 "no status code" or "failed"
         """
         issue_name = "test-issue"
         user_input = "我想要一個登入功能"
         
-        result = run_cafe_spec(tmp_path, issue_name, "# 登入功能需求\n\n沒有狀態碼的內容", user_input)
+        result = run_cafe_spec(tmp_path, issue_name, "# 登入功能需求\n\n沒有狀態碼內容", user_input)
         
         assert result.returncode != 0
         output = result.stdout + result.stderr
@@ -116,10 +116,10 @@ class TestSpecE2EMockStatusCodes:
     def test_empty_response_should_fail(self, tmp_path):
         """測試 agent 返回空回應應該失敗
 
-        情境：Agent 返回完全空白的回應
+        情境：Agent 返回完全空白回應
         指令：cafe spec test-issue --no-interactive --user-input "我想要一個登入功能"
-        預期：失敗（或 mock agent 生成 fallback 內容成功）
-        註：MockAgentExecutor 會為空回應生成 fallback 內容，實際 agent 會失敗
+        預期：失敗（or mock agent 生成 fallback 內容成功）
+        註：MockAgentExecutor 會為空回應生成 fallback 內容, 實際 agent 會失敗
         """
         issue_name = "test-issue"
         user_input = "我想要一個登入功能"
@@ -147,7 +147,7 @@ class TestSpecE2EMockUserInputErrors:
 
         情境：非互動模式下沒有提供 --user-input 參數
         指令：cafe spec test-issue --no-interactive
-        預期：失敗，錯誤訊息包含 "user" 或 "input" 或 "required"
+        預期：失敗, 錯誤訊息包含 "user" or "input" or "required"
         """
         issue_name = "test-issue"
         
@@ -159,11 +159,11 @@ class TestSpecE2EMockUserInputErrors:
         assert "user" in output.lower() or "input" in output.lower() or "required" in output.lower()
 
     def test_empty_user_input_should_fail(self, tmp_path):
-        """測試空的 user input 應該失敗
+        """測試空 user input 應該失敗
 
         情境：提供空字串作為 user input
         指令：cafe spec test-issue --no-interactive --user-input ""
-        預期：失敗，CLI 要求 --user-input 參數不能為空
+        預期：失敗, CLI 要求 --user-input 參數不能為空
         """
         issue_name = "test-issue"
         
@@ -183,16 +183,16 @@ class TestSpecE2EMockContentValidation:
     def test_spec_content_excludes_status_code(self, tmp_path):
         """測試 spec_001.md 不包含狀態碼
 
-        情境：Agent 返回 CAFE_READY_FOR_REVIEW 狀態碼和需求內容，用戶確認
+        情境：Agent 返回 CAFE_READY_FOR_REVIEW 狀態碼and需求內容, 用戶確認
         指令：cafe spec test-issue --no-interactive --user-input "confirm"
-        預期：成功，spec_001.md 只包含需求內容，不包含狀態碼字串
+        預期：成功, spec_001.md 只包含需求內容, 不包含狀態碼字串
         """
         issue_name = "test-issue"
         user_input = "confirm"  # Provide confirmation for non-interactive mode
 
         result = run_cafe_spec(
             tmp_path, issue_name,
-            "CAFE_READY_FOR_REVIEW\n\n# 登入功能需求規格\n\n這是測試需求。",
+            "CAFE_READY_FOR_REVIEW\n\n# 登入功能需求規格\n\n這是測試需求.",
             user_input
         )
 
@@ -211,7 +211,7 @@ class TestSpecE2EMockContentValidation:
 
         情境：成功完成 spec phase
         指令：cafe spec test-issue --no-interactive --user-input "confirm"
-        預期：成功，spec_001.md 創建在 .cafe/issues/test-issue/spec/ 目錄下
+        預期：成功, spec_001.md 創建在 .cafe/issues/test-issue/spec/ 目錄下
         """
         issue_name = "test-issue"
         user_input = "confirm"  # Provide confirmation for non-interactive mode
@@ -229,11 +229,11 @@ class TestSpecE2EMockContentValidation:
         assert spec_file.is_file()
 
     def test_spec_file_has_valid_structure(self, tmp_path):
-        """測試 spec_001.md 有正確的 Markdown 結構
+        """測試 spec_001.md 有正確 Markdown 結構
 
-        情境：Agent 返回結構化的 Markdown 內容
+        情境：Agent 返回結構化 Markdown 內容
         指令：cafe spec test-issue --no-interactive --user-input "confirm"
-        預期：成功，spec_001.md 包含有效的 Markdown 標題結構 (# 和 ##)
+        預期：成功, spec_001.md 包含有效 Markdown 標題結構 (# and ##)
         """
         issue_name = "test-issue"
         user_input = "confirm"  # Provide confirmation for non-interactive mode
@@ -259,14 +259,14 @@ class TestSpecWithIssueId:
     """測試 --issue-id 功能"""
 
     def test_spec_with_issue_id_fetches_issue(self, tmp_path):
-        """測試使用 --issue-id 參數時，系統從 GitHub 抓取 issue 內容
+        """測試使用 --issue-id 參數時, 系統從 GitHub 抓取 issue 內容
 
         情境：使用者執行 cafe spec test-issue --issue-id 123
-        預期：系統呼叫 get_issue(123)，並將 issue title + body 作為第一輪 user_input
+        預期：系統呼叫 get_issue(123), 並將 issue title + body 作為Round 1 user_input
 
-        註：此測試由於涉及 subprocess 執行，無法使用 mock。
-        實際使用需要 gh CLI 和真實的 GitHub issue。
-        此處僅測試參數能正確解析和傳遞。
+        註：此測試由於涉及 subprocess 執行, 無法使用 mock.
+        實際使用需要 gh CLI and真實 GitHub issue.
+        此處僅測試參數能正確解析and傳遞.
         """
         issue_name = "test-issue"
         issue_id = "123"
@@ -296,13 +296,13 @@ class TestSpecWithIssueId:
                 "Failed to get current branch" in output)
 
     def test_spec_with_issue_id_posts_comment_on_completion(self, tmp_path):
-        """測試當 spec phase 完成時，系統將 spec_001.md 貼回 GitHub issue
+        """測試當 spec phase 完成時, 系統將 spec_001.md 貼回 GitHub issue
 
-        情境：使用者執行 cafe spec test-issue --issue-id 123，PM agent 返回 CAFE_CONFIRMED
+        情境：使用者執行 cafe spec test-issue --issue-id 123, PM agent 返回 CAFE_CONFIRMED
         預期：系統呼叫 add_issue_comment(123, spec_content)
 
-        註：此測試由於涉及 subprocess 執行，無法使用 mock。
-        實際使用需要 gh CLI 和真實的 GitHub issue。
+        註：此測試由於涉及 subprocess 執行, 無法使用 mock.
+        實際使用需要 gh CLI and真實 GitHub issue.
         """
         issue_name = "test-issue"
         issue_id = "123"
@@ -332,10 +332,10 @@ class TestSpecWithIssueId:
                 "Failed to get current branch" in output)
 
     def test_spec_without_issue_id_works_normally(self, tmp_path):
-        """測試不使用 --issue-id 參數時，原有流程不受影響
+        """測試不使用 --issue-id 參數時, 原有流程不受影響
 
         情境：使用者執行 cafe spec test-issue --no-interactive --user-input "confirm"
-        預期：系統不呼叫 GitHub API，正常完成 spec phase
+        預期：系統不呼叫 GitHub API, 正常完成 spec phase
         """
         issue_name = "test-issue"
         user_input = "confirm"  # Provide confirmation for non-interactive mode
@@ -355,7 +355,7 @@ class TestSpecWithIssueId:
     def test_spec_with_issue_id_issue_not_found(self, tmp_path):
         """測試 issue 不存在時顯示錯誤訊息並退出
 
-        情境：使用者執行 cafe spec test-issue --issue-id 999，但 issue 999 不存在
+        情境：使用者執行 cafe spec test-issue --issue-id 999, 但 issue 999 不存在
         預期：系統顯示錯誤訊息並退出（非零 exit code）
         """
         issue_name = "test-issue"

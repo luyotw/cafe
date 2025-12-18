@@ -84,10 +84,10 @@ def prepared_issue(temp_repo_dir):
 
 
 class TestAutoModeVariableScope:
-    """測試 --auto 模式中的變數作用域問題"""
+    """測試 --auto 模式中變數作用域問題"""
 
     def test_spec_auto_uses_correct_variable_name(self, temp_repo_dir, mock_git_ops, prepared_issue):
-        """測試 spec auto 模式使用正確的變數名稱（issue_name 而非 current_branch）"""
+        """測試 spec auto 模式使用正確變數名稱（issue_name 而非 current_branch）"""
         # Directly test the auto chaining logic by calling _execute_next_phase_auto
         from cafe.ui.cli import _execute_next_phase_auto
         
@@ -109,7 +109,7 @@ class TestAutoModeVariableScope:
 
 
 class TestAutoModeConfigPreservation:
-    """測試 --auto 模式不會覆寫 prepare 的配置"""
+    """測試 --auto 模式不會覆寫 prepare 配置"""
 
     def test_spec_phase_preserves_issue_config(self, temp_repo_dir, mock_git_ops, prepared_issue):
         """測試 spec phase 不會覆寫 issue config（例如 worktree_path）"""

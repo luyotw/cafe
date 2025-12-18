@@ -205,7 +205,7 @@ class PlanPhase(Phase):
 
                     # Save development guide as initial versioned plan file
                     self.plan_file.parent.mkdir(parents=True, exist_ok=True)
-                    self.plan_file.write_text(f"## 開發指南\n\n{dev_guide}\n")
+                    self.plan_file.write_text(f"## Development Guide\n\n{dev_guide}\n")
 
             # Prepare user_input for this iteration
             result_or_input = self._prepare_user_input_for_iteration()
@@ -216,7 +216,7 @@ class PlanPhase(Phase):
             current_user_input = result_or_input
 
             # Prepare allowed tools with write/edit permission for versioned plan file
-            # Convert to relative path (without / prefix) - 普通相對路徑
+            # Convert to relative path (without / prefix) - normal relative path
             # Use path relative to current working directory (supports worktree)
             from cafe.utils.git_utils import to_cwd_relative_path
 
@@ -305,8 +305,8 @@ class PlanPhase(Phase):
             iteration_number = self._get_next_iteration_number("plan", self.phase_dir)
             self.plan_file = self._get_versioned_file_path("plan", iteration_number, self.phase_dir)
 
-        # 轉換所有檔案路徑為相對於當前工作目錄的路徑（用於 prompt）
-        # 使用 to_cwd_relative_path 以支援 worktree 環境
+        # Convert all file paths to paths relative to current working directory (for prompt)
+        # Use to_cwd_relative_path to support worktree environment
         from cafe.utils.git_utils import to_cwd_relative_path
         
         try:
@@ -333,8 +333,8 @@ class PlanPhase(Phase):
                 PhaseStatusCode.NEED_CLARIFICATION,
             ],
             descriptions={
-                PhaseStatusCode.READY_FOR_REVIEW: "實作分析已完成，準備好讓使用者確認",
-                PhaseStatusCode.NEED_CLARIFICATION: "需要更多資訊或確認",
+                PhaseStatusCode.READY_FOR_REVIEW: "Implementation analysis completed, ready for user review",
+                PhaseStatusCode.NEED_CLARIFICATION: "Need more information or confirmation",
             },
         )
 
@@ -342,52 +342,52 @@ class PlanPhase(Phase):
         template_instruction = ""
         if template_path:
             template_instruction = f"""
-**重要：必須嚴格按照模版格式撰寫**
-請先閱讀 {template_path}，然後嚴格按照模版的格式、章節結構、撰寫風格來撰寫 plan.md。
-- 嚴格使用與模版相同的章節標題和結構
-- 參考模版中的內容詳細程度和撰寫風格
-- 有「嚴格」、「必須」等字眼的部分，請務必保持一致
-- 保持簡潔，避免過於冗長的說明
-- 不要把實際的實作內容（程式碼、配置檔等）寫進文件，只寫計畫和步驟
+**Important: Must strictly follow template format**
+Please first read {template_path}, then strictly follow the template's format, section structure, and writing style to write plan.md.
+- Strictly use the same section titles and structure as the template
+- Reference the level of detail and writing style in the template
+- For parts with words like "strictly" or "must", please maintain consistency
+- Keep it concise, avoid overly verbose explanations
+- Do not write actual implementation content (code, config files, etc.) in the document, only write plans and steps
 """
 
         if self.iteration == 1:
             from cafe.agents.manager import AgentManager
             agent_file = AgentManager.get_agent_file_path(self.dev_agent, "developer")
-            
-            return f"""分析 {spec_file_path} 並規劃實作步驟。
 
-**你的角色：**
-請先使用 Read tool 讀取 {agent_file} 了解你的角色定義和工作準則，然後嚴格按照角色定義中的要求進行規劃。
+            return f"""Analyze {spec_file_path} and plan implementation steps.
 
-這是第 {self.iteration} 輪實作分析。
+**Your Role:**
+Please first use Read tool to read {agent_file} to understand your role definition and work guidelines, then strictly follow the requirements in the role definition for planning.
 
-**執行步驟：**
-1. 使用 Read tool 讀取 {agent_file} 了解角色定義
-2. 使用 Read tool 讀取 {plan_file_path} 的開發指南
-3. 使用 Read tool 讀取需求文件 {spec_file_path}
-4. 根據角色定義中的要求規劃實作步驟（注意：你的工作是「規劃」而非「實作」，只需要寫出計畫和步驟）
+This is iteration {self.iteration} of implementation analysis.
+
+**Execution Steps:**
+1. Use Read tool to read {agent_file} to understand the role definition
+2. Use Read tool to read the development guide in {plan_file_path}
+3. Use Read tool to read the requirements document {spec_file_path}
+4. Plan implementation steps according to the role definition requirements (Note: your job is "planning" not "implementation", just need to write plans and steps)
 {template_instruction}
 {status_code_prompt}
 
-**重要：修改既有檔案，將實作計畫附加到檔案**
-- 在「## 開發指南」區塊**之後**附加實作計畫
-- 保留「## 開發指南」區塊不變
+**Important: Edit existing file, append implementation plan to the file**
+- Append implementation plan **after** the "## Development Guide" section
+- Keep the "## Development Guide" section unchanged
 
-**如果需要更多資訊（status: CAFE_NEED_CLARIFICATION）：**
-在開發指南之後附加：
-   - 「## 實作計畫」- 目前的實作分析內容
-   - 「## 待確認問題」- 列出需要確認的技術問題
+**If need more information (status: CAFE_NEED_CLARIFICATION):**
+Append after development guide:
+   - "## Implementation Plan" - current implementation analysis content
+   - "## Questions to Confirm" - list technical questions that need confirmation
 
-**如果分析完成（status: CAFE_READY_FOR_REVIEW）：**
-在開發指南之後附加完整實作計畫，嚴格按照模版的章節結構和格式撰寫。
+**If analysis complete (status: CAFE_READY_FOR_REVIEW):**
+Append complete implementation plan after development guide, strictly follow template's section structure and format.
 """
         else:
             # Add user's modification request section for iteration 2+
             user_request_section = ""
             if user_input:
                 user_request_section = f"""
-**使用者的修改要求：**
+**User's Modification Request:**
 {user_input}
 
 """
@@ -395,31 +395,31 @@ class PlanPhase(Phase):
             from cafe.agents.manager import AgentManager
             agent_file = AgentManager.get_agent_file_path(self.dev_agent, "developer")
             
-            return f"""繼續分析 {spec_file_path} 的最新版本。
+            return f"""Continue analyzing the latest version of {spec_file_path}.
 
-**你的角色：**
-請使用 Read tool 讀取 {agent_file} 了解你的角色定義和工作準則，然後嚴格按照角色定義中的要求進行規劃。
+**Your Role:**
+Please use Read tool to read {agent_file} to understand your role definition and work guidelines, then strictly follow the requirements in the role definition for planning.
 
-這是第 {self.iteration} 輪實作分析。
+This is iteration {self.iteration} of implementation analysis.
 
 {user_request_section}
-**執行步驟：**
-1. 使用 Read tool 讀取 {agent_file} 了解角色定義（如有必要）
-2. 使用 Read tool 讀取 {plan_file_path} 的最新版本
-3. 根據使用者的修改要求和角色定義，**更新**現有的實作計畫（不要全部重寫）
+**Execution Steps:**
+1. Use Read tool to read {agent_file} to understand the role definition (if necessary)
+2. Use Read tool to read the latest version of {plan_file_path}
+3. According to user's modification request and role definition, **update** existing implementation plan (do not rewrite entirely)
 {template_instruction}
 {status_code_prompt}
 
-**重要：修改既有檔案，更新特定段落**
-- 修改特定段落的內容（使用 old_string/new_string 方式）
-- 保留「## 開發指南」區塊不變
-- 只修改需要變更的部分
+**Important: Edit existing file, update specific sections**
+- Modify specific section content (using old_string/new_string method)
+- Keep the "## Development Guide" section unchanged
+- Only modify parts that need changes
 
-**如果仍需確認（status: CAFE_NEED_CLARIFICATION）：**
-更新 {plan_file_path} 中的相關段落，並在「## 待確認問題」區塊列出需要確認的技術問題。
+**If still need confirmation (status: CAFE_NEED_CLARIFICATION):**
+Update relevant sections in {plan_file_path}, and list technical questions that need confirmation in the "## Questions to Confirm" section.
 
-**如果分析完成（status: CAFE_READY_FOR_REVIEW）：**
-更新 {plan_file_path} 中需要修改的段落，確保實作計畫符合使用者的要求。
+**If analysis complete (status: CAFE_READY_FOR_REVIEW):**
+Update sections that need modification in {plan_file_path}, ensure implementation plan meets user's requirements.
 """
 
     def _generate_github_prompt(self, user_input: str) -> str:
@@ -437,55 +437,55 @@ class PlanPhase(Phase):
                 PhaseStatusCode.NEED_CLARIFICATION,
             ],
             descriptions={
-                PhaseStatusCode.READY_FOR_REVIEW: "實作分析已完成，準備好讓使用者確認",
-                PhaseStatusCode.NEED_CLARIFICATION: "需要更多資訊或確認",
+                PhaseStatusCode.READY_FOR_REVIEW: "Implementation analysis completed, ready for user review",
+                PhaseStatusCode.NEED_CLARIFICATION: "Need more information or confirmation",
             },
         )
 
         if self.iteration == 1:
-            return f"""分析 GitHub Issue #{self.issue_id} 並規劃實作步驟。
+            return f"""Analyze GitHub Issue #{self.issue_id} and plan implementation steps.
 
-**你的角色：**
-你是一位經驗豐富的 Developer，負責根據需求規格和開發指南，規劃詳細的實作步驟。
+**Your Role:**
+You are an experienced Developer, responsible for planning detailed implementation steps based on requirements specifications and development guidelines.
 
-這是第 {self.iteration} 輪實作分析。
+This is iteration {self.iteration} of implementation analysis.
 
-請用 `gh issue view {self.issue_id}` 讀取 Issue 內容，根據需求和開發指南規劃詳細的實作步驟。
+Please use `gh issue view {self.issue_id}` to read Issue content, plan detailed implementation steps based on requirements and development guidelines.
 
 {status_code_prompt}
 
-**如果需要更多資訊：**
-用 `gh issue comment {self.issue_id}` 發 comment 詢問。
+**If need more information:**
+Use `gh issue comment {self.issue_id}` to post a comment and ask questions.
 
-**如果分析完成：**
-回應確認訊息。
+**If analysis complete:**
+Reply with confirmation message.
 """
         else:
             # Add user's modification request section for iteration 2+
             user_request_section = ""
             if user_input:
                 user_request_section = f"""
-**使用者的修改要求：**
+**User's Modification Request:**
 {user_input}
 
 """
 
-            return f"""繼續分析 GitHub Issue #{self.issue_id}。
+            return f"""Continue analyzing GitHub Issue #{self.issue_id}.
 
-**你的角色：**
-你是一位經驗豐富的 Developer，負責根據需求規格和開發指南，規劃詳細的實作步驟。
+**Your Role:**
+You are an experienced Developer, responsible for planning detailed implementation steps based on requirements specifications and development guidelines.
 
-這是第 {self.iteration} 輪實作分析。
+This is iteration {self.iteration} of implementation analysis.
 
-{user_request_section}請用 `gh issue view {self.issue_id}` 檢視 Issue 的最新內容。
+{user_request_section}Please use `gh issue view {self.issue_id}` to view the latest Issue content.
 
 {status_code_prompt}
 
-**如果需要更多資訊：**
-用 `gh issue comment {self.issue_id}` 發 comment 詢問。
+**If need more information:**
+Use `gh issue comment {self.issue_id}` to post a comment and ask questions.
 
-**如果分析完成：**
-回應確認訊息。
+**If analysis complete:**
+Reply with confirmation message.
 """
 
 
@@ -504,7 +504,7 @@ class PlanPhase(Phase):
         content = plan_file.read_text()
         # Check for development guide heading
         patterns = [
-            r"##\s*開發指南",
+            r"##\s*Development\s+Guide",
             r"##\s*[Dd]evelopment\s+[Gg]uide",
         ]
 
@@ -521,46 +521,46 @@ class PlanPhase(Phase):
             Development guide content from user input
         """
         print("\n" + "="*70)
-        print("請提供開發指南，說明實作方向與技術背景資訊：")
+        print("Please provide development guide, explain implementation direction and technical background:")
         print("="*70)
         print()
-        print("開發指南應該包含：")
-        print("  1. 建議的技術方案或實作方向")
-        print("  2. 相關的程式碼位置或模組說明")
-        print("  3. 需要注意的技術限制或依賴關係")
-        print("  4. 其他開發者可能不知道的背景資訊")
+        print("Development guide should include:")
+        print("  1. Recommended technical solution or implementation direction")
+        print("  2. Related code locations or module descriptions")
+        print("  3. Technical constraints or dependencies to note")
+        print("  4. Background information that other developers may not know")
         print()
-        print("範例：")
-        print("  這個功能應該在 src/core/processor.py 中實作，")
-        print("  可以參考現有的 DataProcessor 類別。")
-        print("  注意要保持與現有 API 的向後相容性。")
+        print("Example:")
+        print("  This feature should be implemented in src/core/processor.py,")
+        print("  you can reference the existing DataProcessor class.")
+        print("  Note to maintain backward compatibility with existing API.")
         print()
 
         # Get development guide using Display for better Unicode support
-        dev_guide = self.display.get_multiline_input("請輸入開發指南（可留空）").strip()
+        dev_guide = self.display.get_multiline_input("Please enter development guide (can be left empty)").strip()
 
         if dev_guide:
             print()
-            print("✅ 開發指南已記錄，開始實作規劃...")
+            print("✅ Development guide recorded, starting implementation planning...")
         else:
             print()
-            print("ℹ️  未提供開發指南，將直接開始實作規劃...")
+            print("ℹ️  No development guide provided, will start implementation planning directly...")
         print()
 
         return dev_guide
 
     def _prepare_user_input_for_iteration(self) -> "PhaseResult | str":
-        """準備當前迭代的 user input。
+        """Prepare user input for current iteration.
 
-        在最開始就取得所有需要的用戶輸入：
-        - Interactive: 從 stdin 詢問用戶
-        - Non-interactive: 從 self.user_input 取得
+        Get all needed user input at the beginning:
+        - Interactive: Ask user from stdin
+        - Non-interactive: Get from self.user_input
 
-        之後的處理邏輯完全相同，不再區分 interactive/non-interactive。
+        Afterwards, processing logic is the same, no longer distinguishing interactive/non-interactive.
 
         Returns:
-            PhaseResult: 如果需要結束/暫停 phase（完成、失敗、或等待用戶輸入）
-            str: 用戶輸入內容（供 agent 使用）
+            PhaseResult: If need to end/pause phase (completed, failed, or waiting for user input)
+            str: User input content (for agent use)
         """
         # Iteration 1: user_input is the dev guide content from versioned plan file
         if self.iteration == 1:
@@ -572,7 +572,7 @@ class PlanPhase(Phase):
         # Iteration 2+: Check if current iteration was interrupted (has user_input but no response)
         current_data = self._load_current_iteration_data()
         if current_data and current_data.get("user_input") and not current_data.get("response"):
-            # 恢復被中斷的 iteration，直接使用已儲存的 user_input
+            # Restore interrupted iteration, directly use saved user_input
             return current_data["user_input"]
 
         # Iteration 2+: Display current plan.md content (interactive only)
@@ -586,18 +586,18 @@ class PlanPhase(Phase):
 
         prev_status = prev_data.get("status_code", "")
 
-        # 根據上一輪狀態，取得用戶輸入
+        # Get user input based on previous round status
         if prev_status == "CAFE_READY_FOR_REVIEW":
-            # 需要用戶選擇：confirm/modify
+            # Need user choice: confirm/modify
             if self.interactive:
-                choice = self._ask_user_for_review_decision("實作計畫")
+                choice = self._ask_user_for_review_decision("Implementation Plan")
             else:
                 choice = self.user_input
-                # Non-interactive 模式：用完後清空，確保不重複使用
+                # Non-interactive mode: clear after use to ensure not reused
                 self.user_input = ""
-                
+
                 if not choice:
-                    # Non-interactive 但沒提供輸入 → 立即失敗
+                    # Non-interactive but no input provided → immediate failure
                     return PhaseResult(
                         status=PhaseStatus.FAILED,
                         message=f"Plan phase failed after iteration {self.iteration - 1}: received READY_FOR_REVIEW in non-interactive mode without user input",
@@ -608,7 +608,7 @@ class PlanPhase(Phase):
                         },
                     )
 
-            # 處理用戶選擇（不再區分 interactive/non-interactive）
+            # Process user choice (no longer distinguish interactive/non-interactive)
             return self._process_review_decision(
                 choice,
                 prev_data,
@@ -617,50 +617,50 @@ class PlanPhase(Phase):
             )
 
         elif prev_status == "CAFE_NEED_CLARIFICATION":
-            return self._handle_need_clarification_input(prev_data, agent_display_name="開發者")
+            return self._handle_need_clarification_input(prev_data, agent_display_name="Developer")
         else:
             return ""
 
     def _display_current_plan(self) -> None:
-        """顯示目前的 plan 檔案內容（僅 interactive 模式）。"""
+        """Display current plan file content (interactive mode only)."""
         # Display the previous version (current iteration - 1)
         prev_iteration = self.iteration - 1
         if prev_iteration > 0:
             prev_plan_file = self._get_versioned_file_path("plan", prev_iteration, self.phase_dir)
-            print(f"\n💾 載入最新的需求規格檔案： {prev_plan_file}\n")
-            plan_content = prev_plan_file.read_text() if prev_plan_file.exists() else "（檔案未產生）"
+            print(f"\n💾 Loading latest plan file: {prev_plan_file}\n")
+            plan_content = prev_plan_file.read_text() if prev_plan_file.exists() else "(File not generated)"
         else:
-            plan_content = "（檔案未產生）"
+            plan_content = "(File not generated)"
 
         # Get agent CLI info for display
         agent_cli = self.agent_manager.get_agent_config(self.dev_agent).cli.value
 
         print(f"\n{'='*60}")
-        print(f"Dev ({self.dev_agent} by {agent_cli}) - 目前計畫內容 (Iteration {self.iteration - 1}):")
+        print(f"Dev ({self.dev_agent} by {agent_cli}) - Current Plan Content (Iteration {self.iteration - 1}):")
         print(f"{'='*60}")
         print(plan_content)
         print(f"{'='*60}\n")
 
     def _get_status_analysis_prompt(self) -> str:
-        """取得分析 status code 的 prompt.
+        """Get prompt for analyzing status code.
 
         Returns:
-            分析 prompt 字串
+            Analysis prompt string
         """
-        return f"""請閱讀 {self.plan_file} 並分析目前的狀態。
+        return f"""Please read {self.plan_file} and analyze the current state.
 
-根據以下條件判斷應該回傳哪個狀態碼：
+Based on the following conditions, determine which status code to return:
 
-- CAFE_READY_FOR_REVIEW: 實作計畫已完成，可以給用戶審核
-- CAFE_NEED_CLARIFICATION: 還有問題需要與用戶確認
+- CAFE_READY_FOR_REVIEW: Implementation plan is complete, ready for user review
+- CAFE_NEED_CLARIFICATION: There are still questions that need confirmation with user
 
-請只回傳一個狀態碼（例如：CAFE_READY_FOR_REVIEW），不要有任何其他內容。"""
+Please only return one status code (e.g., CAFE_READY_FOR_REVIEW) without any other content."""
 
     def _detect_written_output_files(self) -> List[Path]:
-        """檢查 plan file 是否在失敗前已寫入。
+        """Check if plan file was written before failure.
 
         Returns:
-            List[Path]: 如果 plan_{iteration}.md 存在則返回包含它的列表，否則返回空列表
+            List[Path]: Returns list containing plan_{iteration}.md if it exists, otherwise empty list
         """
         plan_file = self._get_versioned_file_path("plan", self.iteration, self.phase_dir)
         return [Path(plan_file)] if Path(plan_file).exists() else []

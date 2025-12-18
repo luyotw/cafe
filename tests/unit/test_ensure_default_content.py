@@ -19,7 +19,7 @@ def temp_cafe_dir(tmp_path):
 
 @pytest.fixture
 def package_data_dir(tmp_path):
-    """創建模擬的 package data 目錄"""
+    """創建模擬 package data 目錄"""
     # Create mock package data directory
     package_dir = tmp_path / "mock_package" / "data"
     package_dir.mkdir(parents=True)
@@ -86,7 +86,7 @@ class TestEnsureDefaultContent:
         assert (templates_dir / "plan" / "default.md").exists()
 
     def test_falls_back_to_repo_root_if_package_data_missing(self, temp_cafe_dir, tmp_path, monkeypatch):
-        """測試當 package data 不存在時，從 repo root 複製"""
+        """測試當 package data 不存在時, 從 repo root 複製"""
         # Change to temp directory
         monkeypatch.chdir(tmp_path)
 
@@ -154,7 +154,7 @@ class TestEnsureDefaultContent:
         assert not (templates_dir / "plan" / "default.md").exists()
 
     def test_handles_missing_both_package_and_repo_data(self, temp_cafe_dir, tmp_path, monkeypatch):
-        """測試當 package data 和 repo root 都沒有資料時，不會報錯"""
+        """測試當 package data and repo root 都沒有資料時, 不會報錯"""
         # Change to temp directory with no agents/templates
         monkeypatch.chdir(tmp_path)
 

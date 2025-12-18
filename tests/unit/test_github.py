@@ -76,7 +76,7 @@ class TestGetIssue:
 
     @patch("subprocess.run")
     def test_get_issue_with_comments(self, mock_run: Mock) -> None:
-        """測試取得包含 comments 的 issue"""
+        """測試取得包含 comments  issue"""
         mock_run.return_value = Mock(
             returncode=0,
             stdout='{"number":123,"title":"Test","body":"Body","comments":[{"body":"Comment 1"}]}',
@@ -209,7 +209,7 @@ class TestGetPRStatus:
 
     @patch("subprocess.run")
     def test_get_pr_status_open(self, mock_run: Mock) -> None:
-        """測試取得 open 狀態的 PR"""
+        """測試取得 open 狀態 PR"""
         mock_run.return_value = Mock(
             returncode=0,
             stdout='{"number":456,"state":"OPEN","mergeable":"MERGEABLE","title":"Test PR"}',
@@ -225,7 +225,7 @@ class TestGetPRStatus:
 
     @patch("subprocess.run")
     def test_get_pr_status_merged(self, mock_run: Mock) -> None:
-        """測試取得已合併的 PR"""
+        """測試取得已合併 PR"""
         mock_run.return_value = Mock(
             returncode=0,
             stdout='{"number":456,"state":"MERGED","mergeable":"UNKNOWN"}',
@@ -359,14 +359,14 @@ class TestExtractPRNumber:
         assert pr_number == "456"
 
     def test_extract_pr_number_invalid_url(self) -> None:
-        """測試無效的 URL"""
+        """測試無效 URL"""
         gh_ops = GitHubOps()
 
         with pytest.raises(GitHubError, match="Invalid PR URL or number"):
             gh_ops.extract_pr_number("https://invalid-url.com")
 
     def test_extract_pr_number_from_url_with_hash(self) -> None:
-        """測試從帶有 hash 的 URL 提取 PR 編號"""
+        """測試從帶有 hash  URL 提取 PR 編號"""
         gh_ops = GitHubOps()
 
         pr_number = gh_ops.extract_pr_number(
@@ -398,14 +398,14 @@ class TestExtractIssueNumber:
         assert issue_number == "123"
 
     def test_extract_issue_number_invalid_url(self) -> None:
-        """測試無效的 URL"""
+        """測試無效 URL"""
         gh_ops = GitHubOps()
 
         with pytest.raises(GitHubError, match="Invalid issue URL or number"):
             gh_ops.extract_issue_number("https://invalid-url.com")
 
     def test_extract_issue_number_from_url_with_hash(self) -> None:
-        """測試從帶有 hash 的 URL 提取 Issue 編號"""
+        """測試從帶有 hash  URL 提取 Issue 編號"""
         gh_ops = GitHubOps()
 
         issue_number = gh_ops.extract_issue_number(
@@ -420,7 +420,7 @@ class TestGetPRForBranch:
 
     @patch("subprocess.run")
     def test_get_pr_for_branch_exists(self, mock_run: Mock) -> None:
-        """測試找到 PR 的情況"""
+        """測試找到 PR 情況"""
         mock_run.return_value = Mock(
             returncode=0,
             stdout='[{"number":10,"url":"https://github.com/owner/repo/pull/10","title":"Test PR","body":"Test body","state":"OPEN","isDraft":false}]',
@@ -452,7 +452,7 @@ class TestGetPRForBranch:
 
     @patch("subprocess.run")
     def test_get_pr_for_branch_not_exists(self, mock_run: Mock) -> None:
-        """測試沒有 PR 的情況"""
+        """測試沒有 PR 情況"""
         mock_run.return_value = Mock(
             returncode=0,
             stdout='[]',
@@ -517,7 +517,7 @@ class TestUpdatePR:
 
     @patch("subprocess.run")
     def test_update_pr_both(self, mock_run: Mock) -> None:
-        """測試同時更新 title 和 body"""
+        """測試同時更新 title and body"""
         mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
 
         gh_ops = GitHubOps()

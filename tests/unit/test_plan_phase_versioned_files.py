@@ -1,4 +1,4 @@
-"""測試 PlanPhase 使用版本化檔案。"""
+"""測試 PlanPhase 使用版本化檔案."""
 
 import pytest
 from pathlib import Path
@@ -58,12 +58,12 @@ def mock_git_ops():
 
 
 class TestPlanPhaseVersionedFiles:
-    """測試 PlanPhase 的版本化檔案功能。"""
+    """測試 PlanPhase 版本化檔案功能."""
 
     def test_first_iteration_creates_plan_001(
         self, tmp_path, mock_agent_manager, mock_permission_handler, mock_git_ops
     ):
-        """測試第一輪產生 plan_001.md。"""
+        """測試Round 1產生 plan_001.md."""
         # Setup issue directory
         issue_dir = tmp_path / ".cafe" / "issues" / "test-issue"
         spec_dir = issue_dir / "spec"
@@ -111,18 +111,18 @@ class TestPlanPhaseVersionedFiles:
 
             # Verify the file has content with dev guide header
             content = plan_001.read_text(encoding="utf-8")
-            assert content == "## 開發指南\n\nInitial plan\n"
+            assert content == "## Development Guide\n\nInitial plan\n"
 
             # In non-interactive mode, after 5 retries without status code, returns FAILED
             assert result.status == PhaseStatus.FAILED
-            assert "Agent 在 5 次嘗試後仍未回傳有效的 status code" in result.message
+            assert "Still did not return valid status code after" in result.message
         finally:
             os.chdir(original_cwd)
 
     def test_second_iteration_creates_plan_002_by_copying(
         self, tmp_path, mock_agent_manager, mock_permission_handler, mock_git_ops
     ):
-        """測試第二輪產生 plan_002.md（內容為 plan_001.md 的複製）。"""
+        """測試Round 2產生 plan_002.md（內容為 plan_001.md 複製）."""
         # Setup issue directory
         issue_dir = tmp_path / ".cafe" / "issues" / "test-issue"
         spec_dir = issue_dir / "spec"
@@ -177,12 +177,12 @@ class TestPlanPhaseVersionedFiles:
             assert plan_002.exists(), "plan_002.md should be created"
 
             # Verify it was copied from plan_001.md (should preserve the original content)
-            # Since plan_001.md has "## 開發指南" section, plan_002 should just be a copy
+            # Since plan_001.md has "## Development Guide" section, plan_002 should just be a copy
             assert plan_002.read_text(encoding="utf-8") == "## 開發指南\n\nFirst iteration content"
 
             # In non-interactive mode, after 5 retries without status code, returns FAILED
             assert result.status == PhaseStatus.FAILED
-            assert "Agent 在 5 次嘗試後仍未回傳有效的 status code" in result.message
+            assert "Still did not return valid status code after" in result.message
         finally:
             os.chdir(original_cwd)
 

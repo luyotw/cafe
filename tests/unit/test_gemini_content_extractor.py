@@ -51,7 +51,7 @@ class TestGeminiContentExtractor:
         assert result is None
 
     def test_handle_message_without_role(self):
-        """測試處理沒有 role 欄位的訊息"""
+        """測試處理沒有 role 欄位訊息"""
         def extract_gemini_content(data: dict):
             if data.get("role") == "assistant":
                 return data.get("content")
@@ -65,7 +65,7 @@ class TestGeminiContentExtractor:
         assert result is None
 
     def test_handle_assistant_message_without_content(self):
-        """測試處理沒有 content 的 assistant 訊息"""
+        """測試處理沒有 content  assistant 訊息"""
         def extract_gemini_content(data: dict):
             if data.get("role") == "assistant":
                 return data.get("content")

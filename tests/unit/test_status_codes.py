@@ -14,7 +14,7 @@ class TestStatusCodeParser:
 
     def test_extract_from_first_line(self) -> None:
         """測試從第一行提取狀態碼"""
-        response = "CAFE_CONFIRMED\n需求已經很清楚了。"
+        response = "CAFE_CONFIRMED\n需求已經很清楚了."
 
         code = StatusCodeParser.extract(response)
 
@@ -22,7 +22,7 @@ class TestStatusCodeParser:
 
     def test_extract_case_insensitive(self) -> None:
         """測試大小寫不敏感"""
-        response = "cafe_confirmed\n需求已經很清楚了。"
+        response = "cafe_confirmed\n需求已經很清楚了."
 
         code = StatusCodeParser.extract(response)
 
@@ -30,7 +30,7 @@ class TestStatusCodeParser:
 
     def test_extract_from_middle_of_text(self) -> None:
         """測試從文本中間提取狀態碼"""
-        response = "我仔細審查過需求，確認沒問題。CAFE_CONFIRMED！"
+        response = "我仔細審查過需求, 確認沒問題.CAFE_CONFIRMED！"
 
         code = StatusCodeParser.extract(response)
 
@@ -49,7 +49,7 @@ class TestStatusCodeParser:
         assert code == PhaseStatusCode.CONFIRMED
 
     def test_extract_with_valid_codes_filter_rejects_invalid(self) -> None:
-        """測試 valid_codes 會拒絕不在清單中的狀態碼"""
+        """測試 valid_codes 會拒絕不在清單中狀態碼"""
         response = "CAFE_REJECTED"
         valid_codes = [
             PhaseStatusCode.CONFIRMED,
@@ -58,7 +58,7 @@ class TestStatusCodeParser:
 
         code = StatusCodeParser.extract(response, valid_codes)
 
-        # REJECTED 不在 valid_codes 中，應該找不到
+        # REJECTED 不在 valid_codes 中, 應該找不到
         assert code is None
 
     def test_extract_returns_none_for_empty_response(self) -> None:
@@ -69,7 +69,7 @@ class TestStatusCodeParser:
 
     def test_extract_returns_none_when_no_code_found(self) -> None:
         """測試找不到狀態碼時回傳 None"""
-        response = "這是一個沒有狀態碼的回應。"
+        response = "這是一個沒有狀態碼回應."
 
         code = StatusCodeParser.extract(response)
 
@@ -84,12 +84,12 @@ class TestStatusCodeParser:
         assert code == PhaseStatusCode.NEEDS_CHANGES
 
     def test_extract_first_line_code_takes_priority_over_later_mentions(self) -> None:
-        """測試第一行的狀態碼優先於後續出現的狀態碼"""
+        """測試第一行狀態碼優先於後續出現狀態碼"""
         response = """● CAFE_NEEDS_CHANGES
 
 ## Code Review Feedback
 
-文中提到 CAFE_CONFIRMED 作為範例。
+文中提到 CAFE_CONFIRMED 作為範例.
 """
         valid_codes = [PhaseStatusCode.CONFIRMED, PhaseStatusCode.NEEDS_CHANGES]
 
@@ -99,25 +99,25 @@ class TestStatusCodeParser:
         assert code is None
 
     def test_extract_multiple_codes_returns_first_valid(self) -> None:
-        """測試多個狀態碼時回傳第一個有效的"""
+        """測試多個狀態碼時回傳第一個有效"""
         response = "CAFE_CONFIRMED\n但是可能需要 CAFE_RETRY"
 
         code = StatusCodeParser.extract(response)
 
-        # 應該回傳第一行的 CONFIRMED
+        # 應該回傳第一行 CONFIRMED
         assert code == PhaseStatusCode.CONFIRMED
 
     def test_extract_with_whitespace(self) -> None:
         """測試處理空白字元"""
-        response = "  CAFE_CONFIRMED  \n需求清楚。"
+        response = "  CAFE_CONFIRMED  \n需求清楚."
 
         code = StatusCodeParser.extract(response)
 
         assert code == PhaseStatusCode.CONFIRMED
 
     def test_extract_avoids_false_positive_in_content(self) -> None:
-        """測試避免內容中的單字誤判為狀態碼"""
-        # 如果沒有 CAFE_ 前綴，"CONFIRMED" 這個單字會被誤判
+        """測試避免內容中單字誤判為狀態碼"""
+        # 如果沒有 CAFE_ 前綴, "CONFIRMED" 這個單字會被誤判
         response = "The user has CONFIRMED that the feature is working correctly."
 
         code = StatusCodeParser.extract(response)
@@ -126,7 +126,7 @@ class TestStatusCodeParser:
         assert code is None
 
     def test_extract_all_returns_all_unique_codes(self) -> None:
-        """測試 extract_all 能提取所有不同種類的狀態碼"""
+        """測試 extract_all 能提取所有不同種類狀態碼"""
         response = "CAFE_CONFIRMED\nCAFE_NEED_CLARIFICATION\nCAFE_REJECTED\nContent..."
 
         codes = StatusCodeParser.extract_all(response)
@@ -185,7 +185,7 @@ class TestStatusCodeParser:
         assert code == PhaseStatusCode.NEED_CLARIFICATION
 
     def test_extract_handles_edge_case_with_valid_codes(self) -> None:
-        """測試 extract 使用 valid_codes 過濾後，若仍有多種狀態碼則回傳 None"""
+        """測試 extract 使用 valid_codes 過濾後, 若仍有多種狀態碼則回傳 None"""
         response = "CAFE_CONFIRMED\nCAFE_NEED_CLARIFICATION\nCAFE_REJECTED\nContent..."
         valid_codes = [
             PhaseStatusCode.CONFIRMED,
@@ -194,7 +194,7 @@ class TestStatusCodeParser:
 
         code = StatusCodeParser.extract(response, valid_codes)
 
-        # 過濾後仍有 2 種狀態碼，應該回傳 None
+        # 過濾後仍有 2 種狀態碼, 應該回傳 None
         assert code is None
 
 
@@ -229,7 +229,7 @@ class TestStatusCodeClassification:
         assert StatusCodeParser.is_retry(None) is False
 
     def test_needs_human_input(self) -> None:
-        """測試需要人工介入的狀態碼判斷"""
+        """測試需要人工介入狀態碼判斷"""
         assert StatusCodeParser.needs_human_input(PhaseStatusCode.NEED_PERMISSION) is True
         assert StatusCodeParser.needs_human_input(PhaseStatusCode.NEED_CLARIFICATION) is True
         assert StatusCodeParser.needs_human_input(PhaseStatusCode.READY_FOR_REVIEW) is True
@@ -243,7 +243,7 @@ class TestGenerateStatusCodePrompt:
     """Test status code prompt generation."""
 
     def test_generate_basic_prompt(self) -> None:
-        """測試產生基本的狀態碼提示"""
+        """測試產生基本狀態碼提示"""
         codes = [PhaseStatusCode.CONFIRMED, PhaseStatusCode.NEED_CLARIFICATION]
         descriptions = {
             PhaseStatusCode.CONFIRMED: "需求已確認",
@@ -256,7 +256,7 @@ class TestGenerateStatusCodePrompt:
         assert "CAFE_NEED_CLARIFICATION" in prompt
         assert "需求已確認" in prompt
         assert "需要更多資訊" in prompt
-        assert "範例回應格式" in prompt
+        assert "Example response format" in prompt
 
     def test_prompt_includes_all_codes(self) -> None:
         """測試提示包含所有狀態碼"""
@@ -290,7 +290,7 @@ class TestGenerateStatusCodePrompt:
         lines = prompt.split('\n')
         example_section = False
         for line in lines:
-            if "範例回應格式" in line:
+            if "Example response format" in line:
                 example_section = True
             elif example_section and line.strip():
                 # 第一個非空行應該是第一個狀態碼
@@ -311,11 +311,11 @@ class TestPhaseStatusCodeEnum:
             assert all(c.isalpha() or c == '_' for c in code.value)
 
     def test_code_values_are_simple_english(self) -> None:
-        """測試狀態碼都是簡單的英文"""
+        """測試狀態碼都是簡單英文"""
         for code in PhaseStatusCode:
             # 格式為 CAFE_CODE_NAME
             assert code.value.startswith("CAFE_")
-            # 去掉前綴後只包含字母和底線
+            # 去掉前綴後只包含字母and底線
             name_part = code.value[4:]  # Remove "CAFE_"
             assert all(c.isalpha() or c == '_' for c in name_part)
             # 不會太長（節省 token）

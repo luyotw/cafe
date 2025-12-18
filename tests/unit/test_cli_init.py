@@ -12,7 +12,7 @@ runner = CliRunner()
 
 
 class TestInitCommandEnvironmentChecks:
-    """測試 init 指令的環境檢查"""
+    """測試 init 指令環境檢查"""
 
     def test_init_exits_if_config_exists(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -29,7 +29,7 @@ class TestInitCommandEnvironmentChecks:
         result = runner.invoke(app, ["init"])
 
         assert result.exit_code == 1
-        assert "設定已存在" in result.stdout
+        assert "Configuration already exists" in result.stdout
         assert "cafe config" in result.stdout
 
     @patch("cafe.ui.cli.shutil.which")
@@ -45,7 +45,7 @@ class TestInitCommandEnvironmentChecks:
         result = runner.invoke(app, ["init"])
 
         assert result.exit_code == 1
-        assert "未找到任何支援的 AI 代理" in result.stdout
+        assert "No supported AI agents found" in result.stdout
 
     @patch("cafe.ui.cli.shutil.which")
     @patch("cafe.ui.cli.init_helpers.copy_data_directory")
@@ -56,8 +56,8 @@ class TestInitCommandEnvironmentChecks:
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """測試複製 agents 和 templates 目錄"""
-        # 模擬有可用的 CLI
+        """測試複製 agents and templates 目錄"""
+        # 模擬有可用 CLI
         mock_which.return_value = "/usr/bin/claude"
 
         monkeypatch.chdir(tmp_path)
@@ -78,7 +78,7 @@ class TestInitCommandEnvironmentChecks:
 
                 _result = runner.invoke(app, ["init"])
 
-        # 驗證 copy_data_directory 被呼叫兩次（agents 和 templates）
+        # 驗證 copy_data_directory 被呼叫兩次（agents and templates）
         assert mock_copy.call_count == 2
 
     @patch("cafe.ui.cli.shutil.which")
@@ -91,7 +91,7 @@ class TestInitCommandEnvironmentChecks:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """測試複製失敗時顯示錯誤並退出"""
-        # 模擬有可用的 CLI
+        # 模擬有可用 CLI
         mock_which.return_value = "/usr/bin/claude"
 
         # 模擬複製失敗
@@ -106,7 +106,7 @@ class TestInitCommandEnvironmentChecks:
 
 
 class TestInitCommandInteractiveFlow:
-    """測試 init 指令的互動式配置流程"""
+    """測試 init 指令互動式配置流程"""
 
     @patch("cafe.ui.cli.shutil.which")
     @patch("cafe.ui.cli.init_helpers.copy_data_directory")
@@ -120,7 +120,7 @@ class TestInitCommandInteractiveFlow:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """測試會為三個角色進行配置"""
-        # 模擬有可用的 CLI
+        # 模擬有可用 CLI
         mock_which.return_value = "/usr/bin/claude"
 
         # 模擬 agent 列表
@@ -128,11 +128,11 @@ class TestInitCommandInteractiveFlow:
 
         monkeypatch.chdir(tmp_path)
 
-        # 模擬 prompt_list 和 prompt_text 方法
+        # 模擬 prompt_list and prompt_text 方法
         with patch("cafe.ui.cli.prompt_list") as mock_prompt_list, patch(
             "cafe.ui.cli.prompt_text"
         ) as mock_prompt_text:
-            # 設定 prompt_list 的返回值（CLI 和 agent 選擇）
+            # 設定 prompt_list 返回值（CLI and agent 選擇）
             mock_prompt_list.side_effect = [
                 "claude",  # PM CLI
                 "Roger: PM agent",  # PM agent
@@ -142,7 +142,7 @@ class TestInitCommandInteractiveFlow:
                 "Roger: PM agent",  # Reviewer agent
             ]
 
-            # 設定 prompt_text 的返回值（model 輸入）
+            # 設定 prompt_text 返回值（model 輸入）
             mock_prompt_text.side_effect = ["", "sonnet", ""]
 
             _result = runner.invoke(app, ["init"])
@@ -164,7 +164,7 @@ class TestInitCommandInteractiveFlow:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """測試 Ctrl+C 中斷時顯示取消訊息"""
-        # 模擬有可用的 CLI
+        # 模擬有可用 CLI
         mock_which.return_value = "/usr/bin/claude"
 
         # 模擬 agent 列表
@@ -179,7 +179,7 @@ class TestInitCommandInteractiveFlow:
             result = runner.invoke(app, ["init"])
 
         assert result.exit_code == 1
-        assert "已取消" in result.stdout or "未完成" in result.stdout
+        assert "cancelled" in result.stdout or "未完成" in result.stdout
 
     @patch("cafe.ui.cli.shutil.which")
     @patch("cafe.ui.cli.init_helpers.copy_data_directory")
@@ -193,10 +193,10 @@ class TestInitCommandInteractiveFlow:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """測試空 agent 資料夾時提示錯誤"""
-        # 模擬有可用的 CLI
+        # 模擬有可用 CLI
         mock_which.return_value = "/usr/bin/claude"
 
-        # 模擬空的 agent 列表
+        # 模擬空 agent 列表
         mock_list_agents.return_value = []
 
         monkeypatch.chdir(tmp_path)
@@ -208,7 +208,7 @@ class TestInitCommandInteractiveFlow:
 
 
 class TestInitCommandConfigSaving:
-    """測試 init 指令的配置儲存"""
+    """測試 init 指令配置儲存"""
 
     @patch("cafe.ui.cli.shutil.which")
     @patch("cafe.ui.cli.init_helpers.copy_data_directory")
@@ -222,7 +222,7 @@ class TestInitCommandConfigSaving:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """測試配置正確儲存到 .cafe/config.yaml"""
-        # 模擬有可用的 CLI
+        # 模擬有可用 CLI
         mock_which.return_value = "/usr/bin/claude"
 
         # 模擬 agent 列表
@@ -234,11 +234,11 @@ class TestInitCommandConfigSaving:
 
         monkeypatch.chdir(tmp_path)
 
-        # 模擬 prompt_list 和 prompt_text 方法
+        # 模擬 prompt_list and prompt_text 方法
         with patch("cafe.ui.cli.prompt_list") as mock_prompt_list, patch(
             "cafe.ui.cli.prompt_text"
         ) as mock_prompt_text:
-            # 設定 prompt_list 的返回值（CLI 和 agent 選擇）
+            # 設定 prompt_list 返回值（CLI and agent 選擇）
             mock_prompt_list.side_effect = [
                 "copilot",  # PM CLI
                 "Roger: PM agent",  # PM agent
@@ -248,7 +248,7 @@ class TestInitCommandConfigSaving:
                 "Richard: Reviewer agent",  # Reviewer agent
             ]
 
-            # 設定 prompt_text 的返回值（model 輸入）
+            # 設定 prompt_text 返回值（model 輸入）
             mock_prompt_text.side_effect = ["", "sonnet", ""]
 
             _result = runner.invoke(app, ["init"])
@@ -283,7 +283,7 @@ class TestInitCommandConfigSaving:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """測試成功後顯示配置摘要"""
-        # 模擬有可用的 CLI
+        # 模擬有可用 CLI
         mock_which.return_value = "/usr/bin/claude"
 
         # 模擬 agent 列表
@@ -291,11 +291,11 @@ class TestInitCommandConfigSaving:
 
         monkeypatch.chdir(tmp_path)
 
-        # 模擬 prompt_list 和 prompt_text 方法
+        # 模擬 prompt_list and prompt_text 方法
         with patch("cafe.ui.cli.prompt_list") as mock_prompt_list, patch(
             "cafe.ui.cli.prompt_text"
         ) as mock_prompt_text:
-            # 每個角色都選擇相同的設定
+            # 每個角色都選擇相同設定
             mock_prompt_list.side_effect = [
                 "claude",
                 "Roger: PM agent",
@@ -309,7 +309,7 @@ class TestInitCommandConfigSaving:
             result = runner.invoke(app, ["init"])
 
         assert result.exit_code == 0
-        assert "設定已成功儲存" in result.stdout
+        assert "Configuration saved successfully" in result.stdout
         assert "PM:" in result.stdout
         assert "Developer:" in result.stdout
         assert "Reviewer:" in result.stdout
@@ -327,7 +327,7 @@ class TestInitCommandConfigSaving:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """測試 model 為 None 時顯示為「預設」"""
-        # 模擬有可用的 CLI
+        # 模擬有可用 CLI
         mock_which.return_value = "/usr/bin/claude"
 
         # 模擬 agent 列表
@@ -335,7 +335,7 @@ class TestInitCommandConfigSaving:
 
         monkeypatch.chdir(tmp_path)
 
-        # 模擬 prompt_list 和 prompt_text 方法（model 輸入為空）
+        # 模擬 prompt_list and prompt_text 方法（model 輸入為空）
         with patch("cafe.ui.cli.prompt_list") as mock_prompt_list, patch(
             "cafe.ui.cli.prompt_text"
         ) as mock_prompt_text:
@@ -352,4 +352,4 @@ class TestInitCommandConfigSaving:
             result = runner.invoke(app, ["init"])
 
         assert result.exit_code == 0
-        assert "預設" in result.stdout
+        assert "default" in result.stdout

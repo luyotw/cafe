@@ -364,7 +364,7 @@ class TestCloseCommandWorktree:
     def test_close_with_worktree_branch_delete_fails(
         self, temp_repo_dir, mock_git_ops, mock_github_ops_no_pr, issue_with_worktree_config
     ):
-        """測試 branch 刪除失敗時的行為"""
+        """測試 branch 刪除失敗時行為"""
         mock_git_ops.get_current_branch.return_value = "test-worktree-issue"
 
         # 模擬 branch 刪除失敗（未合併）
@@ -380,7 +380,7 @@ class TestCloseCommandWorktree:
     def test_close_without_worktree_normal_flow(
         self, temp_repo_dir, mock_git_ops, mock_github_ops_no_pr
     ):
-        """測試沒有 worktree 時的正常流程"""
+        """測試沒有 worktree 時正常流程"""
         # Create issue directory without worktree config
         issue_dir = temp_repo_dir / ".cafe" / "issues" / "normal-issue"
         issue_dir.mkdir(parents=True)
@@ -408,7 +408,7 @@ class TestCloseCommandWorktree:
     def test_close_worktree_success_message(
         self, temp_repo_dir, mock_git_ops, mock_github_ops_no_pr, issue_with_worktree_config
     ):
-        """測試 worktree 清理的成功訊息"""
+        """測試 worktree 清理成功訊息"""
         mock_git_ops.get_current_branch.return_value = "test-worktree-issue"
 
         result = runner.invoke(app, ["close"])
@@ -423,11 +423,11 @@ class TestCloseCommandWorktree:
         # Setup: 創建 .git 目錄（模擬 git repository）
         (temp_repo_dir / ".git").mkdir()
 
-        # Setup: 創建 worktree 和 repo root 的 .cafe 目錄
+        # Setup: 創建 worktree and repo root  .cafe 目錄
         worktree_path = temp_repo_dir / "worktrees" / "sync-test"
         worktree_path.mkdir(parents=True)
 
-        # 創建 worktree 的 .cafe/issues/sync-test/ 並寫入一些檔案
+        # 創建 worktree  .cafe/issues/sync-test/ 並寫入一些檔案
         worktree_cafe_issue = worktree_path / ".cafe" / "issues" / "sync-test"
         worktree_cafe_issue.mkdir(parents=True)
         (worktree_cafe_issue / "spec").mkdir()
@@ -435,7 +435,7 @@ class TestCloseCommandWorktree:
         (worktree_cafe_issue / "plan").mkdir()
         (worktree_cafe_issue / "plan" / "plan_001.md").write_text("Worktree plan content")
 
-        # 創建 worktree 的 issue.yaml
+        # 創建 worktree  issue.yaml
         worktree_config_data = {
             "base_branch": "main",
             "feature_branch": "sync-test",
@@ -444,7 +444,7 @@ class TestCloseCommandWorktree:
         with open(worktree_cafe_issue / "issue.yaml", 'w', encoding='utf-8') as f:
             yaml.dump(worktree_config_data, f)
 
-        # 創建 repo root 的 issue config
+        # 創建 repo root  issue config
         repo_issue_dir = temp_repo_dir / ".cafe" / "issues" / "sync-test"
         repo_issue_dir.mkdir(parents=True)
         config_file = repo_issue_dir / "issue.yaml"
@@ -463,7 +463,7 @@ class TestCloseCommandWorktree:
 
         assert result.exit_code == 0
 
-        # 驗證 worktree 的 spec/plan 被同步到 repo root 後歸檔
+        # 驗證 worktree  spec/plan 被同步到 repo root 後歸檔
         # Issue directory should be moved to archive after sync
         assert not repo_issue_dir.exists(), "Issue directory should be moved to archive"
 

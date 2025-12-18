@@ -1,6 +1,6 @@
 """E2E tests for 'cafe develop' command with mock agents.
 
-使用 CliRunner 測試 CLI 命令執行，用 CAFE_MOCK_AGENTS=true 避免真實 LLM 呼叫。
+使用 CliRunner 測試 CLI 命令執行, 用 CAFE_MOCK_AGENTS=true 避免真實 LLM 呼叫.
 """
 
 import os
@@ -22,14 +22,14 @@ runner = CliRunner()
 
 @dataclass
 class MockResult:
-    """模擬 subprocess.run 的結果格式"""
+    """模擬 subprocess.run 結果格式"""
     returncode: int
     stdout: str
     stderr: str
 
 
 def setup_test_environment(tmp_path: Path, issue_name: str):
-    """設置測試環境：創建 spec.md 和 plan.md，初始化 git repo"""
+    """設置測試環境：創建 spec.md and plan.md, 初始化 git repo"""
     # Initialize git repo (with GIT_CEILING_DIRECTORIES protection)
     init_git_repo_for_issue(tmp_path, issue_name)
 
@@ -57,7 +57,7 @@ auto:
     spec_dir = tmp_path / ".cafe" / "issues" / issue_name / "spec"
     spec_dir.mkdir(parents=True, exist_ok=True)
     spec_file = spec_dir / "spec.md"
-    spec_file.write_text("# 測試功能需求\n\n這是一個測試需求規格。")
+    spec_file.write_text("# 測試功能需求\n\n這是一個測試需求規格.")
 
     # 創建 plan.md
     plan_dir = tmp_path / ".cafe" / "issues" / issue_name / "plan"
@@ -71,7 +71,7 @@ auto:
 - [ ] 撰寫測試
 
 ## 開發指南
-請按照以上任務清單逐步實作。
+請按照以上任務清單逐步實作.
 """)
 
 
@@ -116,14 +116,14 @@ class TestDevelopE2EMockStatusCodes:
     def test_confirmed_status_success(self, tmp_path):
         """測試 CONFIRMED 狀態碼成功完成
 
-        情境：Agent 返回 CAFE_CONFIRMED，開發工作完成
+        情境：Agent 返回 CAFE_CONFIRMED, 開發工作完成
         指令：cafe develop test-issue --no-interactive
-        預期：成功，status.json 顯示 completed 狀態
+        預期：成功, status.json 顯示 completed 狀態
         """
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
 
-        result = run_cafe_develop(tmp_path, issue_name, "CAFE_CONFIRMED\n\n開發完成。")
+        result = run_cafe_develop(tmp_path, issue_name, "CAFE_CONFIRMED\n\n開發完成.")
 
         assert result.returncode == 0
         output = result.stdout + result.stderr
@@ -142,9 +142,9 @@ class TestDevelopE2EMockStatusCodes:
     def test_invalid_status_code_pauses(self, tmp_path):
         """測試 agent 返回無效狀態碼經過 5 次重試後失敗
 
-        情境：Agent 返回無法識別的狀態碼
+        情境：Agent 返回無法識別狀態碼
         指令：cafe develop test-issue --no-interactive
-        預期：失敗，經過 5 次重試後輸出包含 "Agent 在 5 次嘗試後仍未回傳有效的 status code"
+        預期：失敗, 經過 5 次重試後輸出包含 "Still did not return valid status code after"
         """
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
@@ -155,31 +155,31 @@ class TestDevelopE2EMockStatusCodes:
         assert result.returncode == 1
         output = result.stdout + result.stderr
         # After retries, should fail with status code error
-        assert "Agent 在 5 次嘗試後仍未回傳有效的 status code" in output or "failed" in output.lower()
+        assert "Still did not return valid status code after" in output or "failed" in output.lower()
 
     def test_no_status_code_pauses(self, tmp_path):
         """測試 agent 回應沒有狀態碼經過 5 次重試後失敗
 
         情境：Agent 回應內容沒有包含任何狀態碼
         指令：cafe develop test-issue --no-interactive
-        預期：失敗，經過 5 次重試後輸出包含 "Agent 在 5 次嘗試後仍未回傳有效的 status code"
+        預期：失敗, 經過 5 次重試後輸出包含 "Still did not return valid status code after"
         """
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
 
-        result = run_cafe_develop(tmp_path, issue_name, "開發中，正在實作功能...")
+        result = run_cafe_develop(tmp_path, issue_name, "開發中, 正在實作功能...")
 
         # Non-interactive mode fails after 5 retries
         assert result.returncode == 1
         output = result.stdout + result.stderr
-        assert "Agent 在 5 次嘗試後仍未回傳有效的 status code" in output or "failed" in output.lower()
+        assert "Still did not return valid status code after" in output or "failed" in output.lower()
 
     def test_whitespace_only_response_should_fail(self, tmp_path):
-        """測試 agent 返回僅空白字符的回應應該失敗
+        """測試 agent 返回僅空白字符回應應該失敗
 
-        情境：Agent 返回只包含空白字符的回應
+        情境：Agent 返回只包含空白字符回應
         指令：cafe develop test-issue --no-interactive
-        預期：失敗，錯誤訊息包含 "no response" 或 "failed"
+        預期：失敗, 錯誤訊息包含 "no response" or "failed"
         """
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
@@ -194,14 +194,14 @@ class TestDevelopE2EMockStatusCodes:
     def test_need_permission_in_non_interactive_should_fail(self, tmp_path):
         """測試 NEED_PERMISSION 在 non-interactive 模式應該失敗
 
-        情境：Agent 返回 CAFE_NEED_PERMISSION，但在非互動模式下
+        情境：Agent 返回 CAFE_NEED_PERMISSION, 但在非互動模式下
         指令：cafe develop test-issue --no-interactive
-        預期：失敗，錯誤訊息包含 "permission" 或 "non-interactive"
+        預期：失敗, 錯誤訊息包含 "permission" or "non-interactive"
         """
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
 
-        result = run_cafe_develop(tmp_path, issue_name, "CAFE_NEED_PERMISSION\n\n需要權限執行 git commit。")
+        result = run_cafe_develop(tmp_path, issue_name, "CAFE_NEED_PERMISSION\n\n需要權限執行 git commit.")
 
         assert result.returncode != 0
         output = result.stdout + result.stderr
@@ -215,18 +215,18 @@ class TestDevelopE2EMockFileValidation:
     def test_spec_file_not_exists_should_fail(self, tmp_path):
         """測試 spec.md 不存在應該失敗
 
-        情境：Issue 的 spec.md 檔案不存在
+        情境：Issue  spec.md 檔案不存在
         指令：cafe develop test-issue --no-interactive
-        預期：失敗，錯誤訊息包含 "spec" 或 "not found"
+        預期：失敗, 錯誤訊息包含 "spec" or "not found"
         """
         issue_name = "test-issue"
-        # 只創建 plan.md，不創建 spec.md
+        # 只創建 plan.md, 不創建 spec.md
         plan_dir = tmp_path / ".cafe" / "issues" / issue_name / "plan"
         plan_dir.mkdir(parents=True, exist_ok=True)
         plan_file = plan_dir / "plan.md"
         plan_file.write_text("# 實作計畫")
 
-        result = run_cafe_develop(tmp_path, issue_name, "CAFE_CONFIRMED\n\n開發完成。")
+        result = run_cafe_develop(tmp_path, issue_name, "CAFE_CONFIRMED\n\n開發完成.")
 
         assert result.returncode != 0
         output = result.stdout + result.stderr
@@ -235,18 +235,18 @@ class TestDevelopE2EMockFileValidation:
     def test_plan_file_not_exists_should_fail(self, tmp_path):
         """測試 plan.md 不存在應該失敗
 
-        情境：Issue 的 plan.md 檔案不存在
+        情境：Issue  plan.md 檔案不存在
         指令：cafe develop test-issue --no-interactive
-        預期：失敗，錯誤訊息包含 "plan" 或 "not found"
+        預期：失敗, 錯誤訊息包含 "plan" or "not found"
         """
         issue_name = "test-issue"
-        # 只創建 spec.md，不創建 plan.md
+        # 只創建 spec.md, 不創建 plan.md
         spec_dir = tmp_path / ".cafe" / "issues" / issue_name / "spec"
         spec_dir.mkdir(parents=True, exist_ok=True)
         spec_file = spec_dir / "spec.md"
         spec_file.write_text("# 測試功能需求")
 
-        result = run_cafe_develop(tmp_path, issue_name, "CAFE_CONFIRMED\n\n開發完成。")
+        result = run_cafe_develop(tmp_path, issue_name, "CAFE_CONFIRMED\n\n開發完成.")
 
         assert result.returncode != 0
         output = result.stdout + result.stderr
@@ -257,12 +257,12 @@ class TestDevelopE2EMockFileValidation:
 
         情境：成功執行 develop phase
         指令：cafe develop test-issue --no-interactive
-        預期：成功，develop/history 目錄被創建，至少有一個 iteration 檔案
+        預期：成功, develop/history 目錄被創建, 至少有一個 iteration 檔案
         """
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
 
-        result = run_cafe_develop(tmp_path, issue_name, "CAFE_CONFIRMED\n\n開發完成。")
+        result = run_cafe_develop(tmp_path, issue_name, "CAFE_CONFIRMED\n\n開發完成.")
 
         assert result.returncode == 0
 
@@ -279,12 +279,12 @@ class TestDevelopE2EMockFileValidation:
 
         情境：成功執行 develop phase
         指令：cafe develop test-issue --no-interactive
-        預期：成功，iteration_001.json 包含正確的欄位（iteration, timestamp, status_code）
+        預期：成功, iteration_001.json 包含正確欄位（iteration, timestamp, status_code）
         """
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
 
-        result = run_cafe_develop(tmp_path, issue_name, "CAFE_CONFIRMED\n\n開發完成。")
+        result = run_cafe_develop(tmp_path, issue_name, "CAFE_CONFIRMED\n\n開發完成.")
 
         assert result.returncode == 0
 
@@ -309,12 +309,12 @@ class TestDevelopE2EMockBranchManagement:
 
         情境：在 git repository 中執行 develop
         指令：cafe develop test-issue --no-interactive
-        預期：成功，config.yaml 包含 base_branch 或 feature_branch 資訊
+        預期：成功, config.yaml 包含 base_branch or feature_branch 資訊
         """
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
 
-        result = run_cafe_develop(tmp_path, issue_name, "CAFE_CONFIRMED\n\n開發完成。")
+        result = run_cafe_develop(tmp_path, issue_name, "CAFE_CONFIRMED\n\n開發完成.")
 
         # Note: This test may fail in CI without git repo, skip or mock git
         if result.returncode == 0:
@@ -333,22 +333,22 @@ class TestDevelopE2EMockReviewFeedback:
     def test_continues_with_review_feedback(self, tmp_path):
         """測試當有 review feedback 時繼續執行
 
-        情境：已完成一次 develop，後來收到 review feedback (NEEDS_CHANGES)
+        情境：已完成一次 develop, 後來收到 review feedback (NEEDS_CHANGES)
         指令：cafe develop test-issue --no-interactive（第二次執行）
-        預期：成功，處理 review feedback 並繼續執行
+        預期：成功, 處理 review feedback 並繼續執行
         """
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
 
         # 先執行一次開發（完成）
-        result1 = run_cafe_develop(tmp_path, issue_name, "CAFE_CONFIRMED\n\n初次開發完成。")
+        result1 = run_cafe_develop(tmp_path, issue_name, "CAFE_CONFIRMED\n\n初次開發完成.")
         assert result1.returncode == 0
 
         # 創建 review feedback
         review_dir = tmp_path / ".cafe" / "issues" / issue_name / "review"
         review_dir.mkdir(parents=True, exist_ok=True)
         review_file = review_dir / "review.md"
-        review_file.write_text("CAFE_NEEDS_CHANGES\n\n請修正 commit message。")
+        review_file.write_text("CAFE_NEEDS_CHANGES\n\n請修正 commit message.")
 
         review_status_file = review_dir / "status.json"
         import time
@@ -363,35 +363,35 @@ class TestDevelopE2EMockReviewFeedback:
         review_status_file.write_text(json.dumps(review_status_data, indent=2))
 
         # 再次執行開發（處理 review feedback）
-        result2 = run_cafe_develop(tmp_path, issue_name, "CAFE_CONFIRMED\n\n已修正 commit message。")
+        result2 = run_cafe_develop(tmp_path, issue_name, "CAFE_CONFIRMED\n\n已修正 commit message.")
 
         # 應該成功執行而非提前返回
         assert result2.returncode == 0
         output = result2.stdout + result2.stderr
-        # 可能包含 "completed" 或成功訊息
+        # 可能包含 "completed" or成功訊息
         assert "completed" in output.lower() or "成功" in output.lower()
 
     def test_returns_early_when_already_completed(self, tmp_path):
         """測試當已完成且無 review feedback 時提前返回
 
-        情境：已完成 develop，無新的 review feedback
+        情境：已完成 develop, 無新 review feedback
         指令：cafe develop test-issue --no-interactive（第二次執行）
-        預期：成功但提前返回，輸出包含 "completed"
+        預期：成功但提前返回, 輸出包含 "completed"
         """
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
 
         # 第一次執行
-        result1 = run_cafe_develop(tmp_path, issue_name, "CAFE_CONFIRMED\n\n開發完成。")
+        result1 = run_cafe_develop(tmp_path, issue_name, "CAFE_CONFIRMED\n\n開發完成.")
         assert result1.returncode == 0
 
         # 第二次執行（應該提前返回）
-        result2 = run_cafe_develop(tmp_path, issue_name, "CAFE_CONFIRMED\n\n不應該執行到這裡。")
+        result2 = run_cafe_develop(tmp_path, issue_name, "CAFE_CONFIRMED\n\n不應該執行到這裡.")
 
         # 應該成功但提前返回
         assert result2.returncode == 0
         output = result2.stdout + result2.stderr
-        # 檢查是否包含 "already" 或 "completed" 訊息
+        # 檢查是否包含 "already" or "completed" 訊息
         assert "completed" in output.lower()
 
 
@@ -404,12 +404,12 @@ class TestDevelopE2EMockMultipleIterations:
 
         情境：第一次執行 develop 並成功完成
         指令：cafe develop test-issue --no-interactive
-        預期：成功，history 目錄只有一個 iteration 檔案
+        預期：成功, history 目錄只有一個 iteration 檔案
         """
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
 
-        result = run_cafe_develop(tmp_path, issue_name, "CAFE_CONFIRMED\n\n開發完成。")
+        result = run_cafe_develop(tmp_path, issue_name, "CAFE_CONFIRMED\n\n開發完成.")
 
         assert result.returncode == 0
 
@@ -423,12 +423,12 @@ class TestDevelopE2EMockMultipleIterations:
 
         情境：成功完成 develop phase
         指令：cafe develop test-issue --no-interactive
-        預期：成功，status.json 的 status 為 "completed"
+        預期：成功, status.json  status 為 "completed"
         """
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
 
-        result = run_cafe_develop(tmp_path, issue_name, "CAFE_CONFIRMED\n\n開發完成。")
+        result = run_cafe_develop(tmp_path, issue_name, "CAFE_CONFIRMED\n\n開發完成.")
 
         assert result.returncode == 0
 
@@ -446,33 +446,33 @@ class TestDevelopE2EMockErrorRecovery:
     """測試錯誤恢復場景"""
 
     def test_handles_corrupted_status_file(self, tmp_path):
-        """測試處理損壞的 status.json
+        """測試處理損壞 status.json
 
         情境：develop/status.json 檔案內容損壞（invalid JSON）
         指令：cafe develop test-issue --no-interactive
-        預期：能夠繼續執行或優雅失敗，不會 crash
+        預期：能夠繼續執行or優雅失敗, 不會 crash
         """
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
 
-        # 創建損壞的 status.json
+        # 創建損壞 status.json
         develop_dir = tmp_path / ".cafe" / "issues" / issue_name / "develop"
         develop_dir.mkdir(parents=True, exist_ok=True)
         status_file = develop_dir / "status.json"
         status_file.write_text("{invalid json")
 
-        # 應該能夠繼續執行（忽略損壞的檔案）
-        result = run_cafe_develop(tmp_path, issue_name, "CAFE_CONFIRMED\n\n開發完成。")
+        # 應該能夠繼續執行（忽略損壞檔案）
+        result = run_cafe_develop(tmp_path, issue_name, "CAFE_CONFIRMED\n\n開發完成.")
 
-        # 可能成功或失敗，但不應該 crash
+        # 可能成功or失敗, 但不應該 crash
         assert result.returncode in [0, 1]
 
     def test_handles_missing_directories_gracefully(self, tmp_path):
-        """測試優雅處理缺少的目錄
+        """測試優雅處理缺少目錄
 
         情境：develop 目錄不存在
         指令：cafe develop test-issue --no-interactive
-        預期：成功，自動創建需要的目錄
+        預期：成功, 自動創建需要目錄
         """
         issue_name = "test-issue"
 
@@ -485,7 +485,7 @@ class TestDevelopE2EMockErrorRecovery:
 
         create_minimal_config(tmp_path)
 
-        # 只創建最基本的 spec 和 plan
+        # 只創建最基本 spec and plan
         spec_dir = tmp_path / ".cafe" / "issues" / issue_name / "spec"
         spec_dir.mkdir(parents=True, exist_ok=True)
         (spec_dir / "spec.md").write_text("# Spec")
@@ -495,9 +495,9 @@ class TestDevelopE2EMockErrorRecovery:
         (plan_dir / "plan.md").write_text("# Plan")
 
         # 不創建 develop 目錄
-        result = run_cafe_develop(tmp_path, issue_name, "CAFE_CONFIRMED\n\n開發完成。")
+        result = run_cafe_develop(tmp_path, issue_name, "CAFE_CONFIRMED\n\n開發完成.")
 
-        # 應該自動創建需要的目錄並成功
+        # 應該自動創建需要目錄並成功
         assert result.returncode == 0
 
         develop_dir = tmp_path / ".cafe" / "issues" / issue_name / "develop"
@@ -513,12 +513,12 @@ class TestDevelopE2EMockOutputValidation:
 
         情境：成功完成 develop phase
         指令：cafe develop test-issue --no-interactive
-        預期：成功，輸出包含 "completed" 或 "success" 等成功訊息
+        預期：成功, 輸出包含 "completed" or "success" 等成功訊息
         """
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
 
-        result = run_cafe_develop(tmp_path, issue_name, "CAFE_CONFIRMED\n\n開發完成。")
+        result = run_cafe_develop(tmp_path, issue_name, "CAFE_CONFIRMED\n\n開發完成.")
 
         assert result.returncode == 0
         output = result.stdout + result.stderr
@@ -530,7 +530,7 @@ class TestDevelopE2EMockOutputValidation:
 
         情境：故意不創建 plan.md 導致失敗
         指令：cafe develop test-issue --no-interactive
-        預期：失敗，錯誤訊息明確提到 "plan"
+        預期：失敗, 錯誤訊息明確提到 "plan"
         """
         issue_name = "test-issue"
         # 故意不創建 plan.md
@@ -555,7 +555,7 @@ class TestDevelopE2EMockPRComments:
 
         情境：使用 --pr-number 參數執行 develop
         指令：cafe develop test-issue --pr-number 123 --no-interactive
-        預期：成功（即使 PR 不存在，也不應該影響執行）
+        預期：成功（即使 PR 不存在, 也不應該影響執行）
         """
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
@@ -563,7 +563,7 @@ class TestDevelopE2EMockPRComments:
         result = run_cafe_develop(
             tmp_path,
             issue_name,
-            "CAFE_CONFIRMED\n\n開發完成。",
+            "CAFE_CONFIRMED\n\n開發完成.",
             extra_args=["--pr-number", "123"]
         )
 
@@ -577,12 +577,12 @@ class TestDevelopE2EMockPRComments:
 
         情境：不使用 --pr-number 參數執行 develop
         指令：cafe develop test-issue --no-interactive
-        預期：成功，與之前的行為相同
+        預期：成功, and之前行為相同
         """
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
 
-        result = run_cafe_develop(tmp_path, issue_name, "CAFE_CONFIRMED\n\n開發完成。")
+        result = run_cafe_develop(tmp_path, issue_name, "CAFE_CONFIRMED\n\n開發完成.")
 
         # 應該正常工作（向後兼容）
         assert result.returncode == 0
@@ -592,9 +592,9 @@ class TestDevelopE2EMockPRComments:
     def test_dev_alias_with_pr_number(self, tmp_path):
         """測試 dev alias 也能接受 --pr-number 參數
 
-        情境：使用 dev alias 和 --pr-number 參數執行
+        情境：使用 dev alias and --pr-number 參數執行
         指令：cafe dev --pr-number 123 --no-interactive
-        預期：成功（與 develop 命令行為一致）
+        預期：成功（and develop 命令行為一致）
         """
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
@@ -603,23 +603,23 @@ class TestDevelopE2EMockPRComments:
         result = run_cafe_develop(
             tmp_path,
             issue_name,
-            "CAFE_CONFIRMED\n\n開發完成。",
+            "CAFE_CONFIRMED\n\n開發完成.",
             extra_args=["--pr-number", "123"]
         )
 
-        # 應該成功完成（dev alias 與 develop 行為相同）
-        assert result.returncode == 0, f"指令應該成功執行，但返回碼是 {result.returncode}，輸出：{result.stderr}"
+        # 應該成功完成（dev alias and develop 行為相同）
+        assert result.returncode == 0, f"指令應該成功執行, 但返回碼是 {result.returncode}, 輸出：{result.stderr}"
         output = result.stdout + result.stderr
         assert "completed" in output.lower() or "成功" in output.lower()
 
     def test_pr_comments_with_real_gh_data(self, tmp_path):
-        """測試使用簡化的 PR comments 資料（模擬 gh CLI）
+        """測試使用簡化 PR comments 資料（模擬 gh CLI）
 
-        情境：執行 develop 時提供 PR number，模擬 gh CLI 返回 PR comments
+        情境：執行 develop 時提供 PR number, 模擬 gh CLI 返回 PR comments
         指令：cafe develop test-issue --pr-number 10 --no-interactive
-        預期：成功執行，PR comments 被載入（通過創建 fake gh script）
+        預期：成功執行, PR comments 被載入（通過創建 fake gh script）
         """
-        # 簡化的 PR comments 資料（基於真實 PR #10）
+        # 簡化 PR comments 資料（基於真實 PR #10）
         raw_comments = [
             {
                 "id": 2532554495,
@@ -639,7 +639,7 @@ class TestDevelopE2EMockPRComments:
             }
         ]
 
-        # 準備 gh repo view 的輸出（返回 repo 資訊）
+        # 準備 gh repo view 輸出（返回 repo 資訊）
         repo_info = {
             "owner": {"login": "testowner"},
             "name": "testrepo"
@@ -650,7 +650,7 @@ class TestDevelopE2EMockPRComments:
 
         # init_git_repo_for_issue already checked out to the issue branch
 
-        # 創建一個假的 gh script 來返回 PR comments
+        # 創建一個假 gh script 來返回 PR comments
         fake_gh_dir = tmp_path / "bin"
         fake_gh_dir.mkdir()
         fake_gh = fake_gh_dir / "gh"
@@ -681,7 +681,7 @@ exit 1
 
         env_vars = {
             "CAFE_MOCK_AGENTS": "true",
-            "CAFE_MOCK_RESPONSE": "CAFE_CONFIRMED\n\n開發完成。",
+            "CAFE_MOCK_RESPONSE": "CAFE_CONFIRMED\n\n開發完成.",
             "PATH": f"{fake_gh_dir}:{os.environ.get('PATH', '')}"
         }
 
@@ -693,13 +693,13 @@ exit 1
         finally:
             os.chdir(original_cwd)
 
-        # 應該成功完成（如果 get_pr_comments 失敗，會導致錯誤）
+        # 應該成功完成（如果 get_pr_comments 失敗, 會導致錯誤）
         output = result.stdout or ""
         print("\n=== CLI Output ===")
         print(output)
         print("==================\n")
 
-        assert result.exit_code == 0, f"指令應該成功執行，但返回碼是 {result.exit_code}，輸出：{output}"
+        assert result.exit_code == 0, f"指令應該成功執行, 但返回碼是 {result.exit_code}, 輸出：{output}"
 
         # 驗證開發完成
         assert "completed" in output.lower() or "成功" in output.lower()
@@ -707,12 +707,12 @@ exit 1
 
 @pytest.mark.e2e
 class TestDevelopAutoModeClarification:
-    """測試 develop --auto 模式處理 IN_PROGRESS 狀態的行為"""
+    """測試 develop --auto 模式處理 IN_PROGRESS 狀態行為"""
 
     def test_auto_mode_calls_execute_next_phase_on_in_progress(self, tmp_path):
         """測試 auto 模式下收到 IN_PROGRESS 狀態時調用 _execute_next_phase_auto
 
-        情境：Agent 返回 CAFE_NEED_CLARIFICATION（IN_PROGRESS 狀態），並且在 auto 模式下
+        情境：Agent 返回 CAFE_NEED_CLARIFICATION（IN_PROGRESS 狀態）, 並且在 auto 模式下
         指令：cafe develop --auto
         預期：調用 _execute_next_phase_auto 以繼續流程
         """
@@ -746,9 +746,9 @@ class TestDevelopAutoModeClarification:
     def test_auto_mode_calls_execute_for_need_permission(self, tmp_path):
         """測試 auto 模式下收到 NEED_PERMISSION 時也會調用 _execute_next_phase_auto
 
-        情境：Agent 返回 CAFE_NEED_PERMISSION（IN_PROGRESS 狀態），並且在 auto 模式下
+        情境：Agent 返回 CAFE_NEED_PERMISSION（IN_PROGRESS 狀態）, 並且在 auto 模式下
         指令：cafe develop --auto
-        預期：調用 _execute_next_phase_auto（與 NEED_CLARIFICATION 行為一致）
+        預期：調用 _execute_next_phase_auto（and NEED_CLARIFICATION 行為一致）
         """
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
@@ -780,9 +780,9 @@ class TestDevelopAutoModeClarification:
     def test_non_auto_mode_shows_normal_pause_message_on_in_progress(self, tmp_path):
         """測試非 auto 模式下收到 IN_PROGRESS 狀態時顯示一般暫停訊息
 
-        情境：Agent 返回 CAFE_NEED_CLARIFICATION，但不在 auto 模式下
+        情境：Agent 返回 CAFE_NEED_CLARIFICATION, 但不在 auto 模式下
         指令：cafe develop（沒有 --auto）
-        預期：顯示一般的暫停訊息，不會執行 auto mode 的邏輯
+        預期：顯示一般暫停訊息, 不會執行 auto mode 邏輯
         """
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)

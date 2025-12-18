@@ -1,6 +1,6 @@
 """Integration tests for 'cafe plan --no-interactive' command.
 
-使用 MockAgentExecutor 測試完整的 plan command flow，不呼叫真實 LLM API。
+使用 MockAgentExecutor 測試完整 plan command flow, 不呼叫真實 LLM API.
 """
 
 import os
@@ -35,22 +35,22 @@ def mock_git_ops():
 def temp_plan_dir(tmp_path, monkeypatch):
     """創建臨時 plan 目錄結構"""
     monkeypatch.chdir(tmp_path)
-    # 創建完整的目錄結構: {tmp_path}/.cafe/issues/test-issue/plan/
+    # 創建完整目錄結構: {tmp_path}/.cafe/issues/test-issue/plan/
     plan_dir = tmp_path / ".cafe" / "issues" / "test-issue" / "plan"
     plan_dir.mkdir(parents=True)
 
-    # 創建 spec 目錄和 spec_001.md（plan 需要 spec 已存在）
+    # 創建 spec 目錄and spec_001.md（plan 需要 spec 已存在）
     spec_dir = tmp_path / ".cafe" / "issues" / "test-issue" / "spec"
     spec_dir.mkdir(parents=True)
     spec_file = spec_dir / "spec_001.md"
-    spec_file.write_text("# 測試功能需求\n\n這是一個測試需求規格。")
+    spec_file.write_text("# 測試功能需求\n\n這是一個測試需求規格.")
 
     return plan_dir
 
 
 @pytest.fixture
 def temp_plan_with_template(tmp_path, monkeypatch):
-    """創建包含 template 的臨時環境"""
+    """創建包含 template 臨時環境"""
     monkeypatch.chdir(tmp_path)
     # 創建 plan 目錄
     plan_dir = tmp_path / ".cafe" / "issues" / "test-issue" / "plan"
@@ -60,9 +60,9 @@ def temp_plan_with_template(tmp_path, monkeypatch):
     spec_dir = tmp_path / ".cafe" / "issues" / "test-issue" / "spec"
     spec_dir.mkdir(parents=True)
     spec_file = spec_dir / "spec_001.md"
-    spec_file.write_text("# 測試功能需求\n\n這是一個測試需求規格。")
+    spec_file.write_text("# 測試功能需求\n\n這是一個測試需求規格.")
     
-    # 創建 template 目錄和預設 template
+    # 創建 template 目錄and預設 template
     template_dir = tmp_path / ".cafe" / "templates" / "plan"
     template_dir.mkdir(parents=True)
     default_template = template_dir / "default.md"
@@ -82,12 +82,12 @@ def temp_plan_with_template(tmp_path, monkeypatch):
 
 
 class TestPlanCommandNonInteractiveFirstRound:
-    """測試 plan --no-interactive 第一輪（需要 --template）"""
+    """測試 plan --no-interactive Round 1（需要 --template）"""
 
     def test_first_round_without_template_should_fail(
         self, mock_env, temp_plan_dir
     , mock_git_ops):
-        """測試第一輪沒有提供 --template 應該失敗"""
+        """測試Round 1沒有提供 --template 應該失敗"""
         # Arrange
         spec_file = str(temp_plan_dir.parent / "spec" / "spec_001.md")
         
@@ -98,7 +98,7 @@ class TestPlanCommandNonInteractiveFirstRound:
         
         permission_handler = PermissionHandler()
         
-        # Act - 第一輪沒有 plan.md，且沒有 template
+        # Act - Round 1沒有 plan.md, 且沒有 template
         phase = PlanPhase(
             git_ops=mock_git_ops,
             agent_manager=agent_manager,
@@ -112,14 +112,14 @@ class TestPlanCommandNonInteractiveFirstRound:
         
         result = phase.execute()
         
-        # Assert - 第一輪必須提供 template
+        # Assert - Round 1必須提供 template
         assert result.status == PhaseStatus.FAILED
         assert "template" in result.message.lower() or "required" in result.message.lower()
 
     def test_first_round_with_template_success(
         self, mock_env, temp_plan_with_template, monkeypatch
     , mock_git_ops):
-        """測試第一輪提供 template 並返回 CONFIRMED 成功"""
+        """測試Round 1提供 template 並返回 CONFIRMED 成功"""
         # Arrange
         plan_dir, default_template = temp_plan_with_template
         plan_file = str(plan_dir / "plan_001.md")
@@ -127,7 +127,7 @@ class TestPlanCommandNonInteractiveFirstRound:
         
         monkeypatch.setenv(
             "CAFE_MOCK_RESPONSE",
-            "CAFE_READY_FOR_REVIEW\n\n# 實作計畫\n\n這是測試計畫內容。"
+            "CAFE_READY_FOR_REVIEW\n\n# 實作計畫\n\n這是測試計畫內容."
         )
         
         agent_manager = AgentManager()
@@ -137,7 +137,7 @@ class TestPlanCommandNonInteractiveFirstRound:
         
         permission_handler = PermissionHandler()
         
-        # Act - 第一輪提供 template 和 user_input (dev guide)
+        # Act - Round 1提供 template and user_input (dev guide)
         phase = PlanPhase(
             git_ops=mock_git_ops,
             agent_manager=agent_manager,
@@ -162,7 +162,7 @@ class TestPlanCommandNonInteractiveFirstRound:
     def test_first_round_need_modification_should_fail_in_non_interactive(
         self, mock_env, temp_plan_with_template, monkeypatch
     , mock_git_ops):
-        """測試第一輪返回 NEED_MODIFICATION 在 non-interactive 模式應該失敗"""
+        """測試Round 1返回 NEED_MODIFICATION 在 non-interactive 模式應該失敗"""
         # Arrange
         plan_dir, default_template = temp_plan_with_template
         plan_file = str(plan_dir / "plan_001.md")
@@ -200,21 +200,21 @@ class TestPlanCommandNonInteractiveFirstRound:
 
 
 class TestPlanCommandNonInteractiveSubsequentRounds:
-    """測試 plan --no-interactive 第二輪及之後（不需要 --template）"""
+    """測試 plan --no-interactive Round 2及之後（不需要 --template）"""
 
     def test_subsequent_round_without_template_success(
         self, mock_env, temp_plan_with_template, monkeypatch
     , mock_git_ops):
-        """測試第二輪及之後不需要 template，直接使用現有 plan_001.md"""
+        """測試Round 2及之後不需要 template, 直接使用現有 plan_001.md"""
         # Arrange
         plan_dir, default_template = temp_plan_with_template
         plan_file = str(plan_dir / "plan_001.md")
         spec_file = str(plan_dir.parent / "spec" / "spec_001.md")
 
-        # 先創建 plan.md（模擬第一輪已完成，包含開發指南）
+        # 先創建 plan.md（模擬Round 1已完成, 包含開發指南）
         Path(plan_file).write_text("## 開發指南\n\n原始開發指南\n\n## 實作計畫\n\n初版計畫內容")
 
-        # 創建 history 檔案（模擬第一輪已完成）
+        # 創建 history 檔案（模擬Round 1已完成）
         history_dir = plan_dir / "history"
         history_dir.mkdir(parents=True, exist_ok=True)
         import json
@@ -228,7 +228,7 @@ class TestPlanCommandNonInteractiveSubsequentRounds:
         
         monkeypatch.setenv(
             "CAFE_MOCK_RESPONSE",
-            "CAFE_READY_FOR_REVIEW\n\n# 實作計畫\n\n更新後的計畫內容。"
+            "CAFE_READY_FOR_REVIEW\n\n# 實作計畫\n\n更新後計畫內容."
         )
         
         agent_manager = AgentManager()
@@ -238,7 +238,7 @@ class TestPlanCommandNonInteractiveSubsequentRounds:
         
         permission_handler = PermissionHandler()
         
-        # Act - 第二輪不提供 template（因為 plan.md 已存在）
+        # Act - Round 2不提供 template（因為 plan.md 已存在）
         phase = PlanPhase(
             git_ops=mock_git_ops,
             agent_manager=agent_manager,
@@ -255,13 +255,13 @@ class TestPlanCommandNonInteractiveSubsequentRounds:
 
         # Assert
         assert result.status == PhaseStatus.COMPLETED
-        # 注意：mock agent 不會實際執行 Write 工具，所以 plan.md 不會被更新
+        # 注意：mock agent 不會實際執行 Write 工具, 所以 plan.md 不會被更新
         # 只驗證 phase 成功完成即可
 
     def test_subsequent_round_with_template_ignored(
         self, mock_env, temp_plan_with_template, monkeypatch
     , mock_git_ops):
-        """測試第二輪提供 template 會被忽略（使用現有 plan_001.md）"""
+        """測試Round 2提供 template 會被忽略（使用現有 plan_001.md）"""
         # Arrange
         plan_dir, default_template = temp_plan_with_template
         plan_file = str(plan_dir / "plan_001.md")
@@ -270,7 +270,7 @@ class TestPlanCommandNonInteractiveSubsequentRounds:
         # 先創建 plan.md（包含開發指南）
         Path(plan_file).write_text("## 開發指南\n\n原始開發指南\n\n## 實作計畫\n\n初版計畫內容")
 
-        # 創建 history 檔案（模擬第一輪已完成）
+        # 創建 history 檔案（模擬Round 1已完成）
         history_dir = plan_dir / "history"
         history_dir.mkdir(parents=True, exist_ok=True)
         import json
@@ -284,7 +284,7 @@ class TestPlanCommandNonInteractiveSubsequentRounds:
         
         monkeypatch.setenv(
             "CAFE_MOCK_RESPONSE",
-            "CAFE_READY_FOR_REVIEW\n\n# 實作計畫\n\n更新後的計畫內容。"
+            "CAFE_READY_FOR_REVIEW\n\n# 實作計畫\n\n更新後計畫內容."
         )
         
         agent_manager = AgentManager()
@@ -294,7 +294,7 @@ class TestPlanCommandNonInteractiveSubsequentRounds:
         
         permission_handler = PermissionHandler()
         
-        # Act - 提供 template，但應該被忽略
+        # Act - 提供 template, 但應該被忽略
         phase = PlanPhase(
             git_ops=mock_git_ops,
             agent_manager=agent_manager,
@@ -311,7 +311,7 @@ class TestPlanCommandNonInteractiveSubsequentRounds:
 
         # Assert
         assert result.status == PhaseStatus.COMPLETED
-        # 注意：mock agent 不會實際執行 Write 工具，所以 plan.md 不會被更新
+        # 注意：mock agent 不會實際執行 Write 工具, 所以 plan.md 不會被更新
         # 只驗證 phase 成功完成即可
 
 
@@ -361,7 +361,7 @@ class TestPlanCommandNonInteractiveFiles:
     def test_history_created(
         self, mock_env, temp_plan_with_template, monkeypatch
     , mock_git_ops):
-        """測試 history 目錄和檔案被創建"""
+        """測試 history 目錄and檔案被創建"""
         # Arrange
         plan_dir, default_template = temp_plan_with_template
         plan_file = str(plan_dir / "plan_001.md")
@@ -414,7 +414,7 @@ class TestPlanCommandNonInteractiveErrorHandling:
         # Arrange
         plan_dir, default_template = temp_plan_with_template
         plan_file = str(plan_dir / "plan_001.md")
-        spec_file = str(plan_dir.parent / "spec" / "nonexistent.md")  # 不存在的檔案
+        spec_file = str(plan_dir.parent / "spec" / "nonexistent.md")  # 不存在檔案
         
         agent_manager = AgentManager()
         agent_manager.register_agent(
@@ -444,12 +444,12 @@ class TestPlanCommandNonInteractiveErrorHandling:
 
 
 class TestPlanCommandNonInteractiveAgentTracking:
-    """測試 mock agent 的追蹤功能"""
+    """測試 mock agent 追蹤功能"""
 
     def test_agent_receives_spec_file(
         self, mock_env, temp_plan_with_template, monkeypatch
     , mock_git_ops):
-        """測試 agent 收到正確的 spec file 路徑"""
+        """測試 agent 收到正確 spec file 路徑"""
         # Arrange
         plan_dir, default_template = temp_plan_with_template
         plan_file = str(plan_dir / "plan_001.md")
@@ -482,7 +482,7 @@ class TestPlanCommandNonInteractiveAgentTracking:
         # Act
         phase.execute()
 
-        # Assert - 驗證 agent 被呼叫，且 prompt 包含 spec_001.md
+        # Assert - 驗證 agent 被呼叫, 且 prompt 包含 spec_001.md
         executor = agent_manager.get_agent("David")
         assert executor.call_count >= 1
         assert "spec_001.md" in executor.last_prompt

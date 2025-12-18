@@ -1,14 +1,14 @@
-"""測試 PlanPhase 的用戶確認流程。
+"""測試 PlanPhase 用戶確認流程.
 
-正確的流程應該是：
-1. Agent 回答後，在 interactive 模式下應該顯示給使用者確認
+正確流程應該是：
+1. Agent 回答後, 在 interactive 模式下應該顯示給使用者確認
 2. 只有當狀態碼是 CAFE_READY_FOR_REVIEW 時才需要用戶確認
 3. 用戶選擇：
-   - 確認 (c): 直接完成，**不再呼叫 agent**
+   - 確認 (c): 直接完成, **不再呼叫 agent**
    - 拒絕 (r): Phase 失敗
-   - 修改 (m): 提供 feedback，進入下一輪（會再次呼叫 agent）
-4. 在 non-interactive 模式下，CAFE_READY_FOR_REVIEW 直接完成，不需要確認
-5. CAFE_NEED_CLARIFICATION 不需要用戶確認，直接進入下一輪
+   - 修改 (m): 提供 feedback, 進入下一輪（會再次呼叫 agent）
+4. 在 non-interactive 模式下, CAFE_READY_FOR_REVIEW 直接完成, 不需要確認
+5. CAFE_NEED_CLARIFICATION 不需要用戶確認, 直接進入下一輪
 """
 
 from pathlib import Path
@@ -39,7 +39,7 @@ def create_template_file(tmp_path: Path) -> str:
 
 
 class TestPlanPhaseUserConfirmation:
-    """測試 PlanPhase 用戶確認流程。"""
+    """測試 PlanPhase 用戶確認流程."""
 
     def test_confirmed_interactive_waits_for_user_confirmation(
         self, tmp_path: Path, mock_git_ops: MagicMock, monkeypatch
@@ -51,11 +51,11 @@ class TestPlanPhaseUserConfirmation:
 
         spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec_001.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
-        spec_file.write_text("# Requirements\n\n## 開發指南\nDev guide")
+        spec_file.write_text("# Requirements\n\n## Development Guide\nDev guide")
 
         plan_file = spec_file.parent.parent / "plan" / "plan_001.md"
         plan_file.parent.mkdir(parents=True, exist_ok=True)
-        plan_file.write_text("## 開發指南\nDev guide\n\n## 實作計畫\nTODO")
+        plan_file.write_text("## Development Guide\nDev guide\n\n## 實作計畫\nTODO")
 
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n計畫已完成", TokenUsage(), [], None, [])
@@ -103,11 +103,11 @@ class TestPlanPhaseUserConfirmation:
 
         spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec_001.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
-        spec_file.write_text("# Requirements\n\n## 開發指南\nDev guide")
+        spec_file.write_text("# Requirements\n\n## Development Guide\nDev guide")
 
         plan_file = spec_file.parent.parent / "plan" / "plan_001.md"
         plan_file.parent.mkdir(parents=True, exist_ok=True)
-        plan_file.write_text("## 開發指南\nDev guide\n\n## 實作計畫\nTODO")
+        plan_file.write_text("## Development Guide\nDev guide\n\n## 實作計畫\nTODO")
 
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n計畫已完成", TokenUsage(), [], None, [])
@@ -147,18 +147,18 @@ class TestPlanPhaseUserConfirmation:
     def test_confirmed_interactive_user_requests_modification(
         self, tmp_path: Path, mock_git_ops: MagicMock, monkeypatch
     ) -> None:
-        """測試用戶要求修改，agent 應被呼叫第二次"""
+        """測試用戶要求修改, agent 應被呼叫第二次"""
         issue_name = "test-modify"
         mock_git_ops.get_current_branch.return_value = issue_name
         monkeypatch.chdir(tmp_path)
 
         spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec_001.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
-        spec_file.write_text("# Requirements\n\n## 開發指南\nDev guide")
+        spec_file.write_text("# Requirements\n\n## Development Guide\nDev guide")
 
         plan_file = spec_file.parent.parent / "plan" / "plan_001.md"
         plan_file.parent.mkdir(parents=True, exist_ok=True)
-        plan_file.write_text("## 開發指南\nDev guide\n\n## 實作計畫\nTODO")
+        plan_file.write_text("## Development Guide\nDev guide\n\n## 實作計畫\nTODO")
 
         agent_manager = MagicMock(spec=AgentManager)
         # After removing while loop, only first call happens in single execute()
@@ -193,7 +193,7 @@ class TestPlanPhaseUserConfirmation:
         # After changing behavior, READY_FOR_REVIEW returns COMPLETED immediately
         # User modification happens by running the command again manually with their feedback
         assert mock_input.call_count == 0, "不再提示用戶確認"
-        assert not mock_multiline.called, "不再請求修改意見"
+        assert not mock_multiline.called, "modification opinion"
         assert result.status == PhaseStatus.COMPLETED
         assert result.data.get("status_code") == "CAFE_READY_FOR_REVIEW"
         assert agent_manager.execute.call_count == 1
@@ -201,18 +201,18 @@ class TestPlanPhaseUserConfirmation:
     def test_confirmed_noninteractive_completes_immediately(
         self, tmp_path: Path, mock_git_ops: MagicMock, monkeypatch
     ) -> None:
-        """測試 non-interactive 模式下 READY_FOR_REVIEW 直接完成，不需要用戶確認"""
+        """測試 non-interactive 模式下 READY_FOR_REVIEW 直接完成, 不需要用戶確認"""
         issue_name = "test-noninteractive"
         mock_git_ops.get_current_branch.return_value = issue_name
         monkeypatch.chdir(tmp_path)
 
         spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec_001.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
-        spec_file.write_text("# Requirements\n\n## 開發指南\nDev guide")
+        spec_file.write_text("# Requirements\n\n## Development Guide\nDev guide")
 
         plan_file = spec_file.parent.parent / "plan" / "plan_001.md"
         plan_file.parent.mkdir(parents=True, exist_ok=True)
-        plan_file.write_text("## 開發指南\nDev guide\n\n## 實作計畫\nTODO")
+        plan_file.write_text("## Development Guide\nDev guide\n\n## 實作計畫\nTODO")
 
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n計畫已完成", TokenUsage(), [], None, [])
@@ -248,18 +248,18 @@ class TestPlanPhaseUserConfirmation:
     def test_need_clarification_does_not_need_confirmation(
         self, tmp_path: Path, mock_git_ops: MagicMock, monkeypatch
     ) -> None:
-        """測試 NEED_CLARIFICATION 狀態不需要用戶確認，直接進入下一輪"""
+        """測試 NEED_CLARIFICATION 狀態不需要用戶確認, 直接進入下一輪"""
         issue_name = "test-clarification"
         mock_git_ops.get_current_branch.return_value = issue_name
         monkeypatch.chdir(tmp_path)
 
         spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec_001.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
-        spec_file.write_text("# Requirements\n\n## 開發指南\nDev guide")
+        spec_file.write_text("# Requirements\n\n## Development Guide\nDev guide")
 
         plan_file = spec_file.parent.parent / "plan" / "plan_001.md"
         plan_file.parent.mkdir(parents=True, exist_ok=True)
-        plan_file.write_text("## 開發指南\nDev guide\n\n## 實作計畫\nTODO")
+        plan_file.write_text("## Development Guide\nDev guide\n\n## 實作計畫\nTODO")
 
         agent_manager = MagicMock(spec=AgentManager)
         # After removing while loop, only first call happens

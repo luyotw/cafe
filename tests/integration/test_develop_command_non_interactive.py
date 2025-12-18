@@ -1,6 +1,6 @@
 """Integration tests for 'cafe develop --no-interactive' command.
 
-使用 MockAgentExecutor 測試完整的 develop command flow，不呼叫真實 LLM API。
+使用 MockAgentExecutor 測試完整 develop command flow, 不呼叫真實 LLM API.
 """
 
 import os
@@ -27,17 +27,17 @@ def mock_env(monkeypatch):
 def temp_develop_dir(tmp_path, monkeypatch):
     """創建臨時 develop 目錄結構"""
     monkeypatch.chdir(tmp_path)
-    # 創建完整的目錄結構: {tmp_path}/.cafe/issues/test-issue/develop/
+    # 創建完整目錄結構: {tmp_path}/.cafe/issues/test-issue/develop/
     develop_dir = tmp_path / ".cafe" / "issues" / "test-issue" / "develop"
     develop_dir.mkdir(parents=True)
 
-    # 創建 spec 目錄和 spec.md（develop 需要 spec 已存在）
+    # 創建 spec 目錄and spec.md（develop 需要 spec 已存在）
     spec_dir = tmp_path / ".cafe" / "issues" / "test-issue" / "spec"
     spec_dir.mkdir(parents=True)
     spec_file = spec_dir / "spec.md"
-    spec_file.write_text("# 測試功能需求\n\n這是一個測試需求規格。")
+    spec_file.write_text("# 測試功能需求\n\n這是一個測試需求規格.")
 
-    # 創建 plan 目錄和 plan.md（develop 需要 plan 已存在）
+    # 創建 plan 目錄and plan.md（develop 需要 plan 已存在）
     plan_dir = tmp_path / ".cafe" / "issues" / "test-issue" / "plan"
     plan_dir.mkdir(parents=True)
     plan_file = plan_dir / "plan.md"
@@ -49,7 +49,7 @@ def temp_develop_dir(tmp_path, monkeypatch):
 - [ ] 撰寫測試
 
 ## 開發指南
-請按照以上任務清單逐步實作。
+請按照以上任務清單逐步實作.
 """)
 
     return develop_dir
@@ -67,12 +67,12 @@ def mock_git_ops():
 
 
 class TestDevelopCommandNonInteractiveFirstRound:
-    """測試 develop --no-interactive 第一輪"""
+    """測試 develop --no-interactive Round 1"""
 
     def test_first_round_without_plan_should_fail(
         self, mock_env, tmp_path
     , mock_git_ops):
-        """測試第一輪沒有 plan.md 應該失敗"""
+        """測試Round 1沒有 plan.md 應該失敗"""
         # Arrange
         spec_dir = tmp_path / ".cafe" / "issues" / "test-issue" / "spec"
         spec_dir.mkdir(parents=True)
@@ -90,7 +90,7 @@ class TestDevelopCommandNonInteractiveFirstRound:
         permission_handler = PermissionHandler()
         git_ops = MagicMock(spec=GitOperations)
 
-        # Act - 第一輪沒有 plan.md
+        # Act - Round 1沒有 plan.md
         phase = DevelopPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
@@ -110,14 +110,14 @@ class TestDevelopCommandNonInteractiveFirstRound:
     def test_first_round_with_confirmed_success(
         self, mock_env, temp_develop_dir, mock_git_ops, monkeypatch, tmp_path
     ):
-        """測試第一輪返回 CONFIRMED 成功"""
+        """測試Round 1返回 CONFIRMED 成功"""
         # Arrange
         spec_file = str(temp_develop_dir.parent / "spec" / "spec.md")
         plan_file = str(temp_develop_dir.parent / "plan" / "plan.md")
 
         monkeypatch.setenv(
             "CAFE_MOCK_RESPONSE",
-            "CAFE_CONFIRMED\n\n已完成所有開發任務。"
+            "CAFE_CONFIRMED\n\n已完成所有開發任務."
         )
 
         # Change to tmp_path to ensure git operations work in the right directory
@@ -161,14 +161,14 @@ class TestDevelopCommandNonInteractiveFirstRound:
     def test_first_round_need_permission_should_fail_in_non_interactive(
         self, mock_env, temp_develop_dir, mock_git_ops, monkeypatch, tmp_path
     ):
-        """測試第一輪返回 NEED_PERMISSION 在 non-interactive 模式應該失敗"""
+        """測試Round 1返回 NEED_PERMISSION 在 non-interactive 模式應該失敗"""
         # Arrange
         spec_file = str(temp_develop_dir.parent / "spec" / "spec.md")
         plan_file = str(temp_develop_dir.parent / "plan" / "plan.md")
 
         monkeypatch.setenv(
             "CAFE_MOCK_RESPONSE",
-            "CAFE_NEED_PERMISSION\n\n需要權限執行 git commit。"
+            "CAFE_NEED_PERMISSION\n\n需要權限執行 git commit."
         )
 
         original_cwd = os.getcwd()
@@ -195,7 +195,7 @@ class TestDevelopCommandNonInteractiveFirstRound:
             # Act
             result = phase.execute()
 
-            # Assert - non-interactive 無法處理 NEED_PERMISSION，返回 FAILED
+            # Assert - non-interactive 無法處理 NEED_PERMISSION, 返回 FAILED
             assert result.status == PhaseStatus.FAILED
             assert "permission" in result.message.lower() or "non-interactive" in result.message.lower()
         finally:
@@ -208,7 +208,7 @@ class TestDevelopCommandNonInteractiveFiles:
     def test_history_created(
         self, mock_env, temp_develop_dir, mock_git_ops, monkeypatch, tmp_path
     ):
-        """測試 history 目錄和檔案被創建"""
+        """測試 history 目錄and檔案被創建"""
         # Arrange
         spec_file = str(temp_develop_dir.parent / "spec" / "spec.md")
         plan_file = str(temp_develop_dir.parent / "plan" / "plan.md")
@@ -216,7 +216,7 @@ class TestDevelopCommandNonInteractiveFiles:
 
         monkeypatch.setenv(
             "CAFE_MOCK_RESPONSE",
-            "CAFE_CONFIRMED\n\n開發完成。"
+            "CAFE_CONFIRMED\n\n開發完成."
         )
 
         original_cwd = os.getcwd()
@@ -264,7 +264,7 @@ class TestDevelopCommandNonInteractiveFiles:
 
         monkeypatch.setenv(
             "CAFE_MOCK_RESPONSE",
-            "CAFE_CONFIRMED\n\n開發完成。"
+            "CAFE_CONFIRMED\n\n開發完成."
         )
 
         original_cwd = os.getcwd()
@@ -313,7 +313,7 @@ class TestDevelopCommandNonInteractiveFiles:
 
         monkeypatch.setenv(
             "CAFE_MOCK_RESPONSE",
-            "CAFE_CONFIRMED\n\n開發完成。"
+            "CAFE_CONFIRMED\n\n開發完成."
         )
 
         # Create custom git_ops for this test
@@ -373,7 +373,7 @@ class TestDevelopCommandNonInteractiveBranchManagement:
 
         monkeypatch.setenv(
             "CAFE_MOCK_RESPONSE",
-            "CAFE_CONFIRMED\n\n開發完成。"
+            "CAFE_CONFIRMED\n\n開發完成."
         )
 
         git_ops = MagicMock(spec=GitOperations)
@@ -421,7 +421,7 @@ class TestDevelopCommandNonInteractiveBranchManagement:
 
         monkeypatch.setenv(
             "CAFE_MOCK_RESPONSE",
-            "CAFE_CONFIRMED\n\n開發完成。"
+            "CAFE_CONFIRMED\n\n開發完成."
         )
 
         git_ops = MagicMock(spec=GitOperations)
@@ -460,19 +460,19 @@ class TestDevelopCommandNonInteractiveBranchManagement:
 
 
 class TestDevelopCommandNonInteractiveAgentTracking:
-    """測試 mock agent 的追蹤功能"""
+    """測試 mock agent 追蹤功能"""
 
     def test_agent_receives_spec_and_plan_files(
         self, mock_env, temp_develop_dir, mock_git_ops, monkeypatch, tmp_path
     ):
-        """測試 agent 收到正確的 spec 和 plan file 路徑"""
+        """測試 agent 收到正確 spec and plan file 路徑"""
         # Arrange
         spec_file = str(temp_develop_dir.parent / "spec" / "spec.md")
         plan_file = str(temp_develop_dir.parent / "plan" / "plan.md")
 
         monkeypatch.setenv(
             "CAFE_MOCK_RESPONSE",
-            "CAFE_CONFIRMED\n\n開發完成。"
+            "CAFE_CONFIRMED\n\n開發完成."
         )
 
         original_cwd = os.getcwd()
@@ -499,7 +499,7 @@ class TestDevelopCommandNonInteractiveAgentTracking:
             # Act
             phase.execute()
 
-            # Assert - 驗證 agent 被呼叫，且 prompt 包含 spec.md 和 plan.md
+            # Assert - 驗證 agent 被呼叫, 且 prompt 包含 spec.md and plan.md
             executor = agent_manager.get_agent("David")
             assert executor.call_count >= 1
             assert "spec.md" in executor.last_prompt
@@ -517,7 +517,7 @@ class TestDevelopCommandNonInteractiveAgentTracking:
 
         monkeypatch.setenv(
             "CAFE_MOCK_RESPONSE",
-            "CAFE_CONFIRMED\n\n開發完成。"
+            "CAFE_CONFIRMED\n\n開發完成."
         )
 
         original_cwd = os.getcwd()
@@ -576,7 +576,7 @@ class TestDevelopCommandNonInteractiveReviewFeedback:
         review_dir = temp_develop_dir.parent / "review"
         review_dir.mkdir(parents=True)
         review_file = review_dir / "review.md"
-        review_file.write_text("CAFE_NEEDS_CHANGES\n\n請修正 commit message。")
+        review_file.write_text("CAFE_NEEDS_CHANGES\n\n請修正 commit message.")
 
         review_status_file = review_dir / "status.json"
         review_status_file.write_text(json.dumps({
@@ -589,7 +589,7 @@ class TestDevelopCommandNonInteractiveReviewFeedback:
 
         monkeypatch.setenv(
             "CAFE_MOCK_RESPONSE",
-            "CAFE_CONFIRMED\n\n已修正 commit message。"
+            "CAFE_CONFIRMED\n\n已修正 commit message."
         )
 
         git_ops = MagicMock(spec=GitOperations)
@@ -648,7 +648,7 @@ class TestDevelopCommandNonInteractiveReviewFeedback:
         # Set mock response in case early return doesn't work
         monkeypatch.setenv(
             "CAFE_MOCK_RESPONSE",
-            "CAFE_CONFIRMED\n\n開發完成。"
+            "CAFE_CONFIRMED\n\n開發完成."
         )
 
         git_ops = MagicMock(spec=GitOperations)

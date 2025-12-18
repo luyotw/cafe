@@ -56,7 +56,7 @@ class TestSpecPhaseRigorPrompt:
             git_ops=mock_git_ops,
         )
 
-        with patch('cafe.ui.phase_prompts.prompt_list', return_value="Medium (中) - 平衡模式 [預設]\n   • 詢問重要細節和關鍵場景\n   • 在速度和精確度間取得平衡\n   • 適合：一般功能開發"):
+        with patch('cafe.ui.phase_prompts.prompt_list', return_value="Medium (中) - balanced mode [預設]\n   • 詢問重要細節and關鍵場景\n   • 在速度and精確度間取得平衡\n   • 適合：一般功能開發"):
             phase._prompt_for_rigor()
 
         assert phase.rigor == SpecRigor.MEDIUM
@@ -80,7 +80,7 @@ class TestSpecPhaseRigorPrompt:
             git_ops=mock_git_ops,
         )
 
-        with patch('cafe.ui.phase_prompts.prompt_list', return_value="Low (低) - 快速開發模式\n   • 只問最關鍵的資訊\n   • 允許模糊地帶，讓開發者自行判斷\n   • 適合：快速原型、MVP、內部工具"):
+        with patch('cafe.ui.phase_prompts.prompt_list', return_value="Low (低) - fast development模式\n   • 只問最關鍵資訊\n   • 允許模糊地帶, 讓開發者自行判斷\n   • 適合：快速原型、MVP、內部工具"):
             phase._prompt_for_rigor()
 
         assert phase.rigor == SpecRigor.LOW
@@ -104,7 +104,7 @@ class TestSpecPhaseRigorPrompt:
             git_ops=mock_git_ops,
         )
 
-        with patch('cafe.ui.phase_prompts.prompt_list', return_value="High (高) - 精確規格模式\n   • 詳細詢問所有細節和邊界情況\n   • 確保需求可測試、無模糊\n   • 適合：核心功能、API 設計、對外產品"):
+        with patch('cafe.ui.phase_prompts.prompt_list', return_value="High (高) - precise specification模式\n   • 詳細詢問所有細節and邊界情況\n   • 確保需求可測試、無模糊\n   • 適合：核心功能、API 設計、對外產品"):
             phase._prompt_for_rigor()
 
         assert phase.rigor == SpecRigor.HIGH
@@ -128,7 +128,7 @@ class TestSpecPhaseRigorPrompt:
             git_ops=mock_git_ops,
         )
 
-        with patch('cafe.ui.phase_prompts.prompt_list', return_value="Medium (中) - 平衡模式 [預設]\n   • 詢問重要細節和關鍵場景\n   • 在速度和精確度間取得平衡\n   • 適合：一般功能開發"):
+        with patch('cafe.ui.phase_prompts.prompt_list', return_value="Medium (中) - balanced mode [預設]\n   • 詢問重要細節and關鍵場景\n   • 在速度and精確度間取得平衡\n   • 適合：一般功能開發"):
             with patch('builtins.print'):
                 phase._prompt_for_rigor()
 
@@ -187,7 +187,7 @@ class TestSpecPhaseUserStoryPrompt:
         # Manually set spec_file since we're calling internal method directly
         phase.spec_file = str(spec_file)
 
-        user_requirement = "身為用戶，我想要新增登入功能，以便管理個人資料"
+        user_requirement = "身為用戶, 我想要新增登入功能, 以便管理個人資料"
 
         with patch.object(phase.display, 'get_multiline_input', return_value=user_requirement):
             with patch('builtins.print'):
@@ -196,7 +196,7 @@ class TestSpecPhaseUserStoryPrompt:
         # Check spec file was created
         assert spec_file.exists()
         content = spec_file.read_text()
-        assert "# 初始需求" in content
+        assert "# Initial Requirements" in content
         assert user_requirement in content
 
     def test_prompt_for_user_story_empty_raises_error(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
@@ -220,7 +220,7 @@ class TestSpecPhaseUserStoryPrompt:
 
         with patch.object(phase.display, 'get_multiline_input', return_value=""):
             with patch('builtins.print'):
-                with pytest.raises(ValueError, match="未提供需求，無法繼續"):
+                with pytest.raises(ValueError, match="No requirements provided"):
                     phase._prompt_for_user_story()
 
 
@@ -303,7 +303,7 @@ class TestSpecPhaseHelperMethods:
         assert backup_file.read_text() == "Original content"
 
     def test_display_current_spec_first_iteration(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
-        """測試 _display_current_spec 第一輪時顯示「檔案未產生」"""
+        """測試 _display_current_spec Round 1時顯示「檔案未產生」"""
         monkeypatch.chdir(tmp_path)
         spec_dir = tmp_path / ".cafe" / "issues" / "test" / "spec"
         spec_dir.mkdir(parents=True)
@@ -321,7 +321,7 @@ class TestSpecPhaseHelperMethods:
             git_ops=mock_git_ops,
         )
         phase.pm_agent = "Roger"
-        phase.iteration = 1  # 第一輪
+        phase.iteration = 1  # Round 1
         phase.spec_file = str(spec_dir / "spec_001.md")
         phase.phase_dir = spec_dir
 
@@ -330,8 +330,8 @@ class TestSpecPhaseHelperMethods:
 
         # 驗證顯示「檔案未產生」
         print_calls = [str(call) for call in mock_print.call_args_list]
-        assert any("檔案未產生" in str(call) for call in print_calls), \
-            f"Expected '檔案未產生' in print calls, got: {print_calls}"
+        assert any("File not generated" in str(call) for call in print_calls), \
+            f"Expected 'File not generated' in print calls, got: {print_calls}"
 
     def test_display_current_spec_loads_previous_iteration(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
         """測試 _display_current_spec 載入上一輪檔案（iteration > 1）"""
@@ -339,7 +339,7 @@ class TestSpecPhaseHelperMethods:
         spec_dir = tmp_path / ".cafe" / "issues" / "test" / "spec"
         spec_dir.mkdir(parents=True)
 
-        # 建立上一輪的檔案（spec_001.md）
+        # 建立上一輪檔案（spec_001.md）
         prev_spec_file = spec_dir / "spec_001.md"
         prev_spec_file.write_text("# Previous Spec\nPrevious requirements")
 
@@ -359,18 +359,18 @@ class TestSpecPhaseHelperMethods:
             git_ops=mock_git_ops,
         )
         phase.pm_agent = "Roger"
-        phase.iteration = 2  # 第二輪
+        phase.iteration = 2  # Round 2
         phase.spec_file = str(current_spec_file)
         phase.phase_dir = spec_dir
 
         with patch('builtins.print') as mock_print:
             phase._display_current_spec()
 
-        # 驗證有印出載入訊息，並包含正確的檔案路徑
+        # 驗證有印出載入訊息, 並包含正確檔案路徑
         print_calls = [str(call) for call in mock_print.call_args_list]
         assert any("spec_001.md" in str(call) for call in print_calls), \
             f"Expected spec_001.md in print calls, got: {print_calls}"
-        # 驗證載入的內容是上一輪的內容
+        # 驗證載入內容是上一輪內容
         assert any("Previous requirements" in str(call) for call in print_calls), \
             f"Expected 'Previous requirements' in print calls, got: {print_calls}"
 
@@ -393,7 +393,7 @@ class TestSpecPhaseHelperMethods:
             git_ops=mock_git_ops,
         )
 
-        user_input = "這是我的回答"
+        user_input = "這是我回答"
         with patch.object(phase.display, 'get_multiline_input', return_value=user_input):
             result = phase._ask_user_for_clarification()
 
@@ -423,8 +423,8 @@ class TestSpecPhaseGetMethods:
         )
 
         guidelines = phase._get_non_technical_guidelines()
-        assert "不可涉及技術細節" in guidelines
-        assert "不要提及實作方式" in guidelines
+        assert "no technical details" in guidelines
+        assert "Do not mention implementation methods" in guidelines
 
     def test_get_status_code_prompt(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
         """測試 _get_status_code_prompt 返回 prompt"""
@@ -469,24 +469,24 @@ class TestSpecPhaseGetMethods:
             git_ops=mock_git_ops,
         )
         guidelines = phase._get_rigor_guidelines()
-        assert "快速開發" in guidelines or "快速" in guidelines.lower()
+        assert "fast development" in guidelines.lower()
 
         # Test MEDIUM
         phase.rigor = SpecRigor.MEDIUM
         guidelines = phase._get_rigor_guidelines()
-        assert "平衡" in guidelines
+        assert "balance" in guidelines.lower()
 
         # Test HIGH
         phase.rigor = SpecRigor.HIGH
         guidelines = phase._get_rigor_guidelines()
-        assert "詳細" in guidelines or "精確" in guidelines
+        assert "precise" in guidelines.lower()
 
 
 class TestSpecPhaseRigorPersistence:
-    """測試 rigor 參數的持久化"""
+    """測試 rigor 參數持久化"""
 
     def test_rigor_saved_to_config_after_first_iteration(self, tmp_path, mock_git_ops, monkeypatch):
-        """測試第一輪執行後 rigor 被儲存到 config"""
+        """測試Round 1執行後 rigor 被儲存到 config"""
         monkeypatch.chdir(tmp_path)
         mock_git_ops.get_current_branch.return_value = "test-issue"
 
@@ -531,7 +531,7 @@ class TestSpecPhaseRigorPersistence:
         assert config_data["rigor"] == "low"
 
     def test_rigor_loaded_from_config_in_second_iteration(self, tmp_path, mock_git_ops, monkeypatch):
-        """測試第二輪從 config 載入 rigor"""
+        """測試Round 2從 config 載入 rigor"""
         monkeypatch.chdir(tmp_path)
         mock_git_ops.get_current_branch.return_value = "test-issue"
 
@@ -541,7 +541,7 @@ class TestSpecPhaseRigorPersistence:
 
         # Create spec_001.md (previous iteration)
         spec_001 = spec_dir / "spec_001.md"
-        spec_001.write_text("# 需求\n\n## 待釐清的問題\n測試問題")
+        spec_001.write_text("# 需求\n\n## 待釐清問題\n測試問題")
 
         # Create config with rigor=low
         config_file = issue_dir / "issue.yaml"
@@ -601,11 +601,11 @@ class TestSpecPhaseRigorPersistence:
         with open(iteration_2, 'r') as f:
             iter2_data = json.load(f)
         
-        assert "低（快速開發）" in iter2_data["prompt"]
-        assert "中（平衡模式）" not in iter2_data["prompt"]
+        assert "low" in iter2_data["prompt"]
+        assert "中（balanced mode）" not in iter2_data["prompt"]
 
     def test_explicit_rigor_overrides_config(self, tmp_path, mock_git_ops, monkeypatch):
-        """測試明確設定的 rigor 會覆蓋 config 中的值"""
+        """測試明確設定 rigor 會覆蓋 config 中值"""
         monkeypatch.chdir(tmp_path)
         mock_git_ops.get_current_branch.return_value = "test-issue"
 

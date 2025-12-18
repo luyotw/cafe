@@ -1,6 +1,6 @@
-"""測試 iteration history 應該包含完整的 metadata。
+"""測試 iteration history 應該包含完整 metadata.
 
-Iteration history 應該記錄執行時的完整上下文：
+Iteration history 應該記錄執行時完整上下文：
 - CLI tool (例如 "copilot", "claude")
 - Session ID
 - Allowed tools
@@ -41,7 +41,7 @@ def setup_agent_manager_mock_for_spec(agent_manager: MagicMock, cli: str = "copi
 
 
 class TestSpecPhaseIterationHistoryMetadata:
-    """測試 SpecPhase iteration history 包含完整 metadata。"""
+    """測試 SpecPhase iteration history 包含完整 metadata."""
 
     def test_iteration_history_includes_agent_metadata(
         self, tmp_path: Path, mock_git_ops: MagicMock, monkeypatch
@@ -107,7 +107,7 @@ class TestSpecPhaseIterationHistoryMetadata:
     def test_multiple_iterations_preserve_metadata(
         self, tmp_path: Path, mock_git_ops: MagicMock, monkeypatch
     ) -> None:
-        """測試迭代時記錄完整 metadata（沒有 while loop，只執行一次）"""
+        """測試迭代時記錄完整 metadata（沒有 while loop, 只執行一次）"""
         issue_name = "test-multi-metadata"
         mock_git_ops.get_current_branch.return_value = issue_name
         monkeypatch.chdir(tmp_path)
@@ -139,7 +139,7 @@ class TestSpecPhaseIterationHistoryMetadata:
              patch.object(phase.display, 'get_multiline_input', return_value="補充資訊"):
             result = phase.execute()
 
-        # 沒有 while loop，只有第一次迭代，NEED_CLARIFICATION 返回 COMPLETED
+        # 沒有 while loop, 只有第一次迭代, NEED_CLARIFICATION 返回 COMPLETED
         assert result.status == PhaseStatus.COMPLETED
 
         # Check first iteration history file

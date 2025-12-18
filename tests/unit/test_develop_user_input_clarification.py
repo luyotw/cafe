@@ -26,7 +26,7 @@ class TestDevelopUserInputForClarification:
         plan_file.parent.mkdir(parents=True, exist_ok=True)
         history_dir.mkdir(parents=True, exist_ok=True)
         
-        # 建立 spec 和 plan 檔案
+        # 建立 spec and plan 檔案
         spec_file.write_text("# Requirements")
         plan_file.write_text("# Plan")
         
@@ -48,8 +48,8 @@ class TestDevelopUserInputForClarification:
         }
 
     def test_user_input_saved_when_responding_to_clarification(self, setup_develop_phase, monkeypatch):
-        """測試當回應 NEED_CLARIFICATION 時，user_input 應該被保存到 iteration history"""
-        # 建立上一輪的 iteration 檔案，狀態為 NEED_CLARIFICATION
+        """測試當回應 NEED_CLARIFICATION 時, user_input 應該被保存到 iteration history"""
+        # 建立上一輪 iteration 檔案, 狀態為 NEED_CLARIFICATION
         prev_iteration_file = setup_develop_phase["history_dir"] / "iteration_001.json"
         prev_iteration_data = {
             "iteration": 1,
@@ -61,7 +61,7 @@ class TestDevelopUserInputForClarification:
         with open(prev_iteration_file, "w") as f:
             json.dump(prev_iteration_data, f)
 
-        # 建立 develop phase，在 non-interactive 模式下提供 user_input
+        # 建立 develop phase, 在 non-interactive 模式下提供 user_input
         user_response = "選項 A"
         phase = DevelopPhase(
             agent_manager=setup_develop_phase["agent_manager"],
@@ -77,23 +77,23 @@ class TestDevelopUserInputForClarification:
             user_input=user_response,
         )
 
-        # 設定 iteration 為 2，這樣會載入 iteration_001.json
+        # 設定 iteration 為 2, 這樣會載入 iteration_001.json
         phase.iteration = 2
-        # 確保 history_dir 指向測試環境的目錄
+        # 確保 history_dir 指向測試環境目錄
         phase.history_dir = setup_develop_phase["history_dir"]
 
         # 呼叫 _prepare_user_input_for_iteration
         result = phase._prepare_user_input_for_iteration()
 
-        # 確認返回的是 user_input
+        # 確認返回是 user_input
         assert result == user_response
 
         # 確認 user_input 被清空（避免下次重複使用）
         assert phase.user_input == ""
 
     def test_empty_user_input_when_no_clarification_pending(self, setup_develop_phase):
-        """測試當沒有 NEED_CLARIFICATION 狀態時，返回空字串"""
-        # 建立上一輪的 iteration 檔案，狀態為 NEED_PERMISSION（不是 NEED_CLARIFICATION）
+        """測試當沒有 NEED_CLARIFICATION 狀態時, 返回空字串"""
+        # 建立上一輪 iteration 檔案, 狀態為 NEED_PERMISSION（不是 NEED_CLARIFICATION）
         prev_iteration_file = setup_develop_phase["history_dir"] / "iteration_001.json"
         prev_iteration_data = {
             "iteration": 1,
@@ -106,7 +106,7 @@ class TestDevelopUserInputForClarification:
         with open(prev_iteration_file, "w") as f:
             json.dump(prev_iteration_data, f)
         
-        # 建立 develop phase，提供 user_input，但因為不是 NEED_CLARIFICATION 所以不應該使用
+        # 建立 develop phase, 提供 user_input, 但因為不是 NEED_CLARIFICATION 所以不應該使用
         phase = DevelopPhase(
             agent_manager=setup_develop_phase["agent_manager"],
             permission_handler=setup_develop_phase["permission_handler"],
@@ -121,9 +121,9 @@ class TestDevelopUserInputForClarification:
             user_input="這不應該被使用",
         )
         
-        # 設定 iteration 為 2，這樣會載入 iteration_001.json
+        # 設定 iteration 為 2, 這樣會載入 iteration_001.json
         phase.iteration = 2
-        # 確保 history_dir 指向測試環境的目錄
+        # 確保 history_dir 指向測試環境目錄
         phase.history_dir = setup_develop_phase["history_dir"]
         
         # 呼叫 _prepare_user_input_for_iteration

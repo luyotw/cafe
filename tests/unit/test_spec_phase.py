@@ -118,7 +118,7 @@ class TestAgentSelection:
         spec_file.write_text("Requirements")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("CAFE_CONFIRMED\n需求已清楚。", TokenUsage(), [], None, [])
+        agent_manager.execute.return_value = ("CAFE_CONFIRMED\n需求已清楚.", TokenUsage(), [], None, [])
         setup_agent_manager_mocks(agent_manager)
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -152,7 +152,7 @@ class TestHistoryTracking:
         spec_file.write_text("Initial requirements\n")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("CAFE_CONFIRMED\n需求已清楚。", TokenUsage(), [], None, [])
+        agent_manager.execute.return_value = ("CAFE_CONFIRMED\n需求已清楚.", TokenUsage(), [], None, [])
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
@@ -169,7 +169,7 @@ class TestHistoryTracking:
         assert str(phase.history_dir) == ".cafe/issues/test-feature/spec/history"
 
     def test_save_iteration_history_creates_json(self, tmp_path: Path, mock_git_ops: MagicMock) -> None:
-        """測試儲存迭代歷史會建立 JSON 檔案，包含 user_input（輪的開始）"""
+        """測試儲存迭代歷史會建立 JSON 檔案, 包含 user_input（輪開始）"""
         spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec_001.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.parent.mkdir(parents=True, exist_ok=True)
@@ -194,7 +194,7 @@ class TestHistoryTracking:
         phase._save_iteration_history(
             phase_specific_data={
                 "status": PhaseStatusCode.NEED_CLARIFICATION.value,
-                "user_input": "Initial requirements\n",  # 輪的開始：使用者故事
+                "user_input": "Initial requirements\n",  # 輪開始：使用者故事
                 "pm_response": "請問使用者是誰？",
                 "confirmed_requirements": phase.confirmed_requirements.copy(),
                 "pending_questions": phase.pending_questions.copy(),
@@ -211,7 +211,7 @@ class TestHistoryTracking:
 
         assert data["iteration"] == 1
         assert data["status"] == "CAFE_NEED_CLARIFICATION"
-        assert data["user_input"] == "Initial requirements\n"  # 輪的開始
+        assert data["user_input"] == "Initial requirements\n"  # 輪開始
         assert data["pm_response"] == "請問使用者是誰？"
         # user_response is no longer stored - next iteration's user_input IS the user_response
         assert "user_response" not in data
@@ -239,7 +239,7 @@ class TestHistoryTracking:
 
         # Manually set iteration and save history with prompt using base class method
         phase.iteration = 1
-        test_prompt = "這是發送給 PM agent 的完整 prompt 內容\n包含了需求和 context"
+        test_prompt = "這是發送給 PM agent 完整 prompt 內容\n包含了需求and context"
         phase._save_iteration_history(
             phase_specific_data={
                 "status": PhaseStatusCode.NEED_CLARIFICATION.value,
@@ -287,7 +287,7 @@ class TestHistoryTracking:
 
         # Manually set iteration and save history with agent metadata using base class method
         phase.iteration = 1
-        test_prompt = "這是發送給 PM agent 的完整 prompt 內容"
+        test_prompt = "這是發送給 PM agent 完整 prompt 內容"
         phase._save_iteration_history(
             phase_specific_data={
                 "status": PhaseStatusCode.NEED_CLARIFICATION.value,
@@ -346,7 +346,7 @@ class TestHistoryTracking:
         assert str(phase.history_dir) == ".cafe/issues/my-feature/spec/history"
 
     def test_iteration_2_prompt_includes_user_input(self, tmp_path: Path, mock_git_ops: MagicMock) -> None:
-        """測試第 2 輪後 prompt 應該包含 user_input 而不是 context.md"""
+        """測試Round 2後 prompt 應該包含 user_input 而不是 context.md"""
         spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec_001.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("Initial requirements\n")
@@ -364,21 +364,21 @@ class TestHistoryTracking:
         )
 
         phase.iteration = 2
-        user_response = "1. 議題是人工定義的\n2. 同一組織共享議題列表\n3. 在新頁面選擇議題"
+        user_response = "1. 議題是人工定義\n2. 同一組織共享議題列表\n3. 在新頁面選擇議題"
 
         # Generate prompt with user input
         prompt = phase._generate_prompt(user_input=user_response)
 
         # Should include user's response directly in prompt
-        assert "議題是人工定義的" in prompt
+        assert "議題是人工定義" in prompt
         assert "同一組織共享議題列表" in prompt
         assert "在新頁面選擇議題" in prompt
 
         # Should have a section header for user response
-        assert "使用者的回答" in prompt or "使用者回覆" in prompt
+        assert "User's Answer" in prompt or "使用者回覆" in prompt
 
     def test_iteration_4_prompt_includes_restriction(self, tmp_path: Path, mock_git_ops: MagicMock) -> None:
-        """測試第 4 輪 prompt 包含問題限制"""
+        """測試Round 4 prompt 包含問題限制"""
         spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec_001.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
         spec_file.write_text("Initial requirements\n")
@@ -402,14 +402,14 @@ class TestHistoryTracking:
         prompt = phase._generate_prompt()
 
         # Should include restriction message
-        assert "待解答的問題" in prompt and "不可以提出新的問題" in prompt
+        assert "pending questions" in prompt.lower() and "cannot propose new questions" in prompt.lower()
 
 
 class TestNonInteractiveModeIteration1:
     """Test non-interactive mode - first iteration (user story input)."""
 
     def test_first_call_with_user_story_returns_in_progress(self, tmp_path: Path, mock_git_ops: MagicMock, monkeypatch) -> None:
-        """第1次呼叫：提供 user story，PM 提問，回傳 IN_PROGRESS（沒有 while loop，只執行一次）"""
+        """第1次呼叫：提供 user story, PM 提問, 回傳 IN_PROGRESS（沒有 while loop, 只執行一次）"""
         mock_git_ops.get_current_branch.return_value = "test-feature"
         monkeypatch.chdir(tmp_path)
 
@@ -418,13 +418,13 @@ class TestNonInteractiveModeIteration1:
 
         agent_manager = MagicMock(spec=AgentManager)
         # Agent returns NEED_CLARIFICATION
-        agent_manager.execute.return_value = ("CAFE_NEED_CLARIFICATION\n需要澄清需求。\n\n## 待釐清的問題\n1. 問題一", TokenUsage(), [], None, [])
+        agent_manager.execute.return_value = ("CAFE_NEED_CLARIFICATION\n需要澄清需求.\n\n## 待釐清問題\n1. 問題一", TokenUsage(), [], None, [])
         setup_agent_manager_mocks(agent_manager)
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
         # Provide user story via user_input for non-interactive mode
-        user_story = "身為開發者，我想要有一個指令可以顯示 IP"
+        user_story = "身為開發者, 我想要有一個指令可以顯示 IP"
 
         phase = SpecPhase(
             agent_manager=agent_manager,
@@ -477,7 +477,7 @@ class TestNonInteractiveModeIteration1:
         assert user_story in content
 
     def test_first_call_pm_confirms_immediately(self, tmp_path: Path, mock_git_ops: MagicMock, monkeypatch) -> None:
-        """第1次呼叫：PM 直接 READY_FOR_REVIEW（不提問），回傳 COMPLETED"""
+        """第1次呼叫：PM 直接 READY_FOR_REVIEW（不提問）, 回傳 COMPLETED"""
         mock_git_ops.get_current_branch.return_value = "test-feature"
         monkeypatch.chdir(tmp_path)
 
@@ -485,7 +485,7 @@ class TestNonInteractiveModeIteration1:
         spec_file.parent.mkdir(parents=True, exist_ok=True)
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n需求已清楚。", TokenUsage(), [], None, [])
+        agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n需求已清楚.", TokenUsage(), [], None, [])
         setup_agent_manager_mocks(agent_manager)
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -499,7 +499,7 @@ class TestNonInteractiveModeIteration1:
             user_input="confirm",  # Provide confirmation for non-interactive mode
         )
 
-        user_story = "簡單的需求"
+        user_story = "簡單需求"
         with patch('sys.stdin', StringIO(user_story + "\nEND\n")), \
              patch('builtins.print'):  # Suppress token usage output
             result = phase.execute()
@@ -595,7 +595,7 @@ class TestInteractiveModeStillWorks:
     """Verify interactive mode still works as before."""
 
     def test_interactive_mode_single_iteration(self, tmp_path: Path, mock_git_ops: MagicMock, monkeypatch) -> None:
-        """互動模式：單次迭代（沒有 while loop，回傳 IN_PROGRESS 等待確認）"""
+        """互動模式：單次迭代（沒有 while loop, 回傳 IN_PROGRESS 等待確認）"""
         from cafe.core.types import SpecRigor
 
         mock_git_ops.get_current_branch.return_value = "test-feature"
@@ -730,7 +730,7 @@ class TestSpecPhasePromptGeneration:
     """測試 SpecPhase prompt 生成"""
 
     def test_prompt_does_not_include_status_code_without_prefix(self, tmp_path: Path, mock_git_ops: MagicMock, monkeypatch) -> None:
-        """測試 prompt 不應該包含沒有 CAFE_ 前綴的 status code 指示"""
+        """測試 prompt 不應該包含沒有 CAFE_ 前綴 status code 指示"""
         monkeypatch.chdir(tmp_path)
         mock_git_ops.get_current_branch.return_value = "test"
 
@@ -773,10 +773,10 @@ class TestSpecPhasePromptGeneration:
 
 
 class TestInterruptedIterationResume:
-    """測試中斷後恢復的完整流程."""
+    """測試中斷後恢復完整流程."""
 
     def test_resume_interrupted_iteration_uses_saved_user_input(self, tmp_path: Path, mock_git_ops: MagicMock, monkeypatch) -> None:
-        """測試中斷後恢復時，直接使用已儲存的 user_input，不再詢問用戶."""
+        """測試中斷後恢復時, 直接使用已儲存 user_input, 不再詢問用戶."""
         import json
         from io import StringIO
 
@@ -797,7 +797,7 @@ class TestInterruptedIterationResume:
         history_dir = spec_dir / "history"
         history_dir.mkdir(parents=True, exist_ok=True)
 
-        # 創建 iteration 1 的完整歷史（已完成，有 response）
+        # 創建 iteration 1 完整歷史（已完成, 有 response）
         iteration1 = history_dir / "iteration_001.json"
         iteration1.write_text(json.dumps({
             "iteration": 1,
@@ -806,13 +806,13 @@ class TestInterruptedIterationResume:
             "status_code": "CAFE_NEED_CLARIFICATION"
         }))
 
-        # 創建 iteration 2 的不完整歷史（被中斷，有 user_input 但沒有 response）
+        # 創建 iteration 2 不完整歷史（被中斷, 有 user_input 但沒有 response）
         iteration2 = history_dir / "iteration_002.json"
         saved_user_input = "1. 功能A\n2. 功能B\n3. 功能C"
         iteration2.write_text(json.dumps({
             "iteration": 2,
             "user_input": saved_user_input,
-            "response": None  # 被中斷，沒有 response
+            "response": None  # 被中斷, 沒有 response
         }))
 
         # Setup mocks
@@ -833,33 +833,33 @@ class TestInterruptedIterationResume:
             user_input="confirm",  # Provide confirmation for non-interactive mode
         )
 
-        # Execute phase - 應該直接使用已儲存的 user_input，不會要求用戶輸入
+        # Execute phase - 應該直接使用已儲存 user_input, 不會要求用戶輸入
         with patch('sys.stdin', StringIO("")):  # 不提供任何輸入
             result = phase.execute()
 
         # 驗證結果
         assert result.status == PhaseStatus.COMPLETED
 
-        # 驗證 agent 被呼叫時使用了已儲存的 user_input
+        # 驗證 agent 被呼叫時使用了已儲存 user_input
         agent_manager.execute.assert_called_once()
         call_args = agent_manager.execute.call_args
-        # execute 的參數是 (agent_name, prompt, ...)
+        # execute 參數是 (agent_name, prompt, ...)
         prompt = call_args[0][1]  # 第二個位置參數是 prompt
 
-        # Prompt 應該包含已儲存的 user_input
+        # Prompt 應該包含已儲存 user_input
         assert saved_user_input in prompt
 
-        # 驗證 iteration 2 的 history 被更新（有 response 了）
+        # 驗證 iteration 2  history 被更新（有 response 了）
         iteration2_data = json.loads(iteration2.read_text())
         assert iteration2_data["response"] is not None
         assert "CAFE_READY_FOR_REVIEW" in iteration2_data["response"]
 
 
 class TestSpecPhaseFilePermissions:
-    """測試 SpecPhase 的檔案權限設定"""
+    """測試 SpecPhase 檔案權限設定"""
 
     def test_uses_precise_file_permissions_for_spec_file(self, tmp_path: Path, mock_git_ops: MagicMock, monkeypatch) -> None:
-        """測試使用精細的檔案路徑授權 (edit spec.md)"""
+        """測試使用精細檔案路徑授權 (edit spec.md)"""
         monkeypatch.chdir(tmp_path)
 
         # Setup - Don't create spec file, let execute() create it
@@ -1071,7 +1071,7 @@ class TestFetchGitHubIssue:
         assert result is None  # Success
         assert spec_file.exists()
         content = spec_file.read_text()
-        assert "# 初始需求" in content
+        assert "# Initial Requirements" in content
         assert "Test Issue Title" in content
         assert "Test issue body content" in content
 
@@ -1114,13 +1114,13 @@ class TestFetchGitHubIssue:
     def test_save_issue_config_preserves_existing_fields(
         self, tmp_path: Path, mock_git_ops: MagicMock, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """測試 _save_issue_config 會保留現有的 base_branch 和 feature_branch"""
+        """測試 _save_issue_config 會保留現有 base_branch and feature_branch"""
         import yaml
 
         # Change to tmp_path to make .cafe paths work correctly
         monkeypatch.chdir(tmp_path)
 
-        # Setup - 先建立有 base_branch 和 feature_branch 的 config.yaml
+        # Setup - 先建立有 base_branch and feature_branch  config.yaml
         issue_dir = Path(".cafe/issues/test-issue")
         issue_dir.mkdir(parents=True, exist_ok=True)
         config_file = issue_dir / "issue.yaml"
@@ -1164,7 +1164,7 @@ class TestFetchGitHubIssue:
     def test_fetch_github_issue_fails_when_not_authenticated(
         self, mock_github_ops: MagicMock, mock_get_repo: MagicMock, tmp_path: Path, mock_git_ops: MagicMock
     ) -> None:
-        """測試當 gh 未登入時，_fetch_github_issue() 正確回傳失敗狀態"""
+        """測試當 gh 未登入時, _fetch_github_issue() 正確回傳失敗狀態"""
         # Setup
         mock_get_repo.return_value = "owner/repo"
         mock_gh_instance = MagicMock()
@@ -1197,18 +1197,18 @@ class TestFetchGitHubIssue:
 
 
 class TestOriginalRequirement:
-    """測試原始需求描述的保存與使用"""
+    """測試Original Requirements Description保存and使用"""
 
     def test_captures_original_requirement_before_first_iteration(
         self, tmp_path: Path, mock_git_ops: MagicMock, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """測試在第一輪迭代前會捕獲原始需求描述"""
+        """測試在Round 1迭代前會捕獲Original Requirements Description"""
         monkeypatch.chdir(tmp_path)
 
         # Setup - 建立初始 spec_001.md (versioned file)
         spec_file = Path(".cafe/issues/test-issue/spec/spec_001.md")
         spec_file.parent.mkdir(parents=True, exist_ok=True)
-        original_content = "# 初始需求\n\n身為用戶，我想要匯出 CSV 檔案"
+        original_content = "# 初始需求\n\n身為用戶, 我想要匯出 CSV 檔案"
         spec_file.write_text(original_content, encoding="utf-8")
 
         agent_manager = MagicMock(spec=AgentManager)
@@ -1226,7 +1226,7 @@ class TestOriginalRequirement:
             issue_name="test-issue",
         )
 
-        # Execute - 這會進入 while loop 並在第一輪前捕獲原始需求
+        # Execute - 這會進入 while loop 並在Round 1前捕獲原始需求
         phase.execute()
 
         # Assert - 驗證原始需求被保存
@@ -1235,7 +1235,7 @@ class TestOriginalRequirement:
     def test_spec_format_includes_original_requirement_section(
         self, tmp_path: Path, mock_git_ops: MagicMock, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """測試 spec.md 格式指示包含「原始需求描述」區塊"""
+        """測試 spec.md 格式指示包含「Original Requirements Description」區塊"""
         monkeypatch.chdir(tmp_path)
 
         # Setup
@@ -1260,14 +1260,14 @@ class TestOriginalRequirement:
         # Execute - 生成 prompt
         prompt = phase._generate_local_prompt(user_input="")
 
-        # Assert - 驗證格式指示包含「原始需求描述」
-        assert "「## 原始需求描述」" in prompt
-        assert "完整保留" in prompt or "不可修改" in prompt
+        # Assert - Verify format includes "Original Requirements Description"
+        assert "## Original Requirements Description" in prompt
+        assert "fully preserve" in prompt.lower() or "cannot modify" in prompt.lower()
 
     def test_empty_original_requirement_not_shown_in_prompt(
         self, tmp_path: Path, mock_git_ops: MagicMock, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """測試空的原始需求不會顯示在 prompt 中"""
+        """測試空原始需求不會顯示在 prompt 中"""
         monkeypatch.chdir(tmp_path)
 
         # Setup
@@ -1292,14 +1292,14 @@ class TestOriginalRequirement:
         # Execute - 生成 prompt
         prompt = phase._generate_local_prompt(user_input="")
 
-        # Assert - 驗證不包含原始需求描述區塊
-        assert "⚠️ **重要：原始需求描述**" not in prompt
-        assert "除非用戶明確要求修改，否則絕對不可更動此部分內容" not in prompt
+        # Assert - 驗證不包含Original Requirements Description區塊
+        assert "⚠️ **重要：Original Requirements Description**" not in prompt
+        assert "除非用戶明確要求修改, 否則絕對不可更動此部分內容" not in prompt
 
     def test_none_original_requirement_not_shown_in_prompt(
         self, tmp_path: Path, mock_git_ops: MagicMock, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """測試 None 的原始需求不會顯示在 prompt 中"""
+        """測試 None 原始需求不會顯示在 prompt 中"""
         monkeypatch.chdir(tmp_path)
 
         # Setup
@@ -1324,13 +1324,13 @@ class TestOriginalRequirement:
         # Execute - 生成 prompt
         prompt = phase._generate_local_prompt(user_input="")
 
-        # Assert - 驗證不包含原始需求描述區塊
-        assert "⚠️ **重要：原始需求描述**" not in prompt
+        # Assert - 驗證不包含Original Requirements Description區塊
+        assert "⚠️ **重要：Original Requirements Description**" not in prompt
 
     def test_pm_prompt_includes_no_code_modification_instruction(
         self, tmp_path: Path, mock_git_ops: MagicMock, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """測試 PM prompt 中包含讀取角色定義的指示"""
+        """測試 PM prompt 中包含讀取角色定義指示"""
         monkeypatch.chdir(tmp_path)
 
         # Setup
@@ -1354,18 +1354,18 @@ class TestOriginalRequirement:
         # Execute - 生成 prompt
         prompt = phase._generate_local_prompt(user_input="")
 
-        # Assert - 驗證包含讀取角色定義檔案的指示
+        # Assert - 驗證包含讀取角色定義檔案指示
         assert "Roger.md" in prompt
-        assert "讀取" in prompt
-        assert "角色定義" in prompt
-        assert "嚴格按照角色定義中的要求" in prompt
+        assert "read" in prompt
+        assert "role" in prompt.lower()
+        assert "strictly" in prompt.lower() and "role definition" in prompt.lower()
 
 
 class TestSpecPhaseVersionedFiles:
-    """測試 SpecPhase 的版本化檔案管理"""
+    """測試 SpecPhase 版本化檔案管理"""
 
     def test_first_iteration_creates_spec_001(self, tmp_path: Path, mock_git_ops: MagicMock, monkeypatch) -> None:
-        """測試第一輪產生 spec_001.md"""
+        """測試Round 1產生 spec_001.md"""
         monkeypatch.chdir(tmp_path)
         mock_git_ops.get_current_branch.return_value = "test-issue"
 
@@ -1375,7 +1375,7 @@ class TestSpecPhaseVersionedFiles:
 
         # Create initial requirement
         initial_spec = spec_dir / "spec.md"
-        initial_spec.write_text("# 初始需求\n\n身為使用者，我想要功能X")
+        initial_spec.write_text("# 初始需求\n\n身為使用者, 我想要功能X")
 
         # Setup mocks
         agent_manager = MagicMock(spec=AgentManager)
@@ -1402,7 +1402,7 @@ class TestSpecPhaseVersionedFiles:
         assert spec_001.exists(), "spec_001.md should be created in first iteration"
 
     def test_second_iteration_creates_spec_002_copy(self, tmp_path: Path, mock_git_ops: MagicMock, monkeypatch) -> None:
-        """測試第二輪產生 spec_002.md（內容為 spec_001.md 的複製）"""
+        """測試Round 2產生 spec_002.md（內容為 spec_001.md 複製）"""
         monkeypatch.chdir(tmp_path)
         mock_git_ops.get_current_branch.return_value = "test-issue"
 
@@ -1411,7 +1411,7 @@ class TestSpecPhaseVersionedFiles:
 
         # Create spec_001.md from first iteration
         spec_001 = spec_dir / "spec_001.md"
-        spec_001_content = "## 需求規格\n功能描述：這是第一輪的內容"
+        spec_001_content = "## 需求規格\n功能描述：這是Round 1內容"
         spec_001.write_text(spec_001_content)
 
         # Create history to simulate iteration 1 completion
@@ -1421,7 +1421,7 @@ class TestSpecPhaseVersionedFiles:
         iteration1.write_text(json.dumps({
             "iteration": 1,
             "user_input": "Initial requirement",
-            "response": "CAFE_READY_FOR_REVIEW\n第一輪完成",
+            "response": "CAFE_READY_FOR_REVIEW\nRound 1完成",
             "status_code": "CAFE_READY_FOR_REVIEW"
         }))
 
@@ -1482,7 +1482,7 @@ class TestSpecPhaseVersionedFiles:
         )
 
         # Attempt to execute - should raise ValueError
-        with pytest.raises(ValueError, match="不可超過 999"):
+        with pytest.raises(ValueError, match="Cannot exceed 999"):
             # Directly call _get_next_iteration_number to test the limit
             phase._get_next_iteration_number("spec", spec_dir)
 

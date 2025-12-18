@@ -1,4 +1,4 @@
-"""測試 cafe agent 指令集的 CLI 介面。"""
+"""測試 cafe agent 指令集 CLI 介面."""
 
 import os
 import tempfile
@@ -13,13 +13,13 @@ from cafe.ui.cli import app
 
 @pytest.fixture
 def runner():
-    """建立 CLI runner。"""
+    """建立 CLI runner."""
     return CliRunner()
 
 
 @pytest.fixture
 def temp_cafe_dir(tmp_path):
-    """建立暫時的 .cafe 目錄結構。"""
+    """建立暫時 .cafe 目錄結構."""
     cafe_dir = tmp_path / ".cafe"
     agents_dir = cafe_dir / "agents"
 
@@ -31,11 +31,11 @@ def temp_cafe_dir(tmp_path):
 
 
 class TestAgentLsCommand:
-    """測試 cafe agent ls 指令。"""
+    """測試 cafe agent ls 指令."""
 
     def test_agent_ls_with_no_agents(self, runner, temp_cafe_dir, monkeypatch):
-        """測試沒有任何 agent 時的 ls 輸出。"""
-        # 將工作目錄設定為 temp_cafe_dir 的父目錄
+        """測試沒有任何 agent 時 ls 輸出."""
+        # 將工作目錄設定為 temp_cafe_dir 父目錄
         monkeypatch.chdir(temp_cafe_dir.parent)
 
         result = runner.invoke(app, ["agent", "ls"])
@@ -44,11 +44,11 @@ class TestAgentLsCommand:
         assert "No agents found" in result.stdout
 
     def test_agent_ls_with_multiple_agents(self, runner, temp_cafe_dir, monkeypatch):
-        """測試有多個 agents 時按角色分類列出。"""
-        # 將工作目錄設定為 temp_cafe_dir 的父目錄
+        """測試有多個 agents 時按角色分類列出."""
+        # 將工作目錄設定為 temp_cafe_dir 父目錄
         monkeypatch.chdir(temp_cafe_dir.parent)
 
-        # 建立測試用的 agent 檔案
+        # 建立測試用 agent 檔案
         agents_dir = temp_cafe_dir / "agents"
 
         # PM agents
@@ -84,23 +84,23 @@ class TestAgentLsCommand:
 
 
 class TestAgentRmCommand:
-    """測試 cafe agent rm 指令。"""
+    """測試 cafe agent rm 指令."""
 
     def test_agent_rm_success(self, runner, temp_cafe_dir, monkeypatch):
-        """測試成功刪除 agent 檔案。"""
-        # 將工作目錄設定為 temp_cafe_dir 的父目錄
+        """測試成功刪除 agent 檔案."""
+        # 將工作目錄設定為 temp_cafe_dir 父目錄
         monkeypatch.chdir(temp_cafe_dir.parent)
 
-        # 建立測試用的 agent 檔案
+        # 建立測試用 agent 檔案
         agents_dir = temp_cafe_dir / "agents"
         agent_file = agents_dir / "developer" / "John.md"
         agent_file.write_text("---\nname: John\n---\nRules")
 
-        # Mock prompt_list 和 prompt_confirm
+        # Mock prompt_list and prompt_confirm
         with patch("cafe.ui.cli.prompt_list") as mock_prompt_list, patch(
             "cafe.ui.cli.prompt_confirm", return_value=True
         ):
-            # 模擬使用者選擇角色和 agent
+            # 模擬使用者選擇角色and agent
             mock_prompt_list.side_effect = ["developer", "John.md"]
 
             result = runner.invoke(app, ["agent", "rm"])
@@ -110,11 +110,11 @@ class TestAgentRmCommand:
         assert not agent_file.exists()
 
     def test_agent_rm_file_not_found(self, runner, temp_cafe_dir, monkeypatch):
-        """測試刪除不存在的 agent 檔案（選擇的 role 沒有任何 agent）。"""
-        # 將工作目錄設定為 temp_cafe_dir 的父目錄
+        """測試刪除不存在 agent 檔案（選擇 role 沒有任何 agent）."""
+        # 將工作目錄設定為 temp_cafe_dir 父目錄
         monkeypatch.chdir(temp_cafe_dir.parent)
 
-        # Mock prompt_list 選擇一個沒有 agents 的 role
+        # Mock prompt_list 選擇一個沒有 agents  role
         with patch("cafe.ui.cli.prompt_list") as mock_prompt_list:
             mock_prompt_list.return_value = "developer"
 
@@ -124,20 +124,20 @@ class TestAgentRmCommand:
         assert "no agents found" in result.stdout.lower()
 
     def test_agent_rm_user_cancels(self, runner, temp_cafe_dir, monkeypatch):
-        """測試使用者取消刪除操作。"""
-        # 將工作目錄設定為 temp_cafe_dir 的父目錄
+        """測試使用者取消刪除操作."""
+        # 將工作目錄設定為 temp_cafe_dir 父目錄
         monkeypatch.chdir(temp_cafe_dir.parent)
 
-        # 建立測試用的 agent 檔案
+        # 建立測試用 agent 檔案
         agents_dir = temp_cafe_dir / "agents"
         agent_file = agents_dir / "developer" / "John.md"
         agent_file.write_text("---\nname: John\n---\nRules")
 
-        # Mock prompt_list 和 typer.confirm (回傳 False)
+        # Mock prompt_list and typer.confirm (回傳 False)
         with patch("cafe.ui.cli.prompt_list") as mock_prompt_list, patch(
             "typer.confirm", return_value=False
         ):
-            # 模擬使用者選擇角色和 agent
+            # 模擬使用者選擇角色and agent
             mock_prompt_list.side_effect = ["developer", "John.md"]
 
             result = runner.invoke(app, ["agent", "rm"])
@@ -148,18 +148,18 @@ class TestAgentRmCommand:
 
 
 class TestAgentCreateCommand:
-    """測試 cafe agent create 指令。"""
+    """測試 cafe agent create 指令."""
 
     def test_agent_create_success(self, runner, temp_cafe_dir, monkeypatch):
-        """測試成功建立 agent 檔案。"""
-        # 將工作目錄設定為 temp_cafe_dir 的父目錄
+        """測試成功建立 agent 檔案."""
+        # 將工作目錄設定為 temp_cafe_dir 父目錄
         monkeypatch.chdir(temp_cafe_dir.parent)
 
         # Mock prompt_list and prompt_text
         with patch("cafe.ui.cli.prompt_list") as mock_prompt_list, patch(
             "cafe.ui.cli.prompt_text"
         ) as mock_prompt_text:
-            # 模擬使用者選擇角色和輸入 name/description
+            # 模擬使用者選擇角色and輸入 name/description
             mock_prompt_list.return_value = "developer"
             mock_prompt_text.side_effect = ["Michael", "A senior Rust developer"]
 
@@ -193,11 +193,11 @@ class TestAgentCreateCommand:
         assert "Always write safe Rust code" in content
 
     def test_agent_create_file_already_exists(self, runner, temp_cafe_dir, monkeypatch):
-        """測試建立已存在的 agent 檔案。"""
-        # 將工作目錄設定為 temp_cafe_dir 的父目錄
+        """測試建立已存在 agent 檔案."""
+        # 將工作目錄設定為 temp_cafe_dir 父目錄
         monkeypatch.chdir(temp_cafe_dir.parent)
 
-        # 建立已存在的 agent 檔案
+        # 建立已存在 agent 檔案
         agents_dir = temp_cafe_dir / "agents"
         agent_file = agents_dir / "developer" / "Michael.md"
         agent_file.write_text("---\nname: Michael\n---\nExisting")
@@ -216,14 +216,14 @@ class TestAgentCreateCommand:
 
 
 class TestAgentEditCommand:
-    """測試 cafe agent edit 指令。"""
+    """測試 cafe agent edit 指令."""
 
     def test_agent_edit_success(self, runner, temp_cafe_dir, monkeypatch):
-        """測試成功編輯 agent 檔案。"""
-        # 將工作目錄設定為 temp_cafe_dir 的父目錄
+        """測試成功編輯 agent 檔案."""
+        # 將工作目錄設定為 temp_cafe_dir 父目錄
         monkeypatch.chdir(temp_cafe_dir.parent)
 
-        # 建立測試用的 agent 檔案
+        # 建立測試用 agent 檔案
         agents_dir = temp_cafe_dir / "agents"
         pm_dir = agents_dir / "pm"
         pm_dir.mkdir(parents=True, exist_ok=True)
@@ -235,7 +235,7 @@ class TestAgentEditCommand:
 
         # Mock prompt_list
         with patch("cafe.ui.cli.prompt_list") as mock_prompt_list:
-            # 模擬使用者選擇角色和 agent
+            # 模擬使用者選擇角色and agent
             mock_prompt_list.side_effect = ["developer", "David.md"]
 
             # Mock subprocess.run for editor

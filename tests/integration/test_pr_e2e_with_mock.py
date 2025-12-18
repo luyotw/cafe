@@ -1,6 +1,6 @@
 """E2E tests for 'cafe pr' command with mock agents.
 
-使用 CliRunner 測試 CLI 命令執行，用 CAFE_MOCK_AGENTS=true 避免真實 LLM 呼叫。
+使用 CliRunner 測試 CLI 命令執行, 用 CAFE_MOCK_AGENTS=true 避免真實 LLM 呼叫.
 """
 
 import os
@@ -20,14 +20,14 @@ runner = CliRunner()
 
 @dataclass
 class MockResult:
-    """模擬 subprocess.run 的結果格式"""
+    """模擬 subprocess.run 結果格式"""
     returncode: int
     stdout: str
     stderr: str
 
 
 def setup_test_environment(tmp_path: Path, issue_name: str):
-    """設置測試環境：創建 config.yaml、spec.md 和 plan.md"""
+    """設置測試環境：創建 config.yaml、spec.md and plan.md"""
 
     # Create config.yaml (required by cafe commands)
     cafe_dir = tmp_path / ".cafe"
@@ -39,7 +39,7 @@ def setup_test_environment(tmp_path: Path, issue_name: str):
     spec_dir = tmp_path / ".cafe" / "issues" / issue_name / "spec"
     spec_dir.mkdir(parents=True, exist_ok=True)
     spec_file = spec_dir / "spec.md"
-    spec_file.write_text("# 測試功能需求\n\n這是一個測試需求規格。")
+    spec_file.write_text("# 測試功能需求\n\n這是一個測試需求規格.")
 
     # 創建 plan.md
     plan_dir = tmp_path / ".cafe" / "issues" / issue_name / "plan"
@@ -53,7 +53,7 @@ def setup_test_environment(tmp_path: Path, issue_name: str):
 - [x] 撰寫測試
 
 ## 開發指南
-已完成所有任務。
+已完成所有任務.
 """)
 
 
@@ -106,9 +106,9 @@ class TestPRE2EMockDraftFlag:
     def test_draft_pr_by_default(self, tmp_path):
         """測試預設創建 draft PR
 
-        情境：GitHub 上不存在該 branch 的 PR，使用預設參數創建 draft PR
+        情境：GitHub 上不存在該 branch  PR, 使用預設參數創建 draft PR
         指令：cafe pr test-issue --no-interactive --title "Test PR" --body "Test body"
-        預期：創建 draft PR，gh pr create 帶有 --draft flag
+        預期：創建 draft PR, gh pr create 帶有 --draft flag
         """
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
@@ -132,9 +132,9 @@ class TestPRE2EMockDraftFlag:
     def test_non_draft_pr(self, tmp_path):
         """測試創建非 draft PR
 
-        情境：GitHub 上不存在該 branch 的 PR，明確指定不要 draft
+        情境：GitHub 上不存在該 branch  PR, 明確指定不要 draft
         指令：cafe pr test-issue --no-interactive --no-draft --title "Test PR" --body "Test body"
-        預期：創建正式 PR，gh pr create 不帶 --draft flag
+        預期：創建正式 PR, gh pr create 不帶 --draft flag
         """
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
@@ -152,14 +152,14 @@ class TestPRE2EMockDraftFlag:
 
 @pytest.mark.e2e
 class TestPRE2EMockCustomTitleAndBody:
-    """測試自訂 title 和 body"""
+    """測試自訂 title and body"""
 
     def test_custom_title_and_body(self, tmp_path):
-        """測試使用自訂 title 和 body
+        """測試使用自訂 title and body
 
-        情境：GitHub 上不存在該 branch 的 PR，使用自訂的 title 和 body
+        情境：GitHub 上不存在該 branch  PR, 使用自訂 title and body
         指令：cafe pr test-issue --no-interactive --title "My Custom PR Title" --body "My custom PR body\\nwith details"
-        預期：創建 PR 使用提供的 title 和 body
+        預期：創建 PR 使用提供 title and body
         """
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
@@ -175,11 +175,11 @@ class TestPRE2EMockCustomTitleAndBody:
         assert issue_name in output or "PR" in output or result.returncode in [0, 1]
 
     def test_auto_generate_title_and_body(self, tmp_path):
-        """測試自動產生 title 和 body
+        """測試自動產生 title and body
 
-        情境：GitHub 上不存在該 branch 的 PR，不提供 title/body，由 agent 自動生成
+        情境：GitHub 上不存在該 branch  PR, 不提供 title/body, 由 agent 自動生成
         指令：cafe pr test-issue --no-interactive
-        預期：呼叫 agent (David) 生成 title 和 body，創建 PR
+        預期：呼叫 agent (David) 生成 title and body, 創建 PR
         """
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
@@ -202,9 +202,9 @@ class TestPRE2EMockErrorHandling:
     def test_missing_spec_file_fails(self, tmp_path):
         """測試缺少 spec 檔案時失敗
 
-        情境：Issue 的 spec.md 不存在
+        情境：Issue  spec.md 不存在
         指令：cafe pr --no-interactive
-        預期：失敗，錯誤訊息提示 spec file not found 或 branch not initialized
+        預期：失敗, 錯誤訊息提示 spec file not found or branch not initialized
         """
         issue_name = "test-issue"
         # Don't create spec file (git operations are mocked)
@@ -222,7 +222,7 @@ class TestPRE2EMockErrorHandling:
 
         情境：GitHub CLI (gh pr create) 執行失敗（例如網路問題、權限問題）
         指令：cafe pr test-issue --no-interactive --title "Test" --body "Test"
-        預期：失敗，錯誤訊息包含 "failed"
+        預期：失敗, 錯誤訊息包含 "failed"
         """
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
@@ -243,14 +243,14 @@ class TestPRE2EMockErrorHandling:
 
 @pytest.mark.e2e
 class TestPRE2EMockExistingFiles:
-    """測試 PR 檔案已存在的情境"""
+    """測試 PR 檔案已存在情境"""
 
     def test_pr_exists_non_interactive_without_update_fails(self, tmp_path):
         """測試 PR 檔案已存在且非互動模式沒有 --update 會失敗
 
-        情境：本地 PR 檔案 (title.txt, body.md) 已存在，非互動模式下沒有 --update flag
+        情境：本地 PR 檔案 (title.txt, body.md) 已存在, 非互動模式下沒有 --update flag
         指令：cafe pr test-issue --no-interactive
-        預期：失敗，錯誤訊息提示需要使用 --update
+        預期：失敗, 錯誤訊息提示需要使用 --update
         """
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
@@ -274,9 +274,9 @@ class TestPRE2EMockExistingFiles:
     def test_pr_exists_with_update_flag_regenerates(self, tmp_path):
         """測試 PR 檔案已存在且使用 --update 會重新生成
 
-        情境：本地 PR 檔案 (title.txt, body.md) 已存在，使用 --update 強制重新生成
+        情境：本地 PR 檔案 (title.txt, body.md) 已存在, 使用 --update 強制重新生成
         指令：cafe pr test-issue --no-interactive --update
-        預期：呼叫 agent 重新生成 title 和 body，覆蓋舊檔案，創建 PR
+        預期：呼叫 agent 重新生成 title and body, 覆蓋舊檔案, 創建 PR
         """
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
@@ -302,14 +302,14 @@ class TestPRE2EMockExistingFiles:
 
 @pytest.mark.e2e
 class TestPRE2EMockGitHubPRExists:
-    """測試 GitHub 上已存在 PR 的情境"""
+    """測試 GitHub 上已存在 PR 情境"""
 
     def test_github_pr_exists_non_interactive_without_update_fails(self, tmp_path):
         """測試 GitHub PR 已存在且非互動模式沒有 --update 會失敗
 
-        情境：GitHub 上已存在該 branch 的 PR，非互動模式下沒有 --update flag
+        情境：GitHub 上已存在該 branch  PR, 非互動模式下沒有 --update flag
         指令：cafe pr test-issue --no-interactive --title "New Title" --body "New Body"
-        預期：失敗，錯誤訊息提示 PR 已存在
+        預期：失敗, 錯誤訊息提示 PR 已存在
         """
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
@@ -329,9 +329,9 @@ class TestPRE2EMockGitHubPRExists:
     def test_github_pr_exists_with_update_flag_updates_pr(self, tmp_path):
         """測試 GitHub PR 已存在且使用 --update 會更新 PR
 
-        情境：GitHub 上已存在該 branch 的 PR，使用 --update 更新現有 PR
+        情境：GitHub 上已存在該 branch  PR, 使用 --update 更新現有 PR
         指令：cafe pr test-issue --no-interactive --update --title "Updated Title" --body "Updated Body"
-        預期：成功，呼叫 gh pr edit 更新 PR 的 title 和 body
+        預期：成功, 呼叫 gh pr edit 更新 PR  title and body
         """
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
@@ -350,9 +350,9 @@ class TestPRE2EMockGitHubPRExists:
     def test_github_pr_not_exists_creates_new_pr(self, tmp_path):
         """測試 GitHub PR 不存在時創建新 PR
 
-        情境：GitHub 上不存在該 branch 的 PR，正常創建流程
+        情境：GitHub 上不存在該 branch  PR, 正常創建流程
         指令：cafe pr test-issue --no-interactive --title "New PR Title" --body "New PR Body"
-        預期：成功，呼叫 gh pr create 創建新 PR
+        預期：成功, 呼叫 gh pr create 創建新 PR
         """
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)

@@ -1,4 +1,4 @@
-"""測試 Phase 基礎類別的共用功能."""
+"""測試 Phase 基礎類別共用功能."""
 import json
 from datetime import datetime
 from pathlib import Path
@@ -13,10 +13,10 @@ from cafe.core.types import PhaseResult, PhaseStatus, TokenUsage
 
 
 class ConcretePhase(Phase):
-    """用於測試的具體 Phase 實作."""
+    """用於測試具體 Phase 實作."""
 
     def __init__(self, history_dir: Path) -> None:
-        """初始化測試用的 Phase.
+        """初始化測試用 Phase.
 
         Args:
             history_dir: History 儲存目錄
@@ -36,7 +36,7 @@ class TestSaveIterationHistory:
     """測試 _save_iteration_history 共用方法."""
 
     def test_save_basic_history(self, tmp_path: Path) -> None:
-        """測試儲存基本的 history 資料."""
+        """測試儲存基本 history 資料."""
         phase = ConcretePhase(history_dir=tmp_path / "history")
 
         phase._save_iteration_history(
@@ -60,7 +60,7 @@ class TestSaveIterationHistory:
         assert data["response"] == "Test response"
 
     def test_save_history_with_agent_metadata(self, tmp_path: Path) -> None:
-        """測試儲存包含 agent metadata 的 history."""
+        """測試儲存包含 agent metadata  history."""
         phase = ConcretePhase(history_dir=tmp_path / "history")
 
         phase._save_iteration_history(
@@ -86,7 +86,7 @@ class TestSaveIterationHistory:
         assert data["denied_tools"] == ["bash"]
 
     def test_save_history_with_status_code(self, tmp_path: Path) -> None:
-        """測試儲存包含 status_code 的 history."""
+        """測試儲存包含 status_code  history."""
         phase = ConcretePhase(history_dir=tmp_path / "history")
 
         phase._save_iteration_history(
@@ -141,7 +141,7 @@ class TestSaveIterationHistory:
         assert (history_dir / "iteration_001.json").exists()
 
     def test_save_history_incremental_iterations(self, tmp_path: Path) -> None:
-        """測試多次儲存會產生不同的 iteration 檔案."""
+        """測試多次儲存會產生不同 iteration 檔案."""
         phase = ConcretePhase(history_dir=tmp_path / "history")
 
         # Iteration 1
@@ -186,7 +186,7 @@ class TestLoadCurrentIterationData:
         assert data is None
 
     def test_load_current_iteration_data_exists(self, tmp_path: Path) -> None:
-        """測試載入當前 iteration 的資料."""
+        """測試載入當前 iteration 資料."""
         history_dir = tmp_path / "history"
         history_dir.mkdir(parents=True)
 
@@ -209,11 +209,11 @@ class TestLoadCurrentIterationData:
         assert data["response"] is None
 
     def test_load_current_iteration_data_with_response(self, tmp_path: Path) -> None:
-        """測試載入已完成的當前 iteration（有 response）."""
+        """測試載入已完成當前 iteration（有 response）."""
         history_dir = tmp_path / "history"
         history_dir.mkdir(parents=True)
 
-        # 創建完整的 iteration 檔案
+        # 創建完整 iteration 檔案
         iteration2 = history_dir / "iteration_002.json"
         iteration2.write_text(json.dumps({
             "iteration": 2,
@@ -242,11 +242,11 @@ class TestLoadIterationCounter:
         assert counter == 0
 
     def test_load_counter_with_complete_iterations(self, tmp_path: Path) -> None:
-        """測試載入完整 iteration 的 counter（有 response）."""
+        """測試載入完整 iteration  counter（有 response）."""
         history_dir = tmp_path / "history"
         history_dir.mkdir(parents=True)
 
-        # 創建兩個完整的 iteration（都有 response）
+        # 創建兩個完整 iteration（都有 response）
         iteration1 = history_dir / "iteration_001.json"
         iteration1.write_text(json.dumps({
             "iteration": 1,
@@ -264,11 +264,11 @@ class TestLoadIterationCounter:
         phase = ConcretePhase(history_dir=history_dir)
         counter = phase._load_iteration_counter()
 
-        # 應該返回最後一個完整 iteration 的數字
+        # 應該返回最後一個完整 iteration 數字
         assert counter == 2
 
     def test_load_counter_with_incomplete_iteration(self, tmp_path: Path) -> None:
-        """測試當最後一個 iteration 沒有 response（被中斷），應該重用該 iteration 編號."""
+        """測試當最後一個 iteration 沒有 response（被中斷）, 應該重用該 iteration 編號."""
         history_dir = tmp_path / "history"
         history_dir.mkdir(parents=True)
 
@@ -291,12 +291,12 @@ class TestLoadIterationCounter:
         phase = ConcretePhase(history_dir=history_dir)
         counter = phase._load_iteration_counter()
 
-        # 應該返回 1（前一個完整的 iteration），這樣下次執行時會重用 iteration 2
+        # 應該返回 1（前一個完整 iteration）, 這樣下次執行時會重用 iteration 2
         assert counter == 1
 
 
 class PhaseWithStatusAnalysis(Phase):
-    """用於測試 status analysis 的 Phase 實作."""
+    """用於測試 status analysis  Phase 實作."""
 
     def __init__(
         self,

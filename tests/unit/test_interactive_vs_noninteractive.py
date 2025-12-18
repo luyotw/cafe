@@ -1,11 +1,11 @@
-"""測試 interactive 和 non-interactive 模式的差異。
+"""測試 interactive and non-interactive 模式差異.
 
-根據規格，兩種模式的差異應該只有：
+根據規格, 兩種模式差異應該只有：
 1. 輸入參數方式不同
 2. interactive 執行完一輪後若不是 CONFIRMED 狀態會自動進入下一輪
    non-interactive 只會進行一輪然後返回 IN_PROGRESS
 
-除此之外其他行為都應該一模一樣。
+除此之外其他行為都應該一模一樣.
 """
 
 from pathlib import Path
@@ -48,12 +48,12 @@ def create_template_file(tmp_path: Path) -> str:
 
 
 class TestSpecPhaseInteractiveVsNonInteractive:
-    """測試 SpecPhase 的 interactive 和 non-interactive 模式差異。"""
+    """測試 SpecPhase  interactive and non-interactive 模式差異."""
 
     def test_confirmed_status_same_behavior_both_modes(
         self, tmp_path: Path, mock_git_ops: MagicMock, monkeypatch
     ) -> None:
-        """測試 READY_FOR_REVIEW 在兩種模式下的行為差異（沒有 while loop）"""
+        """測試 READY_FOR_REVIEW 在兩種模式下行為差異（沒有 while loop）"""
         monkeypatch.chdir(tmp_path)
 
         # 測試 interactive mode: READY_FOR_REVIEW 應該回傳 IN_PROGRESS（等待用戶確認）
@@ -124,7 +124,7 @@ class TestSpecPhaseInteractiveVsNonInteractive:
     def test_need_clarification_interactive_continues(
         self, tmp_path: Path, mock_git_ops: MagicMock, monkeypatch
     ) -> None:
-        """測試 NEED_CLARIFICATION 在 interactive 模式回傳 COMPLETED（沒有 while loop，不自動繼續）"""
+        """測試 NEED_CLARIFICATION 在 interactive 模式回傳 COMPLETED（沒有 while loop, 不自動繼續）"""
         issue_name = "test-clarification-interactive"
         mock_git_ops.get_current_branch.return_value = issue_name
         monkeypatch.chdir(tmp_path)
@@ -156,7 +156,7 @@ class TestSpecPhaseInteractiveVsNonInteractive:
              patch.object(phase.display, 'get_multiline_input', return_value="補充資訊"):
             result = phase.execute()
 
-        # Interactive 模式：第一次執行得到 NEED_CLARIFICATION，回傳 COMPLETED
+        # Interactive 模式：第一次執行得到 NEED_CLARIFICATION, 回傳 COMPLETED
         assert result.status == PhaseStatus.COMPLETED
         assert result.data.get("iterations") == 1
         assert agent_manager.execute.call_count == 1
@@ -193,7 +193,7 @@ class TestSpecPhaseInteractiveVsNonInteractive:
         with patch('builtins.print'):
             result = phase.execute()
 
-        # Non-interactive 模式：第一次執行得到 NEED_CLARIFICATION，回傳 COMPLETED
+        # Non-interactive 模式：第一次執行得到 NEED_CLARIFICATION, 回傳 COMPLETED
         assert result.status == PhaseStatus.COMPLETED
         assert result.data.get("status_code") == "CAFE_NEED_CLARIFICATION"
         assert result.data.get("iterations") == 1
@@ -213,8 +213,8 @@ class TestSpecPhaseInteractiveVsNonInteractive:
 
         agent_manager = MagicMock(spec=AgentManager)
         setup_agent_manager_mock_for_spec(agent_manager)
-        # 第一次執行沒有狀態碼，第二次繼續也沒有狀態碼，經過 5 次重試後會拋出 ValueError
-        # ValueError 會被 SpecPhase.execute() 的 except 捕捉並轉為 FAILED
+        # 第一次執行沒有狀態碼, 第二次繼續也沒有狀態碼, 經過 5 次重試後會拋出 ValueError
+        # ValueError 會被 SpecPhase.execute()  except 捕捉並轉為 FAILED
         agent_manager.execute.return_value = ("這是回應但沒有狀態碼", TokenUsage(), [], None, [])
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 
@@ -235,9 +235,9 @@ class TestSpecPhaseInteractiveVsNonInteractive:
              patch.object(phase.display, 'get_multiline_input', return_value="需求"):
             result = phase.execute()
 
-        # Interactive 模式：經過 5 次重試後仍無 status code，返回 FAILED
+        # Interactive 模式：經過 5 次重試後仍無 status code, 返回 FAILED
         assert result.status == PhaseStatus.FAILED
-        assert "Agent 在 5 次嘗試後仍未回傳有效的 status code" in result.message
+        assert "Still did not return valid status code after" in result.message
         # Agent 被呼叫 6 次：1次正常執行 + 5次重試
         assert agent_manager.execute.call_count == 6
 
@@ -275,13 +275,13 @@ class TestSpecPhaseInteractiveVsNonInteractive:
 
         # Non-interactive 模式經過 5 次重試後返回 FAILED
         assert result.status == PhaseStatus.FAILED
-        assert "Agent 在 5 次嘗試後仍未回傳有效的 status code" in result.message
+        assert "Still did not return valid status code after" in result.message
         # 呼叫 6 次：原始 prompt + 5 次重試
         assert agent_manager.execute.call_count == 6
 
 
 class TestPlanPhaseInteractiveVsNonInteractive:
-    """測試 PlanPhase 的 interactive 和 non-interactive 模式差異。"""
+    """測試 PlanPhase  interactive and non-interactive 模式差異."""
 
     def test_confirmed_status_same_behavior_both_modes(
         self, tmp_path: Path, mock_git_ops: MagicMock, monkeypatch
@@ -297,11 +297,11 @@ class TestPlanPhaseInteractiveVsNonInteractive:
 
         spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec_001.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
-        spec_file.write_text("# Requirements\nTest requirements\n\n## 開發指南\nDev guide")
+        spec_file.write_text("# Requirements\nTest requirements\n\n## Development Guide\nDev guide")
 
         plan_file = spec_file.parent.parent / "plan" / "plan_001.md"
         plan_file.parent.mkdir(parents=True, exist_ok=True)
-        plan_file.write_text("## 開發指南\nDev guide\n\n## 實作計畫\nTODO")
+        plan_file.write_text("## Development Guide\nDev guide\n\n## Implementation Plan\nTODO")
 
         agent_manager = MagicMock(spec=AgentManager)
         setup_agent_manager_mock_for_spec(agent_manager)
@@ -364,15 +364,15 @@ class TestPlanPhaseInteractiveVsNonInteractive:
 
         spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec_001.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
-        spec_file.write_text("# Requirements\nTest requirements\n\n## 開發指南\nDev guide")
+        spec_file.write_text("# Requirements\nTest requirements\n\n## Development Guide\nDev guide")
 
         plan_file = spec_file.parent.parent / "plan" / "plan_001.md"
         plan_file.parent.mkdir(parents=True, exist_ok=True)
-        plan_file.write_text("## 開發指南\nDev guide\n\n## 實作計畫\nTODO")
+        plan_file.write_text("## Development Guide\nDev guide\n\n## Implementation Plan\nTODO")
 
         agent_manager = MagicMock(spec=AgentManager)
         setup_agent_manager_mock_for_spec(agent_manager)
-        # 移除 while loop 後，只會執行一次
+        # 移除 while loop 後, 只會執行一次
         agent_manager.execute.return_value = ("CAFE_NEED_CLARIFICATION\n需要更多資訊", TokenUsage(), [], None, [])
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 
@@ -399,7 +399,7 @@ class TestPlanPhaseInteractiveVsNonInteractive:
              patch('builtins.input', return_value='c'):
             result = phase.execute()
 
-        # 移除 while loop 後，NEED_CLARIFICATION 返回 COMPLETED
+        # 移除 while loop 後, NEED_CLARIFICATION 返回 COMPLETED
         assert result.status == PhaseStatus.COMPLETED
         assert result.data.get("status_code") == "CAFE_NEED_CLARIFICATION"
         assert agent_manager.execute.call_count == 1  # 只呼叫一次
@@ -414,11 +414,11 @@ class TestPlanPhaseInteractiveVsNonInteractive:
 
         spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec_001.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
-        spec_file.write_text("# Requirements\nTest requirements\n\n## 開發指南\nDev guide")
+        spec_file.write_text("# Requirements\nTest requirements\n\n## Development Guide\nDev guide")
 
         plan_file = spec_file.parent.parent / "plan" / "plan_001.md"
         plan_file.parent.mkdir(parents=True, exist_ok=True)
-        plan_file.write_text("## 開發指南\nDev guide\n\n## 實作計畫\nTODO")
+        plan_file.write_text("## Development Guide\nDev guide\n\n## Implementation Plan\nTODO")
 
         agent_manager = MagicMock(spec=AgentManager)
         setup_agent_manager_mock_for_spec(agent_manager)
@@ -446,7 +446,7 @@ class TestPlanPhaseInteractiveVsNonInteractive:
         with patch('builtins.print'):
             result = phase.execute()
 
-        # 移除 while loop 後，non-interactive 模式下 NEED_CLARIFICATION 返回 COMPLETED
+        # 移除 while loop 後, non-interactive 模式下 NEED_CLARIFICATION 返回 COMPLETED
         assert result.status == PhaseStatus.COMPLETED
         assert result.data.get("status_code") == "CAFE_NEED_CLARIFICATION"
         assert agent_manager.execute.call_count == 1
@@ -461,11 +461,11 @@ class TestPlanPhaseInteractiveVsNonInteractive:
 
         spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec_001.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
-        spec_file.write_text("# Requirements\nTest requirements\n\n## 開發指南\nDev guide")
+        spec_file.write_text("# Requirements\nTest requirements\n\n## Development Guide\nDev guide")
 
         plan_file = spec_file.parent.parent / "plan" / "plan_001.md"
         plan_file.parent.mkdir(parents=True, exist_ok=True)
-        plan_file.write_text("## 開發指南\nDev guide\n\n## 實作計畫\nTODO")
+        plan_file.write_text("## Development Guide\nDev guide\n\n## Implementation Plan\nTODO")
 
         agent_manager = MagicMock(spec=AgentManager)
         setup_agent_manager_mock_for_spec(agent_manager)
@@ -495,6 +495,6 @@ class TestPlanPhaseInteractiveVsNonInteractive:
 
         # Non-interactive 模式經過 5 次重試後返回 FAILED
         assert result.status == PhaseStatus.FAILED
-        assert "Agent 在 5 次嘗試後仍未回傳有效的 status code" in result.message
+        assert "Still did not return valid status code after" in result.message
         # 呼叫 6 次：原始 prompt + 5 次重試
         assert agent_manager.execute.call_count == 6

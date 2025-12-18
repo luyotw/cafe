@@ -394,7 +394,7 @@ class TestPromptGeneration:
     """Test prompt generation logic."""
 
     def test_first_iteration_prompt_contains_file_paths(self, tmp_path: Path) -> None:
-        """測試第 1 輪 prompt 包含檔案路徑"""
+        """測試Round 1 prompt 包含檔案路徑"""
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
         git_ops = MagicMock(spec=GitOperations)
@@ -507,7 +507,7 @@ class TestBranchManagement:
         assert config_data["feature_branch"] == "test-issue"
 
     def test_save_issue_config_preserves_existing_fields(self, tmp_path: Path, monkeypatch) -> None:
-        """測試保存 config 時會保留現有的 worktree_path、issue_id 和 rigor"""
+        """測試保存 config 時會保留現有 worktree_path、issue_id and rigor"""
         import yaml
         
         # Change to tmp_path so relative paths work
@@ -566,7 +566,7 @@ class TestReviewFeedbackDetection:
     """Test review feedback detection methods."""
 
     def test_get_review_file_path_returns_latest_numbered_file(self, tmp_path: Path) -> None:
-        """測試當有多個 review_XXX.md 檔案時，返回最新的"""
+        """測試當有多個 review_XXX.md 檔案時, 返回最新"""
         # Create multiple review files
         review_dir = tmp_path / ".cafe" / "issues" / "test-issue" / "review"
         review_dir.mkdir(parents=True)
@@ -593,7 +593,7 @@ class TestReviewFeedbackDetection:
         assert review_path == tmp_path / ".cafe" / "issues" / "test-issue" / "review" / "review_003.md"
 
     def test_get_review_file_path_fallback_to_review_md(self, tmp_path: Path) -> None:
-        """測試當沒有 review_XXX.md 時，返回 review.md（向後兼容）"""
+        """測試當沒有 review_XXX.md 時, 返回 review.md（向後兼容）"""
         # Create only review.md
         review_dir = tmp_path / ".cafe" / "issues" / "test-issue" / "review"
         review_dir.mkdir(parents=True)
@@ -618,7 +618,7 @@ class TestReviewFeedbackDetection:
         assert review_path == tmp_path / ".cafe" / "issues" / "test-issue" / "review" / "review.md"
 
     def test_get_review_file_path_no_review_files(self) -> None:
-        """測試沒有任何 review 檔案時的路徑"""
+        """測試沒有任何 review 檔案時路徑"""
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
         git_ops = MagicMock(spec=GitOperations)
@@ -638,7 +638,7 @@ class TestReviewFeedbackDetection:
         assert review_path == Path(".cafe/issues/test-issue/review/review.md")
 
     def test_check_review_feedback_exists_true(self, tmp_path: Path) -> None:
-        """測試檔案存在的情況"""
+        """測試檔案存在情況"""
         # Create review.md file
         review_file = tmp_path / ".cafe" / "issues" / "test" / "review" / "review.md"
         review_file.parent.mkdir(parents=True)
@@ -661,7 +661,7 @@ class TestReviewFeedbackDetection:
         assert phase._check_review_feedback_exists() is True
 
     def test_check_review_feedback_exists_false(self, tmp_path: Path) -> None:
-        """測試檔案不存在的情況"""
+        """測試檔案不存在情況"""
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
         git_ops = MagicMock(spec=GitOperations)
@@ -683,7 +683,7 @@ class TestPromptGenerationWithReviewFeedback:
     """Test prompt generation with review feedback."""
 
     def test_generate_prompt_with_review_feedback(self, tmp_path: Path) -> None:
-        """測試有 review feedback 時的 prompt"""
+        """測試有 review feedback 時 prompt"""
         # Create review.md file
         review_file = tmp_path / ".cafe" / "issues" / "test" / "review" / "review.md"
         review_file.parent.mkdir(parents=True)
@@ -710,10 +710,10 @@ class TestPromptGenerationWithReviewFeedback:
         assert "Review Feedback" in prompt
         assert "review/review.md" in prompt
         assert "Code Review" in prompt
-        assert "修正" in prompt
+        assert "correction" in prompt
 
     def test_generate_prompt_without_review_feedback(self, tmp_path: Path) -> None:
-        """測試無 review feedback 時的 prompt"""
+        """測試無 review feedback 時 prompt"""
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
         git_ops = MagicMock(spec=GitOperations)
@@ -732,13 +732,13 @@ class TestPromptGenerationWithReviewFeedback:
         prompt = phase._generate_prompt()
 
         # Verify prompt is the original development prompt
-        assert "請按照實作計畫執行開發工作" in prompt
-        assert "需求規格" in prompt
-        assert "實作計畫" in prompt
+        assert "execute development work" in prompt
+        assert "Requirements Specification" in prompt
+        assert "Implementation Plan" in prompt
         assert "Review Feedback" not in prompt
 
     def test_prompt_contains_correct_review_file_path(self, tmp_path: Path) -> None:
-        """驗證 prompt 中包含正確的 review.md 路徑"""
+        """驗證 prompt 中包含正確 review.md 路徑"""
         # Create review.md file
         review_file = tmp_path / ".cafe" / "issues" / "myissue" / "review" / "review.md"
         review_file.parent.mkdir(parents=True)
@@ -766,10 +766,10 @@ class TestPromptGenerationWithReviewFeedback:
 
 
 class TestDevelopPhaseReviewFeedback:
-    """測試 develop phase 處理 review feedback 的情況"""
+    """測試 develop phase 處理 review feedback 情況"""
 
     def test_execute_continues_when_completed_but_review_feedback_exists(self, tmp_path, monkeypatch) -> None:
-        """測試當 develop 已完成但有 review feedback 時，應該繼續執行而非直接返回"""
+        """測試當 develop 已完成但有 review feedback 時, 應該繼續執行而非直接返回"""
         monkeypatch.chdir(tmp_path)
 
         # Setup
@@ -867,7 +867,7 @@ class TestDevelopPhaseReviewFeedback:
         assert phase.iteration == 2
 
     def test_execute_returns_early_when_completed_and_no_review_feedback(self, tmp_path) -> None:
-        """測試當 develop 已完成且沒有 review feedback 時，應該直接返回"""
+        """測試當 develop 已完成且沒有 review feedback 時, 應該直接返回"""
         # Setup
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -923,7 +923,7 @@ class TestDevelopPhaseReviewFeedback:
         assert "already completed" in result.message.lower()
 
     def test_execute_continues_when_review_status_is_needs_changes(self, tmp_path, monkeypatch) -> None:
-        """測試當 review status 為 NEEDS_CHANGES 時，即使 develop 已完成也應該繼續執行"""
+        """測試當 review status 為 NEEDS_CHANGES 時, 即使 develop 已完成也應該繼續執行"""
         monkeypatch.chdir(tmp_path)
 
         # Setup
@@ -1009,7 +1009,7 @@ class TestDevelopPhaseReviewFeedback:
         assert phase.iteration == 1
 
     def test_execute_returns_early_when_review_status_is_confirmed(self, tmp_path) -> None:
-        """測試當 review status 為 CONFIRMED 時，develop 已完成應該直接返回"""
+        """測試當 review status 為 CONFIRMED 時, develop 已完成應該直接返回"""
         # Setup
         agent_manager = MagicMock(spec=AgentManager)
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -1080,7 +1080,7 @@ class TestDevelopPhaseReviewFeedback:
         assert "already completed" in result.message.lower()
 
     def test_prints_review_file_when_detected(self, tmp_path, capsys) -> None:
-        """測試當檢測到 review feedback 時，應該 print 出 review 檔案路徑"""
+        """測試當檢測到 review feedback 時, 應該 print 出 review 檔案路徑"""
         # Setup
         agent_manager = MagicMock(spec=AgentManager)
         setup_agent_manager_mock(agent_manager)
@@ -1179,10 +1179,10 @@ class TestDevelopPhaseIterationCounter:
     """Test DevelopPhase iteration counter behavior to prevent overwriting previous iterations."""
 
     def test_second_execution_creates_iteration_002_not_overwrite_001(self, tmp_path: Path, monkeypatch):
-        """測試第二次執行創建 iteration_002.json，而不是覆蓋 iteration_001.json
+        """測試第二次執行創建 iteration_002.json, 而不是覆蓋 iteration_001.json
 
-        這是一個 regression test，確保 DevelopPhase 使用 _load_iteration_counter()
-        而不是總是設定 self.iteration = 1，否則會覆蓋之前的 iteration history。
+        這是一個 regression test, 確保 DevelopPhase 使用 _load_iteration_counter()
+        而不是總是設定 self.iteration = 1, 否則會覆蓋之前 iteration history.
 
         測試場景：
         1. 第一次執行：agent 完成工作 (iteration_001.json)
@@ -1283,15 +1283,15 @@ class TestDevelopPhaseIterationCounter:
         with open(iteration_002_file, "r") as f:
             saved_002 = json.load(f)
 
-        assert saved_002["iteration"] == 2, "第二輪應該是 iteration 2"
+        assert saved_002["iteration"] == 2, "Round 2應該是 iteration 2"
         assert "第二次開發完成" in saved_002["response"]
 
 
 class TestDeveloperPermissions:
-    """測試 developer 的權限配置"""
+    """測試 developer 權限配置"""
 
     def test_developer_has_edit_permission(self):
-        """測試 developer 的 base_allowed_tools 包含 edit"""
+        """測試 developer  base_allowed_tools 包含 edit"""
         from cafe.phases.develop_phase import DevelopPhase
         from unittest.mock import MagicMock
 
@@ -1318,7 +1318,7 @@ class TestDeveloperPermissions:
             "Developer's base_allowed_tools should include edit permission"
 
     def test_inherits_previous_iteration_tools(self, tmp_path):
-        """測試第二輪會繼承第一輪的 allowed_tools"""
+        """測試Round 2會繼承Round 1 allowed_tools"""
         import os
         import json
         from unittest.mock import MagicMock
@@ -1435,7 +1435,7 @@ class TestDeveloperPermissions:
             )
 
             # Verify that allowed_tools includes both base tools and previous iteration's tools
-            # 檢查第一次呼叫（主要執行，非 _analyze_missing_status_code）
+            # 檢查第一次呼叫（主要執行, 非 _analyze_missing_status_code）
             assert len(captured_calls) >= 1, "execute should be called at least once"
             expected_tools = set(["write", "read", "edit", "bash", "grep(/some/path)"])
             actual_tools = set(captured_calls[0]["allowed_tools"]) if captured_calls[0]["allowed_tools"] else set()
@@ -1452,7 +1452,7 @@ class TestDevelopPhasePRDetection:
     def test_auto_detects_pr_number_when_not_provided(
         self, tmp_path, monkeypatch
     ):
-        """測試：當未提供 pr_number 時，自動偵測當前 branch 的 PR"""
+        """測試：當未提供 pr_number 時, 自動偵測當前 branch  PR"""
         monkeypatch.chdir(tmp_path)
 
         # Setup files
@@ -1511,7 +1511,7 @@ class TestDevelopPhasePRDetection:
     def test_uses_provided_pr_number_when_given(
         self, tmp_path, monkeypatch
     ):
-        """測試：當提供 pr_number 時，不進行自動偵測"""
+        """測試：當提供 pr_number 時, 不進行自動偵測"""
         monkeypatch.chdir(tmp_path)
 
         # Setup files
@@ -1564,7 +1564,7 @@ class TestDevelopPhasePRDetection:
     def test_continues_when_pr_detection_fails(
         self, tmp_path, monkeypatch
     ):
-        """測試：當 PR 偵測失敗時，繼續執行（不會中斷）"""
+        """測試：當 PR 偵測失敗時, 繼續執行（不會中斷）"""
         monkeypatch.chdir(tmp_path)
 
         # Setup files
@@ -1620,7 +1620,7 @@ class TestDevelopPhasePRDetection:
     def test_continues_when_no_pr_exists_for_branch(
         self, tmp_path, monkeypatch
     ):
-        """測試：當 branch 沒有對應的 PR 時，繼續執行"""
+        """測試：當 branch 沒有對應 PR 時, 繼續執行"""
         monkeypatch.chdir(tmp_path)
 
         # Setup files

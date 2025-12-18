@@ -1,6 +1,6 @@
 """Unit tests for GitHub PR comments utilities.
 
-測試 GitHub PR comments 的獲取、過濾和格式化功能。
+測試 GitHub PR comments 獲取、過濾and格式化功能.
 """
 
 import pytest
@@ -20,7 +20,7 @@ class TestGetPRComments:
     def test_get_pr_comments_success(self):
         """測試成功獲取 PR comments
 
-        情境：gh api 返回有效的 JSON 數據
+        情境：gh api 返回有效 JSON 數據
         預期：解析並返回 PRComment 列表
         """
         # Mock gh repo view output (to get repo info)
@@ -82,7 +82,7 @@ class TestGetPRComments:
             assert comments[1].is_resolved is False  # All treated as unresolved
 
     def test_get_pr_comments_pr_not_found(self):
-        """測試 PR 不存在的情況
+        """測試 PR 不存在情況
 
         情境：gh api 返回錯誤（PR 不存在）
         預期：拋出 ValueError 異常
@@ -104,9 +104,9 @@ class TestGetPRComments:
                 get_pr_comments(999)
 
     def test_get_pr_comments_no_comments(self):
-        """測試 PR 沒有 comments 的情況
+        """測試 PR 沒有 comments 情況
 
-        情境：gh api 返回空的 review comments 陣列
+        情境：gh api 返回空 review comments 陣列
         預期：返回空列表
         """
         # Mock gh repo view output
@@ -132,10 +132,10 @@ class TestFilterUnresolvedComments:
     """測試過濾未 resolved comments 功能"""
 
     def test_filter_unresolved_comments_mixed(self):
-        """測試過濾混合的 resolved/unresolved comments
+        """測試過濾混合 resolved/unresolved comments
 
-        情境：有 resolved 和 unresolved 的 comments
-        預期：只返回 unresolved 的 comments
+        情境：有 resolved and unresolved  comments
+        預期：只返回 unresolved  comments
         """
         comments = [
             PRComment(
@@ -210,8 +210,8 @@ class TestFormatCommentsForPrompt:
     def test_format_comments_for_prompt_single(self):
         """測試格式化單一 comment
 
-        情境：一個未 resolved 的 comment
-        預期：生成格式化的文字區塊
+        情境：一個未 resolved  comment
+        預期：生成格式化文字區塊
         """
         comments = [
             PRComment(
@@ -237,8 +237,8 @@ class TestFormatCommentsForPrompt:
     def test_format_comments_for_prompt_multiple(self):
         """測試格式化多個 comments
 
-        情境：多個未 resolved 的 comments
-        預期：生成包含所有 comments 的格式化文字
+        情境：多個未 resolved  comments
+        預期：生成包含所有 comments 格式化文字
         """
         comments = [
             PRComment(
@@ -275,13 +275,13 @@ class TestFormatCommentsForPrompt:
         """測試格式化空列表
 
         情境：沒有 comments
-        預期：返回空字串或提示訊息
+        預期：返回空字串or提示訊息
         """
         result = format_comments_for_prompt([])
         assert result == "" or "No unresolved comments" in result
 
     def test_format_comments_preserves_code_blocks(self):
-        """測試保留 comment 中的程式碼區塊
+        """測試保留 comment 中程式碼區塊
 
         情境：comment 包含 markdown 程式碼區塊
         預期：保留程式碼區塊格式

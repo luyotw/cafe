@@ -1,6 +1,6 @@
 """Integration tests for 'cafe pr --no-interactive' command.
 
-使用 mock git 和 gh CLI 測試完整的 PR command flow。
+使用 mock git and gh CLI 測試完整 PR command flow.
 """
 
 import os
@@ -28,16 +28,16 @@ def mock_github_ops():
 @pytest.fixture
 def temp_pr_dir(tmp_path):
     """創建臨時 PR 目錄結構"""
-    # 創建完整的目錄結構: {tmp_path}/.cafe/issues/test-issue/
+    # 創建完整目錄結構: {tmp_path}/.cafe/issues/test-issue/
     issue_dir = tmp_path / ".cafe" / "issues" / "test-issue"
 
-    # 創建 spec 目錄和 spec.md
+    # 創建 spec 目錄and spec.md
     spec_dir = issue_dir / "spec"
     spec_dir.mkdir(parents=True)
     spec_file = spec_dir / "spec.md"
-    spec_file.write_text("# 測試功能需求\n\n這是一個測試需求規格。")
+    spec_file.write_text("# 測試功能需求\n\n這是一個測試需求規格.")
 
-    # 創建 plan 目錄和 plan.md
+    # 創建 plan 目錄and plan.md
     plan_dir = issue_dir / "plan"
     plan_dir.mkdir(parents=True)
     plan_file = plan_dir / "plan.md"
@@ -49,7 +49,7 @@ def temp_pr_dir(tmp_path):
 - [x] 撰寫測試
 
 ## 開發指南
-已按照以上任務清單完成實作。
+已按照以上任務清單完成實作.
 """)
 
     return issue_dir
@@ -113,7 +113,7 @@ class TestPRCommandNonInteractiveBasics:
             # 驗證 git push 被呼叫
             mock_git_ops.push.assert_called_once_with("test-issue", set_upstream=True, force=False)
 
-            # 驗證 github_ops.create_pr 被呼叫，並包含 draft flag
+            # 驗證 github_ops.create_pr 被呼叫, 並包含 draft flag
             mock_github_ops.create_pr.assert_called_once()
             call_kwargs = mock_github_ops.create_pr.call_args[1]
             assert call_kwargs["draft"] == True
@@ -160,7 +160,7 @@ class TestPRCommandNonInteractiveBasics:
             assert result.status == PhaseStatus.COMPLETED
             assert result.data["pr_number"] == "2"
 
-            # 驗證 github_ops.create_pr 被呼叫，不包含 draft flag
+            # 驗證 github_ops.create_pr 被呼叫, 不包含 draft flag
             mock_github_ops.create_pr.assert_called_once()
             call_kwargs = mock_github_ops.create_pr.call_args[1]
             assert call_kwargs["draft"] == False
@@ -169,10 +169,10 @@ class TestPRCommandNonInteractiveBasics:
 
 
 class TestPRCommandCustomTitleAndBody:
-    """測試自訂 title 和 body"""
+    """測試自訂 title and body"""
 
     def test_custom_title_and_body(self, temp_pr_dir, mock_git_ops, mock_github_ops, tmp_path):
-        """測試使用自訂 title 和 body 創建 PR"""
+        """測試使用自訂 title and body 創建 PR"""
         # Arrange
         spec_file = str(temp_pr_dir / "spec" / "spec.md")
         custom_title = "Custom PR Title"
@@ -213,7 +213,7 @@ class TestPRCommandCustomTitleAndBody:
             assert result.status == PhaseStatus.COMPLETED
             assert result.data["pr_number"] == "3"
 
-            # 驗證 github_ops.create_pr 使用自訂 title 和 body
+            # 驗證 github_ops.create_pr 使用自訂 title and body
             mock_github_ops.create_pr.assert_called_once()
             call_kwargs = mock_github_ops.create_pr.call_args[1]
             assert call_kwargs["title"] == custom_title
@@ -223,7 +223,7 @@ class TestPRCommandCustomTitleAndBody:
             os.chdir(original_cwd)
 
     def test_auto_generate_title_and_body(self, temp_pr_dir, mock_git_ops, mock_github_ops, tmp_path, monkeypatch):
-        """測試自動產生 title 和 body"""
+        """測試自動產生 title and body"""
         # Arrange
         spec_file = str(temp_pr_dir / "spec" / "spec.md")
 
@@ -306,7 +306,7 @@ class TestPRCommandErrorHandling:
                 permission_handler=permission_handler,
                 git_ops=mock_git_ops,
                 github_ops=mock_github_ops,
-                spec_file=spec_file,  # 不存在的檔案
+                spec_file=spec_file,  # 不存在檔案
                 workflow_mode=WorkflowMode.LOCAL,
                 issue_name="test-issue",
                 draft=True,

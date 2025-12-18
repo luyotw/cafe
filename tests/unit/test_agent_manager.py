@@ -54,7 +54,7 @@ class TestAgentRetrieval:
         assert executor.config.name == "David"
 
     def test_get_agent_not_found_raises_error(self) -> None:
-        """測試取得不存在的 agent 拋出錯誤"""
+        """測試取得不存在 agent 拋出錯誤"""
         manager = AgentManager()
 
         with pytest.raises(AgentNotFoundError, match="Agent 'Unknown' not found"):
@@ -81,7 +81,7 @@ class TestAgentSwitching:
     """Test agent switching."""
 
     def test_switch_to_existing_agent(self) -> None:
-        """測試切換到已存在的 agent"""
+        """測試切換到已存在 agent"""
         manager = AgentManager()
         manager.register_agent(AgentConfig(name="Roger", cli=AgentCLI.CLAUDE))
         manager.register_agent(AgentConfig(name="David", cli=AgentCLI.CLAUDE))
@@ -93,7 +93,7 @@ class TestAgentSwitching:
         assert manager.current_agent_name == "David"
 
     def test_switch_to_nonexistent_agent_raises_error(self) -> None:
-        """測試切換到不存在的 agent 拋出錯誤"""
+        """測試切換到不存在 agent 拋出錯誤"""
         manager = AgentManager()
 
         with pytest.raises(AgentNotFoundError):

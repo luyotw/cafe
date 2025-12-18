@@ -53,7 +53,7 @@ class TestSpecPhaseWithStatusCodes:
 
         agent_manager = MagicMock(spec=AgentManager)
         setup_agent_manager_mock_for_spec(agent_manager)
-        agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n需求已經很清楚了。", TokenUsage(), [], None, [])
+        agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n需求已經很清楚了.", TokenUsage(), [], None, [])
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -72,7 +72,7 @@ class TestSpecPhaseWithStatusCodes:
         with patch('builtins.print'):
             result = phase.execute()
 
-        # 沒有 while loop，interactive 模式下 READY_FOR_REVIEW 回傳 IN_PROGRESS
+        # 沒有 while loop, interactive 模式下 READY_FOR_REVIEW 回傳 IN_PROGRESS
         assert result.status == PhaseStatus.COMPLETED
         assert result.data.get("status_code") == "CAFE_READY_FOR_REVIEW"
         assert agent_manager.execute.call_count == 1
@@ -88,7 +88,7 @@ class TestSpecPhaseWithStatusCodes:
         agent_manager = MagicMock(spec=AgentManager)
         setup_agent_manager_mock_for_spec(agent_manager)
         # 第一次回應需要澄清
-        agent_manager.execute.return_value = ("CAFE_NEED_CLARIFICATION\n請補充更多資訊。", TokenUsage(), [], None, [])
+        agent_manager.execute.return_value = ("CAFE_NEED_CLARIFICATION\n請補充更多資訊.", TokenUsage(), [], None, [])
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -107,7 +107,7 @@ class TestSpecPhaseWithStatusCodes:
         with patch('builtins.print'):
             result = phase.execute()
 
-        # 沒有 while loop，第一次執行得到 NEED_CLARIFICATION 直接完成，用戶需手動再次執行
+        # 沒有 while loop, 第一次執行得到 NEED_CLARIFICATION 直接完成, 用戶需手動再次執行
         assert result.status == PhaseStatus.COMPLETED
         assert result.data.get("status_code") == "CAFE_NEED_CLARIFICATION"
         assert result.data.get("iterations") == 1
@@ -122,7 +122,7 @@ class TestSpecPhaseWithStatusCodes:
 
         agent_manager = MagicMock(spec=AgentManager)
         setup_agent_manager_mock_for_spec(agent_manager)
-        agent_manager.execute.return_value = ("需求已經很清楚了。CAFE_READY_FOR_REVIEW", TokenUsage(), [], None, [])
+        agent_manager.execute.return_value = ("需求已經很清楚了.CAFE_READY_FOR_REVIEW", TokenUsage(), [], None, [])
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -141,7 +141,7 @@ class TestSpecPhaseWithStatusCodes:
         with patch('builtins.print'):
             result = phase.execute()
 
-        # 沒有 while loop，READY_FOR_REVIEW 回傳 IN_PROGRESS
+        # 沒有 while loop, READY_FOR_REVIEW 回傳 IN_PROGRESS
         assert result.status == PhaseStatus.COMPLETED
         assert result.data.get("status_code") == "CAFE_READY_FOR_REVIEW"
 
@@ -155,8 +155,8 @@ class TestSpecPhaseWithStatusCodes:
 
         agent_manager = MagicMock(spec=AgentManager)
         setup_agent_manager_mock_for_spec(agent_manager)
-        # 所有執行都沒有狀態碼，經過 5 次重試後會拋出 ValueError
-        agent_manager.execute.return_value = ("我覺得需求不夠清楚。", TokenUsage(), [], None, [])
+        # 所有執行都沒有狀態碼, 經過 5 次重試後會拋出 ValueError
+        agent_manager.execute.return_value = ("我覺得需求不夠清楚.", TokenUsage(), [], None, [])
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -169,15 +169,15 @@ class TestSpecPhaseWithStatusCodes:
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
             rigor=SpecRigor.MEDIUM,
-            user_input="我的回答",
+            user_input="我回答",
         )
 
         with patch('builtins.print'):
             result = phase.execute()
 
-        # 經過 5 次重試後，沒有狀態碼回傳 FAILED
+        # 經過 5 次重試後, 沒有狀態碼回傳 FAILED
         assert result.status == PhaseStatus.FAILED
-        assert "Agent 在 5 次嘗試後仍未回傳有效的 status code" in result.message
+        assert "Still did not return valid status code after" in result.message
 
     def test_case_insensitive_status_code(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
         """測試狀態碼不分大小寫"""
@@ -189,7 +189,7 @@ class TestSpecPhaseWithStatusCodes:
 
         agent_manager = MagicMock(spec=AgentManager)
         setup_agent_manager_mock_for_spec(agent_manager)
-        agent_manager.execute.return_value = ("cafe_ready_for_review\n需求清楚。", TokenUsage(), [], None, [])
+        agent_manager.execute.return_value = ("cafe_ready_for_review\n需求清楚.", TokenUsage(), [], None, [])
         agent_manager.get_total_token_usage.return_value = TokenUsage()
 
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -208,6 +208,6 @@ class TestSpecPhaseWithStatusCodes:
         with patch('builtins.print'):
             result = phase.execute()
 
-        # 沒有 while loop，READY_FOR_REVIEW 回傳 IN_PROGRESS
+        # 沒有 while loop, READY_FOR_REVIEW 回傳 IN_PROGRESS
         assert result.status == PhaseStatus.COMPLETED
         assert result.data.get("status_code") == "CAFE_READY_FOR_REVIEW"

@@ -70,7 +70,7 @@ def test_need_clarification_in_valid_status_codes(mock_deps):
 
 
 def test_prompt_includes_need_clarification_description(mock_deps):
-    """測試 prompt 中包含 CAFE_NEED_CLARIFICATION 的說明文字."""
+    """測試 prompt 中包含 CAFE_NEED_CLARIFICATION 說明文字."""
     phase = DevelopPhase(
         agent_manager=mock_deps["agent_manager"],
         permission_handler=mock_deps["permission_handler"],
@@ -90,7 +90,7 @@ def test_prompt_includes_need_clarification_description(mock_deps):
 
 
 def test_save_develop_clarification_file(mock_deps, monkeypatch, tmp_path):
-    """測試當 agent 回應 CAFE_NEED_CLARIFICATION 時，檔案正確儲存到 develop_{it_num}.md."""
+    """測試當 agent 回應 CAFE_NEED_CLARIFICATION 時, 檔案正確儲存到 develop_{it_num}.md."""
     # Change working directory to tmp_path
     monkeypatch.chdir(tmp_path)
 
@@ -182,7 +182,7 @@ def test_develop_file_numbering_increments(mock_deps):
 
 
 def test_prompt_includes_develop_file_when_exists(mock_deps, monkeypatch, tmp_path):
-    """測試當存在前一輪的 develop_{it_num-1}.md 時，prompt 包含該檔案路徑."""
+    """測試當存在前一輪 develop_{it_num-1}.md 時, prompt 包含該檔案路徑."""
     monkeypatch.chdir(tmp_path)
 
     # Create a develop file
@@ -208,11 +208,11 @@ def test_prompt_includes_develop_file_when_exists(mock_deps, monkeypatch, tmp_pa
     # Verify prompt includes develop file path
     assert "develop_001.md" in prompt
     # Verify prompt includes instruction to read develop file
-    assert "首先閱讀" in prompt or "閱讀" in prompt
+    assert "first read" in prompt.lower() or "read" in prompt.lower()
 
 
 def test_prompt_includes_read_instruction_when_develop_file_exists(mock_deps, monkeypatch, tmp_path):
-    """測試 prompt 中包含「首先閱讀 develop_XXX.md 中的問題」的指示."""
+    """測試 prompt 中包含「首先閱讀 develop_XXX.md 中問題」指示."""
     monkeypatch.chdir(tmp_path)
 
     # Create a develop file
@@ -237,11 +237,11 @@ def test_prompt_includes_read_instruction_when_develop_file_exists(mock_deps, mo
 
     # Verify prompt includes instruction to read develop file
     assert "develop_001.md" in prompt
-    assert "問題" in prompt
+    assert "question" in prompt
 
 
 def test_prompt_excludes_develop_file_when_not_exists(mock_deps, monkeypatch, tmp_path):
-    """測試當不存在 develop file 時，prompt 不包含相關指示."""
+    """測試當不存在 develop file 時, prompt 不包含相關指示."""
     monkeypatch.chdir(tmp_path)
 
     phase = DevelopPhase(

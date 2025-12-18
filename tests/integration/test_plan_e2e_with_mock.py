@@ -1,6 +1,6 @@
 """E2E tests for 'cafe plan' command with mock agents.
 
-使用 CliRunner 測試 CLI 命令執行，用 CAFE_MOCK_AGENTS=true 避免真實 LLM 呼叫。
+使用 CliRunner 測試 CLI 命令執行, 用 CAFE_MOCK_AGENTS=true 避免真實 LLM 呼叫.
 """
 
 import os
@@ -21,14 +21,14 @@ runner = CliRunner()
 
 @dataclass
 class MockResult:
-    """模擬 subprocess.run 的結果格式"""
+    """模擬 subprocess.run 結果格式"""
     returncode: int
     stdout: str
     stderr: str
 
 
 def setup_test_environment(tmp_path: Path, issue_name: str):
-    """設置測試環境：創建 spec.md 和 config.yaml"""
+    """設置測試環境：創建 spec.md and config.yaml"""
     # Create config.yaml (required by cafe commands)
     cafe_dir = tmp_path / ".cafe"
     from tests.conftest import create_minimal_config
@@ -38,7 +38,7 @@ def setup_test_environment(tmp_path: Path, issue_name: str):
     spec_dir = tmp_path / ".cafe" / "issues" / issue_name / "spec"
     spec_dir.mkdir(parents=True, exist_ok=True)
     spec_file = spec_dir / "spec.md"
-    spec_file.write_text("# 測試功能需求\n\n這是一個測試需求規格。")
+    spec_file.write_text("# 測試功能需求\n\n這是一個測試需求規格.")
 
 
 def create_default_template(tmp_path: Path):
@@ -103,9 +103,9 @@ class TestPlanE2EMockStatusCodes:
     def test_invalid_status_code_should_fail(self, tmp_path):
         """測試 agent 返回無效狀態碼應該失敗
 
-        情境：Agent 返回無法識別的狀態碼 (CAFE_INVALID_CODE)
+        情境：Agent 返回無法識別狀態碼 (CAFE_INVALID_CODE)
         指令：cafe plan test-issue --no-interactive --template default
-        預期：失敗，錯誤訊息包含 "no status code" 或 "failed"
+        預期：失敗, 錯誤訊息包含 "no status code" or "failed"
         """
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
@@ -123,7 +123,7 @@ class TestPlanE2EMockStatusCodes:
 
         情境：Agent 回應內容沒有包含任何狀態碼
         指令：cafe plan test-issue --no-interactive --template default
-        預期：失敗，錯誤訊息包含 "no status code" 或 "failed"
+        預期：失敗, 錯誤訊息包含 "no status code" or "failed"
         """
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
@@ -140,8 +140,8 @@ class TestPlanE2EMockStatusCodes:
 
         情境：CAFE_MOCK_RESPONSE 設為空字串
         指令：cafe plan test-issue --no-interactive --template default
-        預期：成功，MockAgentExecutor 使用預設的 READY_FOR_REVIEW 回應
-        註：此測試記錄當前行為 - 空 mock 回應會使用預設值，仍然成功
+        預期：成功, MockAgentExecutor 使用預設 READY_FOR_REVIEW 回應
+        註：此測試記錄當前行為 - 空 mock 回應會使用預設值, 仍然成功
         """
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
@@ -160,9 +160,9 @@ class TestPlanE2EMockTemplateErrors:
     def test_template_not_exists_should_fail(self, tmp_path):
         """測試 template 不存在應該失敗
 
-        情境：指定的 template 檔案不存在
+        情境：指定 template 檔案不存在
         指令：cafe plan test-issue --no-interactive --template nonexistent-template
-        預期：失敗，錯誤訊息包含 "template" 和 "not found"，plan.md 不被創建
+        預期：失敗, 錯誤訊息包含 "template" and "not found", plan.md 不被創建
         """
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
@@ -178,11 +178,11 @@ class TestPlanE2EMockTemplateErrors:
         assert not plan_file.exists()
 
     def test_first_round_without_template_should_fail(self, tmp_path):
-        """測試第一輪沒有提供 template 應該失敗
+        """測試Round 1沒有提供 template 應該失敗
 
-        情境：首次創建 plan，但沒有提供 template
+        情境：首次創建 plan, 但沒有提供 template
         指令：cafe plan test-issue --no-interactive
-        預期：失敗，錯誤訊息包含 "template" 和 "required"
+        預期：失敗, 錯誤訊息包含 "template" and "required"
         """
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
@@ -206,9 +206,9 @@ class TestPlanE2EMockContentValidation:
     def test_plan_content_excludes_status_code(self, tmp_path):
         """測試 plan.md 不包含狀態碼
 
-        情境：Agent 返回 CAFE_READY_FOR_REVIEW 狀態碼和計畫內容
+        情境：Agent 返回 CAFE_READY_FOR_REVIEW 狀態碼and計畫內容
         指令：cafe plan test-issue --no-interactive --template default
-        預期：成功，plan.md 只包含計畫內容，不包含狀態碼字串
+        預期：成功, plan.md 只包含計畫內容, 不包含狀態碼字串
         """
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
@@ -227,11 +227,11 @@ class TestPlanE2EMockContentValidation:
         # and plan.md exists (with at least the dev guide written by the system)
 
     def test_plan_preserves_dev_guide_section(self, tmp_path):
-        """測試第二輪更新時保留開發指南
+        """測試Round 2更新時保留開發指南
 
-        情境：已有 plan.md 和第一輪 history，進行第二輪更新（不提供 template）
+        情境：已有 plan.md andRound 1 history, 進行Round 2更新（不提供 template）
         指令：cafe plan test-issue --no-interactive
-        預期：成功，原有的開發指南內容被保留，只更新計畫部分
+        預期：成功, 原有開發指南內容被保留, 只更新計畫部分
         """
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
@@ -248,7 +248,7 @@ class TestPlanE2EMockContentValidation:
 
         result = run_cafe_plan(
             tmp_path, issue_name,
-            "CAFE_READY_FOR_REVIEW\n\n## 開發指南\n\n原始開發指南內容\n\n## 實作計畫\n\n更新後的計畫",
+            "CAFE_READY_FOR_REVIEW\n\n## 開發指南\n\n原始開發指南內容\n\n## 實作計畫\n\n更新後計畫",
             template=None
         )
 
@@ -257,11 +257,11 @@ class TestPlanE2EMockContentValidation:
         # Note: Mock agent doesn't execute Write tool, so we only verify phase completes successfully
 
     def test_plan_file_has_valid_structure(self, tmp_path):
-        """測試 plan.md 有正確的 Markdown 結構
+        """測試 plan.md 有正確 Markdown 結構
 
-        情境：Agent 返回結構化的 Markdown 內容
+        情境：Agent 返回結構化 Markdown 內容
         指令：cafe plan test-issue --no-interactive --template default
-        預期：成功，plan.md 包含有效的 Markdown 標題結構 (# 和 ##)
+        預期：成功, plan.md 包含有效 Markdown 標題結構 (# and ##)
         """
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)

@@ -8,16 +8,16 @@ from cafe.core.types import AgentConfig, AgentResponse, TokenUsage
 class MockAgentExecutor:
     """Mock agent executor that returns predefined responses.
     
-    用於測試時 mock agent 的行為，避免實際呼叫 LLM API。
+    Used to mock agent behavior during testing to avoid actual LLM API calls.
     
     Example:
-        # 創建 mock executor
+        # Create mock executor
         executor = MockAgentExecutor(
             config=AgentConfig(name="TestAgent", cli="claude"),
-            response="CONFIRMED\n這是測試回應"
+            response="CONFIRMED\nThis is a test response"
         )
         
-        # 使用 mock executor 替換真實的 executor
+        # Use mock executor to replace real executor
         agent_manager.agents["TestAgent"] = executor
     """
 

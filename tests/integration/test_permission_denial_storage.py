@@ -48,7 +48,7 @@ class TestSpecPhasePermissionDenialStorage:
     """Test SpecPhase saves response and permission_denials correctly."""
 
     def test_spec_phase_saves_permission_denials_with_need_clarification(self, tmp_path: Path, mock_git_ops, monkeypatch):
-        """測試 SpecPhase 在 NEED_CLARIFICATION 時正確儲存 response 和 permission_denials"""
+        """測試 SpecPhase 在 NEED_CLARIFICATION 時正確儲存 response and permission_denials"""
         monkeypatch.chdir(tmp_path)
         issue_name = "test-spec-permission-issue"
         mock_git_ops.get_current_branch.return_value = issue_name
@@ -66,7 +66,7 @@ class TestSpecPhasePermissionDenialStorage:
             )
         ]
         agent_manager.execute.return_value = (
-            "CAFE_NEED_CLARIFICATION\n我需要讀取 /etc/passwd 來分析需求。",
+            "CAFE_NEED_CLARIFICATION\n我需要讀取 /etc/passwd 來分析需求.",
             TokenUsage(),
             permission_denials,
             None  # cli_command_args
@@ -118,7 +118,7 @@ class TestSpecPhasePermissionDenialStorage:
         assert iteration_data["cli"] == "claude"
 
     def test_spec_phase_saves_empty_permission_denials_with_confirmed(self, tmp_path: Path, mock_git_ops, monkeypatch):
-        """測試 SpecPhase 在 READY_FOR_REVIEW + 用戶確認後正確儲存空的 permission_denials"""
+        """測試 SpecPhase 在 READY_FOR_REVIEW + 用戶確認後正確儲存空 permission_denials"""
         monkeypatch.chdir(tmp_path)
         issue_name = "test-spec-confirmed-issue"
         mock_git_ops.get_current_branch.return_value = issue_name
@@ -130,7 +130,7 @@ class TestSpecPhasePermissionDenialStorage:
 
         # Mock agent returns READY_FOR_REVIEW without permission denials
         agent_manager.execute.return_value = (
-            "CAFE_READY_FOR_REVIEW\n需求已經很清楚了。",
+            "CAFE_READY_FOR_REVIEW\n需求已經很清楚了.",
             TokenUsage(),
             [],  # No permission denials
             None,  # cli_command_args
@@ -147,7 +147,7 @@ class TestSpecPhasePermissionDenialStorage:
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
             rigor=SpecRigor.MEDIUM,
-            user_input="清楚的需求",
+            user_input="清楚需求",
         )
 
         with patch('builtins.print'):
@@ -173,7 +173,7 @@ class TestPlanPhasePermissionDenialStorage:
     """Test PlanPhase saves response and permission_denials correctly."""
 
     def test_plan_phase_saves_permission_denials_with_need_clarification(self, tmp_path: Path, mock_git_ops, monkeypatch):
-        """測試 PlanPhase 在 NEED_CLARIFICATION 時正確儲存 response 和 permission_denials"""
+        """測試 PlanPhase 在 NEED_CLARIFICATION 時正確儲存 response and permission_denials"""
         monkeypatch.chdir(tmp_path)
         issue_name = "test-plan-permission-issue"
         mock_git_ops.get_current_branch.return_value = issue_name
@@ -213,7 +213,7 @@ class TestPlanPhasePermissionDenialStorage:
             )
         ]
         agent_manager.execute.return_value = (
-            "CAFE_NEED_CLARIFICATION\n我需要執行 git status 來了解專案狀態。",
+            "CAFE_NEED_CLARIFICATION\n我需要執行 git status 來了解專案狀態.",
             TokenUsage(),
             permission_denials,
             None  # cli_command_args
@@ -258,7 +258,7 @@ class TestDevelopPhasePermissionDenialStorage:
     """Test DevelopPhase saves response and permission_denials correctly."""
 
     def test_develop_phase_saves_permission_denials_with_need_permission(self, tmp_path: Path, mock_git_ops, monkeypatch):
-        """測試 DevelopPhase 在 NEED_PERMISSION 時正確儲存 response 和 permission_denials"""
+        """測試 DevelopPhase 在 NEED_PERMISSION 時正確儲存 response and permission_denials"""
         from .conftest import init_git_repo_for_issue
 
         monkeypatch.chdir(tmp_path)
@@ -372,7 +372,7 @@ class TestDevelopPhasePermissionDenialStorage:
 
         # Mock agent returns CONFIRMED without permission denials
         agent_manager.execute.return_value = (
-            "CAFE_CONFIRMED\n\n開發工作已完成。所有功能都已實作並測試通過。",
+            "CAFE_CONFIRMED\n\n開發工作已完成.所有功能都已實作並測試通過.",
             TokenUsage(),
             [],  # No permission denials
             None,  # cli_command_args

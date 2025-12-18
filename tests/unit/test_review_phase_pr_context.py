@@ -1,6 +1,6 @@
 """Unit tests for ReviewPhase PR comments integration.
 
-測試 ReviewPhase 整合 PR comments 的功能。
+測試 ReviewPhase 整合 PR comments 功能.
 """
 
 import pytest
@@ -16,7 +16,7 @@ class TestReviewPhasePRCommentsIntegration:
 
     @pytest.fixture
     def mock_components(self, tmp_path):
-        """創建 mock 的 components"""
+        """創建 mock  components"""
         # Create test files
         spec_file = tmp_path / ".cafe" / "issues" / "test-issue" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
@@ -43,8 +43,8 @@ class TestReviewPhasePRCommentsIntegration:
     def test_load_pr_comments_success(self, mock_components):
         """測試成功加載 PR comments
 
-        情境：提供有效的 PR number，成功獲取未 resolved comments
-        預期：返回格式化的 comments 字串及數量
+        情境：提供有效 PR number, 成功獲取未 resolved comments
+        預期：返回格式化 comments 字串及數量
         """
         with patch('cafe.phases.review_phase.get_pr_comments') as mock_get:
             with patch('cafe.phases.review_phase.filter_unresolved_comments') as mock_filter:
@@ -109,7 +109,7 @@ class TestReviewPhasePRCommentsIntegration:
     def test_load_pr_comments_pr_not_found(self, mock_components):
         """測試 PR 不存在
 
-        情境：提供的 PR number 不存在
+        情境：提供 PR number 不存在
         預期：_load_pr_comments 返回空字串並記錄錯誤
         """
         with patch('cafe.phases.review_phase.get_pr_comments') as mock_get:
@@ -131,10 +131,10 @@ class TestReviewPhasePRCommentsIntegration:
             assert count == 0
 
     def test_load_pr_comments_no_unresolved(self, mock_components):
-        """測試 PR 沒有未 resolved 的 comments
+        """測試 PR 沒有未 resolved  comments
 
-        情境：PR 有 comments，但全部都已 resolved
-        預期：返回空字串（沒有需要處理的 comments）
+        情境：PR 有 comments, 但全部都已 resolved
+        預期：返回空字串（沒有需要處理 comments）
         """
         with patch('cafe.phases.review_phase.get_pr_comments') as mock_get:
             with patch('cafe.phases.review_phase.filter_unresolved_comments') as mock_filter:
@@ -170,8 +170,8 @@ class TestReviewPhasePRCommentsIntegration:
     def test_prompt_includes_pr_comments(self, mock_components):
         """測試 prompt 包含 PR comments
 
-        情境：有未 resolved 的 PR comments
-        預期：生成的 prompt 包含 PR comments 內容
+        情境：有未 resolved  PR comments
+        預期：生成 prompt 包含 PR comments 內容
         """
         with patch('cafe.phases.review_phase.get_pr_comments') as mock_get:
             with patch('cafe.phases.review_phase.filter_unresolved_comments') as mock_filter:
@@ -258,14 +258,14 @@ class TestReviewPhasePRCommentsIntegration:
                 mock_components["agent_manager"].execute_agent.assert_not_called()
 
     def test_get_latest_pr_comment_timestamp(self, mock_components):
-        """測試取得最新 PR comment 的時間戳
+        """測試取得最新 PR comment 時間戳
 
-        情境：有多個 PR comments，需要找到最新的時間戳
-        預期：返回最新 comment 的 created_at 時間
+        情境：有多個 PR comments, 需要找到最新時間戳
+        預期：返回最新 comment  created_at 時間
         """
         with patch('cafe.phases.review_phase.get_pr_comments') as mock_get:
             with patch('cafe.phases.review_phase.filter_unresolved_comments') as mock_filter:
-                # 3 個 comments，按時間排序
+                # 3 個 comments, 按時間排序
                 mock_comments = [
                     PRComment(
                         id="C1",
@@ -285,7 +285,7 @@ class TestReviewPhasePRCommentsIntegration:
                         id="C3",
                         body="Latest comment",
                         author="user3",
-                        created_at="2025-01-03T09:00:00Z",  # 最新的
+                        created_at="2025-01-03T09:00:00Z",  # 最新
                         is_resolved=False
                     ),
                 ]
@@ -305,19 +305,19 @@ class TestReviewPhasePRCommentsIntegration:
 
                 timestamp = phase._get_latest_pr_comment_timestamp()
 
-                # 應該返回最新 comment 的時間
+                # 應該返回最新 comment 時間
                 assert timestamp is not None
                 assert "2025-01-03" in timestamp.isoformat()
 
     def test_check_commits_since_pr_comments(self, mock_components):
-        """測試檢查 PR comments 之後的 commits
+        """測試檢查 PR comments 之後 commits
 
-        情境：有新的 commits 在 PR comments 之後
+        情境：有新 commits 在 PR comments 之後
         預期：呼叫 git_ops.get_commits_since 並返回新 commits
         """
         with patch('cafe.phases.review_phase.get_pr_comments') as mock_get:
             with patch('cafe.phases.review_phase.filter_unresolved_comments') as mock_filter:
-                # 最後一個 PR comment 的時間：2025-01-02 10:00:00
+                # 最後一個 PR comment 時間：2025-01-02 10:00:00
                 mock_comments = [
                     PRComment(
                         id="C1",
@@ -341,7 +341,7 @@ class TestReviewPhasePRCommentsIntegration:
                     pr_number=123,
                 )
 
-                # Mock git log 返回新的 commits
+                # Mock git log 返回新 commits
                 mock_components["git_ops"].get_commits_since = Mock(return_value=[
                     {"hash": "abc123", "message": "New commit after PR comment"}
                 ])
@@ -387,13 +387,13 @@ class TestReviewPhasePRCommentsIntegration:
                     pr_number=123,
                 )
 
-                # Mock: 沒有新的 commits
+                # Mock: 沒有新 commits
                 mock_components["git_ops"].get_commits_since = Mock(return_value=[])
                 mock_components["git_ops"].get_current_branch = Mock(return_value="test-issue")
 
                 result = phase.execute()
 
-                # 應該返回 COMPLETED 因為沒有新的 commits
+                # 應該返回 COMPLETED 因為沒有新 commits
                 assert result.status.value == "completed"
                 assert "no new commits" in result.message.lower()
 
@@ -432,7 +432,7 @@ class TestReviewPhasePRCommentsIntegration:
                     pr_number=123,
                 )
 
-                # Mock: 有新的 commits
+                # Mock: 有新 commits
                 mock_components["git_ops"].get_commits_since = Mock(return_value=[
                     {"hash": "abc123", "message": "New commit"}
                 ])

@@ -162,12 +162,12 @@ class PRPhase(Phase):
         return None
 
     def _check_if_develop_is_newer_than_pr(self) -> bool:
-        """檢查 develop phase 的時間戳記是否比上次 PR review 更新。
+        """Check if develop phase timestamp is newer than last PR review.
 
         Works for both GitHub mode (PR comments) and local mode (pr/status.json).
 
         Returns:
-            True 如果 develop 更新（需要重新 review），False 否則
+            True if develop is newer (needs re-review), False otherwise
         """
         from datetime import datetime
 
@@ -505,7 +505,7 @@ class PRPhase(Phase):
 
         # Ask user for decision (c/r/m)
         if self.interactive:
-            choice = self._ask_user_for_review_decision("程式碼變更")
+            choice = self._ask_user_for_review_decision("code changes")
         else:
             # Non-interactive mode not supported for local review
             return PhaseResult(
@@ -697,49 +697,49 @@ class PRPhase(Phase):
         commits = self._get_current_branch_commits(self.git_ops, self.base_branch)
 
         # Build issue reference for GitHub mode
-        issue_instruction = f"\n- 在 body.md 開頭加上 `Closes #{self.issue_id}`" if self.workflow_mode == WorkflowMode.GITHUB else ""
+        issue_instruction = f"\n- Add `Closes #{self.issue_id}` at the beginning of body.md" if self.workflow_mode == WorkflowMode.GITHUB else ""
 
         # Build tasks based on what needs to be generated
         tasks = []
         if generate_title:
-            tasks.append(f"""1. 修改既有檔案 `{title_file}`，用 PR title 取代原本內容
-   - 一行，簡潔明確（不超過 80 字元）
-   - 描述這個 PR 做了什麼
-   - 範例：Add user authentication with OAuth2 support""")
+            tasks.append(f"""1. Edit existing file `{title_file}`, replace content with PR title
+   - One line, concise and clear (max 80 characters)
+   - Describe what this PR does
+   - Example: Add user authentication with OAuth2 support""")
 
         if generate_body:
             task_num = "2" if generate_title else "1"
-            tasks.append(f"""{task_num}. 修改既有檔案 `{body_file}`，用 PR description 取代原本內容（Markdown 格式）
-   - ## Summary - 簡要說明（2-3 句話）
-   - ## Changes - 主要變更（bullet points）
-   - ## Test Plan - 如何測試{issue_instruction}""")
+            tasks.append(f"""{task_num}. Edit existing file `{body_file}`, replace content with PR description (Markdown format)
+   - ## Summary - Brief description (2-3 sentences)
+   - ## Changes - Main changes (bullet points)
+   - ## Test Plan - How to test{issue_instruction}""")
 
         tasks_str = "\n\n".join(tasks)
 
         # Determine what is being generated for the prompt
         if generate_title and generate_body:
-            what_to_generate = "title 和 description"
-            status_desc = "PR title 和 body 已產生完成"
+            what_to_generate = "title and description"
+            status_desc = "PR title and body generation completed"
         elif generate_title:
             what_to_generate = "title"
-            status_desc = "PR title 已產生完成"
+            status_desc = "PR title generation completed"
         else:
             what_to_generate = "description"
-            status_desc = "PR body 已產生完成"
+            status_desc = "PR body generation completed"
 
         # Generate prompt for agent
-        prompt = f"""你需要為這個 Pull Request 產生 {what_to_generate}。
+        prompt = f"""You need to generate {what_to_generate} for this Pull Request.
 
-**需求規格：** {self.spec_file}
-**實作計畫：** {plan_file}
+**Requirements Specification:** {self.spec_file}
+**Implementation Plan:** {plan_file}
 
-**Commits：**
+**Commits:**
 {commits}
 
-**任務：**
+**Tasks:**
 {tasks_str}
 
-完成後請回傳 CAFE_CONFIRMED。
+When done, please return CAFE_CONFIRMED.
 """
 
         # Execute agent
@@ -819,23 +819,23 @@ class PRPhase(Phase):
         return body_file.read_text().strip()
 
     def _get_status_analysis_prompt(self) -> str:
-        """取得分析 status code 的 prompt.
+        """Get prompt for analyzing status code.
 
         Returns:
-            分析 prompt 字串
+            Analysis prompt string
         """
         spec_path = Path(self.spec_file)
         pr_dir = spec_path.parent.parent / "pr"
         title_file = pr_dir / "title.txt"
         body_file = pr_dir / "body.md"
 
-        return f"""請檢查以下檔案是否存在且內容完整：
+        return f"""Please check if the following files exist and have complete content:
 - {title_file}
 - {body_file}
 
-根據以下條件判斷應該回傳哪個狀態碼：
+Based on the following conditions, determine which status code to return:
 
-- CAFE_CONFIRMED: 兩個檔案都存在且內容完整
+- CAFE_CONFIRMED: Both files exist and have complete content
 
-請只回傳一個狀態碼（例如：CAFE_CONFIRMED），不要有任何其他內容。"""
+Please return only one status code (example: CAFE_CONFIRMED), with no other content."""
 

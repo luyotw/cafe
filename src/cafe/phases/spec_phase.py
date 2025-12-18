@@ -185,7 +185,7 @@ class SpecPhase(Phase):
                 iteration_number = self._get_next_iteration_number("spec", self.phase_dir)
             except ValueError as e:
                 # Exceeded 999 iterations
-                # spec_file 可能尚未設定，使用 hasattr 檢查
+                # spec_file may not be set yet, use hasattr to check
                 spec_file = self.spec_file if hasattr(self, 'spec_file') else None
                 return PhaseResult(
                     status=PhaseStatus.FAILED,
@@ -335,7 +335,7 @@ class SpecPhase(Phase):
             current_user_input = result_or_input
 
             # Prepare allowed tools with write/edit permission for spec file
-            # Convert to relative path (without / prefix) - 普通相對路徑
+            # Convert to relative path (without / prefix) - plain relative path
             # Use path relative to current working directory (supports worktree)
             from cafe.utils.git_utils import to_cwd_relative_path
 
@@ -396,7 +396,7 @@ class SpecPhase(Phase):
                     data={
                         "iterations": self.iteration,
                         "status_code": status_code.value if status_code else None,
-                        "spec_file": self.spec_file,  # 問題1: 加上完整檔案路徑
+                        "spec_file": self.spec_file,  # Issue 1: Add full file path
                     },
                 )
 
@@ -412,7 +412,7 @@ class SpecPhase(Phase):
                 message="Paused by user - can resume later",
                 data={
                     "iterations": self.iteration,
-                    "spec_file": self.spec_file,  # 問題1: 加上完整檔案路徑
+                    "spec_file": self.spec_file,  # Issue 1: Add full file path
                 },
             )
         except Exception as e:
@@ -425,10 +425,10 @@ class SpecPhase(Phase):
             return result
 
     def _get_completion_data(self) -> dict:
-        """取得 phase 完成時的額外資料（提供給 base class 的 _handle_standard_status_codes）。
+        """Get additional data when phase completes (provided to base class's _handle_standard_status_codes).
 
         Returns:
-            包含 phase-specific 資料的 dict，會被合併到 PhaseResult.data 中
+            Dict containing phase-specific data, will be merged into PhaseResult.data
         """
         data = {}
         # Add issue_id if GitHub mode and created new issue
@@ -450,23 +450,23 @@ class SpecPhase(Phase):
                 # Log error but don't fail the phase
                 print(f"Warning: Failed to post spec to GitHub issue: {e}")
 
-        # Always include spec_file in completion data (問題1: 加上完整檔案路徑)
+        # Always include spec_file in completion data (Issue 1: Add full file path)
         data["spec_file"] = self.spec_file
 
         return data
 
     def _prepare_user_input_for_iteration(self) -> "PhaseResult | str":
-        """準備當前迭代的 user input。
+        """Prepare user input for current iteration.
 
-        在最開始就取得所有需要的用戶輸入：
-        - Interactive: 從 stdin 詢問用戶
-        - Non-interactive: 從 self.user_input 取得
+        Get all required user input at the beginning:
+        - Interactive: Ask user from stdin
+        - Non-interactive: Get from self.user_input
 
-        之後的處理邏輯完全相同，不再區分 interactive/non-interactive。
+        Subsequent processing logic is identical, no distinction between interactive/non-interactive.
 
         Returns:
-            PhaseResult: 如果需要結束/暫停 phase
-            str: 用戶輸入內容（供 agent 使用）
+            PhaseResult: If phase needs to end/pause
+            str: User input content (for agent use)
         """
         # Iteration 1: user_input is the initial user story from spec file
         if self.iteration == 1:
@@ -476,7 +476,7 @@ class SpecPhase(Phase):
         # Iteration 2+: Check if current iteration was interrupted (has user_input but no response)
         current_data = self._load_current_iteration_data()
         if current_data and current_data.get("user_input") and not current_data.get("response"):
-            # 恢復被中斷的 iteration，直接使用已儲存的 user_input
+            # Resume interrupted iteration, directly use saved user_input
             return current_data["user_input"]
 
         # Iteration 2+: Display current spec content (interactive only)
@@ -490,18 +490,18 @@ class SpecPhase(Phase):
 
         prev_status = prev_data.get("status_code", "")
 
-        # 根據上一輪狀態，取得用戶輸入
+        # Get user input based on previous round status
         if prev_status == "CAFE_READY_FOR_REVIEW":
-            # 需要用戶選擇：confirm/modify
+            # Need user choice: confirm/modify
             if self.interactive:
-                choice = self._ask_user_for_review_decision("需求規格")
+                choice = self._ask_user_for_review_decision("Requirements specification")
             else:
                 choice = self.user_input
-                # Non-interactive 模式：用完後清空，確保不重複使用
+                # Non-interactive mode: clear after use to ensure no reuse
                 self.user_input = ""
 
                 if not choice:
-                    # Non-interactive 但沒提供輸入 → 立即失敗
+                    # Non-interactive but no input provided → fail immediately
                     return PhaseResult(
                         status=PhaseStatus.FAILED,
                         message=f"Spec phase failed after iteration {self.iteration - 1}: received READY_FOR_REVIEW in non-interactive mode without user input",
@@ -512,7 +512,7 @@ class SpecPhase(Phase):
                         },
                     )
 
-            # 處理用戶選擇（不再區分 interactive/non-interactive）
+            # Handle user choice (no longer distinguish interactive/non-interactive)
             return self._process_review_decision(
                 choice,
                 prev_data,
@@ -526,20 +526,20 @@ class SpecPhase(Phase):
             return ""
 
     def _display_current_spec(self) -> None:
-        """顯示目前的 spec.md 內容（僅 interactive 模式）。"""
+        """Display current spec.md content (interactive mode only)."""
         prev_iteration = self.iteration - 1
         if prev_iteration > 0:
             prev_spec_file = self._get_versioned_file_path("spec", prev_iteration, self.phase_dir)
-            print(f"\n💾 載入最新的需求規格檔案： {prev_spec_file}\n")
-            spec_content = prev_spec_file.read_text() if prev_spec_file.exists() else "（檔案未產生）"
+            print(f"\n💾 Loading latest requirements specification file: {prev_spec_file}\n")
+            spec_content = prev_spec_file.read_text() if prev_spec_file.exists() else "(File not generated)"
         else:
-            spec_content = "（檔案未產生）"
+            spec_content = "(File not generated)"
 
         # Get PM CLI info for display
         pm_cli = self.agent_manager.get_agent_config(self.pm_agent).cli.value
 
         print(f"\n{'='*60}")
-        print(f"PM ({self.pm_agent} by {pm_cli}) - 目前規格內容 (Iteration {self.iteration - 1}):")
+        print(f"PM ({self.pm_agent} by {pm_cli}) - Current specification content (Iteration {self.iteration - 1}):")
         print(f"{'='*60}")
         print(spec_content)
         print(f"{'='*60}\n")
@@ -558,19 +558,19 @@ class SpecPhase(Phase):
         self.rigor = SpecRigor(rigor_str)
 
     def _prompt_for_input_method(self) -> tuple[str, Optional[int]]:
-        """詢問用戶選擇需求輸入方式（手動 vs GitHub Issue）
+        """Ask user to select requirements input method (manual vs GitHub Issue)
 
         Returns:
             Tuple of (method, issue_id):
-            - method: "manual" 或 "github"
-            - issue_id: Issue ID (int) 如果選擇 GitHub，否則 None
+            - method: "manual" or "github"
+            - issue_id: Issue ID (int) if GitHub selected, None otherwise
         """
         # Use shared prompt function
         gh_ops = GitHubOps()
         return prompt_for_input_method(self.display, gh_ops)
 
     def _fetch_github_issue(self, issue_id: int) -> Optional[PhaseResult]:
-        """從 GitHub 抓取 issue 內容
+        """Fetch issue content from GitHub
 
         Args:
             issue_id: GitHub issue ID
@@ -605,10 +605,10 @@ class SpecPhase(Phase):
                 spec_path = Path(self.spec_file)
 
             spec_path.parent.mkdir(parents=True, exist_ok=True)
-            spec_path.write_text(f"# 初始需求\n\n{fetched_content}\n")
+            spec_path.write_text(f"# Initial Requirements\n\n{fetched_content}\n")
 
             print()
-            print("✅ 需求已從 GitHub Issue 載入，開始需求澄清...")
+            print("✅ Requirements loaded from GitHub Issue, starting clarification...")
             print()
 
             return None  # Success
@@ -633,35 +633,35 @@ class SpecPhase(Phase):
     def _prompt_for_user_story(self) -> None:
         """Prompt user to write initial requirement when no requirements file exists."""
         print("\n" + "="*70)
-        print("請描述你的需求：")
+        print("Please describe your requirements:")
         print("="*70)
         print()
-        print("建議以使用者故事的方式撰寫：")
-        print("   格式：身為[角色]，我想要[功能]，以便[目的/價值]")
+        print("Recommended to write as user stories:")
+        print("   Format: As a [role], I want [feature], so that [purpose/value]")
         print()
-        print("   範例：")
-        print("   - 身為產品經理，我想要快速了解專案進度，以便向團隊報告開發狀態")
-        print("   - 身為用戶，我想要看到清楚的錯誤訊息，以便知道哪裡出問題並如何修正")
+        print("   Examples:")
+        print("   - As a product manager, I want to quickly understand project progress to report development status to the team")
+        print("   - As a user, I want to see clear error messages to know what went wrong and how to fix it")
         print()
-        print("也可以用一般方式描述需求：")
-        print("   - 新增一個匯出 CSV 的功能")
-        print("   - 修正登入頁面無法提交的 bug")
-        print("   - 優化首頁載入速度")
+        print("Or describe requirements in general terms:")
+        print("   - Add a CSV export feature")
+        print("   - Fix bug where login page cannot submit")
+        print("   - Optimize homepage loading speed")
         print()
 
         # Get user's requirement using Display for better Unicode support
-        user_requirement = self.display.get_multiline_input("請輸入你的需求").strip()
+        user_requirement = self.display.get_multiline_input("Please enter your requirements").strip()
 
         if not user_requirement:
-            raise ValueError("未提供需求，無法繼續")
+            raise ValueError("No requirements provided, cannot continue")
 
         # Save requirement as initial spec
         spec_path = Path(self.spec_file)
         spec_path.parent.mkdir(parents=True, exist_ok=True)
-        spec_path.write_text(f"# 初始需求\n\n{user_requirement}\n")
+        spec_path.write_text(f"# Initial Requirements\n\n{user_requirement}\n")
 
         print()
-        print("✅ 需求已記錄，開始需求澄清...")
+        print("✅ Requirements recorded, starting clarification...")
         print()
 
     def _backup_spec(self, spec_path: Path) -> None:
@@ -675,25 +675,25 @@ class SpecPhase(Phase):
             backup_path.write_text(spec_path.read_text())
 
     def _ensure_spec_file_written(self, response: str) -> None:
-        """確保 spec 檔案已寫入（用於 mock 模式或 agent 未使用 write tool）。
+        """Ensure spec file is written (for mock mode or when agent does not use write tool).
         
-        在 mock 模式下，agent 不會實際呼叫 write tool，所以需要從 response 中提取內容並寫入。
+        In mock mode, agent will not actually call write tool, so content needs to be extracted from response and written.
         
         Args:
-            response: Agent 回應內容
+            response: Agent response content
         """
         import os
         
-        # 只在 mock 模式下處理
+        # Only process in mock mode
         if not os.getenv("CAFE_MOCK_AGENTS"):
             return
             
-        # 提取狀態碼後的內容
+        # Extract content after status code
         lines = response.strip().split("\n")
         if not lines:
             return
             
-        # 跳過第一行（狀態碼）和空行
+        # Skip first line (status code) and empty lines
         content_lines = []
         skip_first = True
         for line in lines:
@@ -706,38 +706,38 @@ class SpecPhase(Phase):
         if not content:
             return
             
-        # 寫入檔案
+        # Write to file
         spec_path = Path(self.spec_file)
         spec_path.parent.mkdir(parents=True, exist_ok=True)
         spec_path.write_text(content, encoding="utf-8")
 
     def _sync_spec_to_github(self, response: str) -> None:
-        """同步 spec 檔案到 GitHub issue（僅 GitHub workflow 模式）。
+        """Sync spec file to GitHub issue (GitHub workflow mode only).
 
-        注意：此方法**不負責寫入 spec 檔案**。PM agent 已透過 Write tool 直接寫入 spec_file。
+        Note: This method **is not responsible for writing spec file**. PM agent has directly written to spec_file via Write tool.
 
-        此方法的用途：
-        - Local mode: 無動作（agent 已寫入檔案，無需額外處理）
-        - GitHub mode: 將本地 spec_file 內容同步到 GitHub issue
+        Purpose of this method:
+        - Local mode: No action (agent has written file, no additional processing needed)
+        - GitHub mode: Sync local spec_file content to GitHub issue
 
         Args:
-            response: Agent 回應內容（未使用，因為 agent 已透過 Write tool 寫入檔案）
+            response: Agent response content (unused, because agent has written file via Write tool)
         """
         spec_path = Path(self.spec_file)
         if not spec_path.exists():
-            return  # Agent 尚未寫入檔案
+            return  # Agent has not written file yet
 
         if self.workflow_mode == WorkflowMode.GITHUB:
-            # 將本地檔案內容同步到 GitHub issue
+            # Sync local file content to GitHub issue
             content = spec_path.read_text()
             if not self.issue_id and not hasattr(self, '_created_issue_id'):
-                # 首次建立 GitHub issue
+                # First time creating GitHub issue
                 self._created_issue_id = create_github_issue(content)
             elif hasattr(self, '_created_issue_id'):
-                # 更新先前建立的 issue
+                # Update previously created issue
                 update_github_issue(self._created_issue_id, content)
             else:
-                # 更新既有的 issue
+                # Update existing issue
                 update_github_issue(self.issue_id, content)
 
     def _create_github_issue(self, content: str) -> str:
@@ -779,12 +779,12 @@ class SpecPhase(Phase):
         Returns:
             Guidelines string
         """
-        return """**重要：絕對不可涉及技術細節！**
-- ❌ 不要提及實作方式、技術架構、程式語言、框架、資料庫等
-- ❌ 不要建議任何技術解決方案
-- ❌ 禁止自己修改程式碼
-- ✅ 只關注「用戶要什麼」「為什麼要」「預期效果是什麼」
-- ✅ 從產品和業務角度思考"""
+        return """**Important: Absolutely no technical details!**
+- ❌ Do not mention implementation methods, technical architecture, programming languages, frameworks, databases, etc.
+- ❌ Do not suggest any technical solutions
+- ❌ Do not modify code yourself
+- ✅ Only focus on "what users want" "why they want it" "what the expected outcome is"
+- ✅ Think from product and business perspectives"""
 
     def _get_status_code_prompt(self) -> str:
         """Get status code prompt.
@@ -798,8 +798,8 @@ class SpecPhase(Phase):
                 PhaseStatusCode.NEED_CLARIFICATION,
             ],
             descriptions={
-                PhaseStatusCode.READY_FOR_REVIEW: "需求規格已完成，準備好讓使用者確認",
-                PhaseStatusCode.NEED_CLARIFICATION: "需求有不清楚的地方需要澄清",
+                PhaseStatusCode.READY_FOR_REVIEW: "Requirements specification completed, ready for user confirmation",
+                PhaseStatusCode.NEED_CLARIFICATION: "Requirements have unclear parts that need clarification",
             },
         )
 
@@ -812,28 +812,28 @@ class SpecPhase(Phase):
         from cafe.core.types import SpecRigor
 
         if self.rigor == SpecRigor.LOW:
-            return """**嚴謹程度：低（快速開發）**
-- 只詢問最關鍵的資訊（核心功能是什麼）
-- 不追問細節，可以讓開發者自行判斷的就不問
-- 允許一些模糊地帶，相信開發者會做出合理選擇
-- 如果需求基本清楚，就可以確認
-- 目標：快速進入開發，邊做邊調整"""
+            return """**Rigor level: Low (fast development)**
+- Only ask for the most critical information (what is the core function)
+- Do not ask for details that developers can decide themselves
+- Allow some ambiguity, trust developers to make reasonable choices
+- If requirements are basically clear, can confirm
+- Goal: Quickly start development, adjust as you go"""
         elif self.rigor == SpecRigor.HIGH:
-            return """**嚴謹程度：高（精確規格）**
-- 詳細詢問所有細節（包括邊界情況、錯誤處理、特殊場景）
-- 確保每個功能的輸入、輸出、行為都有明確定義
-- 追問驗收標準，確保需求可測試
-- 不允許任何模糊或「看情況」的描述
-- 必須達到可以直接編寫測試案例的程度
-- 目標：規格越清楚越好，減少後續溝通成本"""
+            return """**Rigor level: High (precise specification)**
+- Ask all details in depth (including edge cases, error handling, special scenarios)
+- Ensure every function's input, output, and behavior is clearly defined
+- Ask for acceptance criteria to ensure requirements are testable
+- Do not allow any vague or "it depends" descriptions
+- Must reach the level where test cases can be directly written
+- Goal: The clearer the specification, the better, reduce subsequent communication costs"""
         else:  # MEDIUM (default)
-            return """**嚴謹程度：中（平衡模式）**
-- 詢問重要的細節和關鍵場景
-- 對於明顯需要澄清的地方提問，但不過度追問小細節
-- 確保主要功能和預期行為清楚
-- 對於次要細節可以接受合理的彈性
-- 詢問驗收標準，但不要求過於詳細
-- 目標：在速度和精確度之間取得平衡"""
+            return """**Rigor level: Medium (balanced mode)**
+- Ask important details and key scenarios
+- Ask about obviously unclear areas, but don't over-pursue minor details
+- Ensure main functions and expected behaviors are clear
+- Accept reasonable flexibility for secondary details
+- Ask for acceptance criteria, but don't require excessive detail
+- Goal: Balance between speed and precision"""
 
     def _generate_local_prompt(self, user_input: str = "") -> str:
         """Generate prompt for local workflow.
@@ -848,33 +848,33 @@ class SpecPhase(Phase):
         status_code_prompt = self._get_status_code_prompt()
         rigor_guidelines = self._get_rigor_guidelines()
 
-        # 計算當前和前一個的檔案名稱（使用相對路徑）
-        # self.spec_file 是當前要寫入的檔案（已在 execute() 中設定好）
+        # Calculate current and previous file names (using relative paths)
+        # self.spec_file is the current file to write (already set in execute())
         from pathlib import Path
         current_spec_path = Path(self.spec_file)
         if not current_spec_path.is_absolute():
             current_spec_path = current_spec_path.resolve()
 
-        # 轉換為相對於當前工作目錄的路徑（用於 prompt）
-        # 使用 to_cwd_relative_path 以支援 worktree 環境
+        # Convert to path relative to current working directory (for prompt)
+        # Use to_cwd_relative_path to support worktree environment
         try:
             current_spec_file = to_cwd_relative_path(current_spec_path)
         except (ValueError, OSError):
-            # 如果無法轉換（檔案不在 cwd 下），使用絕對路徑
+            # If cannot convert (file not under cwd), use absolute path
             current_spec_file = str(current_spec_path)
 
-        # 前一輪的檔案：只在 iteration > 1 時才存在
+        # Previous round file: only exists when iteration > 1
         prev_spec_file = None
         if self.iteration > 1:
-            # 列出現有檔案並取最新的一個（作為前一輪的檔案）
-            # 當前檔案 (self.spec_file) 可能還不存在（即將被建立），所以最新的檔案就是前一輪的
+            # List existing files and get the newest one (as previous round file)
+            # Current file (self.spec_file) may not exist yet (about to be created), so the newest file is from previous round
             existing_specs = sorted(self.phase_dir.glob("spec_*.md"))
             if existing_specs:
-                # 取最新的檔案（編號最大的）作為前一輪的檔案
+                # Get the newest file (highest number) as previous round file
                 prev_spec_path = existing_specs[-1]
                 if not prev_spec_path.is_absolute():
                     prev_spec_path = prev_spec_path.resolve()
-                # 轉換為相對於當前工作目錄的路徑
+                # Convert to path relative to current working directory
                 try:
                     prev_spec_file = to_cwd_relative_path(prev_spec_path)
                 except (ValueError, OSError):
@@ -886,35 +886,35 @@ class SpecPhase(Phase):
         restriction = ""
 
         if self.iteration == 1:
-            # 第一輪：讀取 user_input（初始需求），寫入 spec_001.md
-            initial_instruction = f"""**第 1 輪需求澄清**
+            # Round 1: Read user_input (initial requirements), write to spec_001.md
+            initial_instruction = f"""**Round 1 Requirements Clarification**
 
-讀取 {current_spec_file} 中的初始需求內容。"""
+Read {current_spec_file}  for initial requirements content."""
             context_section = """
-**你的職責：**
-1. 仔細閱讀需求文件，找出所有不清楚、模糊、可能讓開發者自己腦補的地方。
-2. **以 PM 的身份**用對話方式向用戶提問，確認所有必要資訊。
-3. 如果需求已經很清楚，就說清楚了，不要硬湊問題。
+**Your Responsibilities:**
+1. Carefully read requirements document, identify all unclear, vague, or areas that might require developers to make assumptions.
+2. **As PM** ask users conversationally to confirm all necessary information.
+3. If requirements are already clear, say so, do not force questions.
 """
         else:  # Iteration 2+
-            # 第二輪以後：讀取前一輪的 spec 檔案及 user_input，寫入新的 spec 檔案
-            initial_instruction = f"""**第 {self.iteration} 輪需求澄清**
+            # Round 2 onwards: Read previous round spec file and user_input, write new spec file
+            initial_instruction = f"""**Round {self.iteration} Requirements Clarification**
 
-1. 使用 Read tool 讀取 {prev_spec_file}（前一輪的分析結果）
-2. 查看使用者的最新回答（見下方）
-3. 修改 {current_spec_file}，更新內容（新的版本）"""
+1. Use Read tool to read {prev_spec_file}(previous round analysis results)
+2. View user's latest answer (see below)
+3. Modify {current_spec_file}, update content (new version)"""
             
             if user_input:
                 context_section = f"""
-**使用者的回答：**
+**User's Answer:**
 {user_input}
 """
             if self.iteration >= 4:
                 restriction = f"""
-⚠️ **重要限制：**
-- 你現在是第 {self.iteration} 輪，只能針對「待解答的問題」繼續追問。
-- **不可以提出新的問題**。
-- 只能深入釐清已經提出的問題。
+⚠️ **Important Constraints:**
+- You are now in round {self.iteration} , can only continue asking about "pending questions".
+- **Cannot propose new questions**.
+- Can only deeply clarify questions already raised.
 """
 
         # --- 2. Define common instructions ---
@@ -923,37 +923,37 @@ class SpecPhase(Phase):
         agent_file = AgentManager.get_agent_file_path(self.pm_agent, "pm")
         
         role_reading_instruction = f"""
-**執行步驟：**
-1. 使用 Read tool 讀取 {agent_file} 了解你的角色定義和工作準則
+**Execution Steps:**
+1. Use Read tool to read {agent_file} to understand your role definition and work guidelines
 """
         
         if self.iteration == 1:
-            role_reading_instruction += f"""2. 使用 Read tool 讀取 {current_spec_file} 了解初始需求內容
-3. 修改 {current_spec_file}，補充分析結果（包含原始需求、使用者故事、目前規格、待釐清問題）
+            role_reading_instruction += f"""2. Use Read tool to read {current_spec_file} to understand initial requirements content
+3. Modify {current_spec_file}，Add analysis results (including original requirements, user stories, current specification, questions to clarify)
 """
         else:
-            role_reading_instruction += f"""2. 使用 Read tool 讀取 {prev_spec_file}（前一輪的分析結果）
-3. 整合使用者的最新回答
-4. 修改 {current_spec_file}，更新分析結果（新版本）
+            role_reading_instruction += f"""2. Use Read tool to read {prev_spec_file}(previous round analysis results)
+3. Integrate user's latest answers
+4. Modify {current_spec_file}，Update analysis results (new version)
 """
 
         base_prompt = f"""
-**你的角色：**
-PM (Product Manager)，負責需求澄清工作。請讀取 {agent_file} 了解你的角色定義和工作準則，然後嚴格按照角色定義中的要求執行。"""
+**Your Role:**
+PM (Product Manager), responsible for requirements clarification. Please read {agent_file} to understand your role definition and work guidelines, then strictly execute according to role definition requirements."""
 
-        need_clarification_instruction = f"""**如果需要澄清（status: CAFE_NEED_CLARIFICATION）：**
-將以下內容寫入 {current_spec_file}：
-   - 「## 原始需求描述」- **完整保留**用戶最初提供的原始需求，不可修改（除非用戶明確要求）。
-   - 「## 使用者故事」- 用戶撰寫的使用者故事或由自動由需求描述產生的使用者故事。
-   - 「## 目前的需求規格」- 整合所有已知資訊（包括使用者故事、先前的對話、用戶的最新回答），列出目前已知的完整需求。
-   - 「## 待釐清的問題」- 以 PM 的身份用對話方式提問，深入釐清需求。
+        need_clarification_instruction = f"""**If clarification needed (status: CAFE_NEED_CLARIFICATION):**
+Write the following content to {current_spec_file}：
+   - 「## Original Requirements Description」- **Fully preserve** the original requirements initially provided by user, cannot modify (unless user explicitly requests).
+   - 「## User Stories」- User stories written by user or automatically generated from requirements description.
+   - 「## Current Requirements Specification」- Integrate all known information (including user stories, previous conversations, user's latest answers), list complete known requirements.
+   - 「## Questions to Clarify」- As PM ask conversationally to deeply clarify requirements.
 """
 
-        confirmed_instruction = f"""**如果需求已清楚（status: CAFE_READY_FOR_REVIEW）：**
-將完整需求規格文件寫入 {current_spec_file}，格式：
-   - 「## 原始需求描述」- **完整保留**用戶最初提供的原始需求，不可修改（除非用戶明確要求）。
-   - 「## 使用者故事」- 用戶撰寫的使用者故事或由自動由需求描述產生的使用者故事。
-   - 「## 需求規格」- 整合所有已確認的內容，產生最終的完整需求規格，包含功能描述、使用場景、預期行為、驗收標準等。
+        confirmed_instruction = f"""**If requirements are clear (status: CAFE_READY_FOR_REVIEW):**
+Write complete requirements specification document to {current_spec_file}, format:
+   - 「## Original Requirements Description」- **Fully preserve** the original requirements initially provided by user, cannot modify (unless user explicitly requests).
+   - 「## User Stories」- User stories written by user or automatically generated from requirements description.
+   - 「## Requirements Specification」- Integrate all confirmed content, produce final complete requirements specification, including function descriptions, usage scenarios, expected behaviors, acceptance criteria, etc.
 """
 
         # --- 3. Assemble the final prompt ---
@@ -987,36 +987,36 @@ PM (Product Manager)，負責需求澄清工作。請讀取 {agent_file} 了解�
                 PhaseStatusCode.NEED_CLARIFICATION,
             ],
             descriptions={
-                PhaseStatusCode.CONFIRMED: "需求已經很清楚，可以進行開發",
-                PhaseStatusCode.NEED_CLARIFICATION: "需求有不清楚的地方需要澄清",
+                PhaseStatusCode.CONFIRMED: "Requirements are clear, can proceed with development",
+                PhaseStatusCode.NEED_CLARIFICATION: "Requirements have unclear parts that need clarification",
             },
         )
 
         if self.iteration == 1:
-            return f"""這是第 {self.iteration} 輪需求分析。
+            return f"""This is round {self.iteration}  requirements analysis.
 
-請用 `gh issue view {self.issue_id}` 讀取 Issue 內容，仔細分析需求，找出所有不清楚、模糊、可能讓開發者自己腦補的地方。
+Please use `gh issue view {self.issue_id}` to read Issue content, carefully analyze requirements, identify all unclear, vague, or areas that might require developers to make assumptions.
 
 {status_code_prompt}
 
-**如果有需求問題需要澄清：**
-用最精簡的方式條列問題，不要給任何建議。
+**If there are requirements issues that need clarification:**
+List questions in the most concise way, do not give any suggestions.
 
-**如果需求已經很清楚，確認完成：**
-回應確認訊息。
+**If requirements are already clear, confirm completion:**
+Respond with confirmation message.
 """
         else:
-            return f"""這是第 {self.iteration} 輪需求分析。
+            return f"""This is round {self.iteration}  requirements analysis.
 
-請用 `gh issue view {self.issue_id}` 檢視 Issue 的最新內容。
+Please use `gh issue view {self.issue_id}`  to view Issue's latest content.
 
 {status_code_prompt}
 
-**如果有需求問題需要澄清：**
-用最精簡的方式條列問題，不要給任何建議。
+**If there are requirements issues that need clarification:**
+List questions in the most concise way, do not give any suggestions.
 
-**如果需求已經很清楚，確認完成：**
-回應確認訊息。
+**If requirements are already clear, confirm completion:**
+Respond with confirmation message.
 """
 
     def _load_issue_config(self) -> None:
@@ -1088,31 +1088,31 @@ PM (Product Manager)，負責需求澄清工作。請讀取 {agent_file} 了解�
         return self._get_status_file()
 
     def _get_status_analysis_prompt(self) -> str:
-        """取得分析 status code 的 prompt。
+        """Get prompt for analyzing status code.
 
         Returns:
-            分析 spec 檔案狀態的 prompt
+            Prompt for analyzing spec file status
         """
-        # 使用絕對路徑
+        # Use absolute path
         from pathlib import Path
         spec_path = Path(self.spec_file)
         if not spec_path.is_absolute():
             spec_path = spec_path.resolve()
         
-        return f"""請使用 Read tool 讀取 {spec_path} 並分析目前的狀態。
+        return f"""Please use Read tool to read {spec_path}  and analyze current status.
 
-根據以下條件判斷應該回傳哪個狀態碼：
+Based on the following conditions, determine which status code to return:
 
-- CAFE_READY_FOR_REVIEW: 需求規格已完成，所有必要資訊都已釐清，沒有待確認的問題
-- CAFE_NEED_CLARIFICATION: 規格中還有問題需要與用戶確認，或有未釐清的細節
+- CAFE_READY_FOR_REVIEW: Requirements specification completed, all necessary information clarified, no pending questions
+- CAFE_NEED_CLARIFICATION: Specification still has issues that need user confirmation, or unclear details
 
-請只回傳一個狀態碼（例如：CAFE_READY_FOR_REVIEW），不要有任何其他內容。"""
+Please return only one status code (e.g., CAFE_READY_FOR_REVIEW), no other content."""
 
     def _detect_written_output_files(self) -> List[Path]:
-        """檢查 spec file 是否在失敗前已寫入。
+        """Check if spec file was written before failure.
 
         Returns:
-            List[Path]: 如果 spec_{iteration}.md 存在則返回包含它的列表，否則返回空列表
+            List[Path]: If spec_{iteration}.md exists, return list containing it, otherwise return empty list
         """
         spec_file = self._get_versioned_file_path("spec", self.iteration, self.phase_dir)
         return [Path(spec_file)] if Path(spec_file).exists() else []

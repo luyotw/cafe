@@ -1,14 +1,14 @@
-"""測試 SpecPhase 的用戶確認流程。
+"""測試 SpecPhase 用戶確認流程.
 
-正確的流程應該是：
-1. Agent 回答後，在 interactive 模式下應該顯示給使用者確認
+正確流程應該是：
+1. Agent 回答後, 在 interactive 模式下應該顯示給使用者確認
 2. 只有當狀態碼是 CAFE_READY_FOR_REVIEW 時才需要用戶確認
 3. 用戶選擇：
-   - 確認 (c): 直接完成，**不再呼叫 agent**
+   - 確認 (c): 直接完成, **不再呼叫 agent**
    - 拒絕 (r): Phase 失敗
-   - 修改 (m): 提供 feedback，進入下一輪（會再次呼叫 agent）
-4. 在 non-interactive 模式下，CAFE_READY_FOR_REVIEW 直接完成，不需要確認
-5. CAFE_NEED_CLARIFICATION 不需要用戶確認，直接進入下一輪
+   - 修改 (m): 提供 feedback, 進入下一輪（會再次呼叫 agent）
+4. 在 non-interactive 模式下, CAFE_READY_FOR_REVIEW 直接完成, 不需要確認
+5. CAFE_NEED_CLARIFICATION 不需要用戶確認, 直接進入下一輪
 """
 
 from pathlib import Path
@@ -32,7 +32,7 @@ def mock_git_ops() -> MagicMock:
 
 
 class TestSpecPhaseUserConfirmation:
-    """測試 SpecPhase 用戶確認流程。"""
+    """測試 SpecPhase 用戶確認流程."""
 
     def test_ready_for_review_interactive_waits_for_user_confirmation(
         self, tmp_path: Path, mock_git_ops: MagicMock, monkeypatch
@@ -72,7 +72,7 @@ class TestSpecPhaseUserConfirmation:
         with patch('builtins.print'):
             result = phase.execute()
 
-        # 沒有 while loop，READY_FOR_REVIEW 在 interactive 模式下返回 IN_PROGRESS
+        # 沒有 while loop, READY_FOR_REVIEW 在 interactive 模式下返回 IN_PROGRESS
         assert result.status == PhaseStatus.COMPLETED
         assert result.data.get("status_code") == "CAFE_READY_FOR_REVIEW"
         assert agent_manager.execute.call_count == 1, "只應呼叫 agent 一次"
@@ -115,8 +115,8 @@ class TestSpecPhaseUserConfirmation:
         with patch('builtins.print'):
             result = phase.execute()
 
-        # 沒有 while loop，READY_FOR_REVIEW 在 interactive 模式下返回 IN_PROGRESS
-        # 用戶拒絕的行為會在後續的 execute() 呼叫中處理
+        # 沒有 while loop, READY_FOR_REVIEW 在 interactive 模式下返回 IN_PROGRESS
+        # 用戶拒絕行為會在後續 execute() 呼叫中處理
         assert result.status == PhaseStatus.COMPLETED
         assert result.data.get("status_code") == "CAFE_READY_FOR_REVIEW"
         assert agent_manager.execute.call_count == 1, "只應呼叫 agent 一次"
@@ -134,7 +134,7 @@ class TestSpecPhaseUserConfirmation:
         spec_file.write_text("# 初始需求\n\n用戶想要一個新功能")
 
         agent_manager = MagicMock(spec=AgentManager)
-        # 沒有 while loop，第一次呼叫只會執行一次
+        # 沒有 while loop, 第一次呼叫只會執行一次
         agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n規格已完成", TokenUsage(), [], None, [])
         agent_manager.get_total_token_usage.return_value = TokenUsage()
         agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
@@ -160,7 +160,7 @@ class TestSpecPhaseUserConfirmation:
         with patch('builtins.print'):
             result = phase.execute()
 
-        # 沒有 while loop，READY_FOR_REVIEW 在 interactive 模式下返回 IN_PROGRESS
+        # 沒有 while loop, READY_FOR_REVIEW 在 interactive 模式下返回 IN_PROGRESS
         assert result.status == PhaseStatus.COMPLETED
         assert result.data.get("status_code") == "CAFE_READY_FOR_REVIEW"
         # 只呼叫 agent 一次
@@ -169,7 +169,7 @@ class TestSpecPhaseUserConfirmation:
     def test_ready_for_review_noninteractive_completes_immediately(
         self, tmp_path: Path, mock_git_ops: MagicMock, monkeypatch
     ) -> None:
-        """測試 non-interactive 模式下 READY_FOR_REVIEW 直接完成，不需要用戶確認"""
+        """測試 non-interactive 模式下 READY_FOR_REVIEW 直接完成, 不需要用戶確認"""
         issue_name = "test-noninteractive"
         mock_git_ops.get_current_branch.return_value = issue_name
         monkeypatch.chdir(tmp_path)
@@ -221,7 +221,7 @@ class TestSpecPhaseUserConfirmation:
         spec_file.write_text("# 初始需求\n\n用戶想要一個新功能")
 
         agent_manager = MagicMock(spec=AgentManager)
-        # 沒有 while loop，只會執行一次
+        # 沒有 while loop, 只會執行一次
         agent_manager.execute.return_value = ("CAFE_NEED_CLARIFICATION\n需要更多資訊", TokenUsage(), [], None, [])
         agent_manager.get_total_token_usage.return_value = TokenUsage()
         agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
@@ -247,7 +247,7 @@ class TestSpecPhaseUserConfirmation:
         with patch('builtins.print'):
             result = phase.execute()
 
-        # 沒有 while loop，NEED_CLARIFICATION 返回 COMPLETED（不再自動繼續）
+        # 沒有 while loop, NEED_CLARIFICATION 返回 COMPLETED（不再自動繼續）
         assert result.status == PhaseStatus.COMPLETED
         assert result.data.get("status_code") == "CAFE_NEED_CLARIFICATION"
         assert agent_manager.execute.call_count == 1

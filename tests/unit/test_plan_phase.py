@@ -102,7 +102,7 @@ class TestLocalWorkflow:
         plan_file.write_text("## 開發指南\n\nDevelopment guide here")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage(), [], None, [])
+        agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n實作分析已完成.", TokenUsage(), [], None, [])
 
         setup_agent_manager_mocks(agent_manager)
 
@@ -135,10 +135,10 @@ class TestLocalWorkflow:
         # Create plan.md with dev guide section (simulate user providing it)
         plan_file = spec_file.parent.parent / "plan" / "plan.md"
         plan_file.parent.mkdir(parents=True, exist_ok=True)
-        plan_file.write_text("## 開發指南\n\n這是開發指南內容\n\n## 實作計畫\n\nTODO")
+        plan_file.write_text("## Development Guide\n\nThis is the development guide content\n\n## Implementation Plan\n\nTODO")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage(), [], None, [])
+        agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n實作分析已完成.", TokenUsage(), [], None, [])
 
         setup_agent_manager_mocks(agent_manager)
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -163,12 +163,12 @@ class TestLocalWorkflow:
         # plan.md should still exist with dev guide
         assert plan_file.exists()
         content = plan_file.read_text()
-        assert "## 開發指南" in content
-        assert "這是開發指南內容" in content
+        assert "## Development Guide" in content
+        assert "This is the development guide content" in content
         assert agent_manager.execute.called
 
     def test_empty_dev_guide_allowed_in_non_interactive_mode(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
-        """測試空的開發指南在非互動模式下被允許"""
+        """測試空開發指南在非互動模式下被允許"""
         monkeypatch.chdir(tmp_path)
         mock_git_ops.get_current_branch.return_value = "test-feature"
 
@@ -177,7 +177,7 @@ class TestLocalWorkflow:
         spec_file.write_text("# Requirements\n\nNo dev guide")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage(), [], None, [])
+        agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n實作分析已完成.", TokenUsage(), [], None, [])
 
         setup_agent_manager_mocks(agent_manager)
         permission_handler = MagicMock(spec=PermissionHandler)
@@ -203,7 +203,7 @@ class TestLocalWorkflow:
         plan_file = spec_file.parent.parent / "plan" / "plan_001.md"
         assert plan_file.exists()
         content = plan_file.read_text()
-        assert "## 開發指南" in content
+        assert "## Development Guide" in content
 
     def test_multiple_iterations_until_confirmed(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
         monkeypatch.chdir(tmp_path)
@@ -218,8 +218,8 @@ class TestLocalWorkflow:
         plan_file.write_text("## 開發指南\n\nGuide")
 
         agent_manager = MagicMock(spec=AgentManager)
-        # 移除 while loop 後，agent 回應應該包含 status code
-        # 測試 NEED_CLARIFICATION 的情況
+        # 移除 while loop 後, agent 回應應該包含 status code
+        # 測試 NEED_CLARIFICATION 情況
         agent_manager.execute.return_value = ("CAFE_NEED_CLARIFICATION\n需要更多資訊", TokenUsage(), [], None, [])
 
         setup_agent_manager_mocks(agent_manager)
@@ -240,10 +240,10 @@ class TestLocalWorkflow:
         with patch('builtins.print'):
             result = phase.execute()
 
-        # 移除 while loop 後，execute() 只執行一次，返回 COMPLETED
+        # 移除 while loop 後, execute() 只執行一次, 返回 COMPLETED
         assert result.status == PhaseStatus.COMPLETED
         assert result.data.get("status_code") == "CAFE_NEED_CLARIFICATION"
-        # 沒有 while loop，只呼叫 agent 一次
+        # 沒有 while loop, 只呼叫 agent 一次
         assert agent_manager.execute.call_count == 1
 
 
@@ -260,7 +260,7 @@ class TestGitHubWorkflow:
         spec_file.write_text("# Requirements\n\n## 開發指南\nDev guide")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage(), [], None, [])
+        agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n實作分析已完成.", TokenUsage(), [], None, [])
 
         setup_agent_manager_mocks(agent_manager)
 
@@ -295,7 +295,7 @@ class TestGitHubWorkflow:
         spec_file.write_text("# Requirements\n\n## 開發指南\nDev guide")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage(), [], None, [])
+        agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n實作分析已完成.", TokenUsage(), [], None, [])
 
         setup_agent_manager_mocks(agent_manager)
 
@@ -334,7 +334,7 @@ class TestPromptGeneration:
         plan_file.write_text("## 開發指南\n\nGuide")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage(), [], None, [])
+        agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n實作分析已完成.", TokenUsage(), [], None, [])
 
         setup_agent_manager_mocks(agent_manager)
 
@@ -357,7 +357,7 @@ class TestPromptGeneration:
         call_args = agent_manager.execute.call_args[0]
         prompt = call_args[1]
         assert "spec.md" in prompt
-        assert "第 1 輪" in prompt
+        assert "iteration 1" in prompt.lower()
 
     def test_subsequent_iteration_includes_history(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
         monkeypatch.chdir(tmp_path)
@@ -395,14 +395,14 @@ class TestPromptGeneration:
 
         # Non-interactive mode: after 5 retries without status code returns FAILED
         assert result.status == PhaseStatus.FAILED
-        assert "Agent 在 5 次嘗試後仍未回傳有效的 status code" in result.message
+        assert "Still did not return valid status code after" in result.message
         # 呼叫 6 次：原始 prompt + 5 次重試
         assert agent_manager.execute.call_count == 6
 
         # Check first call includes iteration info
         first_call = agent_manager.execute.call_args_list[0][0]
         prompt = first_call[1]
-        assert "第 1 輪" in prompt
+        assert "iteration 1" in prompt.lower()
 
 
 class TestAgentSelection:
@@ -421,7 +421,7 @@ class TestAgentSelection:
         plan_file.write_text("## 開發指南\n\nGuide")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage(), [], None, [])
+        agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n實作分析已完成.", TokenUsage(), [], None, [])
 
         setup_agent_manager_mocks(agent_manager)
 
@@ -544,7 +544,7 @@ class TestPlanPhaseHistory:
         plan_file.write_text("## 開發指南\n\nGuide")
 
         agent_manager = MagicMock(spec=AgentManager)
-        # 移除 while loop 後，只會執行一次迭代
+        # 移除 while loop 後, 只會執行一次迭代
         agent_manager.execute.return_value = ("CAFE_NEED_CLARIFICATION\n需要更多資訊", TokenUsage(), [], None, [])
 
         setup_agent_manager_mocks(agent_manager)
@@ -568,7 +568,7 @@ class TestPlanPhaseHistory:
              patch('builtins.print'):
             result = phase.execute()
 
-        # 移除 while loop 後，只會有一次迭代的 history
+        # 移除 while loop 後, 只會有一次迭代 history
         history_dir = spec_file.parent.parent / "plan" / "history"
         assert history_dir.exists()
         assert (history_dir / "iteration_001.json").exists()
@@ -595,7 +595,7 @@ class TestPlanPhaseHistory:
         plan_file.write_text("## 開發指南\n\nGuide")
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage(), [], None, [])
+        agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n實作分析已完成.", TokenUsage(), [], None, [])
         agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
 
         setup_agent_manager_mocks(agent_manager)
@@ -648,7 +648,7 @@ class TestPlanPhaseHistory:
             plan_file = spec_file.parent.parent / "plan" / "plan.md"
             plan_file.parent.mkdir(parents=True, exist_ok=True)
             plan_file.write_text("# 實作計畫\n\n## 技術分析\n分析內容")
-            return ("CAFE_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage(), [], None, [])
+            return ("CAFE_READY_FOR_REVIEW\n實作分析已完成.", TokenUsage(), [], None, [])
 
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.side_effect = mock_agent_writes_plan
@@ -747,7 +747,7 @@ class TestPlanPhaseHistory:
             data = json.load(f)
 
         assert data["iteration"] == 1
-        assert data["user_input"] == "User's dev guide input"  # 輪的開始
+        assert data["user_input"] == "User's dev guide input"  # 輪開始
         assert data["prompt"] == "Test prompt"
         assert data["response"] == "Test response"
         assert data["status_code"] == "CAFE_NEED_CLARIFICATION"
@@ -870,7 +870,7 @@ class TestPlanPhaseNeedClarification:
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.side_effect = [
             ("CAFE_NEED_CLARIFICATION\n需要更多資訊", TokenUsage(), [], None, []),
-            ("CAFE_READY_FOR_REVIEW\n實作分析已完成。", TokenUsage(), [], None, []),
+            ("CAFE_READY_FOR_REVIEW\n實作分析已完成.", TokenUsage(), [], None, []),
         ]
 
         setup_agent_manager_mocks(agent_manager)
@@ -889,15 +889,15 @@ class TestPlanPhaseNeedClarification:
         )
 
         # Mock user input (provide actual content and confirmation)
-        with patch.object(phase.display, 'get_multiline_input', return_value="這是我補充的開發指南資訊") as mock_input, \
+        with patch.object(phase.display, 'get_multiline_input', return_value="這是我補充開發指南資訊") as mock_input, \
              patch('builtins.input', return_value='c'), \
              patch('builtins.print'):
             result = phase.execute()
 
-            # 移除 while loop 後，NEED_CLARIFICATION 返回 COMPLETED
+            # 移除 while loop 後, NEED_CLARIFICATION 返回 COMPLETED
             assert result.status == PhaseStatus.COMPLETED
             assert result.data.get("status_code") == "CAFE_NEED_CLARIFICATION"
-            # 沒有 while loop，只呼叫 agent 一次
+            # 沒有 while loop, 只呼叫 agent 一次
             assert agent_manager.execute.call_count == 1
 
     def test_need_clarification_exits_in_non_interactive_mode(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
@@ -933,7 +933,7 @@ class TestPlanPhaseNeedClarification:
         with patch('builtins.print'):
             result = phase.execute()
 
-        # 移除 while loop 後，NEED_CLARIFICATION 在 non-interactive 模式下返回 COMPLETED
+        # 移除 while loop 後, NEED_CLARIFICATION 在 non-interactive 模式下返回 COMPLETED
         assert result.status == PhaseStatus.COMPLETED
         assert result.data.get("status_code") == "CAFE_NEED_CLARIFICATION"
 
@@ -950,7 +950,7 @@ class TestPlanPhaseNeedClarification:
         plan_file.write_text("## 開發指南\n\n初始開發指南內容")
 
         agent_manager = MagicMock(spec=AgentManager)
-        # 移除 while loop 後，只會執行一次迭代
+        # 移除 while loop 後, 只會執行一次迭代
         agent_manager.execute.return_value = ("CAFE_NEED_CLARIFICATION\n需要更多資訊", TokenUsage(), [], None, [])
 
         setup_agent_manager_mocks(agent_manager)
@@ -969,12 +969,12 @@ class TestPlanPhaseNeedClarification:
         )
 
         # Mock user input and confirmation
-        with patch.object(phase.display, 'get_multiline_input', return_value="我的回應內容"), \
+        with patch.object(phase.display, 'get_multiline_input', return_value="我回應內容"), \
              patch('builtins.input', return_value='c'), \
              patch('builtins.print'):
             result = phase.execute()
 
-        # 移除 while loop 後，只會有一次迭代的 history
+        # 移除 while loop 後, 只會有一次迭代 history
         history_dir = spec_file.parent.parent / "plan" / "history"
         history_file_1 = history_dir / "iteration_001.json"
         assert history_file_1.exists()
@@ -983,11 +983,11 @@ class TestPlanPhaseNeedClarification:
         with open(history_file_1, 'r', encoding='utf-8') as f:
             data1 = json.load(f)
 
-        # 第一輪：user_input（開發指南）→ agent response（NEED_CLARIFICATION）
+        # Round 1：user_input（開發指南）→ agent response（NEED_CLARIFICATION）
         assert data1["iteration"] == 1
         assert data1["status_code"] == "CAFE_NEED_CLARIFICATION"
-        assert "user_input" in data1  # 輪的開始：開發指南
-        assert "初始開發指南內容" in data1["user_input"]
+        assert "user_input" in data1  # 輪開始：開發指南
+        assert "Development Guide" in data1["user_input"]
 
     def test_need_clarification_saves_progress(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
         monkeypatch.chdir(tmp_path)
@@ -1065,7 +1065,7 @@ class TestPlanPhaseResume:
         history_file.write_text(json.dumps(history_data, ensure_ascii=False, indent=2))
 
         agent_manager = MagicMock(spec=AgentManager)
-        agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n實作計畫已完成。", TokenUsage(), [], None, [])
+        agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n實作計畫已完成.", TokenUsage(), [], None, [])
 
         setup_agent_manager_mocks(agent_manager)
 
@@ -1083,7 +1083,7 @@ class TestPlanPhaseResume:
         )
 
         # Mock user providing response and then confirming
-        with patch.object(phase.display, 'get_multiline_input', return_value="我的回答") as mock_multiline:
+        with patch.object(phase.display, 'get_multiline_input', return_value="我回答") as mock_multiline:
             with patch('builtins.input', return_value='c') as mock_input:
                 with patch('builtins.print'):
                     result = phase.execute()
@@ -1098,7 +1098,7 @@ class TestPlanPhaseIterationDisplay:
     """Test plan display at iteration start."""
 
     def test_displays_plan_at_start_of_iteration_2(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
-        """測試從恢復的 iteration 開始時顯示 plan.md 內容（移除 while loop 後不會在同一個 execute() 呼叫中進入第二輪）"""
+        """測試從恢復 iteration 開始時顯示 plan.md 內容（移除 while loop 後不會在同一個 execute() 呼叫中進入Round 2）"""
         monkeypatch.chdir(tmp_path)
         issue_name = "test-display-plan"
         spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
@@ -1109,7 +1109,7 @@ class TestPlanPhaseIterationDisplay:
         plan_file.parent.mkdir(parents=True, exist_ok=True)
         plan_file.write_text("## 開發指南\nDev guide\n\n## 實作計畫\n初始計畫")
 
-        # 建立 iteration 1 的 history 來模擬恢復狀態
+        # 建立 iteration 1  history 來模擬恢復狀態
         history_dir = plan_file.parent / "history"
         history_dir.mkdir(parents=True, exist_ok=True)
         import json
@@ -1157,7 +1157,7 @@ class TestPlanPhaseIterationDisplay:
         assert result.data.get("status_code") == "CAFE_READY_FOR_REVIEW"
 
     def test_no_plan_display_in_iteration_1(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
-        """測試第一輪不應該顯示計畫內容（因為還沒產生）"""
+        """測試Round 1不應該顯示計畫內容（因為還沒產生）"""
         monkeypatch.chdir(tmp_path)
         issue_name = "test-no-display-iter1"
         spec_file = tmp_path / ".cafe" / "issues" / issue_name / "spec" / "spec.md"
@@ -1169,7 +1169,7 @@ class TestPlanPhaseIterationDisplay:
         plan_file.write_text("## 開發指南\nDev guide\n\n## 實作計畫\nTODO")
 
         agent_manager = MagicMock(spec=AgentManager)
-        # 第一輪就 READY_FOR_REVIEW
+        # Round 1就 READY_FOR_REVIEW
         agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n計畫完成", TokenUsage(), [], None, [])
         agent_manager.get_agent_config.return_value = MagicMock(cli=MagicMock(value="claude"))
 
@@ -1192,13 +1192,13 @@ class TestPlanPhaseIterationDisplay:
              patch('builtins.input', return_value='c'):
             result = phase.execute()
 
-        # 第一輪開始時不應該有「目前計畫內容」
+        # Round 1開始時不應該有「目前計畫內容」
         plan_display_headers = [line for line in printed_output if "目前計畫內容" in line]
 
-        assert len(plan_display_headers) == 0, "第一輪開始時不應該顯示計畫內容"
+        assert len(plan_display_headers) == 0, "Round 1開始時不應該顯示計畫內容"
 
     def test_display_current_plan_first_iteration_shows_not_generated(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
-        """測試 _display_current_plan 第一輪時顯示「檔案未產生」"""
+        """測試 _display_current_plan Round 1時顯示「檔案未產生」"""
         monkeypatch.chdir(tmp_path)
         plan_dir = tmp_path / ".cafe" / "issues" / "test" / "plan"
         plan_dir.mkdir(parents=True)
@@ -1221,7 +1221,7 @@ class TestPlanPhaseIterationDisplay:
             git_ops=mock_git_ops,
         )
         phase.dev_agent = "David"
-        phase.iteration = 1  # 第一輪
+        phase.iteration = 1  # Round 1
         phase.plan_file = str(plan_dir / "plan_001.md")
         phase.phase_dir = plan_dir
 
@@ -1230,8 +1230,8 @@ class TestPlanPhaseIterationDisplay:
 
         # 驗證顯示「檔案未產生」
         print_calls = [str(call) for call in mock_print.call_args_list]
-        assert any("檔案未產生" in str(call) for call in print_calls), \
-            f"Expected '檔案未產生' in print calls, got: {print_calls}"
+        assert any("File not generated" in str(call) for call in print_calls), \
+            f"Expected 'File not generated' in print calls, got: {print_calls}"
 
     def test_display_current_plan_loads_previous_iteration(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
         """測試 _display_current_plan 載入上一輪檔案（iteration > 1）"""
@@ -1239,7 +1239,7 @@ class TestPlanPhaseIterationDisplay:
         plan_dir = tmp_path / ".cafe" / "issues" / "test" / "plan"
         plan_dir.mkdir(parents=True)
 
-        # 建立上一輪的檔案（plan_001.md）
+        # 建立上一輪檔案（plan_001.md）
         prev_plan_file = plan_dir / "plan_001.md"
         prev_plan_file.write_text("# Previous Plan\n\n## 實作計畫\nPrevious plan content")
 
@@ -1264,18 +1264,18 @@ class TestPlanPhaseIterationDisplay:
             git_ops=mock_git_ops,
         )
         phase.dev_agent = "David"
-        phase.iteration = 2  # 第二輪
+        phase.iteration = 2  # Round 2
         phase.plan_file = str(current_plan_file)
         phase.phase_dir = plan_dir
 
         with patch('builtins.print') as mock_print:
             phase._display_current_plan()
 
-        # 驗證有印出載入訊息，並包含正確的檔案路徑
+        # 驗證有印出載入訊息, 並包含正確檔案路徑
         print_calls = [str(call) for call in mock_print.call_args_list]
         assert any("plan_001.md" in str(call) for call in print_calls), \
             f"Expected plan_001.md in print calls, got: {print_calls}"
-        # 驗證載入的內容是上一輪的內容
+        # 驗證載入內容是上一輪內容
         assert any("Previous plan content" in str(call) for call in print_calls), \
             f"Expected 'Previous plan content' in print calls, got: {print_calls}"
 
@@ -1345,14 +1345,14 @@ class TestPlanPhaseProgressTracking:
 
 
 class TestPlanPhaseNoStatusCode:
-    """測試 agent 回傳內容但沒有 status code 的情況"""
+    """測試 agent 回傳內容但沒有 status code 情況"""
 
     def test_agent_response_without_status_code_saves_to_history(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
-        """測試 agent 回傳內容但沒有 status code 時，經過 5 次重試後返回 FAILED
+        """測試 agent 回傳內容但沒有 status code 時, 經過 5 次重試後返回 FAILED
 
-        這個測試模擬真實情況：agent 回傳了內容，但沒有包含正確的 status code
-        （可能是格式錯誤或 agent 沒照指示做）。系統會重試最多 5 次，
-        如果都沒有 status code 則返回 FAILED。
+        這個測試模擬真實情況：agent 回傳了內容, 但沒有包含正確 status code
+        （可能是格式錯誤or agent 沒照指示做）.系統會重試最多 5 次, 
+        如果都沒有 status code 則返回 FAILED.
         """
         monkeypatch.chdir(tmp_path)
         mock_git_ops.get_current_branch.return_value = "test"
@@ -1388,14 +1388,14 @@ class TestPlanPhaseNoStatusCode:
         )
 
         # Mock agent to return content without status code (all attempts)
-        agent_manager.execute.return_value = ("這是計畫內容，但沒有 status code", TokenUsage(), [], None, [])
+        agent_manager.execute.return_value = ("這是計畫內容, 但沒有 status code", TokenUsage(), [], None, [])
 
         with patch('builtins.print'):
             result = phase.execute()
 
         # After 5 retries, should return FAILED
         assert result.status == PhaseStatus.FAILED
-        assert "Agent 在 5 次嘗試後仍未回傳有效的 status code" in result.message
+        assert "Still did not return valid status code after" in result.message
 
         # Check that iteration 1 history was saved
         # When ValueError is raised after 5 retries, the history may not have all fields
@@ -1413,13 +1413,13 @@ class TestPlanPhaseNoStatusCode:
 
 
 class TestPlanPhaseEmptyResponse:
-    """測試 agent 回傳空字串的情況"""
+    """測試 agent 回傳空字串情況"""
 
     def test_agent_empty_response_should_fail_with_no_response_status(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
         """測試 agent 回傳空字串時應該失敗並標記為 NO_RESPONSE 狀態
 
-        當 agent 回傳空字串（可能是執行失敗或輸出未正確捕捉），
-        應該立即終止並返回 FAILED 狀態，並在 history 中記錄 CAFE_NO_RESPONSE。
+        當 agent 回傳空字串（可能是執行失敗or輸出未正確捕捉）, 
+        應該立即終止並返回 FAILED 狀態, 並在 history 中記錄 CAFE_NO_RESPONSE.
         """
         monkeypatch.chdir(tmp_path)
         mock_git_ops.get_current_branch.return_value = "test"
@@ -1479,10 +1479,10 @@ class TestPlanPhaseEmptyResponse:
 
 
 class TestPlanPhasePromptGeneration:
-    """測試 PlanPhase 的 prompt 產生"""
+    """測試 PlanPhase  prompt 產生"""
 
     def test_prompt_includes_user_modification_request_in_iteration_2(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
-        """測試 iteration 2 的 prompt 應該包含使用者的修改意見"""
+        """測試 iteration 2  prompt 應該包含使用者修改意見"""
         monkeypatch.chdir(tmp_path)
         mock_git_ops.get_current_branch.return_value = "test"
 
@@ -1523,7 +1523,7 @@ class TestPlanPhasePromptGeneration:
         def capture_prompt(agent_name, prompt, allowed_tools=None, allowed_directories=None):
             nonlocal captured_prompt
             captured_prompt = prompt
-            return ("CAFE_READY_FOR_REVIEW\n修改後的計畫", TokenUsage())
+            return ("CAFE_READY_FOR_REVIEW\n修改後計畫", TokenUsage())
 
         agent_manager.execute.side_effect = capture_prompt
 
@@ -1541,12 +1541,12 @@ class TestPlanPhasePromptGeneration:
         )
 
         # Mock user choosing 'm' (modify) then confirming with CONFIRMED status code
-        modification_request = "請加上錯誤處理和測試"
+        modification_request = "請加上錯誤處理and測試"
 
         # First call will be for iteration 2 (after user chooses 'm')
         # Second call should return CONFIRMED to finish
         agent_manager.execute.side_effect = [
-            ("CAFE_READY_FOR_REVIEW\n修改後的計畫", TokenUsage(), [], None, []),  # iter 2: user requested modification
+            ("CAFE_READY_FOR_REVIEW\n修改後計畫", TokenUsage(), [], None, []),  # iter 2: user requested modification
             ("CAFE_CONFIRMED\n確認完成", TokenUsage(), [], None, []),  # iter 3: user confirms
         ]
 
@@ -1565,7 +1565,7 @@ class TestPlanPhasePromptGeneration:
             f"Prompt should include user's modification request.\nPrompt: {first_prompt}"
 
     def test_prompt_does_not_include_contradicting_status_code_format(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
-        """測試 prompt 不應該包含矛盾的 status code 格式指示"""
+        """測試 prompt 不應該包含矛盾 status code 格式指示"""
         monkeypatch.chdir(tmp_path)
         spec_file = tmp_path / ".cafe" / "issues" / "test" / "spec" / "spec.md"
         spec_file.parent.mkdir(parents=True, exist_ok=True)
@@ -1621,10 +1621,10 @@ class TestPlanPhasePromptGeneration:
 
 
 class TestPlanPhaseUserConfirmation:
-    """測試用戶確認計畫後的行為"""
+    """測試用戶確認計畫後行為"""
 
     def test_user_confirmation_saves_history_and_updates_status(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
-        """測試在 non-interactive 模式下，READY_FOR_REVIEW 直接完成"""
+        """測試在 non-interactive 模式下, READY_FOR_REVIEW 直接完成"""
         monkeypatch.chdir(tmp_path)
         issue_name = "test"
         mock_git_ops.get_current_branch.return_value = issue_name
@@ -1671,7 +1671,7 @@ class TestPlanPhaseUserConfirmation:
         assert history_dir.exists()
 
         iteration_files = sorted(history_dir.glob("iteration_*.json"))
-        assert len(iteration_files) == 1, f"應該有 1 個 iteration 文件（non-interactive 直接完成），但有 {len(iteration_files)} 個"
+        assert len(iteration_files) == 1, f"應該有 1 個 iteration 文件（non-interactive 直接完成）, 但有 {len(iteration_files)} 個"
 
         # Check iteration 1: agent returns READY_FOR_REVIEW and completes
         with open(iteration_files[0]) as f:
@@ -1857,7 +1857,7 @@ class TestExecuteAndHandleAgentResponse:
         phase.iteration = 1
 
         # Execute - should raise ValueError after 5 retries
-        with pytest.raises(ValueError, match="Agent 在 5 次嘗試後仍未回傳有效的 status code"):
+        with pytest.raises(ValueError, match="Still did not return valid status code after"):
             result, _ = phase._execute_and_handle_agent_response(
                 agent_name=phase.dev_agent,
                 user_input="請建立計畫",
@@ -1904,7 +1904,7 @@ class TestExecuteAndHandleAgentResponse:
         phase.iteration = 1
 
         # Execute - should raise ValueError after 5 retries
-        with pytest.raises(ValueError, match="Agent 在 5 次嘗試後仍未回傳有效的 status code"):
+        with pytest.raises(ValueError, match="Still did not return valid status code after"):
             result, _ = phase._execute_and_handle_agent_response(
                 agent_name=phase.dev_agent,
                 user_input="請建立計畫",
@@ -1921,7 +1921,7 @@ class TestExecuteAndHandleAgentResponse:
 
 
 class TestPlanPhaseFilePermissions:
-    """測試 PlanPhase 的檔案權限設定"""
+    """測試 PlanPhase 檔案權限設定"""
 
     def test_uses_precise_file_permissions_for_plan_file(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
         monkeypatch.chdir(tmp_path)

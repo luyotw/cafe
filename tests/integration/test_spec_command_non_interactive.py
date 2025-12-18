@@ -1,6 +1,6 @@
 """Integration tests for 'cafe spec --no-interactive' command.
 
-使用 MockAgentExecutor 測試完整的 spec command flow，不呼叫真實 LLM API。
+使用 MockAgentExecutor 測試完整 spec command flow, 不呼叫真實 LLM API.
 """
 
 import os
@@ -35,15 +35,15 @@ def mock_git_ops():
 def temp_spec_dir(tmp_path, monkeypatch):
     """創建臨時 spec 目錄結構"""
     monkeypatch.chdir(tmp_path)
-    # 創建完整的目錄結構: {tmp_path}/.cafe/issues/test-issue/spec/
+    # 創建完整目錄結構: {tmp_path}/.cafe/issues/test-issue/spec/
     spec_dir = tmp_path / ".cafe" / "issues" / "test-issue" / "spec"
     spec_dir.mkdir(parents=True)
-    # 不要創建 history 目錄，讓 phase 自己創建
+    # 不要創建 history 目錄, 讓 phase 自己創建
     return spec_dir
 
 
 class TestSpecCommandNonInteractiveBasic:
-    """測試 spec --no-interactive 的基本功能"""
+    """測試 spec --no-interactive 基本功能"""
 
     def test_successful_spec_creation_with_confirmed(
         self, mock_env, temp_spec_dir, mock_git_ops, monkeypatch
@@ -55,7 +55,7 @@ class TestSpecCommandNonInteractiveBasic:
 
         monkeypatch.setenv(
             "CAFE_MOCK_RESPONSE",
-            "CAFE_READY_FOR_REVIEW\n\n# 登入功能需求規格\n\n這是測試規格。"
+            "CAFE_READY_FOR_REVIEW\n\n# 登入功能需求規格\n\n這是測試規格."
         )
 
         # 創建 mock agent manager
@@ -97,7 +97,7 @@ class TestSpecCommandNonInteractiveBasic:
 
         monkeypatch.setenv(
             "CAFE_MOCK_RESPONSE",
-            "CAFE_NEED_CLARIFICATION\n\n請問這個功能的使用者是誰？"
+            "CAFE_NEED_CLARIFICATION\n\n請問這個功能使用者是誰？"
         )
 
         agent_manager = AgentManager()
@@ -203,7 +203,7 @@ class TestSpecCommandNonInteractiveFiles:
     def test_history_created(
         self, mock_env, temp_spec_dir, monkeypatch
     , mock_git_ops):
-        """測試 history 目錄和檔案被創建"""
+        """測試 history 目錄and檔案被創建"""
         # Arrange
         spec_file = str(temp_spec_dir / "spec_001.md")
         history_dir = temp_spec_dir / "history"
@@ -248,13 +248,13 @@ class TestSpecCommandNonInteractiveErrorHandling:
     def test_invalid_status_code(
         self, mock_env, temp_spec_dir, monkeypatch
     , mock_git_ops):
-        """測試無效的 status code"""
+        """測試無效 status code"""
         # Arrange
         spec_file = str(temp_spec_dir / "spec_001.md")
         
         monkeypatch.setenv(
             "CAFE_MOCK_RESPONSE",
-            "CAFE_INVALID_STATUS\n\n這是無效的狀態碼"
+            "CAFE_INVALID_STATUS\n\n這是無效狀態碼"
         )
         
         agent_manager = AgentManager()
@@ -277,9 +277,9 @@ class TestSpecCommandNonInteractiveErrorHandling:
         # Act
         result = phase.execute()
         
-        # Assert - 無效 status code 會導致繼續迭代（或達到max iterations失敗）
-        # 因為 mock 會重複返回無效狀態，最終會超過 max iterations
-        # 但由於是 mock 環境，可能只會執行 1 iteration 返回 IN_PROGRESS
+        # Assert - 無效 status code 會導致繼續迭代（or達到max iterations失敗）
+        # 因為 mock 會重複返回無效狀態, 最終會超過 max iterations
+        # 但由於是 mock 環境, 可能只會執行 1 iteration 返回 IN_PROGRESS
         assert result.status in [PhaseStatus.IN_PROGRESS, PhaseStatus.FAILED]
 
 
@@ -355,15 +355,15 @@ class TestSpecCommandNonInteractiveCLIValidation:
 
 
 class TestSpecCommandNonInteractiveAgentTracking:
-    """測試 mock agent 的追蹤功能"""
+    """測試 mock agent 追蹤功能"""
 
     def test_agent_receives_user_input(
         self, mock_env, temp_spec_dir, monkeypatch
     , mock_git_ops):
-        """測試 agent 收到正確的 user input"""
+        """測試 agent 收到正確 user input"""
         # Arrange
         spec_file = str(temp_spec_dir / "spec_001.md")
-        user_input = "我想要一個特殊的登入功能"
+        user_input = "我想要一個特殊登入功能"
 
         monkeypatch.setenv(
             "CAFE_MOCK_RESPONSE",
@@ -390,14 +390,14 @@ class TestSpecCommandNonInteractiveAgentTracking:
         # Act
         phase.execute()
         
-        # Assert - 驗證 agent 被呼叫，且收到包含 user input 的 prompt
+        # Assert - 驗證 agent 被呼叫, 且收到包含 user input  prompt
         executor = agent_manager.get_agent("Roger")
         assert executor.call_count >= 1
-        # Agent 的 prompt 包含 spec_001.md 路徑（agent 會讀取該檔案）
+        # Agent  prompt 包含 spec_001.md 路徑（agent 會讀取該檔案）
         assert "spec_001.md" in executor.last_prompt
         # 驗證 spec_001.md 被創建（內容來自 mock response）
         spec_content = Path(spec_file).read_text()
-        assert "測試規格" in spec_content  # Mock response 的內容
+        assert "測試規格" in spec_content  # Mock response 內容
 
     def test_agent_called_once_for_confirmed(
         self, mock_env, temp_spec_dir, monkeypatch

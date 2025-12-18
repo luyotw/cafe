@@ -339,18 +339,18 @@ class AgentExecutor:
                     # Check if it's a rate limit error
                     is_rate_limit = self._is_rate_limit_error(full_stderr)
                     if is_rate_limit:
-                        print(f"\n❌ {cli_name} API 使用量已達上限\n")
-                        print(f"錯誤訊息: {full_stderr.strip()}\n")
+                        print(f"\n❌ {cli_name} API rate limit reached\n")
+                        print(f"Error message: {full_stderr.strip()}\n")
                         print(f"{'='*80}\n")
 
-                    # Attach實際 CLI 參數到錯誤物件，方便記錄到 history
+                    # Attach actual CLI arguments to error object for history recording
                     err = AgentExecutionError(
                         f"{cli_name} execution failed: {full_stderr}"
                     )
                     # Set error_type for rate limit errors
                     if is_rate_limit:
                         err.error_type = "rate_limit"
-                    # 不包含可執行檔本身（例如 'gemini' / 'claude'）
+                    # Exclude executable itself (e.g. 'gemini' / 'claude')
                     err.cli_command_args = cmd[1:]
                     raise err
 
@@ -361,7 +361,7 @@ class AgentExecutor:
 
         output_lines = []
         response_text = ""
-        streaming_log: List[str] = []  # 記錄所有 streaming 片段
+        streaming_log: List[str] = []  # Record all streaming fragments
         token_usage = TokenUsage()
         session_id = None
         permission_denials: List[PermissionDenial] = []
@@ -401,7 +401,7 @@ class AgentExecutor:
                             if content:
                                 print(content, end='\n\n', flush=True)
                                 streaming_log.append(content)
-                                response_text = content  # 只保存最後一個片段
+                                response_text = content  # Only save the last fragment
                         else:
                             # Default Claude format extractor
                             # Extract content from message.content[] (new Claude format)
@@ -411,14 +411,14 @@ class AgentExecutor:
                                         text = content_block.get("text", "")
                                         print(text, end='\n\n', flush=True)
                                         streaming_log.append(text)
-                                        response_text = text  # 只保存最後一個片段
+                                        response_text = text  # Only save the last fragment
 
                             # Old format: direct content field
                             elif "content" in data:
                                 content = data["content"]
                                 print(content, end='\n\n', flush=True)
                                 streaming_log.append(content)
-                                response_text = content  # 只保存最後一個片段
+                                response_text = content  # Only save the last fragment
 
                         # Extract session_id (from init message for Gemini, or any message for Claude)
                         if "session_id" in data and not session_id:
@@ -455,7 +455,7 @@ class AgentExecutor:
                     # Simple line-by-line streaming (Copilot style)
                     print(line, end='')
                     output_lines.append(line)
-                    streaming_log.append(line)  # 記錄每一行到 streaming_log
+                    streaming_log.append(line)  # Record each line to streaming_log
 
         print(f"\n{'='*80}\n")
 
@@ -467,8 +467,8 @@ class AgentExecutor:
             # Check if it's a rate limit error
             is_rate_limit = stderr_output and self._is_rate_limit_error(stderr_output)
             if is_rate_limit:
-                print(f"\n❌ {cli_name} API 使用量已達上限\n")
-                print(f"錯誤訊息: {stderr_output.strip()}\n")
+                print(f"\n❌ {cli_name} API rate limit reached\n")
+                print(f"Error message: {stderr_output.strip()}\n")
 
             err = AgentExecutionError(
                 f"{cli_name} execution failed with code {returncode}: {stderr_output}"
@@ -476,7 +476,7 @@ class AgentExecutor:
             # Set error_type for rate limit errors
             if is_rate_limit:
                 err.error_type = "rate_limit"
-            # 附上實際 CLI 參數，方便 Phase 在錯誤時寫入 iteration history
+            # Attach actual CLI arguments for Phase to write to iteration history on error
             err.cli_command_args = cmd[1:]
             raise err
 
@@ -490,12 +490,12 @@ class AgentExecutor:
 
         # Return response (either from stream-json or combined lines)
         if parse_stream_json:
-            # response_text 已經是最後一個片段，如果為空則使用 output_lines
+            # response_text is already the last fragment, use output_lines if empty
             final_response = response_text if response_text else ''.join(output_lines)
             final_streaming_log = streaming_log if streaming_log else []
         else:
-            # Copilot/non-JSON style: 完整輸出作為 response
-            # 所有行（包含換行符）組合成完整文本
+            # Copilot/non-JSON style: full output as response
+            # All lines (with newlines) combined into complete text
             final_response = ''.join(output_lines) if output_lines else ""
             final_streaming_log = output_lines
 
@@ -539,48 +539,48 @@ class AgentExecutor:
             cmd.extend(["--model", self.config.model])
 
         # Add allowed tools if specified
-        # Claude 的 --allowed-tools 需要雙引號，否則授權無效
+        # Claude's --allowed-tools requires double quotes, otherwise authorization fails
         tools_arg_value = None
         if allowed_tools:
             # Special handling for Claude: convert absolute paths to git ignore format
             processed_tools = []
 
             for tool in allowed_tools:
-                # 處理帶路徑的工具（例如 write(/abs/path) 或 edit(/abs/path)）
+                # Handle tools with paths (e.g. write(/abs/path) or edit(/abs/path))
                 if "(" in tool and ")" in tool:
                     tool_name = tool.split("(")[0].lower()
                     path_part = tool.split("(")[1].rstrip(")")
 
-                    # Claude 需要將路徑轉換為 git ignore 格式
-                    # Git ignore 格式：以 / 開頭的相對路徑（例如 /.cafe/...）
-                    # 普通相對路徑：不帶 / 前綴（例如 .cafe/...）- Phase 傳來的格式
-                    # 絕對路徑：系統絕對路徑（例如 /Users/me/repo/.cafe/...）
+                    # Claude needs paths converted to git ignore format
+                    # Git ignore format: relative path with / prefix (e.g. /.cafe/...)
+                    # Plain relative path: without / prefix (e.g. .cafe/...) - format from Phase
+                    # Absolute path: system absolute path (e.g. /Users/me/repo/.cafe/...)
                     path_obj = Path(path_part)
 
-                    # 區分路徑類型：
-                    # 1. 如果已經是 git ignore 格式（以 /. 或 /src 等開頭），保持不變
-                    # 2. 如果是絕對路徑（例如 /Users/...），轉換為 git ignore 格式
-                    # 3. 如果是普通相對路徑（例如 .cafe/...），轉換為 git ignore 格式（加前綴 /）
+                    # Distinguish path types:
+                    # 1. If already git ignore format (starts with /. or /src etc), keep unchanged
+                    # 2. If absolute path (e.g. /Users/...), convert to git ignore format
+                    # 3. If plain relative path (e.g. .cafe/...), convert to git ignore format (add / prefix)
                     is_git_ignore_format = path_part.startswith("/") and not path_obj.is_absolute()
 
                     if is_git_ignore_format:
-                        # 已經是 git ignore 格式，直接使用
+                        # Already git ignore format, use directly
                         processed_tool = tool
                     elif path_obj.is_absolute():
-                        # 系統絕對路徑，轉換為 git ignore 格式
+                        # System absolute path, convert to git ignore format
                         try:
                             repo_root = get_repo_root()
                             git_ignore_path = to_git_ignore_path(path_obj, repo_root)
                             processed_tool = f"{tool_name.capitalize()}({git_ignore_path})"
                         except (ValueError, OSError):
-                            # 轉換失敗，使用原始路徑
+                            # Conversion failed, use original path
                             processed_tool = tool
                     else:
-                        # 普通相對路徑（例如 .cafe/...），轉換為 git ignore 格式（加前綴 /）
+                        # Plain relative path (e.g. .cafe/...), convert to git ignore format (add / prefix)
                         git_ignore_path = "/" + path_part
                         processed_tool = f"{tool_name.capitalize()}({git_ignore_path})"
                 else:
-                    # 沒有路徑參數的工具
+                    # Tool without path parameter
                     processed_tool = tool
 
                 # Avoid duplicates
@@ -618,8 +618,8 @@ class AgentExecutor:
         # Session ID is already set in config (either from existing or newly created)
         # and updated by _execute_with_session_recovery if recovery was needed
 
-        # Add CLI command args to response（實際執行的參數列表，不包含可執行檔本身）
-        # 例如：["--resume", "session", "-p", "prompt", "--output-format", ...]
+        # Add CLI command args to response (actual executed argument list, excluding executable)
+        # Example: ["--resume", "session", "-p", "prompt", "--output-format", ...]
         agent_response.cli_command_args = cmd[1:]
 
         return agent_response
@@ -644,8 +644,8 @@ class AgentExecutor:
 
         # Check for rate limit error first (appears in stderr as plain text)
         if result.stderr and "limit reached" in result.stderr.lower():
-            print(f"\n❌ Claude API 使用量已達上限\n")
-            print(f"錯誤訊息: {result.stderr.strip()}\n")
+            print(f"\n❌ Claude API rate limit reached\n")
+            print(f"Error message: {result.stderr.strip()}\n")
             raise AgentExecutionError(
                 f"Claude API rate limit reached: {result.stderr}",
                 error_type="rate_limit"
@@ -659,8 +659,8 @@ class AgentExecutor:
                 error_msg = response_data.get("result", "Unknown error")
                 # Check if it's a rate limit error
                 if "limit" in error_msg.lower():
-                    print(f"\n❌ Claude API 使用量已達上限\n")
-                    print(f"錯誤訊息: {error_msg}\n")
+                    print(f"\n❌ Claude API rate limit reached\n")
+                    print(f"Error message: {error_msg}\n")
                     raise AgentExecutionError(f"Claude API error: {error_msg}", error_type="rate_limit")
                 else:
                     print(f"\n⚠️  Claude API Error: {error_msg}\n")
@@ -838,7 +838,7 @@ class AgentExecutor:
         )
 
         # Add CLI command args to response
-        # 使用實際執行的參數（不包含程式名稱）
+        # Use actual executed arguments (excluding program name)
         agent_response.cli_command_args = cmd[1:]
 
         return agent_response
@@ -938,10 +938,10 @@ class AgentExecutor:
         from pathlib import Path
         import time
 
-        # Copilot 的 session 目錄
+        # Copilot's session directory
         copilot_session_dir = Path.home() / ".copilot" / "session-state"
 
-        # 記錄執行前的 session 檔案（用於偵測新建立的 session）
+        # Record session files before execution (for detecting newly created sessions)
         existing_sessions = set()
         if copilot_session_dir.exists():
             existing_sessions = {f.name for f in copilot_session_dir.iterdir() if f.is_file()}
@@ -1000,20 +1000,20 @@ class AgentExecutor:
                 parse_stream_json=False,
             )
 
-        # 如果還沒有 session_id，嘗試從新建立的 session 檔案中提取
+        # If no session_id yet, try to extract from newly created session file
         if not self.config.session_id and copilot_session_dir.exists():
-            # 等待一下讓檔案系統更新
+            # Wait a bit for filesystem to update
             time.sleep(0.1)
             current_sessions = {f.name for f in copilot_session_dir.iterdir() if f.is_file()}
             new_sessions = current_sessions - existing_sessions
 
             if new_sessions:
-                # 找到新建立的 session，提取 UUID（檔名去掉 .jsonl）
-                newest_session = sorted(new_sessions)[-1]  # 取最新的
+                # Find newly created session, extract UUID (filename without .jsonl)
+                newest_session = sorted(new_sessions)[-1]  # Take the newest
                 session_id = newest_session.replace(".jsonl", "")
                 self.config.session_id = session_id
 
-        # Add CLI command args to response（實際執行參數，不包含程式名稱）
+        # Add CLI command args to response (actual executed arguments, excluding program name)
         agent_response.cli_command_args = cmd[1:]
 
         return agent_response

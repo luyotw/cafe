@@ -1,4 +1,4 @@
-"""測試 cafe prepare 指令的自動初始化功能。"""
+"""測試 cafe prepare 指令自動初始化功能."""
 
 import shutil
 from pathlib import Path
@@ -12,16 +12,16 @@ from cafe.ui.cli import app
 
 
 class TestPrepareAutoInitialization:
-    """測試 cafe prepare 自動初始化 templates 和 agents。"""
+    """測試 cafe prepare 自動初始化 templates and agents."""
 
     @pytest.fixture
     def runner(self) -> CliRunner:
-        """建立 CLI runner。"""
+        """建立 CLI runner."""
         return CliRunner()
 
     @pytest.fixture
     def mock_git_repo(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-        """建立 mock git repository。"""
+        """建立 mock git repository."""
         monkeypatch.chdir(tmp_path)
 
         # Create .cafe directory with config.yaml (required by prepare command)
@@ -45,7 +45,7 @@ class TestPrepareAutoInitialization:
     def test_prepare_initializes_templates_when_not_exists(
         self, mock_git_class: MagicMock, runner: CliRunner, mock_git_repo: Path
     ) -> None:
-        """測試當 .cafe/templates 不存在時，從 ./templates 複製。"""
+        """測試當 .cafe/templates 不存在時, 從 ./templates 複製."""
         mock_git = MagicMock()
         mock_git_class.return_value = mock_git
         mock_git.is_valid_branch.return_value = True
@@ -67,7 +67,7 @@ class TestPrepareAutoInitialization:
     def test_prepare_initializes_agents_when_not_exists(
         self, mock_git_class: MagicMock, runner: CliRunner, mock_git_repo: Path
     ) -> None:
-        """測試當 .cafe/agents 不存在時，從 ./agents 複製。"""
+        """測試當 .cafe/agents 不存在時, 從 ./agents 複製."""
         mock_git = MagicMock()
         mock_git_class.return_value = mock_git
         mock_git.is_valid_branch.return_value = True
@@ -91,7 +91,7 @@ class TestPrepareAutoInitialization:
     def test_prepare_does_not_overwrite_existing_templates(
         self, mock_git_class: MagicMock, runner: CliRunner, mock_git_repo: Path
     ) -> None:
-        """測試當 .cafe/templates 已存在時不覆蓋。"""
+        """測試當 .cafe/templates 已存在時不覆蓋."""
         mock_git = MagicMock()
         mock_git_class.return_value = mock_git
         mock_git.is_valid_branch.return_value = True
@@ -117,7 +117,7 @@ class TestPrepareAutoInitialization:
     def test_prepare_does_not_overwrite_existing_agents(
         self, mock_git_class: MagicMock, runner: CliRunner, mock_git_repo: Path
     ) -> None:
-        """測試當 .cafe/agents 已存在時不覆蓋。"""
+        """測試當 .cafe/agents 已存在時不覆蓋."""
         mock_git = MagicMock()
         mock_git_class.return_value = mock_git
         mock_git.is_valid_branch.return_value = True

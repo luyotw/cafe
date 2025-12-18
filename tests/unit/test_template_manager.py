@@ -60,14 +60,14 @@ class TestTemplateManager:
             manager.add_template("nonexistent.md", "test")
 
     def test_add_template_invalid_name_raises_error(self, tmp_path: Path) -> None:
-        """測試無效的模版名稱會拋出錯誤"""
+        """測試無效模版名稱會拋出錯誤"""
         config_dir = tmp_path / ".cafe"
         manager = TemplateManager(str(config_dir))
 
         source_file = tmp_path / "template.md"
         source_file.write_text("Content")
 
-        # 測試包含路徑分隔符號的名稱
+        # 測試包含路徑分隔符號名稱
         with pytest.raises(ValueError, match="Invalid template name"):
             manager.add_template(str(source_file), "path/to/template")
 
@@ -93,7 +93,7 @@ class TestTemplateManager:
 
         templates = manager.list_templates()
 
-        # 驗證回傳的模版名稱（不包含 .md 副檔名）
+        # 驗證回傳模版名稱（不包含 .md 副檔名）
         assert sorted(templates) == ["default", "template1", "template2"]
 
     def test_list_templates_empty_directory(self, tmp_path: Path) -> None:
@@ -118,7 +118,7 @@ class TestTemplateManager:
         (template_dir / "template3.json").write_text("{}")
 
         templates = manager.list_templates()
-        # 包含 default + template1（忽略 .txt 和 .json）
+        # 包含 default + template1（忽略 .txt and .json）
         assert sorted(templates) == ["default", "template1"]
 
     def test_remove_template_deletes_file(self, tmp_path: Path) -> None:
@@ -154,7 +154,7 @@ class TestTemplateManager:
         assert not template_path.exists()
 
     def test_remove_template_not_found_raises_error(self, tmp_path: Path) -> None:
-        """測試刪除不存在的模版時拋出錯誤"""
+        """測試刪除不存在模版時拋出錯誤"""
         config_dir = tmp_path / ".cafe"
         manager = TemplateManager(str(config_dir))
 

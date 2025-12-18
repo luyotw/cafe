@@ -10,14 +10,14 @@ from cafe.core.types import AgentCLI
 
 
 def check_available_clis() -> List[str]:
-    """檢查系統上可用的 CLI 工具。
+    """Check available CLI tools on the system.
 
     Returns:
-        可用的 CLI 工具列表
+        List of available CLI tools
     """
     available_clis = []
 
-    # 檢查所有支援的 CLI 工具
+    # Check all supported CLI tools
     for cli in AgentCLI:
         if shutil.which(cli.value):
             available_clis.append(cli.value)
@@ -26,24 +26,24 @@ def check_available_clis() -> List[str]:
 
 
 def parse_agent_file(file_path: Path) -> Dict[str, str]:
-    """解析 agent 檔案的 front matter。
+    """Parse agent file's front matter.
 
     Args:
-        file_path: agent 檔案路徑
+        file_path: agent file path
 
     Returns:
-        包含 name 和 description 的字典
+        Dictionary containing name and description
     """
     content = file_path.read_text()
 
-    # 預設值
-    name = file_path.stem  # 使用檔名（不含副檔名）
-    description = "(無描述)"
+    # Default values
+    name = file_path.stem  # Use filename (without extension)
+    description = "(No description)"
 
-    # 嘗試解析 YAML front matter
-    # Front matter 格式: ---\nkey: value\n---
+    # Try to parse YAML front matter
+    # Front matter format: ---\nkey: value\n---
     if content.startswith("---"):
-        # 找到第二個 --- 的位置
+        # Find the second --- position
         parts = content.split("---", 2)
         if len(parts) >= 3:
             frontmatter_content = parts[1]
@@ -53,20 +53,20 @@ def parse_agent_file(file_path: Path) -> Dict[str, str]:
                     name = frontmatter.get("name", name)
                     description = frontmatter.get("description", description)
             except yaml.YAMLError:
-                # 如果 YAML 解析失敗，保持預設值
+                # If YAML parsing fails, keep default values
                 pass
 
     return {"name": name, "description": description}
 
 
 def list_available_agents(role: str) -> List[tuple[str, str, Path]]:
-    """列出指定角色的所有可用 agent。
+    """List all available agents for specified role.
 
     Args:
-        role: 角色名稱（pm, developer, reviewer）
+        role: Role name (pm, developer, reviewer)
 
     Returns:
-        (name, description, file_path) 的列表
+        List of (name, description, file_path) tuples
     """
     agents_dir = Path(".cafe") / "agents" / role
 
@@ -82,15 +82,15 @@ def list_available_agents(role: str) -> List[tuple[str, str, Path]]:
 
 
 def copy_data_directory(source: str, destination: str) -> None:
-    """複製目錄的輔助函式。
+    """Helper function to copy directory.
 
     Args:
-        source: 來源目錄路徑
-        destination: 目標目錄路徑
+        source: Source directory path
+        destination: Destination directory path
 
     Raises:
-        FileNotFoundError: 來源目錄不存在
-        PermissionError: 權限不足
+        FileNotFoundError: Source directory does not exist
+        PermissionError: Insufficient permissions
     """
     source_path = Path(source)
     dest_path = Path(destination)
@@ -98,5 +98,5 @@ def copy_data_directory(source: str, destination: str) -> None:
     if not source_path.exists():
         raise FileNotFoundError(f"Source directory not found: {source}")
 
-    # 複製目錄 (增量拷貝)
+    # Copy directory (incremental copy)
     shutil.copytree(source_path, dest_path, dirs_exist_ok=True)

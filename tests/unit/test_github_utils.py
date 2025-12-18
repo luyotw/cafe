@@ -63,7 +63,7 @@ class TestGetGitHubRepoName:
             get_github_repo_name(cwd=tmp_path)
 
     def test_get_repo_name_invalid_url(self, tmp_path: Path) -> None:
-        """測試無效的 GitHub URL 格式時拋出錯誤"""
+        """測試無效 GitHub URL 格式時拋出錯誤"""
         git_dir = tmp_path / ".git"
         git_dir.mkdir()
         config_file = git_dir / "config"

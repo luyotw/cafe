@@ -10,7 +10,7 @@ from cafe.core.types import AgentConfig, AgentCLI
 
 
 class TestAgentManagerMockMode:
-    """測試 AgentManager 的 mock mode 功能"""
+    """測試 AgentManager  mock mode 功能"""
 
     def test_mock_mode_disabled_by_default(self):
         """測試預設不啟用 mock mode"""
@@ -100,7 +100,7 @@ class TestAgentManagerMockMode:
         assert "請提供更多資訊" in agent_response.response
 
     def test_mock_mode_does_not_create_real_executor(self, monkeypatch):
-        """測試 mock mode 不會創建真實的 AgentExecutor"""
+        """測試 mock mode 不會創建真實 AgentExecutor"""
         # Arrange
         monkeypatch.setenv("CAFE_MOCK_AGENTS", "true")
         manager = AgentManager()

@@ -63,7 +63,7 @@ class TestLoadConfig:
         assert config["auto_approve_read"] is True
 
     def test_load_nonexistent_config_raises_error(self, tmp_path: Path) -> None:
-        """測試載入不存在的設定檔拋出錯誤"""
+        """測試載入不存在設定檔拋出錯誤"""
         config_dir = tmp_path / ".cafe"
         manager = ConfigManager(config_dir=str(config_dir))
 
@@ -71,7 +71,7 @@ class TestLoadConfig:
             manager.load_config()
 
     def test_load_invalid_yaml_raises_error(self, tmp_path: Path) -> None:
-        """測試載入無效的 YAML 拋出錯誤"""
+        """測試載入無效 YAML 拋出錯誤"""
         config_dir = tmp_path / ".cafe"
         config_dir.mkdir()
         config_file = config_dir / "config.yaml"
@@ -159,7 +159,7 @@ class TestValidateConfig:
     """Test config validation."""
 
     def test_validate_valid_config(self) -> None:
-        """測試驗證有效的設定"""
+        """測試驗證有效設定"""
         manager = ConfigManager()
         config = {
             "workflow_mode": "github",
@@ -174,7 +174,7 @@ class TestValidateConfig:
         assert result is True
 
     def test_validate_invalid_agent_tool(self) -> None:
-        """測試驗證無效的 agent cli"""
+        """測試驗證無效 agent cli"""
         manager = ConfigManager()
         config = {
             "agents": [
@@ -200,7 +200,7 @@ class TestGetConfigValue:
     """Test getting config values."""
 
     def test_get_existing_value(self, tmp_path: Path) -> None:
-        """測試取得存在的設定值"""
+        """測試取得存在設定值"""
         config_dir = tmp_path / ".cafe"
         config_dir.mkdir()
         config_file = config_dir / "config.yaml"
@@ -212,7 +212,7 @@ class TestGetConfigValue:
         assert value == "github"
 
     def test_get_nonexistent_value_returns_default(self, config_with_file) -> None:
-        """測試取得不存在的值回傳預設"""
+        """測試取得不存在值回傳預設"""
         value = config_with_file.get("nonexistent_key", default="default_value")
 
         assert value == "default_value"
@@ -304,7 +304,7 @@ class TestAliasResolution:
         assert manager._resolve_alias("reviewer") == "agents.reviewer.cli"
 
     def test_resolve_agent_with_property(self) -> None:
-        """測試解析帶屬性的 agent key"""
+        """測試解析帶屬性 agent key"""
         manager = ConfigManager()
 
         assert manager._resolve_alias("pm.cli") == "agents.pm.cli"

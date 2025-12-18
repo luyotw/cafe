@@ -85,23 +85,23 @@ def is_branch_initialized(branch_name: str, repo_path: Optional[Union[str, Path]
 
 
 def get_repo_root(cwd: Optional[Path] = None) -> Path:
-    """取得 Git repository 的根目錄。
+    """Get the root directory of a Git repository.
 
-    支援一般 repository 和 worktree 環境。
-    從給定目錄開始向上搜尋，直到找到 .git 目錄或檔案。
-    如果是 worktree（.git 是檔案），則解析 gitdir 找到主 repo。
+    Supports both regular repository and worktree environments.
+    Searches upward from the given directory until finding a .git directory or file.
+    If it's a worktree (.git is a file), parses gitdir to find the main repo.
 
-    尊重 GIT_CEILING_DIRECTORIES 環境變數，防止向上搜索超過指定邊界。
-    這對於防止測試污染真實 repository 非常重要。
+    Respects GIT_CEILING_DIRECTORIES environment variable to prevent searching beyond specified boundaries.
+    This is critical for preventing tests from polluting the real repository.
 
     Args:
-        cwd: 起始目錄（default: 當前目錄）
+        cwd: Starting directory (default: current directory)
 
     Returns:
-        Repository 根目錄的 Path 物件
+        Path object of the repository root directory
 
     Raises:
-        ValueError: 如果不在 Git repository 中，或搜索被 ceiling 阻止
+        ValueError: If not in a Git repository, or search was blocked by ceiling
 
     Example:
         >>> repo_root = get_repo_root()
@@ -114,19 +114,19 @@ def get_repo_root(cwd: Optional[Path] = None) -> Path:
     else:
         cwd = Path(cwd)
 
-    # 解析 GIT_CEILING_DIRECTORIES（可能包含多個路徑，用冒號分隔）
+    # Parse GIT_CEILING_DIRECTORIES (may contain multiple paths, colon-separated)
     ceiling_dirs: set[Path] = set()
     ceiling_env = os.environ.get("GIT_CEILING_DIRECTORIES")
     if ceiling_env:
         for ceiling_str in ceiling_env.split(":"):
-            if ceiling_str:  # 忽略空字串
+            if ceiling_str:  # Ignore empty strings
                 ceiling_dirs.add(Path(ceiling_str).resolve())
 
-    # 向上搜尋 .git
+    # Search upward for .git
     current = cwd.resolve()
     while current != current.parent:
-        # 檢查是否到達 ceiling（在檢查 .git 之前）
-        # 如果當前目錄是 ceiling，則停止搜索
+        # Check if reached ceiling (before checking for .git)
+        # If current directory is ceiling, stop searching
         if current in ceiling_dirs:
             raise ValueError(
                 f"Not in a Git repository: {cwd} "
@@ -135,39 +135,39 @@ def get_repo_root(cwd: Optional[Path] = None) -> Path:
 
         git_path = current / ".git"
         if git_path.exists():
-            # 找到 .git，檢查是目錄還是檔案
+            # Found .git, check if it's a directory or file
             if git_path.is_dir():
-                # 一般 repo：返回此目錄
+                # Regular repo: return this directory
                 return current
             elif git_path.is_file():
-                # Worktree：解析 .git 檔案找到主 repo
+                # Worktree: parse .git file to find main repo
                 gitdir_content = git_path.read_text().strip()
                 if gitdir_content.startswith("gitdir: "):
-                    # 格式：gitdir: /path/to/main-repo/.git/worktrees/branch-name
-                    gitdir = Path(gitdir_content[8:])  # 移除 "gitdir: " 前綴
-                    # 主 repo 的 .git 目錄在 ../../（從 worktrees/branch-name 向上兩層）
+                    # Format: gitdir: /path/to/main-repo/.git/worktrees/branch-name
+                    gitdir = Path(gitdir_content[8:])  # Remove "gitdir: " prefix
+                    # Main repo's .git directory is ../../ (up two levels from worktrees/branch-name)
                     main_git_dir = gitdir.parent.parent
-                    # 主 repo root 是 .git 的父目錄
+                    # Main repo root is parent of .git
                     main_repo_root = main_git_dir.parent
 
-                    # 🔥 關鍵修復：檢查主 repo root 是否在 ceiling 之外
-                    # Ceiling 語意：只允許在 ceiling 目錄內部搜索
-                    # 如果 worktree 指向的主 repo 不在 ceiling 內部，應該拋出錯誤
+                    # Critical fix: Check if main repo root is outside ceiling
+                    # Ceiling semantics: Only allow searching inside ceiling directory
+                    # If worktree points to main repo not inside ceiling, should raise error
                     if ceiling_dirs:
-                        # 檢查 main_repo_root 是否在任何 ceiling 之內
+                        # Check if main_repo_root is inside any ceiling
                         is_under_any_ceiling = False
                         for ceiling in ceiling_dirs:
                             try:
                                 rel = main_repo_root.relative_to(ceiling)
-                                # main_repo_root 在 ceiling 之下，允許
+                                # main_repo_root is under ceiling, allow
                                 is_under_any_ceiling = True
                                 break
                             except ValueError as e:
-                                # main_repo_root 不在這個 ceiling 之下，繼續檢查其他 ceiling
+                                # main_repo_root is not under this ceiling, continue checking other ceilings
                                 continue
 
                         if not is_under_any_ceiling:
-                            # main_repo_root 不在任何 ceiling 之內，拋出錯誤
+                            # main_repo_root is not inside any ceiling, raise error
                             raise ValueError(
                                 f"Not in a Git repository: {cwd} "
                                 f"(worktree points to repo outside ceiling: {main_repo_root})"
@@ -177,49 +177,49 @@ def get_repo_root(cwd: Optional[Path] = None) -> Path:
                 else:
                     raise ValueError(f"Invalid .git file format: {git_path}")
 
-        # 向上移動到父目錄前，檢查 parent 是否在 ceiling 之外
-        # Ceiling 語意：只允許在 ceiling 目錄內部搜索
+        # Before moving up to parent directory, check if parent is outside ceiling
+        # Ceiling semantics: Only allow searching inside ceiling directory
         parent = current.parent
         if ceiling_dirs:
-            # 檢查 parent 是否在任何 ceiling 之內
+            # Check if parent is inside any ceiling
             is_under_any_ceiling = False
             for ceiling in ceiling_dirs:
                 try:
                     parent.relative_to(ceiling)
-                    # parent 在 ceiling 之下，允許繼續向上搜索
+                    # parent is under ceiling, allow continuing upward search
                     is_under_any_ceiling = True
                     break
                 except ValueError:
-                    # parent 不在這個 ceiling 之下，繼續檢查其他 ceiling
+                    # parent is not under this ceiling, continue checking other ceilings
                     continue
 
             if not is_under_any_ceiling:
-                # parent 不在任何 ceiling 之內，停止搜索
+                # parent is not inside any ceiling, stop searching
                 raise ValueError(
                     f"Not in a Git repository: {cwd} (stopped at ceiling boundary)"
                 )
 
         current = parent
 
-    # 沒有找到 .git
+    # Did not find .git
     raise ValueError(f"Not in a Git repository: {cwd}")
 
 
 def to_relative_path(file_path: Union[str, Path], repo_root: Union[str, Path]) -> str:
-    """將絕對路徑轉換為普通相對路徑。
+    """Convert absolute path to plain relative path.
 
-    普通相對路徑：不帶前綴 / 的相對於 repo root 的路徑。
-    例如：.cafe/issues/issue26/spec/spec_001.md
+    Plain relative path: path relative to repo root without / prefix.
+    Example: .cafe/issues/issue26/spec/spec_001.md
 
     Args:
-        file_path: 檔案的絕對路徑
-        repo_root: Repository 根目錄的絕對路徑
+        file_path: File's absolute path
+        repo_root: Repository root directory's absolute path
 
     Returns:
-        普通相對路徑字串（不帶前綴 /）
+        Plain relative path string (without / prefix)
 
     Raises:
-        ValueError: 如果 file_path 不在 repo_root 下
+        ValueError: If file_path is not under repo_root
 
     Example:
         >>> path = to_relative_path(
@@ -231,38 +231,39 @@ def to_relative_path(file_path: Union[str, Path], repo_root: Union[str, Path]) -
     file_path = Path(file_path).resolve()
     repo_root = Path(repo_root).resolve()
 
-    # 檢查 file_path 是否在 repo_root 下
+    # Check if file_path is under repo_root
     try:
         relative_path = file_path.relative_to(repo_root)
     except ValueError:
         raise ValueError(f"File path {file_path} is not under repository root {repo_root}")
 
-    # 返回普通相對路徑（不帶前綴 /）
+    # Return plain relative path (without / prefix)
     return str(relative_path)
 
 
 def to_cwd_relative_path(file_path: Union[str, Path]) -> str:
-    """將檔案路徑轉換為相對於當前工作目錄的相對路徑。
+    """Convert file path to path relative to current working directory.
 
-    此函數支援 worktree 環境，因為它使用當前工作目錄作為基準，
-    而不是 repository root。在 worktree 中，當前工作目錄就是 worktree 目錄。
+    This function supports worktree environments because it uses the current working directory
+    as the base, rather than the repository root. In a worktree, the current working directory
+    is the worktree directory.
 
     Args:
-        file_path: 檔案路徑（可以是絕對或相對路徑）
+        file_path: File path (can be absolute or relative)
 
     Returns:
-        相對於當前工作目錄的普通相對路徑字串（不帶前綴 /）
+        Plain relative path string relative to current working directory (without / prefix)
 
     Raises:
-        ValueError: 如果 file_path 不在當前工作目錄下
+        ValueError: If file_path is not under current working directory
 
     Example:
-        在普通 repo 中:
+        In normal repo:
         >>> # cwd = /Users/me/repo
         >>> path = to_cwd_relative_path("/Users/me/repo/.cafe/issues/x/spec.md")
         >>> print(path)  # .cafe/issues/x/spec.md
 
-        在 worktree 中:
+        In worktree:
         >>> # cwd = /Users/me/repo/.cafe/worktrees/issue33
         >>> path = to_cwd_relative_path(
         ...     "/Users/me/repo/.cafe/worktrees/issue33/.cafe/issues/issue33/spec.md"
@@ -285,20 +286,20 @@ def to_cwd_relative_path(file_path: Union[str, Path]) -> str:
 
 
 def to_git_ignore_path(file_path: Union[str, Path], repo_root: Union[str, Path]) -> str:
-    """將絕對路徑轉換為 git ignore 格式的相對路徑。
+    """Convert absolute path to git ignore format relative path.
 
-    Git ignore 格式：以 / 開頭的相對於 repo root 的路徑。
-    例如：/.cafe/issues/issue26/spec/spec_001.md
+    Git ignore format: path relative to repo root with / prefix.
+    Example: /.cafe/issues/issue26/spec/spec_001.md
 
     Args:
-        file_path: 檔案的絕對路徑
-        repo_root: Repository 根目錄的絕對路徑
+        file_path: File's absolute path
+        repo_root: Repository root directory's absolute path
 
     Returns:
-        Git ignore 格式的路徑字串（以 / 開頭）
+        Git ignore format path string (with / prefix)
 
     Raises:
-        ValueError: 如果 file_path 不在 repo_root 下
+        ValueError: If file_path is not under repo_root
 
     Example:
         >>> path = to_git_ignore_path(
@@ -310,13 +311,13 @@ def to_git_ignore_path(file_path: Union[str, Path], repo_root: Union[str, Path])
     file_path = Path(file_path).resolve()
     repo_root = Path(repo_root).resolve()
 
-    # 檢查 file_path 是否在 repo_root 下
+    # Check if file_path is under repo_root
     try:
         relative_path = file_path.relative_to(repo_root)
     except ValueError:
         raise ValueError(f"File path {file_path} is not under repository root {repo_root}")
 
-    # 轉換為 git ignore 格式（以 / 開頭）
+    # Convert to git ignore format (with / prefix)
     return "/" + str(relative_path)
 
 

@@ -1,4 +1,4 @@
-"""測試 git_utils.py 的 repo root 和路徑轉換功能。
+"""測試 git_utils.py  repo root and路徑轉換功能.
 
 確保可以正確處理：
 1. 一般 Git repository
@@ -17,7 +17,7 @@ class TestGetRepoRoot:
     """測試 get_repo_root() 函數"""
 
     def test_normal_repo_returns_repo_root(self, tmp_path):
-        """一般 repo：返回包含 .git 目錄的路徑"""
+        """一般 repo：返回包含 .git 目錄路徑"""
         # Setup: 創建 .git 目錄
         repo_root = tmp_path / "my-repo"
         git_dir = repo_root / ".git"
@@ -35,7 +35,7 @@ class TestGetRepoRoot:
         assert result.name == "my-repo"
 
     def test_worktree_returns_main_repo_root(self, tmp_path):
-        """Worktree：返回主 repo 的 root，不是 worktree 目錄"""
+        """Worktree：返回主 repo  root, 不是 worktree 目錄"""
         # Setup: 創建主 repo 結構
         main_repo = tmp_path / "main-repo"
         main_git_dir = main_repo / ".git"
@@ -45,23 +45,23 @@ class TestGetRepoRoot:
         worktree_dir = tmp_path / "worktrees" / "feature-branch"
         worktree_dir.mkdir(parents=True)
 
-        # 創建 .git 檔案（worktree 的 .git 是檔案不是目錄）
+        # 創建 .git 檔案（worktree  .git 是檔案不是目錄）
         git_file = worktree_dir / ".git"
         git_file.write_text(f"gitdir: {main_git_dir}/worktrees/feature-branch\n")
 
-        # 創建對應的 worktree git 目錄
+        # 創建對應 worktree git 目錄
         worktree_git_dir = main_git_dir / "worktrees" / "feature-branch"
         worktree_git_dir.mkdir(parents=True)
 
         # Execute：從 worktree 目錄呼叫
         result = get_repo_root(worktree_dir)
 
-        # Assert：應該返回主 repo 的 root
+        # Assert：應該返回主 repo  root
         assert result == main_repo
         assert result.name == "main-repo"
 
     def test_from_nested_worktree_subdirectory(self, tmp_path):
-        """從 worktree 的子目錄呼叫，仍然返回主 repo root"""
+        """從 worktree 子目錄呼叫, 仍然返回主 repo root"""
         # Setup
         main_repo = tmp_path / "main-repo"
         main_git_dir = main_repo / ".git"
@@ -76,7 +76,7 @@ class TestGetRepoRoot:
         worktree_git_dir = main_git_dir / "worktrees" / "my-feature"
         worktree_git_dir.mkdir(parents=True)
 
-        # 創建 worktree 的子目錄
+        # 創建 worktree 子目錄
         subdir = worktree_dir / "src" / "cafe" / "phases"
         subdir.mkdir(parents=True)
 
@@ -87,7 +87,7 @@ class TestGetRepoRoot:
         assert result == main_repo
 
     def test_current_directory_default(self, tmp_path, monkeypatch):
-        """不傳入路徑時，使用當前目錄"""
+        """不傳入路徑時, 使用當前目錄"""
         # Setup
         repo_root = tmp_path / "repo"
         git_dir = repo_root / ".git"
@@ -103,7 +103,7 @@ class TestGetRepoRoot:
 
     def test_not_in_git_repo_raises_error(self, tmp_path):
         """不在 Git repo 中時拋出 ValueError"""
-        # Setup：沒有 .git 的目錄
+        # Setup：沒有 .git 目錄
         non_repo = tmp_path / "not-a-repo"
         non_repo.mkdir()
 
@@ -116,7 +116,7 @@ class TestToGitIgnorePath:
     """測試 to_git_ignore_path() 函數"""
 
     def test_convert_absolute_to_relative_with_slash_prefix(self):
-        """轉換絕對路徑為相對路徑，並加上 / 前綴"""
+        """轉換絕對路徑為相對路徑, 並加上 / 前綴"""
         repo_root = Path("/Users/me/projects/my-repo")
         file_path = Path("/Users/me/projects/my-repo/.cafe/issues/issue26/spec/spec_001.md")
 
@@ -142,7 +142,7 @@ class TestToGitIgnorePath:
             to_git_ignore_path(file_path, repo_root)
 
     def test_handles_path_with_spaces(self):
-        """處理包含空格的路徑"""
+        """處理包含空格路徑"""
         repo_root = Path("/Users/me/my projects/repo")
         file_path = Path("/Users/me/my projects/repo/src/my file.py")
 

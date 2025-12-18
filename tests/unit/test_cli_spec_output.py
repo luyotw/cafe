@@ -1,6 +1,6 @@
 """Tests for spec command output messages based on status codes.
 
-測試 cafe spec 命令根據不同的 status code 顯示正確的下一步提示。
+測試 cafe spec 命令根據不同 status code 顯示正確下一步提示.
 """
 
 from pathlib import Path
@@ -78,12 +78,12 @@ def setup_test_env(tmp_path, monkeypatch):
 
 
 class TestSpecCommandOutputWithReadyForReview:
-    """測試 READY_FOR_REVIEW 狀態的輸出訊息。"""
+    """測試 READY_FOR_REVIEW 狀態輸出訊息."""
 
     def test_ready_for_review_prompts_user_to_run_spec_again(
         self, runner, mock_git_ops, mock_spec_phase, mock_agent_manager, mock_permission_handler, setup_test_env
     ):
-        """READY_FOR_REVIEW 狀態應提示使用者再次執行 cafe spec 確認。"""
+        """READY_FOR_REVIEW 狀態應提示使用者再次執行 cafe spec 確認."""
         # Setup: Phase returns READY_FOR_REVIEW
         mock_phase_instance = Mock()
         mock_phase_instance.execute.return_value = PhaseResult(
@@ -110,7 +110,7 @@ class TestSpecCommandOutputWithReadyForReview:
     def test_ready_for_review_shows_saved_location(
         self, runner, mock_git_ops, mock_spec_phase, mock_agent_manager, mock_permission_handler, setup_test_env
     ):
-        """READY_FOR_REVIEW 狀態應顯示 spec 儲存位置。"""
+        """READY_FOR_REVIEW 狀態應顯示 spec 儲存位置."""
         mock_phase_instance = Mock()
         mock_phase_instance.execute.return_value = PhaseResult(
             status=PhaseStatus.COMPLETED,
@@ -129,12 +129,12 @@ class TestSpecCommandOutputWithReadyForReview:
 
 
 class TestSpecCommandOutputWithConfirmed:
-    """測試 CONFIRMED 狀態的輸出訊息。"""
+    """測試 CONFIRMED 狀態輸出訊息."""
 
     def test_confirmed_prompts_user_to_run_plan(
         self, runner, mock_git_ops, mock_spec_phase, mock_agent_manager, mock_permission_handler, setup_test_env
     ):
-        """CONFIRMED 狀態應提示使用者執行 cafe plan。"""
+        """CONFIRMED 狀態應提示使用者執行 cafe plan."""
         # Setup: Phase returns CONFIRMED
         mock_phase_instance = Mock()
         mock_phase_instance.execute.return_value = PhaseResult(
@@ -161,7 +161,7 @@ class TestSpecCommandOutputWithConfirmed:
     def test_confirmed_shows_iteration_count(
         self, runner, mock_git_ops, mock_spec_phase, mock_agent_manager, mock_permission_handler, setup_test_env
     ):
-        """CONFIRMED 狀態應顯示 iteration 次數。"""
+        """CONFIRMED 狀態應顯示 iteration 次數."""
         mock_phase_instance = Mock()
         mock_phase_instance.execute.return_value = PhaseResult(
             status=PhaseStatus.COMPLETED,
@@ -180,12 +180,12 @@ class TestSpecCommandOutputWithConfirmed:
 
 
 class TestSpecCommandOutputWithNeedClarification:
-    """測試 NEED_CLARIFICATION 狀態的輸出訊息。"""
+    """測試 NEED_CLARIFICATION 狀態輸出訊息."""
 
     def test_need_clarification_prompts_to_continue(
         self, runner, mock_git_ops, mock_spec_phase, mock_agent_manager, mock_permission_handler, setup_test_env
     ):
-        """NEED_CLARIFICATION 狀態應提示使用者繼續執行 cafe spec。"""
+        """NEED_CLARIFICATION 狀態應提示使用者繼續執行 cafe spec."""
         mock_phase_instance = Mock()
         mock_phase_instance.execute.return_value = PhaseResult(
             status=PhaseStatus.COMPLETED,
@@ -206,12 +206,12 @@ class TestSpecCommandOutputWithNeedClarification:
 
 
 class TestSpecCommandOutputComparison:
-    """比較測試：確保不同狀態的輸出訊息確實不同。"""
+    """比較測試：確保不同狀態輸出訊息確實不同."""
 
     def test_ready_for_review_and_confirmed_have_different_messages(
         self, runner, mock_git_ops, mock_spec_phase, mock_agent_manager, mock_permission_handler, setup_test_env
     ):
-        """確認 READY_FOR_REVIEW 和 CONFIRMED 的訊息確實不同。"""
+        """確認 READY_FOR_REVIEW and CONFIRMED 訊息確實不同."""
         # Test READY_FOR_REVIEW
         mock_phase_instance = Mock()
         mock_phase_instance.execute.return_value = PhaseResult(
@@ -243,7 +243,7 @@ class TestSpecCommandOutputComparison:
 
 
 class TestSpecRigorConfigLoading:
-    """測試 spec 命令從 config 載入 rigor 設定。"""
+    """測試 spec 命令從 config 載入 rigor 設定."""
 
     @pytest.fixture
     def setup_env_with_rigor(self, tmp_path, monkeypatch):
@@ -302,7 +302,7 @@ class TestSpecRigorConfigLoading:
         self, runner, mock_git_ops, mock_spec_phase, mock_agent_manager,
         mock_permission_handler, setup_env_with_rigor
     ):
-        """應該從 issue config 載入 rigor 設定。"""
+        """應該從 issue config 載入 rigor 設定."""
         from cafe.core.types import SpecRigor
 
         # Setup: Phase returns success
@@ -326,7 +326,7 @@ class TestSpecRigorConfigLoading:
         self, runner, mock_git_ops, mock_spec_phase, mock_agent_manager,
         mock_permission_handler, setup_env_with_rigor
     ):
-        """CLI flag 應該覆蓋 config 中的 rigor 設定。"""
+        """CLI flag 應該覆蓋 config 中 rigor 設定."""
         from cafe.core.types import SpecRigor
 
         # Setup: Phase returns success
@@ -350,7 +350,7 @@ class TestSpecRigorConfigLoading:
         self, runner, mock_git_ops, mock_spec_phase, mock_agent_manager,
         mock_permission_handler, setup_env_without_rigor
     ):
-        """當 config 和 flag 都沒有 rigor 時，應該傳入 None。"""
+        """當 config and flag 都沒有 rigor 時, 應該傳入 None."""
         # Setup: Phase returns success
         mock_phase_instance = Mock()
         mock_phase_instance.execute.return_value = PhaseResult(
@@ -372,7 +372,7 @@ class TestSpecRigorConfigLoading:
         self, runner, mock_git_ops, mock_spec_phase, mock_agent_manager,
         mock_permission_handler, setup_env_with_rigor
     ):
-        """應該顯示從 config 載入的 rigor 設定。"""
+        """應該顯示從 config 載入 rigor 設定."""
         # Setup: Phase returns success
         mock_phase_instance = Mock()
         mock_phase_instance.execute.return_value = PhaseResult(
@@ -393,7 +393,7 @@ class TestSpecRigorConfigLoading:
         self, runner, mock_git_ops, mock_spec_phase, mock_agent_manager,
         mock_permission_handler, setup_env_with_rigor
     ):
-        """讀取 issue config 時不應該覆蓋 config_file 參數。"""
+        """讀取 issue config 時不應該覆蓋 config_file 參數."""
         # Setup: Phase returns success
         mock_phase_instance = Mock()
         mock_phase_instance.execute.return_value = PhaseResult(

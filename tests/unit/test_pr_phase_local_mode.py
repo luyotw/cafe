@@ -221,9 +221,9 @@ class TestPRPhaseLocalReviewMode:
                                                               capsys):
         """測試 worktree 模式下修改請求檔案路徑顯示正確 (issue50)
 
-        在 worktree 模式下，pr_file 路徑指向 repo root (.cafe/issues/xxx/pr/pr_001.md)
-        而 cwd 是 worktree 目錄 (.cafe/worktrees/xxx)。
-        應使用 to_cwd_relative_path() 正確顯示路徑，而非拋出 "not in subpath" 錯誤。
+        在 worktree 模式下, pr_file 路徑指向 repo root (.cafe/issues/xxx/pr/pr_001.md)
+        而 cwd 是 worktree 目錄 (.cafe/worktrees/xxx).
+        應使用 to_cwd_relative_path() 正確顯示路徑, 而非拋出 "not in subpath" 錯誤.
         """
         # Setup repo root structure
         repo_root = tmp_path / "repo"
@@ -291,10 +291,10 @@ class TestPRPhaseLocalReviewMode:
 
 
 class TestPRPhaseStatusTracking:
-    """測試 PR phase 的狀態追蹤和時間戳記比較"""
+    """測試 PR phase 狀態追蹤and時間戳記比較"""
 
     def test_skip_review_when_needs_changes_and_no_new_develop(self, tmp_path, mock_git_ops, monkeypatch):
-        """測試當狀態為 NEEDS_CHANGES 且 develop 沒有更新時，跳過 review"""
+        """測試當狀態為 NEEDS_CHANGES 且 develop 沒有更新時, 跳過 review"""
         from datetime import datetime, timedelta
 
         # Setup

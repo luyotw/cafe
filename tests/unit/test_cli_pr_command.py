@@ -58,7 +58,7 @@ def change_test_dir(tmp_path, monkeypatch):
 
 
 class TestPRCommandGitHubMode:
-    """測試 PR 指令在 GitHub 模式下的行為。"""
+    """測試 PR 指令在 GitHub 模式下行為."""
 
     @patch("subprocess.run")
     @patch("cafe.ui.cli.GitHubOps")
@@ -78,7 +78,7 @@ class TestPRCommandGitHubMode:
         mock_subprocess_run,
         temp_repo_dir,
     ):
-        """測試 PR 成功創建後自動執行 gh pr diff --web。"""
+        """測試 PR 成功創建後自動執行 gh pr diff --web."""
         # Setup mocks
         mock_git = MagicMock()
         mock_git.get_current_branch.return_value = "test-issue"
@@ -148,7 +148,7 @@ class TestPRCommandGitHubMode:
         mock_subprocess_run,
         temp_repo_dir,
     ):
-        """測試當 subprocess.run 失敗時靜默忽略錯誤。"""
+        """測試當 subprocess.run 失敗時靜默忽略錯誤."""
         # Setup mocks
         mock_git = MagicMock()
         mock_git.get_current_branch.return_value = "test-issue"
@@ -221,7 +221,7 @@ class TestPRCommandGitHubMode:
         mock_subprocess_run,
         temp_repo_dir,
     ):
-        """測試當 PR 創建失敗時不執行 subprocess。"""
+        """測試當 PR 創建失敗時不執行 subprocess."""
         # Setup mocks
         mock_git = MagicMock()
         mock_git.get_current_branch.return_value = "test-issue"

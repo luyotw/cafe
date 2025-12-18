@@ -18,7 +18,7 @@ class DummyPhase(Phase):
 
 
 class TestPhaseInteractiveParameter:
-    """測試 Phase 基礎類別的 interactive 參數"""
+    """測試 Phase 基礎類別 interactive 參數"""
 
     def test_default_interactive_is_true(self):
         """測試預設 interactive 為 True"""
@@ -54,7 +54,7 @@ class TestPhaseInteractiveParameter:
         assert result.data["interactive"] is False
 
     def test_multiple_instances_independent(self):
-        """測試多個 Phase 實例的 interactive 互相獨立"""
+        """測試多個 Phase 實例 interactive 互相獨立"""
         # Act
         phase1 = DummyPhase(interactive=True)
         phase2 = DummyPhase(interactive=False)

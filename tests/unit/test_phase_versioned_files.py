@@ -1,4 +1,4 @@
-"""測試 Phase base class 的版本化檔案管理方法。"""
+"""測試 Phase base class 版本化檔案管理方法."""
 
 import pytest
 from pathlib import Path
@@ -19,10 +19,10 @@ class ConcretePhase(Phase):
 
 
 class TestVersionedFileMethods:
-    """測試版本化檔案管理的基礎方法。"""
+    """測試版本化檔案管理基礎方法."""
 
     def test_get_versioned_file_path_basic(self, tmp_path: Path):
-        """測試 _get_versioned_file_path() 正確產生檔案路徑。"""
+        """測試 _get_versioned_file_path() 正確產生檔案路徑."""
         phase = ConcretePhase()
         phase_dir = tmp_path / "spec"
 
@@ -39,7 +39,7 @@ class TestVersionedFileMethods:
         assert file_path == phase_dir / "spec_999.md"
 
     def test_get_next_iteration_number_empty_dir(self, tmp_path: Path):
-        """測試 _get_next_iteration_number() 在空目錄中返回 1。"""
+        """測試 _get_next_iteration_number() 在空目錄中返回 1."""
         phase = ConcretePhase()
         phase_dir = tmp_path / "spec"
         phase_dir.mkdir(parents=True)
@@ -48,7 +48,7 @@ class TestVersionedFileMethods:
         assert iteration == 1
 
     def test_get_next_iteration_number_no_history_dir(self, tmp_path: Path):
-        """測試 _get_next_iteration_number() 在沒有 history 目錄時返回 1。"""
+        """測試 _get_next_iteration_number() 在沒有 history 目錄時返回 1."""
         phase = ConcretePhase()
         phase_dir = tmp_path / "spec"
         phase_dir.mkdir(parents=True)
@@ -62,7 +62,7 @@ class TestVersionedFileMethods:
         assert iteration == 1
 
     def test_get_next_iteration_number_with_existing_files(self, tmp_path: Path):
-        """測試 _get_next_iteration_number() 基於 iteration history 正確計算編號。"""
+        """測試 _get_next_iteration_number() 基於 iteration history 正確計算編號."""
         phase = ConcretePhase()
         phase_dir = tmp_path / "spec"
         phase_dir.mkdir(parents=True)
@@ -77,7 +77,7 @@ class TestVersionedFileMethods:
         assert iteration == 3
 
     def test_get_next_iteration_number_exceeds_999(self, tmp_path: Path):
-        """測試 _get_next_iteration_number() 在超過 999 時拋出錯誤。"""
+        """測試 _get_next_iteration_number() 在超過 999 時拋出錯誤."""
         phase = ConcretePhase()
         phase_dir = tmp_path / "spec"
         phase_dir.mkdir(parents=True)
@@ -88,14 +88,14 @@ class TestVersionedFileMethods:
         for i in range(1, 1000):
             (history_dir / f"iteration_{i:03d}.json").touch()
 
-        with pytest.raises(ValueError, match="不可超過 999"):
+        with pytest.raises(ValueError, match="Cannot exceed 999"):
             phase._get_next_iteration_number("spec", phase_dir)
 
     def test_get_next_iteration_number_ignores_orphaned_output_files(self, tmp_path: Path):
-        """測試 _get_next_iteration_number() 忽略中斷執行時殘留的輸出檔案。
+        """測試 _get_next_iteration_number() 忽略中斷執行時殘留輸出檔案.
 
-        這個測試驗證當有多餘的輸出檔案（如 plan_002.md, plan_003.md）
-        但 iteration history 只有 iteration_001.json 時，版本號應該基於 history 而不是輸出檔案。
+        這個測試驗證當有多餘輸出檔案（如 plan_002.md, plan_003.md）
+        但 iteration history 只有 iteration_001.json 時, 版本號應該基於 history 而不是輸出檔案.
         """
         phase = ConcretePhase()
         phase_dir = tmp_path / "spec"
@@ -116,10 +116,10 @@ class TestVersionedFileMethods:
         assert iteration == 2
 
     def test_get_next_iteration_number_returns_same_if_interrupted(self, tmp_path: Path):
-        """測試 _get_next_iteration_number() 在最後一個 iteration 被中斷時返回相同編號。
+        """測試 _get_next_iteration_number() 在最後一個 iteration 被中斷時返回相同編號.
 
-        當 iteration_001.json 存在但沒有 response（被中斷），應該返回 1 而不是 2。
-        這樣可以避免在第一輪執行 _copy_previous_version() 創建 plan_002.md。
+        當 iteration_001.json 存在但沒有 response（被中斷）, 應該返回 1 而不是 2.
+        這樣可以避免在Round 1執行 _copy_previous_version() 創建 plan_002.md.
         """
         phase = ConcretePhase()
         phase_dir = tmp_path / "spec"
@@ -135,7 +135,7 @@ class TestVersionedFileMethods:
         assert iteration == 1
 
     def test_get_next_iteration_number_nonexistent_dir(self, tmp_path: Path):
-        """測試 _get_next_iteration_number() 在目錄不存在時返回 1。"""
+        """測試 _get_next_iteration_number() 在目錄不存在時返回 1."""
         phase = ConcretePhase()
         phase_dir = tmp_path / "spec"  # Directory doesn't exist
 
@@ -143,7 +143,7 @@ class TestVersionedFileMethods:
         assert iteration == 1
 
     def test_copy_previous_version_success(self, tmp_path: Path):
-        """測試 _copy_previous_version() 正確複製檔案。"""
+        """測試 _copy_previous_version() 正確複製檔案."""
         phase = ConcretePhase()
         phase_dir = tmp_path / "spec"
         phase_dir.mkdir(parents=True)
@@ -161,7 +161,7 @@ class TestVersionedFileMethods:
         assert new_file.read_text(encoding="utf-8") == "Previous content"
 
     def test_copy_previous_version_first_iteration(self, tmp_path: Path):
-        """測試 _copy_previous_version() 在第一輪時不執行任何動作。"""
+        """測試 _copy_previous_version() 在Round 1時不執行任何動作."""
         phase = ConcretePhase()
         phase_dir = tmp_path / "spec"
         phase_dir.mkdir(parents=True)
@@ -174,7 +174,7 @@ class TestVersionedFileMethods:
         assert not new_file.exists()
 
     def test_copy_previous_version_no_previous_file(self, tmp_path: Path):
-        """測試 _copy_previous_version() 在前一版本不存在時不執行任何動作。"""
+        """測試 _copy_previous_version() 在前一版本不存在時不執行任何動作."""
         phase = ConcretePhase()
         phase_dir = tmp_path / "spec"
         phase_dir.mkdir(parents=True)

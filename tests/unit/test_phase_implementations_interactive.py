@@ -32,7 +32,7 @@ def mock_git_ops():
 
 
 class TestSpecPhaseInteractive:
-    """測試 SpecPhase 的 interactive 參數"""
+    """測試 SpecPhase  interactive 參數"""
 
     def test_spec_phase_default_interactive_true(self, mock_git_ops):
         """測試 SpecPhase 預設 interactive 為 True"""
@@ -73,7 +73,7 @@ class TestSpecPhaseInteractive:
 
 
 class TestPlanPhaseInteractive:
-    """測試 PlanPhase 的 interactive 參數"""
+    """測試 PlanPhase  interactive 參數"""
 
     def test_plan_phase_default_interactive_true(self, mock_git_ops):
         """測試 PlanPhase 預設 interactive 為 True"""
@@ -114,7 +114,7 @@ class TestPlanPhaseInteractive:
 
 
 class TestDevelopPhaseInteractive:
-    """測試 DevelopPhase 的 interactive 參數"""
+    """測試 DevelopPhase  interactive 參數"""
 
     def test_develop_phase_default_interactive_true(self):
         """測試 DevelopPhase 預設 interactive 為 True"""
@@ -159,7 +159,7 @@ class TestDevelopPhaseInteractive:
 
 
 class TestReviewPhaseInteractive:
-    """測試 ReviewPhase 的 interactive 參數"""
+    """測試 ReviewPhase  interactive 參數"""
 
     def test_review_phase_default_interactive_true(self):
         """測試 ReviewPhase 預設 interactive 為 True"""
@@ -204,7 +204,7 @@ class TestReviewPhaseInteractive:
 
 
 class TestPRPhaseInteractive:
-    """測試 PRPhase 的 interactive 參數"""
+    """測試 PRPhase  interactive 參數"""
 
     def test_pr_phase_default_interactive_true(self, mock_github_ops):
         """測試 PRPhase 預設 interactive 為 True"""
@@ -249,7 +249,7 @@ class TestPRPhaseInteractive:
 
 
 class TestInteractiveConsistency:
-    """測試所有 Phase 的 interactive 行為一致性"""
+    """測試所有 Phase  interactive 行為一致性"""
 
     def test_all_phases_support_interactive_parameter(self, mock_github_ops, mock_git_ops):
         """測試所有 Phase 都支援 interactive 參數"""

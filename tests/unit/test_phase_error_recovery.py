@@ -35,10 +35,10 @@ class MockPhase(Phase):
 
 
 class TestDetectWrittenOutputFiles:
-    """測試 _detect_written_output_files 方法。"""
+    """測試 _detect_written_output_files 方法."""
 
     def test_base_implementation_returns_empty_list(self, tmp_path):
-        """Base implementation 應返回空列表。"""
+        """Base implementation 應返回空列表."""
         agent_manager = Mock(spec=AgentManager)
         phase = MockPhase(tmp_path, agent_manager)
 
@@ -48,10 +48,10 @@ class TestDetectWrittenOutputFiles:
 
 
 class TestRecoverFromWrittenFiles:
-    """測試 _recover_from_written_files 方法。"""
+    """測試 _recover_from_written_files 方法."""
 
     def test_no_written_files_returns_none(self, tmp_path):
-        """當沒有寫入檔案時，應返回 (None, None)。"""
+        """當沒有寫入檔案時, 應返回 (None, None)."""
         agent_manager = Mock(spec=AgentManager)
         phase = MockPhase(tmp_path, agent_manager)
         valid_codes = [PhaseStatusCode.CONFIRMED, PhaseStatusCode.NEED_CLARIFICATION]
@@ -62,7 +62,7 @@ class TestRecoverFromWrittenFiles:
         assert status_code is None
 
     def test_successful_recovery_with_valid_status_code(self, tmp_path):
-        """成功恢復：檔案存在且包含有效的 status code。"""
+        """成功恢復：檔案存在且包含有效 status code."""
         agent_manager = Mock(spec=AgentManager)
         phase = MockPhase(tmp_path, agent_manager)
 
@@ -78,7 +78,7 @@ class TestRecoverFromWrittenFiles:
         assert status_code == PhaseStatusCode.CONFIRMED
 
     def test_recovery_with_no_status_code_in_file(self, tmp_path):
-        """檔案存在但沒有 status code：應返回 (response, None)。"""
+        """檔案存在但沒有 status code：應返回 (response, None)."""
         agent_manager = Mock(spec=AgentManager)
         phase = MockPhase(tmp_path, agent_manager)
 
@@ -94,11 +94,11 @@ class TestRecoverFromWrittenFiles:
         assert status_code is None
 
     def test_recovery_fails_when_file_unreadable(self, tmp_path, capsys):
-        """檔案無法讀取時，應返回 (None, None) 並印出警告。"""
+        """檔案無法讀取時, 應返回 (None, None) 並印出警告."""
         agent_manager = Mock(spec=AgentManager)
         phase = MockPhase(tmp_path, agent_manager)
 
-        # 使用不存在的檔案
+        # 使用不存在檔案
         non_existent_file = tmp_path / "non_existent.md"
         valid_codes = [PhaseStatusCode.CONFIRMED]
 
@@ -112,7 +112,7 @@ class TestRecoverFromWrittenFiles:
         assert "⚠️  Failed to recover from written files:" in captured.out
 
     def test_recovery_uses_first_file_when_multiple_files(self, tmp_path):
-        """當有多個檔案時，應使用第一個檔案進行恢復。"""
+        """當有多個檔案時, 應使用第一個檔案進行恢復."""
         agent_manager = Mock(spec=AgentManager)
         phase = MockPhase(tmp_path, agent_manager)
 
@@ -133,10 +133,10 @@ class TestRecoverFromWrittenFiles:
 
 
 class TestAgentExecutionWithRecovery:
-    """測試 _execute_agent_iteration 中的錯誤恢復邏輯。"""
+    """測試 _execute_agent_iteration 中錯誤恢復邏輯."""
 
     def test_normal_execution_without_error(self, tmp_path):
-        """正常執行（無錯誤）：應不觸發恢復邏輯。"""
+        """正常執行（無錯誤）：應不觸發恢復邏輯."""
         agent_manager = Mock(spec=AgentManager)
         agent_manager.execute.return_value = (
             "CAFE_CONFIRMED\n\nResponse content",
@@ -176,7 +176,7 @@ class TestAgentExecutionWithRecovery:
         assert "recovered_from_error" not in history_data
 
     def test_agent_error_with_no_output_files(self, tmp_path):
-        """Agent 執行失敗且沒有輸出檔案：應 re-raise 錯誤。"""
+        """Agent 執行失敗且沒有輸出檔案：應 re-raise 錯誤."""
         agent_manager = Mock(spec=AgentManager)
         error = AgentExecutionError("Token limit exceeded", error_type="TOKEN_LIMIT")
         # 模擬 executor 在錯誤物件上附帶實際 CLI 參數
@@ -212,7 +212,7 @@ class TestAgentExecutionWithRecovery:
         assert history_data["status_code"] is None
         assert "error" in history_data
         assert "Token limit exceeded" in history_data["error"]
-        # 應該記錄實際的 CLI 參數，方便除錯
+        # 應該記錄實際 CLI 參數, 方便除錯
         assert history_data["cli_command_args"] == [
             "--output-format",
             "stream-json",
@@ -221,7 +221,7 @@ class TestAgentExecutionWithRecovery:
         ]
 
     def test_agent_error_with_written_files_successful_recovery(self, tmp_path):
-        """Agent 執行失敗但有輸出檔案：應成功恢復。"""
+        """Agent 執行失敗但有輸出檔案：應成功恢復."""
         # 建立測試輸出檔案
         output_file = tmp_path / "test" / "test_001.md"
         output_file.parent.mkdir(parents=True, exist_ok=True)
@@ -268,7 +268,7 @@ class TestAgentExecutionWithRecovery:
         assert error_log.exists()
 
     def test_agent_error_with_written_files_no_status_code(self, tmp_path):
-        """Agent 執行失敗，有輸出檔案但沒有 status code：應 re-raise 錯誤。"""
+        """Agent 執行失敗, 有輸出檔案但沒有 status code：應 re-raise 錯誤."""
         # 建立測試輸出檔案（沒有 status code）
         output_file = tmp_path / "test" / "test_001.md"
         output_file.parent.mkdir(parents=True, exist_ok=True)
@@ -305,7 +305,7 @@ class TestAgentExecutionWithRecovery:
         assert history_data["error"] == "Token limit exceeded"
 
     def test_recovery_updates_iteration_history_with_metadata(self, tmp_path):
-        """恢復成功時，iteration history 應包含恢復 metadata。"""
+        """恢復成功時, iteration history 應包含恢復 metadata."""
         output_file = tmp_path / "test" / "test_001.md"
         output_file.parent.mkdir(parents=True, exist_ok=True)
         output_file.write_text("CAFE_CONFIRMED\n\nRecovered content.", encoding="utf-8")
@@ -342,8 +342,8 @@ class TestAgentExecutionWithRecovery:
         assert history_data["status_code"] == "CAFE_CONFIRMED"
 
     def test_failed_recovery_updates_iteration_history_with_error(self, tmp_path):
-        """恢復失敗時，iteration history 應包含錯誤資訊。"""
-        # 建立無法讀取的檔案（使用不存在的檔案）
+        """恢復失敗時, iteration history 應包含錯誤資訊."""
+        # 建立無法讀取檔案（使用不存在檔案）
         non_existent_file = tmp_path / "non_existent.md"
 
         agent_manager = Mock(spec=AgentManager)
@@ -379,7 +379,7 @@ class TestAgentExecutionWithRecovery:
         assert history_data.get("error_type") == "SESSION_CONFLICT"
 
     def test_error_log_file_created_with_recovery_info(self, tmp_path):
-        """錯誤發生時，應建立包含恢復資訊的 error log。"""
+        """錯誤發生時, 應建立包含恢復資訊 error log."""
         output_file = tmp_path / "test" / "test_002.md"
         output_file.parent.mkdir(parents=True, exist_ok=True)
         output_file.write_text("CAFE_NEED_CLARIFICATION\n\nQuestion content.", encoding="utf-8")

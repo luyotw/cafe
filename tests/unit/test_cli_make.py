@@ -1,4 +1,4 @@
-"""測試 cafe make 指令功能。"""
+"""測試 cafe make 指令功能."""
 
 import sys
 from pathlib import Path
@@ -10,10 +10,10 @@ from cafe.utils.config import ConfigManager
 
 
 class TestCheckAgentCLIsAvailable:
-    """測試 _check_agent_clis_available 函數。"""
+    """測試 _check_agent_clis_available 函數."""
 
     def test_all_clis_available(self) -> None:
-        """測試當所有 CLI 工具都存在時，檢查通過。"""
+        """測試當所有 CLI 工具都存在時, 檢查通過."""
         # Setup
         config_manager = MagicMock(spec=ConfigManager)
         config_manager.get.side_effect = lambda key, default: {
@@ -37,7 +37,7 @@ class TestCheckAgentCLIsAvailable:
             assert mock_which.call_count == 3
 
     def test_missing_cli_tools(self) -> None:
-        """測試當缺少某個 CLI 工具時，檢查失敗並回傳正確的錯誤訊息。"""
+        """測試當缺少某個 CLI 工具時, 檢查失敗並回傳正確錯誤訊息."""
         # Setup
         config_manager = MagicMock(spec=ConfigManager)
         config_manager.get.side_effect = lambda key, default: {
@@ -66,7 +66,7 @@ class TestCheckAgentCLIsAvailable:
             assert "gemini" in missing_clis
 
     def test_reads_correct_config_keys(self) -> None:
-        """測試從 `.cafe/config.yaml` 正確讀取所有 agent 的 CLI 配置。"""
+        """測試從 `.cafe/config.yaml` 正確讀取所有 agent  CLI 配置."""
         # Setup
         config_manager = MagicMock(spec=ConfigManager)
         config_manager.get.side_effect = lambda key, default: {
@@ -93,10 +93,10 @@ class TestCheckAgentCLIsAvailable:
 
 
 class TestMakeCommand:
-    """測試 cafe make 指令。"""
+    """測試 cafe make 指令."""
 
     def test_make_command_fails_when_clis_missing(self) -> None:
-        """測試 cafe make 指令在環境檢查失敗時正確中止。"""
+        """測試 cafe make 指令在環境檢查失敗時正確中止."""
         from typer.testing import CliRunner
 
         from cafe.ui.cli import app
@@ -129,7 +129,7 @@ class TestMakeCommand:
             assert "claude" in result.stdout.lower()
 
     def test_make_command_executes_spec_auto_when_clis_available(self) -> None:
-        """測試 cafe make 指令在環境檢查通過後執行 cafe spec --auto。"""
+        """測試 cafe make 指令在環境檢查通過後執行 cafe spec --auto."""
         from typer.testing import CliRunner
 
         from cafe.ui.cli import app
@@ -167,7 +167,7 @@ class TestMakeCommand:
             assert "--auto" in call_args
 
     def test_make_command_displays_correct_error_message(self) -> None:
-        """測試 cafe make 指令顯示正確的錯誤提示訊息。"""
+        """測試 cafe make 指令顯示正確錯誤提示訊息."""
         from typer.testing import CliRunner
 
         from cafe.ui.cli import app

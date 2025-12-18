@@ -1,6 +1,6 @@
 """InquirerPy wrapper functions for consistent interactive prompts.
 
-此模組封裝 InquirerPy 的功能，提供統一的介面給 CLI 指令使用。
+This module wraps InquirerPy functionality, providing a unified interface for CLI commands.
 """
 
 from typing import Any, Optional
@@ -13,15 +13,15 @@ def prompt_list(
     choices: list[Any],
     default: Optional[Any] = None,
 ) -> Any:
-    """顯示選單讓使用者選擇
+    """Display menu for user to select
 
     Args:
-        message: 提示訊息
-        choices: 選項列表
-        default: 預設選項
+        message: Prompt message
+        choices: List of choices
+        default: Default option
 
     Returns:
-        使用者選擇的項目
+        User's selected item
     """
     kwargs = {
         "message": message,
@@ -37,14 +37,14 @@ def prompt_text(
     message: str,
     default: str = "",
 ) -> str:
-    """提示使用者輸入文字
+    """Prompt user for text input
 
     Args:
-        message: 提示訊息
-        default: 預設值
+        message: Prompt message
+        default: Default value
 
     Returns:
-        使用者輸入的文字
+        User's input text
     """
     return inquirer.text(
         message=message,
@@ -56,14 +56,14 @@ def prompt_confirm(
     message: str,
     default: bool = True,
 ) -> bool:
-    """詢問使用者確認（Yes/No）
+    """Ask user for confirmation (Yes/No)
 
     Args:
-        message: 提示訊息
-        default: 預設值（True 或 False）
+        message: Prompt message
+        default: Default value (True or False)
 
     Returns:
-        使用者的選擇（True 或 False）
+        User's choice (True or False)
     """
     return inquirer.confirm(
         message=message,

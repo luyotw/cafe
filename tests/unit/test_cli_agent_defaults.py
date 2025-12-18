@@ -1,6 +1,6 @@
 """Tests for CLI commands using agent names from config instead of hardcoded defaults.
 
-測試 CLI 指令從 config 讀取 agent 名稱而非使用 hardcoded 預設值。
+測試 CLI 指令從 config 讀取 agent 名稱而非使用 hardcoded 預設值.
 """
 
 from pathlib import Path
@@ -98,7 +98,7 @@ def mock_config_manager_with_custom_dev():
 
 
 class TestPlanCommandAgentDefault:
-    """測試 plan 指令使用 config 中的 developer agent 名稱。"""
+    """測試 plan 指令使用 config 中 developer agent 名稱."""
 
     def test_plan_uses_config_developer_name_when_no_flag_provided(
         self,
@@ -109,7 +109,7 @@ class TestPlanCommandAgentDefault:
         mock_config_manager_with_custom_dev,
         setup_test_env,
     ):
-        """當沒有提供 --dev flag 時，plan 指令應使用 config 中的 developer agent 名稱。"""
+        """當沒有提供 --dev flag 時, plan 指令應使用 config 中 developer agent 名稱."""
         # Setup: Mock _setup_agents to return our mock agent_manager
         with patch("cafe.ui.cli._setup_agents") as mock_setup:
             mock_setup.return_value = mock_agent_manager.return_value
@@ -150,7 +150,7 @@ class TestPlanCommandAgentDefault:
         mock_config_manager_with_custom_dev,
         setup_test_env,
     ):
-        """當提供 --dev flag 時，plan 指令應使用 flag 指定的名稱而非 config。"""
+        """當提供 --dev flag 時, plan 指令應使用 flag 指定名稱而非 config."""
         # Setup: Mock _setup_agents to return our mock agent_manager
         with patch("cafe.ui.cli._setup_agents") as mock_setup:
             mock_setup.return_value = mock_agent_manager.return_value
@@ -184,7 +184,7 @@ class TestPlanCommandAgentDefault:
 
 
 class TestDevelopCommandAgentDefault:
-    """測試 develop 指令使用 config 中的 developer agent 名稱。"""
+    """測試 develop 指令使用 config 中 developer agent 名稱."""
 
     def test_develop_uses_config_developer_name_when_no_flag_provided(
         self,
@@ -195,7 +195,7 @@ class TestDevelopCommandAgentDefault:
         mock_config_manager_with_custom_dev,
         setup_test_env,
     ):
-        """當沒有提供 --dev flag 時，develop 指令應使用 config 中的 developer agent 名稱。"""
+        """當沒有提供 --dev flag 時, develop 指令應使用 config 中 developer agent 名稱."""
         # Create plan file (required for develop command)
         plan_dir = setup_test_env / ".cafe" / "issues" / "test-branch" / "plan"
         plan_dir.mkdir(parents=True, exist_ok=True)
@@ -236,7 +236,7 @@ class TestDevelopCommandAgentDefault:
 
 
 class TestSpecCommandAgentDefault:
-    """測試 spec 指令使用 config 中的 PM agent 名稱。"""
+    """測試 spec 指令使用 config 中 PM agent 名稱."""
 
     def test_spec_uses_config_pm_name_when_no_flag_provided(
         self,
@@ -246,7 +246,7 @@ class TestSpecCommandAgentDefault:
         mock_permission_handler,
         setup_test_env,
     ):
-        """當沒有提供 --pm flag 時，spec 指令應使用 config 中的 PM agent 名稱。"""
+        """當沒有提供 --pm flag 時, spec 指令應使用 config 中 PM agent 名稱."""
         # Setup: Mock ConfigManager to return 'Alice' as PM agent name
         with patch("cafe.ui.cli.ConfigManager") as mock_config:
             mock_config_instance = Mock()
