@@ -47,7 +47,7 @@ def prompt_for_input_method(display: Display, github_ops: GitHubOps) -> tuple[st
         # Ask for Issue ID or URL, with error retry handling
         while True:
             issue_input = prompt_text(
-                message="Please enter GitHub Issue ID or URL",
+                message="Please enter GitHub Issue ID or URL:",
                 default="",
             )
 

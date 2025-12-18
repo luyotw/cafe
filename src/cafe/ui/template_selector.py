@@ -40,7 +40,7 @@ def select_template(templates: List[str], template_paths: Dict[str, Path]) -> Op
     choices = [f"{i}. {name}" for i, name in enumerate(templates, 1)]
 
     try:
-        selected = prompt_list("Select template number", choices, default=choices[0])
+        selected = prompt_list("Select template number:", choices, default=choices[0])
         # Parse the selection to get template name
         # Format: "1. default" -> "default"
         template_name = selected.split(". ", 1)[1]
