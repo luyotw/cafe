@@ -201,3 +201,83 @@ class TestAutoModeConfigPreservation:
                 
                 assert "worktree_path" in final_config, "worktree_path was removed from config"
                 assert final_config["worktree_path"] == "/some/worktree/path"
+
+
+class TestAutoModeErrorHandling:
+    """Test error suppression in auto mode to prevent redundant error messages."""
+
+    def test_handle_phase_exception_suppresses_output_in_auto_mode(self):
+        """Test that _handle_phase_exception suppresses standard error output in auto mode."""
+        from cafe.ui.cli import _handle_phase_exception
+        import typer
+
+        # Mock console to capture output
+        with patch('cafe.ui.cli.console') as mock_console:
+            # In auto mode with non-critical error, should exit without printing
+            with pytest.raises(typer.Exit):
+                _handle_phase_exception(ValueError("test error"), "spec", auto=True)
+
+            # Verify no error message was printed for non-critical errors
+            error_prints = [
+                call for call in mock_console.print.call_args_list
+                if "Error" in str(call) or "error" in str(call)
+            ]
+            assert len(error_prints) == 0, "Error message was printed in auto mode"
+
+    def test_handle_phase_exception_shows_critical_errors_in_auto_mode(self):
+        """Test that _handle_phase_exception still shows critical errors in auto mode."""
+        from cafe.ui.cli import _handle_phase_exception
+        from cafe.core.types import CriticalPhaseError
+        import typer
+
+        # Mock console to capture output
+        with patch('cafe.ui.cli.console') as mock_console:
+            critical_error = CriticalPhaseError(
+                message="Rate limit reached",
+                error_type="rate_limit",
+                phase_name="spec"
+            )
+
+            with pytest.raises(typer.Exit):
+                _handle_phase_exception(critical_error, "spec", auto=True)
+
+            # Verify critical error message was printed
+            calls_str = str(mock_console.print.call_args_list)
+            assert "Critical error" in calls_str or "rate limit" in calls_str.lower(), \
+                "Critical error message was suppressed in auto mode"
+
+    def test_handle_phase_exception_shows_errors_in_non_auto_mode(self):
+        """Test that _handle_phase_exception shows all errors when not in auto mode."""
+        from cafe.ui.cli import _handle_phase_exception
+        import typer
+
+        # Mock console to capture output
+        with patch('cafe.ui.cli.console') as mock_console:
+            with pytest.raises(typer.Exit):
+                _handle_phase_exception(ValueError("test error"), "spec", auto=False)
+
+            # Verify error message was printed
+            calls_str = str(mock_console.print.call_args_list)
+            assert "Error" in calls_str, "Error message was not printed in non-auto mode"
+
+    def test_execute_next_phase_auto_does_not_print_redundant_errors(self):
+        """Test that _execute_next_phase_auto doesn't print error messages (already printed by phase)."""
+        from cafe.ui.cli import _execute_next_phase_auto
+        import typer
+
+        with patch('cafe.ui.cli.subprocess.run') as mock_subprocess, \
+             patch('cafe.ui.cli.console') as mock_console:
+            # Simulate phase command failure
+            mock_subprocess.return_value = MagicMock(returncode=1)
+
+            with pytest.raises(typer.Exit):
+                _execute_next_phase_auto("spec", "test-issue")
+
+            # Verify no error message like "spec phase failed" was printed
+            # Only the "Auto mode: executing..." message should be there
+            error_messages = [
+                call for call in mock_console.print.call_args_list
+                if "failed" in str(call).lower()
+            ]
+            assert len(error_messages) == 0, \
+                "Redundant error message was printed by _execute_next_phase_auto"

@@ -43,20 +43,25 @@ app = typer.Typer(
 console = Console()
 
 
-def _handle_phase_exception(e: Exception, phase_name: str) -> None:
+def _handle_phase_exception(e: Exception, phase_name: str, auto: bool = False) -> None:
     """Unified exception handling for phase execution.
-    
+
     Args:
         e: Caught exception
         phase_name: Phase name (for error messages)
-        
+        auto: Whether running in auto mode (to reduce redundant output)
+
     Raises:
         typer.Exit: Always raises exit(1)
     """
     from cafe.core.types import CriticalPhaseError
-    
+
+    # In auto mode, suppress output for most errors as they're already reported
+    if auto and not isinstance(e, CriticalPhaseError):
+        raise typer.Exit(1)
+
     console.print()
-    
+
     # Check if it's a critical error that should stop the entire workflow
     if isinstance(e, CriticalPhaseError):
         console.print(f"[bold red]❌ Critical error in {phase_name} phase[/bold red]")
@@ -73,7 +78,7 @@ def _handle_phase_exception(e: Exception, phase_name: str) -> None:
     else:
         console.print(f"[bold red]❌ Error in {phase_name} phase: {e}[/bold red]")
         console.print()
-    
+
     raise typer.Exit(1)
 
 
@@ -309,13 +314,7 @@ def _execute_next_phase_auto(next_phase: str, issue_name: str) -> None:
     try:
         result = subprocess.run(cmd, check=False)
         if result.returncode != 0:
-            console.print()
-            console.print(
-                f"[bold red]❌ {next_phase.capitalize()} phase failed with exit code {result.returncode}[/bold red]"
-            )
-            console.print()
-            console.print("[yellow]⚠️  Stopping automated workflow due to error[/yellow]")
-            console.print()
+            # Error already printed by the phase command, just exit
             raise typer.Exit(result.returncode)
     except typer.Exit:
         raise
@@ -1537,7 +1536,7 @@ def spec(
             raise typer.Exit(1)
 
     except Exception as e:
-        _handle_phase_exception(e, "spec")
+        _handle_phase_exception(e, "spec", auto=auto)
 
 
 @app.command()
@@ -1851,7 +1850,7 @@ def plan(
             raise typer.Exit(1)
 
     except Exception as e:
-        _handle_phase_exception(e, "plan")
+        _handle_phase_exception(e, "plan", auto=auto)
 
 
 @app.command()
@@ -2059,8 +2058,7 @@ def develop(
                 console.print("[dim]Resume with: cafe develop[/dim]")
 
     except Exception as e:
-        console.print(f"[red]Error: {e}[/red]")
-        raise typer.Exit(1)
+        _handle_phase_exception(e, "develop", auto=auto)
 
 
 # Add "dev" as an alias for "develop"
@@ -2354,8 +2352,7 @@ def review(
             raise typer.Exit(1)
 
     except Exception as e:
-        console.print(f"[red]Error: {e}[/red]")
-        raise typer.Exit(1)
+        _handle_phase_exception(e, "review", auto=auto)
 
 
 @app.command()
@@ -2572,8 +2569,7 @@ def pr(
             raise typer.Exit(1)
 
     except Exception as e:
-        console.print(f"[red]Error: {e}[/red]")
-        raise typer.Exit(1)
+        _handle_phase_exception(e, "pr", auto=auto)
 
 
 @app.command()
@@ -3037,8 +3033,10 @@ def make(
     try:
         result = subprocess.run(cmd, check=False)
         if result.returncode != 0:
-            console.print(f"[red]Error: spec phase failed with exit code {result.returncode}[/red]")
+            # Error already printed by spec phase command, just exit
             raise typer.Exit(result.returncode)
+    except typer.Exit:
+        raise
     except Exception as e:
         console.print(f"[red]Error executing spec phase: {e}[/red]")
         raise typer.Exit(1)
