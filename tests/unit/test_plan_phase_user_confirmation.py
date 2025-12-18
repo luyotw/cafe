@@ -186,7 +186,7 @@ class TestPlanPhaseUserConfirmation:
 
         # Mock user choosing 'm' (modify) - but this won't be used anymore
         with patch('builtins.input', return_value='m') as mock_input, \
-             patch.object(phase.display, 'get_multiline_input', return_value="請加上錯誤處理") as mock_multiline, \
+             patch('cafe.ui.inquirer_prompts.prompt_multiline', return_value="請加上錯誤處理") as mock_multiline, \
              patch('builtins.print'):
             result = phase.execute()
 
@@ -246,7 +246,7 @@ class TestPlanPhaseUserConfirmation:
         assert agent_manager.execute.call_count == 1
 
     def test_need_clarification_does_not_need_confirmation(
-        self, tmp_path: Path, mock_git_ops: MagicMock, monkeypatch
+        self, tmp_path: Path, mock_git_ops: MagicMock, monkeypatch, mock_multiline_input
     ) -> None:
         """測試 NEED_CLARIFICATION 狀態不需要用戶確認, 直接進入下一輪"""
         issue_name = "test-clarification"
@@ -286,8 +286,8 @@ class TestPlanPhaseUserConfirmation:
         )
 
         # Mock user input for clarification
-        with patch.object(phase.display, 'get_multiline_input', return_value="補充資訊"), \
-             patch('builtins.input', return_value='c') as mock_input, \
+        mock_multiline_input.return_value = "補充資訊"
+        with patch('builtins.input', return_value='c') as mock_input, \
              patch('builtins.print'):
             result = phase.execute()
 

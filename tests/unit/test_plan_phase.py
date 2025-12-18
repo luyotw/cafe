@@ -531,7 +531,7 @@ class TestErrorHandling:
 class TestPlanPhaseHistory:
     """Test history recording and loading functionality (TDD)."""
 
-    def test_saves_history_after_each_iteration(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
+    def test_saves_history_after_each_iteration(self, tmp_path: Path, mock_git_ops, monkeypatch, mock_multiline_input) -> None:
         monkeypatch.chdir(tmp_path)
         mock_git_ops.get_current_branch.return_value = "test-feature"
         spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
@@ -563,8 +563,8 @@ class TestPlanPhaseHistory:
         )
 
         # Mock user input to continue after NEED_CLARIFICATION
-        with patch('cafe.ui.inquirer_prompts.prompt_multiline', return_value="補充資訊"), \
-             patch('builtins.print'):
+        mock_multiline_input.return_value = "補充資訊"
+        with patch('builtins.print'):
             result = phase.execute()
 
         # 移除 while loop 後, 只會有一次迭代 history
@@ -854,7 +854,7 @@ class TestPlanPhaseHistory:
 class TestPlanPhaseNeedClarification:
     """Test NEED_CLARIFICATION handling (TDD)."""
 
-    def test_need_clarification_prompts_user_in_interactive_mode(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
+    def test_need_clarification_prompts_user_in_interactive_mode(self, tmp_path: Path, mock_git_ops, monkeypatch, mock_multiline_input) -> None:
         monkeypatch.chdir(tmp_path)
         mock_git_ops.get_current_branch.return_value = "test-feature"
         spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
@@ -888,8 +888,8 @@ class TestPlanPhaseNeedClarification:
         )
 
         # Mock user input (provide actual content and confirmation)
-        with patch('cafe.ui.inquirer_prompts.prompt_multiline', return_value="這是我補充開發指南資訊") as mock_input, \
-             patch('builtins.print'):
+        mock_multiline_input.return_value = "這是我補充開發指南資訊"
+        with patch('builtins.print'):
             result = phase.execute()
 
             # 移除 while loop 後, NEED_CLARIFICATION 返回 COMPLETED
@@ -935,7 +935,7 @@ class TestPlanPhaseNeedClarification:
         assert result.status == PhaseStatus.COMPLETED
         assert result.data.get("status_code") == "CAFE_NEED_CLARIFICATION"
 
-    def test_need_clarification_saves_iteration_history_with_user_input_and_response(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
+    def test_need_clarification_saves_iteration_history_with_user_input_and_response(self, tmp_path: Path, mock_git_ops, monkeypatch, mock_multiline_input) -> None:
         monkeypatch.chdir(tmp_path)
         mock_git_ops.get_current_branch.return_value = "test-feature"
         spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
@@ -967,8 +967,8 @@ class TestPlanPhaseNeedClarification:
         )
 
         # Mock user input and confirmation
-        with patch('cafe.ui.inquirer_prompts.prompt_multiline', return_value="我回應內容"), \
-             patch('builtins.print'):
+        mock_multiline_input.return_value = "我回應內容"
+        with patch('builtins.print'):
             result = phase.execute()
 
         # 移除 while loop 後, 只會有一次迭代 history
@@ -1034,7 +1034,7 @@ class TestPlanPhaseNeedClarification:
 class TestPlanPhaseResume:
     """Test resuming from interrupted phase (TDD)."""
 
-    def test_resume_shows_previous_plan_and_asks_user(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
+    def test_resume_shows_previous_plan_and_asks_user(self, tmp_path: Path, mock_git_ops, monkeypatch, mock_multiline_input) -> None:
         monkeypatch.chdir(tmp_path)
         mock_git_ops.get_current_branch.return_value = "test-feature"
         spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
@@ -1080,12 +1080,12 @@ class TestPlanPhaseResume:
         )
 
         # Mock user providing response and then confirming
-        with patch('cafe.ui.inquirer_prompts.prompt_multiline', return_value="我回答") as mock_multiline:
-            with patch('builtins.print'):
-                result = phase.execute()
+        mock_multiline_input.return_value = "我回答"
+        with patch('builtins.print'):
+            result = phase.execute()
 
         # Should have prompted user for response before calling agent
-        assert mock_multiline.call_count == 1
+        assert mock_multiline_input.call_count == 1
         # After behavior change, READY_FOR_REVIEW in interactive mode returns COMPLETED immediately
         assert result.status == PhaseStatus.COMPLETED
         assert result.data.get("status_code") == "CAFE_READY_FOR_REVIEW"

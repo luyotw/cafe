@@ -109,8 +109,8 @@ class TestPlanPhaseWithStatusCodes:
 
         # Mock user input and confirmation
         from unittest.mock import patch
-        with patch.object(phase.display, 'get_multiline_input', return_value="補充資訊"), \
-             patch('builtins.input', return_value='c'), \
+        mock_multiline_input.return_value = "補充資訊"
+        with patch('builtins.input', return_value='c'), \
              patch('builtins.print'):  # 'c' for confirm
             result = phase.execute()
 

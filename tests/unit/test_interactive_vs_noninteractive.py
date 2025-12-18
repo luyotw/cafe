@@ -82,7 +82,7 @@ class TestSpecPhaseInteractiveVsNonInteractive:
 
         with patch('builtins.print'), \
              patch('builtins.input', return_value='c'), \
-             patch.object(phase_interactive.display, 'get_multiline_input', return_value="需求"):
+             patch('cafe.ui.inquirer_prompts.prompt_multiline', return_value="需求"):
             result_interactive = phase_interactive.execute()
 
         # 測試 non-interactive mode: READY_FOR_REVIEW 立即完成
@@ -153,7 +153,7 @@ class TestSpecPhaseInteractiveVsNonInteractive:
 
         with patch('builtins.print'), \
              patch('builtins.input', return_value='c'), \
-             patch.object(phase.display, 'get_multiline_input', return_value="補充資訊"):
+             patch('cafe.ui.inquirer_prompts.prompt_multiline', return_value="補充資訊"):
             result = phase.execute()
 
         # Interactive 模式：第一次執行得到 NEED_CLARIFICATION, 回傳 COMPLETED
@@ -232,7 +232,7 @@ class TestSpecPhaseInteractiveVsNonInteractive:
 
         with patch('builtins.print'), \
              patch('builtins.input', return_value='c'), \
-             patch.object(phase.display, 'get_multiline_input', return_value="需求"):
+             patch('cafe.ui.inquirer_prompts.prompt_multiline', return_value="需求"):
             result = phase.execute()
 
         # Interactive 模式：經過 5 次重試後仍無 status code, 返回 FAILED
@@ -395,7 +395,7 @@ class TestPlanPhaseInteractiveVsNonInteractive:
         )
 
         with patch('builtins.print'), \
-             patch.object(phase.display, 'get_multiline_input', return_value="補充資訊"), \
+             patch('cafe.ui.inquirer_prompts.prompt_multiline', return_value="補充資訊"), \
              patch('builtins.input', return_value='c'):
             result = phase.execute()
 

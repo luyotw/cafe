@@ -625,7 +625,7 @@ class TestInteractiveModeStillWorks:
         # Mock user choosing 'c' (confirm)
         with patch('builtins.print'), \
              patch('builtins.input', return_value='c'), \
-             patch.object(phase.display, 'get_multiline_input', return_value=''):
+             patch('cafe.ui.inquirer_prompts.prompt_multiline', return_value=''):
             result = phase.execute()
 
         # After behavior change: READY_FOR_REVIEW returns COMPLETED immediately in both modes

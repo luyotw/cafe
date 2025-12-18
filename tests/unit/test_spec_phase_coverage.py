@@ -374,7 +374,7 @@ class TestSpecPhaseHelperMethods:
         assert any("Previous requirements" in str(call) for call in print_calls), \
             f"Expected 'Previous requirements' in print calls, got: {print_calls}"
 
-    def test_ask_user_for_clarification(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
+    def test_ask_user_for_clarification(self, tmp_path: Path, mock_git_ops, monkeypatch, mock_multiline_input) -> None:
         """測試 _ask_user_for_clarification"""
         monkeypatch.chdir(tmp_path)
         spec_file = tmp_path / ".cafe" / "issues" / "test" / "spec" / "spec_001.md"
@@ -394,8 +394,8 @@ class TestSpecPhaseHelperMethods:
         )
 
         user_input = "這是我回答"
-        with patch('cafe.ui.inquirer_prompts.prompt_multiline', return_value=user_input):
-            result = phase._ask_user_for_clarification()
+        mock_multiline_input.return_value = user_input
+        result = phase._ask_user_for_clarification()
 
         assert result == user_input
 

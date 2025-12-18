@@ -136,7 +136,7 @@ class TestSpecPhaseIterationHistoryMetadata:
 
         with patch('builtins.print'), \
              patch('builtins.input', return_value='c'), \
-             patch.object(phase.display, 'get_multiline_input', return_value="補充資訊"):
+             patch('cafe.ui.inquirer_prompts.prompt_multiline', return_value="補充資訊"):
             result = phase.execute()
 
         # 沒有 while loop, 只有第一次迭代, NEED_CLARIFICATION 返回 COMPLETED
