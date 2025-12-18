@@ -494,7 +494,7 @@ class SpecPhase(Phase):
         if prev_status == "CAFE_READY_FOR_REVIEW":
             # Need user choice: confirm/modify
             if self.interactive:
-                choice = self._ask_user_for_review_decision("Requirements specification")
+                choice = self._ask_user_for_review_decision("Requirements specification", agent_name="PM")
             else:
                 choice = self.user_input
                 # Non-interactive mode: clear after use to ensure no reuse

@@ -1550,8 +1550,8 @@ class TestPlanPhasePromptGeneration:
             ("CAFE_CONFIRMED\n確認完成", TokenUsage(), [], None, []),  # iter 3: user confirms
         ]
 
-        with patch('builtins.input', side_effect=['m', 'c']) as mock_input, \
-             patch.object(phase.display, 'get_multiline_input', return_value=modification_request), \
+        with patch('cafe.ui.inquirer_prompts.prompt_list', return_value='m') as mock_list, \
+             patch('cafe.ui.inquirer_prompts.prompt_multiline', return_value=modification_request) as mock_multiline, \
              patch('builtins.print'):
             phase.execute()
 

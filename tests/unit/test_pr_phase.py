@@ -1905,10 +1905,11 @@ class TestIssueCommentIntegration:
 class TestInteractiveModeBehavior:
     """Test interactive mode specific behaviors."""
 
+    @patch('cafe.ui.phase_prompts.prompt_and_save_auto_create')
     @patch('cafe.ui.phase_prompts.is_github_repo')
     @patch('cafe.ui.phase_prompts.prompt_confirm')
     def test_interactive_mode_auto_generates_without_asking(
-        self, mock_prompt_confirm, mock_is_github_repo, tmp_path: Path, monkeypatch
+        self, mock_prompt_confirm, mock_is_github_repo, mock_prompt_auto_create, tmp_path: Path, monkeypatch
     ) -> None:
         """
         測試互動模式下, 若無 --title or --body, 應直接由 agent 生成, 不再詢問.
@@ -1918,6 +1919,7 @@ class TestInteractiveModeBehavior:
         # Mock GitHub repo and auto_create prompt
         mock_is_github_repo.return_value = True
         mock_prompt_confirm.return_value = True
+        mock_prompt_auto_create.return_value = True  # Default to GitHub PR mode
 
         # Setup
         spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"

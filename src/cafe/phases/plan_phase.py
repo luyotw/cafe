@@ -590,7 +590,7 @@ Reply with confirmation message.
         if prev_status == "CAFE_READY_FOR_REVIEW":
             # Need user choice: confirm/modify
             if self.interactive:
-                choice = self._ask_user_for_review_decision("Implementation Plan")
+                choice = self._ask_user_for_review_decision("Implementation Plan", agent_name=self.dev_agent)
             else:
                 choice = self.user_input
                 # Non-interactive mode: clear after use to ensure not reused

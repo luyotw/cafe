@@ -52,6 +52,27 @@ def prompt_text(
     ).execute()
 
 
+def prompt_multiline(
+    message: str,
+    default: str = "",
+) -> str:
+    """Prompt user for multiline text input
+
+    Args:
+        message: Prompt message
+        default: Default value
+
+    Returns:
+        User's input text (multiline)
+    """
+    return inquirer.text(
+        message=message,
+        default=default,
+        multiline=True,
+        instruction="(Press Esc + Enter to finish)",
+    ).execute()
+
+
 def prompt_confirm(
     message: str,
     default: bool = True,

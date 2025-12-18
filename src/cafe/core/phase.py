@@ -609,45 +609,46 @@ class Phase(ABC):
 
         return response, status_code
 
-    def _ask_user_for_review_decision(self, item_name: str = "content") -> str:
+    def _ask_user_for_review_decision(self, item_name: str = "content", agent_name: str = "Developer") -> str:
         """Ask user for decision on READY_FOR_REVIEW (interactive mode).
 
         Args:
             item_name: Item name to confirm (e.g. "plan", "code", "requirements")
+            agent_name: Agent name (e.g. "Developer", "PM", "Reviewer")
 
         Returns:
             str: "confirm" or modification opinion content
         """
-        # Use phase's display if available, otherwise create new one
-        if hasattr(self, 'display'):
-            display = self.display  # type: ignore
-        else:
-            from cafe.ui.display import Display
-            display = Display()
+        from cafe.ui.inquirer_prompts import prompt_list, prompt_multiline
 
-        print(f"Developer thinks {item_name} is complete. Please confirm:")
-        print("  [c] confirm - Confirm, continue")
-        print("  [m] modify - Request modification (enter modification opinion)")
+        print(f"{agent_name} thinks {item_name} is complete. Please confirm:")
 
-        while True:
-            choice = input("\nPlease select [c/m]: ").strip().lower()
+        # Use prompt_list for better UX with arrow keys
+        choices = [
+            {"name": "Confirm - Confirm, continue", "value": "c"},
+            {"name": "Modify - Request modification", "value": "m"},
+        ]
 
-            if choice == 'c':
-                return "confirm"
-            elif choice == 'm':
-                modification_request = display.get_multiline_input("Please enter modification opinion")
+        choice = prompt_list(
+            "Please select an option",
+            choices,
+            default=None,
+        )
 
-                if not modification_request.strip():
-                    print("\n⚠️  No modification opinion entered, please reselect.")
-                    continue
+        if choice == "c":
+            return "confirm"
+        else:  # choice == "m"
+            modification_request = prompt_multiline("Please enter modification opinion")
 
-                print()
-                print("✅ Received your modification opinion...")
-                print()
+            if not modification_request.strip():
+                print("\n⚠️  No modification opinion entered, please try again.")
+                return self._ask_user_for_review_decision(item_name, agent_name)
 
-                return modification_request
-            else:
-                print("❌ Invalid choice, please enter c or m")
+            print()
+            print("✅ Received your modification opinion...")
+            print()
+
+            return modification_request
 
     def _ask_user_for_clarification(self) -> str:
         """Ask user for answer to NEED_CLARIFICATION (interactive mode).
