@@ -33,7 +33,8 @@ def change_test_dir(tmp_path, monkeypatch):
 def mock_git_ops():
     """Create a mock GitOperations instance."""
     with patch('cafe.ui.cli.GitOperations') as MockGitOperations, \
-         patch('cafe.utils.git_utils.is_github_repo') as mock_is_github_repo:
+         patch('cafe.utils.git_utils.is_github_repo') as mock_is_github_repo1, \
+         patch('cafe.ui.phase_prompts.is_github_repo') as mock_is_github_repo2:
         mock_git = MagicMock()
         MockGitOperations.return_value = mock_git
 
@@ -46,7 +47,8 @@ def mock_git_ops():
         mock_git.worktree_exists.return_value = False  # Default: worktree doesn't exist
 
         # Mock is_github_repo to return True by default (GitHub repo)
-        mock_is_github_repo.return_value = True
+        mock_is_github_repo1.return_value = True
+        mock_is_github_repo2.return_value = True
 
         yield mock_git
 
@@ -84,18 +86,20 @@ class TestPrepareCommand:
         mock_git_ops.branch_exists.assert_called_once_with("test-issue")
         mock_git_ops.create_branch.assert_called_once_with("test-issue")
 
+    @patch("cafe.ui.phase_prompts.prompt_confirm")
     @patch("cafe.ui.cli.prompt_confirm")
     @patch("cafe.ui.template_selector.prompt_list")
     @patch("cafe.ui.phase_prompts.prompt_list")
     @patch("cafe.ui.cli.prompt_text")
-    def test_prepare_interactive_mode(self, mock_prompt_text, mock_phase_list, mock_template_list, mock_prompt_confirm, temp_repo_dir, mock_git_ops):
+    def test_prepare_interactive_mode(self, mock_prompt_text, mock_phase_list, mock_template_list, mock_cli_confirm, mock_phase_confirm, temp_repo_dir, mock_git_ops):
         """測試互動式輸入 issue name"""
         # Mock user inputs
         mock_prompt_text.return_value = "my-feature"
-        mock_prompt_confirm.side_effect = [False, True]  # worktree (n), pr auto_create (y)
+        mock_cli_confirm.return_value = False  # worktree (n)
+        mock_phase_confirm.return_value = True  # pr auto_create (y)
         mock_phase_list.side_effect = [
-            "1. 手動輸入需求",  # input method (manual)
-            "Medium (中) - balanced mode [預設]\n   • 詢問重要細節and關鍵場景\n   • 在速度and精確度間取得平衡\n   • 適合：一般功能開發",  # rigor
+            "1. Manual input",  # input method (manual)
+            "Medium - Balanced mode [Default]\n   • Ask important details and key scenarios\n   • Balance speed and precision\n   • Suitable for: general feature development",  # rigor
         ]
         mock_template_list.return_value = "1. default"  # template
 
@@ -344,18 +348,20 @@ class TestPrepareCommandWorktree:
             worktree_path, "test-branch", base_branch
         )
 
+    @patch("cafe.ui.phase_prompts.prompt_confirm")
     @patch("cafe.ui.cli.prompt_confirm")
     @patch("cafe.ui.template_selector.prompt_list")
     @patch("cafe.ui.phase_prompts.prompt_list")
     @patch("cafe.ui.cli.prompt_text")
-    def test_prepare_interactive_worktree_prompt_yes(self, mock_prompt_text, mock_phase_list, mock_template_list, mock_prompt_confirm, temp_repo_dir, mock_git_ops):
+    def test_prepare_interactive_worktree_prompt_yes(self, mock_prompt_text, mock_phase_list, mock_template_list, mock_cli_confirm, mock_phase_confirm, temp_repo_dir, mock_git_ops):
         """測試互動模式詢問是否使用 worktree, 使用者選擇 Yes"""
         # Mock user inputs: issue name, worktree path
         mock_prompt_text.side_effect = ["my-feature", "worktrees/my-feature"]
-        mock_prompt_confirm.side_effect = [True, True]  # worktree (y), pr auto_create (y)
+        mock_cli_confirm.return_value = True  # worktree (y)
+        mock_phase_confirm.return_value = True  # pr auto_create (y)
         mock_phase_list.side_effect = [
-            "1. 手動輸入需求",  # input method (manual)
-            "Medium (中) - balanced mode [預設]\n   • 詢問重要細節and關鍵場景\n   • 在速度and精確度間取得平衡\n   • 適合：一般功能開發",  # rigor
+            "1. Manual input",  # input method (manual)
+            "Medium - Balanced mode [Default]\n   • Ask important details and key scenarios\n   • Balance speed and precision\n   • Suitable for: general feature development",  # rigor
         ]
         mock_template_list.return_value = "1. default"
 
@@ -376,18 +382,20 @@ class TestPrepareCommandWorktree:
             config_data = yaml.safe_load(f)
             assert config_data["worktree_path"] == "worktrees/my-feature"
 
+    @patch("cafe.ui.phase_prompts.prompt_confirm")
     @patch("cafe.ui.cli.prompt_confirm")
     @patch("cafe.ui.template_selector.prompt_list")
     @patch("cafe.ui.phase_prompts.prompt_list")
     @patch("cafe.ui.cli.prompt_text")
-    def test_prepare_interactive_worktree_prompt_no(self, mock_prompt_text, mock_phase_list, mock_template_list, mock_prompt_confirm, temp_repo_dir, mock_git_ops):
+    def test_prepare_interactive_worktree_prompt_no(self, mock_prompt_text, mock_phase_list, mock_template_list, mock_cli_confirm, mock_phase_confirm, temp_repo_dir, mock_git_ops):
         """測試互動模式詢問是否使用 worktree, 使用者選擇 No"""
         # Mock user inputs
         mock_prompt_text.return_value = "normal-feature"
-        mock_prompt_confirm.side_effect = [False, True]  # worktree (n), pr auto_create (y)
+        mock_cli_confirm.return_value = False  # worktree (n)
+        mock_phase_confirm.return_value = True  # pr auto_create (y)
         mock_phase_list.side_effect = [
-            "1. 手動輸入需求",  # input method (manual)
-            "Medium (中) - balanced mode [預設]\n   • 詢問重要細節and關鍵場景\n   • 在速度and精確度間取得平衡\n   • 適合：一般功能開發",  # rigor
+            "1. Manual input",  # input method (manual)
+            "Medium - Balanced mode [Default]\n   • Ask important details and key scenarios\n   • Balance speed and precision\n   • Suitable for: general feature development",  # rigor
         ]
         mock_template_list.return_value = "1. default"
 
@@ -404,18 +412,20 @@ class TestPrepareCommandWorktree:
             config_data = yaml.safe_load(f)
             assert "worktree_path" not in config_data
 
+    @patch("cafe.ui.phase_prompts.prompt_confirm")
     @patch("cafe.ui.cli.prompt_confirm")
     @patch("cafe.ui.template_selector.prompt_list")
     @patch("cafe.ui.phase_prompts.prompt_list")
     @patch("cafe.ui.cli.prompt_text")
-    def test_prepare_interactive_worktree_default_path_suggestion(self, mock_prompt_text, mock_phase_list, mock_template_list, mock_prompt_confirm, temp_repo_dir, mock_git_ops):
+    def test_prepare_interactive_worktree_default_path_suggestion(self, mock_prompt_text, mock_phase_list, mock_template_list, mock_cli_confirm, mock_phase_confirm, temp_repo_dir, mock_git_ops):
         """測試互動模式建議預設路徑 .cafe/worktrees/{issue-name}"""
         # Mock user inputs: issue name, default path (empty string)
         mock_prompt_text.side_effect = ["test-issue", ".cafe/worktrees/test-issue"]
-        mock_prompt_confirm.side_effect = [True, True]  # worktree (y), pr auto_create (y)
+        mock_cli_confirm.return_value = True  # worktree (y)
+        mock_phase_confirm.return_value = True  # pr auto_create (y)
         mock_phase_list.side_effect = [
-            "1. 手動輸入需求",  # input method (manual)
-            "Medium (中) - balanced mode [預設]\n   • 詢問重要細節and關鍵場景\n   • 在速度and精確度間取得平衡\n   • 適合：一般功能開發",  # rigor
+            "1. Manual input",  # input method (manual)
+            "Medium - Balanced mode [Default]\n   • Ask important details and key scenarios\n   • Balance speed and precision\n   • Suitable for: general feature development",  # rigor
         ]
         mock_template_list.return_value = "1. default"
 
@@ -509,18 +519,20 @@ class TestPrepareCommandWorktree:
         # 驗證 default template 存在
         assert (worktree_templates_dir / "plan" / "default.md").exists(), "default.md should exist in worktree"
 
+    @patch("cafe.ui.phase_prompts.prompt_confirm")
     @patch("cafe.ui.cli.prompt_confirm")
     @patch("cafe.ui.template_selector.prompt_list")
     @patch("cafe.ui.phase_prompts.prompt_list")
     @patch("cafe.ui.cli.prompt_text")
-    def test_prepare_interactive_saves_pr_auto_create_true(self, mock_prompt_text, mock_phase_list, mock_template_list, mock_prompt_confirm, temp_repo_dir, mock_git_ops):
+    def test_prepare_interactive_saves_pr_auto_create_true(self, mock_prompt_text, mock_phase_list, mock_template_list, mock_cli_confirm, mock_phase_confirm, temp_repo_dir, mock_git_ops):
         """測試互動模式選擇自動建立 PR (yes)"""
         # Mock user inputs
         mock_prompt_text.return_value = "test-issue"
-        mock_prompt_confirm.side_effect = [False, True]  # worktree (n), pr auto_create (y)
+        mock_cli_confirm.return_value = False  # worktree (n)
+        mock_phase_confirm.return_value = True  # pr auto_create (y)
         mock_phase_list.side_effect = [
-            "1. 手動輸入需求",  # input method (manual)
-            "Medium (中) - balanced mode [預設]\n   • 詢問重要細節and關鍵場景\n   • 在速度and精確度間取得平衡\n   • 適合：一般功能開發",  # rigor
+            "1. Manual input",  # input method (manual)
+            "Medium - Balanced mode [Default]\n   • Ask important details and key scenarios\n   • Balance speed and precision\n   • Suitable for: general feature development",  # rigor
         ]
         mock_template_list.return_value = "1. default"
 
@@ -536,18 +548,20 @@ class TestPrepareCommandWorktree:
             assert "pr" in config_data
             assert config_data["pr"]["auto_create"] is True
 
+    @patch("cafe.ui.phase_prompts.prompt_confirm")
     @patch("cafe.ui.cli.prompt_confirm")
     @patch("cafe.ui.template_selector.prompt_list")
     @patch("cafe.ui.phase_prompts.prompt_list")
     @patch("cafe.ui.cli.prompt_text")
-    def test_prepare_interactive_saves_pr_auto_create_false(self, mock_prompt_text, mock_phase_list, mock_template_list, mock_prompt_confirm, temp_repo_dir, mock_git_ops):
+    def test_prepare_interactive_saves_pr_auto_create_false(self, mock_prompt_text, mock_phase_list, mock_template_list, mock_cli_confirm, mock_phase_confirm, temp_repo_dir, mock_git_ops):
         """測試互動模式選擇不自動建立 PR (no)"""
         # Mock user inputs
         mock_prompt_text.return_value = "test-issue"
-        mock_prompt_confirm.side_effect = [False, False]  # worktree (n), pr auto_create (n)
+        mock_cli_confirm.return_value = False  # worktree (n)
+        mock_phase_confirm.return_value = False  # pr auto_create (n)
         mock_phase_list.side_effect = [
-            "1. 手動輸入需求",  # input method (manual)
-            "Medium (中) - balanced mode [預設]\n   • 詢問重要細節and關鍵場景\n   • 在速度and精確度間取得平衡\n   • 適合：一般功能開發",  # rigor
+            "1. Manual input",  # input method (manual)
+            "Medium - Balanced mode [Default]\n   • Ask important details and key scenarios\n   • Balance speed and precision\n   • Suitable for: general feature development",  # rigor
         ]
         mock_template_list.return_value = "1. default"
 

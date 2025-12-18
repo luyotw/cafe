@@ -230,9 +230,18 @@ class PRPhase(Phase):
             Phase result
         """
         try:
-            # Check if local review mode is enabled
+            # Prompt for auto_create if not set (only in interactive mode)
             config_file = self.issue_dir / "issue.yaml"
             pr_auto_create = self._get_issue_config_value(config_file, "pr.auto_create")
+
+            if pr_auto_create is None:
+                if self.interactive:
+                    # Interactive mode: ask user using shared prompt function
+                    from cafe.ui.phase_prompts import prompt_and_save_auto_create
+                    pr_auto_create = prompt_and_save_auto_create(config_file, "pr.auto_create")
+                else:
+                    # Non-interactive mode: default to True (GitHub PR mode)
+                    pr_auto_create = True
 
             # If pr.auto_create is False, use local review mode
             if pr_auto_create is False:

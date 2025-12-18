@@ -680,15 +680,11 @@ def prepare(
                 )
 
             # Prompt for PR auto-create setting (only for GitHub repos)
-            console.print()
-            if is_github_repo():
-                auto_create_pr = prompt_confirm(
-                    "Automatically create PR on GitHub after development?", default=True
-                )
-                pr_config["auto_create"] = auto_create_pr
-            else:
-                # Non-GitHub repo: disable PR creation
-                pr_config["auto_create"] = False
+            from cafe.ui.phase_prompts import prompt_and_save_auto_create
+
+            config_file = Path(".cafe") / "issues" / issue_name / "issue.yaml"
+            auto_create_pr = prompt_and_save_auto_create(config_file, "pr.auto_create")
+            pr_config["auto_create"] = auto_create_pr
 
         # 9. Prepare config data (but don't write yet)
         feature_branch = issue_name

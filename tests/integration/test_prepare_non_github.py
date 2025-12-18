@@ -68,7 +68,7 @@ class TestPrepareNonGitHubRepo:
         # Note: Should NOT ask for input method or PR auto-create in non-GitHub repos
         mock_prompt_text.return_value = "test-issue"
         mock_prompt_confirm.return_value = False  # worktree (n)
-        mock_phase_list.return_value = "Medium (中) - balanced mode [預設]\n   • 詢問重要細節and關鍵場景\n   • 在速度and精確度間取得平衡\n   • 適合：一般功能開發"
+        mock_phase_list.return_value = "Medium - Balanced mode [Default]\n   • Ask important details and key scenarios\n   • Balance speed and precision\n   • Suitable for: general feature development"
         mock_template_list.return_value = "1. default"
 
         result = runner.invoke(app, ["prepare"])
@@ -99,7 +99,7 @@ class TestPrepareNonGitHubRepo:
         # Mock user inputs
         mock_prompt_text.return_value = "my-feature"
         mock_prompt_confirm.return_value = False  # worktree (n)
-        mock_phase_list.return_value = "Medium (中) - balanced mode [預設]\n   • 詢問重要細節and關鍵場景\n   • 在速度and精確度間取得平衡\n   • 適合：一般功能開發"
+        mock_phase_list.return_value = "Medium - Balanced mode [Default]\n   • Ask important details and key scenarios\n   • Balance speed and precision\n   • Suitable for: general feature development"
         mock_template_list.return_value = "1. default"
 
         result = runner.invoke(app, ["prepare"])
@@ -142,7 +142,8 @@ class TestPrepareNonGitHubRepo:
 def mock_git_ops_github():
     """建立 mock GitOperations and GitHub repo 環境."""
     with patch('cafe.ui.cli.GitOperations') as MockGitOperations, \
-         patch('cafe.utils.git_utils.is_github_repo') as mock_is_github_repo:
+         patch('cafe.utils.git_utils.is_github_repo') as mock_is_github_repo1, \
+         patch('cafe.ui.phase_prompts.is_github_repo') as mock_is_github_repo2:
         mock_git = MagicMock()
         MockGitOperations.return_value = mock_git
 
@@ -154,7 +155,8 @@ def mock_git_ops_github():
         mock_git.checkout_branch.return_value = None
 
         # Mock as GitHub repo
-        mock_is_github_repo.return_value = True
+        mock_is_github_repo1.return_value = True
+        mock_is_github_repo2.return_value = True
 
         yield mock_git
 
@@ -162,21 +164,23 @@ def mock_git_ops_github():
 class TestPrepareGitHubRepo:
     """測試 prepare 指令在 GitHub repo 行為保持不變."""
 
+    @patch("cafe.ui.phase_prompts.prompt_confirm")
     @patch("cafe.ui.cli.prompt_confirm")
     @patch("cafe.ui.template_selector.prompt_list")
     @patch("cafe.ui.phase_prompts.prompt_list")
     @patch("cafe.ui.cli.prompt_text")
     def test_prepare_github_repo_interactive_asks_input_method(
-        self, mock_prompt_text, mock_phase_list, mock_template_list, mock_prompt_confirm, temp_repo_dir, mock_git_ops_github
+        self, mock_prompt_text, mock_phase_list, mock_template_list, mock_cli_confirm, mock_phase_confirm, temp_repo_dir, mock_git_ops_github
     ):
         """測試在 GitHub repo 中執行 prepare 會詢問 input method."""
         # Mock user inputs: issue name, worktree (n), input method (manual), rigor, template, pr (y)
         mock_prompt_text.return_value = "gh-issue"
-        mock_prompt_confirm.side_effect = [False, True]  # worktree (n), pr (y)
+        mock_cli_confirm.return_value = False  # worktree (n)
+        mock_phase_confirm.return_value = True  # pr (y)
         # Note: phase_prompts has input method selection too, need to handle both
         mock_phase_list.side_effect = [
-            "1. 手動輸入需求",  # input method
-            "Medium (中) - balanced mode [預設]\n   • 詢問重要細節and關鍵場景\n   • 在速度and精確度間取得平衡\n   • 適合：一般功能開發",  # rigor
+            "1. Manual input",  # input method
+            "Medium - Balanced mode [Default]\n   • Ask important details and key scenarios\n   • Balance speed and precision\n   • Suitable for: general feature development",  # rigor
         ]
         mock_template_list.return_value = "1. default"  # template
 
