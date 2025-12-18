@@ -72,7 +72,7 @@ class TestPlanPhaseWithStatusCodes:
         assert result.data.get("status_code") == "CAFE_READY_FOR_REVIEW"  # non-interactive mode completes at READY_FOR_REVIEW
         assert result.data.get("iterations") == 1  # Only 1 iteration in non-interactive mode
 
-    def test_need_clarification_continues_iteration(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
+    def test_need_clarification_continues_iteration(self, tmp_path: Path, mock_git_ops, monkeypatch, mock_multiline_input) -> None:
         """測試 NEED_CLARIFICATION 繼續迭代"""
         monkeypatch.chdir(tmp_path)
         requirements_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
@@ -161,7 +161,7 @@ class TestPlanPhaseWithStatusCodes:
         assert result.status == PhaseStatus.COMPLETED
         assert result.data.get("status_code") == "CAFE_READY_FOR_REVIEW"  # non-interactive completes at READY_FOR_REVIEW
 
-    def test_no_status_code_continues_iteration(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
+    def test_no_status_code_continues_iteration(self, tmp_path: Path, mock_git_ops, monkeypatch, mock_multiline_input) -> None:
         """測試沒有狀態碼時繼續迭代"""
         monkeypatch.chdir(tmp_path)
         requirements_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
@@ -202,8 +202,8 @@ class TestPlanPhaseWithStatusCodes:
             template_path=create_template_file(tmp_path),
         )
 
+        mock_multiline_input.return_value = "回應"
         with patch('builtins.print'), \
-             patch.object(phase.display, 'get_multiline_input', return_value="回應"), \
              patch('builtins.input', return_value='c'):
             result = phase.execute()
 

@@ -563,8 +563,7 @@ class TestPlanPhaseHistory:
         )
 
         # Mock user input to continue after NEED_CLARIFICATION
-        with patch.object(phase.display, 'get_multiline_input', return_value="補充資訊"), \
-             patch('builtins.input', return_value='c'), \
+        with patch('cafe.ui.inquirer_prompts.prompt_multiline', return_value="補充資訊"), \
              patch('builtins.print'):
             result = phase.execute()
 
@@ -889,8 +888,7 @@ class TestPlanPhaseNeedClarification:
         )
 
         # Mock user input (provide actual content and confirmation)
-        with patch.object(phase.display, 'get_multiline_input', return_value="這是我補充開發指南資訊") as mock_input, \
-             patch('builtins.input', return_value='c'), \
+        with patch('cafe.ui.inquirer_prompts.prompt_multiline', return_value="這是我補充開發指南資訊") as mock_input, \
              patch('builtins.print'):
             result = phase.execute()
 
@@ -969,8 +967,7 @@ class TestPlanPhaseNeedClarification:
         )
 
         # Mock user input and confirmation
-        with patch.object(phase.display, 'get_multiline_input', return_value="我回應內容"), \
-             patch('builtins.input', return_value='c'), \
+        with patch('cafe.ui.inquirer_prompts.prompt_multiline', return_value="我回應內容"), \
              patch('builtins.print'):
             result = phase.execute()
 
@@ -1083,10 +1080,9 @@ class TestPlanPhaseResume:
         )
 
         # Mock user providing response and then confirming
-        with patch.object(phase.display, 'get_multiline_input', return_value="我回答") as mock_multiline:
-            with patch('builtins.input', return_value='c') as mock_input:
-                with patch('builtins.print'):
-                    result = phase.execute()
+        with patch('cafe.ui.inquirer_prompts.prompt_multiline', return_value="我回答") as mock_multiline:
+            with patch('builtins.print'):
+                result = phase.execute()
 
         # Should have prompted user for response before calling agent
         assert mock_multiline.call_count == 1
@@ -1148,8 +1144,7 @@ class TestPlanPhaseIterationDisplay:
             printed_output.append(' '.join(str(arg) for arg in args))
 
         with patch('builtins.print', side_effect=capture_print), \
-             patch.object(phase.display, 'get_multiline_input', return_value="補充資訊"), \
-             patch('builtins.input', return_value='c'):
+             patch('cafe.ui.inquirer_prompts.prompt_multiline', return_value="補充資訊"):
             result = phase.execute()
 
         # After behavior change: READY_FOR_REVIEW in interactive mode returns COMPLETED immediately

@@ -594,7 +594,7 @@ class TestHandlePreviousPermissionDenials:
         # Should return user_input
         assert user_input == "請小心修改"
 
-    def test_interactive_mode_asks_user_for_each_denial(self, tmp_path: Path) -> None:
+    def test_interactive_mode_asks_user_for_each_denial(self, tmp_path: Path, mock_multiline_input) -> None:
         """測試 interactive 模式逐一詢問用戶是否批准權限"""
         history_dir = tmp_path / "history"
         history_dir.mkdir(parents=True)
@@ -627,11 +627,11 @@ class TestHandlePreviousPermissionDenials:
                 return PhaseResult(status=PhaseStatus.COMPLETED)
 
         mock_display = MagicMock()
-        mock_display.get_multiline_input.return_value = "請注意安全"
 
         phase = TestPhase(history_dir, mock_display)
 
         # Mock user input: approve first (y), reject second (n)
+        mock_multiline_input.return_value = "請注意安全"
         with patch('builtins.input', side_effect=['y', 'n']):
             approved_tools, user_input = phase._handle_previous_permission_denials()
 
@@ -639,9 +639,9 @@ class TestHandlePreviousPermissionDenials:
         assert len(approved_tools) == 1
         assert "read(/home/user/test.txt)" in approved_tools
 
-        # Should have user_input from get_multiline_input
+        # Should have user_input from prompt_multiline
         assert user_input == "請注意安全"
-        mock_display.get_multiline_input.assert_called_once()
+        mock_multiline_input.assert_called_once()
 
     def test_bash_command_pattern_uses_first_two_words(self, tmp_path: Path) -> None:
         """測試 Bash 命令 pattern 使用前兩個詞"""

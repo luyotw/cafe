@@ -166,7 +166,7 @@ class TestSpecPhaseRigorPrompt:
 class TestSpecPhaseUserStoryPrompt:
     """Test user story prompt."""
 
-    def test_prompt_for_user_story_success(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
+    def test_prompt_for_user_story_success(self, tmp_path: Path, mock_git_ops, monkeypatch, mock_multiline_input) -> None:
         """測試成功提示用戶輸入需求"""
         monkeypatch.chdir(tmp_path)
         spec_file = tmp_path / ".cafe" / "issues" / "test" / "spec" / "spec_001.md"
@@ -189,9 +189,9 @@ class TestSpecPhaseUserStoryPrompt:
 
         user_requirement = "身為用戶, 我想要新增登入功能, 以便管理個人資料"
 
-        with patch.object(phase.display, 'get_multiline_input', return_value=user_requirement):
-            with patch('builtins.print'):
-                phase._prompt_for_user_story()
+        mock_multiline_input.return_value = user_requirement
+        with patch('builtins.print'):
+            phase._prompt_for_user_story()
 
         # Check spec file was created
         assert spec_file.exists()
@@ -199,7 +199,7 @@ class TestSpecPhaseUserStoryPrompt:
         assert "# Initial Requirements" in content
         assert user_requirement in content
 
-    def test_prompt_for_user_story_empty_raises_error(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
+    def test_prompt_for_user_story_empty_raises_error(self, tmp_path: Path, mock_git_ops, monkeypatch, mock_multiline_input) -> None:
         """測試空輸入拋出 ValueError"""
         monkeypatch.chdir(tmp_path)
         spec_file = tmp_path / ".cafe" / "issues" / "test" / "spec" / "spec_001.md"
@@ -218,10 +218,10 @@ class TestSpecPhaseUserStoryPrompt:
             git_ops=mock_git_ops,
         )
 
-        with patch.object(phase.display, 'get_multiline_input', return_value=""):
-            with patch('builtins.print'):
-                with pytest.raises(ValueError, match="No requirements provided"):
-                    phase._prompt_for_user_story()
+        mock_multiline_input.return_value = ""
+        with patch('builtins.print'):
+            with pytest.raises(ValueError, match="No requirements provided"):
+                phase._prompt_for_user_story()
 
 
 class TestSpecPhaseGitHubMethods:
@@ -394,7 +394,7 @@ class TestSpecPhaseHelperMethods:
         )
 
         user_input = "這是我回答"
-        with patch.object(phase.display, 'get_multiline_input', return_value=user_input):
+        with patch('cafe.ui.inquirer_prompts.prompt_multiline', return_value=user_input):
             result = phase._ask_user_for_clarification()
 
         assert result == user_input

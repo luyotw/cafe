@@ -51,7 +51,7 @@ def setup_agent_manager_mock(agent_name: str = "David") -> MagicMock:
 class TestPermissionDenialUserInteraction:
     """Test user interaction for permission denials."""
 
-    def test_user_approves_all_denied_tools_and_they_are_added_to_allowed_tools(self, tmp_path: Path, monkeypatch):
+    def test_user_approves_all_denied_tools_and_they_are_added_to_allowed_tools(self, tmp_path: Path, monkeypatch, mock_multiline_input):
         """測試用戶批准所有被拒絕工具, 這些工具會被加入 allowed_tools"""
         issue_name = "test-permission-approval"
         monkeypatch.chdir(tmp_path)
@@ -118,9 +118,9 @@ class TestPermissionDenialUserInteraction:
 
         # Second execution - user approves all tools
         # Mock user input: approve both tools ('y', 'y'), then skip additional input ('')
+        mock_multiline_input.return_value = "請繼續開發"
         with patch('builtins.print'), \
-             patch('builtins.input', side_effect=['y', 'y', '']),  \
-             patch.object(phase.display, 'get_multiline_input', return_value="請繼續開發"):
+             patch('builtins.input', side_effect=['y', 'y', '']):
 
             # Reset iteration for second execution
             phase.iteration = 1
@@ -136,7 +136,7 @@ class TestPermissionDenialUserInteraction:
         assert "edit(/home/user/app/config.php)" in called_allowed_tools
         assert "bash(git status)" in called_allowed_tools
 
-    def test_user_rejects_some_tools_only_approved_ones_added_to_allowed_tools(self, tmp_path: Path, monkeypatch):
+    def test_user_rejects_some_tools_only_approved_ones_added_to_allowed_tools(self, tmp_path: Path, monkeypatch, mock_multiline_input):
         """測試用戶只批准部分工具, 只有被批准工具被加入 allowed_tools"""
         issue_name = "test-partial-approval"
         monkeypatch.chdir(tmp_path)
@@ -196,9 +196,9 @@ class TestPermissionDenialUserInteraction:
 
         # Second execution - user rejects first two, approves last one
         # Mock input(): 'n', 'n', 'y' for permissions, then '' for additional input
+        mock_multiline_input.return_value = "只用安全檔案"
         with patch('builtins.print'), \
-             patch('builtins.input', side_effect=['n', 'n', 'y', '']), \
-             patch.object(phase.display, 'get_multiline_input', return_value="只用安全檔案"):
+             patch('builtins.input', side_effect=['n', 'n', 'y', '']):
 
             phase.iteration = 1
             result = phase.execute()
@@ -211,7 +211,7 @@ class TestPermissionDenialUserInteraction:
         assert "bash(rm -rf /)" not in called_allowed_tools
         assert "read(/home/user/safe_file.txt)" in called_allowed_tools
 
-    def test_user_rejects_all_tools_phase_fails(self, tmp_path: Path, monkeypatch):
+    def test_user_rejects_all_tools_phase_fails(self, tmp_path: Path, monkeypatch, mock_multiline_input):
         """測試用戶拒絕所有工具, phase 失敗"""
         issue_name = "test-reject-all"
         monkeypatch.chdir(tmp_path)
@@ -270,9 +270,9 @@ class TestPermissionDenialUserInteraction:
 
         # Second execution - user rejects all tools
         # Mock input(): 'n', 'n' for permissions (no additional input needed as it will fail)
+        mock_multiline_input.return_value = "不給權限"
         with patch('builtins.print'), \
-             patch('builtins.input', side_effect=['n', 'n']), \
-             patch.object(phase.display, 'get_multiline_input', return_value="不給權限"):
+             patch('builtins.input', side_effect=['n', 'n']):
 
             phase.iteration = 1
             result = phase.execute()
@@ -281,7 +281,7 @@ class TestPermissionDenialUserInteraction:
         assert result.status == PhaseStatus.FAILED
         assert "permission denied" in result.message.lower() or "no tools approved" in result.message.lower()
 
-    def test_permission_denials_displayed_with_clear_format(self, tmp_path: Path, monkeypatch):
+    def test_permission_denials_displayed_with_clear_format(self, tmp_path: Path, monkeypatch, mock_multiline_input):
         """測試權限請求以清楚格式顯示給用戶"""
         issue_name = "test-display-format"
         monkeypatch.chdir(tmp_path)
@@ -334,9 +334,9 @@ class TestPermissionDenialUserInteraction:
 
         # Second execution - verify display format
         # Mock input(): 'y' for permission, then '' for additional input
+        mock_multiline_input.return_value = "繼續"
         with patch('builtins.print') as mock_print, \
-             patch('builtins.input', side_effect=['y', '']), \
-             patch.object(phase.display, 'get_multiline_input', return_value="繼續"):
+             patch('builtins.input', side_effect=['y', '']):
 
             phase.iteration = 1
             result = phase.execute()

@@ -649,8 +649,9 @@ class SpecPhase(Phase):
         print("   - Optimize homepage loading speed")
         print()
 
-        # Get user's requirement using Display for better Unicode support
-        user_requirement = self.display.get_multiline_input("Please enter your requirements").strip()
+        # Get user's requirement using prompt_multiline for better UX
+        from cafe.ui.inquirer_prompts import prompt_multiline
+        user_requirement = prompt_multiline("Please enter your requirements").strip()
 
         if not user_requirement:
             raise ValueError("No requirements provided, cannot continue")

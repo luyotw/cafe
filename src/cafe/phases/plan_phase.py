@@ -536,8 +536,9 @@ Reply with confirmation message.
         print("  Note to maintain backward compatibility with existing API.")
         print()
 
-        # Get development guide using Display for better Unicode support
-        dev_guide = self.display.get_multiline_input("Please enter development guide (can be left empty)").strip()
+        # Get development guide using prompt_multiline for better UX
+        from cafe.ui.inquirer_prompts import prompt_multiline
+        dev_guide = prompt_multiline("Please enter development guide (can be left empty)").strip()
 
         if dev_guide:
             print()

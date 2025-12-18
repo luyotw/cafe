@@ -656,14 +656,9 @@ class Phase(ABC):
         Returns:
             str: User's answer
         """
-        # Use phase's display if available, otherwise create new one
-        if hasattr(self, 'display'):
-            display = self.display  # type: ignore
-        else:
-            from cafe.ui.display import Display
-            display = Display()
+        from cafe.ui.inquirer_prompts import prompt_multiline
 
-        return display.get_multiline_input("Please answer the question")
+        return prompt_multiline("Please answer the question")
 
     def _process_review_decision(
         self,
@@ -1041,7 +1036,8 @@ class Phase(ABC):
 
             # Ask user if there are additional notes
             print()
-            user_input = self.display.get_multiline_input(
+            from cafe.ui.inquirer_prompts import prompt_multiline
+            user_input = prompt_multiline(
                 "Regarding these permissions, any additional notes or instructions for agent? (Can be left blank)"
             )
         else:

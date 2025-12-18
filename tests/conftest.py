@@ -3,6 +3,7 @@
 import sys
 import shutil
 from pathlib import Path
+from unittest.mock import patch
 import pytest
 
 
@@ -54,3 +55,19 @@ def cleanup_mock_issue_dirs():
         for issue_dir in cafe_issues_dir.iterdir():
             if issue_dir.is_dir() and "MagicMock" in issue_dir.name:
                 shutil.rmtree(issue_dir, ignore_errors=True)
+
+
+@pytest.fixture
+def mock_multiline_input():
+    """Fixture to mock prompt_multiline() function.
+
+    This centralizes the mocking of multiline input to reduce fragile tests.
+    Tests should use this fixture instead of directly mocking implementation details.
+
+    Usage:
+        def test_something(mock_multiline_input):
+            mock_multiline_input.return_value = "user input"
+            # ... test code ...
+    """
+    with patch('cafe.ui.inquirer_prompts.prompt_multiline') as mock:
+        yield mock

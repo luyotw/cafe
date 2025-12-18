@@ -421,6 +421,8 @@ class DevelopPhase(Phase):
         Returns:
             str: User's answer
         """
+        from cafe.ui.inquirer_prompts import prompt_multiline
+
         # Find the latest develop clarification file
         develop_dir = self.issue_dir / "develop"
         develop_files = sorted(develop_dir.glob("develop_*.md"))
@@ -436,7 +438,7 @@ class DevelopPhase(Phase):
             print("💡 Developer needs clarification.")
             print()
 
-        return self.display.get_multiline_input("Please answer the question")
+        return prompt_multiline("Please answer the question")
 
     def _get_last_develop_timestamp(self):
         """Get timestamp from last develop/status.json.
