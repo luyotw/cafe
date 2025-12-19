@@ -93,6 +93,21 @@ cafe --help
     ```
     This command merges your changes back to the original branch and removes the feature branch and related environment files.
 
+4.  **Multiple CLI agents configuration**:
+    You can adjust the CLI agent settings at any time using the `cafe config` command set. For example:
+
+    ```bash
+    cafe config set agents.pm.cli gemini
+    cafe config set agents.pm.model gemini-2.5-flash
+    ```
+    Or to edit the configuration file directly in your default editor:
+
+    ```bash
+    cafe config edit
+    ```
+
+    > **Note**: In `worktree` mode, each worktree maintains an independent configuration, allowing for isolated agent settings per development task.
+
 ## Core Architecture
 
 ### 5-in-1 Workflow:
