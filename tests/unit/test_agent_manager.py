@@ -360,4 +360,33 @@ class TestAgentConfiguration:
         retrieved_config = manager.get_agent_config("Roger")
 
         assert retrieved_config.name == "Roger"
-        assert retrieved_config.cli == AgentCLI.CLAUDE
+
+    def test_register_agent_preserves_model_field(self) -> None:
+        """Test that model field is preserved when registering agent."""
+        manager = AgentManager()
+        config = AgentConfig(
+            name="David",
+            cli=AgentCLI.CLAUDE,
+            model="haiku"
+        )
+
+        manager.register_agent(config)
+
+        # Verify model is preserved in the registered executor
+        executor = manager.get_agent("David")
+        assert executor.config.model == "haiku"
+
+    def test_register_agent_preserves_none_model(self) -> None:
+        """Test that None model is preserved (not replaced with default)."""
+        manager = AgentManager()
+        config = AgentConfig(
+            name="Roger",
+            cli=AgentCLI.CLAUDE,
+            model=None
+        )
+
+        manager.register_agent(config)
+
+        # Verify None model is preserved
+        executor = manager.get_agent("Roger")
+        assert executor.config.model is None

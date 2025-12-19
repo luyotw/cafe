@@ -67,6 +67,7 @@ class AgentManager:
             name=config.name,
             cli=config.cli,
             session_id=session_id,
+            model=config.model,
         )
 
         # Create executor
