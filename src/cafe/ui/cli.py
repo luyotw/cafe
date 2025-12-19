@@ -794,7 +794,13 @@ def prepare(
             yaml.dump(config_data, f, allow_unicode=True, default_flow_style=False)
 
         console.print()
-        console.print(f"[green]✓ Issue config saved to {issue_config_file}[/green]")
+        # Display relative path instead of absolute path
+        try:
+            relative_config_path = issue_config_file.relative_to(Path.cwd())
+        except ValueError:
+            # If path is not relative to cwd, show absolute path
+            relative_config_path = issue_config_file
+        console.print(f"[green]✓ Issue config saved to {relative_config_path}[/green]")
         console.print()
 
         # 12. Display success message

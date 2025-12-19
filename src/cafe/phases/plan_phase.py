@@ -146,8 +146,8 @@ class PlanPhase(Phase):
                 has_history = self.history_dir.exists() and list(self.history_dir.glob("iteration_*.json"))
                 is_first_iteration = not has_history
 
-                # First iteration requires template
-                if is_first_iteration and not self.template_path:
+                # First iteration requires template (unless template_mode is 'auto')
+                if is_first_iteration and not self.template_path and self.template_mode != "auto":
                     if self.interactive:
                         # Interactive mode: prompt for template selection
                         from cafe.templates.manager import TemplateManager
@@ -694,11 +694,18 @@ Please only return one status code (e.g., CAFE_READY_FOR_REVIEW) without any oth
             plan_config = config_data.get("plan", {})
 
             if "template" in plan_config:
-                # Resolve template name to path
-                from cafe.templates.manager import TemplateManager
-                template_manager = TemplateManager(".cafe")
-                template_path = template_manager.get_template_path(plan_config["template"])
-                if template_path and template_path.exists():
-                    self.template_path = str(template_path)
+                template_name = plan_config["template"]
+                # If template is 'auto', set template_mode and skip path resolution
+                if template_name == "auto":
+                    self.template_mode = "auto"
+                    self.template_path = None
+                else:
+                    # Resolve template name to path
+                    from cafe.templates.manager import TemplateManager
+                    template_manager = TemplateManager(".cafe")
+                    template_path = template_manager.get_template_path(template_name)
+                    if template_path and template_path.exists():
+                        self.template_path = str(template_path)
+                        self.template_mode = "manual"
 
 

@@ -177,26 +177,26 @@ class TestPlanE2EMockTemplateErrors:
         plan_file = tmp_path / ".cafe" / "issues" / issue_name / "plan" / "plan.md"
         assert not plan_file.exists()
 
-    def test_first_round_without_template_should_fail(self, tmp_path):
-        """測試Round 1沒有提供 template 應該失敗
+    def test_first_round_without_template_uses_auto_mode(self, tmp_path):
+        """測試Round 1沒有提供 template 時預設使用 auto 模式
 
         情境：首次創建 plan, 但沒有提供 template
         指令：cafe plan test-issue --no-interactive
-        預期：失敗, 錯誤訊息包含 "template" and "required"
+        預期：成功, 使用預設 auto 模式
         """
         issue_name = "test-issue"
         setup_test_environment(tmp_path, issue_name)
-        
+
         plan_file = tmp_path / ".cafe" / "issues" / issue_name / "plan" / "plan.md"
         if plan_file.exists():
             plan_file.unlink()
-        
+
         result = run_cafe_plan(tmp_path, issue_name, None, template=None)
-        
-        assert result.returncode != 0
-        output = result.stdout + result.stderr
-        assert "template" in output.lower()
-        assert "required" in output.lower() or "needed" in output.lower()
+
+        assert result.returncode == 0
+        # Verify plan was created (auto mode succeeded)
+        plan_files = list((tmp_path / ".cafe" / "issues" / issue_name / "plan").glob("plan_*.md"))
+        assert len(plan_files) > 0
 
 
 @pytest.mark.integration

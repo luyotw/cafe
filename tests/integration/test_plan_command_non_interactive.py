@@ -84,21 +84,21 @@ def temp_plan_with_template(tmp_path, monkeypatch):
 class TestPlanCommandNonInteractiveFirstRound:
     """測試 plan --no-interactive Round 1（需要 --template）"""
 
-    def test_first_round_without_template_should_fail(
+    def test_first_round_without_template_uses_auto_mode(
         self, mock_env, temp_plan_dir
     , mock_git_ops):
-        """測試Round 1沒有提供 --template 應該失敗"""
+        """測試Round 1沒有提供 --template 時預設使用 auto 模式"""
         # Arrange
         spec_file = str(temp_plan_dir.parent / "spec" / "spec_001.md")
-        
+
         agent_manager = AgentManager()
         agent_manager.register_agent(
             AgentConfig(name="David", cli=AgentCLI.CLAUDE)
         )
-        
+
         permission_handler = PermissionHandler()
-        
-        # Act - Round 1沒有 plan.md, 且沒有 template
+
+        # Act - Round 1沒有 plan.md, 且沒有 template (預設使用 auto 模式)
         phase = PlanPhase(
             git_ops=mock_git_ops,
             agent_manager=agent_manager,
@@ -106,15 +106,15 @@ class TestPlanCommandNonInteractiveFirstRound:
             spec_file=spec_file,
             workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
-            template_path=None,  # 沒有提供 template
+            template_path=None,  # 沒有提供 template，使用預設 auto 模式
             user_input="這是開發指南內容",
         )
-        
+
         result = phase.execute()
-        
-        # Assert - Round 1必須提供 template
-        assert result.status == PhaseStatus.FAILED
-        assert "template" in result.message.lower() or "required" in result.message.lower()
+
+        # Assert - Round 1預設使用 auto 模式，應該成功
+        assert result.status == PhaseStatus.COMPLETED
+        assert phase.template_mode == "auto"
 
     def test_first_round_with_template_success(
         self, mock_env, temp_plan_with_template, monkeypatch
