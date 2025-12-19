@@ -295,8 +295,33 @@ class PRPhase(Phase):
             # Get branch name
             branch_name = self._get_branch_name()
 
-            # Push branch to remote
-            self.git_ops.push(branch_name, set_upstream=True, force=self.force_push)
+            # Check if there are unpushed commits before pushing
+            if self.git_ops.has_unpushed_commits():
+                unpushed_commits = self.git_ops.get_unpushed_commits()
+                from rich.console import Console
+                console = Console()
+                console.print()
+                console.print(f"[bold]Pushing {len(unpushed_commits)} unpushed commit(s) to remote...[/bold]")
+                for commit in unpushed_commits:
+                    console.print(f"  [dim]- {commit['hash'][:8]} {commit['message']}[/dim]")
+                console.print()
+
+                self.git_ops.push(branch_name, set_upstream=True, force=self.force_push)
+            else:
+                if not self.git_ops.has_upstream_branch():
+                    from rich.console import Console
+                    console = Console()
+                    console.print()
+                    console.print(f"[bold]Pushing branch '{branch_name}' to remote for the first time...[/bold]")
+                    console.print()
+
+                    self.git_ops.push(branch_name, set_upstream=True, force=self.force_push)
+                else:
+                    from rich.console import Console
+                    console = Console()
+                    console.print()
+                    console.print(f"[yellow]ℹ️  No new commits to push - branch '{branch_name}' is already up to date[/yellow]")
+                    console.print()
 
             # Check if PR already exists on GitHub
             existing_pr = self.github_ops.get_pr_for_branch(branch_name)

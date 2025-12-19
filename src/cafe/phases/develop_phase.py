@@ -305,6 +305,38 @@ class DevelopPhase(Phase):
         # If pr_number is provided, always continue execution (user wants to address PR comments)
         if self.pr_number:
             print(f"ℹ️  PR #{self.pr_number} comments will be addressed")
+
+            # Check if there are unpushed commits that address PR comments
+            if self.git_ops.has_unpushed_commits():
+                latest_unpushed_timestamp_str = self.git_ops.get_latest_unpushed_commit_timestamp()
+
+                if latest_unpushed_timestamp_str:
+                    from datetime import datetime, timezone
+
+                    latest_unpushed_timestamp = datetime.fromisoformat(latest_unpushed_timestamp_str)
+                    if latest_unpushed_timestamp.tzinfo is None:
+                        latest_unpushed_timestamp = latest_unpushed_timestamp.replace(tzinfo=timezone.utc)
+
+                    latest_pr_comment_timestamp = self._get_latest_pr_comment_timestamp()
+
+                    if latest_pr_comment_timestamp:
+                        if latest_unpushed_timestamp > latest_pr_comment_timestamp:
+                            print(f"✅ Development already completed - unpushed commits address PR comments")
+                            print(f"   Latest unpushed commit: {latest_unpushed_timestamp.isoformat()}")
+                            print(f"   Latest PR comment: {latest_pr_comment_timestamp.isoformat()}")
+                            print(f"   Next step: Run 'cafe pr' to push and create/update PR")
+
+                            return PhaseResult(
+                                status=PhaseStatus.COMPLETED,
+                                message=f"Development already completed - {len(self.git_ops.get_unpushed_commits())} unpushed commit(s) address PR comments",
+                                data={
+                                    "branch": self._get_branch_name(),
+                                    "iterations": existing_progress.iteration,
+                                    "status_code": existing_progress.status_code,
+                                    "unpushed_commits": len(self.git_ops.get_unpushed_commits()),
+                                },
+                            )
+
             return None
 
         # Check if there's review feedback that requires handling
@@ -573,6 +605,41 @@ class DevelopPhase(Phase):
             traceback.print_exc()
             self._pr_comments_cache = ("", 0)
             return self._pr_comments_cache
+
+    def _get_latest_pr_comment_timestamp(self) -> Optional["datetime"]:
+        """Get timestamp of the latest PR comment.
+
+        Returns:
+            Timezone-aware datetime object of latest comment, or None if no comments
+        """
+        if not self.pr_number:
+            return None
+
+        try:
+            from datetime import datetime, timezone
+            from cafe.utils.github import get_pr_comments
+
+            comments = get_pr_comments(self.pr_number)
+            if not comments:
+                return None
+
+            latest_timestamp = None
+            for comment in comments:
+                timestamp_str = comment.created_at
+                if timestamp_str.endswith('Z'):
+                    timestamp_str = timestamp_str.replace('Z', '+00:00')
+                comment_time = datetime.fromisoformat(timestamp_str)
+
+                if comment_time.tzinfo is None:
+                    comment_time = comment_time.replace(tzinfo=timezone.utc)
+
+                if latest_timestamp is None or comment_time > latest_timestamp:
+                    latest_timestamp = comment_time
+
+            return latest_timestamp
+        except Exception as e:
+            print(f"⚠️  Failed to get latest PR comment timestamp: {e}")
+            return None
 
     def _generate_prompt(self, user_input: str = "") -> str:
         """Generate prompt for current iteration.

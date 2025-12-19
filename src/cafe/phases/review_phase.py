@@ -114,6 +114,49 @@ class ReviewPhase(Phase):
             if early_exit_result:
                 return early_exit_result
 
+            # Check if there are unpushed commits newer than last review
+            if self.git_ops.has_unpushed_commits():
+                review_status_file = self.issue_dir / "review" / "status.json"
+
+                if review_status_file.exists():
+                    try:
+                        from datetime import datetime, timezone
+
+                        with open(review_status_file, 'r', encoding='utf-8') as f:
+                            review_status = json.load(f)
+
+                        review_timestamp_str = review_status.get("timestamp", "")
+                        if review_timestamp_str:
+                            review_timestamp = datetime.fromisoformat(review_timestamp_str)
+                            if review_timestamp.tzinfo is None:
+                                review_timestamp = review_timestamp.replace(tzinfo=timezone.utc)
+
+                            latest_unpushed_timestamp_str = self.git_ops.get_latest_unpushed_commit_timestamp()
+
+                            if latest_unpushed_timestamp_str:
+                                latest_unpushed_timestamp = datetime.fromisoformat(latest_unpushed_timestamp_str)
+                                if latest_unpushed_timestamp.tzinfo is None:
+                                    latest_unpushed_timestamp = latest_unpushed_timestamp.replace(tzinfo=timezone.utc)
+
+                                if review_timestamp > latest_unpushed_timestamp:
+                                    print(f"✅ Code review already completed for current commits")
+                                    print(f"   Last review: {review_timestamp.isoformat()}")
+                                    print(f"   Latest commit: {latest_unpushed_timestamp.isoformat()}")
+                                    print(f"   Next step: Run 'cafe pr' to push changes")
+
+                                    return PhaseResult(
+                                        status=PhaseStatus.COMPLETED,
+                                        message=f"Review already completed - no new commits since last review",
+                                        data={
+                                            "status_code": review_status.get("status_code"),
+                                            "review_timestamp": review_timestamp.isoformat(),
+                                            "latest_commit_timestamp": latest_unpushed_timestamp.isoformat(),
+                                        },
+                                    )
+                    except Exception as e:
+                        print(f"⚠️  Warning: Failed to check review timestamp: {e}")
+                        pass
+
             # Initialize history directory
             self._initialize_history_dir()
 

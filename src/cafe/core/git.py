@@ -313,3 +313,69 @@ class GitOperations:
             return worktrees
         except GitError:
             return []
+
+    def has_upstream_branch(self) -> bool:
+        """Check if current branch has upstream tracking.
+
+        Returns:
+            True if branch has upstream tracking, False otherwise
+        """
+        try:
+            self.run_git("rev-parse", "--abbrev-ref", "@{u}")
+            return True
+        except (GitError, Exception):
+            return False
+
+    def has_unpushed_commits(self) -> bool:
+        """Check if there are commits not pushed to upstream.
+
+        Returns:
+            True if there are unpushed commits, False otherwise
+        """
+        if not self.has_upstream_branch():
+            return False
+        try:
+            output = self.run_git("log", "@{u}..HEAD", "--oneline")
+            return bool(output.strip())
+        except GitError:
+            return False
+
+    def get_unpushed_commits(self) -> List[dict]:
+        """Get list of unpushed commits with timestamps.
+
+        Returns:
+            List of commit dictionaries with 'hash', 'timestamp', and 'message' keys.
+            Timestamp is in ISO 8601 format.
+        """
+        if not self.has_upstream_branch():
+            return []
+        try:
+            # Format: <hash>|<iso-timestamp>|<subject>
+            output = self.run_git("log", "@{u}..HEAD", "--format=%H|%aI|%s")
+            if not output:
+                return []
+
+            commits = []
+            for line in output.split("\n"):
+                if line.strip():
+                    parts = line.split("|", 2)
+                    if len(parts) == 3:
+                        commits.append({
+                            "hash": parts[0],
+                            "timestamp": parts[1],  # ISO 8601 format
+                            "message": parts[2],
+                        })
+            return commits
+        except GitError:
+            return []
+
+    def get_latest_unpushed_commit_timestamp(self) -> Optional[str]:
+        """Get timestamp of most recent unpushed commit.
+
+        Returns:
+            ISO 8601 timestamp string of latest unpushed commit, or None if no unpushed commits
+        """
+        unpushed_commits = self.get_unpushed_commits()
+        if not unpushed_commits:
+            return None
+        return unpushed_commits[0]["timestamp"]

@@ -296,3 +296,197 @@ class TestGitOperations:
 
             with pytest.raises(GitError, match="Pull failed"):
                 git.pull()
+
+    def test_has_upstream_branch_true(self) -> None:
+        """測試當前分支有 upstream 時回傳 True"""
+        git = GitOperations()
+
+        with patch.object(git, "run_git") as mock_run:
+            mock_run.return_value = "origin/feature-branch"
+
+            has_upstream = git.has_upstream_branch()
+
+            assert has_upstream is True
+            mock_run.assert_called_once_with("rev-parse", "--abbrev-ref", "@{u}")
+
+    def test_has_upstream_branch_false(self) -> None:
+        """測試當前分支沒有 upstream 時回傳 False"""
+        git = GitOperations()
+
+        with patch.object(git, "run_git") as mock_run:
+            mock_run.side_effect = GitError("No upstream branch")
+
+            has_upstream = git.has_upstream_branch()
+
+            assert has_upstream is False
+
+    def test_has_upstream_branch_error(self) -> None:
+        """測試 has_upstream_branch 發生錯誤時回傳 False"""
+        git = GitOperations()
+
+        with patch.object(git, "run_git") as mock_run:
+            mock_run.side_effect = Exception("Unexpected error")
+
+            # Should not raise, should return False
+            has_upstream = git.has_upstream_branch()
+
+            assert has_upstream is False
+
+    def test_has_unpushed_commits_true(self) -> None:
+        """測試有未 push 的 commits 時回傳 True"""
+        git = GitOperations()
+
+        # Use any non-empty commit log output
+        commit_output = "abc123 Fix bug"
+
+        with patch.object(git, "has_upstream_branch") as mock_upstream:
+            with patch.object(git, "run_git") as mock_run:
+                mock_upstream.return_value = True
+                mock_run.return_value = commit_output
+
+                has_unpushed = git.has_unpushed_commits()
+
+                assert has_unpushed is True
+                mock_run.assert_called_once_with("log", "@{u}..HEAD", "--oneline")
+
+    def test_has_unpushed_commits_false(self) -> None:
+        """測試沒有未 push 的 commits 時回傳 False"""
+        git = GitOperations()
+
+        with patch.object(git, "has_upstream_branch") as mock_upstream:
+            with patch.object(git, "run_git") as mock_run:
+                mock_upstream.return_value = True
+                mock_run.return_value = ""
+
+                has_unpushed = git.has_unpushed_commits()
+
+                assert has_unpushed is False
+
+    def test_has_unpushed_commits_no_upstream(self) -> None:
+        """測試沒有 upstream 分支時回傳 False"""
+        git = GitOperations()
+
+        with patch.object(git, "has_upstream_branch") as mock_upstream:
+            mock_upstream.return_value = False
+
+            has_unpushed = git.has_unpushed_commits()
+
+            assert has_unpushed is False
+
+    def test_has_unpushed_commits_error(self) -> None:
+        """測試發生錯誤時回傳 False"""
+        git = GitOperations()
+
+        with patch.object(git, "has_upstream_branch") as mock_upstream:
+            with patch.object(git, "run_git") as mock_run:
+                mock_upstream.return_value = True
+                mock_run.side_effect = GitError("Command failed")
+
+                has_unpushed = git.has_unpushed_commits()
+
+                assert has_unpushed is False
+
+    def test_get_unpushed_commits_success(self) -> None:
+        """測試成功取得未 push 的 commits"""
+        from datetime import datetime, timezone, timedelta
+
+        git = GitOperations()
+
+        # Use relative timestamps to avoid fragile tests
+        now = datetime.now(timezone.utc)
+        one_hour_ago = (now - timedelta(hours=1)).isoformat()
+        two_hours_ago = (now - timedelta(hours=2)).isoformat()
+
+        commit_output = f"abc1234|{one_hour_ago}|Fix bug\ndef5678|{two_hours_ago}|Add feature"
+
+        with patch.object(git, "has_upstream_branch") as mock_upstream:
+            with patch.object(git, "run_git") as mock_run:
+                mock_upstream.return_value = True
+                mock_run.return_value = commit_output
+
+                commits = git.get_unpushed_commits()
+
+                assert len(commits) == 2
+                assert commits[0]["hash"] == "abc1234"
+                assert commits[0]["timestamp"] == one_hour_ago
+                assert commits[0]["message"] == "Fix bug"
+                assert commits[1]["hash"] == "def5678"
+                assert commits[1]["timestamp"] == two_hours_ago
+                assert commits[1]["message"] == "Add feature"
+
+    def test_get_unpushed_commits_empty(self) -> None:
+        """測試沒有未 push 的 commits 時回傳空列表"""
+        git = GitOperations()
+
+        with patch.object(git, "has_upstream_branch") as mock_upstream:
+            with patch.object(git, "run_git") as mock_run:
+                mock_upstream.return_value = True
+                mock_run.return_value = ""
+
+                commits = git.get_unpushed_commits()
+
+                assert commits == []
+
+    def test_get_unpushed_commits_no_upstream(self) -> None:
+        """測試沒有 upstream 分支時回傳空列表"""
+        git = GitOperations()
+
+        with patch.object(git, "has_upstream_branch") as mock_upstream:
+            mock_upstream.return_value = False
+
+            commits = git.get_unpushed_commits()
+
+            assert commits == []
+
+    def test_get_unpushed_commits_error(self) -> None:
+        """測試發生錯誤時回傳空列表"""
+        git = GitOperations()
+
+        with patch.object(git, "has_upstream_branch") as mock_upstream:
+            with patch.object(git, "run_git") as mock_run:
+                mock_upstream.return_value = True
+                mock_run.side_effect = GitError("Command failed")
+
+                commits = git.get_unpushed_commits()
+
+                assert commits == []
+
+    def test_get_latest_unpushed_commit_timestamp_success(self) -> None:
+        """測試成功取得最新未 push commit 的時間戳"""
+        from datetime import datetime, timezone, timedelta
+
+        git = GitOperations()
+
+        # Use relative timestamps to avoid fragile tests
+        now = datetime.now(timezone.utc)
+        one_hour_ago = (now - timedelta(hours=1)).isoformat()
+        two_hours_ago = (now - timedelta(hours=2)).isoformat()
+
+        with patch.object(git, "get_unpushed_commits") as mock_get:
+            mock_get.return_value = [
+                {
+                    "hash": "abc1234",
+                    "timestamp": one_hour_ago,
+                    "message": "Fix bug"
+                },
+                {
+                    "hash": "def5678",
+                    "timestamp": two_hours_ago,
+                    "message": "Add feature"
+                }
+            ]
+
+            timestamp = git.get_latest_unpushed_commit_timestamp()
+
+            assert timestamp == one_hour_ago
+
+    def test_get_latest_unpushed_commit_timestamp_none(self) -> None:
+        """測試沒有未 push 的 commits 時回傳 None"""
+        git = GitOperations()
+
+        with patch.object(git, "get_unpushed_commits") as mock_get:
+            mock_get.return_value = []
+
+            timestamp = git.get_latest_unpushed_commit_timestamp()
+
+            assert timestamp is None
