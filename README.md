@@ -75,11 +75,12 @@ cafe --help
     cafe make
     ```
 
-### Core Commands
-
-- `cafe prepare` - Initializes the issue environment.
-- `cafe make` - Starts or resumes the workflow.
-- `cafe close` - Merges back to the original branch and cleans up the environment.
+3.  **Finalize and sync back to original branch**:
+    ```bash
+    # After development is complete, merge back to the original branch and clean up
+    cafe close
+    ```
+    This command merges your changes back to the original branch and removes the feature branch and related environment files.
 
 ## Core Architecture
 
