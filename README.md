@@ -70,6 +70,7 @@ cafe --help
     cafe prepare
     ```
 
+    Switch to the worktree path if set, then:
     ```bash
     # Start or continue the full automated workflow
     cafe make
