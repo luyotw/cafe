@@ -1,6 +1,6 @@
 # The CAFE Engine - AI-Driven Development Workflow Automation
 
-CAFE (CLI Agent Flow Engine) is an AI-driven development workflow automation system that establishes a complete development process from requirements analysis to pull request generation by coordinating multiple AI agents (PM, Developer, Reviewer) and integrating various CLI agent tools.
+CAFE (CLI Agent Flow Engine) leverages headless CLI agents to power an AI-driven workflow that automates the entire development lifecycle—from requirements analysis to PR generation—by orchestrating specialized roles such as PM, Developer, and Reviewer.
 
 ## Who is CAFE designed for?
 
