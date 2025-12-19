@@ -486,7 +486,12 @@ class AgentExecutor:
 
         # Use custom response parser if provided
         if response_parser:
-            return response_parser(output_lines)
+            parsed_response = response_parser(output_lines)
+            # Merge streaming_log from custom parser with accumulated streaming_log
+            # If parser doesn't provide streaming_log, use our accumulated one
+            if not parsed_response.streaming_log:
+                parsed_response.streaming_log = streaming_log if streaming_log else []
+            return parsed_response
 
         # Return response (either from stream-json or combined lines)
         if parse_stream_json:
