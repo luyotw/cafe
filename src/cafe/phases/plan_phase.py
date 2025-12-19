@@ -523,19 +523,14 @@ Reply with confirmation message.
             Development guide content from user input
         """
         print("\n" + "="*70)
-        print("Please provide development guide, explain implementation direction and technical background:")
+        print("📝 Development Guide")
         print("="*70)
         print()
-        print("Development guide should include:")
-        print("  1. Recommended technical solution or implementation direction")
-        print("  2. Related code locations or module descriptions")
-        print("  3. Technical constraints or dependencies to note")
-        print("  4. Background information that other developers may not know")
-        print()
-        print("Example:")
-        print("  This feature should be implemented in src/core/processor.py,")
-        print("  you can reference the existing DataProcessor class.")
-        print("  Note to maintain backward compatibility with existing API.")
+        print("Provide implementation direction and technical background:")
+        print("  • Technical solution/direction")
+        print("  • Related code locations")
+        print("  • Technical constraints or dependencies")
+        print("  • Key background information")
         print()
 
         # Get development guide using prompt_multiline for better UX

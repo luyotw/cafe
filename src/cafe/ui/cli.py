@@ -1354,10 +1354,11 @@ def spec(
 
         # Display start message
         console.print("[bold blue]🎯 Spec Phase: Specification Clarification[/bold blue]")
-        console.print(f"Mode: {workflow_mode.value}")
         console.print(f"Issue: {issue_name}")
         console.print(f"PM Agent: {pm_agent}")
+        pm_model = pm_executor.config.model or "default"
         console.print(f"CLI: {pm_cli}")
+        console.print(f"Model: {pm_model}")
         console.print(f"Session ID: {pm_session_id}")
         if spec_rigor:
             console.print(f"Rigor: {spec_rigor.value}")
@@ -1696,10 +1697,11 @@ def plan(
 
         # Display start message
         console.print("[bold blue]📋 Plan Phase: Implementation Planning[/bold blue]")
-        console.print(f"Mode: {workflow_mode.value}")
         console.print(f"Issue: {issue_name}")
         console.print(f"Developer Agent: {dev_agent}")
+        dev_model = dev_executor.config.model or "default"
         console.print(f"CLI: {dev_cli}")
+        console.print(f"Model: {dev_model}")
         console.print(f"Session ID: {dev_session_id}")
         if workflow_mode == WorkflowMode.LOCAL:
             console.print(f"Spec file: {spec_file_path}")
@@ -1983,10 +1985,11 @@ def develop(
 
         # Display start message
         console.print("[bold blue]🔨 Develop Phase: Development Execution[/bold blue]")
-        console.print(f"Mode: {workflow_mode.value}")
         console.print(f"Issue: {issue_name}")
         console.print(f"Developer Agent: {dev_agent}")
+        dev_model = dev_executor.config.model or "default"
         console.print(f"CLI: {dev_cli}")
+        console.print(f"Model: {dev_model}")
         console.print(f"Session ID: {dev_session_id}")
         console.print(f"Spec file: {spec_file}")
         console.print(f"Plan file: {plan_file}")
@@ -2247,10 +2250,11 @@ def review(
 
         # Display start message (use actual base_branch from phase)
         console.print("[bold blue]🔍 Review Phase: Code Review[/bold blue]")
-        console.print(f"Mode: {workflow_mode.value}")
         console.print(f"Issue: {issue_name}")
         console.print(f"Reviewer Agent: {reviewer_agent}")
+        reviewer_model = reviewer_executor.config.model or "default"
         console.print(f"CLI: {reviewer_cli}")
+        console.print(f"Model: {reviewer_model}")
         console.print(f"Session ID: {reviewer_session_id}")
         console.print(f"Spec file: {spec_file}")
         console.print(f"Base branch: {phase.base_branch}")
@@ -2490,6 +2494,12 @@ def pr(
         # Display start message
         console.print("[bold blue]🚀 PR Phase: Create Pull Request[/bold blue]")
         console.print(f"Issue: {issue_name}")
+        dev_executor = agent_manager.get_agent(dev_agent)
+        dev_cli = dev_executor.config.cli.value
+        dev_model = dev_executor.config.model or "default"
+        console.print(f"Developer Agent: {dev_agent}")
+        console.print(f"CLI: {dev_cli}")
+        console.print(f"Model: {dev_model}")
         console.print(f"Base branch: {phase.base_branch}")
         console.print()
 
