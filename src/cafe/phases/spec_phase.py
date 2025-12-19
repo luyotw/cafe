@@ -948,14 +948,16 @@ Write the following content to {current_spec_file}：
    - 「## User Stories」- User stories written by user or automatically generated from requirements description.
    - 「## Current Requirements Specification」- Integrate all known information (including user stories, previous conversations, user's latest answers), list complete known requirements.
    - 「## Questions to Clarify」- As PM ask conversationally to deeply clarify requirements.
-"""
+
+⚠️ **Important:** Write the markdown content in your native language (the language you were configured with)."""
 
         confirmed_instruction = f"""**If requirements are clear (status: CAFE_READY_FOR_REVIEW):**
 Write complete requirements specification document to {current_spec_file}, format:
    - 「## Original Requirements Description」- **Fully preserve** the original requirements initially provided by user, cannot modify (unless user explicitly requests).
    - 「## User Stories」- User stories written by user or automatically generated from requirements description.
    - 「## Requirements Specification」- Integrate all confirmed content, produce final complete requirements specification, including function descriptions, usage scenarios, expected behaviors, acceptance criteria, etc.
-"""
+
+⚠️ **Important:** Write the markdown content in your native language (the language you were configured with)."""
 
         # --- 3. Assemble the final prompt ---
         return f"""{initial_instruction}

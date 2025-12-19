@@ -525,9 +525,10 @@ You are conducting iteration {self.iteration} of the code review. You will only 
 {recheck_instruction}
 {restriction}
 **Review Result Storage:**
-- **Must** save the complete review result to: `{review_file_path}`
+- **Must** save the complete review result to: `{review_file_path}` **in your native language**
 - File format is Markdown
 - Content includes all issues and suggestions found during review
+- ⚠️ **Important:** Write the markdown content in your native language (the language you were configured with)
 
 **Requirements Specification and Implementation Plan:**
 {requirements_section}

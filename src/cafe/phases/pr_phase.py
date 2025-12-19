@@ -718,7 +718,7 @@ class PRPhase(Phase):
 
         if generate_body:
             task_num = "2" if generate_title else "1"
-            tasks.append(f"""{task_num}. Edit existing file `{body_file}`, replace content with PR description (Markdown format)
+            tasks.append(f"""{task_num}. Edit existing file `{body_file}`, replace content with PR description (Markdown format, in your native language)
    - ## Summary - Brief description (2-3 sentences)
    - ## Changes - Main changes (bullet points)
    - ## Test Plan - How to test{issue_instruction}""")

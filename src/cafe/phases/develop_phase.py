@@ -649,8 +649,10 @@ Clarification can be requested only in these two cases, **any other situation st
 Steps for requesting clarification:
 1. Return `CAFE_NEED_CLARIFICATION` status code
 2. Clearly describe the clarification questions in the response (can use bullet points)
-3. The system will save your questions to develop_XXX.md file
+3. The system will save your questions to develop_XXX.md file (in your native language)
 4. After user replies, the system will provide the file for you to read on next execution
+
+⚠️ **Important:** Write the markdown content in your native language (the language you were configured with).
 """
 
         if has_review_feedback:

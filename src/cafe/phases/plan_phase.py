@@ -375,12 +375,14 @@ This is iteration {self.iteration} of implementation analysis.
 - Keep the "## Development Guide" section unchanged
 
 **If need more information (status: CAFE_NEED_CLARIFICATION):**
-Append after development guide:
+Append after development guide (in your native language):
    - "## Implementation Plan" - current implementation analysis content
    - "## Questions to Confirm" - list technical questions that need confirmation
 
 **If analysis complete (status: CAFE_READY_FOR_REVIEW):**
-Append complete implementation plan after development guide, strictly follow template's section structure and format.
+Append complete implementation plan after development guide (in your native language), strictly follow template's section structure and format.
+
+⚠️ **Important:** Write the markdown content in your native language (the language you were configured with).
 """
         else:
             # Add user's modification request section for iteration 2+
