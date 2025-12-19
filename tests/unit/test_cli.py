@@ -94,6 +94,28 @@ class TestSetupAgents:
         assert agent_manager.agents["CustomPM"].config.cli == AgentCLI.GEMINI
         assert agent_manager.agents["Richard"].config.cli == AgentCLI.CURSOR
 
+    def test_setup_agents_preserves_model_from_config(self, tmp_path: Path) -> None:
+        """Test that agent model from config is preserved when setting up agents."""
+        config_file = tmp_path / "config.yaml"
+        config_manager = ConfigManager(str(config_file))
+
+        # Create config with model settings
+        custom_config = {
+            "agents": {
+                "pm": {"name": "Roger", "cli": "claude", "model": "haiku"},
+                "developer": {"name": "David", "cli": "claude", "model": "opus"},
+                "reviewer": {"name": "Richard", "cli": "gemini", "model": "gemini-2.5-flash"},
+            }
+        }
+        config_manager.save_config(custom_config)
+
+        agent_manager = _setup_agents(config_manager)
+
+        # Verify models are preserved
+        assert agent_manager.agents["Roger"].config.model == "haiku"
+        assert agent_manager.agents["David"].config.model == "opus"
+        assert agent_manager.agents["Richard"].config.model == "gemini-2.5-flash"
+
 
 class TestVersionCommand:
     """Test version command."""

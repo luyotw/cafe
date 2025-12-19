@@ -197,18 +197,21 @@ def _setup_agents(config_manager: ConfigManager, issue_name: Optional[str] = Non
         AgentConfig(
             name=pm_config["name"],
             cli=AgentCLI(pm_config["cli"]),
+            model=pm_config.get("model"),
         )
     )
     agent_manager.register_agent(
         AgentConfig(
             name=dev_config["name"],
             cli=AgentCLI(dev_config["cli"]),
+            model=dev_config.get("model"),
         )
     )
     agent_manager.register_agent(
         AgentConfig(
             name=reviewer_config["name"],
             cli=AgentCLI(reviewer_config["cli"]),
+            model=reviewer_config.get("model"),
         )
     )
 
