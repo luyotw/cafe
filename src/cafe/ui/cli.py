@@ -2619,7 +2619,7 @@ def config(
     if not action:
         loaded_config = config_manager.load_config()
         console.print("[bold cyan]Current Configuration:[/bold cyan]")
-        console.print(yaml.dump(loaded_config, default_flow_style=False))
+        console.print(yaml.dump(loaded_config, default_flow_style=False, allow_unicode=True))
         return
 
     # Sub-commands

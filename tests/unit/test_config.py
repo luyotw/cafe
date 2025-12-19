@@ -373,3 +373,83 @@ class TestMergeConfig:
 
         assert "b" not in base
         assert "a" not in override
+
+
+class TestConfigUnicodeHandling:
+    """Test Unicode character handling in config serialization."""
+
+    def test_save_config_with_unicode_characters(self, tmp_path: Path) -> None:
+        """Test that config with Unicode characters (e.g., Chinese names) saves and loads correctly."""
+        config_dir = tmp_path / ".cafe"
+        config_manager = ConfigManager(config_dir=str(config_dir))
+
+        # Create config with Unicode characters (Chinese names)
+        unicode_config = {
+            "agents": {
+                "developer": {"cli": "claude", "name": "黃建"},
+                "pm": {"cli": "gemini", "name": "方竹"},
+                "reviewer": {"cli": "claude", "name": "安那"},
+            },
+            "python_bin": "python3",
+        }
+
+        # Save config
+        config_manager.save_config(unicode_config)
+
+        # Load config back
+        loaded_config = config_manager.load_config()
+
+        # Verify Unicode characters are preserved (not escaped)
+        assert loaded_config["agents"]["developer"]["name"] == "黃建"
+        assert loaded_config["agents"]["pm"]["name"] == "方竹"
+        assert loaded_config["agents"]["reviewer"]["name"] == "安那"
+
+    def test_config_file_contains_readable_unicode(self, tmp_path: Path) -> None:
+        """Test that saved config file contains readable Unicode (not escape sequences)."""
+        config_dir = tmp_path / ".cafe"
+        config_manager = ConfigManager(config_dir=str(config_dir))
+
+        # Create config with Unicode
+        unicode_config = {
+            "agents": {
+                "developer": {"cli": "claude", "name": "黃建"},
+            },
+        }
+
+        config_manager.save_config(unicode_config)
+
+        # Read the raw file content
+        config_file = config_dir / "config.yaml"
+        file_content = config_file.read_text(encoding="utf-8")
+
+        # Verify that the file contains actual Unicode characters, not escape sequences
+        # Should contain "黃建" not "\u9ec3\u5efa"
+        assert "黃建" in file_content
+        assert "\\u" not in file_content or "\\u" in file_content and "9ec3" not in file_content
+
+    def test_save_and_load_preserves_unicode_roundtrip(self, tmp_path: Path) -> None:
+        """Test that saving and loading config preserves Unicode through multiple roundtrips."""
+        config_dir = tmp_path / ".cafe"
+        config_manager = ConfigManager(config_dir=str(config_dir))
+
+        original_config = {
+            "agents": {
+                "developer": {"cli": "claude", "name": "黃建"},
+                "pm": {"cli": "gemini", "name": "方竹"},
+                "reviewer": {"cli": "cursor", "name": "安那"},
+            },
+            "python_bin": "python3",
+        }
+
+        # First save
+        config_manager.save_config(original_config)
+        loaded_once = config_manager.load_config()
+
+        # Second save (with loaded config)
+        config_manager.save_config(loaded_once)
+        loaded_twice = config_manager.load_config()
+
+        # All Unicode should be preserved
+        for agent_type in ["developer", "pm", "reviewer"]:
+            assert original_config["agents"][agent_type]["name"] == loaded_once["agents"][agent_type]["name"]
+            assert original_config["agents"][agent_type]["name"] == loaded_twice["agents"][agent_type]["name"]
