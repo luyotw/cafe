@@ -1712,7 +1712,7 @@ def plan(
 
                     templates = template_manager.list_templates()
                     template_paths = {name: template_manager.get_template_path(name) for name in templates}
-                    selected_template = select_template(templates, template_paths, include_auto=True)
+                    selected_template = select_template(templates, template_paths)
 
                     if selected_template == "auto":
                         template_mode = "auto"

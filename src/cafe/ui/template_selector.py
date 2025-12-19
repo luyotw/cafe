@@ -11,18 +11,17 @@ from cafe.ui.inquirer_prompts import prompt_list
 console = Console()
 
 
-def select_template(templates: List[str], template_paths: Dict[str, Path], include_auto: bool = False) -> Optional[str]:
+def select_template(templates: List[str], template_paths: Dict[str, Path]) -> Optional[str]:
     """Select a template interactively.
 
     Args:
         templates: List of template names
         template_paths: Dict mapping template names to their file paths
-        include_auto: Whether to include 'auto' option (default: False)
 
     Returns:
         Selected template name (or 'auto'), or None if skipped
     """
-    if not templates and not include_auto:
+    if not templates:
         return None
 
     console.print()
@@ -30,14 +29,13 @@ def select_template(templates: List[str], template_paths: Dict[str, Path], inclu
     console.print()
     console.print("[bold cyan]Available templates:[/bold cyan]")
 
-    # Build choices list with 'auto' option first if included
+    # Build choices list with 'auto' option first
     choices = []
     choice_num = 1
 
-    if include_auto:
-        console.print(f"  [green]{choice_num}[/green]. auto (agent decides)")
-        choices.append(f"{choice_num}. auto")
-        choice_num += 1
+    console.print(f"  [green]{choice_num}[/green]. auto (agent decides)")
+    choices.append(f"{choice_num}. auto")
+    choice_num += 1
 
     for name in templates:
         console.print(f"  [green]{choice_num}[/green]. {name}")
