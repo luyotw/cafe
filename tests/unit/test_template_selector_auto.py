@@ -16,7 +16,7 @@ class TestTemplateSelectorWithAuto:
         template_paths = {name: Path(f"/path/to/{name}.md") for name in templates}
 
         with patch("cafe.ui.template_selector.prompt_list") as mock_prompt:
-            mock_prompt.return_value = "2. default"
+            mock_prompt.return_value = "default"
             result = select_template(templates, template_paths)
 
             assert result == "default"
@@ -24,7 +24,7 @@ class TestTemplateSelectorWithAuto:
             # Verify choices include auto as first option
             call_args = mock_prompt.call_args
             choices = call_args[0][1]
-            assert choices[0] == "1. auto"
+            assert choices[0] == "auto (agent decides)"
 
     def test_select_auto_option(self):
         """Test selecting auto option."""
@@ -32,7 +32,7 @@ class TestTemplateSelectorWithAuto:
         template_paths = {name: Path(f"/path/to/{name}.md") for name in templates}
 
         with patch("cafe.ui.template_selector.prompt_list") as mock_prompt:
-            mock_prompt.return_value = "1. auto"
+            mock_prompt.return_value = "auto (agent decides)"
             result = select_template(templates, template_paths)
 
             assert result == "auto"
@@ -40,7 +40,7 @@ class TestTemplateSelectorWithAuto:
             # Verify choices include auto as first option
             call_args = mock_prompt.call_args
             choices = call_args[0][1]
-            assert choices[0] == "1. auto"
+            assert choices[0] == "auto (agent decides)"
 
     def test_select_manual_template_with_auto_option(self):
         """Test selecting a manual template when auto option is available."""
@@ -48,7 +48,7 @@ class TestTemplateSelectorWithAuto:
         template_paths = {name: Path(f"/path/to/{name}.md") for name in templates}
 
         with patch("cafe.ui.template_selector.prompt_list") as mock_prompt:
-            mock_prompt.return_value = "3. simple"
+            mock_prompt.return_value = "simple"
             result = select_template(templates, template_paths)
 
             assert result == "simple"
@@ -56,8 +56,8 @@ class TestTemplateSelectorWithAuto:
             # Verify auto is first, then templates
             call_args = mock_prompt.call_args
             choices = call_args[0][1]
-            assert choices[0] == "1. auto"
-            assert "3. simple" in choices
+            assert choices[0] == "auto (agent decides)"
+            assert "simple" in choices
 
     def test_auto_option_is_first_choice(self):
         """Test that auto option appears as the first choice."""
@@ -65,17 +65,17 @@ class TestTemplateSelectorWithAuto:
         template_paths = {name: Path(f"/path/to/{name}.md") for name in templates}
 
         with patch("cafe.ui.template_selector.prompt_list") as mock_prompt:
-            mock_prompt.return_value = "1. auto"
+            mock_prompt.return_value = "auto (agent decides)"
             select_template(templates, template_paths)
 
             call_args = mock_prompt.call_args
             choices = call_args[0][1]
             # First choice should be auto
-            assert choices[0].endswith("auto")
+            assert choices[0] == "auto (agent decides)"
             # Other choices should be templates
-            assert any("default" in choice for choice in choices)
-            assert any("simple" in choice for choice in choices)
-            assert any("bug" in choice for choice in choices)
+            assert "default" in choices
+            assert "simple" in choices
+            assert "bug" in choices
 
     def test_select_template_empty_list_returns_none(self):
         """Test template selection returns None with empty template list."""
@@ -91,10 +91,10 @@ class TestTemplateSelectorWithAuto:
         template_paths = {name: Path(f"/path/to/{name}.md") for name in templates}
 
         with patch("cafe.ui.template_selector.prompt_list") as mock_prompt:
-            mock_prompt.return_value = "1. auto"
+            mock_prompt.return_value = "auto (agent decides)"
             select_template(templates, template_paths)
 
             call_args = mock_prompt.call_args
             # The default should be the first choice (auto)
             default_choice = call_args[1]["default"]
-            assert default_choice.endswith("auto")
+            assert default_choice == "auto (agent decides)"

@@ -30,29 +30,25 @@ def select_template(templates: List[str], template_paths: Dict[str, Path]) -> Op
     console.print("[bold cyan]Available templates:[/bold cyan]")
 
     # Build choices list with 'auto' option first
-    choices = []
-    choice_num = 1
+    # Use template names as keys for direct mapping
+    choices = ["auto (agent decides)"] + templates
 
-    console.print(f"  [green]{choice_num}[/green]. auto (agent decides)")
-    choices.append(f"{choice_num}. auto")
-    choice_num += 1
-
-    for name in templates:
-        console.print(f"  [green]{choice_num}[/green]. {name}")
-        choices.append(f"{choice_num}. {name}")
-        choice_num += 1
+    for choice in choices:
+        console.print(f"  • {choice}")
 
     console.print()
     console.print("[dim]Tip: Use 'cafe template cat <name>' to preview template content[/dim]")
-    if len(templates) == 1 and not include_auto:
+    if len(templates) == 1:
         console.print("[dim]     Create your own: 'cafe template add <file> <name>' to add custom template[/dim]")
     console.print()
 
     try:
-        selected = prompt_list("Select template number:", choices, default=choices[0])
-        # Parse the selection to get template name
-        # Format: "1. auto" or "1. default" -> "auto" or "default"
-        template_name = selected.split(". ", 1)[1]
+        selected = prompt_list("Select a template:", choices, default=choices[0])
+        # Extract the template name (remove "(agent decides)" if present)
+        if " (" in selected:
+            template_name = selected.split(" (")[0]
+        else:
+            template_name = selected
         return template_name
     except (KeyboardInterrupt, EOFError):
         # User pressed Ctrl+C or Ctrl+D, exit
