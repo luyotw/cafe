@@ -39,6 +39,7 @@ app = typer.Typer(
     name="cafe",
     help="AI Agent Flow - Automated development workflow with AI agents",
     no_args_is_help=True,
+    context_settings={"help_option_names": ["-h", "--help"]},
 )
 console = Console()
 
