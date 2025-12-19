@@ -33,6 +33,7 @@ class PlanPhase(Phase):
         dev_agent: str = "David",
         interactive: bool = True,
         template_path: Optional[str] = None,
+        template_mode: str = "auto",
         user_input: str = "",
     ) -> None:
         """Initialize plan phase.
@@ -46,7 +47,8 @@ class PlanPhase(Phase):
             issue_id: GitHub issue ID (required for github mode)
             issue_name: Issue name for history tracking (default: derived from current branch)
             dev_agent: Developer agent name (default: David)
-            template_path: Path to plan template file (optional)
+            template_path: Path to plan template file (optional, used when template_mode='manual')
+            template_mode: Template selection mode ('auto' or 'manual', default: 'auto')
             interactive: Whether to allow interactive prompts (default: True)
             user_input: User input for non-interactive mode (default: "")
         """
@@ -59,6 +61,7 @@ class PlanPhase(Phase):
         self.issue_id = issue_id
         self.dev_agent = dev_agent
         self.template_path = template_path
+        self.template_mode = template_mode
         self.user_input = user_input
         self.display = Display()
         self.iteration = 0
@@ -338,9 +341,22 @@ class PlanPhase(Phase):
             },
         )
 
-        # Add template reference if template is provided
+        # Add template reference
         template_instruction = ""
-        if template_path:
+        if self.template_mode == "auto":
+            # Auto mode: include template list and ask agent to pick
+            from cafe.templates.manager import TemplateManager
+            template_manager = TemplateManager(".cafe")
+            available_templates = template_manager.list_templates()
+
+            if available_templates:
+                template_list_str = ", ".join(f"`{t}`" for t in available_templates)
+                template_instruction = f"""
+**Important: Must pick a most suitable template**
+Please pick a most suitable template from .cafe/templates/plan/ (available: {template_list_str}). After reading the requirements, select the template that best fits the task type and complexity.
+"""
+        elif template_path:
+            # Manual mode: use the specified template
             template_instruction = f"""
 **Important: Must strictly follow template format**
 Please first read {template_path}, then strictly follow the template's format, section structure, and writing style to write plan.md.

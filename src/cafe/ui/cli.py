@@ -1687,6 +1687,7 @@ def plan(
         # Handle template selection
         template_manager = TemplateManager(config_dir)
         selected_template = None
+        template_mode = "auto"  # Track if template is 'auto' or manually specified
 
         if is_resume:
             console.print(f"[dim]Resuming existing plan from: {plan_file_path}[/dim]")
@@ -1698,6 +1699,34 @@ def plan(
                 console.print("[dim]Use 'cafe template list' to see available templates[/dim]")
                 raise typer.Exit(1)
             selected_template = template
+            template_mode = "manual"
+        elif not is_resume:
+            # No template specified and not resuming - need to select one for first iteration
+            if interactive:
+                # Interactive mode: prompt user to select 'auto' or a specific template
+                import sys
+                is_interactive = sys.stdin.isatty()
+
+                if is_interactive:
+                    from cafe.ui.template_selector import select_template
+
+                    templates = template_manager.list_templates()
+                    template_paths = {name: template_manager.get_template_path(name) for name in templates}
+                    selected_template = select_template(templates, template_paths, include_auto=True)
+
+                    if selected_template == "auto":
+                        template_mode = "auto"
+                    else:
+                        template_mode = "manual"
+                else:
+                    # Non-interactive but interactive flag set (piped stdin)
+                    # Default to auto mode
+                    selected_template = "auto"
+                    template_mode = "auto"
+            else:
+                # Non-interactive mode with no --template: default to auto
+                selected_template = "auto"
+                template_mode = "auto"
 
         # Display start message
         console.print("[bold blue]📋 Plan Phase: Implementation Planning[/bold blue]")
@@ -1711,11 +1740,16 @@ def plan(
             console.print(f"Spec file: {spec_file_path}")
         elif issue_id:
             console.print(f"GitHub Issue: #{issue_id}")
+        if selected_template:
+            if template_mode == "auto":
+                console.print("[dim]Template mode: auto (agent will decide)[/dim]")
+            else:
+                console.print(f"[dim]Template: {selected_template}[/dim]")
         console.print()
 
-        # Get template path if selected
+        # Get template path if manually selected (not auto)
         template_path_str = None
-        if selected_template:
+        if selected_template and template_mode == "manual":
             template_path_obj = template_manager.get_template_path(selected_template)
             if template_path_obj:
                 template_path_str = str(template_path_obj)
@@ -1735,6 +1769,7 @@ def plan(
             dev_agent=dev_agent,
             interactive=interactive,
             template_path=template_path_str,
+            template_mode=template_mode,  # Pass template mode to plan phase
         )
 
         # Determine if should be interactive
