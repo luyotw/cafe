@@ -1,12 +1,15 @@
 """Claude CLI 工具實作."""
 
 import json
+import logging
 from pathlib import Path
 from typing import List, Optional, Tuple
 
 from cafe.agents.cli.abstract import AbstractCLI
 from cafe.core.types import PermissionDenial, TokenUsage
 from cafe.utils.git_utils import get_repo_root, to_git_ignore_path
+
+logger = logging.getLogger(__name__)
 
 
 class ClaudeCLI(AbstractCLI):
@@ -157,8 +160,12 @@ class ClaudeCLI(AbstractCLI):
                             repo_root = get_repo_root()
                             git_ignore_path = to_git_ignore_path(path_obj, repo_root)
                             processed_tool = f"{tool_name.capitalize()}({git_ignore_path})"
-                        except (ValueError, OSError):
-                            # 轉換失敗，使用原始路徑
+                        except (ValueError, OSError) as e:
+                            # 轉換失敗，使用原始路徑並記錄警告
+                            logger.warning(
+                                f"Failed to convert path to git-ignore format: {path_or_cmd}. "
+                                f"Error: {e}. Using original path."
+                            )
                             processed_tool = f"{tool_name.capitalize()}({path_or_cmd})"
                     else:
                         # 相對路徑，加上 / 前綴 (git ignore 格式)
