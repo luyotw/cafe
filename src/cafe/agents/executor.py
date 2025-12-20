@@ -188,8 +188,8 @@ class AgentExecutor:
             # Execute with session recovery if session_id configured
             if self.config.session_id:
                 def create_session():
-                    # For CLI tools that auto-create sessions
-                    return ""
+                    # 使用 CLI strategy 的 create_session 方法
+                    return cli_strategy.create_session()
 
                 def update_cmd_with_session(cmd_list, new_session_id):
                     if "--resume" in cmd_list:

@@ -2,6 +2,7 @@
 
 import json
 import logging
+import subprocess
 from pathlib import Path
 from typing import List, Optional, Tuple
 
@@ -220,3 +221,39 @@ class ClaudeCLI(AbstractCLI):
             except json.JSONDecodeError:
                 continue
         return None
+
+    def create_session(self) -> str:
+        """建立新的 Claude session.
+
+        執行一個簡單的 Claude 命令來建立新的 session，並從回應中提取 session ID。
+
+        Returns:
+            新的 session ID
+
+        Raises:
+            Exception: 如果 session 建立失敗或無法提取 session ID
+        """
+        cmd = ["claude", "-p", "Say 'hi'", "--output-format", "json"]
+
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        try:
+            response_data = json.loads(result.stdout)
+
+            # 檢查錯誤（例如達到使用限制）
+            if response_data.get("is_error"):
+                error_msg = response_data.get("result", "Unknown error")
+                print(f"\n⚠️  Claude API Error: {error_msg}\n")
+                raise Exception(f"Claude API error: {error_msg}")
+
+            session_id = response_data.get("session_id")
+            if not session_id:
+                raise Exception("No session_id in response")
+            return session_id
+        except json.JSONDecodeError as e:
+            raise Exception(f"Failed to parse Claude response: {e}") from e

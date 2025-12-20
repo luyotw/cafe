@@ -102,3 +102,19 @@ class AbstractCLI(ABC):
             Session ID，如果找不到則回傳 None
         """
         pass
+
+    def create_session(self) -> str:
+        """建立新的 session.
+
+        此方法為可選實作。對於會自動建立 session 的 CLI (如 Gemini, Cursor)，
+        使用預設實作（回傳空字串）。對於需要明確建立 session 的 CLI (如 Claude)，
+        應該覆寫此方法。
+
+        Returns:
+            新的 session ID，若 CLI 會自動建立 session 則回傳空字串
+
+        Raises:
+            AgentExecutionError: 如果 session 建立失敗
+        """
+        # 預設實作：回傳空字串，表示 CLI 會自動建立 session
+        return ""
