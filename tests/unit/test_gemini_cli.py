@@ -179,6 +179,25 @@ class TestGeminiCLIParseResponse:
         assert permission_denials[1].tool_name == "write_file"
         assert permission_denials[1].tool_input == {}
 
+    def test_parse_response_extracts_tool_not_registered_errors(self, gemini_config):
+        """測試解析 tool_not_registered 錯誤作為 permission denials."""
+        cli = GeminiCLI(gemini_config)
+        output_lines = [
+            json.dumps({"type": "init", "timestamp": "2025-12-20T12:36:39.228Z", "session_id": "7efed73d-0c1f-412a-8e1b-b98b1c70d2c6", "model": "gemini-2.5-flash"}),
+            json.dumps({"type": "message", "timestamp": "2025-12-20T12:36:39.230Z", "role": "user", "content": '寫入 ~/tmp/test.txt 內容為 "Hello world!"'}),
+            json.dumps({"type": "tool_use", "timestamp": "2025-12-20T12:36:45.990Z", "tool_name": "write_file", "tool_id": "write_file-1766234205989-a2899f2734f1a", "parameters": {"file_path": "~/tmp/test.txt", "content": "Hello world!"}}),
+            json.dumps({"type": "tool_result", "timestamp": "2025-12-20T12:36:46.004Z", "tool_id": "write_file-1766234205989-a2899f2734f1a", "status": "error", "output": 'Tool "write_file" not found in registry. Tools must use the exact names that are registered. Did you mean one of: "read_file", "write_todos", "glob"?', "error": {"type": "tool_not_registered", "message": 'Tool "write_file" not found in registry. Tools must use the exact names that are registered. Did you mean one of: "read_file", "write_todos", "glob"?'}}),
+            json.dumps({"type": "message", "timestamp": "2025-12-20T12:36:49.088Z", "role": "assistant", "content": "I cannot directly write files as there is no `write_file` tool available. The available tools for file manipulation are `read_file`, `list_directory`, `search_file_content`, and `glob`.", "delta": True}),
+        ]
+
+        response, token_usage, permission_denials = cli.parse_response(output_lines)
+
+        # 應該提取 tool_result 中的 error 作為 permission denial
+        assert len(permission_denials) == 1
+        assert permission_denials[0].tool_name == "write_file"
+        # tool_input 應該從前面的 tool_use 訊息中提取
+        assert permission_denials[0].tool_input == {"file_path": "~/tmp/test.txt", "content": "Hello world!"}
+
 
 class TestGeminiCLIExtractSessionId:
     """測試 extract_session_id() 方法."""

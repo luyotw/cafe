@@ -76,6 +76,9 @@ class GeminiCLI(AbstractCLI):
         token_usage = TokenUsage()
         full_response = ""
 
+        # 用於追蹤 tool_use 和對應的參數，以便在 tool_result error 時建立 permission_denial
+        tool_use_map = {}  # tool_id -> (tool_name, parameters)
+
         for line in output_lines:
             try:
                 data = json.loads(line.strip())
@@ -89,6 +92,29 @@ class GeminiCLI(AbstractCLI):
                 # 提取最後一行的 response 作為 fallback
                 if "response" in data:
                     full_response = data["response"]
+
+                # 追蹤 tool_use，以便在 tool_result error 時使用
+                if data.get("type") == "tool_use":
+                    tool_id = data.get("tool_id")
+                    tool_name = data.get("tool_name")
+                    parameters = data.get("parameters", {})
+                    if tool_id and tool_name:
+                        tool_use_map[tool_id] = (tool_name, parameters)
+
+                # 檢查 tool_result 是否有錯誤（特別是 tool_not_registered）
+                if data.get("type") == "tool_result" and data.get("status") == "error":
+                    error = data.get("error", {})
+                    if error.get("type") == "tool_not_registered":
+                        # 從之前的 tool_use 中獲取工具名稱和參數
+                        tool_id = data.get("tool_id")
+                        if tool_id in tool_use_map:
+                            tool_name, tool_input = tool_use_map[tool_id]
+                            permission_denials.append(
+                                PermissionDenial(
+                                    tool_name=tool_name,
+                                    tool_input=tool_input
+                                )
+                            )
 
                 # 提取 permission denials
                 # 註：假設 Gemini 使用類似 Claude 的格式，若實際格式不同需調整
