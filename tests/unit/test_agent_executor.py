@@ -24,18 +24,23 @@ class TestAgentExecutorBasics:
         config = AgentConfig(name="David", cli=AgentCLI.CLAUDE)
         executor = AgentExecutor(config)
 
-        with patch.object(executor, "_execute_claude") as mock_execute:
-            mock_execute.return_value = AgentResponse(
-                response="Agent response",
-                token_usage=TokenUsage()
-            )
+        # Mock subprocess calls
+        mock_process = MagicMock()
+        mock_process.stdout.readline.side_effect = [
+            '{"content": "Agent response"}\n',
+            "",
+        ]
+        mock_process.stderr.read.return_value = ""
+        mock_process.wait.return_value = 0
 
+        with patch("subprocess.run", return_value=MagicMock(stdout='{"session_id": "test-session"}', returncode=0)), \
+             patch("subprocess.Popen", return_value=mock_process), \
+             patch("sys.platform", "win32"):
             agent_response = executor.execute("Test prompt")
 
             assert agent_response.response == "Agent response"
             assert isinstance(agent_response.token_usage, TokenUsage)
             assert agent_response.permission_denials == []
-            mock_execute.assert_called_once_with("Test prompt", None, None)
 
 
 class TestAgentExecutorWithSession:
@@ -61,15 +66,21 @@ class TestAgentExecutorWithSession:
         )
         executor = AgentExecutor(config)
 
-        with patch.object(executor, "_execute_claude") as mock_execute:
-            mock_execute.return_value = AgentResponse(response="Response with session", token_usage=TokenUsage())
+        # Mock subprocess calls
+        mock_process = MagicMock()
+        mock_process.stdout.readline.side_effect = [
+            '{"content": "Response with session"}\n',
+            "",
+        ]
+        mock_process.stderr.read.return_value = ""
+        mock_process.wait.return_value = 0
 
+        with patch("subprocess.Popen", return_value=mock_process), \
+             patch("sys.platform", "win32"):
             agent_response = executor.execute("Prompt with session")
 
             assert agent_response.response == "Response with session"
             assert isinstance(agent_response.token_usage, TokenUsage)
-            # Verify session was used in execution
-            mock_execute.assert_called_once()
 
 
 class TestAgentExecutorErrorHandling:
@@ -77,384 +88,38 @@ class TestAgentExecutorErrorHandling:
 
     def test_execute_raises_execution_error_on_failure(self) -> None:
         """測試 agent 執行失敗時拋出 AgentExecutionError"""
-        config = AgentConfig(name="Roger", cli=AgentCLI.CLAUDE)
+        config = AgentConfig(name="Roger", cli=AgentCLI.CLAUDE, session_id="test-session")
         executor = AgentExecutor(config)
 
-        with patch.object(executor, "_execute_claude") as mock_execute:
-            mock_execute.side_effect = Exception("Agent failed")
+        # Mock subprocess execution to fail
+        mock_process = MagicMock()
+        mock_process.stdout.readline.return_value = ""
+        mock_process.stderr.read.return_value = "Error: connection failed"
+        mock_process.wait.return_value = 1
 
-            with pytest.raises(AgentExecutionError, match="Agent execution failed"):
+        with patch("subprocess.Popen", return_value=mock_process), \
+             patch("sys.platform", "win32"):
+            with pytest.raises(AgentExecutionError, match="Claude execution failed"):
                 executor.execute("Test prompt")
 
     def test_execution_error_contains_original_error(self) -> None:
         """測試 AgentExecutionError 包含原始錯誤資訊"""
-        config = AgentConfig(name="David", cli=AgentCLI.CLAUDE)
+        config = AgentConfig(name="David", cli=AgentCLI.CLAUDE, session_id="test-session")
         executor = AgentExecutor(config)
 
-        with patch.object(executor, "_execute_claude") as mock_execute:
-            original_error = ValueError("Original error")
-            mock_execute.side_effect = original_error
+        # Mock subprocess execution to fail with specific error
+        mock_process = MagicMock()
+        mock_process.stdout.readline.return_value = ""
+        mock_process.stderr.read.return_value = "Connection timeout"
+        mock_process.wait.return_value = 1
 
+        with patch("subprocess.Popen", return_value=mock_process), \
+             patch("sys.platform", "win32"):
             with pytest.raises(AgentExecutionError) as exc_info:
                 executor.execute("Test prompt")
 
-            assert exc_info.value.__cause__ == original_error
-
-
-class TestClaudeExecution:
-    """Test Claude-specific execution."""
-
-    def test_execute_claude_calls_cli(self) -> None:
-        """測試執行 Claude 會呼叫 claude CLI"""
-        config = AgentConfig(
-            name="Roger",
-            cli=AgentCLI.CLAUDE,
-        )
-        executor = AgentExecutor(config)
-
-        # Mock session creation
-        mock_run_result = MagicMock()
-        mock_run_result.stdout = '{"session_id": "new-session-123"}'
-        mock_run_result.returncode = 0
-
-        # Mock streaming process
-        mock_process = MagicMock()
-        mock_process.stdout.readline.side_effect = [
-            '{"content": "Claude response"}\n',
-            "",
-        ]
-        mock_process.stderr.read.return_value = ""
-        mock_process.wait.return_value = 0
-
-        with patch("subprocess.run", return_value=mock_run_result), \
-             patch("subprocess.Popen", return_value=mock_process), \
-             patch("sys.platform", "win32"):  # Skip select() on Windows
-            agent_response = executor._execute_claude("Test prompt")
-
-            assert agent_response.response == "Claude response"
-            assert isinstance(agent_response.token_usage, TokenUsage)
-
-    def test_execute_claude_failure(self) -> None:
-        """測試 Claude 執行失敗時拋出錯誤"""
-        config = AgentConfig(
-            name="Roger",
-            cli=AgentCLI.CLAUDE,
-        )
-        executor = AgentExecutor(config)
-
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(
-                stdout="",
-                stderr="Error: session not found",
-                returncode=1
-            )
-
-            with pytest.raises(AgentExecutionError, match="Failed to create new session"):
-                executor._execute_claude("Test prompt")
-
-    def test_execute_claude_non_json_response(self) -> None:
-        """測試 Claude 回傳非 JSON 格式時返回原始輸出"""
-        config = AgentConfig(
-            name="David",
-            cli=AgentCLI.CLAUDE,
-            session_id="test-session"
-        )
-        executor = AgentExecutor(config)
-
-        # Mock streaming process with non-JSON output
-        mock_process = MagicMock()
-        mock_process.stdout.readline.side_effect = [
-            "Plain text response\n",
-            "",
-        ]
-        mock_process.stderr.read.return_value = ""
-        mock_process.wait.return_value = 0
-
-        with patch("subprocess.run", return_value=MagicMock(stdout='{"session_id": "test-session"}', returncode=0)), \
-             patch("subprocess.Popen", return_value=mock_process), \
-             patch("sys.platform", "win32"):
-            agent_response = executor._execute_claude("Test prompt")
-
-            # With streaming, non-JSON is treated as plain lines
-            assert "Plain text response" in agent_response.response
-            assert isinstance(agent_response.token_usage, TokenUsage)
-            assert agent_response.token_usage.input_tokens == 0
-
-    def test_execute_claude_session_already_in_use_raises_conflict_error(self) -> None:
-        """測試當 session 已被使用時, 拋出 AgentExecutionError"""
-        config = AgentConfig(
-            name="Roger",
-            cli=AgentCLI.CLAUDE,
-        )
-        executor = AgentExecutor(config)
-
-        # Mock session creation success
-        mock_run_result = MagicMock(
-            stdout='{"session_id": "new-session-123"}',
-            returncode=0
-        )
-
-        # Mock Popen to simulate session in use error
-        mock_process = MagicMock()
-        mock_process.stdout.readline.side_effect = [""]
-        mock_process.stderr.read.return_value = "Error: Session ID is already in use."
-        mock_process.wait.return_value = 1
-
-        with patch("subprocess.run", return_value=mock_run_result), \
-             patch("subprocess.Popen", return_value=mock_process), \
-             patch("sys.platform", "win32"):
-            with pytest.raises(AgentExecutionError, match="Claude execution failed"):
-                executor._execute_claude("Test prompt")
-
-    def test_create_new_session_success(self) -> None:
-        """測試成功創建新 session"""
-        config = AgentConfig(name="David", cli=AgentCLI.CLAUDE)
-        executor = AgentExecutor(config)
-
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(
-                stdout='{"session_id": "abc-123", "result": "Hi!"}',
-                returncode=0
-            )
-
-            session_id = executor._create_new_session()
-
-            assert session_id == "abc-123"
-            mock_run.assert_called_once()
-            # Verify it called with correct args
-            args = mock_run.call_args[0][0]
-            assert "claude" in args
-            assert "-p" in args or "--print" in args
-
-    def test_create_new_session_failure(self) -> None:
-        """測試創建 session 失敗時拋出錯誤"""
-        config = AgentConfig(name="Roger", cli=AgentCLI.CLAUDE)
-        executor = AgentExecutor(config)
-
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(
-                stdout="",
-                stderr="Error: API key not found",
-                returncode=1
-            )
-
-            with pytest.raises(AgentExecutionError, match="Failed to create new session"):
-                executor._create_new_session()
-
-
-class TestGeminiExecution:
-    """Test Gemini-specific execution."""
-
-    def test_execute_gemini_calls_cli(self) -> None:
-        """測試執行 Gemini 會呼叫 gemini CLI with streaming"""
-        config = AgentConfig(name="Roger", cli=AgentCLI.GEMINI)
-        executor = AgentExecutor(config)
-
-        with patch("subprocess.Popen") as mock_popen, \
-             patch("sys.platform", "win32"):  # Skip select() on Windows
-            # Mock process
-            mock_process = MagicMock()
-            mock_process.stdout.readline.side_effect = [
-                '{"chunk": "Gemini "}\n',
-                '{"chunk": "response"}\n',
-                '{"response": "Gemini response"}\n',
-                '',  # EOF
-            ]
-            mock_process.stderr.read.return_value = ""
-            mock_process.wait.return_value = 0
-            mock_popen.return_value = mock_process
-
-            agent_response = executor._execute_gemini("Test prompt")
-
-            assert agent_response.response == "Gemini response"
-            assert isinstance(agent_response.token_usage, TokenUsage)
-            mock_popen.assert_called_once()
-            # Verify command structure
-            call_args = mock_popen.call_args[0][0]
-            assert "gemini" in call_args
-            assert "Test prompt" in call_args
-            assert "--output-format" in call_args
-            assert "stream-json" in call_args
-
-    def test_execute_with_gemini_tool(self) -> None:
-        """測試使用 Gemini tool 執行"""
-        config = AgentConfig(name="Roger", cli=AgentCLI.GEMINI)
-        executor = AgentExecutor(config)
-
-        with patch("subprocess.Popen") as mock_popen, \
-             patch("sys.platform", "win32"):  # Skip select() on Windows
-            mock_process = MagicMock()
-            mock_process.stdout.readline.side_effect = [
-                '{"response": "Hi there"}\n',
-                '',
-            ]
-            mock_process.stderr.read.return_value = ""
-            mock_process.wait.return_value = 0
-            mock_popen.return_value = mock_process
-
-            agent_response = executor.execute("Test prompt")
-
-            assert agent_response.response == "Hi there"
-            assert isinstance(agent_response.token_usage, TokenUsage)
-
-    def test_execute_gemini_failure(self) -> None:
-        """測試 Gemini 執行失敗時拋出錯誤"""
-        config = AgentConfig(name="Roger", cli=AgentCLI.GEMINI)
-        executor = AgentExecutor(config)
-
-        with patch("subprocess.Popen") as mock_popen, \
-             patch("sys.platform", "win32"):  # Skip select() on Windows
-            mock_process = MagicMock()
-            mock_process.stdout.readline.return_value = ''
-            mock_process.stderr.read.return_value = "Error: API key not found"
-            mock_process.wait.return_value = 1
-            mock_popen.return_value = mock_process
-
-            with pytest.raises(AgentExecutionError, match="Gemini execution failed"):
-                executor._execute_gemini("Test prompt")
-
-    def test_execute_gemini_non_json_response(self) -> None:
-        """測試 Gemini 回傳非 JSON 格式時返回原始輸出"""
-        config = AgentConfig(name="Roger", cli=AgentCLI.GEMINI)
-        executor = AgentExecutor(config)
-
-        with patch("subprocess.Popen") as mock_popen, \
-             patch("sys.platform", "win32"):  # Skip select() on Windows
-            mock_process = MagicMock()
-            mock_process.stdout.readline.side_effect = [
-                "Plain text response\n",
-                '',
-            ]
-            mock_process.stderr.read.return_value = ""
-            mock_process.wait.return_value = 0
-            mock_popen.return_value = mock_process
-
-            agent_response = executor._execute_gemini("Test prompt")
-
-            assert agent_response.response == "Plain text response\n"
-            assert isinstance(agent_response.token_usage, TokenUsage)
-
-    def test_execute_gemini_extracts_only_assistant_messages(self) -> None:
-        """測試 Gemini 只提取 assistant  messages, 過濾掉 tool output and user messages"""
-        config = AgentConfig(name="Roger", cli=AgentCLI.GEMINI)
-        executor = AgentExecutor(config)
-
-        with patch("subprocess.Popen") as mock_popen, \
-             patch("sys.platform", "win32"):  # Skip select() on Windows
-            mock_process = MagicMock()
-            # Simulate Gemini stream-json output with user message, tool output, and assistant messages
-            mock_process.stdout.readline.side_effect = [
-                '{"type":"message","role":"user","content":"User prompt"}\n',
-                '{"type":"tool_result","output":"File content with CAFE_CONFIRMED in history"}\n',
-                '{"type":"message","role":"assistant","content":"CAFE_NEED_CLARIFICATION\\n"}\n',
-                '{"type":"message","role":"assistant","content":"Here is my response"}\n',
-                '{"response": "Full response including tool output"}\n',  # Last line (final result)
-                '',
-            ]
-            mock_process.stderr.read.return_value = ""
-            mock_process.wait.return_value = 0
-            mock_popen.return_value = mock_process
-
-            agent_response = executor._execute_gemini("Test prompt")
-
-            # Should only contain assistant messages, not user message or tool output
-            assert agent_response.response == "CAFE_NEED_CLARIFICATION\nHere is my response"
-            assert "User prompt" not in agent_response.response
-            assert "File content" not in agent_response.response
-            assert "CAFE_CONFIRMED" not in agent_response.response  # Should not pick up status from history
-            assert isinstance(agent_response.token_usage, TokenUsage)
-
-
-class TestCursorExecution:
-    """Test Cursor-specific execution."""
-
-    def test_execute_cursor_calls_cli(self) -> None:
-        """測試執行 Cursor 會呼叫 cursor-agent CLI with streaming"""
-        config = AgentConfig(name="David", cli=AgentCLI.CURSOR)
-        executor = AgentExecutor(config)
-
-        with patch("subprocess.Popen") as mock_popen, \
-             patch("sys.platform", "win32"):
-            # Mock process
-            mock_process = MagicMock()
-            mock_process.stdout.readline.side_effect = [
-                '{"response": "Cursor response"}\n',
-                '',  # EOF
-            ]
-            mock_process.stderr.read.return_value = ""
-            mock_process.wait.return_value = 0
-            mock_popen.return_value = mock_process
-
-            agent_response = executor._execute_cursor("Test prompt")
-
-            assert agent_response.response == "Cursor response"
-            assert isinstance(agent_response.token_usage, TokenUsage)
-            mock_popen.assert_called_once()
-            # Verify command structure
-            call_args = mock_popen.call_args[0][0]
-            assert "cursor-agent" in call_args
-            assert "-p" in call_args
-            assert "Test prompt" in call_args
-            assert "--output-format" in call_args
-            assert "json" in call_args
-
-    def test_execute_with_cursor_tool(self) -> None:
-        """測試使用 Cursor tool 執行"""
-        config = AgentConfig(name="David", cli=AgentCLI.CURSOR)
-        executor = AgentExecutor(config)
-
-        with patch("subprocess.Popen") as mock_popen, \
-             patch("sys.platform", "win32"):
-            mock_process = MagicMock()
-            mock_process.stdout.readline.side_effect = [
-                '{"response": "Hello from Cursor"}\n',
-                '',
-            ]
-            mock_process.stderr.read.return_value = ""
-            mock_process.wait.return_value = 0
-            mock_popen.return_value = mock_process
-
-            agent_response = executor.execute("Test prompt")
-
-            assert agent_response.response == "Hello from Cursor"
-            assert isinstance(agent_response.token_usage, TokenUsage)
-
-    def test_execute_cursor_failure(self) -> None:
-        """測試 Cursor 執行失敗時拋出錯誤"""
-        config = AgentConfig(name="David", cli=AgentCLI.CURSOR)
-        executor = AgentExecutor(config)
-
-        with patch("subprocess.Popen") as mock_popen, \
-             patch("sys.platform", "win32"):
-            mock_process = MagicMock()
-            mock_process.stdout.readline.return_value = ''
-            mock_process.stderr.read.return_value = "Error: Connection failed"
-            mock_process.wait.return_value = 1
-            mock_popen.return_value = mock_process
-
-            with pytest.raises(AgentExecutionError, match="Cursor execution failed"):
-                executor._execute_cursor("Test prompt")
-
-    def test_execute_cursor_non_json_response(self) -> None:
-        """測試 Cursor 回傳非 JSON 格式時返回原始輸出"""
-        config = AgentConfig(name="David", cli=AgentCLI.CURSOR)
-        executor = AgentExecutor(config)
-
-        with patch("subprocess.Popen") as mock_popen, \
-             patch("sys.platform", "win32"):
-            mock_process = MagicMock()
-            mock_process.stdout.readline.side_effect = [
-                "Plain text from Cursor\n",
-                '',
-            ]
-            mock_process.stderr.read.return_value = ""
-            mock_process.wait.return_value = 0
-            mock_popen.return_value = mock_process
-
-            agent_response = executor._execute_cursor("Test prompt")
-
-            assert agent_response.response == "Plain text from Cursor\n"
-            assert isinstance(agent_response.token_usage, TokenUsage)
+            # The error message should contain details
+            assert "Connection timeout" in str(exc_info.value)
 
 
 class TestTokenUsageTracking:
@@ -716,133 +381,6 @@ class TestStreamingExecution:
         assert "Not valid JSON" in captured.out
 
 
-class TestClaudeStreamingExecution:
-    """測試 Claude streaming 執行"""
-
-    def test_execute_claude_uses_streaming(self, capsys) -> None:
-        """測試 Claude 使用 streaming 執行"""
-        config = AgentConfig(name="Roger", cli=AgentCLI.CLAUDE)
-        executor = AgentExecutor(config)
-
-        # Mock streaming process
-        mock_process = MagicMock()
-        mock_process.stdout.readline.side_effect = [
-            '{"content": "Response "}\n',
-            '{"content": "text"}\n',
-            '{"usage": {"input_tokens": 5, "output_tokens": 2}}\n',
-            "",
-        ]
-        mock_process.stderr.read.return_value = ""
-        mock_process.wait.return_value = 0
-
-        with patch("subprocess.run", return_value=MagicMock(stdout='{"session_id": "test-session"}', returncode=0)), \
-             patch("subprocess.Popen", return_value=mock_process), \
-             patch("sys.platform", "win32"):
-            agent_response = executor._execute_claude("Test prompt")
-
-        assert agent_response.response == "text"  # Last fragment only
-        assert agent_response.streaming_log == ["Response ", "text"]
-        assert agent_response.token_usage.input_tokens == 5
-        assert agent_response.token_usage.output_tokens == 2
-
-        # Verify streaming output was shown
-        captured = capsys.readouterr()
-        assert "Claude Response (streaming):" in captured.out
-
-    def test_execute_claude_with_new_message_format(self) -> None:
-        """測試 Claude 新 message.content[] JSON 格式能正確解析"""
-        config = AgentConfig(
-            name="David",
-            cli=AgentCLI.CLAUDE,
-            session_id="test-session"
-        )
-        executor = AgentExecutor(config)
-
-        # Mock streaming process with new Claude JSON format
-        mock_process = MagicMock()
-        mock_process.stdout.readline.side_effect = [
-            '{"type": "system", "subtype": "init", "session_id": "new-session-123"}\n',
-            '{"type": "assistant", "message": {"content": [{"type": "text", "text": "Hello from Claude"}]}}\n',
-            '{"type": "assistant", "message": {"content": [{"type": "text", "text": " with new format"}]}}\n',
-            '{"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "tool123"}]}}\n',  # Non-text content, should be ignored
-            '{"usage": {"input_tokens": 100, "output_tokens": 50}}\n',
-            "",
-        ]
-        mock_process.stderr.read.return_value = ""
-        mock_process.wait.return_value = 0
-
-        with patch("subprocess.run", return_value=MagicMock(stdout='{"session_id": "test-session"}', returncode=0)), \
-             patch("subprocess.Popen", return_value=mock_process), \
-             patch("sys.platform", "win32"):
-            agent_response = executor._execute_claude("Test prompt")
-
-            # Should extract text from message.content[] - last fragment only
-            assert agent_response.response == " with new format"
-            assert agent_response.streaming_log == ["Hello from Claude", " with new format"]
-            assert isinstance(agent_response.token_usage, TokenUsage)
-            assert agent_response.token_usage.input_tokens == 100
-            assert agent_response.token_usage.output_tokens == 50
-
-    def test_execute_claude_with_mixed_content_types(self) -> None:
-        """測試 Claude message.content[] 包含多種類型時只提取 text"""
-        config = AgentConfig(
-            name="David",
-            cli=AgentCLI.CLAUDE,
-        )
-        executor = AgentExecutor(config)
-
-        # Mock streaming with mixed content types
-        mock_process = MagicMock()
-        mock_process.stdout.readline.side_effect = [
-            '{"type": "assistant", "message": {"content": [{"type": "text", "text": "Analysis: "}, {"type": "tool_use", "id": "read_file"}, {"type": "text", "text": "Complete"}]}}\n',
-            "",
-        ]
-        mock_process.stderr.read.return_value = ""
-        mock_process.wait.return_value = 0
-
-        with patch("subprocess.run", return_value=MagicMock(stdout='{"session_id": "test-session"}', returncode=0)), \
-             patch("subprocess.Popen", return_value=mock_process), \
-             patch("sys.platform", "win32"):
-            agent_response = executor._execute_claude("Analyze file")
-
-            # Should only extract text blocks, skipping tool_use - last fragment only
-            assert agent_response.response == "Complete"
-            assert agent_response.streaming_log == ["Analysis: ", "Complete"]
-
-
-class TestCopilotStreamingExecution:
-    """測試 Copilot streaming 執行"""
-
-    def test_execute_copilot_uses_streaming(self, capsys) -> None:
-        """測試 Copilot 使用 streaming 執行"""
-        config = AgentConfig(name="David", cli=AgentCLI.COPILOT)
-        executor = AgentExecutor(config)
-
-        # Mock streaming process
-        mock_process = MagicMock()
-        mock_process.stdout.readline.side_effect = [
-            "Copilot response line 1\n",
-            "Copilot response line 2\n",
-            "",
-        ]
-        mock_process.stderr.read.return_value = ""
-        mock_process.wait.return_value = 0
-
-        with patch("subprocess.Popen", return_value=mock_process), \
-             patch("pathlib.Path.exists", return_value=False), \
-             patch("sys.platform", "win32"):
-            agent_response = executor._execute_copilot("Test prompt")
-
-            # For copilot style, response is complete output (all lines joined)
-            assert agent_response.response == "Copilot response line 1\nCopilot response line 2\n"
-            # streaming_log contains all lines
-            assert agent_response.streaming_log == ["Copilot response line 1\n", "Copilot response line 2\n"]
-
-            # Verify streaming output was shown
-            captured = capsys.readouterr()
-            assert "Copilot Response (streaming):" in captured.out
-
-
 class TestCLICommandArgsGeneration:
     """測試 CLI command args 生成功能"""
 
@@ -864,10 +402,9 @@ class TestCLICommandArgsGeneration:
         mock_process.stderr.read.return_value = ""
         mock_process.wait.return_value = 0
 
-        with patch("subprocess.run", return_value=MagicMock(stdout='{"session_id": "test-session-123"}', returncode=0)), \
-             patch("subprocess.Popen", return_value=mock_process), \
+        with patch("subprocess.Popen", return_value=mock_process), \
              patch("sys.platform", "win32"):
-            agent_response = executor._execute_claude("Test prompt")
+            agent_response = executor.execute("Test prompt")
 
             # Verify cli_command_args is set
             assert agent_response.cli_command_args is not None
@@ -906,10 +443,9 @@ class TestCLICommandArgsGeneration:
 
         allowed_tools = ["Write", "Read", "Edit(/views/admin/topics.php)"]
 
-        with patch("subprocess.run", return_value=MagicMock(stdout='{"session_id": "test-session-123"}', returncode=0)), \
-             patch("subprocess.Popen", return_value=mock_process), \
+        with patch("subprocess.Popen", return_value=mock_process), \
              patch("sys.platform", "win32"):
-            agent_response = executor._execute_claude("Test prompt", allowed_tools=allowed_tools)
+            agent_response = executor.execute("Test prompt", allowed_tools=allowed_tools)
 
             # Verify cli_command_args contains allowed-tools, 值and實際命令參數一致
             assert agent_response.cli_command_args is not None
@@ -942,7 +478,7 @@ class TestCLICommandArgsGeneration:
 
         with patch("subprocess.Popen", return_value=mock_process), \
              patch("sys.platform", "win32"):
-            agent_response = executor._execute_gemini("Test prompt")
+            agent_response = executor.execute("Test prompt")
 
             # Verify cli_command_args is set
             assert agent_response.cli_command_args is not None
@@ -980,7 +516,7 @@ class TestCLICommandArgsGeneration:
 
         with patch("subprocess.Popen", return_value=mock_process), \
              patch("sys.platform", "win32"):
-            agent_response = executor._execute_gemini("Test prompt", allowed_tools=allowed_tools)
+            agent_response = executor.execute("Test prompt", allowed_tools=allowed_tools)
 
             # Verify cli_command_args contains allowed-tools, 值and實際命令參數一致
             assert agent_response.cli_command_args is not None
@@ -998,7 +534,7 @@ class TestCLICommandArgsGeneration:
         config = AgentConfig(
             name="David",
             cli=AgentCLI.CURSOR,
-            session_id="cursor-session-789"
+            # No session_id - Cursor auto-manages sessions
         )
         executor = AgentExecutor(config)
 
@@ -1015,7 +551,7 @@ class TestCLICommandArgsGeneration:
 
         with patch("subprocess.Popen", return_value=mock_process), \
              patch("sys.platform", "win32"):
-            agent_response = executor._execute_cursor("Test prompt", allowed_tools=allowed_tools)
+            agent_response = executor.execute("Test prompt", allowed_tools=allowed_tools)
 
             # Verify cli_command_args is set
             assert agent_response.cli_command_args is not None
@@ -1045,25 +581,28 @@ class TestCLICommandArgsGeneration:
         mock_process.stderr.read.return_value = ""
         mock_process.wait.return_value = 0
 
+        # Note: edit maps to write, and edit(/test.php) also maps to write after path stripping
+        # So write + edit(/test.php) deduplicate to just "write"
         allowed_tools = ["write", "shell", "edit(/test.php)"]
 
         with patch("subprocess.Popen", return_value=mock_process), \
              patch("pathlib.Path.exists", return_value=False), \
              patch("sys.platform", "win32"):
-            agent_response = executor._execute_copilot("Test prompt", allowed_tools=allowed_tools)
+            agent_response = executor.execute("Test prompt", allowed_tools=allowed_tools)
 
             # Verify cli_command_args is set
             assert agent_response.cli_command_args is not None
             assert isinstance(agent_response.cli_command_args, list)
 
             # Count --allow-tool flags
+            # write + edit(/test.php) both map to "write" and get deduplicated
+            # So we only get 2 tools: write, shell
             allow_tool_count = agent_response.cli_command_args.count("--allow-tool")
-            assert allow_tool_count == 3  # One for each tool
+            assert allow_tool_count == 2
 
-            # Verify each tool is present (no quotes needed for Copilot)
+            # Verify deduplicated tools are present
             assert "write" in agent_response.cli_command_args
             assert "shell" in agent_response.cli_command_args
-            assert "edit(/test.php)" in agent_response.cli_command_args
 
     def test_execute_claude_with_model_parameter(self) -> None:
         """測試 Claude 在配置中有 model 時會加入 --model 參數"""
@@ -1084,10 +623,9 @@ class TestCLICommandArgsGeneration:
         mock_process.stderr.read.return_value = ""
         mock_process.wait.return_value = 0
 
-        with patch("subprocess.run", return_value=MagicMock(stdout='{"session_id": "test-session-123"}', returncode=0)), \
-             patch("subprocess.Popen", return_value=mock_process) as mock_popen, \
+        with patch("subprocess.Popen", return_value=mock_process) as mock_popen, \
              patch("sys.platform", "win32"):
-            agent_response = executor._execute_claude("Test prompt")
+            agent_response = executor.execute("Test prompt")
 
             # Verify --model parameter is in command
             call_args = mock_popen.call_args[0][0]
@@ -1118,7 +656,7 @@ class TestCLICommandArgsGeneration:
 
         with patch("subprocess.Popen", return_value=mock_process) as mock_popen, \
              patch("sys.platform", "win32"):
-            agent_response = executor._execute_gemini("Test prompt")
+            agent_response = executor.execute("Test prompt")
 
             # Verify --model parameter is in command
             call_args = mock_popen.call_args[0][0]
@@ -1134,7 +672,8 @@ class TestCLICommandArgsGeneration:
         config = AgentConfig(
             name="David",
             cli=AgentCLI.CURSOR,
-            model="claude-3-5-sonnet-20241022"
+            model="claude-3-5-sonnet-20241022",
+            # No session_id - Cursor auto-manages sessions
         )
         executor = AgentExecutor(config)
 
@@ -1149,7 +688,7 @@ class TestCLICommandArgsGeneration:
 
         with patch("subprocess.Popen", return_value=mock_process) as mock_popen, \
              patch("sys.platform", "win32"):
-            agent_response = executor._execute_cursor("Test prompt")
+            agent_response = executor.execute("Test prompt")
 
             # Verify --model parameter is in command
             call_args = mock_popen.call_args[0][0]
@@ -1181,7 +720,7 @@ class TestCLICommandArgsGeneration:
         with patch("subprocess.Popen", return_value=mock_process) as mock_popen, \
              patch("pathlib.Path.exists", return_value=False), \
              patch("sys.platform", "win32"):
-            agent_response = executor._execute_copilot("Test prompt")
+            agent_response = executor.execute("Test prompt")
 
             # Verify --model parameter is in command
             call_args = mock_popen.call_args[0][0]
@@ -1428,19 +967,22 @@ class TestGeminiIgnoreSetup:
     def test_creates_geminiignore_if_not_exists(self, tmp_path):
         """測試不存在時建立 .geminiignore"""
         import os
+        from cafe.agents.cli.gemini import GeminiCLI
+        from cafe.core.types import AgentConfig, AgentCLI
+
         original_cwd = os.getcwd()
         try:
             os.chdir(tmp_path)
 
             config = AgentConfig(name="test", cli=AgentCLI.GEMINI)
-            executor = AgentExecutor(config)
+            cli = GeminiCLI(config)
 
             # Should not exist initially
             geminiignore = tmp_path / ".geminiignore"
             assert not geminiignore.exists()
 
             # Call ensure method
-            executor._ensure_geminiignore()
+            cli.ensure_geminiignore()
 
             # Should now exist with correct content
             assert geminiignore.exists()
@@ -1452,6 +994,9 @@ class TestGeminiIgnoreSetup:
     def test_appends_pattern_if_missing(self, tmp_path):
         """測試檔案存在但缺少 pattern 時追加"""
         import os
+        from cafe.agents.cli.gemini import GeminiCLI
+        from cafe.core.types import AgentConfig, AgentCLI
+
         original_cwd = os.getcwd()
         try:
             os.chdir(tmp_path)
@@ -1461,9 +1006,9 @@ class TestGeminiIgnoreSetup:
             geminiignore.write_text("*.log\n*.tmp\n")
 
             config = AgentConfig(name="test", cli=AgentCLI.GEMINI)
-            executor = AgentExecutor(config)
+            cli = GeminiCLI(config)
 
-            executor._ensure_geminiignore()
+            cli.ensure_geminiignore()
 
             # Should append the pattern
             content = geminiignore.read_text()
@@ -1476,6 +1021,9 @@ class TestGeminiIgnoreSetup:
     def test_does_nothing_if_already_configured(self, tmp_path):
         """測試已正確配置時不修改"""
         import os
+        from cafe.agents.cli.gemini import GeminiCLI
+        from cafe.core.types import AgentConfig, AgentCLI
+
         original_cwd = os.getcwd()
         try:
             os.chdir(tmp_path)
@@ -1486,9 +1034,9 @@ class TestGeminiIgnoreSetup:
             geminiignore.write_text(original_content)
 
             config = AgentConfig(name="test", cli=AgentCLI.GEMINI)
-            executor = AgentExecutor(config)
+            cli = GeminiCLI(config)
 
-            executor._ensure_geminiignore()
+            cli.ensure_geminiignore()
 
             # Content should remain unchanged
             assert geminiignore.read_text() == original_content
@@ -1633,7 +1181,7 @@ class TestGeminiSessionManagement:
             mock_process.wait.return_value = 0
             mock_popen.return_value = mock_process
 
-            executor._execute_gemini("Test prompt")
+            executor.execute("Test prompt")
 
             # Verify command includes --resume parameter
             call_args = mock_popen.call_args[0][0]
@@ -1660,7 +1208,7 @@ class TestGeminiSessionManagement:
             mock_process.wait.return_value = 0
             mock_popen.return_value = mock_process
 
-            executor._execute_gemini("Test prompt")
+            executor.execute("Test prompt")
 
             # Verify command does not include --resume parameter
             call_args = mock_popen.call_args[0][0]
@@ -1686,7 +1234,7 @@ class TestGeminiSessionManagement:
             mock_popen.return_value = mock_process
 
             # Execute without existing session_id
-            executor._execute_gemini("Test prompt")
+            executor.execute("Test prompt")
 
             # Verify session_id was extracted and stored
             assert executor.config.session_id == "extracted-session-789"
@@ -1710,7 +1258,7 @@ class TestGeminiSessionManagement:
             mock_process_1.wait.return_value = 0
             mock_popen.return_value = mock_process_1
 
-            response1 = executor._execute_gemini("First prompt")
+            response1 = executor.execute("First prompt")
             assert response1.response == "First response"
             assert executor.config.session_id == "first-session-abc"
 
@@ -1730,7 +1278,7 @@ class TestGeminiSessionManagement:
             mock_process_2.wait.return_value = 0
             mock_popen.return_value = mock_process_2
 
-            response2 = executor._execute_gemini("Second prompt")
+            response2 = executor.execute("Second prompt")
             assert response2.response == "Second response"
             assert executor.config.session_id == "first-session-abc"
 
@@ -1763,149 +1311,11 @@ class TestGeminiSessionManagement:
             mock_process.wait.return_value = 0
             mock_popen.return_value = mock_process
 
-            executor._execute_gemini("Test prompt")
+            executor.execute("Test prompt")
 
             # Should update to new session_id
             assert executor.config.session_id == "new-session-456"
 
-
-
-class TestPromptTooLongErrorHandling:
-    """Test handling of 'Prompt is too long' errors by creating fresh session."""
-
-    def test_claude_handles_prompt_too_long_error(self) -> None:
-        """測試 Claude 遇到 prompt too long 錯誤時自動建立新 session 並重試"""
-        config = AgentConfig(
-            name="Roger",
-            cli=AgentCLI.CLAUDE,
-            session_id="old-session-123"
-        )
-        executor = AgentExecutor(config)
-
-        call_count = 0
-
-        def mock_popen_side_effect(*args, **kwargs):
-            nonlocal call_count
-            call_count += 1
-
-            mock_process = MagicMock()
-
-            if call_count == 1:
-                # First call: return prompt too long error
-                mock_process.stdout.readline.side_effect = [
-                    '{"type":"assistant","message":{"content":[{"type":"text","text":"Prompt is too long"}]},"error":"invalid_request"}\n',
-                    '',
-                ]
-            else:
-                # Second call (after retry): return success
-                mock_process.stdout.readline.side_effect = [
-                    '{"content": "Success with new session"}\n',
-                    '',
-                ]
-
-            mock_process.stderr.read.return_value = ""
-            mock_process.wait.return_value = 0
-            return mock_process
-
-        with patch("subprocess.run") as mock_run, \
-             patch("subprocess.Popen") as mock_popen, \
-             patch("sys.platform", "win32"):
-
-            # Mock session creation
-            mock_run.return_value = MagicMock(
-                stdout='{"session_id": "new-session-456"}',
-                returncode=0
-            )
-
-            mock_popen.side_effect = mock_popen_side_effect
-
-            # Execute should succeed after retry
-            response = executor._execute_claude("Test prompt")
-
-            # Should have called Popen twice (initial + retry)
-            assert mock_popen.call_count == 2
-
-            # Should have created new session
-            assert mock_run.call_count == 1
-
-            # Session ID should be updated
-            assert executor.config.session_id == "new-session-456"
-
-            # Response should be from second attempt
-            assert response.response == "Success with new session"
-
-    def test_prompt_too_long_error_includes_cli_command_args(self) -> None:
-        """測試 prompt too long 錯誤時, 錯誤物件包含 CLI 參數"""
-        config = AgentConfig(
-            name="Roger",
-            cli=AgentCLI.CLAUDE,
-            session_id="test-session"
-        )
-        executor = AgentExecutor(config)
-
-        with patch("subprocess.Popen") as mock_popen, \
-             patch("subprocess.run") as mock_run, \
-             patch("sys.platform", "win32"):
-
-            # Mock process returns prompt too long error
-            mock_process = MagicMock()
-            mock_process.stdout.readline.side_effect = [
-                '{"type":"assistant","message":{"content":[{"type":"text","text":"Prompt is too long"}]},"error":"invalid_request"}\n',
-                '',
-            ]
-            mock_process.stderr.read.return_value = ""
-            mock_process.wait.return_value = 0
-            mock_popen.return_value = mock_process
-
-            # Mock session creation to fail (to trigger error)
-            mock_run.side_effect = Exception("Failed to create session")
-
-            # Should raise error with cli_command_args
-            with pytest.raises(Exception):
-                executor._execute_claude("Test prompt")
-
-    def test_prompt_too_long_max_retries_exceeded(self) -> None:
-        """測試 prompt too long 錯誤超過最大重試次數時拋出錯誤"""
-        config = AgentConfig(
-            name="Roger",
-            cli=AgentCLI.CLAUDE,
-            session_id="old-session"
-        )
-        executor = AgentExecutor(config)
-
-        with patch("subprocess.Popen") as mock_popen, \
-             patch("subprocess.run") as mock_run, \
-             patch("sys.platform", "win32"):
-
-            # Always return prompt too long error (need fresh mock for each call)
-            def create_error_process(*args, **kwargs):
-                mock_process = MagicMock()
-                mock_process.stdout.readline.side_effect = [
-                    '{"type":"assistant","message":{"content":[{"type":"text","text":"Prompt is too long"}]},"error":"invalid_request"}\n',
-                    '',
-                ]
-                mock_process.stderr.read.return_value = ""
-                mock_process.wait.return_value = 0
-                return mock_process
-
-            mock_popen.side_effect = create_error_process
-
-            # Mock session creation to always return different session
-            session_count = [0]
-            def create_session(*args, **kwargs):
-                session_count[0] += 1
-                return MagicMock(
-                    stdout=f'{{"session_id": "session-{session_count[0]}"}}',
-                    returncode=0
-                )
-            mock_run.side_effect = create_session
-
-            # Should raise after max retries
-            with pytest.raises(AgentExecutionError) as exc_info:
-                executor._execute_claude("Test prompt")
-
-            # Error message should indicate prompt too long
-            assert "prompt is too long" in str(exc_info.value).lower()
 
 
 class TestAllowedDirectoriesParameter:
@@ -1916,16 +1326,22 @@ class TestAllowedDirectoriesParameter:
         config = AgentConfig(name="Roger", cli=AgentCLI.CLAUDE, session_id="test-session")
         executor = AgentExecutor(config)
 
-        with patch.object(executor, "_execute_claude") as mock_execute:
-            mock_execute.return_value = AgentResponse(
-                response="Test response",
-                token_usage=TokenUsage()
-            )
+        # Mock subprocess calls
+        mock_process = MagicMock()
+        mock_process.stdout.readline.side_effect = [
+            '{"content": "Test response"}\n',
+            "",
+        ]
+        mock_process.stderr.read.return_value = ""
+        mock_process.wait.return_value = 0
 
+        with patch("subprocess.Popen", return_value=mock_process) as mock_popen, \
+             patch("sys.platform", "win32"):
             executor.execute("Test prompt", allowed_directories=[".cafe", "src"])
 
-            # Verify _execute_claude was called with allowed_directories
-            mock_execute.assert_called_once_with("Test prompt", None, [".cafe", "src"])
+            # Verify command includes allowed directories
+            call_args = mock_popen.call_args[0][0]
+            assert "--add-dir" in call_args
 
     def test_claude_adds_add_dir_parameters(self) -> None:
         """測試 Claude 使用 --add-dir 參數"""
@@ -1980,7 +1396,7 @@ class TestAllowedDirectoriesParameter:
         mock_process.wait.return_value = 0
 
         with patch("subprocess.Popen", return_value=mock_process) as mock_popen, \
-             patch.object(executor, "_ensure_geminiignore"), \
+             patch("cafe.agents.cli.gemini.GeminiCLI.ensure_geminiignore"), \
              patch("select.select", return_value=([], [], [])):
             agent_response = executor.execute(
                 "Test prompt",

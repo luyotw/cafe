@@ -137,6 +137,48 @@ class TestGeminiCLIParseResponse:
 
         assert response == "Fallback response"
 
+    def test_parse_response_extracts_permission_denials(self, gemini_config):
+        """測試解析並提取 permission denials."""
+        cli = GeminiCLI(gemini_config)
+        output_lines = [
+            json.dumps({"type": "message", "role": "assistant", "content": "Test"}),
+            json.dumps({
+                "permission_denials": [
+                    {"tool_name": "write_file", "tool_input": {"path": "/etc/passwd"}},
+                    {"tool_name": "run_shell_command", "tool_input": {"command": "rm -rf /"}}
+                ]
+            }),
+        ]
+
+        response, token_usage, permission_denials = cli.parse_response(output_lines)
+
+        assert len(permission_denials) == 2
+        assert permission_denials[0].tool_name == "write_file"
+        assert permission_denials[0].tool_input == {"path": "/etc/passwd"}
+        assert permission_denials[1].tool_name == "run_shell_command"
+        assert permission_denials[1].tool_input == {"command": "rm -rf /"}
+
+    def test_parse_response_handles_missing_permission_denial_fields(self, gemini_config):
+        """測試處理缺少欄位的 permission denials."""
+        cli = GeminiCLI(gemini_config)
+        output_lines = [
+            json.dumps({"type": "message", "role": "assistant", "content": "Test"}),
+            json.dumps({
+                "permission_denials": [
+                    {},  # 缺少所有欄位
+                    {"tool_name": "write_file"}  # 缺少 tool_input
+                ]
+            }),
+        ]
+
+        response, token_usage, permission_denials = cli.parse_response(output_lines)
+
+        assert len(permission_denials) == 2
+        assert permission_denials[0].tool_name == ""
+        assert permission_denials[0].tool_input == {}
+        assert permission_denials[1].tool_name == "write_file"
+        assert permission_denials[1].tool_input == {}
+
 
 class TestGeminiCLIExtractSessionId:
     """測試 extract_session_id() 方法."""

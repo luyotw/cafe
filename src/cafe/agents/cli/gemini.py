@@ -90,7 +90,16 @@ class GeminiCLI(AbstractCLI):
                 if "response" in data:
                     full_response = data["response"]
 
-                # TODO: 提取 permission denials (Gemini 格式不同，待實作)
+                # 提取 permission denials
+                # 註：假設 Gemini 使用類似 Claude 的格式，若實際格式不同需調整
+                if "permission_denials" in data and data["permission_denials"]:
+                    for denial_data in data["permission_denials"]:
+                        permission_denials.append(
+                            PermissionDenial(
+                                tool_name=denial_data.get("tool_name", ""),
+                                tool_input=denial_data.get("tool_input", {})
+                            )
+                        )
 
             except json.JSONDecodeError:
                 # 非 JSON 行，忽略

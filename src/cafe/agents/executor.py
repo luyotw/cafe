@@ -5,6 +5,7 @@ import subprocess
 from pathlib import Path
 from typing import Callable, List, Optional, Tuple
 
+from cafe.agents.cli import AbstractCLI, ClaudeCLI, CopilotCLI, CursorCLI, GeminiCLI
 from cafe.core.types import AgentConfig, AgentCLI, AgentResponse, PermissionDenial, TokenUsage
 from cafe.utils.git_utils import get_repo_root, to_git_ignore_path, to_relative_path
 
@@ -86,6 +87,26 @@ class AgentExecutor:
         self.config = config
         self._total_token_usage = TokenUsage()
 
+    def _get_cli_strategy(self) -> AbstractCLI:
+        """Get the appropriate CLI strategy based on config.
+
+        Returns:
+            CLI strategy instance for the configured CLI
+
+        Raises:
+            AgentExecutionError: If CLI is not supported
+        """
+        if self.config.cli == AgentCLI.CLAUDE:
+            return ClaudeCLI(self.config)
+        elif self.config.cli == AgentCLI.GEMINI:
+            return GeminiCLI(self.config)
+        elif self.config.cli == AgentCLI.CURSOR:
+            return CursorCLI(self.config)
+        elif self.config.cli == AgentCLI.COPILOT:
+            return CopilotCLI(self.config)
+        else:
+            raise AgentExecutionError(f"Unsupported agent CLI: {self.config.cli}")
+
     def _translate_tool_names(self, tools: Optional[List[str]]) -> Optional[List[str]]:
         """Translate tool names from Claude convention to current CLI convention.
 
@@ -140,16 +161,72 @@ class AgentExecutor:
         translated_tools = self._translate_tool_names(allowed_tools)
 
         try:
-            if self.config.cli == AgentCLI.CLAUDE:
-                agent_response = self._execute_claude(prompt, translated_tools, allowed_directories)
-            elif self.config.cli == AgentCLI.GEMINI:
-                agent_response = self._execute_gemini(prompt, translated_tools, allowed_directories)
-            elif self.config.cli == AgentCLI.CURSOR:
-                agent_response = self._execute_cursor(prompt, translated_tools, allowed_directories)
-            elif self.config.cli == AgentCLI.COPILOT:
-                agent_response = self._execute_copilot(prompt, translated_tools, allowed_directories)
+            # Get CLI strategy
+            cli_strategy = self._get_cli_strategy()
+
+            # For Gemini, ensure .geminiignore file exists
+            if self.config.cli == AgentCLI.GEMINI:
+                cli_strategy.ensure_geminiignore()
+
+            # For Copilot, record existing sessions before execution
+            if self.config.cli == AgentCLI.COPILOT:
+                cli_strategy.record_existing_sessions()
+
+            # Translate allowed tools using CLI-specific logic
+            cli_translated_tools = cli_strategy.translate_allowed_tools(translated_tools) if translated_tools else None
+
+            # Build command using strategy
+            cmd = cli_strategy.build_command(prompt, cli_translated_tools, allowed_directories)
+
+            # Execute with streaming
+            if self.config.cli == AgentCLI.COPILOT or self.config.cli == AgentCLI.CURSOR:
+                # Copilot and Cursor don't use stream-json
+                parse_stream_json = False
             else:
-                raise AgentExecutionError(f"Unsupported agent CLI: {self.config.cli}")
+                parse_stream_json = True
+
+            # Execute with session recovery if session_id configured
+            if self.config.session_id:
+                def create_session():
+                    # For CLI tools that auto-create sessions
+                    return ""
+
+                def update_cmd_with_session(cmd_list, new_session_id):
+                    if "--resume" in cmd_list:
+                        resume_idx = cmd_list.index("--resume")
+                        cmd_list[resume_idx + 1] = new_session_id
+                    return cmd_list
+
+                # Only use response parser for stream-json formats
+                parser = (lambda lines: self._parse_using_strategy(cli_strategy, lines)) if parse_stream_json else None
+
+                agent_response = self._execute_with_session_recovery(
+                    cmd=cmd,
+                    cli_name=self.config.cli.value.capitalize(),
+                    create_new_session_fn=create_session,
+                    update_cmd_with_session_fn=update_cmd_with_session,
+                    response_parser=parser,
+                    parse_stream_json=parse_stream_json,
+                )
+            else:
+                # Only use response parser for stream-json formats
+                parser = (lambda lines: self._parse_using_strategy(cli_strategy, lines)) if parse_stream_json else None
+
+                agent_response = self._execute_with_streaming(
+                    cmd=cmd,
+                    cli_name=self.config.cli.value.capitalize(),
+                    response_parser=parser,
+                    parse_stream_json=parse_stream_json,
+                )
+
+            # Extract session ID if needed
+            if not self.config.session_id:
+                session_id = cli_strategy.extract_session_id(agent_response.streaming_log or [])
+                if session_id:
+                    self.config.session_id = session_id
+
+            # Add CLI command args to response
+            agent_response.cli_command_args = cmd[1:]
 
             # Accumulate token usage
             self._total_token_usage.input_tokens += agent_response.token_usage.input_tokens
@@ -163,6 +240,23 @@ class AgentExecutor:
             raise
         except Exception as e:
             raise AgentExecutionError(f"Agent execution failed: {e}") from e
+
+    def _parse_using_strategy(self, cli_strategy: AbstractCLI, output_lines: List[str]) -> AgentResponse:
+        """Parse response using the CLI strategy.
+
+        Args:
+            cli_strategy: CLI strategy instance
+            output_lines: Output lines from CLI
+
+        Returns:
+            AgentResponse
+        """
+        response, token_usage, permission_denials = cli_strategy.parse_response(output_lines)
+        return AgentResponse(
+            response=response,
+            token_usage=token_usage,
+            permission_denials=permission_denials
+        )
 
     def get_total_token_usage(self) -> TokenUsage:
         """Get total accumulated token usage across all execute() calls.
@@ -510,515 +604,3 @@ class AgentExecutor:
             permission_denials=permission_denials,
             streaming_log=final_streaming_log
         )
-
-    def _execute_claude(
-        self,
-        prompt: str,
-        allowed_tools: Optional[List[str]] = None,
-        allowed_directories: Optional[List[str]] = None
-    ) -> AgentResponse:
-        """Execute Claude agent with streaming output.
-
-        Args:
-            prompt: Prompt to send to Claude
-            allowed_tools: List of allowed tools (already translated)
-            allowed_directories: List of allowed directories
-
-        Returns:
-            AgentResponse with response text, token usage, and permission denials
-        """
-        # Step 1: Get or create session
-        # If session_id already exists in config, use it; otherwise create new
-        if self.config.session_id:
-            session_id = self.config.session_id
-        else:
-            session_id = self._create_new_session()
-            # Update config immediately so session recovery can access it
-            self.config.session_id = session_id
-
-        # Step 2: Use resume with actual prompt
-        cmd = ["claude", "--resume", session_id, "-p", prompt]
-
-        # Add model if specified in config
-        if self.config.model:
-            cmd.extend(["--model", self.config.model])
-
-        # Add allowed tools if specified
-        # Claude's --allowed-tools requires double quotes, otherwise authorization fails
-        tools_arg_value = None
-        if allowed_tools:
-            # Special handling for Claude: convert absolute paths to git ignore format
-            processed_tools = []
-
-            for tool in allowed_tools:
-                # Handle tools with paths (e.g. write(/abs/path) or edit(/abs/path))
-                if "(" in tool and ")" in tool:
-                    tool_name = tool.split("(")[0].lower()
-                    path_part = tool.split("(")[1].rstrip(")")
-
-                    # Claude needs paths converted to git ignore format
-                    # Git ignore format: relative path with / prefix (e.g. /.cafe/...)
-                    # Plain relative path: without / prefix (e.g. .cafe/...) - format from Phase
-                    # Absolute path: system absolute path (e.g. /Users/me/repo/.cafe/...)
-                    path_obj = Path(path_part)
-
-                    # Distinguish path types:
-                    # 1. If already git ignore format (starts with /. or /src etc), keep unchanged
-                    # 2. If absolute path (e.g. /Users/...), convert to git ignore format
-                    # 3. If plain relative path (e.g. .cafe/...), convert to git ignore format (add / prefix)
-                    is_git_ignore_format = path_part.startswith("/") and not path_obj.is_absolute()
-
-                    if is_git_ignore_format:
-                        # Already git ignore format, use directly
-                        processed_tool = tool
-                    elif path_obj.is_absolute():
-                        # System absolute path, convert to git ignore format
-                        try:
-                            repo_root = get_repo_root()
-                            git_ignore_path = to_git_ignore_path(path_obj, repo_root)
-                            processed_tool = f"{tool_name.capitalize()}({git_ignore_path})"
-                        except (ValueError, OSError):
-                            # Conversion failed, use original path
-                            processed_tool = tool
-                    else:
-                        # Plain relative path (e.g. .cafe/...), convert to git ignore format (add / prefix)
-                        git_ignore_path = "/" + path_part
-                        processed_tool = f"{tool_name.capitalize()}({git_ignore_path})"
-                else:
-                    # Tool without path parameter
-                    processed_tool = tool
-
-                # Avoid duplicates
-                if processed_tool not in processed_tools:
-                    processed_tools.append(processed_tool)
-
-            tools_arg_value = ",".join(processed_tools)
-            cmd.extend(["--allowed-tools", tools_arg_value])
-
-        # Add streaming output format
-        cmd.extend(["--output-format", "stream-json", "--verbose"])
-
-        # Add allowed directories if specified
-        if allowed_directories:
-            for directory in allowed_directories:
-                cmd.extend(["--add-dir", directory])
-
-        # Execute with streaming - with session recovery
-        def create_session():
-            return self._create_new_session()
-
-        def update_cmd(cmd, new_session_id):
-            resume_idx = cmd.index("--resume")
-            cmd[resume_idx + 1] = new_session_id
-            return cmd
-
-        agent_response = self._execute_with_session_recovery(
-            cmd=cmd,
-            cli_name="Claude",
-            create_new_session_fn=create_session,
-            update_cmd_with_session_fn=update_cmd,
-            parse_stream_json=True,
-        )
-
-        # Session ID is already set in config (either from existing or newly created)
-        # and updated by _execute_with_session_recovery if recovery was needed
-
-        # Add CLI command args to response (actual executed argument list, excluding executable)
-        # Example: ["--resume", "session", "-p", "prompt", "--output-format", ...]
-        agent_response.cli_command_args = cmd[1:]
-
-        return agent_response
-
-    def _create_new_session(self) -> str:
-        """Create a new Claude session.
-
-        Returns:
-            New session ID
-
-        Raises:
-            AgentExecutionError: If session creation fails
-        """
-        cmd = ["claude", "-p", "Say 'hi'", "--output-format", "json"]
-
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-
-        # Check for rate limit error first (appears in stderr as plain text)
-        if result.stderr and "limit reached" in result.stderr.lower():
-            print(f"\n❌ Claude API rate limit reached\n")
-            print(f"Error message: {result.stderr.strip()}\n")
-            raise AgentExecutionError(
-                f"Claude API rate limit reached: {result.stderr}",
-                error_type="rate_limit"
-            )
-
-        try:
-            response_data = json.loads(result.stdout)
-
-            # Check for errors (like limit reached)
-            if response_data.get("is_error"):
-                error_msg = response_data.get("result", "Unknown error")
-                # Check if it's a rate limit error
-                if "limit" in error_msg.lower():
-                    print(f"\n❌ Claude API rate limit reached\n")
-                    print(f"Error message: {error_msg}\n")
-                    raise AgentExecutionError(f"Claude API error: {error_msg}", error_type="rate_limit")
-                else:
-                    print(f"\n⚠️  Claude API Error: {error_msg}\n")
-                    raise AgentExecutionError(f"Claude API error: {error_msg}")
-
-            session_id = response_data.get("session_id")
-            if not session_id:
-                raise AgentExecutionError("No session_id in response")
-            return session_id
-        except json.JSONDecodeError as e:
-            # If can't parse JSON, check returncode
-            if result.returncode != 0:
-                print(f"\n⚠️  Failed to create Claude session")
-                if result.stderr:
-                    print(f"Error: {result.stderr}\n")
-                raise AgentExecutionError(f"Failed to create new session: {result.stderr}")
-            raise AgentExecutionError(
-                f"Failed to parse session creation response: {e}"
-            ) from e
-
-    def _ensure_geminiignore(self) -> None:
-        """Ensure .geminiignore file exists with proper configuration.
-
-        Gemini CLI needs .geminiignore to exclude .cafe directory from indexing.
-        """
-        from pathlib import Path
-
-        geminiignore_path = Path(".geminiignore")
-        required_pattern = "!/.cafe"
-
-        # Check if file exists and has the required pattern
-        if geminiignore_path.exists():
-            content = geminiignore_path.read_text()
-            if required_pattern in content:
-                return  # Already configured correctly
-            # File exists but missing pattern - append it
-            with open(geminiignore_path, "a") as f:
-                if not content.endswith("\n"):
-                    f.write("\n")
-                f.write(f"{required_pattern}\n")
-        else:
-            # Create new .geminiignore file
-            geminiignore_path.write_text(f"{required_pattern}\n")
-
-    def _execute_gemini(
-        self,
-        prompt: str,
-        allowed_tools: Optional[List[str]] = None,
-        allowed_directories: Optional[List[str]] = None
-    ) -> AgentResponse:
-        """Execute Gemini agent with streaming output.
-
-        Args:
-            prompt: Prompt to send to Gemini
-            allowed_tools: List of allowed tools (already translated)
-            allowed_directories: List of allowed directories
-
-        Returns:
-            AgentResponse with response text, token usage, and permission denials
-        """
-        # Ensure .geminiignore exists with proper configuration
-        self._ensure_geminiignore()
-
-        # Build command
-        cmd = ["gemini", "-p", prompt]
-
-        # Add session if configured
-        if self.config.session_id:
-            cmd.extend(["--resume", self.config.session_id])
-
-        # Add model if specified in config
-        if self.config.model:
-            cmd.extend(["--model", self.config.model])
-
-        # Add allowed tools if specified
-        tools_arg_value = None
-        if allowed_tools:
-            # Special handling for Gemini: write_file doesn't support path restrictions
-            # write_file(/path) is treated as "no write permission", so we strip the path
-            processed_tools = []
-            for tool in allowed_tools:
-                if tool.startswith("write_file("):
-                    # Strip path parameter: write_file(/path) -> write_file
-                    tool_name = "write_file"
-                else:
-                    tool_name = tool
-
-                # Avoid duplicates
-                if tool_name not in processed_tools:
-                    processed_tools.append(tool_name)
-
-            tools_arg_value = ",".join(processed_tools)
-            cmd.extend(["--allowed-tools", tools_arg_value])
-
-        # Add streaming JSON output format
-        cmd.extend(["--output-format", "stream-json"])
-
-        # Add allowed directories if specified
-        if allowed_directories:
-            for directory in allowed_directories:
-                cmd.extend(["--include-directories", directory])
-
-        # Gemini-specific parser: parse last line as final result
-        def parse_gemini_response(output_lines: List[str]) -> AgentResponse:
-            full_output = ''.join(output_lines)
-
-            # Parse the last line as JSON (stream-json format sends final result on last line)
-            try:
-                lines = [l.strip() for l in output_lines if l.strip()]
-                if not lines:
-                    return AgentResponse(response="", token_usage=TokenUsage())
-
-                last_json = json.loads(lines[-1])
-
-                # Extract only assistant messages from the full response
-                # The response field contains the entire conversation, but we only want the assistant's messages
-                assistant_messages = []
-                permission_denials: List[PermissionDenial] = []
-
-                for line in lines:
-                    try:
-                        data = json.loads(line)
-                        if data.get("type") == "message" and data.get("role") == "assistant":
-                            content = data.get("content", "")
-                            if content:
-                                assistant_messages.append(content)
-
-                        # Extract permission_denials from stats.tools.byName[tool].decisions.reject
-                        # Gemini uses different format - extract from stats if available
-                        if "stats" in data and "tools" in data["stats"]:
-                            tools_stats = data["stats"]["tools"]
-                            if "byName" in tools_stats:
-                                for tool_name, tool_stats in tools_stats["byName"].items():
-                                    decisions = tool_stats.get("decisions", {})
-                                    # If there are rejected decisions, we need more info
-                                    # For now, skip Gemini permission denials (will implement later)
-                                    pass
-
-                    except (json.JSONDecodeError, KeyError):
-                        continue
-
-                # If we extracted assistant messages, use those; otherwise fall back to full response
-                response = "".join(assistant_messages) if assistant_messages else last_json.get("response", full_output)
-
-                # Parse token usage if available
-                token_usage = TokenUsage()
-
-                return AgentResponse(
-                    response=response,
-                    token_usage=token_usage,
-                    permission_denials=permission_denials
-                )
-            except json.JSONDecodeError:
-                # If not JSON, return raw output
-                return AgentResponse(response=full_output, token_usage=TokenUsage())
-
-        # Gemini content extractor function
-        def extract_gemini_content(data: dict) -> Optional[str]:
-            """Extract content from Gemini stream-json format.
-            
-            Only extract content from assistant messages, not user messages (prompt echo).
-            """
-            # Only extract content if it's from the assistant
-            if data.get("role") == "assistant":
-                return data.get("content")
-            return None
-
-        # Execute Gemini
-        agent_response = self._execute_with_streaming(
-            cmd,
-            "Gemini",
-            parse_gemini_response,
-            parse_stream_json=True,
-            json_content_extractor=extract_gemini_content
-        )
-
-        # Add CLI command args to response
-        # Use actual executed arguments (excluding program name)
-        agent_response.cli_command_args = cmd[1:]
-
-        return agent_response
-
-    def _execute_cursor(
-        self,
-        prompt: str,
-        allowed_tools: Optional[List[str]] = None,
-        allowed_directories: Optional[List[str]] = None
-    ) -> AgentResponse:
-        """Execute Cursor agent with streaming output.
-
-        Args:
-            prompt: Prompt to send to Cursor
-            allowed_tools: List of allowed tools (ignored - cursor-agent doesn't support permission control)
-            allowed_directories: List of allowed directories (ignored - cursor-agent doesn't support this)
-
-        Returns:
-            AgentResponse with response text, token usage, and permission denials
-        """
-        # Build command
-        cmd = ["cursor-agent", "-p", prompt]
-
-        # Add model if specified in config
-        if self.config.model:
-            cmd.extend(["--model", self.config.model])
-
-        # Add session if configured
-        if self.config.session_id:
-            cmd.extend(["--resume", self.config.session_id])
-
-        # Cursor-agent doesn't support allowed-tools, use --force to auto-approve all tools
-        cmd.append("--force")
-
-        # Add JSON output format for parsing
-        cmd.extend(["--output-format", "json"])
-
-        # Cursor-specific parser: parse JSON output
-        def parse_cursor_response(output_lines: List[str]) -> AgentResponse:
-            full_output = ''.join(output_lines)
-
-            # Parse JSON output
-            try:
-                data = json.loads(full_output.strip())
-                response = data.get("response", full_output)
-                token_usage = TokenUsage()
-                # TODO: Parse permission_denials from cursor if available
-                return AgentResponse(response=response, token_usage=token_usage)
-            except json.JSONDecodeError:
-                # If not JSON, return raw output
-                return AgentResponse(response=full_output, token_usage=TokenUsage())
-
-        # Execute with session recovery if session_id is configured
-        if self.config.session_id:
-            def create_session():
-                # Cursor creates session automatically, return empty string
-                return ""
-
-            def update_cmd(cmd, new_session_id):
-                # Update --resume argument
-                if "--resume" in cmd:
-                    resume_idx = cmd.index("--resume")
-                    cmd[resume_idx + 1] = new_session_id
-                return cmd
-
-            agent_response = self._execute_with_session_recovery(
-                cmd=cmd,
-                cli_name="Cursor",
-                create_new_session_fn=create_session,
-                update_cmd_with_session_fn=update_cmd,
-                response_parser=parse_cursor_response,
-            )
-        else:
-            agent_response = self._execute_with_streaming(cmd, "Cursor", parse_cursor_response)
-
-        # Add CLI command args to response
-        agent_response.cli_command_args = cmd[1:]
-
-        return agent_response
-
-    def _execute_copilot(
-        self,
-        prompt: str,
-        allowed_tools: Optional[List[str]] = None,
-        allowed_directories: Optional[List[str]] = None
-    ) -> AgentResponse:
-        """Execute GitHub Copilot CLI agent with streaming output.
-
-        Args:
-            prompt: Prompt to send to Copilot
-            allowed_tools: List of allowed tools (already translated)
-            allowed_directories: List of allowed directories
-
-        Returns:
-            AgentResponse with response text, token usage, and permission denials
-        """
-        from pathlib import Path
-        import time
-
-        # Copilot's session directory
-        copilot_session_dir = Path.home() / ".copilot" / "session-state"
-
-        # Record session files before execution (for detecting newly created sessions)
-        existing_sessions = set()
-        if copilot_session_dir.exists():
-            existing_sessions = {f.name for f in copilot_session_dir.iterdir() if f.is_file()}
-
-        # Build command: copilot -p "prompt" --allow-all-tools or --allow-tool
-        cmd = ["copilot", "-p", prompt]
-
-        # Add model if specified in config
-        if self.config.model:
-            cmd.extend(["--model", self.config.model])
-
-        # Add allowed tools if specified
-        if allowed_tools:
-            # Use --allow-tool for each tool
-            for tool in allowed_tools:
-                cmd.extend(["--allow-tool", tool])
-        else:
-            # Use --allow-all-tools for automatic approval
-            cmd.append("--allow-all-tools")
-
-        # Add session if configured
-        if self.config.session_id:
-            cmd.extend(["--resume", self.config.session_id])
-
-        # Add allowed directories if specified
-        if allowed_directories:
-            for directory in allowed_directories:
-                cmd.extend(["--add-dir", directory])
-
-        # Execute with streaming (line-by-line mode)
-        # Use session recovery if session_id is configured
-        if self.config.session_id:
-            def create_session():
-                # Copilot creates session automatically, detect from filesystem
-                # For now, just return empty string and let filesystem detection handle it
-                return ""
-
-            def update_cmd(cmd, new_session_id):
-                # Update --resume argument
-                if "--resume" in cmd:
-                    resume_idx = cmd.index("--resume")
-                    cmd[resume_idx + 1] = new_session_id
-                return cmd
-
-            agent_response = self._execute_with_session_recovery(
-                cmd=cmd,
-                cli_name="Copilot",
-                create_new_session_fn=create_session,
-                update_cmd_with_session_fn=update_cmd,
-                parse_stream_json=False,
-            )
-        else:
-            agent_response = self._execute_with_streaming(
-                cmd=cmd,
-                cli_name="Copilot",
-                parse_stream_json=False,
-            )
-
-        # If no session_id yet, try to extract from newly created session file
-        if not self.config.session_id and copilot_session_dir.exists():
-            # Wait a bit for filesystem to update
-            time.sleep(0.1)
-            current_sessions = {f.name for f in copilot_session_dir.iterdir() if f.is_file()}
-            new_sessions = current_sessions - existing_sessions
-
-            if new_sessions:
-                # Find newly created session, extract UUID (filename without .jsonl)
-                newest_session = sorted(new_sessions)[-1]  # Take the newest
-                session_id = newest_session.replace(".jsonl", "")
-                self.config.session_id = session_id
-
-        # Add CLI command args to response (actual executed arguments, excluding program name)
-        agent_response.cli_command_args = cmd[1:]
-
-        return agent_response
