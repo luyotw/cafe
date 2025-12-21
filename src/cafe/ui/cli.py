@@ -1707,32 +1707,55 @@ def plan(
             selected_template = template
             template_mode = "manual"
         elif not is_resume:
-            # No template specified and not resuming - need to select one for first iteration
-            if interactive:
-                # Interactive mode: prompt user to select 'auto' or a specific template
-                import sys
-                is_interactive = sys.stdin.isatty()
+            # No template specified and not resuming
+            # First, try to load template from issue.yaml
+            import yaml
+            issue_config_file = Path(f".cafe/issues/{issue_name}/issue.yaml")
+            template_from_config = None
 
-                if is_interactive:
-                    from cafe.ui.template_selector import select_template
+            if issue_config_file.exists():
+                try:
+                    with open(issue_config_file, "r") as f:
+                        issue_config = yaml.safe_load(f)
+                    template_from_config = issue_config.get("plan", {}).get("template")
+                except Exception:
+                    pass  # Ignore config read errors, will prompt user
 
-                    templates = template_manager.list_templates()
-                    template_paths = {name: template_manager.get_template_path(name) for name in templates}
-                    selected_template = select_template(templates, template_paths)
-
-                    if selected_template == "auto":
-                        template_mode = "auto"
-                    else:
-                        template_mode = "manual"
+            if template_from_config:
+                # Use template from config
+                selected_template = template_from_config
+                if template_from_config == "auto":
+                    template_mode = "auto"
                 else:
-                    # Non-interactive but interactive flag set (piped stdin)
-                    # Default to auto mode
+                    template_mode = "manual"
+                console.print(f"[dim]Using template from config: {template_from_config}[/dim]")
+            else:
+                # No template in config - need to select one for first iteration
+                if interactive:
+                    # Interactive mode: prompt user to select 'auto' or a specific template
+                    import sys
+                    is_interactive = sys.stdin.isatty()
+
+                    if is_interactive:
+                        from cafe.ui.template_selector import select_template
+
+                        templates = template_manager.list_templates()
+                        template_paths = {name: template_manager.get_template_path(name) for name in templates}
+                        selected_template = select_template(templates, template_paths)
+
+                        if selected_template == "auto":
+                            template_mode = "auto"
+                        else:
+                            template_mode = "manual"
+                    else:
+                        # Non-interactive but interactive flag set (piped stdin)
+                        # Default to auto mode
+                        selected_template = "auto"
+                        template_mode = "auto"
+                else:
+                    # Non-interactive mode with no --template: default to auto
                     selected_template = "auto"
                     template_mode = "auto"
-            else:
-                # Non-interactive mode with no --template: default to auto
-                selected_template = "auto"
-                template_mode = "auto"
 
         # Display start message
         console.print("[bold blue]📋 Plan Phase: Implementation Planning[/bold blue]")
