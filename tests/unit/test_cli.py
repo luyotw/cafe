@@ -433,6 +433,145 @@ class TestPlanCommand:
         assert result.exit_code == 1
         assert "Invalid mode" in result.stdout
 
+    @patch("cafe.ui.cli.GitOperations")
+    @patch("cafe.ui.cli.select_template")
+    @patch("cafe.ui.cli.PlanPhase")
+    def test_plan_loads_template_from_issue_config(
+        self,
+        mock_plan_phase: Mock,
+        mock_select_template: Mock,
+        mock_git_ops: Mock,
+        tmp_path: Path,
+    ) -> None:
+        """測試 plan 指令從 issue.yaml 載入 template 設定，不應該提示選擇"""
+        # Setup: Create config.yaml
+        _create_minimal_config(tmp_path)
+
+        # Setup: Create versioned spec file
+        branch_name = "test-issue"
+        spec_dir = tmp_path / ".cafe" / "issues" / branch_name / "spec"
+        spec_dir.mkdir(parents=True, exist_ok=True)
+        spec_file = spec_dir / "spec_001.md"
+        spec_file.write_text("# Spec\n\n## 開發指南\nGuide")
+
+        # Setup: Create issue.yaml with plan.template: auto
+        issue_config_file = tmp_path / ".cafe" / "issues" / branch_name / "issue.yaml"
+        issue_config_file.write_text("plan:\n  template: auto\n")
+
+        # Create a default template
+        template_dir = tmp_path / ".cafe" / "templates" / "plan"
+        template_dir.mkdir(parents=True, exist_ok=True)
+        (template_dir / "default.md").write_text("# Plan Template")
+
+        # Mock Git operations
+        mock_git_instance = MagicMock()
+        mock_git_instance.is_valid_branch.return_value = True
+        mock_git_instance.get_current_branch.return_value = branch_name
+        mock_git_ops.return_value = mock_git_instance
+
+        # Mock phase execution
+        mock_phase_instance = MagicMock()
+        mock_phase_instance.execute.return_value = PhaseResult(
+            status=PhaseStatus.COMPLETED,
+            message="Plan completed",
+            data={"iterations": 1, "status_code": "CAFE_CONFIRMED"}
+        )
+        mock_plan_phase.return_value = mock_phase_instance
+
+        # Execute
+        import os
+        old_cwd = os.getcwd()
+        try:
+            os.chdir(tmp_path)
+            result = runner.invoke(app, ["plan", "--no-interactive"])
+        finally:
+            os.chdir(old_cwd)
+
+        # Verify: Should not call select_template because config has template setting
+        mock_select_template.assert_not_called()
+
+        # Verify: PlanPhase should be called with template_mode="auto"
+        mock_plan_phase.assert_called_once()
+        call_kwargs = mock_plan_phase.call_args[1]
+        assert call_kwargs["template_mode"] == "auto"
+        assert call_kwargs["template_path"] is None
+
+        # Verify: Command succeeded
+        assert result.exit_code == 0
+        # Verify auto mode is indicated in output
+        assert "Template mode: auto" in result.stdout
+
+    @patch("cafe.ui.cli.GitOperations")
+    @patch("cafe.ui.cli.select_template")
+    @patch("cafe.ui.cli.PlanPhase")
+    @patch("sys.stdin.isatty")
+    def test_plan_loads_template_from_issue_config_interactive(
+        self,
+        mock_isatty: Mock,
+        mock_plan_phase: Mock,
+        mock_select_template: Mock,
+        mock_git_ops: Mock,
+        tmp_path: Path,
+    ) -> None:
+        """測試互動模式下，plan 指令從 issue.yaml 載入 template 設定，不應該提示選擇"""
+        # Setup: Create config.yaml
+        _create_minimal_config(tmp_path)
+
+        # Setup: Create versioned spec file
+        branch_name = "test-issue"
+        spec_dir = tmp_path / ".cafe" / "issues" / branch_name / "spec"
+        spec_dir.mkdir(parents=True, exist_ok=True)
+        spec_file = spec_dir / "spec_001.md"
+        spec_file.write_text("# Spec\n\n## 開發指南\nGuide")
+
+        # Setup: Create issue.yaml with plan.template: auto
+        issue_config_file = tmp_path / ".cafe" / "issues" / branch_name / "issue.yaml"
+        issue_config_file.write_text("plan:\n  template: auto\n")
+
+        # Create a default template
+        template_dir = tmp_path / ".cafe" / "templates" / "plan"
+        template_dir.mkdir(parents=True, exist_ok=True)
+        (template_dir / "default.md").write_text("# Plan Template")
+
+        # Mock Git operations
+        mock_git_instance = MagicMock()
+        mock_git_instance.is_valid_branch.return_value = True
+        mock_git_instance.get_current_branch.return_value = branch_name
+        mock_git_ops.return_value = mock_git_instance
+
+        # Mock isatty to simulate interactive mode
+        mock_isatty.return_value = True
+
+        # Mock phase execution
+        mock_phase_instance = MagicMock()
+        mock_phase_instance.execute.return_value = PhaseResult(
+            status=PhaseStatus.COMPLETED,
+            message="Plan completed",
+            data={"iterations": 1, "status_code": "CAFE_CONFIRMED"}
+        )
+        mock_plan_phase.return_value = mock_phase_instance
+
+        # Execute in interactive mode (default)
+        import os
+        old_cwd = os.getcwd()
+        try:
+            os.chdir(tmp_path)
+            result = runner.invoke(app, ["plan"])
+        finally:
+            os.chdir(old_cwd)
+
+        # Verify: Should not call select_template because config has template setting
+        mock_select_template.assert_not_called()
+
+        # Verify: PlanPhase should be called with template_mode="auto"
+        mock_plan_phase.assert_called_once()
+        call_kwargs = mock_plan_phase.call_args[1]
+        assert call_kwargs["template_mode"] == "auto"
+        assert call_kwargs["template_path"] is None
+
+        # Verify: Command succeeded
+        assert result.exit_code == 0
+
 
 class TestCloseCommand:
     """Test close command."""
