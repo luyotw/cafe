@@ -337,24 +337,22 @@ class TestPRCommandErrorHandling:
 
             permission_handler = PermissionHandler()
 
-            # Act
-            with patch("subprocess.run") as mock_run:
-                mock_run.return_value.returncode = 1
-                mock_run.return_value.stderr = "PR creation failed"
+            # Mock github_ops.create_pr to raise an exception
+            mock_github_ops.create_pr.side_effect = RuntimeError("PR creation failed")
 
-                phase = PRPhase(
-                    agent_manager=agent_manager,
-                    permission_handler=permission_handler,
-                    git_ops=mock_git_ops,
-                    github_ops=mock_github_ops,
-                    spec_file=spec_file,
-                    workflow_mode=WorkflowMode.LOCAL,
-                    issue_name="test-issue",
-                    draft=True,
-                    interactive=False,
-                )
+            phase = PRPhase(
+                agent_manager=agent_manager,
+                permission_handler=permission_handler,
+                git_ops=mock_git_ops,
+                github_ops=mock_github_ops,
+                spec_file=spec_file,
+                workflow_mode=WorkflowMode.LOCAL,
+                issue_name="test-issue",
+                draft=True,
+                interactive=False,
+            )
 
-                result = phase.execute()
+            result = phase.execute()
 
             # Assert
             assert result.status == PhaseStatus.FAILED
