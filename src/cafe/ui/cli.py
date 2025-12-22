@@ -2772,7 +2772,7 @@ def list_issues() -> None:
 
     if not issues_dir.exists():
         console.print("[yellow]No issues directory found[/yellow]")
-        console.print("Run 'cafe run <issue-name>' to create your first issue")
+        console.print("Run 'cafe prepare' to create your first issue")
         return
 
     # Get all issue directories
@@ -2780,7 +2780,7 @@ def list_issues() -> None:
 
     if not issues:
         console.print("[yellow]No issues found[/yellow]")
-        console.print("Run 'cafe run <issue-name>' to create your first issue")
+        console.print("Run 'cafe prepare' to create your first issue")
         return
 
     # Create table
