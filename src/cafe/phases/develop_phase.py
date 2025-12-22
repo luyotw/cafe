@@ -397,11 +397,25 @@ class DevelopPhase(Phase):
         Special logic for develop phase:
         - Iteration 1 (no previous data): Use self.user_input (if --user-input parameter provided)
         - Iteration 2+ (with previous data): Check if there's pending NEED_PERMISSION to handle
+        - If current iteration was interrupted (has prompt but no response): Reuse user_input from that iteration
 
         Returns:
             PhaseResult: If phase needs to be ended/paused
             str: User input content (usually empty, unless handling NEED_PERMISSION or --user-input provided)
         """
+        # First, check if current iteration was interrupted (e.g., rate limit error)
+        # If so, we should reuse the user_input from that interrupted iteration
+        current_iteration_file = Path(self.history_dir) / f"iteration_{self.iteration:03d}.json"
+        if current_iteration_file.exists():
+            with open(current_iteration_file, "r", encoding="utf-8") as f:
+                current_data = json.load(f)
+
+            # Check if this iteration was interrupted (has prompt but no response)
+            if current_data.get("prompt") and not current_data.get("response"):
+                # Reuse the user_input from interrupted iteration
+                interrupted_user_input = current_data.get("user_input", "")
+                return interrupted_user_input
+
         # Check for previous iteration data
         prev_data = self._load_previous_iteration_data()
 
