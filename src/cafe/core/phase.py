@@ -196,6 +196,17 @@ class Phase(ABC):
         with open(iteration_file, "w", encoding="utf-8") as f:
             json.dump(history_data, f, ensure_ascii=False, indent=2)
 
+        # 儲存串流 JSONL 檔案（如果有串流資料）
+        streaming_log = history_data.get("streaming_log", [])
+        if streaming_log:
+            try:
+                self._save_streaming_jsonl(streaming_log)
+            except Exception as e:
+                # 記錄錯誤但不中斷流程（JSONL 儲存失敗不應影響主要功能）
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.warning(f"Failed to save streaming JSONL: {e}")
+
     def _save_streaming_jsonl(self, streaming_log: List[str]) -> None:
         """儲存串流片段為 JSONL 格式檔案。
 

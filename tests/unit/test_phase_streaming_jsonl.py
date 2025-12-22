@@ -169,3 +169,68 @@ class TestSaveStreamingJsonl:
         # 驗證目錄被建立
         assert phase.history_dir.exists(), "history_dir 應該被自動建立"
         assert phase.history_dir.is_dir(), "history_dir 應該是目錄"
+
+
+class TestUpdateIterationHistoryIntegration:
+    """測試 _update_iteration_history 與 JSONL 儲存的整合"""
+
+    def test_update_iteration_history_saves_jsonl(self, tmp_path: Path) -> None:
+        """測試 _update_iteration_history 會自動儲存 JSONL 檔案"""
+        # 建立測試 phase
+        phase = ConcretePhaseWithHistory(tmp_path)
+        phase.iteration = 5
+
+        # 準備測試資料
+        phase_data = {
+            "response": "Test response",
+            "streaming_log": ["Fragment 1", "Fragment 2", "Fragment 3"],
+            "permission_denials": []
+        }
+
+        # 呼叫 _update_iteration_history
+        phase._update_iteration_history(
+            phase_specific_data=phase_data,
+            prompt="Test prompt",
+            agent_cli="claude"
+        )
+
+        # 驗證 iteration JSON 存在
+        iteration_file = phase.history_dir / "iteration_005.json"
+        assert iteration_file.exists(), "iteration JSON 檔案應該被建立"
+
+        # 驗證 JSONL 檔案存在
+        jsonl_file = phase.history_dir / "response_005.jsonl"
+        assert jsonl_file.exists(), "JSONL 檔案應該被自動建立"
+
+        # 驗證 JSONL 內容
+        with open(jsonl_file, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+        assert len(lines) == 3, "JSONL 應包含 3 行"
+
+    def test_update_iteration_history_no_jsonl_if_empty(self, tmp_path: Path) -> None:
+        """測試當 streaming_log 為空時，不建立 JSONL 檔案"""
+        # 建立測試 phase
+        phase = ConcretePhaseWithHistory(tmp_path)
+        phase.iteration = 6
+
+        # 準備測試資料（空的 streaming_log）
+        phase_data = {
+            "response": "Test response",
+            "streaming_log": [],
+            "permission_denials": []
+        }
+
+        # 呼叫 _update_iteration_history
+        phase._update_iteration_history(
+            phase_specific_data=phase_data,
+            prompt="Test prompt",
+            agent_cli="claude"
+        )
+
+        # 驗證 iteration JSON 存在
+        iteration_file = phase.history_dir / "iteration_006.json"
+        assert iteration_file.exists(), "iteration JSON 檔案應該被建立"
+
+        # 驗證 JSONL 檔案不存在
+        jsonl_file = phase.history_dir / "response_006.jsonl"
+        assert not jsonl_file.exists(), "空的 streaming_log 不應建立 JSONL 檔案"
