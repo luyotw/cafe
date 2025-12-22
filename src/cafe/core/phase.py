@@ -991,8 +991,9 @@ class Phase(ABC):
 
         This method will:
         1. Read allowed_tools from previous iteration
-        2. Merge base_allowed_tools + previous iteration's allowed_tools + newly approved tools
-        3. Remove duplicates
+        2. Filter out file-specific tools from previous iteration (e.g., edit(file_path), write(file_path))
+        3. Merge base_allowed_tools + filtered previous tools + newly approved tools
+        4. Remove duplicates
 
         Args:
             base_allowed_tools: Base tool list for this phase
@@ -1009,9 +1010,17 @@ class Phase(ABC):
         if prev_data and prev_data.get("allowed_tools"):
             prev_allowed_tools = prev_data.get("allowed_tools", [])
 
-        # Merge: base tools + previous iteration's tools + newly approved tools from denials
+        # Filter out file-specific tools from previous iteration
+        # File-specific tools have format: tool_name(file_path)
+        # We want to keep only generic tools (no parentheses) from previous iteration
+        filtered_prev_tools = [
+            tool for tool in prev_allowed_tools
+            if "(" not in tool  # Filter out tools with parentheses (file-specific)
+        ]
+
+        # Merge: base tools + filtered previous iteration's tools + newly approved tools from denials
         # Use set to avoid duplicates, then convert back to list
-        return list(set(base_allowed_tools + prev_allowed_tools + approved_tools_from_denials))
+        return list(set(base_allowed_tools + filtered_prev_tools + approved_tools_from_denials))
 
     def _get_allowed_directories(self) -> List[str]:
         """Get list of allowed directories.
