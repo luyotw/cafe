@@ -196,6 +196,43 @@ class Phase(ABC):
         with open(iteration_file, "w", encoding="utf-8") as f:
             json.dump(history_data, f, ensure_ascii=False, indent=2)
 
+    def _save_streaming_jsonl(self, streaming_log: List[str]) -> None:
+        """儲存串流片段為 JSONL 格式檔案。
+
+        將 streaming_log 中的每個片段儲存為 JSONL 格式（每行一個 JSON 物件），
+        檔案命名為 response_{iteration:03d}.jsonl。
+
+        Args:
+            streaming_log: 串流片段列表
+        """
+        # 如果 streaming_log 為空，不建立檔案
+        if not streaming_log:
+            return
+
+        # 確保 history_dir 存在
+        if not hasattr(self, "history_dir"):
+            raise AttributeError(
+                "Phase must have 'history_dir' attribute to use _save_streaming_jsonl"
+            )
+
+        history_dir = Path(self.history_dir)
+        history_dir.mkdir(parents=True, exist_ok=True)
+
+        # 建立 JSONL 檔案路徑
+        jsonl_file = history_dir / f"response_{self.iteration:03d}.jsonl"
+
+        # 寫入 JSONL 檔案（每行一個 JSON 物件）
+        with open(jsonl_file, "w", encoding="utf-8") as f:
+            for index, content in enumerate(streaming_log):
+                # 建立 JSON 物件
+                json_obj = {
+                    "index": index,
+                    "timestamp": datetime.now().isoformat(),
+                    "content": content
+                }
+                # 寫入一行 JSON（不使用縮排）
+                f.write(json.dumps(json_obj, ensure_ascii=False) + "\n")
+
     def _save_iteration_history(
         self,
         phase_specific_data: Dict[str, Any],
