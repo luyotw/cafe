@@ -77,21 +77,16 @@ class TestTranslateToolNamesWithPaths:
 class TestClaudePathProcessing:
     """測試 Claude 執行器路徑處理邏輯"""
 
-    @patch("cafe.agents.executor.AgentExecutor._execute_with_streaming")
-    @patch("cafe.agents.executor.AgentExecutor._create_new_session")
     @patch("os.getcwd")
-    def test_relative_paths_converted_to_git_ignore_format(self, mock_getcwd, mock_create_session, mock_execute):
+    def test_relative_paths_converted_to_git_ignore_format(self, mock_getcwd):
         """Claude 應該將普通相對路徑轉換為 git ignore 格式"""
+        from cafe.agents.cli.claude import ClaudeCLI
+
         # Setup
         mock_getcwd.return_value = "/Users/me/repo"
-        mock_create_session.return_value = "test-session-123"
-        mock_execute.return_value = MagicMock(
-            response="Test response",
-            cli_command_args=[],
-        )
 
-        config = AgentConfig(name="Test", cli=AgentCLI.CLAUDE)
-        executor = AgentExecutor(config)
+        config = AgentConfig(name="Test", cli=AgentCLI.CLAUDE, session_id="test-123")
+        cli = ClaudeCLI(config)
 
         # 使用普通相對路徑 allowed_tools（Phase 傳來格式）
         allowed_tools = [
@@ -99,45 +94,30 @@ class TestClaudePathProcessing:
             "Edit(.cafe/issues/test/spec/spec_001.md)",
         ]
 
-        # Execute
-        executor._execute_claude("Test prompt", allowed_tools)
-
-        # Assert：檢查傳遞給 _execute_with_streaming 命令
-        call_args = mock_execute.call_args
-        cmd = call_args.kwargs["cmd"]
-
-        # 找到 --allowed-tools 參數
-        allowed_tools_idx = cmd.index("--allowed-tools")
-        tools_arg = cmd[allowed_tools_idx + 1]
+        # Execute translate_allowed_tools
+        result = cli.translate_allowed_tools(allowed_tools)
 
         # 應該被轉換為 git ignore 格式（加上前綴 /）
-        assert "/.cafe/issues/test/spec/spec_001.md" in tools_arg
-        # 不應該包含普通相對路徑
-        assert "Write(.cafe" not in tools_arg
-        assert "Edit(.cafe" not in tools_arg
-        # 不應該包含絕對路徑
-        assert "/Users/me/repo/.cafe" not in tools_arg
+        assert "Write(/.cafe/issues/test/spec/spec_001.md)" in result
+        assert "Edit(/.cafe/issues/test/spec/spec_001.md)" in result
+        # 不應該包含普通相對路徑（沒有 /）
+        assert "Write(.cafe" not in str(result)
+        assert "Edit(.cafe" not in str(result)
 
-    @patch("cafe.agents.executor.AgentExecutor._execute_with_streaming")
-    @patch("cafe.agents.executor.AgentExecutor._create_new_session")
-    @patch("cafe.agents.executor.get_repo_root")
-    @patch("cafe.agents.executor.to_git_ignore_path")
+    @patch("cafe.agents.cli.claude.get_repo_root")
+    @patch("cafe.agents.cli.claude.to_git_ignore_path")
     def test_absolute_paths_converted_to_git_ignore_format(
-        self, mock_to_git_ignore, mock_get_repo, mock_create_session, mock_execute
+        self, mock_to_git_ignore, mock_get_repo
     ):
         """絕對路徑應該被轉換為 git ignore 格式"""
+        from cafe.agents.cli.claude import ClaudeCLI
+
         # Setup: Mock git utils functions
         mock_get_repo.return_value = Path("/Users/me/repo")
         mock_to_git_ignore.side_effect = lambda p, r: f"/.cafe/issues/test/spec/{p.name}"
 
-        mock_create_session.return_value = "test-session-123"
-        mock_execute.return_value = MagicMock(
-            response="Test response",
-            cli_command_args=[],
-        )
-
         config = AgentConfig(name="Test", cli=AgentCLI.CLAUDE)
-        executor = AgentExecutor(config)
+        cli = ClaudeCLI(config)
 
         # 使用絕對路徑 allowed_tools
         allowed_tools = [
@@ -145,40 +125,25 @@ class TestClaudePathProcessing:
             "Edit(/Users/me/repo/.cafe/issues/test/spec/spec_001.md)",
         ]
 
-        # Execute
-        executor._execute_claude("Test prompt", allowed_tools)
-
-        # Assert
-        call_args = mock_execute.call_args
-        cmd = call_args.kwargs["cmd"]
-
-        allowed_tools_idx = cmd.index("--allowed-tools")
-        tools_arg = cmd[allowed_tools_idx + 1]
+        # Execute translate_allowed_tools
+        result = cli.translate_allowed_tools(allowed_tools)
 
         # 絕對路徑應該被轉換為 git ignore 格式
-        assert "/.cafe/issues/test/spec/spec_001.md" in tools_arg
+        assert "Write(/.cafe/issues/test/spec/spec_001.md)" in result
+        assert "Edit(/.cafe/issues/test/spec/spec_001.md)" in result
         # 不應該包含絕對路徑
-        assert "/Users/me/repo/.cafe" not in tools_arg
+        assert "/Users/me/repo/.cafe" not in str(result)
 
 
 class TestGeminiPathProcessing:
     """測試 Gemini 執行器路徑處理"""
 
-    @patch("cafe.agents.executor.AgentExecutor._execute_with_streaming")
-    @patch("pathlib.Path.exists")
-    @patch("pathlib.Path.read_text")
-    def test_strips_path_from_write_file_tool(self, mock_read_text, mock_exists, mock_execute):
+    def test_strips_path_from_write_file_tool(self):
         """Gemini  write_file 應該移除路徑參數（因為 CLI 不支援路徑限制）"""
-        # Setup
-        mock_exists.return_value = True
-        mock_read_text.return_value = "!/.cafe\n"
-        mock_execute.return_value = MagicMock(
-            response="Test response",
-            cli_command_args=[],
-        )
+        from cafe.agents.cli.gemini import GeminiCLI
 
         config = AgentConfig(name="Test", cli=AgentCLI.GEMINI)
-        executor = AgentExecutor(config)
+        cli = GeminiCLI(config)
 
         # 使用普通相對路徑（Phase 傳來格式）
         # Note: 這裡測試都用 write_file, 因為 Gemini 不支援 replace
@@ -187,39 +152,24 @@ class TestGeminiPathProcessing:
             "write_file(.cafe/issues/test/plan.md)",
         ]
 
-        # Execute
-        executor._execute_gemini("Test prompt", allowed_tools)
-
-        # Assert
-        call_args = mock_execute.call_args
-        # Gemini 使用位置參數傳遞 cmd
-        cmd = call_args.args[0] if call_args.args else call_args.kwargs.get("cmd")
-
-        allowed_tools_idx = cmd.index("--allowed-tools")
-        tools_arg = cmd[allowed_tools_idx + 1]
+        # Execute translate_allowed_tools
+        result = cli.translate_allowed_tools(allowed_tools)
 
         # write_file 路徑應該被移除（去重後只保留一個 write_file）
-        assert tools_arg == "write_file"
+        assert result == ["write_file"]
         # 不應該包含路徑
-        assert ".cafe" not in tools_arg
+        assert not any(".cafe" in tool for tool in result)
 
 
 class TestCopilotPathProcessing:
     """測試 Copilot 執行器路徑處理"""
 
-    @patch("cafe.agents.executor.AgentExecutor._execute_with_streaming")
-    @patch("pathlib.Path.exists")
-    def test_passes_tools_directly_with_relative_paths(self, mock_exists, mock_execute):
+    def test_passes_tools_directly_with_relative_paths(self):
         """Copilot 應該直接傳遞普通相對路徑, 不轉換為 git ignore format"""
-        # Setup
-        mock_exists.return_value = True
-        mock_execute.return_value = MagicMock(
-            response="Test response",
-            cli_command_args=[],
-        )
+        from cafe.agents.cli.copilot import CopilotCLI
 
         config = AgentConfig(name="Test", cli=AgentCLI.COPILOT)
-        executor = AgentExecutor(config)
+        cli = CopilotCLI(config)
 
         # 使用普通相對路徑（Phase 傳來格式）
         allowed_tools = [
@@ -227,16 +177,18 @@ class TestCopilotPathProcessing:
             "write(.cafe/issues/test/plan.md)",
         ]
 
-        # Execute
-        executor._execute_copilot("Test prompt", allowed_tools)
+        # Execute translate_allowed_tools
+        # Note: Copilot strips paths, so both become just "write" and deduplicate to 1
+        result = cli.translate_allowed_tools(allowed_tools)
 
-        # Assert
-        call_args = mock_execute.call_args
-        cmd = call_args.kwargs["cmd"]
+        # Copilot strips path parameters and deduplicates
+        assert result == ["write"]
 
-        # 應該有兩個 --allow-tool 參數, 保持普通相對路徑
-        assert cmd.count("--allow-tool") == 2
-        assert "write(.cafe/issues/test/spec.md)" in cmd
-        assert "write(.cafe/issues/test/plan.md)" in cmd
-        # 不應該被轉換為 git ignore format
-        assert "write(/.cafe" not in str(cmd)
+        # Now test that build_command creates correct flags
+        cmd = cli.build_command("Test prompt", result, None)
+
+        # Should have one --allow-tool parameter for the deduplicated "write"
+        assert cmd.count("--allow-tool") == 1
+        assert "write" in cmd
+        # Paths should be stripped out
+        assert ".cafe" not in str(cmd)

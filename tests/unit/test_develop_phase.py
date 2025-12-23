@@ -1672,4 +1672,116 @@ class TestDevelopPhasePRDetection:
         assert phase.pr_number is None
 
 
+class TestDevelopPhaseInterruptedIterationRecovery:
+    """Test DevelopPhase recovery from interrupted iterations (e.g., rate limit errors)."""
+
+    def test_interrupted_iteration_reuses_user_input(self, tmp_path: Path, monkeypatch) -> None:
+        """測試中斷的 iteration（有 prompt 但沒有 response）應該重新使用該 iteration 的 user_input"""
+        monkeypatch.chdir(tmp_path)
+
+        # Setup mocks
+        mock_agent_manager = MagicMock(spec=AgentManager)
+        mock_permission_handler = MagicMock(spec=PermissionHandler)
+        mock_git_ops = MagicMock(spec=GitOperations)
+        mock_git_ops.get_current_branch.return_value = "issue1"
+        mock_git_ops.branch_exists.return_value = True
+
+        setup_agent_manager_mock(mock_agent_manager, "David")
+
+        # Create directory structure
+        issue_dir = tmp_path / ".cafe" / "issues" / "issue1"
+        spec_dir = issue_dir / "spec"
+        plan_dir = issue_dir / "plan"
+        develop_dir = issue_dir / "develop"
+        history_dir = develop_dir / "history"
+
+        spec_dir.mkdir(parents=True)
+        plan_dir.mkdir(parents=True)
+        history_dir.mkdir(parents=True)
+
+        spec_file = spec_dir / "spec_001.md"
+        spec_file.write_text("# Spec\nTest spec")
+
+        plan_file = plan_dir / "plan_001.md"
+        plan_file.write_text("# Plan\nTest plan")
+
+        # Create iteration_001.json with NEED_CLARIFICATION status
+        iteration_001 = history_dir / "iteration_001.json"
+        iteration_001.write_text(json.dumps({
+            "iteration": 1,
+            "timestamp": "2024-01-01T00:00:00",
+            "user_input": "",
+            "prompt": "First iteration prompt",
+            "cli": "claude",
+            "session_id": "session_1",
+            "allowed_tools": ["read", "write"],
+            "response": "CAFE_NEED_CLARIFICATION\nPlease clarify the requirements.",
+            "status_code": "CAFE_NEED_CLARIFICATION"
+        }, ensure_ascii=False, indent=2))
+
+        # Create develop_001.md (clarification questions)
+        develop_001 = develop_dir / "develop_001.md"
+        develop_001.write_text("# Developer Questions\n\nWhere should the functions be located?")
+
+        # Create iteration_002.json with prompt but NO response (interrupted by rate limit)
+        iteration_002 = history_dir / "iteration_002.json"
+        iteration_002.write_text(json.dumps({
+            "iteration": 2,
+            "timestamp": "2024-01-01T01:00:00",
+            "user_input": "The functions are in tests/unit/test_cli_ls_rm.py",
+            "prompt": "Continue with user's answer: The functions are in tests/unit/test_cli_ls_rm.py",
+            "cli": "claude",
+            "session_id": "session_1",
+            "allowed_tools": ["read", "write"],
+            "response": None,
+            "status_code": None,
+            "error": "Claude execution failed with code 1: ",
+            "error_type": "rate_limit"
+        }, ensure_ascii=False, indent=2))
+
+        # Mock agent execution to return success
+        mock_agent_manager.execute.return_value = (
+            "CAFE_CONFIRMED\nWork completed.",
+            TokenUsage(),
+            [],  # permission_denials
+            ["claude", "-p", "test"],  # cli_command_args
+            None  # streaming_log
+        )
+        mock_agent_manager.get_total_token_usage.return_value = TokenUsage()
+
+        # Create phase
+        phase = DevelopPhase(
+            agent_manager=mock_agent_manager,
+            permission_handler=mock_permission_handler,
+            git_ops=mock_git_ops,
+            spec_file=str(spec_file),
+            plan_file=str(plan_file),
+            workflow_mode=WorkflowMode.LOCAL,
+            issue_name="issue1",
+        )
+
+        # Execute phase
+        result = phase.execute()
+
+        # Verify: Should reuse iteration 2 (not create iteration 3)
+        iteration_003 = history_dir / "iteration_003.json"
+        assert not iteration_003.exists(), "Should not create iteration_003.json"
+
+        # Verify: iteration_002.json should be updated with response
+        with open(iteration_002, "r") as f:
+            updated_data = json.load(f)
+        assert updated_data["response"] == "CAFE_CONFIRMED\nWork completed."
+        assert updated_data["status_code"] == "CAFE_CONFIRMED"
+
+        # Verify: user_input should be reused from iteration_002
+        assert updated_data["user_input"] == "The functions are in tests/unit/test_cli_ls_rm.py"
+
+        # Verify: agent.execute was called with prompt that includes the user_input
+        mock_agent_manager.execute.assert_called_once()
+        call_args = mock_agent_manager.execute.call_args
+        executed_prompt = call_args[0][1]
+        # The prompt should contain the user's answer from iteration_002
+        assert "The functions are in tests/unit/test_cli_ls_rm.py" in executed_prompt or "Additional user notes" in executed_prompt
+
+
 

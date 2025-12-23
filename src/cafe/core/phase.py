@@ -196,6 +196,54 @@ class Phase(ABC):
         with open(iteration_file, "w", encoding="utf-8") as f:
             json.dump(history_data, f, ensure_ascii=False, indent=2)
 
+        # 儲存串流 JSONL 檔案（如果有串流資料）
+        streaming_log = history_data.get("streaming_log", [])
+        if streaming_log:
+            try:
+                self._save_streaming_jsonl(streaming_log)
+            except Exception as e:
+                # 記錄錯誤但不中斷流程（JSONL 儲存失敗不應影響主要功能）
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.warning(f"Failed to save streaming JSONL: {e}")
+
+    def _save_streaming_jsonl(self, streaming_log: List[str]) -> None:
+        """儲存串流片段為 JSONL 格式檔案。
+
+        將 streaming_log 中的每個片段儲存為 JSONL 格式（每行一個 JSON 物件），
+        檔案命名為 response_{iteration:03d}.jsonl。
+
+        Args:
+            streaming_log: 串流片段列表
+        """
+        # 如果 streaming_log 為空，不建立檔案
+        if not streaming_log:
+            return
+
+        # 確保 history_dir 存在
+        if not hasattr(self, "history_dir"):
+            raise AttributeError(
+                "Phase must have 'history_dir' attribute to use _save_streaming_jsonl"
+            )
+
+        history_dir = Path(self.history_dir)
+        history_dir.mkdir(parents=True, exist_ok=True)
+
+        # 建立 JSONL 檔案路徑
+        jsonl_file = history_dir / f"response_{self.iteration:03d}.jsonl"
+
+        # 寫入 JSONL 檔案（每行一個 JSON 物件）
+        with open(jsonl_file, "w", encoding="utf-8") as f:
+            for index, content in enumerate(streaming_log):
+                # 建立 JSON 物件
+                json_obj = {
+                    "index": index,
+                    "timestamp": datetime.now().isoformat(),
+                    "content": content
+                }
+                # 寫入一行 JSON（不使用縮排）
+                f.write(json.dumps(json_obj, ensure_ascii=False) + "\n")
+
     def _save_iteration_history(
         self,
         phase_specific_data: Dict[str, Any],
@@ -943,8 +991,9 @@ class Phase(ABC):
 
         This method will:
         1. Read allowed_tools from previous iteration
-        2. Merge base_allowed_tools + previous iteration's allowed_tools + newly approved tools
-        3. Remove duplicates
+        2. Filter out file-specific tools from previous iteration (e.g., edit(file_path), write(file_path))
+        3. Merge base_allowed_tools + filtered previous tools + newly approved tools
+        4. Remove duplicates
 
         Args:
             base_allowed_tools: Base tool list for this phase
@@ -961,9 +1010,17 @@ class Phase(ABC):
         if prev_data and prev_data.get("allowed_tools"):
             prev_allowed_tools = prev_data.get("allowed_tools", [])
 
-        # Merge: base tools + previous iteration's tools + newly approved tools from denials
+        # Filter out file-specific tools from previous iteration
+        # File-specific tools have format: tool_name(file_path)
+        # We want to keep only generic tools (no parentheses) from previous iteration
+        filtered_prev_tools = [
+            tool for tool in prev_allowed_tools
+            if "(" not in tool  # Filter out tools with parentheses (file-specific)
+        ]
+
+        # Merge: base tools + filtered previous iteration's tools + newly approved tools from denials
         # Use set to avoid duplicates, then convert back to list
-        return list(set(base_allowed_tools + prev_allowed_tools + approved_tools_from_denials))
+        return list(set(base_allowed_tools + filtered_prev_tools + approved_tools_from_denials))
 
     def _get_allowed_directories(self) -> List[str]:
         """Get list of allowed directories.

@@ -33,7 +33,7 @@ class TestPermissionDenialParsing:
         with patch("subprocess.run", return_value=mock_run_result), \
              patch("subprocess.Popen", return_value=mock_process), \
              patch("sys.platform", "win32"):
-            agent_response = executor._execute_claude("Read /etc/passwd")
+            agent_response = executor.execute("Read /etc/passwd")
 
             assert len(agent_response.permission_denials) == 1
             denial = agent_response.permission_denials[0]
@@ -58,7 +58,7 @@ class TestPermissionDenialParsing:
         with patch("subprocess.run", return_value=mock_run_result), \
              patch("subprocess.Popen", return_value=mock_process), \
              patch("sys.platform", "win32"):
-            agent_response = executor._execute_claude("Test")
+            agent_response = executor.execute("Test")
 
             assert len(agent_response.permission_denials) == 2
             assert agent_response.permission_denials[0].tool_name == "Read"
@@ -81,7 +81,7 @@ class TestPermissionDenialParsing:
         with patch("subprocess.run", return_value=mock_run_result), \
              patch("subprocess.Popen", return_value=mock_process), \
              patch("sys.platform", "win32"):
-            agent_response = executor._execute_claude("Test")
+            agent_response = executor.execute("Test")
 
             assert agent_response.permission_denials == []
 

@@ -17,11 +17,11 @@ from cafe.utils.github import (
 class TestGetPRComments:
     """測試獲取 PR comments 功能"""
 
-    def test_get_pr_comments_success(self):
-        """測試成功獲取 PR comments
+    def test_get_pr_comments_success_with_resolved_status(self):
+        """測試成功獲取 PR comments 並正確設置 resolved 狀態
 
-        情境：gh api 返回有效 JSON 數據
-        預期：解析並返回 PRComment 列表
+        情境：gh api graphql 返回有效 GraphQL 響應，包含 isResolved 狀態
+        預期：解析並返回 PRComment 列表，正確設置 is_resolved 欄位
         """
         # Mock gh repo view output (to get repo info)
         mock_repo_output = json.dumps({
@@ -29,31 +29,57 @@ class TestGetPRComments:
             "name": "testrepo"
         })
 
-        # Mock gh api output (review comments - direct array)
-        mock_comments_output = json.dumps([
-            {
-                "id": 123456,
-                "body": "請修正這個 bug",
-                "user": {"login": "reviewer1"},
-                "created_at": "2025-01-01T10:00:00Z",
-                "path": "src/main.py",
-                "line": 42
-            },
-            {
-                "id": 123457,
-                "body": "這個看起來不錯",
-                "user": {"login": "reviewer2"},
-                "created_at": "2025-01-01T11:00:00Z",
-                "path": "src/utils.py",
-                "line": 10
+        # Mock gh api graphql output
+        mock_graphql_output = json.dumps({
+            "data": {
+                "repository": {
+                    "pullRequest": {
+                        "reviewThreads": {
+                            "nodes": [
+                                {
+                                    "isResolved": True,  # 已解決
+                                    "comments": {
+                                        "nodes": [
+                                            {
+                                                "id": "PRRC_abc123",
+                                                "databaseId": 123456,
+                                                "body": "請修正這個 bug",
+                                                "author": {"login": "reviewer1"},
+                                                "createdAt": "2025-01-01T10:00:00Z",
+                                                "path": "src/main.py",
+                                                "line": 42
+                                            }
+                                        ]
+                                    }
+                                },
+                                {
+                                    "isResolved": False,  # 未解決
+                                    "comments": {
+                                        "nodes": [
+                                            {
+                                                "id": "PRRC_def456",
+                                                "databaseId": 123457,
+                                                "body": "這個看起來不錯",
+                                                "author": {"login": "reviewer2"},
+                                                "createdAt": "2025-01-01T11:00:00Z",
+                                                "path": "src/utils.py",
+                                                "line": 10
+                                            }
+                                        ]
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
             }
-        ])
+        })
 
         with patch('subprocess.run') as mock_run:
             # Return different outputs for different calls
             mock_run.side_effect = [
                 MagicMock(returncode=0, stdout=mock_repo_output, stderr=""),  # gh repo view
-                MagicMock(returncode=0, stdout=mock_comments_output, stderr="")  # gh api
+                MagicMock(returncode=0, stdout=mock_graphql_output, stderr="")  # gh api graphql
             ]
 
             comments = get_pr_comments(123)
@@ -67,19 +93,23 @@ class TestGetPRComments:
             assert "repo" in first_call_args
             assert "view" in first_call_args
 
-            # Second call should be gh api
+            # Second call should be gh api graphql
             second_call_args = mock_run.call_args_list[1][0][0]
             assert "gh" in second_call_args
             assert "api" in second_call_args
-            assert "/repos/testowner/testrepo/pulls/123/comments" in second_call_args
+            assert "graphql" in second_call_args
 
             # Verify results
             assert len(comments) == 2
             assert comments[0].id == "123456"
             assert comments[0].body == "請修正這個 bug"
             assert comments[0].author == "reviewer1"
-            assert comments[0].is_resolved is False  # All treated as unresolved
-            assert comments[1].is_resolved is False  # All treated as unresolved
+            assert comments[0].is_resolved is True  # First thread is resolved
+
+            assert comments[1].id == "123457"
+            assert comments[1].body == "這個看起來不錯"
+            assert comments[1].author == "reviewer2"
+            assert comments[1].is_resolved is False  # Second thread is not resolved
 
     def test_get_pr_comments_pr_not_found(self):
         """測試 PR 不存在情況
@@ -106,7 +136,7 @@ class TestGetPRComments:
     def test_get_pr_comments_no_comments(self):
         """測試 PR 沒有 comments 情況
 
-        情境：gh api 返回空 review comments 陣列
+        情境：gh api graphql 返回空 review threads
         預期：返回空列表
         """
         # Mock gh repo view output
@@ -115,13 +145,23 @@ class TestGetPRComments:
             "name": "testrepo"
         })
 
-        # Mock gh api output (empty array)
-        mock_comments_output = json.dumps([])
+        # Mock gh api graphql output (empty review threads)
+        mock_graphql_output = json.dumps({
+            "data": {
+                "repository": {
+                    "pullRequest": {
+                        "reviewThreads": {
+                            "nodes": []
+                        }
+                    }
+                }
+            }
+        })
 
         with patch('subprocess.run') as mock_run:
             mock_run.side_effect = [
                 MagicMock(returncode=0, stdout=mock_repo_output, stderr=""),  # gh repo view
-                MagicMock(returncode=0, stdout=mock_comments_output, stderr="")  # gh api
+                MagicMock(returncode=0, stdout=mock_graphql_output, stderr="")  # gh api graphql
             ]
 
             comments = get_pr_comments(123)

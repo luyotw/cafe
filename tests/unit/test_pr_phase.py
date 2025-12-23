@@ -1319,8 +1319,8 @@ class TestPRExistingFiles:
         assert result.status == PhaseStatus.FAILED
         assert "--update" in result.message
 
-    def test_pr_exists_with_update_flag_regenerates(self, tmp_path: Path, monkeypatch) -> None:
-        """測試 PR 檔案已存在且使用 --update 會重新生成"""
+    def test_pr_exists_with_update_flag_reuses_existing_files(self, tmp_path: Path, monkeypatch) -> None:
+        """測試 PR 檔案已存在且使用 --update 會重複使用現有檔案（不重新生成）"""
         monkeypatch.chdir(tmp_path)
 
         # Setup issue directory structure with existing PR files
@@ -1335,8 +1335,8 @@ class TestPRExistingFiles:
 
         pr_dir = spec_file.parent.parent / "pr"
         pr_dir.mkdir(parents=True, exist_ok=True)
-        (pr_dir / "title.txt").write_text("Old Title")
-        (pr_dir / "body.md").write_text("Old Body")
+        (pr_dir / "title.txt").write_text("Existing Title")
+        (pr_dir / "body.md").write_text("Existing Body")
 
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = ("Done! CAFE_CONFIRMED", TokenUsage(), [], None, [])
@@ -1361,14 +1361,6 @@ class TestPRExistingFiles:
             "body": "Old Body"
         }
 
-        # Mock agent to write new files
-        def mock_agent_execute(agent_name, prompt, allowed_tools, allowed_directories=None):
-            (pr_dir / "title.txt").write_text("New Generated Title")
-            (pr_dir / "body.md").write_text("New Generated Body")
-            return "CAFE_CONFIRMED", TokenUsage(), [], None, []
-
-        agent_manager.execute.side_effect = mock_agent_execute
-
         phase = PRPhase(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
@@ -1387,14 +1379,16 @@ class TestPRExistingFiles:
 
         # Should succeed and update PR
         assert result.status == PhaseStatus.COMPLETED
-        # Verify files were updated
-        assert (pr_dir / "title.txt").read_text() == "New Generated Title"
-        assert (pr_dir / "body.md").read_text() == "New Generated Body"
-        # Verify github_ops.update_pr was called
+        # Verify files were NOT regenerated (still have existing content)
+        assert (pr_dir / "title.txt").read_text() == "Existing Title"
+        assert (pr_dir / "body.md").read_text() == "Existing Body"
+        # Verify agent was NOT called (reused existing files)
+        agent_manager.execute.assert_not_called()
+        # Verify github_ops.update_pr was called with existing content
         github_ops.update_pr.assert_called_once_with(
             "123",
-            title="New Generated Title",
-            body="New Generated Body"
+            title="Existing Title",
+            body="Existing Body"
         )
 
     def test_pr_exists_with_update_and_custom_values(self, tmp_path: Path, monkeypatch) -> None:

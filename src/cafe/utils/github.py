@@ -342,17 +342,15 @@ class PRComment(BaseModel):
 
 
 def get_pr_comments(pr_number: int) -> List[PRComment]:
-    """Get all review comments from a Pull Request.
+    """Get all review comments from a Pull Request with accurate resolved status.
 
-    Note: Uses gh api to get review comments (code comments), not issue comments.
-    GitHub API does not provide isResolved status for review comments, so all
-    comments are returned with is_resolved=False.
+    Uses GitHub GraphQL API to fetch review threads which include isResolved status.
 
     Args:
         pr_number: PR number
 
     Returns:
-        List of PRComment objects
+        List of PRComment objects with accurate is_resolved status
 
     Raises:
         ValueError: If PR not found or invalid
@@ -374,9 +372,41 @@ def get_pr_comments(pr_number: int) -> List[PRComment]:
         owner = repo_data["owner"]["login"]
         repo_name = repo_data["name"]
 
-        # Get review comments using gh api
+        # Use GraphQL API to get review threads with resolved status
+        graphql_query = """
+        query($owner: String!, $name: String!, $number: Int!) {
+          repository(owner: $owner, name: $name) {
+            pullRequest(number: $number) {
+              reviewThreads(first: 100) {
+                nodes {
+                  isResolved
+                  comments(first: 50) {
+                    nodes {
+                      id
+                      databaseId
+                      body
+                      author {
+                        login
+                      }
+                      createdAt
+                      path
+                      line
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+        """
+
+        # Execute GraphQL query using gh api graphql
         result = subprocess.run(
-            ["gh", "api", f"/repos/{owner}/{repo_name}/pulls/{pr_number}/comments"],
+            ["gh", "api", "graphql",
+             "-f", f"query={graphql_query}",
+             "-f", f"owner={owner}",
+             "-f", f"name={repo_name}",
+             "-F", f"number={pr_number}"],
             capture_output=True,
             text=True,
             check=False,
@@ -387,22 +417,38 @@ def get_pr_comments(pr_number: int) -> List[PRComment]:
                 raise ValueError(f"PR #{pr_number} not found")
             raise GitHubError(f"Failed to get PR comments: {result.stderr}")
 
-        # gh api returns array directly, not wrapped in {"comments": [...]}
-        comments_data = json.loads(result.stdout)
+        response_data = json.loads(result.stdout)
+
+        # Check for GraphQL errors
+        if "errors" in response_data:
+            error_messages = [e.get("message", str(e)) for e in response_data["errors"]]
+            raise GitHubError(f"GraphQL errors: {', '.join(error_messages)}")
+
+        # Extract review threads
+        pr_data = response_data.get("data", {}).get("repository", {}).get("pullRequest")
+        if not pr_data:
+            raise ValueError(f"PR #{pr_number} not found")
+
+        review_threads = pr_data.get("reviewThreads", {}).get("nodes", [])
 
         comments = []
-        for comment in comments_data:
-            comments.append(PRComment(
-                id=str(comment.get("id", "")),
-                body=comment.get("body", ""),
-                author=comment.get("user", {}).get("login", "unknown"),
-                created_at=comment.get("created_at", ""),
-                path=comment.get("path"),
-                line=comment.get("line"),
-                # GitHub API doesn't provide isResolved for review comments
-                # All comments are treated as unresolved
-                is_resolved=False,
-            ))
+        for thread in review_threads:
+            is_resolved = thread.get("isResolved", False)
+            thread_comments = thread.get("comments", {}).get("nodes", [])
+
+            for comment in thread_comments:
+                # Use databaseId (integer) for compatibility with existing code
+                comment_id = str(comment.get("databaseId", ""))
+
+                comments.append(PRComment(
+                    id=comment_id,
+                    body=comment.get("body", ""),
+                    author=comment.get("author", {}).get("login", "unknown") if comment.get("author") else "unknown",
+                    created_at=comment.get("createdAt", ""),
+                    path=comment.get("path"),
+                    line=comment.get("line"),
+                    is_resolved=is_resolved,
+                ))
 
         return comments
 

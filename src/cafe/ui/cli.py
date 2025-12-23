@@ -2772,7 +2772,7 @@ def list_issues() -> None:
 
     if not issues_dir.exists():
         console.print("[yellow]No issues directory found[/yellow]")
-        console.print("Run 'cafe run <issue-name>' to create your first issue")
+        console.print("Run 'cafe prepare' to create your first issue")
         return
 
     # Get all issue directories
@@ -2780,13 +2780,14 @@ def list_issues() -> None:
 
     if not issues:
         console.print("[yellow]No issues found[/yellow]")
-        console.print("Run 'cafe run <issue-name>' to create your first issue")
+        console.print("Run 'cafe prepare' to create your first issue")
         return
 
     # Create table
     table = Table(title="CAFE Issues", show_header=True, header_style="bold cyan")
     table.add_column("Issue Name", style="green")
     table.add_column("Phases", style="dim")
+    table.add_column("Worktree", style="dim")
     table.add_column("Modified", style="dim")
 
     for issue in sorted(issues, key=lambda x: x.stat().st_mtime, reverse=True):
@@ -2799,13 +2800,28 @@ def list_issues() -> None:
 
         phases_str = ", ".join(phases) if phases else "empty"
 
+        # Get worktree path from issue.yaml
+        worktree_path = "-"
+        config_file = issue / "issue.yaml"
+        if config_file.exists():
+            try:
+                import yaml
+
+                with open(config_file, "r") as f:
+                    config = yaml.safe_load(f)
+                    if config and "worktree_path" in config:
+                        worktree_path = config["worktree_path"]
+            except Exception:
+                # 若讀取失敗，保持預設值 "-"
+                pass
+
         # Get last modified time
         import datetime
 
         mtime = datetime.datetime.fromtimestamp(issue.stat().st_mtime)
         mtime_str = mtime.strftime("%Y-%m-%d %H:%M")
 
-        table.add_row(issue.name, phases_str, mtime_str)
+        table.add_row(issue.name, phases_str, worktree_path, mtime_str)
 
     console.print(table)
     console.print(f"\n[dim]Total: {len(issues)} issue(s)[/dim]")

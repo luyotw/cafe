@@ -965,3 +965,145 @@ class TestPhaseAllowedDirectories:
 
         # Verify
         assert result == [".cafe"]
+
+
+class TestPhaseMergeAllowedToolsFileSpecificFiltering:
+    """測試 Phase _merge_allowed_tools 方法過濾檔案特定工具"""
+
+    def test_merge_allowed_tools_filters_old_file_specific_tools(self, tmp_path: Path, monkeypatch) -> None:
+        """測試 _merge_allowed_tools 應該過濾掉舊 iteration 的檔案特定工具（如 edit(file_path)）"""
+        monkeypatch.chdir(tmp_path)
+
+        # Setup: Create a phase with history
+        phase = ConcretePhase()
+        phase.iteration = 2
+        phase.history_dir = tmp_path / "history"
+        phase.history_dir.mkdir(parents=True)
+
+        # Create iteration_001.json with file-specific tools
+        iteration_001 = phase.history_dir / "iteration_001.json"
+        iteration_001.write_text(json.dumps({
+            "iteration": 1,
+            "allowed_tools": [
+                "read",
+                "grep",
+                "glob",
+                "ls",
+                "web_fetch",
+                "web_search",
+                "edit(.cafe/issues/issue1/spec/spec_001.md)",  # Old file-specific tool
+            ],
+            "response": "Some response",
+            "status_code": "CAFE_CONFIRMED"
+        }, ensure_ascii=False, indent=2))
+
+        # Define base_allowed_tools for iteration 2 (with new file)
+        base_allowed_tools = [
+            "read",
+            "grep",
+            "glob",
+            "ls",
+            "web_fetch",
+            "web_search",
+            "edit(.cafe/issues/issue1/spec/spec_002.md)",  # New file-specific tool
+        ]
+
+        # Execute
+        merged_tools = phase._merge_allowed_tools(base_allowed_tools)
+
+        # Verify: Should NOT contain old file-specific tool
+        assert "edit(.cafe/issues/issue1/spec/spec_001.md)" not in merged_tools
+        # Verify: Should contain new file-specific tool
+        assert "edit(.cafe/issues/issue1/spec/spec_002.md)" in merged_tools
+        # Verify: Should contain generic tools
+        assert "read" in merged_tools
+        assert "grep" in merged_tools
+        assert "glob" in merged_tools
+        assert "ls" in merged_tools
+        assert "web_fetch" in merged_tools
+        assert "web_search" in merged_tools
+
+    def test_merge_allowed_tools_keeps_generic_tools_from_previous_iteration(self, tmp_path: Path, monkeypatch) -> None:
+        """測試 _merge_allowed_tools 應該保留舊 iteration 的通用工具"""
+        monkeypatch.chdir(tmp_path)
+
+        # Setup
+        phase = ConcretePhase()
+        phase.iteration = 2
+        phase.history_dir = tmp_path / "history"
+        phase.history_dir.mkdir(parents=True)
+
+        # Create iteration_001.json with generic tools
+        iteration_001 = phase.history_dir / "iteration_001.json"
+        iteration_001.write_text(json.dumps({
+            "iteration": 1,
+            "allowed_tools": [
+                "read",
+                "write",
+                "bash",
+            ],
+            "response": "Some response",
+            "status_code": "CAFE_CONFIRMED"
+        }, ensure_ascii=False, indent=2))
+
+        # Define base_allowed_tools for iteration 2 (different set)
+        base_allowed_tools = [
+            "read",
+            "grep",
+            "edit(somefile.md)",
+        ]
+
+        # Execute
+        merged_tools = phase._merge_allowed_tools(base_allowed_tools)
+
+        # Verify: Should contain all generic tools from both iterations
+        assert "read" in merged_tools
+        assert "write" in merged_tools  # From iteration 1
+        assert "bash" in merged_tools   # From iteration 1
+        assert "grep" in merged_tools   # From iteration 2
+
+    def test_merge_allowed_tools_filters_multiple_file_specific_patterns(self, tmp_path: Path, monkeypatch) -> None:
+        """測試 _merge_allowed_tools 應該過濾多種檔案特定工具格式"""
+        monkeypatch.chdir(tmp_path)
+
+        # Setup
+        phase = ConcretePhase()
+        phase.iteration = 2
+        phase.history_dir = tmp_path / "history"
+        phase.history_dir.mkdir(parents=True)
+
+        # Create iteration_001.json with various file-specific tools
+        iteration_001 = phase.history_dir / "iteration_001.json"
+        iteration_001.write_text(json.dumps({
+            "iteration": 1,
+            "allowed_tools": [
+                "read",
+                "edit(.cafe/issues/issue1/spec/spec_001.md)",
+                "write(output_001.txt)",
+                "bash(git add file_001.py)",
+            ],
+            "response": "Some response",
+            "status_code": "CAFE_CONFIRMED"
+        }, ensure_ascii=False, indent=2))
+
+        # Define base_allowed_tools for iteration 2
+        base_allowed_tools = [
+            "read",
+            "edit(.cafe/issues/issue1/spec/spec_002.md)",
+            "write(output_002.txt)",
+        ]
+
+        # Execute
+        merged_tools = phase._merge_allowed_tools(base_allowed_tools)
+
+        # Verify: Should NOT contain old file-specific tools
+        assert "edit(.cafe/issues/issue1/spec/spec_001.md)" not in merged_tools
+        assert "write(output_001.txt)" not in merged_tools
+        assert "bash(git add file_001.py)" not in merged_tools
+
+        # Verify: Should contain new file-specific tools
+        assert "edit(.cafe/issues/issue1/spec/spec_002.md)" in merged_tools
+        assert "write(output_002.txt)" in merged_tools
+
+        # Verify: Should contain generic tools
+        assert "read" in merged_tools
