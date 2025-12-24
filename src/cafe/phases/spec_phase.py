@@ -929,7 +929,7 @@ Read {current_spec_file}  for initial requirements content."""
 """
         
         if self.iteration == 1:
-            role_reading_instruction += f"""2. Use Read tool to read {current_spec_file} to understand initial requirements content
+            role_reading_instruction += f"""2. Use Read tool to read {current_spec_file} to understand initial requirements content, then read README.md for more context
 3. Modify {current_spec_file}，Add analysis results (including original requirements, user stories, current specification, questions to clarify)
 """
         else:
