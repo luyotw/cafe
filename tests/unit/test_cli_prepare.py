@@ -586,3 +586,33 @@ class TestPrepareCommandWorktree:
             config_data = yaml.safe_load(f)
             # Non-interactive mode should not have pr config
             assert "pr" not in config_data
+
+    def test_prepare_worktree_creates_issue_yaml_in_repo_root(self, temp_repo_dir, mock_git_ops):
+        """測試 worktree 模式下，在 repo root 也創建 issue.yaml 供 cafe ls 讀取"""
+        # Execute prepare with worktree mode (non-interactive)
+        result = runner.invoke(
+            app,
+            ["prepare", "test-issue", "--worktree", ".cafe/worktrees/test-issue"]
+        )
+
+        assert result.exit_code == 0
+
+        # Verify: issue.yaml should exist in BOTH locations
+        # 1. In worktree location
+        worktree_config = temp_repo_dir / ".cafe" / "worktrees" / "test-issue" / ".cafe" / "issues" / "test-issue" / "issue.yaml"
+        assert worktree_config.exists(), "issue.yaml should exist in worktree location"
+
+        # 2. In repo root location (for cafe ls to read)
+        repo_root_config = temp_repo_dir / ".cafe" / "issues" / "test-issue" / "issue.yaml"
+        assert repo_root_config.exists(), "issue.yaml should exist in repo root location for cafe ls"
+
+        # Verify: Both files should contain worktree_path
+        with open(worktree_config) as f:
+            worktree_data = yaml.safe_load(f)
+            assert "worktree_path" in worktree_data
+            assert worktree_data["worktree_path"] == ".cafe/worktrees/test-issue"
+
+        with open(repo_root_config) as f:
+            repo_data = yaml.safe_load(f)
+            assert "worktree_path" in repo_data
+            assert repo_data["worktree_path"] == ".cafe/worktrees/test-issue"

@@ -796,6 +796,14 @@ def prepare(
         with open(issue_config_file, "w", encoding="utf-8") as f:
             yaml.dump(config_data, f, allow_unicode=True, default_flow_style=False)
 
+        # For worktree mode, also create issue.yaml in repo root for cafe ls to read
+        if use_worktree:
+            repo_root_issue_dir = Path(f".cafe/issues/{issue_name}")
+            repo_root_issue_dir.mkdir(parents=True, exist_ok=True)
+            repo_root_config_file = repo_root_issue_dir / "issue.yaml"
+            with open(repo_root_config_file, "w", encoding="utf-8") as f:
+                yaml.dump(config_data, f, allow_unicode=True, default_flow_style=False)
+
         console.print()
         # Display relative path instead of absolute path
         try:
