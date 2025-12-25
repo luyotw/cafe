@@ -43,6 +43,9 @@ app = typer.Typer(
 )
 console = Console()
 
+# List of all phases in order
+ALL_PHASES = ["spec", "plan", "develop", "review", "pr"]
+
 
 def _handle_phase_exception(e: Exception, phase_name: str, auto: bool = False) -> None:
     """Unified exception handling for phase execution.
@@ -2791,16 +2794,7 @@ def list_issues() -> None:
     table.add_column("Modified", style="dim")
 
     for issue in sorted(issues, key=lambda x: x.stat().st_mtime, reverse=True):
-        # Check which phases exist
-        phases = []
-        for phase in ["spec", "plan", "develop", "review", "pr"]:
-            phase_dir = issue / phase
-            if phase_dir.exists():
-                phases.append(phase)
-
-        phases_str = ", ".join(phases) if phases else "empty"
-
-        # Get worktree path from issue.yaml
+        # Get worktree path from issue.yaml first
         worktree_path = "-"
         config_file = issue / "issue.yaml"
         if config_file.exists():
@@ -2814,6 +2808,32 @@ def list_issues() -> None:
             except Exception:
                 # 若讀取失敗，保持預設值 "-"
                 pass
+
+        # Check which phases exist
+        # If worktree_path exists, read phases from worktree location
+        phases = []
+        if worktree_path != "-":
+            # Read phases from worktree/.cafe/issues/{issue_name}/
+            worktree_issue_dir = Path(worktree_path) / ".cafe" / "issues" / issue.name
+            if worktree_issue_dir.exists():
+                for phase in ALL_PHASES:
+                    phase_dir = worktree_issue_dir / phase
+                    if phase_dir.exists():
+                        phases.append(phase)
+            # If worktree issue dir doesn't exist, fall back to current location
+            if not phases:
+                for phase in ALL_PHASES:
+                    phase_dir = issue / phase
+                    if phase_dir.exists():
+                        phases.append(phase)
+        else:
+            # No worktree, read phases from current location
+            for phase in ALL_PHASES:
+                phase_dir = issue / phase
+                if phase_dir.exists():
+                    phases.append(phase)
+
+        phases_str = ", ".join(phases) if phases else "empty"
 
         # Get last modified time
         import datetime

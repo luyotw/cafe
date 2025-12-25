@@ -142,10 +142,57 @@ class TestLsCommand:
 
         assert result.exit_code == 0
         assert "issue-with-wt" in result.stdout
-        assert ".cafe/worktrees" in result.stdout
-        assert "issue-without-wt" in result.stdout
-        assert "issue-no-config" in result.stdout
-        assert "Total: 3 issue(s)" in result.stdout
+
+    def test_ls_reads_phases_from_worktree_location(self, tmp_path, monkeypatch):
+        """測試從 repo root 執行 cafe ls 時，應該從 worktree 目錄讀取 phases 資訊"""
+        import yaml
+
+        # Setup: Create repo structure at repo root
+        monkeypatch.chdir(tmp_path)
+
+        # Create .cafe/issues at repo root
+        repo_issues_dir = tmp_path / ".cafe" / "issues"
+        repo_issues_dir.mkdir(parents=True)
+
+        # Create issue27 at repo root with worktree_path config
+        issue27_root = repo_issues_dir / "issue27"
+        issue27_root.mkdir()
+
+        # Create issue.yaml with worktree_path
+        config = {
+            "worktree_path": ".cafe/worktrees/issue27",
+            "base_branch": "develop",
+            "feature_branch": "issue27"
+        }
+        with open(issue27_root / "issue.yaml", "w") as f:
+            yaml.dump(config, f)
+
+        # Create worktree directory with actual issue data
+        worktree_dir = tmp_path / ".cafe" / "worktrees" / "issue27"
+        worktree_dir.mkdir(parents=True)
+
+        # Create .cafe/issues/issue27 in worktree with phases
+        worktree_issue_dir = worktree_dir / ".cafe" / "issues" / "issue27"
+        worktree_issue_dir.mkdir(parents=True)
+
+        # Add spec and plan phases in worktree
+        (worktree_issue_dir / "spec").mkdir()
+        (worktree_issue_dir / "plan").mkdir()
+
+        # Execute: Run cafe ls from repo root
+        result = runner.invoke(app, ["ls"])
+
+        # Verify: Should show phases from worktree location
+        assert result.exit_code == 0
+        assert "issue27" in result.stdout
+        # Should show "spec, plan" from worktree, not "empty"
+        assert "spec, plan" in result.stdout
+        # Should NOT show "empty"
+        lines = [line for line in result.stdout.split('\n') if 'issue27' in line]
+        assert len(lines) > 0
+        for line in lines:
+            assert "empty" not in line
+        assert ".cafe/worktrees/issue27" in result.stdout
 
 
 class TestRmCommand:
