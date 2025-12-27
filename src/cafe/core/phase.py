@@ -440,11 +440,11 @@ class Phase(ABC):
                 - status_code: Extracted status code, None if not found
 
         Raises:
-            AttributeError: If phase lacks required attributes（history_dir, iteration, agent_manager）
+            AttributeError: If phase lacks required attributes（phase_dir, iteration, agent_manager）
         """
         # Check required attributes
-        if not hasattr(self, "history_dir"):
-            raise AttributeError("Phase must have 'history_dir' attribute")
+        if not hasattr(self, "phase_dir"):
+            raise AttributeError("Phase must have 'phase_dir' attribute")
         if not hasattr(self, "iteration"):
             raise AttributeError("Phase must have 'iteration' attribute")
         if not hasattr(self, "agent_manager"):
@@ -461,18 +461,19 @@ class Phase(ABC):
         agent_cli = agent_executor.config.cli.value
         agent_session_id = agent_executor.config.session_id
 
-        # 3. Save prompt to history（Before executing agent）
-        iteration_file = Path(self.history_dir) / f"iteration_{self.iteration:03d}.json"
-        if iteration_file.exists():
-            with open(iteration_file, "r", encoding="utf-8") as f:
-                history_data = json.load(f)
-            history_data["prompt"] = prompt
-            history_data["cli"] = agent_cli
-            history_data["session_id"] = agent_session_id
-            history_data["allowed_tools"] = allowed_tools
-            history_data["denied_tools"] = denied_tools
-            with open(iteration_file, "w", encoding="utf-8") as f:
-                json.dump(history_data, f, ensure_ascii=False, indent=2)
+        # 3. Save prompt to context.json（Before executing agent）
+        iteration_dir = self._get_iteration_dir(self.iteration)
+        context_file = iteration_dir / "context.json"
+        if context_file.exists():
+            with open(context_file, "r", encoding="utf-8") as f:
+                context_data = json.load(f)
+            context_data["prompt"] = prompt
+            context_data["cli"] = agent_cli
+            context_data["session_id"] = agent_session_id
+            context_data["allowed_tools"] = allowed_tools
+            context_data["denied_tools"] = denied_tools
+            with open(context_file, "w", encoding="utf-8") as f:
+                json.dump(context_data, f, ensure_ascii=False, indent=2)
 
         # 4. Execute agent（with error recovery）
         try:
@@ -498,19 +499,19 @@ class Phase(ABC):
             if is_critical_error:
                 print(f"❌ Critical error detected ({e.error_type}) - stopping execution\n")
 
-                # Update iteration history with error info
-                if iteration_file.exists():
-                    with open(iteration_file, "r", encoding="utf-8") as f:
-                        history_data = json.load(f)
+                # Update iteration context with error info
+                if context_file.exists():
+                    with open(context_file, "r", encoding="utf-8") as f:
+                        context_data = json.load(f)
 
-                    history_data["response"] = None
-                    history_data["status_code"] = None
-                    history_data["error"] = str(e)
-                    history_data["error_type"] = e.error_type
-                    history_data["is_critical"] = True
+                    context_data["response"] = None
+                    context_data["status_code"] = None
+                    context_data["error"] = str(e)
+                    context_data["error_type"] = e.error_type
+                    context_data["is_critical"] = True
 
-                    with open(iteration_file, "w", encoding="utf-8") as f:
-                        json.dump(history_data, f, ensure_ascii=False, indent=2)
+                    with open(context_file, "w", encoding="utf-8") as f:
+                        json.dump(context_data, f, ensure_ascii=False, indent=2)
 
                 # Create a CriticalError wrapper to signal this should stop the workflow
                 from cafe.core.types import CriticalPhaseError
@@ -849,16 +850,16 @@ class Phase(ABC):
         """Get the path to status.json file.
 
         Returns:
-            Path to status.json in {history_dir.parent}/status.json
+            Path to status.json in {phase_dir}/status.json
 
         For different phases:
             - SpecPhase: .cafe/issues/myissue/spec/status.json
             - PlanPhase: .cafe/issues/myissue/plan/status.json
             - DevelopPhase: .cafe/issues/myissue/develop/status.json
         """
-        if not hasattr(self, "history_dir"):
-            raise AttributeError("Phase must have 'history_dir' attribute")
-        return Path(self.history_dir).parent / "status.json"
+        if not hasattr(self, "phase_dir"):
+            raise AttributeError("Phase must have 'phase_dir' attribute")
+        return Path(self.phase_dir) / "status.json"
 
     def _detect_written_output_files(self) -> List[Path]:
         """Detect if agent wrote output files before failure.
@@ -1055,17 +1056,18 @@ class Phase(ABC):
         """
         if not hasattr(self, "iteration"):
             raise AttributeError("Phase must have 'iteration' attribute")
-        if not hasattr(self, "history_dir"):
-            raise AttributeError("Phase must have 'history_dir' attribute")
+        if not hasattr(self, "phase_dir"):
+            raise AttributeError("Phase must have 'phase_dir' attribute")
 
         if self.iteration == 1:
             return None
 
-        prev_iteration_file = Path(self.history_dir) / f"iteration_{self.iteration - 1:03d}.json"
-        if not prev_iteration_file.exists():
+        prev_iteration_dir = self._get_iteration_dir(self.iteration - 1)
+        prev_context_file = prev_iteration_dir / "context.json"
+        if not prev_context_file.exists():
             return None
 
-        with open(prev_iteration_file, "r", encoding="utf-8") as f:
+        with open(prev_context_file, "r", encoding="utf-8") as f:
             return json.load(f)
 
     def _merge_allowed_tools(
@@ -1212,14 +1214,15 @@ class Phase(ABC):
         """
         if not hasattr(self, "iteration"):
             raise AttributeError("Phase must have 'iteration' attribute")
-        if not hasattr(self, "history_dir"):
-            raise AttributeError("Phase must have 'history_dir' attribute")
+        if not hasattr(self, "phase_dir"):
+            raise AttributeError("Phase must have 'phase_dir' attribute")
 
-        current_iteration_file = Path(self.history_dir) / f"iteration_{self.iteration:03d}.json"
-        if not current_iteration_file.exists():
+        current_iteration_dir = self._get_iteration_dir(self.iteration)
+        current_context_file = current_iteration_dir / "context.json"
+        if not current_context_file.exists():
             return None
 
-        with open(current_iteration_file, "r", encoding="utf-8") as f:
+        with open(current_context_file, "r", encoding="utf-8") as f:
             return json.load(f)
 
     def _load_iteration_counter(self) -> int:
@@ -1855,13 +1858,9 @@ class Phase(ABC):
         if not phase_dir.exists():
             return 1
 
-        # Count based on iteration history files, not output files
+        # Count based on iteration_XXX directories with context.json files
         # This prevents interrupted executions from affecting version numbers
-        history_dir = phase_dir / "history"
-        if not history_dir.exists():
-            return 1
-
-        existing_iterations = sorted(history_dir.glob("iteration_*.json"))
+        existing_iterations = sorted(phase_dir.glob("iteration_*/context.json"))
         if not existing_iterations:
             return 1
 
@@ -1872,10 +1871,10 @@ class Phase(ABC):
             raise ValueError("Cannot exceed 999")
 
         # Check if the last iteration was interrupted (has no response)
-        last_iteration_file = existing_iterations[-1]
+        last_context_file = existing_iterations[-1]
         try:
             import json
-            with open(last_iteration_file, 'r', encoding='utf-8') as f:
+            with open(last_context_file, 'r', encoding='utf-8') as f:
                 last_iteration_data = json.load(f)
 
             # If last iteration has no response, it was interrupted
