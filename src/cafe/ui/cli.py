@@ -1289,6 +1289,44 @@ def restore(
                 # 如果無法取得 git root，跳過 worktree 路徑檢查
                 pass
 
+        # 7. Prompt user for confirmation
+        console.print("[yellow]⚠️  Warning: This will restore the issue from backup.[/yellow]")
+        console.print("[yellow]   Any current changes in .cafe/issues/{} will be overwritten.[/yellow]".format(issue_name))
+        console.print()
+
+        # 使用 typer.confirm 進行確認
+        confirmed = typer.confirm("Do you want to continue?", default=False)
+        if not confirmed:
+            console.print()
+            console.print("[yellow]Restore cancelled.[/yellow]")
+            console.print()
+            raise typer.Exit(1)
+
+        # 8. Perform the restore operation
+        console.print()
+        console.print("[dim]Restoring issue data...[/dim]")
+
+        # 目標路徑
+        issue_dir = Path.cwd() / ".cafe" / "issues" / issue_name
+
+        # 如果目標路徑已存在，先刪除
+        if issue_dir.exists():
+            console.print(f"[dim]Removing existing issue directory...[/dim]")
+            shutil.rmtree(issue_dir)
+
+        # 從備份複製資料
+        console.print(f"[dim]Copying data from backup...[/dim]")
+        shutil.copytree(archive_path, issue_dir)
+
+        # 9. Display success message
+        console.print()
+        console.print(f"[green]✓ Successfully restored issue: {issue_name}[/green]")
+        console.print(f"  📁 Restored to: .cafe/issues/{issue_name}/")
+        console.print(f"  🌿 Branch: {feature_branch}")
+        if worktree_path:
+            console.print(f"  📂 Worktree: {worktree_path}")
+        console.print()
+
     except typer.Exit:
         raise
     except Exception as e:
