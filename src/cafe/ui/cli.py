@@ -1195,7 +1195,6 @@ def restore(
     Examples:
         cafe restore issue80
     """
-    import os
     import shutil
 
     try:
@@ -1208,7 +1207,7 @@ def restore(
         # 2. Check if backup exists
         if not archive_path.exists():
             console.print()
-            console.print(f"[red]❌ Error: 找不到該 issue 的備份[/red]")
+            console.print(f"[red]❌ Error: Backup not found for issue '{issue_name}'[/red]")
             console.print(f"   Backup path: {archive_path}")
             console.print()
             raise typer.Exit(1)
@@ -1257,14 +1256,25 @@ def restore(
             raise typer.Exit(1)
 
         # 6. For worktree mode, check if we're in the correct worktree directory
-        # 檢查方式：看當前目錄路徑是否包含 worktree_path 中的關鍵部分
+        # 檢查方式：比較當前目錄是否在預期的 worktree 路徑下
         if worktree_path:
-            current_dir_str = str(Path.cwd())
-            # 提取 worktree 路徑的最後一個部分作為檢查依據
-            worktree_name = Path(worktree_path).name
+            current_path = Path.cwd().resolve()
+            expected_worktree = Path(worktree_path).resolve()
 
-            # 如果當前路徑不包含 worktree 名稱，表示路徑不匹配
-            if worktree_name not in current_dir_str:
+            # 檢查當前路徑是否在 worktree 路徑下
+            # 使用 is_relative_to() 或手動檢查路徑前綴
+            try:
+                # Python 3.9+ 有 is_relative_to()
+                is_in_worktree = current_path.is_relative_to(expected_worktree)
+            except AttributeError:
+                # Python 3.8 fallback: 檢查是否有共同前綴
+                try:
+                    current_path.relative_to(expected_worktree)
+                    is_in_worktree = True
+                except ValueError:
+                    is_in_worktree = False
+
+            if not is_in_worktree:
                 console.print()
                 console.print("[red]❌ Error: Worktree path mismatch[/red]")
                 console.print(f"   Current path: {Path.cwd()}")

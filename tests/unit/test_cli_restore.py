@@ -107,7 +107,7 @@ class TestRestoreCommand:
         result = runner.invoke(app, ["restore", "nonexistent-issue"])
 
         assert result.exit_code == 1
-        assert "找不到該 issue 的備份" in result.stdout or "backup not found" in result.stdout.lower()
+        assert "backup not found" in result.stdout.lower()
 
     def test_restore_success_normal_mode(self, temp_repo_dir, mock_git_ops, archived_issue):
         """測試成功 restore 的情境（備份存在、branch 正確、一般模式）"""
@@ -184,8 +184,7 @@ class TestRestoreCommand:
         """測試使用者取消確認後退出"""
         result = runner.invoke(app, ["restore", "test-issue"], input="n\n")
 
-        assert result.exit_code == 1 or result.exit_code == 0
-        # Either aborted or exited cleanly
+        assert result.exit_code == 1
         # Issue directory should not be restored
         issue_dir = temp_repo_dir / ".cafe" / "issues" / "test-issue"
         assert not issue_dir.exists(), "Issue directory should not be restored when user cancels"
