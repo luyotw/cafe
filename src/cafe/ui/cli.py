@@ -1177,6 +1177,55 @@ def close() -> None:
 
 
 @app.command()
+def restore(
+    issue_name: str = typer.Argument(..., help="Issue name to restore")
+) -> None:
+    """Restore archived issue from backup.
+
+    This command restores an archived issue from ~/.cafe/projects/<project-path>/archived/<issue-name>/
+    back to .cafe/issues/<issue-name>/.
+
+    It performs the following checks:
+    1. Verifies backup exists
+    2. Checks current branch matches the issue's feature_branch
+    3. For worktree mode, checks current directory matches worktree_path
+    4. Prompts user for confirmation
+    5. Restores all files from backup
+
+    Examples:
+        cafe restore issue80
+    """
+    import os
+    import shutil
+
+    try:
+        # 1. Get project path and construct archive path
+        project_path = _get_project_path()
+        home_dir = Path.home()
+        archive_base = home_dir / ".cafe" / "projects" / project_path / "archived"
+        archive_path = archive_base / issue_name
+
+        # 2. Check if backup exists
+        if not archive_path.exists():
+            console.print()
+            console.print(f"[red]❌ Error: 找不到該 issue 的備份[/red]")
+            console.print(f"   Backup path: {archive_path}")
+            console.print()
+            raise typer.Exit(1)
+
+        console.print()
+        console.print(f"[bold blue]🔄 Restoring issue: {issue_name}[/bold blue]")
+        console.print(f"   From: {archive_path}")
+        console.print()
+
+    except typer.Exit:
+        raise
+    except Exception as e:
+        console.print(f"[red]Error during restore: {e}[/red]")
+        raise typer.Exit(1)
+
+
+@app.command()
 def spec(
     ctx: typer.Context,
     action: Optional[str] = typer.Argument(None, help="Action: edit (to edit latest spec file)"),
