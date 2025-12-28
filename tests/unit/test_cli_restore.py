@@ -148,6 +148,10 @@ class TestRestoreCommand:
         worktree_path = temp_repo_dir / ".cafe" / "worktrees" / "test-worktree-issue"
         worktree_path.mkdir(parents=True, exist_ok=True)
 
+        # Create .cafe structure in worktree (as would exist in real worktree)
+        (worktree_path / ".cafe").mkdir(exist_ok=True)
+        (worktree_path / ".cafe" / "issues").mkdir(exist_ok=True)
+
         # Change to worktree directory
         import os
         os.chdir(worktree_path)
