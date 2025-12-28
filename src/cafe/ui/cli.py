@@ -1256,38 +1256,24 @@ def restore(
             console.print()
             raise typer.Exit(1)
 
-        # 6. For worktree mode, check if current directory matches worktree_path
+        # 6. For worktree mode, check if we're in the correct worktree directory
+        # 檢查方式：看當前目錄路徑是否包含 worktree_path 中的關鍵部分
         if worktree_path:
-            # 取得當前工作目錄的相對路徑（相對於 git root）
-            repo_root = Path.cwd()
-            # 嘗試找到 .git 所在的根目錄
-            try:
-                # 使用 git rev-parse 取得 repo root
-                import subprocess
-                result = subprocess.run(
-                    ["git", "rev-parse", "--show-toplevel"],
-                    capture_output=True,
-                    text=True,
-                    check=True
-                )
-                git_root = Path(result.stdout.strip())
-                current_relative_path = Path.cwd().relative_to(git_root.parent)
-                expected_worktree_path = Path(worktree_path)
+            current_dir_str = str(Path.cwd())
+            # 提取 worktree 路徑的最後一個部分作為檢查依據
+            worktree_name = Path(worktree_path).name
 
-                # 檢查當前路徑是否在預期的 worktree 路徑下
-                if not str(current_relative_path).startswith(str(expected_worktree_path)):
-                    console.print()
-                    console.print("[red]❌ Error: Worktree path mismatch[/red]")
-                    console.print(f"   Current path: {current_relative_path}")
-                    console.print(f"   Expected worktree path (from issue.yaml): {worktree_path}")
-                    console.print()
-                    console.print("[yellow]Please change to the correct worktree directory:[/yellow]")
-                    console.print(f"   [bold]cd {worktree_path}[/bold]")
-                    console.print()
-                    raise typer.Exit(1)
-            except subprocess.CalledProcessError:
-                # 如果無法取得 git root，跳過 worktree 路徑檢查
-                pass
+            # 如果當前路徑不包含 worktree 名稱，表示路徑不匹配
+            if worktree_name not in current_dir_str:
+                console.print()
+                console.print("[red]❌ Error: Worktree path mismatch[/red]")
+                console.print(f"   Current path: {Path.cwd()}")
+                console.print(f"   Expected worktree path (from issue.yaml): {worktree_path}")
+                console.print()
+                console.print("[yellow]Please change to the correct worktree directory:[/yellow]")
+                console.print(f"   [bold]cd {worktree_path}[/bold]")
+                console.print()
+                raise typer.Exit(1)
 
         # 7. Prompt user for confirmation
         console.print("[yellow]⚠️  Warning: This will restore the issue from backup.[/yellow]")
