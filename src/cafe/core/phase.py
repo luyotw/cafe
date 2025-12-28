@@ -326,66 +326,6 @@ class Phase(ABC):
 
         return result
 
-    def _save_iteration_history(
-        self,
-        phase_specific_data: Dict[str, Any],
-        prompt: Optional[str] = None,
-        agent_cli: Optional[str] = None,
-        agent_session_id: Optional[str] = None,
-        allowed_tools: Optional[List[str]] = None,
-        denied_tools: Optional[List[str]] = None,
-        status_code: Optional[PhaseStatusCode] = None,
-    ) -> None:
-        """Save iteration history to JSON file (common method - Maintain backward compatibility).
-
-        This method maintains backward compatibility, directly creates complete history file.
-        Recommended that new code uses two-stage approach of _save_user_input + _update_iteration_history.
-
-        Args:
-            phase_specific_data: Phase-specific data (e.g. user_input, response etc.)
-            prompt: Actual prompt received by agent
-            agent_cli: CLI tool used by agent (e.g. "copilot", "claude")
-            agent_session_id: Agent's session ID
-            allowed_tools: List of tools available to agent
-            denied_tools: List of tools unavailable to agent
-            status_code: Phase status code (e.g. CONFIRMED, NEED_CLARIFICATION)
-        """
-        # Ensure history_dir exists
-        if not hasattr(self, "history_dir"):
-            raise AttributeError(
-                "Phase must have 'history_dir' attribute to use _save_iteration_history"
-            )
-
-        history_dir = Path(self.history_dir)
-        history_dir.mkdir(parents=True, exist_ok=True)
-
-        # Ensure iteration exists
-        if not hasattr(self, "iteration"):
-            raise AttributeError(
-                "Phase must have 'iteration' attribute to use _save_iteration_history"
-            )
-
-        # Create history data, including common fields and phase-specific data
-        history_data: Dict[str, Any] = {
-            "iteration": self.iteration,
-            "timestamp": datetime.now().isoformat(),
-        }
-
-        # Add phase-specific data
-        history_data.update(phase_specific_data)
-
-        # Add shared agent metadata
-        history_data["prompt"] = prompt
-        history_data["cli"] = agent_cli
-        history_data["session_id"] = agent_session_id
-        history_data["allowed_tools"] = allowed_tools
-        history_data["denied_tools"] = denied_tools
-        history_data["status_code"] = status_code.value if status_code is not None else None
-
-        # Save as JSON file
-        iteration_file = history_dir / f"iteration_{self.iteration:03d}.json"
-        with open(iteration_file, "w", encoding="utf-8") as f:
-            json.dump(history_data, f, ensure_ascii=False, indent=2)
 
     def _check_empty_response(self, response: str) -> Optional[PhaseStatusCode]:
         """Check if agent response is empty, if empty return NO_RESPONSE status code.
@@ -1902,20 +1842,31 @@ class Phase(ABC):
 
         Note:
             - If first round (iteration=1), do not perform any action
-            - If previous version does not exist, do not perform any action
+            - If immediate previous version does not exist, find the latest existing output.md to copy
+            - If no previous output.md exists at all, do not perform any action
         """
         # Do nothing for first iteration
         if iteration == 1:
             return
 
-        # Get previous and current file paths
-        prev_file = self._get_versioned_file_path(phase_name, iteration - 1, phase_dir)
+        # Get current file path
         current_file = self._get_versioned_file_path(phase_name, iteration, phase_dir)
 
-        # Copy if previous file exists
-        if prev_file.exists():
+        # Try to find the latest existing output.md from previous iterations
+        # Start from iteration-1 and work backwards
+        source_file = None
+        for i in range(iteration - 1, 0, -1):
+            candidate = self._get_versioned_file_path(phase_name, i, phase_dir)
+            if candidate.exists():
+                source_file = candidate
+                break
+
+        # Copy if we found a source file
+        if source_file:
             import shutil
-            shutil.copy2(prev_file, current_file)
+            # Ensure parent directory exists
+            current_file.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source_file, current_file)
 
     def _get_latest_versioned_file(
         self,
