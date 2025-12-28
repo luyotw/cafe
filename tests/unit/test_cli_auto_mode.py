@@ -169,8 +169,10 @@ class TestAutoModeConfigPreservation:
         with open(config_file, 'w') as f:
             yaml.dump(config_data, f)
         
-        # Create spec file (required for plan)
-        spec_file = prepared_issue / "spec" / "spec_001.md"
+        # Create spec file in new structure (required for plan)
+        spec_iter_dir = prepared_issue / "spec" / "iteration_001"
+        spec_iter_dir.mkdir(parents=True, exist_ok=True)
+        spec_file = spec_iter_dir / "output.md"
         spec_file.write_text("# Test Spec")
         
         # Mock plan phase
