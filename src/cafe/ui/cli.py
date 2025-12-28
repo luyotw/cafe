@@ -227,24 +227,18 @@ def _get_latest_versioned_file(phase_name: str, issue_name: str) -> Optional[Pat
         issue_name: Issue name
 
     Returns:
-        Path to the latest versioned file, or base file if no versioned files exist, or None if no files exist
+        Path to the latest iteration's output.md, or None if no output files exist
     """
     phase_dir = Path(f".cafe/issues/{issue_name}/{phase_name}")
     if not phase_dir.exists():
         return None
 
-    # Find all versioned files
-    pattern = f"{phase_name}_*.md"
-    versioned_files = sorted(phase_dir.glob(pattern))
+    # Find all iteration output files (iteration_XXX/output.md)
+    output_files = sorted(phase_dir.glob("iteration_*/output.md"))
 
-    if versioned_files:
-        # Return the latest (highest numbered) file
-        return versioned_files[-1]
-
-    # Fallback to base file (e.g., spec.md, plan.md)
-    base_file = phase_dir / f"{phase_name}.md"
-    if base_file.exists():
-        return base_file
+    if output_files:
+        # Return the latest (highest numbered iteration) file
+        return output_files[-1]
 
     return None
 
@@ -1885,28 +1879,28 @@ def plan(
         if result.status.value == "completed":
             console.print()
             status_code = result.data.get("status_code")
-            plan_file = f".cafe/issues/{issue_name}/plan/plan.md"
+            plan_dir = f".cafe/issues/{issue_name}/plan"
 
             if status_code == "CAFE_NEED_CLARIFICATION":
                 console.print("[bold yellow]💬 Agent needs clarification[/bold yellow]")
                 console.print(f"Iterations: {result.data.get('iterations', 'N/A')}")
-                if Path(plan_file).exists():
-                    console.print(f"Saved to: {plan_file}")
+                plan_file = result.data.get("plan_file", plan_dir)
+                console.print(f"Saved to: {plan_file}")
                 console.print()
                 console.print("[dim]To continue, run:[/dim] [bold]cafe plan[/bold]")
             elif status_code == "CAFE_READY_FOR_REVIEW":
                 console.print("[bold yellow]📋 Plan ready for review[/bold yellow]")
                 console.print(f"Iterations: {result.data.get('iterations', 'N/A')}")
-                if Path(plan_file).exists():
-                    console.print(f"Saved to: {plan_file}")
+                plan_file = result.data.get("plan_file", plan_dir)
+                console.print(f"Saved to: {plan_file}")
                 console.print()
                 console.print("[dim]To review the plan, run:[/dim] [bold]cafe plan[/bold]")
             else:
                 # CAFE_CONFIRMED
                 console.print("[bold green]✅ Implementation plan completed![/bold green]")
                 console.print(f"Iterations: {result.data.get('iterations', 'N/A')}")
-                if Path(plan_file).exists():
-                    console.print(f"Saved to: {plan_file}")
+                plan_file = result.data.get("plan_file", plan_dir)
+                console.print(f"Saved to: {plan_file}")
                 console.print()
 
                 # Auto mode: execute next phase
