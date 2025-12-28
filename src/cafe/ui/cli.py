@@ -1218,6 +1218,77 @@ def restore(
         console.print(f"   From: {archive_path}")
         console.print()
 
+        # 3. Read issue.yaml from backup to get branch and worktree configuration
+        issue_config_file = archive_path / "issue.yaml"
+        if not issue_config_file.exists():
+            console.print(f"[red]❌ Error: issue.yaml not found in backup[/red]")
+            console.print(f"   Expected at: {issue_config_file}")
+            console.print()
+            raise typer.Exit(1)
+
+        with open(issue_config_file, "r", encoding="utf-8") as f:
+            config_data = yaml.safe_load(f)
+
+        feature_branch = config_data.get("feature_branch", issue_name)
+        worktree_path = config_data.get("worktree_path")
+
+        # 4. Initialize Git operations and check current branch
+        try:
+            git_ops = GitOperations()
+        except Exception as e:
+            console.print(f"[red]Error: Not a git repository. {e}[/red]")
+            raise typer.Exit(1)
+
+        current_branch = git_ops.get_current_branch()
+        if not current_branch:
+            console.print("[red]Error: Not on a valid branch (detached HEAD?).[/red]")
+            raise typer.Exit(1)
+
+        # 5. Check if current branch matches feature_branch
+        if current_branch != feature_branch:
+            console.print()
+            console.print("[red]❌ Error: Branch mismatch[/red]")
+            console.print(f"   Current branch: {current_branch}")
+            console.print(f"   Expected branch (from issue.yaml): {feature_branch}")
+            console.print()
+            console.print("[yellow]Please switch to the correct branch first:[/yellow]")
+            console.print(f"   [bold]git checkout {feature_branch}[/bold]")
+            console.print()
+            raise typer.Exit(1)
+
+        # 6. For worktree mode, check if current directory matches worktree_path
+        if worktree_path:
+            # 取得當前工作目錄的相對路徑（相對於 git root）
+            repo_root = Path.cwd()
+            # 嘗試找到 .git 所在的根目錄
+            try:
+                # 使用 git rev-parse 取得 repo root
+                import subprocess
+                result = subprocess.run(
+                    ["git", "rev-parse", "--show-toplevel"],
+                    capture_output=True,
+                    text=True,
+                    check=True
+                )
+                git_root = Path(result.stdout.strip())
+                current_relative_path = Path.cwd().relative_to(git_root.parent)
+                expected_worktree_path = Path(worktree_path)
+
+                # 檢查當前路徑是否在預期的 worktree 路徑下
+                if not str(current_relative_path).startswith(str(expected_worktree_path)):
+                    console.print()
+                    console.print("[red]❌ Error: Worktree path mismatch[/red]")
+                    console.print(f"   Current path: {current_relative_path}")
+                    console.print(f"   Expected worktree path (from issue.yaml): {worktree_path}")
+                    console.print()
+                    console.print("[yellow]Please change to the correct worktree directory:[/yellow]")
+                    console.print(f"   [bold]cd {worktree_path}[/bold]")
+                    console.print()
+                    raise typer.Exit(1)
+            except subprocess.CalledProcessError:
+                # 如果無法取得 git root，跳過 worktree 路徑檢查
+                pass
+
     except typer.Exit:
         raise
     except Exception as e:
