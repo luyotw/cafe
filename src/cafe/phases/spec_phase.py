@@ -123,10 +123,6 @@ class SpecPhase(Phase):
         # Path: .cafe/issues/{issue_name}/spec
         self.phase_dir = self.issue_dir / "spec"
 
-        # History directory for spec phase
-        # Path: .cafe/issues/{issue_name}/spec/history
-        self.history_dir = self.phase_dir / "history"
-
         # spec_file will be set in execute() based on iteration number
         self.spec_file: str = ""
 
@@ -151,11 +147,11 @@ class SpecPhase(Phase):
         self.iteration = self._load_iteration_counter()
 
         # Load phase-specific data from last iteration
-        if self.iteration > 0 and self.history_dir.exists():
-            iteration_files = sorted(self.history_dir.glob("iteration_*.json"))
-            if iteration_files:
-                last_iteration_file = iteration_files[-1]
-                with open(last_iteration_file, "r", encoding="utf-8") as f:
+        if self.iteration > 0:
+            existing_iterations = sorted(self.phase_dir.glob("iteration_*/context.json"))
+            if existing_iterations:
+                last_context_file = existing_iterations[-1]
+                with open(last_context_file, "r", encoding="utf-8") as f:
                     last_data = json.load(f)
                 if "confirmed_requirements" in last_data:
                     self.confirmed_requirements = last_data["confirmed_requirements"]
@@ -451,7 +447,12 @@ class SpecPhase(Phase):
                 print(f"Warning: Failed to post spec to GitHub issue: {e}")
 
         # Always include spec_file in completion data (Issue 1: Add full file path)
-        data["spec_file"] = self.spec_file
+        # Find the latest existing output.md file (in case current iteration doesn't have one)
+        latest_output = self._get_latest_versioned_file("spec", self.phase_dir)
+        if latest_output:
+            data["spec_file"] = str(latest_output)
+        elif hasattr(self, 'spec_file'):
+            data["spec_file"] = self.spec_file
 
         return data
 
