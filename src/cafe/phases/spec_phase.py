@@ -940,29 +940,44 @@ Read {current_spec_file}  for initial requirements content."""
 """
 
         base_prompt = f"""
-**Your Role:**
-PM (Product Manager), responsible for requirements clarification. Please read {agent_file} to understand your role definition and work guidelines, then strictly execute according to role definition requirements."""
+**Your Role:** PM (Product Manager)
+Read {agent_file} to understand your role and responsibilities."""
 
-        need_clarification_instruction = f"""**If clarification needed (status: CAFE_NEED_CLARIFICATION):**
-Write the following content to {current_spec_file}：
-   - 「## Original Requirements Description」- **Fully preserve** the original requirements initially provided by user, cannot modify (unless user explicitly requests).
-   - 「## User Stories」- User stories written by user or automatically generated from requirements description.
-   - 「## Current Requirements Specification」- Integrate all known information (including user stories, previous conversations, user's latest answers), list complete known requirements.
-   - 「## Questions to Clarify」- As PM ask conversationally to deeply clarify requirements.
+        output_format = f"""
+**⚠️ CRITICAL: Output Format**
+1. Write ALL content (requirements, questions, specifications) to {current_spec_file}
+2. Return ONLY the status code in your response
+3. ❌ NEVER put questions or content in your response
+4. ✅ Questions go in the markdown file, response contains ONLY status code
 
-Finally, return only "CAFE_NEED_CLARIFICATION" as the response.
+**Why this matters:**
+If you put questions in your response instead of the file, the workflow CANNOT continue.
+The user will NOT see your questions, and the process will be stuck.
 
-⚠️ **Important:** Write the markdown content in your native language (the language you were configured with)."""
+**Example (CORRECT):**
+- File {current_spec_file}: Contains all questions and specifications
+- Your response: "CAFE_NEED_CLARIFICATION"
 
-        confirmed_instruction = f"""**If requirements are clear (status: CAFE_READY_FOR_REVIEW):**
-Write complete requirements specification document to {current_spec_file}, format:
-   - 「## Original Requirements Description」- **Fully preserve** the original requirements initially provided by user, cannot modify (unless user explicitly requests).
-   - 「## User Stories」- User stories written by user or automatically generated from requirements description.
-   - 「## Requirements Specification」- Integrate all confirmed content, produce final complete requirements specification, including function descriptions, usage scenarios, expected behaviors, acceptance criteria, etc.
+**Example (WRONG - workflow will fail):**
+- Your response: "I have some questions: 1. What is...? CAFE_NEED_CLARIFICATION" ← ❌ DO NOT DO THIS
+"""
 
-Finally, return only "CAFE_READY_FOR_REVIEW" as the response.
+        need_clarification_instruction = f"""**Status: CAFE_NEED_CLARIFICATION**
+Write to {current_spec_file}:
+   - ## Original Requirements Description (preserve exactly as provided)
+   - ## User Stories (from user or auto-generated)
+   - ## Current Requirements Specification (integrate all known info)
+   - ## Questions to Clarify (PM asks conversational questions)
 
-⚠️ **Important:** Write the markdown content in your native language (the language you were configured with)."""
+Response: "CAFE_NEED_CLARIFICATION" (nothing else)"""
+
+        confirmed_instruction = f"""**Status: CAFE_READY_FOR_REVIEW**
+Write to {current_spec_file}:
+   - ## Original Requirements Description (preserve exactly as provided)
+   - ## User Stories (from user or auto-generated)
+   - ## Requirements Specification (complete spec with functions, scenarios, behaviors, acceptance criteria)
+
+Response: "CAFE_READY_FOR_REVIEW" (nothing else)"""
 
         # --- 3. Assemble the final prompt ---
         return f"""{initial_instruction}
@@ -972,6 +987,8 @@ Finally, return only "CAFE_READY_FOR_REVIEW" as the response.
 {rigor_guidelines}
 
 {non_technical}
+
+{output_format}
 
 {status_code_prompt}
 {restriction}
