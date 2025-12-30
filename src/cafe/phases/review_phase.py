@@ -238,16 +238,17 @@ class ReviewPhase(Phase):
                 continue_codes=[],  # No continue codes - single iteration only
             )
 
-            # Save review to review_XXX.md file
+            # Save review to iteration_XXX/output.md file
             # Note: Real agent would write via Edit tool, but we save it here to ensure
             # the file has actual content in mock mode or if agent doesn't execute Edit tool
-            review_file_name = f"review_{self.iteration:03d}.md"
-            review_file_path = self.review_dir / review_file_name
+            iteration_dir = self.review_dir / f"iteration_{self.iteration:03d}"
+            review_file_path = iteration_dir / "output.md"
             # Check if file is placeholder or doesn't exist
             is_placeholder = (review_file_path.exists() and
                             review_file_path.read_text().strip() == "# TODO: Write review content here")
             if not review_file_path.exists() or is_placeholder:
                 # Write response if agent didn't write it via Edit tool
+                review_file_path.parent.mkdir(parents=True, exist_ok=True)
                 review_file_path.write_text(response, encoding="utf-8")
 
             # If base class returned a result, use it
@@ -537,8 +538,8 @@ class ReviewPhase(Phase):
         restriction = ""
         if self.iteration >= 4:
             # Previous review file
-            previous_review_file = f"review_{self.iteration - 1:03d}.md"
-            previous_review_path = self.review_dir / previous_review_file
+            previous_iteration_dir = self.review_dir / f"iteration_{self.iteration - 1:03d}"
+            previous_review_path = previous_iteration_dir / "output.md"
             restriction = f"""
 ⚠️ **Important Restriction:**
 - You are now in iteration {self.iteration}, only follow up on "issues raised in the previous round"
@@ -547,9 +548,9 @@ class ReviewPhase(Phase):
 - Only clarify issues that have already been raised
 """
 
-        # Generate review file path
-        review_file_name = f"review_{self.iteration:03d}.md"
-        review_file_path = self.review_dir / review_file_name
+        # Generate review file path (iteration_XXX/output.md format)
+        iteration_dir = self.review_dir / f"iteration_{self.iteration:03d}"
+        review_file_path = iteration_dir / "output.md"
 
         # Build prompt
         try:
@@ -659,7 +660,8 @@ You are conducting iteration {self.iteration} of the code review. You will only 
         Returns:
             Analysis prompt string
         """
-        review_file = self.review_dir / f"review_{self.iteration:03d}.md"
+        iteration_dir = self.review_dir / f"iteration_{self.iteration:03d}"
+        review_file = iteration_dir / "output.md"
         return f"""Please read {review_file} and analyze the code review results.
 
 Based on the following conditions, determine which status code to return:
@@ -673,8 +675,9 @@ Please only return one status code (e.g., CAFE_CONFIRMED) without any other cont
         """Check if review file was written before failure.
 
         Returns:
-            List[Path]: Returns list containing review_{iteration}.md if it exists, otherwise empty list
+            List[Path]: Returns list containing iteration_XXX/output.md if it exists, otherwise empty list
         """
-        review_file = self.review_dir / f"review_{self.iteration:03d}.md"
+        iteration_dir = self.review_dir / f"iteration_{self.iteration:03d}"
+        review_file = iteration_dir / "output.md"
         return [review_file] if review_file.exists() else []
 
