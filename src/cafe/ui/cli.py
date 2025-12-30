@@ -277,27 +277,27 @@ def _edit_file_with_editor(file_path: Path) -> None:
 
 
 def _get_latest_review_iteration(issue_name: str) -> int:
-    """Get the latest review iteration number from history files.
+    """Get the latest review iteration number from iteration directories.
 
     Args:
         issue_name: Issue name
 
     Returns:
-        Latest iteration number, or 0 if no history exists
+        Latest iteration number, or 0 if no iterations exist
     """
-    history_dir = Path(f".cafe/issues/{issue_name}/review/history")
-    if not history_dir.exists():
+    review_dir = Path(f".cafe/issues/{issue_name}/review")
+    if not review_dir.exists():
         return 0
 
-    # Find all iteration files
-    iteration_files = sorted(history_dir.glob("iteration_*.json"))
-    if not iteration_files:
+    # Find all iteration directories
+    iteration_dirs = sorted(review_dir.glob("iteration_*"))
+    if not iteration_dirs:
         return 0
 
-    # Extract iteration number from the latest file (e.g., iteration_005.json -> 5)
-    latest_file = iteration_files[-1]
+    # Extract iteration number from the latest directory (e.g., iteration_005 -> 5)
+    latest_dir = iteration_dirs[-1]
     try:
-        iteration_num = int(latest_file.stem.split("_")[1])
+        iteration_num = int(latest_dir.name.split("_")[1])
         return iteration_num
     except (IndexError, ValueError):
         return 0
