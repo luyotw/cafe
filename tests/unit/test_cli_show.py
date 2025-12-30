@@ -84,7 +84,7 @@ class TestResolveIterationNumber:
             (iteration_dir / "context.json").write_text("{}")
 
         # -5 超出範圍，應該拋出 ValueError
-        with pytest.raises((ValueError, IndexError)):
+        with pytest.raises(ValueError):
             _resolve_iteration_number(phase_dir, -5)
 
     def test_resolve_iteration_number_no_iterations(self, tmp_path):

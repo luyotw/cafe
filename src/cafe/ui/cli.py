@@ -43,6 +43,23 @@ app = typer.Typer(
 )
 console = Console()
 
+# Constants for cafe show command
+VALID_PHASES = ["spec", "plan", "develop", "review", "pr"]
+VALID_CONTENT_TYPES = [
+    "context", "output", "streaming", "error",
+    "title", "body", "status", "iterations"
+]
+CONTENT_TYPE_FILE_MAP = {
+    "context": "context.json",
+    "output": "output.md",
+    "streaming": "streaming.jsonl",
+    "error": "error.json",
+    "title": "title.txt",
+    "body": "body.md",
+    "status": "status.json",
+    "iterations": "iterations.jsonl",
+}
+
 
 def _handle_phase_exception(e: Exception, phase_name: str, auto: bool = False) -> None:
     """Unified exception handling for phase execution.
@@ -277,28 +294,28 @@ def _edit_file_with_editor(file_path: Path) -> None:
 
 
 def _resolve_iteration_number(phase_dir: Path, iteration_input: int) -> int:
-    """解析迭代號碼（支援正數、零、負數）。
+    """Resolve iteration number (supports positive, zero, negative).
 
     Args:
-        phase_dir: 階段目錄路徑（例如 .cafe/issues/issue84/spec）
-        iteration_input: 使用者輸入的迭代號碼（可為正數、0、負數）
+        phase_dir: Phase directory path (e.g., .cafe/issues/issue84/spec)
+        iteration_input: User input iteration number (can be positive, 0, negative)
 
     Returns:
-        實際的迭代號碼（正整數）
+        Actual iteration number (positive integer)
 
     Raises:
-        ValueError: 當迭代號碼不存在時
+        ValueError: When iteration number does not exist
     """
-    # 取得所有迭代目錄（透過 context.json 檔案確認）
+    # Get all iteration directories (verified by context.json file)
     iteration_files = sorted(phase_dir.glob("iteration_*/context.json"))
 
     if not iteration_files:
         raise ValueError(f"No iterations found in {phase_dir}")
 
-    # 從目錄名稱中提取迭代號碼
+    # Extract iteration numbers from directory names
     iteration_numbers = []
     for file_path in iteration_files:
-        # 目錄名稱格式為 iteration_XXX
+        # Directory name format is iteration_XXX
         dir_name = file_path.parent.name
         if dir_name.startswith("iteration_"):
             try:
@@ -310,12 +327,12 @@ def _resolve_iteration_number(phase_dir: Path, iteration_input: int) -> int:
     if not iteration_numbers:
         raise ValueError(f"No valid iterations found in {phase_dir}")
 
-    # 處理不同的迭代號碼格式
+    # Handle different iteration number formats
     if iteration_input == 0:
-        # 零表示最新的迭代
+        # Zero means latest iteration
         return iteration_numbers[-1]
     elif iteration_input > 0:
-        # 正數直接使用，但需要驗證是否存在
+        # Positive number used directly, but need to verify existence
         if iteration_input not in iteration_numbers:
             raise ValueError(
                 f"Iteration {iteration_input} not found. "
@@ -323,7 +340,7 @@ def _resolve_iteration_number(phase_dir: Path, iteration_input: int) -> int:
             )
         return iteration_input
     else:
-        # 負數使用 Python 陣列索引邏輯
+        # Negative number uses Python array indexing logic
         try:
             return iteration_numbers[iteration_input]
         except IndexError:
@@ -334,37 +351,25 @@ def _resolve_iteration_number(phase_dir: Path, iteration_input: int) -> int:
 
 
 def _get_show_file_path(phase_dir: Path, iteration: int, content_type: str) -> Path:
-    """取得指定內容類型的檔案路徑。
+    """Get file path for specified content type.
 
     Args:
-        phase_dir: 階段目錄路徑
-        iteration: 迭代號碼（已解析為正整數）
-        content_type: 內容類型（context, output, streaming 等）
+        phase_dir: Phase directory path
+        iteration: Iteration number (resolved to positive integer)
+        content_type: Content type (context, output, streaming, etc.)
 
     Returns:
-        檔案的完整路徑
+        Complete file path
     """
-    # 內容類型與檔案名稱的映射
-    content_type_map = {
-        "context": "context.json",
-        "output": "output.md",
-        "streaming": "streaming.jsonl",
-        "error": "error.json",
-        "title": "title.txt",
-        "body": "body.md",
-        "status": "status.json",
-        "iterations": "iterations.jsonl",
-    }
-
-    filename = content_type_map.get(content_type)
+    filename = CONTENT_TYPE_FILE_MAP.get(content_type)
     if not filename:
         raise ValueError(f"Unknown content type: {content_type}")
 
-    # status 和 iterations 位於階段目錄根層
+    # status and iterations are located at phase directory root level
     if content_type in ["status", "iterations"]:
         return phase_dir / filename
     else:
-        # 其他檔案位於迭代目錄內
+        # Other files are located in iteration directory
         iteration_dir = phase_dir / f"iteration_{iteration:03d}"
         return iteration_dir / filename
 
@@ -3792,7 +3797,6 @@ def show(
         "--iteration", "-i",
         help="Iteration number (positive, 0=latest, negative=relative index)"
     ),
-    ctx: typer.Context = typer.Context,
 ) -> None:
     """📄 Display iteration file contents.
 
@@ -3805,28 +3809,23 @@ def show(
         cafe show spec context -i -1      # Show previous spec iteration context
         cafe show plan status -i -2       # Show plan status 2 iterations ago
     """
-    # 驗證階段名稱
-    valid_phases = ["spec", "plan", "develop", "review", "pr"]
-    if phase_name not in valid_phases:
+    # Validate phase name
+    if phase_name not in VALID_PHASES:
         console.print(f"[red]Error: Invalid phase '{phase_name}'[/red]")
-        console.print(f"[dim]Valid phases: {', '.join(valid_phases)}[/dim]")
+        console.print(f"[dim]Valid phases: {', '.join(VALID_PHASES)}[/dim]")
         raise typer.Exit(1)
 
-    # 設定預設內容類型
+    # Set default content type
     if content_type is None:
         content_type = "output"
 
-    # 驗證內容類型
-    valid_content_types = [
-        "context", "output", "streaming", "error",
-        "title", "body", "status", "iterations"
-    ]
-    if content_type not in valid_content_types:
+    # Validate content type
+    if content_type not in VALID_CONTENT_TYPES:
         console.print(f"[red]Error: Invalid content type '{content_type}'[/red]")
-        console.print(f"[dim]Valid types: {', '.join(valid_content_types)}[/dim]")
+        console.print(f"[dim]Valid types: {', '.join(VALID_CONTENT_TYPES)}[/dim]")
         raise typer.Exit(1)
 
-    # 取得當前分支名稱（issue_name）
+    # Get current branch name (issue_name)
     try:
         git_ops = GitOperations()
         issue_name = git_ops.get_current_branch()
@@ -3834,49 +3833,49 @@ def show(
         console.print(f"[red]Error: Failed to get current branch: {e}[/red]")
         raise typer.Exit(1)
 
-    # 建構階段目錄路徑
+    # Build phase directory path
     cafe_dir = Path.cwd() / ".cafe"
     phase_dir = cafe_dir / "issues" / issue_name / phase_name
 
-    # 檢查階段目錄是否存在
+    # Check if phase directory exists
     if not phase_dir.exists():
         console.print(f"[red]Error: Phase directory not found: {phase_dir}[/red]")
         console.print(f"[dim]The '{phase_name}' phase has not been executed yet[/dim]")
         raise typer.Exit(1)
 
     try:
-        # 解析迭代號碼（僅對非 status/iterations 檔案）
+        # Resolve iteration number (only for non-status/iterations files)
         if content_type not in ["status", "iterations"]:
             resolved_iteration = _resolve_iteration_number(phase_dir, iteration)
+            # Get file path
+            file_path = _get_show_file_path(phase_dir, resolved_iteration, content_type)
         else:
-            # status 和 iterations 不需要迭代號碼
-            resolved_iteration = 0
+            # status and iterations don't need iteration number
+            file_path = _get_show_file_path(phase_dir, 0, content_type)
+            resolved_iteration = None
 
-        # 取得檔案路徑
-        file_path = _get_show_file_path(phase_dir, resolved_iteration, content_type)
-
-        # 檢查檔案是否存在
+        # Check if file exists
         if not file_path.exists():
             console.print(f"[red]Error: File not found: {file_path}[/red]")
-            if content_type not in ["status", "iterations"]:
+            if resolved_iteration is not None:
                 console.print(f"[dim]File '{content_type}' does not exist in iteration {resolved_iteration}[/dim]")
             raise typer.Exit(1)
 
-        # 讀取並顯示檔案內容
+        # Read and display file content
         try:
             content = file_path.read_text(encoding="utf-8")
 
-            # 對於 JSON 檔案使用語法高亮
+            # Use syntax highlighting for JSON files
             if file_path.suffix == ".json":
                 try:
                     import json
                     json_data = json.loads(content)
                     console.print_json(data=json_data)
                 except json.JSONDecodeError:
-                    # 如果 JSON 解析失敗，直接輸出原始內容
+                    # If JSON parsing fails, output raw content
                     console.print(content)
             else:
-                # 其他檔案直接輸出
+                # Output other files directly
                 console.print(content)
 
         except UnicodeDecodeError:
