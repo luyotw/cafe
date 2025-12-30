@@ -152,24 +152,27 @@ class DevelopPhase(Phase):
     def _get_review_file_path(self) -> Path:
         """Get full path to review file.
 
-        Prioritizes returning the latest review_XXX.md file. Falls back to review.md if no numbered file exists (backward compatible).
+        Returns the latest iteration_XXX/output.md file.
 
         Returns:
             Path object of review file
         """
         spec_path = Path(self.spec_file)
-        issue_dir = spec_path.parent.parent  # .cafe/issues/{issue_name}
+        # spec_file is like .cafe/issues/{issue_name}/spec/iteration_XXX/output.md
+        # Go up: output.md -> iteration_XXX -> spec -> issue_name
+        issue_dir = spec_path.parent.parent.parent
         review_dir = issue_dir / "review"
 
-        # Find all review_XXX.md files
+        # Find all iteration_XXX/output.md files
         if review_dir.exists():
-            numbered_reviews = sorted(review_dir.glob("review_*.md"))
-            if numbered_reviews:
-                # Return the latest numbered review file
-                return numbered_reviews[-1]
+            iteration_files = sorted(review_dir.glob("iteration_*/output.md"))
+            if iteration_files:
+                # Return the latest iteration file
+                return iteration_files[-1]
 
-        # Fallback to review.md for backward compatibility
-        return review_dir / "review.md"
+        # If no iteration files found, construct the expected path
+        # This will be used even if the file doesn't exist yet
+        return review_dir / "iteration_001" / "output.md"
 
     def _check_review_feedback_exists(self) -> bool:
         """Check if review feedback exists that needs to be addressed.
@@ -201,7 +204,9 @@ class DevelopPhase(Phase):
             Review status dict if exists, None otherwise
         """
         spec_path = Path(self.spec_file)
-        issue_dir = spec_path.parent.parent
+        # spec_file is like .cafe/issues/{issue_name}/spec/iteration_XXX/output.md
+        # Go up: output.md -> iteration_XXX -> spec -> issue_name
+        issue_dir = spec_path.parent.parent.parent
         review_status_file = issue_dir / "review" / "status.json"
 
         if not review_status_file.exists():
