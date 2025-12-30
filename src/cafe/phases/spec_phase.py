@@ -928,17 +928,18 @@ Read {current_spec_file}  for initial requirements content."""
         
         role_reading_instruction = f"""
 **Execution Steps:**
-1. Use Read tool to read {agent_file} to understand your role definition and work guidelines
+1. Use Read tool to read {agent_file} to find you native language
+2. Understand your role definition and work guidelines from {agent_file}
 """
         
         if self.iteration == 1:
-            role_reading_instruction += f"""2. Use Read tool to read {current_spec_file} to understand initial requirements content
-3. Modify {current_spec_file}，Add analysis results (including original requirements, user stories, current specification, questions to clarify)
+            role_reading_instruction += f"""3. Use Read tool to read {current_spec_file} to understand initial requirements content
+4. Modify {current_spec_file}，Add analysis results (including original requirements, user stories, current specification, questions to clarify)
 """
         else:
-            role_reading_instruction += f"""2. Use Read tool to read {prev_spec_file}(previous round analysis results)
-3. Integrate user's latest answers
-4. Modify {current_spec_file}，Update analysis results (new version)
+            role_reading_instruction += f"""3. Use Read tool to read {prev_spec_file}(previous round analysis results)
+4. Integrate user's latest answers
+5. Modify {current_spec_file}，Update analysis results (new version)
 """
 
         base_prompt = f"""
