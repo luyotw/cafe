@@ -472,12 +472,16 @@ class DevelopPhase(Phase):
         """
         from cafe.ui.inquirer_prompts import prompt_multiline
 
-        # Find the latest develop clarification file
+        # Find the latest develop clarification file (iteration_XXX/output.md format)
         develop_dir = self.issue_dir / "develop"
-        develop_files = sorted(develop_dir.glob("develop_*.md"))
 
-        if develop_files:
-            latest_develop_file = develop_files[-1]
+        latest_develop_file = None
+        if develop_dir.exists():
+            iteration_files = sorted(develop_dir.glob("iteration_*/output.md"))
+            if iteration_files:
+                latest_develop_file = iteration_files[-1]
+
+        if latest_develop_file and latest_develop_file.exists():
             print(f"\n{'='*60}")
             print(f"Dev ({self.dev_agent}):")
             print(f"{'='*60}")
@@ -486,6 +490,13 @@ class DevelopPhase(Phase):
             print(f"{'='*60}\n")
             print("💡 Developer needs clarification.")
             print()
+        else:
+            # No clarification file found - this shouldn't happen
+            print(f"\n{'='*60}")
+            print("⚠️  No clarification file found")
+            print(f"{'='*60}")
+            print(f"Expected location: {develop_dir}/iteration_XXX/output.md")
+            print(f"{'='*60}\n")
 
         return prompt_multiline("Please answer the question")
 
@@ -524,15 +535,15 @@ class DevelopPhase(Phase):
         it means the user has already answered the clarification question.
 
         Args:
-            develop_file: develop clarification file path (e.g. develop_001.md)
+            develop_file: develop clarification file path (e.g. iteration_001/output.md)
 
         Returns:
             True if already answered in any subsequent iteration, False otherwise
         """
-        # Extract iteration number from develop file name
-        # develop_001.md -> 1
+        # Extract iteration number from develop file path
+        # iteration_001/output.md -> 1
         import re
-        match = re.search(r'develop_(\d+)\.md', develop_file.name)
+        match = re.search(r'iteration_(\d+)', str(develop_file))
         if not match:
             return False
 
@@ -1074,11 +1085,11 @@ Please return only one status code (example: CAFE_CONFIRMED), with no other cont
     def _detect_written_output_files(self) -> List[Path]:
         """Check if develop file was written before failure.
 
-        DevelopPhase uses develop_{iteration}.md to record CAFE_NEED_CLARIFICATION questions.
+        DevelopPhase uses iteration_XXX/output.md to record CAFE_NEED_CLARIFICATION questions.
 
         Returns:
-            List[Path]: Return list containing develop_{iteration}.md if it exists, otherwise empty list
+            List[Path]: Return list containing iteration_XXX/output.md if it exists, otherwise empty list
         """
         develop_dir = self.issue_dir / "develop"
-        develop_file = develop_dir / f"develop_{self.iteration:03d}.md"
+        develop_file = develop_dir / f"iteration_{self.iteration:03d}" / "output.md"
         return [develop_file] if develop_file.exists() else []
