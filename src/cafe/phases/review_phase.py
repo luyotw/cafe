@@ -93,6 +93,7 @@ class ReviewPhase(Phase):
 
         # Set up phase and history directories (needed for _check_if_already_completed)
         self.phase_dir = self.issue_dir / "review"
+        self.review_dir = self.phase_dir  # Alias for backward compatibility
         self.history_dir = self.phase_dir / "history"
 
     def execute(self) -> PhaseResult:
