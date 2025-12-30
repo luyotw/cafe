@@ -426,6 +426,7 @@ class Phase(ABC):
         except Exception as e:
             # Agent execution failed - attempt recovery
             from cafe.agents.executor import AgentExecutionError
+            from cafe.core.types import CriticalPhaseError
 
             print(f"⚠️  Agent execution failed: {e}")
 
@@ -454,7 +455,6 @@ class Phase(ABC):
                         json.dump(context_data, f, ensure_ascii=False, indent=2)
 
                 # Create a CriticalError wrapper to signal this should stop the workflow
-                from cafe.core.types import CriticalPhaseError
                 raise CriticalPhaseError(
                     message=str(e),
                     error_type=e.error_type,
