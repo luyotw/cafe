@@ -698,6 +698,24 @@ def prepare(
         cafe_dir = Path(".cafe")
         _ensure_default_content(cafe_dir)
 
+        # 9.1. Validate template exists (only in non-interactive mode after templates are initialized)
+        if not interactive and template:
+            template_file = Path(".cafe") / "templates" / "plan" / f"{template}.md"
+            if not template_file.exists():
+                console.print(f"[red]Error: Template '{template}' not found[/red]")
+                console.print(f"   Expected at: {template_file}")
+                console.print()
+                console.print("[yellow]Available templates:[/yellow]")
+                template_dir = Path(".cafe") / "templates" / "plan"
+                if template_dir.exists():
+                    available = [f.stem for f in template_dir.glob("*.md")]
+                    if available:
+                        for tmpl in sorted(available):
+                            console.print(f"  - {tmpl}")
+                    else:
+                        console.print("  (none)")
+                raise typer.Exit(1)
+
         # 10. Assemble spec/plan/pr configuration (prompt mode or parameter mode)
         spec_config = {}
         plan_config = {}
