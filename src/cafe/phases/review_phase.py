@@ -190,8 +190,9 @@ class ReviewPhase(Phase):
             self.iteration = self._get_next_iteration_number("review", self.review_dir)
 
             # Prepare allowed tools with edit permission for review file
-            review_file_name = f"review_{self.iteration:03d}.md"
-            review_file_path = self.review_dir / review_file_name
+            # Use iteration_XXX/output.md format (consistent with other phases)
+            iteration_dir = self.review_dir / f"iteration_{self.iteration:03d}"
+            review_file_path = iteration_dir / "output.md"
 
             # Use path relative to current working directory (supports worktree)
             from cafe.utils.git_utils import to_cwd_relative_path

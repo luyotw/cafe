@@ -2359,14 +2359,14 @@ def review(
                 )
                 console.print()
 
-                # Find latest review file (review_XXX.md)
+                # Find latest review file (iteration_XXX/output.md format)
                 review_dir = Path(f".cafe/issues/{issue_name}/review")
-                review_files = sorted(review_dir.glob("review_*.md"))
-                if review_files:
-                    latest_review = review_files[-1]
-                    review_path = f".cafe/issues/{issue_name}/review/{latest_review.name}"
+                iteration_files = sorted(review_dir.glob("iteration_*/output.md"))
+                if iteration_files:
+                    latest_review = iteration_files[-1]
+                    review_path = f".cafe/issues/{issue_name}/review/{latest_review.parent.name}/output.md"
                 else:
-                    # Fallback to review.md if no numbered files found
+                    # Fallback for old format
                     review_path = f".cafe/issues/{issue_name}/review/review.md"
 
                 console.print("[dim]Review feedback saved to:[/dim]")
