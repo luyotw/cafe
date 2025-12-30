@@ -276,6 +276,99 @@ def _edit_file_with_editor(file_path: Path) -> None:
         raise typer.Exit(1)
 
 
+def _resolve_iteration_number(phase_dir: Path, iteration_input: int) -> int:
+    """解析迭代號碼（支援正數、零、負數）。
+
+    Args:
+        phase_dir: 階段目錄路徑（例如 .cafe/issues/issue84/spec）
+        iteration_input: 使用者輸入的迭代號碼（可為正數、0、負數）
+
+    Returns:
+        實際的迭代號碼（正整數）
+
+    Raises:
+        ValueError: 當迭代號碼不存在時
+    """
+    # 取得所有迭代目錄（透過 context.json 檔案確認）
+    iteration_files = sorted(phase_dir.glob("iteration_*/context.json"))
+
+    if not iteration_files:
+        raise ValueError(f"No iterations found in {phase_dir}")
+
+    # 從目錄名稱中提取迭代號碼
+    iteration_numbers = []
+    for file_path in iteration_files:
+        # 目錄名稱格式為 iteration_XXX
+        dir_name = file_path.parent.name
+        if dir_name.startswith("iteration_"):
+            try:
+                num = int(dir_name.split("_")[1])
+                iteration_numbers.append(num)
+            except (IndexError, ValueError):
+                continue
+
+    if not iteration_numbers:
+        raise ValueError(f"No valid iterations found in {phase_dir}")
+
+    # 處理不同的迭代號碼格式
+    if iteration_input == 0:
+        # 零表示最新的迭代
+        return iteration_numbers[-1]
+    elif iteration_input > 0:
+        # 正數直接使用，但需要驗證是否存在
+        if iteration_input not in iteration_numbers:
+            raise ValueError(
+                f"Iteration {iteration_input} not found. "
+                f"Available iterations: {iteration_numbers}"
+            )
+        return iteration_input
+    else:
+        # 負數使用 Python 陣列索引邏輯
+        try:
+            return iteration_numbers[iteration_input]
+        except IndexError:
+            raise ValueError(
+                f"Iteration index {iteration_input} out of range. "
+                f"Available iterations: {iteration_numbers}"
+            )
+
+
+def _get_show_file_path(phase_dir: Path, iteration: int, content_type: str) -> Path:
+    """取得指定內容類型的檔案路徑。
+
+    Args:
+        phase_dir: 階段目錄路徑
+        iteration: 迭代號碼（已解析為正整數）
+        content_type: 內容類型（context, output, streaming 等）
+
+    Returns:
+        檔案的完整路徑
+    """
+    # 內容類型與檔案名稱的映射
+    content_type_map = {
+        "context": "context.json",
+        "output": "output.md",
+        "streaming": "streaming.jsonl",
+        "error": "error.json",
+        "title": "title.txt",
+        "body": "body.md",
+        "status": "status.json",
+        "iterations": "iterations.jsonl",
+    }
+
+    filename = content_type_map.get(content_type)
+    if not filename:
+        raise ValueError(f"Unknown content type: {content_type}")
+
+    # status 和 iterations 位於階段目錄根層
+    if content_type in ["status", "iterations"]:
+        return phase_dir / filename
+    else:
+        # 其他檔案位於迭代目錄內
+        iteration_dir = phase_dir / f"iteration_{iteration:03d}"
+        return iteration_dir / filename
+
+
 def _get_latest_review_iteration(issue_name: str) -> int:
     """Get the latest review iteration number from iteration directories.
 
@@ -3681,6 +3774,120 @@ def agent_edit() -> None:
         raise typer.Exit(1)
     except FileNotFoundError:
         console.print(f"[red]Error: Editor '{editor}' not found[/red]")
+        raise typer.Exit(1)
+
+
+@app.command()
+def show(
+    phase_name: str = typer.Argument(
+        ...,
+        help="Phase name (spec, plan, develop, review, pr)"
+    ),
+    content_type: Optional[str] = typer.Argument(
+        None,
+        help="Content type (default: output)"
+    ),
+    iteration: int = typer.Option(
+        0,
+        "--iteration", "-i",
+        help="Iteration number (positive, 0=latest, negative=relative index)"
+    ),
+    ctx: typer.Context = typer.Context,
+) -> None:
+    """📄 Display iteration file contents.
+
+    Shows the content of files from different phases and iterations.
+
+    Examples:
+        cafe show spec                    # Show latest spec output
+        cafe show spec context            # Show latest spec context
+        cafe show spec output -i 2        # Show spec iteration 2 output
+        cafe show spec context -i -1      # Show previous spec iteration context
+        cafe show plan status -i -2       # Show plan status 2 iterations ago
+    """
+    # 驗證階段名稱
+    valid_phases = ["spec", "plan", "develop", "review", "pr"]
+    if phase_name not in valid_phases:
+        console.print(f"[red]Error: Invalid phase '{phase_name}'[/red]")
+        console.print(f"[dim]Valid phases: {', '.join(valid_phases)}[/dim]")
+        raise typer.Exit(1)
+
+    # 設定預設內容類型
+    if content_type is None:
+        content_type = "output"
+
+    # 驗證內容類型
+    valid_content_types = [
+        "context", "output", "streaming", "error",
+        "title", "body", "status", "iterations"
+    ]
+    if content_type not in valid_content_types:
+        console.print(f"[red]Error: Invalid content type '{content_type}'[/red]")
+        console.print(f"[dim]Valid types: {', '.join(valid_content_types)}[/dim]")
+        raise typer.Exit(1)
+
+    # 取得當前分支名稱（issue_name）
+    try:
+        git_ops = GitOperations()
+        issue_name = git_ops.get_current_branch()
+    except Exception as e:
+        console.print(f"[red]Error: Failed to get current branch: {e}[/red]")
+        raise typer.Exit(1)
+
+    # 建構階段目錄路徑
+    cafe_dir = Path.cwd() / ".cafe"
+    phase_dir = cafe_dir / "issues" / issue_name / phase_name
+
+    # 檢查階段目錄是否存在
+    if not phase_dir.exists():
+        console.print(f"[red]Error: Phase directory not found: {phase_dir}[/red]")
+        console.print(f"[dim]The '{phase_name}' phase has not been executed yet[/dim]")
+        raise typer.Exit(1)
+
+    try:
+        # 解析迭代號碼（僅對非 status/iterations 檔案）
+        if content_type not in ["status", "iterations"]:
+            resolved_iteration = _resolve_iteration_number(phase_dir, iteration)
+        else:
+            # status 和 iterations 不需要迭代號碼
+            resolved_iteration = 0
+
+        # 取得檔案路徑
+        file_path = _get_show_file_path(phase_dir, resolved_iteration, content_type)
+
+        # 檢查檔案是否存在
+        if not file_path.exists():
+            console.print(f"[red]Error: File not found: {file_path}[/red]")
+            if content_type not in ["status", "iterations"]:
+                console.print(f"[dim]File '{content_type}' does not exist in iteration {resolved_iteration}[/dim]")
+            raise typer.Exit(1)
+
+        # 讀取並顯示檔案內容
+        try:
+            content = file_path.read_text(encoding="utf-8")
+
+            # 對於 JSON 檔案使用語法高亮
+            if file_path.suffix == ".json":
+                try:
+                    import json
+                    json_data = json.loads(content)
+                    console.print_json(data=json_data)
+                except json.JSONDecodeError:
+                    # 如果 JSON 解析失敗，直接輸出原始內容
+                    console.print(content)
+            else:
+                # 其他檔案直接輸出
+                console.print(content)
+
+        except UnicodeDecodeError:
+            console.print(f"[red]Error: Failed to read file (not UTF-8 encoded)[/red]")
+            raise typer.Exit(1)
+
+    except ValueError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1)
+    except Exception as e:
+        console.print(f"[red]Unexpected error: {e}[/red]")
         raise typer.Exit(1)
 
 
