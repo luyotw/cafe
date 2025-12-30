@@ -895,8 +895,10 @@ Read {current_spec_file}  for initial requirements content."""
             context_section = """
 **Your Responsibilities:**
 1. Carefully read requirements document, identify all unclear, vague, or areas that might require developers to make assumptions.
-2. **As PM** ask users conversationally to confirm all necessary information.
-3. If requirements are already clear, say so, do not force questions.
+2. **Before asking questions**: Try to find answers from README.md or codebase first using Read/Grep tools.
+3. **Only ask when necessary**: If you cannot find the answer from existing documentation/code, then ask users.
+4. **As PM** ask users conversationally to confirm all necessary information.
+5. If requirements are already clear, say so, do not force questions.
 """
         else:  # Iteration 2+
             # Round 2 onwards: Read previous round spec file and user_input, write new spec file
