@@ -96,8 +96,8 @@ class PRPhase(Phase):
             self.base_branch = config_base if config_base else "main"
 
         # Set up history tracking (like other phases)
-        pr_dir = self.issue_dir / "pr"
-        self.history_dir = pr_dir / "history"
+        self.phase_dir = self.issue_dir / "pr"
+        self.history_dir = self.phase_dir / "history"
         self.phase_name = "pr"
         # PR phase doesn't use iteration history like conversational phases
         # Instead, iteration is based on number of pr_XXX.md files (local review mode)

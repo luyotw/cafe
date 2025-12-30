@@ -80,9 +80,12 @@ class DevelopPhase(Phase):
             # Derive from current branch name (via issue_dir)
             self.issue_name = self.issue_dir.name
 
+        # Phase directory for develop phase (required by base class)
+        self.phase_dir = self.issue_dir / "develop"
+
         # History directory for develop phase
         # Path: .cafe/issues/{issue_name}/develop/history
-        self.history_dir = self.issue_dir / "develop" / "history"
+        self.history_dir = self.phase_dir / "history"
 
         # Track user responses for permission requests
         self.user_responses: List[str] = []
