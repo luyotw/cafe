@@ -1499,9 +1499,8 @@ def spec(
             if status_code == "CAFE_NEED_CLARIFICATION":
                 console.print("[bold yellow]💬 Agent needs clarification[/bold yellow]")
                 console.print(f"Iterations: {result.data.get('iterations', 'N/A')}")
-                if workflow_mode == WorkflowMode.LOCAL:
-                    # Display full file path
-                    spec_file = result.data.get("spec_file", spec_dir)
+                spec_file = result.data.get("spec_file")
+                if spec_file:
                     console.print(f"Saved to: {spec_file}")
                 console.print()
                 console.print("[dim]To continue, run:[/dim] [bold]cafe spec[/bold]")
@@ -1509,26 +1508,18 @@ def spec(
                 # Spec draft is ready, but needs user confirmation
                 console.print("[bold green]✅ Spec draft completed![/bold green]")
                 console.print(f"Iterations: {result.data.get('iterations', 'N/A')}")
-                if workflow_mode == WorkflowMode.LOCAL:
-                    spec_file = result.data.get("spec_file", spec_dir)
+                spec_file = result.data.get("spec_file")
+                if spec_file:
                     console.print(f"Saved to: {spec_file}")
-                elif result.data.get("issue_id"):
-                    console.print(f"Created issue: #{result.data['issue_id']}")
-                elif issue_id:
-                    console.print(f"Updated issue: #{issue_id}")
                 console.print()
                 console.print("[dim]Please review the spec and run:[/dim] [bold]cafe spec[/bold]")
             elif status_code == "CAFE_CONFIRMED":
                 # Spec is confirmed, ready to proceed to plan
                 console.print("[bold green]✅ Spec clarification completed![/bold green]")
                 console.print(f"Iterations: {result.data.get('iterations', 'N/A')}")
-                if workflow_mode == WorkflowMode.LOCAL:
-                    spec_file = result.data.get("spec_file", spec_dir)
+                spec_file = result.data.get("spec_file")
+                if spec_file:
                     console.print(f"Saved to: {spec_file}")
-                elif result.data.get("issue_id"):
-                    console.print(f"Created issue: #{result.data['issue_id']}")
-                elif issue_id:
-                    console.print(f"Updated issue: #{issue_id}")
                 console.print()
 
                 # Auto mode: execute next phase
@@ -1541,8 +1532,8 @@ def spec(
                 console.print("[bold green]✅ Spec phase completed![/bold green]")
                 console.print(f"Iterations: {result.data.get('iterations', 'N/A')}")
                 console.print(f"Status: {status_code}")
-                if workflow_mode == WorkflowMode.LOCAL:
-                    spec_file = result.data.get("spec_file", spec_dir)
+                spec_file = result.data.get("spec_file")
+                if spec_file:
                     console.print(f"Saved to: {spec_file}")
         else:
             console.print()
@@ -1888,28 +1879,30 @@ def plan(
         if result.status.value == "completed":
             console.print()
             status_code = result.data.get("status_code")
-            plan_dir = f".cafe/issues/{issue_name}/plan"
 
             if status_code == "CAFE_NEED_CLARIFICATION":
                 console.print("[bold yellow]💬 Agent needs clarification[/bold yellow]")
                 console.print(f"Iterations: {result.data.get('iterations', 'N/A')}")
-                plan_file = result.data.get("plan_file", plan_dir)
-                console.print(f"Saved to: {plan_file}")
+                plan_file = result.data.get("plan_file")
+                if plan_file:
+                    console.print(f"Saved to: {plan_file}")
                 console.print()
                 console.print("[dim]To continue, run:[/dim] [bold]cafe plan[/bold]")
             elif status_code == "CAFE_READY_FOR_REVIEW":
                 console.print("[bold yellow]📋 Plan ready for review[/bold yellow]")
                 console.print(f"Iterations: {result.data.get('iterations', 'N/A')}")
-                plan_file = result.data.get("plan_file", plan_dir)
-                console.print(f"Saved to: {plan_file}")
+                plan_file = result.data.get("plan_file")
+                if plan_file:
+                    console.print(f"Saved to: {plan_file}")
                 console.print()
                 console.print("[dim]To review the plan, run:[/dim] [bold]cafe plan[/bold]")
             else:
                 # CAFE_CONFIRMED
                 console.print("[bold green]✅ Implementation plan completed![/bold green]")
                 console.print(f"Iterations: {result.data.get('iterations', 'N/A')}")
-                plan_file = result.data.get("plan_file", plan_dir)
-                console.print(f"Saved to: {plan_file}")
+                plan_file = result.data.get("plan_file")
+                if plan_file:
+                    console.print(f"Saved to: {plan_file}")
                 console.print()
 
                 # Auto mode: execute next phase
