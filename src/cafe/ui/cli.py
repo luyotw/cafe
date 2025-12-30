@@ -293,62 +293,81 @@ def _edit_file_with_editor(file_path: Path) -> None:
         raise typer.Exit(1)
 
 
-def _resolve_iteration_number(phase_dir: Path, iteration_input: int) -> int:
-    """Resolve iteration number (supports positive, zero, negative).
+def _resolve_iteration_number(phase_dir: Path, iteration_input: int, content_type: str) -> int:
+    """Resolve iteration number based on iterations that have the specified file.
 
     Args:
         phase_dir: Phase directory path (e.g., .cafe/issues/issue84/spec)
         iteration_input: User input iteration number (can be positive, 0, negative)
+        content_type: Content type to search for (output, context, etc.)
 
     Returns:
         Actual iteration number (positive integer)
 
     Raises:
-        ValueError: When iteration number does not exist
+        ValueError: When iteration number does not exist or file not found
     """
-    # Get all iteration directories (verified by context.json file)
-    iteration_files = sorted(phase_dir.glob("iteration_*/context.json"))
+    # Get filename for the content type
+    filename = CONTENT_TYPE_FILE_MAP.get(content_type)
+    if not filename:
+        raise ValueError(f"Unknown content type: {content_type}")
 
-    if not iteration_files:
+    # Get all iteration directories (verified by context.json file)
+    all_iteration_files = sorted(phase_dir.glob("iteration_*/context.json"))
+
+    if not all_iteration_files:
         raise ValueError(f"No iterations found in {phase_dir}")
 
-    # Extract iteration numbers from directory names
-    iteration_numbers = []
-    for file_path in iteration_files:
-        # Directory name format is iteration_XXX
+    # Extract all iteration numbers
+    all_iteration_numbers = []
+    for file_path in all_iteration_files:
         dir_name = file_path.parent.name
         if dir_name.startswith("iteration_"):
             try:
                 num = int(dir_name.split("_")[1])
-                iteration_numbers.append(num)
+                all_iteration_numbers.append(num)
             except (IndexError, ValueError):
                 continue
 
-    if not iteration_numbers:
+    if not all_iteration_numbers:
         raise ValueError(f"No valid iterations found in {phase_dir}")
+
+    # Find iterations that have the requested file
+    iteration_numbers_with_file = []
+    for iter_num in all_iteration_numbers:
+        iteration_dir = phase_dir / f"iteration_{iter_num:03d}"
+        file_path = iteration_dir / filename
+        if file_path.exists():
+            iteration_numbers_with_file.append(iter_num)
+
+    if not iteration_numbers_with_file:
+        raise ValueError(
+            f"No iterations found with file '{filename}'. "
+            f"Available iterations: {all_iteration_numbers}"
+        )
 
     # Handle different iteration number formats
     if iteration_input == 0:
-        # Zero means latest iteration
-        return iteration_numbers[-1]
+        # Zero means latest iteration with the file
+        return iteration_numbers_with_file[-1]
     elif iteration_input > 0:
         # Positive number used directly, but need to verify existence
-        if iteration_input not in iteration_numbers:
+        if iteration_input not in iteration_numbers_with_file:
             raise ValueError(
-                f"Iteration {iteration_input} not found. "
-                f"Available iterations: {iteration_numbers}"
+                f"Iteration {iteration_input} not found or does not have '{filename}'. "
+                f"Iterations with this file: {iteration_numbers_with_file}"
             )
         return iteration_input
     else:
         # Negative number: -1 means one before latest, -2 means two before, etc.
-        # Since 0 already represents latest (iteration_numbers[-1]),
+        # Since 0 already represents latest (iteration_numbers_with_file[-1]),
         # we need to offset: -1 -> [-2], -2 -> [-3], etc.
         try:
-            return iteration_numbers[iteration_input - 1]
+            return iteration_numbers_with_file[iteration_input - 1]
         except IndexError:
             raise ValueError(
                 f"Iteration index {iteration_input} out of range. "
-                f"Available iterations: {iteration_numbers}"
+                f"Iterations with '{filename}': {iteration_numbers_with_file}"
             )
 
 
@@ -3848,7 +3867,7 @@ def show(
     try:
         # Resolve iteration number (only for non-status/iterations files)
         if content_type not in ["status", "iterations"]:
-            resolved_iteration = _resolve_iteration_number(phase_dir, iteration)
+            resolved_iteration = _resolve_iteration_number(phase_dir, iteration, content_type)
             # Get file path
             file_path = _get_show_file_path(phase_dir, resolved_iteration, content_type)
         else:

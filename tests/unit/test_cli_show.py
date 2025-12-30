@@ -23,11 +23,12 @@ class TestResolveIterationNumber:
             iteration_dir = phase_dir / f"iteration_{i:03d}"
             iteration_dir.mkdir()
             (iteration_dir / "context.json").write_text("{}")
+            (iteration_dir / "output.md").write_text(f"# Output {i}")
 
         # 測試正數迭代號碼
-        assert _resolve_iteration_number(phase_dir, 1) == 1
-        assert _resolve_iteration_number(phase_dir, 2) == 2
-        assert _resolve_iteration_number(phase_dir, 3) == 3
+        assert _resolve_iteration_number(phase_dir, 1, "output") == 1
+        assert _resolve_iteration_number(phase_dir, 2, "output") == 2
+        assert _resolve_iteration_number(phase_dir, 3, "output") == 3
 
     def test_resolve_iteration_number_zero(self, tmp_path):
         """測試零（最新迭代）解析"""
@@ -38,9 +39,10 @@ class TestResolveIterationNumber:
             iteration_dir = phase_dir / f"iteration_{i:03d}"
             iteration_dir.mkdir()
             (iteration_dir / "context.json").write_text("{}")
+            (iteration_dir / "output.md").write_text(f"# Output {i}")
 
-        # 零應該返回最新的迭代號碼（3）
-        assert _resolve_iteration_number(phase_dir, 0) == 3
+        # 零應該返回最新的有該檔案的迭代號碼（3）
+        assert _resolve_iteration_number(phase_dir, 0, "output") == 3
 
     def test_resolve_iteration_number_negative(self, tmp_path):
         """測試負數（相對索引）解析"""
@@ -51,11 +53,12 @@ class TestResolveIterationNumber:
             iteration_dir = phase_dir / f"iteration_{i:03d}"
             iteration_dir.mkdir()
             (iteration_dir / "context.json").write_text("{}")
+            (iteration_dir / "output.md").write_text(f"# Output {i}")
 
         # -1 應該返回最新迭代的前一個（2）
-        assert _resolve_iteration_number(phase_dir, -1) == 2
+        assert _resolve_iteration_number(phase_dir, -1, "output") == 2
         # -2 應該返回最新迭代的前兩個（1）
-        assert _resolve_iteration_number(phase_dir, -2) == 1
+        assert _resolve_iteration_number(phase_dir, -2, "output") == 1
 
     def test_resolve_iteration_number_invalid_positive(self, tmp_path):
         """測試不存在的正數迭代號碼"""
@@ -66,10 +69,11 @@ class TestResolveIterationNumber:
             iteration_dir = phase_dir / f"iteration_{i:03d}"
             iteration_dir.mkdir()
             (iteration_dir / "context.json").write_text("{}")
+            (iteration_dir / "output.md").write_text(f"# Output {i}")
 
         # 迭代號碼 5 不存在，應該拋出 ValueError
         with pytest.raises(ValueError):
-            _resolve_iteration_number(phase_dir, 5)
+            _resolve_iteration_number(phase_dir, 5, "output")
 
     def test_resolve_iteration_number_invalid_negative(self, tmp_path):
         """測試超出範圍的負數迭代號碼"""
@@ -80,10 +84,11 @@ class TestResolveIterationNumber:
             iteration_dir = phase_dir / f"iteration_{i:03d}"
             iteration_dir.mkdir()
             (iteration_dir / "context.json").write_text("{}")
+            (iteration_dir / "output.md").write_text(f"# Output {i}")
 
         # -5 超出範圍，應該拋出 ValueError
         with pytest.raises(ValueError):
-            _resolve_iteration_number(phase_dir, -5)
+            _resolve_iteration_number(phase_dir, -5, "output")
 
     def test_resolve_iteration_number_no_iterations(self, tmp_path):
         """測試沒有任何迭代時"""
@@ -93,7 +98,26 @@ class TestResolveIterationNumber:
 
         # 沒有迭代時應該拋出 ValueError
         with pytest.raises(ValueError):
-            _resolve_iteration_number(phase_dir, 0)
+            _resolve_iteration_number(phase_dir, 0, "output")
+
+    def test_resolve_iteration_number_partial_files(self, tmp_path):
+        """測試部分迭代有特定檔案的情況"""
+        # 準備測試資料：iteration 1-3 有 output.md，iteration 4 只有 context.json
+        phase_dir = tmp_path / "spec"
+        phase_dir.mkdir(parents=True)
+        for i in [1, 2, 3, 4]:
+            iteration_dir = phase_dir / f"iteration_{i:03d}"
+            iteration_dir.mkdir()
+            (iteration_dir / "context.json").write_text("{}")
+            if i <= 3:  # 只有 1-3 有 output.md
+                (iteration_dir / "output.md").write_text(f"# Output {i}")
+
+        # 0 應該返回最後一個有 output.md 的迭代（3）
+        assert _resolve_iteration_number(phase_dir, 0, "output") == 3
+        # -1 應該返回倒數第二個有 output.md 的迭代（2）
+        assert _resolve_iteration_number(phase_dir, -1, "output") == 2
+        # -2 應該返回倒數第三個有 output.md 的迭代（1）
+        assert _resolve_iteration_number(phase_dir, -2, "output") == 1
 
 
 class TestGetShowFilePath:
