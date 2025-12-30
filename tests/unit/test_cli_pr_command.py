@@ -121,7 +121,7 @@ class TestPRCommandGitHubMode:
         assert len(calls) == 1, f"Expected exactly 1 call to 'gh pr diff --web', got {len(calls)}"
         assert calls[0] == (
             (["gh", "pr", "diff", "--web"],),
-            {"capture_output": True, "timeout": 5}
+            {"capture_output": True, "check": False, "timeout": 5}
         )
         
         # Verify output contains PR URL and next steps

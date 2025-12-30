@@ -2559,17 +2559,27 @@ def pr(
             base_branch=base if base != "main" else None,  # Pass base only if not default
         )
 
-        # Display start message
-        console.print("[bold blue]🚀 PR Phase: Create Pull Request[/bold blue]")
-        console.print(f"Issue: {issue_name}")
-        dev_executor = agent_manager.get_agent(dev_agent)
-        dev_cli = dev_executor.config.cli.value
-        dev_model = dev_executor.config.model or "default"
-        console.print(f"Developer Agent: {dev_agent}")
-        console.print(f"CLI: {dev_cli}")
-        console.print(f"Model: {dev_model}")
-        console.print(f"Base branch: {phase.base_branch}")
-        console.print()
+        # Display start message (only for GitHub PR mode)
+        # Check if pr.auto_create is set to determine mode
+        config_file = Path(f".cafe/issues/{issue_name}/issue.yaml")
+        pr_auto_create = None
+        if config_file.exists():
+            with open(config_file, "r") as f:
+                issue_config = yaml.safe_load(f)
+            pr_auto_create = issue_config.get("pr", {}).get("auto_create")
+
+        # Only show PR creation header if not in local review mode
+        if pr_auto_create is not False:
+            console.print("[bold blue]🚀 PR Phase: Create Pull Request[/bold blue]")
+            console.print(f"Issue: {issue_name}")
+            dev_executor = agent_manager.get_agent(dev_agent)
+            dev_cli = dev_executor.config.cli.value
+            dev_model = dev_executor.config.model or "default"
+            console.print(f"Developer Agent: {dev_agent}")
+            console.print(f"CLI: {dev_cli}")
+            console.print(f"Model: {dev_model}")
+            console.print(f"Base branch: {phase.base_branch}")
+            console.print()
 
         result = phase.execute()
 
@@ -2638,9 +2648,11 @@ def pr(
 
                 # Automatically open PR diff in browser
                 try:
-                    subprocess.run(["gh", "pr", "diff", "--web"], capture_output=True, timeout=5)
+                    subprocess.run(["gh", "pr", "diff", "--web"], capture_output=True, check=False, timeout=5)
+                except (subprocess.TimeoutExpired, FileNotFoundError):
+                    pass  # Silently ignore timeout or gh not found
                 except Exception:
-                    pass  # Silently ignore any errors
+                    pass  # Silently ignore any other errors
         else:
             console.print()
             console.print(f"[bold red]❌ PR phase failed: {result.message}[/bold red]")
