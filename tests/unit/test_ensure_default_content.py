@@ -6,7 +6,7 @@ import shutil
 
 import pytest
 
-from cafe.ui.cli import _ensure_default_content
+from cafe.ui.commands.init_commands import _ensure_default_content
 
 
 @pytest.fixture

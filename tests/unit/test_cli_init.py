@@ -32,7 +32,7 @@ class TestInitCommandEnvironmentChecks:
         assert "Configuration already exists" in result.stdout
         assert "cafe config" in result.stdout
 
-    @patch("cafe.ui.cli.shutil.which")
+    @patch("cafe.ui.commands.init_commands.shutil.which")
     def test_init_exits_if_no_clis_available(
         self, mock_which: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -47,8 +47,8 @@ class TestInitCommandEnvironmentChecks:
         assert result.exit_code == 1
         assert "No supported AI agents found" in result.stdout
 
-    @patch("cafe.ui.cli.shutil.which")
-    @patch("cafe.ui.cli.init_helpers.copy_data_directory")
+    @patch("cafe.ui.commands.init_commands.shutil.which")
+    @patch("cafe.ui.commands.init_commands.init_helpers.copy_data_directory")
     def test_init_copies_agents_and_templates(
         self,
         mock_copy: MagicMock,
@@ -63,8 +63,8 @@ class TestInitCommandEnvironmentChecks:
         monkeypatch.chdir(tmp_path)
 
         # Mock prompt functions to avoid actual interaction
-        with patch("cafe.ui.cli.prompt_list") as mock_prompt_list, patch(
-            "cafe.ui.cli.prompt_text"
+        with patch("cafe.ui.commands.init_commands.prompt_list") as mock_prompt_list, patch(
+            "cafe.ui.commands.init_commands.prompt_text"
         ) as mock_prompt_text:
             # 模擬用戶選擇
             mock_prompt_list.return_value = "claude"
@@ -81,8 +81,8 @@ class TestInitCommandEnvironmentChecks:
         # 驗證 copy_data_directory 被呼叫兩次（agents and templates）
         assert mock_copy.call_count == 2
 
-    @patch("cafe.ui.cli.shutil.which")
-    @patch("cafe.ui.cli.init_helpers.copy_data_directory")
+    @patch("cafe.ui.commands.init_commands.shutil.which")
+    @patch("cafe.ui.commands.init_commands.init_helpers.copy_data_directory")
     def test_init_handles_copy_errors(
         self,
         mock_copy: MagicMock,
@@ -108,9 +108,9 @@ class TestInitCommandEnvironmentChecks:
 class TestInitCommandInteractiveFlow:
     """測試 init 指令互動式配置流程"""
 
-    @patch("cafe.ui.cli.shutil.which")
-    @patch("cafe.ui.cli.init_helpers.copy_data_directory")
-    @patch("cafe.ui.cli.list_available_agents")
+    @patch("cafe.ui.commands.init_commands.shutil.which")
+    @patch("cafe.ui.commands.init_commands.init_helpers.copy_data_directory")
+    @patch("cafe.ui.commands.init_commands.list_available_agents")
     def test_init_prompts_for_all_three_roles(
         self,
         mock_list_agents: MagicMock,
@@ -129,8 +129,8 @@ class TestInitCommandInteractiveFlow:
         monkeypatch.chdir(tmp_path)
 
         # 模擬 prompt_list and prompt_text 方法
-        with patch("cafe.ui.cli.prompt_list") as mock_prompt_list, patch(
-            "cafe.ui.cli.prompt_text"
+        with patch("cafe.ui.commands.init_commands.prompt_list") as mock_prompt_list, patch(
+            "cafe.ui.commands.init_commands.prompt_text"
         ) as mock_prompt_text:
             # 設定 prompt_list 返回值（CLI and agent 選擇）
             mock_prompt_list.side_effect = [
@@ -152,9 +152,9 @@ class TestInitCommandInteractiveFlow:
         # 驗證 prompt_text 被呼叫 3 次（3 個角色 × 1: model）
         assert mock_prompt_text.call_count == 3
 
-    @patch("cafe.ui.cli.shutil.which")
-    @patch("cafe.ui.cli.init_helpers.copy_data_directory")
-    @patch("cafe.ui.cli.list_available_agents")
+    @patch("cafe.ui.commands.init_commands.shutil.which")
+    @patch("cafe.ui.commands.init_commands.init_helpers.copy_data_directory")
+    @patch("cafe.ui.commands.init_commands.list_available_agents")
     def test_init_handles_keyboard_interrupt(
         self,
         mock_list_agents: MagicMock,
@@ -173,7 +173,7 @@ class TestInitCommandInteractiveFlow:
         monkeypatch.chdir(tmp_path)
 
         # 模擬 Ctrl+C
-        with patch("cafe.ui.cli.prompt_list") as mock_prompt_list:
+        with patch("cafe.ui.commands.init_commands.prompt_list") as mock_prompt_list:
             mock_prompt_list.side_effect = KeyboardInterrupt()
 
             result = runner.invoke(app, ["init"])
@@ -181,9 +181,9 @@ class TestInitCommandInteractiveFlow:
         assert result.exit_code == 1
         assert "cancelled" in result.stdout or "未完成" in result.stdout
 
-    @patch("cafe.ui.cli.shutil.which")
-    @patch("cafe.ui.cli.init_helpers.copy_data_directory")
-    @patch("cafe.ui.cli.list_available_agents")
+    @patch("cafe.ui.commands.init_commands.shutil.which")
+    @patch("cafe.ui.commands.init_commands.init_helpers.copy_data_directory")
+    @patch("cafe.ui.commands.init_commands.list_available_agents")
     def test_init_errors_on_empty_agent_directory(
         self,
         mock_list_agents: MagicMock,
@@ -210,9 +210,9 @@ class TestInitCommandInteractiveFlow:
 class TestInitCommandConfigSaving:
     """測試 init 指令配置儲存"""
 
-    @patch("cafe.ui.cli.shutil.which")
-    @patch("cafe.ui.cli.init_helpers.copy_data_directory")
-    @patch("cafe.ui.cli.list_available_agents")
+    @patch("cafe.ui.commands.init_commands.shutil.which")
+    @patch("cafe.ui.commands.init_commands.init_helpers.copy_data_directory")
+    @patch("cafe.ui.commands.init_commands.list_available_agents")
     def test_init_saves_config_correctly(
         self,
         mock_list_agents: MagicMock,
@@ -235,8 +235,8 @@ class TestInitCommandConfigSaving:
         monkeypatch.chdir(tmp_path)
 
         # 模擬 prompt_list and prompt_text 方法
-        with patch("cafe.ui.cli.prompt_list") as mock_prompt_list, patch(
-            "cafe.ui.cli.prompt_text"
+        with patch("cafe.ui.commands.init_commands.prompt_list") as mock_prompt_list, patch(
+            "cafe.ui.commands.init_commands.prompt_text"
         ) as mock_prompt_text:
             # 設定 prompt_list 返回值（CLI and agent 選擇）
             mock_prompt_list.side_effect = [
@@ -271,9 +271,9 @@ class TestInitCommandConfigSaving:
         assert config["agents"]["reviewer"]["name"] == "Richard"
         assert config["agents"]["reviewer"]["cli"] == "gemini"
 
-    @patch("cafe.ui.cli.shutil.which")
-    @patch("cafe.ui.cli.init_helpers.copy_data_directory")
-    @patch("cafe.ui.cli.list_available_agents")
+    @patch("cafe.ui.commands.init_commands.shutil.which")
+    @patch("cafe.ui.commands.init_commands.init_helpers.copy_data_directory")
+    @patch("cafe.ui.commands.init_commands.list_available_agents")
     def test_init_displays_success_message(
         self,
         mock_list_agents: MagicMock,
@@ -292,8 +292,8 @@ class TestInitCommandConfigSaving:
         monkeypatch.chdir(tmp_path)
 
         # 模擬 prompt_list and prompt_text 方法
-        with patch("cafe.ui.cli.prompt_list") as mock_prompt_list, patch(
-            "cafe.ui.cli.prompt_text"
+        with patch("cafe.ui.commands.init_commands.prompt_list") as mock_prompt_list, patch(
+            "cafe.ui.commands.init_commands.prompt_text"
         ) as mock_prompt_text:
             # 每個角色都選擇相同設定
             mock_prompt_list.side_effect = [
@@ -315,9 +315,9 @@ class TestInitCommandConfigSaving:
         assert "Reviewer:" in result.stdout
         assert "cafe prepare" in result.stdout
 
-    @patch("cafe.ui.cli.shutil.which")
-    @patch("cafe.ui.cli.init_helpers.copy_data_directory")
-    @patch("cafe.ui.cli.list_available_agents")
+    @patch("cafe.ui.commands.init_commands.shutil.which")
+    @patch("cafe.ui.commands.init_commands.init_helpers.copy_data_directory")
+    @patch("cafe.ui.commands.init_commands.list_available_agents")
     def test_init_displays_model_as_default_when_empty(
         self,
         mock_list_agents: MagicMock,
@@ -336,8 +336,8 @@ class TestInitCommandConfigSaving:
         monkeypatch.chdir(tmp_path)
 
         # 模擬 prompt_list and prompt_text 方法（model 輸入為空）
-        with patch("cafe.ui.cli.prompt_list") as mock_prompt_list, patch(
-            "cafe.ui.cli.prompt_text"
+        with patch("cafe.ui.commands.init_commands.prompt_list") as mock_prompt_list, patch(
+            "cafe.ui.commands.init_commands.prompt_text"
         ) as mock_prompt_text:
             mock_prompt_list.side_effect = [
                 "claude",

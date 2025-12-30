@@ -87,10 +87,10 @@ class TestPrepareCommand:
         mock_git_ops.create_branch.assert_called_once_with("test-issue")
 
     @patch("cafe.ui.phase_prompts.prompt_confirm")
-    @patch("cafe.ui.cli.prompt_confirm")
+    @patch("cafe.ui.commands.init_commands.prompt_confirm")
     @patch("cafe.ui.template_selector.prompt_list")
     @patch("cafe.ui.phase_prompts.prompt_list")
-    @patch("cafe.ui.cli.prompt_text")
+    @patch("cafe.ui.commands.init_commands.prompt_text")
     def test_prepare_interactive_mode(self, mock_prompt_text, mock_phase_list, mock_template_list, mock_cli_confirm, mock_phase_confirm, temp_repo_dir, mock_git_ops):
         """測試互動式輸入 issue name"""
         # Mock user inputs
@@ -142,7 +142,7 @@ class TestPrepareCommand:
         mock_git_ops.checkout_branch.assert_called_once_with("existing-issue")
         mock_git_ops.create_branch.assert_not_called()
 
-    @patch("cafe.ui.cli.prompt_confirm")
+    @patch("cafe.ui.commands.init_commands.prompt_confirm")
     def test_prepare_with_uncommitted_changes_cancel(self, mock_prompt_confirm, temp_repo_dir, mock_git_ops):
         """測試有未 commit 變更時取消"""
         mock_git_ops.has_uncommitted_changes.return_value = True
@@ -160,7 +160,7 @@ class TestPrepareCommand:
         assert not issue_dir.exists()
         mock_git_ops.create_branch.assert_not_called()
 
-    @patch("cafe.ui.cli.prompt_confirm")
+    @patch("cafe.ui.commands.init_commands.prompt_confirm")
     def test_prepare_with_uncommitted_changes_continue(self, mock_prompt_confirm, temp_repo_dir, mock_git_ops):
         """測試有未 commit 變更時繼續執行"""
         mock_git_ops.has_uncommitted_changes.return_value = True
@@ -349,10 +349,10 @@ class TestPrepareCommandWorktree:
         )
 
     @patch("cafe.ui.phase_prompts.prompt_confirm")
-    @patch("cafe.ui.cli.prompt_confirm")
+    @patch("cafe.ui.commands.init_commands.prompt_confirm")
     @patch("cafe.ui.template_selector.prompt_list")
     @patch("cafe.ui.phase_prompts.prompt_list")
-    @patch("cafe.ui.cli.prompt_text")
+    @patch("cafe.ui.commands.init_commands.prompt_text")
     def test_prepare_interactive_worktree_prompt_yes(self, mock_prompt_text, mock_phase_list, mock_template_list, mock_cli_confirm, mock_phase_confirm, temp_repo_dir, mock_git_ops):
         """測試互動模式詢問是否使用 worktree, 使用者選擇 Yes"""
         # Mock user inputs: issue name, worktree path
@@ -383,10 +383,10 @@ class TestPrepareCommandWorktree:
             assert config_data["worktree_path"] == "worktrees/my-feature"
 
     @patch("cafe.ui.phase_prompts.prompt_confirm")
-    @patch("cafe.ui.cli.prompt_confirm")
+    @patch("cafe.ui.commands.init_commands.prompt_confirm")
     @patch("cafe.ui.template_selector.prompt_list")
     @patch("cafe.ui.phase_prompts.prompt_list")
-    @patch("cafe.ui.cli.prompt_text")
+    @patch("cafe.ui.commands.init_commands.prompt_text")
     def test_prepare_interactive_worktree_prompt_no(self, mock_prompt_text, mock_phase_list, mock_template_list, mock_cli_confirm, mock_phase_confirm, temp_repo_dir, mock_git_ops):
         """測試互動模式詢問是否使用 worktree, 使用者選擇 No"""
         # Mock user inputs
@@ -413,10 +413,10 @@ class TestPrepareCommandWorktree:
             assert "worktree_path" not in config_data
 
     @patch("cafe.ui.phase_prompts.prompt_confirm")
-    @patch("cafe.ui.cli.prompt_confirm")
+    @patch("cafe.ui.commands.init_commands.prompt_confirm")
     @patch("cafe.ui.template_selector.prompt_list")
     @patch("cafe.ui.phase_prompts.prompt_list")
-    @patch("cafe.ui.cli.prompt_text")
+    @patch("cafe.ui.commands.init_commands.prompt_text")
     def test_prepare_interactive_worktree_default_path_suggestion(self, mock_prompt_text, mock_phase_list, mock_template_list, mock_cli_confirm, mock_phase_confirm, temp_repo_dir, mock_git_ops):
         """測試互動模式建議預設路徑 .cafe/worktrees/{issue-name}"""
         # Mock user inputs: issue name, default path (empty string)
@@ -520,10 +520,10 @@ class TestPrepareCommandWorktree:
         assert (worktree_templates_dir / "plan" / "default.md").exists(), "default.md should exist in worktree"
 
     @patch("cafe.ui.phase_prompts.prompt_confirm")
-    @patch("cafe.ui.cli.prompt_confirm")
+    @patch("cafe.ui.commands.init_commands.prompt_confirm")
     @patch("cafe.ui.template_selector.prompt_list")
     @patch("cafe.ui.phase_prompts.prompt_list")
-    @patch("cafe.ui.cli.prompt_text")
+    @patch("cafe.ui.commands.init_commands.prompt_text")
     def test_prepare_interactive_saves_pr_auto_create_true(self, mock_prompt_text, mock_phase_list, mock_template_list, mock_cli_confirm, mock_phase_confirm, temp_repo_dir, mock_git_ops):
         """測試互動模式選擇自動建立 PR (yes)"""
         # Mock user inputs
@@ -549,10 +549,10 @@ class TestPrepareCommandWorktree:
             assert config_data["pr"]["auto_create"] is True
 
     @patch("cafe.ui.phase_prompts.prompt_confirm")
-    @patch("cafe.ui.cli.prompt_confirm")
+    @patch("cafe.ui.commands.init_commands.prompt_confirm")
     @patch("cafe.ui.template_selector.prompt_list")
     @patch("cafe.ui.phase_prompts.prompt_list")
-    @patch("cafe.ui.cli.prompt_text")
+    @patch("cafe.ui.commands.init_commands.prompt_text")
     def test_prepare_interactive_saves_pr_auto_create_false(self, mock_prompt_text, mock_phase_list, mock_template_list, mock_cli_confirm, mock_phase_confirm, temp_repo_dir, mock_git_ops):
         """測試互動模式選擇不自動建立 PR (no)"""
         # Mock user inputs

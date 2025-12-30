@@ -28,7 +28,7 @@ def temp_repo_dir(tmp_path, monkeypatch):
 @pytest.fixture
 def mock_git_ops(monkeypatch):
     """Mock GitOperations."""
-    with patch("cafe.ui.cli.GitOperations") as MockGitOps:
+    with patch("cafe.ui.commands.init_commands.GitOperations") as MockGitOps:
         mock = MagicMock()
         MockGitOps.return_value = mock
         mock.checkout_branch.return_value = None
@@ -42,7 +42,7 @@ def mock_git_ops(monkeypatch):
 @pytest.fixture
 def mock_github_ops_no_pr(monkeypatch):
     """Mock GitHubOps to return no PR."""
-    with patch("cafe.ui.cli.GitHubOps") as MockGitHubOps:
+    with patch("cafe.ui.commands.init_commands.GitHubOps") as MockGitHubOps:
         mock = MagicMock()
         MockGitHubOps.return_value = mock
         mock.check_gh_auth.return_value = False

@@ -56,10 +56,10 @@ def mock_git_ops_non_github():
 class TestPrepareNonGitHubRepo:
     """測試 prepare 指令在非 GitHub repo 行為."""
 
-    @patch("cafe.ui.cli.prompt_confirm")
+    @patch("cafe.ui.commands.init_commands.prompt_confirm")
     @patch("cafe.ui.template_selector.prompt_list")
     @patch("cafe.ui.phase_prompts.prompt_list")
-    @patch("cafe.ui.cli.prompt_text")
+    @patch("cafe.ui.commands.init_commands.prompt_text")
     def test_prepare_non_github_repo_interactive_skips_input_method_prompt(
         self, mock_prompt_text, mock_phase_list, mock_template_list, mock_prompt_confirm, temp_repo_dir, mock_git_ops_non_github
     ):
@@ -88,10 +88,10 @@ class TestPrepareNonGitHubRepo:
         # Should not have issue_id in config
         assert "issue_id" not in config_data.get("spec", {})
 
-    @patch("cafe.ui.cli.prompt_confirm")
+    @patch("cafe.ui.commands.init_commands.prompt_confirm")
     @patch("cafe.ui.template_selector.prompt_list")
     @patch("cafe.ui.phase_prompts.prompt_list")
-    @patch("cafe.ui.cli.prompt_text")
+    @patch("cafe.ui.commands.init_commands.prompt_text")
     def test_prepare_non_github_repo_sets_pr_auto_create_false(
         self, mock_prompt_text, mock_phase_list, mock_template_list, mock_prompt_confirm, temp_repo_dir, mock_git_ops_non_github
     ):
@@ -165,10 +165,10 @@ class TestPrepareGitHubRepo:
     """測試 prepare 指令在 GitHub repo 行為保持不變."""
 
     @patch("cafe.ui.phase_prompts.prompt_confirm")
-    @patch("cafe.ui.cli.prompt_confirm")
+    @patch("cafe.ui.commands.init_commands.prompt_confirm")
     @patch("cafe.ui.template_selector.prompt_list")
     @patch("cafe.ui.phase_prompts.prompt_list")
-    @patch("cafe.ui.cli.prompt_text")
+    @patch("cafe.ui.commands.init_commands.prompt_text")
     def test_prepare_github_repo_interactive_asks_input_method(
         self, mock_prompt_text, mock_phase_list, mock_template_list, mock_cli_confirm, mock_phase_confirm, temp_repo_dir, mock_git_ops_github
     ):

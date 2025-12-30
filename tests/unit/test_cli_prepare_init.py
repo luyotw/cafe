@@ -41,7 +41,7 @@ class TestPrepareAutoInitialization:
 
         return tmp_path
 
-    @patch("cafe.ui.cli.GitOperations")
+    @patch("cafe.ui.commands.init_commands.GitOperations")
     def test_prepare_initializes_templates_when_not_exists(
         self, mock_git_class: MagicMock, runner: CliRunner, mock_git_repo: Path
     ) -> None:
@@ -63,7 +63,7 @@ class TestPrepareAutoInitialization:
         assert cafe_templates.exists()
         assert (cafe_templates / "plan" / "default.md").exists()
 
-    @patch("cafe.ui.cli.GitOperations")
+    @patch("cafe.ui.commands.init_commands.GitOperations")
     def test_prepare_initializes_agents_when_not_exists(
         self, mock_git_class: MagicMock, runner: CliRunner, mock_git_repo: Path
     ) -> None:
@@ -87,7 +87,7 @@ class TestPrepareAutoInitialization:
         assert (cafe_agents / "developer" / "David.md").exists()
         assert (cafe_agents / "reviewer" / "Richard.md").exists()
 
-    @patch("cafe.ui.cli.GitOperations")
+    @patch("cafe.ui.commands.init_commands.GitOperations")
     def test_prepare_does_not_overwrite_existing_templates(
         self, mock_git_class: MagicMock, runner: CliRunner, mock_git_repo: Path
     ) -> None:
@@ -113,7 +113,7 @@ class TestPrepareAutoInitialization:
         assert (cafe_templates / "custom.md").exists()
         assert (cafe_templates / "custom.md").read_text() == "# Custom Template"
 
-    @patch("cafe.ui.cli.GitOperations")
+    @patch("cafe.ui.commands.init_commands.GitOperations")
     def test_prepare_does_not_overwrite_existing_agents(
         self, mock_git_class: MagicMock, runner: CliRunner, mock_git_repo: Path
     ) -> None:
