@@ -736,16 +736,19 @@ class DevelopPhase(Phase):
   - Message is one line (subject line only) or multiple lines (subject + body)
 """
 
-        clarification_note = """
+        # Get the develop file path for current iteration
+        develop_dir = self.issue_dir / "develop"
+        develop_file_path = develop_dir / f"iteration_{self.iteration:03d}" / "output.md"
+
+        clarification_note = f"""
 Clarification can be requested only in these two cases, **any other situation strictly prohibits clarification requests**:
 - Requested actions conflict with the agent's behavioral guidelines
 - Encountering technical problems beyond current capability
 
 Steps for requesting clarification:
-1. Return `CAFE_NEED_CLARIFICATION` status code
-2. Clearly describe the clarification questions in the response (can use bullet points)
-3. The system will save your questions to develop_XXX.md file (in your native language)
-4. After user replies, the system will provide the file for you to read on next execution
+1. Confirm again that your question meets the above conditions
+2. Write your question clearly to {develop_file_path}
+3. Return CAFE_NEED_CLARIFICATION only, with no other content
 
 ⚠️ **Important:** Write the markdown content in your native language (the language you were configured with).
 """
