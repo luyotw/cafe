@@ -157,9 +157,6 @@ class ReviewPhase(Phase):
                         print(f"⚠️  Warning: Failed to check review timestamp: {e}")
                         pass
 
-            # Initialize history directory
-            self._initialize_history_dir()
-
             # Note: We don't check if diff is empty here - let the review agent
             # see the empty diff and decide (usually NEEDS_CHANGES)
 
@@ -291,25 +288,6 @@ class ReviewPhase(Phase):
 
         except Exception as e:
             return self._handle_exception_in_execute(e, "Review phase failed")
-
-    def _initialize_history_dir(self) -> None:
-        """Initialize history directory for review."""
-        # Determine review directory based on workflow mode
-        if self.workflow_mode == WorkflowMode.GITHUB and self.issue_id:
-            review_dir = Path(f".cafe/issues/{self.issue_id}/review")
-        else:
-            # Extract issue name from spec_file path and use its parent structure
-            if not self.spec_file:
-                raise ValueError("spec_file is required for local workflow mode")
-            spec_path = Path(self.spec_file).resolve()  # Use absolute path
-            # spec_file is like /path/.cafe/issues/<issue-name>/spec/iteration_XXX/output.md
-            # review_dir should be /path/.cafe/issues/<issue-name>/review
-            # Go up from: output.md -> iteration_XXX -> spec -> issue-name -> review
-            review_dir = spec_path.parent.parent.parent / "review"
-
-        self.review_dir = review_dir  # Store for use in other methods
-        self.history_dir = review_dir / "history"
-        self.history_dir.mkdir(parents=True, exist_ok=True)
 
     def _load_pr_comments(self) -> tuple[str, int]:
         """Load PR comments if pr_number is provided.
