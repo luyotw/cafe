@@ -3798,7 +3798,7 @@ def show(
         help="Iteration number (positive, 0=latest, negative=relative index)"
     ),
 ) -> None:
-    """📄 Display iteration file contents.
+    """Display iteration file contents.
 
     Shows the content of files from different phases and iterations.
 
