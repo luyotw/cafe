@@ -533,6 +533,36 @@ def prepare(
         "--worktree",
         help="Use worktree mode with specified path (e.g., worktrees/my-feature)",
     ),
+    interactive: bool = typer.Option(
+        True,
+        "--interactive/--no-interactive",
+        help="Enable/disable interactive mode (default: True)",
+    ),
+    input_method: Optional[str] = typer.Option(
+        None,
+        "--input-method",
+        help="Spec input method: 'manual' or 'github' (required in non-interactive mode)",
+    ),
+    issue_id: Optional[int] = typer.Option(
+        None,
+        "--issue-id",
+        help="GitHub issue ID (required when --input-method=github)",
+    ),
+    rigor: Optional[str] = typer.Option(
+        None,
+        "--rigor",
+        help="Spec rigor level: 'low', 'medium', or 'high' (default: medium)",
+    ),
+    template: Optional[str] = typer.Option(
+        None,
+        "--template",
+        help="Plan template name (default: default)",
+    ),
+    auto_create_pr: bool = typer.Option(
+        False,
+        "--auto-create-pr/--no-auto-create-pr",
+        help="Automatically create PR after development (default: False, GitHub repos only)",
+    ),
 ) -> None:
     """Prepare issue environment (directory, config, git branch) before running spec phase.
 
@@ -561,16 +591,54 @@ def prepare(
             console.print("[yellow]Please run 'cafe init' first to set up CAFE.[/yellow]")
             raise typer.Exit(1)
 
-        # 2. Get issue name (from argument or prompt)
-        is_interactive = not issue_name  # Track if we're in interactive mode
-        if not issue_name:
-            issue_name = prompt_text("Issue name:")
-            if not issue_name or not issue_name.strip():
-                console.print("[red]Error: Issue name cannot be empty.[/red]")
-                raise typer.Exit(1)
-            issue_name = issue_name.strip()
+        # 2. Determine interactive mode and config prompt behavior
+        # should_prompt_for_config: Should we show config prompts?
+        #   - True if user didn't provide issue_name as argument AND interactive flag is True
+        #   - This preserves backward compatibility
+        # Store this BEFORE prompting for issue_name
+        should_prompt_for_config = (issue_name is None) and interactive
 
-        # 3. Initialize Git operations
+        # 3. Get issue name (from argument or prompt)
+        if not issue_name:
+            if interactive:
+                issue_name = prompt_text("Issue name:")
+                if not issue_name or not issue_name.strip():
+                    console.print("[red]Error: Issue name cannot be empty.[/red]")
+                    raise typer.Exit(1)
+                issue_name = issue_name.strip()
+            else:
+                console.print("[red]Error: Issue name is required in non-interactive mode.[/red]")
+                raise typer.Exit(1)
+
+        # 4. Validate non-interactive mode parameters (only when user explicitly passed --no-interactive)
+        if not interactive:
+            # 4.1. input_method is required in non-interactive mode
+            if input_method is None:
+                console.print("[red]Error: --input-method is required in non-interactive mode[/red]")
+                raise typer.Exit(1)
+
+            # 4.2. input_method must be 'manual' or 'github'
+            if input_method not in ["manual", "github"]:
+                console.print("[red]Error: --input-method must be 'manual' or 'github'[/red]")
+                raise typer.Exit(1)
+
+            # 4.3. When input_method is 'github', issue_id is required
+            if input_method == "github" and issue_id is None:
+                console.print("[red]Error: --issue-id is required when using --input-method=github[/red]")
+                raise typer.Exit(1)
+
+            # 4.4. Validate rigor if provided
+            if rigor and rigor not in ["low", "medium", "high"]:
+                console.print("[red]Error: --rigor must be 'low', 'medium', or 'high'[/red]")
+                raise typer.Exit(1)
+
+            # 4.5. Set default values for optional parameters
+            if rigor is None:
+                rigor = "medium"
+            if template is None:
+                template = "default"
+
+        # 5. Initialize Git operations
         try:
             git_ops = GitOperations()
         except Exception as e:
@@ -578,7 +646,7 @@ def prepare(
             console.print("[yellow]Hint: Run 'git init' to initialize a git repository.[/yellow]")
             raise typer.Exit(1)
 
-        # 4. Check for uncommitted changes (warning only)
+        # 6. Check for uncommitted changes (warning only)
         if check_uncommitted and git_ops.has_uncommitted_changes():
             console.print("[yellow]⚠️  Warning: You have uncommitted changes.[/yellow]")
             console.print(
@@ -592,11 +660,11 @@ def prepare(
                 console.print("[dim]Cancelled.[/dim]")
                 raise typer.Exit(0)
 
-        # 5. Determine base branch
+        # 7. Determine base branch
         if not base_branch:
             base_branch = git_ops.get_current_branch()
 
-        # 6. Determine worktree mode (interactive or from parameter)
+        # 8. Determine worktree mode (interactive or from parameter)
         use_worktree = False
         worktree_path = None
 
@@ -604,8 +672,8 @@ def prepare(
         if worktree and worktree.strip():
             use_worktree = True
             worktree_path = worktree.strip()
-        # If in interactive mode and no --worktree parameter
-        elif is_interactive and not worktree:
+        # If in config prompt mode and no --worktree parameter
+        elif should_prompt_for_config and not worktree:
             # Ask user if they want to use worktree mode
             use_worktree = prompt_confirm("Use Git worktree mode for this issue?", default=False)
 
@@ -626,16 +694,16 @@ def prepare(
         console.print(f"Base branch: {base_branch}")
         console.print()
 
-        # 7. Initialize default templates and agents if not exists (in repo root)
+        # 9. Initialize default templates and agents if not exists (in repo root)
         cafe_dir = Path(".cafe")
         _ensure_default_content(cafe_dir)
 
-        # 8. Interactive prompts for spec/plan configuration (only in interactive mode)
+        # 10. Assemble spec/plan/pr configuration (prompt mode or parameter mode)
         spec_config = {}
         plan_config = {}
         pr_config = {}
 
-        if is_interactive:
+        if should_prompt_for_config:
             console.print()
             console.print("[bold cyan]📝 Pre-configure spec and plan phases[/bold cyan]")
             console.print(
@@ -689,10 +757,28 @@ def prepare(
             from cafe.ui.phase_prompts import prompt_and_save_auto_create
 
             config_file = Path(".cafe") / "issues" / issue_name / "issue.yaml"
-            auto_create_pr = prompt_and_save_auto_create(config_file, "pr.auto_create")
-            pr_config["auto_create"] = auto_create_pr
+            auto_create_pr_result = prompt_and_save_auto_create(config_file, "pr.auto_create")
+            pr_config["auto_create"] = auto_create_pr_result
+        elif not interactive:
+            # Explicit non-interactive mode (--no-interactive): use CLI parameters
+            from cafe.utils.git_utils import is_github_repo
 
-        # 9. Prepare config data (but don't write yet)
+            # Spec config
+            spec_config["input_method"] = input_method
+            if input_method == "github" and issue_id is not None:
+                spec_config["issue_id"] = str(issue_id)
+            spec_config["rigor"] = rigor
+
+            # Plan config
+            plan_config["template"] = template
+
+            # PR config (only for GitHub repos)
+            if is_github_repo() and auto_create_pr:
+                pr_config["auto_create"] = True
+        # else: issue_name was provided as argument but not --no-interactive
+        #       Don't save any config (old behavior for backward compatibility)
+
+        # 11. Prepare config data (but don't write yet)
         feature_branch = issue_name
 
         # Load global config to get default auto settings
