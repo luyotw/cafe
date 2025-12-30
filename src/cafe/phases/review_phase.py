@@ -300,9 +300,10 @@ class ReviewPhase(Phase):
             if not self.spec_file:
                 raise ValueError("spec_file is required for local workflow mode")
             spec_path = Path(self.spec_file).resolve()  # Use absolute path
-            # spec_file is like /path/.cafe/issues/<issue-name>/spec/spec.md
+            # spec_file is like /path/.cafe/issues/<issue-name>/spec/iteration_XXX/output.md
             # review_dir should be /path/.cafe/issues/<issue-name>/review
-            review_dir = spec_path.parent.parent / "review"
+            # Go up from: output.md -> iteration_XXX -> spec -> issue-name -> review
+            review_dir = spec_path.parent.parent.parent / "review"
 
         self.review_dir = review_dir  # Store for use in other methods
         self.history_dir = review_dir / "history"
