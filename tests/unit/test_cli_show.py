@@ -5,7 +5,8 @@ from pathlib import Path
 from typer.testing import CliRunner
 from unittest.mock import patch
 
-from cafe.ui.cli import app, _resolve_iteration_number, _get_show_file_path
+from cafe.ui.cli import app
+from cafe.ui.commands.show_commands import _resolve_iteration_number, _get_show_file_path
 
 
 runner = CliRunner()
@@ -161,9 +162,8 @@ class TestShowCommand:
         (iteration_dir / "output.md").write_text("# Test Output")
 
         # Mock git operations 和 config
-        with patch("cafe.ui.cli.GitOperations") as mock_git_cls, \
-             patch("cafe.ui.cli.ConfigManager") as mock_config_cls, \
-             patch("cafe.ui.cli.Path.cwd", return_value=tmp_path):
+        with patch("cafe.ui.commands.show_commands.GitOperations") as mock_git_cls, \
+             patch("cafe.ui.commands.show_commands.Path.cwd", return_value=tmp_path):
 
             mock_git = mock_git_cls.return_value
             mock_git.get_current_branch.return_value = "test-issue"
@@ -188,9 +188,8 @@ class TestShowCommand:
         (iteration_dir / "context.json").write_text('{"test": "context"}')
 
         # Mock git operations 和 config
-        with patch("cafe.ui.cli.GitOperations") as mock_git_cls, \
-             patch("cafe.ui.cli.ConfigManager") as mock_config_cls, \
-             patch("cafe.ui.cli.Path.cwd", return_value=tmp_path):
+        with patch("cafe.ui.commands.show_commands.GitOperations") as mock_git_cls, \
+             patch("cafe.ui.commands.show_commands.Path.cwd", return_value=tmp_path):
 
             mock_git = mock_git_cls.return_value
             mock_git.get_current_branch.return_value = "test-issue"
@@ -217,9 +216,8 @@ class TestShowCommand:
             (iteration_dir / "output.md").write_text(f"# Iteration {i}")
 
         # Mock git operations 和 config
-        with patch("cafe.ui.cli.GitOperations") as mock_git_cls, \
-             patch("cafe.ui.cli.ConfigManager") as mock_config_cls, \
-             patch("cafe.ui.cli.Path.cwd", return_value=tmp_path):
+        with patch("cafe.ui.commands.show_commands.GitOperations") as mock_git_cls, \
+             patch("cafe.ui.commands.show_commands.Path.cwd", return_value=tmp_path):
 
             mock_git = mock_git_cls.return_value
             mock_git.get_current_branch.return_value = "test-issue"
@@ -246,9 +244,8 @@ class TestShowCommand:
             (iteration_dir / "output.md").write_text(f"# Iteration {i}")
 
         # Mock git operations 和 config
-        with patch("cafe.ui.cli.GitOperations") as mock_git_cls, \
-             patch("cafe.ui.cli.ConfigManager") as mock_config_cls, \
-             patch("cafe.ui.cli.Path.cwd", return_value=tmp_path):
+        with patch("cafe.ui.commands.show_commands.GitOperations") as mock_git_cls, \
+             patch("cafe.ui.commands.show_commands.Path.cwd", return_value=tmp_path):
 
             mock_git = mock_git_cls.return_value
             mock_git.get_current_branch.return_value = "test-issue"
@@ -273,9 +270,8 @@ class TestShowCommand:
         (iteration_dir / "context.json").write_text("{}")
 
         # Mock git operations 和 config
-        with patch("cafe.ui.cli.GitOperations") as mock_git_cls, \
-             patch("cafe.ui.cli.ConfigManager") as mock_config_cls, \
-             patch("cafe.ui.cli.Path.cwd", return_value=tmp_path):
+        with patch("cafe.ui.commands.show_commands.GitOperations") as mock_git_cls, \
+             patch("cafe.ui.commands.show_commands.Path.cwd", return_value=tmp_path):
 
             mock_git = mock_git_cls.return_value
             mock_git.get_current_branch.return_value = "test-issue"
@@ -299,9 +295,8 @@ class TestShowCommand:
         (iteration_dir / "context.json").write_text("{}")
 
         # Mock git operations 和 config
-        with patch("cafe.ui.cli.GitOperations") as mock_git_cls, \
-             patch("cafe.ui.cli.ConfigManager") as mock_config_cls, \
-             patch("cafe.ui.cli.Path.cwd", return_value=tmp_path):
+        with patch("cafe.ui.commands.show_commands.GitOperations") as mock_git_cls, \
+             patch("cafe.ui.commands.show_commands.Path.cwd", return_value=tmp_path):
 
             mock_git = mock_git_cls.return_value
             mock_git.get_current_branch.return_value = "test-issue"
@@ -315,9 +310,8 @@ class TestShowCommand:
     def test_show_command_invalid_phase(self, tmp_path):
         """測試無效的階段名稱"""
         # Mock git operations 和 config
-        with patch("cafe.ui.cli.GitOperations") as mock_git_cls, \
-             patch("cafe.ui.cli.ConfigManager") as mock_config_cls, \
-             patch("cafe.ui.cli.Path.cwd", return_value=tmp_path):
+        with patch("cafe.ui.commands.show_commands.GitOperations") as mock_git_cls, \
+             patch("cafe.ui.commands.show_commands.Path.cwd", return_value=tmp_path):
 
             mock_git = mock_git_cls.return_value
             mock_git.get_current_branch.return_value = "test-issue"
