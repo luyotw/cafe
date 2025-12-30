@@ -52,12 +52,10 @@ class TestResolveIterationNumber:
             iteration_dir.mkdir()
             (iteration_dir / "context.json").write_text("{}")
 
-        # -1 應該返回最新迭代（3）
-        assert _resolve_iteration_number(phase_dir, -1) == 3
-        # -2 應該返回倒數第二個迭代（2）
-        assert _resolve_iteration_number(phase_dir, -2) == 2
-        # -3 應該返回倒數第三個迭代（1）
-        assert _resolve_iteration_number(phase_dir, -3) == 1
+        # -1 應該返回最新迭代的前一個（2）
+        assert _resolve_iteration_number(phase_dir, -1) == 2
+        # -2 應該返回最新迭代的前兩個（1）
+        assert _resolve_iteration_number(phase_dir, -2) == 1
 
     def test_resolve_iteration_number_invalid_positive(self, tmp_path):
         """測試不存在的正數迭代號碼"""
@@ -231,8 +229,8 @@ class TestShowCommand:
             mock_git = mock_git_cls.return_value
             mock_git.get_current_branch.return_value = "test-issue"
 
-            # 執行命令，使用 -2 應該返回倒數第二個迭代（iteration 2）
-            result = runner.invoke(app, ["show", "spec", "output", "-i", "-2"])
+            # 執行命令，使用 -1 應該返回最新迭代的前一個（iteration 2）
+            result = runner.invoke(app, ["show", "spec", "output", "-i", "-1"])
 
             # 驗證輸出
             assert result.exit_code == 0

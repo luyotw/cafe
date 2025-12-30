@@ -340,9 +340,11 @@ def _resolve_iteration_number(phase_dir: Path, iteration_input: int) -> int:
             )
         return iteration_input
     else:
-        # Negative number uses Python array indexing logic
+        # Negative number: -1 means one before latest, -2 means two before, etc.
+        # Since 0 already represents latest (iteration_numbers[-1]),
+        # we need to offset: -1 -> [-2], -2 -> [-3], etc.
         try:
-            return iteration_numbers[iteration_input]
+            return iteration_numbers[iteration_input - 1]
         except IndexError:
             raise ValueError(
                 f"Iteration index {iteration_input} out of range. "
