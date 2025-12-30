@@ -58,9 +58,12 @@ def _handle_phase_exception(e: Exception, phase_name: str, auto: bool = False) -
     from cafe.core.types import CriticalPhaseError
 
     # In auto mode, suppress output for most errors as they're already reported
-    # BUT always show AttributeError, ValueError, TypeError (programming errors)
+    # BUT always show programming errors (AttributeError, TypeError, NameError, etc.)
     if auto and not isinstance(e, CriticalPhaseError):
-        if isinstance(e, (AttributeError, ValueError, TypeError, KeyError)):
+        # Check if it's a programming error
+        # These indicate bugs in the code, not normal workflow errors
+        programming_errors = (AttributeError, TypeError, NameError, KeyError, IndexError, ImportError, SyntaxError)
+        if isinstance(e, programming_errors):
             # These are programming/configuration errors - always show them
             console.print()
             console.print(f"[bold red]❌ Error in {phase_name} phase[/bold red]")
@@ -2559,28 +2562,6 @@ def pr(
             base_branch=base if base != "main" else None,  # Pass base only if not default
         )
 
-        # Display start message (only for GitHub PR mode)
-        # Check if pr.auto_create is set to determine mode
-        config_file = Path(f".cafe/issues/{issue_name}/issue.yaml")
-        pr_auto_create = None
-        if config_file.exists():
-            with open(config_file, "r") as f:
-                issue_config = yaml.safe_load(f)
-            pr_auto_create = issue_config.get("pr", {}).get("auto_create")
-
-        # Only show PR creation header if not in local review mode
-        if pr_auto_create is not False:
-            console.print("[bold blue]🚀 PR Phase: Create Pull Request[/bold blue]")
-            console.print(f"Issue: {issue_name}")
-            dev_executor = agent_manager.get_agent(dev_agent)
-            dev_cli = dev_executor.config.cli.value
-            dev_model = dev_executor.config.model or "default"
-            console.print(f"Developer Agent: {dev_agent}")
-            console.print(f"CLI: {dev_cli}")
-            console.print(f"Model: {dev_model}")
-            console.print(f"Base branch: {phase.base_branch}")
-            console.print()
-
         result = phase.execute()
 
         # Display result
@@ -2590,9 +2571,12 @@ def pr(
             is_local_review = result.data.get("local_review", False)
             status_code = result.data.get("status_code")
 
-            console.print()
-            console.print(f"[bold green]✅ {result.message}![/bold green]")
-            console.print()
+            # Only show success message and details for GitHub PR mode
+            # Local review mode already prints its own messages
+            if not is_local_review:
+                console.print()
+                console.print(f"[bold green]✅ {result.message}![/bold green]")
+                console.print()
 
             if is_local_review:
                 # Local review mode: Show local-specific next steps
