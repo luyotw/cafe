@@ -242,11 +242,12 @@ class TestPlanCommand:
         # Setup: Create config.yaml
         _create_minimal_config(tmp_path)
 
-        # Setup: Create versioned spec file in the expected location
+        # Setup: Create versioned spec file in the expected location (new structure)
         branch_name = "test-issue"
         spec_dir = tmp_path / ".cafe" / "issues" / branch_name / "spec"
-        spec_dir.mkdir(parents=True, exist_ok=True)
-        spec_file = spec_dir / "spec_001.md"
+        iter_dir = spec_dir / "iteration_001"
+        iter_dir.mkdir(parents=True, exist_ok=True)
+        spec_file = iter_dir / "output.md"
         spec_file.write_text("# Spec\n\n## 開發指南\nGuide")
 
         # Create a default template
@@ -301,11 +302,12 @@ class TestPlanCommand:
         # Setup: Create config.yaml
         _create_minimal_config(tmp_path)
 
-        # Setup: GitHub mode still checks if versioned spec file exists first
+        # Setup: GitHub mode still checks if versioned spec file exists first (new structure)
         branch_name = "test-issue"
         spec_dir = tmp_path / ".cafe" / "issues" / branch_name / "spec"
-        spec_dir.mkdir(parents=True, exist_ok=True)
-        spec_file = spec_dir / "spec_001.md"
+        iter_dir = spec_dir / "iteration_001"
+        iter_dir.mkdir(parents=True, exist_ok=True)
+        spec_file = iter_dir / "output.md"
         spec_file.write_text("# Spec\n\n## 開發指南\nGuide")
 
         # Create a default template
@@ -359,11 +361,12 @@ class TestPlanCommand:
         # Setup: Create config.yaml
         _create_minimal_config(tmp_path)
 
-        # Setup: Create versioned spec file in the expected location
+        # Setup: Create versioned spec file in the expected location (new structure)
         branch_name = "test-issue"
         spec_dir = tmp_path / ".cafe" / "issues" / branch_name / "spec"
-        spec_dir.mkdir(parents=True, exist_ok=True)
-        spec_file = spec_dir / "spec_001.md"
+        iter_dir = spec_dir / "iteration_001"
+        iter_dir.mkdir(parents=True, exist_ok=True)
+        spec_file = iter_dir / "output.md"
         spec_file.write_text("# Spec")
 
         # Create a default template
@@ -447,11 +450,12 @@ class TestPlanCommand:
         # Setup: Create config.yaml
         _create_minimal_config(tmp_path)
 
-        # Setup: Create versioned spec file
+        # Setup: Create versioned spec file (new structure)
         branch_name = "test-issue"
         spec_dir = tmp_path / ".cafe" / "issues" / branch_name / "spec"
-        spec_dir.mkdir(parents=True, exist_ok=True)
-        spec_file = spec_dir / "spec_001.md"
+        iter_dir = spec_dir / "iteration_001"
+        iter_dir.mkdir(parents=True, exist_ok=True)
+        spec_file = iter_dir / "output.md"
         spec_file.write_text("# Spec\n\n## 開發指南\nGuide")
 
         # Setup: Create issue.yaml with plan.template: auto
@@ -517,11 +521,12 @@ class TestPlanCommand:
         # Setup: Create config.yaml
         _create_minimal_config(tmp_path)
 
-        # Setup: Create versioned spec file
+        # Setup: Create versioned spec file (new structure)
         branch_name = "test-issue"
         spec_dir = tmp_path / ".cafe" / "issues" / branch_name / "spec"
-        spec_dir.mkdir(parents=True, exist_ok=True)
-        spec_file = spec_dir / "spec_001.md"
+        iter_dir = spec_dir / "iteration_001"
+        iter_dir.mkdir(parents=True, exist_ok=True)
+        spec_file = iter_dir / "output.md"
         spec_file.write_text("# Spec\n\n## 開發指南\nGuide")
 
         # Setup: Create issue.yaml with plan.template: auto
@@ -1020,12 +1025,15 @@ class TestSpecEditCommand:
         mock_git_instance.get_current_branch.return_value = "test-issue"
         mock_git_ops_class.return_value = mock_git_instance
 
-        # Create issue directory and spec files
+        # Create issue directory and spec files in new structure
         issue_dir = tmp_path / ".cafe" / "issues" / "test-issue"
         spec_dir = issue_dir / "spec"
-        spec_dir.mkdir(parents=True)
-        spec_file_1 = spec_dir / "spec_001.md"
-        spec_file_2 = spec_dir / "spec_002.md"
+        iter1_dir = spec_dir / "iteration_001"
+        iter2_dir = spec_dir / "iteration_002"
+        iter1_dir.mkdir(parents=True)
+        iter2_dir.mkdir(parents=True)
+        spec_file_1 = iter1_dir / "output.md"
+        spec_file_2 = iter2_dir / "output.md"
         spec_file_1.write_text("Spec version 1")
         spec_file_2.write_text("Spec version 2")
 
@@ -1041,7 +1049,8 @@ class TestSpecEditCommand:
         assert result.exit_code == 0
         mock_edit.assert_called_once()
         called_path = mock_edit.call_args[0][0]
-        assert called_path.name == "spec_002.md"
+        assert called_path.name == "output.md"
+        assert called_path.parent.name == "iteration_002"
 
     @patch("cafe.ui.cli.GitOperations")
     def test_spec_edit_no_file_shows_error(
@@ -1115,11 +1124,12 @@ class TestSpecEditCommand:
         mock_git_instance.get_current_branch.return_value = "test-issue"
         mock_git_ops_class.return_value = mock_git_instance
 
-        # Create spec file
+        # Create spec file in new structure
         issue_dir = tmp_path / ".cafe" / "issues" / "test-issue"
         spec_dir = issue_dir / "spec"
-        spec_dir.mkdir(parents=True)
-        spec_file = spec_dir / "spec_001.md"
+        iter_dir = spec_dir / "iteration_001"
+        iter_dir.mkdir(parents=True)
+        spec_file = iter_dir / "output.md"
         spec_file.write_text("Spec content")
 
         # Execute
@@ -1152,12 +1162,15 @@ class TestPlanEditCommand:
         mock_git_instance.get_current_branch.return_value = "test-issue"
         mock_git_ops_class.return_value = mock_git_instance
 
-        # Create issue directory and plan files
+        # Create issue directory and plan files in new structure
         issue_dir = tmp_path / ".cafe" / "issues" / "test-issue"
         plan_dir = issue_dir / "plan"
-        plan_dir.mkdir(parents=True)
-        plan_file_1 = plan_dir / "plan_001.md"
-        plan_file_2 = plan_dir / "plan_002.md"
+        iter1_dir = plan_dir / "iteration_001"
+        iter2_dir = plan_dir / "iteration_002"
+        iter1_dir.mkdir(parents=True)
+        iter2_dir.mkdir(parents=True)
+        plan_file_1 = iter1_dir / "output.md"
+        plan_file_2 = iter2_dir / "output.md"
         plan_file_1.write_text("Plan version 1")
         plan_file_2.write_text("Plan version 2")
 
@@ -1173,7 +1186,8 @@ class TestPlanEditCommand:
         assert result.exit_code == 0
         mock_edit.assert_called_once()
         called_path = mock_edit.call_args[0][0]
-        assert called_path.name == "plan_002.md"
+        assert called_path.name == "output.md"
+        assert called_path.parent.name == "iteration_002"
 
     @patch("cafe.ui.cli.GitOperations")
     def test_plan_edit_no_file_shows_error(
@@ -1247,11 +1261,12 @@ class TestPlanEditCommand:
         mock_git_instance.get_current_branch.return_value = "test-issue"
         mock_git_ops_class.return_value = mock_git_instance
 
-        # Create plan file
+        # Create plan file in new structure
         issue_dir = tmp_path / ".cafe" / "issues" / "test-issue"
         plan_dir = issue_dir / "plan"
-        plan_dir.mkdir(parents=True)
-        plan_file = plan_dir / "plan_001.md"
+        iter_dir = plan_dir / "iteration_001"
+        iter_dir.mkdir(parents=True)
+        plan_file = iter_dir / "output.md"
         plan_file.write_text("Plan content")
 
         # Execute
@@ -1284,12 +1299,15 @@ class TestReviewEditCommand:
         mock_git_instance.get_current_branch.return_value = "test-issue"
         mock_git_ops_class.return_value = mock_git_instance
 
-        # Create issue directory and review files
+        # Create issue directory and review files in new structure
         issue_dir = tmp_path / ".cafe" / "issues" / "test-issue"
         review_dir = issue_dir / "review"
-        review_dir.mkdir(parents=True)
-        review_file_1 = review_dir / "review_001.md"
-        review_file_2 = review_dir / "review_002.md"
+        iter1_dir = review_dir / "iteration_001"
+        iter2_dir = review_dir / "iteration_002"
+        iter1_dir.mkdir(parents=True)
+        iter2_dir.mkdir(parents=True)
+        review_file_1 = iter1_dir / "output.md"
+        review_file_2 = iter2_dir / "output.md"
         review_file_1.write_text("Review version 1")
         review_file_2.write_text("Review version 2")
 
@@ -1305,7 +1323,8 @@ class TestReviewEditCommand:
         assert result.exit_code == 0
         mock_edit.assert_called_once()
         called_path = mock_edit.call_args[0][0]
-        assert called_path.name == "review_002.md"
+        assert called_path.name == "output.md"
+        assert called_path.parent.name == "iteration_002"
 
     @patch("cafe.ui.cli.GitOperations")
     def test_review_edit_no_file_shows_error(
@@ -1379,11 +1398,12 @@ class TestReviewEditCommand:
         mock_git_instance.get_current_branch.return_value = "test-issue"
         mock_git_ops_class.return_value = mock_git_instance
 
-        # Create review file
+        # Create review file in new structure
         issue_dir = tmp_path / ".cafe" / "issues" / "test-issue"
         review_dir = issue_dir / "review"
-        review_dir.mkdir(parents=True)
-        review_file = review_dir / "review_001.md"
+        iter_dir = review_dir / "iteration_001"
+        iter_dir.mkdir(parents=True)
+        review_file = iter_dir / "output.md"
         review_file.write_text("Review content")
 
         # Execute

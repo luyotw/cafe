@@ -94,14 +94,11 @@ class Phase(ABC):
             user_input: User input at the start of this round
             phase_specific_data: Phase-specific initial data (optional)
         """
-        # Ensure history_dir exists
-        if not hasattr(self, "history_dir"):
+        # Ensure phase_dir exists
+        if not hasattr(self, "phase_dir"):
             raise AttributeError(
-                "Phase must have 'history_dir' attribute to use _save_user_input"
+                "Phase must have 'phase_dir' attribute to use _save_user_input"
             )
-
-        history_dir = Path(self.history_dir)
-        history_dir.mkdir(parents=True, exist_ok=True)
 
         # Ensure iteration exists
         if not hasattr(self, "iteration"):
@@ -109,8 +106,12 @@ class Phase(ABC):
                 "Phase must have 'iteration' attribute to use _save_user_input"
             )
 
-        # Create initial history data
-        history_data: Dict[str, Any] = {
+        # 建立 iteration 目錄
+        iteration_dir = self._get_iteration_dir(self.iteration)
+        iteration_dir.mkdir(parents=True, exist_ok=True)
+
+        # Create initial context data
+        context_data: Dict[str, Any] = {
             "iteration": self.iteration,
             "timestamp": datetime.now().isoformat(),
             "user_input": user_input,
@@ -118,12 +119,12 @@ class Phase(ABC):
 
         # Add phase-specific initial data
         if phase_specific_data:
-            history_data.update(phase_specific_data)
+            context_data.update(phase_specific_data)
 
-        # Save as JSON file
-        iteration_file = history_dir / f"iteration_{self.iteration:03d}.json"
-        with open(iteration_file, "w", encoding="utf-8") as f:
-            json.dump(history_data, f, ensure_ascii=False, indent=2)
+        # Save as context.json file
+        context_file = iteration_dir / "context.json"
+        with open(context_file, "w", encoding="utf-8") as f:
+            json.dump(context_data, f, ensure_ascii=False, indent=2)
 
     def _update_iteration_history(
         self,
@@ -150,54 +151,55 @@ class Phase(ABC):
             cli_command_args: CLI command argument list (excluding prompt)
             status_code: Phase status code (e.g. CONFIRMED, NEED_CLARIFICATION)
         """
-        # Ensure history_dir exists
-        if not hasattr(self, "history_dir"):
+        # Ensure phase_dir exists
+        if not hasattr(self, "phase_dir"):
             raise AttributeError(
-                "Phase must have 'history_dir' attribute to use _update_iteration_history"
+                "Phase must have 'phase_dir' attribute to use _update_iteration_history"
             )
 
-        history_dir = Path(self.history_dir)
-        history_dir.mkdir(parents=True, exist_ok=True)
-        iteration_file = history_dir / f"iteration_{self.iteration:03d}.json"
+        # Get iteration directory and context file
+        iteration_dir = self._get_iteration_dir(self.iteration)
+        iteration_dir.mkdir(parents=True, exist_ok=True)
+        context_file = iteration_dir / "context.json"
 
-        # Read existing history data
-        if iteration_file.exists():
-            with open(iteration_file, "r", encoding="utf-8") as f:
-                history_data = json.load(f)
+        # Read existing context data
+        if context_file.exists():
+            with open(context_file, "r", encoding="utf-8") as f:
+                context_data = json.load(f)
         else:
             # If file does not exist, create basic structure
-            history_data = {
+            context_data = {
                 "iteration": self.iteration,
                 "timestamp": datetime.now().isoformat(),
             }
 
         # Update phase-specific data
-        history_data.update(phase_specific_data)
+        context_data.update(phase_specific_data)
 
         # Ensure required fields exist (if phase_specific_data does not provide, set to default values)
         # These fields are very important for debugging and tracking, should always exist
-        if "response" not in history_data:
-            history_data["response"] = None
-        if "permission_denials" not in history_data:
-            history_data["permission_denials"] = []
-        if "streaming_log" not in history_data:
-            history_data["streaming_log"] = []
+        if "response" not in context_data:
+            context_data["response"] = None
+        if "permission_denials" not in context_data:
+            context_data["permission_denials"] = []
+        if "streaming_log" not in context_data:
+            context_data["streaming_log"] = []
 
         # Update shared agent metadata
-        history_data["prompt"] = prompt
-        history_data["cli"] = agent_cli
-        history_data["session_id"] = agent_session_id
-        history_data["allowed_tools"] = allowed_tools
-        history_data["denied_tools"] = denied_tools
-        history_data["cli_command_args"] = cli_command_args
-        history_data["status_code"] = status_code.value if status_code is not None else None
+        context_data["prompt"] = prompt
+        context_data["cli"] = agent_cli
+        context_data["session_id"] = agent_session_id
+        context_data["allowed_tools"] = allowed_tools
+        context_data["denied_tools"] = denied_tools
+        context_data["cli_command_args"] = cli_command_args
+        context_data["status_code"] = status_code.value if status_code is not None else None
 
-        # Save updated JSON file
-        with open(iteration_file, "w", encoding="utf-8") as f:
-            json.dump(history_data, f, ensure_ascii=False, indent=2)
+        # Save updated context.json file
+        with open(context_file, "w", encoding="utf-8") as f:
+            json.dump(context_data, f, ensure_ascii=False, indent=2)
 
         # 儲存串流 JSONL 檔案（如果有串流資料）
-        streaming_log = history_data.get("streaming_log", [])
+        streaming_log = context_data.get("streaming_log", [])
         if streaming_log:
             try:
                 self._save_streaming_jsonl(streaming_log)
@@ -207,11 +209,26 @@ class Phase(ABC):
                 logger = logging.getLogger(__name__)
                 logger.warning(f"Failed to save streaming JSONL: {e}")
 
+        # 新增一筆到 iterations.jsonl
+        iteration_index_data = {
+            "iteration": self.iteration,
+            "timestamp": context_data.get("timestamp", datetime.now().isoformat()),
+            "status": status_code.value if status_code is not None else None,
+            "has_error": "error" in context_data,
+        }
+        try:
+            self._append_iteration_index(iteration_index_data)
+        except Exception as e:
+            # 記錄錯誤但不中斷流程
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.warning(f"Failed to append iteration index: {e}")
+
     def _save_streaming_jsonl(self, streaming_log: List[str]) -> None:
         """儲存串流片段為 JSONL 格式檔案。
 
         將 streaming_log 中的每個片段儲存為 JSONL 格式（每行一個 JSON 物件），
-        檔案命名為 response_{iteration:03d}.jsonl。
+        儲存到 iteration_XXX/streaming.jsonl。
 
         Args:
             streaming_log: 串流片段列表
@@ -220,17 +237,18 @@ class Phase(ABC):
         if not streaming_log:
             return
 
-        # 確保 history_dir 存在
-        if not hasattr(self, "history_dir"):
+        # 確保 phase_dir 存在
+        if not hasattr(self, "phase_dir"):
             raise AttributeError(
-                "Phase must have 'history_dir' attribute to use _save_streaming_jsonl"
+                "Phase must have 'phase_dir' attribute to use _save_streaming_jsonl"
             )
 
-        history_dir = Path(self.history_dir)
-        history_dir.mkdir(parents=True, exist_ok=True)
+        # 取得 iteration 目錄
+        iteration_dir = self._get_iteration_dir(self.iteration)
+        iteration_dir.mkdir(parents=True, exist_ok=True)
 
         # 建立 JSONL 檔案路徑
-        jsonl_file = history_dir / f"response_{self.iteration:03d}.jsonl"
+        jsonl_file = iteration_dir / "streaming.jsonl"
 
         # 寫入 JSONL 檔案（每行一個 JSON 物件）
         with open(jsonl_file, "w", encoding="utf-8") as f:
@@ -244,66 +262,70 @@ class Phase(ABC):
                 # 寫入一行 JSON（不使用縮排）
                 f.write(json.dumps(json_obj, ensure_ascii=False) + "\n")
 
-    def _save_iteration_history(
-        self,
-        phase_specific_data: Dict[str, Any],
-        prompt: Optional[str] = None,
-        agent_cli: Optional[str] = None,
-        agent_session_id: Optional[str] = None,
-        allowed_tools: Optional[List[str]] = None,
-        denied_tools: Optional[List[str]] = None,
-        status_code: Optional[PhaseStatusCode] = None,
-    ) -> None:
-        """Save iteration history to JSON file (common method - Maintain backward compatibility).
-
-        This method maintains backward compatibility, directly creates complete history file.
-        Recommended that new code uses two-stage approach of _save_user_input + _update_iteration_history.
+    def _get_iteration_dir(self, iteration: int) -> Path:
+        """取得 iteration 目錄路徑。
 
         Args:
-            phase_specific_data: Phase-specific data (e.g. user_input, response etc.)
-            prompt: Actual prompt received by agent
-            agent_cli: CLI tool used by agent (e.g. "copilot", "claude")
-            agent_session_id: Agent's session ID
-            allowed_tools: List of tools available to agent
-            denied_tools: List of tools unavailable to agent
-            status_code: Phase status code (e.g. CONFIRMED, NEED_CLARIFICATION)
+            iteration: iteration 編號
+
+        Returns:
+            iteration 目錄的 Path 物件，格式為 iteration_XXX/
         """
-        # Ensure history_dir exists
-        if not hasattr(self, "history_dir"):
+        if not hasattr(self, "phase_dir"):
             raise AttributeError(
-                "Phase must have 'history_dir' attribute to use _save_iteration_history"
+                "Phase must have 'phase_dir' attribute to use _get_iteration_dir"
             )
 
-        history_dir = Path(self.history_dir)
-        history_dir.mkdir(parents=True, exist_ok=True)
+        return Path(self.phase_dir) / f"iteration_{iteration:03d}"
 
-        # Ensure iteration exists
-        if not hasattr(self, "iteration"):
+    def _append_iteration_index(self, iteration_data: dict) -> None:
+        """新增一筆 iteration 記錄到 iterations.jsonl。
+
+        Args:
+            iteration_data: iteration 資料字典，應包含 iteration、timestamp、status、has_error 欄位
+        """
+        if not hasattr(self, "phase_dir"):
             raise AttributeError(
-                "Phase must have 'iteration' attribute to use _save_iteration_history"
+                "Phase must have 'phase_dir' attribute to use _append_iteration_index"
             )
 
-        # Create history data, including common fields and phase-specific data
-        history_data: Dict[str, Any] = {
-            "iteration": self.iteration,
-            "timestamp": datetime.now().isoformat(),
-        }
+        iterations_file = Path(self.phase_dir) / "iterations.jsonl"
 
-        # Add phase-specific data
-        history_data.update(phase_specific_data)
+        # 新增一行 JSON 到檔案末尾
+        with open(iterations_file, "a", encoding="utf-8") as f:
+            f.write(json.dumps(iteration_data, ensure_ascii=False) + "\n")
 
-        # Add shared agent metadata
-        history_data["prompt"] = prompt
-        history_data["cli"] = agent_cli
-        history_data["session_id"] = agent_session_id
-        history_data["allowed_tools"] = allowed_tools
-        history_data["denied_tools"] = denied_tools
-        history_data["status_code"] = status_code.value if status_code is not None else None
+    def _read_iterations_index(self) -> List[dict]:
+        """讀取 iterations.jsonl 的所有記錄。
 
-        # Save as JSON file
-        iteration_file = history_dir / f"iteration_{self.iteration:03d}.json"
-        with open(iteration_file, "w", encoding="utf-8") as f:
-            json.dump(history_data, f, ensure_ascii=False, indent=2)
+        Returns:
+            iterations 記錄列表，每個元素是一個字典
+        """
+        if not hasattr(self, "phase_dir"):
+            raise AttributeError(
+                "Phase must have 'phase_dir' attribute to use _read_iterations_index"
+            )
+
+        iterations_file = Path(self.phase_dir) / "iterations.jsonl"
+
+        # 如果檔案不存在，返回空列表
+        if not iterations_file.exists():
+            return []
+
+        # 讀取所有行並解析為 JSON
+        result = []
+        content = iterations_file.read_text(encoding="utf-8").strip()
+
+        # 處理空檔案
+        if not content:
+            return []
+
+        for line in content.split("\n"):
+            if line.strip():  # 忽略空行
+                result.append(json.loads(line))
+
+        return result
+
 
     def _check_empty_response(self, response: str) -> Optional[PhaseStatusCode]:
         """Check if agent response is empty, if empty return NO_RESPONSE status code.
@@ -358,11 +380,11 @@ class Phase(ABC):
                 - status_code: Extracted status code, None if not found
 
         Raises:
-            AttributeError: If phase lacks required attributes（history_dir, iteration, agent_manager）
+            AttributeError: If phase lacks required attributes（phase_dir, iteration, agent_manager）
         """
         # Check required attributes
-        if not hasattr(self, "history_dir"):
-            raise AttributeError("Phase must have 'history_dir' attribute")
+        if not hasattr(self, "phase_dir"):
+            raise AttributeError("Phase must have 'phase_dir' attribute")
         if not hasattr(self, "iteration"):
             raise AttributeError("Phase must have 'iteration' attribute")
         if not hasattr(self, "agent_manager"):
@@ -379,18 +401,19 @@ class Phase(ABC):
         agent_cli = agent_executor.config.cli.value
         agent_session_id = agent_executor.config.session_id
 
-        # 3. Save prompt to history（Before executing agent）
-        iteration_file = Path(self.history_dir) / f"iteration_{self.iteration:03d}.json"
-        if iteration_file.exists():
-            with open(iteration_file, "r", encoding="utf-8") as f:
-                history_data = json.load(f)
-            history_data["prompt"] = prompt
-            history_data["cli"] = agent_cli
-            history_data["session_id"] = agent_session_id
-            history_data["allowed_tools"] = allowed_tools
-            history_data["denied_tools"] = denied_tools
-            with open(iteration_file, "w", encoding="utf-8") as f:
-                json.dump(history_data, f, ensure_ascii=False, indent=2)
+        # 3. Save prompt to context.json（Before executing agent）
+        iteration_dir = self._get_iteration_dir(self.iteration)
+        context_file = iteration_dir / "context.json"
+        if context_file.exists():
+            with open(context_file, "r", encoding="utf-8") as f:
+                context_data = json.load(f)
+            context_data["prompt"] = prompt
+            context_data["cli"] = agent_cli
+            context_data["session_id"] = agent_session_id
+            context_data["allowed_tools"] = allowed_tools
+            context_data["denied_tools"] = denied_tools
+            with open(context_file, "w", encoding="utf-8") as f:
+                json.dump(context_data, f, ensure_ascii=False, indent=2)
 
         # 4. Execute agent（with error recovery）
         try:
@@ -416,19 +439,19 @@ class Phase(ABC):
             if is_critical_error:
                 print(f"❌ Critical error detected ({e.error_type}) - stopping execution\n")
 
-                # Update iteration history with error info
-                if iteration_file.exists():
-                    with open(iteration_file, "r", encoding="utf-8") as f:
-                        history_data = json.load(f)
+                # Update iteration context with error info
+                if context_file.exists():
+                    with open(context_file, "r", encoding="utf-8") as f:
+                        context_data = json.load(f)
 
-                    history_data["response"] = None
-                    history_data["status_code"] = None
-                    history_data["error"] = str(e)
-                    history_data["error_type"] = e.error_type
-                    history_data["is_critical"] = True
+                    context_data["response"] = None
+                    context_data["status_code"] = None
+                    context_data["error"] = str(e)
+                    context_data["error_type"] = e.error_type
+                    context_data["is_critical"] = True
 
-                    with open(iteration_file, "w", encoding="utf-8") as f:
-                        json.dump(history_data, f, ensure_ascii=False, indent=2)
+                    with open(context_file, "w", encoding="utf-8") as f:
+                        json.dump(context_data, f, ensure_ascii=False, indent=2)
 
                 # Create a CriticalError wrapper to signal this should stop the workflow
                 from cafe.core.types import CriticalPhaseError
@@ -447,17 +470,21 @@ class Phase(ABC):
                 valid_status_codes,
             )
 
-            # 4d. Create error log file for debugging
-            error_log_file = Path(self.history_dir) / f"execution_error_{self.iteration:03d}.log"
-            error_log_file.parent.mkdir(parents=True, exist_ok=True)
-            error_log_file.write_text(
-                f"Timestamp: {datetime.now().isoformat()}\n"
-                f"Error: {str(e)}\n"
-                f"Written files: {[str(f) for f in written_files]}\n"
-                f"Recovered response: {bool(recovered_response)}\n"
-                f"Recovered status: {recovered_status_code.value if recovered_status_code else None}\n",
-                encoding="utf-8",
-            )
+            # 4d. Create error.json file for debugging
+            iteration_dir = self._get_iteration_dir(self.iteration)
+            iteration_dir.mkdir(parents=True, exist_ok=True)
+            error_file = iteration_dir / "error.json"
+            error_data = {
+                "error": str(e),
+                "error_type": type(e).__name__,
+                "is_critical": isinstance(e, CriticalPhaseError),
+                "timestamp": datetime.now().isoformat(),
+                "written_files": [str(f) for f in written_files],
+                "recovered_response": bool(recovered_response),
+                "recovered_status": recovered_status_code.value if recovered_status_code else None,
+            }
+            with open(error_file, "w", encoding="utf-8") as f:
+                json.dump(error_data, f, ensure_ascii=False, indent=2)
 
             if recovered_response and recovered_status_code:
                 # 4e. Recovery successful - treat as partial success
@@ -763,16 +790,16 @@ class Phase(ABC):
         """Get the path to status.json file.
 
         Returns:
-            Path to status.json in {history_dir.parent}/status.json
+            Path to status.json in {phase_dir}/status.json
 
         For different phases:
             - SpecPhase: .cafe/issues/myissue/spec/status.json
             - PlanPhase: .cafe/issues/myissue/plan/status.json
             - DevelopPhase: .cafe/issues/myissue/develop/status.json
         """
-        if not hasattr(self, "history_dir"):
-            raise AttributeError("Phase must have 'history_dir' attribute")
-        return Path(self.history_dir).parent / "status.json"
+        if not hasattr(self, "phase_dir"):
+            raise AttributeError("Phase must have 'phase_dir' attribute")
+        return Path(self.phase_dir) / "status.json"
 
     def _detect_written_output_files(self) -> List[Path]:
         """Detect if agent wrote output files before failure.
@@ -969,17 +996,18 @@ class Phase(ABC):
         """
         if not hasattr(self, "iteration"):
             raise AttributeError("Phase must have 'iteration' attribute")
-        if not hasattr(self, "history_dir"):
-            raise AttributeError("Phase must have 'history_dir' attribute")
+        if not hasattr(self, "phase_dir"):
+            raise AttributeError("Phase must have 'phase_dir' attribute")
 
         if self.iteration == 1:
             return None
 
-        prev_iteration_file = Path(self.history_dir) / f"iteration_{self.iteration - 1:03d}.json"
-        if not prev_iteration_file.exists():
+        prev_iteration_dir = self._get_iteration_dir(self.iteration - 1)
+        prev_context_file = prev_iteration_dir / "context.json"
+        if not prev_context_file.exists():
             return None
 
-        with open(prev_iteration_file, "r", encoding="utf-8") as f:
+        with open(prev_context_file, "r", encoding="utf-8") as f:
             return json.load(f)
 
     def _merge_allowed_tools(
@@ -1126,18 +1154,19 @@ class Phase(ABC):
         """
         if not hasattr(self, "iteration"):
             raise AttributeError("Phase must have 'iteration' attribute")
-        if not hasattr(self, "history_dir"):
-            raise AttributeError("Phase must have 'history_dir' attribute")
+        if not hasattr(self, "phase_dir"):
+            raise AttributeError("Phase must have 'phase_dir' attribute")
 
-        current_iteration_file = Path(self.history_dir) / f"iteration_{self.iteration:03d}.json"
-        if not current_iteration_file.exists():
+        current_iteration_dir = self._get_iteration_dir(self.iteration)
+        current_context_file = current_iteration_dir / "context.json"
+        if not current_context_file.exists():
             return None
 
-        with open(current_iteration_file, "r", encoding="utf-8") as f:
+        with open(current_context_file, "r", encoding="utf-8") as f:
             return json.load(f)
 
     def _load_iteration_counter(self) -> int:
-        """Load latest iteration number from history files (common method).
+        """Load latest iteration number from iterations.jsonl or context files.
 
         If last iteration has no response (interrupted), return previous complete iteration number,
         this way next execution will reuse interrupted iteration number.
@@ -1145,20 +1174,33 @@ class Phase(ABC):
         Returns:
             Latest complete iteration number, return 0 if no history
         """
-        if not hasattr(self, "history_dir"):
-            raise AttributeError("Phase must have 'history_dir' attribute")
+        if not hasattr(self, "phase_dir"):
+            raise AttributeError("Phase must have 'phase_dir' attribute")
 
-        history_dir = Path(self.history_dir)
-        if not history_dir.exists():
+        phase_dir = Path(self.phase_dir)
+        if not phase_dir.exists():
             return 0
 
-        iteration_files = sorted(history_dir.glob("iteration_*.json"))
-        if not iteration_files:
+        # 優先從 iterations.jsonl 讀取
+        iterations_file = phase_dir / "iterations.jsonl"
+        if iterations_file.exists():
+            iterations = self._read_iterations_index()
+            if iterations:
+                # 返回最後一個 iteration 編號
+                return iterations[-1].get("iteration", 0)
+
+        # 降級方案：從 iteration_XXX/context.json 讀取
+        iteration_dirs = sorted(phase_dir.glob("iteration_*"))
+        if not iteration_dirs:
             return 0
 
         # Search from back to front for first complete iteration (has response)
-        for iteration_file in reversed(iteration_files):
-            with open(iteration_file, "r", encoding="utf-8") as f:
+        for iteration_dir in reversed(iteration_dirs):
+            context_file = iteration_dir / "context.json"
+            if not context_file.exists():
+                continue
+
+            with open(context_file, "r", encoding="utf-8") as f:
                 data = json.load(f)
 
             # Check if has response (complete iteration)
@@ -1571,15 +1613,16 @@ class Phase(ABC):
             cli_command_args: CLI command arguments
             multiple_codes_found: If multiple status codes found, list all found codes
         """
-        if not hasattr(self, "history_dir") or not hasattr(self, "iteration"):
+        if not hasattr(self, "phase_dir") or not hasattr(self, "iteration"):
             return
 
         # Only write log when needed: no status code, performed analysis, or found multiple codes
         if status_code is not None and not analysis_attempted and not multiple_codes_found:
             return
 
-        error_log_file = Path(self.history_dir) / f"execution_error_{self.iteration:03d}.log"
-        error_log_file.parent.mkdir(parents=True, exist_ok=True)
+        iteration_dir = self._get_iteration_dir(self.iteration)
+        iteration_dir.mkdir(parents=True, exist_ok=True)
+        error_file = iteration_dir / "error.json"
 
         # Determine error type
         if multiple_codes_found:
@@ -1589,51 +1632,27 @@ class Phase(ABC):
         else:
             error_type = "Status code required analysis"
 
-        # Create log content
-        log_lines = [
-            f"Timestamp: {datetime.now().isoformat()}",
-            f"Issue: {self.issue_dir.name if hasattr(self, 'issue_dir') else 'unknown'}",
-            f"Iteration: {self.iteration}",
-            f"Phase: {self.phase_name if hasattr(self, 'phase_name') else 'unknown'}",
-            f"Error type: {error_type}",
-            "",
-            "Original response:",
-            "-" * 60,
-            original_response,
-            "-" * 60,
-            "",
-            f"Valid status codes: {[code.value for code in valid_status_codes]}",
-            f"Extracted status code: {status_code.value if status_code else None}",
-        ]
+        # Create error data
+        error_data = {
+            "error": error_type,
+            "error_type": error_type.replace(" ", "_").upper(),
+            "is_critical": False,
+            "timestamp": datetime.now().isoformat(),
+            "issue": self.issue_dir.name if hasattr(self, 'issue_dir') else 'unknown',
+            "iteration": self.iteration,
+            "phase": self.phase_name if hasattr(self, 'phase_name') else 'unknown',
+            "original_response": original_response,
+            "valid_status_codes": [code.value for code in valid_status_codes],
+            "extracted_status_code": status_code.value if status_code else None,
+            "multiple_codes_found": [code.value for code in multiple_codes_found] if multiple_codes_found else None,
+            "analysis_attempted": analysis_attempted,
+            "analysis_response": analysis_response if analysis_attempted else None,
+            "cli_command_args": cli_command_args,
+        }
 
-        if multiple_codes_found:
-            log_lines.extend([
-                "",
-                f"Multiple status codes found: {[code.value for code in multiple_codes_found]}",
-            ])
-        
-        log_lines.append("")
-        log_lines.append(f"Analysis attempted: {analysis_attempted}")
-
-        if analysis_attempted:
-            log_lines.extend([
-                "",
-                "Analysis response:",
-                "-" * 60,
-                analysis_response if analysis_response else "(No response from analysis)",
-                "-" * 60,
-            ])
-
-        if cli_command_args:
-            log_lines.extend([
-                "",
-                "CLI command args:",
-                "-" * 60,
-                " ".join(cli_command_args) if isinstance(cli_command_args, list) else str(cli_command_args),
-                "-" * 60,
-            ])
-
-        error_log_file.write_text("\n".join(log_lines), encoding="utf-8")
+        # Write error.json
+        with open(error_file, "w", encoding="utf-8") as f:
+            json.dump(error_data, f, ensure_ascii=False, indent=2)
 
     def _get_status_analysis_prompt(self) -> Optional[str]:
         """Get prompt for analyzing status code (subclass override).
@@ -1749,14 +1768,14 @@ class Phase(ABC):
             phase_dir: Phase directory path
 
         Returns:
-            Path object of versioned file (format: {phase_name}_{iteration:03d}.md)
+            Path object of versioned file (format: iteration_XXX/output.md)
 
         Examples:
             >>> _get_versioned_file_path("spec", 1, Path(".cafe/issues/myissue/spec"))
-            Path('.cafe/issues/myissue/spec/spec_001.md')
+            Path('.cafe/issues/myissue/spec/iteration_001/output.md')
         """
-        file_name = f"{phase_name}_{iteration:03d}.md"
-        return phase_dir / file_name
+        iteration_dir = phase_dir / f"iteration_{iteration:03d}"
+        return iteration_dir / "output.md"
 
     def _get_next_iteration_number(
         self,
@@ -1779,13 +1798,9 @@ class Phase(ABC):
         if not phase_dir.exists():
             return 1
 
-        # Count based on iteration history files, not output files
+        # Count based on iteration_XXX directories with context.json files
         # This prevents interrupted executions from affecting version numbers
-        history_dir = phase_dir / "history"
-        if not history_dir.exists():
-            return 1
-
-        existing_iterations = sorted(history_dir.glob("iteration_*.json"))
+        existing_iterations = sorted(phase_dir.glob("iteration_*/context.json"))
         if not existing_iterations:
             return 1
 
@@ -1796,10 +1811,10 @@ class Phase(ABC):
             raise ValueError("Cannot exceed 999")
 
         # Check if the last iteration was interrupted (has no response)
-        last_iteration_file = existing_iterations[-1]
+        last_context_file = existing_iterations[-1]
         try:
             import json
-            with open(last_iteration_file, 'r', encoding='utf-8') as f:
+            with open(last_context_file, 'r', encoding='utf-8') as f:
                 last_iteration_data = json.load(f)
 
             # If last iteration has no response, it was interrupted
@@ -1827,20 +1842,31 @@ class Phase(ABC):
 
         Note:
             - If first round (iteration=1), do not perform any action
-            - If previous version does not exist, do not perform any action
+            - If immediate previous version does not exist, find the latest existing output.md to copy
+            - If no previous output.md exists at all, do not perform any action
         """
         # Do nothing for first iteration
         if iteration == 1:
             return
 
-        # Get previous and current file paths
-        prev_file = self._get_versioned_file_path(phase_name, iteration - 1, phase_dir)
+        # Get current file path
         current_file = self._get_versioned_file_path(phase_name, iteration, phase_dir)
 
-        # Copy if previous file exists
-        if prev_file.exists():
+        # Try to find the latest existing output.md from previous iterations
+        # Start from iteration-1 and work backwards
+        source_file = None
+        for i in range(iteration - 1, 0, -1):
+            candidate = self._get_versioned_file_path(phase_name, i, phase_dir)
+            if candidate.exists():
+                source_file = candidate
+                break
+
+        # Copy if we found a source file
+        if source_file:
             import shutil
-            shutil.copy2(prev_file, current_file)
+            # Ensure parent directory exists
+            current_file.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source_file, current_file)
 
     def _get_latest_versioned_file(
         self,
@@ -1858,15 +1884,17 @@ class Phase(ABC):
 
         Examples:
             >>> _get_latest_versioned_file("spec", Path(".cafe/issues/myissue/spec"))
-            Path('.cafe/issues/myissue/spec/spec_003.md')  # Assuming 3 versions
+            Path('.cafe/issues/myissue/spec/iteration_003/output.md')  # Assuming 3 versions
         """
-        # Find all versioned files
-        pattern = f"{phase_name}_*.md"
-        versioned_files = sorted(phase_dir.glob(pattern))
+        # Find all iteration directories
+        iteration_dirs = sorted(phase_dir.glob("iteration_*"))
 
-        # Return the latest one (highest number)
-        if versioned_files:
-            return versioned_files[-1]
+        # Search from latest to earliest for first output.md
+        for iteration_dir in reversed(iteration_dirs):
+            output_file = iteration_dir / "output.md"
+            if output_file.exists():
+                return output_file
+
         return None
 
 

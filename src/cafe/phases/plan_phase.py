@@ -81,10 +81,6 @@ class PlanPhase(Phase):
         # Path: .cafe/issues/{issue_name}/plan
         self.phase_dir = self.issue_dir / "plan"
 
-        # History directory for plan phase
-        # Path: .cafe/issues/{issue_name}/plan/history
-        self.history_dir = self.phase_dir / "history"
-
         # Load existing history if available (will create dir if needed)
         self.iteration = self._load_iteration_counter()
 
@@ -143,7 +139,7 @@ class PlanPhase(Phase):
                     )
 
                 # Check if this is first iteration (no history files or plan files)
-                has_history = self.history_dir.exists() and list(self.history_dir.glob("iteration_*.json"))
+                has_history = bool(list(self.phase_dir.glob("iteration_*/context.json")))
                 is_first_iteration = not has_history
 
                 # First iteration requires template (unless template_mode is 'auto')
@@ -278,6 +274,23 @@ class PlanPhase(Phase):
 
         except Exception as e:
             return self._handle_exception_in_execute(e, "Plan phase failed")
+
+    def _get_completion_data(self) -> dict:
+        """Get additional data when phase completes (provided to base class's _handle_standard_status_codes).
+
+        Returns:
+            Dict containing phase-specific data, will be merged into PhaseResult.data
+        """
+        data = {}
+
+        # Find the latest existing output.md file (in case current iteration doesn't have one)
+        latest_output = self._get_latest_versioned_file("plan", self.phase_dir)
+        if latest_output:
+            data["plan_file"] = str(latest_output)
+        elif hasattr(self, 'plan_file') and self.plan_file:
+            data["plan_file"] = str(self.plan_file)
+
+        return data
 
     def _generate_prompt(self, user_input: str) -> str:
         """Generate prompt for current iteration.

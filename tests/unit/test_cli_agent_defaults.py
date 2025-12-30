@@ -59,10 +59,11 @@ def setup_test_env(tmp_path, monkeypatch):
     config_file = issue_dir / "issue.yaml"
     config_file.write_text("issue_name: test-branch\nbase_branch: main\n")
 
-    # Create spec directory with spec file (required for plan command)
+    # Create spec directory with spec file in new structure (required for plan command)
     spec_dir = issue_dir / "spec"
-    spec_dir.mkdir(parents=True, exist_ok=True)
-    spec_file = spec_dir / "spec_001.md"
+    iter_dir = spec_dir / "iteration_001"
+    iter_dir.mkdir(parents=True, exist_ok=True)
+    spec_file = iter_dir / "output.md"
     spec_file.write_text("# Test Spec\n\nThis is a test spec.")
 
     # Change to tmp_path
@@ -196,10 +197,10 @@ class TestDevelopCommandAgentDefault:
         setup_test_env,
     ):
         """當沒有提供 --dev flag 時, develop 指令應使用 config 中 developer agent 名稱."""
-        # Create plan file (required for develop command)
-        plan_dir = setup_test_env / ".cafe" / "issues" / "test-branch" / "plan"
-        plan_dir.mkdir(parents=True, exist_ok=True)
-        plan_file = plan_dir / "plan_001.md"
+        # Create plan file in new structure (required for develop command)
+        plan_iter_dir = setup_test_env / ".cafe" / "issues" / "test-branch" / "plan" / "iteration_001"
+        plan_iter_dir.mkdir(parents=True, exist_ok=True)
+        plan_file = plan_iter_dir / "output.md"
         plan_file.write_text("# Test Plan\n\nThis is a test plan.")
 
         # Setup: Mock _setup_agents to return our mock agent_manager
