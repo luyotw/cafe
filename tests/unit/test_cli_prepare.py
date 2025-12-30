@@ -586,3 +586,76 @@ class TestPrepareCommandWorktree:
             config_data = yaml.safe_load(f)
             # Non-interactive mode should not have pr config
             assert "pr" not in config_data
+
+
+class TestPrepareNonInteractiveMode:
+    """測試 prepare 命令的 non-interactive 模式"""
+
+    def test_no_interactive_flag_exists(self, temp_repo_dir, mock_git_ops):
+        """Test 1.1: 驗證 --no-interactive flag 存在且型別正確"""
+        # 測試 --no-interactive flag 可以被接受
+        result = runner.invoke(app, ["prepare", "test-issue", "--no-interactive", "--input-method=manual"])
+
+        # 應該不會因為 --no-interactive flag 而報錯（可能因為其他驗證失敗）
+        # 此測試主要確認參數存在
+        assert "--no-interactive" not in result.stdout or "Error" not in result.stdout
+
+    def test_all_new_parameters_exist(self, temp_repo_dir, mock_git_ops):
+        """Test 1.2: 驗證所有新增參數的定義存在"""
+        # 測試所有新參數都能被接受
+        result = runner.invoke(app, [
+            "prepare", "test-issue",
+            "--no-interactive",
+            "--input-method=manual",
+            "--issue-id=123",
+            "--rigor=medium",
+            "--template=default",
+            "--auto-create-pr"
+        ])
+
+        # 參數應該被接受（不會有 "no such option" 錯誤）
+        assert "no such option" not in result.stdout.lower()
+
+    def test_non_interactive_missing_required_input_method(self, temp_repo_dir, mock_git_ops):
+        """Test 1.3: 驗證 non-interactive 模式下缺少必填參數時顯示錯誤"""
+        # 測試場景：--no-interactive 但缺少 --input-method
+        result = runner.invoke(app, ["prepare", "test-issue", "--no-interactive"])
+
+        assert result.exit_code == 1
+        assert "Error" in result.stdout
+        assert "--input-method" in result.stdout or "input-method" in result.stdout
+
+    def test_non_interactive_github_mode_missing_issue_id(self, temp_repo_dir, mock_git_ops):
+        """Test 1.3: 驗證 GitHub 模式下缺少 --issue-id 時顯示錯誤"""
+        # 測試場景：--input-method=github 但缺少 --issue-id
+        result = runner.invoke(app, [
+            "prepare", "test-issue",
+            "--no-interactive",
+            "--input-method=github"
+        ])
+
+        assert result.exit_code == 1
+        assert "Error" in result.stdout
+        assert "--issue-id" in result.stdout or "issue-id" in result.stdout or "issue_id" in result.stdout
+
+    def test_non_interactive_with_defaults(self, temp_repo_dir, mock_git_ops):
+        """Test 1.4: 驗證參數預設值在 non-interactive 模式下正確使用"""
+        # 測試場景：--no-interactive --input-method=manual（不指定 rigor 和 template）
+        result = runner.invoke(app, [
+            "prepare", "test-issue",
+            "--no-interactive",
+            "--input-method=manual"
+        ])
+
+        assert result.exit_code == 0
+
+        # 檢查設定檔是否使用預設值
+        config_file = temp_repo_dir / ".cafe" / "issues" / "test-issue" / "issue.yaml"
+        with open(config_file) as f:
+            config_data = yaml.safe_load(f)
+            # 應該有 spec 設定
+            assert "spec" in config_data
+            assert config_data["spec"]["rigor"] == "medium"  # 預設值
+            # 應該有 plan 設定
+            assert "plan" in config_data
+            assert config_data["plan"]["template"] == "default"  # 預設值
