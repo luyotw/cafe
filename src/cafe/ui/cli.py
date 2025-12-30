@@ -569,12 +569,22 @@ def prepare(
     This command sets up the necessary directory structure, creates a feature branch,
     and saves initial configuration for the issue.
 
+    Supports both interactive and non-interactive modes:
+    - Interactive mode: Prompts for spec/plan configuration (default behavior)
+    - Non-interactive mode: Requires configuration via command-line parameters
+
     Examples:
-        # Interactive mode (will ask for issue name)
+        # Interactive mode (will ask for issue name and configuration)
         cafe prepare
 
-        # Specify issue name directly
+        # Specify issue name directly (still prompts for configuration)
         cafe prepare fix-login-bug
+
+        # Non-interactive mode with all required parameters
+        cafe prepare fix-bug --no-interactive --input-method=manual --rigor=medium --template=default
+
+        # Non-interactive mode with GitHub issue
+        cafe prepare issue-123 --no-interactive --input-method=github --issue-id=123 --rigor=high
 
         # Specify custom base branch
         cafe prepare my-feature --base develop
