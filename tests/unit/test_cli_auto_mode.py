@@ -215,16 +215,33 @@ class TestAutoModeErrorHandling:
 
         # Mock console to capture output
         with patch('cafe.ui.cli.console') as mock_console:
-            # In auto mode with non-critical error, should exit without printing
+            # In auto mode with non-critical, non-programming error, should exit without printing
+            # Use RuntimeError instead of ValueError (ValueError is a programming error)
             with pytest.raises(typer.Exit):
-                _handle_phase_exception(ValueError("test error"), "spec", auto=True)
+                _handle_phase_exception(RuntimeError("test error"), "spec", auto=True)
 
-            # Verify no error message was printed for non-critical errors
+            # Verify no error message was printed for non-critical, non-programming errors
             error_prints = [
                 call for call in mock_console.print.call_args_list
                 if "Error" in str(call) or "error" in str(call)
             ]
             assert len(error_prints) == 0, "Error message was printed in auto mode"
+
+    def test_handle_phase_exception_shows_programming_errors_in_auto_mode(self):
+        """Test that _handle_phase_exception shows programming errors even in auto mode."""
+        from cafe.ui.cli import _handle_phase_exception
+        import typer
+
+        # Mock console to capture output
+        with patch('cafe.ui.cli.console') as mock_console:
+            # Programming errors (AttributeError, ValueError, TypeError, KeyError) should be shown
+            with pytest.raises(typer.Exit):
+                _handle_phase_exception(AttributeError("Phase must have 'phase_dir' attribute"), "spec", auto=True)
+
+            # Verify error message was printed
+            calls_str = str(mock_console.print.call_args_list)
+            assert "Error" in calls_str and "AttributeError" in calls_str, \
+                "Programming error was not shown in auto mode"
 
     def test_handle_phase_exception_shows_critical_errors_in_auto_mode(self):
         """Test that _handle_phase_exception still shows critical errors in auto mode."""

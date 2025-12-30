@@ -58,7 +58,13 @@ def _handle_phase_exception(e: Exception, phase_name: str, auto: bool = False) -
     from cafe.core.types import CriticalPhaseError
 
     # In auto mode, suppress output for most errors as they're already reported
+    # BUT always show AttributeError, ValueError, TypeError (programming errors)
     if auto and not isinstance(e, CriticalPhaseError):
+        if isinstance(e, (AttributeError, ValueError, TypeError, KeyError)):
+            # These are programming/configuration errors - always show them
+            console.print()
+            console.print(f"[bold red]❌ Error in {phase_name} phase[/bold red]")
+            console.print(f"[red]{type(e).__name__}: {e}[/red]")
         raise typer.Exit(1)
 
     console.print()
