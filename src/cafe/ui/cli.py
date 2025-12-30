@@ -1180,6 +1180,160 @@ def close() -> None:
 
 
 @app.command()
+def restore(
+    issue_name: str = typer.Argument(..., help="Issue name to restore")
+) -> None:
+    """Restore archived issue from backup.
+
+    This command restores an archived issue from ~/.cafe/projects/<project-path>/archived/<issue-name>/
+    back to .cafe/issues/<issue-name>/.
+
+    It performs the following checks:
+    1. Verifies backup exists
+    2. Checks current branch matches the issue's feature_branch
+    3. For worktree mode, checks current directory matches worktree_path
+    4. Prompts user for confirmation
+    5. Restores all files from backup
+
+    Examples:
+        cafe restore issue80
+    """
+    import shutil
+
+    try:
+        # 1. Get project path and construct archive path
+        project_path = _get_project_path()
+        home_dir = Path.home()
+        archive_base = home_dir / ".cafe" / "projects" / project_path / "archived"
+        archive_path = archive_base / issue_name
+
+        # 2. Check if backup exists
+        if not archive_path.exists():
+            console.print()
+            console.print(f"[red]❌ Error: Backup not found for issue '{issue_name}'[/red]")
+            console.print(f"   Backup path: {archive_path}")
+            console.print()
+            raise typer.Exit(1)
+
+        console.print()
+        console.print(f"[bold blue]🔄 Restoring issue: {issue_name}[/bold blue]")
+        console.print(f"   From: {archive_path}")
+        console.print()
+
+        # 3. Read issue.yaml from backup to get branch and worktree configuration
+        issue_config_file = archive_path / "issue.yaml"
+        if not issue_config_file.exists():
+            console.print(f"[red]❌ Error: issue.yaml not found in backup[/red]")
+            console.print(f"   Expected at: {issue_config_file}")
+            console.print()
+            raise typer.Exit(1)
+
+        with open(issue_config_file, "r", encoding="utf-8") as f:
+            config_data = yaml.safe_load(f)
+
+        feature_branch = config_data.get("feature_branch", issue_name)
+        worktree_path = config_data.get("worktree_path")
+
+        # 4. Initialize Git operations and check current branch
+        try:
+            git_ops = GitOperations()
+        except Exception as e:
+            console.print(f"[red]Error: Not a git repository. {e}[/red]")
+            raise typer.Exit(1)
+
+        current_branch = git_ops.get_current_branch()
+        if not current_branch:
+            console.print("[red]Error: Not on a valid branch (detached HEAD?).[/red]")
+            raise typer.Exit(1)
+
+        # 5. Check if current branch matches feature_branch
+        if current_branch != feature_branch:
+            console.print()
+            console.print("[red]❌ Error: Branch mismatch[/red]")
+            console.print(f"   Current branch: {current_branch}")
+            console.print(f"   Expected branch (from issue.yaml): {feature_branch}")
+            console.print()
+            console.print("[yellow]Please switch to the correct branch first:[/yellow]")
+            console.print(f"   [bold]git checkout {feature_branch}[/bold]")
+            console.print()
+            raise typer.Exit(1)
+
+        # 6. For worktree mode, check if we're in the correct worktree directory
+        # 檢查方式：比較當前目錄是否在預期的 worktree 路徑下
+        if worktree_path:
+            current_path = Path.cwd().resolve()
+            expected_worktree = Path(worktree_path).resolve()
+
+            # 檢查當前路徑是否在 worktree 路徑下
+            # 使用 is_relative_to() 或手動檢查路徑前綴
+            try:
+                # Python 3.9+ 有 is_relative_to()
+                is_in_worktree = current_path.is_relative_to(expected_worktree)
+            except AttributeError:
+                # Python 3.8 fallback: 檢查是否有共同前綴
+                try:
+                    current_path.relative_to(expected_worktree)
+                    is_in_worktree = True
+                except ValueError:
+                    is_in_worktree = False
+
+            if not is_in_worktree:
+                console.print()
+                console.print("[red]❌ Error: Worktree path mismatch[/red]")
+                console.print(f"   Current path: {Path.cwd()}")
+                console.print(f"   Expected worktree path (from issue.yaml): {worktree_path}")
+                console.print()
+                console.print("[yellow]Please change to the correct worktree directory:[/yellow]")
+                console.print(f"   [bold]cd {worktree_path}[/bold]")
+                console.print()
+                raise typer.Exit(1)
+
+        # 7. Prompt user for confirmation
+        console.print("[yellow]⚠️  Warning: This will restore the issue from backup.[/yellow]")
+        console.print("[yellow]   Any current changes in .cafe/issues/{} will be overwritten.[/yellow]".format(issue_name))
+        console.print()
+
+        # 使用 typer.confirm 進行確認
+        confirmed = typer.confirm("Do you want to continue?", default=False)
+        if not confirmed:
+            console.print()
+            console.print("[yellow]Restore cancelled.[/yellow]")
+            console.print()
+            raise typer.Exit(1)
+
+        # 8. Perform the restore operation
+        console.print()
+        console.print("[dim]Restoring issue data...[/dim]")
+
+        # 目標路徑
+        issue_dir = Path.cwd() / ".cafe" / "issues" / issue_name
+
+        # 如果目標路徑已存在，先刪除
+        if issue_dir.exists():
+            console.print(f"[dim]Removing existing issue directory...[/dim]")
+            shutil.rmtree(issue_dir)
+
+        # 從備份複製資料
+        console.print(f"[dim]Copying data from backup...[/dim]")
+        shutil.copytree(archive_path, issue_dir)
+
+        # 9. Display success message
+        console.print()
+        console.print(f"[green]✓ Successfully restored issue: {issue_name}[/green]")
+        console.print(f"  📁 Restored to: .cafe/issues/{issue_name}/")
+        console.print(f"  🌿 Branch: {feature_branch}")
+        if worktree_path:
+            console.print(f"  📂 Worktree: {worktree_path}")
+        console.print()
+
+    except typer.Exit:
+        raise
+    except Exception as e:
+        console.print(f"[red]Error during restore: {e}[/red]")
+        raise typer.Exit(1)
+
+
+@app.command()
 def spec(
     ctx: typer.Context,
     action: Optional[str] = typer.Argument(None, help="Action: edit (to edit latest spec file)"),
