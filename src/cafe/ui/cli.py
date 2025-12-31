@@ -17,7 +17,7 @@ from cafe.agents.manager import AgentManager
 from cafe.core.git import GitOperations
 from cafe.core.permission import PermissionHandler
 from cafe.core.types import AgentCLI, AgentConfig, WorkflowMode
-from cafe.phases.develop_phase import DevelopPhase
+from cafe.phases.develop_phase import DevelopPhase, develop as develop_command
 from cafe.phases.plan_phase import PlanPhase, plan as plan_command
 from cafe.phases.pr_phase import PRPhase
 from cafe.phases.review_phase import ReviewPhase
@@ -515,218 +515,9 @@ def restore(
         raise typer.Exit(1)
 
 
-@app.command()
-def develop(
-    ctx: typer.Context,
-    mode: str = typer.Option(
-        "local",
-        "--mode",
-        "-m",
-        help="Workflow mode: local or github",
-    ),
-    issue_id: Optional[str] = typer.Option(
-        None,
-        "--issue",
-        "-i",
-        help="GitHub issue ID (github mode)",
-    ),
-    dev_agent: Optional[str] = typer.Option(
-        None,
-        "--dev",
-        help="Developer agent name (defaults to config)",
-    ),
-    config_file: str = typer.Option(
-        ".cafe/config.yaml",
-        "--config",
-        "-c",
-        help="Path to configuration file",
-    ),
-    show_prompt: bool = typer.Option(
-        False,
-        "--show-prompt",
-        help="Show the prompt sent to agent",
-    ),
-    interactive: bool = typer.Option(
-        True,
-        "--interactive/--no-interactive",
-        help="Allow interactive prompts (default: True)",
-    ),
-    approve_denied_tools: Optional[str] = typer.Option(
-        None,
-        "--approve-denied-tools",
-        help="Comma-separated indices of permission denials to approve (non-interactive mode)",
-    ),
-    user_input: Optional[str] = typer.Option(
-        None,
-        "--user-input",
-        help="Additional user instructions or context (non-interactive mode)",
-    ),
-    pr_number: Optional[int] = typer.Option(
-        None,
-        "--pr-number",
-        help="PR number to fetch unresolved comments from",
-    ),
-    auto: bool = typer.Option(
-        False,
-        "--auto",
-        help="Auto mode: continue iterations automatically and execute cafe review after completion",
-    ),
-) -> None:
-    """Run develop phase: Execute development work according to plan.
-
-    The developer agent will implement the planned features, running tests and
-    making commits according to the implementation plan.
-
-    This command automatically uses the current Git branch name as the issue identifier.
-
-    Examples:
-        # Execute development (uses current branch)
-        cafe develop
-
-        # Use custom developer agent
-        cafe develop --dev CustomDev
-
-        # Fetch unresolved PR comments to guide development
-        cafe develop --pr-number 123
-
-        # Non-interactive mode with permission approval
-        cafe develop --no-interactive --approve-denied-tools 0,2 --user-input "Please be careful"
-    """
-    try:
-        # Get and validate current branch
-        issue_name = _get_and_validate_branch(ctx, "develop")
-
-        # Validate mode
-        try:
-            workflow_mode = WorkflowMode(mode)
-        except ValueError:
-            console.print(f"[red]Error: Invalid mode '{mode}'. Use 'local' or 'github'.[/red]")
-            raise typer.Exit(1)
-
-        # Get latest versioned files
-        spec_file_path = _get_latest_versioned_file("spec", issue_name)
-        if spec_file_path is None:
-            console.print(f"[red]Error: No spec file found for issue '{issue_name}'[/red]")
-            console.print("[dim]Hint: Run 'cafe spec' first to create the specification.[/dim]")
-            raise typer.Exit(1)
-
-        plan_file_path = _get_latest_versioned_file("plan", issue_name)
-        if plan_file_path is None:
-            console.print(f"[red]Error: No plan file found for issue '{issue_name}'[/red]")
-            console.print(
-                "[dim]Hint: Run 'cafe plan' first to create the implementation plan.[/dim]"
-            )
-            raise typer.Exit(1)
-
-        # Convert to strings for compatibility
-        spec_file = str(spec_file_path)
-        plan_file = str(plan_file_path)
-
-        # Initialize components
-        config_dir = (
-            str(Path(config_file).parent) if config_file != ".cafe/config.yaml" else ".cafe"
-        )
-        config_manager = ConfigManager(config_dir)
-        agent_manager = _setup_agents(config_manager, issue_name=issue_name)
-        permission_handler = PermissionHandler()
-        git_ops = GitOperations()
-
-        # Set show_prompt flag
-        agent_manager.show_prompt = show_prompt
-
-        # Get developer agent name (from flag or config)
-        if dev_agent is None:
-            dev_agent = config_manager.get("agents.developer.name", "David")
-
-        # Get developer agent CLI
-        dev_executor = agent_manager.get_agent(dev_agent)
-        dev_cli = dev_executor.config.cli.value
-        dev_session_id = dev_executor.config.session_id or "(will be created)"
-
-        # Display start message
-        console.print("[bold blue]🔨 Develop Phase: Development Execution[/bold blue]")
-        console.print(f"Issue: {issue_name}")
-        console.print(f"Developer Agent: {dev_agent}")
-        dev_model = dev_executor.config.model or "default"
-        console.print(f"CLI: {dev_cli}")
-        console.print(f"Model: {dev_model}")
-        console.print(f"Session ID: {dev_session_id}")
-        console.print(f"Spec file: {spec_file}")
-        console.print(f"Plan file: {plan_file}")
-        console.print()
-
-        # Parse approve_denied_tools if provided
-        approved_denial_indices: List[int] = []
-        if approve_denied_tools is not None:
-            try:
-                # Ensure it's a string (defensive programming)
-                tools_str = str(approve_denied_tools)
-                approved_denial_indices = [int(idx.strip()) for idx in tools_str.split(",")]
-            except (ValueError, AttributeError) as e:
-                console.print(
-                    f"[red]Error: --approve-denied-tools must be comma-separated integers (e.g., '0,1,3'). Got: {approve_denied_tools}[/red]"
-                )
-                console.print(f"[dim]Debug: type={type(approve_denied_tools)}, error={e}[/dim]")
-                raise typer.Exit(1)
-
-        # Create and execute develop phase
-        phase = DevelopPhase(
-            agent_manager=agent_manager,
-            permission_handler=permission_handler,
-            git_ops=git_ops,
-            spec_file=spec_file,
-            plan_file=plan_file,
-            workflow_mode=workflow_mode,
-            issue_id=issue_id,
-            issue_name=issue_name,
-            dev_agent=dev_agent,
-            interactive=interactive,
-            approved_denial_indices=approved_denial_indices if approved_denial_indices else None,
-            user_input=user_input or "",
-            pr_number=pr_number,
-        )
-
-        console.print("[bold]Starting development execution...[/bold]")
-        console.print("[dim]The developer will implement features according to the plan.[/dim]")
-        console.print("[dim]💡 Tip: Press Ctrl+C anytime to pause and save progress.[/dim]")
-        console.print()
-
-        result = phase.execute()
-
-        # Display result
-        if result.status.value == "completed":
-            console.print()
-            console.print("[bold green]✅ Development completed![/bold green]")
-            console.print(f"Branch: {result.data.get('branch', 'N/A')}")
-            console.print(f"Iterations: {result.data.get('iterations', 'N/A')}")
-            console.print()
-
-            # Auto mode: execute next phase
-            if auto:
-                _execute_next_phase_auto("review", issue_name)
-            else:
-                console.print("[dim]Next steps:[/dim]")
-                console.print("[dim]  1. Review changes: git diff[/dim]")
-                console.print("[dim]  2. Run tests: pytest[/dim]")
-                console.print("[dim]  3. Code review: cafe review[/dim]")
-        elif result.status.value == "failed":
-            console.print(f"[red]❌ Development failed: {result.message}[/red]")
-            raise typer.Exit(1)
-        elif result.status.value == "in_progress":
-            # Development paused (e.g., NEED_CLARIFICATION, NEED_PERMISSION)
-            if auto:
-                _execute_next_phase_auto("develop", issue_name)
-            else:
-                console.print(f"[yellow]⏸️  Development paused: {result.message}[/yellow]")
-                console.print("[dim]Resume with: cafe develop[/dim]")
-
-    except Exception as e:
-        _handle_phase_exception(e, "develop", auto=auto)
-
-
 # Add "dev" as an alias for "develop"
 # Use the same function with different name to ensure parameter sync
-app.command(name="dev", hidden=False)(develop)
+app.command(name="dev", hidden=False)(develop_command)
 
 
 @app.command()
@@ -1364,6 +1155,7 @@ app.add_typer(resource_commands.agent_app, name="agent")
 app.command()(show_commands.show)
 app.command()(spec_command)
 app.command()(plan_command)
+app.command()(develop_command)
 
 
 def main() -> None:
