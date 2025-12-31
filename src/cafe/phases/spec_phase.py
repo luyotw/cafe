@@ -373,6 +373,22 @@ class SpecPhase(Phase):
             # In mock mode or if agent doesn't use write tool, write spec from response
             self._ensure_spec_file_written(response)
 
+            # Verify agent followed instructions: check if content is in file (not response)
+            verification_result, final_response = self._verify_output_format(
+                agent_name=self.pm_agent,
+                response=response,
+                spec_file_pattern=spec_file_pattern,
+                allowed_tools=allowed_tools,
+                valid_status_codes=[
+                    PhaseStatusCode.READY_FOR_REVIEW,
+                    PhaseStatusCode.NEED_CLARIFICATION,
+                ],
+            )
+
+            # Use the final response (either original or corrected)
+            if final_response:
+                response = final_response
+
             # Phase-specific post-processing: Sync spec to GitHub (no-op in local mode)
             self._sync_spec_to_github("")
 
@@ -1144,3 +1160,87 @@ Please return only one status code (e.g., CAFE_READY_FOR_REVIEW), no other conte
         """
         spec_file = self._get_versioned_file_path("spec", self.iteration, self.phase_dir)
         return [Path(spec_file)] if Path(spec_file).exists() else []
+
+    def _verify_output_format(
+        self,
+        agent_name: str,
+        response: str,
+        spec_file_pattern: str,
+        allowed_tools: List[str],
+        valid_status_codes: List[PhaseStatusCode],
+    ) -> tuple[Optional[PhaseResult], Optional[str]]:
+        """Verify that agent followed output format instructions.
+
+        Checks:
+        1. Is content written to the markdown file (not in response)?
+        2. Is the markdown file written in the agent's native language?
+
+        Args:
+            agent_name: Name of the agent
+            response: Agent's response
+            spec_file_pattern: File pattern for spec file
+            allowed_tools: Tools allowed for agent
+            valid_status_codes: Valid status codes
+
+        Returns:
+            Tuple of (verification_result, final_response)
+            - verification_result: PhaseResult if verification failed, None if ok
+            - final_response: Updated response if agent corrected the output, None to use original
+        """
+        from cafe.core.status_codes import StatusCodeParser
+        from cafe.agents.manager import AgentManager
+
+        # Extract status code from response
+        status_code = StatusCodeParser.extract(response)
+        if not status_code:
+            return None, None
+
+        # Read spec file to check content
+        spec_path = Path(self.spec_file)
+        if not spec_path.exists():
+            # File doesn't exist - agent didn't write anything
+            return None, None
+
+        spec_content = spec_path.read_text(encoding="utf-8")
+
+        # Build verification prompt
+        verification_prompt = f"""Please verify your previous output:
+
+1. Did you write ALL questions and specifications to {spec_file_pattern}?
+   - Check: Is your response ONLY a status code (e.g., "CAFE_NEED_CLARIFICATION")?
+   - Check: Are ALL questions in the markdown file, NOT in your response?
+
+2. Did you write the markdown file in your native language (the language you were configured with)?
+   - Check the content in {spec_file_pattern}
+   - Your native language: Use the language specified in your agent configuration
+
+**If both checks pass:**
+Return ONLY your previous status code: {status_code.value}
+
+**If any check fails:**
+1. Fix the markdown file in {spec_file_pattern}
+2. Return ONLY the status code (no explanation)
+
+Remember: Your response must contain ONLY the status code, nothing else."""
+
+        # Execute verification using the phase's agent_manager
+        try:
+            verification_response, _ = self.agent_manager.execute(
+                agent_name=agent_name,
+                prompt=verification_prompt,
+                allowed_tools=allowed_tools,
+            )
+
+            # Extract status code from verification response
+            verified_status = StatusCodeParser.extract(verification_response)
+
+            # If status code is valid, return the final response
+            if verified_status and verified_status in valid_status_codes:
+                return None, verification_response.strip()
+
+            # If no valid status code, something went wrong
+            return None, None
+
+        except Exception:
+            # If verification fails, just use original response
+            return None, None

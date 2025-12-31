@@ -2766,9 +2766,14 @@ def review(
                     if issue_config_file.exists():
                         with open(issue_config_file, "r") as f:
                             issue_config = yaml.safe_load(f)
-                            max_iterations = issue_config.get("auto", {}).get(
+                            max_iterations_value = issue_config.get("auto", {}).get(
                                 "max_review_iterations", 5
                             )
+                            # Convert to int if it's a string
+                            try:
+                                max_iterations = int(max_iterations_value)
+                            except (ValueError, TypeError):
+                                max_iterations = 5
 
                     # Get current review iteration count
                     current_iteration = _get_latest_review_iteration(issue_name)
