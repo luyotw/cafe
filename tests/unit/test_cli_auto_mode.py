@@ -300,3 +300,139 @@ class TestAutoModeErrorHandling:
             ]
             assert len(error_messages) == 0, \
                 "Redundant error message was printed by _execute_next_phase_auto"
+
+
+class TestReviewMaxIterationsConfig:
+    """測試 review phase 從 config.yaml 讀取 max_review_iterations，而非 issue.yaml"""
+
+    def test_review_reads_max_iterations_from_config_not_issue_yaml(self, temp_repo_dir, mock_git_ops, prepared_issue):
+        """測試 review phase 從 config.yaml 讀取 max_review_iterations"""
+        from cafe.ui.cli import review
+        from typer.testing import CliRunner
+        from cafe.ui.cli import app
+
+        runner = CliRunner()
+
+        # Setup: Create spec and plan files
+        spec_iter_dir = prepared_issue / "spec" / "iteration_001"
+        spec_iter_dir.mkdir(parents=True, exist_ok=True)
+        spec_file = spec_iter_dir / "output.md"
+        spec_file.write_text("# Test Spec")
+
+        plan_iter_dir = prepared_issue / "plan" / "iteration_001"
+        plan_iter_dir.mkdir(parents=True, exist_ok=True)
+        plan_file = plan_iter_dir / "output.md"
+        plan_file.write_text("# Test Plan")
+
+        # Create 8 review iterations
+        review_dir = prepared_issue / "review"
+        review_dir.mkdir(exist_ok=True)
+        for i in range(1, 9):
+            review_iter_dir = review_dir / f"iteration_{i:03d}"
+            review_iter_dir.mkdir(exist_ok=True)
+            review_output = review_iter_dir / "output.md"
+            review_output.write_text(f"# Review {i}")
+
+        # Set issue.yaml to have max_review_iterations: 5 (should be IGNORED)
+        issue_config_file = prepared_issue / "issue.yaml"
+        with open(issue_config_file, 'r') as f:
+            issue_config = yaml.safe_load(f)
+
+        issue_config["auto"] = {"max_review_iterations": 5}
+
+        with open(issue_config_file, 'w') as f:
+            yaml.dump(issue_config, f)
+
+        # Set config.yaml to have max_review_iterations: 10 (should be USED)
+        config_file = temp_repo_dir / ".cafe" / "config.yaml"
+        with open(config_file, 'r') as f:
+            config_data = yaml.safe_load(f)
+
+        config_data["auto"] = {"max_review_iterations": 10}
+
+        with open(config_file, 'w') as f:
+            yaml.dump(config_data, f)
+
+        # Mock ReviewPhase to succeed
+        with patch('cafe.ui.cli.ReviewPhase') as MockReviewPhase, \
+             patch('cafe.ui.cli.PermissionHandler'), \
+             patch('cafe.ui.cli._setup_agents'), \
+             patch('cafe.ui.cli._execute_next_phase_auto') as mock_next_phase:
+
+            mock_phase = MagicMock()
+            MockReviewPhase.return_value = mock_phase
+
+            mock_result = MagicMock()
+            mock_result.status.value = "completed"
+            mock_result.data = {"status_code": "CAFE_NEEDS_CHANGES"}
+            mock_phase.execute.return_value = mock_result
+
+            # Execute review with --auto
+            result = runner.invoke(app, ["review", "--auto", "--no-interactive"])
+
+            # Should NOT hit the limit (8 < 10), so should call next phase
+            assert mock_next_phase.called, "Should continue to next phase when under limit"
+
+            # Verify it didn't print the limit warning
+            assert "Review loop limit reached" not in result.stdout
+
+    def test_review_respects_config_limit_when_exceeded(self, temp_repo_dir, mock_git_ops, prepared_issue):
+        """測試 review phase 達到 config.yaml 設定的上限時會停止"""
+        from cafe.ui.cli import review
+        from typer.testing import CliRunner
+        from cafe.ui.cli import app
+
+        runner = CliRunner()
+
+        # Setup: Create spec and plan files
+        spec_iter_dir = prepared_issue / "spec" / "iteration_001"
+        spec_iter_dir.mkdir(parents=True, exist_ok=True)
+        spec_file = spec_iter_dir / "output.md"
+        spec_file.write_text("# Test Spec")
+
+        plan_iter_dir = prepared_issue / "plan" / "iteration_001"
+        plan_iter_dir.mkdir(parents=True, exist_ok=True)
+        plan_file = plan_iter_dir / "output.md"
+        plan_file.write_text("# Test Plan")
+
+        # Create 10 review iterations (equal to limit)
+        review_dir = prepared_issue / "review"
+        review_dir.mkdir(exist_ok=True)
+        for i in range(1, 11):
+            review_iter_dir = review_dir / f"iteration_{i:03d}"
+            review_iter_dir.mkdir(exist_ok=True)
+            review_output = review_iter_dir / "output.md"
+            review_output.write_text(f"# Review {i}")
+
+        # Set config.yaml to have max_review_iterations: 10
+        config_file = temp_repo_dir / ".cafe" / "config.yaml"
+        with open(config_file, 'r') as f:
+            config_data = yaml.safe_load(f)
+
+        config_data["auto"] = {"max_review_iterations": 10}
+
+        with open(config_file, 'w') as f:
+            yaml.dump(config_data, f)
+
+        # Mock ReviewPhase to succeed
+        with patch('cafe.ui.cli.ReviewPhase') as MockReviewPhase, \
+             patch('cafe.ui.cli.PermissionHandler'), \
+             patch('cafe.ui.cli._setup_agents'), \
+             patch('cafe.ui.cli._execute_next_phase_auto') as mock_next_phase:
+
+            mock_phase = MagicMock()
+            MockReviewPhase.return_value = mock_phase
+
+            mock_result = MagicMock()
+            mock_result.status.value = "completed"
+            mock_result.data = {"status_code": "CAFE_NEEDS_CHANGES"}
+            mock_phase.execute.return_value = mock_result
+
+            # Execute review with --auto
+            result = runner.invoke(app, ["review", "--auto", "--no-interactive"])
+
+            # Should hit the limit (10 >= 10), so should NOT call next phase
+            assert not mock_next_phase.called, "Should NOT continue to next phase when limit reached"
+
+            # Verify it printed the limit warning
+            assert "Review loop limit reached (10 times)" in result.stdout

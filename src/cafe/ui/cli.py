@@ -2758,22 +2758,13 @@ def review(
 
                 # Auto mode: check max_review_iterations and execute develop if not exceeded
                 if auto:
-                    # Read max_review_iterations from issue config
-                    import yaml
-
-                    issue_config_file = Path(f".cafe/issues/{issue_name}/issue.yaml")
-                    max_iterations = 5  # Default
-                    if issue_config_file.exists():
-                        with open(issue_config_file, "r") as f:
-                            issue_config = yaml.safe_load(f)
-                            max_iterations_value = issue_config.get("auto", {}).get(
-                                "max_review_iterations", 5
-                            )
-                            # Convert to int if it's a string
-                            try:
-                                max_iterations = int(max_iterations_value)
-                            except (ValueError, TypeError):
-                                max_iterations = 5
+                    # Read max_review_iterations from global config
+                    max_iterations_value = config_manager.get("auto.max_review_iterations", 5)
+                    # Convert to int if it's a string
+                    try:
+                        max_iterations = int(max_iterations_value)
+                    except (ValueError, TypeError):
+                        max_iterations = 5
 
                     # Get current review iteration count
                     current_iteration = _get_latest_review_iteration(issue_name)
@@ -2791,9 +2782,6 @@ def review(
                         )
                         console.print(
                             "[dim]  • Adjust limit: [bold]cafe config set auto.max_review_iterations 10[/bold][/dim]"
-                        )
-                        console.print(
-                            f"[dim]  • Or modify .cafe/issues/{issue_name}/issue.yaml[/dim]"
                         )
                     else:
                         # Continue with develop phase
