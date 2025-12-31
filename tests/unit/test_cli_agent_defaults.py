@@ -249,7 +249,7 @@ class TestSpecCommandAgentDefault:
     ):
         """當沒有提供 --pm flag 時, spec 指令應使用 config 中 PM agent 名稱."""
         # Setup: Mock ConfigManager to return 'Alice' as PM agent name
-        with patch("cafe.ui.cli.ConfigManager") as mock_config:
+        with patch("cafe.phases.spec_phase.ConfigManager") as mock_config:
             mock_config_instance = Mock()
 
             def get_side_effect(key, default=None):
@@ -270,12 +270,12 @@ class TestSpecCommandAgentDefault:
             mock_config_instance.get.side_effect = get_side_effect
             mock_config.return_value = mock_config_instance
 
-            # Mock _setup_agents
+            # Mock _setup_agents (imported from cafe.ui.cli)
             with patch("cafe.ui.cli._setup_agents") as mock_setup:
                 mock_setup.return_value = mock_agent_manager.return_value
 
                 # Mock SpecPhase
-                with patch("cafe.ui.cli.SpecPhase") as mock_spec_phase:
+                with patch("cafe.phases.spec_phase.SpecPhase") as mock_spec_phase:
                     mock_phase_instance = Mock()
                     mock_phase_instance.execute.return_value = PhaseResult(
                         status=PhaseStatus.COMPLETED,

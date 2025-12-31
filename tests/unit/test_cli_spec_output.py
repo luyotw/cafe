@@ -27,14 +27,18 @@ def mock_git_ops():
         mock_instance = Mock()
         mock_instance.get_current_branch.return_value = "test-branch"
         mock_instance.get_repo_root.return_value = Path.cwd()
+        mock_instance.is_valid_branch.return_value = True
         mock.return_value = mock_instance
-        yield mock
+
+        # Also patch for spec_phase (used by helper functions imported in spec command)
+        with patch("cafe.phases.spec_phase.GitOperations", return_value=mock_instance):
+            yield mock
 
 
 @pytest.fixture
 def mock_spec_phase():
     """Mock SpecPhase."""
-    with patch("cafe.ui.cli.SpecPhase") as mock:
+    with patch("cafe.phases.spec_phase.SpecPhase") as mock:
         yield mock
 
 
@@ -43,8 +47,20 @@ def mock_agent_manager():
     """Mock AgentManager."""
     with patch("cafe.ui.cli.AgentManager") as mock:
         mock_instance = Mock()
+        mock_executor = Mock()
+        mock_executor.config.cli.value = "copilot"
+        mock_executor.config.session_id = "test-session"
+        mock_executor.config.model = None
+        mock_instance.get_agent.return_value = mock_executor
+        mock_instance.show_prompt = False
         mock.return_value = mock_instance
-        yield mock
+
+        # Also patch ConfigManager for spec command
+        with patch("cafe.phases.spec_phase.ConfigManager") as mock_cfg:
+            mock_cfg_inst = Mock()
+            mock_cfg_inst.get.return_value = "Roger"
+            mock_cfg.return_value = mock_cfg_inst
+            yield mock
 
 
 @pytest.fixture
@@ -53,7 +69,30 @@ def mock_permission_handler():
     with patch("cafe.ui.cli.PermissionHandler") as mock:
         mock_instance = Mock()
         mock.return_value = mock_instance
-        yield mock
+
+        # Also patch for spec_phase
+        with patch("cafe.phases.spec_phase.PermissionHandler", return_value=mock_instance):
+            yield mock
+
+
+@pytest.fixture(autouse=True)
+def mock_cli_helper_functions():
+    """Automatically mock CLI helper functions for spec command."""
+    with patch("cafe.ui.cli._get_and_validate_branch") as mock_validate:
+        with patch("cafe.ui.cli._setup_agents") as mock_setup:
+            mock_validate.return_value = "test-branch"
+
+            # Mock agent manager
+            mock_agent_mgr = Mock()
+            mock_executor = Mock()
+            mock_executor.config.cli.value = "copilot"
+            mock_executor.config.session_id = "test-session"
+            mock_executor.config.model = None
+            mock_agent_mgr.get_agent.return_value = mock_executor
+            mock_agent_mgr.show_prompt = False
+            mock_setup.return_value = mock_agent_mgr
+
+            yield
 
 
 @pytest.fixture
@@ -405,7 +444,7 @@ class TestSpecRigorConfigLoading:
         mock_spec_phase.return_value = mock_phase_instance
 
         # Mock ConfigManager to verify it receives correct config_dir
-        with patch("cafe.ui.cli.ConfigManager") as MockConfigManager:
+        with patch("cafe.phases.spec_phase.ConfigManager") as MockConfigManager:
             mock_config_manager = Mock()
             MockConfigManager.return_value = mock_config_manager
             mock_config_manager.get.return_value = "Roger"
