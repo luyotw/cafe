@@ -6,13 +6,22 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Dict, Any
 
+import typer
+import yaml
+from rich.console import Console
+
 from cafe.agents.manager import AgentManager
 from cafe.core.permission import PermissionHandler
 from cafe.core.phase import Phase
 from cafe.core.status_codes import PhaseStatusCode, StatusCodeParser, generate_status_code_prompt
 from cafe.core.types import PhaseProgress, PhaseResult, PhaseStatus, WorkflowMode
+from cafe.templates.manager import TemplateManager
 from cafe.ui.display import Display
+from cafe.ui.inquirer_prompts import prompt_confirm
+from cafe.utils.config import ConfigManager
 from cafe.utils.git_utils import get_repo_root
+
+console = Console()
 
 # Maximum number of planning iterations to prevent infinite loops
 MAX_PLANNING_ITERATIONS = 10
@@ -722,3 +731,388 @@ Please only return one status code (e.g., CAFE_READY_FOR_REVIEW) without any oth
                         self.template_mode = "manual"
 
 
+
+
+# CLI command
+def plan(
+    ctx: typer.Context,
+    action: Optional[str] = typer.Argument(None, help="Action: edit (to edit latest plan file)"),
+    mode: str = typer.Option(
+        "local",
+        "--mode",
+        "-m",
+        help="Workflow mode: local or github",
+    ),
+    issue_id: Optional[str] = typer.Option(
+        None,
+        "--issue",
+        "-i",
+        help="GitHub issue ID (github mode)",
+    ),
+    dev_agent: Optional[str] = typer.Option(
+        None,
+        "--dev",
+        help="Developer agent name (defaults to config)",
+    ),
+    template: Optional[str] = typer.Option(
+        None,
+        "--template",
+        "-t",
+        help="Plan template name (if not specified, will prompt interactively)",
+    ),
+    config_file: str = typer.Option(
+        ".cafe/config.yaml",
+        "--config",
+        "-c",
+        help="Path to configuration file",
+    ),
+    show_prompt: bool = typer.Option(
+        False,
+        "--show-prompt",
+        help="Show the prompt sent to agent",
+    ),
+    interactive: bool = typer.Option(
+        True,
+        "--interactive/--no-interactive",
+        help="Allow interactive prompts (default: True)",
+    ),
+    auto: bool = typer.Option(
+        False,
+        "--auto",
+        help="Auto mode: automatically continue iterations until CAFE_CONFIRMED",
+    ),
+) -> None:
+    """Run plan phase: Implementation planning with developer agent.
+
+    The developer agent will analyze the specification and create a detailed
+    implementation plan with technical considerations and development guide.
+
+    This command automatically uses the current Git branch name as the issue identifier.
+
+    Use 'cafe plan edit' to edit the latest plan file.
+
+    Examples:
+        # Analyze spec and create plan (uses current branch)
+        cafe plan
+
+        # Auto mode: automatically continue iterations until CAFE_CONFIRMED
+        cafe plan --auto
+
+        # Analyze GitHub issue and create plan
+        cafe plan -m github -i 123
+
+        # Use custom developer agent
+        cafe plan --dev CustomDev
+
+        # Edit latest plan file
+        cafe plan edit
+    """
+    # Import helper functions from cli module
+    from cafe.ui.cli import (
+        _get_and_validate_branch,
+        _get_latest_versioned_file,
+        _edit_file_with_editor,
+        _setup_agents,
+        _execute_next_phase_auto,
+        _handle_phase_exception,
+    )
+    from cafe.core.git import GitOperations
+
+    # Handle edit action
+    if action == "edit":
+        try:
+            # Get and validate current branch
+            issue_name = _get_and_validate_branch(ctx, "plan")
+
+            # Find latest plan file
+            plan_file = _get_latest_versioned_file("plan", issue_name)
+            if not plan_file:
+                console.print(f"[red]Error: No plan file found for issue '{issue_name}'[/red]")
+                console.print("[dim]Hint: Run 'cafe plan' first to create the plan.[/dim]")
+                raise typer.Exit(1)
+
+            # Edit the file
+            _edit_file_with_editor(plan_file)
+            return
+
+        except typer.Exit:
+            raise
+        except Exception as e:
+            console.print(f"[red]Error: {e}[/red]")
+            raise typer.Exit(1)
+
+    try:
+        # Get and validate current branch
+        issue_name = _get_and_validate_branch(ctx, "plan")
+
+        # Validate mode
+        try:
+            workflow_mode = WorkflowMode(mode)
+        except ValueError:
+            console.print(f"[red]Error: Invalid mode '{mode}'. Use 'local' or 'github'.[/red]")
+            raise typer.Exit(1)
+
+        # Check if spec file exists (use latest versioned file)
+        spec_file_path = _get_latest_versioned_file("spec", issue_name)
+        if spec_file_path is None:
+            console.print(f"[red]Error: No spec file found for issue '{issue_name}'[/red]")
+            console.print("[dim]Hint: Run 'cafe spec' first to create the specification.[/dim]")
+            raise typer.Exit(1)
+
+        # Check if plan already exists (any versioned plan file)
+        plan_file_path = _get_latest_versioned_file("plan", issue_name)
+        is_resume = plan_file_path is not None
+
+        # Initialize components
+        config_dir = (
+            str(Path(config_file).parent) if config_file != ".cafe/config.yaml" else ".cafe"
+        )
+        config_manager = ConfigManager(config_dir)
+        agent_manager = _setup_agents(config_manager, issue_name=issue_name)
+        permission_handler = PermissionHandler()
+        git_ops = GitOperations()
+
+        # Set show_prompt flag
+        agent_manager.show_prompt = show_prompt
+
+        # Get developer agent name (from flag or config)
+        if dev_agent is None:
+            dev_agent = config_manager.get("agents.developer.name", "David")
+
+        # Get developer agent CLI
+        dev_executor = agent_manager.get_agent(dev_agent)
+        dev_cli = dev_executor.config.cli.value
+        dev_session_id = dev_executor.config.session_id or "(will be created)"
+
+        # Handle template selection
+        template_manager = TemplateManager(config_dir)
+        selected_template = None
+        template_mode = "auto"  # Track if template is 'auto' or manually specified
+
+        if is_resume:
+            console.print(f"[dim]Resuming existing plan from: {plan_file_path}[/dim]")
+
+        if template:
+            # Template specified via --template option
+            if not template_manager.template_exists(template):
+                console.print(f"[red]Error: Template '{template}' not found[/red]")
+                console.print("[dim]Use 'cafe template list' to see available templates[/dim]")
+                raise typer.Exit(1)
+            selected_template = template
+            template_mode = "manual"
+        elif not is_resume:
+            # No template specified and not resuming
+            # First, try to load template from issue.yaml
+            issue_config_file = Path(f".cafe/issues/{issue_name}/issue.yaml")
+            template_from_config = None
+
+            if issue_config_file.exists():
+                try:
+                    with open(issue_config_file, "r") as f:
+                        issue_config = yaml.safe_load(f)
+                    template_from_config = issue_config.get("plan", {}).get("template")
+                except Exception:
+                    pass  # Ignore config read errors, will prompt user
+
+            if template_from_config:
+                # Use template from config
+                selected_template = template_from_config
+                if template_from_config == "auto":
+                    template_mode = "auto"
+                else:
+                    template_mode = "manual"
+                console.print(f"[dim]Using template from config: {template_from_config}[/dim]")
+            else:
+                # No template in config - need to select one for first iteration
+                if interactive:
+                    # Interactive mode: prompt user to select 'auto' or a specific template
+                    import sys
+                    is_interactive = sys.stdin.isatty()
+
+                    if is_interactive:
+                        from cafe.ui.template_selector import select_template
+
+                        templates = template_manager.list_templates()
+                        template_paths = {name: template_manager.get_template_path(name) for name in templates}
+                        selected_template = select_template(templates, template_paths)
+
+                        if selected_template == "auto":
+                            template_mode = "auto"
+                        else:
+                            template_mode = "manual"
+                    else:
+                        # Non-interactive but interactive flag set (piped stdin)
+                        # Default to auto mode
+                        selected_template = "auto"
+                        template_mode = "auto"
+                else:
+                    # Non-interactive mode with no --template: default to auto
+                    selected_template = "auto"
+                    template_mode = "auto"
+
+        # Display start message
+        console.print("[bold blue]📋 Plan Phase: Implementation Planning[/bold blue]")
+        console.print(f"Issue: {issue_name}")
+        console.print(f"Developer Agent: {dev_agent}")
+        dev_model = dev_executor.config.model or "default"
+        console.print(f"CLI: {dev_cli}")
+        console.print(f"Model: {dev_model}")
+        console.print(f"Session ID: {dev_session_id}")
+        if workflow_mode == WorkflowMode.LOCAL:
+            console.print(f"Spec file: {spec_file_path}")
+        elif issue_id:
+            console.print(f"GitHub Issue: #{issue_id}")
+        if selected_template:
+            if template_mode == "auto":
+                console.print("[dim]Template mode: auto (agent will decide)[/dim]")
+            else:
+                console.print(f"[dim]Template: {selected_template}[/dim]")
+        console.print()
+
+        # Get template path if manually selected (not auto)
+        template_path_str = None
+        if selected_template and template_mode == "manual":
+            template_path_obj = template_manager.get_template_path(selected_template)
+            if template_path_obj:
+                template_path_str = str(template_path_obj)
+
+        # Create and execute plan phase
+        # Note: spec_file parameter is deprecated, PlanPhase computes latest versioned files internally
+        phase = PlanPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            git_ops=git_ops,
+            spec_file=(
+                str(spec_file_path) if spec_file_path else ""
+            ),  # Deprecated - computed internally
+            workflow_mode=workflow_mode,
+            issue_id=issue_id,
+            issue_name=issue_name,
+            dev_agent=dev_agent,
+            interactive=interactive,
+            template_path=template_path_str,
+            template_mode=template_mode,  # Pass template mode to plan phase
+        )
+
+        # Determine if should be interactive
+        import sys
+
+        is_interactive = interactive and sys.stdin.isatty()
+
+        # Validate auto mode constraints
+        if auto and not is_interactive:
+            console.print("[red]Error: --auto can only be used in interactive mode[/red]")
+            raise typer.Exit(1)
+
+        console.print("[bold]Starting implementation planning...[/bold]")
+        console.print(
+            "[dim]The developer will analyze technical feasibility and create implementation plan.[/dim]"
+        )
+        if auto:
+            console.print(
+                "[dim]🤖 Auto mode: will automatically continue iterations until CAFE_CONFIRMED[/dim]"
+            )
+        console.print()
+
+        # Execute phase iterations (with recursion for auto-continue)
+        def execute_iteration(iteration_count=1):
+            """Execute one iteration and optionally continue to next"""
+            if iteration_count > 1:
+                console.print(f"\n[bold cyan]━━━ Iteration {iteration_count} ━━━[/bold cyan]\n")
+
+            # Execute phase
+            result = phase.execute()
+
+            # Check result status
+            if result.status.value != "completed":
+                return result  # Phase failed
+
+            status_code = result.data.get("status_code")
+            if not status_code:
+                return result  # No valid status code
+
+            # Check if we should continue
+            if status_code == "CAFE_CONFIRMED":
+                return result  # Reached final state
+
+            elif status_code in ["CAFE_NEED_CLARIFICATION", "CAFE_READY_FOR_REVIEW"]:
+                # Only continue iterations in interactive mode (with or without --auto)
+                if not is_interactive:
+                    # Non-interactive mode: stop after first iteration
+                    return result
+
+                # Show brief status
+                console.print()
+                if status_code == "CAFE_NEED_CLARIFICATION":
+                    console.print("[yellow]💬 Agent needs clarification[/yellow]")
+                else:  # CAFE_READY_FOR_REVIEW
+                    console.print("[yellow]📋 Plan ready for review[/yellow]")
+
+                # Decide whether to continue
+                should_continue = False
+                if auto:
+                    # Auto mode: continue automatically
+                    console.print("[dim]Auto mode: continuing to next iteration...[/dim]")
+                    should_continue = True
+                else:
+                    # Interactive mode: ask user
+                    should_continue = prompt_confirm(
+                        message="Continue to next iteration?", default=True
+                    )
+
+                if should_continue:
+                    console.print("[dim]Continuing...[/dim]")
+                    return execute_iteration(iteration_count + 1)
+                else:
+                    console.print("[dim]Stopped by user.[/dim]")
+                    return result
+            else:
+                # Unknown status
+                console.print(f"\n[bold yellow]⚠️  Unknown status code: {status_code}[/bold yellow]")
+                return result
+
+        # Start execution
+        result = execute_iteration()
+
+        # Display result
+        if result.status.value == "completed":
+            console.print()
+            status_code = result.data.get("status_code")
+
+            if status_code == "CAFE_NEED_CLARIFICATION":
+                console.print("[bold yellow]💬 Agent needs clarification[/bold yellow]")
+                console.print(f"Iterations: {result.data.get('iterations', 'N/A')}")
+                plan_file = result.data.get("plan_file")
+                if plan_file:
+                    console.print(f"Saved to: {plan_file}")
+                console.print()
+                console.print("[dim]To continue, run:[/dim] [bold]cafe plan[/bold]")
+            elif status_code == "CAFE_READY_FOR_REVIEW":
+                console.print("[bold yellow]📋 Plan ready for review[/bold yellow]")
+                console.print(f"Iterations: {result.data.get('iterations', 'N/A')}")
+                plan_file = result.data.get("plan_file")
+                if plan_file:
+                    console.print(f"Saved to: {plan_file}")
+                console.print()
+                console.print("[dim]To review the plan, run:[/dim] [bold]cafe plan[/bold]")
+            else:
+                # CAFE_CONFIRMED
+                console.print("[bold green]✅ Implementation plan completed![/bold green]")
+                console.print(f"Iterations: {result.data.get('iterations', 'N/A')}")
+                plan_file = result.data.get("plan_file")
+                if plan_file:
+                    console.print(f"Saved to: {plan_file}")
+                console.print()
+
+                # Auto mode: execute next phase
+                if auto:
+                    _execute_next_phase_auto("develop", issue_name)
+                else:
+                    console.print("[dim]Next step:[/dim] [bold]cafe develop[/bold]")
+        else:
+            console.print()
+            console.print(f"[bold red]❌ Plan phase failed: {result.message}[/bold red]")
+            raise typer.Exit(1)
+
+    except Exception as e:
+        _handle_phase_exception(e, "plan", auto=auto)
