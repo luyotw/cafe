@@ -6,6 +6,7 @@ import subprocess
 from pathlib import Path
 from typing import Optional
 
+import typer
 import yaml
 
 from cafe.agents.manager import AgentManager
@@ -873,4 +874,234 @@ Based on the following conditions, determine which status code to return:
 - CAFE_CONFIRMED: Both files exist and have complete content
 
 Please return only one status code (example: CAFE_CONFIRMED), with no other content."""
+
+
+def pr(
+    ctx: "typer.Context",
+    base: str = typer.Option(
+        "main",
+        "--base",
+        "-b",
+        help="Base branch for PR (default: main)",
+    ),
+    draft: Optional[bool] = typer.Option(
+        None,
+        "--draft/--no-draft",
+        help="Create as draft PR (default: ask in interactive mode, True in non-interactive)",
+    ),
+    title: Optional[str] = typer.Option(
+        None,
+        "--title",
+        "-t",
+        help="Custom PR title (leave empty for auto-generation)",
+    ),
+    body: Optional[str] = typer.Option(
+        None,
+        "--body",
+        help="Custom PR body (leave empty for auto-generation)",
+    ),
+    update: bool = typer.Option(
+        False,
+        "--update",
+        help="Force regenerate PR title/body even if they already exist",
+    ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help="Force push to remote (use with caution)",
+    ),
+    auto: bool = typer.Option(
+        False,
+        "--auto",
+        help="Auto mode: automatically update existing PR without asking",
+    ),
+    config_file: str = typer.Option(
+        ".cafe/config.yaml",
+        "--config",
+        help="Path to configuration file",
+    ),
+    interactive: bool = typer.Option(
+        True,
+        "--interactive/--no-interactive",
+        help="Allow interactive prompts (default: True)",
+    ),
+) -> None:
+    """Create pull request for the issue.
+
+    The PR phase will push the feature branch and create a GitHub Pull Request.
+
+    This command automatically uses the current Git branch name as the issue identifier.
+
+    Examples:
+        # Create draft PR (uses current branch, interactive mode will ask for confirmation)
+        cafe pr
+
+        # Create non-draft PR
+        cafe pr --no-draft
+
+        # Create PR with custom title and body
+        cafe pr --title "Add user authentication" --body "Implements login/logout"
+
+        # Non-interactive mode (creates draft PR by default)
+        cafe pr --no-interactive
+    """
+    import subprocess
+    import typer
+    from rich.console import Console
+    from cafe.ui.cli import (
+        _get_and_validate_branch,
+        _get_latest_versioned_file,
+        _setup_agents,
+        _handle_phase_exception,
+        _execute_next_phase_auto,
+    )
+    from cafe.core.permission import PermissionHandler
+    from cafe.core.types import WorkflowMode
+    from cafe.utils.config import ConfigManager
+    from cafe.utils.github import GitHubOps
+
+    console = Console()
+
+    try:
+        # Get and validate current branch
+        issue_name = _get_and_validate_branch(ctx, "pr")
+
+        # Get latest versioned files
+        spec_file_path = _get_latest_versioned_file("spec", issue_name)
+        if spec_file_path is None:
+            console.print(f"[red]Error: No spec file found for issue '{issue_name}'[/red]")
+            console.print("[dim]Hint: Run 'cafe spec' first to create the specification.[/dim]")
+            raise typer.Exit(1)
+
+        plan_file_path = _get_latest_versioned_file("plan", issue_name)
+        if plan_file_path is None:
+            console.print(f"[red]Error: No plan file found for issue '{issue_name}'[/red]")
+            console.print("[dim]Hint: Run 'cafe plan' first to create the plan.[/dim]")
+            raise typer.Exit(1)
+
+        # Convert to strings for compatibility
+        spec_file = str(spec_file_path)
+        plan_file = str(plan_file_path)
+
+        # Initialize components
+        config_dir = (
+            str(Path(config_file).parent) if config_file != ".cafe/config.yaml" else ".cafe"
+        )
+        config_manager = ConfigManager(config_dir)
+        agent_manager = _setup_agents(config_manager, issue_name=issue_name)
+        permission_handler = PermissionHandler()
+        git_ops = GitOperations()
+
+        github_ops = GitHubOps()
+
+        # Determine final draft value
+        final_draft = draft if draft is not None else True  # Default to draft
+
+        # In auto mode, automatically update existing PR
+        final_update = update or auto
+
+        # Get developer agent name from config (for PR generation)
+        dev_agent = config_manager.get("agents.developer.name", "David")
+
+        # Create PR phase
+        phase = PRPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            git_ops=git_ops,
+            github_ops=github_ops,
+            spec_file=spec_file,
+            workflow_mode=WorkflowMode.LOCAL,  # Always use local mode (no --mode flag)
+            issue_name=issue_name,
+            dev_agent=dev_agent,
+            draft=final_draft,
+            custom_title=title,
+            custom_body=body,
+            update=final_update,
+            force_push=force,
+            interactive=interactive,
+            base_branch=base if base != "main" else None,  # Pass base only if not default
+        )
+
+        result = phase.execute()
+
+        # Display result
+        if result.status.value == "completed":
+            pr_number = result.data.get("pr_number")
+            pr_url = result.data.get("pr_url")
+            is_local_review = result.data.get("local_review", False)
+            status_code = result.data.get("status_code")
+
+            # Only show success message and details for GitHub PR mode
+            # Local review mode already prints its own messages
+            if not is_local_review:
+                console.print()
+                console.print(f"[bold green]✅ {result.message}![/bold green]")
+                console.print()
+
+            if is_local_review:
+                # Local review mode: Show local-specific next steps
+                if status_code == "CAFE_CONFIRMED":
+                    # Read issue config to get base_branch, feature_branch, worktree_path
+                    import yaml
+
+                    issue_config_file = Path(f".cafe/issues/{issue_name}/issue.yaml")
+                    base_branch = "main"
+                    feature_branch = issue_name
+                    worktree_path = None
+
+                    if issue_config_file.exists():
+                        with open(issue_config_file, "r") as f:
+                            issue_config = yaml.safe_load(f)
+                        base_branch = issue_config.get("base_branch", "main")
+                        feature_branch = issue_config.get("feature_branch", issue_name)
+                        worktree_path = issue_config.get("worktree_path")
+
+                    console.print("[dim]Next step: [bold]cafe close[/bold] - this will do[/dim]")
+                    console.print(f"[dim]  1. checkout branch: {base_branch}[/dim]")
+                    console.print(f"[dim]  2. merge branch: {feature_branch}[/dim]")
+                    console.print(f"[dim]  3. delete branch: {feature_branch}[/dim]")
+                    if worktree_path:
+                        console.print(f"[dim]  4. delete worktree: {worktree_path}[/dim]")
+                    console.print()
+                elif status_code == "CAFE_NEEDS_CHANGES":
+                    # If in auto mode, automatically run develop phase
+                    if auto:
+                        # Get the pr feedback file path from result
+                        pr_file = result.data.get("pr_file")
+                        if pr_file:
+                            console.print(f"[dim]Using modification request from: {pr_file}[/dim]")
+                            console.print()
+
+                        # Execute develop phase in auto mode
+                        _execute_next_phase_auto("develop", issue_name)
+            elif pr_url:
+                # GitHub PR mode: Show PR URL and GitHub-specific next steps
+                files_url = pr_url + "/files"
+                console.print(f"[bold cyan]{files_url}[/bold cyan]")
+                console.print()
+                console.print("[dim]Next steps:[/dim]")
+                console.print(
+                    "[dim]  1. Review PR: open the link above or run [bold]gh pr diff --web[/bold][/dim]"
+                )
+                console.print(
+                    "[dim]  2. If OK: [bold]merge[/bold] the PR, then run [bold]cafe close[/bold][/dim]"
+                )
+                console.print(
+                    "[dim]  3. If issues found: add comments and submit review, then run [bold]cafe develop --auto[/bold] (or [bold]cafe make[/bold])[/dim]"
+                )
+
+                # Automatically open PR diff in browser
+                try:
+                    subprocess.run(["gh", "pr", "diff", "--web"], capture_output=True, check=False, timeout=5)
+                except (subprocess.TimeoutExpired, FileNotFoundError):
+                    pass  # Silently ignore timeout or gh not found
+                except Exception:
+                    pass  # Silently ignore any other errors
+        else:
+            console.print()
+            console.print(f"[bold red]❌ PR phase failed: {result.message}[/bold red]")
+            raise typer.Exit(1)
+
+    except Exception as e:
+        _handle_phase_exception(e, "pr", auto=auto)
 
