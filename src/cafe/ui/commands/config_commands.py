@@ -15,7 +15,10 @@ from cafe.ui.inquirer_prompts import prompt_confirm
 
 console = Console()
 
+app = typer.Typer()
 
+
+@app.command()
 def config(
     action: Optional[str] = typer.Argument(
         None, help="Action: set, get, edit, reset, or config key"

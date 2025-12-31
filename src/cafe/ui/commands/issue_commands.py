@@ -15,7 +15,10 @@ from cafe.ui.inquirer_prompts import prompt_confirm
 
 console = Console()
 
+app = typer.Typer()
 
+
+@app.command(name="ls")
 def list_issues() -> None:
     """List all issues."""
     issues_dir = Path(".cafe/issues")
@@ -73,6 +76,7 @@ def list_issues() -> None:
     console.print(f"\n[dim]Total: {len(issues)} issue(s)[/dim]")
 
 
+@app.command(name="rm")
 def remove_issue(
     issue_names: List[str] = typer.Argument(
         ..., help="Names of the issues to delete (supports wildcards like 'test-*')"

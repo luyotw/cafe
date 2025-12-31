@@ -20,7 +20,10 @@ from cafe.utils.github import GitHubError, GitHubOps
 
 console = Console()
 
+app = typer.Typer()
 
+
+@app.command()
 def init() -> None:
     """Initialize CAFE configuration for the project.
 
@@ -192,6 +195,7 @@ def _ensure_default_content(cafe_dir: Path) -> None:
             console.print(f"[yellow]Warning: Could not copy default content - {e}[/yellow]")
 
 
+@app.command()
 def prepare(
     issue_name: Optional[str] = typer.Argument(None, help="Issue name or number (e.g., 'issue123' or '123')"),
     base_branch: str = typer.Option("develop", "--base", "-b", help="Base branch to create from"),
@@ -389,6 +393,7 @@ def _get_project_path() -> str:
         raise typer.Exit(1)
 
 
+@app.command()
 def close() -> None:
     """Close current issue and cleanup.
 

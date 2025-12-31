@@ -16,10 +16,12 @@ from cafe.ui.inquirer_prompts import prompt_confirm, prompt_list, prompt_text
 
 console = Console()
 
-# Create agent sub-application
+# Create apps
+app = typer.Typer()
 agent_app = typer.Typer(help="Manage agents")
 
 
+@app.command()
 def template(
     action: str = typer.Argument(..., help="Action: add, list, or remove"),
     source: Optional[str] = typer.Argument(None, help="Source file path (for 'add' action)"),
@@ -427,3 +429,7 @@ def agent_edit() -> None:
     except FileNotFoundError:
         console.print(f"[red]Error: Editor '{editor}' not found[/red]")
         raise typer.Exit(1)
+
+
+# Register agent sub-app to main resource app
+app.add_typer(agent_app, name="agent")

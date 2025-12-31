@@ -637,16 +637,32 @@ def test() -> None:
         raise typer.Exit(1)
 
 
-# Register commands from modules
-app.command()(config_commands.config)
-app.command()(init_commands.init)
-app.command()(init_commands.prepare)
-app.command()(init_commands.close)
-app.command(name="ls")(issue_commands.list_issues)
-app.command(name="rm")(issue_commands.remove_issue)
-app.command()(resource_commands.template)
+# Register commands from modules - using decorator pattern in modules
+# Extract commands from module apps and register to main app
+def _register_commands_from_app(source_app: typer.Typer) -> None:
+    """Helper to register commands from a Typer app to the main app."""
+    for cmd_info in source_app.registered_commands:
+        # Re-register the command callback to the main app with same metadata
+        cmd_decorator = app.command(
+            name=cmd_info.name,
+            help=cmd_info.help,
+            epilog=cmd_info.epilog,
+            short_help=cmd_info.short_help,
+            hidden=cmd_info.hidden,
+            deprecated=cmd_info.deprecated,
+        )
+        cmd_decorator(cmd_info.callback)
+
+_register_commands_from_app(config_commands.app)
+_register_commands_from_app(init_commands.app)
+_register_commands_from_app(issue_commands.app)
+_register_commands_from_app(show_commands.app)
+_register_commands_from_app(resource_commands.app)
+
+# Register resource agent subgroup
 app.add_typer(resource_commands.agent_app, name="agent")
-app.command()(show_commands.show)
+
+# Register phase commands
 app.command()(spec_command)
 app.command()(plan_command)
 app.command()(develop_command)

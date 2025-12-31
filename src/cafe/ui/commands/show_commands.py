@@ -11,6 +11,8 @@ from cafe.core.git import GitOperations
 
 console = Console()
 
+app = typer.Typer()
+
 # Constants for cafe show command
 VALID_PHASES = ["spec", "plan", "develop", "review", "pr"]
 VALID_CONTENT_TYPES = [
@@ -158,6 +160,7 @@ def _get_latest_review_iteration(issue_name: str) -> int:
         return 0
 
 
+@app.command()
 def show(
     phase_name: str = typer.Argument(
         ...,
