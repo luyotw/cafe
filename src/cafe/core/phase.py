@@ -531,8 +531,8 @@ class Phase(ABC):
                 print(f"❌ Could not recover from error")
 
                 # Update iteration history including error information and CLI arguments
-                if iteration_file.exists():
-                    with open(iteration_file, "r", encoding="utf-8") as f:
+                if context_file.exists():
+                    with open(context_file, "r", encoding="utf-8") as f:
                         history_data = json.load(f)
 
                     history_data["response"] = None
@@ -550,7 +550,7 @@ class Phase(ABC):
                         # Explicitly mark as None, convenient for subsequent debugging to see "no available CLI arguments"
                         history_data.setdefault("cli_command_args", None)
 
-                    with open(iteration_file, "w", encoding="utf-8") as f:
+                    with open(context_file, "w", encoding="utf-8") as f:
                         json.dump(history_data, f, ensure_ascii=False, indent=2)
 
                 # Re-raise to let phase handle failure
