@@ -3904,6 +3904,112 @@ def show(
         raise typer.Exit(1)
 
 
+@app.command(name="cli", context_settings={"allow_extra_args": False, "ignore_unknown_options": False})
+def invoke_cli(
+    ctx: typer.Context,
+    role: str = typer.Argument(..., help="Role: pm, developer, or reviewer"),
+) -> None:
+    """開啟與指定角色 Agent 的互動式對話
+
+    此命令讓你能夠快速與指定角色的 Agent 進行互動，無需手動查找和輸入 session id。
+    系統會自動從當前分支推斷 issue，並載入對應的 session。
+
+    支援的角色：
+    - pm: 產品經理 Agent
+    - developer: 開發者 Agent
+    - reviewer: 審查者 Agent
+
+    範例：
+        cafe cli pm
+        cafe cli developer
+        cafe cli reviewer
+    """
+    # 1. 驗證 role 參數
+    valid_roles = ["pm", "developer", "reviewer"]
+    if role not in valid_roles:
+        console.print(f"[red]Error: Invalid role '{role}'. Must be one of: {', '.join(valid_roles)}[/red]")
+        raise typer.Exit(1)
+
+    # 2. 取得當前分支作為 issue name
+    issue_name = _get_and_validate_branch(ctx, "cli")
+
+    # 3. 載入設定
+    config_manager = ConfigManager()
+
+    # 4. 從 config 取得對應角色的 agent 設定
+    agent_config = config_manager.get(f"agents.{role}", None)
+
+    if agent_config is None:
+        console.print(f"[red]Error: No agent configured for role '{role}'.[/red]")
+        console.print(f"[yellow]Please configure an agent for '{role}' in .cafe/config.yaml[/yellow]")
+        raise typer.Exit(1)
+
+    agent_name = agent_config.get("name")
+    agent_cli = agent_config.get("cli")
+    agent_model = agent_config.get("model")
+
+    if not agent_name or not agent_cli:
+        console.print(f"[red]Error: Invalid agent configuration for role '{role}'.[/red]")
+        console.print(f"[yellow]Please ensure 'name' and 'cli' are configured in .cafe/config.yaml[/yellow]")
+        raise typer.Exit(1)
+
+    # 5. 設定 agent manager（會自動載入 session）
+    agent_manager = _setup_agents(config_manager, issue_name=issue_name)
+
+    # 6. 取得該 agent 的 executor
+    try:
+        agent_executor = agent_manager.get_agent(agent_name)
+    except Exception as e:
+        console.print(f"[red]Error: Failed to get agent '{agent_name}': {e}[/red]")
+        raise typer.Exit(1)
+
+    # 7. 取得 session ID（如果存在）
+    session_id = agent_executor.config.session_id
+
+    # 8. 建立並執行互動式 CLI 命令
+    console.print(f"[bold blue]Opening interactive CLI for {role} ({agent_name})...[/bold blue]")
+    console.print(f"[dim]Issue: {issue_name}[/dim]")
+    console.print(f"[dim]CLI: {agent_cli}[/dim]")
+    if session_id:
+        console.print(f"[dim]Session: {session_id}[/dim]")
+    console.print()
+
+    # 建立 CLI 命令
+    cli_command = [agent_cli]
+
+    # 加入 session 參數（如果存在）
+    if session_id:
+        if agent_cli == "claude":
+            cli_command.extend(["--resume", session_id])
+        elif agent_cli == "copilot":
+            cli_command.extend(["--session", session_id])
+        elif agent_cli == "gemini":
+            cli_command.extend(["--session-id", session_id])
+        elif agent_cli == "cursor-agent":
+            cli_command.extend(["--session", session_id])
+
+    # 加入 model 參數（如果存在）
+    if agent_model:
+        if agent_cli == "claude":
+            cli_command.extend(["--model", agent_model])
+        elif agent_cli == "copilot":
+            cli_command.extend(["--model", agent_model])
+        elif agent_cli == "gemini":
+            cli_command.extend(["--model", agent_model])
+
+    # 執行互動式 CLI
+    try:
+        result = subprocess.run(cli_command)
+        raise typer.Exit(result.returncode)
+    except FileNotFoundError:
+        console.print(f"[red]Error: CLI tool '{agent_cli}' not found.[/red]")
+        console.print(f"[yellow]Please install '{agent_cli}' CLI tool first.[/yellow]")
+        raise typer.Exit(1)
+    except Exception as e:
+        console.print(f"[red]Error: Failed to execute CLI: {e}[/red]")
+        raise typer.Exit(1)
+
+
 @app.command()
 def test() -> None:
     """🧪 Simulate agent execution test (for reproducing contamination issues).
