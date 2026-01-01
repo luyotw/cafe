@@ -80,9 +80,12 @@ class DevelopPhase(Phase):
             # Derive from current branch name (via issue_dir)
             self.issue_name = self.issue_dir.name
 
+        # Phase directory for develop phase (required by base class)
+        self.phase_dir = self.issue_dir / "develop"
+
         # History directory for develop phase
         # Path: .cafe/issues/{issue_name}/develop/history
-        self.history_dir = self.issue_dir / "develop" / "history"
+        self.history_dir = self.phase_dir / "history"
 
         # Track user responses for permission requests
         self.user_responses: List[str] = []
@@ -149,24 +152,27 @@ class DevelopPhase(Phase):
     def _get_review_file_path(self) -> Path:
         """Get full path to review file.
 
-        Prioritizes returning the latest review_XXX.md file. Falls back to review.md if no numbered file exists (backward compatible).
+        Returns the latest iteration_XXX/output.md file.
 
         Returns:
             Path object of review file
         """
         spec_path = Path(self.spec_file)
-        issue_dir = spec_path.parent.parent  # .cafe/issues/{issue_name}
+        # spec_file is like .cafe/issues/{issue_name}/spec/iteration_XXX/output.md
+        # Go up: output.md -> iteration_XXX -> spec -> issue_name
+        issue_dir = spec_path.parent.parent.parent
         review_dir = issue_dir / "review"
 
-        # Find all review_XXX.md files
+        # Find all iteration_XXX/output.md files
         if review_dir.exists():
-            numbered_reviews = sorted(review_dir.glob("review_*.md"))
-            if numbered_reviews:
-                # Return the latest numbered review file
-                return numbered_reviews[-1]
+            iteration_files = sorted(review_dir.glob("iteration_*/output.md"))
+            if iteration_files:
+                # Return the latest iteration file
+                return iteration_files[-1]
 
-        # Fallback to review.md for backward compatibility
-        return review_dir / "review.md"
+        # If no iteration files found, construct the expected path
+        # This will be used even if the file doesn't exist yet
+        return review_dir / "iteration_001" / "output.md"
 
     def _check_review_feedback_exists(self) -> bool:
         """Check if review feedback exists that needs to be addressed.
@@ -198,7 +204,9 @@ class DevelopPhase(Phase):
             Review status dict if exists, None otherwise
         """
         spec_path = Path(self.spec_file)
-        issue_dir = spec_path.parent.parent
+        # spec_file is like .cafe/issues/{issue_name}/spec/iteration_XXX/output.md
+        # Go up: output.md -> iteration_XXX -> spec -> issue_name
+        issue_dir = spec_path.parent.parent.parent
         review_status_file = issue_dir / "review" / "status.json"
 
         if not review_status_file.exists():
@@ -469,12 +477,16 @@ class DevelopPhase(Phase):
         """
         from cafe.ui.inquirer_prompts import prompt_multiline
 
-        # Find the latest develop clarification file
+        # Find the latest develop clarification file (iteration_XXX/output.md format)
         develop_dir = self.issue_dir / "develop"
-        develop_files = sorted(develop_dir.glob("develop_*.md"))
 
-        if develop_files:
-            latest_develop_file = develop_files[-1]
+        latest_develop_file = None
+        if develop_dir.exists():
+            iteration_files = sorted(develop_dir.glob("iteration_*/output.md"))
+            if iteration_files:
+                latest_develop_file = iteration_files[-1]
+
+        if latest_develop_file and latest_develop_file.exists():
             print(f"\n{'='*60}")
             print(f"Dev ({self.dev_agent}):")
             print(f"{'='*60}")
@@ -483,6 +495,13 @@ class DevelopPhase(Phase):
             print(f"{'='*60}\n")
             print("💡 Developer needs clarification.")
             print()
+        else:
+            # No clarification file found - this shouldn't happen
+            print(f"\n{'='*60}")
+            print("⚠️  No clarification file found")
+            print(f"{'='*60}")
+            print(f"Expected location: {develop_dir}/iteration_XXX/output.md")
+            print(f"{'='*60}\n")
 
         return prompt_multiline("Please answer the question")
 
@@ -521,15 +540,15 @@ class DevelopPhase(Phase):
         it means the user has already answered the clarification question.
 
         Args:
-            develop_file: develop clarification file path (e.g. develop_001.md)
+            develop_file: develop clarification file path (e.g. iteration_001/output.md)
 
         Returns:
             True if already answered in any subsequent iteration, False otherwise
         """
-        # Extract iteration number from develop file name
-        # develop_001.md -> 1
+        # Extract iteration number from develop file path
+        # iteration_001/output.md -> 1
         import re
-        match = re.search(r'develop_(\d+)\.md', develop_file.name)
+        match = re.search(r'iteration_(\d+)', str(develop_file))
         if not match:
             return False
 
@@ -722,16 +741,19 @@ class DevelopPhase(Phase):
   - Message is one line (subject line only) or multiple lines (subject + body)
 """
 
-        clarification_note = """
+        # Get the develop file path for current iteration
+        develop_dir = self.issue_dir / "develop"
+        develop_file_path = develop_dir / f"iteration_{self.iteration:03d}" / "output.md"
+
+        clarification_note = f"""
 Clarification can be requested only in these two cases, **any other situation strictly prohibits clarification requests**:
 - Requested actions conflict with the agent's behavioral guidelines
 - Encountering technical problems beyond current capability
 
 Steps for requesting clarification:
-1. Return `CAFE_NEED_CLARIFICATION` status code
-2. Clearly describe the clarification questions in the response (can use bullet points)
-3. The system will save your questions to develop_XXX.md file (in your native language)
-4. After user replies, the system will provide the file for you to read on next execution
+1. Confirm again that your question meets the above conditions
+2. Write your question clearly to {develop_file_path}
+3. Return CAFE_NEED_CLARIFICATION only, with no other content
 
 ⚠️ **Important:** Write the markdown content in your native language (the language you were configured with).
 """
@@ -1071,11 +1093,11 @@ Please return only one status code (example: CAFE_CONFIRMED), with no other cont
     def _detect_written_output_files(self) -> List[Path]:
         """Check if develop file was written before failure.
 
-        DevelopPhase uses develop_{iteration}.md to record CAFE_NEED_CLARIFICATION questions.
+        DevelopPhase uses iteration_XXX/output.md to record CAFE_NEED_CLARIFICATION questions.
 
         Returns:
-            List[Path]: Return list containing develop_{iteration}.md if it exists, otherwise empty list
+            List[Path]: Return list containing iteration_XXX/output.md if it exists, otherwise empty list
         """
         develop_dir = self.issue_dir / "develop"
-        develop_file = develop_dir / f"develop_{self.iteration:03d}.md"
+        develop_file = develop_dir / f"iteration_{self.iteration:03d}" / "output.md"
         return [develop_file] if develop_file.exists() else []

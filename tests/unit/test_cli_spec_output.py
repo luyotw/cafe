@@ -118,6 +118,7 @@ class TestSpecCommandOutputWithReadyForReview:
             data={
                 "iterations": 1,
                 "status_code": "CAFE_READY_FOR_REVIEW",
+                "spec_file": ".cafe/issues/test-branch/spec/iteration_001/output.md",
             },
         )
         mock_spec_phase.return_value = mock_phase_instance
@@ -125,7 +126,7 @@ class TestSpecCommandOutputWithReadyForReview:
         result = runner.invoke(app, ["spec", "--interactive", "--user-input", "test"])
 
         assert result.exit_code == 0
-        assert "Saved to: .cafe/issues/test-branch/spec" in result.stdout
+        assert "Saved to: .cafe/issues/test-branch/spec/iteration_001/output.md" in result.stdout
 
 
 class TestSpecCommandOutputWithConfirmed:

@@ -123,10 +123,6 @@ class SpecPhase(Phase):
         # Path: .cafe/issues/{issue_name}/spec
         self.phase_dir = self.issue_dir / "spec"
 
-        # History directory for spec phase
-        # Path: .cafe/issues/{issue_name}/spec/history
-        self.history_dir = self.phase_dir / "history"
-
         # spec_file will be set in execute() based on iteration number
         self.spec_file: str = ""
 
@@ -151,11 +147,11 @@ class SpecPhase(Phase):
         self.iteration = self._load_iteration_counter()
 
         # Load phase-specific data from last iteration
-        if self.iteration > 0 and self.history_dir.exists():
-            iteration_files = sorted(self.history_dir.glob("iteration_*.json"))
-            if iteration_files:
-                last_iteration_file = iteration_files[-1]
-                with open(last_iteration_file, "r", encoding="utf-8") as f:
+        if self.iteration > 0:
+            existing_iterations = sorted(self.phase_dir.glob("iteration_*/context.json"))
+            if existing_iterations:
+                last_context_file = existing_iterations[-1]
+                with open(last_context_file, "r", encoding="utf-8") as f:
                     last_data = json.load(f)
                 if "confirmed_requirements" in last_data:
                     self.confirmed_requirements = last_data["confirmed_requirements"]
@@ -377,6 +373,22 @@ class SpecPhase(Phase):
             # In mock mode or if agent doesn't use write tool, write spec from response
             self._ensure_spec_file_written(response)
 
+            # Verify agent followed instructions: check if content is in file (not response)
+            verification_result, final_response = self._verify_output_format(
+                agent_name=self.pm_agent,
+                response=response,
+                spec_file_pattern=spec_file_pattern,
+                allowed_tools=allowed_tools,
+                valid_status_codes=[
+                    PhaseStatusCode.READY_FOR_REVIEW,
+                    PhaseStatusCode.NEED_CLARIFICATION,
+                ],
+            )
+
+            # Use the final response (either original or corrected)
+            if final_response:
+                response = final_response
+
             # Phase-specific post-processing: Sync spec to GitHub (no-op in local mode)
             self._sync_spec_to_github("")
 
@@ -451,7 +463,12 @@ class SpecPhase(Phase):
                 print(f"Warning: Failed to post spec to GitHub issue: {e}")
 
         # Always include spec_file in completion data (Issue 1: Add full file path)
-        data["spec_file"] = self.spec_file
+        # Find the latest existing output.md file (in case current iteration doesn't have one)
+        latest_output = self._get_latest_versioned_file("spec", self.phase_dir)
+        if latest_output:
+            data["spec_file"] = str(latest_output)
+        elif hasattr(self, 'spec_file'):
+            data["spec_file"] = self.spec_file
 
         return data
 
@@ -894,8 +911,10 @@ Read {current_spec_file}  for initial requirements content."""
             context_section = """
 **Your Responsibilities:**
 1. Carefully read requirements document, identify all unclear, vague, or areas that might require developers to make assumptions.
-2. **As PM** ask users conversationally to confirm all necessary information.
-3. If requirements are already clear, say so, do not force questions.
+2. **Before asking questions**: Try to find answers from README.md or codebase first using Read/Grep tools.
+3. **Only ask when necessary**: If you cannot find the answer from existing documentation/code, then ask users.
+4. **As PM** ask users conversationally to confirm all necessary information.
+5. If requirements are already clear, say so, do not force questions.
 """
         else:  # Iteration 2+
             # Round 2 onwards: Read previous round spec file and user_input, write new spec file
@@ -925,39 +944,59 @@ Read {current_spec_file}  for initial requirements content."""
         
         role_reading_instruction = f"""
 **Execution Steps:**
-1. Use Read tool to read {agent_file} to understand your role definition and work guidelines
+1. Use Read tool to read {agent_file} to find you native language
+2. Understand your role definition and work guidelines from {agent_file}
 """
         
         if self.iteration == 1:
-            role_reading_instruction += f"""2. Use Read tool to read {current_spec_file} to understand initial requirements content, then read README.md for more context
-3. Modify {current_spec_file}，Add analysis results (including original requirements, user stories, current specification, questions to clarify)
+            role_reading_instruction += f"""3. Use Read tool to read {current_spec_file} to understand initial requirements content, then read README.md for more context
+4. Modify {current_spec_file}，Add analysis results (including original requirements, user stories, current specification, questions to clarify)
 """
         else:
-            role_reading_instruction += f"""2. Use Read tool to read {prev_spec_file}(previous round analysis results)
-3. Integrate user's latest answers
-4. Modify {current_spec_file}，Update analysis results (new version)
+            role_reading_instruction += f"""3. Use Read tool to read {prev_spec_file}(previous round analysis results)
+4. Integrate user's latest answers
+5. Modify {current_spec_file}，Update analysis results (new version)
 """
 
         base_prompt = f"""
-**Your Role:**
-PM (Product Manager), responsible for requirements clarification. Please read {agent_file} to understand your role definition and work guidelines, then strictly execute according to role definition requirements."""
+**Your Role:** PM (Product Manager)
+Read {agent_file} to understand your role and responsibilities."""
 
-        need_clarification_instruction = f"""**If clarification needed (status: CAFE_NEED_CLARIFICATION):**
-Write the following content to {current_spec_file}：
-   - 「## Original Requirements Description」- **Fully preserve** the original requirements initially provided by user, cannot modify (unless user explicitly requests).
-   - 「## User Stories」- User stories written by user or automatically generated from requirements description.
-   - 「## Current Requirements Specification」- Integrate all known information (including user stories, previous conversations, user's latest answers), list complete known requirements.
-   - 「## Questions to Clarify」- As PM ask conversationally to deeply clarify requirements.
+        output_format = f"""
+**⚠️ CRITICAL: Output Format**
+1. Write ALL content (requirements, questions, specifications) to {current_spec_file}
+2. Return ONLY the status code in your response
+3. ❌ NEVER put questions or content in your response
+4. ✅ Questions go in the markdown file, response contains ONLY status code
 
-⚠️ **Important:** Write the markdown content in your native language (the language you were configured with)."""
+**Why this matters:**
+If you put questions in your response instead of the file, the workflow CANNOT continue.
+The user will NOT see your questions, and the process will be stuck.
 
-        confirmed_instruction = f"""**If requirements are clear (status: CAFE_READY_FOR_REVIEW):**
-Write complete requirements specification document to {current_spec_file}, format:
-   - 「## Original Requirements Description」- **Fully preserve** the original requirements initially provided by user, cannot modify (unless user explicitly requests).
-   - 「## User Stories」- User stories written by user or automatically generated from requirements description.
-   - 「## Requirements Specification」- Integrate all confirmed content, produce final complete requirements specification, including function descriptions, usage scenarios, expected behaviors, acceptance criteria, etc.
+**Example (CORRECT):**
+- File {current_spec_file}: Contains all questions and specifications
+- Your response: "CAFE_NEED_CLARIFICATION"
 
-⚠️ **Important:** Write the markdown content in your native language (the language you were configured with)."""
+**Example (WRONG - workflow will fail):**
+- Your response: "I have some questions: 1. What is...? CAFE_NEED_CLARIFICATION" ← ❌ DO NOT DO THIS
+"""
+
+        need_clarification_instruction = f"""**Status: CAFE_NEED_CLARIFICATION**
+Write to {current_spec_file}:
+   - ## Original Requirements Description (preserve exactly as provided)
+   - ## User Stories (from user or auto-generated)
+   - ## Current Requirements Specification (integrate all known info)
+   - ## Questions to Clarify (PM asks conversational questions)
+
+Response: "CAFE_NEED_CLARIFICATION" (nothing else)"""
+
+        confirmed_instruction = f"""**Status: CAFE_READY_FOR_REVIEW**
+Write to {current_spec_file}:
+   - ## Original Requirements Description (preserve exactly as provided)
+   - ## User Stories (from user or auto-generated)
+   - ## Requirements Specification (complete spec with functions, scenarios, behaviors, acceptance criteria)
+
+Response: "CAFE_READY_FOR_REVIEW" (nothing else)"""
 
         # --- 3. Assemble the final prompt ---
         return f"""{initial_instruction}
@@ -968,10 +1007,12 @@ Write complete requirements specification document to {current_spec_file}, forma
 
 {non_technical}
 
+{output_format}
+
 {status_code_prompt}
 {restriction}
-{need_clarification_instruction}
 
+{need_clarification_instruction}
 {confirmed_instruction}
 """
 
@@ -1119,3 +1160,87 @@ Please return only one status code (e.g., CAFE_READY_FOR_REVIEW), no other conte
         """
         spec_file = self._get_versioned_file_path("spec", self.iteration, self.phase_dir)
         return [Path(spec_file)] if Path(spec_file).exists() else []
+
+    def _verify_output_format(
+        self,
+        agent_name: str,
+        response: str,
+        spec_file_pattern: str,
+        allowed_tools: List[str],
+        valid_status_codes: List[PhaseStatusCode],
+    ) -> tuple[Optional[PhaseResult], Optional[str]]:
+        """Verify that agent followed output format instructions.
+
+        Checks:
+        1. Is content written to the markdown file (not in response)?
+        2. Is the markdown file written in the agent's native language?
+
+        Args:
+            agent_name: Name of the agent
+            response: Agent's response
+            spec_file_pattern: File pattern for spec file
+            allowed_tools: Tools allowed for agent
+            valid_status_codes: Valid status codes
+
+        Returns:
+            Tuple of (verification_result, final_response)
+            - verification_result: PhaseResult if verification failed, None if ok
+            - final_response: Updated response if agent corrected the output, None to use original
+        """
+        from cafe.core.status_codes import StatusCodeParser
+        from cafe.agents.manager import AgentManager
+
+        # Extract status code from response
+        status_code = StatusCodeParser.extract(response)
+        if not status_code:
+            return None, None
+
+        # Read spec file to check content
+        spec_path = Path(self.spec_file)
+        if not spec_path.exists():
+            # File doesn't exist - agent didn't write anything
+            return None, None
+
+        spec_content = spec_path.read_text(encoding="utf-8")
+
+        # Build verification prompt
+        verification_prompt = f"""Please verify your previous output:
+
+1. Did you write ALL questions and specifications to {spec_file_pattern}?
+   - Check: Is your response ONLY a status code (e.g., "CAFE_NEED_CLARIFICATION")?
+   - Check: Are ALL questions in the markdown file, NOT in your response?
+
+2. Did you write the markdown file in your native language (the language you were configured with)?
+   - Check the content in {spec_file_pattern}
+   - Your native language: Use the language specified in your agent configuration
+
+**If both checks pass:**
+Return ONLY your previous status code: {status_code.value}
+
+**If any check fails:**
+1. Fix the markdown file in {spec_file_pattern}
+2. Return ONLY the status code (no explanation)
+
+Remember: Your response must contain ONLY the status code, nothing else."""
+
+        # Execute verification using the phase's agent_manager
+        try:
+            verification_response, _ = self.agent_manager.execute(
+                agent_name=agent_name,
+                prompt=verification_prompt,
+                allowed_tools=allowed_tools,
+            )
+
+            # Extract status code from verification response
+            verified_status = StatusCodeParser.extract(verification_response)
+
+            # If status code is valid, return the final response
+            if verified_status and verified_status in valid_status_codes:
+                return None, verification_response.strip()
+
+            # If no valid status code, something went wrong
+            return None, None
+
+        except Exception:
+            # If verification fails, just use original response
+            return None, None

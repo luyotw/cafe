@@ -96,8 +96,8 @@ class PRPhase(Phase):
             self.base_branch = config_base if config_base else "main"
 
         # Set up history tracking (like other phases)
-        pr_dir = self.issue_dir / "pr"
-        self.history_dir = pr_dir / "history"
+        self.phase_dir = self.issue_dir / "pr"
+        self.history_dir = self.phase_dir / "history"
         self.phase_name = "pr"
         # PR phase doesn't use iteration history like conversational phases
         # Instead, iteration is based on number of pr_XXX.md files (local review mode)
@@ -539,7 +539,7 @@ class PRPhase(Phase):
 
         # Ask user for decision (c/r/m)
         if self.interactive:
-            choice = self._ask_user_for_review_decision("code changes")
+            choice = self._ask_user_for_review_decision("code changes", agent_name="Reviewer")
         else:
             # Non-interactive mode not supported for local review
             return PhaseResult(

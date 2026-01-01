@@ -40,13 +40,13 @@ def temp_repo_dir(tmp_path):
     issue_dir = cafe_dir / "issues" / "test-issue"
     issue_dir.mkdir(parents=True)
     
-    spec_dir = issue_dir / "spec"
+    spec_dir = issue_dir / "spec" / "iteration_001"
     spec_dir.mkdir(parents=True)
-    (spec_dir / "spec_001.md").write_text("Test spec")
-    
-    plan_dir = issue_dir / "plan"
+    (spec_dir / "output.md").write_text("Test spec")
+
+    plan_dir = issue_dir / "plan" / "iteration_001"
     plan_dir.mkdir(parents=True)
-    (plan_dir / "plan_001.md").write_text("Test plan")
+    (plan_dir / "output.md").write_text("Test plan")
     
     return tmp_path
 
@@ -121,7 +121,7 @@ class TestPRCommandGitHubMode:
         assert len(calls) == 1, f"Expected exactly 1 call to 'gh pr diff --web', got {len(calls)}"
         assert calls[0] == (
             (["gh", "pr", "diff", "--web"],),
-            {"capture_output": True, "timeout": 5}
+            {"capture_output": True, "check": False, "timeout": 5}
         )
         
         # Verify output contains PR URL and next steps

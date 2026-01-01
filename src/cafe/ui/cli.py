@@ -46,6 +46,23 @@ console = Console()
 # List of all phases in order
 ALL_PHASES = ["spec", "plan", "develop", "review", "pr"]
 
+# Constants for cafe show command
+VALID_PHASES = ["spec", "plan", "develop", "review", "pr"]
+VALID_CONTENT_TYPES = [
+    "context", "output", "streaming", "error",
+    "title", "body", "status", "iterations"
+]
+CONTENT_TYPE_FILE_MAP = {
+    "context": "context.json",
+    "output": "output.md",
+    "streaming": "streaming.jsonl",
+    "error": "error.json",
+    "title": "title.txt",
+    "body": "body.md",
+    "status": "status.json",
+    "iterations": "iterations.jsonl",
+}
+
 
 def _handle_phase_exception(e: Exception, phase_name: str, auto: bool = False) -> None:
     """Unified exception handling for phase execution.
@@ -61,7 +78,16 @@ def _handle_phase_exception(e: Exception, phase_name: str, auto: bool = False) -
     from cafe.core.types import CriticalPhaseError
 
     # In auto mode, suppress output for most errors as they're already reported
+    # BUT always show programming errors (AttributeError, TypeError, NameError, etc.)
     if auto and not isinstance(e, CriticalPhaseError):
+        # Check if it's a programming error
+        # These indicate bugs in the code, not normal workflow errors
+        programming_errors = (AttributeError, TypeError, NameError, KeyError, IndexError, ImportError, SyntaxError)
+        if isinstance(e, programming_errors):
+            # These are programming/configuration errors - always show them
+            console.print()
+            console.print(f"[bold red]❌ Error in {phase_name} phase[/bold red]")
+            console.print(f"[red]{type(e).__name__}: {e}[/red]")
         raise typer.Exit(1)
 
     console.print()
@@ -230,24 +256,18 @@ def _get_latest_versioned_file(phase_name: str, issue_name: str) -> Optional[Pat
         issue_name: Issue name
 
     Returns:
-        Path to the latest versioned file, or base file if no versioned files exist, or None if no files exist
+        Path to the latest iteration's output.md, or None if no output files exist
     """
     phase_dir = Path(f".cafe/issues/{issue_name}/{phase_name}")
     if not phase_dir.exists():
         return None
 
-    # Find all versioned files
-    pattern = f"{phase_name}_*.md"
-    versioned_files = sorted(phase_dir.glob(pattern))
+    # Find all iteration output files (iteration_XXX/output.md)
+    output_files = sorted(phase_dir.glob("iteration_*/output.md"))
 
-    if versioned_files:
-        # Return the latest (highest numbered) file
-        return versioned_files[-1]
-
-    # Fallback to base file (e.g., spec.md, plan.md)
-    base_file = phase_dir / f"{phase_name}.md"
-    if base_file.exists():
-        return base_file
+    if output_files:
+        # Return the latest (highest numbered iteration) file
+        return output_files[-1]
 
     return None
 
@@ -276,28 +296,130 @@ def _edit_file_with_editor(file_path: Path) -> None:
         raise typer.Exit(1)
 
 
+def _resolve_iteration_number(phase_dir: Path, iteration_input: int, content_type: str) -> int:
+    """Resolve iteration number based on iterations that have the specified file.
+
+    Args:
+        phase_dir: Phase directory path (e.g., .cafe/issues/issue84/spec)
+        iteration_input: User input iteration number (can be positive, 0, negative)
+        content_type: Content type to search for (output, context, etc.)
+
+    Returns:
+        Actual iteration number (positive integer)
+
+    Raises:
+        ValueError: When iteration number does not exist or file not found
+    """
+    # Get filename for the content type
+    filename = CONTENT_TYPE_FILE_MAP.get(content_type)
+    if not filename:
+        raise ValueError(f"Unknown content type: {content_type}")
+
+    # Get all iteration directories (verified by context.json file)
+    all_iteration_files = sorted(phase_dir.glob("iteration_*/context.json"))
+
+    if not all_iteration_files:
+        raise ValueError(f"No iterations found in {phase_dir}")
+
+    # Extract all iteration numbers
+    all_iteration_numbers = []
+    for file_path in all_iteration_files:
+        dir_name = file_path.parent.name
+        if dir_name.startswith("iteration_"):
+            try:
+                num = int(dir_name.split("_")[1])
+                all_iteration_numbers.append(num)
+            except (IndexError, ValueError):
+                continue
+
+    if not all_iteration_numbers:
+        raise ValueError(f"No valid iterations found in {phase_dir}")
+
+    # Find iterations that have the requested file
+    iteration_numbers_with_file = []
+    for iter_num in all_iteration_numbers:
+        iteration_dir = phase_dir / f"iteration_{iter_num:03d}"
+        file_path = iteration_dir / filename
+        if file_path.exists():
+            iteration_numbers_with_file.append(iter_num)
+
+    if not iteration_numbers_with_file:
+        raise ValueError(
+            f"No iterations found with file '{filename}'. "
+            f"Available iterations: {all_iteration_numbers}"
+        )
+
+    # Handle different iteration number formats
+    if iteration_input == 0:
+        # Zero means latest iteration with the file
+        return iteration_numbers_with_file[-1]
+    elif iteration_input > 0:
+        # Positive number used directly, but need to verify existence
+        if iteration_input not in iteration_numbers_with_file:
+            raise ValueError(
+                f"Iteration {iteration_input} not found or does not have '{filename}'. "
+                f"Iterations with this file: {iteration_numbers_with_file}"
+            )
+        return iteration_input
+    else:
+        # Negative number: -1 means one before latest, -2 means two before, etc.
+        # Since 0 already represents latest (iteration_numbers_with_file[-1]),
+        # we need to offset: -1 -> [-2], -2 -> [-3], etc.
+        try:
+            return iteration_numbers_with_file[iteration_input - 1]
+        except IndexError:
+            raise ValueError(
+                f"Iteration index {iteration_input} out of range. "
+                f"Iterations with '{filename}': {iteration_numbers_with_file}"
+            )
+
+
+def _get_show_file_path(phase_dir: Path, iteration: int, content_type: str) -> Path:
+    """Get file path for specified content type.
+
+    Args:
+        phase_dir: Phase directory path
+        iteration: Iteration number (resolved to positive integer)
+        content_type: Content type (context, output, streaming, etc.)
+
+    Returns:
+        Complete file path
+    """
+    filename = CONTENT_TYPE_FILE_MAP.get(content_type)
+    if not filename:
+        raise ValueError(f"Unknown content type: {content_type}")
+
+    # status and iterations are located at phase directory root level
+    if content_type in ["status", "iterations"]:
+        return phase_dir / filename
+    else:
+        # Other files are located in iteration directory
+        iteration_dir = phase_dir / f"iteration_{iteration:03d}"
+        return iteration_dir / filename
+
+
 def _get_latest_review_iteration(issue_name: str) -> int:
-    """Get the latest review iteration number from history files.
+    """Get the latest review iteration number from iteration directories.
 
     Args:
         issue_name: Issue name
 
     Returns:
-        Latest iteration number, or 0 if no history exists
+        Latest iteration number, or 0 if no iterations exist
     """
-    history_dir = Path(f".cafe/issues/{issue_name}/review/history")
-    if not history_dir.exists():
+    review_dir = Path(f".cafe/issues/{issue_name}/review")
+    if not review_dir.exists():
         return 0
 
-    # Find all iteration files
-    iteration_files = sorted(history_dir.glob("iteration_*.json"))
-    if not iteration_files:
+    # Find all iteration directories
+    iteration_dirs = sorted(review_dir.glob("iteration_*"))
+    if not iteration_dirs:
         return 0
 
-    # Extract iteration number from the latest file (e.g., iteration_005.json -> 5)
-    latest_file = iteration_files[-1]
+    # Extract iteration number from the latest directory (e.g., iteration_005 -> 5)
+    latest_dir = iteration_dirs[-1]
     try:
-        iteration_num = int(latest_file.stem.split("_")[1])
+        iteration_num = int(latest_dir.name.split("_")[1])
         return iteration_num
     except (IndexError, ValueError):
         return 0
@@ -533,18 +655,58 @@ def prepare(
         "--worktree",
         help="Use worktree mode with specified path (e.g., worktrees/my-feature)",
     ),
+    interactive: bool = typer.Option(
+        True,
+        "--interactive/--no-interactive",
+        help="Enable/disable interactive mode (default: True)",
+    ),
+    input_method: Optional[str] = typer.Option(
+        None,
+        "--input-method",
+        help="Spec input method: 'manual' or 'github' (required in non-interactive mode)",
+    ),
+    issue_id: Optional[int] = typer.Option(
+        None,
+        "--issue-id",
+        help="GitHub issue ID (required when --input-method=github)",
+    ),
+    rigor: Optional[str] = typer.Option(
+        None,
+        "--rigor",
+        help="Spec rigor level: 'low', 'medium', or 'high' (default: medium)",
+    ),
+    template: Optional[str] = typer.Option(
+        None,
+        "--template",
+        help="Plan template name (default: default)",
+    ),
+    auto_create_pr: bool = typer.Option(
+        False,
+        "--auto-create-pr/--no-auto-create-pr",
+        help="Automatically create PR after development (default: False, GitHub repos only)",
+    ),
 ) -> None:
     """Prepare issue environment (directory, config, git branch) before running spec phase.
 
     This command sets up the necessary directory structure, creates a feature branch,
     and saves initial configuration for the issue.
 
+    Supports both interactive and non-interactive modes:
+    - Interactive mode: Prompts for spec/plan configuration (default behavior)
+    - Non-interactive mode: Requires configuration via command-line parameters
+
     Examples:
-        # Interactive mode (will ask for issue name)
+        # Interactive mode (will ask for issue name and configuration)
         cafe prepare
 
-        # Specify issue name directly
+        # Specify issue name directly (still prompts for configuration)
         cafe prepare fix-login-bug
+
+        # Non-interactive mode with all required parameters
+        cafe prepare fix-bug --no-interactive --input-method=manual --rigor=medium --template=default
+
+        # Non-interactive mode with GitHub issue
+        cafe prepare issue-123 --no-interactive --input-method=github --issue-id=123 --rigor=high
 
         # Specify custom base branch
         cafe prepare my-feature --base develop
@@ -561,16 +723,54 @@ def prepare(
             console.print("[yellow]Please run 'cafe init' first to set up CAFE.[/yellow]")
             raise typer.Exit(1)
 
-        # 2. Get issue name (from argument or prompt)
-        is_interactive = not issue_name  # Track if we're in interactive mode
-        if not issue_name:
-            issue_name = prompt_text("Issue name:")
-            if not issue_name or not issue_name.strip():
-                console.print("[red]Error: Issue name cannot be empty.[/red]")
-                raise typer.Exit(1)
-            issue_name = issue_name.strip()
+        # 2. Determine interactive mode and config prompt behavior
+        # should_prompt_for_config: Should we show config prompts?
+        #   - True if user didn't provide issue_name as argument AND interactive flag is True
+        #   - This preserves backward compatibility
+        # Store this BEFORE prompting for issue_name
+        should_prompt_for_config = (issue_name is None) and interactive
 
-        # 3. Initialize Git operations
+        # 3. Get issue name (from argument or prompt)
+        if not issue_name:
+            if interactive:
+                issue_name = prompt_text("Issue name:")
+                if not issue_name or not issue_name.strip():
+                    console.print("[red]Error: Issue name cannot be empty.[/red]")
+                    raise typer.Exit(1)
+                issue_name = issue_name.strip()
+            else:
+                console.print("[red]Error: Issue name is required in non-interactive mode.[/red]")
+                raise typer.Exit(1)
+
+        # 4. Validate non-interactive mode parameters (only when user explicitly passed --no-interactive)
+        if not interactive:
+            # 4.1. input_method is required in non-interactive mode
+            if input_method is None:
+                console.print("[red]Error: --input-method is required in non-interactive mode[/red]")
+                raise typer.Exit(1)
+
+            # 4.2. input_method must be 'manual' or 'github'
+            if input_method not in ["manual", "github"]:
+                console.print("[red]Error: --input-method must be 'manual' or 'github'[/red]")
+                raise typer.Exit(1)
+
+            # 4.3. When input_method is 'github', issue_id is required
+            if input_method == "github" and issue_id is None:
+                console.print("[red]Error: --issue-id is required when using --input-method=github[/red]")
+                raise typer.Exit(1)
+
+            # 4.4. Validate rigor if provided
+            if rigor and rigor not in ["low", "medium", "high"]:
+                console.print("[red]Error: --rigor must be 'low', 'medium', or 'high'[/red]")
+                raise typer.Exit(1)
+
+            # 4.5. Set default values for optional parameters
+            if rigor is None:
+                rigor = "medium"
+            if template is None:
+                template = "default"
+
+        # 5. Initialize Git operations
         try:
             git_ops = GitOperations()
         except Exception as e:
@@ -578,7 +778,7 @@ def prepare(
             console.print("[yellow]Hint: Run 'git init' to initialize a git repository.[/yellow]")
             raise typer.Exit(1)
 
-        # 4. Check for uncommitted changes (warning only)
+        # 6. Check for uncommitted changes (warning only)
         if check_uncommitted and git_ops.has_uncommitted_changes():
             console.print("[yellow]⚠️  Warning: You have uncommitted changes.[/yellow]")
             console.print(
@@ -592,11 +792,11 @@ def prepare(
                 console.print("[dim]Cancelled.[/dim]")
                 raise typer.Exit(0)
 
-        # 5. Determine base branch
+        # 7. Determine base branch
         if not base_branch:
             base_branch = git_ops.get_current_branch()
 
-        # 6. Determine worktree mode (interactive or from parameter)
+        # 8. Determine worktree mode (interactive or from parameter)
         use_worktree = False
         worktree_path = None
 
@@ -604,8 +804,8 @@ def prepare(
         if worktree and worktree.strip():
             use_worktree = True
             worktree_path = worktree.strip()
-        # If in interactive mode and no --worktree parameter
-        elif is_interactive and not worktree:
+        # If in config prompt mode and no --worktree parameter
+        elif should_prompt_for_config and not worktree:
             # Ask user if they want to use worktree mode
             use_worktree = prompt_confirm("Use Git worktree mode for this issue?", default=False)
 
@@ -626,16 +826,34 @@ def prepare(
         console.print(f"Base branch: {base_branch}")
         console.print()
 
-        # 7. Initialize default templates and agents if not exists (in repo root)
+        # 9. Initialize default templates and agents if not exists (in repo root)
         cafe_dir = Path(".cafe")
         _ensure_default_content(cafe_dir)
 
-        # 8. Interactive prompts for spec/plan configuration (only in interactive mode)
+        # 9.1. Validate template exists (only in non-interactive mode after templates are initialized)
+        if not interactive and template:
+            template_file = Path(".cafe") / "templates" / "plan" / f"{template}.md"
+            if not template_file.exists():
+                console.print(f"[red]Error: Template '{template}' not found[/red]")
+                console.print(f"   Expected at: {template_file}")
+                console.print()
+                console.print("[yellow]Available templates:[/yellow]")
+                template_dir = Path(".cafe") / "templates" / "plan"
+                if template_dir.exists():
+                    available = [f.stem for f in template_dir.glob("*.md")]
+                    if available:
+                        for tmpl in sorted(available):
+                            console.print(f"  - {tmpl}")
+                    else:
+                        console.print("  (none)")
+                raise typer.Exit(1)
+
+        # 10. Assemble spec/plan/pr configuration (prompt mode or parameter mode)
         spec_config = {}
         plan_config = {}
         pr_config = {}
 
-        if is_interactive:
+        if should_prompt_for_config:
             console.print()
             console.print("[bold cyan]📝 Pre-configure spec and plan phases[/bold cyan]")
             console.print(
@@ -689,10 +907,28 @@ def prepare(
             from cafe.ui.phase_prompts import prompt_and_save_auto_create
 
             config_file = Path(".cafe") / "issues" / issue_name / "issue.yaml"
-            auto_create_pr = prompt_and_save_auto_create(config_file, "pr.auto_create")
-            pr_config["auto_create"] = auto_create_pr
+            auto_create_pr_result = prompt_and_save_auto_create(config_file, "pr.auto_create")
+            pr_config["auto_create"] = auto_create_pr_result
+        elif not interactive:
+            # Explicit non-interactive mode (--no-interactive): use CLI parameters
+            from cafe.utils.git_utils import is_github_repo
 
-        # 9. Prepare config data (but don't write yet)
+            # Spec config
+            spec_config["input_method"] = input_method
+            if input_method == "github" and issue_id is not None:
+                spec_config["issue_id"] = str(issue_id)
+            spec_config["rigor"] = rigor
+
+            # Plan config
+            plan_config["template"] = template
+
+            # PR config (only for GitHub repos)
+            if is_github_repo() and auto_create_pr:
+                pr_config["auto_create"] = True
+        # else: issue_name was provided as argument but not --no-interactive
+        #       Don't save any config (old behavior for backward compatibility)
+
+        # 11. Prepare config data (but don't write yet)
         feature_branch = issue_name
 
         # Load global config to get default auto settings
@@ -1188,6 +1424,160 @@ def close() -> None:
 
 
 @app.command()
+def restore(
+    issue_name: str = typer.Argument(..., help="Issue name to restore")
+) -> None:
+    """Restore archived issue from backup.
+
+    This command restores an archived issue from ~/.cafe/projects/<project-path>/archived/<issue-name>/
+    back to .cafe/issues/<issue-name>/.
+
+    It performs the following checks:
+    1. Verifies backup exists
+    2. Checks current branch matches the issue's feature_branch
+    3. For worktree mode, checks current directory matches worktree_path
+    4. Prompts user for confirmation
+    5. Restores all files from backup
+
+    Examples:
+        cafe restore issue80
+    """
+    import shutil
+
+    try:
+        # 1. Get project path and construct archive path
+        project_path = _get_project_path()
+        home_dir = Path.home()
+        archive_base = home_dir / ".cafe" / "projects" / project_path / "archived"
+        archive_path = archive_base / issue_name
+
+        # 2. Check if backup exists
+        if not archive_path.exists():
+            console.print()
+            console.print(f"[red]❌ Error: Backup not found for issue '{issue_name}'[/red]")
+            console.print(f"   Backup path: {archive_path}")
+            console.print()
+            raise typer.Exit(1)
+
+        console.print()
+        console.print(f"[bold blue]🔄 Restoring issue: {issue_name}[/bold blue]")
+        console.print(f"   From: {archive_path}")
+        console.print()
+
+        # 3. Read issue.yaml from backup to get branch and worktree configuration
+        issue_config_file = archive_path / "issue.yaml"
+        if not issue_config_file.exists():
+            console.print(f"[red]❌ Error: issue.yaml not found in backup[/red]")
+            console.print(f"   Expected at: {issue_config_file}")
+            console.print()
+            raise typer.Exit(1)
+
+        with open(issue_config_file, "r", encoding="utf-8") as f:
+            config_data = yaml.safe_load(f)
+
+        feature_branch = config_data.get("feature_branch", issue_name)
+        worktree_path = config_data.get("worktree_path")
+
+        # 4. Initialize Git operations and check current branch
+        try:
+            git_ops = GitOperations()
+        except Exception as e:
+            console.print(f"[red]Error: Not a git repository. {e}[/red]")
+            raise typer.Exit(1)
+
+        current_branch = git_ops.get_current_branch()
+        if not current_branch:
+            console.print("[red]Error: Not on a valid branch (detached HEAD?).[/red]")
+            raise typer.Exit(1)
+
+        # 5. Check if current branch matches feature_branch
+        if current_branch != feature_branch:
+            console.print()
+            console.print("[red]❌ Error: Branch mismatch[/red]")
+            console.print(f"   Current branch: {current_branch}")
+            console.print(f"   Expected branch (from issue.yaml): {feature_branch}")
+            console.print()
+            console.print("[yellow]Please switch to the correct branch first:[/yellow]")
+            console.print(f"   [bold]git checkout {feature_branch}[/bold]")
+            console.print()
+            raise typer.Exit(1)
+
+        # 6. For worktree mode, check if we're in the correct worktree directory
+        # 檢查方式：比較當前目錄是否在預期的 worktree 路徑下
+        if worktree_path:
+            current_path = Path.cwd().resolve()
+            expected_worktree = Path(worktree_path).resolve()
+
+            # 檢查當前路徑是否在 worktree 路徑下
+            # 使用 is_relative_to() 或手動檢查路徑前綴
+            try:
+                # Python 3.9+ 有 is_relative_to()
+                is_in_worktree = current_path.is_relative_to(expected_worktree)
+            except AttributeError:
+                # Python 3.8 fallback: 檢查是否有共同前綴
+                try:
+                    current_path.relative_to(expected_worktree)
+                    is_in_worktree = True
+                except ValueError:
+                    is_in_worktree = False
+
+            if not is_in_worktree:
+                console.print()
+                console.print("[red]❌ Error: Worktree path mismatch[/red]")
+                console.print(f"   Current path: {Path.cwd()}")
+                console.print(f"   Expected worktree path (from issue.yaml): {worktree_path}")
+                console.print()
+                console.print("[yellow]Please change to the correct worktree directory:[/yellow]")
+                console.print(f"   [bold]cd {worktree_path}[/bold]")
+                console.print()
+                raise typer.Exit(1)
+
+        # 7. Prompt user for confirmation
+        console.print("[yellow]⚠️  Warning: This will restore the issue from backup.[/yellow]")
+        console.print("[yellow]   Any current changes in .cafe/issues/{} will be overwritten.[/yellow]".format(issue_name))
+        console.print()
+
+        # 使用 typer.confirm 進行確認
+        confirmed = typer.confirm("Do you want to continue?", default=False)
+        if not confirmed:
+            console.print()
+            console.print("[yellow]Restore cancelled.[/yellow]")
+            console.print()
+            raise typer.Exit(1)
+
+        # 8. Perform the restore operation
+        console.print()
+        console.print("[dim]Restoring issue data...[/dim]")
+
+        # 目標路徑
+        issue_dir = Path.cwd() / ".cafe" / "issues" / issue_name
+
+        # 如果目標路徑已存在，先刪除
+        if issue_dir.exists():
+            console.print(f"[dim]Removing existing issue directory...[/dim]")
+            shutil.rmtree(issue_dir)
+
+        # 從備份複製資料
+        console.print(f"[dim]Copying data from backup...[/dim]")
+        shutil.copytree(archive_path, issue_dir)
+
+        # 9. Display success message
+        console.print()
+        console.print(f"[green]✓ Successfully restored issue: {issue_name}[/green]")
+        console.print(f"  📁 Restored to: .cafe/issues/{issue_name}/")
+        console.print(f"  🌿 Branch: {feature_branch}")
+        if worktree_path:
+            console.print(f"  📂 Worktree: {worktree_path}")
+        console.print()
+
+    except typer.Exit:
+        raise
+    except Exception as e:
+        console.print(f"[red]Error during restore: {e}[/red]")
+        raise typer.Exit(1)
+
+
+@app.command()
 def spec(
     ctx: typer.Context,
     action: Optional[str] = typer.Argument(None, help="Action: edit (to edit latest spec file)"),
@@ -1507,9 +1897,8 @@ def spec(
             if status_code == "CAFE_NEED_CLARIFICATION":
                 console.print("[bold yellow]💬 Agent needs clarification[/bold yellow]")
                 console.print(f"Iterations: {result.data.get('iterations', 'N/A')}")
-                if workflow_mode == WorkflowMode.LOCAL:
-                    # Display full file path
-                    spec_file = result.data.get("spec_file", spec_dir)
+                spec_file = result.data.get("spec_file")
+                if spec_file:
                     console.print(f"Saved to: {spec_file}")
                 console.print()
                 console.print("[dim]To continue, run:[/dim] [bold]cafe spec[/bold]")
@@ -1517,26 +1906,18 @@ def spec(
                 # Spec draft is ready, but needs user confirmation
                 console.print("[bold green]✅ Spec draft completed![/bold green]")
                 console.print(f"Iterations: {result.data.get('iterations', 'N/A')}")
-                if workflow_mode == WorkflowMode.LOCAL:
-                    spec_file = result.data.get("spec_file", spec_dir)
+                spec_file = result.data.get("spec_file")
+                if spec_file:
                     console.print(f"Saved to: {spec_file}")
-                elif result.data.get("issue_id"):
-                    console.print(f"Created issue: #{result.data['issue_id']}")
-                elif issue_id:
-                    console.print(f"Updated issue: #{issue_id}")
                 console.print()
                 console.print("[dim]Please review the spec and run:[/dim] [bold]cafe spec[/bold]")
             elif status_code == "CAFE_CONFIRMED":
                 # Spec is confirmed, ready to proceed to plan
                 console.print("[bold green]✅ Spec clarification completed![/bold green]")
                 console.print(f"Iterations: {result.data.get('iterations', 'N/A')}")
-                if workflow_mode == WorkflowMode.LOCAL:
-                    spec_file = result.data.get("spec_file", spec_dir)
+                spec_file = result.data.get("spec_file")
+                if spec_file:
                     console.print(f"Saved to: {spec_file}")
-                elif result.data.get("issue_id"):
-                    console.print(f"Created issue: #{result.data['issue_id']}")
-                elif issue_id:
-                    console.print(f"Updated issue: #{issue_id}")
                 console.print()
 
                 # Auto mode: execute next phase
@@ -1549,8 +1930,8 @@ def spec(
                 console.print("[bold green]✅ Spec phase completed![/bold green]")
                 console.print(f"Iterations: {result.data.get('iterations', 'N/A')}")
                 console.print(f"Status: {status_code}")
-                if workflow_mode == WorkflowMode.LOCAL:
-                    spec_file = result.data.get("spec_file", spec_dir)
+                spec_file = result.data.get("spec_file")
+                if spec_file:
                     console.print(f"Saved to: {spec_file}")
         else:
             console.print()
@@ -1896,19 +2277,20 @@ def plan(
         if result.status.value == "completed":
             console.print()
             status_code = result.data.get("status_code")
-            plan_file = f".cafe/issues/{issue_name}/plan/plan.md"
 
             if status_code == "CAFE_NEED_CLARIFICATION":
                 console.print("[bold yellow]💬 Agent needs clarification[/bold yellow]")
                 console.print(f"Iterations: {result.data.get('iterations', 'N/A')}")
-                if Path(plan_file).exists():
+                plan_file = result.data.get("plan_file")
+                if plan_file:
                     console.print(f"Saved to: {plan_file}")
                 console.print()
                 console.print("[dim]To continue, run:[/dim] [bold]cafe plan[/bold]")
             elif status_code == "CAFE_READY_FOR_REVIEW":
                 console.print("[bold yellow]📋 Plan ready for review[/bold yellow]")
                 console.print(f"Iterations: {result.data.get('iterations', 'N/A')}")
-                if Path(plan_file).exists():
+                plan_file = result.data.get("plan_file")
+                if plan_file:
                     console.print(f"Saved to: {plan_file}")
                 console.print()
                 console.print("[dim]To review the plan, run:[/dim] [bold]cafe plan[/bold]")
@@ -1916,7 +2298,8 @@ def plan(
                 # CAFE_CONFIRMED
                 console.print("[bold green]✅ Implementation plan completed![/bold green]")
                 console.print(f"Iterations: {result.data.get('iterations', 'N/A')}")
-                if Path(plan_file).exists():
+                plan_file = result.data.get("plan_file")
+                if plan_file:
                     console.print(f"Saved to: {plan_file}")
                 console.print()
 
@@ -2370,14 +2753,14 @@ def review(
                 )
                 console.print()
 
-                # Find latest review file (review_XXX.md)
+                # Find latest review file (iteration_XXX/output.md format)
                 review_dir = Path(f".cafe/issues/{issue_name}/review")
-                review_files = sorted(review_dir.glob("review_*.md"))
-                if review_files:
-                    latest_review = review_files[-1]
-                    review_path = f".cafe/issues/{issue_name}/review/{latest_review.name}"
+                iteration_files = sorted(review_dir.glob("iteration_*/output.md"))
+                if iteration_files:
+                    latest_review = iteration_files[-1]
+                    review_path = f".cafe/issues/{issue_name}/review/{latest_review.parent.name}/output.md"
                 else:
-                    # Fallback to review.md if no numbered files found
+                    # Fallback for old format
                     review_path = f".cafe/issues/{issue_name}/review/review.md"
 
                 console.print("[dim]Review feedback saved to:[/dim]")
@@ -2386,17 +2769,13 @@ def review(
 
                 # Auto mode: check max_review_iterations and execute develop if not exceeded
                 if auto:
-                    # Read max_review_iterations from issue config
-                    import yaml
-
-                    issue_config_file = Path(f".cafe/issues/{issue_name}/issue.yaml")
-                    max_iterations = 5  # Default
-                    if issue_config_file.exists():
-                        with open(issue_config_file, "r") as f:
-                            issue_config = yaml.safe_load(f)
-                            max_iterations = issue_config.get("auto", {}).get(
-                                "max_review_iterations", 5
-                            )
+                    # Read max_review_iterations from global config
+                    max_iterations_value = config_manager.get("auto.max_review_iterations", 5)
+                    # Convert to int if it's a string
+                    try:
+                        max_iterations = int(max_iterations_value)
+                    except (ValueError, TypeError):
+                        max_iterations = 5
 
                     # Get current review iteration count
                     current_iteration = _get_latest_review_iteration(issue_name)
@@ -2414,9 +2793,6 @@ def review(
                         )
                         console.print(
                             "[dim]  • Adjust limit: [bold]cafe config set auto.max_review_iterations 10[/bold][/dim]"
-                        )
-                        console.print(
-                            f"[dim]  • Or modify .cafe/issues/{issue_name}/issue.yaml[/dim]"
                         )
                     else:
                         # Continue with develop phase
@@ -2570,18 +2946,6 @@ def pr(
             base_branch=base if base != "main" else None,  # Pass base only if not default
         )
 
-        # Display start message
-        console.print("[bold blue]🚀 PR Phase: Create Pull Request[/bold blue]")
-        console.print(f"Issue: {issue_name}")
-        dev_executor = agent_manager.get_agent(dev_agent)
-        dev_cli = dev_executor.config.cli.value
-        dev_model = dev_executor.config.model or "default"
-        console.print(f"Developer Agent: {dev_agent}")
-        console.print(f"CLI: {dev_cli}")
-        console.print(f"Model: {dev_model}")
-        console.print(f"Base branch: {phase.base_branch}")
-        console.print()
-
         result = phase.execute()
 
         # Display result
@@ -2591,9 +2955,12 @@ def pr(
             is_local_review = result.data.get("local_review", False)
             status_code = result.data.get("status_code")
 
-            console.print()
-            console.print(f"[bold green]✅ {result.message}![/bold green]")
-            console.print()
+            # Only show success message and details for GitHub PR mode
+            # Local review mode already prints its own messages
+            if not is_local_review:
+                console.print()
+                console.print(f"[bold green]✅ {result.message}![/bold green]")
+                console.print()
 
             if is_local_review:
                 # Local review mode: Show local-specific next steps
@@ -2649,9 +3016,11 @@ def pr(
 
                 # Automatically open PR diff in browser
                 try:
-                    subprocess.run(["gh", "pr", "diff", "--web"], capture_output=True, timeout=5)
+                    subprocess.run(["gh", "pr", "diff", "--web"], capture_output=True, check=False, timeout=5)
+                except (subprocess.TimeoutExpired, FileNotFoundError):
+                    pass  # Silently ignore timeout or gh not found
                 except Exception:
-                    pass  # Silently ignore any errors
+                    pass  # Silently ignore any other errors
         else:
             console.print()
             console.print(f"[bold red]❌ PR phase failed: {result.message}[/bold red]")
@@ -2814,7 +3183,7 @@ def list_issues() -> None:
                     if config and "worktree_path" in config:
                         worktree_path = config["worktree_path"]
             except Exception:
-                # 若讀取失敗，保持預設值 "-"
+                # If read fails, keep default value "-"
                 pass
 
         # Check which phases exist
@@ -3453,6 +3822,223 @@ def agent_edit() -> None:
     except FileNotFoundError:
         console.print(f"[red]Error: Editor '{editor}' not found[/red]")
         raise typer.Exit(1)
+
+
+@app.command()
+def show(
+    phase_name: str = typer.Argument(
+        ...,
+        help="Phase name (spec, plan, develop, review, pr)"
+    ),
+    content_type: Optional[str] = typer.Argument(
+        None,
+        help="Content type (default: output)"
+    ),
+    iteration: int = typer.Option(
+        0,
+        "--iteration", "-i",
+        help="Iteration number (positive, 0=latest, negative=relative index)"
+    ),
+) -> None:
+    """Display iteration file contents.
+
+    Shows the content of files from different phases and iterations.
+
+    Examples:
+        cafe show spec                    # Show latest spec output
+        cafe show spec context            # Show latest spec context
+        cafe show spec output -i 2        # Show spec iteration 2 output
+        cafe show spec context -i -1      # Show previous spec iteration context
+        cafe show plan status -i -2       # Show plan status 2 iterations ago
+    """
+    # Validate phase name
+    if phase_name not in VALID_PHASES:
+        console.print(f"[red]Error: Invalid phase '{phase_name}'[/red]")
+        console.print(f"[dim]Valid phases: {', '.join(VALID_PHASES)}[/dim]")
+        raise typer.Exit(1)
+
+    # Set default content type
+    if content_type is None:
+        content_type = "output"
+
+    # Validate content type
+    if content_type not in VALID_CONTENT_TYPES:
+        console.print(f"[red]Error: Invalid content type '{content_type}'[/red]")
+        console.print(f"[dim]Valid types: {', '.join(VALID_CONTENT_TYPES)}[/dim]")
+        raise typer.Exit(1)
+
+    # Get current branch name (issue_name)
+    try:
+        git_ops = GitOperations()
+        issue_name = git_ops.get_current_branch()
+    except Exception as e:
+        console.print(f"[red]Error: Failed to get current branch: {e}[/red]")
+        raise typer.Exit(1)
+
+    # Build phase directory path
+    cafe_dir = Path.cwd() / ".cafe"
+    phase_dir = cafe_dir / "issues" / issue_name / phase_name
+
+    # Check if phase directory exists
+    if not phase_dir.exists():
+        console.print(f"[red]Error: Phase directory not found: {phase_dir}[/red]")
+        console.print(f"[dim]The '{phase_name}' phase has not been executed yet[/dim]")
+        raise typer.Exit(1)
+
+    try:
+        # Resolve iteration number (only for non-status/iterations files)
+        if content_type not in ["status", "iterations"]:
+            resolved_iteration = _resolve_iteration_number(phase_dir, iteration, content_type)
+            # Get file path
+            file_path = _get_show_file_path(phase_dir, resolved_iteration, content_type)
+        else:
+            # status and iterations don't need iteration number
+            file_path = _get_show_file_path(phase_dir, 0, content_type)
+            resolved_iteration = None
+
+        # Check if file exists
+        if not file_path.exists():
+            console.print(f"[red]Error: File not found: {file_path}[/red]")
+            if resolved_iteration is not None:
+                console.print(f"[dim]File '{content_type}' does not exist in iteration {resolved_iteration}[/dim]")
+            raise typer.Exit(1)
+
+        # Read and display file content
+        try:
+            content = file_path.read_text(encoding="utf-8")
+
+            # Use syntax highlighting for JSON files
+            if file_path.suffix == ".json":
+                try:
+                    import json
+                    json_data = json.loads(content)
+                    console.print_json(data=json_data)
+                except json.JSONDecodeError:
+                    # If JSON parsing fails, output raw content
+                    console.print(content)
+            else:
+                # Output other files directly
+                console.print(content)
+
+        except UnicodeDecodeError:
+            console.print(f"[red]Error: Failed to read file (not UTF-8 encoded)[/red]")
+            raise typer.Exit(1)
+
+    except ValueError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1)
+    except Exception as e:
+        console.print(f"[red]Unexpected error: {e}[/red]")
+        raise typer.Exit(1)
+
+
+@app.command(name="chat", context_settings={"allow_extra_args": False, "ignore_unknown_options": False})
+def chat_with_agent(
+    ctx: typer.Context,
+    role: str = typer.Argument(..., help="Role: pm, developer, or reviewer"),
+) -> None:
+    """Open interactive chat with specified role Agent
+
+    This command allows you to quickly interact with an Agent of specified role,
+    without manually looking up and entering session id.
+    The system automatically infers the issue from current branch and loads corresponding session.
+
+    Supported roles:
+    - pm: Product Manager Agent
+    - developer: Developer Agent
+    - reviewer: Reviewer Agent
+
+    Examples:
+        cafe chat pm
+        cafe chat developer
+        cafe chat reviewer
+    """
+    # 1. Validate role parameter
+    valid_roles = ["pm", "developer", "reviewer"]
+    if role not in valid_roles:
+        console.print(f"[red]Error: Invalid role '{role}'. Must be one of: {', '.join(valid_roles)}[/red]")
+        raise typer.Exit(1)
+
+    # 2. Get current branch as issue name
+    issue_name = _get_and_validate_branch(ctx, "chat")
+
+    # 3. Load configuration
+    config_manager = ConfigManager()
+
+    # 4. Get agent config for corresponding role from config
+    agent_config = config_manager.get(f"agents.{role}", None)
+
+    if agent_config is None:
+        console.print(f"[red]Error: No agent configured for role '{role}'.[/red]")
+        console.print(f"[yellow]Please configure an agent for '{role}' in .cafe/config.yaml[/yellow]")
+        raise typer.Exit(1)
+
+    agent_name = agent_config.get("name")
+    agent_cli = agent_config.get("cli")
+    agent_model = agent_config.get("model")
+
+    if not agent_name or not agent_cli:
+        console.print(f"[red]Error: Invalid agent configuration for role '{role}'.[/red]")
+        console.print(f"[yellow]Please ensure 'name' and 'cli' are configured in .cafe/config.yaml[/yellow]")
+        raise typer.Exit(1)
+
+    # 5. Set up agent manager (automatically loads session)
+    agent_manager = _setup_agents(config_manager, issue_name=issue_name)
+
+    # 6. Get executor for this agent
+    try:
+        agent_executor = agent_manager.get_agent(agent_name)
+    except Exception as e:
+        console.print(f"[red]Error: Failed to get agent '{agent_name}': {e}[/red]")
+        raise typer.Exit(1)
+
+    # 7. Get session ID (if exists)
+    session_id = agent_executor.config.session_id
+
+    # 8. Build and execute interactive CLI command
+    console.print(f"[bold blue]Opening interactive CLI for {role} ({agent_name})...[/bold blue]")
+    console.print(f"[dim]Issue: {issue_name}[/dim]")
+    console.print(f"[dim]CLI: {agent_cli}[/dim]")
+    if session_id:
+        console.print(f"[dim]Session: {session_id}[/dim]")
+    console.print()
+
+    # Build CLI command
+    cli_command = [agent_cli]
+
+    # Add session parameter (if exists)
+    if session_id:
+        if agent_cli == "claude":
+            cli_command.extend(["--resume", session_id])
+        elif agent_cli == "copilot":
+            cli_command.extend(["--session", session_id])
+        elif agent_cli == "gemini":
+            cli_command.extend(["--session-id", session_id])
+        elif agent_cli == "cursor-agent":
+            cli_command.extend(["--session", session_id])
+
+    # Add model parameter (if exists)
+    if agent_model:
+        if agent_cli == "claude":
+            cli_command.extend(["--model", agent_model])
+        elif agent_cli == "copilot":
+            cli_command.extend(["--model", agent_model])
+        elif agent_cli == "gemini":
+            cli_command.extend(["--model", agent_model])
+
+    # Execute interactive CLI
+    try:
+        result = subprocess.run(cli_command)
+    except FileNotFoundError:
+        console.print(f"[red]Error: CLI tool '{agent_cli}' not found.[/red]")
+        console.print(f"[yellow]Please install '{agent_cli}' CLI tool first.[/yellow]")
+        raise typer.Exit(1)
+    except Exception as e:
+        console.print(f"[red]Error: Failed to execute CLI: {e}[/red]")
+        raise typer.Exit(1)
+
+    # Exit normally, return CLI tool's exit code
+    raise typer.Exit(result.returncode)
 
 
 @app.command()
