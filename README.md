@@ -122,13 +122,14 @@ cafe --help
     ```
 
 3.  **Finalize and sync back to original branch**:
+    You merge the PR manually on GitHub (or do nothing in local review mode), then:
+
     ```bash
-    # After development is complete, merge back to the original branch and clean up
     cafe close
     ```
-    This command merges your changes back to the original branch and removes the feature branch and related environment files.
+    This command updates the original branch, removes the feature branch and worktree, and backs up related environment files.
 
-4.  **Multiple CLI agents configuration**:
+5.  **Multiple CLI agents configuration**:
     You can adjust the CLI agent settings at any time using the `cafe config` command set. For example:
 
     ```bash
