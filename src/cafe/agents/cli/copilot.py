@@ -1,4 +1,4 @@
-"""Copilot CLI 工具實作."""
+"""Copilot CLI tool implementation."""
 
 import time
 from pathlib import Path
@@ -9,13 +9,13 @@ from cafe.core.types import PermissionDenial, TokenUsage
 
 
 class CopilotCLI(AbstractCLI):
-    """Copilot CLI 工具的具體實作."""
+    """Concrete implementation of Copilot CLI tool."""
 
     def __init__(self, config):
-        """初始化 Copilot CLI.
+        """Initialize Copilot CLI.
 
         Args:
-            config: Agent 配置
+            config: Agent configuration
         """
         super().__init__(config)
         self._existing_sessions: Set[str] = set()
@@ -26,38 +26,38 @@ class CopilotCLI(AbstractCLI):
         allowed_tools: Optional[List[str]] = None,
         allowed_directories: Optional[List[str]] = None,
     ) -> List[str]:
-        """建構 Copilot CLI 命令列參數.
+        """Build Copilot CLI command line arguments.
 
-        參數順序: copilot -> -p -> --model -> --allow-tool/--allow-all-tools -> --resume -> --add-dir
+        Parameter order: copilot -> -p -> --model -> --allow-tool/--allow-all-tools -> --resume -> --add-dir
 
         Args:
-            prompt: 提示詞
-            allowed_tools: 允許使用的工具列表 (已轉換格式)
-            allowed_directories: 允許存取的目錄列表
+            prompt: Prompt text
+            allowed_tools: List of allowed tools (already converted format)
+            allowed_directories: List of allowed directories
 
         Returns:
-            完整的命令列參數列表
+            Complete command line argument list
         """
         cmd = ["copilot", "-p", prompt]
 
-        # 如果有 model，加入 --model 參數
+        # If has model, add --model parameter
         if self.config.model:
             cmd.extend(["--model", self.config.model])
 
-        # 加入 allowed tools 參數
+        # Add allowed tools parameter
         if allowed_tools:
-            # 使用 --allow-tool 為每個工具
+            # Use --allow-tool for each tool
             for tool in allowed_tools:
                 cmd.extend(["--allow-tool", tool])
         else:
-            # 使用 --allow-all-tools 自動批准所有工具
+            # Use --allow-all-tools to automatically approve all tools
             cmd.append("--allow-all-tools")
 
-        # 如果有 session_id，加入 --resume 參數
+        # If has session_id, add --resume parameter
         if self.config.session_id:
             cmd.extend(["--resume", self.config.session_id])
 
-        # 如果有 allowed_directories，加入 --add-dir 參數
+        # If has allowed_directories, add --add-dir parameter
         if allowed_directories:
             cmd = self.add_directories(cmd, allowed_directories)
 
@@ -68,77 +68,77 @@ class CopilotCLI(AbstractCLI):
         output_lines: List[str],
         streaming_log: Optional[List[str]] = None,
     ) -> Tuple[str, TokenUsage, List[PermissionDenial]]:
-        """解析 Copilot CLI 的純文字輸出.
+        """Parse Copilot CLI's plain text output.
 
         Args:
-            output_lines: CLI 輸出的行列表
-            streaming_log: 串流輸出記錄 (可選，此處不使用)
+            output_lines: List of lines from CLI output
+            streaming_log: Streaming output log (optional, not used here)
 
         Returns:
-            (response, token_usage, permission_denials) 三元組
+            (response, token_usage, permission_denials) tuple
         """
-        # Copilot 使用純文字輸出，連接所有行
+        # Copilot uses plain text output, join all lines
         response = "".join(output_lines)
         token_usage = TokenUsage()
         permission_denials = []
 
-        # TODO: 如果 Copilot 提供 token usage 或 permission denials，在此解析
+        # TODO: If Copilot provides token usage or permission denials, parse here
 
         return response, token_usage, permission_denials
 
     def translate_allowed_tools(self, tools: List[str]) -> List[str]:
-        """轉換工具名稱為 Copilot 格式.
+        """Convert tool names to Copilot format.
 
-        Copilot 使用簡單的工具名稱，需要去除路徑參數。
+        Copilot uses simple tool names, need to remove path parameters.
 
         Args:
-            tools: 工具名稱列表
+            tools: List of tool names
 
         Returns:
-            轉換後的工具名稱列表
+            List of converted tool names
         """
         processed_tools = []
 
         for tool in tools:
-            # 如果工具名稱帶有路徑參數，去除路徑部分
+            # If tool name has path parameter, remove path part
             if "(" in tool and ")" in tool:
                 tool_name = tool.split("(")[0].lower()
             else:
                 tool_name = tool.lower()
 
-            # 去重
+            # Remove duplicates
             if tool_name not in processed_tools:
                 processed_tools.append(tool_name)
 
         return processed_tools
 
     def add_directories(self, cmd: List[str], directories: List[str]) -> List[str]:
-        """將允許的目錄加入命令列參數.
+        """Add allowed directories to command line arguments.
 
         Args:
-            cmd: 目前的命令列參數
-            directories: 目錄列表
+            cmd: Current command line arguments
+            directories: List of directories
 
         Returns:
-            更新後的命令列參數
+            Updated command line arguments
         """
         for directory in directories:
             cmd.extend(["--add-dir", directory])
         return cmd
 
     def get_output_format(self) -> List[str]:
-        """取得 Copilot CLI 的輸出格式參數.
+        """Get Copilot CLI's output format parameters.
 
         Returns:
-            空列表（Copilot 不使用 output format 參數）
+            Empty list (Copilot doesn't use output format parameter)
         """
-        # Copilot 不使用 output format 參數
+        # Copilot doesn't use output format parameter
         return []
 
     def record_existing_sessions(self) -> None:
-        """記錄執行前已存在的 session 檔案.
+        """Record session files that existed before execution.
 
-        用於稍後檢測新建立的 session。
+        Used to later detect newly created sessions.
         """
         copilot_session_dir = Path.home() / ".copilot" / "session-state"
 
@@ -150,36 +150,36 @@ class CopilotCLI(AbstractCLI):
             self._existing_sessions = set()
 
     def extract_session_id(self, output_lines: List[str]) -> Optional[str]:
-        """從檔案系統提取新建立的 session ID.
+        """Extract newly created session ID from file system.
 
-        Copilot 自動建立 session 檔案，需要從檔案系統檢測。
+        Copilot automatically creates session files, need to detect from file system.
 
         Args:
-            output_lines: CLI 輸出的行列表 (此處不使用)
+            output_lines: List of lines from CLI output (not used here)
 
         Returns:
-            Session ID，如果找不到則回傳 None
+            Session ID, or None if not found
         """
         copilot_session_dir = Path.home() / ".copilot" / "session-state"
 
         if not copilot_session_dir.exists():
             return None
 
-        # 等待檔案系統更新
+        # Wait for file system to update
         time.sleep(0.1)
 
-        # 取得目前的 session 檔案
+        # Get current session files
         current_sessions = {
             f.name for f in copilot_session_dir.iterdir() if f.is_file()
         }
 
-        # 找出新建立的 session
+        # Find newly created sessions
         new_sessions = current_sessions - self._existing_sessions
 
         if new_sessions:
-            # 取得最新的 session (依名稱排序)
+            # Get newest session (sorted by name)
             newest_session = sorted(new_sessions)[-1]
-            # 去除 .jsonl 副檔名
+            # Remove .jsonl extension
             session_id = newest_session.replace(".jsonl", "")
             return session_id
 

@@ -129,17 +129,17 @@ def fetch_github_issue(github_ops: GitHubOps, issue_id: int) -> str:
 
 
 def prompt_and_save_auto_create(config_file: Path, config_key: str) -> bool:
-    """詢問用戶 auto_create 設定並保存到配置文件
+    """Prompt user for auto_create setting and save to config file
 
-    檢測 GitHub 儲存庫上下文，只在適用時提示用戶。
-    將用戶選擇保存到 issue 配置文件。
+    Detect GitHub repository context and only prompt user when applicable.
+    Save user's choice to issue config file.
 
     Args:
-        config_file: issue.yaml 文件的路徑
-        config_key: 配置鍵名（例如："pr.auto_create"）
+        config_file: Path to issue.yaml file
+        config_key: Configuration key name (e.g., "pr.auto_create")
 
     Returns:
-        bool: True 如果用戶希望自動建立，False 否則
+        bool: True if user wants automatic creation, False otherwise
     """
     from rich.console import Console
 

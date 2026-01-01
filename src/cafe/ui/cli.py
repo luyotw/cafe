@@ -1503,18 +1503,18 @@ def restore(
             raise typer.Exit(1)
 
         # 6. For worktree mode, check if we're in the correct worktree directory
-        # 檢查方式：比較當前目錄是否在預期的 worktree 路徑下
+        # Check method: compare if current directory is under expected worktree path
         if worktree_path:
             current_path = Path.cwd().resolve()
             expected_worktree = Path(worktree_path).resolve()
 
-            # 檢查當前路徑是否在 worktree 路徑下
-            # 使用 is_relative_to() 或手動檢查路徑前綴
+            # Check if current path is under worktree path
+            # Use is_relative_to() or manually check path prefix
             try:
-                # Python 3.9+ 有 is_relative_to()
+                # Python 3.9+ has is_relative_to()
                 is_in_worktree = current_path.is_relative_to(expected_worktree)
             except AttributeError:
-                # Python 3.8 fallback: 檢查是否有共同前綴
+                # Python 3.8 fallback: check for common prefix
                 try:
                     current_path.relative_to(expected_worktree)
                     is_in_worktree = True
@@ -1537,7 +1537,7 @@ def restore(
         console.print("[yellow]   Any current changes in .cafe/issues/{} will be overwritten.[/yellow]".format(issue_name))
         console.print()
 
-        # 使用 typer.confirm 進行確認
+        # Use typer.confirm for confirmation
         confirmed = typer.confirm("Do you want to continue?", default=False)
         if not confirmed:
             console.print()
@@ -1549,15 +1549,15 @@ def restore(
         console.print()
         console.print("[dim]Restoring issue data...[/dim]")
 
-        # 目標路徑
+        # Target path
         issue_dir = Path.cwd() / ".cafe" / "issues" / issue_name
 
-        # 如果目標路徑已存在，先刪除
+        # If target path already exists, delete it first
         if issue_dir.exists():
             console.print(f"[dim]Removing existing issue directory...[/dim]")
             shutil.rmtree(issue_dir)
 
-        # 從備份複製資料
+        # Copy data from backup
         console.print(f"[dim]Copying data from backup...[/dim]")
         shutil.copytree(archive_path, issue_dir)
 

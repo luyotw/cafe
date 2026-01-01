@@ -1,4 +1,4 @@
-"""Claude CLI 工具實作."""
+"""Claude CLI tool implementation."""
 
 import json
 import logging
@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 
 class ClaudeCLI(AbstractCLI):
-    """Claude CLI 工具的具體實作."""
+    """Concrete implementation of Claude CLI tool."""
 
     def build_command(
         self,
@@ -22,40 +22,40 @@ class ClaudeCLI(AbstractCLI):
         allowed_tools: Optional[List[str]] = None,
         allowed_directories: Optional[List[str]] = None,
     ) -> List[str]:
-        """建構 Claude CLI 命令列參數.
+        """Build Claude CLI command line arguments.
 
-        參數順序: claude -> --resume -> -p -> --model -> --allowed-tools -> --output-format -> --add-dir
+        Parameter order: claude -> --resume -> -p -> --model -> --allowed-tools -> --output-format -> --add-dir
 
         Args:
-            prompt: 提示詞
-            allowed_tools: 允許使用的工具列表 (已轉換格式)
-            allowed_directories: 允許存取的目錄列表
+            prompt: Prompt text
+            allowed_tools: List of allowed tools (already converted format)
+            allowed_directories: List of allowed directories
 
         Returns:
-            完整的命令列參數列表
+            Complete command line argument list
         """
         cmd = ["claude"]
 
-        # 1. 如果有 session_id，加入 --resume 參數 (必須在 -p 之前)
+        # 1. If has session_id, add --resume parameter (must be before -p)
         if self.config.session_id:
             cmd.extend(["--resume", self.config.session_id])
 
-        # 2. 加入 -p 參數 (永遠在最前面，除了 --resume)
+        # 2. Add -p parameter (always at front, except --resume)
         cmd.extend(["-p", prompt])
 
-        # 3. 如果有 model，加入 --model 參數 (必須在 -p 之後)
+        # 3. If has model, add --model parameter (must be after -p)
         if self.config.model:
             cmd.extend(["--model", self.config.model])
 
-        # 4. 如果有 allowed_tools，加入 --allowed-tools 參數
+        # 4. If has allowed_tools, add --allowed-tools parameter
         if allowed_tools:
             tools_arg_value = ",".join(allowed_tools)
             cmd.extend(["--allowed-tools", tools_arg_value])
 
-        # 5. 加入輸出格式參數
+        # 5. Add output format parameter
         cmd.extend(self.get_output_format())
 
-        # 6. 如果有 allowed_directories，加入 --add-dir 參數
+        # 6. If has allowed_directories, add --add-dir parameter
         if allowed_directories:
             cmd = self.add_directories(cmd, allowed_directories)
 
@@ -66,14 +66,14 @@ class ClaudeCLI(AbstractCLI):
         output_lines: List[str],
         streaming_log: Optional[List[str]] = None,
     ) -> Tuple[str, TokenUsage, List[PermissionDenial]]:
-        """解析 Claude CLI 的 stream-json 輸出.
+        """Parse Claude CLI's stream-json output.
 
         Args:
-            output_lines: CLI 輸出的行列表
-            streaming_log: 串流輸出記錄 (可選，此處不使用)
+            output_lines: List of lines from CLI output
+            streaming_log: Streaming output log (optional, not used here)
 
         Returns:
-            (response, token_usage, permission_denials) 三元組
+            (response, token_usage, permission_denials) tuple
         """
         response_text = ""
         token_usage = TokenUsage()
@@ -83,7 +83,7 @@ class ClaudeCLI(AbstractCLI):
             try:
                 data = json.loads(line.strip())
 
-                # 提取內容 (新格式: message.content[] 或舊格式: content)
+                # Extract content (new format: message.content[] or old format: content)
                 if "message" in data and "content" in data["message"]:
                     for content_block in data["message"]["content"]:
                         if content_block.get("type") == "text":
@@ -91,7 +91,7 @@ class ClaudeCLI(AbstractCLI):
                 elif "content" in data:
                     response_text = data["content"]
 
-                # 提取 token usage
+                # Extract token usage
                 if "usage" in data:
                     usage_data = data["usage"]
                     token_usage = TokenUsage(
@@ -104,7 +104,7 @@ class ClaudeCLI(AbstractCLI):
                 if "total_cost_usd" in data:
                     token_usage.total_cost_usd = data["total_cost_usd"]
 
-                # 提取 permission denials
+                # Extract permission denials
                 if "permission_denials" in data and data["permission_denials"]:
                     for denial_data in data["permission_denials"]:
                         permission_denials.append(
@@ -115,103 +115,103 @@ class ClaudeCLI(AbstractCLI):
                         )
 
             except json.JSONDecodeError:
-                # 非 JSON 行，忽略
+                # Non-JSON line, ignore
                 continue
 
         return response_text, token_usage, permission_denials
 
     def translate_allowed_tools(self, tools: List[str]) -> List[str]:
-        """轉換工具名稱為 Claude 格式 (首字母大寫，路徑轉為 git-ignore 格式).
+        """Convert tool names to Claude format (capitalize first letter, convert paths to git-ignore format).
 
         Args:
-            tools: 工具名稱列表 (小寫格式，例如 ["read", "write(/path)"])
+            tools: List of tool names (lowercase format, e.g. ["read", "write(/path)"])
 
         Returns:
-            轉換後的工具名稱列表 (例如 ["Read", "Write(/.cafe/config.yaml)"])
+            List of converted tool names (e.g. ["Read", "Write(/.cafe/config.yaml)"])
         """
         processed_tools = []
 
         for tool in tools:
-            # 處理帶有路徑或命令的工具 (例如 write(/path) 或 bash(git status))
+            # Handle tools with paths or commands (e.g. write(/path) or bash(git status))
             if "(" in tool and ")" in tool:
                 tool_name = tool.split("(")[0].lower()
                 path_or_cmd = tool.split("(")[1].rstrip(")")
 
-                # 判斷是否為路徑或命令
-                # 如果 tool_name 是 bash，則視為命令，不轉換路徑格式
+                # Determine if it's a path or command
+                # If tool_name is bash, treat as command, don't convert path format
                 if tool_name == "bash":
-                    # 命令參數，直接使用，不加 / 前綴
+                    # Command parameter, use directly, don't add / prefix
                     processed_tool = f"{tool_name.capitalize()}({path_or_cmd})"
                 else:
-                    # 路徑參數，需要轉換為 git-ignore 格式
+                    # Path parameter, needs conversion to git-ignore format
                     path_obj = Path(path_or_cmd)
 
-                    # 區分路徑類型:
-                    # 1. 已經是 git ignore 格式 (以 / 開頭但不是絕對路徑)
-                    # 2. 絕對路徑 (系統路徑，例如 /Users/...)
-                    # 3. 相對路徑 (例如 .cafe/... 或 src/...)
+                    # Distinguish path types:
+                    # 1. Already git ignore format (starts with / but not absolute path)
+                    # 2. Absolute path (system path, e.g. /Users/...)
+                    # 3. Relative path (e.g. .cafe/... or src/...)
                     is_git_ignore_format = path_or_cmd.startswith("/") and not path_obj.is_absolute()
 
                     if is_git_ignore_format:
-                        # 已經是 git ignore 格式，保持不變
+                        # Already git ignore format, keep unchanged
                         processed_tool = f"{tool_name.capitalize()}({path_or_cmd})"
                     elif path_obj.is_absolute():
-                        # 絕對路徑，轉換為 git ignore 格式
+                        # Absolute path, convert to git ignore format
                         try:
                             repo_root = get_repo_root()
                             git_ignore_path = to_git_ignore_path(path_obj, repo_root)
                             processed_tool = f"{tool_name.capitalize()}({git_ignore_path})"
                         except (ValueError, OSError) as e:
-                            # 轉換失敗，使用原始路徑並記錄警告
+                            # Conversion failed, use original path and log warning
                             logger.warning(
                                 f"Failed to convert path to git-ignore format: {path_or_cmd}. "
                                 f"Error: {e}. Using original path."
                             )
                             processed_tool = f"{tool_name.capitalize()}({path_or_cmd})"
                     else:
-                        # 相對路徑，加上 / 前綴 (git ignore 格式)
+                        # Relative path, add / prefix (git ignore format)
                         git_ignore_path = "/" + path_or_cmd
                         processed_tool = f"{tool_name.capitalize()}({git_ignore_path})"
             else:
-                # 工具沒有路徑參數，直接首字母大寫
+                # Tool has no path parameter, just capitalize first letter
                 processed_tool = tool.capitalize()
 
-            # 去重
+            # Remove duplicates
             if processed_tool not in processed_tools:
                 processed_tools.append(processed_tool)
 
         return processed_tools
 
     def add_directories(self, cmd: List[str], directories: List[str]) -> List[str]:
-        """將允許的目錄加入命令列參數.
+        """Add allowed directories to command line arguments.
 
         Args:
-            cmd: 目前的命令列參數
-            directories: 目錄列表
+            cmd: Current command line arguments
+            directories: List of directories
 
         Returns:
-            更新後的命令列參數
+            Updated command line arguments
         """
         for directory in directories:
             cmd.extend(["--add-dir", directory])
         return cmd
 
     def get_output_format(self) -> List[str]:
-        """取得 Claude CLI 的輸出格式參數.
+        """Get Claude CLI's output format parameters.
 
         Returns:
-            輸出格式相關的命令列參數
+            Output format related command line parameters
         """
         return ["--output-format", "stream-json", "--verbose"]
 
     def extract_session_id(self, output_lines: List[str]) -> Optional[str]:
-        """從輸出中提取 session ID.
+        """Extract session ID from output.
 
         Args:
-            output_lines: CLI 輸出的行列表
+            output_lines: List of lines from CLI output
 
         Returns:
-            Session ID，如果找不到則回傳 None
+            Session ID, or None if not found
         """
         for line in output_lines:
             try:
@@ -223,15 +223,15 @@ class ClaudeCLI(AbstractCLI):
         return None
 
     def create_session(self) -> str:
-        """建立新的 Claude session.
+        """Create new Claude session.
 
-        執行一個簡單的 Claude 命令來建立新的 session，並從回應中提取 session ID。
+        Execute a simple Claude command to create new session, and extract session ID from response.
 
         Returns:
-            新的 session ID
+            New session ID
 
         Raises:
-            Exception: 如果 session 建立失敗或無法提取 session ID
+            Exception: If session creation fails or session ID cannot be extracted
         """
         cmd = ["claude", "-p", "Say 'hi'", "--output-format", "json"]
 
@@ -245,7 +245,7 @@ class ClaudeCLI(AbstractCLI):
         try:
             response_data = json.loads(result.stdout)
 
-            # 檢查錯誤（例如達到使用限制）
+            # Check for errors (e.g. usage limit reached)
             if response_data.get("is_error"):
                 error_msg = response_data.get("result", "Unknown error")
                 print(f"\n⚠️  Claude API Error: {error_msg}\n")

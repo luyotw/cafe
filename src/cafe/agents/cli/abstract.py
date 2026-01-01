@@ -1,4 +1,4 @@
-"""抽象基底類別，定義所有 CLI 工具的共同介面."""
+"""Abstract base class defining the common interface for all CLI tools."""
 
 from abc import ABC, abstractmethod
 from typing import List, Optional, Tuple
@@ -7,17 +7,17 @@ from cafe.core.types import AgentConfig, PermissionDenial, TokenUsage
 
 
 class AbstractCLI(ABC):
-    """CLI 工具的抽象基底類別.
+    """Abstract base class for CLI tools.
 
-    所有 CLI 工具 (Claude, Gemini, Cursor, Copilot) 都必須繼承此類別
-    並實作所有抽象方法。
+    All CLI tools (Claude, Gemini, Cursor, Copilot) must inherit from this class
+    and implement all abstract methods.
     """
 
     def __init__(self, config: AgentConfig) -> None:
-        """初始化 CLI 策略.
+        """Initialize CLI strategy.
 
         Args:
-            config: Agent 配置
+            config: Agent configuration
         """
         self.config = config
 
@@ -28,15 +28,15 @@ class AbstractCLI(ABC):
         allowed_tools: Optional[List[str]] = None,
         allowed_directories: Optional[List[str]] = None,
     ) -> List[str]:
-        """建構 CLI 命令列參數.
+        """Build CLI command line arguments.
 
         Args:
-            prompt: 提示詞
-            allowed_tools: 允許使用的工具列表
-            allowed_directories: 允許存取的目錄列表
+            prompt: Prompt text
+            allowed_tools: List of allowed tools
+            allowed_directories: List of allowed directories
 
         Returns:
-            完整的命令列參數列表
+            Complete list of command line arguments
         """
         pass
 
@@ -46,75 +46,75 @@ class AbstractCLI(ABC):
         output_lines: List[str],
         streaming_log: Optional[List[str]] = None,
     ) -> Tuple[str, TokenUsage, List[PermissionDenial]]:
-        """解析 CLI 輸出.
+        """Parse CLI output.
 
         Args:
-            output_lines: CLI 輸出的行列表
-            streaming_log: 串流輸出記錄 (可選)
+            output_lines: List of CLI output lines
+            streaming_log: Streaming output log (optional)
 
         Returns:
-            (response, token_usage, permission_denials) 三元組
+            Tuple of (response, token_usage, permission_denials)
         """
         pass
 
     @abstractmethod
     def translate_allowed_tools(self, tools: List[str]) -> List[str]:
-        """轉換工具名稱為此 CLI 的格式.
+        """Translate tool names to this CLI's format.
 
         Args:
-            tools: 工具名稱列表 (使用內部慣例格式)
+            tools: List of tool names (using internal convention format)
 
         Returns:
-            轉換後的工具名稱列表
+            List of translated tool names
         """
         pass
 
     @abstractmethod
     def add_directories(self, cmd: List[str], directories: List[str]) -> List[str]:
-        """將允許的目錄加入命令列參數.
+        """Add allowed directories to command line arguments.
 
         Args:
-            cmd: 目前的命令列參數
-            directories: 目錄列表
+            cmd: Current command line arguments
+            directories: List of directories
 
         Returns:
-            更新後的命令列參數
+            Updated command line arguments
         """
         pass
 
     @abstractmethod
     def get_output_format(self) -> List[str]:
-        """取得此 CLI 的輸出格式參數.
+        """Get output format parameters for this CLI.
 
         Returns:
-            輸出格式相關的命令列參數 (例如 ["--output-format", "stream-json"])
+            Command line parameters for output format (e.g. ["--output-format", "stream-json"])
         """
         pass
 
     @abstractmethod
     def extract_session_id(self, output_lines: List[str]) -> Optional[str]:
-        """從輸出中提取 session ID.
+        """Extract session ID from output.
 
         Args:
-            output_lines: CLI 輸出的行列表
+            output_lines: List of CLI output lines
 
         Returns:
-            Session ID，如果找不到則回傳 None
+            Session ID if found, None otherwise
         """
         pass
 
     def create_session(self) -> str:
-        """建立新的 session.
+        """Create a new session.
 
-        此方法為可選實作。對於會自動建立 session 的 CLI (如 Gemini, Cursor)，
-        使用預設實作（回傳空字串）。對於需要明確建立 session 的 CLI (如 Claude)，
-        應該覆寫此方法。
+        This method is optional to implement. For CLIs that automatically create sessions
+        (like Gemini, Cursor), use the default implementation (return empty string).
+        For CLIs that need explicit session creation (like Claude), override this method.
 
         Returns:
-            新的 session ID，若 CLI 會自動建立 session 則回傳空字串
+            New session ID, or empty string if CLI automatically creates sessions
 
         Raises:
-            AgentExecutionError: 如果 session 建立失敗
+            AgentExecutionError: If session creation fails
         """
-        # 預設實作：回傳空字串，表示 CLI 會自動建立 session
+        # Default implementation: return empty string, indicating CLI will auto-create session
         return ""

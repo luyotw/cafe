@@ -106,7 +106,7 @@ class Phase(ABC):
                 "Phase must have 'iteration' attribute to use _save_user_input"
             )
 
-        # 建立 iteration 目錄
+        # Create iteration directory
         iteration_dir = self._get_iteration_dir(self.iteration)
         iteration_dir.mkdir(parents=True, exist_ok=True)
 
@@ -198,18 +198,18 @@ class Phase(ABC):
         with open(context_file, "w", encoding="utf-8") as f:
             json.dump(context_data, f, ensure_ascii=False, indent=2)
 
-        # 儲存串流 JSONL 檔案（如果有串流資料）
+        # Save streaming JSONL file (if streaming data exists)
         streaming_log = context_data.get("streaming_log", [])
         if streaming_log:
             try:
                 self._save_streaming_jsonl(streaming_log)
             except Exception as e:
-                # 記錄錯誤但不中斷流程（JSONL 儲存失敗不應影響主要功能）
+                # Log error but don't interrupt flow (JSONL save failure shouldn't affect main functionality)
                 import logging
                 logger = logging.getLogger(__name__)
                 logger.warning(f"Failed to save streaming JSONL: {e}")
 
-        # 新增一筆到 iterations.jsonl
+        # Append one record to iterations.jsonl
         iteration_index_data = {
             "iteration": self.iteration,
             "timestamp": context_data.get("timestamp", datetime.now().isoformat()),
@@ -219,57 +219,57 @@ class Phase(ABC):
         try:
             self._append_iteration_index(iteration_index_data)
         except Exception as e:
-            # 記錄錯誤但不中斷流程
+            # Log error but don't interrupt flow
             import logging
             logger = logging.getLogger(__name__)
             logger.warning(f"Failed to append iteration index: {e}")
 
     def _save_streaming_jsonl(self, streaming_log: List[str]) -> None:
-        """儲存串流片段為 JSONL 格式檔案。
+        """Save streaming fragments as JSONL format file.
 
-        將 streaming_log 中的每個片段儲存為 JSONL 格式（每行一個 JSON 物件），
-        儲存到 iteration_XXX/streaming.jsonl。
+        Save each fragment in streaming_log as JSONL format (one JSON object per line),
+        saved to iteration_XXX/streaming.jsonl.
 
         Args:
-            streaming_log: 串流片段列表
+            streaming_log: List of streaming fragments
         """
-        # 如果 streaming_log 為空，不建立檔案
+        # If streaming_log is empty, don't create file
         if not streaming_log:
             return
 
-        # 確保 phase_dir 存在
+        # Ensure phase_dir exists
         if not hasattr(self, "phase_dir"):
             raise AttributeError(
                 "Phase must have 'phase_dir' attribute to use _save_streaming_jsonl"
             )
 
-        # 取得 iteration 目錄
+        # Get iteration directory
         iteration_dir = self._get_iteration_dir(self.iteration)
         iteration_dir.mkdir(parents=True, exist_ok=True)
 
-        # 建立 JSONL 檔案路徑
+        # Create JSONL file path
         jsonl_file = iteration_dir / "streaming.jsonl"
 
-        # 寫入 JSONL 檔案（每行一個 JSON 物件）
+        # Write JSONL file (one JSON object per line)
         with open(jsonl_file, "w", encoding="utf-8") as f:
             for index, content in enumerate(streaming_log):
-                # 建立 JSON 物件
+                # Create JSON object
                 json_obj = {
                     "index": index,
                     "timestamp": datetime.now().isoformat(),
                     "content": content
                 }
-                # 寫入一行 JSON（不使用縮排）
+                # Write one line of JSON (without indentation)
                 f.write(json.dumps(json_obj, ensure_ascii=False) + "\n")
 
     def _get_iteration_dir(self, iteration: int) -> Path:
-        """取得 iteration 目錄路徑。
+        """Get iteration directory path.
 
         Args:
-            iteration: iteration 編號
+            iteration: iteration number
 
         Returns:
-            iteration 目錄的 Path 物件，格式為 iteration_XXX/
+            Path object of iteration directory, format is iteration_XXX/
         """
         if not hasattr(self, "phase_dir"):
             raise AttributeError(
@@ -279,10 +279,10 @@ class Phase(ABC):
         return Path(self.phase_dir) / f"iteration_{iteration:03d}"
 
     def _append_iteration_index(self, iteration_data: dict) -> None:
-        """新增一筆 iteration 記錄到 iterations.jsonl。
+        """Append one iteration record to iterations.jsonl.
 
         Args:
-            iteration_data: iteration 資料字典，應包含 iteration、timestamp、status、has_error 欄位
+            iteration_data: iteration data dictionary, should contain iteration, timestamp, status, has_error fields
         """
         if not hasattr(self, "phase_dir"):
             raise AttributeError(
@@ -291,15 +291,15 @@ class Phase(ABC):
 
         iterations_file = Path(self.phase_dir) / "iterations.jsonl"
 
-        # 新增一行 JSON 到檔案末尾
+        # Append one line of JSON to end of file
         with open(iterations_file, "a", encoding="utf-8") as f:
             f.write(json.dumps(iteration_data, ensure_ascii=False) + "\n")
 
     def _read_iterations_index(self) -> List[dict]:
-        """讀取 iterations.jsonl 的所有記錄。
+        """Read all records from iterations.jsonl.
 
         Returns:
-            iterations 記錄列表，每個元素是一個字典
+            List of iteration records, each element is a dictionary
         """
         if not hasattr(self, "phase_dir"):
             raise AttributeError(
@@ -308,20 +308,20 @@ class Phase(ABC):
 
         iterations_file = Path(self.phase_dir) / "iterations.jsonl"
 
-        # 如果檔案不存在，返回空列表
+        # If file doesn't exist, return empty list
         if not iterations_file.exists():
             return []
 
-        # 讀取所有行並解析為 JSON
+        # Read all lines and parse as JSON
         result = []
         content = iterations_file.read_text(encoding="utf-8").strip()
 
-        # 處理空檔案
+        # Handle empty file
         if not content:
             return []
 
         for line in content.split("\n"):
-            if line.strip():  # 忽略空行
+            if line.strip():  # Ignore empty lines
                 result.append(json.loads(line))
 
         return result
@@ -401,7 +401,7 @@ class Phase(ABC):
         agent_cli = agent_executor.config.cli.value
         agent_session_id = agent_executor.config.session_id
 
-        # 3. Save prompt to context.json（Before executing agent）
+        # 3. Save prompt to context.json (before executing agent)
         iteration_dir = self._get_iteration_dir(self.iteration)
         context_file = iteration_dir / "context.json"
         if context_file.exists():
@@ -415,7 +415,7 @@ class Phase(ABC):
             with open(context_file, "w", encoding="utf-8") as f:
                 json.dump(context_data, f, ensure_ascii=False, indent=2)
 
-        # 4. Execute agent（with error recovery）
+        # 4. Execute agent (with error recovery)
         try:
             response, token_usage, permission_denials, cli_command_args, streaming_log = self.agent_manager.execute(
                 agent_name,
@@ -654,7 +654,7 @@ class Phase(ABC):
             print(f"\n❌ {error_msg}")
             raise ValueError(error_msg)
 
-        # 7. Update history（Always save, even if no status code）
+        # 7. Update history (always save, even if no status code)
         phase_data = {
             "response": response,
             "permission_denials": [denial.model_dump() for denial in permission_denials],
@@ -678,7 +678,7 @@ class Phase(ABC):
             status_code=status_code,
         )
 
-        # 8. Save progress（If has status code and phase has _save_progress method）
+        # 8. Save progress (if has status code and phase has _save_progress method)
         if status_code and hasattr(self, "_save_progress"):
             self._save_progress(status_code)  # type: ignore
 
@@ -851,7 +851,7 @@ class Phase(ABC):
             return None, None
 
     def _save_progress(self, status_code: PhaseStatusCode) -> None:
-        """Save phase progress to status.json（common method）。
+        """Save phase progress to status.json (common method).
 
         Args:
             status_code: Phase status code (CONFIRMED, READY_FOR_REVIEW, NEED_CLARIFICATION, etc.)
@@ -881,7 +881,7 @@ class Phase(ABC):
             json.dump(progress.to_dict(), f, ensure_ascii=False, indent=2)
 
     def _load_progress(self) -> Optional["PhaseProgress"]:
-        """Load phase progress from status.json（common method）。
+        """Load phase progress from status.json (common method).
 
         Returns:
             PhaseProgress if file exists, None otherwise
@@ -1181,15 +1181,15 @@ class Phase(ABC):
         if not phase_dir.exists():
             return 0
 
-        # 優先從 iterations.jsonl 讀取
+        # Read iterations.jsonl first
         iterations_file = phase_dir / "iterations.jsonl"
         if iterations_file.exists():
             iterations = self._read_iterations_index()
             if iterations:
-                # 返回最後一個 iteration 編號
+                # Return last iteration number
                 return iterations[-1].get("iteration", 0)
 
-        # 降級方案：從 iteration_XXX/context.json 讀取
+        # Fallback: read from iteration_XXX/context.json
         iteration_dirs = sorted(phase_dir.glob("iteration_*"))
         if not iteration_dirs:
             return 0

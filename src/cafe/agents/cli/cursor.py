@@ -1,4 +1,4 @@
-"""Cursor CLI 工具實作."""
+"""Cursor CLI tool implementation."""
 
 import json
 from typing import List, Optional, Tuple
@@ -8,7 +8,7 @@ from cafe.core.types import PermissionDenial, TokenUsage
 
 
 class CursorCLI(AbstractCLI):
-    """Cursor CLI 工具的具體實作."""
+    """Concrete implementation of Cursor CLI tool."""
 
     def build_command(
         self,
@@ -16,34 +16,34 @@ class CursorCLI(AbstractCLI):
         allowed_tools: Optional[List[str]] = None,
         allowed_directories: Optional[List[str]] = None,
     ) -> List[str]:
-        """建構 Cursor CLI 命令列參數.
+        """Build Cursor CLI command line arguments.
 
-        注意: Cursor 不支援工具限制和目錄限制，一律使用 --force 自動批准所有工具。
+        Note: Cursor doesn't support tool restrictions and directory restrictions, always uses --force to automatically approve all tools.
 
-        參數順序: cursor-agent -> -p -> --model -> --resume -> --force -> --output-format
+        Parameter order: cursor-agent -> -p -> --model -> --resume -> --force -> --output-format
 
         Args:
-            prompt: 提示詞
-            allowed_tools: 允許使用的工具列表 (Cursor 不支援，會被忽略)
-            allowed_directories: 允許存取的目錄列表 (Cursor 不支援，會被忽略)
+            prompt: Prompt text
+            allowed_tools: List of allowed tools (Cursor doesn't support, will be ignored)
+            allowed_directories: List of allowed directories (Cursor doesn't support, will be ignored)
 
         Returns:
-            完整的命令列參數列表
+            Complete command line argument list
         """
         cmd = ["cursor-agent", "-p", prompt]
 
-        # 如果有 model，加入 --model 參數
+        # If has model, add --model parameter
         if self.config.model:
             cmd.extend(["--model", self.config.model])
 
-        # 如果有 session_id，加入 --resume 參數
+        # If has session_id, add --resume parameter
         if self.config.session_id:
             cmd.extend(["--resume", self.config.session_id])
 
-        # Cursor 不支援 allowed-tools，使用 --force 自動批准所有工具
+        # Cursor doesn't support allowed-tools, use --force to automatically approve all tools
         cmd.append("--force")
 
-        # 加入輸出格式參數
+        # Add output format parameter
         cmd.extend(self.get_output_format())
 
         return cmd
@@ -53,77 +53,77 @@ class CursorCLI(AbstractCLI):
         output_lines: List[str],
         streaming_log: Optional[List[str]] = None,
     ) -> Tuple[str, TokenUsage, List[PermissionDenial]]:
-        """解析 Cursor CLI 的 JSON 輸出.
+        """Parse Cursor CLI's JSON output.
 
         Args:
-            output_lines: CLI 輸出的行列表
-            streaming_log: 串流輸出記錄 (可選，此處不使用)
+            output_lines: List of lines from CLI output
+            streaming_log: Streaming output log (optional, not used here)
 
         Returns:
-            (response, token_usage, permission_denials) 三元組
+            (response, token_usage, permission_denials) tuple
         """
         full_output = "".join(output_lines)
         token_usage = TokenUsage()
         permission_denials = []
 
-        # 解析 JSON 輸出
+        # Parse JSON output
         try:
             data = json.loads(full_output.strip())
             response = data.get("response", full_output)
-            # TODO: 如果 Cursor 提供 token usage 或 permission denials，在此解析
+            # TODO: If Cursor provides token usage or permission denials, parse here
         except json.JSONDecodeError:
-            # 如果不是 JSON，回傳原始輸出
+            # If not JSON, return original output
             response = full_output
 
         return response, token_usage, permission_denials
 
     def translate_allowed_tools(self, tools: List[str]) -> List[str]:
-        """轉換工具名稱為 Cursor 格式.
+        """Convert tool names to Cursor format.
 
-        Cursor 不支援工具限制，回傳空列表。
+        Cursor doesn't support tool restrictions, return empty list.
 
         Args:
-            tools: 工具名稱列表
+            tools: List of tool names
 
         Returns:
-            空列表（Cursor 不支援工具限制）
+            Empty list (Cursor doesn't support tool restrictions)
         """
-        # Cursor 不支援工具限制，回傳空列表
+        # Cursor doesn't support tool restrictions, return empty list
         return []
 
     def add_directories(self, cmd: List[str], directories: List[str]) -> List[str]:
-        """將允許的目錄加入命令列參數.
+        """Add allowed directories to command line arguments.
 
-        Cursor 不支援目錄限制，直接回傳原始命令。
+        Cursor doesn't support directory restrictions, return original command.
 
         Args:
-            cmd: 目前的命令列參數
-            directories: 目錄列表
+            cmd: Current command line arguments
+            directories: List of directories
 
         Returns:
-            原始命令（不做任何改變）
+            Original command (no changes)
         """
-        # Cursor 不支援目錄限制，回傳原始命令
+        # Cursor doesn't support directory restrictions, return original command
         return cmd
 
     def get_output_format(self) -> List[str]:
-        """取得 Cursor CLI 的輸出格式參數.
+        """Get Cursor CLI's output format parameters.
 
         Returns:
-            輸出格式相關的命令列參數
+            Output format related command line parameters
         """
         return ["--output-format", "json"]
 
     def extract_session_id(self, output_lines: List[str]) -> Optional[str]:
-        """從輸出中提取 session ID.
+        """Extract session ID from output.
 
-        Cursor 自動管理 session，不需要從輸出提取。
+        Cursor automatically manages session, no need to extract from output.
 
         Args:
-            output_lines: CLI 輸出的行列表
+            output_lines: List of lines from CLI output
 
         Returns:
-            None（Cursor 自動管理 session）
+            None (Cursor automatically manages session)
         """
-        # Cursor 自動管理 session，不需要從輸出提取
+        # Cursor automatically manages session, no need to extract from output
         return None
