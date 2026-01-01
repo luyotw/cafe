@@ -3904,8 +3904,8 @@ def show(
         raise typer.Exit(1)
 
 
-@app.command(name="cli", context_settings={"allow_extra_args": False, "ignore_unknown_options": False})
-def invoke_cli(
+@app.command(name="chat", context_settings={"allow_extra_args": False, "ignore_unknown_options": False})
+def chat_with_agent(
     ctx: typer.Context,
     role: str = typer.Argument(..., help="Role: pm, developer, or reviewer"),
 ) -> None:
@@ -3920,9 +3920,9 @@ def invoke_cli(
     - reviewer: 審查者 Agent
 
     範例：
-        cafe cli pm
-        cafe cli developer
-        cafe cli reviewer
+        cafe chat pm
+        cafe chat developer
+        cafe chat reviewer
     """
     # 1. 驗證 role 參數
     valid_roles = ["pm", "developer", "reviewer"]
@@ -3931,7 +3931,7 @@ def invoke_cli(
         raise typer.Exit(1)
 
     # 2. 取得當前分支作為 issue name
-    issue_name = _get_and_validate_branch(ctx, "cli")
+    issue_name = _get_and_validate_branch(ctx, "chat")
 
     # 3. 載入設定
     config_manager = ConfigManager()

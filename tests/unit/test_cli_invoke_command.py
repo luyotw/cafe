@@ -1,4 +1,4 @@
-"""Tests for cafe cli <role> command."""
+"""Tests for cafe chat <role> command."""
 
 import pytest
 from pathlib import Path
@@ -59,16 +59,16 @@ agents:
     return config_dir
 
 
-class TestInvokeCliCommand:
-    """測試 cafe cli <role> 命令功能"""
+class TestChatCommand:
+    """測試 cafe chat <role> 命令功能"""
 
-    def test_invoke_cli_validates_role_parameter(self, tmp_path: Path, mock_initialized_branch, config_with_agents):
+    def test_chat_validates_role_parameter(self, tmp_path: Path, mock_initialized_branch, config_with_agents):
         """測試 role 參數驗證 - 應只接受 pm、developer、reviewer"""
         # 測試無效的 role - 應該在驗證階段就失敗（exit code 1）
-        result = runner.invoke(app, ["cli", "invalid_role"])
+        result = runner.invoke(app, ["chat", "invalid_role"])
         assert result.exit_code == 1
 
-    def test_invoke_cli_accepts_valid_roles(self, tmp_path: Path, mock_initialized_branch, config_with_agents):
+    def test_chat_accepts_valid_roles(self, tmp_path: Path, mock_initialized_branch, config_with_agents):
         """測試接受有效的 role 參數 - pm、developer、reviewer"""
         valid_roles = ["pm", "developer", "reviewer"]
 
@@ -90,11 +90,11 @@ class TestInvokeCliCommand:
                         with patch("cafe.ui.cli.subprocess.run") as mock_run:
                             mock_run.return_value = MagicMock(returncode=0)
 
-                            result = runner.invoke(app, ["cli", role])
+                            result = runner.invoke(app, ["chat", role])
                             # 命令應該被接受（不應在 role 驗證階段失敗）
                             # 註：如果實作使用互動模式，exit_code 可能不是 0
 
-    def test_invoke_cli_gets_issue_from_current_branch(self, tmp_path: Path, mock_initialized_branch, config_with_agents):
+    def test_chat_gets_issue_from_current_branch(self, tmp_path: Path, mock_initialized_branch, config_with_agents):
         """測試從當前分支取得 issue name"""
         with patch("cafe.ui.cli.GitOperations") as mock_git_class:
             mock_git = mock_git_class.return_value
@@ -118,12 +118,12 @@ class TestInvokeCliCommand:
                         with patch("cafe.ui.cli.subprocess.run") as mock_run:
                             mock_run.return_value = MagicMock(returncode=0)
 
-                            result = runner.invoke(app, ["cli", "pm"])
+                            result = runner.invoke(app, ["chat", "pm"])
 
                             # 驗證有呼叫 _get_and_validate_branch，這會內部呼叫 get_current_branch
                             assert mock_git.get_current_branch.called or result.exit_code == 0
 
-    def test_invoke_cli_checks_branch_initialized(self, tmp_path: Path, config_with_agents):
+    def test_chat_checks_branch_initialized(self, tmp_path: Path, config_with_agents):
         """測試檢查分支是否已初始化"""
         with patch("cafe.ui.cli.GitOperations") as mock_git_class:
             mock_git = mock_git_class.return_value
@@ -132,10 +132,10 @@ class TestInvokeCliCommand:
 
             # 分支未初始化 - 應該要失敗
             with patch("cafe.ui.cli.is_branch_initialized", return_value=False):
-                result = runner.invoke(app, ["cli", "pm"])
+                result = runner.invoke(app, ["chat", "pm"])
                 assert result.exit_code == 1
 
-    def test_invoke_cli_fails_when_agent_not_configured(self, tmp_path: Path, mock_initialized_branch):
+    def test_chat_fails_when_agent_not_configured(self, tmp_path: Path, mock_initialized_branch):
         """測試當 role 沒有配置 agent 時顯示錯誤"""
         with patch("cafe.ui.cli.GitOperations") as mock_git_class:
             mock_git = mock_git_class.return_value
@@ -148,10 +148,10 @@ class TestInvokeCliCommand:
                     # pm agent 未配置（返回 None 或空 dict）
                     mock_config.get.return_value = None
 
-                    result = runner.invoke(app, ["cli", "pm"])
+                    result = runner.invoke(app, ["chat", "pm"])
                     assert result.exit_code != 0
 
-    def test_invoke_cli_loads_agent_config_correctly(self, tmp_path: Path, mock_initialized_branch, config_with_agents):
+    def test_chat_loads_agent_config_correctly(self, tmp_path: Path, mock_initialized_branch, config_with_agents):
         """測試正確從 config 載入 agent 設定"""
         with patch("cafe.ui.cli.GitOperations") as mock_git_class:
             mock_git = mock_git_class.return_value
@@ -184,7 +184,7 @@ class TestInvokeCliCommand:
                         with patch("cafe.ui.cli.subprocess.run") as mock_run:
                             mock_run.return_value = MagicMock(returncode=0)
 
-                            result = runner.invoke(app, ["cli", "pm"])
+                            result = runner.invoke(app, ["chat", "pm"])
 
                             # 驗證有查詢 pm agent 設定
                             assert "agents.pm" in get_calls
