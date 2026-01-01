@@ -171,10 +171,10 @@ cafe --help
 You can add custom agents using the `cafe agent` command set. See `cafe agent --help` for more details.
 
 ### Template System
-- **Implementation Analysis Template**: Defines the format for the implementation plan.
-- **Requirements Analysis Template**: Defines the format for requirements clarification and specification documents (To be implemented).
-- **Review Report Template**: Defines the format for code review reports (To be implemented).
-- **PR Description Template**: Defines the format for PR descriptions (To be implemented).
+- **Plan Template**: Defines the format for the implementation plan.
+- **Spec Template** (To be implemented): Defines the format for requirements clarification and specification documents.
+- **Review Report Template** (To be implemented): Defines the format for code review reports.
+- **PR Description Template** (To be implemented): Defines the format for PR descriptions.
 
 You can manage custom templates with the `cafe template` command set. See `cafe template --help` for details.
 
