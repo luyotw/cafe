@@ -3,7 +3,9 @@
 
 **Maximize your vibe coding—without losing control of your codebase.**
 
-CAFE (CLI Agent Flow Engine) is an AI-driven development workflow automation system powered by headless CLI agents. It automates the entire development lifecycle—from requirements analysis to PR generation—by orchestrating specialized roles such as PM, Developer, and Reviewer, while keeping the codebase structured, inspectable, and maintainable.
+CAFE (CLI Agent Flow Engine) is an AI-driven development workflow automation system powered by headless CLI agents. Our goal is to help individual developers leverage AI agents more effectively while maintaining code quality and long-term maintainability. It automates the entire development lifecycle—from requirements analysis to PR generation—by orchestrating specialized roles such as PM, Developer, and Reviewer, while keeping the codebase structured, inspectable, and maintainable.
+
+CAFE is actively evolving—we're continuously iterating based on real-world usage and feedback to improve stability, usability, and integration with various AI agents.
 
 ![image](https://github.com/luyotw/cafe/blob/main/images/CAFE-Flow.png)
 
