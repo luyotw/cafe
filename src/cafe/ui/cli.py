@@ -463,9 +463,23 @@ def init() -> None:
 
         # 1. Check if config already exists
         if config_manager.config_file.exists():
-            console.print("[yellow]Configuration already exists. To modify, use the `cafe config` commands.[/yellow]")
-            console.print("[yellow]See `cafe config --help` for details.[/yellow]")
-            raise typer.Exit(1)
+            console.print("[yellow]⚠️  Configuration already exists.[/yellow]")
+            console.print(f"[dim]Current config: {config_manager.config_file}[/dim]")
+            console.print()
+
+            # Ask user if they want to overwrite
+            from cafe.ui.inquirer_prompts import prompt_confirm
+            overwrite = prompt_confirm(
+                message="Do you want to overwrite the existing configuration?",
+                default=False
+            )
+
+            if overwrite is None or not overwrite:
+                console.print("[yellow]Cancelled. To modify existing config, use `cafe config` commands.[/yellow]")
+                raise typer.Exit(0)
+
+            console.print("[yellow]⚠️  Proceeding to overwrite existing configuration...[/yellow]")
+            console.print()
 
         # 2. Copy agents and templates directories
         try:

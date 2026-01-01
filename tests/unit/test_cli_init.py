@@ -14,10 +14,10 @@ runner = CliRunner()
 class TestInitCommandEnvironmentChecks:
     """測試 init 指令環境檢查"""
 
-    def test_init_exits_if_config_exists(
+    def test_init_prompts_for_overwrite_if_config_exists(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """測試當 .cafe/config.yaml 存在時提示並退出"""
+        """測試當 .cafe/config.yaml 存在時提示是否覆寫"""
         # 建立測試環境
         cafe_dir = tmp_path / ".cafe"
         cafe_dir.mkdir()
@@ -26,11 +26,72 @@ class TestInitCommandEnvironmentChecks:
 
         monkeypatch.chdir(tmp_path)
 
-        result = runner.invoke(app, ["init"])
+        # Mock prompt_confirm to return False (user cancels)
+        with patch("cafe.ui.inquirer_prompts.prompt_confirm") as mock_confirm:
+            mock_confirm.return_value = False
 
-        assert result.exit_code == 1
+            result = runner.invoke(app, ["init"])
+
+        assert result.exit_code == 0
         assert "Configuration already exists" in result.stdout
-        assert "cafe config" in result.stdout
+        assert "Cancelled" in result.stdout
+        mock_confirm.assert_called_once()
+
+    @patch("cafe.ui.cli.shutil.which")
+    @patch("cafe.ui.cli.init_helpers.copy_data_directory")
+    @patch("cafe.ui.cli.list_available_agents")
+    def test_init_overwrites_config_when_confirmed(
+        self,
+        mock_list_agents: MagicMock,
+        mock_copy: MagicMock,
+        mock_which: MagicMock,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """測試當使用者確認覆寫時，會重新執行 init"""
+        # 建立測試環境
+        cafe_dir = tmp_path / ".cafe"
+        cafe_dir.mkdir()
+        config_file = cafe_dir / "config.yaml"
+        config_file.write_text("old config")
+
+        # 模擬有可用 CLI
+        mock_which.return_value = "/usr/bin/claude"
+
+        # 模擬 agent 列表
+        mock_list_agents.return_value = [("Roger", "PM agent", Path(".cafe/agents/pm/Roger.md"))]
+
+        monkeypatch.chdir(tmp_path)
+
+        # Mock prompts
+        with patch("cafe.ui.inquirer_prompts.prompt_confirm") as mock_confirm, \
+             patch("cafe.ui.cli.prompt_list") as mock_prompt_list, \
+             patch("cafe.ui.cli.prompt_text") as mock_prompt_text:
+
+            # User confirms overwrite
+            mock_confirm.return_value = True
+
+            # Setup agent selection
+            mock_prompt_list.side_effect = [
+                "claude",
+                "Roger: PM agent",
+                "claude",
+                "Roger: PM agent",
+                "claude",
+                "Roger: PM agent",
+            ]
+            mock_prompt_text.side_effect = ["", "", ""]
+
+            result = runner.invoke(app, ["init"])
+
+        assert result.exit_code == 0
+        assert "Proceeding to overwrite" in result.stdout
+        assert "Configuration saved successfully" in result.stdout
+
+        # Verify config was overwritten
+        assert config_file.exists()
+        content = config_file.read_text()
+        assert "old config" not in content
 
     @patch("cafe.ui.cli.shutil.which")
     def test_init_exits_if_no_clis_available(
