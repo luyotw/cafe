@@ -4000,7 +4000,6 @@ def invoke_cli(
     # 執行互動式 CLI
     try:
         result = subprocess.run(cli_command)
-        raise typer.Exit(result.returncode)
     except FileNotFoundError:
         console.print(f"[red]Error: CLI tool '{agent_cli}' not found.[/red]")
         console.print(f"[yellow]Please install '{agent_cli}' CLI tool first.[/yellow]")
@@ -4008,6 +4007,9 @@ def invoke_cli(
     except Exception as e:
         console.print(f"[red]Error: Failed to execute CLI: {e}[/red]")
         raise typer.Exit(1)
+
+    # 正常退出，返回 CLI 工具的 exit code
+    raise typer.Exit(result.returncode)
 
 
 @app.command()
