@@ -691,27 +691,18 @@ def prepare(
     This command sets up the necessary directory structure, creates a feature branch,
     and saves initial configuration for the issue.
 
+    \b
     Supports both interactive and non-interactive modes:
     - Interactive mode: Prompts for spec/plan configuration (default behavior)
     - Non-interactive mode: Requires configuration via command-line parameters
 
+    \b
     Examples:
-        # Interactive mode (will ask for issue name and configuration)
         cafe prepare
-
-        # Specify issue name directly (still prompts for configuration)
         cafe prepare fix-login-bug
-
-        # Non-interactive mode with all required parameters
         cafe prepare fix-bug --no-interactive --input-method=manual --rigor=medium --template=default
-
-        # Non-interactive mode with GitHub issue
         cafe prepare issue-123 --no-interactive --input-method=github --issue-id=123 --rigor=high
-
-        # Specify custom base branch
         cafe prepare my-feature --base develop
-
-        # Skip uncommitted changes check
         cafe prepare my-feature --no-check
     """
 
@@ -1104,6 +1095,7 @@ def _get_project_path() -> str:
 def close() -> None:
     """Close current feature and return to base branch.
 
+    \b
     This command:
     1. Checks for open/draft PRs (blocks if found)
     2. For worktree mode: switches back to main repo, removes worktree, deletes branch
@@ -1432,6 +1424,7 @@ def restore(
     This command restores an archived issue from ~/.cafe/projects/<project-path>/archived/<issue-name>/
     back to .cafe/issues/<issue-name>/.
 
+    \b
     It performs the following checks:
     1. Verifies backup exists
     2. Checks current branch matches the issue's feature_branch
@@ -1439,6 +1432,7 @@ def restore(
     4. Prompts user for confirmation
     5. Restores all files from backup
 
+    \b
     Examples:
         cafe restore issue80
     """
@@ -1646,26 +1640,14 @@ def spec(
 
     Use 'cafe spec edit' to edit the latest specification file.
 
+    \b
     Examples:
-        # Generate spec through conversation (uses current branch)
         cafe spec
-
-        # Auto mode: automatically continue iterations until CAFE_CONFIRMED
         cafe spec --auto
-
-        # Create new GitHub issue with spec
         cafe spec -m github
-
-        # Update existing GitHub issue
         cafe spec -m github -i 123
-
-        # Use custom PM agent
         cafe spec --pm CustomPM
-
-        # Specify rigor level
         cafe spec --rigor low
-
-        # Edit latest spec file
         cafe spec edit
     """
     # Handle edit action
@@ -2000,20 +1982,12 @@ def plan(
 
     Use 'cafe plan edit' to edit the latest plan file.
 
+    \b
     Examples:
-        # Analyze spec and create plan (uses current branch)
         cafe plan
-
-        # Auto mode: automatically continue iterations until CAFE_CONFIRMED
         cafe plan --auto
-
-        # Analyze GitHub issue and create plan
         cafe plan -m github -i 123
-
-        # Use custom developer agent
         cafe plan --dev CustomDev
-
-        # Edit latest plan file
         cafe plan edit
     """
     # Handle edit action
@@ -2381,17 +2355,11 @@ def develop(
 
     This command automatically uses the current Git branch name as the issue identifier.
 
+    \b
     Examples:
-        # Execute development (uses current branch)
         cafe develop
-
-        # Use custom developer agent
         cafe develop --dev CustomDev
-
-        # Fetch unresolved PR comments to guide development
         cafe develop --pr-number 123
-
-        # Non-interactive mode with permission approval
         cafe develop --no-interactive --approve-denied-tools 0,2 --user-input "Please be careful"
     """
     try:
@@ -2603,20 +2571,12 @@ def review(
 
     This command automatically uses the current Git branch name as the issue identifier.
 
+    \b
     Examples:
-        # Review entire feature branch (uses current branch)
         cafe review
-
-        # Review specific commit
         cafe review --commit abc123
-
-        # Use custom reviewer agent
         cafe review --reviewer CustomReviewer
-
-        # Force re-review even if already completed
         cafe review --force
-
-        # Edit latest review file
         cafe review edit
     """
     # Handle edit action
@@ -2871,17 +2831,11 @@ def pr(
 
     This command automatically uses the current Git branch name as the issue identifier.
 
+    \b
     Examples:
-        # Create draft PR (uses current branch, interactive mode will ask for confirmation)
         cafe pr
-
-        # Create non-draft PR
         cafe pr --no-draft
-
-        # Create PR with custom title and body
         cafe pr --title "Add user authentication" --body "Implements login/logout"
-
-        # Non-interactive mode (creates draft PR by default)
         cafe pr --no-interactive
     """
     try:
@@ -3040,23 +2994,15 @@ def config(
 ) -> None:
     """Manage CAFE configuration.
 
+    \b
     Examples:
-        # Show all configuration
         cafe config
-
-        # Set a configuration value (with alias support)
         cafe config set pm gemini
         cafe config set pm.cli gemini
         cafe config set agents.pm.cli gemini
-
-        # Get a configuration value
         cafe config get pm
         cafe config get agents.pm.cli
-
-        # Edit config file in editor
         cafe config edit
-
-        # Reset to defaults
         cafe config reset
     """
     config_manager = ConfigManager()
@@ -3334,6 +3280,7 @@ def template(
 ) -> None:
     """Manage plan templates.
 
+    \b
     Actions:
         add  - Add a new template from a file
         ls   - List all available templates
@@ -3341,20 +3288,12 @@ def template(
         cat  - View template content
         edit - Edit a template with $EDITOR
 
+    \b
     Examples:
-        # Add a new template
         cafe template add path/to/template.md my-template
-
-        # List all templates
         cafe template ls
-
-        # View template content
         cafe template cat my-template
-
-        # Edit a template
         cafe template edit my-template
-
-        # Remove a template
         cafe template rm my-template
     """
     try:
@@ -3472,17 +3411,16 @@ def make(
 ) -> None:
     """🚀 Check environment and execute complete development workflow.
 
+    \b
     This command will:
     1. Check if all configured agent CLI tools are installed
     2. If environment check passes, execute `cafe spec --auto` to start automated workflow
 
     Please run `cafe prepare` first to initialize issue environment.
 
+    \b
     Examples:
-        # Execute with default configuration
         cafe make
-
-        # Use custom config file
         cafe make --config /path/to/config.yaml
     """
     # Load configuration
@@ -3844,12 +3782,13 @@ def show(
 
     Shows the content of files from different phases and iterations.
 
+    \b
     Examples:
-        cafe show spec                    # Show latest spec output
-        cafe show spec context            # Show latest spec context
-        cafe show spec output -i 2        # Show spec iteration 2 output
-        cafe show spec context -i -1      # Show previous spec iteration context
-        cafe show plan status -i -2       # Show plan status 2 iterations ago
+        cafe show spec
+        cafe show spec context
+        cafe show spec output -i 2
+        cafe show spec context -i -1
+        cafe show plan status -i -2
     """
     # Validate phase name
     if phase_name not in VALID_PHASES:
@@ -3943,11 +3882,13 @@ def chat_with_agent(
     without manually looking up and entering session id.
     The system automatically infers the issue from current branch and loads corresponding session.
 
+    \b
     Supported roles:
     - pm: Product Manager Agent
     - developer: Developer Agent
     - reviewer: Reviewer Agent
 
+    \b
     Examples:
         cafe chat pm
         cafe chat developer
