@@ -105,17 +105,9 @@ class ReviewPhase(Phase):
             Phase result
         """
         try:
-            # Check if phase is already completed (avoid re-running completed phases)
-            # unless force flag is set
-            from cafe.core.status_codes import PhaseStatusCode
-            early_exit_result = self._check_if_already_completed(
-                [PhaseStatusCode.CONFIRMED, PhaseStatusCode.REJECTED],
-                force=self.force
-            )
-            if early_exit_result:
-                return early_exit_result
-
             # Check if there are unpushed commits newer than last review
+            # This must be checked BEFORE checking completion status, so that
+            # new commits after a CONFIRMED review will trigger a new review
             if self.git_ops.has_unpushed_commits():
                 review_status_file = self.issue_dir / "review" / "status.json"
 
@@ -157,6 +149,16 @@ class ReviewPhase(Phase):
                     except Exception as e:
                         print(f"⚠️  Warning: Failed to check review timestamp: {e}")
                         pass
+
+            # Check if phase is already completed (avoid re-running completed phases)
+            # unless force flag is set
+            from cafe.core.status_codes import PhaseStatusCode
+            early_exit_result = self._check_if_already_completed(
+                [PhaseStatusCode.CONFIRMED, PhaseStatusCode.REJECTED],
+                force=self.force
+            )
+            if early_exit_result:
+                return early_exit_result
 
             # Note: We don't check if diff is empty here - let the review agent
             # see the empty diff and decide (usually NEEDS_CHANGES)
