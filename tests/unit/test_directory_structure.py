@@ -35,7 +35,7 @@ class TestDirectoryStructure:
         # Check agent files are in correct subdirectories
         assert (Path("src/cafe/data/agents/pm/Roger.md")).exists(), "Roger.md should be in src/cafe/data/agents/pm/"
         assert (Path("src/cafe/data/agents/developer/David.md")).exists(), "David.md should be in src/cafe/data/agents/developer/"
-        assert (Path("src/cafe/data/agents/developer/John.md")).exists(), "John.md should be in src/cafe/data/agents/developer/"
+        assert (Path("src/cafe/data/agents/developer/Nick.md")).exists(), "Nick.md should be in src/cafe/data/agents/developer/"
         assert (Path("src/cafe/data/agents/reviewer/Richard.md")).exists(), "Richard.md should be in src/cafe/data/agents/reviewer/"
 
     def test_repo_root_agents_and_templates_do_not_exist(self) -> None:

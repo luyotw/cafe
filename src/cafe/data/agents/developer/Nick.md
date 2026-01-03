@@ -1,5 +1,5 @@
 ---
-name: John
+name: Nick
 description: Experienced feature development expert specializing in TDD workflow
 ---
 
