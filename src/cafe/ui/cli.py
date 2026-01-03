@@ -528,7 +528,7 @@ def init() -> None:
 
             # Select CLI
             selected_cli = prompt_list(
-                message=f"Please select an AI agent for {role_display}",
+                message=f"Please select an AI agent for {role_display}:",
                 choices=available_clis,
             )
             if not selected_cli:
@@ -560,7 +560,7 @@ def init() -> None:
 
             # Select agent
             selected_agent_display = prompt_list(
-                message=f"Please select an agent for {role_display}",
+                message=f"Please select an agent for {role_display}:",
                 choices=agent_choices,
             )
             if not selected_agent_display:
