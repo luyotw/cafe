@@ -737,7 +737,7 @@ class DevelopPhase(Phase):
         important_note = f"""
 **Important**
 - **Strictly maintain consistency with {base_branch}'s commit message format**, can commit multiple times, consistency includes:
-  - Language (English/Chinese)
+  - Language (English/Chinese/...)
   - Message is one line (subject line only) or multiple lines (subject + body)
 """
 
@@ -791,10 +791,11 @@ Please use Read tool to read {agent_file} to understand your role definition and
 1. Use Read tool to read {agent_file} to understand role definition
 {develop_instruction}{review_instruction}
 3. Address issues one by one based on review feedback
-4. **Strictly follow existing commit message style**, can commit multiple times
-5. **Do not modify commits from other branches**
-6. If needed, refer to {self.spec_file} and {self.plan_file}
-7. Return status code after completing all corrections
+4. **Maximize code reuse** - look for existing patterns and utilities in the codebase before writing new code
+5. **Strictly follow existing commit message style**, can commit multiple times
+6. **Do not modify commits from other branches**
+7. If needed, refer to {self.spec_file} and {self.plan_file}
+8. Return status code after completing all corrections
 
 {status_code_prompt}
 
@@ -820,10 +821,11 @@ Please use Read tool to read {agent_file} to understand your role definition and
 1. Use Read tool to read {agent_file} to understand role definition
 {develop_instruction}2. Carefully read {self.spec_file} and {self.plan_file}
 3. Execute development tasks in strict order according to the plan
-4. **Strictly follow existing commit message style**, can commit multiple times
-5. After completing each task, mark it checked in {self.plan_file} (change - [ ] to - [x])
-6. **Do not modify commits from other branches**
-7. Return status code after completing all tasks
+4. **Maximize code reuse** - look for existing patterns and utilities in the codebase before writing new code
+5. **Strictly follow existing commit message style**, can commit multiple times
+6. After completing each task, mark it checked in {self.plan_file} (change - [ ] to - [x])
+7. **Do not modify commits from other branches**
+8. Return status code after completing all tasks
 
 {status_code_prompt}
 
