@@ -3,7 +3,7 @@
 from typing import List
 
 from cafe.services.timeline_builder import TimelineEntry
-from cafe.services.time_formatter import format_timestamp_local, format_duration, calculate_elapsed_time
+from cafe.services.time_formatter import format_timestamp_utc, format_duration, calculate_elapsed_time
 from cafe.core.types import PhaseStatus
 
 try:
@@ -39,7 +39,7 @@ class SummaryDisplay:
             Formatted string for the phase
         """
         symbol = self.STATUS_SYMBOLS.get(entry.status, "?")
-        start_time = format_timestamp_local(entry.start_time)
+        start_time = format_timestamp_utc(entry.start_time)
 
         if entry.status == PhaseStatus.IN_PROGRESS:
             elapsed = calculate_elapsed_time(entry.start_time)
@@ -47,7 +47,7 @@ class SummaryDisplay:
             return f"{symbol} [Phase] {entry.name}: {start_time} (elapsed: {duration_str})"
         elif entry.end_time:
             duration_str = format_duration(entry.end_time - entry.start_time)
-            return f"{symbol} [Phase] {entry.name}: {start_time} - {format_timestamp_local(entry.end_time)} ({duration_str})"
+            return f"{symbol} [Phase] {entry.name}: {start_time} - {format_timestamp_utc(entry.end_time)} ({duration_str})"
         else:
             return f"{symbol} [Phase] {entry.name}: {start_time}"
 
@@ -61,7 +61,7 @@ class SummaryDisplay:
             Formatted string for the iteration
         """
         symbol = self.STATUS_SYMBOLS.get(entry.status, "?")
-        start_time = format_timestamp_local(entry.start_time)
+        start_time = format_timestamp_utc(entry.start_time)
 
         if entry.status == PhaseStatus.IN_PROGRESS:
             elapsed = calculate_elapsed_time(entry.start_time)
@@ -69,7 +69,7 @@ class SummaryDisplay:
             return f"  {symbol} {entry.name}: {start_time} (elapsed: {duration_str})"
         elif entry.end_time:
             duration_str = format_duration(entry.end_time - entry.start_time)
-            return f"  {symbol} {entry.name}: {start_time} - {format_timestamp_local(entry.end_time)} ({duration_str})"
+            return f"  {symbol} {entry.name}: {start_time} - {format_timestamp_utc(entry.end_time)} ({duration_str})"
         else:
             return f"  {symbol} {entry.name}: {start_time}"
 

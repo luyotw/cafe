@@ -4159,10 +4159,7 @@ def summary() -> None:
         builder = TimelineBuilder(issue_name)
         entries = builder.build_timeline_entries(phase_statuses, iteration_data)
 
-        # Convert to local timezone
-        entries = builder.convert_to_local_timezone(entries)
-
-        # Display timeline
+        # Display timeline (keep times in UTC as they appear in data files)
         display = SummaryDisplay()
         output = display.render_vertical_timeline(entries)
 

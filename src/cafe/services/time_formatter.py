@@ -24,6 +24,26 @@ def format_timestamp_local(dt: datetime) -> str:
     return local_dt.strftime("%b %d, %Y at %I:%M %p")
 
 
+def format_timestamp_utc(dt: datetime) -> str:
+    """Format datetime to human-readable UTC time string.
+
+    Args:
+        dt: Datetime object to format
+
+    Returns:
+        Human-readable string in UTC (e.g., "Jan 4, 2025 at 2:30 PM")
+    """
+    # Ensure datetime is timezone-aware
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+
+    # Convert to UTC
+    utc_dt = dt.astimezone(timezone.utc)
+
+    # Format: "Jan 4, 2025 at 2:30 PM"
+    return utc_dt.strftime("%b %d, %Y at %I:%M %p")
+
+
 def format_duration(elapsed: timedelta) -> str:
     """Format timedelta to human-readable duration string.
 
