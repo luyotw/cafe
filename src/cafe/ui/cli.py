@@ -4122,5 +4122,56 @@ def _check_dependencies() -> None:
         pass
 
 
+@app.command()
+def summary() -> None:
+    """Display a comprehensive timeline of all workflow phases and iterations.
+
+    Shows the start time, end time, duration, and current status for each phase
+    and iteration in the current issue's workflow.
+
+    \b
+    Examples:
+        cafe summary
+    """
+    from cafe.services.summary_service import SummaryService
+    from cafe.services.timeline_builder import TimelineBuilder
+    from cafe.services.summary_display import SummaryDisplay
+
+    try:
+        # Get current issue from git context
+        service = SummaryService()
+        issue_name = service.get_current_issue()
+
+        # Load phase and iteration data
+        phase_statuses = {}
+        iteration_data = {}
+
+        for phase_name in ["spec", "plan", "develop", "review", "pr"]:
+            phase_status = service.load_phase_status(issue_name, phase_name)
+            if phase_status:
+                phase_statuses[phase_name] = phase_status
+
+            iterations = service.load_iteration_statuses(issue_name, phase_name)
+            if iterations:
+                iteration_data[phase_name] = iterations
+
+        # Build timeline
+        builder = TimelineBuilder(issue_name)
+        entries = builder.build_timeline_entries(phase_statuses, iteration_data)
+
+        # Convert to local timezone
+        entries = builder.convert_to_local_timezone(entries)
+
+        # Display timeline
+        display = SummaryDisplay()
+        output = display.render_vertical_timeline(entries)
+
+        console.print(output)
+
+    except Exception as e:
+        console.print(f"[red]Error: Failed to display summary: {e}[/red]")
+        raise typer.Exit(1)
+
+
 if __name__ == "__main__":
     main()
