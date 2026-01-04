@@ -525,8 +525,7 @@ class ReviewPhase(Phase):
 ⚠️ **Important Restriction:**
 - You are now in iteration {self.iteration}, only follow up on "issues raised in the previous round"
 - Previous review content is at: {previous_review_path}
-- **Cannot raise new issues** (unless they are critical issues like security vulnerabilities, data corruption, etc.)
-- Only clarify issues that have already been raised
+- **Cannot raise new issues, only review new changes after previous review**
 """
 
         # Generate review file path (iteration_XXX/output.md format)
