@@ -146,7 +146,7 @@ class TimelineBuilder:
 
         Args:
             phase_name: Name of the phase
-            iteration_status: Status data from iteration status.json
+            iteration_status: Status data from iterations.jsonl or iteration status.json
 
         Returns:
             TimelineEntry for the iteration, or None if timestamp is missing
@@ -163,7 +163,21 @@ class TimelineBuilder:
         # Calculate end time and elapsed time based on status
         end_time = None
         elapsed_time = None
-        status = PhaseStatus(iteration_status.get("status", "pending"))
+
+        # Map status - iterations.jsonl has status codes like "CAFE_CONFIRMED", "CAFE_NEEDS_CHANGES"
+        # These should map to "completed" since they represent completed iterations
+        status_str = iteration_status.get("status", "pending")
+        if status_str.startswith("CAFE_"):
+            # These are CAFE status codes, map them to completed
+            status = PhaseStatus.COMPLETED
+            status_code = status_str
+        else:
+            # These are PhaseStatus values
+            try:
+                status = PhaseStatus(status_str)
+            except ValueError:
+                status = PhaseStatus.PENDING
+            status_code = iteration_status.get("status_code")
 
         # Try to read end_time from status data if available
         end_timestamp_str = iteration_status.get("end_time", "")
@@ -186,7 +200,7 @@ class TimelineBuilder:
             elapsed_time=elapsed_time,
             status=status,
             iteration=iteration_num,
-            status_code=iteration_status.get("status_code"),
+            status_code=status_code,
         )
 
     def _parse_timestamp(self, timestamp_str: str) -> Optional[datetime]:

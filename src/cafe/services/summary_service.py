@@ -60,7 +60,7 @@ class SummaryService:
             raise RuntimeError(f"Failed to load phase status from {status_file}: {e}")
 
     def load_iteration_statuses(self, issue_name: str, phase_name: str) -> List[Dict[str, Any]]:
-        """Load all iteration statuses for a phase.
+        """Load all iteration statuses for a phase from iterations.jsonl file.
 
         Args:
             issue_name: Name of the issue
@@ -75,8 +75,36 @@ class SummaryService:
             return []
 
         iterations = []
+        iterations_file = phase_dir / "iterations.jsonl"
 
-        # Find all iteration status files (format: iteration_NNN/status.json)
+        # Try to read from iterations.jsonl file (preferred format)
+        if iterations_file.exists():
+            try:
+                with open(iterations_file, "r") as f:
+                    for line_num, line in enumerate(f, 1):
+                        if not line.strip():
+                            continue
+                        try:
+                            iteration_data = json.loads(line)
+                            iterations.append(iteration_data)
+                        except json.JSONDecodeError as e:
+                            self._load_errors.append({
+                                'file': str(iterations_file),
+                                'error': f"Line {line_num}: {str(e)}",
+                                'type': 'iteration'
+                            })
+                            continue
+            except IOError as e:
+                self._load_errors.append({
+                    'file': str(iterations_file),
+                    'error': str(e),
+                    'type': 'iteration'
+                })
+                return []
+
+            return iterations
+
+        # Fallback: Find all iteration status files (format: iteration_NNN/status.json)
         for iteration_dir in sorted(phase_dir.glob("iteration_*")):
             if not iteration_dir.is_dir():
                 continue

@@ -221,3 +221,27 @@ class TestLoadIterationStatuses:
 
         result = service.load_iteration_statuses("test-issue", "pr")
         assert isinstance(result, list)
+
+    def test_load_iteration_statuses_from_jsonl_file(self, tmp_path, monkeypatch):
+        """Test reading iterations from iterations.jsonl file."""
+        from cafe.services.summary_service import SummaryService
+
+        monkeypatch.chdir(tmp_path)
+
+        service = SummaryService()
+        phase_dir = tmp_path / ".cafe/issues/test-issue/review"
+        phase_dir.mkdir(parents=True)
+
+        jsonl_content = ('{"iteration": 1, "timestamp": "2026-01-05T00:42:36.437898", "status": "CAFE_NEEDS_CHANGES", "has_error": false}\n'
+                        '{"iteration": 2, "timestamp": "2026-01-05T00:49:05.274391", "status": "CAFE_NEEDS_CHANGES", "has_error": false}\n'
+                        '{"iteration": 3, "timestamp": "2026-01-05T01:03:46.858399", "status": "CAFE_NEEDS_CHANGES", "has_error": false}\n'
+                        '{"iteration": 4, "timestamp": "2026-01-05T01:10:18.388798", "status": "CAFE_CONFIRMED", "has_error": false}\n')
+
+        (phase_dir / "iterations.jsonl").write_text(jsonl_content)
+
+        result = service.load_iteration_statuses("test-issue", "review")
+        assert isinstance(result, list)
+        assert len(result) == 4
+        assert result[0]["iteration"] == 1
+        assert result[0]["timestamp"] == "2026-01-05T00:42:36.437898"
+        assert result[3]["status"] == "CAFE_CONFIRMED"
