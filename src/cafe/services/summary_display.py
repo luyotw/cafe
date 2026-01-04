@@ -66,12 +66,12 @@ class SummaryDisplay:
         if entry.status == PhaseStatus.IN_PROGRESS:
             elapsed = calculate_elapsed_time(entry.start_time)
             duration_str = format_duration(elapsed)
-            return f"  {symbol} {entry.name}: {start_time} (elapsed: {duration_str})"
+            return f"{symbol} {entry.phase.capitalize()} {entry.name}: {start_time} (elapsed: {duration_str})"
         elif entry.end_time:
             duration_str = format_duration(entry.end_time - entry.start_time)
-            return f"  {symbol} {entry.name}: {start_time} - {format_timestamp_utc(entry.end_time)} ({duration_str})"
+            return f"{symbol} {entry.phase.capitalize()} {entry.name}: {start_time} - {format_timestamp_utc(entry.end_time)} ({duration_str})"
         else:
-            return f"  {symbol} {entry.name}: {start_time}"
+            return f"{symbol} {entry.phase.capitalize()} {entry.name}: {start_time}"
 
     def apply_status_styling(self, text: str, status: PhaseStatus) -> str:
         """Apply styling based on status.
@@ -121,11 +121,8 @@ class SummaryDisplay:
         lines = ["", "📋 CAFE Workflow Timeline", "=" * 50, ""]
 
         for entry in entries:
-            if entry.entry_type == "phase":
-                formatted = self.format_phase_entry(entry)
-            else:
-                formatted = self.format_iteration_entry(entry)
-
+            # Only render iteration entries (phase entries are filtered out)
+            formatted = self.format_iteration_entry(entry)
             styled = self.apply_status_styling(formatted, entry.status)
             lines.append(styled)
 

@@ -232,33 +232,16 @@ class TimelineBuilder:
             return None
 
     def filter_pending_phases(self, entries: List[TimelineEntry]) -> List[TimelineEntry]:
-        """Filter out pending phases with no iterations.
+        """Filter out phase entries, keep only iteration entries.
 
         Args:
             entries: List of timeline entries
 
         Returns:
-            Filtered list with pending-only phases removed
+            Filtered list with only iteration entries
         """
-        # Group entries by phase
-        phases_with_data = set()
-        result = []
-
-        # First pass: identify phases that have iterations
-        for entry in entries:
-            if entry.entry_type == "iteration":
-                phases_with_data.add(entry.phase)
-
-        # Second pass: keep phases with iterations, skip pending phases
-        for entry in entries:
-            if entry.entry_type == "iteration":
-                result.append(entry)
-            elif entry.entry_type == "phase":
-                # Keep phase if it has iterations or if it's not pending
-                if entry.phase in phases_with_data or entry.status != PhaseStatus.PENDING:
-                    result.append(entry)
-
-        return result
+        # Keep only iteration entries, filter out all phase entries
+        return [entry for entry in entries if entry.entry_type == "iteration"]
 
     def sort_chronologically(self, entries: List[TimelineEntry]) -> List[TimelineEntry]:
         """Sort entries chronologically in flat order by start_time.
