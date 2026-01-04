@@ -7,13 +7,10 @@ from cafe.services.time_formatter import format_timestamp_local, format_duration
 from cafe.core.types import PhaseStatus
 
 try:
-    from rich.console import Console
-    from rich.style import Style
+    import rich
     RICH_AVAILABLE = True
 except ImportError:
     RICH_AVAILABLE = False
-    Console = None
-    Style = None
 
 
 class SummaryDisplay:
