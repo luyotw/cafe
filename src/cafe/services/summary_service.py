@@ -19,6 +19,7 @@ class SummaryService:
             git_ops: GitOperations instance for git context detection
         """
         self.git_ops = git_ops or GitOperations()
+        self._load_errors: List[Dict[str, str]] = []
 
     def get_current_issue(self) -> str:
         """Get current issue name from git branch context.
@@ -89,8 +90,20 @@ class SummaryService:
                     status_data = json.load(f)
                     iterations.append(status_data)
             except (json.JSONDecodeError, IOError) as e:
-                # Log but continue processing other iterations
-                print(f"Warning: Failed to load iteration status from {status_file}: {e}")
+                # Track errors for reporting to user later
+                self._load_errors.append({
+                    'file': str(status_file),
+                    'error': str(e),
+                    'type': 'iteration'
+                })
                 continue
 
         return iterations
+
+    def get_load_errors(self) -> List[Dict[str, str]]:
+        """Get any errors that occurred during file loading.
+
+        Returns:
+            List of load error dictionaries containing file path and error message
+        """
+        return self._load_errors

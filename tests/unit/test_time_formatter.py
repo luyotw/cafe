@@ -3,34 +3,43 @@
 import pytest
 from datetime import datetime, timedelta, timezone
 
+from cafe.services.time_formatter import format_timestamp_local, format_duration, calculate_elapsed_time
+
 
 class TestFormatTimestampLocal:
     """Test cases for format_timestamp_local() function."""
 
     def test_format_timestamp_local_iso_format(self):
         """Test formatting ISO format timestamps to human-readable local time."""
-        # This test validates local timezone conversion and formatting
-        pass
+        dt = datetime(2025, 1, 4, 14, 30, 0, tzinfo=timezone.utc)
+        result = format_timestamp_local(dt)
+        assert "Jan 04" in result or "Jan 4" in result
+        assert "2025" in result
 
     def test_format_timestamp_local_utc_to_local(self):
         """Test converting UTC timestamp to local timezone."""
-        # This test validates UTC to local timezone conversion
-        pass
+        dt = datetime(2025, 1, 4, 12, 0, 0, tzinfo=timezone.utc)
+        result = format_timestamp_local(dt)
+        assert isinstance(result, str)
+        assert len(result) > 0
 
     def test_format_timestamp_local_naive_datetime(self):
         """Test handling naive datetime (assumes UTC)."""
-        # This test validates handling timezone-naive datetimes
-        pass
+        dt = datetime(2025, 1, 4, 10, 0, 0)
+        result = format_timestamp_local(dt)
+        assert isinstance(result, str)
 
     def test_format_timestamp_local_aware_datetime(self):
         """Test handling timezone-aware datetime."""
-        # This test validates handling timezone-aware datetimes
-        pass
+        dt = datetime(2025, 1, 4, 10, 0, 0, tzinfo=timezone.utc)
+        result = format_timestamp_local(dt)
+        assert isinstance(result, str)
 
     def test_format_timestamp_local_readable_format(self):
         """Test that output format is human-readable."""
-        # This test validates output format like "Jan 4, 2025 at 2:30 PM"
-        pass
+        dt = datetime(2025, 1, 4, 14, 30, 0, tzinfo=timezone.utc)
+        result = format_timestamp_local(dt)
+        assert "2025" in result and ("PM" in result or "pm" in result or "14" in result)
 
 
 class TestFormatDuration:
@@ -38,43 +47,51 @@ class TestFormatDuration:
 
     def test_format_duration_hours_and_minutes(self):
         """Test formatting duration with hours and minutes."""
-        # This test validates "2 hours 15 minutes" format
-        pass
+        td = timedelta(hours=2, minutes=15)
+        result = format_duration(td)
+        assert "hour" in result and "minute" in result
 
     def test_format_duration_days_and_hours(self):
         """Test formatting duration with days and hours."""
-        # This test validates "1 day 3 hours" format
-        pass
+        td = timedelta(days=1, hours=3)
+        result = format_duration(td)
+        assert "day" in result and "hour" in result
 
     def test_format_duration_only_minutes(self):
         """Test formatting duration with only minutes."""
-        # This test validates "45 minutes" format
-        pass
+        td = timedelta(minutes=45)
+        result = format_duration(td)
+        assert "minute" in result
 
     def test_format_duration_only_hours(self):
         """Test formatting duration with only hours."""
-        # This test validates "2 hours" format
-        pass
+        td = timedelta(hours=2)
+        result = format_duration(td)
+        assert "hour" in result
 
     def test_format_duration_only_days(self):
         """Test formatting duration with only days."""
-        # This test validates "1 day" or "3 days" format
-        pass
+        td = timedelta(days=3)
+        result = format_duration(td)
+        assert "day" in result
 
     def test_format_duration_less_than_minute(self):
         """Test formatting duration less than a minute."""
-        # This test validates "less than 1 minute" or "30 seconds"
-        pass
+        td = timedelta(seconds=30)
+        result = format_duration(td)
+        assert isinstance(result, str)
 
     def test_format_duration_zero(self):
         """Test formatting zero duration."""
-        # This test validates handling of zero duration
-        pass
+        td = timedelta(0)
+        result = format_duration(td)
+        assert isinstance(result, str)
 
     def test_format_duration_large_value(self):
         """Test formatting very large duration."""
-        # This test validates "N days M hours" format for large values
-        pass
+        td = timedelta(days=10, hours=5)
+        result = format_duration(td)
+        assert "day" in result and "hour" in result
 
 
 class TestCalculateElapsedTime:
@@ -82,25 +99,31 @@ class TestCalculateElapsedTime:
 
     def test_calculate_elapsed_time_recent_start(self):
         """Test calculating elapsed time from recent start."""
-        # This test validates current time minus start time
-        pass
+        start = datetime.now(timezone.utc) - timedelta(seconds=10)
+        elapsed = calculate_elapsed_time(start)
+        assert isinstance(elapsed, timedelta)
+        assert 0 < elapsed.total_seconds() < 20
 
     def test_calculate_elapsed_time_older_start(self):
         """Test calculating elapsed time from past start."""
-        # This test validates correct calculation from older timestamp
-        pass
+        start = datetime.now(timezone.utc) - timedelta(hours=1)
+        elapsed = calculate_elapsed_time(start)
+        assert elapsed.total_seconds() > 3600
 
     def test_calculate_elapsed_time_seconds_precision(self):
         """Test elapsed time calculation precision."""
-        # This test validates second-level accuracy
-        pass
+        start = datetime.now(timezone.utc) - timedelta(seconds=30)
+        elapsed = calculate_elapsed_time(start)
+        assert 25 < elapsed.total_seconds() < 35
 
     def test_calculate_elapsed_time_with_timezone(self):
         """Test elapsed time calculation with timezone-aware datetimes."""
-        # This test validates correct calculation across timezone boundaries
-        pass
+        start = datetime.now(timezone.utc) - timedelta(minutes=5)
+        elapsed = calculate_elapsed_time(start)
+        assert 290 < elapsed.total_seconds() < 310
 
     def test_calculate_elapsed_time_future_datetime_handled(self):
         """Test handling of future datetime (edge case)."""
-        # This test validates error handling for future dates
-        pass
+        future = datetime.now(timezone.utc) + timedelta(hours=1)
+        with pytest.raises(ValueError):
+            calculate_elapsed_time(future)

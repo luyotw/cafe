@@ -6,6 +6,15 @@ from cafe.services.timeline_builder import TimelineEntry
 from cafe.services.time_formatter import format_timestamp_local, format_duration, calculate_elapsed_time
 from cafe.core.types import PhaseStatus
 
+try:
+    from rich.console import Console
+    from rich.style import Style
+    RICH_AVAILABLE = True
+except ImportError:
+    RICH_AVAILABLE = False
+    Console = None
+    Style = None
+
 
 class SummaryDisplay:
     """Formatter for rendering workflow timeline."""
@@ -77,13 +86,27 @@ class SummaryDisplay:
         Returns:
             Styled text (with color codes if terminal supports it)
         """
-        # Simple styling without rich library (can enhance with rich later)
-        if status == PhaseStatus.IN_PROGRESS:
-            return f"[ACTIVE] {text}"
+        if not RICH_AVAILABLE:
+            # Fallback to simple text styling
+            if status == PhaseStatus.IN_PROGRESS:
+                return f"[ACTIVE] {text}"
+            elif status == PhaseStatus.FAILED:
+                return f"[FAILED] {text}"
+            elif status == PhaseStatus.SKIPPED:
+                return f"[SKIPPED] {text}"
+            return text
+
+        # Use rich library for enhanced styling
+        if status == PhaseStatus.COMPLETED:
+            return f"[green]{text}[/green]"
+        elif status == PhaseStatus.IN_PROGRESS:
+            return f"[yellow]{text}[/yellow]"
         elif status == PhaseStatus.FAILED:
-            return f"[FAILED] {text}"
+            return f"[red]{text}[/red]"
         elif status == PhaseStatus.SKIPPED:
-            return f"[SKIPPED] {text}"
+            return f"[dim]{text}[/dim]"
+        elif status == PhaseStatus.PENDING:
+            return f"[blue]{text}[/blue]"
         return text
 
     def render_vertical_timeline(self, entries: List[TimelineEntry]) -> str:

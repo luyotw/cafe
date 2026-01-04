@@ -3,9 +3,10 @@
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Union
 
 from cafe.core.types import PhaseStatus
+from cafe.services.time_formatter import calculate_elapsed_time
 
 
 @dataclass
@@ -71,12 +72,14 @@ class TimelineBuilder:
             # Create phase entry
             if phase_status:
                 phase_entry = self._create_phase_entry(phase_name, phase_status)
-                entries.append(phase_entry)
+                if phase_entry:
+                    entries.append(phase_entry)
 
             # Create iteration entries
             for iteration_status in iterations:
                 iteration_entry = self._create_iteration_entry(phase_name, iteration_status)
-                entries.append(iteration_entry)
+                if iteration_entry:
+                    entries.append(iteration_entry)
 
         # Filter out pending phases with no iterations, sort chronologically
         filtered = self.filter_pending_phases(entries)
@@ -84,7 +87,7 @@ class TimelineBuilder:
 
         return sorted_entries
 
-    def _create_phase_entry(self, phase_name: str, phase_status: Dict[str, Any]) -> TimelineEntry:
+    def _create_phase_entry(self, phase_name: str, phase_status: Dict[str, Any]) -> Optional[TimelineEntry]:
         """Create a timeline entry for a phase.
 
         Args:
@@ -92,20 +95,26 @@ class TimelineBuilder:
             phase_status: Status data from status.json
 
         Returns:
-            TimelineEntry for the phase
+            TimelineEntry for the phase, or None if timestamp is missing
         """
         timestamp_str = phase_status.get("timestamp", "")
         start_time = self._parse_timestamp(timestamp_str)
+
+        # Skip entries with missing timestamps
+        if start_time is None:
+            return None
 
         # Calculate end time and elapsed time based on status
         end_time = None
         elapsed_time = None
         status = PhaseStatus(phase_status.get("status", "pending"))
 
-        if status == PhaseStatus.COMPLETED or status == PhaseStatus.FAILED:
-            end_time = start_time  # Simplified: use start time if no end time
-        elif status == PhaseStatus.IN_PROGRESS:
-            elapsed_time = datetime.now(timezone.utc) - start_time
+        if status == PhaseStatus.IN_PROGRESS:
+            # Use utility function for calculating elapsed time
+            try:
+                elapsed_time = calculate_elapsed_time(start_time)
+            except ValueError:
+                elapsed_time = None
 
         return TimelineEntry(
             entry_type="phase",
@@ -118,7 +127,7 @@ class TimelineBuilder:
             status_code=phase_status.get("status_code"),
         )
 
-    def _create_iteration_entry(self, phase_name: str, iteration_status: Dict[str, Any]) -> TimelineEntry:
+    def _create_iteration_entry(self, phase_name: str, iteration_status: Dict[str, Any]) -> Optional[TimelineEntry]:
         """Create a timeline entry for an iteration.
 
         Args:
@@ -126,10 +135,15 @@ class TimelineBuilder:
             iteration_status: Status data from iteration status.json
 
         Returns:
-            TimelineEntry for the iteration
+            TimelineEntry for the iteration, or None if timestamp is missing
         """
         timestamp_str = iteration_status.get("timestamp", "")
         start_time = self._parse_timestamp(timestamp_str)
+
+        # Skip entries with missing timestamps
+        if start_time is None:
+            return None
+
         iteration_num = iteration_status.get("iteration", 0)
 
         # Calculate end time and elapsed time based on status
@@ -137,10 +151,12 @@ class TimelineBuilder:
         elapsed_time = None
         status = PhaseStatus(iteration_status.get("status", "pending"))
 
-        if status == PhaseStatus.COMPLETED or status == PhaseStatus.FAILED:
-            end_time = start_time  # Simplified: use start time if no end time
-        elif status == PhaseStatus.IN_PROGRESS:
-            elapsed_time = datetime.now(timezone.utc) - start_time
+        if status == PhaseStatus.IN_PROGRESS:
+            # Use utility function for calculating elapsed time
+            try:
+                elapsed_time = calculate_elapsed_time(start_time)
+            except ValueError:
+                elapsed_time = None
 
         return TimelineEntry(
             entry_type="iteration",
@@ -154,17 +170,17 @@ class TimelineBuilder:
             status_code=iteration_status.get("status_code"),
         )
 
-    def _parse_timestamp(self, timestamp_str: str) -> datetime:
+    def _parse_timestamp(self, timestamp_str: str) -> Optional[datetime]:
         """Parse ISO format timestamp to datetime.
 
         Args:
             timestamp_str: ISO format timestamp string
 
         Returns:
-            datetime object in UTC
+            datetime object in UTC, or None if timestamp is missing/invalid
         """
         if not timestamp_str:
-            return datetime.now(timezone.utc)
+            return None
 
         try:
             # Handle 'Z' suffix in ISO format
@@ -179,7 +195,8 @@ class TimelineBuilder:
 
             return dt
         except Exception:
-            return datetime.now(timezone.utc)
+            # Return None for unparseable timestamps instead of current time
+            return None
 
     def filter_pending_phases(self, entries: List[TimelineEntry]) -> List[TimelineEntry]:
         """Filter out pending phases with no iterations.
