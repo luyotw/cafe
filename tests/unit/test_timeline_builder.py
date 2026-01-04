@@ -13,7 +13,7 @@ class TestBuildTimelineEntries:
     """Test cases for build_timeline_entries() method."""
 
     def test_build_timeline_entries_creates_phase_entries(self):
-        """Test creating timeline entries for phases."""
+        """Test that timeline entries exclude phase entries (only iterations are included)."""
         builder = TimelineBuilder("test-issue")
         phase_statuses = {
             "spec": {"timestamp": "2025-01-01T00:00:00Z", "status": "completed"}
@@ -21,8 +21,9 @@ class TestBuildTimelineEntries:
         iteration_data = {}
 
         entries = builder.build_timeline_entries(phase_statuses, iteration_data)
-        assert len(entries) > 0
-        assert any(e.entry_type == "phase" for e in entries)
+        # Phase-only entries should be filtered out
+        assert len(entries) == 0
+        assert not any(e.entry_type == "phase" for e in entries)
 
     def test_build_timeline_entries_creates_iteration_entries(self):
         """Test creating timeline entries for iterations."""
@@ -39,10 +40,10 @@ class TestBuildTimelineEntries:
     def test_build_timeline_entries_includes_all_required_fields(self):
         """Test that timeline entries have all required fields."""
         builder = TimelineBuilder("test-issue")
-        phase_statuses = {
-            "spec": {"timestamp": "2025-01-01T00:00:00Z", "status": "completed"}
+        phase_statuses = {}
+        iteration_data = {
+            "spec": [{"iteration": 1, "timestamp": "2025-01-01T00:00:00Z", "status": "completed"}]
         }
-        iteration_data = {}
 
         entries = builder.build_timeline_entries(phase_statuses, iteration_data)
         assert len(entries) > 0
