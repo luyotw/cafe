@@ -1498,7 +1498,38 @@ def restore(
             console.print("[red]Error: Not on a valid branch (detached HEAD?).[/red]")
             raise typer.Exit(1)
 
-        # 5. Auto-checkout feature branch if not already on it
+        # 5. For worktree mode, create worktree first (before checkout)
+        # This avoids branch conflict issues
+        if worktree_path:
+            worktree_path_obj = Path(worktree_path)
+            if not worktree_path_obj.exists():
+                console.print(f"[yellow]ℹ️  Creating worktree: {worktree_path}[/yellow]")
+                try:
+                    # Create worktree parent directory
+                    worktree_path_obj.parent.mkdir(parents=True, exist_ok=True)
+                    # Try to create worktree with new branch first
+                    git_ops.run_git("worktree", "add", "-b", feature_branch, worktree_path)
+                    console.print(f"[green]✓ Created worktree at: {worktree_path}[/green]")
+                    current_branch = feature_branch  # Update since we created the branch
+                except Exception as e:
+                    # If branch already exists, try without -b flag
+                    if "already exists" in str(e):
+                        console.print(f"[yellow]ℹ️  Branch '{feature_branch}' already exists, creating worktree[/yellow]")
+                        try:
+                            git_ops.run_git("worktree", "add", worktree_path, feature_branch)
+                            console.print(f"[green]✓ Created worktree at: {worktree_path}[/green]")
+                            current_branch = feature_branch
+                        except Exception as e2:
+                            if "already used by worktree" in str(e2):
+                                console.print(f"[yellow]ℹ️  Branch '{feature_branch}' is already in another worktree[/yellow]")
+                            else:
+                                console.print(f"[red]❌ Error: Failed to create worktree: {e2}[/red]")
+                                raise typer.Exit(1)
+                    else:
+                        console.print(f"[red]❌ Error: Failed to create worktree: {e}[/red]")
+                        raise typer.Exit(1)
+
+        # 6. Auto-checkout feature branch if not already on it
         if current_branch != feature_branch:
             console.print(f"[yellow]ℹ️  Checking out feature branch: {feature_branch}[/yellow]")
             try:
@@ -1512,46 +1543,24 @@ def restore(
                 console.print(f"[red]❌ Error: Failed to checkout branch {feature_branch}: {e}[/red]")
                 raise typer.Exit(1)
 
-        # 6. For worktree mode, auto-navigate to the correct worktree directory
+        # 7. Navigate to worktree directory if it was created
         if worktree_path:
-            current_path = Path.cwd().resolve()
-            expected_worktree = Path(worktree_path).resolve()
+            worktree_path_obj = Path(worktree_path)
+            if worktree_path_obj.exists():
+                current_path = Path.cwd().resolve()
+                expected_worktree = worktree_path_obj.resolve()
 
-            # Check if current path is under worktree path
-            # Use is_relative_to() or manually check path prefix
-            try:
-                # Python 3.9+ has is_relative_to()
-                is_in_worktree = current_path.is_relative_to(expected_worktree)
-            except AttributeError:
-                # Python 3.8 fallback: check for common prefix
+                # Check if already in worktree
                 try:
-                    current_path.relative_to(expected_worktree)
-                    is_in_worktree = True
-                except ValueError:
-                    is_in_worktree = False
-
-            if not is_in_worktree:
-                # Auto-create worktree if it doesn't exist
-                worktree_path_obj = Path(worktree_path)
-                if not worktree_path_obj.exists():
-                    console.print(f"[yellow]ℹ️  Creating worktree: {worktree_path}[/yellow]")
+                    is_in_worktree = current_path.is_relative_to(expected_worktree)
+                except AttributeError:
                     try:
-                        # Create worktree parent directory
-                        worktree_path_obj.parent.mkdir(parents=True, exist_ok=True)
-                        # Create worktree using existing branch (don't create new branch with -b)
-                        git_ops.run_git("worktree", "add", worktree_path, feature_branch)
-                        console.print(f"[green]✓ Created worktree at: {worktree_path}[/green]")
-                    except Exception as e:
-                        # If branch is already in a worktree, that's OK - we can restore in current location
-                        if "already used by worktree" in str(e):
-                            console.print(f"[yellow]ℹ️  Branch '{feature_branch}' is already checked out elsewhere, will restore in current location[/yellow]")
-                            worktree_path_obj = None  # Mark worktree as unavailable
-                        else:
-                            console.print(f"[red]❌ Error: Failed to create worktree at {worktree_path}: {e}[/red]")
-                            raise typer.Exit(1)
+                        current_path.relative_to(expected_worktree)
+                        is_in_worktree = True
+                    except ValueError:
+                        is_in_worktree = False
 
-                # Navigate to worktree directory if it exists, otherwise stay in current directory
-                if worktree_path_obj and worktree_path_obj.exists():
+                if not is_in_worktree:
                     console.print(f"[yellow]ℹ️  Navigating to worktree directory: {worktree_path}[/yellow]")
                     try:
                         import os
@@ -1561,7 +1570,7 @@ def restore(
                         console.print(f"[red]❌ Error: Failed to change directory to {worktree_path}: {e}[/red]")
                         raise typer.Exit(1)
 
-        # 7. Prompt user for confirmation
+        # 8. Prompt user for confirmation
         console.print("[yellow]⚠️  Warning: This will restore the issue from backup.[/yellow]")
         console.print("[yellow]   Any current changes in .cafe/issues/{} will be overwritten.[/yellow]".format(issue_name))
         console.print()
@@ -1574,7 +1583,7 @@ def restore(
             console.print()
             raise typer.Exit(1)
 
-        # 8. Perform the restore operation
+        # 9. Perform the restore operation
         console.print()
         console.print("[dim]Restoring issue data...[/dim]")
 
@@ -1590,7 +1599,7 @@ def restore(
         console.print(f"[dim]Copying data from backup...[/dim]")
         shutil.copytree(archive_path, issue_dir)
 
-        # 9. Display success message
+        # 10. Display success message
         console.print()
         console.print(f"[green]✓ Successfully restored issue: {issue_name}[/green]")
         console.print(f"  📁 Restored to: .cafe/issues/{issue_name}/")
