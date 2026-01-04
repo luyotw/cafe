@@ -1536,21 +1536,30 @@ def restore(
                 if not worktree_path_obj.exists():
                     console.print(f"[yellow]ℹ️  Creating worktree: {worktree_path}[/yellow]")
                     try:
-                        git_ops.create_worktree(worktree_path, feature_branch, "develop")
+                        # Create worktree parent directory
+                        worktree_path_obj.parent.mkdir(parents=True, exist_ok=True)
+                        # Create worktree using existing branch (don't create new branch with -b)
+                        git_ops.run_git("worktree", "add", worktree_path, feature_branch)
                         console.print(f"[green]✓ Created worktree at: {worktree_path}[/green]")
                     except Exception as e:
-                        console.print(f"[red]❌ Error: Failed to create worktree at {worktree_path}: {e}[/red]")
-                        raise typer.Exit(1)
+                        # If branch is already in a worktree, that's OK - we can restore in current location
+                        if "already used by worktree" in str(e):
+                            console.print(f"[yellow]ℹ️  Branch '{feature_branch}' is already checked out elsewhere, will restore in current location[/yellow]")
+                            worktree_path_obj = None  # Mark worktree as unavailable
+                        else:
+                            console.print(f"[red]❌ Error: Failed to create worktree at {worktree_path}: {e}[/red]")
+                            raise typer.Exit(1)
 
-                # Navigate to worktree directory
-                console.print(f"[yellow]ℹ️  Navigating to worktree directory: {worktree_path}[/yellow]")
-                try:
-                    import os
-                    os.chdir(worktree_path)
-                    console.print(f"[green]✓ Changed directory to: {worktree_path}[/green]")
-                except Exception as e:
-                    console.print(f"[red]❌ Error: Failed to change directory to {worktree_path}: {e}[/red]")
-                    raise typer.Exit(1)
+                # Navigate to worktree directory if it exists, otherwise stay in current directory
+                if worktree_path_obj and worktree_path_obj.exists():
+                    console.print(f"[yellow]ℹ️  Navigating to worktree directory: {worktree_path}[/yellow]")
+                    try:
+                        import os
+                        os.chdir(worktree_path)
+                        console.print(f"[green]✓ Changed directory to: {worktree_path}[/green]")
+                    except Exception as e:
+                        console.print(f"[red]❌ Error: Failed to change directory to {worktree_path}: {e}[/red]")
+                        raise typer.Exit(1)
 
         # 7. Prompt user for confirmation
         console.print("[yellow]⚠️  Warning: This will restore the issue from backup.[/yellow]")
