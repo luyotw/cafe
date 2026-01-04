@@ -261,48 +261,16 @@ class TimelineBuilder:
         return result
 
     def sort_chronologically(self, entries: List[TimelineEntry]) -> List[TimelineEntry]:
-        """Sort entries chronologically while keeping iterations grouped with their phases.
+        """Sort entries chronologically in flat order by start_time.
 
         Args:
             entries: List of timeline entries
 
         Returns:
-            Sorted list with phases and their iterations in chronological order
+            Sorted list with all entries in chronological order by start_time
         """
-        # First, separate phases and iterations
-        phases = {}  # phase_name -> TimelineEntry
-        iterations = {}  # phase_name -> List[TimelineEntry]
-
-        for entry in entries:
-            if entry.entry_type == "phase":
-                phases[entry.phase] = entry
-            else:
-                if entry.phase not in iterations:
-                    iterations[entry.phase] = []
-                iterations[entry.phase].append(entry)
-
-        # Sort iterations within each phase by iteration number
-        for phase_name in iterations:
-            iterations[phase_name].sort(key=lambda e: e.iteration or 0)
-
-        # Sort phases by their start time
-        sorted_phases = sorted(phases.values(), key=lambda e: e.start_time)
-
-        # Build result: phase followed by its iterations
-        result = []
-        for phase_entry in sorted_phases:
-            result.append(phase_entry)
-            # Add all iterations for this phase in order
-            if phase_entry.phase in iterations:
-                result.extend(iterations[phase_entry.phase])
-
-        # Add any orphaned iterations (iterations without a parent phase) at the end
-        phases_with_entries = set(phases.keys())
-        for phase_name, iter_list in iterations.items():
-            if phase_name not in phases_with_entries:
-                result.extend(iter_list)
-
-        return result
+        # Sort all entries together by start_time
+        return sorted(entries, key=lambda e: e.start_time)
 
     def convert_to_local_timezone(self, entries: List[TimelineEntry]) -> List[TimelineEntry]:
         """Convert all UTC timestamps to local timezone.
