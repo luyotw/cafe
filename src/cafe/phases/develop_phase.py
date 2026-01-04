@@ -746,7 +746,7 @@ class DevelopPhase(Phase):
         develop_file_path = develop_dir / f"iteration_{self.iteration:03d}" / "output.md"
 
         clarification_note = f"""
-Clarification can be requested only in these two cases, **any other situation strictly prohibits clarification requests**:
+Clarification can be requested only in these two cases, **any other situation strictly prohibits clarification requests, just decide the solution by yourself**:
 - Requested actions conflict with the agent's behavioral guidelines
 - Encountering technical problems beyond current capability
 
