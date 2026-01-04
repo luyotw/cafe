@@ -131,16 +131,19 @@ class TestRestoreCommand:
         assert config_file.exists()
 
     def test_restore_branch_mismatch(self, temp_repo_dir, mock_git_ops, archived_issue):
-        """測試 branch 不一致的錯誤處理"""
+        """測試 branch 不一致時自動檢出正確分支"""
         # Set current branch to something different
         mock_git_ops.get_current_branch.return_value = "wrong-branch"
+        # Mock branch_exists to return False so it will create and checkout
+        mock_git_ops.branch_exists.return_value = False
 
         result = runner.invoke(app, ["restore", "test-issue"], input="y\n")
 
-        assert result.exit_code == 1
-        assert "branch" in result.stdout.lower()
-        assert "wrong-branch" in result.stdout
-        assert "test-issue" in result.stdout
+        assert result.exit_code == 0
+        assert "Checking out" in result.stdout or "checked out" in result.stdout.lower()
+        # Verify that create_branch and checkout_branch were called
+        mock_git_ops.create_branch.assert_called_once_with("test-issue")
+        mock_git_ops.checkout_branch.assert_called_once_with("test-issue")
 
     @pytest.mark.xfail(reason="_get_project_path() doesn't handle worktrees correctly - needs fix")
     def test_restore_worktree_mode_success(self, temp_repo_dir, mock_git_ops, archived_issue_with_worktree):
@@ -170,15 +173,20 @@ class TestRestoreCommand:
         assert issue_dir.exists(), "Issue directory should be restored in worktree"
 
     def test_restore_worktree_path_mismatch(self, temp_repo_dir, mock_git_ops, archived_issue_with_worktree):
-        """測試 worktree 路徑不一致的錯誤處理"""
+        """測試 worktree 路徑不一致時自動導航到正確目錄"""
         # Current directory is temp_repo_dir, not the worktree path
         mock_git_ops.get_current_branch.return_value = "test-worktree-issue"
 
+        # Create the worktree directory so chdir won't fail
+        worktree_path = temp_repo_dir / ".cafe" / "worktrees" / "test-worktree-issue"
+        worktree_path.mkdir(parents=True, exist_ok=True)
+        (worktree_path / ".cafe").mkdir(exist_ok=True)
+        (worktree_path / ".cafe" / "issues").mkdir(exist_ok=True)
+
         result = runner.invoke(app, ["restore", "test-worktree-issue"], input="y\n")
 
-        assert result.exit_code == 1
-        assert "worktree" in result.stdout.lower()
-        assert ".cafe/worktrees/test-worktree-issue" in result.stdout
+        assert result.exit_code == 0
+        assert "Navigating" in result.stdout or "Changed directory" in result.stdout
 
     def test_restore_user_cancels_confirmation(self, temp_repo_dir, mock_git_ops, archived_issue):
         """測試使用者取消確認後退出"""

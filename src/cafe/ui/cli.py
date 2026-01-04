@@ -1439,10 +1439,10 @@ def restore(
     back to .cafe/issues/<issue-name>/.
 
     \b
-    It performs the following checks:
+    It performs the following operations:
     1. Verifies backup exists
-    2. Checks current branch matches the issue's feature_branch
-    3. For worktree mode, checks current directory matches worktree_path
+    2. Auto-checks out the feature branch (creates it if necessary)
+    3. For worktree mode, auto-navigates to the worktree directory
     4. Prompts user for confirmation
     5. Restores all files from backup
 
@@ -1486,7 +1486,7 @@ def restore(
         feature_branch = config_data.get("feature_branch", issue_name)
         worktree_path = config_data.get("worktree_path")
 
-        # 4. Initialize Git operations and check current branch
+        # 4. Initialize Git operations and auto-checkout feature branch
         try:
             git_ops = GitOperations()
         except Exception as e:
@@ -1498,20 +1498,21 @@ def restore(
             console.print("[red]Error: Not on a valid branch (detached HEAD?).[/red]")
             raise typer.Exit(1)
 
-        # 5. Check if current branch matches feature_branch
+        # 5. Auto-checkout feature branch if not already on it
         if current_branch != feature_branch:
-            console.print()
-            console.print("[red]❌ Error: Branch mismatch[/red]")
-            console.print(f"   Current branch: {current_branch}")
-            console.print(f"   Expected branch (from issue.yaml): {feature_branch}")
-            console.print()
-            console.print("[yellow]Please switch to the correct branch first:[/yellow]")
-            console.print(f"   [bold]git checkout {feature_branch}[/bold]")
-            console.print()
-            raise typer.Exit(1)
+            console.print(f"[yellow]ℹ️  Checking out feature branch: {feature_branch}[/yellow]")
+            try:
+                # Check if branch exists, create if it doesn't
+                if not git_ops.branch_exists(feature_branch):
+                    console.print(f"[dim]Creating new branch: {feature_branch}[/dim]")
+                    git_ops.create_branch(feature_branch)
+                git_ops.checkout_branch(feature_branch)
+                console.print(f"[green]✓ Checked out branch: {feature_branch}[/green]")
+            except Exception as e:
+                console.print(f"[red]❌ Error: Failed to checkout branch {feature_branch}: {e}[/red]")
+                raise typer.Exit(1)
 
-        # 6. For worktree mode, check if we're in the correct worktree directory
-        # Check method: compare if current directory is under expected worktree path
+        # 6. For worktree mode, auto-navigate to the correct worktree directory
         if worktree_path:
             current_path = Path.cwd().resolve()
             expected_worktree = Path(worktree_path).resolve()
@@ -1530,15 +1531,15 @@ def restore(
                     is_in_worktree = False
 
             if not is_in_worktree:
-                console.print()
-                console.print("[red]❌ Error: Worktree path mismatch[/red]")
-                console.print(f"   Current path: {Path.cwd()}")
-                console.print(f"   Expected worktree path (from issue.yaml): {worktree_path}")
-                console.print()
-                console.print("[yellow]Please change to the correct worktree directory:[/yellow]")
-                console.print(f"   [bold]cd {worktree_path}[/bold]")
-                console.print()
-                raise typer.Exit(1)
+                # Auto-navigate to worktree directory
+                console.print(f"[yellow]ℹ️  Navigating to worktree directory: {worktree_path}[/yellow]")
+                try:
+                    import os
+                    os.chdir(worktree_path)
+                    console.print(f"[green]✓ Changed directory to: {worktree_path}[/green]")
+                except Exception as e:
+                    console.print(f"[red]❌ Error: Failed to change directory to {worktree_path}: {e}[/red]")
+                    raise typer.Exit(1)
 
         # 7. Prompt user for confirmation
         console.print("[yellow]⚠️  Warning: This will restore the issue from backup.[/yellow]")
