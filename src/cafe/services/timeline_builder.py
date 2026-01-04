@@ -11,7 +11,12 @@ from cafe.services.time_formatter import calculate_elapsed_time
 
 @dataclass
 class TimelineEntry:
-    """Represents a single phase or iteration entry in the timeline."""
+    """Represents a single phase or iteration entry in the timeline.
+
+    Note: end_time and elapsed_time are mutually exclusive:
+    - end_time: Set for COMPLETED or FAILED items (completed time)
+    - elapsed_time: Set for IN_PROGRESS items (current elapsed duration)
+    """
 
     entry_type: str  # 'phase' or 'iteration'
     name: str
@@ -27,6 +32,10 @@ class TimelineEntry:
         """Validate and normalize the entry."""
         if self.entry_type not in ("phase", "iteration"):
             raise ValueError(f"entry_type must be 'phase' or 'iteration', got {self.entry_type}")
+
+        # Validate mutually exclusive fields
+        if self.end_time is not None and self.elapsed_time is not None:
+            raise ValueError("end_time and elapsed_time cannot both be set; they are mutually exclusive")
 
         # Convert status string to PhaseStatus enum if needed
         if isinstance(self.status, str):
@@ -109,6 +118,11 @@ class TimelineBuilder:
         elapsed_time = None
         status = PhaseStatus(phase_status.get("status", "pending"))
 
+        # Try to read end_time from status data if available
+        end_timestamp_str = phase_status.get("end_time", "")
+        if end_timestamp_str:
+            end_time = self._parse_timestamp(end_timestamp_str)
+
         if status == PhaseStatus.IN_PROGRESS:
             # Use utility function for calculating elapsed time
             try:
@@ -150,6 +164,11 @@ class TimelineBuilder:
         end_time = None
         elapsed_time = None
         status = PhaseStatus(iteration_status.get("status", "pending"))
+
+        # Try to read end_time from status data if available
+        end_timestamp_str = iteration_status.get("end_time", "")
+        if end_timestamp_str:
+            end_time = self._parse_timestamp(end_timestamp_str)
 
         if status == PhaseStatus.IN_PROGRESS:
             # Use utility function for calculating elapsed time

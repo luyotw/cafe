@@ -421,6 +421,9 @@ class ReviewPhase(Phase):
         complete_codes = [PhaseStatusCode.CONFIRMED, PhaseStatusCode.NEEDS_CHANGES]
         phase_status = PhaseStatus.COMPLETED if status_code in complete_codes else PhaseStatus.IN_PROGRESS
 
+        # Set end_time when phase completes
+        end_time = datetime.now() if phase_status == PhaseStatus.COMPLETED else None
+
         progress = PhaseProgress(
             phase=self.phase_name,
             status=phase_status,
@@ -428,6 +431,7 @@ class ReviewPhase(Phase):
             timestamp=datetime.now(),
             iteration=self.iteration,
             message=f"Code review completed with {status_code.value}" if phase_status == PhaseStatus.COMPLETED else f"Iteration {self.iteration}",
+            end_time=end_time,
         )
 
         with open(status_file, 'w', encoding='utf-8') as f:

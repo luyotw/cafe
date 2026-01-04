@@ -49,23 +49,39 @@ class TestGetCurrentIssue:
 class TestLoadPhaseStatus:
     """Test cases for load_phase_status() method."""
 
-    def test_load_phase_status_reads_json_file(self):
+    def test_load_phase_status_reads_json_file(self, tmp_path, monkeypatch):
         """Test reading and parsing phase status.json file."""
         from cafe.services.summary_service import SummaryService
 
-        service = SummaryService()
-        # Test with nonexistent file should return None
-        result = service.load_phase_status("nonexistent", "spec")
-        assert result is None
+        # Change working directory to tmp_path so relative paths work
+        monkeypatch.chdir(tmp_path)
 
-    def test_load_phase_status_parses_timestamp(self):
+        service = SummaryService()
+        # Create temporary valid JSON file
+        issue_dir = tmp_path / ".cafe/issues/test-issue/spec"
+        issue_dir.mkdir(parents=True)
+        status_file = issue_dir / "status.json"
+        status_file.write_text('{"timestamp": "2025-01-01T00:00:00Z", "status": "completed"}')
+
+        result = service.load_phase_status("test-issue", "spec")
+        assert result is not None
+        assert result["status"] == "completed"
+
+    def test_load_phase_status_parses_timestamp(self, tmp_path, monkeypatch):
         """Test parsing ISO format timestamps in status.json."""
         from cafe.services.summary_service import SummaryService
 
+        monkeypatch.chdir(tmp_path)
+
         service = SummaryService()
-        # Test with nonexistent file
-        result = service.load_phase_status("nonexistent", "plan")
-        assert result is None
+        issue_dir = tmp_path / ".cafe/issues/test-issue/plan"
+        issue_dir.mkdir(parents=True)
+        status_file = issue_dir / "status.json"
+        status_file.write_text('{"timestamp": "2025-01-04T10:30:00Z", "status": "in_progress"}')
+
+        result = service.load_phase_status("test-issue", "plan")
+        assert result is not None
+        assert "timestamp" in result
 
     def test_load_phase_status_handles_missing_file(self):
         """Test handling when status.json doesn't exist."""
@@ -75,42 +91,78 @@ class TestLoadPhaseStatus:
         result = service.load_phase_status("nonexistent-issue", "spec")
         assert result is None
 
-    def test_load_phase_status_returns_correct_structure(self):
+    def test_load_phase_status_returns_correct_structure(self, tmp_path, monkeypatch):
         """Test that loaded status has required fields."""
         from cafe.services.summary_service import SummaryService
 
-        service = SummaryService()
-        result = service.load_phase_status("nonexistent", "develop")
-        assert result is None
+        monkeypatch.chdir(tmp_path)
 
-    def test_load_phase_status_handles_malformed_json(self):
+        service = SummaryService()
+        issue_dir = tmp_path / ".cafe/issues/test-issue/develop"
+        issue_dir.mkdir(parents=True)
+        status_file = issue_dir / "status.json"
+        status_data = {
+            "timestamp": "2025-01-04T12:00:00Z",
+            "status": "completed",
+            "status_code": None
+        }
+        status_file.write_text(json.dumps(status_data))
+
+        result = service.load_phase_status("test-issue", "develop")
+        assert result is not None
+        assert "status" in result
+        assert "timestamp" in result
+
+    def test_load_phase_status_handles_malformed_json(self, tmp_path, monkeypatch):
         """Test handling of malformed JSON in status file."""
         from cafe.services.summary_service import SummaryService
 
+        monkeypatch.chdir(tmp_path)
+
         service = SummaryService()
-        # Test with nonexistent file (would raise if file existed with bad JSON)
-        result = service.load_phase_status("test-issue", "review")
-        assert result is None
+        issue_dir = tmp_path / ".cafe/issues/test-issue/review"
+        issue_dir.mkdir(parents=True)
+        status_file = issue_dir / "status.json"
+        status_file.write_text('{invalid json}')
+
+        with pytest.raises(RuntimeError):
+            service.load_phase_status("test-issue", "review")
 
 
 class TestLoadIterationStatuses:
     """Test cases for load_iteration_statuses() method."""
 
-    def test_load_iteration_statuses_finds_all_iterations(self):
+    def test_load_iteration_statuses_finds_all_iterations(self, tmp_path, monkeypatch):
         """Test finding all iteration status files in a phase directory."""
         from cafe.services.summary_service import SummaryService
 
-        service = SummaryService()
-        result = service.load_iteration_statuses("nonexistent", "spec")
-        assert isinstance(result, list)
-        assert len(result) == 0
+        monkeypatch.chdir(tmp_path)
 
-    def test_load_iteration_statuses_orders_by_number(self):
+        service = SummaryService()
+        phase_dir = tmp_path / ".cafe/issues/test-issue/spec"
+        (phase_dir / "iteration_001").mkdir(parents=True)
+        (phase_dir / "iteration_002").mkdir(parents=True)
+        (phase_dir / "iteration_001/status.json").write_text('{"iteration": 1, "status": "completed"}')
+        (phase_dir / "iteration_002/status.json").write_text('{"iteration": 2, "status": "completed"}')
+
+        result = service.load_iteration_statuses("test-issue", "spec")
+        assert isinstance(result, list)
+        assert len(result) >= 2
+
+    def test_load_iteration_statuses_orders_by_number(self, tmp_path, monkeypatch):
         """Test that iterations are ordered by iteration number."""
         from cafe.services.summary_service import SummaryService
 
+        monkeypatch.chdir(tmp_path)
+
         service = SummaryService()
-        result = service.load_iteration_statuses("nonexistent", "plan")
+        phase_dir = tmp_path / ".cafe/issues/test-issue/plan"
+        (phase_dir / "iteration_003").mkdir(parents=True)
+        (phase_dir / "iteration_001").mkdir(parents=True)
+        (phase_dir / "iteration_003/status.json").write_text('{"iteration": 3}')
+        (phase_dir / "iteration_001/status.json").write_text('{"iteration": 1}')
+
+        result = service.load_iteration_statuses("test-issue", "plan")
         assert isinstance(result, list)
 
     def test_load_iteration_statuses_handles_empty_phase(self):
@@ -121,18 +173,51 @@ class TestLoadIterationStatuses:
         result = service.load_iteration_statuses("nonexistent", "develop")
         assert result == []
 
-    def test_load_iteration_statuses_parses_iteration_info(self):
+    def test_load_iteration_statuses_parses_iteration_info(self, tmp_path, monkeypatch):
         """Test parsing iteration number and metadata from files."""
         from cafe.services.summary_service import SummaryService
 
-        service = SummaryService()
-        result = service.load_iteration_statuses("nonexistent", "review")
-        assert isinstance(result, list)
+        monkeypatch.chdir(tmp_path)
 
-    def test_load_iteration_statuses_skips_non_iteration_files(self):
+        service = SummaryService()
+        phase_dir = tmp_path / ".cafe/issues/test-issue/review"
+        (phase_dir / "iteration_001").mkdir(parents=True)
+        status_data = {"iteration": 1, "status": "in_progress", "timestamp": "2025-01-04T14:00:00Z"}
+        (phase_dir / "iteration_001/status.json").write_text(json.dumps(status_data))
+
+        result = service.load_iteration_statuses("test-issue", "review")
+        assert isinstance(result, list)
+        assert len(result) > 0
+        assert result[0]["iteration"] == 1
+
+    def test_load_iteration_statuses_handles_malformed_iteration_json(self, tmp_path, monkeypatch):
+        """Test handling of malformed JSON in iteration status files."""
+        from cafe.services.summary_service import SummaryService
+
+        monkeypatch.chdir(tmp_path)
+
+        service = SummaryService()
+        phase_dir = tmp_path / ".cafe/issues/test-issue/pr"
+        (phase_dir / "iteration_001").mkdir(parents=True)
+        (phase_dir / "iteration_001/status.json").write_text('{invalid json}')
+
+        result = service.load_iteration_statuses("test-issue", "pr")
+        # Should skip malformed file and return empty or populated list
+        assert isinstance(result, list)
+        # Check that errors were collected
+        assert len(service.get_load_errors()) > 0
+
+    def test_load_iteration_statuses_skips_non_iteration_files(self, tmp_path, monkeypatch):
         """Test that non-iteration files are ignored."""
         from cafe.services.summary_service import SummaryService
 
+        monkeypatch.chdir(tmp_path)
+
         service = SummaryService()
-        result = service.load_iteration_statuses("nonexistent", "pr")
+        phase_dir = tmp_path / ".cafe/issues/test-issue/pr"
+        (phase_dir / "iteration_001").mkdir(parents=True)
+        (phase_dir / "iteration_001/status.json").write_text('{"iteration": 1}')
+        phase_dir.joinpath("other_file.json").write_text('{"some": "data"}')
+
+        result = service.load_iteration_statuses("test-issue", "pr")
         assert isinstance(result, list)
