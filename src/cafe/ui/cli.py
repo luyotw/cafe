@@ -1531,7 +1531,18 @@ def restore(
                     is_in_worktree = False
 
             if not is_in_worktree:
-                # Auto-navigate to worktree directory
+                # Auto-create worktree if it doesn't exist
+                worktree_path_obj = Path(worktree_path)
+                if not worktree_path_obj.exists():
+                    console.print(f"[yellow]ℹ️  Creating worktree: {worktree_path}[/yellow]")
+                    try:
+                        git_ops.create_worktree(worktree_path, feature_branch, "develop")
+                        console.print(f"[green]✓ Created worktree at: {worktree_path}[/green]")
+                    except Exception as e:
+                        console.print(f"[red]❌ Error: Failed to create worktree at {worktree_path}: {e}[/red]")
+                        raise typer.Exit(1)
+
+                # Navigate to worktree directory
                 console.print(f"[yellow]ℹ️  Navigating to worktree directory: {worktree_path}[/yellow]")
                 try:
                     import os
