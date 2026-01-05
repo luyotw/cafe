@@ -734,11 +734,17 @@ class DevelopPhase(Phase):
 
         config_file = self.issue_dir / "issue.yaml"
         base_branch = self._get_issue_config_value(config_file, "base_branch") or "main"
+        worktree_path = self._get_issue_config_value(config_file, "worktree_path")
+
+        worktree_note = ""
+        if worktree_path:
+            worktree_note = f"\n- **When working in worktree mode: Strictly prohibit modifying any files outside the worktree directory ({worktree_path})**"
+
         important_note = f"""
 **Important**
 - **Strictly maintain consistency with {base_branch}'s commit message format**, can commit multiple times, consistency includes:
   - Language (English/Chinese/...)
-  - Message is one line (subject line only) or multiple lines (subject + body)
+  - Message is one line (subject line only) or multiple lines (subject + body){worktree_note}
 """
 
         # Get the develop file path for current iteration
