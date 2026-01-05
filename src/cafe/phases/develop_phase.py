@@ -756,6 +756,8 @@ Clarification can be requested only in these two cases, **any other situations s
 - Requested actions conflict with the agent's behavioral guidelines
 - Encountering technical problems beyond current capability
 
+**⚠️ Never request clarification due to time pressure or token concerns - just do the work. CAFE has a resume mechanism to handle long tasks.**
+
 Steps for requesting clarification:
 1. Confirm again that your question meets the above conditions
 2. Write your question clearly to {develop_file_path}
