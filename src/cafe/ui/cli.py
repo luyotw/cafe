@@ -1616,6 +1616,204 @@ def restore(
 
 
 @app.command()
+def reset(
+    phase: str = typer.Argument(
+        ...,
+        help="Phase name (spec, plan, develop, review, pr)"
+    ),
+    iteration: int = typer.Option(
+        0,
+        "--iteration", "-i",
+        help="Iteration number to keep (positive, 0=remove latest only, negative=relative)"
+    ),
+) -> None:
+    """Remove iterations from a phase when agent behaves unexpectedly.
+
+    Backs up the issue directory before removing iterations, then removes all iterations
+    after the specified target iteration. Similar iteration number format as `cafe show`.
+
+    \b
+    Examples:
+        cafe reset spec              # Remove latest iteration from spec
+        cafe reset develop -i 2      # Keep only iteration_002, remove all after
+        cafe reset plan -i -1        # Same as cafe reset plan (remove latest)
+    """
+    try:
+        # 1. Validate phase name
+        if phase not in VALID_PHASES:
+            console.print(f"[red]Error: Invalid phase '{phase}'[/red]")
+            console.print(f"[dim]Valid phases: {', '.join(VALID_PHASES)}[/dim]")
+            raise typer.Exit(1)
+
+        # 2. Get current branch name (issue_name)
+        try:
+            git_ops = GitOperations()
+            issue_name = git_ops.get_current_branch()
+        except Exception as e:
+            console.print(f"[red]Error: Failed to get current branch: {e}[/red]")
+            raise typer.Exit(1)
+
+        # 3. Verify phase directory exists
+        phase_dir = Path.cwd() / ".cafe" / "issues" / issue_name / phase
+        if not phase_dir.exists():
+            console.print(f"[red]Error: Phase directory not found: {phase_dir}[/red]")
+            raise typer.Exit(1)
+
+        # 4. Get all iterations in phase
+        all_iteration_dirs = sorted([d for d in phase_dir.glob("iteration_*") if d.is_dir()])
+        if not all_iteration_dirs:
+            console.print(f"[yellow]ℹ️  No iterations found in {phase} phase[/yellow]")
+            raise typer.Exit(0)
+
+        all_iteration_numbers = []
+        for dir_path in all_iteration_dirs:
+            try:
+                num = int(dir_path.name.split("_")[1])
+                all_iteration_numbers.append(num)
+            except (IndexError, ValueError):
+                continue
+
+        if not all_iteration_numbers:
+            console.print(f"[yellow]ℹ️  No valid iterations found in {phase} phase[/yellow]")
+            raise typer.Exit(0)
+
+        # 5. Resolve iteration number to target iteration
+        latest_iter = max(all_iteration_numbers)
+
+        if iteration == 0:
+            # Remove only the latest iteration
+            target_iteration = latest_iter - 1 if len(all_iteration_numbers) > 1 else 0
+            to_remove = [latest_iter]
+        elif iteration > 0:
+            # Keep specified iteration, remove all after
+            if iteration not in all_iteration_numbers:
+                console.print(f"[red]Error: Iteration {iteration} does not exist[/red]")
+                console.print(f"[dim]Available iterations: {all_iteration_numbers}[/dim]")
+                raise typer.Exit(1)
+            target_iteration = iteration
+            to_remove = [i for i in all_iteration_numbers if i > iteration]
+        else:
+            # Negative number: relative to latest (-1 = second-to-last, -2 = third-to-last)
+            try:
+                target_iteration = all_iteration_numbers[iteration]
+                to_remove = all_iteration_numbers[iteration + 1:]
+            except IndexError:
+                console.print(f"[red]Error: Iteration index {iteration} out of range[/red]")
+                console.print(f"[dim]Available iterations: {all_iteration_numbers}[/dim]")
+                raise typer.Exit(1)
+
+        if not to_remove:
+            console.print(f"[yellow]ℹ️  No iterations to remove[/yellow]")
+            raise typer.Exit(0)
+
+        # 6. Display confirmation prompt
+        console.print()
+        console.print(f"[yellow]⚠️  About to reset {phase} phase[/yellow]")
+        console.print()
+
+        console.print("[cyan]📋 Iterations to remove:[/cyan]")
+        for iter_num in sorted(to_remove):
+            console.print(f"  • iteration_{iter_num:03d}")
+        console.print()
+
+        # Get backup path
+        project_path = _get_project_path()
+        home_dir = Path.home()
+        archive_path = home_dir / ".cafe" / "projects" / project_path / "archived" / issue_name
+
+        console.print(f"[cyan]📁 Backup location: {archive_path}[/cyan]")
+        console.print()
+
+        # Get user confirmation
+        confirm = prompt_confirm("Proceed with reset?", default=False)
+        if not confirm:
+            console.print()
+            console.print("[yellow]❌ Reset cancelled. No changes made.[/yellow]")
+            console.print()
+            raise typer.Exit(0)
+
+        # 7. Create backup of entire issue directory
+        try:
+            console.print("[dim]Backing up issue data...[/dim]")
+            archive_base = archive_path.parent
+            archive_base.mkdir(parents=True, exist_ok=True)
+
+            issue_dir = Path.cwd() / ".cafe" / "issues" / issue_name
+
+            # Remove existing backup if present
+            if archive_path.exists():
+                shutil.rmtree(archive_path)
+
+            # Backup issue directory
+            shutil.copytree(issue_dir, archive_path)
+            console.print(f"[green]✓ Backed up issue data to: {archive_path}[/green]")
+        except Exception as e:
+            console.print(f"[red]❌ Backup failed: {e}[/red]")
+            console.print(f"[red]   Reset cancelled - no changes made[/red]")
+            console.print()
+            raise typer.Exit(1)
+
+        # 8. Remove iterations
+        try:
+            console.print("[dim]Removing iterations...[/dim]")
+            for iter_num in sorted(to_remove):
+                iter_dir = phase_dir / f"iteration_{iter_num:03d}"
+                if iter_dir.exists():
+                    shutil.rmtree(iter_dir)
+
+            console.print(f"[green]✓ Removed iterations: {', '.join([f'iteration_{i:03d}' for i in sorted(to_remove)])}[/green]")
+        except Exception as e:
+            console.print(f"[red]❌ Failed to remove iterations: {e}[/red]")
+            console.print()
+            raise typer.Exit(1)
+
+        # 9. Update status.json
+        try:
+            console.print("[dim]Updating phase status...[/dim]")
+            status_file = phase_dir / "status.json"
+
+            if target_iteration > 0:
+                # Copy status from previous iteration
+                prev_iter_dir = phase_dir / f"iteration_{target_iteration:03d}"
+                prev_status_file = prev_iter_dir / "status.json"
+
+                if prev_status_file.exists():
+                    # Read and update previous iteration's status
+                    with open(prev_status_file, "r", encoding="utf-8") as f:
+                        status_data = json.load(f)
+
+                    # Write to phase status.json
+                    with open(status_file, "w", encoding="utf-8") as f:
+                        json.dump(status_data, f, indent=2, ensure_ascii=False)
+
+                    console.print(f"[green]✓ Updated {phase} phase status to iteration_{target_iteration:03d}[/green]")
+                else:
+                    console.print(f"[yellow]⚠️  Could not find status file for iteration_{target_iteration:03d}[/yellow]")
+            else:
+                # No iterations left, delete status.json
+                if status_file.exists():
+                    status_file.unlink()
+                console.print(f"[green]✓ Phase restarted (status.json removed)[/green]")
+
+            console.print("[green]✓ Status saved[/green]")
+        except Exception as e:
+            console.print(f"[yellow]⚠️  Failed to update status: {e}[/yellow]")
+
+        # 10. Success message
+        console.print()
+        console.print(f"[green]✓ Successfully reset {phase} phase[/green]")
+        console.print(f"  📁 Backup location: {archive_path}")
+        console.print()
+
+    except typer.Exit:
+        raise
+    except Exception as e:
+        console.print()
+        console.print(f"[red]Error during reset: {e}[/red]")
+        raise typer.Exit(1)
+
+
+@app.command()
 def spec(
     ctx: typer.Context,
     action: Optional[str] = typer.Argument(None, help="Action: edit (to edit latest spec file)"),
