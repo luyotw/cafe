@@ -296,6 +296,56 @@ def _edit_file_with_editor(file_path: Path) -> None:
         raise typer.Exit(1)
 
 
+def _resolve_iteration_index(iteration_numbers: List[int], iteration_input: int) -> int:
+    """Resolve iteration number from user input.
+
+    Shared iteration resolution logic used by both cafe show and cafe reset.
+
+    Args:
+        iteration_numbers: Sorted list of available iteration numbers
+        iteration_input: User input iteration number (can be positive, 0, negative)
+
+    Returns:
+        Actual iteration number (positive integer)
+
+    Raises:
+        ValueError: When iteration number does not exist or index out of range
+
+    Examples:
+        If iteration_numbers = [1, 2, 3, 4, 5]:
+        - iteration_input = 0 → returns 5 (latest)
+        - iteration_input = 3 → returns 3 (exact match)
+        - iteration_input = -1 → returns 4 (one before latest)
+        - iteration_input = -2 → returns 3 (two before latest)
+    """
+    if not iteration_numbers:
+        raise ValueError("No iterations available")
+
+    # Handle different iteration number formats
+    if iteration_input == 0:
+        # Zero means latest iteration
+        return iteration_numbers[-1]
+    elif iteration_input > 0:
+        # Positive number used directly, but need to verify existence
+        if iteration_input not in iteration_numbers:
+            raise ValueError(
+                f"Iteration {iteration_input} not found. "
+                f"Available iterations: {iteration_numbers}"
+            )
+        return iteration_input
+    else:
+        # Negative number: -1 means one before latest, -2 means two before, etc.
+        # Since 0 already represents latest (iteration_numbers[-1]),
+        # we need to offset: -1 -> [-2], -2 -> [-3], etc.
+        try:
+            return iteration_numbers[iteration_input - 1]
+        except IndexError:
+            raise ValueError(
+                f"Iteration index {iteration_input} out of range. "
+                f"Available iterations: {iteration_numbers}"
+            )
+
+
 def _resolve_iteration_number(phase_dir: Path, iteration_input: int, content_type: str) -> int:
     """Resolve iteration number based on iterations that have the specified file.
 
@@ -349,29 +399,8 @@ def _resolve_iteration_number(phase_dir: Path, iteration_input: int, content_typ
             f"Available iterations: {all_iteration_numbers}"
         )
 
-    # Handle different iteration number formats
-    if iteration_input == 0:
-        # Zero means latest iteration with the file
-        return iteration_numbers_with_file[-1]
-    elif iteration_input > 0:
-        # Positive number used directly, but need to verify existence
-        if iteration_input not in iteration_numbers_with_file:
-            raise ValueError(
-                f"Iteration {iteration_input} not found or does not have '{filename}'. "
-                f"Iterations with this file: {iteration_numbers_with_file}"
-            )
-        return iteration_input
-    else:
-        # Negative number: -1 means one before latest, -2 means two before, etc.
-        # Since 0 already represents latest (iteration_numbers_with_file[-1]),
-        # we need to offset: -1 -> [-2], -2 -> [-3], etc.
-        try:
-            return iteration_numbers_with_file[iteration_input - 1]
-        except IndexError:
-            raise ValueError(
-                f"Iteration index {iteration_input} out of range. "
-                f"Iterations with '{filename}': {iteration_numbers_with_file}"
-            )
+    # Use shared iteration resolution logic
+    return _resolve_iteration_index(iteration_numbers_with_file, iteration_input)
 
 
 def _get_show_file_path(phase_dir: Path, iteration: int, content_type: str) -> Path:
@@ -1677,30 +1706,25 @@ def reset(
             console.print(f"[yellow]ℹ️  No valid iterations found in {phase} phase[/yellow]")
             raise typer.Exit(0)
 
-        # 5. Resolve iteration number to target iteration
-        latest_iter = max(all_iteration_numbers)
-
-        if iteration == 0:
-            # Remove only the latest iteration
-            target_iteration = latest_iter - 1 if len(all_iteration_numbers) > 1 else 0
-            to_remove = [latest_iter]
-        elif iteration > 0:
-            # Keep specified iteration, remove all after
-            if iteration not in all_iteration_numbers:
-                console.print(f"[red]Error: Iteration {iteration} does not exist[/red]")
-                console.print(f"[dim]Available iterations: {all_iteration_numbers}[/dim]")
-                raise typer.Exit(1)
-            target_iteration = iteration
-            to_remove = [i for i in all_iteration_numbers if i > iteration]
-        else:
-            # Negative number: relative to latest (-1 = second-to-last, -2 = third-to-last)
-            try:
-                target_iteration = all_iteration_numbers[iteration]
-                to_remove = all_iteration_numbers[iteration + 1:]
-            except IndexError:
-                console.print(f"[red]Error: Iteration index {iteration} out of range[/red]")
-                console.print(f"[dim]Available iterations: {all_iteration_numbers}[/dim]")
-                raise typer.Exit(1)
+        # 5. Resolve iteration number to target iteration using shared logic
+        try:
+            if iteration == 0:
+                # Special case for reset: -i 0 means remove latest only
+                # Resolve to latest, then set target to second-to-last
+                latest = _resolve_iteration_index(all_iteration_numbers, 0)
+                if len(all_iteration_numbers) > 1:
+                    target_iteration = all_iteration_numbers[-2]
+                else:
+                    target_iteration = 0  # Will remove the only iteration
+                to_remove = [i for i in all_iteration_numbers if i > target_iteration]
+            else:
+                # For positive and negative: the resolved iteration is what we keep
+                target_iteration = _resolve_iteration_index(all_iteration_numbers, iteration)
+                # Determine which iterations to remove (all after target)
+                to_remove = [i for i in all_iteration_numbers if i > target_iteration]
+        except ValueError as e:
+            console.print(f"[red]Error: {e}[/red]")
+            raise typer.Exit(1)
 
         if not to_remove:
             console.print(f"[yellow]ℹ️  No iterations to remove[/yellow]")
