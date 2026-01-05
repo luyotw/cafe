@@ -192,10 +192,11 @@ class PhaseProgress(BaseModel):
     timestamp: datetime
     iteration: Optional[int] = None
     message: str = ""
+    end_time: Optional[datetime] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
-        return {
+        result = {
             "phase": self.phase,
             "status": self.status.value,
             "status_code": self.status_code,
@@ -203,6 +204,9 @@ class PhaseProgress(BaseModel):
             "iteration": self.iteration,
             "message": self.message,
         }
+        if self.end_time:
+            result["end_time"] = self.end_time.isoformat()
+        return result
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "PhaseProgress":
@@ -212,6 +216,13 @@ class PhaseProgress(BaseModel):
         if timestamp_str.endswith('Z'):
             timestamp_str = timestamp_str.replace('Z', '+00:00')
 
+        end_time = None
+        end_time_str = data.get("end_time")
+        if end_time_str:
+            if end_time_str.endswith('Z'):
+                end_time_str = end_time_str.replace('Z', '+00:00')
+            end_time = datetime.fromisoformat(end_time_str)
+
         return cls(
             phase=data["phase"],
             status=PhaseStatus(data["status"]),
@@ -219,4 +230,5 @@ class PhaseProgress(BaseModel):
             timestamp=datetime.fromisoformat(timestamp_str),
             iteration=data.get("iteration"),
             message=data.get("message", ""),
+            end_time=end_time,
         )

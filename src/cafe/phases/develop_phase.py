@@ -734,11 +734,17 @@ class DevelopPhase(Phase):
 
         config_file = self.issue_dir / "issue.yaml"
         base_branch = self._get_issue_config_value(config_file, "base_branch") or "main"
+        worktree_path = self._get_issue_config_value(config_file, "worktree_path")
+
+        worktree_note = ""
+        if worktree_path:
+            worktree_note = f"\n- **When working in worktree mode: Strictly prohibit modifying any files outside the worktree directory ({worktree_path})**"
+
         important_note = f"""
 **Important**
 - **Strictly maintain consistency with {base_branch}'s commit message format**, can commit multiple times, consistency includes:
   - Language (English/Chinese/...)
-  - Message is one line (subject line only) or multiple lines (subject + body)
+  - Message is one line (subject line only) or multiple lines (subject + body){worktree_note}
 """
 
         # Get the develop file path for current iteration
@@ -746,9 +752,11 @@ class DevelopPhase(Phase):
         develop_file_path = develop_dir / f"iteration_{self.iteration:03d}" / "output.md"
 
         clarification_note = f"""
-Clarification can be requested only in these two cases, **any other situation strictly prohibits clarification requests**:
+Clarification can be requested only in these two cases, **any other situations strictly prohibit clarification requests, just decide the solution by yourself**:
 - Requested actions conflict with the agent's behavioral guidelines
 - Encountering technical problems beyond current capability
+
+**⚠️ Never request clarification due to time pressure or token concerns - just do the work. CAFE has a resume mechanism to handle long tasks.**
 
 Steps for requesting clarification:
 1. Confirm again that your question meets the above conditions

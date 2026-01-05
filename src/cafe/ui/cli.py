@@ -1439,10 +1439,10 @@ def restore(
     back to .cafe/issues/<issue-name>/.
 
     \b
-    It performs the following checks:
+    It performs the following operations:
     1. Verifies backup exists
-    2. Checks current branch matches the issue's feature_branch
-    3. For worktree mode, checks current directory matches worktree_path
+    2. Auto-checks out the feature branch (creates it if necessary)
+    3. For worktree mode, auto-navigates to the worktree directory
     4. Prompts user for confirmation
     5. Restores all files from backup
 
@@ -1486,7 +1486,7 @@ def restore(
         feature_branch = config_data.get("feature_branch", issue_name)
         worktree_path = config_data.get("worktree_path")
 
-        # 4. Initialize Git operations and check current branch
+        # 4. Initialize Git operations and auto-checkout feature branch
         try:
             git_ops = GitOperations()
         except Exception as e:
@@ -1498,49 +1498,79 @@ def restore(
             console.print("[red]Error: Not on a valid branch (detached HEAD?).[/red]")
             raise typer.Exit(1)
 
-        # 5. Check if current branch matches feature_branch
-        if current_branch != feature_branch:
-            console.print()
-            console.print("[red]❌ Error: Branch mismatch[/red]")
-            console.print(f"   Current branch: {current_branch}")
-            console.print(f"   Expected branch (from issue.yaml): {feature_branch}")
-            console.print()
-            console.print("[yellow]Please switch to the correct branch first:[/yellow]")
-            console.print(f"   [bold]git checkout {feature_branch}[/bold]")
-            console.print()
-            raise typer.Exit(1)
-
-        # 6. For worktree mode, check if we're in the correct worktree directory
-        # Check method: compare if current directory is under expected worktree path
+        # 5. For worktree mode, create worktree first (before checkout)
+        # This avoids branch conflict issues
         if worktree_path:
-            current_path = Path.cwd().resolve()
-            expected_worktree = Path(worktree_path).resolve()
-
-            # Check if current path is under worktree path
-            # Use is_relative_to() or manually check path prefix
-            try:
-                # Python 3.9+ has is_relative_to()
-                is_in_worktree = current_path.is_relative_to(expected_worktree)
-            except AttributeError:
-                # Python 3.8 fallback: check for common prefix
+            worktree_path_obj = Path(worktree_path)
+            if not worktree_path_obj.exists():
+                console.print(f"[yellow]ℹ️  Creating worktree: {worktree_path}[/yellow]")
                 try:
-                    current_path.relative_to(expected_worktree)
-                    is_in_worktree = True
-                except ValueError:
-                    is_in_worktree = False
+                    # Create worktree parent directory
+                    worktree_path_obj.parent.mkdir(parents=True, exist_ok=True)
+                    # Try to create worktree with new branch first
+                    git_ops.run_git("worktree", "add", "-b", feature_branch, worktree_path)
+                    console.print(f"[green]✓ Created worktree at: {worktree_path}[/green]")
+                    current_branch = feature_branch  # Update since we created the branch
+                except Exception as e:
+                    # If branch already exists, try without -b flag
+                    if "already exists" in str(e):
+                        console.print(f"[yellow]ℹ️  Branch '{feature_branch}' already exists, creating worktree[/yellow]")
+                        try:
+                            git_ops.run_git("worktree", "add", worktree_path, feature_branch)
+                            console.print(f"[green]✓ Created worktree at: {worktree_path}[/green]")
+                            current_branch = feature_branch
+                        except Exception as e2:
+                            if "already used by worktree" in str(e2):
+                                console.print(f"[yellow]ℹ️  Branch '{feature_branch}' is already in another worktree[/yellow]")
+                            else:
+                                console.print(f"[red]❌ Error: Failed to create worktree: {e2}[/red]")
+                                raise typer.Exit(1)
+                    else:
+                        console.print(f"[red]❌ Error: Failed to create worktree: {e}[/red]")
+                        raise typer.Exit(1)
 
-            if not is_in_worktree:
-                console.print()
-                console.print("[red]❌ Error: Worktree path mismatch[/red]")
-                console.print(f"   Current path: {Path.cwd()}")
-                console.print(f"   Expected worktree path (from issue.yaml): {worktree_path}")
-                console.print()
-                console.print("[yellow]Please change to the correct worktree directory:[/yellow]")
-                console.print(f"   [bold]cd {worktree_path}[/bold]")
-                console.print()
+        # 6. Auto-checkout feature branch if not already on it
+        if current_branch != feature_branch:
+            console.print(f"[yellow]ℹ️  Checking out feature branch: {feature_branch}[/yellow]")
+            try:
+                # Check if branch exists, create if it doesn't
+                if not git_ops.branch_exists(feature_branch):
+                    console.print(f"[dim]Creating new branch: {feature_branch}[/dim]")
+                    git_ops.create_branch(feature_branch)
+                git_ops.checkout_branch(feature_branch)
+                console.print(f"[green]✓ Checked out branch: {feature_branch}[/green]")
+            except Exception as e:
+                console.print(f"[red]❌ Error: Failed to checkout branch {feature_branch}: {e}[/red]")
                 raise typer.Exit(1)
 
-        # 7. Prompt user for confirmation
+        # 7. Navigate to worktree directory if it was created
+        if worktree_path:
+            worktree_path_obj = Path(worktree_path)
+            if worktree_path_obj.exists():
+                current_path = Path.cwd().resolve()
+                expected_worktree = worktree_path_obj.resolve()
+
+                # Check if already in worktree
+                try:
+                    is_in_worktree = current_path.is_relative_to(expected_worktree)
+                except AttributeError:
+                    try:
+                        current_path.relative_to(expected_worktree)
+                        is_in_worktree = True
+                    except ValueError:
+                        is_in_worktree = False
+
+                if not is_in_worktree:
+                    console.print(f"[yellow]ℹ️  Navigating to worktree directory: {worktree_path}[/yellow]")
+                    try:
+                        import os
+                        os.chdir(worktree_path)
+                        console.print(f"[green]✓ Changed directory to: {worktree_path}[/green]")
+                    except Exception as e:
+                        console.print(f"[red]❌ Error: Failed to change directory to {worktree_path}: {e}[/red]")
+                        raise typer.Exit(1)
+
+        # 8. Prompt user for confirmation
         console.print("[yellow]⚠️  Warning: This will restore the issue from backup.[/yellow]")
         console.print("[yellow]   Any current changes in .cafe/issues/{} will be overwritten.[/yellow]".format(issue_name))
         console.print()
@@ -1553,7 +1583,7 @@ def restore(
             console.print()
             raise typer.Exit(1)
 
-        # 8. Perform the restore operation
+        # 9. Perform the restore operation
         console.print()
         console.print("[dim]Restoring issue data...[/dim]")
 
@@ -1569,7 +1599,7 @@ def restore(
         console.print(f"[dim]Copying data from backup...[/dim]")
         shutil.copytree(archive_path, issue_dir)
 
-        # 9. Display success message
+        # 10. Display success message
         console.print()
         console.print(f"[green]✓ Successfully restored issue: {issue_name}[/green]")
         console.print(f"  📁 Restored to: .cafe/issues/{issue_name}/")
@@ -4090,6 +4120,54 @@ def _check_dependencies() -> None:
     except Exception:
         # If check fails, continue anyway
         pass
+
+
+@app.command()
+def summary() -> None:
+    """Display a comprehensive timeline of all workflow phases and iterations.
+
+    Shows the start time, end time, duration, and current status for each phase
+    and iteration in the current issue's workflow.
+
+    \b
+    Examples:
+        cafe summary
+    """
+    from cafe.services.summary_service import SummaryService
+    from cafe.services.timeline_builder import TimelineBuilder
+    from cafe.services.summary_display import SummaryDisplay
+
+    try:
+        # Get current issue from git context
+        service = SummaryService()
+        issue_name = service.get_current_issue()
+
+        # Load phase and iteration data
+        phase_statuses = {}
+        iteration_data = {}
+
+        for phase_name in ["spec", "plan", "develop", "review", "pr"]:
+            phase_status = service.load_phase_status(issue_name, phase_name)
+            if phase_status:
+                phase_statuses[phase_name] = phase_status
+
+            iterations = service.load_iteration_statuses(issue_name, phase_name)
+            if iterations:
+                iteration_data[phase_name] = iterations
+
+        # Build timeline
+        builder = TimelineBuilder(issue_name)
+        entries = builder.build_timeline_entries(phase_statuses, iteration_data)
+
+        # Display timeline (keep times in UTC as they appear in data files)
+        display = SummaryDisplay()
+        output = display.render_vertical_timeline(entries)
+
+        console.print(output)
+
+    except Exception as e:
+        console.print(f"[red]Error: Failed to display summary: {e}[/red]")
+        raise typer.Exit(1)
 
 
 if __name__ == "__main__":
