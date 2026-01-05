@@ -225,9 +225,9 @@ def generate_status_code_prompt(valid_codes: List[PhaseStatusCode], descriptions
 
     lines.extend([
         "",
-        "Example response format:",
-        f"{valid_codes[0].value}",
-        "(Only respond with the status code, no summary or explanation...)"
+        "**Response format:**",
+        "- Return ONLY the status code on the first line",
+        "- Do NOT include any summary or explanation",
     ])
 
     return "\n".join(lines)

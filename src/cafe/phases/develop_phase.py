@@ -803,13 +803,17 @@ Please use Read tool to read {agent_file} to understand your role definition and
 5. **Strictly follow existing commit message style**, can commit multiple times
 6. **Do not modify commits from other branches**
 7. If needed, refer to {self.spec_file} and {self.plan_file}
-8. Return status code after completing all corrections
+8. **⚠️ ONLY after completing ALL corrections**, verify and return status code
+
+**Before returning status code, verify:**
+✓ All review feedback issues are addressed
+✓ All tests pass
+✓ All commits are made
+✓ No pending work remains
 
 {status_code_prompt}
 
 {clarification_note}
-
-**Return status code only, do not provide any summary**
 """
 
         # No review feedback - normal development mode
@@ -833,13 +837,17 @@ Please use Read tool to read {agent_file} to understand your role definition and
 5. **Strictly follow existing commit message style**, can commit multiple times
 6. After completing each task, mark it checked in {self.plan_file} (change - [ ] to - [x])
 7. **Do not modify commits from other branches**
-8. Return status code after completing all tasks
+8. **⚠️ ONLY after completing ALL tasks in the plan**, verify and return status code
+
+**Before returning status code, verify:**
+✓ All tasks in {self.plan_file} are marked [x]
+✓ All tests pass
+✓ All commits are made
+✓ No pending work remains
 
 {status_code_prompt}
 
 {clarification_note}
-
-**Return status code only, do not provide any summary**
 """
 
     def execute(self) -> PhaseResult:

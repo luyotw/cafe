@@ -256,7 +256,8 @@ class TestGenerateStatusCodePrompt:
         assert "CAFE_NEED_CLARIFICATION" in prompt
         assert "需求已確認" in prompt
         assert "需要更多資訊" in prompt
-        assert "Example response format" in prompt
+        assert "Response format:" in prompt
+        assert "Return ONLY the status code" in prompt
 
     def test_prompt_includes_all_codes(self) -> None:
         """測試提示包含所有狀態碼"""
