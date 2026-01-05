@@ -783,6 +783,17 @@ Steps for requesting clarification:
             else:
                 review_instruction = f"2. **First read** {' and '.join(review_sources)}, understand all issues needing correction"
 
+            # Build verification checklist
+            verification_items = ["✓ All review feedback issues are addressed"]
+            if has_pr_comments:
+                verification_items.append("✓ All PR comments are resolved (no unresolved comments remain)")
+            verification_items.extend([
+                "✓ All tests pass",
+                "✓ All commits are made",
+                "✓ No pending work remains"
+            ])
+            verification_checklist = "\n".join(verification_items)
+
             return f"""Please make corrections based on Code Review feedback.
 
 **Your role:**
@@ -806,10 +817,7 @@ Please use Read tool to read {agent_file} to understand your role definition and
 8. **⚠️ ONLY after completing ALL corrections**, verify and return status code
 
 **Before returning status code, verify:**
-✓ All review feedback issues are addressed
-✓ All tests pass
-✓ All commits are made
-✓ No pending work remains
+{verification_checklist}
 
 {status_code_prompt}
 
@@ -818,6 +826,18 @@ Please use Read tool to read {agent_file} to understand your role definition and
 
         # No review feedback - normal development mode
         user_input_section = f"\n\n**Additional user notes:**\n{user_input}\n" if user_input else ""
+
+        # Build verification checklist for normal mode
+        verification_items = [f"✓ All tasks in {self.plan_file} are marked [x]"]
+        if has_pr_comments:
+            verification_items.append("✓ All PR comments are resolved (no unresolved comments remain)")
+        verification_items.extend([
+            "✓ All tests pass",
+            "✓ All commits are made",
+            "✓ No pending work remains"
+        ])
+        verification_checklist = "\n".join(verification_items)
+
         return f"""Please execute development work according to the implementation plan.
 
 **Your role:**
@@ -840,10 +860,7 @@ Please use Read tool to read {agent_file} to understand your role definition and
 8. **⚠️ ONLY after completing ALL tasks in the plan**, verify and return status code
 
 **Before returning status code, verify:**
-✓ All tasks in {self.plan_file} are marked [x]
-✓ All tests pass
-✓ All commits are made
-✓ No pending work remains
+{verification_checklist}
 
 {status_code_prompt}
 
