@@ -212,13 +212,13 @@ class PRPhase(Phase):
         phase_status = PhaseStatus.COMPLETED if status_code in complete_codes else PhaseStatus.IN_PROGRESS
 
         # Set end_time when phase completes
-        end_time = datetime.now() if phase_status == PhaseStatus.COMPLETED else None
+        end_time = datetime.now().astimezone() if phase_status == PhaseStatus.COMPLETED else None
 
         progress = PhaseProgress(
             phase=self.phase_name,
             status=phase_status,
             status_code=status_code.value,
-            timestamp=datetime.now(),
+            timestamp=datetime.now().astimezone(),
             iteration=self.iteration,
             message=f"PR phase completed with {status_code.value}" if phase_status == PhaseStatus.COMPLETED else f"Iteration {self.iteration}",
             end_time=end_time,
