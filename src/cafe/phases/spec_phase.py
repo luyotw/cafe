@@ -938,10 +938,16 @@ Read {current_spec_file}  for initial requirements content."""
 - Can only deeply clarify questions already raised.
 """
 
-        # --- 2. Build execution steps checklist ---
+        # --- 2. Build agent guidelines checklist ---
         from cafe.agents.manager import AgentManager
+        from cafe.utils.prompt_utils import extract_agent_guidelines_checklist
+
         agent_file = AgentManager.get_agent_file_path(self.pm_agent, "pm")
 
+        # Read agent md file and extract bullet points as checklist
+        agent_guidelines_checklist = extract_agent_guidelines_checklist(agent_file)
+
+        # --- 3. Build execution steps checklist ---
         if self.iteration == 1:
             execution_steps = f"""
 ## Execution Steps Checklist
@@ -966,7 +972,7 @@ Read {current_spec_file}  for initial requirements content."""
 [ ] Return appropriate status code
 """
 
-        # --- 3. Build important notes checklist ---
+        # --- 4. Build important notes checklist ---
         important_notes = f"""
 ## Important Notes Checklist
 
@@ -984,7 +990,7 @@ Read {current_spec_file}  for initial requirements content."""
             important_notes += f"""[ ] ⚠️ Round {self.iteration}: Only clarify existing questions, NO new questions
 """
 
-        # --- 4. Build principles section ---
+        # --- 5. Build principles section ---
         base_prompt = f"""# Specification Phase
 
 **Your Role:** PM (Product Manager)
@@ -1036,6 +1042,8 @@ Response: "CAFE_READY_FOR_REVIEW" (nothing else)
 {execution_steps}
 
 {important_notes}
+
+{agent_guidelines_checklist}
 
 {status_code_prompt}
 
