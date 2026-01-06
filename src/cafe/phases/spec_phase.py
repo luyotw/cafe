@@ -72,6 +72,7 @@ class SpecPhase(Phase):
         user_input: str = "",
         fetch_issue_id: Optional[int] = None,
         spec_file: Optional[str] = None,  # Deprecated: kept for backward compatibility
+        template_path: Optional[Path] = None,
     ) -> None:
         """Initialize requirements phase.
 
@@ -88,6 +89,7 @@ class SpecPhase(Phase):
             user_input: User input for non-interactive mode (default: "")
             fetch_issue_id: GitHub issue number to fetch content from (optional)
             spec_file: (Deprecated) Spec file path - ignored, kept for backward compatibility
+            template_path: Path to spec template file (optional)
         """
         super().__init__(interactive=interactive, git_ops=git_ops)
 
@@ -100,6 +102,7 @@ class SpecPhase(Phase):
         self.pm_agent = pm_agent
         self.user_input = user_input
         self.fetch_issue_id = fetch_issue_id
+        self.template_path = template_path
         self.phase_name = "spec"  # For base class progress tracking
 
         # Track if rigor was explicitly set (for interactive prompting)
@@ -905,9 +908,20 @@ class SpecPhase(Phase):
 
         if self.iteration == 1:
             # Round 1: Read user_input (initial requirements), write to spec_001.md
+            template_instruction = ""
+            if self.template_path:
+                # Convert template path to relative path for display
+                try:
+                    template_file = to_cwd_relative_path(self.template_path)
+                except (ValueError, OSError):
+                    template_file = str(self.template_path)
+                template_instruction = f"""
+**Template Reference:**
+Use Read tool to read {template_file} as a reference for output format and structure."""
+
             initial_instruction = f"""**Round 1 Requirements Clarification**
 
-Read {current_spec_file}  for initial requirements content."""
+Read {current_spec_file}  for initial requirements content.{template_instruction}"""
             context_section = """
 **Your Responsibilities:**
 1. Carefully read requirements document, identify all unclear, vague, or areas that might require developers to make assumptions.

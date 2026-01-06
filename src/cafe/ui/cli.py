@@ -1955,6 +1955,11 @@ def spec(
         "--auto",
         help="Auto mode: automatically continue iterations until CAFE_CONFIRMED",
     ),
+    template: Optional[str] = typer.Option(
+        None,
+        "--template",
+        help="Spec template name (default: auto, reads from issue.yaml if present)",
+    ),
 ) -> None:
     """Run specification phase: Spec clarification with conversational generation.
 
@@ -2011,16 +2016,18 @@ def spec(
             console.print(f"[red]Error: Invalid mode '{mode}'. Use 'local' or 'github'.[/red]")
             raise typer.Exit(1)
 
-        # Load issue config to get saved rigor setting
+        # Load issue config to get saved rigor and template settings
         import yaml
 
         issue_config_file = Path(f".cafe/issues/{issue_name}/issue.yaml")
         saved_rigor = None
+        saved_template = None
         if issue_config_file.exists():
             with open(issue_config_file, "r", encoding="utf-8") as f:
                 config_data = yaml.safe_load(f) or {}
                 spec_config = config_data.get("spec", {})
                 saved_rigor = spec_config.get("rigor")
+                saved_template = spec_config.get("template")
 
         # Validate rigor (if specified via flag, otherwise use saved value)
         spec_rigor = None
@@ -2044,6 +2051,19 @@ def spec(
             except ValueError:
                 # Ignore invalid saved value
                 pass
+
+        # Determine template to use (CLI flag > saved config > default "auto")
+        spec_template = template if template else (saved_template if saved_template else "auto")
+
+        # Get template path if not "auto"
+        spec_template_path = None
+        if spec_template and spec_template != "auto":
+            template_manager = TemplateManager(".cafe", template_type="spec")
+            spec_template_path = template_manager.get_template_path(spec_template)
+            if not spec_template_path:
+                console.print(f"[yellow]⚠️  Warning: Template '{spec_template}' not found, using auto mode[/yellow]")
+                spec_template = "auto"
+                spec_template_path = None
 
         # Create spec directory if it doesn't exist
         spec_dir = Path(f".cafe/issues/{issue_name}/spec")
@@ -2116,6 +2136,7 @@ def spec(
             user_input=user_input or "",
             issue_name=issue_name,
             fetch_issue_id=fetch_issue_id,
+            template_path=spec_template_path,
         )
 
         console.print("[bold]Starting conversational spec generation...[/bold]")
