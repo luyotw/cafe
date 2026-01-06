@@ -1791,33 +1791,67 @@ def reset(
             console.print()
             raise typer.Exit(1)
 
-        # 9. Update status.json
+        # 9. Update status.json and iterations.jsonl
         try:
             console.print("[dim]Updating phase status...[/dim]")
             status_file = phase_dir / "status.json"
+            iterations_file = phase_dir / "iterations.jsonl"
 
             if target_iteration > 0:
-                # Copy status from previous iteration
-                prev_iter_dir = phase_dir / f"iteration_{target_iteration:03d}"
-                prev_status_file = prev_iter_dir / "status.json"
+                # Read iterations.jsonl to get status for target iteration
+                if iterations_file.exists():
+                    iterations_data = []
+                    content = iterations_file.read_text(encoding="utf-8").strip()
+                    if content:
+                        for line in content.split("\n"):
+                            if line.strip():
+                                iterations_data.append(json.loads(line))
 
-                if prev_status_file.exists():
-                    # Read and update previous iteration's status
-                    with open(prev_status_file, "r", encoding="utf-8") as f:
-                        status_data = json.load(f)
+                    # Find the target iteration's data
+                    target_data = None
+                    for iteration_record in iterations_data:
+                        if iteration_record.get("iteration") == target_iteration:
+                            target_data = iteration_record
+                            break
 
-                    # Write to phase status.json
-                    with open(status_file, "w", encoding="utf-8") as f:
-                        json.dump(status_data, f, indent=2, ensure_ascii=False)
+                    if target_data:
+                        # Update status.json with target iteration's data
+                        status_data = {
+                            "phase": phase,
+                            "status": "completed",
+                            "status_code": target_data.get("status"),
+                            "timestamp": target_data.get("timestamp"),
+                            "iteration": target_iteration,
+                            "message": f"Phase completed with {target_data.get('status')}",
+                        }
 
-                    console.print(f"[green]✓ Updated {phase} phase status to iteration_{target_iteration:03d}[/green]")
+                        # Add end_time if it exists in the iteration data
+                        if "end_time" in target_data:
+                            status_data["end_time"] = target_data["end_time"]
+
+                        with open(status_file, "w", encoding="utf-8") as f:
+                            json.dump(status_data, f, indent=2, ensure_ascii=False)
+
+                        console.print(f"[green]✓ Updated {phase} phase status to iteration_{target_iteration:03d}[/green]")
+
+                        # Update iterations.jsonl to remove deleted iterations
+                        kept_iterations = [rec for rec in iterations_data if rec.get("iteration", 0) <= target_iteration]
+                        with open(iterations_file, "w", encoding="utf-8") as f:
+                            for record in kept_iterations:
+                                f.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+                        console.print(f"[green]✓ Updated iterations.jsonl[/green]")
+                    else:
+                        console.print(f"[yellow]⚠️  Could not find iteration {target_iteration} in iterations.jsonl[/yellow]")
                 else:
-                    console.print(f"[yellow]⚠️  Could not find status file for iteration_{target_iteration:03d}[/yellow]")
+                    console.print(f"[yellow]⚠️  iterations.jsonl not found[/yellow]")
             else:
-                # No iterations left, delete status.json
+                # No iterations left, delete status.json and iterations.jsonl
                 if status_file.exists():
                     status_file.unlink()
-                console.print(f"[green]✓ Phase restarted (status.json removed)[/green]")
+                if iterations_file.exists():
+                    iterations_file.unlink()
+                console.print(f"[green]✓ Phase restarted (status.json and iterations.jsonl removed)[/green]")
 
             console.print("[green]✓ Status saved[/green]")
         except Exception as e:
