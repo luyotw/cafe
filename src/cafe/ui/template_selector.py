@@ -25,8 +25,6 @@ def select_template(templates: List[str], template_paths: Dict[str, Path]) -> Op
         return None
 
     console.print()
-    console.print("Please select a plan template:")
-    console.print()
     console.print("[bold cyan]Available templates:[/bold cyan]")
 
     # Build choices list with 'auto' option first
