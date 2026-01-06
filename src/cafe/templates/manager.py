@@ -6,17 +6,19 @@ from typing import List, Optional
 
 
 class TemplateManager:
-    """Manage plan templates."""
+    """Manage plan and spec templates."""
 
-    def __init__(self, config_dir: str = ".cafe"):
+    def __init__(self, config_dir: str = ".cafe", template_type: str = "plan"):
         """Initialize template manager.
 
         Args:
             config_dir: CAFE configuration directory
+            template_type: Type of template to manage ('plan' or 'spec')
         """
-        self.template_dir = Path(config_dir) / "templates" / "plan"
+        self.template_type = template_type
+        self.template_dir = Path(config_dir) / "templates" / template_type
         self.template_dir.mkdir(parents=True, exist_ok=True)
-        self._ensure_default_template()
+        self._ensure_default_templates()
 
     def add_template(self, source_path: str, template_name: str) -> None:
         """Add a new template from a file.
@@ -107,26 +109,35 @@ class TemplateManager:
         """
         return self.get_template_path(template_name) is not None
 
-    def _ensure_default_template(self) -> None:
-        """Ensure default template exists by copying from package data if needed."""
-        default_template_path = self.template_dir / "default.md"
+    def _ensure_default_templates(self) -> None:
+        """Ensure default templates exist by copying from package data if needed."""
+        # For spec templates, we need to copy multiple default templates
+        if self.template_type == "spec":
+            template_names = ["default.md", "simple.md", "detailed.md"]
+        else:
+            template_names = ["default.md"]
 
-        # If default template already exists, don't overwrite
-        if default_template_path.exists():
-            return
+        for template_name in template_names:
+            template_path = self.template_dir / template_name
 
-        # Find the template in package data directory
-        # Path(__file__) = src/cafe/templates/manager.py
-        # .parent = src/cafe/templates/
-        # .parent.parent = src/cafe/
-        # .parent.parent / "data" / "templates" / "plan" / "default.md" = package data template
-        package_data_template = Path(__file__).parent.parent / "data" / "templates" / "plan" / "default.md"
+            # If template already exists, don't overwrite
+            if template_path.exists():
+                continue
 
-        # Try package data first, then repo root (for backward compatibility)
-        repo_root = Path(__file__).parent.parent.parent.parent
-        repo_template = repo_root / "templates" / "plan" / "default.md"
+            # Find the template in package data directory
+            # Path(__file__) = src/cafe/templates/manager.py
+            # .parent = src/cafe/templates/
+            # .parent.parent = src/cafe/
+            # .parent.parent / "data" / "templates" / {template_type} / {template_name}
+            package_data_template = (
+                Path(__file__).parent.parent / "data" / "templates" / self.template_type / template_name
+            )
 
-        if package_data_template.exists():
-            shutil.copy2(package_data_template, default_template_path)
-        elif repo_template.exists():
-            shutil.copy2(repo_template, default_template_path)
+            # Try package data first, then repo root (for backward compatibility)
+            repo_root = Path(__file__).parent.parent.parent.parent
+            repo_template = repo_root / "templates" / self.template_type / template_name
+
+            if package_data_template.exists():
+                shutil.copy2(package_data_template, template_path)
+            elif repo_template.exists():
+                shutil.copy2(repo_template, template_path)

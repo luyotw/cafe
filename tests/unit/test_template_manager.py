@@ -215,3 +215,48 @@ class TestTemplateManager:
         manager = TemplateManager(str(config_dir))
 
         assert manager.template_exists("nonexistent") is False
+
+    def test_init_spec_template_creates_spec_directory(self, tmp_path: Path) -> None:
+        """測試初始化 spec 模版時建立 spec 目錄"""
+        config_dir = tmp_path / ".cafe"
+        manager = TemplateManager(str(config_dir), template_type="spec")
+
+        expected_dir = config_dir / "templates" / "spec"
+        assert expected_dir.exists()
+        assert expected_dir.is_dir()
+
+    def test_spec_template_manager_list_templates(self, tmp_path: Path) -> None:
+        """測試 spec 模版管理器列出模版"""
+        config_dir = tmp_path / ".cafe"
+        manager = TemplateManager(str(config_dir), template_type="spec")
+
+        # 建立模版
+        template_dir = config_dir / "templates" / "spec"
+        template_dir.mkdir(parents=True, exist_ok=True)
+        (template_dir / "default.md").write_text("Default spec")
+        (template_dir / "simple.md").write_text("Simple spec")
+
+        templates = manager.list_templates()
+        assert "default" in templates
+        assert "simple" in templates
+
+    def test_spec_template_add_and_get(self, tmp_path: Path) -> None:
+        """測試新增和取得 spec 模版"""
+        config_dir = tmp_path / ".cafe"
+        manager = TemplateManager(str(config_dir), template_type="spec")
+
+        # 建立來源檔案
+        source_file = tmp_path / "custom-spec.md"
+        source_file.write_text("## Custom Spec Template")
+
+        # 新增模版
+        manager.add_template(str(source_file), "custom")
+
+        # 驗證檔案已複製到 spec 目錄
+        template_path = config_dir / "templates" / "spec" / "custom.md"
+        assert template_path.exists()
+        assert template_path.read_text() == "## Custom Spec Template"
+
+        # 取得路徑
+        path = manager.get_template_path("custom")
+        assert path == template_path
