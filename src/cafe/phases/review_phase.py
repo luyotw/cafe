@@ -545,82 +545,109 @@ class ReviewPhase(Phase):
         # Build prompt
         try:
             from cafe.agents.manager import AgentManager
+            from cafe.utils.prompt_utils import extract_agent_guidelines_checklist
+
             agent_file = AgentManager.get_agent_file_path(self.review_agent, "reviewer")
-            
-            prompt = f"""**Your Role:**
-Please use Read tool to read {agent_file} to understand your role definition and work guidelines, then strictly follow the requirements in the role definition to perform code review.
+            agent_guidelines_checklist = extract_agent_guidelines_checklist(agent_file)
 
-**Execution Steps:**
-1. Use Read tool to read {agent_file} to understand the role definition
-2. Use Read tool to read the requirements specification and implementation plan
-3. Perform iteration {self.iteration} code review according to the role definition requirements
+            execution_steps = f"""
+## Execution Steps Checklist
 
-You are conducting iteration {self.iteration} of the code review. You will only check commits that exist in the current branch but not in the base branch ({self.base_branch}).
+[ ] Read {agent_file} to understand your role and native language
+[ ] Read the requirements specification and implementation plan
+[ ] Review commits in current branch (not in {self.base_branch})
+[ ] Complete all review tasks listed below
+[ ] Save complete review result to {review_file_path} in your native language
+[ ] Return appropriate status code
+"""
 
-{status_code_prompt}
-{recheck_instruction}
-{restriction}
-**Review Result Storage:**
-- **Must** save the complete review result to: `{review_file_path}` **in your native language**
-- File format is Markdown
-- Content includes all issues and suggestions found during review
-- ⚠️ **Important:** Write the markdown content in your native language (the language you were configured with)
+            review_tasks = f"""
+## Review Tasks Checklist (Priority Order)
+
+**1. Git Status Check**
+[ ] Check for uncommitted changes (if any, development is incomplete)
+[ ] Check for sensitive info (passwords, API keys, credentials - CRITICAL if found)
+
+**2. [Important] Check Commit Message Style Consistency**
+[ ] Get commits: `git log {self.base_branch}..HEAD` (current branch)
+[ ] Get commits: `git log {self.base_branch} --max-count=5` (base branch)
+[ ] Calculate if base branch uses single-line or multi-line messages
+[ ] Calculate if current branch uses single-line or multi-line messages
+[ ] Compare consistency: body presence and language must match base branch
+[ ] If inconsistent: list non-conforming commit SHAs and provide update commands
+
+**3. Confirm Implementation Completion**
+[ ] Check for unfinished items in implementation plan
+
+**4. Find Potential Issues**
+[ ] Check conformance to existing project coding style
+[ ] Check for excessive duplicate code
+[ ] Check code correctness, readability, performance, security
+[ ] Check for missing updates (error messages, docs, examples)
+[ ] Check for files that should not be committed (config, logs)
+[ ] Check for files or code that should not be deleted
+
+**5. Brief Explanation of Issues**
+[ ] List file paths and line numbers with explanations
+[ ] Do NOT provide code solutions
+"""
+
+            important_notes = f"""
+## Important Notes Checklist
+
+[ ] ✅ Write review result in your native language
+[ ] ✅ Save to {review_file_path} in Markdown format
+[ ] ✅ Include all issues and suggestions
+[ ] ⚠️ Commit message style issues are CRITICAL - must fix before passing
+[ ] ✅ Return status code only, no summary or explanation
+{f"[ ] ⚠️ Iteration {self.iteration}: Only follow up on previous round issues" if self.iteration >= 4 else ""}
+"""
+
+            recheck_note = ""
+            if recheck_instruction:
+                recheck_note = recheck_instruction
+
+            restriction_note = ""
+            if restriction:
+                restriction_note = restriction
+
+            base_prompt = f"""# Review Phase
+
+**Your Role:** Reviewer
+Read {agent_file} to understand your complete role definition and responsibilities.
+
+**Task:** Conduct iteration {self.iteration} code review.
+Review scope: commits in current branch but not in {self.base_branch}.
 
 **Requirements Specification and Implementation Plan:**
 {requirements_section}
 {pr_comments_section}
+{recheck_note}
+{restriction_note}
+"""
 
-**Your Review Tasks (in priority order):**
+            prompt = f"""{base_prompt}
 
-1. **Git Status Check**
-   - **Check for uncommitted changes, if any, consider development incomplete and list them**
-   - **Check for sensitive information being committed (such as passwords, API keys, credentials, etc.), if any, treat as critical issue, list them and require immediate removal, must not remain in commit history**
+{execution_steps}
 
-2. **[Important] Check Commit Message Style Consistency**
-   - Use `git log {self.base_branch}..HEAD` to get commits added in current branch
-   - Use `git log {self.base_branch} --max-count=5` to get commits from base branch
-   - Calculate whether the last 5 commit messages in base branch are single-line or multi-line, calculation method is **subject lines + body lines**, only subject line is single-line, with body is multi-line, blank lines in between are not counted. Recommended to use `git log <sha> -1 --format="%B" | wc -l` to calculate, more than 2 is multi-line
-   - Calculate whether all commit messages in current branch are single-line or multi-line, same calculation method
-   - **Only compare the following two items for consistency:**
-     - Whether having body or not (multi-line description) is consistent with base branch, auto-generated commits like merge commits can be ignored
-     - Whether language (Chinese/English/...) is consistent
-   - **If style inconsistency is found:**
-     - Clearly list which commit SHAs and messages do not conform to the style
-     - Explain correct style examples (based on actual base branch style)
-     - **Important: Provide complete update commands for developer to execute directly (one command per commit), do not use file paths outside project directory**
-     - **Developer can execute these commands directly without requesting permission, do not use interactive rebase**
+{review_tasks}
 
-     Command example:
-     ```bash
-     # Modify commit abc123 message
-     echo "Fix login logic" > ./commit_msg.txt && \\
-     git rebase --onto {self.base_branch} {self.base_branch} HEAD --exec '
-       if test $(git rev-parse HEAD) = abc123 || test $(git rev-parse HEAD) = $(git rev-parse abc123); then
-         git commit --amend -F ./commit_msg.txt --allow-empty --no-edit;
-       fi
-     ' && rm -f ./commit_msg.txt
-     ```
+{important_notes}
 
-3. **Confirm Implementation Completion**
-   - Carefully check if there are unfinished items in the implementation plan, if any, consider development incomplete and list them
+{agent_guidelines_checklist}
 
-4. **Find Potential Issues**
-   - Check if it conforms to existing project coding style
-   - Check for excessive duplicate code
-   - Check code correctness, readability, performance, security
-   - Check for missing parts, such as error messages, prompts, documentation, examples that need updates but were not changed
-   - Check for files that should not be committed, such as personal config files, log files, etc.
-     - If not pushed, require using `git rebase` or `git filter-branch` to remove
-     - If already pushed, require using `git rm --cached` to remove and update .gitignore then commit
-   - Check for files or code that should not be deleted
+{status_code_prompt}
 
-5. **Brief Explanation of Issues**
-   - List file paths and line numbers with issue explanation
-   - Do not provide code solutions
-
-**Important:**
-- Commit message style issues are considered critical issues and must be fixed before passing review
-- After review is complete, return status code without any summary or additional explanation
+**Commit Message Update Command Example:**
+```bash
+# Modify commit abc123 message
+echo "Fix login logic" > ./commit_msg.txt && \\
+git rebase --onto {self.base_branch} {self.base_branch} HEAD --exec '
+  if test $(git rev-parse HEAD) = abc123 || test $(git rev-parse HEAD) = $(git rev-parse abc123); then
+    git commit --amend -F ./commit_msg.txt --allow-empty --no-edit;
+  fi
+' && rm -f ./commit_msg.txt
+```
 """
         except Exception as e:
             raise RuntimeError(f"Error building prompt: {e}") from e
