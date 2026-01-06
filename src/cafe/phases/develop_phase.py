@@ -768,6 +768,9 @@ Steps for requesting clarification:
 
         if has_review_feedback:
             # With review feedback - correction mode
+            from cafe.utils.prompt_utils import extract_agent_guidelines_checklist
+            agent_guidelines_checklist = extract_agent_guidelines_checklist(agent_file)
+
             user_input_section = f"\n\n**Additional user notes:**\n{user_input}\n" if user_input else ""
 
             # Build review sources instruction
@@ -777,46 +780,69 @@ Steps for requesting clarification:
             if has_pr_comments:
                 review_sources.append(f"PR comments (see {unresolved_count} unresolved comments above)")
 
-            review_instruction = ""
+            review_source_text = ""
             if len(review_sources) == 1:
-                review_instruction = f"2. **First read** {review_sources[0]}, understand all issues needing correction"
+                review_source_text = review_sources[0]
             else:
-                review_instruction = f"2. **First read** {' and '.join(review_sources)}, understand all issues needing correction"
+                review_source_text = " and ".join(review_sources)
+
+            execution_steps = f"""
+## Execution Steps Checklist
+
+[ ] Read {agent_file} to understand your role and native language
+{f"[ ] Read questions in {develop_file}" if develop_file and develop_file.exists() and not self._is_clarification_answered(develop_file) else ""}
+[ ] Read {review_source_text} and understand all issues
+[ ] Address issues one by one based on review feedback
+[ ] Follow existing commit message style, commit multiple times if needed
+[ ] Do NOT modify commits from other branches
+[ ] Refer to {self.spec_file} and {self.plan_file} if needed
+[ ] ONLY after completing ALL corrections, verify and return status code
+"""
 
             # Build verification checklist
-            verification_items = ["✓ All review feedback issues are addressed"]
+            verification_items = ["[ ] All review feedback issues are addressed"]
             if has_pr_comments:
-                verification_items.append("✓ All PR comments are resolved (no unresolved comments remain)")
+                verification_items.append("[ ] All PR comments are resolved (no unresolved comments remain)")
             verification_items.extend([
-                "✓ All tests pass",
-                "✓ All commits are made",
-                "✓ No pending work remains"
+                "[ ] All tests pass",
+                "[ ] All commits are made",
+                "[ ] No pending work remains"
             ])
             verification_checklist = "\n".join(verification_items)
 
-            return f"""Please make corrections based on Code Review feedback.
+            important_notes = f"""
+## Important Notes Checklist
 
-**Your role:**
-Please use Read tool to read {agent_file} to understand your role definition and work guidelines, then strictly follow the requirements in the role definition to perform code corrections.
+[ ] ✅ Maximize code reuse - look for existing patterns and utilities
+[ ] ✅ Strictly maintain consistency with {base_branch}'s commit message format
+[ ] ✅ Commit message language and structure must match existing commits
+{f"[ ] ⚠️ Strictly prohibit modifying files outside worktree ({worktree_path})" if worktree_path else ""}
+"""
 
-{important_note}
+            base_prompt = f"""# Develop Phase (Correction Mode)
+
+**Your Role:** Developer
+Read {agent_file} to understand your complete role definition and responsibilities.
+
+**Task:** Make corrections based on Code Review feedback.
 
 **File paths:**
 - Review Feedback: {review_file_path}
 - Requirements Specification: {self.spec_file}
 - Implementation Plan: {self.plan_file}{develop_file_section}
 {pr_comments_section}{user_input_section}
-**Execution steps:**
-1. Use Read tool to read {agent_file} to understand role definition
-{develop_instruction}{review_instruction}
-3. Address issues one by one based on review feedback
-4. **Maximize code reuse** - look for existing patterns and utilities in the codebase before writing new code
-5. **Strictly follow existing commit message style**, can commit multiple times
-6. **Do not modify commits from other branches**
-7. If needed, refer to {self.spec_file} and {self.plan_file}
-8. **⚠️ ONLY after completing ALL corrections**, verify and return status code
+"""
 
-**Before returning status code, verify:**
+            return f"""{base_prompt}
+
+{execution_steps}
+
+{important_notes}
+
+{agent_guidelines_checklist}
+
+## Verification Checklist (Before Returning Status Code)
+
 {verification_checklist}
 
 {status_code_prompt}
@@ -825,41 +851,67 @@ Please use Read tool to read {agent_file} to understand your role definition and
 """
 
         # No review feedback - normal development mode
+        from cafe.utils.prompt_utils import extract_agent_guidelines_checklist
+        agent_guidelines_checklist = extract_agent_guidelines_checklist(agent_file)
+
         user_input_section = f"\n\n**Additional user notes:**\n{user_input}\n" if user_input else ""
 
+        execution_steps = f"""
+## Execution Steps Checklist
+
+[ ] Read {agent_file} to understand your role and native language
+{f"[ ] Read questions in {develop_file}" if develop_file and develop_file.exists() and not self._is_clarification_answered(develop_file) else ""}
+[ ] Carefully read {self.spec_file} and {self.plan_file}
+[ ] Execute development tasks in strict order according to the plan
+[ ] Mark each completed task as checked in {self.plan_file} (change - [ ] to - [x])
+[ ] Follow existing commit message style, commit multiple times if needed
+[ ] Do NOT modify commits from other branches
+[ ] ONLY after completing ALL tasks in the plan, verify and return status code
+"""
+
         # Build verification checklist for normal mode
-        verification_items = [f"✓ All tasks in {self.plan_file} are marked [x]"]
+        verification_items = [f"[ ] All tasks in {self.plan_file} are marked [x]"]
         if has_pr_comments:
-            verification_items.append("✓ All PR comments are resolved (no unresolved comments remain)")
+            verification_items.append("[ ] All PR comments are resolved (no unresolved comments remain)")
         verification_items.extend([
-            "✓ All tests pass",
-            "✓ All commits are made",
-            "✓ No pending work remains"
+            "[ ] All tests pass",
+            "[ ] All commits are made",
+            "[ ] No pending work remains"
         ])
         verification_checklist = "\n".join(verification_items)
 
-        return f"""Please execute development work according to the implementation plan.
+        important_notes = f"""
+## Important Notes Checklist
 
-**Your role:**
-Please use Read tool to read {agent_file} to understand your role definition and work guidelines, then strictly follow the requirements in the role definition to perform development work.
+[ ] ✅ Maximize code reuse - look for existing patterns and utilities
+[ ] ✅ Strictly maintain consistency with {base_branch}'s commit message format
+[ ] ✅ Commit message language and structure must match existing commits
+{f"[ ] ⚠️ Strictly prohibit modifying files outside worktree ({worktree_path})" if worktree_path else ""}
+"""
 
-{important_note}
+        base_prompt = f"""# Develop Phase (Normal Mode)
+
+**Your Role:** Developer
+Read {agent_file} to understand your complete role definition and responsibilities.
+
+**Task:** Execute development work according to the implementation plan.
 
 **File paths:**
 - Requirements Specification: {self.spec_file}
 - Implementation Plan: {self.plan_file}{develop_file_section}
 {pr_comments_section}{user_input_section}
-**Execution steps:**
-1. Use Read tool to read {agent_file} to understand role definition
-{develop_instruction}2. Carefully read {self.spec_file} and {self.plan_file}
-3. Execute development tasks in strict order according to the plan
-4. **Maximize code reuse** - look for existing patterns and utilities in the codebase before writing new code
-5. **Strictly follow existing commit message style**, can commit multiple times
-6. After completing each task, mark it checked in {self.plan_file} (change - [ ] to - [x])
-7. **Do not modify commits from other branches**
-8. **⚠️ ONLY after completing ALL tasks in the plan**, verify and return status code
+"""
 
-**Before returning status code, verify:**
+        return f"""{base_prompt}
+
+{execution_steps}
+
+{important_notes}
+
+{agent_guidelines_checklist}
+
+## Verification Checklist (Before Returning Status Code)
+
 {verification_checklist}
 
 {status_code_prompt}
