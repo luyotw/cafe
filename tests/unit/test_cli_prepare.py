@@ -689,3 +689,102 @@ class TestPrepareNonInteractiveMode:
             # 應該有 plan 設定
             assert "plan" in config_data
             assert config_data["plan"]["template"] == "default"  # 預設值
+
+
+class TestPrepareSpecTemplateParameter:
+    """測試 prepare 命令的 spec template 參數"""
+
+    def test_spec_template_parameter_exists(self, temp_repo_dir, mock_git_ops):
+        """測試 --spec-template 參數存在"""
+        result = runner.invoke(app, [
+            "prepare", "test-issue",
+            "--no-interactive",
+            "--input-method=manual",
+            "--spec-template=simple"
+        ])
+
+        assert "no such option" not in result.stdout.lower()
+
+    def test_plan_template_parameter_renamed(self, temp_repo_dir, mock_git_ops):
+        """測試 --plan-template 參數存在（從 --template 重新命名）"""
+        result = runner.invoke(app, [
+            "prepare", "test-issue",
+            "--no-interactive",
+            "--input-method=manual",
+            "--plan-template=bug"
+        ])
+
+        assert "no such option" not in result.stdout.lower()
+
+    def test_spec_template_saved_to_issue_yaml(self, temp_repo_dir, mock_git_ops):
+        """測試 spec template 設定儲存到 issue.yaml"""
+        result = runner.invoke(app, [
+            "prepare", "test-issue",
+            "--no-interactive",
+            "--input-method=manual",
+            "--spec-template=detailed"
+        ])
+
+        assert result.exit_code == 0
+
+        config_file = temp_repo_dir / ".cafe" / "issues" / "test-issue" / "issue.yaml"
+        with open(config_file) as f:
+            config_data = yaml.safe_load(f)
+            assert "spec" in config_data
+            assert "template" in config_data["spec"]
+            assert config_data["spec"]["template"] == "detailed"
+
+    def test_plan_template_saved_to_plan_section(self, temp_repo_dir, mock_git_ops):
+        """測試 plan template 設定儲存到 plan section"""
+        result = runner.invoke(app, [
+            "prepare", "test-issue",
+            "--no-interactive",
+            "--input-method=manual",
+            "--plan-template=simple"
+        ])
+
+        assert result.exit_code == 0
+
+        config_file = temp_repo_dir / ".cafe" / "issues" / "test-issue" / "issue.yaml"
+        with open(config_file) as f:
+            config_data = yaml.safe_load(f)
+            assert "plan" in config_data
+            assert "template" in config_data["plan"]
+            assert config_data["plan"]["template"] == "simple"
+
+    def test_both_templates_can_be_specified(self, temp_repo_dir, mock_git_ops):
+        """測試可以同時指定 spec 和 plan template"""
+        result = runner.invoke(app, [
+            "prepare", "test-issue",
+            "--no-interactive",
+            "--input-method=manual",
+            "--spec-template=simple",
+            "--plan-template=bug"
+        ])
+
+        assert result.exit_code == 0
+
+        config_file = temp_repo_dir / ".cafe" / "issues" / "test-issue" / "issue.yaml"
+        with open(config_file) as f:
+            config_data = yaml.safe_load(f)
+            assert config_data["spec"]["template"] == "simple"
+            assert config_data["plan"]["template"] == "bug"
+
+    def test_spec_template_defaults_to_auto(self, temp_repo_dir, mock_git_ops):
+        """測試 spec template 預設為 auto"""
+        result = runner.invoke(app, [
+            "prepare", "test-issue",
+            "--no-interactive",
+            "--input-method=manual"
+        ])
+
+        assert result.exit_code == 0
+
+        config_file = temp_repo_dir / ".cafe" / "issues" / "test-issue" / "issue.yaml"
+        with open(config_file) as f:
+            config_data = yaml.safe_load(f)
+            # Should have spec template with default value
+            assert "spec" in config_data
+            # Default is "auto"
+            if "template" in config_data["spec"]:
+                assert config_data["spec"]["template"] == "auto"
