@@ -625,7 +625,8 @@ class SpecPhase(Phase):
             spec_path.write_text(f"# Initial Requirements\n\n{fetched_content}\n")
 
             print()
-            print("✅ Requirements loaded from GitHub Issue, starting clarification...")
+            print(f"✅ Requirements loaded from GitHub Issue and written to {spec_path}")
+            print("   Starting clarification...")
             print()
 
             return None  # Success
@@ -937,80 +938,106 @@ Read {current_spec_file}  for initial requirements content."""
 - Can only deeply clarify questions already raised.
 """
 
-        # --- 2. Define common instructions ---
-        # Add agent role definition reading instruction
+        # --- 2. Build execution steps checklist ---
         from cafe.agents.manager import AgentManager
         agent_file = AgentManager.get_agent_file_path(self.pm_agent, "pm")
-        
-        role_reading_instruction = f"""
-**Execution Steps:**
-1. Use Read tool to read {agent_file} to find you native language
-2. Understand your role definition and work guidelines from {agent_file}
-"""
-        
+
         if self.iteration == 1:
-            role_reading_instruction += f"""3. Use Read tool to read {current_spec_file} to understand initial requirements content, then read README.md for more context
-4. Modify {current_spec_file}，Add analysis results (including original requirements, user stories, current specification, questions to clarify)
+            execution_steps = f"""
+## Execution Steps Checklist
+
+[ ] Read {agent_file} to understand your role and native language
+[ ] Read {current_spec_file} to understand initial requirements
+[ ] Read README.md for project context
+[ ] Search codebase using Read/Grep tools to find answers before asking users
+[ ] Identify unclear areas that need clarification
+[ ] Write analysis results to {current_spec_file}
+[ ] Return appropriate status code
 """
         else:
-            role_reading_instruction += f"""3. Use Read tool to read {prev_spec_file}(previous round analysis results)
-4. Integrate user's latest answers
-5. Modify {current_spec_file}，Update analysis results (new version)
+            execution_steps = f"""
+## Execution Steps Checklist
+
+[ ] Read {agent_file} to understand your role and native language
+[ ] Read {prev_spec_file} to review previous analysis
+[ ] Review user's answer (provided below)
+[ ] Integrate new information into specification
+[ ] Write updated analysis to {current_spec_file}
+[ ] Return appropriate status code
 """
 
-        base_prompt = f"""
+        # --- 3. Build important notes checklist ---
+        important_notes = f"""
+## Important Notes Checklist
+
+[ ] ❌ NO technical details (no implementation, architecture, languages, frameworks, databases)
+[ ] ❌ NO technical solutions or suggestions
+[ ] ❌ DO NOT modify code
+[ ] ✅ Focus ONLY on "what users want", "why", and "expected outcomes"
+[ ] ✅ Think from product and business perspectives
+[ ] ✅ Write ALL content to {current_spec_file}, not in your response
+[ ] ✅ Return ONLY the status code in your response
+[ ] ✅ If requirements are clear, proceed to CAFE_READY_FOR_REVIEW
+"""
+
+        if self.iteration >= 4:
+            important_notes += f"""[ ] ⚠️ Round {self.iteration}: Only clarify existing questions, NO new questions
+"""
+
+        # --- 4. Build principles section ---
+        base_prompt = f"""# Specification Phase
+
 **Your Role:** PM (Product Manager)
-Read {agent_file} to understand your role and responsibilities."""
+Read {agent_file} to understand your complete role definition and responsibilities.
 
-        output_format = f"""
-**⚠️ CRITICAL: Output Format**
-1. Write ALL content (requirements, questions, specifications) to {current_spec_file}
-2. Return ONLY the status code in your response
-3. ❌ NEVER put questions or content in your response
-4. ✅ Questions go in the markdown file, response contains ONLY status code
+{initial_instruction}
+{context_section}
+{rigor_guidelines}
 
-**Why this matters:**
-If you put questions in your response instead of the file, the workflow CANNOT continue.
-The user will NOT see your questions, and the process will be stuck.
+**Output Format Requirements:**
+- Write ALL content (requirements, questions, specifications) to {current_spec_file}
+- Return ONLY the status code in your response
+- ❌ NEVER put questions or content in your response - the workflow CANNOT continue if you do this
+- ✅ Questions must go in the markdown file, response contains ONLY status code
 
-**Example (CORRECT):**
+**Correct Example:**
 - File {current_spec_file}: Contains all questions and specifications
 - Your response: "CAFE_NEED_CLARIFICATION"
 
-**Example (WRONG - workflow will fail):**
+**Wrong Example (will fail):**
 - Your response: "I have some questions: 1. What is...? CAFE_NEED_CLARIFICATION" ← ❌ DO NOT DO THIS
 """
 
-        need_clarification_instruction = f"""**Status: CAFE_NEED_CLARIFICATION**
+        # --- 5. Build status code section ---
+        need_clarification_instruction = f"""
+**Status: CAFE_NEED_CLARIFICATION**
 Write to {current_spec_file}:
    - ## Original Requirements Description (preserve exactly as provided)
    - ## User Stories (from user or auto-generated)
    - ## Current Requirements Specification (integrate all known info)
    - ## Questions to Clarify (PM asks conversational questions)
 
-Response: "CAFE_NEED_CLARIFICATION" (nothing else)"""
+Response: "CAFE_NEED_CLARIFICATION" (nothing else)
+"""
 
-        confirmed_instruction = f"""**Status: CAFE_READY_FOR_REVIEW**
+        confirmed_instruction = f"""
+**Status: CAFE_READY_FOR_REVIEW**
 Write to {current_spec_file}:
    - ## Original Requirements Description (preserve exactly as provided)
    - ## User Stories (from user or auto-generated)
    - ## Requirements Specification (complete spec with functions, scenarios, behaviors, acceptance criteria)
 
-Response: "CAFE_READY_FOR_REVIEW" (nothing else)"""
+Response: "CAFE_READY_FOR_REVIEW" (nothing else)
+"""
 
-        # --- 3. Assemble the final prompt ---
-        return f"""{initial_instruction}
-{base_prompt.strip()}
-{role_reading_instruction}
-{context_section}
-{rigor_guidelines}
+        # --- 6. Assemble the final prompt ---
+        return f"""{base_prompt}
 
-{non_technical}
+{execution_steps}
 
-{output_format}
+{important_notes}
 
 {status_code_prompt}
-{restriction}
 
 {need_clarification_instruction}
 {confirmed_instruction}
