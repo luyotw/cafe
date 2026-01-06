@@ -382,75 +382,126 @@ Please first read {template_path}, then strictly follow the template's format, s
 
         if self.iteration == 1:
             from cafe.agents.manager import AgentManager
+            from cafe.utils.prompt_utils import extract_agent_guidelines_checklist
+
             agent_file = AgentManager.get_agent_file_path(self.dev_agent, "developer")
+            agent_guidelines_checklist = extract_agent_guidelines_checklist(agent_file)
 
-            return f"""Analyze {spec_file_path} and plan implementation steps.
+            execution_steps = f"""
+## Execution Steps Checklist
 
-**Your Role:**
-Please first use Read tool to read {agent_file} to understand your role definition and work guidelines, then strictly follow the requirements in the role definition for planning.
+[ ] Read {agent_file} to understand your role and native language
+[ ] Read the development guide in {plan_file_path}
+[ ] Read the requirements document {spec_file_path}
+[ ] Plan implementation steps (planning, not implementation)
+[ ] Append plan after "## Development Guide" section
+[ ] Return appropriate status code
+"""
+
+            important_notes = f"""
+## Important Notes Checklist
+
+[ ] ✅ Your job is PLANNING, not implementation
+[ ] ✅ Write plans and steps only, no actual code
+[ ] ✅ Keep "## Development Guide" section unchanged
+[ ] ✅ Append implementation plan AFTER development guide
+[ ] ✅ Write content in your native language
+[ ] ✅ Follow template format strictly (if template provided)
+"""
+
+            template_note = ""
+            if template_instruction:
+                template_note = f"\n{template_instruction}"
+
+            base_prompt = f"""# Plan Phase
+
+**Your Role:** Developer (Planning)
+Read {agent_file} to understand your complete role definition and responsibilities.
 
 This is iteration {self.iteration} of implementation analysis.
+Analyze {spec_file_path} and plan implementation steps.
+{template_note}
 
-**Execution Steps:**
-1. Use Read tool to read {agent_file} to understand the role definition
-2. Use Read tool to read the development guide in {plan_file_path}
-3. Use Read tool to read the requirements document {spec_file_path}
-4. Plan implementation steps according to the role definition requirements (Note: your job is "planning" not "implementation", just need to write plans and steps)
-{template_instruction}
+**Output Format:**
+- **CAFE_NEED_CLARIFICATION**: Append "## Implementation Plan" and "## Questions to Confirm" sections
+- **CAFE_READY_FOR_REVIEW**: Append complete implementation plan following template structure
+"""
+
+            return f"""{base_prompt}
+
+{execution_steps}
+
+{important_notes}
+
+{agent_guidelines_checklist}
+
 {status_code_prompt}
-
-**Important: Edit existing file, append implementation plan to the file**
-- Append implementation plan **after** the "## Development Guide" section
-- Keep the "## Development Guide" section unchanged
-
-**If need more information (status: CAFE_NEED_CLARIFICATION):**
-Append after development guide (in your native language):
-   - "## Implementation Plan" - current implementation analysis content
-   - "## Questions to Confirm" - list technical questions that need confirmation
-
-**If analysis complete (status: CAFE_READY_FOR_REVIEW):**
-Append complete implementation plan after development guide (in your native language), strictly follow template's section structure and format.
-
-⚠️ **Important:** Write the markdown content in your native language (the language you were configured with).
 """
         else:
-            # Add user's modification request section for iteration 2+
+            # Iteration 2+
+            from cafe.agents.manager import AgentManager
+            from cafe.utils.prompt_utils import extract_agent_guidelines_checklist
+
+            agent_file = AgentManager.get_agent_file_path(self.dev_agent, "developer")
+            agent_guidelines_checklist = extract_agent_guidelines_checklist(agent_file)
+
             user_request_section = ""
             if user_input:
                 user_request_section = f"""
 **User's Modification Request:**
 {user_input}
-
 """
 
-            from cafe.agents.manager import AgentManager
-            agent_file = AgentManager.get_agent_file_path(self.dev_agent, "developer")
-            
-            return f"""Continue analyzing the latest version of {spec_file_path}.
+            execution_steps = f"""
+## Execution Steps Checklist
 
-**Your Role:**
-Please use Read tool to read {agent_file} to understand your role definition and work guidelines, then strictly follow the requirements in the role definition for planning.
+[ ] Read {agent_file} to understand your role (if necessary)
+[ ] Read the latest version of {plan_file_path}
+[ ] Review user's modification request (see above)
+[ ] Update existing implementation plan (do not rewrite entirely)
+[ ] Keep "## Development Guide" section unchanged
+[ ] Return appropriate status code
+"""
+
+            important_notes = f"""
+## Important Notes Checklist
+
+[ ] ✅ UPDATE existing plan, do not rewrite entirely
+[ ] ✅ Use Edit tool with old_string/new_string method
+[ ] ✅ Keep "## Development Guide" section unchanged
+[ ] ✅ Only modify parts that need changes
+[ ] ✅ Write content in your native language
+[ ] ✅ Follow template format strictly (if template provided)
+"""
+
+            template_note = ""
+            if template_instruction:
+                template_note = f"\n{template_instruction}"
+
+            base_prompt = f"""# Plan Phase
+
+**Your Role:** Developer (Planning)
+Read {agent_file} to understand your complete role definition and responsibilities.
 
 This is iteration {self.iteration} of implementation analysis.
-
+Continue analyzing the latest version of {spec_file_path}.
 {user_request_section}
-**Execution Steps:**
-1. Use Read tool to read {agent_file} to understand the role definition (if necessary)
-2. Use Read tool to read the latest version of {plan_file_path}
-3. According to user's modification request and role definition, **update** existing implementation plan (do not rewrite entirely)
-{template_instruction}
+{template_note}
+
+**Output Format:**
+- **CAFE_NEED_CLARIFICATION**: Update relevant sections and list questions in "## Questions to Confirm"
+- **CAFE_READY_FOR_REVIEW**: Update sections to meet user's requirements
+"""
+
+            return f"""{base_prompt}
+
+{execution_steps}
+
+{important_notes}
+
+{agent_guidelines_checklist}
+
 {status_code_prompt}
-
-**Important: Edit existing file, update specific sections**
-- Modify specific section content (using old_string/new_string method)
-- Keep the "## Development Guide" section unchanged
-- Only modify parts that need changes
-
-**If still need confirmation (status: CAFE_NEED_CLARIFICATION):**
-Update relevant sections in {plan_file_path}, and list technical questions that need confirmation in the "## Questions to Confirm" section.
-
-**If analysis complete (status: CAFE_READY_FOR_REVIEW):**
-Update sections that need modification in {plan_file_path}, ensure implementation plan meets user's requirements.
 """
 
     def _generate_github_prompt(self, user_input: str) -> str:
