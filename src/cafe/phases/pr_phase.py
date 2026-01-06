@@ -766,19 +766,34 @@ class PRPhase(Phase):
             what_to_generate = "description"
             status_desc = "PR body generation completed"
 
-        # Generate prompt for agent
-        prompt = f"""You need to generate {what_to_generate} for this Pull Request.
+        # Build task checklist
+        task_checklist_items = []
+        if generate_title:
+            task_checklist_items.append(f"[ ] Edit `{title_file}` with PR title (one line, max 80 chars)")
+        if generate_body:
+            task_checklist_items.append(f"[ ] Edit `{body_file}` with PR description (Summary, Changes, Test Plan)")
+        task_checklist = "\n".join(task_checklist_items)
 
-**Requirements Specification:** {self.spec_file}
-**Implementation Plan:** {plan_file}
+        # Generate prompt for agent
+        prompt = f"""# PR Phase
+
+**Task:** Generate {what_to_generate} for this Pull Request.
+
+**Context:**
+- Requirements Specification: {self.spec_file}
+- Implementation Plan: {plan_file}
 
 **Commits:**
 {commits}
 
-**Tasks:**
-{tasks_str}
+## Task Checklist
 
-When done, please return CAFE_CONFIRMED.
+{task_checklist}
+[ ] Return CAFE_CONFIRMED when done
+
+## Requirements
+
+{tasks_str}
 """
 
         # Execute agent
