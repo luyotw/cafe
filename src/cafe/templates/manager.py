@@ -6,17 +6,19 @@ from typing import List, Optional
 
 
 class TemplateManager:
-    """Manage plan templates."""
+    """Manage plan and spec templates."""
 
-    def __init__(self, config_dir: str = ".cafe"):
+    def __init__(self, config_dir: str = ".cafe", template_type: str = "plan"):
         """Initialize template manager.
 
         Args:
             config_dir: CAFE configuration directory
+            template_type: Type of template to manage ('plan' or 'spec')
         """
-        self.template_dir = Path(config_dir) / "templates" / "plan"
+        self.template_type = template_type
+        self.template_dir = Path(config_dir) / "templates" / template_type
         self.template_dir.mkdir(parents=True, exist_ok=True)
-        self._ensure_default_template()
+        self._ensure_default_templates()
 
     def add_template(self, source_path: str, template_name: str) -> None:
         """Add a new template from a file.
@@ -107,26 +109,34 @@ class TemplateManager:
         """
         return self.get_template_path(template_name) is not None
 
-    def _ensure_default_template(self) -> None:
-        """Ensure default template exists by copying from package data if needed."""
-        default_template_path = self.template_dir / "default.md"
-
-        # If default template already exists, don't overwrite
-        if default_template_path.exists():
-            return
-
-        # Find the template in package data directory
-        # Path(__file__) = src/cafe/templates/manager.py
-        # .parent = src/cafe/templates/
-        # .parent.parent = src/cafe/
-        # .parent.parent / "data" / "templates" / "plan" / "default.md" = package data template
-        package_data_template = Path(__file__).parent.parent / "data" / "templates" / "plan" / "default.md"
-
-        # Try package data first, then repo root (for backward compatibility)
+    def _ensure_default_templates(self) -> None:
+        """Ensure default templates exist by copying from package data if needed."""
+        # Dynamically discover all .md template files from package data
+        package_data_dir = Path(__file__).parent.parent / "data" / "templates" / self.template_type
         repo_root = Path(__file__).parent.parent.parent.parent
-        repo_template = repo_root / "templates" / "plan" / "default.md"
+        repo_template_dir = repo_root / "templates" / self.template_type
 
-        if package_data_template.exists():
-            shutil.copy2(package_data_template, default_template_path)
-        elif repo_template.exists():
-            shutil.copy2(repo_template, default_template_path)
+        # Collect template files from both locations
+        template_sources = []
+        if package_data_dir.exists():
+            template_sources.extend(package_data_dir.glob("*.md"))
+        if repo_template_dir.exists():
+            template_sources.extend(repo_template_dir.glob("*.md"))
+
+        # Copy each discovered template if it doesn't exist in target directory
+        for source_template in template_sources:
+            template_name = source_template.name
+            target_path = self.template_dir / template_name
+
+            # If template already exists, don't overwrite
+            if target_path.exists():
+                continue
+
+            # Determine which source to use (package data first, then repo)
+            package_data_template = package_data_dir / template_name if package_data_dir.exists() else None
+            repo_template = repo_template_dir / template_name if repo_template_dir.exists() else None
+
+            if package_data_template and package_data_template.exists():
+                shutil.copy2(package_data_template, target_path)
+            elif repo_template and repo_template.exists():
+                shutil.copy2(repo_template, target_path)

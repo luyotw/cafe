@@ -719,10 +719,15 @@ def prepare(
         "--rigor",
         help="Spec rigor level: 'low', 'medium', or 'high' (default: medium)",
     ),
-    template: Optional[str] = typer.Option(
+    plan_template: Optional[str] = typer.Option(
         None,
-        "--template",
+        "--plan-template",
         help="Plan template name (default: default)",
+    ),
+    spec_template: Optional[str] = typer.Option(
+        None,
+        "--spec-template",
+        help="Spec template name (default: auto)",
     ),
     auto_create_pr: bool = typer.Option(
         False,
@@ -744,8 +749,8 @@ def prepare(
     Examples:
         cafe prepare
         cafe prepare fix-login-bug
-        cafe prepare fix-bug --no-interactive --input-method=manual --rigor=medium --template=default
-        cafe prepare issue-123 --no-interactive --input-method=github --issue-id=123 --rigor=high
+        cafe prepare fix-bug --no-interactive --input-method=manual --rigor=medium --plan-template=default
+        cafe prepare issue-123 --no-interactive --input-method=github --issue-id=123 --rigor=high --spec-template=detailed
         cafe prepare my-feature --base develop
         cafe prepare my-feature --no-check
     """
@@ -802,8 +807,10 @@ def prepare(
             # 4.5. Set default values for optional parameters
             if rigor is None:
                 rigor = "medium"
-            if template is None:
-                template = "default"
+            if plan_template is None:
+                plan_template = "default"
+            if spec_template is None:
+                spec_template = "auto"
 
         # 5. Initialize Git operations
         try:
@@ -865,14 +872,14 @@ def prepare(
         cafe_dir = Path(".cafe")
         _ensure_default_content(cafe_dir)
 
-        # 9.1. Validate template exists (only in non-interactive mode after templates are initialized)
-        if not interactive and template:
-            template_file = Path(".cafe") / "templates" / "plan" / f"{template}.md"
+        # 9.1. Validate plan template exists (only in non-interactive mode after templates are initialized)
+        if not interactive and plan_template and plan_template != "auto":
+            template_file = Path(".cafe") / "templates" / "plan" / f"{plan_template}.md"
             if not template_file.exists():
-                console.print(f"[red]Error: Template '{template}' not found[/red]")
+                console.print(f"[red]Error: Plan template '{plan_template}' not found[/red]")
                 console.print(f"   Expected at: {template_file}")
                 console.print()
-                console.print("[yellow]Available templates:[/yellow]")
+                console.print("[yellow]Available plan templates:[/yellow]")
                 template_dir = Path(".cafe") / "templates" / "plan"
                 if template_dir.exists():
                     available = [f.stem for f in template_dir.glob("*.md")]
@@ -916,19 +923,33 @@ def prepare(
             rigor = prompt_for_rigor(display)
             spec_config["rigor"] = rigor
 
-            # Prompt for plan template
-            template_manager = TemplateManager(".cafe")
-            templates = template_manager.list_templates()
+            # Prompt for spec template
+            spec_template_manager = TemplateManager(".cafe", template_type="spec")
+            spec_templates = spec_template_manager.list_templates()
 
-            if templates:
+            if spec_templates:
+                console.print()
+                console.print("[bold cyan]Please select a spec template:[/bold cyan]")
+                spec_template_paths = {
+                    name: spec_template_manager.get_template_path(name) for name in spec_templates
+                }
+                selected_spec_template = select_template(spec_templates, spec_template_paths)
+                if selected_spec_template:
+                    spec_config["template"] = selected_spec_template
+
+            # Prompt for plan template
+            plan_template_manager = TemplateManager(".cafe", template_type="plan")
+            plan_templates = plan_template_manager.list_templates()
+
+            if plan_templates:
                 console.print()
                 console.print("[bold cyan]Please select a plan template:[/bold cyan]")
-                template_paths = {
-                    name: template_manager.get_template_path(name) for name in templates
+                plan_template_paths = {
+                    name: plan_template_manager.get_template_path(name) for name in plan_templates
                 }
-                selected_template = select_template(templates, template_paths)
-                if selected_template:
-                    plan_config["template"] = selected_template
+                selected_plan_template = select_template(plan_templates, plan_template_paths)
+                if selected_plan_template:
+                    plan_config["template"] = selected_plan_template
             else:
                 console.print()
                 console.print(
@@ -953,9 +974,12 @@ def prepare(
             if input_method == "github" and issue_id is not None:
                 spec_config["issue_id"] = str(issue_id)
             spec_config["rigor"] = rigor
+            if spec_template:
+                spec_config["template"] = spec_template
 
             # Plan config
-            plan_config["template"] = template
+            if plan_template:
+                plan_config["template"] = plan_template
 
             # PR config (only for GitHub repos)
             if is_github_repo() and auto_create_pr:
@@ -1931,6 +1955,11 @@ def spec(
         "--auto",
         help="Auto mode: automatically continue iterations until CAFE_CONFIRMED",
     ),
+    template: Optional[str] = typer.Option(
+        None,
+        "--template",
+        help="Spec template name (default: auto, reads from issue.yaml if present)",
+    ),
 ) -> None:
     """Run specification phase: Spec clarification with conversational generation.
 
@@ -1987,16 +2016,18 @@ def spec(
             console.print(f"[red]Error: Invalid mode '{mode}'. Use 'local' or 'github'.[/red]")
             raise typer.Exit(1)
 
-        # Load issue config to get saved rigor setting
+        # Load issue config to get saved rigor and template settings
         import yaml
 
         issue_config_file = Path(f".cafe/issues/{issue_name}/issue.yaml")
         saved_rigor = None
+        saved_template = None
         if issue_config_file.exists():
             with open(issue_config_file, "r", encoding="utf-8") as f:
                 config_data = yaml.safe_load(f) or {}
                 spec_config = config_data.get("spec", {})
                 saved_rigor = spec_config.get("rigor")
+                saved_template = spec_config.get("template")
 
         # Validate rigor (if specified via flag, otherwise use saved value)
         spec_rigor = None
@@ -2020,6 +2051,19 @@ def spec(
             except ValueError:
                 # Ignore invalid saved value
                 pass
+
+        # Determine template to use (CLI flag > saved config > default "auto")
+        spec_template = template if template else (saved_template if saved_template else "auto")
+
+        # Get template path if not "auto"
+        spec_template_path = None
+        if spec_template and spec_template != "auto":
+            template_manager = TemplateManager(".cafe", template_type="spec")
+            spec_template_path = template_manager.get_template_path(spec_template)
+            if not spec_template_path:
+                console.print(f"[yellow]⚠️  Warning: Template '{spec_template}' not found, using auto mode[/yellow]")
+                spec_template = "auto"
+                spec_template_path = None
 
         # Create spec directory if it doesn't exist
         spec_dir = Path(f".cafe/issues/{issue_name}/spec")
@@ -2092,6 +2136,7 @@ def spec(
             user_input=user_input or "",
             issue_name=issue_name,
             fetch_issue_id=fetch_issue_id,
+            template_path=spec_template_path,
         )
 
         console.print("[bold]Starting conversational spec generation...[/bold]")
