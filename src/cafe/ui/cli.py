@@ -1653,6 +1653,38 @@ def restore(
         console.print(f"[dim]Copying data from backup...[/dim]")
         shutil.copytree(archive_path, issue_dir)
 
+        # For worktree mode, also copy config.yaml, agents, and templates to worktree/.cafe/
+        if worktree_path:
+            worktree_cafe_dir = Path(worktree_path) / ".cafe"
+            worktree_cafe_dir.mkdir(parents=True, exist_ok=True)
+
+            # Copy config.yaml
+            repo_root = Path.cwd()
+            if current_branch != feature_branch:
+                # We're in worktree, go back to main repo
+                try:
+                    repo_root = Path(git_ops.run_git("rev-parse", "--show-toplevel").strip())
+                except Exception:
+                    pass
+
+            main_cafe_dir = repo_root / ".cafe"
+            if (main_cafe_dir / "config.yaml").exists():
+                shutil.copy2(main_cafe_dir / "config.yaml", worktree_cafe_dir / "config.yaml")
+
+            # Copy agents directory
+            if (main_cafe_dir / "agents").exists():
+                worktree_agents = worktree_cafe_dir / "agents"
+                if worktree_agents.exists():
+                    shutil.rmtree(worktree_agents)
+                shutil.copytree(main_cafe_dir / "agents", worktree_agents)
+
+            # Copy templates directory
+            if (main_cafe_dir / "templates").exists():
+                worktree_templates = worktree_cafe_dir / "templates"
+                if worktree_templates.exists():
+                    shutil.rmtree(worktree_templates)
+                shutil.copytree(main_cafe_dir / "templates", worktree_templates)
+
         # 10. Display success message
         console.print()
         console.print(f"[green]✓ Successfully restored issue: {issue_name}[/green]")
