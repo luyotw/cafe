@@ -89,21 +89,21 @@ class TestTemplateManager:
 
         (template_dir / "template1.md").write_text("Content 1")
         (template_dir / "template2.md").write_text("Content 2")
-        (template_dir / "default.md").write_text("Default content")
 
         templates = manager.list_templates()
 
         # 驗證回傳模版名稱（不包含 .md 副檔名）
-        assert sorted(templates) == ["default", "template1", "template2"]
+        # 包含內建模版（bug, default, simple）和自訂模版（template1, template2）
+        assert sorted(templates) == ["bug", "default", "simple", "template1", "template2"]
 
     def test_list_templates_empty_directory(self, tmp_path: Path) -> None:
-        """測試空目錄時回傳 default template"""
+        """測試空目錄時回傳內建 templates"""
         config_dir = tmp_path / ".cafe"
         manager = TemplateManager(str(config_dir))
 
         templates = manager.list_templates()
-        # TemplateManager 自動建立 default template
-        assert templates == ["default"]
+        # TemplateManager 自動建立所有內建 plan templates
+        assert sorted(templates) == ["bug", "default", "simple"]
 
     def test_list_templates_ignores_non_md_files(self, tmp_path: Path) -> None:
         """測試只列出 .md 檔案"""
@@ -118,8 +118,8 @@ class TestTemplateManager:
         (template_dir / "template3.json").write_text("{}")
 
         templates = manager.list_templates()
-        # 包含 default + template1（忽略 .txt and .json）
-        assert sorted(templates) == ["default", "template1"]
+        # 包含內建模版（bug, default, simple）+ template1（忽略 .txt and .json）
+        assert sorted(templates) == ["bug", "default", "simple", "template1"]
 
     def test_remove_template_deletes_file(self, tmp_path: Path) -> None:
         """測試刪除模版"""
@@ -260,3 +260,63 @@ class TestTemplateManager:
         # 取得路徑
         path = manager.get_template_path("custom")
         assert path == template_path
+
+    def test_init_copies_all_builtin_plan_templates(self, tmp_path: Path) -> None:
+        """測試初始化時自動複製所有內建 plan 模版"""
+        config_dir = tmp_path / ".cafe"
+        manager = TemplateManager(str(config_dir), template_type="plan")
+
+        template_dir = config_dir / "templates" / "plan"
+
+        # 驗證 default.md 存在
+        assert (template_dir / "default.md").exists()
+
+        # 驗證 simple.md 存在
+        assert (template_dir / "simple.md").exists()
+
+        # 驗證 bug.md 存在
+        assert (template_dir / "bug.md").exists()
+
+        # 驗證可以列出所有模版
+        templates = manager.list_templates()
+        assert "default" in templates
+        assert "simple" in templates
+        assert "bug" in templates
+
+    def test_init_copies_all_builtin_spec_templates(self, tmp_path: Path) -> None:
+        """測試初始化時自動複製所有內建 spec 模版"""
+        config_dir = tmp_path / ".cafe"
+        manager = TemplateManager(str(config_dir), template_type="spec")
+
+        template_dir = config_dir / "templates" / "spec"
+
+        # 驗證 default.md 存在
+        assert (template_dir / "default.md").exists()
+
+        # 驗證 simple.md 存在
+        assert (template_dir / "simple.md").exists()
+
+        # 驗證 detailed.md 存在
+        assert (template_dir / "detailed.md").exists()
+
+        # 驗證可以列出所有模版
+        templates = manager.list_templates()
+        assert "default" in templates
+        assert "simple" in templates
+        assert "detailed" in templates
+
+    def test_init_does_not_overwrite_existing_templates(self, tmp_path: Path) -> None:
+        """測試初始化時不會覆蓋已存在的模版"""
+        config_dir = tmp_path / ".cafe"
+        template_dir = config_dir / "templates" / "plan"
+        template_dir.mkdir(parents=True, exist_ok=True)
+
+        # 建立自訂內容的模版
+        custom_content = "## My Custom Default Template"
+        (template_dir / "default.md").write_text(custom_content)
+
+        # 初始化 manager
+        manager = TemplateManager(str(config_dir), template_type="plan")
+
+        # 驗證自訂內容未被覆蓋
+        assert (template_dir / "default.md").read_text() == custom_content

@@ -111,33 +111,32 @@ class TemplateManager:
 
     def _ensure_default_templates(self) -> None:
         """Ensure default templates exist by copying from package data if needed."""
-        # For spec templates, we need to copy multiple default templates
-        if self.template_type == "spec":
-            template_names = ["default.md", "simple.md", "detailed.md"]
-        else:
-            template_names = ["default.md"]
+        # Dynamically discover all .md template files from package data
+        package_data_dir = Path(__file__).parent.parent / "data" / "templates" / self.template_type
+        repo_root = Path(__file__).parent.parent.parent.parent
+        repo_template_dir = repo_root / "templates" / self.template_type
 
-        for template_name in template_names:
-            template_path = self.template_dir / template_name
+        # Collect template files from both locations
+        template_sources = []
+        if package_data_dir.exists():
+            template_sources.extend(package_data_dir.glob("*.md"))
+        if repo_template_dir.exists():
+            template_sources.extend(repo_template_dir.glob("*.md"))
+
+        # Copy each discovered template if it doesn't exist in target directory
+        for source_template in template_sources:
+            template_name = source_template.name
+            target_path = self.template_dir / template_name
 
             # If template already exists, don't overwrite
-            if template_path.exists():
+            if target_path.exists():
                 continue
 
-            # Find the template in package data directory
-            # Path(__file__) = src/cafe/templates/manager.py
-            # .parent = src/cafe/templates/
-            # .parent.parent = src/cafe/
-            # .parent.parent / "data" / "templates" / {template_type} / {template_name}
-            package_data_template = (
-                Path(__file__).parent.parent / "data" / "templates" / self.template_type / template_name
-            )
+            # Determine which source to use (package data first, then repo)
+            package_data_template = package_data_dir / template_name if package_data_dir.exists() else None
+            repo_template = repo_template_dir / template_name if repo_template_dir.exists() else None
 
-            # Try package data first, then repo root (for backward compatibility)
-            repo_root = Path(__file__).parent.parent.parent.parent
-            repo_template = repo_root / "templates" / self.template_type / template_name
-
-            if package_data_template.exists():
-                shutil.copy2(package_data_template, template_path)
-            elif repo_template.exists():
-                shutil.copy2(repo_template, template_path)
+            if package_data_template and package_data_template.exists():
+                shutil.copy2(package_data_template, target_path)
+            elif repo_template and repo_template.exists():
+                shutil.copy2(repo_template, target_path)
