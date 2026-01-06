@@ -108,7 +108,9 @@ class ReviewPhase(Phase):
             # Check if there are unpushed commits newer than last review
             # This must be checked BEFORE checking completion status, so that
             # new commits after a CONFIRMED review will trigger a new review
-            if self.git_ops.has_unpushed_commits():
+            has_new_commits_to_review = False  # Flag to skip completion check if there are new commits
+            has_unpushed = self.git_ops.has_unpushed_commits()
+            if has_unpushed:
                 review_status_file = self.issue_dir / "review" / "status.json"
 
                 if review_status_file.exists():
@@ -146,19 +148,23 @@ class ReviewPhase(Phase):
                                             "latest_commit_timestamp": latest_unpushed_timestamp.isoformat(),
                                         },
                                     )
+                                else:
+                                    # There are new commits after the last review, must do new review
+                                    has_new_commits_to_review = True
                     except Exception as e:
                         print(f"⚠️  Warning: Failed to check review timestamp: {e}")
                         pass
 
             # Check if phase is already completed (avoid re-running completed phases)
-            # unless force flag is set
+            # unless force flag is set OR there are new commits to review
             from cafe.core.status_codes import PhaseStatusCode
-            early_exit_result = self._check_if_already_completed(
-                [PhaseStatusCode.CONFIRMED, PhaseStatusCode.REJECTED],
-                force=self.force
-            )
-            if early_exit_result:
-                return early_exit_result
+            if not has_new_commits_to_review:
+                early_exit_result = self._check_if_already_completed(
+                    [PhaseStatusCode.CONFIRMED, PhaseStatusCode.REJECTED],
+                    force=self.force
+                )
+                if early_exit_result:
+                    return early_exit_result
 
             # Note: We don't check if diff is empty here - let the review agent
             # see the empty diff and decide (usually NEEDS_CHANGES)

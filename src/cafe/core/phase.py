@@ -113,7 +113,7 @@ class Phase(ABC):
         # Create initial context data
         context_data: Dict[str, Any] = {
             "iteration": self.iteration,
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": datetime.now().astimezone().isoformat(),
             "user_input": user_input,
         }
 
@@ -170,7 +170,7 @@ class Phase(ABC):
             # If file does not exist, create basic structure
             context_data = {
                 "iteration": self.iteration,
-                "timestamp": datetime.now().isoformat(),
+                "timestamp": datetime.now().astimezone().isoformat(),
             }
 
         # Update phase-specific data
@@ -212,7 +212,7 @@ class Phase(ABC):
         # Append one record to iterations.jsonl
         iteration_index_data = {
             "iteration": self.iteration,
-            "timestamp": context_data.get("timestamp", datetime.now().isoformat()),
+            "timestamp": context_data.get("timestamp", datetime.now().astimezone().isoformat()),
             "status": status_code.value if status_code is not None else None,
             "has_error": "error" in context_data,
         }
@@ -256,7 +256,7 @@ class Phase(ABC):
                 # Create JSON object
                 json_obj = {
                     "index": index,
-                    "timestamp": datetime.now().isoformat(),
+                    "timestamp": datetime.now().astimezone().isoformat(),
                     "content": content
                 }
                 # Write one line of JSON (without indentation)
@@ -478,7 +478,7 @@ class Phase(ABC):
                 "error": str(e),
                 "error_type": type(e).__name__,
                 "is_critical": isinstance(e, CriticalPhaseError),
-                "timestamp": datetime.now().isoformat(),
+                "timestamp": datetime.now().astimezone().isoformat(),
                 "written_files": [str(f) for f in written_files],
                 "recovered_response": bool(recovered_response),
                 "recovered_status": recovered_status_code.value if recovered_status_code else None,
@@ -869,13 +869,13 @@ class Phase(ABC):
         phase_status = PhaseStatus.COMPLETED if status_code in complete_codes else PhaseStatus.IN_PROGRESS
 
         # Set end_time when phase completes
-        end_time = datetime.now() if phase_status == PhaseStatus.COMPLETED else None
+        end_time = datetime.now().astimezone() if phase_status == PhaseStatus.COMPLETED else None
 
         progress = PhaseProgress(
             phase=self.phase_name,
             status=phase_status,
             status_code=status_code.value,
-            timestamp=datetime.now(),
+            timestamp=datetime.now().astimezone(),
             iteration=self.iteration,
             message=f"Phase completed with {status_code.value}" if phase_status == PhaseStatus.COMPLETED else f"Iteration {self.iteration}",
             end_time=end_time,
@@ -1641,7 +1641,7 @@ class Phase(ABC):
             "error": error_type,
             "error_type": error_type.replace(" ", "_").upper(),
             "is_critical": False,
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": datetime.now().astimezone().isoformat(),
             "issue": self.issue_dir.name if hasattr(self, 'issue_dir') else 'unknown',
             "iteration": self.iteration,
             "phase": self.phase_name if hasattr(self, 'phase_name') else 'unknown',
