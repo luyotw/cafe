@@ -194,7 +194,7 @@ class TestToCwdRelativePath:
         # 轉換為相對路徑
         result = to_cwd_relative_path(test_file)
         
-        assert result == ".cafe/issues/test/spec.md"
+        assert result == "./.cafe/issues/test/spec.md"
 
     def test_handles_already_relative_path(self, tmp_path, monkeypatch):
         """測試處理已經是相對路徑情況"""
@@ -205,7 +205,7 @@ class TestToCwdRelativePath:
         
         result = to_cwd_relative_path(relative_path)
         
-        assert result == ".cafe/issues/test/spec.md"
+        assert result == "./.cafe/issues/test/spec.md"
 
     def test_worktree_scenario(self, tmp_path, monkeypatch):
         """測試 worktree 場景：cwd 是 worktree 目錄"""
@@ -226,7 +226,7 @@ class TestToCwdRelativePath:
         result = to_cwd_relative_path(spec_file)
         
         # 應該相對於 worktree 目錄
-        assert result == ".cafe/issues/issue33/spec.md"
+        assert result == "./.cafe/issues/issue33/spec.md"
 
     def test_normal_repo_scenario(self, tmp_path, monkeypatch):
         """測試一般 repo 場景：cwd 是 repo root"""
@@ -238,7 +238,7 @@ class TestToCwdRelativePath:
         
         result = to_cwd_relative_path(spec_file)
         
-        assert result == ".cafe/issues/test-feature/spec/spec.md"
+        assert result == "./.cafe/issues/test-feature/spec/spec.md"
 
     def test_raises_error_if_path_not_under_cwd(self, tmp_path, monkeypatch):
         """測試路徑不在 cwd 下時拋出錯誤"""
@@ -262,7 +262,7 @@ class TestToCwdRelativePath:
         
         result = to_cwd_relative_path(deep_file)
         
-        assert result == "a/b/c/d/file.txt"
+        assert result == "./a/b/c/d/file.txt"
         # 確保使用正斜線（跨平台一致）
         assert "\\" not in result
 
@@ -275,4 +275,4 @@ class TestToCwdRelativePath:
         
         result = to_cwd_relative_path(test_file)
         
-        assert result == ".hidden/spec_001.md"
+        assert result == "./.hidden/spec_001.md"

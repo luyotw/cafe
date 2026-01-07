@@ -252,7 +252,7 @@ def to_cwd_relative_path(file_path: Union[str, Path]) -> str:
         file_path: File path (can be absolute or relative)
 
     Returns:
-        Plain relative path string relative to current working directory (without / prefix)
+        Relative path string relative to current working directory (with ./ prefix)
 
     Raises:
         ValueError: If file_path is not under current working directory
@@ -261,14 +261,14 @@ def to_cwd_relative_path(file_path: Union[str, Path]) -> str:
         In normal repo:
         >>> # cwd = /Users/me/repo
         >>> path = to_cwd_relative_path("/Users/me/repo/.cafe/issues/x/spec.md")
-        >>> print(path)  # .cafe/issues/x/spec.md
+        >>> print(path)  # ./.cafe/issues/x/spec.md
 
         In worktree:
         >>> # cwd = /Users/me/repo/.cafe/worktrees/issue33
         >>> path = to_cwd_relative_path(
         ...     "/Users/me/repo/.cafe/worktrees/issue33/.cafe/issues/issue33/spec.md"
         ... )
-        >>> print(path)  # .cafe/issues/issue33/spec.md
+        >>> print(path)  # ./.cafe/issues/issue33/spec.md
     """
     import os
 
@@ -280,7 +280,7 @@ def to_cwd_relative_path(file_path: Union[str, Path]) -> str:
 
     try:
         relative_path = file_path.relative_to(cwd)
-        return str(relative_path)
+        return f"./{relative_path}"
     except ValueError:
         raise ValueError(f"File path {file_path} is not under current working directory {cwd}")
 
