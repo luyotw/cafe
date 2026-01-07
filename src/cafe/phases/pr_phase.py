@@ -870,6 +870,54 @@ class PRPhase(Phase):
         if generate_body and not body_file.exists():
             raise RuntimeError("Agent failed to generate PR body file")
 
+    def _parse_pr_title(self, content: str) -> str:
+        """Parse PR title from output.md content.
+
+        Args:
+            content: Full content of output.md file
+
+        Returns:
+            PR title (text after first # heading)
+
+        Raises:
+            ValueError: If no H1 heading found
+        """
+        lines = content.split('\n')
+        for line in lines:
+            stripped = line.strip()
+            if stripped.startswith('# '):
+                # Extract title after '# ' and strip whitespace
+                title = stripped[2:].strip()
+                return title
+
+        raise ValueError("No H1 heading found in output.md")
+
+    def _parse_pr_body(self, content: str) -> str:
+        """Parse PR body from output.md content.
+
+        Args:
+            content: Full content of output.md file
+
+        Returns:
+            PR body (all content after first # heading), empty string if no content
+        """
+        lines = content.split('\n')
+        h1_found = False
+        body_lines = []
+
+        for line in lines:
+            if not h1_found:
+                # Look for first H1
+                if line.strip().startswith('# '):
+                    h1_found = True
+                continue
+            else:
+                # Collect all lines after H1
+                body_lines.append(line)
+
+        # Join and strip leading/trailing whitespace
+        return '\n'.join(body_lines).strip()
+
     def _get_pr_title(self) -> str:
         """Read PR title from agent-generated or user-provided file.
 
