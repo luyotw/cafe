@@ -310,7 +310,37 @@ class DevelopPhase(Phase):
                 # If error, continue with normal flow
                 pass
 
-        # If pr_number is provided, always continue execution (user wants to address PR comments)
+        # PRIORITY 1: Check if there's review feedback that requires handling (always check first)
+        review_status = self._load_review_status()
+        if review_status and review_status.get("status_code") == "CAFE_NEEDS_CHANGES":
+            # Check if this review has already been handled
+            review_timestamp = review_status.get("timestamp", "")
+
+            # Load develop status.json to check handled_review_timestamp
+            status_file = self.history_dir.parent / "status.json"
+            if status_file.exists():
+                with open(status_file, 'r', encoding='utf-8') as f:
+                    develop_status = json.load(f)
+                    handled_review_timestamp = develop_status.get("handled_review_timestamp")
+
+                    if handled_review_timestamp == review_timestamp:
+                        # This review has already been handled
+                        return PhaseResult(
+                            status=PhaseStatus.COMPLETED,
+                            message=f"Development already completed in {existing_progress.iteration} iteration(s)",
+                            data={
+                                "branch": self._get_branch_name(),
+                                "iterations": existing_progress.iteration,
+                                "status_code": existing_progress.status_code,
+                            },
+                        )
+
+            # Review exists and hasn't been handled yet, continue execution
+            review_file = self._get_review_file_path()
+            print(f"ℹ️  Review feedback detected: {review_file}")
+            return None  # Don't return early - let execution continue to handle review feedback
+
+        # PRIORITY 2: If pr_number is provided, check PR comments (only after review check)
         if self.pr_number:
             print(f"ℹ️  PR #{self.pr_number} comments will be addressed")
 
@@ -347,37 +377,7 @@ class DevelopPhase(Phase):
 
             return None
 
-        # Check if there's review feedback that requires handling
-        review_status = self._load_review_status()
-        if review_status and review_status.get("status_code") == "CAFE_NEEDS_CHANGES":
-            # Check if this review has already been handled
-            review_timestamp = review_status.get("timestamp", "")
-
-            # Load develop status.json to check handled_review_timestamp
-            status_file = self.history_dir.parent / "status.json"
-            if status_file.exists():
-                with open(status_file, 'r', encoding='utf-8') as f:
-                    develop_status = json.load(f)
-                    handled_review_timestamp = develop_status.get("handled_review_timestamp")
-
-                    if handled_review_timestamp == review_timestamp:
-                        # This review has already been handled
-                        return PhaseResult(
-                            status=PhaseStatus.COMPLETED,
-                            message=f"Development already completed in {existing_progress.iteration} iteration(s)",
-                            data={
-                                "branch": self._get_branch_name(),
-                                "iterations": existing_progress.iteration,
-                                "status_code": existing_progress.status_code,
-                            },
-                        )
-
-            # Review exists and hasn't been handled yet, continue execution
-            review_file = self._get_review_file_path()
-            print(f"ℹ️  Review feedback detected: {review_file}")
-            return None  # Don't return early - let execution continue to handle review feedback
-
-        # No review feedback or review passed, phase is truly completed
+        # No review feedback or PR comments, phase is truly completed
         return PhaseResult(
             status=PhaseStatus.COMPLETED,
             message=f"Development already completed in {existing_progress.iteration} iteration(s)",
