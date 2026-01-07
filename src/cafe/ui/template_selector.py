@@ -29,9 +29,9 @@ def select_template(templates: List[str], template_paths: Dict[str, Path]) -> Op
     choices = ["auto (agent decides)"] + templates
 
     console.print()
-    console.print("[dim]Tip: Use 'cafe template cat <name>' to preview template content[/dim]")
+    console.print("[dim]Tip: Use 'cafe template cat --type TYPE --name NAME' to preview template content[/dim]")
     if len(templates) == 1:
-        console.print("[dim]     Create your own: 'cafe template add <file> <name>' to add custom template[/dim]")
+        console.print("[dim]     Create your own: 'cafe template add --source-file FILE --name NAME --type TYPE' to add custom template[/dim]")
     console.print()
 
     try:

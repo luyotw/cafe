@@ -3644,17 +3644,17 @@ def remove_issue(
         raise typer.Exit(1)
 
 
-@app.command()
-def template(
-    action: str = typer.Argument(..., help="Action: add, list, or remove"),
-    source: Optional[str] = typer.Argument(None, help="Source file path (for 'add' action)"),
-    name: Optional[str] = typer.Argument(None, help="Template name (for 'add' or 'remove' action)"),
-    template_type: Optional[str] = typer.Option(
-        None,
-        "--type",
-        "-t",
-        help="Template type: plan or spec (default: list both)",
-    ),
+# Template management commands
+TEMPLATE_TYPES = ["plan", "spec"]
+template_app = typer.Typer(help="Manage plan and spec templates")
+app.add_typer(template_app, name="template")
+
+
+@template_app.command(name="add")
+def template_add(
+    source_file: Optional[str] = typer.Option(None, "--source-file", help="Path to the template file to add"),
+    name: Optional[str] = typer.Option(None, "--name", help="Name for the template"),
+    template_type: Optional[str] = typer.Option(None, "--type", "-t", help="Template type: plan or spec"),
     config_file: str = typer.Option(
         ".cafe/config.yaml",
         "--config",
@@ -3662,158 +3662,439 @@ def template(
         help="Path to configuration file",
     ),
 ) -> None:
-    """Manage plan and spec templates.
-
-    \b
-    Actions:
-        add  - Add a new template from a file
-        ls   - List all available templates
-        rm   - Remove a template
-        cat  - View template content
-        edit - Edit a template with $EDITOR
+    """Add a new template from a file.
 
     \b
     Examples:
-        cafe template add path/to/template.md my-template --type plan
-        cafe template ls
-        cafe template ls --type spec
-        cafe template cat my-template --type plan
-        cafe template cat my-spec-template --type spec
-        cafe template edit my-template --type plan
-        cafe template rm my-template --type spec
+        cafe template add --source-file path/to/template.md --name my-template --type plan
+        cafe template add  # Interactive mode
     """
-    # Validate template_type if provided
-    if template_type and template_type not in ["plan", "spec"]:
+    import tempfile
+
+    config_dir = str(Path(config_file).parent) if config_file != ".cafe/config.yaml" else ".cafe"
+
+    # Interactive prompting for missing arguments
+    try:
+        if not template_type:
+            template_type = prompt_list(
+                message="Select template type:",
+                choices=TEMPLATE_TYPES,
+            )
+
+        # Validate template type
+        if template_type not in TEMPLATE_TYPES:
+            console.print(f"[red]Error: Invalid template type '{template_type}'. Must be 'plan' or 'spec'.[/red]")
+            raise typer.Exit(1)
+
+        if not name:
+            name = prompt_text(
+                message="Template name:",
+                default="",
+            )
+            name = name.strip()
+            if not name:
+                console.print("[red]Error: Template name cannot be empty[/red]")
+                raise typer.Exit(1)
+
+        # Check if template already exists
+        manager = TemplateManager(config_dir, template_type=template_type)
+        if manager.template_exists(name):
+            console.print(f"[red]Error: Template '{name}' already exists for type '{template_type}'[/red]")
+            raise typer.Exit(1)
+
+        if not source_file:
+            source_file = prompt_text(
+                message="Source file path:",
+                default="",
+            )
+            source_file = source_file.strip()
+            if not source_file:
+                console.print("[red]Error: Source file path cannot be empty[/red]")
+                raise typer.Exit(1)
+
+    except (KeyboardInterrupt, EOFError):
+        console.print("\n[dim]Cancelled[/dim]")
+        raise typer.Exit(0)
+
+    # Add template
+    try:
+        manager.add_template(source_file, name)
+        console.print(f"[green]✅ {template_type.capitalize()} template '{name}' added successfully[/green]")
+    except FileNotFoundError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1)
+    except ValueError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1)
+
+
+@template_app.command(name="ls")
+def template_ls(
+    template_type: Optional[str] = typer.Option(None, "--type", "-t", help="Template type: plan or spec"),
+    config_file: str = typer.Option(
+        ".cafe/config.yaml",
+        "--config",
+        "-c",
+        help="Path to configuration file",
+    ),
+) -> None:
+    """List available templates.
+
+    \b
+    Examples:
+        cafe template ls
+        cafe template ls --type plan
+        cafe template ls --type spec
+    """
+    config_dir = str(Path(config_file).parent) if config_file != ".cafe/config.yaml" else ".cafe"
+
+    # Interactive prompting if type not provided
+    try:
+        if not template_type:
+            template_type = prompt_list(
+                message="Select template type:",
+                choices=TEMPLATE_TYPES,
+            )
+    except (KeyboardInterrupt, EOFError):
+        console.print("\n[dim]Cancelled[/dim]")
+        raise typer.Exit(0)
+
+    # Validate template type
+    if template_type not in TEMPLATE_TYPES:
         console.print(f"[red]Error: Invalid template type '{template_type}'. Must be 'plan' or 'spec'.[/red]")
         raise typer.Exit(1)
 
+    # List templates
+    manager = TemplateManager(config_dir, template_type=template_type)
+    templates = manager.list_templates()
+    if not templates:
+        console.print(f"[dim]No {template_type} templates found[/dim]")
+    else:
+        console.print(f"[bold]{template_type.capitalize()} templates:[/bold]")
+        for tmpl in templates:
+            console.print(f"  • {tmpl}")
+
+
+@template_app.command(name="rm")
+def template_rm(
+    name: Optional[str] = typer.Option(None, "--name", help="Template name to remove"),
+    template_type: Optional[str] = typer.Option(None, "--type", "-t", help="Template type: plan or spec"),
+    force: bool = typer.Option(False, "--force", help="Skip confirmation prompt"),
+    config_file: str = typer.Option(
+        ".cafe/config.yaml",
+        "--config",
+        "-c",
+        help="Path to configuration file",
+    ),
+) -> None:
+    """Remove a template.
+
+    \b
+    Examples:
+        cafe template rm --name my-template --type plan
+        cafe template rm --name my-template --type plan --force
+        cafe template rm  # Interactive mode
+    """
+    config_dir = str(Path(config_file).parent) if config_file != ".cafe/config.yaml" else ".cafe"
+
+    # Interactive prompting for missing arguments
     try:
-        config_dir = (
-            str(Path(config_file).parent) if config_file != ".cafe/config.yaml" else ".cafe"
-        )
+        if not template_type:
+            template_type = prompt_list(
+                message="Select template type:",
+                choices=TEMPLATE_TYPES,
+            )
 
-        if action == "add":
-            if not source or not name or not template_type:
-                console.print(
-                    "[red]Error: 'add' action requires source file path, template name, and --type[/red]"
-                )
-                console.print("[dim]Usage: cafe template add <source-file> <template-name> --type <plan|spec>[/dim]")
-                raise typer.Exit(1)
-
-            try:
-                manager = TemplateManager(config_dir, template_type=template_type)
-                manager.add_template(source, name)
-                console.print(f"[green]✅ {template_type.capitalize()} template '{name}' added successfully[/green]")
-            except FileNotFoundError as e:
-                console.print(f"[red]Error: {e}[/red]")
-                raise typer.Exit(1)
-            except ValueError as e:
-                console.print(f"[red]Error: {e}[/red]")
-                raise typer.Exit(1)
-
-        elif action == "ls":
-            # If no type specified, list both plan and spec
-            if not template_type:
-                console.print("[bold]Plan templates:[/bold]")
-                plan_manager = TemplateManager(config_dir, template_type="plan")
-                plan_templates = plan_manager.list_templates()
-                if not plan_templates:
-                    console.print("  [dim]No plan templates found[/dim]")
-                else:
-                    for tmpl in plan_templates:
-                        console.print(f"  • {tmpl}")
-
-                console.print()
-                console.print("[bold]Spec templates:[/bold]")
-                spec_manager = TemplateManager(config_dir, template_type="spec")
-                spec_templates = spec_manager.list_templates()
-                if not spec_templates:
-                    console.print("  [dim]No spec templates found[/dim]")
-                else:
-                    for tmpl in spec_templates:
-                        console.print(f"  • {tmpl}")
-            else:
-                manager = TemplateManager(config_dir, template_type=template_type)
-                templates = manager.list_templates()
-                if not templates:
-                    console.print(f"[dim]No {template_type} templates found[/dim]")
-                else:
-                    console.print(f"[bold]{template_type.capitalize()} templates:[/bold]")
-                    for tmpl in templates:
-                        console.print(f"  • {tmpl}")
-
-        elif action == "rm":
-            if not name or not template_type:
-                console.print("[red]Error: 'rm' action requires template name and --type[/red]")
-                console.print("[dim]Usage: cafe template rm <template-name> --type <plan|spec>[/dim]")
-                raise typer.Exit(1)
-
-            try:
-                manager = TemplateManager(config_dir, template_type=template_type)
-                manager.remove_template(name)
-                console.print(f"[green]✅ {template_type.capitalize()} template '{name}' removed successfully[/green]")
-            except FileNotFoundError as e:
-                console.print(f"[red]Error: {e}[/red]")
-                raise typer.Exit(1)
-
-        elif action == "cat":
-            if not source or not template_type:
-                console.print("[red]Error: 'cat' action requires template name and --type[/red]")
-                console.print("[dim]Usage: cafe template cat <template-name> --type <plan|spec>[/dim]")
-                raise typer.Exit(1)
-
-            manager = TemplateManager(config_dir, template_type=template_type)
-            template_path = manager.get_template_path(source)
-            if not template_path:
-                console.print(f"[red]Error: {template_type.capitalize()} template '{source}' not found[/red]")
-                raise typer.Exit(1)
-
-            # Display template content using pager
-            import subprocess
-
-            try:
-                subprocess.run(["less", "-R", str(template_path)], check=False)
-            except FileNotFoundError:
-                # Fallback: print to console
-                content = template_path.read_text()
-                console.print(content)
-
-        elif action == "edit":
-            if not source or not template_type:
-                console.print("[red]Error: 'edit' action requires template name and --type[/red]")
-                console.print("[dim]Usage: cafe template edit <template-name> --type <plan|spec>[/dim]")
-                raise typer.Exit(1)
-
-            manager = TemplateManager(config_dir, template_type=template_type)
-            template_path = manager.get_template_path(source)
-            if not template_path:
-                console.print(f"[red]Error: {template_type.capitalize()} template '{source}' not found[/red]")
-                raise typer.Exit(1)
-
-            # Open template in editor
-            import os
-            import subprocess
-
-            editor = os.environ.get("EDITOR", "vim")
-            try:
-                subprocess.run([editor, str(template_path)], check=True)
-                console.print(f"[green]✅ Template '{source}' updated[/green]")
-            except subprocess.CalledProcessError:
-                console.print("[red]Error: Failed to edit template[/red]")
-                raise typer.Exit(1)
-            except FileNotFoundError:
-                console.print(f"[red]Error: Editor '{editor}' not found[/red]")
-                console.print("[dim]Set EDITOR environment variable or install vim[/dim]")
-                raise typer.Exit(1)
-
-        else:
-            console.print(f"[red]Error: Unknown action '{action}'[/red]")
-            console.print("[dim]Valid actions: add, ls, rm, cat, edit[/dim]")
+        # Validate template type
+        if template_type not in TEMPLATE_TYPES:
+            console.print(f"[red]Error: Invalid template type '{template_type}'. Must be 'plan' or 'spec'.[/red]")
             raise typer.Exit(1)
 
-    except Exception as e:
+        manager = TemplateManager(config_dir, template_type=template_type)
+
+        if not name:
+            templates = manager.list_templates()
+            if not templates:
+                console.print(f"[red]No {template_type} templates found[/red]")
+                raise typer.Exit(1)
+
+            name = prompt_list(
+                message="Select template to delete:",
+                choices=templates,
+            )
+
+    except (KeyboardInterrupt, EOFError):
+        console.print("\n[dim]Cancelled[/dim]")
+        raise typer.Exit(0)
+
+    # Confirm deletion unless --force
+    if not force:
+        try:
+            confirm = prompt_confirm(
+                f"Are you sure you want to delete template '{template_type}/{name}.md'?",
+                default=False
+            )
+        except (KeyboardInterrupt, EOFError):
+            console.print("\n[dim]Cancelled[/dim]")
+            raise typer.Exit(0)
+
+        if not confirm:
+            console.print("[dim]Cancelled[/dim]")
+            raise typer.Exit(0)
+
+    # Remove template
+    try:
+        manager.remove_template(name)
+        console.print(f"[green]✅ {template_type.capitalize()} template '{name}' removed successfully[/green]")
+    except FileNotFoundError as e:
         console.print(f"[red]Error: {e}[/red]")
         raise typer.Exit(1)
+
+
+@template_app.command(name="cat")
+def template_cat(
+    name: Optional[str] = typer.Option(None, "--name", help="Template name to view"),
+    template_type: Optional[str] = typer.Option(None, "--type", "-t", help="Template type: plan or spec"),
+    config_file: str = typer.Option(
+        ".cafe/config.yaml",
+        "--config",
+        "-c",
+        help="Path to configuration file",
+    ),
+) -> None:
+    """View template content.
+
+    \b
+    Examples:
+        cafe template cat --name my-template --type plan
+        cafe template cat  # Interactive mode
+    """
+    config_dir = str(Path(config_file).parent) if config_file != ".cafe/config.yaml" else ".cafe"
+
+    # Interactive prompting for missing arguments
+    try:
+        if not template_type:
+            template_type = prompt_list(
+                message="Select template type:",
+                choices=TEMPLATE_TYPES,
+            )
+
+        # Validate template type
+        if template_type not in TEMPLATE_TYPES:
+            console.print(f"[red]Error: Invalid template type '{template_type}'. Must be 'plan' or 'spec'.[/red]")
+            raise typer.Exit(1)
+
+        manager = TemplateManager(config_dir, template_type=template_type)
+
+        if not name:
+            templates = manager.list_templates()
+            if not templates:
+                console.print(f"[red]No {template_type} templates found[/red]")
+                raise typer.Exit(1)
+
+            name = prompt_list(
+                message="Select template to view:",
+                choices=templates,
+            )
+
+    except (KeyboardInterrupt, EOFError):
+        console.print("\n[dim]Cancelled[/dim]")
+        raise typer.Exit(0)
+
+    # Display template
+    template_path = manager.get_template_path(name)
+    if not template_path:
+        console.print(f"[red]Error: {template_type.capitalize()} template '{name}' not found[/red]")
+        raise typer.Exit(1)
+
+    # Display template content using pager
+    try:
+        subprocess.run(["less", "-R", str(template_path)], check=False)
+    except FileNotFoundError:
+        # Fallback: print to console
+        content = template_path.read_text()
+        console.print(content)
+
+
+@template_app.command(name="edit")
+def template_edit(
+    name: Optional[str] = typer.Option(None, "--name", help="Template name to edit"),
+    template_type: Optional[str] = typer.Option(None, "--type", "-t", help="Template type: plan or spec"),
+    config_file: str = typer.Option(
+        ".cafe/config.yaml",
+        "--config",
+        "-c",
+        help="Path to configuration file",
+    ),
+) -> None:
+    """Edit a template with $EDITOR.
+
+    \b
+    Examples:
+        cafe template edit --name my-template --type plan
+        cafe template edit  # Interactive mode
+    """
+    config_dir = str(Path(config_file).parent) if config_file != ".cafe/config.yaml" else ".cafe"
+
+    # Interactive prompting for missing arguments
+    try:
+        if not template_type:
+            template_type = prompt_list(
+                message="Select template type:",
+                choices=TEMPLATE_TYPES,
+            )
+
+        # Validate template type
+        if template_type not in TEMPLATE_TYPES:
+            console.print(f"[red]Error: Invalid template type '{template_type}'. Must be 'plan' or 'spec'.[/red]")
+            raise typer.Exit(1)
+
+        manager = TemplateManager(config_dir, template_type=template_type)
+
+        if not name:
+            templates = manager.list_templates()
+            if not templates:
+                console.print(f"[red]No {template_type} templates found[/red]")
+                raise typer.Exit(1)
+
+            name = prompt_list(
+                message="Select template to edit:",
+                choices=templates,
+            )
+
+    except (KeyboardInterrupt, EOFError):
+        console.print("\n[dim]Cancelled[/dim]")
+        raise typer.Exit(0)
+
+    # Edit template
+    template_path = manager.get_template_path(name)
+    if not template_path:
+        console.print(f"[red]Error: {template_type.capitalize()} template '{name}' not found[/red]")
+        raise typer.Exit(1)
+
+    # Open template in editor
+    editor = os.environ.get("EDITOR", "vim")
+    try:
+        subprocess.run([editor, str(template_path)], check=True)
+        console.print(f"[green]✅ Template '{name}' updated[/green]")
+    except subprocess.CalledProcessError:
+        console.print("[red]Error: Failed to edit template[/red]")
+        raise typer.Exit(1)
+    except FileNotFoundError:
+        console.print(f"[red]Error: Editor '{editor}' not found[/red]")
+        console.print("[dim]Set EDITOR environment variable or install vim[/dim]")
+        raise typer.Exit(1)
+
+
+@template_app.command(name="create")
+def template_create(
+    name: Optional[str] = typer.Option(None, "--name", help="Template name"),
+    template_type: Optional[str] = typer.Option(None, "--type", "-t", help="Template type: plan or spec"),
+    config_file: str = typer.Option(
+        ".cafe/config.yaml",
+        "--config",
+        "-c",
+        help="Path to configuration file",
+    ),
+) -> None:
+    """Create a new template from scratch.
+
+    \b
+    Examples:
+        cafe template create --name my-template --type plan
+        cafe template create  # Interactive mode
+    """
+    import tempfile
+
+    config_dir = str(Path(config_file).parent) if config_file != ".cafe/config.yaml" else ".cafe"
+
+    # Interactive prompting for missing arguments
+    try:
+        if not template_type:
+            template_type = prompt_list(
+                message="Select template type:",
+                choices=TEMPLATE_TYPES,
+            )
+
+        # Validate template type
+        if template_type not in TEMPLATE_TYPES:
+            console.print(f"[red]Error: Invalid template type '{template_type}'. Must be 'plan' or 'spec'.[/red]")
+            raise typer.Exit(1)
+
+        if not name:
+            name = prompt_text(
+                message="Template name:",
+                default="",
+            )
+            name = name.strip()
+            if not name:
+                console.print("[red]Error: Template name cannot be empty[/red]")
+                raise typer.Exit(1)
+
+    except (KeyboardInterrupt, EOFError):
+        console.print("\n[dim]Cancelled[/dim]")
+        raise typer.Exit(0)
+
+    # Check if template already exists
+    manager = TemplateManager(config_dir, template_type=template_type)
+    if manager.template_exists(name):
+        console.print(f"[red]Error: Template '{name}' already exists for type '{template_type}'[/red]")
+        raise typer.Exit(1)
+
+    # Create template with editor
+    editor = os.environ.get("EDITOR", "vim")
+
+    # Create temp file with placeholder
+    placeholder_content = f"""# Please enter your {template_type} template "{name}" content below.
+# Note: It is highly recommended to include a todo list for all tasks.
+
+"""
+
+    with tempfile.NamedTemporaryFile(mode="w+", suffix=".md", delete=False) as tf:
+        tf.write(placeholder_content)
+        temp_path = tf.name
+
+    try:
+        # Open editor
+        subprocess.run([editor, temp_path], check=True)
+
+        # Read content
+        with open(temp_path, "r") as f:
+            content = f.read().strip()
+
+        # Remove placeholder comments if user didn't modify
+        if f'# Please enter your {template_type} template "{name}" content below.' in content:
+            lines = [
+                line for line in content.split('\n')
+                if not (line.strip().startswith('#') and (
+                    'Please enter your' in line or
+                    'Note: It is highly recommended' in line
+                ))
+            ]
+            content = '\n'.join(lines).strip()
+
+        if not content:
+            console.print("[red]Error: Template content cannot be empty[/red]")
+            raise typer.Exit(1)
+
+    finally:
+        # Clean up temp file
+        os.unlink(temp_path)
+
+    # Save template
+    template_dir = Path(config_dir) / "templates" / template_type
+    template_dir.mkdir(parents=True, exist_ok=True)
+    template_file = template_dir / f"{name}.md"
+    template_file.write_text(content)
+
+    # Show relative path
+    try:
+        relative_path = template_file.resolve().relative_to(Path.cwd())
+    except ValueError:
+        # If path is not relative to cwd, show absolute path
+        relative_path = template_file.resolve()
+    console.print(f"[green]✓[/green] Template created successfully: {relative_path}")
+
 
 
 @app.command()
