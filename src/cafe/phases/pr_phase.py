@@ -704,47 +704,34 @@ class PRPhase(Phase):
         """
         return self._current_prompt
 
-    def _generate_pr_content(self, generate_title: bool = True, generate_body: bool = True) -> None:
-        """Generate PR title and/or body using agent.
-
-        Args:
-            generate_title: Whether to generate title (default: True)
-            generate_body: Whether to generate body (default: True)
+    def _generate_pr_content(self) -> None:
+        """Generate PR title and body using agent.
 
         Agent writes to:
-        - .cafe/issues/{issue_name}/pr/title.txt (if generate_title=True)
-        - .cafe/issues/{issue_name}/pr/body.md (if generate_body=True)
+        - .cafe/issues/{issue_name}/pr/iteration_XXX/output.md
         """
-        if not generate_title and not generate_body:
-            return  # Nothing to generate
-
         # Derive issue name and pr directory with iteration subdirectory
         spec_path = Path(self.spec_file)
-        issue_name = spec_path.parent.parent.name
-        pr_dir = spec_path.parent.parent / "pr"
+        # spec_file is like: .cafe/issues/issue99/spec/iteration_001/output.md
+        # Go up 3 levels to get issue dir
+        issue_dir = spec_path.parent.parent.parent
+        pr_dir = issue_dir / "pr"
         iteration_dir = pr_dir / f"iteration_{self.iteration:03d}"
         iteration_dir.mkdir(parents=True, exist_ok=True)
 
         # Use path relative to current working directory (supports worktree)
         from cafe.utils.git_utils import to_cwd_relative_path
 
-        title_file = iteration_dir / "title.txt"
-        body_file = iteration_dir / "body.md"
+        output_file = iteration_dir / "output.md"
 
         try:
-            title_file_pattern = to_cwd_relative_path(title_file)
+            output_file_pattern = to_cwd_relative_path(output_file)
         except ValueError:
             # Fallback to absolute path if file is not under cwd
-            title_file_pattern = str(title_file.resolve())
-
-        try:
-            body_file_pattern = to_cwd_relative_path(body_file)
-        except ValueError:
-            # Fallback to absolute path if file is not under cwd
-            body_file_pattern = str(body_file.resolve())
+            output_file_pattern = str(output_file.resolve())
 
         # Derive plan file path - use latest versioned file if available
-        plan_dir = spec_path.parent.parent / "plan"
+        plan_dir = issue_dir / "plan"
         latest_plan = self._get_latest_versioned_file("plan", plan_dir)
         if latest_plan and latest_plan.exists():
             plan_file = latest_plan
@@ -757,48 +744,12 @@ class PRPhase(Phase):
         commits = self._get_current_branch_commits(self.git_ops, self.base_branch)
 
         # Build issue reference for GitHub mode
-        issue_instruction = f"\n- Add `Closes #{self.issue_id}` at the beginning of body.md" if self.workflow_mode == WorkflowMode.GITHUB else ""
-
-        # Build tasks based on what needs to be generated
-        tasks = []
-        if generate_title:
-            tasks.append(f"""1. Edit existing file `{title_file}`, replace content with PR title
-   - One line, concise and clear (max 80 characters)
-   - Describe what this PR does
-   - Example: Add user authentication with OAuth2 support""")
-
-        if generate_body:
-            task_num = "2" if generate_title else "1"
-            tasks.append(f"""{task_num}. Edit existing file `{body_file}`, replace content with PR description (Markdown format, in your native language)
-   - ## Summary - Brief description (2-3 sentences)
-   - ## Changes - Main changes (bullet points)
-   - ## Test Plan - How to test{issue_instruction}""")
-
-        tasks_str = "\n\n".join(tasks)
-
-        # Determine what is being generated for the prompt
-        if generate_title and generate_body:
-            what_to_generate = "title and description"
-            status_desc = "PR title and body generation completed"
-        elif generate_title:
-            what_to_generate = "title"
-            status_desc = "PR title generation completed"
-        else:
-            what_to_generate = "description"
-            status_desc = "PR body generation completed"
-
-        # Build task checklist
-        task_checklist_items = []
-        if generate_title:
-            task_checklist_items.append(f"[ ] Edit `{title_file}` with PR title (one line, max 80 chars)")
-        if generate_body:
-            task_checklist_items.append(f"[ ] Edit `{body_file}` with PR description (Summary, Changes, Test Plan)")
-        task_checklist = "\n".join(task_checklist_items)
+        issue_instruction = f"\n- Add `Closes #{self.issue_id}` at the beginning of body" if self.workflow_mode == WorkflowMode.GITHUB else ""
 
         # Generate prompt for agent
         prompt = f"""# PR Phase
 
-**Task:** Generate {what_to_generate} for this Pull Request.
+**Task:** Generate PR title and description for this Pull Request.
 
 **Context:**
 - Requirements Specification: {self.spec_file}
@@ -809,12 +760,35 @@ class PRPhase(Phase):
 
 ## Task Checklist
 
-{task_checklist}
+[ ] Edit `{output_file}` with PR title and description
 [ ] Return CAFE_CONFIRMED when done
 
 ## Requirements
 
-{tasks_str}
+1. Edit existing file `{output_file}`, replace content with PR title and description in the following format:
+
+```markdown
+# [Your PR Title Here]
+
+## Summary
+[Brief description in 2-3 sentences]
+
+## Changes
+[Main changes as bullet points]
+
+## Test Plan
+[How to test these changes]{issue_instruction}
+```
+
+**Title Requirements:**
+- One line after `#`, concise and clear (max 80 characters)
+- Describe what this PR does
+- Example: "Add user authentication with OAuth2 support"
+
+**Body Requirements:**
+- Use Markdown format
+- Write in your native language
+- Include Summary, Changes, and Test Plan sections
 """
 
         # Execute agent
@@ -823,7 +797,7 @@ class PRPhase(Phase):
         status_code_prompt = generate_status_code_prompt(
             valid_codes=[PhaseStatusCode.CONFIRMED],
             descriptions={
-                PhaseStatusCode.CONFIRMED: status_desc,
+                PhaseStatusCode.CONFIRMED: "PR content generation completed",
             },
         )
 
@@ -835,17 +809,11 @@ class PRPhase(Phase):
         # Set allowed tools for editing
         allowed_tools = ["read", "grep", "glob", "ls", "web_fetch", "web_search"]
 
-        # Touch files with placeholder content before agent execution to ensure they exist for edit tool
-        if generate_title:
-            title_file.parent.mkdir(parents=True, exist_ok=True)
-            if not title_file.exists():
-                title_file.write_text("# TODO: Write PR title here\n")
-            allowed_tools.append(f"edit({title_file_pattern})")
-        if generate_body:
-            body_file.parent.mkdir(parents=True, exist_ok=True)
-            if not body_file.exists():
-                body_file.write_text("# TODO: Write PR body here\n")
-            allowed_tools.append(f"edit({body_file_pattern})")
+        # Touch file with placeholder content before agent execution to ensure it exists for edit tool
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+        if not output_file.exists():
+            output_file.write_text("# TODO: Write PR title\n\nTODO: Write PR body\n")
+        allowed_tools.append(f"edit({output_file_pattern})")
 
         # Store prompt for _generate_prompt method
         self._current_prompt = full_prompt
@@ -863,11 +831,9 @@ class PRPhase(Phase):
         if result and result.data.get("status_code") == "CAFE_NEED_PERMISSION":
             return result
 
-        # Verify requested files were created
-        if generate_title and not title_file.exists():
-            raise RuntimeError("Agent failed to generate PR title file")
-        if generate_body and not body_file.exists():
-            raise RuntimeError("Agent failed to generate PR body file")
+        # Verify output file was created
+        if not output_file.exists():
+            raise RuntimeError("Agent failed to generate PR output file")
 
     @staticmethod
     def _parse_pr_title(content: str) -> str:
@@ -966,23 +932,27 @@ class PRPhase(Phase):
             Analysis prompt string
         """
         spec_path = Path(self.spec_file)
-        pr_dir = spec_path.parent.parent / "pr"
+        # spec_file is like: .cafe/issues/issue99/spec/iteration_001/output.md
+        # Go up 3 levels to get issue dir, then add pr
+        pr_dir = spec_path.parent.parent.parent / "pr"
 
         # Find latest iteration directory
         latest_iteration_dir = self._get_latest_iteration_dir(pr_dir)
         if not latest_iteration_dir:
             raise FileNotFoundError("No PR iteration directory found")
 
-        title_file = latest_iteration_dir / "title.txt"
-        body_file = latest_iteration_dir / "body.md"
+        output_file = latest_iteration_dir / "output.md"
 
-        return f"""Please check if the following files exist and have complete content:
-- {title_file}
-- {body_file}
+        return f"""Please check if the following file exists and has complete content:
+- {output_file}
+
+The file should contain:
+- A PR title (H1 heading starting with `#`)
+- A PR body (content after the H1 heading)
 
 Based on the following conditions, determine which status code to return:
 
-- CAFE_CONFIRMED: Both files exist and have complete content
+- CAFE_CONFIRMED: File exists and has complete content (both title and body)
 
 Please return only one status code (example: CAFE_CONFIRMED), with no other content."""
 
