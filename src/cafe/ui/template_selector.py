@@ -24,15 +24,9 @@ def select_template(templates: List[str], template_paths: Dict[str, Path]) -> Op
     if not templates:
         return None
 
-    console.print()
-    console.print("[bold cyan]Available templates:[/bold cyan]")
-
     # Build choices list with 'auto' option first
     # Use template names as keys for direct mapping
     choices = ["auto (agent decides)"] + templates
-
-    for choice in choices:
-        console.print(f"  • {choice}")
 
     console.print()
     console.print("[dim]Tip: Use 'cafe template cat <name>' to preview template content[/dim]")
