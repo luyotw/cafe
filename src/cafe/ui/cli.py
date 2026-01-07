@@ -3649,6 +3649,12 @@ def template(
     action: str = typer.Argument(..., help="Action: add, list, or remove"),
     source: Optional[str] = typer.Argument(None, help="Source file path (for 'add' action)"),
     name: Optional[str] = typer.Argument(None, help="Template name (for 'add' or 'remove' action)"),
+    template_type: Optional[str] = typer.Option(
+        None,
+        "--type",
+        "-t",
+        help="Template type: plan or spec (default: list both)",
+    ),
     config_file: str = typer.Option(
         ".cafe/config.yaml",
         "--config",
@@ -3656,7 +3662,7 @@ def template(
         help="Path to configuration file",
     ),
 ) -> None:
-    """Manage plan templates.
+    """Manage plan and spec templates.
 
     \b
     Actions:
@@ -3668,29 +3674,36 @@ def template(
 
     \b
     Examples:
-        cafe template add path/to/template.md my-template
+        cafe template add path/to/template.md my-template --type plan
         cafe template ls
-        cafe template cat my-template
-        cafe template edit my-template
-        cafe template rm my-template
+        cafe template ls --type spec
+        cafe template cat my-template --type plan
+        cafe template cat my-spec-template --type spec
+        cafe template edit my-template --type plan
+        cafe template rm my-template --type spec
     """
+    # Validate template_type if provided
+    if template_type and template_type not in ["plan", "spec"]:
+        console.print(f"[red]Error: Invalid template type '{template_type}'. Must be 'plan' or 'spec'.[/red]")
+        raise typer.Exit(1)
+
     try:
         config_dir = (
             str(Path(config_file).parent) if config_file != ".cafe/config.yaml" else ".cafe"
         )
-        manager = TemplateManager(config_dir)
 
         if action == "add":
-            if not source or not name:
+            if not source or not name or not template_type:
                 console.print(
-                    "[red]Error: 'add' action requires both source file path and template name[/red]"
+                    "[red]Error: 'add' action requires source file path, template name, and --type[/red]"
                 )
-                console.print("[dim]Usage: cafe template add <source-file> <template-name>[/dim]")
+                console.print("[dim]Usage: cafe template add <source-file> <template-name> --type <plan|spec>[/dim]")
                 raise typer.Exit(1)
 
             try:
+                manager = TemplateManager(config_dir, template_type=template_type)
                 manager.add_template(source, name)
-                console.print(f"[green]✅ Template '{name}' added successfully[/green]")
+                console.print(f"[green]✅ {template_type.capitalize()} template '{name}' added successfully[/green]")
             except FileNotFoundError as e:
                 console.print(f"[red]Error: {e}[/red]")
                 raise typer.Exit(1)
@@ -3699,36 +3712,60 @@ def template(
                 raise typer.Exit(1)
 
         elif action == "ls":
-            templates = manager.list_templates()
-            if not templates:
-                console.print("[dim]No templates found[/dim]")
+            # If no type specified, list both plan and spec
+            if not template_type:
+                console.print("[bold]Plan templates:[/bold]")
+                plan_manager = TemplateManager(config_dir, template_type="plan")
+                plan_templates = plan_manager.list_templates()
+                if not plan_templates:
+                    console.print("  [dim]No plan templates found[/dim]")
+                else:
+                    for tmpl in plan_templates:
+                        console.print(f"  • {tmpl}")
+
+                console.print()
+                console.print("[bold]Spec templates:[/bold]")
+                spec_manager = TemplateManager(config_dir, template_type="spec")
+                spec_templates = spec_manager.list_templates()
+                if not spec_templates:
+                    console.print("  [dim]No spec templates found[/dim]")
+                else:
+                    for tmpl in spec_templates:
+                        console.print(f"  • {tmpl}")
             else:
-                console.print("[bold]Available templates:[/bold]")
-                for tmpl in templates:
-                    console.print(f"  • {tmpl}")
+                manager = TemplateManager(config_dir, template_type=template_type)
+                templates = manager.list_templates()
+                if not templates:
+                    console.print(f"[dim]No {template_type} templates found[/dim]")
+                else:
+                    console.print(f"[bold]{template_type.capitalize()} templates:[/bold]")
+                    for tmpl in templates:
+                        console.print(f"  • {tmpl}")
 
         elif action == "rm":
-            if not name:
-                console.print("[red]Error: 'rm' action requires template name[/red]")
-                console.print("[dim]Usage: cafe template rm <template-name>[/dim]")
+            if not name or not template_type:
+                console.print("[red]Error: 'rm' action requires template name and --type[/red]")
+                console.print("[dim]Usage: cafe template rm <template-name> --type <plan|spec>[/dim]")
                 raise typer.Exit(1)
 
             try:
+                manager = TemplateManager(config_dir, template_type=template_type)
                 manager.remove_template(name)
-                console.print(f"[green]✅ Template '{name}' removed successfully[/green]")
+                console.print(f"[green]✅ {template_type.capitalize()} template '{name}' removed successfully[/green]")
             except FileNotFoundError as e:
                 console.print(f"[red]Error: {e}[/red]")
                 raise typer.Exit(1)
 
         elif action == "cat":
-            if not source:
-                console.print("[red]Error: 'cat' action requires template name[/red]")
-                console.print("[dim]Usage: cafe template cat <template-name>[/dim]")
+            if not source or not template_type:
+                console.print("[red]Error: 'cat' action requires template name and --type[/red]")
+                console.print("[dim]Usage: cafe template cat <template-name> --type <plan|spec>[/dim]")
                 raise typer.Exit(1)
 
+            manager = TemplateManager(config_dir, template_type=template_type)
             template_path = manager.get_template_path(source)
             if not template_path:
-                console.print(f"[red]Error: Template '{source}' not found[/red]")
+                console.print(f"[red]Error: {template_type.capitalize()} template '{source}' not found[/red]")
                 raise typer.Exit(1)
 
             # Display template content using pager
@@ -3742,14 +3779,15 @@ def template(
                 console.print(content)
 
         elif action == "edit":
-            if not source:
-                console.print("[red]Error: 'edit' action requires template name[/red]")
-                console.print("[dim]Usage: cafe template edit <template-name>[/dim]")
+            if not source or not template_type:
+                console.print("[red]Error: 'edit' action requires template name and --type[/red]")
+                console.print("[dim]Usage: cafe template edit <template-name> --type <plan|spec>[/dim]")
                 raise typer.Exit(1)
 
+            manager = TemplateManager(config_dir, template_type=template_type)
             template_path = manager.get_template_path(source)
             if not template_path:
-                console.print(f"[red]Error: Template '{source}' not found[/red]")
+                console.print(f"[red]Error: {template_type.capitalize()} template '{source}' not found[/red]")
                 raise typer.Exit(1)
 
             # Open template in editor
