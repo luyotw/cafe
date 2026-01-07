@@ -4088,7 +4088,11 @@ def template_create(
     template_file.write_text(content)
 
     # Show relative path
-    relative_path = template_file.relative_to(Path.cwd())
+    try:
+        relative_path = template_file.resolve().relative_to(Path.cwd())
+    except ValueError:
+        # If path is not relative to cwd, show absolute path
+        relative_path = template_file.resolve()
     console.print(f"[green]✓[/green] Template created successfully: {relative_path}")
 
 
