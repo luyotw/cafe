@@ -31,10 +31,12 @@ def temp_pr_dir(tmp_path):
     # 創建完整目錄結構: {tmp_path}/.cafe/issues/test-issue/
     issue_dir = tmp_path / ".cafe" / "issues" / "test-issue"
 
-    # 創建 spec 目錄and spec.md
+    # 創建 spec 目錄 with iteration structure
     spec_dir = issue_dir / "spec"
     spec_dir.mkdir(parents=True)
-    spec_file = spec_dir / "spec.md"
+    iteration_spec_dir = spec_dir / "iteration_001"
+    iteration_spec_dir.mkdir(parents=True)
+    spec_file = iteration_spec_dir / "output.md"
     spec_file.write_text("# 測試功能需求\n\n這是一個測試需求規格.")
 
     # 創建 plan 目錄and plan.md
@@ -72,7 +74,7 @@ class TestPRCommandNonInteractiveBasics:
     def test_draft_pr_creation(self, temp_pr_dir, mock_git_ops, mock_github_ops, tmp_path):
         """測試創建 draft PR"""
         # Arrange
-        spec_file = str(temp_pr_dir / "spec" / "spec.md")
+        spec_file = str(temp_pr_dir / "spec" / "iteration_001" / "output.md")
 
         # Override mock to return specific PR URL
         mock_github_ops.create_pr.return_value = "https://github.com/user/repo/pull/1"
@@ -123,7 +125,7 @@ class TestPRCommandNonInteractiveBasics:
     def test_non_draft_pr_creation(self, temp_pr_dir, mock_git_ops, mock_github_ops, tmp_path):
         """測試創建非 draft PR"""
         # Arrange
-        spec_file = str(temp_pr_dir / "spec" / "spec.md")
+        spec_file = str(temp_pr_dir / "spec" / "iteration_001" / "output.md")
 
         # Override mock to return specific PR URL
         mock_github_ops.create_pr.return_value = "https://github.com/user/repo/pull/2"
@@ -174,7 +176,7 @@ class TestPRCommandCustomTitleAndBody:
     def test_custom_title_and_body(self, temp_pr_dir, mock_git_ops, mock_github_ops, tmp_path):
         """測試使用自訂 title and body 創建 PR"""
         # Arrange
-        spec_file = str(temp_pr_dir / "spec" / "spec.md")
+        spec_file = str(temp_pr_dir / "spec" / "iteration_001" / "output.md")
         custom_title = "Custom PR Title"
         custom_body = "Custom PR body\nWith multiple lines"
 
@@ -225,7 +227,7 @@ class TestPRCommandCustomTitleAndBody:
     def test_auto_generate_title_and_body(self, temp_pr_dir, mock_git_ops, mock_github_ops, tmp_path, monkeypatch):
         """測試自動產生 title and body"""
         # Arrange
-        spec_file = str(temp_pr_dir / "spec" / "spec.md")
+        spec_file = str(temp_pr_dir / "spec" / "iteration_001" / "output.md")
 
         # Enable mock agent mode
         monkeypatch.setenv("CAFE_MOCK_AGENTS", "true")
@@ -245,12 +247,11 @@ class TestPRCommandCustomTitleAndBody:
 
             permission_handler = PermissionHandler()
 
-            # Create title.txt and body.md files in iteration_001 (mock agent won't write them)
+            # Create output.md file in iteration_001 (mock agent won't write it)
             pr_dir = temp_pr_dir / "pr"
             iteration_dir = pr_dir / "iteration_001"
             iteration_dir.mkdir(parents=True, exist_ok=True)
-            (iteration_dir / "title.txt").write_text("測試功能需求")
-            (iteration_dir / "body.md").write_text("## Summary\n\nTest summary\n\n## Changes\n\n- commit1\n- commit2")
+            (iteration_dir / "output.md").write_text("# 測試功能需求\n\n## Summary\n\nTest summary\n\n## Changes\n\n- commit1\n- commit2")
 
             # Act
             phase = PRPhase(
@@ -325,7 +326,7 @@ class TestPRCommandErrorHandling:
     def test_gh_pr_create_fails(self, temp_pr_dir, mock_git_ops, mock_github_ops, tmp_path):
         """測試 gh pr create 失敗時返回失敗"""
         # Arrange
-        spec_file = str(temp_pr_dir / "spec" / "spec.md")
+        spec_file = str(temp_pr_dir / "spec" / "iteration_001" / "output.md")
 
         original_cwd = os.getcwd()
         try:
