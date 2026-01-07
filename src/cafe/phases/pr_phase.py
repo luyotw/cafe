@@ -117,6 +117,26 @@ class PRPhase(Phase):
         pr_files = list(pr_dir.glob("pr_*.md"))
         return len(pr_files)
 
+    def _get_latest_iteration_dir(self, pr_dir: Path) -> Optional[Path]:
+        """Get the latest iteration directory in pr folder.
+
+        Args:
+            pr_dir: Path to the pr directory
+
+        Returns:
+            Path to latest iteration directory, or None if none exist
+        """
+        if not pr_dir.exists():
+            return None
+
+        # Find all iteration directories
+        iteration_dirs = sorted(pr_dir.glob("iteration_*"))
+        if not iteration_dirs:
+            return None
+
+        # Return the latest one (highest number)
+        return iteration_dirs[-1]
+
     def _get_pr_review_timestamp(self) -> Optional["datetime"]:
         """Get PR review timestamp.
 
@@ -637,13 +657,14 @@ class PRPhase(Phase):
         Returns:
             Tuple of (title, body)
         """
-        # Prepare PR directory
+        # Prepare PR directory with iteration subdirectory
         spec_path = Path(self.spec_file)
         pr_dir = spec_path.parent.parent / "pr"
-        pr_dir.mkdir(parents=True, exist_ok=True)
+        iteration_dir = pr_dir / f"iteration_{self.iteration:03d}"
+        iteration_dir.mkdir(parents=True, exist_ok=True)
 
-        title_file = pr_dir / "title.txt"
-        body_file = pr_dir / "body.md"
+        title_file = iteration_dir / "title.txt"
+        body_file = iteration_dir / "body.md"
 
         # Use custom title/body if provided via CLI, otherwise let agent generate
         final_title = self.custom_title
@@ -698,17 +719,18 @@ class PRPhase(Phase):
         if not generate_title and not generate_body:
             return  # Nothing to generate
 
-        # Derive issue name and pr directory
+        # Derive issue name and pr directory with iteration subdirectory
         spec_path = Path(self.spec_file)
         issue_name = spec_path.parent.parent.name
         pr_dir = spec_path.parent.parent / "pr"
-        pr_dir.mkdir(parents=True, exist_ok=True)
+        iteration_dir = pr_dir / f"iteration_{self.iteration:03d}"
+        iteration_dir.mkdir(parents=True, exist_ok=True)
 
         # Use path relative to current working directory (supports worktree)
         from cafe.utils.git_utils import to_cwd_relative_path
 
-        title_file = pr_dir / "title.txt"
-        body_file = pr_dir / "body.md"
+        title_file = iteration_dir / "title.txt"
+        body_file = iteration_dir / "body.md"
 
         try:
             title_file_pattern = to_cwd_relative_path(title_file)
@@ -855,9 +877,14 @@ class PRPhase(Phase):
             PR title
         """
         spec_path = Path(self.spec_file)
-        issue_name = spec_path.parent.parent.name
-        title_file = spec_path.parent.parent / "pr" / "title.txt"
+        pr_dir = spec_path.parent.parent / "pr"
 
+        # Find latest iteration directory
+        latest_iteration_dir = self._get_latest_iteration_dir(pr_dir)
+        if not latest_iteration_dir:
+            raise FileNotFoundError("No PR iteration directory found")
+
+        title_file = latest_iteration_dir / "title.txt"
         return title_file.read_text().strip()
 
     def _get_pr_body(self) -> str:
@@ -867,9 +894,14 @@ class PRPhase(Phase):
             PR body
         """
         spec_path = Path(self.spec_file)
-        issue_name = spec_path.parent.parent.name
-        body_file = spec_path.parent.parent / "pr" / "body.md"
+        pr_dir = spec_path.parent.parent / "pr"
 
+        # Find latest iteration directory
+        latest_iteration_dir = self._get_latest_iteration_dir(pr_dir)
+        if not latest_iteration_dir:
+            raise FileNotFoundError("No PR iteration directory found")
+
+        body_file = latest_iteration_dir / "body.md"
         return body_file.read_text().strip()
 
     def _get_status_analysis_prompt(self) -> str:
@@ -880,8 +912,14 @@ class PRPhase(Phase):
         """
         spec_path = Path(self.spec_file)
         pr_dir = spec_path.parent.parent / "pr"
-        title_file = pr_dir / "title.txt"
-        body_file = pr_dir / "body.md"
+
+        # Find latest iteration directory
+        latest_iteration_dir = self._get_latest_iteration_dir(pr_dir)
+        if not latest_iteration_dir:
+            raise FileNotFoundError("No PR iteration directory found")
+
+        title_file = latest_iteration_dir / "title.txt"
+        body_file = latest_iteration_dir / "body.md"
 
         return f"""Please check if the following files exist and have complete content:
 - {title_file}

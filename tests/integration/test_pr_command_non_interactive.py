@@ -245,11 +245,12 @@ class TestPRCommandCustomTitleAndBody:
 
             permission_handler = PermissionHandler()
 
-            # Create title.txt and body.md files (mock agent won't write them)
+            # Create title.txt and body.md files in iteration_001 (mock agent won't write them)
             pr_dir = temp_pr_dir / "pr"
-            pr_dir.mkdir(parents=True, exist_ok=True)
-            (pr_dir / "title.txt").write_text("測試功能需求")
-            (pr_dir / "body.md").write_text("## Summary\n\nTest summary\n\n## Changes\n\n- commit1\n- commit2")
+            iteration_dir = pr_dir / "iteration_001"
+            iteration_dir.mkdir(parents=True, exist_ok=True)
+            (iteration_dir / "title.txt").write_text("測試功能需求")
+            (iteration_dir / "body.md").write_text("## Summary\n\nTest summary\n\n## Changes\n\n- commit1\n- commit2")
 
             # Act
             phase = PRPhase(
