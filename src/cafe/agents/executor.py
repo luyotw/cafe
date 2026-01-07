@@ -553,9 +553,27 @@ class AgentExecutor:
 
         print(f"\n{'='*80}\n")
 
-        # Wait for process to complete
+        # Wait for process to complete with timeout
         stderr_output = process.stderr.read() if process.stderr else ""
-        returncode = process.wait()
+        
+        # Add timeout to prevent hanging (especially for copilot)
+        # Timeout starts after all output has been read from stdout
+        # If timeout, terminate and treat as success if we got output
+        try:
+            returncode = process.wait(timeout=120)
+        except subprocess.TimeoutExpired:
+            print(f"⚠️  {cli_name} process did not exit within timeout, terminating...")
+            process.terminate()
+            try:
+                returncode = process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                returncode = process.wait()
+            
+            # If we got output, treat timeout as success (agent likely finished but didn't exit)
+            if output_lines:
+                print(f"✓ Got output from {cli_name}, treating as success despite timeout")
+                returncode = 0
 
         if returncode != 0:
             # Check if it's a rate limit error
