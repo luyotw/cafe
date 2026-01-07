@@ -900,6 +900,26 @@ class Phase(ABC):
         from cafe.core.types import PhaseProgress
         return PhaseProgress.from_dict(data)
 
+    def _get_phase_timestamp(self, phase_name: str) -> Optional[str]:
+        """Get the timestamp of the latest iteration for a specified phase.
+
+        Args:
+            phase_name: Name of the phase (e.g., 'develop', 'review', 'plan')
+
+        Returns:
+            ISO format timestamp string if phase status exists, None otherwise
+        """
+        phase_status_file = self.issue_dir / phase_name / "status.json"
+        if not phase_status_file.exists():
+            return None
+
+        try:
+            with open(phase_status_file, 'r', encoding='utf-8') as f:
+                phase_status = json.load(f)
+            return phase_status.get("timestamp")
+        except (json.JSONDecodeError, KeyError, IOError):
+            return None
+
     def _print_token_usage_summary(self) -> None:
         """Display token usage summary (common method).
 

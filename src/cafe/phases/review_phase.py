@@ -126,30 +126,31 @@ class ReviewPhase(Phase):
                             if review_timestamp.tzinfo is None:
                                 review_timestamp = review_timestamp.replace(tzinfo=timezone.utc)
 
-                            latest_unpushed_timestamp_str = self.git_ops.get_latest_unpushed_commit_timestamp()
+                            # Check develop phase timestamp instead of commit timestamp
+                            # This prevents false "already completed" when develop runs but produces no commits
+                            develop_timestamp_str = self._get_phase_timestamp("develop")
+                            if develop_timestamp_str:
+                                develop_timestamp = datetime.fromisoformat(develop_timestamp_str)
+                                if develop_timestamp.tzinfo is None:
+                                    develop_timestamp = develop_timestamp.replace(tzinfo=timezone.utc)
 
-                            if latest_unpushed_timestamp_str:
-                                latest_unpushed_timestamp = datetime.fromisoformat(latest_unpushed_timestamp_str)
-                                if latest_unpushed_timestamp.tzinfo is None:
-                                    latest_unpushed_timestamp = latest_unpushed_timestamp.replace(tzinfo=timezone.utc)
-
-                                if review_timestamp > latest_unpushed_timestamp:
-                                    print(f"✅ Code review already completed for current commits")
+                                if review_timestamp > develop_timestamp:
+                                    print(f"✅ Code review already completed - no new development since last review")
                                     print(f"   Last review: {review_timestamp.isoformat()}")
-                                    print(f"   Latest commit: {latest_unpushed_timestamp.isoformat()}")
+                                    print(f"   Latest develop: {develop_timestamp.isoformat()}")
                                     print(f"   Next step: Run 'cafe pr' to push changes")
 
                                     return PhaseResult(
                                         status=PhaseStatus.COMPLETED,
-                                        message=f"Review already completed - no new commits since last review",
+                                        message=f"Review already completed - no new development since last review",
                                         data={
                                             "status_code": review_status.get("status_code"),
                                             "review_timestamp": review_timestamp.isoformat(),
-                                            "latest_commit_timestamp": latest_unpushed_timestamp.isoformat(),
+                                            "latest_develop_timestamp": develop_timestamp.isoformat(),
                                         },
                                     )
                                 else:
-                                    # There are new commits after the last review, must do new review
+                                    # Develop is newer than review, must do new review
                                     has_new_commits_to_review = True
                     except Exception as e:
                         print(f"⚠️  Warning: Failed to check review timestamp: {e}")

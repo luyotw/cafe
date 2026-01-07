@@ -338,12 +338,14 @@ class DevelopPhase(Phase):
             # Review exists and hasn't been handled yet, continue execution
             review_file = self._get_review_file_path()
             print(f"ℹ️  Review feedback detected: {review_file}")
+            # Set flag to skip PR comments check - review feedback takes priority
+            self._has_review_feedback = True
             return None  # Don't return early - let execution continue to handle review feedback
 
-        # PRIORITY 2: If pr_number is provided, check PR comments (only after review check)
+        # PRIORITY 2: If pr_number is provided, check PR comments (only if no review feedback)
+        self._has_review_feedback = False
         if self.pr_number:
             print(f"ℹ️  PR #{self.pr_number} comments will be addressed")
-
             # Check if there are unpushed commits that address PR comments
             if self.git_ops.has_unpushed_commits():
                 latest_unpushed_timestamp_str = self.git_ops.get_latest_unpushed_commit_timestamp()
@@ -700,7 +702,12 @@ class DevelopPhase(Phase):
         config_file = self.issue_dir / "issue.yaml"
         pr_auto_create = self._get_issue_config_value(config_file, "pr.auto_create")
 
-        if pr_auto_create is False:
+        # Skip PR comments if review feedback exists (review takes priority)
+        if hasattr(self, '_has_review_feedback') and self._has_review_feedback:
+            pr_comments_section = ""
+            has_pr_comments = False
+            unresolved_count = 0
+        elif pr_auto_create is False:
             # Use local PR feedback
             local_feedback = self._load_local_pr_feedback()
             pr_comments_section = f"\n\n## PR Feedback (Local)\n\n{local_feedback}\n" if local_feedback else ""
@@ -968,16 +975,19 @@ Read {agent_file} to understand your complete role definition and responsibiliti
             if already_completed:
                 return already_completed
 
-            # Load PR comments if pr_number is available (will be included in prompt)
+            # Load PR comments only if there's no review feedback (review takes priority)
             # Note: We don't skip execution even if there are no new comments,
             # as the developer may still have work to do based on the plan
-            if self.pr_number:
+            if self.pr_number and (not hasattr(self, '_has_review_feedback') or not self._has_review_feedback):
                 print(f"\n🔍 Checking PR #{self.pr_number} for unresolved comments...")
                 pr_comments, unresolved_count = self._load_pr_comments()
                 if unresolved_count > 0:
                     print(f"✅ Found {unresolved_count} new unresolved PR comment(s) to address")
                 else:
                     print(f"ℹ️  No new unresolved PR comments since last develop")
+                print()
+            elif hasattr(self, '_has_review_feedback') and self._has_review_feedback:
+                print(f"ℹ️  Skipping PR comments check - prioritizing review feedback")
                 print()
 
             # Create or checkout branch
