@@ -268,8 +268,20 @@ class DevelopPhase(Phase):
         Returns:
             PhaseResult if completed and no review feedback/PR comments need to be handled, None if should continue execution
         """
+        # FIRST: Always check and set review feedback flag (do this BEFORE checking existing_progress)
+        # This ensures the flag is set for _generate_prompt even on first execution
+        review_status = self._load_review_status()
+        if review_status and review_status.get("status_code") == "CAFE_NEEDS_CHANGES":
+            self._has_review_feedback = True
+        else:
+            self._has_review_feedback = False
+
         existing_progress = self._load_progress()
         if not existing_progress or existing_progress.status != PhaseStatus.COMPLETED:
+            # Not completed yet, but flag is set - continue execution
+            if self._has_review_feedback:
+                review_file = self._get_review_file_path()
+                print(f"ℹ️  Review feedback detected: {review_file}")
             return None
 
         # Check if PR phase has requested changes after this develop (both GitHub and local mode)
@@ -310,10 +322,8 @@ class DevelopPhase(Phase):
                 # If error, continue with normal flow
                 pass
 
-        # PRIORITY 1: Check if there's review feedback that requires handling (always check first)
-        review_status = self._load_review_status()
-        if review_status and review_status.get("status_code") == "CAFE_NEEDS_CHANGES":
-            # Check if this review has already been handled
+        # Check if review feedback has already been handled
+        if self._has_review_feedback:
             review_timestamp = review_status.get("timestamp", "")
 
             # Load develop status.json to check handled_review_timestamp
@@ -336,14 +346,9 @@ class DevelopPhase(Phase):
                         )
 
             # Review exists and hasn't been handled yet, continue execution
-            review_file = self._get_review_file_path()
-            print(f"ℹ️  Review feedback detected: {review_file}")
-            # Set flag to skip PR comments check - review feedback takes priority
-            self._has_review_feedback = True
             return None  # Don't return early - let execution continue to handle review feedback
 
-        # PRIORITY 2: If pr_number is provided, check PR comments (only if no review feedback)
-        self._has_review_feedback = False
+        # Check PR comments (only if no review feedback)
         if self.pr_number:
             print(f"ℹ️  PR #{self.pr_number} comments will be addressed")
             # Check if there are unpushed commits that address PR comments
