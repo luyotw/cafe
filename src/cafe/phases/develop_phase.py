@@ -799,7 +799,9 @@ Steps for requesting clarification:
 [ ] Read {agent_file} to understand your role and native language
 {f"[ ] Read questions in {develop_file}" if develop_file and develop_file.exists() and not self._is_clarification_answered(develop_file) else ""}
 [ ] Read {review_source_text} and understand all issues
+[ ] List all issues that need to be addressed from review feedback
 [ ] Address issues one by one based on review feedback
+[ ] Verify each issue from review feedback has been resolved
 [ ] Follow existing commit message style, commit multiple times if needed
 [ ] Do NOT modify commits from other branches
 [ ] Refer to {self.spec_file} and {self.plan_file} if needed
