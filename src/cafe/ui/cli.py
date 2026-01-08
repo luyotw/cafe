@@ -4392,6 +4392,82 @@ def agent_edit() -> None:
         raise typer.Exit(1)
 
 
+@agent_app.command(name="cat")
+def agent_cat(
+    role: Optional[str] = typer.Option(None, "--role", "-r", help="Agent role: pm, developer, or reviewer"),
+    name: Optional[str] = typer.Option(None, "--name", "-n", help="Agent name to view"),
+) -> None:
+    """View agent content.
+
+    \b
+    Examples:
+        cafe agent cat --role developer --name Nick
+        cafe agent cat  # Interactive mode
+    """
+    from cafe.ui.init_helpers import list_available_agents
+
+    # Interactive prompting for missing arguments
+    try:
+        if not role:
+            role = prompt_list(
+                message="Select agent role:",
+                choices=["pm", "developer", "reviewer"],
+            )
+
+        # Validate role
+        if role not in ["pm", "developer", "reviewer"]:
+            console.print(f"[red]Error: Invalid role '{role}'. Must be 'pm', 'developer', or 'reviewer'.[/red]")
+            raise typer.Exit(1)
+
+        if not name:
+            # Get all agents for this role (system + custom)
+            agents = list_available_agents(role)
+            if not agents:
+                console.print(f"[red]No agents found for role '{role}'[/red]")
+                raise typer.Exit(1)
+
+            # Create choices with source indicators
+            choices = []
+            agent_map = {}
+            for agent_name, description, agent_path, source_type in agents:
+                if source_type == "custom":
+                    display_name = f"{agent_name} (custom)"
+                else:
+                    display_name = f"{agent_name} (system default)"
+                choices.append(display_name)
+                agent_map[display_name] = (agent_name, agent_path)
+
+            selected = prompt_list(
+                message="Select agent to view:",
+                choices=choices,
+            )
+            name, agent_path = agent_map[selected]
+        else:
+            # Find agent by name
+            agents = list_available_agents(role)
+            agent_path = None
+            for agent_name, _, path, _ in agents:
+                if agent_name == name:
+                    agent_path = path
+                    break
+
+            if not agent_path:
+                console.print(f"[red]Error: Agent '{name}' not found in role '{role}'[/red]")
+                raise typer.Exit(1)
+
+    except (KeyboardInterrupt, EOFError):
+        console.print("\n[dim]Cancelled[/dim]")
+        raise typer.Exit(0)
+
+    # Display agent content using pager
+    try:
+        subprocess.run(["less", "-R", str(agent_path)], check=False)
+    except FileNotFoundError:
+        # Fallback: print to console
+        content = agent_path.read_text()
+        console.print(content)
+
+
 @app.command()
 def show(
     phase_name: str = typer.Argument(

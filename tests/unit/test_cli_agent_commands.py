@@ -231,3 +231,77 @@ class TestAgentEditCommand:
 
         assert result.exit_code == 0
         assert "updated successfully" in result.stdout or "Updated" in result.stdout
+
+
+class TestAgentCatCommand:
+    """測試 cafe agent cat 指令."""
+
+    def test_agent_cat_with_flags(self, runner, temp_global_dir):
+        """測試使用 --role 和 --name 參數查看 agent."""
+        # 建立測試用 agent 檔案
+        agents_dir = temp_global_dir / "agents"
+        agent_content = "---\nname: TestAgent\ndescription: Test agent\n---\n\nAgent rules here"
+        (agents_dir / "developer" / "TestAgent.md").write_text(agent_content)
+
+        # Mock Path.home() and subprocess.run
+        with patch("cafe.utils.config.Path.home", return_value=temp_global_dir.parent), \
+             patch("subprocess.run") as mock_run:
+            # Mock less command failure to trigger fallback
+            mock_run.side_effect = FileNotFoundError()
+
+            result = runner.invoke(app, ["agent", "cat", "--role", "developer", "--name", "TestAgent"])
+
+        assert result.exit_code == 0
+        assert "Agent rules here" in result.stdout
+
+    def test_agent_cat_interactive_mode(self, runner, temp_global_dir):
+        """測試互動式模式查看 agent."""
+        # 建立測試用 agent 檔案
+        agents_dir = temp_global_dir / "agents"
+        agent_content = "---\nname: InteractiveAgent\ndescription: Interactive test\n---\n\nContent"
+        (agents_dir / "pm" / "InteractiveAgent.md").write_text(agent_content)
+
+        # Mock Path.home(), prompt_list, and subprocess.run
+        with patch("cafe.utils.config.Path.home", return_value=temp_global_dir.parent), \
+             patch("cafe.ui.cli.prompt_list") as mock_prompt_list, \
+             patch("subprocess.run") as mock_run:
+            # 模擬使用者選擇角色和 agent
+            mock_prompt_list.side_effect = ["pm", "InteractiveAgent (custom)"]
+            # Mock less command failure to trigger fallback
+            mock_run.side_effect = FileNotFoundError()
+
+            result = runner.invoke(app, ["agent", "cat"])
+
+        assert result.exit_code == 0
+        assert "Content" in result.stdout
+
+    def test_agent_cat_nonexistent_agent(self, runner, temp_global_dir):
+        """測試查看不存在的 agent."""
+        # Mock Path.home()
+        with patch("cafe.utils.config.Path.home", return_value=temp_global_dir.parent):
+            result = runner.invoke(app, ["agent", "cat", "--role", "developer", "--name", "NonExistent"])
+
+        assert result.exit_code == 1
+        assert "not found" in result.stdout
+
+    def test_agent_cat_invalid_role(self, runner, temp_global_dir):
+        """測試使用無效的角色."""
+        # Mock Path.home()
+        with patch("cafe.utils.config.Path.home", return_value=temp_global_dir.parent):
+            result = runner.invoke(app, ["agent", "cat", "--role", "invalid", "--name", "Test"])
+
+        assert result.exit_code == 1
+        assert "Invalid role" in result.stdout
+
+    def test_agent_cat_no_agents_found(self, runner, temp_global_dir):
+        """測試當角色下沒有任何 agents 時."""
+        # Mock Path.home() and list_available_agents to return empty list
+        with patch("cafe.utils.config.Path.home", return_value=temp_global_dir.parent), \
+             patch("cafe.ui.cli.prompt_list") as mock_prompt_list, \
+             patch("cafe.ui.init_helpers.list_available_agents", return_value=[]):
+            mock_prompt_list.return_value = "developer"
+
+            result = runner.invoke(app, ["agent", "cat"])
+
+        assert result.exit_code == 1
+        assert "No agents found" in result.stdout
