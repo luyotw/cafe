@@ -59,7 +59,7 @@ class TestInitCommandEnvironmentChecks:
         mock_which.return_value = "/usr/bin/claude"
 
         # 模擬 agent 列表
-        mock_list_agents.return_value = [("Roger", "PM agent", Path(".cafe/agents/pm/Roger.md"))]
+        mock_list_agents.return_value = [("Roger", "PM agent", Path(".cafe/agents/pm/Roger.md"), "system default")]
 
         monkeypatch.chdir(tmp_path)
 
@@ -74,11 +74,11 @@ class TestInitCommandEnvironmentChecks:
             # Setup agent selection
             mock_prompt_list.side_effect = [
                 "claude",
-                "Roger: PM agent",
+                "Roger: PM agent (system default)",
                 "claude",
-                "Roger: PM agent",
+                "Roger: PM agent (system default)",
                 "claude",
-                "Roger: PM agent",
+                "Roger: PM agent (system default)",
             ]
             mock_prompt_text.side_effect = ["", "", ""]
 
@@ -134,7 +134,7 @@ class TestInitCommandEnvironmentChecks:
             # Mock list_available_agents to return test data
             with patch("cafe.ui.cli.list_available_agents") as mock_list_agents:
                 mock_list_agents.return_value = [
-                    ("Roger", "PM agent", Path(".cafe/agents/pm/Roger.md"))
+                    ("Roger", "PM agent", Path(".cafe/agents/pm/Roger.md"), "system default")
                 ]
 
                 _result = runner.invoke(app, ["init"])
@@ -185,7 +185,7 @@ class TestInitCommandInteractiveFlow:
         mock_which.return_value = "/usr/bin/claude"
 
         # 模擬 agent 列表
-        mock_list_agents.return_value = [("Roger", "PM agent", Path(".cafe/agents/pm/Roger.md"))]
+        mock_list_agents.return_value = [("Roger", "PM agent", Path(".cafe/agents/pm/Roger.md"), "system default")]
 
         monkeypatch.chdir(tmp_path)
 
@@ -196,11 +196,11 @@ class TestInitCommandInteractiveFlow:
             # 設定 prompt_list 返回值（CLI and agent 選擇）
             mock_prompt_list.side_effect = [
                 "claude",  # PM CLI
-                "Roger: PM agent",  # PM agent
+                "Roger: PM agent (system default)",  # PM agent
                 "gemini",  # Developer CLI
-                "Roger: PM agent",  # Developer agent
+                "Roger: PM agent (system default)",  # Developer agent
                 "copilot",  # Reviewer CLI
-                "Roger: PM agent",  # Reviewer agent
+                "Roger: PM agent (system default)",  # Reviewer agent
             ]
 
             # 設定 prompt_text 返回值（model 輸入）
@@ -229,7 +229,7 @@ class TestInitCommandInteractiveFlow:
         mock_which.return_value = "/usr/bin/claude"
 
         # 模擬 agent 列表
-        mock_list_agents.return_value = [("Roger", "PM agent", Path(".cafe/agents/pm/Roger.md"))]
+        mock_list_agents.return_value = [("Roger", "PM agent", Path(".cafe/agents/pm/Roger.md"), "system default")]
 
         monkeypatch.chdir(tmp_path)
 
@@ -288,9 +288,9 @@ class TestInitCommandConfigSaving:
 
         # 模擬 agent 列表
         mock_list_agents.return_value = [
-            ("Roger", "PM agent", Path(".cafe/agents/pm/Roger.md")),
-            ("David", "Dev agent", Path(".cafe/agents/developer/David.md")),
-            ("Richard", "Reviewer agent", Path(".cafe/agents/reviewer/Richard.md")),
+            ("Roger", "PM agent", Path(".cafe/agents/pm/Roger.md"), "system default"),
+            ("David", "Dev agent", Path(".cafe/agents/developer/David.md"), "custom"),
+            ("Richard", "Reviewer agent", Path(".cafe/agents/reviewer/Richard.md"), "system default"),
         ]
 
         monkeypatch.chdir(tmp_path)
@@ -302,11 +302,11 @@ class TestInitCommandConfigSaving:
             # 設定 prompt_list 返回值（CLI and agent 選擇）
             mock_prompt_list.side_effect = [
                 "copilot",  # PM CLI
-                "Roger: PM agent",  # PM agent
+                "Roger: PM agent (system default)",  # PM agent
                 "claude",  # Developer CLI
-                "David: Dev agent",  # Developer agent
+                "David: Dev agent (custom)",  # Developer agent
                 "gemini",  # Reviewer CLI
-                "Richard: Reviewer agent",  # Reviewer agent
+                "Richard: Reviewer agent (system default)",  # Reviewer agent
             ]
 
             # 設定 prompt_text 返回值（model 輸入）
@@ -348,7 +348,7 @@ class TestInitCommandConfigSaving:
         mock_which.return_value = "/usr/bin/claude"
 
         # 模擬 agent 列表
-        mock_list_agents.return_value = [("Roger", "PM agent", Path(".cafe/agents/pm/Roger.md"))]
+        mock_list_agents.return_value = [("Roger", "PM agent", Path(".cafe/agents/pm/Roger.md"), "system default")]
 
         monkeypatch.chdir(tmp_path)
 
@@ -359,11 +359,11 @@ class TestInitCommandConfigSaving:
             # 每個角色都選擇相同設定
             mock_prompt_list.side_effect = [
                 "claude",
-                "Roger: PM agent",
+                "Roger: PM agent (system default)",
                 "claude",
-                "Roger: PM agent",
+                "Roger: PM agent (system default)",
                 "claude",
-                "Roger: PM agent",
+                "Roger: PM agent (system default)",
             ]
             mock_prompt_text.side_effect = ["", "", ""]
 
@@ -392,7 +392,7 @@ class TestInitCommandConfigSaving:
         mock_which.return_value = "/usr/bin/claude"
 
         # 模擬 agent 列表
-        mock_list_agents.return_value = [("Roger", "PM agent", Path(".cafe/agents/pm/Roger.md"))]
+        mock_list_agents.return_value = [("Roger", "PM agent", Path(".cafe/agents/pm/Roger.md"), "system default")]
 
         monkeypatch.chdir(tmp_path)
 
@@ -402,11 +402,11 @@ class TestInitCommandConfigSaving:
         ) as mock_prompt_text:
             mock_prompt_list.side_effect = [
                 "claude",
-                "Roger: PM agent",
+                "Roger: PM agent (system default)",
                 "claude",
-                "Roger: PM agent",
+                "Roger: PM agent (system default)",
                 "claude",
-                "Roger: PM agent",
+                "Roger: PM agent (system default)",
             ]
             mock_prompt_text.side_effect = ["", "", ""]  # empty models
 
