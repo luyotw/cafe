@@ -459,11 +459,38 @@ class AgentExecutor:
         token_usage = TokenUsage()
         session_id = None
         permission_denials: List[PermissionDenial] = []
+        
+        # Add idle timeout to prevent hanging when process doesn't close stdout (mainly for copilot)
+        import select
+        import sys
+        import time
+        
+        use_idle_timeout = (cli_name.lower() == "copilot" and sys.platform != 'win32')
+        idle_timeout = 300  # seconds - timeout if no new output
+        last_output_time = time.time() if use_idle_timeout else None
 
         if process.stdout:
-            for line in iter(process.stdout.readline, ''):
+            while True:
+                # Check if stdout has data available (with timeout) - only for copilot on Unix
+                if use_idle_timeout:
+                    # Unix + Copilot: use select with timeout
+                    ready, _, _ = select.select([process.stdout], [], [], 1.0)  # 1 second timeout per check
+                    
+                    if not ready:
+                        # No data available, check if idle timeout exceeded
+                        if time.time() - last_output_time > idle_timeout:
+                            print(f"\n⚠️  No output from {cli_name} for {idle_timeout}s, assuming completion...")
+                            break
+                        continue  # Continue waiting
+                
+                # Read the line
+                line = process.stdout.readline()
                 if not line:
                     break
+                
+                # Update last output time (if tracking)
+                if use_idle_timeout:
+                    last_output_time = time.time()
 
                 if parse_stream_json:
                     # Parse stream-json format
@@ -557,7 +584,7 @@ class AgentExecutor:
         # Timeout starts after all output has been read from stdout
         # If timeout, terminate and treat as success if we got output
         try:
-            returncode = process.wait(timeout=120)
+            returncode = process.wait(timeout=300)
             # Only read stderr after process completes normally
             stderr_output = process.stderr.read() if process.stderr else ""
         except subprocess.TimeoutExpired:

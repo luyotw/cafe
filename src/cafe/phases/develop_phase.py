@@ -1102,37 +1102,193 @@ Read {agent_file} to understand your complete role definition and responsibiliti
                             },
                         )
                 elif response_status == PhaseStatusCode.NEED_CLARIFICATION:
-                    # Save clarification to file
-                    self._save_develop_clarification(response)
+                    # Verify that clarification request meets allowed criteria
+                    # Send confirmation prompt to agent
+                    print(f"\n⚠️  Developer returned CAFE_NEED_CLARIFICATION, verifying if it meets allowed criteria...")
 
-                    # Display clarification request and return IN_PROGRESS
-                    if self.interactive:
-                        print(f"\n{'='*60}")
-                        print(f"Dev ({self.dev_agent}) - Iteration {self.iteration}:")
-                        print(f"{'='*60}")
-                        print(response)
-                        print(f"{'='*60}\n")
-                        print("💡 Developer needs clarification. Run 'cafe develop' again to respond.")
+                    confirmation_prompt = """Your previous response returned CAFE_NEED_CLARIFICATION.
 
-                        return PhaseResult(
-                            status=PhaseStatus.IN_PROGRESS,
-                            message=f"Clarification requested in iteration {self.iteration}. Run command again to respond.",
-                            data={
-                                "iterations": self.iteration,
-                                "last_response": response,
-                                "status_code": response_status.value,
-                            },
+Please confirm: Does your clarification request meet one of these allowed criteria?
+1. Requested actions conflict with your behavioral guidelines
+2. Encountering technical problems beyond your current capability
+
+If YES (meets criteria): Return CAFE_NEED_CLARIFICATION again
+If NO (does not meet criteria): Continue with development work and return appropriate status code when done
+
+**Response format:**
+- Return ONLY the status code on the first line
+- Do NOT include any summary or explanation"""
+
+                    try:
+                        confirmation_response, _, _, _, confirmation_streaming_log = self.agent_manager.execute(
+                            self.dev_agent,
+                            confirmation_prompt,
+                            allowed_tools=allowed_tools,
+                            allowed_directories=self._get_allowed_directories(),
                         )
-                    else:
-                        return PhaseResult(
-                            status=PhaseStatus.COMPLETED,
-                            message="Clarification needed - saved to develop file. Re-run with --user-input to provide response.",
-                            data={
-                                "iterations": self.iteration,
-                                "last_response": response,
-                                "status_code": response_status.value,
-                            },
+
+                        confirmation_status = StatusCodeParser.extract(
+                            confirmation_response,
+                            valid_codes=[
+                                PhaseStatusCode.CONFIRMED,
+                                PhaseStatusCode.NEED_PERMISSION,
+                                PhaseStatusCode.NEED_CLARIFICATION,
+                            ],
                         )
+
+                        # Merge original response and confirmation response
+                        merged_response = response + "\n\n" + confirmation_response
+
+                        # Get original streaming_log from phase_data (if it was passed from _execute_agent_iteration)
+                        # Since we're in the middle of handling agent response, we need to get it from context
+                        iteration_dir = self._get_iteration_dir(self.iteration)
+                        context_file = iteration_dir / "context.json"
+                        original_streaming_log = []
+                        if context_file.exists():
+                            with open(context_file, "r", encoding="utf-8") as f:
+                                context_data = json.load(f)
+                                original_streaming_log = context_data.get("streaming_log", [])
+
+                        # Merge streaming logs
+                        merged_streaming_log = original_streaming_log + confirmation_streaming_log
+
+                        if confirmation_status == PhaseStatusCode.NEED_CLARIFICATION:
+                            # Agent confirmed that clarification is needed
+                            print(f"✅ Developer confirmed CAFE_NEED_CLARIFICATION is appropriate.")
+
+                            # Update iteration history with merged response and merged streaming_log
+                            self._update_iteration_history(
+                                phase_specific_data={
+                                    "response": merged_response,
+                                    "clarification_confirmed": True,
+                                    "streaming_log": merged_streaming_log,
+                                },
+                                prompt=prompt,
+                                agent_cli=None,
+                                agent_session_id=None,
+                                allowed_tools=allowed_tools,
+                            )
+
+                            # Save clarification to file
+                            self._save_develop_clarification(merged_response)
+
+                            # Display clarification request and return IN_PROGRESS
+                            if self.interactive:
+                                print(f"\n{'='*60}")
+                                print(f"Dev ({self.dev_agent}) - Iteration {self.iteration}:")
+                                print(f"{'='*60}")
+                                print(merged_response)
+                                print(f"{'='*60}\n")
+                                print("💡 Developer needs clarification. Run 'cafe develop' again to respond.")
+
+                                return PhaseResult(
+                                    status=PhaseStatus.IN_PROGRESS,
+                                    message=f"Clarification requested in iteration {self.iteration}. Run command again to respond.",
+                                    data={
+                                        "iterations": self.iteration,
+                                        "last_response": merged_response,
+                                        "status_code": PhaseStatusCode.NEED_CLARIFICATION.value,
+                                    },
+                                )
+                            else:
+                                return PhaseResult(
+                                    status=PhaseStatus.COMPLETED,
+                                    message="Clarification needed - saved to develop file. Re-run with --user-input to provide response.",
+                                    data={
+                                        "iterations": self.iteration,
+                                        "last_response": merged_response,
+                                        "status_code": PhaseStatusCode.NEED_CLARIFICATION.value,
+                                    },
+                                )
+                        else:
+                            # Agent decided to continue development (returned CONFIRMED or NEED_PERMISSION or other)
+                            print(f"✅ Developer decided to continue development instead of requesting clarification.")
+
+                            # Update iteration history with merged response and merged streaming_log
+                            self._update_iteration_history(
+                                phase_specific_data={
+                                    "response": merged_response,
+                                    "clarification_confirmed": False,
+                                    "streaming_log": merged_streaming_log,
+                                },
+                                prompt=prompt,
+                                agent_cli=None,
+                                agent_session_id=None,
+                                allowed_tools=allowed_tools,
+                            )
+
+                            # Update response and response_status for downstream processing
+                            response = merged_response
+                            response_status = confirmation_status
+
+                            # Continue to handle the new status code (fall through to code below)
+                            # Check if it's NEED_PERMISSION and handle it
+                            if confirmation_status == PhaseStatusCode.NEED_PERMISSION:
+                                # Display permission request and return IN_PROGRESS
+                                if self.interactive:
+                                    print(f"\n{'='*60}")
+                                    print(f"Dev ({self.dev_agent}) - Iteration {self.iteration}:")
+                                    print(f"{'='*60}")
+                                    print(merged_response)
+                                    print(f"{'='*60}\n")
+                                    print("💡 Developer requested permissions. Run 'cafe develop' again to respond.")
+
+                                    return PhaseResult(
+                                        status=PhaseStatus.IN_PROGRESS,
+                                        message=f"Permission requested in iteration {self.iteration}. Run command again to respond.",
+                                        data={
+                                            "iterations": self.iteration,
+                                            "last_response": merged_response,
+                                            "status_code": confirmation_status.value,
+                                        },
+                                    )
+                                else:
+                                    return PhaseResult(
+                                        status=PhaseStatus.FAILED,
+                                        message="Permission required but running in non-interactive mode",
+                                        data={
+                                            "iterations": self.iteration,
+                                            "last_response": merged_response,
+                                        },
+                                    )
+                            # If CONFIRMED, fall through to normal completion handling below
+
+                    except Exception as e:
+                        print(f"⚠️  Failed to verify CAFE_NEED_CLARIFICATION: {e}")
+                        # On verification failure, allow clarification to proceed
+                        # (safer to let human decide than to auto-reject)
+
+                        # Save clarification to file
+                        self._save_develop_clarification(response)
+
+                        # Display clarification request and return IN_PROGRESS
+                        if self.interactive:
+                            print(f"\n{'='*60}")
+                            print(f"Dev ({self.dev_agent}) - Iteration {self.iteration}:")
+                            print(f"{'='*60}")
+                            print(response)
+                            print(f"{'='*60}\n")
+                            print("💡 Developer needs clarification. Run 'cafe develop' again to respond.")
+
+                            return PhaseResult(
+                                status=PhaseStatus.IN_PROGRESS,
+                                message=f"Clarification requested in iteration {self.iteration}. Run command again to respond.",
+                                data={
+                                    "iterations": self.iteration,
+                                    "last_response": response,
+                                    "status_code": response_status.value,
+                                },
+                            )
+                        else:
+                            return PhaseResult(
+                                status=PhaseStatus.COMPLETED,
+                                message="Clarification needed - saved to develop file. Re-run with --user-input to provide response.",
+                                data={
+                                    "iterations": self.iteration,
+                                    "last_response": response,
+                                    "status_code": response_status.value,
+                                },
+                            )
 
             # Phase-specific post-processing: Handle review feedback timestamp
             if result and result.status == PhaseStatus.COMPLETED:
