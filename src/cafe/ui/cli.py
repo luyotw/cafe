@@ -585,8 +585,11 @@ def init() -> None:
                 )
                 raise typer.Exit(1)
 
-            # Create agent choices in "name: description" format
-            agent_choices = [f"{name}: {desc}" for name, desc, _ in agents]
+            # Create agent choices in "name: description (source_type)" format
+            agent_choices = []
+            for name, desc, _, source_type in agents:
+                source_label = " (custom)" if source_type == "custom" else " (system default)"
+                agent_choices.append(f"{name}: {desc}{source_label}")
 
             # Select agent
             selected_agent_display = prompt_list(
