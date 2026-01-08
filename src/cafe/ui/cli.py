@@ -3661,8 +3661,13 @@ def template_add(
     # Add template
     manager = TemplateManager(template_type=template_type)
     try:
-        manager.add_template(source_file, name)
-        console.print(f"[green]✅ {template_type.capitalize()} template '{name}' added successfully[/green]")
+        template_path = manager.add_template(source_file, name)
+        # Show path relative to home directory
+        try:
+            relative_path = template_path.relative_to(Path.home())
+            console.print(f"[green]✅ {template_type.capitalize()} template '{name}' added successfully: ~/{relative_path}[/green]")
+        except ValueError:
+            console.print(f"[green]✅ {template_type.capitalize()} template '{name}' added successfully: {template_path}[/green]")
     except FileNotFoundError as e:
         console.print(f"[red]Error: {e}[/red]")
         raise typer.Exit(1)
@@ -4028,10 +4033,15 @@ def template_create(
         with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as tf:
             tf.write(content)
             source_path = tf.name
-        
+
         try:
-            manager.add_template(source_path, name)
-            console.print(f"[green]✅ {template_type.capitalize()} template '{name}' created successfully[/green]")
+            template_path = manager.add_template(source_path, name)
+            # Show path relative to home directory
+            try:
+                relative_path = template_path.relative_to(Path.home())
+                console.print(f"[green]✅ {template_type.capitalize()} template '{name}' created successfully: ~/{relative_path}[/green]")
+            except ValueError:
+                console.print(f"[green]✅ {template_type.capitalize()} template '{name}' created successfully: {template_path}[/green]")
         finally:
             # Clean up temporary source file
             os.unlink(source_path)

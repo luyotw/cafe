@@ -18,12 +18,15 @@ class TemplateManager:
         """
         self.template_type = template_type
 
-    def add_template(self, source_path: str, template_name: str) -> None:
+    def add_template(self, source_path: str, template_name: str) -> Path:
         """Add a new template from a file to global directory.
 
         Args:
             source_path: Path to the source template file
             template_name: Name for the template (without .md extension)
+
+        Returns:
+            Path to the created template file
 
         Raises:
             FileNotFoundError: If source file doesn't exist
@@ -44,15 +47,16 @@ class TemplateManager:
         global_template_dir = get_global_cafe_dir() / "templates" / self.template_type
         global_template_dir.mkdir(parents=True, exist_ok=True)
         dest = global_template_dir / template_name
-        
+
         # Check if template already exists
         if dest.exists():
             raise FileExistsError(
                 f"Template '{template_name}' already exists in global directory. "
                 f"Use 'cafe template edit' to modify it."
             )
-        
+
         shutil.copy2(source, dest)
+        return dest
 
     def list_templates(self) -> List[Tuple[str, str]]:
         """List all available templates from both system and global directories.
