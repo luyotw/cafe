@@ -224,20 +224,35 @@ class TestTemplateCreate:
             with patch("cafe.ui.cli.subprocess.run") as mock_run:
                 mock_run.return_value = MagicMock(returncode=0)
 
-                # Mock tempfile to provide content
-                with patch("tempfile.NamedTemporaryFile") as mock_temp:
-                    temp_file = tmp_path / "temp.md"
-                    temp_file.write_text("# My content")
-                    mock_temp.return_value.__enter__.return_value.name = str(temp_file)
+                # Mock os.unlink to avoid file not found errors
+                with patch("cafe.ui.cli.os.unlink"):
+                    # Mock tempfile to provide content - need to handle TWO calls
+                    # (one for editor temp file, one for add_template source file)
+                    with patch("tempfile.NamedTemporaryFile") as mock_temp:
+                        temp_file1 = tmp_path / "temp1.md"
+                        temp_file2 = tmp_path / "temp2.md"
+                        temp_file1.write_text("# My content")
 
-                    result = runner.invoke(app, [
-                        "template", "create",
-                        "--name", "my-new-template",
-                        "--type", "plan",
-                    ])
+                        # Create two separate mock context managers
+                        mock_ctx1 = MagicMock()
+                        mock_ctx1.__enter__ = MagicMock(return_value=MagicMock(name=str(temp_file1)))
+                        mock_ctx1.__exit__ = MagicMock(return_value=False)
 
-                    # Should succeed
-                    assert result.exit_code == 0
+                        mock_ctx2 = MagicMock()
+                        mock_ctx2.__enter__ = MagicMock(return_value=MagicMock(name=str(temp_file2), write=MagicMock()))
+                        mock_ctx2.__exit__ = MagicMock(return_value=False)
+
+                        # Return different context managers for the two tempfile calls
+                        mock_temp.side_effect = [mock_ctx1, mock_ctx2]
+
+                        result = runner.invoke(app, [
+                            "template", "create",
+                            "--name", "my-new-template",
+                            "--type", "plan",
+                        ])
+
+                        # Should succeed
+                        assert result.exit_code == 0
 
     def test_template_create_placeholder_includes_name_and_type(self, tmp_path: Path):
         """Test template create placeholder includes template name and type"""
@@ -258,13 +273,15 @@ class TestTemplateCreate:
 
                 with patch("tempfile.NamedTemporaryFile") as mock_temp:
                     temp_file = tmp_path / "temp.md"
+                    temp_file2 = tmp_path / "temp2.md"
 
                     class MockFile:
-                        def __init__(self):
-                            self.name = str(temp_file)
+                        def __init__(self, filepath):
+                            self.name = str(filepath)
 
                         def write(self, content):
-                            capture_write(content)
+                            if "Please enter your" in str(content):
+                                capture_write(content)
 
                         def __enter__(self):
                             return self
@@ -272,7 +289,8 @@ class TestTemplateCreate:
                         def __exit__(self, *args):
                             pass
 
-                    mock_temp.return_value = MockFile()
+                    # Return different mock files for the two tempfile calls
+                    mock_temp.side_effect = [MockFile(temp_file), MockFile(temp_file2)]
                     temp_file.write_text("# Content")
 
                     result = runner.invoke(app, [
@@ -282,9 +300,9 @@ class TestTemplateCreate:
                     ])
 
                     # Verify placeholder contains template name and type
-                    if written_content:
-                        assert template_name in written_content
-                        assert template_type in written_content
+                    assert written_content is not None
+                    assert template_name in written_content
+                    assert template_type in written_content
 
     def test_template_create_with_duplicate_name(self, tmp_path: Path):
         """Test template create with duplicate name shows appropriate error"""
