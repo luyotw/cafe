@@ -512,25 +512,8 @@ def init() -> None:
             console.print()
 
         # 2. Copy agents and templates directories
-        try:
-            # Get package data directory
-            import cafe
-
-            package_dir = Path(cafe.__file__).parent
-            agents_source = package_dir / "data" / "agents"
-            templates_source = package_dir / "data" / "templates"
-
-            console.print("[cyan]Initializing project environment...[/cyan]")
-
-            init_helpers.copy_data_directory(str(agents_source), ".cafe/agents")
-            console.print("[green]✓ Copied agents directory[/green]")
-
-            init_helpers.copy_data_directory(str(templates_source), ".cafe/templates")
-            console.print("[green]✓ Copied templates directory[/green]")
-
-        except Exception as e:
-            console.print(f"[red]Error: Failed to copy files - {e}[/red]")
-            raise typer.Exit(1)
+        # Note: Agents and templates are now managed globally at ~/.cafe/
+        # No need to copy them to project .cafe directory
 
         # 3. Check available CLIs
         available_clis = check_available_clis()
@@ -585,8 +568,11 @@ def init() -> None:
                 )
                 raise typer.Exit(1)
 
-            # Create agent choices in "name: description" format
-            agent_choices = [f"{name}: {desc}" for name, desc, _ in agents]
+            # Create agent choices in "name: description (source_type)" format
+            agent_choices = []
+            for name, desc, _, source_type in agents:
+                source_label = " (custom)" if source_type == "custom" else " (system default)"
+                agent_choices.append(f"{name}: {desc}{source_label}")
 
             # Select agent
             selected_agent_display = prompt_list(
@@ -642,39 +628,14 @@ def version() -> None:
 
 
 def _ensure_default_content(cafe_dir: Path) -> None:
-    """Ensure .cafe/templates and .cafe/agents exist, copy from package data directory if not.
+    """No-op function - agents and templates are now managed globally at ~/.cafe/
 
     Args:
-        cafe_dir: Path to .cafe directory
+        cafe_dir: Path to .cafe directory (unused)
     """
-    from cafe.agents.manager import AgentManager
-
-    # Get package data directory
-    package_dir = Path(__file__).parent.parent / "data"
-
-    # Initialize templates if not exists
-    cafe_templates = cafe_dir / "templates"
-    if not cafe_templates.exists():
-        # Try package data first, then repo root
-        package_templates = package_dir / "templates"
-        repo_templates = Path("templates")
-
-        if package_templates.exists():
-            shutil.copytree(package_templates, cafe_templates)
-        elif repo_templates.exists():
-            shutil.copytree(repo_templates, cafe_templates)
-
-    # Initialize agents if not exists
-    cafe_agents = cafe_dir / AgentManager.AGENTS_DIR
-    if not cafe_agents.exists():
-        # Try package data first, then repo root
-        package_agents = package_dir / AgentManager.AGENTS_DIR
-        repo_agents = Path(AgentManager.AGENTS_DIR)
-
-        if package_agents.exists():
-            shutil.copytree(package_agents, cafe_agents)
-        elif repo_agents.exists():
-            shutil.copytree(repo_agents, cafe_agents)
+    # Agents and templates are now stored globally at ~/.cafe/
+    # No need to copy them to project .cafe directory
+    pass
 
 
 @app.command()
@@ -874,20 +835,19 @@ def prepare(
 
         # 9.1. Validate plan template exists (only in non-interactive mode after templates are initialized)
         if not interactive and plan_template and plan_template != "auto":
-            template_file = Path(".cafe") / "templates" / "plan" / f"{plan_template}.md"
-            if not template_file.exists():
+            plan_template_manager = TemplateManager(template_type="plan")
+            template_path = plan_template_manager.get_template_path(plan_template)
+            if not template_path:
                 console.print(f"[red]Error: Plan template '{plan_template}' not found[/red]")
-                console.print(f"   Expected at: {template_file}")
                 console.print()
                 console.print("[yellow]Available plan templates:[/yellow]")
-                template_dir = Path(".cafe") / "templates" / "plan"
-                if template_dir.exists():
-                    available = [f.stem for f in template_dir.glob("*.md")]
-                    if available:
-                        for tmpl in sorted(available):
-                            console.print(f"  - {tmpl}")
-                    else:
-                        console.print("  (none)")
+                available_templates = plan_template_manager.list_templates()
+                if available_templates:
+                    for name, source_type in available_templates:
+                        source_label = " (system default)" if source_type == "system" else " (custom)"
+                        console.print(f"  - {name}{source_label}")
+                else:
+                    console.print("  (none)")
                 raise typer.Exit(1)
 
         # 10. Assemble spec/plan/pr configuration (prompt mode or parameter mode)
@@ -924,8 +884,9 @@ def prepare(
             spec_config["rigor"] = rigor
 
             # Prompt for spec template
-            spec_template_manager = TemplateManager(".cafe", template_type="spec")
-            spec_templates = spec_template_manager.list_templates()
+            spec_template_manager = TemplateManager(template_type="spec")
+            spec_templates_with_source = spec_template_manager.list_templates()
+            spec_templates = [name for name, _ in spec_templates_with_source]
 
             if spec_templates:
                 console.print()
@@ -933,13 +894,16 @@ def prepare(
                 spec_template_paths = {
                     name: spec_template_manager.get_template_path(name) for name in spec_templates
                 }
-                selected_spec_template = select_template(spec_templates, spec_template_paths)
+                selected_spec_template = select_template(
+                    spec_templates, spec_template_paths, spec_templates_with_source
+                )
                 if selected_spec_template:
                     spec_config["template"] = selected_spec_template
 
             # Prompt for plan template
-            plan_template_manager = TemplateManager(".cafe", template_type="plan")
-            plan_templates = plan_template_manager.list_templates()
+            plan_template_manager = TemplateManager(template_type="plan")
+            plan_templates_with_source = plan_template_manager.list_templates()
+            plan_templates = [name for name, _ in plan_templates_with_source]
 
             if plan_templates:
                 console.print()
@@ -947,7 +911,9 @@ def prepare(
                 plan_template_paths = {
                     name: plan_template_manager.get_template_path(name) for name in plan_templates
                 }
-                selected_plan_template = select_template(plan_templates, plan_template_paths)
+                selected_plan_template = select_template(
+                    plan_templates, plan_template_paths, plan_templates_with_source
+                )
                 if selected_plan_template:
                     plan_config["template"] = selected_plan_template
             else:
@@ -1671,19 +1637,8 @@ def restore(
             if (main_cafe_dir / "config.yaml").exists():
                 shutil.copy2(main_cafe_dir / "config.yaml", worktree_cafe_dir / "config.yaml")
 
-            # Copy agents directory
-            if (main_cafe_dir / "agents").exists():
-                worktree_agents = worktree_cafe_dir / "agents"
-                if worktree_agents.exists():
-                    shutil.rmtree(worktree_agents)
-                shutil.copytree(main_cafe_dir / "agents", worktree_agents)
-
-            # Copy templates directory
-            if (main_cafe_dir / "templates").exists():
-                worktree_templates = worktree_cafe_dir / "templates"
-                if worktree_templates.exists():
-                    shutil.rmtree(worktree_templates)
-                shutil.copytree(main_cafe_dir / "templates", worktree_templates)
+            # Note: Agents and templates are now managed globally at ~/.cafe/
+            # No need to copy them to worktree .cafe directory
 
         # 10. Display success message
         console.print()
@@ -2090,7 +2045,7 @@ def spec(
         # Get template path if not "auto"
         spec_template_path = None
         if spec_template and spec_template != "auto":
-            template_manager = TemplateManager(".cafe", template_type="spec")
+            template_manager = TemplateManager(template_type="spec")
             spec_template_path = template_manager.get_template_path(spec_template)
             if not spec_template_path:
                 console.print(f"[yellow]⚠️  Warning: Template '{spec_template}' not found, using auto mode[/yellow]")
@@ -2435,7 +2390,7 @@ def plan(
         dev_session_id = dev_executor.config.session_id or "(will be created)"
 
         # Handle template selection
-        template_manager = TemplateManager(config_dir)
+        template_manager = TemplateManager()
         selected_template = None
         template_mode = "auto"  # Track if template is 'auto' or manually specified
 
@@ -2483,7 +2438,8 @@ def plan(
                     if is_interactive:
                         from cafe.ui.template_selector import select_template
 
-                        templates = template_manager.list_templates()
+                        templates_with_source = template_manager.list_templates()
+                        templates = [name for name, _ in templates_with_source]
                         template_paths = {name: template_manager.get_template_path(name) for name in templates}
                         selected_template = select_template(templates, template_paths)
 
@@ -3655,12 +3611,6 @@ def template_add(
     source_file: Optional[str] = typer.Option(None, "--source-file", help="Path to the template file to add"),
     name: Optional[str] = typer.Option(None, "--name", help="Name for the template"),
     template_type: Optional[str] = typer.Option(None, "--type", "-t", help="Template type: plan or spec"),
-    config_file: str = typer.Option(
-        ".cafe/config.yaml",
-        "--config",
-        "-c",
-        help="Path to configuration file",
-    ),
 ) -> None:
     """Add a new template from a file.
 
@@ -3670,8 +3620,6 @@ def template_add(
         cafe template add  # Interactive mode
     """
     import tempfile
-
-    config_dir = str(Path(config_file).parent) if config_file != ".cafe/config.yaml" else ".cafe"
 
     # Interactive prompting for missing arguments
     try:
@@ -3696,12 +3644,6 @@ def template_add(
                 console.print("[red]Error: Template name cannot be empty[/red]")
                 raise typer.Exit(1)
 
-        # Check if template already exists
-        manager = TemplateManager(config_dir, template_type=template_type)
-        if manager.template_exists(name):
-            console.print(f"[red]Error: Template '{name}' already exists for type '{template_type}'[/red]")
-            raise typer.Exit(1)
-
         if not source_file:
             source_file = prompt_text(
                 message="Source file path:",
@@ -3717,10 +3659,19 @@ def template_add(
         raise typer.Exit(0)
 
     # Add template
+    manager = TemplateManager(template_type=template_type)
     try:
-        manager.add_template(source_file, name)
-        console.print(f"[green]✅ {template_type.capitalize()} template '{name}' added successfully[/green]")
+        template_path = manager.add_template(source_file, name)
+        # Show path relative to home directory
+        try:
+            relative_path = template_path.relative_to(Path.home())
+            console.print(f"[green]✅ {template_type.capitalize()} template '{name}' added successfully: ~/{relative_path}[/green]")
+        except ValueError:
+            console.print(f"[green]✅ {template_type.capitalize()} template '{name}' added successfully: {template_path}[/green]")
     except FileNotFoundError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1)
+    except FileExistsError as e:
         console.print(f"[red]Error: {e}[/red]")
         raise typer.Exit(1)
     except ValueError as e:
@@ -3765,14 +3716,15 @@ def template_ls(
         raise typer.Exit(1)
 
     # List templates
-    manager = TemplateManager(config_dir, template_type=template_type)
-    templates = manager.list_templates()
-    if not templates:
+    manager = TemplateManager(template_type=template_type)
+    templates_with_source = manager.list_templates()
+    if not templates_with_source:
         console.print(f"[dim]No {template_type} templates found[/dim]")
     else:
         console.print(f"[bold]{template_type.capitalize()} templates:[/bold]")
-        for tmpl in templates:
-            console.print(f"  • {tmpl}")
+        for name, source_type in templates_with_source:
+            source_label = " (custom)" if source_type == "custom" else ""
+            console.print(f"  • {name}{source_label}")
 
 
 @template_app.command(name="rm")
@@ -3810,17 +3762,19 @@ def template_rm(
             console.print(f"[red]Error: Invalid template type '{template_type}'. Must be 'plan' or 'spec'.[/red]")
             raise typer.Exit(1)
 
-        manager = TemplateManager(config_dir, template_type=template_type)
+        manager = TemplateManager(template_type=template_type)
 
         if not name:
-            templates = manager.list_templates()
-            if not templates:
-                console.print(f"[red]No {template_type} templates found[/red]")
+            # Only list custom templates (system templates cannot be deleted)
+            custom_templates = manager.list_custom_templates()
+            if not custom_templates:
+                console.print(f"[yellow]No custom {template_type} templates found[/yellow]")
+                console.print("[dim]System default templates cannot be deleted[/dim]")
                 raise typer.Exit(1)
 
             name = prompt_list(
                 message="Select template to delete:",
-                choices=templates,
+                choices=custom_templates,
             )
 
     except (KeyboardInterrupt, EOFError):
@@ -3884,14 +3838,15 @@ def template_cat(
             console.print(f"[red]Error: Invalid template type '{template_type}'. Must be 'plan' or 'spec'.[/red]")
             raise typer.Exit(1)
 
-        manager = TemplateManager(config_dir, template_type=template_type)
+        manager = TemplateManager(template_type=template_type)
 
         if not name:
-            templates = manager.list_templates()
-            if not templates:
+            templates_with_source = manager.list_templates()
+            if not templates_with_source:
                 console.print(f"[red]No {template_type} templates found[/red]")
                 raise typer.Exit(1)
 
+            templates = [name for name, _ in templates_with_source]
             name = prompt_list(
                 message="Select template to view:",
                 choices=templates,
@@ -3949,17 +3904,19 @@ def template_edit(
             console.print(f"[red]Error: Invalid template type '{template_type}'. Must be 'plan' or 'spec'.[/red]")
             raise typer.Exit(1)
 
-        manager = TemplateManager(config_dir, template_type=template_type)
+        manager = TemplateManager(template_type=template_type)
 
         if not name:
-            templates = manager.list_templates()
-            if not templates:
-                console.print(f"[red]No {template_type} templates found[/red]")
+            # Only list custom templates (system templates cannot be edited)
+            custom_templates = manager.list_custom_templates()
+            if not custom_templates:
+                console.print(f"[yellow]No custom {template_type} templates found[/yellow]")
+                console.print("[dim]System default templates cannot be edited[/dim]")
                 raise typer.Exit(1)
 
             name = prompt_list(
                 message="Select template to edit:",
-                choices=templates,
+                choices=custom_templates,
             )
 
     except (KeyboardInterrupt, EOFError):
@@ -3990,12 +3947,6 @@ def template_edit(
 def template_create(
     name: Optional[str] = typer.Option(None, "--name", help="Template name"),
     template_type: Optional[str] = typer.Option(None, "--type", "-t", help="Template type: plan or spec"),
-    config_file: str = typer.Option(
-        ".cafe/config.yaml",
-        "--config",
-        "-c",
-        help="Path to configuration file",
-    ),
 ) -> None:
     """Create a new template from scratch.
 
@@ -4005,8 +3956,6 @@ def template_create(
         cafe template create  # Interactive mode
     """
     import tempfile
-
-    config_dir = str(Path(config_file).parent) if config_file != ".cafe/config.yaml" else ".cafe"
 
     # Interactive prompting for missing arguments
     try:
@@ -4035,11 +3984,8 @@ def template_create(
         console.print("\n[dim]Cancelled[/dim]")
         raise typer.Exit(0)
 
-    # Check if template already exists
-    manager = TemplateManager(config_dir, template_type=template_type)
-    if manager.template_exists(name):
-        console.print(f"[red]Error: Template '{name}' already exists for type '{template_type}'[/red]")
-        raise typer.Exit(1)
+    # Create TemplateManager
+    manager = TemplateManager(template_type=template_type)
 
     # Create template with editor
     editor = os.environ.get("EDITOR", "vim")
@@ -4081,19 +4027,30 @@ def template_create(
         # Clean up temp file
         os.unlink(temp_path)
 
-    # Save template
-    template_dir = Path(config_dir) / "templates" / template_type
-    template_dir.mkdir(parents=True, exist_ok=True)
-    template_file = template_dir / f"{name}.md"
-    template_file.write_text(content)
-
-    # Show relative path
+    # Save template using TemplateManager
     try:
-        relative_path = template_file.resolve().relative_to(Path.cwd())
-    except ValueError:
-        # If path is not relative to cwd, show absolute path
-        relative_path = template_file.resolve()
-    console.print(f"[green]✓[/green] Template created successfully: {relative_path}")
+        # Write content to a temporary file first
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as tf:
+            tf.write(content)
+            source_path = tf.name
+
+        try:
+            template_path = manager.add_template(source_path, name)
+            # Show path relative to home directory
+            try:
+                relative_path = template_path.relative_to(Path.home())
+                console.print(f"[green]✅ {template_type.capitalize()} template '{name}' created successfully: ~/{relative_path}[/green]")
+            except ValueError:
+                console.print(f"[green]✅ {template_type.capitalize()} template '{name}' created successfully: {template_path}[/green]")
+        finally:
+            # Clean up temporary source file
+            os.unlink(source_path)
+    except FileExistsError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1)
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1)
 
 
 
@@ -4175,16 +4132,9 @@ app.add_typer(agent_app, name="agent")
 
 @agent_app.command(name="ls")
 def agent_ls() -> None:
-    """List all available agents."""
-    from pathlib import Path
+    """List all available agents (system and custom)."""
     from rich.table import Table
-
-    # Get agents directory from current working directory (project)
-    agents_dir = Path.cwd() / ".cafe" / "agents"
-
-    if not agents_dir.exists():
-        console.print("[yellow]No agents found.[/yellow]")
-        return
+    from cafe.ui.init_helpers import list_available_agents
 
     # Get all role directories
     roles = ["pm", "developer", "reviewer"]
@@ -4197,31 +4147,14 @@ def agent_ls() -> None:
     table.add_column("Description", style="dim")
 
     for role in roles:
-        role_dir = agents_dir / role
-        if not role_dir.exists():
-            continue
+        # Get agents from both system and custom directories
+        agents = list_available_agents(role)
 
-        # Get all .md files in role directory
-        agent_files = sorted(role_dir.glob("*.md"))
-
-        for agent_file in agent_files:
+        for agent_name, description, _, source_type in agents:
             has_agents = True
-            agent_name = agent_file.stem
-
-            # Try to extract description from frontmatter
-            description = ""
-            try:
-                import yaml
-                content = agent_file.read_text()
-                if content.startswith("---"):
-                    parts = content.split("---", 2)
-                    if len(parts) >= 3:
-                        frontmatter = yaml.safe_load(parts[1])
-                        description = frontmatter.get("description", "")
-            except Exception:
-                pass
-
-            table.add_row(role, agent_name, description)
+            # Add (custom) indicator for custom agents
+            display_name = f"{agent_name} (custom)" if source_type == "custom" else agent_name
+            table.add_row(role, display_name, description)
 
     if not has_agents:
         console.print("[yellow]No agents found.[/yellow]")
@@ -4234,9 +4167,10 @@ def agent_ls() -> None:
 def agent_rm() -> None:
     """Remove an agent interactively."""
     from pathlib import Path
+    from cafe.utils.config import get_global_cafe_dir
 
-    # Get agents directory from current working directory (project)
-    agents_dir = Path.cwd() / ".cafe" / "agents"
+    # Get global agents directory
+    agents_dir = get_global_cafe_dir() / "agents"
 
     # Prompt for role
     try:
@@ -4297,9 +4231,10 @@ def agent_create() -> None:
     """Create a new agent interactively."""
     from pathlib import Path
     import os
+    from cafe.utils.config import get_global_cafe_dir
 
-    # Get agents directory from current working directory (project)
-    agents_dir = Path.cwd() / ".cafe" / "agents"
+    # Get global agents directory
+    agents_dir = get_global_cafe_dir() / "agents"
 
     # Prompt for role
     try:
@@ -4331,6 +4266,7 @@ def agent_create() -> None:
     agent_file = agents_dir / role / f"{name}.md"
     if agent_file.exists():
         console.print(f"[red]Error: Agent '{role}/{name}.md' already exists[/red]")
+        console.print("[yellow]Use 'cafe agent edit' to modify the existing agent.[/yellow]")
         raise typer.Exit(1)
 
     # Prompt for description
@@ -4398,9 +4334,12 @@ description: {description}
     # Write agent file
     agent_file.write_text(content)
 
-    # Show relative path from current directory
-    relative_path = agent_file.relative_to(Path.cwd())
-    console.print(f"[green]✓[/green] Agent created successfully: {relative_path}")
+    # Show path relative to home directory
+    try:
+        relative_path = agent_file.relative_to(Path.home())
+        console.print(f"[green]✓[/green] Agent created successfully: ~/{relative_path}")
+    except ValueError:
+        console.print(f"[green]✓[/green] Agent created successfully: {agent_file}")
 
 
 @agent_app.command(name="edit")
@@ -4408,9 +4347,10 @@ def agent_edit() -> None:
     """Edit an existing agent."""
     from pathlib import Path
     import os
+    from cafe.utils.config import get_global_cafe_dir
 
-    # Get agents directory from current working directory (project)
-    agents_dir = Path.cwd() / ".cafe" / "agents"
+    # Get global agents directory
+    agents_dir = get_global_cafe_dir() / "agents"
 
     # Prompt for role
     try:
@@ -4448,15 +4388,94 @@ def agent_edit() -> None:
     editor = os.environ.get("EDITOR", "vim")
     try:
         subprocess.run([editor, str(agent_file)], check=True)
-        # Show relative path from current directory
-        relative_path = agent_file.relative_to(Path.cwd())
-        console.print(f"[green]✓[/green] Agent updated successfully: {relative_path}")
+        # Show path relative to home directory
+        try:
+            relative_path = agent_file.relative_to(Path.home())
+            console.print(f"[green]✓[/green] Agent updated successfully: ~/{relative_path}")
+        except ValueError:
+            console.print(f"[green]✓[/green] Agent updated successfully: {agent_file}")
     except subprocess.CalledProcessError:
         console.print("[red]Error: Failed to edit agent[/red]")
         raise typer.Exit(1)
     except FileNotFoundError:
         console.print(f"[red]Error: Editor '{editor}' not found[/red]")
         raise typer.Exit(1)
+
+
+@agent_app.command(name="cat")
+def agent_cat(
+    role: Optional[str] = typer.Option(None, "--role", "-r", help="Agent role: pm, developer, or reviewer"),
+    name: Optional[str] = typer.Option(None, "--name", "-n", help="Agent name to view"),
+) -> None:
+    """View agent content.
+
+    \b
+    Examples:
+        cafe agent cat --role developer --name Nick
+        cafe agent cat  # Interactive mode
+    """
+    from cafe.ui.init_helpers import list_available_agents
+
+    # Interactive prompting for missing arguments
+    try:
+        if not role:
+            role = prompt_list(
+                message="Select agent role:",
+                choices=["pm", "developer", "reviewer"],
+            )
+
+        # Validate role
+        if role not in ["pm", "developer", "reviewer"]:
+            console.print(f"[red]Error: Invalid role '{role}'. Must be 'pm', 'developer', or 'reviewer'.[/red]")
+            raise typer.Exit(1)
+
+        if not name:
+            # Get all agents for this role (system + custom)
+            agents = list_available_agents(role)
+            if not agents:
+                console.print(f"[red]No agents found for role '{role}'[/red]")
+                raise typer.Exit(1)
+
+            # Create choices with source indicators
+            choices = []
+            agent_map = {}
+            for agent_name, description, agent_path, source_type in agents:
+                if source_type == "custom":
+                    display_name = f"{agent_name} (custom)"
+                else:
+                    display_name = f"{agent_name} (system default)"
+                choices.append(display_name)
+                agent_map[display_name] = (agent_name, agent_path)
+
+            selected = prompt_list(
+                message="Select agent to view:",
+                choices=choices,
+            )
+            name, agent_path = agent_map[selected]
+        else:
+            # Find agent by name
+            agents = list_available_agents(role)
+            agent_path = None
+            for agent_name, _, path, _ in agents:
+                if agent_name == name:
+                    agent_path = path
+                    break
+
+            if not agent_path:
+                console.print(f"[red]Error: Agent '{name}' not found in role '{role}'[/red]")
+                raise typer.Exit(1)
+
+    except (KeyboardInterrupt, EOFError):
+        console.print("\n[dim]Cancelled[/dim]")
+        raise typer.Exit(0)
+
+    # Display agent content using pager
+    try:
+        subprocess.run(["less", "-R", str(agent_path)], check=False)
+    except FileNotFoundError:
+        # Fallback: print to console
+        content = agent_path.read_text()
+        console.print(content)
 
 
 @app.command()
