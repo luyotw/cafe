@@ -90,6 +90,26 @@ class TestTemplateManager:
         with pytest.raises(ValueError, match="Invalid template name"):
             manager.add_template(str(source_file), "")
 
+    def test_add_template_raises_file_exists_error_if_duplicate(self, tmp_path: Path) -> None:
+        """測試新增重複模版時拋出 FileExistsError"""
+        fake_home = tmp_path / "home"
+        fake_home.mkdir()
+        
+        with patch("cafe.utils.config.Path.home", return_value=fake_home):
+            with patch("cafe.templates.manager.get_global_cafe_dir", return_value=fake_home / ".cafe"):
+                manager = TemplateManager()
+
+                # 建立來源檔案
+                source_file = tmp_path / "my-template.md"
+                source_file.write_text("## Template Content\n\nTest template")
+
+                # 第一次新增成功
+                manager.add_template(str(source_file), "my-template")
+
+                # 第二次新增同名模版時應該拋出錯誤
+                with pytest.raises(FileExistsError, match="Template 'my-template.md' already exists"):
+                    manager.add_template(str(source_file), "my-template")
+
     def test_list_templates_returns_all_templates(self, tmp_path: Path) -> None:
         """測試列出所有模版（系統 + 全域）"""
         fake_home = tmp_path / "home"
