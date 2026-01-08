@@ -168,7 +168,7 @@ cafe --help
 - **Developer**: Analyzes implementation and writes code.
 - **Reviewer**: Reviews code for quality assurance.
 
-You can add custom agents using the `cafe agent` command set. See `cafe agent --help` for more details.
+You can create and manage custom agents using the `cafe agent` command set. Custom agents are stored globally in `~/.cafe/agents/` and can be reused across all your CAFE projects. See `cafe agent --help` for more details.
 
 ### Template System
 - **Plan Template**: Defines the format for the implementation plan.
@@ -176,7 +176,7 @@ You can add custom agents using the `cafe agent` command set. See `cafe agent --
 - **Review Report Template** (To be implemented): Defines the format for code review reports.
 - **PR Description Template** (To be implemented): Defines the format for PR descriptions.
 
-You can manage custom templates with the `cafe template` command set. See `cafe template --help` for details.
+You can create and manage custom templates with the `cafe template` command set. Custom templates are stored globally in `~/.cafe/templates/` and can be reused across all your CAFE projects. When a custom template has the same name as a system template, the custom template takes precedence. See `cafe template --help` for details.
 
 ### Other Features
 See `cafe --help` to learn more about other features.

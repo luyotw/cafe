@@ -276,22 +276,45 @@ class TestSystemAndGlobalTemplateCoexistence:
 
     def test_global_template_overrides_system_template(self, runner, fake_home, tmp_path):
         """Test that global template with same name as system template takes precedence."""
-        # Create a global template with the same name as a system template
+        # Create a global template with the same name as a system template (e.g., "default")
         source_file = tmp_path / "custom_default.md"
-        source_file.write_text("# Custom Default Template\nThis overrides system default")
+        custom_content = "# Custom Default Template\nThis overrides system default"
+        source_file.write_text(custom_content)
 
         with patch("cafe.utils.config.Path.home", return_value=fake_home):
-            # Add a template with a common name (e.g., "default")
+            # Add a template with the same name as a system template
             result = runner.invoke(app, [
                 "template", "add",
                 "--source-file", str(source_file),
-                "--name", "custom",
+                "--name", "default",  # Same name as system template
                 "--type", "plan",
             ])
 
             assert result.exit_code == 0
 
-            # List templates - should show both system and custom templates
+            # List templates - should show "default" with custom source type
             result = runner.invoke(app, ["template", "ls", "--type", "plan"])
             assert result.exit_code == 0
-            assert "custom" in result.stdout
+            assert "default" in result.stdout
+
+            # Verify that the global template file was created
+            global_template = fake_home / ".cafe" / "templates" / "plan" / "default.md"
+            assert global_template.exists()
+
+            # Verify the content is from the global template, not system
+            global_content = global_template.read_text()
+            assert "Custom Default Template" in global_content
+            assert "This overrides system default" in global_content
+
+            # Use template cat to verify the global version is returned
+            with patch("cafe.ui.cli.subprocess.run") as mock_run:
+                mock_run.side_effect = FileNotFoundError  # Force fallback to console
+                result = runner.invoke(app, [
+                    "template", "cat",
+                    "--name", "default",
+                    "--type", "plan",
+                ])
+
+            assert result.exit_code == 0
+            # The output should contain the custom content
+            assert "Custom Default Template" in result.stdout or custom_content in result.stdout
