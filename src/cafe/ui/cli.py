@@ -835,7 +835,6 @@ def prepare(
 
         # 9.1. Validate plan template exists (only in non-interactive mode after templates are initialized)
         if not interactive and plan_template and plan_template != "auto":
-            from cafe.templates.manager import TemplateManager
             plan_template_manager = TemplateManager(template_type="plan")
             template_path = plan_template_manager.get_template_path(plan_template)
             if not template_path:

@@ -108,8 +108,6 @@ class TestInitCommandEnvironmentChecks:
         assert result.exit_code == 1
         assert "No supported AI agents found" in result.stdout
 
-    @patch("cafe.ui.cli.shutil.which")
-    @patch("cafe.ui.cli.init_helpers.copy_data_directory")
     # Tests removed: Agents and templates are no longer copied to project .cafe directory
     # They are now managed globally at ~/.cafe/
 
