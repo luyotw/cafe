@@ -13,6 +13,41 @@ class ConfigError(Exception):
     pass
 
 
+def get_global_cafe_dir() -> Path:
+    """Get global CAFE directory path.
+    
+    Returns:
+        Path to ~/.cafe directory (creates if not exists)
+    """
+    global_dir = Path.home() / ".cafe"
+    global_dir.mkdir(parents=True, exist_ok=True)
+    return global_dir
+
+
+def ensure_global_directories() -> None:
+    """Ensure global CAFE directories exist.
+    
+    Creates the following directory structure:
+    ~/.cafe/
+    ├── agents/
+    │   ├── pm/
+    │   ├── developer/
+    │   └── reviewer/
+    └── templates/
+        ├── plan/
+        └── spec/
+    """
+    global_dir = get_global_cafe_dir()
+    
+    # Create agent subdirectories
+    for role in ["pm", "developer", "reviewer"]:
+        (global_dir / "agents" / role).mkdir(parents=True, exist_ok=True)
+    
+    # Create template subdirectories
+    for template_type in ["plan", "spec"]:
+        (global_dir / "templates" / template_type).mkdir(parents=True, exist_ok=True)
+
+
 class ConfigManager:
     """Manages CAFE configuration."""
 
