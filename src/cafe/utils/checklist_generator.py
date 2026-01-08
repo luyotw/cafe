@@ -1,0 +1,250 @@
+"""Checklist generation for phase execution."""
+
+from pathlib import Path
+from typing import Dict, Optional
+from cafe.utils.checklist_utils import (
+    resolve_checklist_placeholders,
+    generate_checklist_file
+)
+from cafe.utils import checklist_templates
+from cafe.agents.manager import AgentManager
+from cafe.utils.prompt_utils import extract_agent_guidelines_checklist
+from cafe.utils.git_utils import to_cwd_relative_path
+
+
+def generate_spec_checklist(
+    iteration: int,
+    agent_name: str,
+    current_spec_file: str,
+    prev_spec_file: Optional[str],
+    checklist_file_path: Path,
+) -> None:
+    """Generate checklist file for spec phase.
+
+    Args:
+        iteration: Current iteration number
+        agent_name: PM agent name
+        current_spec_file: Path to current spec file
+        prev_spec_file: Path to previous spec file (None for iteration 1)
+        checklist_file_path: Path where checklist file should be created
+    """
+    # Get agent file path
+    agent_file = AgentManager.get_agent_file_path(agent_name, "pm")
+
+    # Choose template based on iteration
+    if iteration == 1:
+        execution_steps = checklist_templates.SPEC_EXECUTION_STEPS_ITERATION_1
+    else:
+        execution_steps = checklist_templates.SPEC_EXECUTION_STEPS_ITERATION_N
+
+    important_notes = checklist_templates.SPEC_IMPORTANT_NOTES
+
+    # Add iteration-specific note for iteration 4+
+    if iteration >= 4:
+        important_notes += checklist_templates.SPEC_IMPORTANT_NOTES_ITERATION_4_PLUS
+
+    # Get agent guidelines checklist
+    agent_guidelines = extract_agent_guidelines_checklist(agent_file)
+
+    # Combine all sections
+    checklist_content = f"{execution_steps}\n{important_notes}\n{agent_guidelines}"
+
+    # Build placeholders dict
+    placeholders = {
+        "agent_file": agent_file,
+        "current_spec_file": current_spec_file,
+        "iteration": str(iteration),
+    }
+    if prev_spec_file:
+        placeholders["prev_spec_file"] = prev_spec_file
+
+    # Resolve placeholders
+    checklist_content = resolve_checklist_placeholders(checklist_content, placeholders)
+
+    # Generate checklist file
+    generate_checklist_file(checklist_file_path, checklist_content)
+
+
+def generate_plan_checklist(
+    agent_name: str,
+    plan_file_path: str,
+    spec_file_path: str,
+    checklist_file_path: Path,
+) -> None:
+    """Generate checklist file for plan phase.
+
+    Args:
+        agent_name: Developer agent name
+        plan_file_path: Path to plan file
+        spec_file_path: Path to spec file
+        checklist_file_path: Path where checklist file should be created
+    """
+    # Get agent file path
+    agent_file = AgentManager.get_agent_file_path(agent_name, "developer")
+
+    # Get templates
+    execution_steps = checklist_templates.PLAN_EXECUTION_STEPS
+    important_notes = checklist_templates.PLAN_IMPORTANT_NOTES
+
+    # Get agent guidelines checklist
+    agent_guidelines = extract_agent_guidelines_checklist(agent_file)
+
+    # Combine all sections
+    checklist_content = f"{execution_steps}\n{important_notes}\n{agent_guidelines}"
+
+    # Build placeholders dict
+    placeholders = {
+        "agent_file": agent_file,
+        "plan_file_path": plan_file_path,
+        "spec_file_path": spec_file_path,
+    }
+
+    # Resolve placeholders
+    checklist_content = resolve_checklist_placeholders(checklist_content, placeholders)
+
+    # Generate checklist file
+    generate_checklist_file(checklist_file_path, checklist_content)
+
+
+def generate_develop_checklist(
+    agent_name: str,
+    spec_file_path: str,
+    plan_file_path: str,
+    develop_file: Optional[str],
+    checklist_file_path: Path,
+    correction_mode: bool = False,
+) -> None:
+    """Generate checklist file for develop phase.
+
+    Args:
+        agent_name: Developer agent name
+        spec_file_path: Path to spec file
+        plan_file_path: Path to plan file
+        develop_file: Path to develop file (for correction mode)
+        checklist_file_path: Path where checklist file should be created
+        correction_mode: True if in correction mode, False for normal mode
+    """
+    # Get agent file path
+    agent_file = AgentManager.get_agent_file_path(agent_name, "developer")
+
+    # Choose template based on mode
+    if correction_mode:
+        execution_steps = checklist_templates.DEVELOP_EXECUTION_STEPS_CORRECTION
+    else:
+        execution_steps = checklist_templates.DEVELOP_EXECUTION_STEPS_NORMAL
+
+    important_notes = checklist_templates.DEVELOP_IMPORTANT_NOTES
+    verification_checklist = checklist_templates.DEVELOP_VERIFICATION_CHECKLIST
+
+    # Get agent guidelines checklist
+    agent_guidelines = extract_agent_guidelines_checklist(agent_file)
+
+    # Combine all sections
+    checklist_content = f"{execution_steps}\n{important_notes}\n{agent_guidelines}\n{verification_checklist}"
+
+    # Build placeholders dict
+    placeholders = {
+        "agent_file": agent_file,
+        "spec_file_path": spec_file_path,
+        "plan_file_path": plan_file_path,
+    }
+    if develop_file:
+        placeholders["develop_file"] = develop_file
+
+    # Resolve placeholders
+    checklist_content = resolve_checklist_placeholders(checklist_content, placeholders)
+
+    # Generate checklist file
+    generate_checklist_file(checklist_file_path, checklist_content)
+
+
+def generate_review_checklist(
+    agent_name: str,
+    spec_file_path: str,
+    review_file_path: str,
+    base_branch: str,
+    checklist_file_path: Path,
+) -> None:
+    """Generate checklist file for review phase.
+
+    Args:
+        agent_name: Reviewer agent name
+        spec_file_path: Path to spec file
+        review_file_path: Path to review file
+        base_branch: Base branch name
+        checklist_file_path: Path where checklist file should be created
+    """
+    # Get agent file path
+    agent_file = AgentManager.get_agent_file_path(agent_name, "reviewer")
+
+    # Get templates
+    execution_steps = checklist_templates.REVIEW_EXECUTION_STEPS
+    tasks_checklist = checklist_templates.REVIEW_TASKS_CHECKLIST
+    important_notes = checklist_templates.REVIEW_IMPORTANT_NOTES
+
+    # Get agent guidelines checklist
+    agent_guidelines = extract_agent_guidelines_checklist(agent_file)
+
+    # Combine all sections
+    checklist_content = f"{execution_steps}\n{tasks_checklist}\n{important_notes}\n{agent_guidelines}"
+
+    # Build placeholders dict
+    placeholders = {
+        "agent_file": agent_file,
+        "spec_file_path": spec_file_path,
+        "review_file_path": review_file_path,
+        "base_branch": base_branch,
+    }
+
+    # Resolve placeholders
+    checklist_content = resolve_checklist_placeholders(checklist_content, placeholders)
+
+    # Generate checklist file
+    generate_checklist_file(checklist_file_path, checklist_content)
+
+
+def generate_pr_checklist(
+    agent_name: str,
+    spec_file_path: str,
+    plan_file_path: str,
+    pr_title_file: str,
+    pr_body_file: str,
+    checklist_file_path: Path,
+) -> None:
+    """Generate checklist file for PR phase.
+
+    Args:
+        agent_name: Developer agent name
+        spec_file_path: Path to spec file
+        plan_file_path: Path to plan file
+        pr_title_file: Path to PR title file
+        pr_body_file: Path to PR body file
+        checklist_file_path: Path where checklist file should be created
+    """
+    # Get agent file path
+    agent_file = AgentManager.get_agent_file_path(agent_name, "developer")
+
+    # Get templates
+    execution_steps = checklist_templates.PR_EXECUTION_STEPS
+    important_notes = checklist_templates.PR_IMPORTANT_NOTES
+
+    # Get agent guidelines checklist
+    agent_guidelines = extract_agent_guidelines_checklist(agent_file)
+
+    # Combine all sections
+    checklist_content = f"{execution_steps}\n{important_notes}\n{agent_guidelines}"
+
+    # Build placeholders dict
+    placeholders = {
+        "agent_file": agent_file,
+        "spec_file_path": spec_file_path,
+        "plan_file_path": plan_file_path,
+        "pr_title_file": pr_title_file,
+        "pr_body_file": pr_body_file,
+    }
+
+    # Resolve placeholders
+    checklist_content = resolve_checklist_placeholders(checklist_content, placeholders)
+
+    # Generate checklist file
+    generate_checklist_file(checklist_file_path, checklist_content)
