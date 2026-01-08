@@ -3661,12 +3661,6 @@ def template_add(
     source_file: Optional[str] = typer.Option(None, "--source-file", help="Path to the template file to add"),
     name: Optional[str] = typer.Option(None, "--name", help="Name for the template"),
     template_type: Optional[str] = typer.Option(None, "--type", "-t", help="Template type: plan or spec"),
-    config_file: str = typer.Option(
-        ".cafe/config.yaml",
-        "--config",
-        "-c",
-        help="Path to configuration file",
-    ),
 ) -> None:
     """Add a new template from a file.
 
@@ -3676,8 +3670,6 @@ def template_add(
         cafe template add  # Interactive mode
     """
     import tempfile
-
-    config_dir = str(Path(config_file).parent) if config_file != ".cafe/config.yaml" else ".cafe"
 
     # Interactive prompting for missing arguments
     try:
@@ -3702,12 +3694,6 @@ def template_add(
                 console.print("[red]Error: Template name cannot be empty[/red]")
                 raise typer.Exit(1)
 
-        # Check if template already exists
-        manager = TemplateManager(template_type=template_type)
-        if manager.template_exists(name):
-            console.print(f"[red]Error: Template '{name}' already exists for type '{template_type}'[/red]")
-            raise typer.Exit(1)
-
         if not source_file:
             source_file = prompt_text(
                 message="Source file path:",
@@ -3723,10 +3709,14 @@ def template_add(
         raise typer.Exit(0)
 
     # Add template
+    manager = TemplateManager(template_type=template_type)
     try:
         manager.add_template(source_file, name)
         console.print(f"[green]✅ {template_type.capitalize()} template '{name}' added successfully[/green]")
     except FileNotFoundError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1)
+    except FileExistsError as e:
         console.print(f"[red]Error: {e}[/red]")
         raise typer.Exit(1)
     except ValueError as e:
@@ -4000,12 +3990,6 @@ def template_edit(
 def template_create(
     name: Optional[str] = typer.Option(None, "--name", help="Template name"),
     template_type: Optional[str] = typer.Option(None, "--type", "-t", help="Template type: plan or spec"),
-    config_file: str = typer.Option(
-        ".cafe/config.yaml",
-        "--config",
-        "-c",
-        help="Path to configuration file",
-    ),
 ) -> None:
     """Create a new template from scratch.
 
@@ -4015,8 +3999,6 @@ def template_create(
         cafe template create  # Interactive mode
     """
     import tempfile
-
-    config_dir = str(Path(config_file).parent) if config_file != ".cafe/config.yaml" else ".cafe"
 
     # Interactive prompting for missing arguments
     try:
@@ -4045,11 +4027,8 @@ def template_create(
         console.print("\n[dim]Cancelled[/dim]")
         raise typer.Exit(0)
 
-    # Check if template already exists
+    # Create TemplateManager
     manager = TemplateManager(template_type=template_type)
-    if manager.template_exists(name):
-        console.print(f"[red]Error: Template '{name}' already exists for type '{template_type}'[/red]")
-        raise typer.Exit(1)
 
     # Create template with editor
     editor = os.environ.get("EDITOR", "vim")
@@ -4091,19 +4070,25 @@ def template_create(
         # Clean up temp file
         os.unlink(temp_path)
 
-    # Save template
-    template_dir = Path(config_dir) / "templates" / template_type
-    template_dir.mkdir(parents=True, exist_ok=True)
-    template_file = template_dir / f"{name}.md"
-    template_file.write_text(content)
-
-    # Show relative path
+    # Save template using TemplateManager
     try:
-        relative_path = template_file.resolve().relative_to(Path.cwd())
-    except ValueError:
-        # If path is not relative to cwd, show absolute path
-        relative_path = template_file.resolve()
-    console.print(f"[green]✓[/green] Template created successfully: {relative_path}")
+        # Write content to a temporary file first
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as tf:
+            tf.write(content)
+            source_path = tf.name
+        
+        try:
+            manager.add_template(source_path, name)
+            console.print(f"[green]✅ {template_type.capitalize()} template '{name}' created successfully[/green]")
+        finally:
+            # Clean up temporary source file
+            os.unlink(source_path)
+    except FileExistsError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1)
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1)
 
 
 
