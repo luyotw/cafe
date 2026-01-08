@@ -99,23 +99,8 @@ class PRPhase(Phase):
         self.phase_dir = self.issue_dir / "pr"
         self.history_dir = self.phase_dir / "history"
         self.phase_name = "pr"
-        # PR phase doesn't use iteration history like conversational phases
-        # Instead, iteration is based on number of pr_XXX.md files (local review mode)
-        self.iteration = self._get_pr_iteration_number()
-
-    def _get_pr_iteration_number(self) -> int:
-        """Get PR iteration number based on pr_XXX.md files.
-
-        Returns:
-            Current iteration number (number of pr_XXX.md files created so far)
-        """
-        pr_dir = self.issue_dir / "pr"
-        if not pr_dir.exists():
-            return 0
-
-        # Count pr_XXX.md files
-        pr_files = list(pr_dir.glob("pr_*.md"))
-        return len(pr_files)
+        # Load iteration counter (same pattern as other phases)
+        self.iteration = self._load_iteration_counter()
 
     def _get_latest_iteration_dir(self, pr_dir: Path) -> Optional[Path]:
         """Get the latest iteration directory in pr folder.
@@ -276,12 +261,14 @@ class PRPhase(Phase):
                     status_code_str = result.data["status_code"]
                     # Convert string to PhaseStatusCode enum
                     status_code = PhaseStatusCode(status_code_str)
-                    # Update iteration count before saving (in case new pr_XXX.md was created)
-                    self.iteration = self._get_pr_iteration_number()
+                    # iteration is already set in _execute_local_review_mode()
                     self._save_progress(status_code)
                 return result
 
             # Otherwise, continue with GitHub PR creation
+            # Increment iteration for this execution
+            self.iteration += 1
+
             # Check gh CLI authentication status
             try:
                 if not self.github_ops.check_gh_auth():
@@ -411,8 +398,6 @@ class PRPhase(Phase):
 
                 # Save progress for GitHub PR mode
                 from cafe.core.status_codes import PhaseStatusCode
-                # GitHub PR update is a single iteration
-                self.iteration = 1
                 self._save_progress(PhaseStatusCode.CONFIRMED)
 
                 return result
@@ -461,8 +446,6 @@ class PRPhase(Phase):
 
             # Save progress for GitHub PR mode
             from cafe.core.status_codes import PhaseStatusCode
-            # GitHub PR creation is a single iteration
-            self.iteration = 1
             self._save_progress(PhaseStatusCode.CONFIRMED)
 
             return result
@@ -802,9 +785,6 @@ class PRPhase(Phase):
         )
 
         full_prompt = prompt + "\n\n" + status_code_prompt
-
-        # Increment iteration counter before agent execution
-        self.iteration += 1
 
         # Set allowed tools for editing
         allowed_tools = ["read", "grep", "glob", "ls", "web_fetch", "web_search"]
