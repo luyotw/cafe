@@ -179,7 +179,47 @@ You can create and manage custom agents using the `cafe agent` command set. Cust
 You can create and manage custom templates with the `cafe template` command set. Custom templates are stored globally in `~/.cafe/templates/` and can be reused across all your CAFE projects. When a custom template has the same name as a system template, the custom template takes precedence. See `cafe template --help` for details.
 
 ### Other Features
-See `cafe --help` to learn more about other features.
+
+#### Checklist Display
+CAFE provides a convenient way to view execution checklists for each workflow phase. These checklists help you understand what steps the AI agents are following during each phase.
+
+**View phase checklists:**
+```bash
+# Show checklist for spec phase (latest iteration)
+cafe show spec checklist
+
+# Show checklist for plan phase
+cafe show plan checklist
+
+# Show checklist for develop phase
+cafe show develop checklist
+
+# Show checklist for review phase
+cafe show review checklist
+
+# Show checklist for pr phase
+cafe show pr checklist
+```
+
+**View checklists from specific iterations:**
+```bash
+# Show checklist from iteration 2
+cafe show spec checklist -i 2
+
+# Show checklist from second-to-last iteration
+cafe show develop checklist -i -2
+
+# Show checklist from last iteration (same as omitting -i)
+cafe show review checklist -i -1
+```
+
+Checklists are stored in `.cafe/issues/<issue_name>/<phase>/iteration_XXX/checklist.md` and contain:
+- Execution steps for the current phase
+- Important notes and reminders
+- Agent-specific guidelines
+- Verification checklists (for certain phases)
+
+See `cafe show --help` and `cafe --help` to learn more about other features.
 
 ## Contributing
 Contributions of any kind are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for more details.
