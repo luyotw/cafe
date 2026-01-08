@@ -171,8 +171,8 @@ cafe --help
 You can create and manage custom agents using the `cafe agent` command set. Custom agents are stored globally in `~/.cafe/agents/` and can be reused across all your CAFE projects. See `cafe agent --help` for more details.
 
 ### Template System
+- **Spec Template**: Defines the format for requirements clarification and specification documents.
 - **Plan Template**: Defines the format for the implementation plan.
-- **Spec Template** (To be implemented): Defines the format for requirements clarification and specification documents.
 - **Review Report Template** (To be implemented): Defines the format for code review reports.
 - **PR Description Template** (To be implemented): Defines the format for PR descriptions.
 
