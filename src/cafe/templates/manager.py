@@ -62,23 +62,39 @@ class TemplateManager:
             Global templates take precedence over system templates with the same name.
         """
         templates = {}  # Use dict to handle name collisions
-        
+
         # First, collect system templates (from package data)
         package_data_dir = Path(__file__).parent.parent / "data" / "templates" / self.template_type
         if package_data_dir.exists():
             for file in package_data_dir.glob("*.md"):
                 template_name = file.stem
                 templates[template_name] = ("system", file)
-        
+
         # Then, collect global templates (override system if name collision)
         global_template_dir = get_global_cafe_dir() / "templates" / self.template_type
         if global_template_dir.exists():
             for file in global_template_dir.glob("*.md"):
                 template_name = file.stem
                 templates[template_name] = ("custom", file)
-        
+
         # Return sorted list of (name, source_type) tuples
         return sorted([(name, source_type) for name, (source_type, _) in templates.items()])
+
+    def list_custom_templates(self) -> List[str]:
+        """List only custom (user-created) templates from global directory.
+
+        Returns:
+            List of template names (without .md extension)
+        """
+        templates = []
+
+        # Collect global templates only
+        global_template_dir = get_global_cafe_dir() / "templates" / self.template_type
+        if global_template_dir.exists():
+            for file in global_template_dir.glob("*.md"):
+                templates.append(file.stem)
+
+        return sorted(templates)
 
     def remove_template(self, template_name: str) -> None:
         """Remove a template from global directory.

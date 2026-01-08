@@ -33,14 +33,16 @@ def temp_global_dir(tmp_path):
 class TestAgentLsCommand:
     """測試 cafe agent ls 指令."""
 
-    def test_agent_ls_with_no_agents(self, runner, temp_global_dir):
-        """測試沒有任何 agent 時 ls 輸出."""
-        # Mock Path.home() 返回 temp 目錄
+    def test_agent_ls_with_no_custom_agents(self, runner, temp_global_dir):
+        """測試沒有自訂 agent 時顯示系統預設 agents."""
+        # Mock Path.home() 返回 temp 目錄 (沒有自訂 agents)
         with patch("cafe.utils.config.Path.home", return_value=temp_global_dir.parent):
             result = runner.invoke(app, ["agent", "ls"])
 
         assert result.exit_code == 0
-        assert "No agents found" in result.stdout
+        # 應該會列出系統預設的 agents，不會顯示 "No agents found"
+        # 至少會有一些系統預設的 agents
+        assert "Available Agents" in result.stdout or "pm" in result.stdout or "developer" in result.stdout or "reviewer" in result.stdout
 
     def test_agent_ls_with_multiple_agents(self, runner, temp_global_dir):
         """測試有多個 agents 時按角色分類列出."""
@@ -74,11 +76,11 @@ class TestAgentLsCommand:
         assert "pm" in result.stdout.lower()
         assert "developer" in result.stdout.lower()
         assert "reviewer" in result.stdout.lower()
-        # 驗證輸出包含 agent 名稱
-        assert "Roger" in result.stdout
-        assert "David" in result.stdout
-        assert "John" in result.stdout
-        assert "Richard" in result.stdout
+        # 驗證輸出包含 agent 名稱，且自訂 agents 有 (custom) 標記
+        assert "Roger (custom)" in result.stdout
+        assert "David (custom)" in result.stdout
+        assert "John (custom)" in result.stdout
+        assert "Richard (custom)" in result.stdout
 
 
 class TestAgentRmCommand:

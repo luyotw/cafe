@@ -42,50 +42,8 @@ class TestPrepareAutoInitialization:
         return tmp_path
 
     @patch("cafe.ui.cli.GitOperations")
-    def test_prepare_initializes_templates_when_not_exists(
-        self, mock_git_class: MagicMock, runner: CliRunner, mock_git_repo: Path
-    ) -> None:
-        """測試當 .cafe/templates 不存在時, 從 ./templates 複製."""
-        mock_git = MagicMock()
-        mock_git_class.return_value = mock_git
-        mock_git.is_valid_branch.return_value = True
-        mock_git.get_current_branch.return_value = "main"
-        mock_git.branch_exists.return_value = False
-        mock_git.has_uncommitted_changes.return_value = False
-
-        # Run prepare command (non-interactive)
-        result = runner.invoke(app, ["prepare", "test-issue", "--no-check"])
-
-        assert result.exit_code == 0
-
-        # Verify .cafe/templates was copied
-        cafe_templates = Path(".cafe/templates")
-        assert cafe_templates.exists()
-        assert (cafe_templates / "plan" / "default.md").exists()
-
-    @patch("cafe.ui.cli.GitOperations")
-    def test_prepare_initializes_agents_when_not_exists(
-        self, mock_git_class: MagicMock, runner: CliRunner, mock_git_repo: Path
-    ) -> None:
-        """測試當 .cafe/agents 不存在時, 從 ./agents 複製."""
-        mock_git = MagicMock()
-        mock_git_class.return_value = mock_git
-        mock_git.is_valid_branch.return_value = True
-        mock_git.get_current_branch.return_value = "main"
-        mock_git.branch_exists.return_value = False
-        mock_git.has_uncommitted_changes.return_value = False
-
-        # Run prepare command (non-interactive)
-        result = runner.invoke(app, ["prepare", "test-issue", "--no-check"])
-
-        assert result.exit_code == 0
-
-        # Verify .cafe/agents was copied with subdirectories
-        cafe_agents = Path(".cafe/agents")
-        assert cafe_agents.exists()
-        assert (cafe_agents / "pm" / "Roger.md").exists()
-        assert (cafe_agents / "developer" / "David.md").exists()
-        assert (cafe_agents / "reviewer" / "Richard.md").exists()
+    # Tests removed: Agents and templates are no longer copied to project .cafe directory
+    # They are now managed globally at ~/.cafe/
 
     @patch("cafe.ui.cli.GitOperations")
     def test_prepare_does_not_overwrite_existing_templates(
