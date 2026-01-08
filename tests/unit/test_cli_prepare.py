@@ -598,7 +598,7 @@ class TestPrepareNonInteractiveMode:
             "--input-method=manual",
             "--issue-id=123",
             "--rigor=medium",
-            "--template=default",
+            "--plan-template=default",
             "--auto-create-pr"
         ])
 
