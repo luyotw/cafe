@@ -327,3 +327,142 @@ class TestShowCommand:
 
             # 驗證返回錯誤
             assert result.exit_code != 0
+
+
+class TestShowCommandChecklist:
+    """Tests for cafe show checklist command."""
+
+    def test_show_checklist_content_type_valid(self, tmp_path):
+        """Test checklist is a valid content type."""
+        from cafe.ui.cli import VALID_CONTENT_TYPES
+        assert "checklist" in VALID_CONTENT_TYPES
+
+    def test_show_checklist_file_mapping(self, tmp_path):
+        """Test checklist maps to checklist.md file."""
+        from cafe.ui.cli import CONTENT_TYPE_FILE_MAP
+        assert CONTENT_TYPE_FILE_MAP["checklist"] == "checklist.md"
+
+    def test_show_spec_checklist(self, tmp_path):
+        """Test showing spec phase checklist."""
+        # Prepare test environment
+        cafe_dir = tmp_path / ".cafe"
+        issues_dir = cafe_dir / "issues" / "test-issue" / "spec"
+        issues_dir.mkdir(parents=True)
+
+        # Create iteration with checklist
+        iteration_dir = issues_dir / "iteration_001"
+        iteration_dir.mkdir()
+        (iteration_dir / "context.json").write_text("{}")
+        checklist_file = iteration_dir / "checklist.md"
+        checklist_file.write_text("""## Execution Steps Checklist
+
+[ ] Read agent file
+[ ] Read spec file
+[ ] Return status code
+""")
+
+        # Mock git operations and config
+        with patch("cafe.ui.cli.GitOperations") as mock_git_cls, \
+             patch("cafe.ui.cli.ConfigManager") as mock_config_cls, \
+             patch("cafe.ui.cli.Path.cwd", return_value=tmp_path):
+
+            mock_git = mock_git_cls.return_value
+            mock_git.get_current_branch.return_value = "test-issue"
+
+            # Execute command
+            result = runner.invoke(app, ["show", "spec", "checklist"])
+
+            # Verify output
+            assert result.exit_code == 0
+            assert "Execution Steps Checklist" in result.stdout
+            assert "Read agent file" in result.stdout
+
+    def test_show_plan_checklist(self, tmp_path):
+        """Test showing plan phase checklist."""
+        # Prepare test environment
+        cafe_dir = tmp_path / ".cafe"
+        issues_dir = cafe_dir / "issues" / "test-issue" / "plan"
+        issues_dir.mkdir(parents=True)
+
+        # Create iteration with checklist
+        iteration_dir = issues_dir / "iteration_001"
+        iteration_dir.mkdir()
+        (iteration_dir / "context.json").write_text("{}")
+        checklist_file = iteration_dir / "checklist.md"
+        checklist_file.write_text("""## Execution Steps Checklist
+
+[ ] Read plan file
+[ ] Write implementation plan
+""")
+
+        # Mock git operations and config
+        with patch("cafe.ui.cli.GitOperations") as mock_git_cls, \
+             patch("cafe.ui.cli.ConfigManager") as mock_config_cls, \
+             patch("cafe.ui.cli.Path.cwd", return_value=tmp_path):
+
+            mock_git = mock_git_cls.return_value
+            mock_git.get_current_branch.return_value = "test-issue"
+
+            # Execute command
+            result = runner.invoke(app, ["show", "plan", "checklist"])
+
+            # Verify output
+            assert result.exit_code == 0
+            assert "Execution Steps Checklist" in result.stdout
+
+    def test_show_checklist_with_iteration_flag(self, tmp_path):
+        """Test showing checklist with specific iteration."""
+        # Prepare test environment
+        cafe_dir = tmp_path / ".cafe"
+        issues_dir = cafe_dir / "issues" / "test-issue" / "spec"
+        issues_dir.mkdir(parents=True)
+
+        # Create two iterations with different checklists
+        for i in [1, 2]:
+            iteration_dir = issues_dir / f"iteration_{i:03d}"
+            iteration_dir.mkdir()
+            (iteration_dir / "context.json").write_text("{}")
+            checklist_file = iteration_dir / "checklist.md"
+            checklist_file.write_text(f"## Checklist for iteration {i}")
+
+        # Mock git operations and config
+        with patch("cafe.ui.cli.GitOperations") as mock_git_cls, \
+             patch("cafe.ui.cli.ConfigManager") as mock_config_cls, \
+             patch("cafe.ui.cli.Path.cwd", return_value=tmp_path):
+
+            mock_git = mock_git_cls.return_value
+            mock_git.get_current_branch.return_value = "test-issue"
+
+            # Execute command with iteration 1
+            result = runner.invoke(app, ["show", "spec", "checklist", "-i", "1"])
+
+            # Verify output
+            assert result.exit_code == 0
+            assert "iteration 1" in result.stdout
+
+    def test_show_checklist_file_not_found(self, tmp_path):
+        """Test error when checklist file doesn't exist."""
+        # Prepare test environment
+        cafe_dir = tmp_path / ".cafe"
+        issues_dir = cafe_dir / "issues" / "test-issue" / "spec"
+        issues_dir.mkdir(parents=True)
+
+        # Create iteration WITHOUT checklist
+        iteration_dir = issues_dir / "iteration_001"
+        iteration_dir.mkdir()
+        (iteration_dir / "context.json").write_text("{}")
+        # No checklist.md file
+
+        # Mock git operations and config
+        with patch("cafe.ui.cli.GitOperations") as mock_git_cls, \
+             patch("cafe.ui.cli.ConfigManager") as mock_config_cls, \
+             patch("cafe.ui.cli.Path.cwd", return_value=tmp_path):
+
+            mock_git = mock_git_cls.return_value
+            mock_git.get_current_branch.return_value = "test-issue"
+
+            # Execute command
+            result = runner.invoke(app, ["show", "spec", "checklist"])
+
+            # Should show error
+            assert result.exit_code != 0
