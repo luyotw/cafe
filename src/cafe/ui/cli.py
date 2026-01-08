@@ -4173,9 +4173,10 @@ def agent_ls() -> None:
     """List all available agents."""
     from pathlib import Path
     from rich.table import Table
+    from cafe.utils.config import get_global_cafe_dir
 
-    # Get agents directory from current working directory (project)
-    agents_dir = Path.cwd() / ".cafe" / "agents"
+    # Get global agents directory
+    agents_dir = get_global_cafe_dir() / "agents"
 
     if not agents_dir.exists():
         console.print("[yellow]No agents found.[/yellow]")
@@ -4229,9 +4230,10 @@ def agent_ls() -> None:
 def agent_rm() -> None:
     """Remove an agent interactively."""
     from pathlib import Path
+    from cafe.utils.config import get_global_cafe_dir
 
-    # Get agents directory from current working directory (project)
-    agents_dir = Path.cwd() / ".cafe" / "agents"
+    # Get global agents directory
+    agents_dir = get_global_cafe_dir() / "agents"
 
     # Prompt for role
     try:
@@ -4292,9 +4294,10 @@ def agent_create() -> None:
     """Create a new agent interactively."""
     from pathlib import Path
     import os
+    from cafe.utils.config import get_global_cafe_dir
 
-    # Get agents directory from current working directory (project)
-    agents_dir = Path.cwd() / ".cafe" / "agents"
+    # Get global agents directory
+    agents_dir = get_global_cafe_dir() / "agents"
 
     # Prompt for role
     try:
@@ -4326,6 +4329,7 @@ def agent_create() -> None:
     agent_file = agents_dir / role / f"{name}.md"
     if agent_file.exists():
         console.print(f"[red]Error: Agent '{role}/{name}.md' already exists[/red]")
+        console.print("[yellow]Use 'cafe agent edit' to modify the existing agent.[/yellow]")
         raise typer.Exit(1)
 
     # Prompt for description
@@ -4393,9 +4397,12 @@ description: {description}
     # Write agent file
     agent_file.write_text(content)
 
-    # Show relative path from current directory
-    relative_path = agent_file.relative_to(Path.cwd())
-    console.print(f"[green]✓[/green] Agent created successfully: {relative_path}")
+    # Show path relative to home directory
+    try:
+        relative_path = agent_file.relative_to(Path.home())
+        console.print(f"[green]✓[/green] Agent created successfully: ~/{relative_path}")
+    except ValueError:
+        console.print(f"[green]✓[/green] Agent created successfully: {agent_file}")
 
 
 @agent_app.command(name="edit")
@@ -4403,9 +4410,10 @@ def agent_edit() -> None:
     """Edit an existing agent."""
     from pathlib import Path
     import os
+    from cafe.utils.config import get_global_cafe_dir
 
-    # Get agents directory from current working directory (project)
-    agents_dir = Path.cwd() / ".cafe" / "agents"
+    # Get global agents directory
+    agents_dir = get_global_cafe_dir() / "agents"
 
     # Prompt for role
     try:
@@ -4443,9 +4451,12 @@ def agent_edit() -> None:
     editor = os.environ.get("EDITOR", "vim")
     try:
         subprocess.run([editor, str(agent_file)], check=True)
-        # Show relative path from current directory
-        relative_path = agent_file.relative_to(Path.cwd())
-        console.print(f"[green]✓[/green] Agent updated successfully: {relative_path}")
+        # Show path relative to home directory
+        try:
+            relative_path = agent_file.relative_to(Path.home())
+            console.print(f"[green]✓[/green] Agent updated successfully: ~/{relative_path}")
+        except ValueError:
+            console.print(f"[green]✓[/green] Agent updated successfully: {agent_file}")
     except subprocess.CalledProcessError:
         console.print("[red]Error: Failed to edit agent[/red]")
         raise typer.Exit(1)
