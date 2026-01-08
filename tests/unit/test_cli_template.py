@@ -84,6 +84,37 @@ class TestTemplateAdd:
         # Should fail
         assert result.exit_code != 0
 
+    def test_template_add_with_duplicate_name(self, tmp_path: Path):
+        """Test template add with duplicate name shows appropriate error"""
+        # Create a source template file
+        source_file = tmp_path / "test_template.md"
+        source_file.write_text("# Test Template\nContent")
+        
+        fake_home = tmp_path / "home"
+        fake_home.mkdir()
+        
+        with patch("cafe.utils.config.Path.home", return_value=fake_home):
+            # First add should succeed
+            result1 = runner.invoke(app, [
+                "template", "add",
+                "--source-file", str(source_file),
+                "--name", "duplicate-test",
+                "--type", "plan"
+            ])
+            assert result1.exit_code == 0
+            
+            # Second add with same name should fail with appropriate message
+            result2 = runner.invoke(app, [
+                "template", "add",
+                "--source-file", str(source_file),
+                "--name", "duplicate-test",
+                "--type", "plan"
+            ])
+            
+            assert result2.exit_code != 0
+            assert "already exists" in result2.output
+            assert "cafe template edit" in result2.output
+
 
 class TestTemplateLs:
     """Test cafe template ls command"""
@@ -266,3 +297,63 @@ class TestTemplateCreate:
                     if written_content:
                         assert template_name in written_content
                         assert template_type in written_content
+
+    def test_template_create_with_duplicate_name(self, tmp_path: Path):
+        """Test template create with duplicate name shows appropriate error"""
+        fake_home = tmp_path / "home"
+        fake_home.mkdir()
+        
+        with patch("cafe.utils.config.Path.home", return_value=fake_home):
+            with patch("cafe.ui.cli.subprocess.run") as mock_run:
+                mock_run.return_value = MagicMock(returncode=0)
+                
+                # Create multiple temp files for all tempfile calls
+                temp_files = []
+                for i in range(4):  # 2 calls x 2 temp files each
+                    tf = tmp_path / f"temp{i}.md"
+                    tf.write_text("# Test content")
+                    temp_files.append(tf)
+                
+                call_count = [0]
+                
+                def mock_temp_file(*args, **kwargs):
+                    idx = call_count[0]
+                    call_count[0] += 1
+                    temp_file = temp_files[idx] if idx < len(temp_files) else temp_files[-1]
+                    
+                    class MockFile:
+                        def __init__(self):
+                            self.name = str(temp_file)
+                        
+                        def write(self, content):
+                            pass
+                        
+                        def __enter__(self):
+                            return self
+                        
+                        def __exit__(self, *args):
+                            pass
+                    
+                    return MockFile()
+                
+                with patch("tempfile.NamedTemporaryFile", side_effect=mock_temp_file):
+                    # First create should succeed
+                    result1 = runner.invoke(app, [
+                        "template", "create",
+                        "--name", "duplicate-create-test",
+                        "--type", "plan"
+                    ])
+                    
+                    assert result1.exit_code == 0, f"First create failed: {result1.output}"
+                    
+                    # Second create with same name should fail with appropriate message
+                    result2 = runner.invoke(app, [
+                        "template", "create",
+                        "--name", "duplicate-create-test",
+                        "--type", "plan"
+                    ])
+                    
+                    assert result2.exit_code != 0
+                    assert "already exists" in result2.output
+                    assert "cafe template edit" in result2.output
+
