@@ -118,15 +118,17 @@ class TestClaudeCLITranslateAllowedTools:
 
     @patch('cafe.agents.cli.claude.get_repo_root')
     def test_translate_tools_with_relative_paths(self, mock_repo_root, claude_config):
-        """測試轉換帶有相對路徑的工具 (轉為 git-ignore 格式)."""
+        """測試轉換帶有相對路徑的工具（保持相對路徑不變，移除 ./ 前綴）."""
         mock_repo_root.return_value = Path("/test/repo")
         cli = ClaudeCLI(claude_config)
-        tools = ["read(.cafe/config.yaml)", "write(src/main.py)"]
+        tools = ["read(.cafe/config.yaml)", "write(src/main.py)", "edit(./test.py)"]
         result = cli.translate_allowed_tools(tools)
 
-        # 相對路徑應該加上 / 前綴 (git-ignore 格式)
-        assert "Read(/.cafe/config.yaml)" in result
-        assert "Write(/src/main.py)" in result
+        # 相對路徑應該保持不變
+        assert "Read(.cafe/config.yaml)" in result
+        assert "Write(src/main.py)" in result
+        # ./ 前綴應該被移除
+        assert "Edit(test.py)" in result
 
     @patch('cafe.agents.cli.claude.get_repo_root')
     @patch('cafe.agents.cli.claude.to_git_ignore_path')

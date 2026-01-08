@@ -169,9 +169,10 @@ class ClaudeCLI(AbstractCLI):
                             )
                             processed_tool = f"{tool_name.capitalize()}({path_or_cmd})"
                     else:
-                        # Relative path, add / prefix (git ignore format)
-                        git_ignore_path = "/" + path_or_cmd
-                        processed_tool = f"{tool_name.capitalize()}({git_ignore_path})"
+                        # Relative path, remove ./ prefix if present
+                        if path_or_cmd.startswith("./"):
+                            path_or_cmd = path_or_cmd[2:]
+                        processed_tool = f"{tool_name.capitalize()}({path_or_cmd})"
             else:
                 # Tool has no path parameter, just capitalize first letter
                 processed_tool = tool.capitalize()

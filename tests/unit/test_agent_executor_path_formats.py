@@ -79,7 +79,7 @@ class TestClaudePathProcessing:
 
     @patch("os.getcwd")
     def test_relative_paths_converted_to_git_ignore_format(self, mock_getcwd):
-        """Claude 應該將普通相對路徑轉換為 git ignore 格式"""
+        """Claude 應該保持相對路徑格式不變，並移除 ./ 前綴"""
         from cafe.agents.cli.claude import ClaudeCLI
 
         # Setup
@@ -92,17 +92,17 @@ class TestClaudePathProcessing:
         allowed_tools = [
             "Write(.cafe/issues/test/spec/spec_001.md)",
             "Edit(.cafe/issues/test/spec/spec_001.md)",
+            "Write(./src/main.py)",
         ]
 
         # Execute translate_allowed_tools
         result = cli.translate_allowed_tools(allowed_tools)
 
-        # 應該被轉換為 git ignore 格式（加上前綴 /）
-        assert "Write(/.cafe/issues/test/spec/spec_001.md)" in result
-        assert "Edit(/.cafe/issues/test/spec/spec_001.md)" in result
-        # 不應該包含普通相對路徑（沒有 /）
-        assert "Write(.cafe" not in str(result)
-        assert "Edit(.cafe" not in str(result)
+        # 應該保持相對路徑不變
+        assert "Write(.cafe/issues/test/spec/spec_001.md)" in result
+        assert "Edit(.cafe/issues/test/spec/spec_001.md)" in result
+        # ./ 前綴應該被移除
+        assert "Write(src/main.py)" in result
 
     @patch("cafe.agents.cli.claude.get_repo_root")
     @patch("cafe.agents.cli.claude.to_git_ignore_path")
