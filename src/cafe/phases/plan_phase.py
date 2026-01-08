@@ -151,15 +151,16 @@ class PlanPhase(Phase):
                         from rich.console import Console
                         console = Console()
 
-                        template_manager = TemplateManager(".cafe")
-                        templates = template_manager.list_templates()
+                        template_manager = TemplateManager()
+                        templates_with_source = template_manager.list_templates()
 
-                        if not templates:
+                        if not templates_with_source:
                             return PhaseResult(
                                 status=PhaseStatus.FAILED,
                                 message="No templates found. Use 'cafe template add <source> <name>' to add templates.",
                             )
 
+                        templates = [name for name, _ in templates_with_source]
                         console.print()
                         console.print("[yellow]First iteration requires a template.[/yellow]")
                         template_paths = {name: template_manager.get_template_path(name) for name in templates}
@@ -359,10 +360,11 @@ class PlanPhase(Phase):
         if self.template_mode == "auto":
             # Auto mode: include template list and ask agent to pick
             from cafe.templates.manager import TemplateManager
-            template_manager = TemplateManager(".cafe")
-            available_templates = template_manager.list_templates()
+            template_manager = TemplateManager()
+            available_templates_with_source = template_manager.list_templates()
 
-            if available_templates:
+            if available_templates_with_source:
+                available_templates = [name for name, _ in available_templates_with_source]
                 template_list_str = ", ".join(f"`{t}`" for t in available_templates)
                 template_instruction = f"""
 **Important: Must pick a most suitable template**
@@ -766,7 +768,7 @@ Please only return one status code (e.g., CAFE_READY_FOR_REVIEW) without any oth
                 else:
                     # Resolve template name to path
                     from cafe.templates.manager import TemplateManager
-                    template_manager = TemplateManager(".cafe")
+                    template_manager = TemplateManager()
                     template_path = template_manager.get_template_path(template_name)
                     if template_path and template_path.exists():
                         self.template_path = str(template_path)

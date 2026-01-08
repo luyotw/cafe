@@ -924,8 +924,9 @@ def prepare(
             spec_config["rigor"] = rigor
 
             # Prompt for spec template
-            spec_template_manager = TemplateManager(".cafe", template_type="spec")
-            spec_templates = spec_template_manager.list_templates()
+            spec_template_manager = TemplateManager(template_type="spec")
+            spec_templates_with_source = spec_template_manager.list_templates()
+            spec_templates = [name for name, _ in spec_templates_with_source]
 
             if spec_templates:
                 console.print()
@@ -938,8 +939,9 @@ def prepare(
                     spec_config["template"] = selected_spec_template
 
             # Prompt for plan template
-            plan_template_manager = TemplateManager(".cafe", template_type="plan")
-            plan_templates = plan_template_manager.list_templates()
+            plan_template_manager = TemplateManager(template_type="plan")
+            plan_templates_with_source = plan_template_manager.list_templates()
+            plan_templates = [name for name, _ in plan_templates_with_source]
 
             if plan_templates:
                 console.print()
@@ -2090,7 +2092,7 @@ def spec(
         # Get template path if not "auto"
         spec_template_path = None
         if spec_template and spec_template != "auto":
-            template_manager = TemplateManager(".cafe", template_type="spec")
+            template_manager = TemplateManager(template_type="spec")
             spec_template_path = template_manager.get_template_path(spec_template)
             if not spec_template_path:
                 console.print(f"[yellow]⚠️  Warning: Template '{spec_template}' not found, using auto mode[/yellow]")
@@ -2435,7 +2437,7 @@ def plan(
         dev_session_id = dev_executor.config.session_id or "(will be created)"
 
         # Handle template selection
-        template_manager = TemplateManager(config_dir)
+        template_manager = TemplateManager()
         selected_template = None
         template_mode = "auto"  # Track if template is 'auto' or manually specified
 
@@ -2483,7 +2485,8 @@ def plan(
                     if is_interactive:
                         from cafe.ui.template_selector import select_template
 
-                        templates = template_manager.list_templates()
+                        templates_with_source = template_manager.list_templates()
+                        templates = [name for name, _ in templates_with_source]
                         template_paths = {name: template_manager.get_template_path(name) for name in templates}
                         selected_template = select_template(templates, template_paths)
 
@@ -3697,7 +3700,7 @@ def template_add(
                 raise typer.Exit(1)
 
         # Check if template already exists
-        manager = TemplateManager(config_dir, template_type=template_type)
+        manager = TemplateManager(template_type=template_type)
         if manager.template_exists(name):
             console.print(f"[red]Error: Template '{name}' already exists for type '{template_type}'[/red]")
             raise typer.Exit(1)
@@ -3765,14 +3768,15 @@ def template_ls(
         raise typer.Exit(1)
 
     # List templates
-    manager = TemplateManager(config_dir, template_type=template_type)
-    templates = manager.list_templates()
-    if not templates:
+    manager = TemplateManager(template_type=template_type)
+    templates_with_source = manager.list_templates()
+    if not templates_with_source:
         console.print(f"[dim]No {template_type} templates found[/dim]")
     else:
         console.print(f"[bold]{template_type.capitalize()} templates:[/bold]")
-        for tmpl in templates:
-            console.print(f"  • {tmpl}")
+        for name, source_type in templates_with_source:
+            source_label = " (custom)" if source_type == "custom" else ""
+            console.print(f"  • {name}{source_label}")
 
 
 @template_app.command(name="rm")
@@ -3810,14 +3814,15 @@ def template_rm(
             console.print(f"[red]Error: Invalid template type '{template_type}'. Must be 'plan' or 'spec'.[/red]")
             raise typer.Exit(1)
 
-        manager = TemplateManager(config_dir, template_type=template_type)
+        manager = TemplateManager(template_type=template_type)
 
         if not name:
-            templates = manager.list_templates()
-            if not templates:
+            templates_with_source = manager.list_templates()
+            if not templates_with_source:
                 console.print(f"[red]No {template_type} templates found[/red]")
                 raise typer.Exit(1)
 
+            templates = [name for name, _ in templates_with_source]
             name = prompt_list(
                 message="Select template to delete:",
                 choices=templates,
@@ -3884,14 +3889,15 @@ def template_cat(
             console.print(f"[red]Error: Invalid template type '{template_type}'. Must be 'plan' or 'spec'.[/red]")
             raise typer.Exit(1)
 
-        manager = TemplateManager(config_dir, template_type=template_type)
+        manager = TemplateManager(template_type=template_type)
 
         if not name:
-            templates = manager.list_templates()
-            if not templates:
+            templates_with_source = manager.list_templates()
+            if not templates_with_source:
                 console.print(f"[red]No {template_type} templates found[/red]")
                 raise typer.Exit(1)
 
+            templates = [name for name, _ in templates_with_source]
             name = prompt_list(
                 message="Select template to view:",
                 choices=templates,
@@ -3949,14 +3955,15 @@ def template_edit(
             console.print(f"[red]Error: Invalid template type '{template_type}'. Must be 'plan' or 'spec'.[/red]")
             raise typer.Exit(1)
 
-        manager = TemplateManager(config_dir, template_type=template_type)
+        manager = TemplateManager(template_type=template_type)
 
         if not name:
-            templates = manager.list_templates()
-            if not templates:
+            templates_with_source = manager.list_templates()
+            if not templates_with_source:
                 console.print(f"[red]No {template_type} templates found[/red]")
                 raise typer.Exit(1)
 
+            templates = [name for name, _ in templates_with_source]
             name = prompt_list(
                 message="Select template to edit:",
                 choices=templates,
@@ -4036,7 +4043,7 @@ def template_create(
         raise typer.Exit(0)
 
     # Check if template already exists
-    manager = TemplateManager(config_dir, template_type=template_type)
+    manager = TemplateManager(template_type=template_type)
     if manager.template_exists(name):
         console.print(f"[red]Error: Template '{name}' already exists for type '{template_type}'[/red]")
         raise typer.Exit(1)
