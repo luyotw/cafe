@@ -44,6 +44,14 @@ class TemplateManager:
         global_template_dir = get_global_cafe_dir() / "templates" / self.template_type
         global_template_dir.mkdir(parents=True, exist_ok=True)
         dest = global_template_dir / template_name
+        
+        # Check if template already exists
+        if dest.exists():
+            raise FileExistsError(
+                f"Template '{template_name}' already exists in global directory. "
+                f"Use 'cafe template edit' to modify it."
+            )
+        
         shutil.copy2(source, dest)
 
     def list_templates(self) -> List[Tuple[str, str]]:

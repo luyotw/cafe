@@ -172,3 +172,29 @@ class TestTemplateManagerGlobalSupport:
                     assert "simple" in template_names
                     assert "detailed" in template_names
                     assert "custom-spec" in template_names
+
+    def test_add_template_rejects_duplicate_names(self) -> None:
+        """測試 add_template() 拒絕同名 templates."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fake_home = Path(tmpdir)
+            global_template_dir = fake_home / ".cafe" / "templates" / "plan"
+            global_template_dir.mkdir(parents=True)
+            
+            # 創建已存在的 template
+            existing_template = global_template_dir / "existing.md"
+            existing_template.write_text("Existing template")
+            
+            # 創建要添加的新 template 源文件
+            source_file = Path(tmpdir) / "new.md"
+            source_file.write_text("New template content")
+            
+            with patch("cafe.utils.config.Path.home", return_value=fake_home):
+                manager = TemplateManager(template_type="plan")
+                
+                # 嘗試添加同名 template 應該失敗
+                with pytest.raises(FileExistsError) as exc_info:
+                    manager.add_template(str(source_file), "existing")
+                
+                assert "already exists" in str(exc_info.value)
+                assert "cafe template edit" in str(exc_info.value)
+
