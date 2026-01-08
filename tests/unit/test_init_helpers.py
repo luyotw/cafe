@@ -152,23 +152,19 @@ class TestListAvailableAgents:
     def test_list_available_agents_with_valid_files(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """測試列出有效 agent 檔案"""
-        # 建立測試目錄結構
-        agents_dir = tmp_path / ".cafe" / "agents"
-        pm_dir = agents_dir / "pm"
-        pm_dir.mkdir(parents=True)
+        """測試列出有效 agent 檔案（包含系統和全域）"""
+        from cafe.utils.config import get_global_cafe_dir
+        
+        # Mock get_global_cafe_dir to return test directory
+        global_cafe_dir = tmp_path / "global_cafe"
+        monkeypatch.setattr("cafe.utils.config.get_global_cafe_dir", lambda: global_cafe_dir)
+        
+        # 建立全域測試目錄結構
+        global_pm_dir = global_cafe_dir / "agents" / "pm"
+        global_pm_dir.mkdir(parents=True)
 
         # 建立測試檔案
-        roger = pm_dir / "Roger.md"
-        roger.write_text(
-            """---
-name: Roger
-description: 經驗豐富 PM
----
-"""
-        )
-
-        alice = pm_dir / "Alice.md"
+        alice = global_pm_dir / "Alice.md"
         alice.write_text(
             """---
 name: Alice
@@ -177,60 +173,76 @@ description: 注重細節 PM
 """
         )
 
-        # 使用 monkeypatch 改變當前目錄
-        monkeypatch.chdir(tmp_path)
-
         agents = list_available_agents("pm")
 
-        assert len(agents) == 2
+        # Should have system agents (Roger, 范曉燁) + global agent (Alice)
+        assert len(agents) >= 3
         names = [agent[0] for agent in agents]
-        assert "Roger" in names
-        assert "Alice" in names
+        assert "Roger" in names  # system default
+        assert "Alice" in names  # custom
+        
+        # Verify source types
+        alice_agent = [a for a in agents if a[0] == "Alice"][0]
+        assert alice_agent[3] == "custom"
 
     def test_list_available_agents_with_empty_directory(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """測試空 agent 目錄"""
-        agents_dir = tmp_path / ".cafe" / "agents"
-        pm_dir = agents_dir / "pm"
-        pm_dir.mkdir(parents=True)
-
-        # 使用 monkeypatch 改變當前目錄
-        monkeypatch.chdir(tmp_path)
+        """測試空全域 agent 目錄（但仍有系統預設 agents）"""
+        from cafe.utils.config import get_global_cafe_dir
+        
+        # Mock get_global_cafe_dir to return empty test directory
+        global_cafe_dir = tmp_path / "global_cafe"
+        monkeypatch.setattr("cafe.utils.config.get_global_cafe_dir", lambda: global_cafe_dir)
+        
+        # 建立空的全域目錄
+        global_pm_dir = global_cafe_dir / "agents" / "pm"
+        global_pm_dir.mkdir(parents=True)
 
         agents = list_available_agents("pm")
 
-        assert len(agents) == 0
+        # Should still have system default agents (Roger, 范曉燁)
+        assert len(agents) >= 2
+        names = [agent[0] for agent in agents]
+        assert "Roger" in names
 
     def test_list_available_agents_ignores_non_md_files(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """測試忽略非 .md 檔案"""
-        agents_dir = tmp_path / ".cafe" / "agents"
-        pm_dir = agents_dir / "pm"
-        pm_dir.mkdir(parents=True)
+        from cafe.utils.config import get_global_cafe_dir
+        
+        # Mock get_global_cafe_dir to return test directory
+        global_cafe_dir = tmp_path / "global_cafe"
+        monkeypatch.setattr("cafe.utils.config.get_global_cafe_dir", lambda: global_cafe_dir)
+        
+        # 建立全域測試目錄結構
+        global_pm_dir = global_cafe_dir / "agents" / "pm"
+        global_pm_dir.mkdir(parents=True)
 
         # 建立 .md 檔案
-        roger = pm_dir / "Roger.md"
-        roger.write_text(
+        alice = global_pm_dir / "Alice.md"
+        alice.write_text(
             """---
-name: Roger
-description: PM
+name: Alice
+description: 注重細節 PM
 ---
 """
         )
 
-        # 建立非 .md 檔案
-        (pm_dir / "README.txt").write_text("readme")
-        (pm_dir / "config.yaml").write_text("config")
-
-        # 使用 monkeypatch 改變當前目錄
-        monkeypatch.chdir(tmp_path)
+        # 建立非 .md 檔案（應該被忽略）
+        readme = global_pm_dir / "README.txt"
+        readme.write_text("This is a readme")
 
         agents = list_available_agents("pm")
 
-        assert len(agents) == 1
-        assert agents[0][0] == "Roger"
+        # Should have system agents + Alice (但不包含 README.txt)
+        names = [agent[0] for agent in agents]
+        assert "Alice" in names
+        assert "Roger" in names
+        # Verify only .md files are included
+        for agent in agents:
+            assert agent[2].suffix == ".md"
 
 
 class TestCopyDataDirectory:
