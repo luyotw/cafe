@@ -1429,8 +1429,14 @@ class TestAllowedDirectoriesParameter:
         mock_process.stderr.read.return_value = ""
         mock_process.wait.return_value = 0
 
+        def mock_select(rlist, wlist, xlist, timeout=None):
+            # Return stdout as ready to prevent hanging
+            if rlist and hasattr(rlist[0], 'readline'):
+                return (rlist, [], [])
+            return ([], [], [])
+
         with patch("subprocess.Popen", return_value=mock_process) as mock_popen, \
-             patch("select.select", return_value=([], [], [])):
+             patch("select.select", side_effect=mock_select):
             agent_response = executor.execute(
                 "Test prompt",
                 allowed_directories=[".cafe", "tests"]

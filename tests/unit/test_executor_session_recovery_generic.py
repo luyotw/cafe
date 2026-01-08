@@ -92,13 +92,22 @@ class TestGenericSessionRecovery:
 
             return mock_proc
 
+        def mock_select(rlist, wlist, xlist, timeout=None):
+            # Return the stdout as ready on first call, empty afterwards
+            # This prevents hanging in the idle timeout logic
+            if rlist and hasattr(rlist[0], 'readline'):
+                return (rlist, [], [])
+            return ([], [], [])
+
         # Mock copilot session directory
+        mock_file = MagicMock()
+        mock_file.name = "new-copilot-session.jsonl"
+        mock_file.is_file.return_value = True
+
         with patch("subprocess.Popen", side_effect=mock_popen):
-            with patch("select.select", return_value=([], [], [])):
+            with patch("select.select", side_effect=mock_select):
                 with patch.object(Path, "exists", return_value=True):
-                    with patch.object(Path, "iterdir", return_value=[
-                        MagicMock(name="new-copilot-session.jsonl", is_file=lambda: True)
-                    ]):
+                    with patch.object(Path, "iterdir", return_value=[mock_file]):
                         response = executor.execute("Test prompt")
 
         # 驗證成功恢復
