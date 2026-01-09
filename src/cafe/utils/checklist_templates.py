@@ -126,7 +126,7 @@ REVIEW_TASKS_CHECKLIST = """## Review Tasks Checklist (Priority Order)
 [ ] Check for sensitive info in committed files
 
 **2. [Important] Check Commit Message Style Consistency**
-[ ] Get commits: `git log {base_branch}..HEAD`
+[ ] Get commits for the **latest version**: `git log {base_branch}..HEAD --pretty=format:"%H%n%B"`
 [ ] Verify each commit message follows project style
 [ ] Check commit message language consistency
 
