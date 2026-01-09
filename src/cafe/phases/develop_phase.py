@@ -1139,15 +1139,17 @@ If NO (does not meet criteria): Continue with development work and return approp
                         # Merge original response and confirmation response
                         merged_response = response + "\n\n" + confirmation_response
 
-                        # Get original streaming_log from phase_data (if it was passed from _execute_agent_iteration)
+                        # Get original streaming_log and prompt from context.json
                         # Since we're in the middle of handling agent response, we need to get it from context
                         iteration_dir = self._get_iteration_dir(self.iteration)
                         context_file = iteration_dir / "context.json"
                         original_streaming_log = []
+                        original_prompt = ""
                         if context_file.exists():
                             with open(context_file, "r", encoding="utf-8") as f:
                                 context_data = json.load(f)
                                 original_streaming_log = context_data.get("streaming_log", [])
+                                original_prompt = context_data.get("prompt", "")
 
                         # Merge streaming logs
                         merged_streaming_log = original_streaming_log + confirmation_streaming_log
@@ -1163,7 +1165,7 @@ If NO (does not meet criteria): Continue with development work and return approp
                                     "clarification_confirmed": True,
                                     "streaming_log": merged_streaming_log,
                                 },
-                                prompt=prompt,
+                                prompt=original_prompt,
                                 agent_cli=None,
                                 agent_session_id=None,
                                 allowed_tools=allowed_tools,
@@ -1211,7 +1213,7 @@ If NO (does not meet criteria): Continue with development work and return approp
                                     "clarification_confirmed": False,
                                     "streaming_log": merged_streaming_log,
                                 },
-                                prompt=prompt,
+                                prompt=original_prompt,
                                 agent_cli=None,
                                 agent_session_id=None,
                                 allowed_tools=allowed_tools,
