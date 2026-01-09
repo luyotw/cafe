@@ -4671,7 +4671,7 @@ def chat_with_agent(
         elif agent_cli == "copilot":
             cli_command.extend(["--resume", session_id])
         elif agent_cli == "gemini":
-            cli_command.extend(["--session-id", session_id])
+            cli_command.extend(["--resume", session_id])
         elif agent_cli == "cursor-agent":
             cli_command.extend(["--session", session_id])
 
