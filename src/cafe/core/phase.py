@@ -278,6 +278,17 @@ class Phase(ABC):
 
         return Path(self.phase_dir) / f"iteration_{iteration:03d}"
 
+    def _generate_checklist_file(self) -> Optional[Path]:
+        """Generate checklist file for current iteration (optional helper for subclasses).
+
+        This is a helper method that subclasses can override to generate
+        phase-specific checklists. Default implementation does nothing.
+
+        Returns:
+            Path to generated checklist file, or None if not implemented
+        """
+        return None
+
     def _append_iteration_index(self, iteration_data: dict) -> None:
         """Append one iteration record to iterations.jsonl.
 
