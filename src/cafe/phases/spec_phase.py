@@ -354,8 +354,6 @@ class SpecPhase(Phase):
             # Prepare allowed tools with write/edit permission for spec file
             # Convert to relative path (without / prefix) - plain relative path
             # Use path relative to current working directory (supports worktree)
-            from cafe.utils.git_utils import to_cwd_relative_path
-
             try:
                 spec_file_pattern = to_cwd_relative_path(self.spec_file)
             except ValueError:
@@ -978,7 +976,6 @@ Read {current_spec_file}  for initial requirements content.{template_instruction
         # --- 3. Get checklist file path ---
         iteration_dir = self._get_iteration_dir(self.iteration)
         checklist_file = iteration_dir / "checklist.md"
-        from cafe.utils.git_utils import to_cwd_relative_path
         try:
             checklist_path = to_cwd_relative_path(checklist_file)
         except ValueError:
@@ -1056,7 +1053,6 @@ Response: "CAFE_READY_FOR_REVIEW" (nothing else)
         # Get checklist file path
         iteration_dir = self._get_iteration_dir(self.iteration)
         checklist_file = iteration_dir / "checklist.md"
-        from cafe.utils.git_utils import to_cwd_relative_path
         try:
             checklist_path = to_cwd_relative_path(checklist_file)
         except ValueError:
