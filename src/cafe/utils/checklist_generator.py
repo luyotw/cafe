@@ -207,8 +207,7 @@ def generate_pr_checklist(
     agent_name: str,
     spec_file_path: str,
     plan_file_path: str,
-    pr_title_file: str,
-    pr_body_file: str,
+    pr_file: str,
     checklist_file_path: Path,
 ) -> None:
     """Generate checklist file for PR phase.
@@ -217,8 +216,7 @@ def generate_pr_checklist(
         agent_name: Developer agent name
         spec_file_path: Path to spec file
         plan_file_path: Path to plan file
-        pr_title_file: Path to PR title file
-        pr_body_file: Path to PR body file
+        pr_file: Path to PR output file (output.md)
         checklist_file_path: Path where checklist file should be created
     """
     # Get agent file path
@@ -239,8 +237,7 @@ def generate_pr_checklist(
         "agent_file": agent_file,
         "spec_file_path": spec_file_path,
         "plan_file_path": plan_file_path,
-        "pr_title_file": pr_title_file,
-        "pr_body_file": pr_body_file,
+        "pr_file": pr_file,
     }
 
     # Resolve placeholders

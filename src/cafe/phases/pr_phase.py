@@ -716,14 +716,11 @@ class PRPhase(Phase):
 
         checklist_path = iteration_dir / "checklist.md"
         output_file = iteration_dir / "output.md"
-        # Note: generate_pr_checklist still expects pr_title_file and pr_body_file params,
-        # but we pass output.md for both since that's where the content actually is
         generate_pr_checklist(
             agent_name=self.dev_agent,
             spec_file_path=self.spec_file,
             plan_file_path=str(plan_file),
-            pr_title_file=str(output_file),
-            pr_body_file=str(output_file),
+            pr_file=str(output_file),
             checklist_file_path=checklist_path,
         )
 
@@ -963,7 +960,7 @@ Please return only one status code (example: CAFE_CONFIRMED), with no other cont
         iteration_dir = self._get_iteration_dir(iteration)
         checklist_path = iteration_dir / "checklist.md"
 
-        # PR phase now uses output.md instead of separate pr_title.md and pr_body.md
+        # PR phase uses output.md for PR content
         output_file = str(iteration_dir / "output.md")
 
         # Get plan file path
@@ -972,14 +969,11 @@ Please return only one status code (example: CAFE_CONFIRMED), with no other cont
         plan_file = self._get_versioned_file_path("plan", None, plan_dir)
 
         # Generate checklist using the same rules as normal execution
-        # Note: generate_pr_checklist still expects pr_title_file and pr_body_file params,
-        # but we pass output.md for both since that's where the content actually is
         generate_pr_checklist(
             agent_name=self.dev_agent,
             spec_file_path=self.spec_file,
             plan_file_path=str(plan_file),
-            pr_title_file=output_file,
-            pr_body_file=output_file,
+            pr_file=output_file,
             checklist_file_path=checklist_path,
         )
 
