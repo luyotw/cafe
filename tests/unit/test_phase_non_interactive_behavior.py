@@ -49,11 +49,28 @@ def setup_plan_phase(tmp_path, monkeypatch):
     plan_file = plan_dir / "plan.md"
     plan_file.write_text("## 開發指南\n\n開發指南內容.\n\n## 實作計畫\n\nTODO")
 
-    # Create checklist.md with all items completed
+    # Create checklist.md with all items completed (matching Plan phase template)
     checklist_dir = plan_dir / "iteration_001"
     checklist_dir.mkdir(parents=True, exist_ok=True)
     checklist_file = checklist_dir / "checklist.md"
-    checklist_file.write_text("## Execution Steps Checklist\n\n[x] Step 1\n[x] Step 2\n")
+    checklist_file.write_text("""## Execution Steps Checklist
+
+[x] Read agent file to understand your role and native language
+[x] Read the development guide
+[x] Read the requirements document
+[x] Plan implementation steps
+[x] Append plan after Development Guide section
+[x] Return appropriate status code
+
+## Important Notes Checklist
+
+[x] Your job is PLANNING, not implementation
+[x] Write plans and steps only, no actual code
+[x] Keep Development Guide section unchanged
+[x] Append implementation plan AFTER development guide
+[x] Write content in your native language
+[x] Follow template format strictly
+""")
 
     # 創建 template
     template_dir = tmp_path / ".cafe" / "templates" / "plan"
@@ -168,18 +185,30 @@ class TestNonInteractiveModeCompleteImmediately:
         agent_manager.register_agent(AgentConfig(name="David", cli=AgentCLI.CLAUDE))
         permission_handler = PermissionHandler()
 
-        # Act
-        phase = PlanPhase(
-            agent_manager=agent_manager,
-            permission_handler=permission_handler,
-            git_ops=mock_git_ops,
-            spec_file=setup["spec_file"],
-            workflow_mode=WorkflowMode.LOCAL,
-            interactive=False,
-            template_path=setup["template_file"],
-        )
+        # Mock checklist validation to always return success
+        from unittest.mock import patch
+        from cafe.utils.checklist_validator import ChecklistValidationResult
 
-        result = phase.execute()
+        def mock_validate_checklist(checklist_path):
+            return ChecklistValidationResult(
+                is_complete=True,
+                unchecked_count=0,
+                checklist_path=checklist_path
+            )
+
+        # Act
+        with patch('cafe.utils.checklist_validator.validate_checklist', side_effect=mock_validate_checklist):
+            phase = PlanPhase(
+                agent_manager=agent_manager,
+                permission_handler=permission_handler,
+                git_ops=mock_git_ops,
+                spec_file=setup["spec_file"],
+                workflow_mode=WorkflowMode.LOCAL,
+                interactive=False,
+                template_path=setup["template_file"],
+            )
+
+            result = phase.execute()
 
         # Assert - 應該立即完成
         assert result.status == PhaseStatus.COMPLETED

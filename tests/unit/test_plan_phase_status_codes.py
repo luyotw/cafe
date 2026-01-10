@@ -10,6 +10,7 @@ from cafe.core.permission import PermissionHandler
 from cafe.core.types import PhaseStatus, WorkflowMode, TokenUsage
 from cafe.core.git import GitOperations
 from cafe.phases.plan_phase import PlanPhase
+from cafe.utils.checklist_validator import ChecklistValidationResult
 
 
 
@@ -60,18 +61,23 @@ class TestPlanPhaseWithStatusCodes:
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
-        phase = PlanPhase(
-            agent_manager=agent_manager,
-            permission_handler=permission_handler,
-                git_ops=mock_git_ops,
-            spec_file=str(requirements_file),
-            workflow_mode=WorkflowMode.LOCAL,
-            interactive=False,
-            user_input="confirm",  # Simulate user confirming the plan
-            template_path=create_template_file(tmp_path),
-        )
+        # Mock checklist validation
+        def mock_validate_checklist(checklist_path):
+            return ChecklistValidationResult(is_complete=True, unchecked_count=0, checklist_path=checklist_path)
 
-        with patch('builtins.print'):
+        with patch('cafe.utils.checklist_validator.validate_checklist', side_effect=mock_validate_checklist), \
+             patch('builtins.print'):
+            phase = PlanPhase(
+                agent_manager=agent_manager,
+                permission_handler=permission_handler,
+                    git_ops=mock_git_ops,
+                spec_file=str(requirements_file),
+                workflow_mode=WorkflowMode.LOCAL,
+                interactive=False,
+                user_input="confirm",  # Simulate user confirming the plan
+                template_path=create_template_file(tmp_path),
+            )
+
             result = phase.execute()
 
         assert result.status == PhaseStatus.COMPLETED
@@ -156,18 +162,23 @@ class TestPlanPhaseWithStatusCodes:
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
-        phase = PlanPhase(
-            agent_manager=agent_manager,
-            permission_handler=permission_handler,
-                git_ops=mock_git_ops,
-            spec_file=str(requirements_file),
-            workflow_mode=WorkflowMode.LOCAL,
-            interactive=False,
-            user_input="confirm",  # Simulate user confirming the plan
-            template_path=create_template_file(tmp_path),
-        )
+        # Mock checklist validation
+        def mock_validate_checklist(checklist_path):
+            return ChecklistValidationResult(is_complete=True, unchecked_count=0, checklist_path=checklist_path)
 
-        with patch('builtins.print'):
+        with patch('cafe.utils.checklist_validator.validate_checklist', side_effect=mock_validate_checklist), \
+             patch('builtins.print'):
+            phase = PlanPhase(
+                agent_manager=agent_manager,
+                permission_handler=permission_handler,
+                    git_ops=mock_git_ops,
+                spec_file=str(requirements_file),
+                workflow_mode=WorkflowMode.LOCAL,
+                interactive=False,
+                user_input="confirm",  # Simulate user confirming the plan
+                template_path=create_template_file(tmp_path),
+            )
+
             result = phase.execute()
 
         assert result.status == PhaseStatus.COMPLETED
@@ -255,18 +266,23 @@ class TestPlanPhaseWithStatusCodes:
 
         permission_handler = MagicMock(spec=PermissionHandler)
 
-        phase = PlanPhase(
-            agent_manager=agent_manager,
-            permission_handler=permission_handler,
-                git_ops=mock_git_ops,
-            spec_file=str(requirements_file),
-            workflow_mode=WorkflowMode.LOCAL,
-            interactive=False,
-            user_input="confirm",  # Simulate user confirming the plan
-            template_path=create_template_file(tmp_path),
-        )
+        # Mock checklist validation
+        def mock_validate_checklist(checklist_path):
+            return ChecklistValidationResult(is_complete=True, unchecked_count=0, checklist_path=checklist_path)
 
-        with patch('builtins.print'):
+        with patch('cafe.utils.checklist_validator.validate_checklist', side_effect=mock_validate_checklist), \
+             patch('builtins.print'):
+            phase = PlanPhase(
+                agent_manager=agent_manager,
+                permission_handler=permission_handler,
+                    git_ops=mock_git_ops,
+                spec_file=str(requirements_file),
+                workflow_mode=WorkflowMode.LOCAL,
+                interactive=False,
+                user_input="confirm",  # Simulate user confirming the plan
+                template_path=create_template_file(tmp_path),
+            )
+
             result = phase.execute()
 
         assert result.status == PhaseStatus.COMPLETED

@@ -166,8 +166,7 @@ class TestGeneratePRChecklist:
             agent_name="David",
             spec_file_path=".cafe/issues/test/spec/iteration_001/output.md",
             plan_file_path=".cafe/issues/test/plan/iteration_001/output.md",
-            pr_title_file=".cafe/issues/test/pr/iteration_001/title.txt",
-            pr_body_file=".cafe/issues/test/pr/iteration_001/body.md",
+            pr_file=".cafe/issues/test/pr/iteration_001/output.md",
             checklist_file_path=checklist_path,
         )
 
@@ -175,8 +174,7 @@ class TestGeneratePRChecklist:
         content = checklist_path.read_text()
         assert "## Execution Steps Checklist" in content
         assert "## Important Notes Checklist" in content
-        assert ".cafe/issues/test/pr/iteration_001/title.txt" in content
-        assert ".cafe/issues/test/pr/iteration_001/body.md" in content
+        assert ".cafe/issues/test/pr/iteration_001/output.md" in content
 
 
 class TestChecklistFileCreation:
