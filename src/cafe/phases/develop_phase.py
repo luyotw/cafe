@@ -798,46 +798,22 @@ Steps for requesting clarification:
             else:
                 review_source_text = " and ".join(review_sources)
 
-            execution_steps = f"""
-## Execution Steps Checklist
-
-[ ] Read {agent_file} to understand your role and native language
-{f"[ ] Read questions in {develop_file}" if develop_file and develop_file.exists() and not self._is_clarification_answered(develop_file) else ""}
-[ ] Read {review_source_text} and understand all issues
-[ ] List all issues that need to be addressed from review feedback
-[ ] Address issues one by one based on review feedback.
-[ ] Write code immediately without any means of evasion.
-[ ] Verify each issue from review feedback has been resolved
-[ ] Follow existing commit message style, commit multiple times if needed
-[ ] Do NOT modify commits from other branches
-[ ] Refer to {self.spec_file} and {self.plan_file} if needed
-[ ] ONLY after completing ALL corrections, verify and return status code
-"""
-
-            # Build verification checklist
-            verification_items = ["[ ] All review feedback issues are addressed"]
-            if has_pr_comments:
-                verification_items.append("[ ] All PR comments are resolved (no unresolved comments remain)")
-            verification_items.extend([
-                "[ ] All tests pass",
-                "[ ] All commits are made",
-                "[ ] No pending work remains"
-            ])
-            verification_checklist = "\n".join(verification_items)
-
-            important_notes = f"""
-## Important Notes Checklist
-
-[ ] ✅ Maximize code reuse - look for existing patterns and utilities
-[ ] ✅ Strictly maintain consistency with {base_branch}'s commit message format
-[ ] ✅ Commit message language and structure must match existing commits
-{f"[ ] ⚠️ Strictly prohibit modifying files outside worktree ({worktree_path})" if worktree_path else ""}
-"""
+            # Get checklist file path
+            iteration_dir = self._get_iteration_dir(self.iteration)
+            checklist_file = iteration_dir / "checklist.md"
+            from cafe.utils.git_utils import to_cwd_relative_path
+            try:
+                checklist_path = to_cwd_relative_path(checklist_file)
+            except ValueError:
+                checklist_path = str(checklist_file.resolve())
 
             base_prompt = f"""# Develop Phase (Correction Mode)
 
 **Your Role:** Developer
 Read {agent_file} to understand your complete role definition and responsibilities.
+
+**Task Checklist:**
+Read {checklist_path} for detailed execution steps and requirements.
 
 **Task:** Make corrections based on Code Review feedback.
 
@@ -846,69 +822,33 @@ Read {agent_file} to understand your complete role definition and responsibiliti
 - Requirements Specification: {self.spec_file}
 - Implementation Plan: {self.plan_file}{develop_file_section}
 {pr_comments_section}{user_input_section}
-"""
-
-            return f"""{base_prompt}
-
-{execution_steps}
-
-{important_notes}
-
-{agent_guidelines_checklist}
-
-## Verification Checklist (Before Returning Status Code)
-
-{verification_checklist}
 
 {status_code_prompt}
 
 {clarification_note}
 """
 
-        # No review feedback - normal development mode
-        from cafe.utils.prompt_utils import extract_agent_guidelines_checklist
-        agent_guidelines_checklist = extract_agent_guidelines_checklist(agent_file)
+            return base_prompt
 
+        # No review feedback - normal development mode
         user_input_section = f"\n\n**Additional user notes:**\n{user_input}\n" if user_input else ""
 
-        execution_steps = f"""
-## Execution Steps Checklist
-
-[ ] Read {agent_file} to understand your role and native language
-{f"[ ] Read questions in {develop_file}" if develop_file and develop_file.exists() and not self._is_clarification_answered(develop_file) else ""}
-[ ] Carefully read {self.spec_file} and {self.plan_file}
-[ ] Execute development tasks in strict order according to the plan
-[ ] Write code immediately without any means of evasion.
-[ ] Mark each completed task as checked in {self.plan_file} (change - [ ] to - [x])
-[ ] Follow existing commit message style, commit multiple times if needed
-[ ] Do NOT modify commits from other branches
-[ ] ONLY after completing ALL tasks in the plan, verify and return status code
-"""
-
-        # Build verification checklist for normal mode
-        verification_items = [f"[ ] All tasks in {self.plan_file} are marked [x]"]
-        if has_pr_comments:
-            verification_items.append("[ ] All PR comments are resolved (no unresolved comments remain)")
-        verification_items.extend([
-            "[ ] All tests pass",
-            "[ ] All commits are made",
-            "[ ] No pending work remains"
-        ])
-        verification_checklist = "\n".join(verification_items)
-
-        important_notes = f"""
-## Important Notes Checklist
-
-[ ] ✅ Maximize code reuse - look for existing patterns and utilities
-[ ] ✅ Strictly maintain consistency with {base_branch}'s commit message format
-[ ] ✅ Commit message language and structure must match existing commits
-{f"[ ] ⚠️ Strictly prohibit modifying files outside worktree ({worktree_path})" if worktree_path else ""}
-"""
+        # Get checklist file path
+        iteration_dir = self._get_iteration_dir(self.iteration)
+        checklist_file = iteration_dir / "checklist.md"
+        from cafe.utils.git_utils import to_cwd_relative_path
+        try:
+            checklist_path = to_cwd_relative_path(checklist_file)
+        except ValueError:
+            checklist_path = str(checklist_file.resolve())
 
         base_prompt = f"""# Develop Phase (Normal Mode)
 
 **Your Role:** Developer
 Read {agent_file} to understand your complete role definition and responsibilities.
+
+**Task Checklist:**
+Read {checklist_path} for detailed execution steps and requirements.
 
 **Task:** Execute development work according to the implementation plan.
 
@@ -916,24 +856,13 @@ Read {agent_file} to understand your complete role definition and responsibiliti
 - Requirements Specification: {self.spec_file}
 - Implementation Plan: {self.plan_file}{develop_file_section}
 {pr_comments_section}{user_input_section}
-"""
-
-        return f"""{base_prompt}
-
-{execution_steps}
-
-{important_notes}
-
-{agent_guidelines_checklist}
-
-## Verification Checklist (Before Returning Status Code)
-
-{verification_checklist}
 
 {status_code_prompt}
 
 {clarification_note}
 """
+
+        return base_prompt
 
     def execute(self) -> PhaseResult:
         """Execute development phase with iterative loop.
