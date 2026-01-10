@@ -167,14 +167,14 @@ class TimelineBuilder:
         # Map status - iterations.jsonl has status codes like "CAFE_CONFIRMED", "CAFE_NEEDS_CHANGES"
         # These should map to "completed" since they represent completed iterations
         status_str = iteration_status.get("status", "pending")
-        if status_str.startswith("CAFE_"):
+        if status_str and status_str.startswith("CAFE_"):
             # These are CAFE status codes, map them to completed
             status = PhaseStatus.COMPLETED
             status_code = status_str
         else:
             # These are PhaseStatus values
             try:
-                status = PhaseStatus(status_str)
+                status = PhaseStatus(status_str) if status_str else PhaseStatus.PENDING
             except ValueError:
                 status = PhaseStatus.PENDING
             status_code = iteration_status.get("status_code")
