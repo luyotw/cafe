@@ -639,6 +639,8 @@ Review scope: commits in current branch but not in {self.base_branch}.
 {restriction_note}
 """
 
+            checklist_reminder = self._get_checklist_completion_reminder()
+
             prompt = f"""{base_prompt}
 
 {execution_steps}
@@ -648,6 +650,8 @@ Review scope: commits in current branch but not in {self.base_branch}.
 {important_notes}
 
 {agent_guidelines_checklist}
+
+{checklist_reminder}
 
 {status_code_prompt}
 
