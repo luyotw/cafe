@@ -4,6 +4,30 @@ from pathlib import Path
 from typing import Optional
 
 
+def format_checklist_instruction(checklist_path: str) -> str:
+    """Generate standard checklist instruction text for phase prompts.
+
+    Args:
+        checklist_path: Path to the checklist file (can be relative or absolute)
+
+    Returns:
+        Formatted instruction text that tells agents to read and complete checklist
+
+    Example:
+        >>> format_checklist_instruction("./.cafe/issues/issue108/spec/iteration_001/checklist.md")
+        '''**Task Checklist:**
+        Read ./.cafe/issues/issue108/spec/iteration_001/checklist.md for detailed execution steps and requirements.
+
+        IMPORTANT: You MUST edit the checklist file and mark each completed item with [x] format (e.g., "[x] Read agent file").
+        Do NOT return a status code until ALL checklist items are marked as [x].'''
+    """
+    return f"""**Task Checklist:**
+Read {checklist_path} for detailed execution steps and requirements.
+
+IMPORTANT: You MUST edit the checklist file and mark each completed item with [x] format (e.g., "[x] Read agent file").
+Do NOT return a status code until ALL checklist items are marked as [x]."""
+
+
 def extract_agent_guidelines_checklist(agent_file_path: str) -> str:
     """Extract bullet points from agent md file and convert to checklist format.
 

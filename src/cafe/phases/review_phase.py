@@ -14,6 +14,7 @@ from cafe.core.phase import Phase
 from cafe.core.status_codes import PhaseStatusCode, StatusCodeParser, generate_status_code_prompt
 from cafe.core.types import PhaseProgress, PhaseResult, PhaseStatus, WorkflowMode
 from cafe.utils.github import get_pr_comments, filter_unresolved_comments, format_comments_for_prompt
+from cafe.utils.prompt_utils import format_checklist_instruction
 
 
 class ReviewPhase(Phase):
@@ -587,13 +588,13 @@ class ReviewPhase(Phase):
             if restriction:
                 restriction_note = restriction
 
+            checklist_instruction = format_checklist_instruction(checklist_path)
             base_prompt = f"""# Review Phase
 
 **Your Role:** Reviewer
 Read {agent_file} to understand your complete role definition and responsibilities.
 
-**Task Checklist:**
-Read {checklist_path} for detailed execution steps and requirements.
+{checklist_instruction}
 
 **Task:** Conduct iteration {self.iteration} code review.
 Review scope: commits in current branch but not in {self.base_branch}.

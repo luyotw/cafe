@@ -18,6 +18,7 @@ from cafe.ui.display import Display
 from cafe.ui.phase_prompts import prompt_for_input_method, prompt_for_rigor, fetch_github_issue
 from cafe.utils.git_utils import get_github_repo_name, get_repo_root, to_cwd_relative_path
 from cafe.utils.github import GitHubOps, GitHubError
+from cafe.utils.prompt_utils import format_checklist_instruction
 
 # Maximum number of clarification iterations to prevent infinite loops
 MAX_CLARIFICATION_ITERATIONS = 10
@@ -968,13 +969,10 @@ Read {current_spec_file} for initial requirements content.{template_instruction}
             checklist_path = str(checklist_file.resolve())
 
         # --- 4. Build prompt ---
+        checklist_instruction = format_checklist_instruction(checklist_path)
         base_prompt = f"""# Specification Phase
 
-**Task Checklist:**
-Read {checklist_path} for detailed execution steps and requirements.
-
-IMPORTANT: You MUST edit the checklist file and mark each completed item with [x] format (e.g., "[x] Read agent file").
-Do NOT return a status code until ALL checklist items are marked as [x].
+{checklist_instruction}
 
 {initial_instruction}
 {context_section}
@@ -1014,16 +1012,13 @@ Do NOT return a status code until ALL checklist items are marked as [x].
         except ValueError:
             checklist_path = str(checklist_file.resolve())
 
+        checklist_instruction = format_checklist_instruction(checklist_path)
         if self.iteration == 1:
             return f"""This is round {self.iteration} requirements analysis.
 
 Use `gh issue view {self.issue_id}` to read Issue content.
 
-**Task Checklist:**
-Read {checklist_path} for detailed execution steps and requirements.
-
-IMPORTANT: You MUST edit the checklist file and mark each completed item with [x] format (e.g., "[x] Read agent file").
-Do NOT return a status code until ALL checklist items are marked as [x].
+{checklist_instruction}
 
 {status_code_prompt}
 """
@@ -1032,11 +1027,7 @@ Do NOT return a status code until ALL checklist items are marked as [x].
 
 Use `gh issue view {self.issue_id}` to view Issue's latest content.
 
-**Task Checklist:**
-Read {checklist_path} for detailed execution steps and requirements.
-
-IMPORTANT: You MUST edit the checklist file and mark each completed item with [x] format (e.g., "[x] Read agent file").
-Do NOT return a status code until ALL checklist items are marked as [x].
+{checklist_instruction}
 
 {status_code_prompt}
 """

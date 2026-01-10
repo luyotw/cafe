@@ -16,6 +16,7 @@ from cafe.core.status_codes import PhaseStatusCode, StatusCodeParser, generate_s
 from cafe.core.types import PhaseProgress, PhaseResult, PhaseStatus, WorkflowMode
 from cafe.ui.display import Display
 from cafe.utils.github import get_pr_comments, filter_unresolved_comments, format_comments_for_prompt
+from cafe.utils.prompt_utils import format_checklist_instruction
 
 
 class DevelopPhase(Phase):
@@ -807,13 +808,13 @@ Steps for requesting clarification:
             except ValueError:
                 checklist_path = str(checklist_file.resolve())
 
+            checklist_instruction = format_checklist_instruction(checklist_path)
             base_prompt = f"""# Develop Phase (Correction Mode)
 
 **Your Role:** Developer
 Read {agent_file} to understand your complete role definition and responsibilities.
 
-**Task Checklist:**
-Read {checklist_path} for detailed execution steps and requirements.
+{checklist_instruction}
 
 **Task:** Make corrections based on Code Review feedback.
 
@@ -842,13 +843,13 @@ Read {checklist_path} for detailed execution steps and requirements.
         except ValueError:
             checklist_path = str(checklist_file.resolve())
 
+        checklist_instruction = format_checklist_instruction(checklist_path)
         base_prompt = f"""# Develop Phase (Normal Mode)
 
 **Your Role:** Developer
 Read {agent_file} to understand your complete role definition and responsibilities.
 
-**Task Checklist:**
-Read {checklist_path} for detailed execution steps and requirements.
+{checklist_instruction}
 
 **Task:** Execute development work according to the implementation plan.
 

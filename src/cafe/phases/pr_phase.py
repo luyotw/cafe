@@ -15,6 +15,7 @@ from cafe.core.phase import Phase
 from cafe.core.types import PhaseResult, PhaseStatus, WorkflowMode
 from cafe.ui.inquirer_prompts import prompt_confirm
 from cafe.utils.github import GitHubOps, GitHubError
+from cafe.utils.prompt_utils import format_checklist_instruction
 
 
 class PRPhase(Phase):
@@ -736,6 +737,11 @@ class PRPhase(Phase):
             # Fallback to absolute path if file is not under cwd
             output_file_pattern = str(output_file.resolve())
 
+        try:
+            checklist_path_str = to_cwd_relative_path(checklist_path)
+        except ValueError:
+            checklist_path_str = str(checklist_path.resolve())
+
         # Get commits for context
         # Use shared method to get only commits from current feature branch
         commits = self._get_current_branch_commits(self.git_ops, self.base_branch)
@@ -744,9 +750,12 @@ class PRPhase(Phase):
         issue_instruction = f"\n- Add `Closes #{self.issue_id}` at the beginning of body" if self.workflow_mode == WorkflowMode.GITHUB else ""
 
         # Generate prompt for agent
+        checklist_instruction = format_checklist_instruction(checklist_path_str)
         prompt = f"""# PR Phase
 
 **Task:** Generate PR title and description for this Pull Request.
+
+{checklist_instruction}
 
 **Context:**
 - Requirements Specification: {self.spec_file}
@@ -754,11 +763,6 @@ class PRPhase(Phase):
 
 **Commits:**
 {commits}
-
-## Task Checklist
-
-[ ] Edit `{output_file}` with PR title and description
-[ ] Return CAFE_CONFIRMED when done
 
 ## Requirements
 

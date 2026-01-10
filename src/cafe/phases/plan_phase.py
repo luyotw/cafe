@@ -13,6 +13,7 @@ from cafe.core.status_codes import PhaseStatusCode, StatusCodeParser, generate_s
 from cafe.core.types import PhaseProgress, PhaseResult, PhaseStatus, WorkflowMode
 from cafe.ui.display import Display
 from cafe.utils.git_utils import get_repo_root
+from cafe.utils.prompt_utils import format_checklist_instruction
 
 # Maximum number of planning iterations to prevent infinite loops
 MAX_PLANNING_ITERATIONS = 10
@@ -420,13 +421,13 @@ Please first read {template_path}, then strictly follow the template's format, s
             if template_instruction:
                 template_note = f"\n{template_instruction}"
 
+            checklist_instruction = format_checklist_instruction(checklist_path)
             base_prompt = f"""# Plan Phase
 
 **Your Role:** Developer (Planning)
 Read {agent_file} to understand your complete role definition and responsibilities.
 
-**Task Checklist:**
-Read {checklist_path} for detailed execution steps and requirements.
+{checklist_instruction}
 
 This is iteration {self.iteration} of implementation analysis.
 Analyze {spec_file_path} and plan implementation steps.
@@ -466,13 +467,13 @@ Analyze {spec_file_path} and plan implementation steps.
             if template_instruction:
                 template_note = f"\n{template_instruction}"
 
+            checklist_instruction = format_checklist_instruction(checklist_path)
             base_prompt = f"""# Plan Phase
 
 **Your Role:** Developer (Planning)
 Read {agent_file} to understand your complete role definition and responsibilities.
 
-**Task Checklist:**
-Read {checklist_path} for detailed execution steps and requirements.
+{checklist_instruction}
 
 This is iteration {self.iteration} of implementation analysis.
 Continue analyzing the latest version of {spec_file_path}.
@@ -517,14 +518,14 @@ Continue analyzing the latest version of {spec_file_path}.
         except ValueError:
             checklist_path = str(checklist_file.resolve())
 
+        checklist_instruction = format_checklist_instruction(checklist_path)
         if self.iteration == 1:
             return f"""Analyze GitHub Issue #{self.issue_id} and plan implementation steps.
 
 **Your Role:**
 You are an experienced Developer, responsible for planning detailed implementation steps based on requirements specifications and development guidelines.
 
-**Task Checklist:**
-Read {checklist_path} for detailed execution steps and requirements.
+{checklist_instruction}
 
 This is iteration {self.iteration} of implementation analysis.
 
@@ -553,8 +554,7 @@ Reply with confirmation message.
 **Your Role:**
 You are an experienced Developer, responsible for planning detailed implementation steps based on requirements specifications and development guidelines.
 
-**Task Checklist:**
-Read {checklist_path} for detailed execution steps and requirements.
+{checklist_instruction}
 
 This is iteration {self.iteration} of implementation analysis.
 
