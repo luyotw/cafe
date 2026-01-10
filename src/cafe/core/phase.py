@@ -1374,6 +1374,37 @@ class Phase(ABC):
             phase_specific_data=phase_specific_data,
         )
 
+        # Validate checklist completion for complete codes only (after NEED_CLARIFICATION handled)
+        # Only validate for CONFIRMED and complete_codes (e.g., READY_FOR_REVIEW)
+        # Skip validation for continue_codes (e.g., NEED_CLARIFICATION, NEED_PERMISSION)
+        complete_codes = complete_codes or []
+        continue_codes = continue_codes or []
+
+        should_validate_checklist = (
+            status_code == PhaseStatusCode.CONFIRMED or
+            status_code in complete_codes
+        )
+
+        if should_validate_checklist and status_code not in continue_codes:
+            print(f"\n🔍 Validating checklist completion...")
+            final_response, final_status_code, validation_passed = self._validate_and_retry_checklist_completion(
+                agent_name=agent_name,
+                prompt=prompt,
+                user_input=user_input,
+                valid_status_codes=valid_status_codes,
+                allowed_tools=allowed_tools or ["write", "read"],
+                max_retries=3,
+            )
+
+            # Update response and status_code with validated results
+            if validation_passed:
+                response = final_response
+                status_code = final_status_code
+            else:
+                # Validation failed after max retries - alert user
+                print(f"⚠️  Checklist validation failed after maximum retries")
+                # Continue with original response and status_code
+
         # Use base class method to handle standard status codes
         result = self._handle_standard_status_codes(
             status_code=status_code,
