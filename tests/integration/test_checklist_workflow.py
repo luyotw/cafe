@@ -100,8 +100,7 @@ class TestChecklistWorkflowIntegration:
                 agent_name="Nick",
                 spec_file_path=str(spec_dir / "output.md"),
                 plan_file_path=str(plan_dir / "output.md"),
-                pr_title_file=str(pr_dir / "title.txt"),
-                pr_body_file=str(pr_dir / "body.md"),
+                pr_file=str(pr_dir / "output.md"),
                 checklist_file_path=pr_checklist,
             )
 

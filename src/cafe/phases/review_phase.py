@@ -639,6 +639,8 @@ Review scope: commits in current branch but not in {self.base_branch}.
 {restriction_note}
 """
 
+            checklist_reminder = self._get_checklist_completion_reminder()
+
             prompt = f"""{base_prompt}
 
 {execution_steps}
@@ -648,6 +650,8 @@ Review scope: commits in current branch but not in {self.base_branch}.
 {important_notes}
 
 {agent_guidelines_checklist}
+
+{checklist_reminder}
 
 {status_code_prompt}
 
@@ -710,4 +714,29 @@ Please only return one status code (e.g., CAFE_CONFIRMED) without any other cont
         iteration_dir = self.review_dir / f"iteration_{self.iteration:03d}"
         review_file = iteration_dir / "output.md"
         return [review_file] if review_file.exists() else []
+
+    def _rebuild_checklist_for_iteration(self, iteration: int) -> None:
+        """Rebuild checklist for current iteration using review phase rules.
+
+        Args:
+            iteration: Iteration number
+        """
+        from cafe.utils.checklist_generator import generate_review_checklist
+
+        iteration_dir = self._get_iteration_dir(iteration)
+        checklist_path = iteration_dir / "checklist.md"
+
+        # Get review file path
+        review_file_path = str(iteration_dir / "output.md")
+
+        # Generate checklist using the same rules as normal execution
+        generate_review_checklist(
+            agent_name=self.review_agent,
+            spec_file_path=self.spec_file,
+            review_file_path=review_file_path,
+            base_branch=self.base_branch,
+            checklist_file_path=checklist_path,
+        )
+
+        print(f"✅ Rebuilt checklist for review phase iteration {iteration}")
 

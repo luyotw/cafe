@@ -113,8 +113,7 @@ class TestPRPhaseTemplates:
         """Test PR important notes template has expected placeholders."""
         template = checklist_templates.PR_IMPORTANT_NOTES
 
-        assert "{pr_title_file}" in template
-        assert "{pr_body_file}" in template
+        assert "{pr_file}" in template
 
 
 class TestTemplateConsistency:

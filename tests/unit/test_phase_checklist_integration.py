@@ -147,8 +147,7 @@ class TestPRChecklistGeneration:
                 agent_name="Nick",
                 spec_file_path=".cafe/issues/test/spec/iteration_001/output.md",
                 plan_file_path=".cafe/issues/test/plan/iteration_001/output.md",
-                pr_title_file=".cafe/issues/test/pr/iteration_001/title.txt",
-                pr_body_file=".cafe/issues/test/pr/iteration_001/body.md",
+                pr_file=".cafe/issues/test/pr/iteration_001/output.md",
                 checklist_file_path=checklist_path,
             )
 

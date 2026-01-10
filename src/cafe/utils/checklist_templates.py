@@ -175,6 +175,6 @@ PR_IMPORTANT_NOTES = """## Important Notes Checklist
 [ ] ✅ PR description should summarize all changes
 [ ] ✅ Include reference to original requirements
 [ ] ✅ List all major changes and commits
-[ ] ✅ Write PR content to {pr_title_file} and {pr_body_file}
+[ ] ✅ Write PR content to {pr_file}
 [ ] ✅ Return ONLY the status code in your response
 """

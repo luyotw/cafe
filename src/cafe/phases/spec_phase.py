@@ -1068,7 +1068,10 @@ Write to {current_spec_file}:
 Response: "CAFE_READY_FOR_REVIEW" (nothing else)
 """
 
-        # --- 6. Assemble the final prompt ---
+        # --- 6. Build checklist completion reminder ---
+        checklist_reminder = self._get_checklist_completion_reminder()
+
+        # --- 7. Assemble the final prompt ---
         return f"""{base_prompt}
 
 {execution_steps}
@@ -1076,6 +1079,8 @@ Response: "CAFE_READY_FOR_REVIEW" (nothing else)
 {important_notes}
 
 {agent_guidelines_checklist}
+
+{checklist_reminder}
 
 {status_code_prompt}
 
@@ -1103,10 +1108,15 @@ Response: "CAFE_READY_FOR_REVIEW" (nothing else)
             },
         )
 
+        # Build checklist completion reminder
+        checklist_reminder = self._get_checklist_completion_reminder()
+
         if self.iteration == 1:
             return f"""This is round {self.iteration}  requirements analysis.
 
 Please use `gh issue view {self.issue_id}` to read Issue content, carefully analyze requirements, identify all unclear, vague, or areas that might require developers to make assumptions.
+
+{checklist_reminder}
 
 {status_code_prompt}
 
@@ -1120,6 +1130,8 @@ Respond with confirmation message.
             return f"""This is round {self.iteration}  requirements analysis.
 
 Please use `gh issue view {self.issue_id}`  to view Issue's latest content.
+
+{checklist_reminder}
 
 {status_code_prompt}
 
@@ -1311,3 +1323,35 @@ Remember: Your response must contain ONLY the status code, nothing else."""
         except Exception:
             # If verification fails, just use original response
             return None, None
+
+    def _rebuild_checklist_for_iteration(self, iteration: int) -> None:
+        """Rebuild checklist for current iteration using spec phase rules.
+
+        Args:
+            iteration: Iteration number
+        """
+        from cafe.utils.checklist_generator import generate_spec_checklist
+
+        iteration_dir = self._get_iteration_dir(iteration)
+        checklist_path = iteration_dir / "checklist.md"
+
+        # Get previous spec file path if iteration > 1
+        prev_spec_file = None
+        if iteration > 1:
+            prev_spec_path = self._get_versioned_file_path("spec", iteration - 1, self.phase_dir)
+            if prev_spec_path.exists():
+                prev_spec_file = str(prev_spec_path)
+
+        # Get current spec file path
+        current_spec_file = str(self._get_versioned_file_path("spec", iteration, self.phase_dir))
+
+        # Generate checklist using the same rules as normal execution
+        generate_spec_checklist(
+            iteration=iteration,
+            agent_name=self.pm_agent,
+            current_spec_file=current_spec_file,
+            prev_spec_file=prev_spec_file,
+            checklist_file_path=checklist_path,
+        )
+
+        print(f"✅ Rebuilt checklist for spec phase iteration {iteration}")

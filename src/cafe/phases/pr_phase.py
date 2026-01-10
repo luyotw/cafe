@@ -715,21 +715,17 @@ class PRPhase(Phase):
         from cafe.utils.checklist_generator import generate_pr_checklist
 
         checklist_path = iteration_dir / "checklist.md"
-        pr_title_file = iteration_dir / "pr_title.md"
-        pr_body_file = iteration_dir / "pr_body.md"
+        output_file = iteration_dir / "output.md"
         generate_pr_checklist(
             agent_name=self.dev_agent,
             spec_file_path=self.spec_file,
             plan_file_path=str(plan_file),
-            pr_title_file=str(pr_title_file),
-            pr_body_file=str(pr_body_file),
+            pr_file=str(output_file),
             checklist_file_path=checklist_path,
         )
 
         # Use path relative to current working directory (supports worktree)
         from cafe.utils.git_utils import to_cwd_relative_path
-
-        output_file = iteration_dir / "output.md"
 
         try:
             output_file_pattern = to_cwd_relative_path(output_file)
@@ -799,7 +795,9 @@ class PRPhase(Phase):
             },
         )
 
-        full_prompt = prompt + "\n\n" + status_code_prompt
+        checklist_reminder = self._get_checklist_completion_reminder()
+
+        full_prompt = prompt + "\n\n" + checklist_reminder + "\n\n" + status_code_prompt
 
         # Set allowed tools for editing
         allowed_tools = ["read", "grep", "glob", "ls", "web_fetch", "web_search"]
@@ -950,4 +948,34 @@ Based on the following conditions, determine which status code to return:
 - CAFE_CONFIRMED: File exists and has complete content (both title and body)
 
 Please return only one status code (example: CAFE_CONFIRMED), with no other content."""
+
+    def _rebuild_checklist_for_iteration(self, iteration: int) -> None:
+        """Rebuild checklist for current iteration using PR phase rules.
+
+        Args:
+            iteration: Iteration number
+        """
+        from cafe.utils.checklist_generator import generate_pr_checklist
+
+        iteration_dir = self._get_iteration_dir(iteration)
+        checklist_path = iteration_dir / "checklist.md"
+
+        # PR phase uses output.md for PR content
+        output_file = str(iteration_dir / "output.md")
+
+        # Get plan file path
+        spec_path = Path(self.spec_file)
+        plan_dir = spec_path.parent.parent.parent / "plan"
+        plan_file = self._get_versioned_file_path("plan", None, plan_dir)
+
+        # Generate checklist using the same rules as normal execution
+        generate_pr_checklist(
+            agent_name=self.dev_agent,
+            spec_file_path=self.spec_file,
+            plan_file_path=str(plan_file),
+            pr_file=output_file,
+            checklist_file_path=checklist_path,
+        )
+
+        print(f"✅ Rebuilt checklist for PR phase iteration {iteration}")
 
