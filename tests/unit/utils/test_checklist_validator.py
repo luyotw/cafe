@@ -108,7 +108,11 @@ def test_validate_checklist_with_nested_checkboxes(tmp_path):
 
 
 def test_validate_checklist_mixed_content(tmp_path):
-    """Test validation with mixed markdown content."""
+    """Test validation with mixed markdown content.
+
+    Only checkbox items at the start of lines should be counted,
+    not [ ] appearing in regular text or code blocks.
+    """
     checklist_file = tmp_path / "checklist.md"
     checklist_file.write_text("""# Title
 
@@ -118,22 +122,22 @@ Some description text
 - [x] Done
 - [ ] Not done
 
-Some more text with [ ] in it (should count!)
+Some more text with [ ] in it (should NOT count!)
 
 ## Section 2
 - [x] All done here
 
 Code example:
 ```python
-# This [ ] should count as it's the exact string
+# This [ ] should NOT count as it's not at line start
 result = some_function()
 ```
 """)
 
     result = validate_checklist(checklist_file)
 
-    # Should find 2 unchecked: one in Section 1, one in the text
-    # (and potentially one in code block)
+    # Should find only 1 unchecked: the one in Section 1 checklist item
+    # Text and code block [ ] should NOT be counted
     assert result.is_complete is False
-    assert result.unchecked_count == 3  # 1 in checklist + 1 in text + 1 in code
+    assert result.unchecked_count == 1  # Only the actual checklist item
     assert result.checklist_path == checklist_file

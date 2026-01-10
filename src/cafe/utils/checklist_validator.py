@@ -21,8 +21,14 @@ class ChecklistValidationResult:
 def validate_checklist(checklist_path: Path) -> ChecklistValidationResult:
     """Validate that all checklist items are completed.
 
-    Checks for unchecked items by searching for the string "[ ]" (opening bracket,
-    space, closing bracket). Only this exact pattern is considered unchecked.
+    Checks for unchecked items by searching for lines that start with "[ ]"
+    or "- [ ]" (after trimming whitespace). This avoids false positives from
+    "[ ]" appearing in descriptive text within a line.
+
+    Supported formats:
+    - `[ ] Task name` - Direct checkbox
+    - `- [ ] Task name` - Markdown list with checkbox
+    - `  - [ ] Nested task` - Indented checkbox
 
     Args:
         checklist_path: Path to the checklist.md file to validate
@@ -39,8 +45,14 @@ def validate_checklist(checklist_path: Path) -> ChecklistValidationResult:
     # Read checklist content
     content = checklist_path.read_text(encoding="utf-8")
 
-    # Count unchecked items - only "[ ]" (bracket space bracket) counts as unchecked
-    unchecked_count = content.count("[ ]")
+    # Count unchecked items - only lines starting with "[ ]" or "- [ ]" count as unchecked
+    # This avoids false positives from "[ ]" in descriptive text
+    unchecked_count = 0
+    for line in content.splitlines():
+        stripped = line.lstrip()
+        # Check for both "[ ]" and "- [ ]" formats
+        if stripped.startswith("[ ]") or stripped.startswith("- [ ]"):
+            unchecked_count += 1
 
     return ChecklistValidationResult(
         is_complete=(unchecked_count == 0),
