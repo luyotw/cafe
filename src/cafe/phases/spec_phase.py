@@ -385,8 +385,8 @@ class SpecPhase(Phase):
                     PhaseStatusCode.NEED_CLARIFICATION,
                 ],
                 allowed_tools=allowed_tools,
-                complete_codes=[PhaseStatusCode.READY_FOR_REVIEW],
-                continue_codes=[PhaseStatusCode.NEED_CLARIFICATION],
+                complete_codes=[PhaseStatusCode.READY_FOR_REVIEW, PhaseStatusCode.NEED_CLARIFICATION],
+                continue_codes=[],
             )
 
             # In mock mode or if agent doesn't use write tool, write spec from response

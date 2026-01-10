@@ -654,19 +654,20 @@ class Phase(ABC):
             print(f"\n❌ {error_msg}")
             raise ValueError(error_msg)
 
-        # 7. Update history (always save, even if no status code)
+        # 7. Update history (save metadata only, NOT response/status_code yet)
+        # Response and status_code will be saved after checklist validation passes
         phase_data = {
             "response": response,
             "permission_denials": [denial.model_dump() for denial in permission_denials],
             "streaming_log": streaming_log
         }
-        
+
         # If status code analysis was performed, record to history
         if analysis_attempted:
             phase_data["status_code_analyzed"] = True
             if analysis_response:
                 phase_data["status_code_analysis_response"] = analysis_response
-        
+
         self._update_iteration_history(
             phase_specific_data=phase_data,
             prompt=prompt,
@@ -675,12 +676,11 @@ class Phase(ABC):
             allowed_tools=allowed_tools,
             denied_tools=denied_tools,
             cli_command_args=cli_command_args,
-            status_code=status_code,
+            status_code=None,  # Don't save status_code yet - will be saved after checklist validation
         )
 
-        # 8. Save progress (if has status code and phase has _save_progress method)
-        if status_code and hasattr(self, "_save_progress"):
-            self._save_progress(status_code)  # type: ignore
+        # 8. Don't save progress yet - will be saved after checklist validation
+        # (Removed: _save_progress will be called after checklist validation)
 
         return response, status_code
 
@@ -1218,7 +1218,7 @@ class Phase(ABC):
         if not iteration_dirs:
             return 0
 
-        # Search from back to front for first complete iteration (has response)
+        # Search from back to front for first complete iteration (has status_code)
         for iteration_dir in reversed(iteration_dirs):
             context_file = iteration_dir / "context.json"
             if not context_file.exists():
@@ -1227,8 +1227,9 @@ class Phase(ABC):
             with open(context_file, "r", encoding="utf-8") as f:
                 data = json.load(f)
 
-            # Check if has response (complete iteration)
-            if "response" in data and data["response"]:
+            # Check if has status_code (complete iteration)
+            # Use status_code instead of response because response may exist but checklist validation not passed
+            if "status_code" in data and data["status_code"]:
                 return data.get("iteration", 0)
 
         # All iterations incomplete, return 0
@@ -1407,6 +1408,20 @@ class Phase(ABC):
             if validation_passed:
                 response = final_response
                 status_code = final_status_code
+
+                # Checklist validation passed - now we can save status_code to context.json
+                iteration_dir = self._get_iteration_dir(self.iteration)
+                context_file = iteration_dir / "context.json"
+                if context_file.exists():
+                    with open(context_file, "r", encoding="utf-8") as f:
+                        context_data = json.load(f)
+                    context_data["status_code"] = status_code.value if status_code else None
+                    with open(context_file, "w", encoding="utf-8") as f:
+                        json.dump(context_data, f, ensure_ascii=False, indent=2)
+
+                # Save progress (phase-specific logic)
+                if hasattr(self, "_save_progress"):
+                    self._save_progress(status_code)  # type: ignore
             else:
                 # Validation failed after max retries - alert user
                 print(f"⚠️  Checklist validation failed after maximum retries")
@@ -1662,8 +1677,15 @@ class Phase(ABC):
             retry_count += 1
             print(f"\n⚠️  Re-invoking agent to complete checklist items... (attempt {retry_count}/{max_retries})")
 
-            # Generate retry prompt
-            retry_prompt = f"""Your previous response was received, but the checklist at {checklist_path.relative_to(Path.cwd())} still has unchecked items.
+            # Generate retry prompt with safe path conversion
+            from cafe.utils.git_utils import to_cwd_relative_path
+            try:
+                checklist_display_path = to_cwd_relative_path(checklist_path)
+            except (ValueError, OSError):
+                # Fallback to str if relative path conversion fails
+                checklist_display_path = str(checklist_path)
+
+            retry_prompt = f"""Your previous response was received, but the checklist at {checklist_display_path} still has unchecked items.
 
 Please review the checklist file, complete all remaining tasks, update the checklist by marking completed items with [x], and re-submit your status code.
 
@@ -2132,16 +2154,17 @@ The system will verify checklist completion. If unchecked items remain, you will
         if count >= 999:
             raise ValueError("Cannot exceed 999")
 
-        # Check if the last iteration was interrupted (has no response)
+        # Check if the last iteration was interrupted (has no status_code)
         last_context_file = existing_iterations[-1]
         try:
             import json
             with open(last_context_file, 'r', encoding='utf-8') as f:
                 last_iteration_data = json.load(f)
 
-            # If last iteration has no response, it was interrupted
+            # If last iteration has no status_code, it was interrupted
             # Return the same iteration number to retry (don't increment)
-            if not last_iteration_data.get("response"):
+            # Use status_code instead of response because response may exist but checklist validation not passed
+            if not last_iteration_data.get("status_code"):
                 return count
         except (json.JSONDecodeError, KeyError, FileNotFoundError):
             # If we can't read the file, treat it as corrupted/interrupted
