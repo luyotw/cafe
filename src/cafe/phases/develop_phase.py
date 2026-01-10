@@ -1019,13 +1019,15 @@ Read {agent_file} to understand your complete role definition and responsibiliti
 
             checklist_path = self._get_iteration_dir(self.iteration) / "checklist.md"
             develop_file = self._get_iteration_dir(self.iteration) / "output.md"
+            # Check if in correction mode (has review feedback)
+            correction_mode = hasattr(self, '_has_review_feedback') and self._has_review_feedback
             generate_develop_checklist(
                 agent_name=self.dev_agent,
                 spec_file_path=self.spec_file,
                 plan_file_path=self.plan_file,
                 develop_file=str(develop_file),
                 checklist_file_path=checklist_path,
-                correction_mode=self.correction_mode,
+                correction_mode=correction_mode,
             )
 
             # Prepare user_input for this iteration
