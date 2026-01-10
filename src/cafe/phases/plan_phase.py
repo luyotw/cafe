@@ -799,4 +799,31 @@ Please only return one status code (e.g., CAFE_READY_FOR_REVIEW) without any oth
                         self.template_path = str(template_path)
                         self.template_mode = "manual"
 
+    def _rebuild_checklist_for_iteration(self, iteration: int) -> None:
+        """Rebuild checklist for current iteration using plan phase rules.
+
+        Args:
+            iteration: Iteration number
+        """
+        from cafe.utils.checklist_generator import generate_plan_checklist
+
+        iteration_dir = self._get_iteration_dir(iteration)
+        checklist_path = iteration_dir / "checklist.md"
+
+        # Get plan file path
+        plan_file_path = str(self.plan_file)
+
+        # Get spec file path
+        spec_file_path = self.spec_file
+
+        # Generate checklist using the same rules as normal execution
+        generate_plan_checklist(
+            agent_name=self.dev_agent,
+            plan_file_path=plan_file_path,
+            spec_file_path=spec_file_path,
+            checklist_file_path=checklist_path,
+        )
+
+        print(f"✅ Rebuilt checklist for plan phase iteration {iteration}")
+
 

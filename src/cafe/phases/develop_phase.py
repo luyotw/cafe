@@ -1389,3 +1389,32 @@ Please return only one status code (example: CAFE_CONFIRMED), with no other cont
         develop_dir = self.issue_dir / "develop"
         develop_file = develop_dir / f"iteration_{self.iteration:03d}" / "output.md"
         return [develop_file] if develop_file.exists() else []
+
+    def _rebuild_checklist_for_iteration(self, iteration: int) -> None:
+        """Rebuild checklist for current iteration using develop phase rules.
+
+        Args:
+            iteration: Iteration number
+        """
+        from cafe.utils.checklist_generator import generate_develop_checklist
+
+        iteration_dir = self._get_iteration_dir(iteration)
+        checklist_path = iteration_dir / "checklist.md"
+
+        # Get develop file path
+        develop_file = str(iteration_dir / "output.md")
+
+        # Check if in correction mode (has review feedback)
+        correction_mode = hasattr(self, '_has_review_feedback') and self._has_review_feedback
+
+        # Generate checklist using the same rules as normal execution
+        generate_develop_checklist(
+            agent_name=self.dev_agent,
+            spec_file_path=self.spec_file,
+            plan_file_path=self.plan_file,
+            develop_file=develop_file,
+            checklist_file_path=checklist_path,
+            correction_mode=correction_mode,
+        )
+
+        print(f"✅ Rebuilt checklist for develop phase iteration {iteration}")

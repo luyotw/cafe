@@ -1613,7 +1613,11 @@ class Phase(ABC):
         # Check if checklist exists, if not rebuild it
         if not checklist_path.exists() or checklist_path.stat().st_size == 0:
             print(f"⚠️  Checklist file not found or empty, rebuilding...")
-            self._rebuild_checklist_for_iteration(self.iteration)
+            try:
+                self._rebuild_checklist_for_iteration(self.iteration)
+            except Exception as e:
+                print(f"⚠️  Failed to rebuild checklist: {e}")
+                # Continue without checklist validation if rebuild fails
 
         # Validate checklist
         try:

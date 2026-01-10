@@ -715,3 +715,28 @@ Please only return one status code (e.g., CAFE_CONFIRMED) without any other cont
         review_file = iteration_dir / "output.md"
         return [review_file] if review_file.exists() else []
 
+    def _rebuild_checklist_for_iteration(self, iteration: int) -> None:
+        """Rebuild checklist for current iteration using review phase rules.
+
+        Args:
+            iteration: Iteration number
+        """
+        from cafe.utils.checklist_generator import generate_review_checklist
+
+        iteration_dir = self._get_iteration_dir(iteration)
+        checklist_path = iteration_dir / "checklist.md"
+
+        # Get review file path
+        review_file_path = str(iteration_dir / "output.md")
+
+        # Generate checklist using the same rules as normal execution
+        generate_review_checklist(
+            agent_name=self.review_agent,
+            spec_file_path=self.spec_file,
+            review_file_path=review_file_path,
+            base_branch=self.base_branch,
+            checklist_file_path=checklist_path,
+        )
+
+        print(f"✅ Rebuilt checklist for review phase iteration {iteration}")
+

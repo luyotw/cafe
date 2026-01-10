@@ -953,3 +953,35 @@ Based on the following conditions, determine which status code to return:
 
 Please return only one status code (example: CAFE_CONFIRMED), with no other content."""
 
+    def _rebuild_checklist_for_iteration(self, iteration: int) -> None:
+        """Rebuild checklist for current iteration using PR phase rules.
+
+        Args:
+            iteration: Iteration number
+        """
+        from cafe.utils.checklist_generator import generate_pr_checklist
+
+        iteration_dir = self._get_iteration_dir(iteration)
+        checklist_path = iteration_dir / "checklist.md"
+
+        # Get PR title and body file paths
+        pr_title_file = str(iteration_dir / "pr_title.md")
+        pr_body_file = str(iteration_dir / "pr_body.md")
+
+        # Get plan file path
+        spec_path = Path(self.spec_file)
+        plan_dir = spec_path.parent.parent.parent / "plan"
+        plan_file = self._get_versioned_file_path("plan", None, plan_dir)
+
+        # Generate checklist using the same rules as normal execution
+        generate_pr_checklist(
+            agent_name=self.dev_agent,
+            spec_file_path=self.spec_file,
+            plan_file_path=str(plan_file),
+            pr_title_file=pr_title_file,
+            pr_body_file=pr_body_file,
+            checklist_file_path=checklist_path,
+        )
+
+        print(f"✅ Rebuilt checklist for PR phase iteration {iteration}")
+
