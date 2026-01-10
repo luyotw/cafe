@@ -970,63 +970,28 @@ Read {current_spec_file}  for initial requirements content.{template_instruction
 - Can only deeply clarify questions already raised.
 """
 
-        # --- 2. Build agent guidelines checklist ---
+        # --- 2. Get agent file path for reference ---
         from cafe.agents.manager import AgentManager
-        from cafe.utils.prompt_utils import extract_agent_guidelines_checklist
 
         agent_file = AgentManager.get_agent_file_path(self.pm_agent, "pm")
 
-        # Read agent md file and extract bullet points as checklist
-        agent_guidelines_checklist = extract_agent_guidelines_checklist(agent_file)
+        # --- 3. Get checklist file path ---
+        iteration_dir = self._get_iteration_dir(self.iteration)
+        checklist_file = iteration_dir / "checklist.md"
+        from cafe.utils.git_utils import to_cwd_relative_path
+        try:
+            checklist_path = to_cwd_relative_path(checklist_file)
+        except ValueError:
+            checklist_path = str(checklist_file.resolve())
 
-        # --- 3. Build execution steps checklist ---
-        if self.iteration == 1:
-            execution_steps = f"""
-## Execution Steps Checklist
-
-[ ] Read {agent_file} to understand your role and native language
-[ ] Read {current_spec_file} to understand initial requirements
-[ ] Read README.md for project context
-[ ] Search codebase using Read/Grep tools to find answers before asking users
-[ ] Identify unclear areas that need clarification
-[ ] Write analysis results to {current_spec_file}
-[ ] Return appropriate status code
-"""
-        else:
-            execution_steps = f"""
-## Execution Steps Checklist
-
-[ ] Read {agent_file} to understand your role and native language
-[ ] Read {prev_spec_file} to review previous analysis
-[ ] Review user's answer (provided below)
-[ ] Integrate new information into specification
-[ ] Write updated analysis to {current_spec_file}
-[ ] Return appropriate status code
-"""
-
-        # --- 4. Build important notes checklist ---
-        important_notes = f"""
-## Important Notes Checklist
-
-[ ] ❌ NO technical details (no implementation, architecture, languages, frameworks, databases)
-[ ] ❌ NO technical solutions or suggestions
-[ ] ❌ DO NOT modify code
-[ ] ✅ Focus ONLY on "what users want", "why", and "expected outcomes"
-[ ] ✅ Think from product and business perspectives
-[ ] ✅ Write ALL content to {current_spec_file}, not in your response
-[ ] ✅ Return ONLY the status code in your response
-[ ] ✅ If requirements are clear, proceed to CAFE_READY_FOR_REVIEW
-"""
-
-        if self.iteration >= 4:
-            important_notes += f"""[ ] ⚠️ Round {self.iteration}: Only clarify existing questions, NO new questions
-"""
-
-        # --- 5. Build principles section ---
+        # --- 4. Build principles section ---
         base_prompt = f"""# Specification Phase
 
 **Your Role:** PM (Product Manager)
 Read {agent_file} to understand your complete role definition and responsibilities.
+
+**Task Checklist:**
+Read {checklist_path} for detailed execution steps and requirements.
 
 {initial_instruction}
 {context_section}
@@ -1044,10 +1009,9 @@ Read {agent_file} to understand your complete role definition and responsibiliti
 
 **Wrong Example (will fail):**
 - Your response: "I have some questions: 1. What is...? CAFE_NEED_CLARIFICATION" ← ❌ DO NOT DO THIS
-"""
 
-        # --- 5. Build status code section ---
-        need_clarification_instruction = f"""
+{status_code_prompt}
+
 **Status: CAFE_NEED_CLARIFICATION**
 Write to {current_spec_file}:
    - ## Original Requirements Description (preserve exactly as provided)
@@ -1056,9 +1020,7 @@ Write to {current_spec_file}:
    - ## Questions to Clarify (PM asks conversational questions)
 
 Response: "CAFE_NEED_CLARIFICATION" (nothing else)
-"""
 
-        confirmed_instruction = f"""
 **Status: CAFE_READY_FOR_REVIEW**
 Write to {current_spec_file}:
    - ## Original Requirements Description (preserve exactly as provided)
@@ -1068,20 +1030,8 @@ Write to {current_spec_file}:
 Response: "CAFE_READY_FOR_REVIEW" (nothing else)
 """
 
-        # --- 6. Assemble the final prompt ---
-        return f"""{base_prompt}
-
-{execution_steps}
-
-{important_notes}
-
-{agent_guidelines_checklist}
-
-{status_code_prompt}
-
-{need_clarification_instruction}
-{confirmed_instruction}
-"""
+        # --- 5. Return the final prompt ---
+        return base_prompt
 
     def _generate_github_prompt(self, user_input: str = "") -> str:
         """Generate prompt for GitHub workflow.
@@ -1103,10 +1053,22 @@ Response: "CAFE_READY_FOR_REVIEW" (nothing else)
             },
         )
 
+        # Get checklist file path
+        iteration_dir = self._get_iteration_dir(self.iteration)
+        checklist_file = iteration_dir / "checklist.md"
+        from cafe.utils.git_utils import to_cwd_relative_path
+        try:
+            checklist_path = to_cwd_relative_path(checklist_file)
+        except ValueError:
+            checklist_path = str(checklist_file.resolve())
+
         if self.iteration == 1:
-            return f"""This is round {self.iteration}  requirements analysis.
+            return f"""This is round {self.iteration} requirements analysis.
 
 Please use `gh issue view {self.issue_id}` to read Issue content, carefully analyze requirements, identify all unclear, vague, or areas that might require developers to make assumptions.
+
+**Task Checklist:**
+Read {checklist_path} for detailed execution steps and requirements.
 
 {status_code_prompt}
 
@@ -1117,9 +1079,12 @@ List questions in the most concise way, do not give any suggestions.
 Respond with confirmation message.
 """
         else:
-            return f"""This is round {self.iteration}  requirements analysis.
+            return f"""This is round {self.iteration} requirements analysis.
 
-Please use `gh issue view {self.issue_id}`  to view Issue's latest content.
+Please use `gh issue view {self.issue_id}` to view Issue's latest content.
+
+**Task Checklist:**
+Read {checklist_path} for detailed execution steps and requirements.
 
 {status_code_prompt}
 
