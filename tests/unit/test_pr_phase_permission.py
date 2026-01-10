@@ -27,7 +27,13 @@ def test_prepare_pr_content_stops_on_need_permission(tmp_path):
     pr_dir = issue_dir / "pr"
     pr_dir.mkdir(parents=True)
     (pr_dir / "history").mkdir()
-    
+
+    # Create checklist.md with all items completed
+    checklist_dir = pr_dir / "iteration_001"
+    checklist_dir.mkdir(parents=True, exist_ok=True)
+    checklist_file = checklist_dir / "checklist.md"
+    checklist_file.write_text("## Execution Steps Checklist\n\n[x] Step 1\n[x] Step 2\n")
+
     config_file = issue_dir / "issue.yaml"
     config_file.write_text("base_branch: main\n")
     
@@ -104,7 +110,13 @@ def test_pr_phase_stops_on_need_permission(tmp_path):
     pr_dir.mkdir(parents=True)
     # Create empty history dir to avoid iteration counter issues
     (pr_dir / "history").mkdir()
-    
+
+    # Create checklist.md with all items completed
+    checklist_dir = pr_dir / "iteration_001"
+    checklist_dir.mkdir(parents=True, exist_ok=True)
+    checklist_file = checklist_dir / "checklist.md"
+    checklist_file.write_text("## Execution Steps Checklist\n\n[x] Step 1\n[x] Step 2\n")
+
     config_file = issue_dir / "issue.yaml"
     config_file.write_text("base_branch: main\n")
     

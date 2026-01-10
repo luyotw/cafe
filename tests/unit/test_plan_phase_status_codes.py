@@ -42,6 +42,12 @@ class TestPlanPhaseWithStatusCodes:
         plan_file.parent.mkdir(parents=True, exist_ok=True)
         plan_file.write_text("## 開發指南\nSome guide\n\n## 實作計畫\nTODO")
 
+        # Create checklist.md with all items completed
+        checklist_dir = plan_file.parent / "iteration_001"
+        checklist_dir.mkdir(parents=True, exist_ok=True)
+        checklist_file = checklist_dir / "checklist.md"
+        checklist_file.write_text("## Execution Steps Checklist\n\n[x] Step 1\n[x] Step 2\n")
+
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n實作分析已完成.", TokenUsage(), [], None, [])
 
@@ -131,6 +137,12 @@ class TestPlanPhaseWithStatusCodes:
         plan_file = requirements_file.parent.parent / "plan" / "plan.md"
         plan_file.parent.mkdir(parents=True, exist_ok=True)
         plan_file.write_text("## 開發指南\nSome guide\n\n## 實作計畫\nTODO")
+
+        # Create checklist.md with all items completed
+        checklist_dir = plan_file.parent / "iteration_001"
+        checklist_dir.mkdir(parents=True, exist_ok=True)
+        checklist_file = checklist_dir / "checklist.md"
+        checklist_file.write_text("## Execution Steps Checklist\n\n[x] Step 1\n[x] Step 2\n")
 
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = ("分析結果：\nCAFE_READY_FOR_REVIEW\n實作分析已完成.", TokenUsage(), [], None, [])
@@ -224,6 +236,12 @@ class TestPlanPhaseWithStatusCodes:
         plan_file = requirements_file.parent.parent / "plan" / "plan.md"
         plan_file.parent.mkdir(parents=True, exist_ok=True)
         plan_file.write_text("## 開發指南\nSome guide\n\n## 實作計畫\nTODO")
+
+        # Create checklist.md with all items completed
+        checklist_dir = plan_file.parent / "iteration_001"
+        checklist_dir.mkdir(parents=True, exist_ok=True)
+        checklist_file = checklist_dir / "checklist.md"
+        checklist_file.write_text("## Execution Steps Checklist\n\n[x] Step 1\n[x] Step 2\n")
 
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = ("cafe_ready_for_review\n實作分析已完成.", TokenUsage(), [], None, [])

@@ -49,6 +49,12 @@ def setup_plan_phase(tmp_path, monkeypatch):
     plan_file = plan_dir / "plan.md"
     plan_file.write_text("## 開發指南\n\n開發指南內容.\n\n## 實作計畫\n\nTODO")
 
+    # Create checklist.md with all items completed
+    checklist_dir = plan_dir / "iteration_001"
+    checklist_dir.mkdir(parents=True, exist_ok=True)
+    checklist_file = checklist_dir / "checklist.md"
+    checklist_file.write_text("## Execution Steps Checklist\n\n[x] Step 1\n[x] Step 2\n")
+
     # 創建 template
     template_dir = tmp_path / ".cafe" / "templates" / "plan"
     template_dir.mkdir(parents=True)
