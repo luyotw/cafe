@@ -1,41 +1,7 @@
 """Utilities for checklist management."""
 
-import re
 from pathlib import Path
 from typing import Dict, Union
-
-
-def extract_checklist_sections(prompt: str) -> str:
-    """Extract checklist sections from prompt string.
-
-    Args:
-        prompt: The prompt string containing checklist sections
-
-    Returns:
-        String containing only the checklist sections, or empty string if none found
-    """
-    # Pattern to match checklist section headers
-    checklist_pattern = r"^## .*Checklist$"
-
-    lines = prompt.split("\n")
-    result_lines = []
-    in_checklist_section = False
-
-    for line in lines:
-        # Check if this line is a checklist section header
-        if re.match(checklist_pattern, line.strip()):
-            in_checklist_section = True
-            result_lines.append(line)
-        # Check if this line is a different section header (ends checklist section)
-        elif line.strip().startswith("## ") and not re.match(checklist_pattern, line.strip()):
-            in_checklist_section = False
-        # If we're in a checklist section, include the line
-        elif in_checklist_section:
-            result_lines.append(line)
-
-    # Return joined lines, or empty string if no checklists found
-    result = "\n".join(result_lines).strip()
-    return result
 
 
 def resolve_checklist_placeholders(checklist: str, placeholders: Dict[str, str]) -> str:
