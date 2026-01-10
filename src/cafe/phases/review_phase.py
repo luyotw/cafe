@@ -558,63 +558,17 @@ class ReviewPhase(Phase):
         # Build prompt
         try:
             from cafe.agents.manager import AgentManager
-            from cafe.utils.prompt_utils import extract_agent_guidelines_checklist
 
             agent_file = AgentManager.get_agent_file_path(self.review_agent, "reviewer")
-            agent_guidelines_checklist = extract_agent_guidelines_checklist(agent_file)
 
-            execution_steps = f"""
-## Execution Steps Checklist
-
-[ ] Read {agent_file} to understand your role and native language
-[ ] Read the requirements specification and implementation plan
-[ ] Review commits in current branch (not in {self.base_branch})
-[ ] Complete all review tasks listed below
-[ ] Save complete review result to {review_file_path} in your native language
-[ ] Return appropriate status code
-"""
-
-            review_tasks = f"""
-## Review Tasks Checklist (Priority Order)
-
-**1. Git Status Check**
-[ ] Check for uncommitted changes (if any, development is incomplete)
-[ ] Check for sensitive info (passwords, API keys, credentials - CRITICAL if found)
-
-**2. [Important] Check Commit Message Style Consistency**
-[ ] Get commits: `git log {self.base_branch}..HEAD` (current branch)
-[ ] Get commits: `git log {self.base_branch} --max-count=5` (base branch)
-[ ] Calculate if base branch uses single-line or multi-line messages
-[ ] Calculate if current branch uses single-line or multi-line messages
-[ ] Compare consistency: body presence and language must match base branch
-[ ] If inconsistent: list non-conforming commit SHAs and provide update commands
-
-**3. Confirm Implementation Completion**
-[ ] Check for unfinished items in implementation plan
-
-**4. Find Potential Issues**
-[ ] Check conformance to existing project coding style
-[ ] Check for excessive duplicate code
-[ ] Check code correctness, readability, performance, security
-[ ] Check for missing updates (error messages, docs, examples)
-[ ] Check for files that should not be committed (config, logs)
-[ ] Check for files or code that should not be deleted
-
-**5. Brief Explanation of Issues**
-[ ] List file paths and line numbers with explanations
-[ ] Do NOT provide code solutions
-"""
-
-            important_notes = f"""
-## Important Notes Checklist
-
-[ ] ✅ Write review result in your native language
-[ ] ✅ Save to {review_file_path} in Markdown format
-[ ] ✅ Include all issues and suggestions
-[ ] ⚠️ Commit message style issues are CRITICAL - must fix before passing
-[ ] ✅ Return status code only, no summary or explanation
-{f"[ ] ⚠️ Iteration {self.iteration}: Only follow up on previous round issues" if self.iteration >= 4 else ""}
-"""
+            # Get checklist file path
+            iteration_dir = self._get_iteration_dir(self.iteration)
+            checklist_file = iteration_dir / "checklist.md"
+            from cafe.utils.git_utils import to_cwd_relative_path
+            try:
+                checklist_path = to_cwd_relative_path(checklist_file)
+            except ValueError:
+                checklist_path = str(checklist_file.resolve())
 
             recheck_note = ""
             if recheck_instruction:
@@ -629,6 +583,9 @@ class ReviewPhase(Phase):
 **Your Role:** Reviewer
 Read {agent_file} to understand your complete role definition and responsibilities.
 
+**Task Checklist:**
+Read {checklist_path} for detailed execution steps and requirements.
+
 **Task:** Conduct iteration {self.iteration} code review.
 Review scope: commits in current branch but not in {self.base_branch}.
 
@@ -637,17 +594,6 @@ Review scope: commits in current branch but not in {self.base_branch}.
 {pr_comments_section}
 {recheck_note}
 {restriction_note}
-"""
-
-            prompt = f"""{base_prompt}
-
-{execution_steps}
-
-{review_tasks}
-
-{important_notes}
-
-{agent_guidelines_checklist}
 
 {status_code_prompt}
 
@@ -665,7 +611,7 @@ git rebase --onto {self.base_branch} {self.base_branch} HEAD --exec '
         except Exception as e:
             raise RuntimeError(f"Error building prompt: {e}") from e
 
-        return prompt
+        return base_prompt
 
 
 
