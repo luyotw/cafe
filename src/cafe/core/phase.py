@@ -1535,6 +1535,190 @@ class Phase(ABC):
         # Unknown status code - continue
         return None
 
+    def _validate_and_retry_checklist_completion(
+        self,
+        agent_name: str,
+        prompt: str,
+        user_input: str,
+        valid_status_codes: List[PhaseStatusCode],
+        allowed_tools: Optional[List[str]] = None,
+        max_retries: int = 3,
+    ) -> tuple[str, Optional[PhaseStatusCode], bool]:
+        """Validate checklist completion and retry if incomplete.
+
+        This method validates that all checklist items are completed. If unchecked
+        items are found, it will re-invoke the agent to complete them, up to max_retries times.
+
+        Args:
+            agent_name: Agent name
+            prompt: Original prompt sent to agent
+            user_input: User input for this iteration
+            valid_status_codes: Valid status codes for this phase
+            allowed_tools: Tools available to agent
+            max_retries: Maximum number of retry attempts (default: 3)
+
+        Returns:
+            tuple[final_response, final_status_code, validation_passed]:
+                - final_response: Agent's final response (may be merged from multiple attempts)
+                - final_status_code: Final status code
+                - validation_passed: True if validation passed, False if max retries reached
+
+        Raises:
+            AttributeError: If phase lacks required attributes
+        """
+        from cafe.utils.checklist_validator import validate_checklist
+        from cafe.core.status_codes import StatusCodeParser
+
+        # Check required attributes
+        if not hasattr(self, "phase_dir"):
+            raise AttributeError("Phase must have 'phase_dir' attribute")
+        if not hasattr(self, "iteration"):
+            raise AttributeError("Phase must have 'iteration' attribute")
+
+        # Get checklist path
+        iteration_dir = self._get_iteration_dir(self.iteration)
+        checklist_path = iteration_dir / "checklist.md"
+
+        # Check if checklist exists, if not rebuild it
+        if not checklist_path.exists() or checklist_path.stat().st_size == 0:
+            print(f"⚠️  Checklist file not found or empty, rebuilding...")
+            self._rebuild_checklist_for_iteration(self.iteration)
+
+        # Validate checklist
+        try:
+            result = validate_checklist(checklist_path)
+        except FileNotFoundError:
+            # If still not found after rebuild attempt, skip validation
+            print(f"⚠️  Checklist file still not found after rebuild, skipping validation")
+            # Get current response from context
+            context_file = iteration_dir / "context.json"
+            if context_file.exists():
+                with open(context_file, "r", encoding="utf-8") as f:
+                    context_data = json.load(f)
+                    response = context_data.get("response", "")
+                    status_code = StatusCodeParser.extract(response, valid_codes=valid_status_codes)
+                    return response, status_code, True
+            return "", None, True
+
+        if result.is_complete:
+            print(f"✅ Checklist validation passed - all items completed")
+            # Get current response from context
+            context_file = iteration_dir / "context.json"
+            if context_file.exists():
+                with open(context_file, "r", encoding="utf-8") as f:
+                    context_data = json.load(f)
+                    response = context_data.get("response", "")
+                    status_code = StatusCodeParser.extract(response, valid_codes=valid_status_codes)
+                    return response, status_code, True
+            return "", None, True
+
+        # Checklist incomplete - start retry loop
+        print(f"⚠️  Checklist validation failed - {result.unchecked_count} unchecked items found")
+
+        retry_count = 0
+        while retry_count < max_retries:
+            retry_count += 1
+            print(f"\n⚠️  Re-invoking agent to complete checklist items... (attempt {retry_count}/{max_retries})")
+
+            # Generate retry prompt
+            retry_prompt = f"""Your previous response was received, but the checklist at {checklist_path.relative_to(Path.cwd())} still has unchecked items.
+
+Please review the checklist file, complete all remaining tasks, update the checklist by marking completed items with [x], and re-submit your status code.
+
+Do NOT return a status code until ALL checklist items are marked as complete [x].
+"""
+
+            # Execute agent with retry prompt
+            try:
+                retry_response, _, _, _, retry_streaming_log = self.agent_manager.execute(
+                    agent_name,
+                    retry_prompt,
+                    allowed_tools=allowed_tools,
+                    allowed_directories=self._get_allowed_directories(),
+                )
+
+                # Extract status code from retry response
+                retry_status_code = StatusCodeParser.extract(
+                    retry_response,
+                    valid_codes=valid_status_codes,
+                )
+
+                # Validate checklist again
+                retry_result = validate_checklist(checklist_path)
+
+                if retry_result.is_complete:
+                    print(f"✅ Checklist validation passed after retry {retry_count}")
+
+                    # Merge streaming logs
+                    context_file = iteration_dir / "context.json"
+                    original_streaming_log = []
+                    original_response = ""
+                    if context_file.exists():
+                        with open(context_file, "r", encoding="utf-8") as f:
+                            context_data = json.load(f)
+                            original_streaming_log = context_data.get("streaming_log", [])
+                            original_response = context_data.get("response", "")
+
+                    merged_streaming_log = original_streaming_log + retry_streaming_log
+
+                    # Merge streaming.jsonl files
+                    streaming_jsonl_file = iteration_dir / "streaming.jsonl"
+                    if streaming_jsonl_file.exists():
+                        # Append retry streaming log to existing file
+                        with open(streaming_jsonl_file, "a", encoding="utf-8") as f:
+                            for log_entry in retry_streaming_log:
+                                f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
+
+                    # Update context.json with final response and merged streaming_log
+                    # Note: response is NOT merged, only keep the last one
+                    if context_file.exists():
+                        with open(context_file, "r", encoding="utf-8") as f:
+                            context_data = json.load(f)
+
+                        context_data["response"] = retry_response  # Keep last response only
+                        context_data["streaming_log"] = merged_streaming_log
+                        context_data["checklist_validation_attempts"] = retry_count
+                        context_data["status_code"] = retry_status_code.value if retry_status_code else None
+
+                        with open(context_file, "w", encoding="utf-8") as f:
+                            json.dump(context_data, f, ensure_ascii=False, indent=2)
+
+                    return retry_response, retry_status_code, True
+
+                else:
+                    print(f"⚠️  Checklist still has {retry_result.unchecked_count} unchecked items after retry {retry_count}")
+
+            except Exception as e:
+                print(f"⚠️  Failed to retry checklist completion: {e}")
+                # Continue to next retry
+
+        # Max retries reached
+        print(f"\n❌ Maximum retry attempts ({max_retries}) reached. Checklist still incomplete.")
+        print(f"   Please complete the checklist manually and re-run the command.")
+
+        # Return the last response and status code
+        context_file = iteration_dir / "context.json"
+        if context_file.exists():
+            with open(context_file, "r", encoding="utf-8") as f:
+                context_data = json.load(f)
+                response = context_data.get("response", "")
+                status_code = StatusCodeParser.extract(response, valid_codes=valid_status_codes)
+                return response, status_code, False
+
+        return "", None, False
+
+    def _rebuild_checklist_for_iteration(self, iteration: int) -> None:
+        """Rebuild checklist for current iteration.
+
+        Subclasses should override this method to provide phase-specific checklist generation.
+
+        Args:
+            iteration: Iteration number
+        """
+        # Default implementation does nothing
+        # Subclasses should override to call appropriate checklist generator
+        print(f"⚠️  Checklist rebuild not implemented for this phase, skipping...")
+
     def _analyze_missing_status_code(
         self,
         agent_name: str,
