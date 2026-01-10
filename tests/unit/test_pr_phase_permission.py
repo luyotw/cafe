@@ -11,19 +11,18 @@ from cafe.phases.pr_phase import PRPhase
 from cafe.utils.checklist_validator import ChecklistValidationResult
 
 
-@pytest.mark.skip(reason="Needs investigation - PR phase checklist validation issue")
 def test_prepare_pr_content_stops_on_need_permission(tmp_path):
     """測試：_prepare_pr_content 在收到 NEED_PERMISSION 時應該停止並回傳 result"""
     # Setup
     issue_dir = tmp_path / ".cafe" / "issues" / "test-issue"
-    spec_dir = issue_dir / "spec"
+    spec_dir = issue_dir / "spec" / "iteration_001"
     spec_dir.mkdir(parents=True)
-    spec_file = spec_dir / "spec_001.md"
+    spec_file = spec_dir / "output.md"
     spec_file.write_text("# Test Spec")
-    
-    plan_dir = issue_dir / "plan"
+
+    plan_dir = issue_dir / "plan" / "iteration_001"
     plan_dir.mkdir(parents=True)
-    plan_file = plan_dir / "plan_001.md"
+    plan_file = plan_dir / "output.md"
     plan_file.write_text("# Test Plan")
     
     pr_dir = issue_dir / "pr"
@@ -99,19 +98,18 @@ def test_prepare_pr_content_stops_on_need_permission(tmp_path):
         assert content is None
 
 
-@pytest.mark.skip(reason="Needs investigation - PR phase checklist validation issue")
 def test_pr_phase_stops_on_need_permission(tmp_path):
     """測試：PR phase 在收到 NEED_PERMISSION 時應該停止, 不建立 PR"""
     # Setup
     issue_dir = tmp_path / ".cafe" / "issues" / "test-issue"
-    spec_dir = issue_dir / "spec"
+    spec_dir = issue_dir / "spec" / "iteration_001"
     spec_dir.mkdir(parents=True)
-    spec_file = spec_dir / "spec_001.md"
+    spec_file = spec_dir / "output.md"
     spec_file.write_text("# Test Spec")
-    
-    plan_dir = issue_dir / "plan"
+
+    plan_dir = issue_dir / "plan" / "iteration_001"
     plan_dir.mkdir(parents=True)
-    plan_file = plan_dir / "plan_001.md"
+    plan_file = plan_dir / "output.md"
     plan_file.write_text("# Test Plan")
     
     pr_dir = issue_dir / "pr"

@@ -1380,6 +1380,13 @@ class Phase(ABC):
         complete_codes = complete_codes or []
         continue_codes = continue_codes or []
 
+        # Universal rule: NEED_PERMISSION should never trigger checklist validation
+        # Automatically move NEED_PERMISSION from complete_codes to continue_codes if present
+        if PhaseStatusCode.NEED_PERMISSION in complete_codes:
+            complete_codes = [code for code in complete_codes if code != PhaseStatusCode.NEED_PERMISSION]
+            if PhaseStatusCode.NEED_PERMISSION not in continue_codes:
+                continue_codes = list(continue_codes) + [PhaseStatusCode.NEED_PERMISSION]
+
         should_validate_checklist = (
             status_code == PhaseStatusCode.CONFIRMED or
             status_code in complete_codes

@@ -687,11 +687,14 @@ class PRPhase(Phase):
         """
         return self._current_prompt
 
-    def _generate_pr_content(self) -> None:
+    def _generate_pr_content(self) -> PhaseResult | None:
         """Generate PR title and body using agent.
 
         Agent writes to:
         - .cafe/issues/{issue_name}/pr/iteration_XXX/output.md
+
+        Returns:
+            PhaseResult if agent returns NEED_PERMISSION, None otherwise
         """
         # Derive issue name and pr directory with iteration subdirectory
         spec_path = Path(self.spec_file)
@@ -818,6 +821,7 @@ class PRPhase(Phase):
             valid_status_codes=[PhaseStatusCode.CONFIRMED, PhaseStatusCode.NEED_PERMISSION],
             allowed_tools=allowed_tools,
             complete_codes=[PhaseStatusCode.CONFIRMED, PhaseStatusCode.NEED_PERMISSION],
+            # Note: NEED_PERMISSION will be automatically moved to continue_codes by base class
         )
 
         # Check if we should return early (only for NEED_PERMISSION)
