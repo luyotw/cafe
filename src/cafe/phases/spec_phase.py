@@ -980,6 +980,9 @@ Read {current_spec_file} for initial requirements content.{template_instruction}
 **Task Checklist:**
 Read {checklist_path} for detailed execution steps and requirements.
 
+IMPORTANT: You MUST edit the checklist file and mark each completed item with [x] format (e.g., "[x] Read agent file").
+Do NOT return a status code until ALL checklist items are marked as [x].
+
 {initial_instruction}
 {context_section}
 {rigor_guidelines}
@@ -1026,6 +1029,9 @@ Use `gh issue view {self.issue_id}` to read Issue content.
 **Task Checklist:**
 Read {checklist_path} for detailed execution steps and requirements.
 
+IMPORTANT: You MUST edit the checklist file and mark each completed item with [x] format (e.g., "[x] Read agent file").
+Do NOT return a status code until ALL checklist items are marked as [x].
+
 {status_code_prompt}
 """
         else:
@@ -1035,6 +1041,9 @@ Use `gh issue view {self.issue_id}` to view Issue's latest content.
 
 **Task Checklist:**
 Read {checklist_path} for detailed execution steps and requirements.
+
+IMPORTANT: You MUST edit the checklist file and mark each completed item with [x] format (e.g., "[x] Read agent file").
+Do NOT return a status code until ALL checklist items are marked as [x].
 
 {status_code_prompt}
 """
