@@ -848,6 +848,8 @@ Read {agent_file} to understand your complete role definition and responsibiliti
 {pr_comments_section}{user_input_section}
 """
 
+            checklist_reminder = self._get_checklist_completion_reminder()
+
             return f"""{base_prompt}
 
 {execution_steps}
@@ -859,6 +861,8 @@ Read {agent_file} to understand your complete role definition and responsibiliti
 ## Verification Checklist (Before Returning Status Code)
 
 {verification_checklist}
+
+{checklist_reminder}
 
 {status_code_prompt}
 
@@ -918,6 +922,8 @@ Read {agent_file} to understand your complete role definition and responsibiliti
 {pr_comments_section}{user_input_section}
 """
 
+        checklist_reminder = self._get_checklist_completion_reminder()
+
         return f"""{base_prompt}
 
 {execution_steps}
@@ -929,6 +935,8 @@ Read {agent_file} to understand your complete role definition and responsibiliti
 ## Verification Checklist (Before Returning Status Code)
 
 {verification_checklist}
+
+{checklist_reminder}
 
 {status_code_prompt}
 
