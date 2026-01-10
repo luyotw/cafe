@@ -151,6 +151,26 @@ class TestGenerateReviewChecklist:
         assert "git log main..HEAD" in content
 
 
+    def test_review_checklist_includes_commit_message_checking(self, tmp_path):
+        """Test that review checklist always includes commit message checking steps."""
+        checklist_path = tmp_path / "checklist.md"
+
+        generate_review_checklist(
+            agent_name="Richard",
+            spec_file_path=".cafe/issues/test/spec/iteration_001/output.md",
+            review_file_path=".cafe/issues/test/review/iteration_001/output.md",
+            base_branch="main",
+            checklist_file_path=checklist_path,
+        )
+
+        content = checklist_path.read_text()
+        # Verify commit message checking steps are present
+        assert "git log main..HEAD" in content
+        assert "Verify each commit message follows project style" in content
+        assert "Check commit message language consistency" in content
+        assert "Checked commit messages VERY carefully" in content
+
+
 class TestGeneratePRChecklist:
     """Tests for generate_pr_checklist function."""
 
