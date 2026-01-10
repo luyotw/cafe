@@ -226,7 +226,7 @@ class PlanPhase(Phase):
             # Otherwise, it's the user input string
             current_user_input = result_or_input
 
-            # Prepare allowed tools with write/edit permission for versioned plan file
+            # Prepare allowed tools with write/edit permission for versioned plan file and checklist
             # Convert to relative path (without / prefix) - normal relative path
             # Use path relative to current working directory (supports worktree)
             from cafe.utils.git_utils import to_cwd_relative_path
@@ -237,6 +237,14 @@ class PlanPhase(Phase):
                 # Fallback to absolute path if file is not under cwd
                 plan_file_pattern = str(Path(self.plan_file).resolve())
 
+            # Get checklist path for this iteration
+            iteration_dir = self._get_iteration_dir(self.iteration)
+            checklist_file = iteration_dir / "checklist.md"
+            try:
+                checklist_pattern = to_cwd_relative_path(checklist_file)
+            except ValueError:
+                checklist_pattern = str(checklist_file.resolve())
+
             # Merge base tools with previous iteration's tools (if any)
             base_allowed_tools = [
                 "read",
@@ -246,6 +254,7 @@ class PlanPhase(Phase):
                 "web_fetch",
                 "web_search",
                 f"edit({plan_file_pattern})",
+                f"edit({checklist_pattern})",
             ]
             allowed_tools = self._merge_allowed_tools(base_allowed_tools)
 

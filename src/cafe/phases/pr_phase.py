@@ -811,6 +811,16 @@ class PRPhase(Phase):
             output_file.write_text("# TODO: Write PR title\n\nTODO: Write PR body\n")
         allowed_tools.append(f"edit({output_file_pattern})")
 
+        # Get checklist path for this iteration and add edit permission
+        from cafe.utils.git_utils import to_cwd_relative_path
+        iteration_dir = self._get_iteration_dir(self.iteration)
+        checklist_file = iteration_dir / "checklist.md"
+        try:
+            checklist_pattern = to_cwd_relative_path(checklist_file)
+        except ValueError:
+            checklist_pattern = str(checklist_file.resolve())
+        allowed_tools.append(f"edit({checklist_pattern})")
+
         # Store prompt for _generate_prompt method
         self._current_prompt = full_prompt
 

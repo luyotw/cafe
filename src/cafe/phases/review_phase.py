@@ -222,6 +222,14 @@ class ReviewPhase(Phase):
                 # Fallback to absolute path if file is not under cwd
                 review_file_pattern = str(review_file_path.resolve())
 
+            # Get checklist path for this iteration
+            iteration_dir = self._get_iteration_dir(self.iteration)
+            checklist_file = iteration_dir / "checklist.md"
+            try:
+                checklist_pattern = to_cwd_relative_path(checklist_file)
+            except ValueError:
+                checklist_pattern = str(checklist_file.resolve())
+
             base_allowed_tools = [
                 "read",                         # Read spec and plan files
                 "grep",                         # Search file content
@@ -232,8 +240,9 @@ class ReviewPhase(Phase):
                 "bash(git log)",                # View commit history and messages
                 "bash(git diff)",               # View code changes
                 "bash(git show)",               # View specific commit details
-                "bash(git status)",               # View specific commit details
-                f"edit({review_file_pattern})",  # Allow editing to specific review file
+                "bash(git status)",             # View specific commit details
+                f"edit({review_file_pattern})", # Allow editing to specific review file
+                f"edit({checklist_pattern})",   # Allow editing checklist
             ]
 
             # Merge base tools with previous iteration's tools (if any)

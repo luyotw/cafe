@@ -351,7 +351,7 @@ class SpecPhase(Phase):
             # Otherwise, it's the user input string
             current_user_input = result_or_input
 
-            # Prepare allowed tools with write/edit permission for spec file
+            # Prepare allowed tools with write/edit permission for spec file and checklist
             # Convert to relative path (without / prefix) - plain relative path
             # Use path relative to current working directory (supports worktree)
             try:
@@ -359,6 +359,14 @@ class SpecPhase(Phase):
             except ValueError:
                 # Fallback to absolute path if file is not under cwd
                 spec_file_pattern = str(Path(self.spec_file).resolve())
+
+            # Get checklist path for this iteration
+            iteration_dir = self._get_iteration_dir(self.iteration)
+            checklist_file = iteration_dir / "checklist.md"
+            try:
+                checklist_pattern = to_cwd_relative_path(checklist_file)
+            except ValueError:
+                checklist_pattern = str(checklist_file.resolve())
 
             # Merge base tools with previous iteration's tools (if any)
             base_allowed_tools = [
@@ -369,6 +377,7 @@ class SpecPhase(Phase):
                 "web_fetch",
                 "web_search",
                 f"edit({spec_file_pattern})",
+                f"edit({checklist_pattern})",
             ]
             allowed_tools = self._merge_allowed_tools(base_allowed_tools)
 

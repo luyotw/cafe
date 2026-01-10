@@ -115,7 +115,8 @@ class TestGeneratePRContentWithOutputMd:
                 # Execute
                 phase._generate_pr_content()
                 
-                # Verify allowed_tools
+                # Verify allowed_tools (should include both output.md and checklist.md)
                 edit_tools = [t for t in captured_tools if t.startswith("edit(")]
-                assert len(edit_tools) == 1
-                assert "output.md" in edit_tools[0]
+                assert len(edit_tools) == 2
+                assert any("output.md" in t for t in edit_tools)
+                assert any("checklist.md" in t for t in edit_tools)
