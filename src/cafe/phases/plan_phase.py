@@ -207,6 +207,17 @@ class PlanPhase(Phase):
                     self.plan_file.parent.mkdir(parents=True, exist_ok=True)
                     self.plan_file.write_text(f"## Development Guide\n\n{dev_guide}\n")
 
+            # Generate checklist for this iteration
+            from cafe.utils.checklist_generator import generate_plan_checklist
+
+            checklist_path = self._get_iteration_dir(self.iteration) / "checklist.md"
+            generate_plan_checklist(
+                agent_name=self.dev_agent,
+                plan_file_path=str(self.plan_file),
+                spec_file_path=self.spec_file,
+                checklist_file_path=checklist_path,
+            )
+
             # Prepare user_input for this iteration
             result_or_input = self._prepare_user_input_for_iteration()
             if isinstance(result_or_input, PhaseResult):

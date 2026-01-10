@@ -702,6 +702,30 @@ class PRPhase(Phase):
         iteration_dir = pr_dir / f"iteration_{self.iteration:03d}"
         iteration_dir.mkdir(parents=True, exist_ok=True)
 
+        # Derive plan file path - use latest versioned file if available
+        plan_dir = issue_dir / "plan"
+        latest_plan = self._get_latest_versioned_file("plan", plan_dir)
+        if latest_plan and latest_plan.exists():
+            plan_file = latest_plan
+        else:
+            # Fallback to legacy plan.md
+            plan_file = plan_dir / "plan.md"
+
+        # Generate checklist for this iteration
+        from cafe.utils.checklist_generator import generate_pr_checklist
+
+        checklist_path = iteration_dir / "checklist.md"
+        pr_title_file = iteration_dir / "pr_title.md"
+        pr_body_file = iteration_dir / "pr_body.md"
+        generate_pr_checklist(
+            agent_name=self.dev_agent,
+            spec_file_path=self.spec_file,
+            plan_file_path=str(plan_file),
+            pr_title_file=str(pr_title_file),
+            pr_body_file=str(pr_body_file),
+            checklist_file_path=checklist_path,
+        )
+
         # Use path relative to current working directory (supports worktree)
         from cafe.utils.git_utils import to_cwd_relative_path
 
@@ -712,15 +736,6 @@ class PRPhase(Phase):
         except ValueError:
             # Fallback to absolute path if file is not under cwd
             output_file_pattern = str(output_file.resolve())
-
-        # Derive plan file path - use latest versioned file if available
-        plan_dir = issue_dir / "plan"
-        latest_plan = self._get_latest_versioned_file("plan", plan_dir)
-        if latest_plan and latest_plan.exists():
-            plan_file = latest_plan
-        else:
-            # Fallback to legacy plan.md
-            plan_file = plan_dir / "plan.md"
 
         # Get commits for context
         # Use shared method to get only commits from current feature branch

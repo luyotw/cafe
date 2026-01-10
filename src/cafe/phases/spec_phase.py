@@ -325,6 +325,24 @@ class SpecPhase(Phase):
             if max_iterations_result:
                 return max_iterations_result
 
+            # Generate checklist for this iteration
+            from cafe.utils.checklist_generator import generate_spec_checklist
+
+            checklist_path = self._get_iteration_dir(self.iteration) / "checklist.md"
+            prev_spec_file = None
+            if self.iteration > 1:
+                prev_spec_path = self._get_versioned_file_path("spec", self.iteration - 1, self.phase_dir)
+                if prev_spec_path.exists():
+                    prev_spec_file = str(prev_spec_path)
+
+            generate_spec_checklist(
+                iteration=self.iteration,
+                agent_name=self.pm_agent,
+                current_spec_file=self.spec_file,
+                prev_spec_file=prev_spec_file,
+                checklist_file_path=checklist_path,
+            )
+
             # Prepare user_input for this iteration
             result_or_input = self._prepare_user_input_for_iteration()
             if isinstance(result_or_input, PhaseResult):

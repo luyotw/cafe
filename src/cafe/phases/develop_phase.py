@@ -1014,6 +1014,20 @@ Read {agent_file} to understand your complete role definition and responsibiliti
             # Increment for next execution
             self.iteration += 1
 
+            # Generate checklist for this iteration
+            from cafe.utils.checklist_generator import generate_develop_checklist
+
+            checklist_path = self._get_iteration_dir(self.iteration) / "checklist.md"
+            develop_file = self._get_iteration_dir(self.iteration) / "output.md"
+            generate_develop_checklist(
+                agent_name=self.dev_agent,
+                spec_file_path=self.spec_file,
+                plan_file_path=self.plan_file,
+                develop_file=str(develop_file),
+                checklist_file_path=checklist_path,
+                correction_mode=self.correction_mode,
+            )
+
             # Prepare user_input for this iteration
             result_or_input = self._prepare_user_input_for_iteration()
             if isinstance(result_or_input, PhaseResult):
