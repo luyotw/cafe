@@ -1750,6 +1750,46 @@ Do NOT return a status code until ALL checklist items are marked as complete [x]
         # Subclasses should override to call appropriate checklist generator
         print(f"⚠️  Checklist rebuild not implemented for this phase, skipping...")
 
+    def _get_checklist_completion_reminder(self) -> str:
+        """Get checklist completion reminder text for prompts.
+
+        This method generates a reminder text that can be inserted into phase prompts
+        to emphasize the requirement that all checklist items must be completed before
+        returning a status code.
+
+        Returns:
+            str: Checklist completion reminder text
+
+        Raises:
+            AttributeError: If phase lacks required attributes
+        """
+        if not hasattr(self, "iteration"):
+            raise AttributeError("Phase must have 'iteration' attribute")
+
+        iteration_dir = self._get_iteration_dir(self.iteration)
+        checklist_path = iteration_dir / "checklist.md"
+
+        try:
+            from cafe.utils.git_utils import to_cwd_relative_path
+            checklist_relative = to_cwd_relative_path(checklist_path)
+        except (ValueError, OSError):
+            try:
+                checklist_relative = str(checklist_path.relative_to(Path.cwd()))
+            except ValueError:
+                checklist_relative = str(checklist_path)
+
+        return f"""
+⚠️ **IMPORTANT - Checklist Completion Requirement:**
+
+Before returning ANY status code, you MUST:
+1. Review and complete ALL items in {checklist_relative}
+2. Mark each completed item with [x] (change [ ] to [x])
+3. Verify that NO unchecked items [ ] remain in the checklist
+4. ONLY return a status code after ALL checklist items are marked as complete [x]
+
+The system will verify checklist completion. If unchecked items remain, you will be asked to complete them.
+"""
+
     def _analyze_missing_status_code(
         self,
         agent_name: str,

@@ -1068,7 +1068,28 @@ Write to {current_spec_file}:
 Response: "CAFE_READY_FOR_REVIEW" (nothing else)
 """
 
-        # --- 6. Assemble the final prompt ---
+        # --- 6. Build checklist completion reminder ---
+        iteration_dir = self._get_iteration_dir(self.iteration)
+        checklist_path = iteration_dir / "checklist.md"
+        try:
+            from cafe.utils.git_utils import to_cwd_relative_path
+            checklist_relative = to_cwd_relative_path(checklist_path)
+        except (ValueError, OSError):
+            checklist_relative = str(checklist_path.relative_to(Path.cwd()))
+
+        checklist_reminder = f"""
+⚠️ **IMPORTANT - Checklist Completion Requirement:**
+
+Before returning ANY status code, you MUST:
+1. Review and complete ALL items in {checklist_relative}
+2. Mark each completed item with [x] (change [ ] to [x])
+3. Verify that NO unchecked items [ ] remain in the checklist
+4. ONLY return a status code after ALL checklist items are marked as complete [x]
+
+The system will verify checklist completion. If unchecked items remain, you will be asked to complete them.
+"""
+
+        # --- 7. Assemble the final prompt ---
         return f"""{base_prompt}
 
 {execution_steps}
@@ -1076,6 +1097,8 @@ Response: "CAFE_READY_FOR_REVIEW" (nothing else)
 {important_notes}
 
 {agent_guidelines_checklist}
+
+{checklist_reminder}
 
 {status_code_prompt}
 
@@ -1103,10 +1126,33 @@ Response: "CAFE_READY_FOR_REVIEW" (nothing else)
             },
         )
 
+        # Build checklist completion reminder
+        iteration_dir = self._get_iteration_dir(self.iteration)
+        checklist_path = iteration_dir / "checklist.md"
+        try:
+            from cafe.utils.git_utils import to_cwd_relative_path
+            checklist_relative = to_cwd_relative_path(checklist_path)
+        except (ValueError, OSError):
+            checklist_relative = str(checklist_path.relative_to(Path.cwd()))
+
+        checklist_reminder = f"""
+⚠️ **IMPORTANT - Checklist Completion Requirement:**
+
+Before returning ANY status code, you MUST:
+1. Review and complete ALL items in {checklist_relative}
+2. Mark each completed item with [x] (change [ ] to [x])
+3. Verify that NO unchecked items [ ] remain in the checklist
+4. ONLY return a status code after ALL checklist items are marked as complete [x]
+
+The system will verify checklist completion. If unchecked items remain, you will be asked to complete them.
+"""
+
         if self.iteration == 1:
             return f"""This is round {self.iteration}  requirements analysis.
 
 Please use `gh issue view {self.issue_id}` to read Issue content, carefully analyze requirements, identify all unclear, vague, or areas that might require developers to make assumptions.
+
+{checklist_reminder}
 
 {status_code_prompt}
 
@@ -1120,6 +1166,8 @@ Respond with confirmation message.
             return f"""This is round {self.iteration}  requirements analysis.
 
 Please use `gh issue view {self.issue_id}`  to view Issue's latest content.
+
+{checklist_reminder}
 
 {status_code_prompt}
 
