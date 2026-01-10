@@ -805,7 +805,8 @@ Steps for requesting clarification:
 {f"[ ] Read questions in {develop_file}" if develop_file and develop_file.exists() and not self._is_clarification_answered(develop_file) else ""}
 [ ] Read {review_source_text} and understand all issues
 [ ] List all issues that need to be addressed from review feedback
-[ ] Address issues one by one based on review feedback
+[ ] Address issues one by one based on review feedback.
+[ ] Write code immediately without any means of evasion.
 [ ] Verify each issue from review feedback has been resolved
 [ ] Follow existing commit message style, commit multiple times if needed
 [ ] Do NOT modify commits from other branches
@@ -877,6 +878,7 @@ Read {agent_file} to understand your complete role definition and responsibiliti
 {f"[ ] Read questions in {develop_file}" if develop_file and develop_file.exists() and not self._is_clarification_answered(develop_file) else ""}
 [ ] Carefully read {self.spec_file} and {self.plan_file}
 [ ] Execute development tasks in strict order according to the plan
+[ ] Write code immediately without any means of evasion.
 [ ] Mark each completed task as checked in {self.plan_file} (change - [ ] to - [x])
 [ ] Follow existing commit message style, commit multiple times if needed
 [ ] Do NOT modify commits from other branches

@@ -139,6 +139,7 @@ REVIEW_TASKS_CHECKLIST = """## Review Tasks Checklist (Priority Order)
 [ ] Check if existing code patterns and utilities were reused
 [ ] Verify proper error handling
 [ ] Check for code duplication
+[ ] Check if existing unused code can be removed
 
 **5. Testing Verification**
 [ ] Verify all tests pass
