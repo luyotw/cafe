@@ -395,32 +395,17 @@ Please first read {template_path}, then strictly follow the template's format, s
 
         if self.iteration == 1:
             from cafe.agents.manager import AgentManager
-            from cafe.utils.prompt_utils import extract_agent_guidelines_checklist
 
             agent_file = AgentManager.get_agent_file_path(self.dev_agent, "developer")
-            agent_guidelines_checklist = extract_agent_guidelines_checklist(agent_file)
 
-            execution_steps = f"""
-## Execution Steps Checklist
-
-[ ] Read {agent_file} to understand your role and native language
-[ ] Read the development guide in {plan_file_path}
-[ ] Read the requirements document {spec_file_path}
-[ ] Plan implementation steps (planning, not implementation)
-[ ] Append plan after "## Development Guide" section
-[ ] Return appropriate status code
-"""
-
-            important_notes = f"""
-## Important Notes Checklist
-
-[ ] ✅ Your job is PLANNING, not implementation
-[ ] ✅ Write plans and steps only, no actual code
-[ ] ✅ Keep "## Development Guide" section unchanged
-[ ] ✅ Append implementation plan AFTER development guide
-[ ] ✅ Write content in your native language
-[ ] ✅ Follow template format strictly (if template provided)
-"""
+            # Get checklist file path
+            iteration_dir = self._get_iteration_dir(self.iteration)
+            checklist_file = iteration_dir / "checklist.md"
+            from cafe.utils.git_utils import to_cwd_relative_path
+            try:
+                checklist_path = to_cwd_relative_path(checklist_file)
+            except ValueError:
+                checklist_path = str(checklist_file.resolve())
 
             template_note = ""
             if template_instruction:
@@ -430,6 +415,9 @@ Please first read {template_path}, then strictly follow the template's format, s
 
 **Your Role:** Developer (Planning)
 Read {agent_file} to understand your complete role definition and responsibilities.
+
+**Task Checklist:**
+Read {checklist_path} for detailed execution steps and requirements.
 
 This is iteration {self.iteration} of implementation analysis.
 Analyze {spec_file_path} and plan implementation steps.
@@ -438,53 +426,31 @@ Analyze {spec_file_path} and plan implementation steps.
 **Output Format:**
 - **CAFE_NEED_CLARIFICATION**: Append "## Implementation Plan" and "## Questions to Confirm" sections
 - **CAFE_READY_FOR_REVIEW**: Append complete implementation plan following template structure
-"""
-
-            return f"""{base_prompt}
-
-{execution_steps}
-
-{important_notes}
-
-{agent_guidelines_checklist}
 
 {status_code_prompt}
 """
+
+            return base_prompt
         else:
             # Iteration 2+
             from cafe.agents.manager import AgentManager
-            from cafe.utils.prompt_utils import extract_agent_guidelines_checklist
 
             agent_file = AgentManager.get_agent_file_path(self.dev_agent, "developer")
-            agent_guidelines_checklist = extract_agent_guidelines_checklist(agent_file)
+
+            # Get checklist file path
+            iteration_dir = self._get_iteration_dir(self.iteration)
+            checklist_file = iteration_dir / "checklist.md"
+            from cafe.utils.git_utils import to_cwd_relative_path
+            try:
+                checklist_path = to_cwd_relative_path(checklist_file)
+            except ValueError:
+                checklist_path = str(checklist_file.resolve())
 
             user_request_section = ""
             if user_input:
                 user_request_section = f"""
 **User's Modification Request:**
 {user_input}
-"""
-
-            execution_steps = f"""
-## Execution Steps Checklist
-
-[ ] Read {agent_file} to understand your role (if necessary)
-[ ] Read the latest version of {plan_file_path}
-[ ] Review user's modification request (see above)
-[ ] Update existing implementation plan (do not rewrite entirely)
-[ ] Keep "## Development Guide" section unchanged
-[ ] Return appropriate status code
-"""
-
-            important_notes = f"""
-## Important Notes Checklist
-
-[ ] ✅ UPDATE existing plan, do not rewrite entirely
-[ ] ✅ Use Edit tool with old_string/new_string method
-[ ] ✅ Keep "## Development Guide" section unchanged
-[ ] ✅ Only modify parts that need changes
-[ ] ✅ Write content in your native language
-[ ] ✅ Follow template format strictly (if template provided)
 """
 
             template_note = ""
@@ -495,6 +461,9 @@ Analyze {spec_file_path} and plan implementation steps.
 
 **Your Role:** Developer (Planning)
 Read {agent_file} to understand your complete role definition and responsibilities.
+
+**Task Checklist:**
+Read {checklist_path} for detailed execution steps and requirements.
 
 This is iteration {self.iteration} of implementation analysis.
 Continue analyzing the latest version of {spec_file_path}.
@@ -504,18 +473,11 @@ Continue analyzing the latest version of {spec_file_path}.
 **Output Format:**
 - **CAFE_NEED_CLARIFICATION**: Update relevant sections and list questions in "## Questions to Confirm"
 - **CAFE_READY_FOR_REVIEW**: Update sections to meet user's requirements
-"""
-
-            return f"""{base_prompt}
-
-{execution_steps}
-
-{important_notes}
-
-{agent_guidelines_checklist}
 
 {status_code_prompt}
 """
+
+            return base_prompt
 
     def _generate_github_prompt(self, user_input: str) -> str:
         """Generate prompt for GitHub workflow.
@@ -537,11 +499,23 @@ Continue analyzing the latest version of {spec_file_path}.
             },
         )
 
+        # Get checklist file path
+        iteration_dir = self._get_iteration_dir(self.iteration)
+        checklist_file = iteration_dir / "checklist.md"
+        from cafe.utils.git_utils import to_cwd_relative_path
+        try:
+            checklist_path = to_cwd_relative_path(checklist_file)
+        except ValueError:
+            checklist_path = str(checklist_file.resolve())
+
         if self.iteration == 1:
             return f"""Analyze GitHub Issue #{self.issue_id} and plan implementation steps.
 
 **Your Role:**
 You are an experienced Developer, responsible for planning detailed implementation steps based on requirements specifications and development guidelines.
+
+**Task Checklist:**
+Read {checklist_path} for detailed execution steps and requirements.
 
 This is iteration {self.iteration} of implementation analysis.
 
@@ -569,6 +543,9 @@ Reply with confirmation message.
 
 **Your Role:**
 You are an experienced Developer, responsible for planning detailed implementation steps based on requirements specifications and development guidelines.
+
+**Task Checklist:**
+Read {checklist_path} for detailed execution steps and requirements.
 
 This is iteration {self.iteration} of implementation analysis.
 
