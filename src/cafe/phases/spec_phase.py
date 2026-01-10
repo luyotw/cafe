@@ -938,15 +938,8 @@ Use Read tool to read {template_file} as a reference for output format and struc
 
             initial_instruction = f"""**Round 1 Requirements Clarification**
 
-Read {current_spec_file}  for initial requirements content.{template_instruction}"""
-            context_section = """
-**Your Responsibilities:**
-1. Carefully read requirements document, identify all unclear, vague, or areas that might require developers to make assumptions.
-2. **Before asking questions**: Try to find answers from README.md or codebase first using Read/Grep tools.
-3. **Only ask when necessary**: If you cannot find the answer from existing documentation/code, then ask users.
-4. **As PM** ask users conversationally to confirm all necessary information.
-5. If requirements are already clear, say so, do not force questions.
-"""
+Read {current_spec_file} for initial requirements content.{template_instruction}"""
+            context_section = ""
         else:  # Iteration 2+
             # Round 2 onwards: Read previous round spec file and user_input, write new spec file
             initial_instruction = f"""**Round {self.iteration} Requirements Clarification**
@@ -981,11 +974,8 @@ Read {current_spec_file}  for initial requirements content.{template_instruction
         except ValueError:
             checklist_path = str(checklist_file.resolve())
 
-        # --- 4. Build principles section ---
+        # --- 4. Build prompt ---
         base_prompt = f"""# Specification Phase
-
-**Your Role:** PM (Product Manager)
-Read {agent_file} to understand your complete role definition and responsibilities.
 
 **Task Checklist:**
 Read {checklist_path} for detailed execution steps and requirements.
@@ -994,37 +984,7 @@ Read {checklist_path} for detailed execution steps and requirements.
 {context_section}
 {rigor_guidelines}
 
-**Output Format Requirements:**
-- Write ALL content (requirements, questions, specifications) to {current_spec_file}
-- Return ONLY the status code in your response
-- ❌ NEVER put questions or content in your response - the workflow CANNOT continue if you do this
-- ✅ Questions must go in the markdown file, response contains ONLY status code
-
-**Correct Example:**
-- File {current_spec_file}: Contains all questions and specifications
-- Your response: "CAFE_NEED_CLARIFICATION"
-
-**Wrong Example (will fail):**
-- Your response: "I have some questions: 1. What is...? CAFE_NEED_CLARIFICATION" ← ❌ DO NOT DO THIS
-
 {status_code_prompt}
-
-**Status: CAFE_NEED_CLARIFICATION**
-Write to {current_spec_file}:
-   - ## Original Requirements Description (preserve exactly as provided)
-   - ## User Stories (from user or auto-generated)
-   - ## Current Requirements Specification (integrate all known info)
-   - ## Questions to Clarify (PM asks conversational questions)
-
-Response: "CAFE_NEED_CLARIFICATION" (nothing else)
-
-**Status: CAFE_READY_FOR_REVIEW**
-Write to {current_spec_file}:
-   - ## Original Requirements Description (preserve exactly as provided)
-   - ## User Stories (from user or auto-generated)
-   - ## Requirements Specification (complete spec with functions, scenarios, behaviors, acceptance criteria)
-
-Response: "CAFE_READY_FOR_REVIEW" (nothing else)
 """
 
         # --- 5. Return the final prompt ---
@@ -1061,34 +1021,22 @@ Response: "CAFE_READY_FOR_REVIEW" (nothing else)
         if self.iteration == 1:
             return f"""This is round {self.iteration} requirements analysis.
 
-Please use `gh issue view {self.issue_id}` to read Issue content, carefully analyze requirements, identify all unclear, vague, or areas that might require developers to make assumptions.
+Use `gh issue view {self.issue_id}` to read Issue content.
 
 **Task Checklist:**
 Read {checklist_path} for detailed execution steps and requirements.
 
 {status_code_prompt}
-
-**If there are requirements issues that need clarification:**
-List questions in the most concise way, do not give any suggestions.
-
-**If requirements are already clear, confirm completion:**
-Respond with confirmation message.
 """
         else:
             return f"""This is round {self.iteration} requirements analysis.
 
-Please use `gh issue view {self.issue_id}` to view Issue's latest content.
+Use `gh issue view {self.issue_id}` to view Issue's latest content.
 
 **Task Checklist:**
 Read {checklist_path} for detailed execution steps and requirements.
 
 {status_code_prompt}
-
-**If there are requirements issues that need clarification:**
-List questions in the most concise way, do not give any suggestions.
-
-**If requirements are already clear, confirm completion:**
-Respond with confirmation message.
 """
 
     def _load_issue_config(self) -> None:
