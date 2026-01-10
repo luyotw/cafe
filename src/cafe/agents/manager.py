@@ -312,21 +312,25 @@ class AgentManager:
         Args:
             agent_name: Agent name (e.g. "Roger", "David", "Richard", "John")
             role: Agent role directory name (e.g. "pm", "developer", "reviewer")
-            cafe_dir: CAFE config directory path (default None, uses cls.CAFE_DIR)
+            cafe_dir: CAFE config directory path (deprecated, not used)
 
         Returns:
-            str: Agent file path (relative path, e.g. ".cafe/agents/pm/Roger.md")
+            str: Agent file path (tries ~/.cafe/agents first, then src/cafe/data/agents)
 
         Examples:
             >>> AgentManager.get_agent_file_path("Roger", "pm")
-            '.cafe/agents/pm/Roger.md'
+            'src/cafe/data/agents/pm/Roger.md'
             >>> AgentManager.get_agent_file_path("David", "developer")
-            '.cafe/agents/developer/David.md'
+            'src/cafe/data/agents/developer/David.md'
             >>> AgentManager.get_agent_file_path("John", "developer")
-            '.cafe/agents/developer/John.md'
+            'src/cafe/data/agents/developer/John.md'
         """
-        if cafe_dir is None:
-            cafe_dir = cls.CAFE_DIR
-        
-        # Return relative path string
-        return f"{cafe_dir}/{cls.AGENTS_DIR}/{role}/{agent_name}.md"
+        from pathlib import Path
+
+        # Try ~/.cafe/agents first
+        home_path = Path.home() / ".cafe" / "agents" / role / f"{agent_name}.md"
+        if home_path.exists():
+            return str(home_path)
+
+        # Fall back to src/cafe/data/agents
+        return f"src/cafe/data/agents/{role}/{agent_name}.md"
