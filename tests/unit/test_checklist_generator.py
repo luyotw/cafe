@@ -28,8 +28,7 @@ class TestGenerateSpecChecklist:
 
         assert checklist_path.exists()
         content = checklist_path.read_text()
-        assert "## Execution Steps Checklist" in content
-        assert "## Important Notes Checklist" in content
+        assert "## Checklist" in content
         assert ".cafe/issues/test/spec/iteration_001/output.md" in content
         assert "Read README.md" in content  # Iteration 1 specific
 
@@ -84,11 +83,10 @@ class TestGeneratePlanChecklist:
 
         assert checklist_path.exists()
         content = checklist_path.read_text()
-        assert "## Execution Steps Checklist" in content
-        assert "## Important Notes Checklist" in content
+        assert "## Checklist" in content
         assert ".cafe/issues/test/plan/iteration_001/output.md" in content
         assert ".cafe/issues/test/spec/iteration_001/output.md" in content
-        assert "PLANNING, not implementation" in content
+        assert "planning, not implementation" in content
 
 
 class TestGenerateDevelopChecklist:
@@ -109,9 +107,8 @@ class TestGenerateDevelopChecklist:
 
         assert checklist_path.exists()
         content = checklist_path.read_text()
-        assert "## Execution Steps Checklist" in content
+        assert "## Checklist" in content
         assert "Execute development tasks in strict order" in content
-        assert "## Verification Checklist" in content
 
     def test_generates_develop_checklist_correction_mode(self, tmp_path):
         """Test generates develop checklist in correction mode."""
@@ -149,8 +146,7 @@ class TestGenerateReviewChecklist:
 
         assert checklist_path.exists()
         content = checklist_path.read_text()
-        assert "## Execution Steps Checklist" in content
-        assert "## Review Tasks Checklist" in content
+        assert "## Checklist" in content
         assert ".cafe/issues/test/review/iteration_001/output.md" in content
         assert "git log main..HEAD" in content
 
@@ -172,8 +168,7 @@ class TestGeneratePRChecklist:
 
         assert checklist_path.exists()
         content = checklist_path.read_text()
-        assert "## Execution Steps Checklist" in content
-        assert "## Important Notes Checklist" in content
+        assert "## Checklist" in content
         assert ".cafe/issues/test/pr/iteration_001/output.md" in content
 
 

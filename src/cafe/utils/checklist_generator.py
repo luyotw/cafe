@@ -37,17 +37,16 @@ def generate_spec_checklist(
     else:
         execution_steps = checklist_templates.SPEC_EXECUTION_STEPS_ITERATION_N
 
-    important_notes = checklist_templates.SPEC_IMPORTANT_NOTES
-
     # Add iteration-specific note for iteration 4+
+    iteration_note = ""
     if iteration >= 4:
-        important_notes += checklist_templates.SPEC_IMPORTANT_NOTES_ITERATION_4_PLUS
+        iteration_note = checklist_templates.SPEC_IMPORTANT_NOTES_ITERATION_4_PLUS
 
     # Get agent guidelines checklist
     agent_guidelines = extract_agent_guidelines_checklist(agent_file)
 
     # Combine all sections
-    checklist_content = f"{execution_steps}\n{important_notes}\n{agent_guidelines}"
+    checklist_content = f"{execution_steps}\n{iteration_note}\n{agent_guidelines}"
 
     # Build placeholders dict
     placeholders = {
@@ -84,13 +83,12 @@ def generate_plan_checklist(
 
     # Get templates
     execution_steps = checklist_templates.PLAN_EXECUTION_STEPS
-    important_notes = checklist_templates.PLAN_IMPORTANT_NOTES
 
     # Get agent guidelines checklist
     agent_guidelines = extract_agent_guidelines_checklist(agent_file)
 
     # Combine all sections
-    checklist_content = f"{execution_steps}\n{important_notes}\n{agent_guidelines}"
+    checklist_content = f"{execution_steps}\n{agent_guidelines}"
 
     # Build placeholders dict
     placeholders = {
@@ -133,14 +131,11 @@ def generate_develop_checklist(
     else:
         execution_steps = checklist_templates.DEVELOP_EXECUTION_STEPS_NORMAL
 
-    important_notes = checklist_templates.DEVELOP_IMPORTANT_NOTES
-    verification_checklist = checklist_templates.DEVELOP_VERIFICATION_CHECKLIST
-
     # Get agent guidelines checklist
     agent_guidelines = extract_agent_guidelines_checklist(agent_file)
 
     # Combine all sections
-    checklist_content = f"{execution_steps}\n{important_notes}\n{agent_guidelines}\n{verification_checklist}"
+    checklist_content = f"{execution_steps}\n{agent_guidelines}"
 
     # Build placeholders dict
     placeholders = {
@@ -179,14 +174,12 @@ def generate_review_checklist(
 
     # Get templates
     execution_steps = checklist_templates.REVIEW_EXECUTION_STEPS
-    tasks_checklist = checklist_templates.REVIEW_TASKS_CHECKLIST
-    important_notes = checklist_templates.REVIEW_IMPORTANT_NOTES
 
     # Get agent guidelines checklist
     agent_guidelines = extract_agent_guidelines_checklist(agent_file)
 
     # Combine all sections
-    checklist_content = f"{execution_steps}\n{tasks_checklist}\n{important_notes}\n{agent_guidelines}"
+    checklist_content = f"{execution_steps}\n{agent_guidelines}"
 
     # Build placeholders dict
     placeholders = {
@@ -224,13 +217,12 @@ def generate_pr_checklist(
 
     # Get templates
     execution_steps = checklist_templates.PR_EXECUTION_STEPS
-    important_notes = checklist_templates.PR_IMPORTANT_NOTES
 
     # Get agent guidelines checklist
     agent_guidelines = extract_agent_guidelines_checklist(agent_file)
 
     # Combine all sections
-    checklist_content = f"{execution_steps}\n{important_notes}\n{agent_guidelines}"
+    checklist_content = f"{execution_steps}\n{agent_guidelines}"
 
     # Build placeholders dict
     placeholders = {
