@@ -799,7 +799,9 @@ class PRPhase(Phase):
             },
         )
 
-        full_prompt = prompt + "\n\n" + status_code_prompt
+        checklist_reminder = self._get_checklist_completion_reminder()
+
+        full_prompt = prompt + "\n\n" + checklist_reminder + "\n\n" + status_code_prompt
 
         # Set allowed tools for editing
         allowed_tools = ["read", "grep", "glob", "ls", "web_fetch", "web_search"]
