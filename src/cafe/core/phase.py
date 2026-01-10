@@ -1742,13 +1742,45 @@ Do NOT return a status code until ALL checklist items are marked as complete [x]
         """Rebuild checklist for current iteration.
 
         Subclasses should override this method to provide phase-specific checklist generation.
+        This default implementation creates a minimal placeholder checklist to prevent total failure.
 
         Args:
             iteration: Iteration number
         """
-        # Default implementation does nothing
-        # Subclasses should override to call appropriate checklist generator
-        print(f"⚠️  Checklist rebuild not implemented for this phase, skipping...")
+        # Get phase name for the placeholder
+        phase_name = self.__class__.__name__.replace("Phase", "").lower()
+
+        iteration_dir = self._get_iteration_dir(iteration)
+        checklist_path = iteration_dir / "checklist.md"
+
+        # Create minimal placeholder checklist
+        placeholder_content = f"""## Execution Steps Checklist
+
+[ ] Review and complete all required tasks for this phase
+[ ] Verify all work is complete before returning status code
+[ ] Return appropriate status code
+
+## Important Notes Checklist
+
+[ ] ✅ Complete all tasks according to phase requirements
+[ ] ✅ Return ONLY the status code in your response
+
+---
+
+⚠️ **Note**: This is a placeholder checklist generated automatically because the original
+checklist.md was missing or empty. The {phase_name} phase should implement proper
+checklist generation by overriding `_rebuild_checklist_for_iteration()`.
+"""
+
+        # Ensure directory exists
+        iteration_dir.mkdir(parents=True, exist_ok=True)
+
+        # Write placeholder checklist
+        checklist_path.write_text(placeholder_content, encoding="utf-8")
+
+        print(f"⚠️  WARNING: Checklist rebuild not properly implemented for {phase_name} phase!")
+        print(f"   Created placeholder checklist at {checklist_path}")
+        print(f"   Phase should override _rebuild_checklist_for_iteration() for proper checklist generation.")
 
     def _get_checklist_completion_reminder(self) -> str:
         """Get checklist completion reminder text for prompts.
