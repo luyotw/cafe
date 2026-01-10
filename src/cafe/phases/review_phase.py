@@ -201,6 +201,18 @@ class ReviewPhase(Phase):
             iteration_dir = self.review_dir / f"iteration_{self.iteration:03d}"
             review_file_path = iteration_dir / "output.md"
 
+            # Generate checklist for this iteration
+            from cafe.utils.checklist_generator import generate_review_checklist
+
+            checklist_path = iteration_dir / "checklist.md"
+            generate_review_checklist(
+                agent_name=self.review_agent,
+                spec_file_path=self.spec_file,
+                review_file_path=str(review_file_path),
+                base_branch=self.base_branch,
+                checklist_file_path=checklist_path,
+            )
+
             # Use path relative to current working directory (supports worktree)
             from cafe.utils.git_utils import to_cwd_relative_path
 
