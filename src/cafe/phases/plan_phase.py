@@ -440,6 +440,8 @@ Analyze {spec_file_path} and plan implementation steps.
 - **CAFE_READY_FOR_REVIEW**: Append complete implementation plan following template structure
 """
 
+            checklist_reminder = self._get_checklist_completion_reminder()
+
             return f"""{base_prompt}
 
 {execution_steps}
@@ -447,6 +449,8 @@ Analyze {spec_file_path} and plan implementation steps.
 {important_notes}
 
 {agent_guidelines_checklist}
+
+{checklist_reminder}
 
 {status_code_prompt}
 """
@@ -506,6 +510,8 @@ Continue analyzing the latest version of {spec_file_path}.
 - **CAFE_READY_FOR_REVIEW**: Update sections to meet user's requirements
 """
 
+            checklist_reminder = self._get_checklist_completion_reminder()
+
             return f"""{base_prompt}
 
 {execution_steps}
@@ -513,6 +519,8 @@ Continue analyzing the latest version of {spec_file_path}.
 {important_notes}
 
 {agent_guidelines_checklist}
+
+{checklist_reminder}
 
 {status_code_prompt}
 """
@@ -537,6 +545,8 @@ Continue analyzing the latest version of {spec_file_path}.
             },
         )
 
+        checklist_reminder = self._get_checklist_completion_reminder()
+
         if self.iteration == 1:
             return f"""Analyze GitHub Issue #{self.issue_id} and plan implementation steps.
 
@@ -546,6 +556,8 @@ You are an experienced Developer, responsible for planning detailed implementati
 This is iteration {self.iteration} of implementation analysis.
 
 Please use `gh issue view {self.issue_id}` to read Issue content, plan detailed implementation steps based on requirements and development guidelines.
+
+{checklist_reminder}
 
 {status_code_prompt}
 
@@ -573,6 +585,8 @@ You are an experienced Developer, responsible for planning detailed implementati
 This is iteration {self.iteration} of implementation analysis.
 
 {user_request_section}Please use `gh issue view {self.issue_id}` to view the latest Issue content.
+
+{checklist_reminder}
 
 {status_code_prompt}
 
