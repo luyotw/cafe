@@ -52,6 +52,7 @@ PLAN_EXECUTION_STEPS = """## Checklist
 [ ] Keep "## Development Guide" section unchanged
 [ ] Write content in your native language
 [ ] Confirm: Only wrote plans and steps, NO actual code
+[ ] Confirm: No code was modified
 [ ] Return appropriate status code
 """
 
@@ -106,20 +107,18 @@ REVIEW_EXECUTION_STEPS = """## Checklist
 ## Commit Message Style Check (Critical - Must Match Base Branch)
 [ ] Get current branch commits: `git log {base_branch}..HEAD --pretty=format:"%H%n%B"`
 [ ] Get base branch reference commits: `git log {base_branch} --max-count=5`
-[ ] Calculate base branch commit style: single-line or multi-line (subject + body lines, use `git log <sha> -1 --format="%B" | wc -l`)
-[ ] Calculate current branch commit style: same method
+[ ] Determine base branch commit style: single-line or multi-line (subject + body lines, use `git log <sha> -1 --format="%B" | wc -l`)
+[ ] Determine current branch commit style: same method
 [ ] Check consistency: body presence (multi-line description) matches base branch
 [ ] Check consistency: language (Chinese/English) matches base branch
 [ ] If style mismatch found: list commit SHAs, explain correct style, provide update commands
-[ ] Provide complete git rebase commands for developer to execute directly (non-interactive)
-[ ] Confirm: Checked commit messages VERY carefully - style must match exactly
+[ ] Provide complete git rebase commands for developer to execute directly (non-interactive, see prompt)
 
 ## Implementation Completeness Check
 [ ] Check for unfinished items in implementation plan
 [ ] Compare implementation against {spec_file_path}
 [ ] Verify all acceptance criteria are met
-[ ] Check if any requirements were missed
-[ ] Confirm: Verified requirements compliance completely
+[ ] Confirm: Verified all requirements are met, nothing missed
 
 ## Code Quality Review
 [ ] Check conformance to existing project coding style
@@ -134,10 +133,11 @@ REVIEW_EXECUTION_STEPS = """## Checklist
 
 ## Testing Review
 [ ] Verify all tests pass
-[ ] Check test coverage for new code
 [ ] Review test quality and edge cases
+[ ] Check the tests are not fragile or flaky
 
 ## Final Steps
+[ ] Confirm: No code was modified
 [ ] Save complete review result to {review_file_path} in your native language
 [ ] List file paths and line numbers with issue explanations
 [ ] Do NOT provide code solutions, only identify issues
