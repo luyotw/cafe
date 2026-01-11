@@ -79,8 +79,9 @@ DEVELOP_EXECUTION_STEPS_NORMAL = """## Checklist
 DEVELOP_EXECUTION_STEPS_CORRECTION = """## Checklist
 
 [ ] Read {agent_file} to understand your role and native language
-[ ] Read questions in {develop_file}
+[ ] Read questions in {develop_file} (if exists)
 [ ] Carefully read {spec_file_path} and {plan_file_path}
+[ ] Read review feedback in {review_file_path}
 [ ] Address each issue raised in the review
 [ ] Commit changes with descriptive messages
 [ ] Confirm: Maximized code reuse by looking for existing patterns and utilities

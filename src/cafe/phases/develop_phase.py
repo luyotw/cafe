@@ -950,16 +950,35 @@ Read {agent_file} to understand your complete role definition and responsibiliti
             from cafe.utils.checklist_generator import generate_develop_checklist
 
             checklist_path = self._get_iteration_dir(self.iteration) / "checklist.md"
-            develop_file = self._get_iteration_dir(self.iteration) / "output.md"
+
+            # Check for develop clarification file from previous iteration
+            # (only exists if previous iteration returned CAFE_NEED_CLARIFICATION)
+            develop_file = None
+            if self.iteration > 1:
+                prev_iteration_dir = self.issue_dir / "develop" / f"iteration_{self.iteration - 1:03d}"
+                prev_output = prev_iteration_dir / "output.md"
+                if prev_output.exists():
+                    develop_file = str(prev_output)
+
             # Check if in correction mode (has review feedback)
             correction_mode = hasattr(self, '_has_review_feedback') and self._has_review_feedback
+
+            # Get review file path if in correction mode
+            review_file = None
+            if correction_mode:
+                review_dir = self.issue_dir / "review"
+                review_file_path = self._get_latest_versioned_file("review", review_dir)
+                if review_file_path and review_file_path.exists():
+                    review_file = str(review_file_path)
+
             generate_develop_checklist(
                 agent_name=self.dev_agent,
                 spec_file_path=self.spec_file,
                 plan_file_path=self.plan_file,
-                develop_file=str(develop_file),
+                develop_file=develop_file,
                 checklist_file_path=checklist_path,
                 correction_mode=correction_mode,
+                review_file_path=review_file,
             )
 
             # Prepare user_input for this iteration

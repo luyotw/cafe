@@ -399,6 +399,7 @@ class AgentExecutor:
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
+                stdin=subprocess.DEVNULL,  # Close stdin to prevent CLI from waiting for input
                 text=True,
                 bufsize=1,  # Line buffered
             )
@@ -478,6 +479,7 @@ class AgentExecutor:
         use_idle_timeout = (sys.platform != 'win32')
         idle_timeout = 300  # seconds - timeout if no new output
         last_output_time = time.time() if use_idle_timeout else None
+        idle_timeout_triggered = False  # Track if we exited due to idle timeout
 
         if process.stdout:
             while True:
@@ -490,6 +492,7 @@ class AgentExecutor:
                         # No data available, check if idle timeout exceeded
                         if time.time() - last_output_time > idle_timeout:
                             print(f"\n⚠️  No output from {cli_name} for {idle_timeout}s, assuming completion...")
+                            idle_timeout_triggered = True
                             break
                         continue  # Continue waiting
                 
@@ -595,29 +598,47 @@ class AgentExecutor:
 
         print(f"\n{'='*80}\n")
 
-        # Add timeout to prevent hanging (especially for copilot)
-        # Timeout starts after all output has been read from stdout
-        # If timeout, terminate and treat as success if we got output
-        try:
-            returncode = process.wait(timeout=300)
-            # Only read stderr after process completes normally
-            stderr_output = process.stderr.read() if process.stderr else ""
-        except subprocess.TimeoutExpired:
-            print(f"⚠️  {cli_name} process did not exit within timeout, terminating...")
+        # If idle timeout triggered, terminate process immediately
+        if idle_timeout_triggered:
+            print(f"⚠️  Terminating {cli_name} process due to idle timeout...")
             process.terminate()
             try:
                 returncode = process.wait(timeout=2)
             except subprocess.TimeoutExpired:
                 process.kill()
                 returncode = process.wait()
-            
+
             # Read stderr after termination
             stderr_output = process.stderr.read() if process.stderr else ""
-            
-            # If we got output, treat timeout as success (agent likely finished but didn't exit)
+
+            # Treat as success if we got output
             if output_lines:
-                print(f"✓ Got output from {cli_name}, treating as success despite timeout")
+                print(f"✓ Got output from {cli_name}, treating as success despite idle timeout")
                 returncode = 0
+        else:
+            # Add timeout to prevent hanging (especially for copilot)
+            # Timeout starts after all output has been read from stdout
+            # If timeout, terminate and treat as success if we got output
+            try:
+                returncode = process.wait(timeout=300)
+                # Only read stderr after process completes normally
+                stderr_output = process.stderr.read() if process.stderr else ""
+            except subprocess.TimeoutExpired:
+                print(f"⚠️  {cli_name} process did not exit within timeout, terminating...")
+                process.terminate()
+                try:
+                    returncode = process.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    returncode = process.wait()
+
+                # Read stderr after termination
+                stderr_output = process.stderr.read() if process.stderr else ""
+
+                # If we got output, treat timeout as success (agent likely finished but didn't exit)
+                if output_lines:
+                    print(f"✓ Got output from {cli_name}, treating as success despite timeout")
+                    returncode = 0
 
         if returncode != 0:
             # Check if it's a rate limit error
