@@ -43,7 +43,7 @@ class AgentExecutor:
             "bash": "run_shell_command",
             "read": "read_file",
             "write": "write_file",
-            "edit": "write_file",  # Gemini CLI doesn't support replace, use write_file instead
+            "edit": "replace",
             "grep": "search_file_content",
             "glob": "glob",
             "ls": "list_directory",

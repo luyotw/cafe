@@ -926,7 +926,7 @@ class TestToolNameTranslation:
         tools = ["write", "read", "edit"]
         translated = executor._translate_tool_names(tools)
 
-        assert translated == ["write_file", "read_file", "write_file"]
+        assert translated == ["write_file", "read_file", "replace"]
 
     def test_translate_tool_names_with_patterns_for_gemini(self):
         """測試轉換帶 pattern 工具名給 Gemini"""
@@ -944,7 +944,7 @@ class TestToolNameTranslation:
         translated = executor._translate_tool_names(tools)
 
         assert translated == [
-            "write_file(/home/user/test.php)",
+            "replace(/home/user/test.php)",
             "run_shell_command(git status)"
         ]
 
