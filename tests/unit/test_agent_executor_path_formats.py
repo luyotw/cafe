@@ -66,9 +66,10 @@ class TestTranslateToolNamesWithPaths:
         result = executor._translate_tool_names(tools)
 
         # Gemini 工具名稱轉換, 路徑保留
+        # Note: edit 也轉換為 write_file, 因為 Gemini CLI 不支援 replace
         assert result == [
             "write_file(/.cafe/issues/test/spec.md)",
-            "replace(/.cafe/issues/test/spec.md)",
+            "write_file(/.cafe/issues/test/spec.md)",
             "read_file(/.cafe/issues/test/spec.md)",
         ]
 
@@ -138,25 +139,26 @@ class TestGeminiPathProcessing:
     """測試 Gemini 執行器路徑處理"""
 
     def test_strips_path_from_write_file_tool(self):
-        """Gemini write_file 應該移除路徑參數，replace 保持普通相對路徑"""
+        """Gemini  write_file 應該移除路徑參數（因為 CLI 不支援路徑限制）"""
         from cafe.agents.cli.gemini import GeminiCLI
 
         config = AgentConfig(name="Test", cli=AgentCLI.GEMINI)
         cli = GeminiCLI(config)
 
         # 使用普通相對路徑（Phase 傳來格式）
+        # Note: 這裡測試都用 write_file, 因為 Gemini 不支援 replace
         allowed_tools = [
             "write_file(.cafe/issues/test/spec.md)",
-            "replace(.cafe/issues/test/spec.md)",
+            "write_file(.cafe/issues/test/plan.md)",
         ]
 
         # Execute translate_allowed_tools
         result = cli.translate_allowed_tools(allowed_tools)
 
-        # write_file 路徑應該被移除，replace 保持普通相對路徑（不轉換為 git ignore format）
-        assert result == ["write_file", "replace(.cafe/issues/test/spec.md)"]
-        # 不應該被轉換為 git ignore format
-        assert "/.cafe" not in str(result)
+        # write_file 路徑應該被移除（去重後只保留一個 write_file）
+        assert result == ["write_file"]
+        # 不應該包含路徑
+        assert not any(".cafe" in tool for tool in result)
 
 
 class TestCopilotPathProcessing:
