@@ -51,15 +51,13 @@ ALL_PHASES = ["spec", "plan", "develop", "review", "pr"]
 VALID_PHASES = ["spec", "plan", "develop", "review", "pr"]
 VALID_CONTENT_TYPES = [
     "context", "output", "streaming", "error",
-    "title", "body", "status", "iterations", "checklist"
+    "status", "iterations", "checklist"
 ]
 CONTENT_TYPE_FILE_MAP = {
     "context": "context.json",
     "output": "output.md",
     "streaming": "streaming.jsonl",
     "error": "error.json",
-    "title": "title.txt",
-    "body": "body.md",
     "status": "status.json",
     "iterations": "iterations.jsonl",
     "checklist": "checklist.md",
