@@ -1362,7 +1362,7 @@ class TestAllowedDirectoriesParameter:
         mock_process.wait.return_value = 0
 
         with patch("subprocess.Popen", return_value=mock_process) as mock_popen, \
-             patch("select.select", return_value=([], [], [])):
+             patch("sys.platform", "win32"):
             agent_response = executor.execute(
                 "Test prompt",
                 allowed_directories=[".cafe", "src"]
@@ -1397,7 +1397,7 @@ class TestAllowedDirectoriesParameter:
 
         with patch("subprocess.Popen", return_value=mock_process) as mock_popen, \
              patch("cafe.agents.cli.gemini.GeminiCLI.ensure_geminiignore"), \
-             patch("select.select", return_value=([], [], [])):
+             patch("sys.platform", "win32"):
             agent_response = executor.execute(
                 "Test prompt",
                 allowed_directories=[".cafe", "docs"]
@@ -1470,7 +1470,7 @@ class TestAllowedDirectoriesParameter:
         mock_process.wait.return_value = 0
 
         with patch("subprocess.Popen", return_value=mock_process) as mock_popen, \
-             patch("select.select", return_value=([], [], [])):
+             patch("sys.platform", "win32"):
             executor.execute("Test prompt")
 
             # Verify no --add-dir in command when allowed_directories is None

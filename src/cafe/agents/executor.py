@@ -424,7 +424,7 @@ class AgentExecutor:
             if process.stderr in ready:
                 # Read first line of stderr if available (non-blocking)
                 stderr_line = process.stderr.readline()
-                if stderr_line and ("already in use" in stderr_line.lower() or "error:" in stderr_line.lower() or "limit reached" in stderr_line.lower()):
+                if stderr_line and ("already in use" in stderr_line.lower() or "error" in stderr_line.lower() or "limit reached" in stderr_line.lower()):
                     # Likely a fatal error, read rest and terminate
                     process.kill()
                     remaining_stderr = process.stderr.read()
@@ -460,20 +460,20 @@ class AgentExecutor:
         session_id = None
         permission_denials: List[PermissionDenial] = []
         
-        # Add idle timeout to prevent hanging when process doesn't close stdout (mainly for copilot)
+        # Add idle timeout to prevent hanging when process stops outputting
         import select
         import sys
         import time
-        
-        use_idle_timeout = (cli_name.lower() == "copilot" and sys.platform != 'win32')
+
+        use_idle_timeout = (sys.platform != 'win32')
         idle_timeout = 300  # seconds - timeout if no new output
         last_output_time = time.time() if use_idle_timeout else None
 
         if process.stdout:
             while True:
-                # Check if stdout has data available (with timeout) - only for copilot on Unix
+                # Check if stdout has data available (with timeout)
                 if use_idle_timeout:
-                    # Unix + Copilot: use select with timeout
+                    # Unix-like systems: use select with timeout to prevent indefinite blocking
                     ready, _, _ = select.select([process.stdout], [], [], 1.0)  # 1 second timeout per check
                     
                     if not ready:
