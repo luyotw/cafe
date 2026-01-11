@@ -4572,6 +4572,10 @@ def show(
                 except json.JSONDecodeError:
                     # If JSON parsing fails, output raw content
                     console.print(content)
+            elif content_type == "checklist":
+                # For checklist, output raw content without Rich formatting
+                # Rich treats [x] as special markup and removes it
+                print(content)
             else:
                 # Output other files directly
                 console.print(content)
