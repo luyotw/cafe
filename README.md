@@ -180,46 +180,23 @@ You can create and manage custom templates with the `cafe template` command set.
 
 ### Other Features
 
-#### Checklist Display
-CAFE provides a convenient way to view execution checklists for each workflow phase. These checklists help you understand what steps the AI agents are following during each phase.
+CAFE provides additional commands for managing issues and viewing execution details:
 
-**View phase checklists:**
-```bash
-# Show checklist for spec phase (latest iteration)
-cafe show spec checklist
+- `cafe init` - Initialize CAFE configuration for the project
+- `cafe prepare` - Prepare issue environment (directory, config, git branch)
+- `cafe close` - Close current feature and return to base branch
+- `cafe restore` - Restore archived issue from backup
+- `cafe reset` - Remove iterations from a phase when agent behaves unexpectedly
+- `cafe config` - Manage CAFE configuration
+- `cafe ls` - List all issues
+- `cafe rm` - Remove one or more issues and all their data
+- `cafe show` - Display iteration file contents (output, checklist, error, etc.)
+- `cafe chat` - Open interactive chat with specified role Agent
+- `cafe summary` - Display a comprehensive timeline of all workflow phases and iterations
+- `cafe template` - Manage plan and spec templates
+- `cafe agent` - Manage agents
 
-# Show checklist for plan phase
-cafe show plan checklist
-
-# Show checklist for develop phase
-cafe show develop checklist
-
-# Show checklist for review phase
-cafe show review checklist
-
-# Show checklist for pr phase
-cafe show pr checklist
-```
-
-**View checklists from specific iterations:**
-```bash
-# Show checklist from iteration 2
-cafe show spec checklist -i 2
-
-# Show checklist from second-to-last iteration
-cafe show develop checklist -i -2
-
-# Show checklist from last iteration (same as omitting -i)
-cafe show review checklist -i -1
-```
-
-Checklists are stored in `.cafe/issues/<issue_name>/<phase>/iteration_XXX/checklist.md` and contain:
-- Execution steps for the current phase
-- Important notes and reminders
-- Agent-specific guidelines
-- Verification checklists (for certain phases)
-
-See `cafe show --help` and `cafe --help` to learn more about other features.
+Use `cafe <command> --help` to see detailed usage for each command.
 
 ## Contributing
 Contributions of any kind are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for more details.
