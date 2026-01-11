@@ -424,7 +424,17 @@ class AgentExecutor:
             if process.stderr in ready:
                 # Read first line of stderr if available (non-blocking)
                 stderr_line = process.stderr.readline()
-                if stderr_line and ("already in use" in stderr_line.lower() or "error" in stderr_line.lower() or "limit reached" in stderr_line.lower()):
+                # Only treat as fatal error if it's NOT a tool execution error
+                # Tool errors like "Error executing tool" are recoverable and agent continues
+                is_tool_error = "error executing tool" in stderr_line.lower()
+                is_fatal_error = (
+                    stderr_line and
+                    ("already in use" in stderr_line.lower() or
+                     "limit reached" in stderr_line.lower() or
+                     ("error" in stderr_line.lower() and not is_tool_error))
+                )
+
+                if is_fatal_error:
                     # Likely a fatal error, read rest and terminate
                     process.kill()
                     remaining_stderr = process.stderr.read()
@@ -514,6 +524,11 @@ class AgentExecutor:
                             err.error_type = "invalid_request"
                             err.cli_command_args = cmd[1:]
                             raise err
+
+                        # Check for result message (indicates completion for Gemini/Claude)
+                        # When type is "result", the CLI has completed and we should stop reading
+                        if data.get("type") == "result":
+                            break
 
                         # Extract content using custom extractor or default Claude extractor
                         # FIXME: Should implement extractors seperately for each CLI
