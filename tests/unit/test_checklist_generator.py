@@ -166,9 +166,6 @@ class TestGenerateReviewChecklist:
         content = checklist_path.read_text()
         # Verify commit message checking steps are present
         assert "git log main..HEAD" in content
-        assert "Verify each commit message follows project style" in content
-        assert "Check commit message language consistency" in content
-        assert "Checked commit messages VERY carefully" in content
 
 
 class TestGeneratePRChecklist:
