@@ -517,12 +517,6 @@ class ReviewPhase(Phase):
         pr_comments, _ = self._load_pr_comments()
         pr_comments_section = f"\n\n{pr_comments}\n" if pr_comments else ""
 
-        # Get requirements section
-        try:
-            requirements_section = self._get_requirements_section()
-        except Exception as e:
-            raise RuntimeError(f"Error in _get_requirements_section: {e}") from e
-
         # Check if need to re-run checks (develop is newer than review)
         develop_is_newer = self._check_if_develop_is_newer()
         recheck_instruction = ""
@@ -598,9 +592,6 @@ Read {agent_file} to understand your complete role definition and responsibiliti
 
 **Task:** Conduct iteration {self.iteration} code review.
 Review scope: commits in current branch but not in {self.base_branch}.
-
-**Requirements Specification and Implementation Plan:**
-{requirements_section}
 {pr_comments_section}
 {recheck_note}
 {restriction_note}
@@ -624,21 +615,6 @@ git rebase --onto {self.base_branch} {self.base_branch} HEAD --exec '
         return base_prompt
 
 
-
-    def _get_requirements_section(self) -> str:
-        """Get requirements and plan section for review prompt.
-
-        Returns:
-            Requirements and plan section string
-        """
-        if self.workflow_mode == WorkflowMode.GITHUB:
-            return f"Please use `gh issue view {self.issue_id}` to view Issue content (including requirements and implementation analysis)."
-        else:
-            # Only provide file paths, let agent read them
-            # Avoid overly long prompts
-            return f"""Please read the following files to understand requirements and implementation plan:
-- Requirements Spec: {self.spec_file}
-- Implementation Plan: {self.plan_file}"""
 
     def _get_status_analysis_prompt(self) -> str:
         """Get prompt for analyzing status code.
