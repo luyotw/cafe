@@ -132,7 +132,6 @@ REVIEW_EXECUTION_STEPS = """## Checklist
 [ ] Check if existing unused code can be removed
 
 ## Testing Review
-[ ] Verify all tests pass
 [ ] Review test quality and edge cases
 [ ] Check the tests are not fragile or flaky
 
