@@ -354,7 +354,16 @@ class TestPRCommandErrorHandling:
                 interactive=False,
             )
 
-            result = phase.execute()
+            # Mock subprocess to prevent actual agent execution
+            with patch("subprocess.Popen") as mock_popen, \
+                 patch("sys.platform", "win32"):
+                mock_process = MagicMock()
+                mock_process.stdout.readline.side_effect = ['{"content": "PR Title\\n\\nPR Body"}\n', '']
+                mock_process.stderr.read.return_value = ""
+                mock_process.wait.return_value = 0
+                mock_popen.return_value = mock_process
+
+                result = phase.execute()
 
             # Assert
             assert result.status == PhaseStatus.FAILED
