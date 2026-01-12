@@ -198,16 +198,8 @@ class Phase(ABC):
         with open(context_file, "w", encoding="utf-8") as f:
             json.dump(context_data, f, ensure_ascii=False, indent=2)
 
-        # Save streaming JSONL file (if streaming data exists)
-        streaming_log = context_data.get("streaming_log", [])
-        if streaming_log:
-            try:
-                self._save_streaming_jsonl(streaming_log)
-            except Exception as e:
-                # Log error but don't interrupt flow (JSONL save failure shouldn't affect main functionality)
-                import logging
-                logger = logging.getLogger(__name__)
-                logger.warning(f"Failed to save streaming JSONL: {e}")
+        # Note: streaming.jsonl is saved earlier in _execute_agent_iteration
+        # to preserve raw format before context.json processing
 
         # Append one record to iterations.jsonl
         iteration_index_data = {
@@ -575,6 +567,14 @@ class Phase(ABC):
         no_response_status = self._check_empty_response(response)
         if no_response_status:
             # Agent returned empty response - save and return NO_RESPONSE
+            # Save streaming.jsonl before updating history
+            try:
+                self._save_streaming_jsonl(streaming_log)
+            except Exception as e:
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.warning(f"Failed to save streaming JSONL: {e}")
+
             self._update_iteration_history(
                 phase_specific_data={
                     "response": response,
@@ -682,6 +682,15 @@ class Phase(ABC):
             phase_data["status_code_analyzed"] = True
             if analysis_response:
                 phase_data["status_code_analysis_response"] = analysis_response
+
+        # Save streaming.jsonl before updating history (to preserve raw format)
+        # streaming_log contains raw output_lines for stream-json CLIs
+        try:
+            self._save_streaming_jsonl(streaming_log)
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.warning(f"Failed to save streaming JSONL: {e}")
 
         self._update_iteration_history(
             phase_specific_data=phase_data,
