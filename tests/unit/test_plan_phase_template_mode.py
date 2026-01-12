@@ -106,7 +106,8 @@ class TestTemplateMode:
 
         # Verify auto mode prompt includes template selection instruction
         assert "pick a most suitable template" in prompt
-        assert ".cafe/templates/plan/" in prompt
+        # 不應該包含錯誤的 .cafe/templates/plan/ 路徑
+        assert ".cafe/templates/plan/" not in prompt
         assert "`default`" in prompt or "`simple`" in prompt or "`bug`" in prompt
 
     def test_prompt_includes_manual_template_instruction(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
@@ -240,3 +241,46 @@ class TestTemplateMode:
             assert phase.template_mode == "manual"
             # Template path should point to global directory
             assert "custom.md" in str(phase.template_path)
+
+
+class TestTemplatePromptPaths:
+    """測試模板提示訊息中的路徑引用"""
+
+    def test_auto_mode_prompt_does_not_reference_project_cafe_directory(
+        self, tmp_path: Path, mock_git_ops, monkeypatch
+    ) -> None:
+        """測試 auto 模式提示不應該引用專案的 .cafe/templates/plan/ 路徑"""
+        monkeypatch.chdir(tmp_path)
+        mock_git_ops.get_current_branch.return_value = "test-feature"
+
+        # Create spec file
+        spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec_001.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
+        spec_file.write_text("# Requirements\n\nSome requirements")
+
+        # Create plan file with development guide
+        plan_file = spec_file.parent.parent / "plan" / "plan_001.md"
+        plan_file.parent.mkdir(parents=True, exist_ok=True)
+        plan_file.write_text("## Development Guide\n\nSome guide")
+
+        agent_manager = MagicMock(spec=AgentManager)
+        setup_agent_manager_mocks(agent_manager)
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        phase = PlanPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            spec_file=str(spec_file),
+            git_ops=mock_git_ops,
+            template_mode="auto",
+            interactive=False,
+        )
+
+        prompt = phase._generate_local_prompt("")
+
+        # Verify auto mode prompt includes template selection instruction
+        assert "pick a most suitable template" in prompt
+        # 不應該包含錯誤的 .cafe/templates/plan/ 路徑引用
+        assert ".cafe/templates/plan/" not in prompt
+        # 應該包含可用模板列表
+        assert "`default`" in prompt or "`simple`" in prompt or "`bug`" in prompt

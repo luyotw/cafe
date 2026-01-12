@@ -360,3 +360,47 @@ class TestInitCommandConfigSaving:
 
         assert result.exit_code == 0
         assert "default" in result.stdout
+
+
+class TestInitCommandErrorMessages:
+    """測試 init 指令的錯誤訊息"""
+
+    @patch("cafe.ui.cli.shutil.which")
+    @patch("cafe.ui.cli.list_available_agents")
+    @patch("cafe.ui.cli.prompt_list")
+    @patch("cafe.ui.cli.prompt_text")
+    def test_no_agents_error_message_shows_correct_paths(
+        self,
+        mock_prompt_text: MagicMock,
+        mock_prompt_list: MagicMock,
+        mock_list_agents: MagicMock,
+        mock_which: MagicMock,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """測試當沒有 agents 時錯誤訊息應該顯示正確的路徑 (不應該顯示 .cafe/agents/)"""
+        # 模擬有可用 CLI
+        mock_which.return_value = "/usr/bin/claude"
+
+        # 模擬選擇 CLI
+        mock_prompt_list.return_value = "claude"
+        
+        # 模擬輸入 model (empty string)
+        mock_prompt_text.return_value = ""
+        
+        # 模擬空 agent 列表
+        mock_list_agents.return_value = []
+
+        monkeypatch.chdir(tmp_path)
+
+        result = runner.invoke(app, ["init"])
+
+        assert result.exit_code == 1
+        assert "Agent files not found" in result.stdout
+        # 不應該包含錯誤的 .cafe/agents/ 路徑引用 (但允許 ~/.cafe/agents/)
+        # 檢查是否包含正確引用而不是錯誤引用 "Please ensure valid .md files exist in .cafe/agents/"
+        assert "in .cafe/agents/" not in result.stdout
+        # 應該提示正確的路徑：~/.cafe/agents/ 和 src/cafe/data/agents/
+        # Note: ANSI color codes may split the path, so check for the key components
+        assert "~" in result.stdout and "/.cafe/agents/" in result.stdout
+        assert "src/cafe/data/agents/" in result.stdout

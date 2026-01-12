@@ -372,7 +372,7 @@ class PlanPhase(Phase):
                 template_list_str = ", ".join(f"`{t}`" for t in available_templates)
                 template_instruction = f"""
 **Important: Must pick a most suitable template**
-Please pick a most suitable template from .cafe/templates/plan/ (available: {template_list_str}). After reading the requirements, select the template that best fits the task type and complexity.
+Please pick a most suitable template (available: {template_list_str}). After reading the requirements, select the template that best fits the task type and complexity.
 """
         elif template_path:
             # Manual mode: use the specified template
