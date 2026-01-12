@@ -612,6 +612,25 @@ class AgentExecutor:
                         if "total_cost_usd" in data:
                             token_usage.total_cost_usd = data["total_cost_usd"]
 
+                        # Extract duration (from result message)
+                        if "duration_ms" in data:
+                            token_usage.duration_ms = data["duration_ms"]
+                        if "duration_api_ms" in data:
+                            token_usage.duration_api_ms = data["duration_api_ms"]
+
+                        # Extract stats (Gemini format)
+                        if "stats" in data:
+                            stats_data = data["stats"]
+                            if "total_tokens" in stats_data:
+                                token_usage.input_tokens = stats_data.get("input_tokens", 0)
+                                token_usage.output_tokens = stats_data.get("output_tokens", 0)
+                            if "duration_ms" in stats_data:
+                                token_usage.duration_ms = stats_data["duration_ms"]
+
+                        # Extract model (from init or result message)
+                        if "model" in data and data["model"]:
+                            token_usage.model = data["model"]
+
                         # Extract permission_denials (usually in final message)
                         if "permission_denials" in data and data["permission_denials"]:
                             for denial_data in data["permission_denials"]:

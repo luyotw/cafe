@@ -186,6 +186,20 @@ class AgentManager:
         self._total_token_usage.cache_read_input_tokens += token_usage.cache_read_input_tokens
         self._total_token_usage.total_cost_usd += token_usage.total_cost_usd
 
+        # For model and duration, use the latest value (not accumulate)
+        if token_usage.model:
+            self._total_token_usage.model = token_usage.model
+        if token_usage.duration_ms is not None:
+            if self._total_token_usage.duration_ms is None:
+                self._total_token_usage.duration_ms = token_usage.duration_ms
+            else:
+                self._total_token_usage.duration_ms += token_usage.duration_ms
+        if token_usage.duration_api_ms is not None:
+            if self._total_token_usage.duration_api_ms is None:
+                self._total_token_usage.duration_api_ms = token_usage.duration_api_ms
+            else:
+                self._total_token_usage.duration_api_ms += token_usage.duration_api_ms
+
         return response, token_usage, permission_denials, cli_command_args, streaming_log
 
     def execute_current(self, prompt: str) -> str:
@@ -218,6 +232,20 @@ class AgentManager:
         self._total_token_usage.cache_creation_input_tokens += token_usage.cache_creation_input_tokens
         self._total_token_usage.cache_read_input_tokens += token_usage.cache_read_input_tokens
         self._total_token_usage.total_cost_usd += token_usage.total_cost_usd
+
+        # For model and duration, use the latest value (not accumulate)
+        if token_usage.model:
+            self._total_token_usage.model = token_usage.model
+        if token_usage.duration_ms is not None:
+            if self._total_token_usage.duration_ms is None:
+                self._total_token_usage.duration_ms = token_usage.duration_ms
+            else:
+                self._total_token_usage.duration_ms += token_usage.duration_ms
+        if token_usage.duration_api_ms is not None:
+            if self._total_token_usage.duration_api_ms is None:
+                self._total_token_usage.duration_api_ms = token_usage.duration_api_ms
+            else:
+                self._total_token_usage.duration_api_ms += token_usage.duration_api_ms
 
         return response
 

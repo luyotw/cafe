@@ -72,6 +72,9 @@ class TokenUsage(BaseModel):
     cache_creation_input_tokens: int = 0
     cache_read_input_tokens: int = 0
     total_cost_usd: float = 0.0
+    model: Optional[str] = None
+    duration_ms: Optional[int] = None
+    duration_api_ms: Optional[int] = None
 
 
 class AgentResponse(BaseModel):

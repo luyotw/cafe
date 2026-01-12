@@ -895,11 +895,47 @@ class Phase(ABC):
         print("=" * 60)
         print("📊 Token Usage Summary")
         print("=" * 60)
-        print(f"Input tokens:              {token_usage.input_tokens:,}")
-        print(f"Output tokens:             {token_usage.output_tokens:,}")
-        print(f"Cache creation tokens:     {token_usage.cache_creation_input_tokens:,}")
-        print(f"Cache read tokens:         {token_usage.cache_read_input_tokens:,}")
-        print(f"Total cost:                ${token_usage.total_cost_usd:.4f}")
+
+        # Model
+        model_str = token_usage.model if token_usage.model else "--"
+        print(f"Model:                     {model_str}")
+
+        # Input tokens
+        input_str = f"{token_usage.input_tokens:,}" if token_usage.input_tokens > 0 else "--"
+        print(f"Input tokens:              {input_str}")
+
+        # Output tokens
+        output_str = f"{token_usage.output_tokens:,}" if token_usage.output_tokens > 0 else "--"
+        print(f"Output tokens:             {output_str}")
+
+        # Cache creation tokens
+        cache_create_str = f"{token_usage.cache_creation_input_tokens:,}" if token_usage.cache_creation_input_tokens > 0 else "--"
+        print(f"Cache creation tokens:     {cache_create_str}")
+
+        # Cache read tokens
+        cache_read_str = f"{token_usage.cache_read_input_tokens:,}" if token_usage.cache_read_input_tokens > 0 else "--"
+        print(f"Cache read tokens:         {cache_read_str}")
+
+        # Duration (API)
+        if token_usage.duration_api_ms is not None:
+            duration_api_sec = token_usage.duration_api_ms / 1000
+            duration_api_str = f"{duration_api_sec:.1f}s"
+        else:
+            duration_api_str = "--"
+        print(f"Duration (API):            {duration_api_str}")
+
+        # Duration (total)
+        if token_usage.duration_ms is not None:
+            duration_sec = token_usage.duration_ms / 1000
+            duration_str = f"{duration_sec:.1f}s"
+        else:
+            duration_str = "--"
+        print(f"Duration (total):          {duration_str}")
+
+        # Total cost
+        cost_str = f"${token_usage.total_cost_usd:.4f}" if token_usage.total_cost_usd > 0 else "--"
+        print(f"Total cost:                {cost_str}")
+
         print("=" * 60)
         print()
 
