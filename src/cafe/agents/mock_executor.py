@@ -46,6 +46,7 @@ class MockAgentExecutor:
         prompt: str,
         tools: Optional[List[str]] = None,
         json_content_extractor: Optional[Callable] = None,
+        streaming_output_file: Optional[str] = None,
     ) -> AgentResponse:
         """Execute with predefined response.
 
@@ -53,6 +54,7 @@ class MockAgentExecutor:
             prompt: Prompt text (saved but not used)
             tools: Tool names (saved but not used)
             json_content_extractor: JSON extractor (not used)
+            streaming_output_file: Streaming output file (not used in mock)
 
         Returns:
             AgentResponse with response, token_usage, and permission_denials

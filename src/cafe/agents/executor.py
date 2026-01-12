@@ -142,7 +142,8 @@ class AgentExecutor:
         self,
         prompt: str,
         allowed_tools: Optional[List[str]] = None,
-        allowed_directories: Optional[List[str]] = None
+        allowed_directories: Optional[List[str]] = None,
+        streaming_output_file: Optional[str] = None
     ) -> AgentResponse:
         """Execute the agent with given prompt.
 
@@ -150,6 +151,7 @@ class AgentExecutor:
             prompt: Prompt to send to the agent
             allowed_tools: List of allowed tools (using Claude naming convention)
             allowed_directories: List of allowed directories (e.g., [".cafe", "src"])
+            streaming_output_file: Optional file path to write streaming output line-by-line
 
         Returns:
             AgentResponse with response text, token usage, and permission denials
@@ -207,6 +209,7 @@ class AgentExecutor:
                     update_cmd_with_session_fn=update_cmd_with_session,
                     response_parser=parser,
                     parse_stream_json=parse_stream_json,
+                    streaming_output_file=streaming_output_file,
                 )
             else:
                 # Only use response parser for stream-json formats
@@ -217,6 +220,7 @@ class AgentExecutor:
                     cli_name=self.config.cli.value.capitalize(),
                     response_parser=parser,
                     parse_stream_json=parse_stream_json,
+                    streaming_output_file=streaming_output_file,
                 )
 
             # Extract session ID if needed
@@ -377,6 +381,7 @@ class AgentExecutor:
         response_parser: Optional[Callable[[List[str]], AgentResponse]] = None,
         parse_stream_json: bool = False,
         json_content_extractor: Optional[Callable[[dict], Optional[str]]] = None,
+        streaming_output_file: Optional[str] = None,
     ) -> AgentResponse:
         """Execute command with streaming output.
 
@@ -387,6 +392,7 @@ class AgentExecutor:
             parse_stream_json: Whether to parse stream-json format
             json_content_extractor: Optional function to extract content from parsed JSON.
                                    If None and parse_stream_json=True, uses default Claude extractor.
+            streaming_output_file: Optional file path to write streaming output line-by-line
 
         Returns:
             AgentResponse with response text, token usage, and permission denials
@@ -470,7 +476,7 @@ class AgentExecutor:
         token_usage = TokenUsage()
         session_id = None
         permission_denials: List[PermissionDenial] = []
-        
+
         # Add idle timeout to prevent hanging when process stops outputting
         import select
         import sys
@@ -481,6 +487,15 @@ class AgentExecutor:
         idle_timeout = 600 if self.config.cli == AgentCLI.GEMINI else 300  # seconds - timeout if no new output
         last_output_time = time.time() if use_idle_timeout else None
         idle_timeout_triggered = False  # Track if we exited due to idle timeout
+
+        # Open streaming output file if provided
+        streaming_file_handle = None
+        streaming_line_index = 0
+        if streaming_output_file:
+            try:
+                streaming_file_handle = open(streaming_output_file, 'w', encoding='utf-8')
+            except Exception as e:
+                print(f"⚠️  Failed to open streaming output file: {e}")
 
         if process.stdout:
             while True:
@@ -501,10 +516,30 @@ class AgentExecutor:
                 line = process.stdout.readline()
                 if not line:
                     break
-                
+
                 # Update last output time (if tracking)
                 if use_idle_timeout:
                     last_output_time = time.time()
+
+                # Write line to streaming output file immediately
+                if streaming_file_handle:
+                    try:
+                        if parse_stream_json:
+                            # For stream-json: write raw JSON line
+                            streaming_file_handle.write(line)
+                        else:
+                            # For non-stream-json: wrap in JSON object with index and timestamp
+                            from datetime import datetime
+                            json_obj = {
+                                "index": streaming_line_index,
+                                "timestamp": datetime.now().astimezone().isoformat(),
+                                "content": line.rstrip('\n')
+                            }
+                            streaming_file_handle.write(json.dumps(json_obj, ensure_ascii=False) + "\n")
+                            streaming_line_index += 1
+                        streaming_file_handle.flush()
+                    except Exception as e:
+                        print(f"⚠️  Failed to write to streaming output file: {e}")
 
                 if parse_stream_json:
                     # Parse stream-json format
@@ -663,6 +698,13 @@ class AgentExecutor:
             # Attach actual CLI arguments for Phase to write to iteration history on error
             err.cli_command_args = cmd[1:]
             raise err
+
+        # Close streaming output file
+        if streaming_file_handle:
+            try:
+                streaming_file_handle.close()
+            except Exception as e:
+                print(f"⚠️  Failed to close streaming output file: {e}")
 
         # Save session_id if extracted (always update to handle session expiration)
         if session_id:

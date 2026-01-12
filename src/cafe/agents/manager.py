@@ -118,7 +118,8 @@ class AgentManager:
         agent_name: str,
         prompt: str,
         allowed_tools: Optional[List[str]] = None,
-        allowed_directories: Optional[List[str]] = None
+        allowed_directories: Optional[List[str]] = None,
+        streaming_output_file: Optional[str] = None
     ) -> Tuple[str, TokenUsage, List, Optional[List[str]], List[str]]:
         """Execute prompt with specified agent.
 
@@ -127,6 +128,7 @@ class AgentManager:
             prompt: Prompt to execute
             allowed_tools: List of allowed tools (using Claude naming convention)
             allowed_directories: List of allowed directories
+            streaming_output_file: Optional file path to write streaming output line-by-line
 
         Returns:
             Tuple of (agent's response, token usage, permission denials, cli_command_args, streaming_log)
@@ -149,7 +151,7 @@ class AgentManager:
 
         while True:
             try:
-                agent_response = executor.execute(prompt, allowed_tools, allowed_directories)
+                agent_response = executor.execute(prompt, allowed_tools, allowed_directories, streaming_output_file)
                 break  # Success, exit loop
             except AgentExecutionError as e:
                 # Handle session conflict (only retry once)

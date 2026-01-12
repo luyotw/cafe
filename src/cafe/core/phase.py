@@ -216,59 +216,6 @@ class Phase(ABC):
             logger = logging.getLogger(__name__)
             logger.warning(f"Failed to append iteration index: {e}")
 
-    def _save_streaming_jsonl(self, streaming_log: List[str]) -> None:
-        """Save streaming output as JSONL format file.
-
-        For stream-json format CLIs (Claude, Gemini), streaming_log contains raw JSON lines.
-        For non-stream-json CLIs (Copilot, Cursor), streaming_log contains text that needs wrapping.
-
-        Args:
-            streaming_log: Raw output lines (JSON for stream-json, text for others)
-        """
-        # If streaming_log is empty, don't create file
-        if not streaming_log:
-            return
-
-        # Ensure phase_dir exists
-        if not hasattr(self, "phase_dir"):
-            raise AttributeError(
-                "Phase must have 'phase_dir' attribute to use _save_streaming_jsonl"
-            )
-
-        # Get iteration directory
-        iteration_dir = self._get_iteration_dir(self.iteration)
-        iteration_dir.mkdir(parents=True, exist_ok=True)
-
-        # Create JSONL file path
-        jsonl_file = iteration_dir / "streaming.jsonl"
-
-        # Check if using stream-json format (read from context.json)
-        context_file = iteration_dir / "context.json"
-        use_stream_json = False
-        if context_file.exists():
-            import json
-            with open(context_file, "r", encoding="utf-8") as f:
-                context_data = json.load(f)
-                cli_command_args = context_data.get("cli_command_args") or []
-                # Check if output format is stream-json
-                use_stream_json = "stream-json" in cli_command_args
-
-        # Write JSONL file
-        with open(jsonl_file, "w", encoding="utf-8") as f:
-            if use_stream_json:
-                # For stream-json: streaming_log already contains raw JSON lines
-                for line in streaming_log:
-                    f.write(line.rstrip('\n') + "\n")
-            else:
-                # For non-stream-json: wrap text in JSON objects
-                for index, content in enumerate(streaming_log):
-                    json_obj = {
-                        "index": index,
-                        "timestamp": datetime.now().astimezone().isoformat(),
-                        "content": content
-                    }
-                    f.write(json.dumps(json_obj, ensure_ascii=False) + "\n")
-
     def _get_iteration_dir(self, iteration: int) -> Path:
         """Get iteration directory path.
 
@@ -423,12 +370,16 @@ class Phase(ABC):
                 json.dump(context_data, f, ensure_ascii=False, indent=2)
 
         # 4. Execute agent (with error recovery)
+        # Prepare streaming.jsonl file path for real-time writing
+        streaming_jsonl_file = iteration_dir / "streaming.jsonl"
+
         try:
             response, token_usage, permission_denials, cli_command_args, streaming_log = self.agent_manager.execute(
                 agent_name,
                 prompt,
                 allowed_tools=allowed_tools,
                 allowed_directories=self._get_allowed_directories(),
+                streaming_output_file=str(streaming_jsonl_file),
             )
         except Exception as e:
             # Agent execution failed - attempt recovery
@@ -567,14 +518,7 @@ class Phase(ABC):
         no_response_status = self._check_empty_response(response)
         if no_response_status:
             # Agent returned empty response - save and return NO_RESPONSE
-            # Save streaming.jsonl before updating history
-            try:
-                self._save_streaming_jsonl(streaming_log)
-            except Exception as e:
-                import logging
-                logger = logging.getLogger(__name__)
-                logger.warning(f"Failed to save streaming JSONL: {e}")
-
+            # Note: streaming.jsonl is already written in real-time by executor
             self._update_iteration_history(
                 phase_specific_data={
                     "response": response,
@@ -683,15 +627,7 @@ class Phase(ABC):
             if analysis_response:
                 phase_data["status_code_analysis_response"] = analysis_response
 
-        # Save streaming.jsonl before updating history (to preserve raw format)
-        # streaming_log contains raw output_lines for stream-json CLIs
-        try:
-            self._save_streaming_jsonl(streaming_log)
-        except Exception as e:
-            import logging
-            logger = logging.getLogger(__name__)
-            logger.warning(f"Failed to save streaming JSONL: {e}")
-
+        # Note: streaming.jsonl is already written in real-time by executor
         self._update_iteration_history(
             phase_specific_data=phase_data,
             prompt=prompt,
