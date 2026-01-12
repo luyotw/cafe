@@ -257,7 +257,7 @@ class Phase(ABC):
             import json
             with open(context_file, "r", encoding="utf-8") as f:
                 context_data = json.load(f)
-                cli_command_args = context_data.get("cli_command_args", [])
+                cli_command_args = context_data.get("cli_command_args") or []
                 # Check if output format is stream-json
                 use_stream_json = "stream-json" in cli_command_args
 

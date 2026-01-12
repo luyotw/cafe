@@ -477,7 +477,8 @@ class AgentExecutor:
         import time
 
         use_idle_timeout = (sys.platform != 'win32')
-        idle_timeout = 300  # seconds - timeout if no new output
+        # Gemini needs longer timeout (10 min), others use 5 min
+        idle_timeout = 600 if self.config.cli == AgentCLI.GEMINI else 300  # seconds - timeout if no new output
         last_output_time = time.time() if use_idle_timeout else None
         idle_timeout_triggered = False  # Track if we exited due to idle timeout
 
@@ -605,8 +606,14 @@ class AgentExecutor:
             try:
                 returncode = process.wait(timeout=2)
             except subprocess.TimeoutExpired:
+                print(f"⚠️  Process did not respond to SIGTERM, sending SIGKILL...")
                 process.kill()
-                returncode = process.wait()
+                try:
+                    returncode = process.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    # If even kill doesn't work, something is very wrong
+                    print(f"❌ Process could not be killed, giving up...")
+                    returncode = -1
 
             # Read stderr after termination
             stderr_output = process.stderr.read() if process.stderr else ""
