@@ -536,7 +536,7 @@ class Phase(ABC):
                 )
 
                 # Save progress
-                if hasattr(self, "_save_progress"):
+                if hasattr(self, "_save_progress") and status_code is not None:
                     self._save_progress(status_code)
 
                 # Return recovered result
@@ -1435,7 +1435,7 @@ class Phase(ABC):
                         json.dump(context_data, f, ensure_ascii=False, indent=2)
 
                 # Save progress (phase-specific logic)
-                if hasattr(self, "_save_progress"):
+                if hasattr(self, "_save_progress") and status_code is not None:
                     self._save_progress(status_code)  # type: ignore
             else:
                 # Validation failed after max retries - alert user
