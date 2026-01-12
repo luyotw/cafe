@@ -17,17 +17,11 @@ from cafe.core.types import (
     PhaseResult,
     PhaseStatus,
     SessionConfig,
-    WorkflowMode,
 )
 
 
 class TestEnums:
     """Test enum types."""
-
-    def test_workflow_mode_values(self) -> None:
-        """測試 WorkflowMode enum 值是否正確"""
-        assert WorkflowMode.GITHUB == "github"
-        assert WorkflowMode.LOCAL == "local"
 
     def test_agent_tool_values(self) -> None:
         """測試 AgentCLI enum 值是否正確"""
@@ -132,28 +126,24 @@ class TestPermissionRequest:
 class TestSessionConfig:
     """Test SessionConfig model."""
 
-    def test_create_session_config_github_mode(self) -> None:
-        """測試可以成功建立 GitHub 工作流程 SessionConfig"""
-        config = SessionConfig(workflow_mode=WorkflowMode.GITHUB, issue_id="123")
-        assert config.workflow_mode == WorkflowMode.GITHUB
+    def test_create_session_config_with_issue_id(self) -> None:
+        """測試可以成功建立帶 issue_id 的 SessionConfig"""
+        config = SessionConfig(issue_id="123")
         assert config.issue_id == "123"
         assert config.spec_file is None
         assert config.sessions_dir == ".cafe/sessions"
 
-    def test_create_session_config_local_mode(self) -> None:
-        """測試可以成功建立 Local 工作流程 SessionConfig"""
+    def test_create_session_config_with_spec_file(self) -> None:
+        """測試可以成功建立帶 spec_file 的 SessionConfig"""
         config = SessionConfig(
-            workflow_mode=WorkflowMode.LOCAL,
             spec_file="requirements.md",
         )
-        assert config.workflow_mode == WorkflowMode.LOCAL
         assert config.spec_file == "requirements.md"
         assert config.issue_id is None
 
     def test_create_session_config_custom_dirs(self) -> None:
         """測試可以自訂 sessions and issues 目錄路徑"""
         config = SessionConfig(
-            workflow_mode=WorkflowMode.GITHUB,
             issue_id="456",
             sessions_dir="/tmp/sessions",
             issue_dir="/tmp/issues",

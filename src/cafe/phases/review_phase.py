@@ -12,7 +12,7 @@ from cafe.core.git import GitOperations
 from cafe.core.permission import PermissionHandler
 from cafe.core.phase import Phase
 from cafe.core.status_codes import PhaseStatusCode, StatusCodeParser, generate_status_code_prompt
-from cafe.core.types import PhaseProgress, PhaseResult, PhaseStatus, WorkflowMode
+from cafe.core.types import PhaseProgress, PhaseResult, PhaseStatus
 from cafe.utils.github import get_pr_comments, filter_unresolved_comments, format_comments_for_prompt
 from cafe.utils.prompt_utils import format_checklist_instruction
 
@@ -33,8 +33,6 @@ class ReviewPhase(Phase):
         git_ops: GitOperations,
         spec_file: str,
         plan_file: str,
-        workflow_mode: WorkflowMode,
-        issue_id: Optional[str] = None,
         review_agent: str = "Richard",
         target_commit: Optional[str] = None,
         base_branch: str = "main",
@@ -50,8 +48,6 @@ class ReviewPhase(Phase):
             git_ops: Git operations
             spec_file: Path to spec file (deprecated - will be computed from latest version)
             plan_file: Path to plan file (deprecated - will be computed from latest version)
-            workflow_mode: Workflow mode (local or github)
-            issue_id: GitHub issue ID (required for github mode)
             review_agent: Review agent name (default: Richard)
             target_commit: Specific commit to review (None for full branch)
             base_branch: Base branch for diff (default: main)
@@ -64,8 +60,6 @@ class ReviewPhase(Phase):
         self.agent_manager = agent_manager
         self.permission_handler = permission_handler
         self.git_ops = git_ops
-        self.workflow_mode = workflow_mode
-        self.issue_id = issue_id
         self.review_agent = review_agent
         self.target_commit = target_commit
         self.iteration = 1  # Track iteration number for subsequent reviews
@@ -613,7 +607,6 @@ git rebase --onto {self.base_branch} {self.base_branch} HEAD --exec '
             raise RuntimeError(f"Error building prompt: {e}") from e
 
         return base_prompt
-
 
 
     def _get_status_analysis_prompt(self) -> str:

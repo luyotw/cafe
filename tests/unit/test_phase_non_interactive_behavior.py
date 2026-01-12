@@ -12,7 +12,7 @@ from cafe.agents.manager import AgentManager
 from cafe.core.git import GitOperations
 from cafe.core.permission import PermissionHandler
 from cafe.core.status_codes import PhaseStatusCode
-from cafe.core.types import AgentConfig, AgentCLI, PhaseStatus, WorkflowMode
+from cafe.core.types import AgentConfig, AgentCLI, PhaseStatus
 from cafe.phases.plan_phase import PlanPhase
 
 
@@ -113,7 +113,6 @@ class TestNonInteractiveModeWithNeedClarification:
             permission_handler=permission_handler,
             git_ops=mock_git_ops,
             spec_file=setup["spec_file"],
-            workflow_mode=WorkflowMode.LOCAL,
             interactive=False,  # Non-interactive
             template_path=setup["template_file"],
             user_input="",  # 沒有提供 user_input
@@ -150,7 +149,6 @@ class TestNonInteractiveModeWithNeedClarification:
             permission_handler=permission_handler,
             git_ops=mock_git_ops,
             spec_file=setup["spec_file"],
-            workflow_mode=WorkflowMode.LOCAL,
             interactive=False,
             template_path=setup["template_file"],
             user_input="使用 TypeScript",  # 提供 user_input
@@ -203,7 +201,6 @@ class TestNonInteractiveModeCompleteImmediately:
                 permission_handler=permission_handler,
                 git_ops=mock_git_ops,
                 spec_file=setup["spec_file"],
-                workflow_mode=WorkflowMode.LOCAL,
                 interactive=False,
                 template_path=setup["template_file"],
             )

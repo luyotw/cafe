@@ -17,7 +17,7 @@ from rich.console import Console
 from cafe.agents.manager import AgentManager
 from cafe.core.git import GitOperations
 from cafe.core.permission import PermissionHandler
-from cafe.core.types import AgentCLI, AgentConfig, WorkflowMode
+from cafe.core.types import AgentCLI, AgentConfig
 from cafe.phases.develop_phase import DevelopPhase
 from cafe.phases.plan_phase import PlanPhase
 from cafe.phases.pr_phase import PRPhase
@@ -1995,13 +1995,6 @@ def spec(
         # Get and validate current branch
         issue_name = _get_and_validate_branch(ctx, "spec")
 
-        # Validate mode
-        try:
-            workflow_mode = WorkflowMode(mode)
-        except ValueError:
-            console.print(f"[red]Error: Invalid mode '{mode}'. Use 'local' or 'github'.[/red]")
-            raise typer.Exit(1)
-
         # Load issue config to get saved rigor and template settings
         import yaml
 
@@ -2086,9 +2079,8 @@ def spec(
         console.print(f"Session ID: {pm_session_id}")
         if spec_rigor:
             console.print(f"Rigor: {spec_rigor.value}")
-        if workflow_mode == WorkflowMode.LOCAL:
-            console.print(f"Spec directory: {spec_dir}")
-        elif issue_id:
+        console.print(f"Spec directory: {spec_dir}")
+        if issue_id:
             console.print(f"GitHub Issue: #{issue_id}")
         console.print()
 
@@ -2114,7 +2106,6 @@ def spec(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            workflow_mode=workflow_mode,
             issue_id=issue_id,
             pm_agent=pm_agent,
             interactive=is_interactive,
@@ -2260,12 +2251,6 @@ def spec(
 def plan(
     ctx: typer.Context,
     action: Optional[str] = typer.Argument(None, help="Action: edit (to edit latest plan file)"),
-    mode: str = typer.Option(
-        "local",
-        "--mode",
-        "-m",
-        help="Workflow mode: local or github",
-    ),
     issue_id: Optional[str] = typer.Option(
         None,
         "--issue",
@@ -2318,7 +2303,7 @@ def plan(
     Examples:
         cafe plan
         cafe plan --auto
-        cafe plan -m github -i 123
+        cafe plan -i 123
         cafe plan --dev CustomDev
         cafe plan edit
     """
@@ -2348,13 +2333,6 @@ def plan(
     try:
         # Get and validate current branch
         issue_name = _get_and_validate_branch(ctx, "plan")
-
-        # Validate mode
-        try:
-            workflow_mode = WorkflowMode(mode)
-        except ValueError:
-            console.print(f"[red]Error: Invalid mode '{mode}'. Use 'local' or 'github'.[/red]")
-            raise typer.Exit(1)
 
         # Check if spec file exists (use latest versioned file)
         spec_file_path = _get_latest_versioned_file("spec", issue_name)
@@ -2464,9 +2442,8 @@ def plan(
         console.print(f"CLI: {dev_cli}")
         console.print(f"Model: {dev_model}")
         console.print(f"Session ID: {dev_session_id}")
-        if workflow_mode == WorkflowMode.LOCAL:
-            console.print(f"Spec file: {spec_file_path}")
-        elif issue_id:
+        console.print(f"Spec file: {spec_file_path}")
+        if issue_id:
             console.print(f"GitHub Issue: #{issue_id}")
         if selected_template:
             if template_mode == "auto":
@@ -2491,7 +2468,6 @@ def plan(
             spec_file=(
                 str(spec_file_path) if spec_file_path else ""
             ),  # Deprecated - computed internally
-            workflow_mode=workflow_mode,
             issue_id=issue_id,
             issue_name=issue_name,
             dev_agent=dev_agent,
@@ -2699,13 +2675,6 @@ def develop(
         # Get and validate current branch
         issue_name = _get_and_validate_branch(ctx, "develop")
 
-        # Validate mode
-        try:
-            workflow_mode = WorkflowMode(mode)
-        except ValueError:
-            console.print(f"[red]Error: Invalid mode '{mode}'. Use 'local' or 'github'.[/red]")
-            raise typer.Exit(1)
-
         # Get latest versioned files
         spec_file_path = _get_latest_versioned_file("spec", issue_name)
         if spec_file_path is None:
@@ -2779,7 +2748,6 @@ def develop(
             git_ops=git_ops,
             spec_file=spec_file,
             plan_file=plan_file,
-            workflow_mode=workflow_mode,
             issue_id=issue_id,
             issue_name=issue_name,
             dev_agent=dev_agent,
@@ -2939,13 +2907,6 @@ def review(
         # Get and validate current branch
         issue_name = _get_and_validate_branch(ctx, "review")
 
-        # Validate mode
-        try:
-            workflow_mode = WorkflowMode(mode)
-        except ValueError:
-            console.print(f"[red]Error: Invalid mode '{mode}'. Use 'local' or 'github'.[/red]")
-            raise typer.Exit(1)
-
         # Get latest versioned files
         spec_file_path = _get_latest_versioned_file("spec", issue_name)
         if spec_file_path is None:
@@ -2993,7 +2954,6 @@ def review(
             git_ops=git_ops,
             spec_file=spec_file,
             plan_file=plan_file,
-            workflow_mode=workflow_mode,
             issue_id=issue_id,
             review_agent=reviewer_agent,
             target_commit=commit,
@@ -3221,7 +3181,6 @@ def pr(
             git_ops=git_ops,
             github_ops=github_ops,
             spec_file=spec_file,
-            workflow_mode=WorkflowMode.LOCAL,  # Always use local mode (no --mode flag)
             issue_name=issue_name,
             dev_agent=dev_agent,
             draft=final_draft,

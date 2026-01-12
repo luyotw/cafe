@@ -7,7 +7,7 @@ import pytest
 
 from cafe.agents.manager import AgentManager
 from cafe.core.permission import PermissionHandler
-from cafe.core.types import PhaseStatus, WorkflowMode, TokenUsage
+from cafe.core.types import PhaseStatus, TokenUsage
 from cafe.core.git import GitOperations
 from cafe.phases.plan_phase import PlanPhase
 from cafe.utils.checklist_validator import ChecklistValidationResult
@@ -72,8 +72,7 @@ class TestPlanPhaseWithStatusCodes:
                 permission_handler=permission_handler,
                     git_ops=mock_git_ops,
                 spec_file=str(requirements_file),
-                workflow_mode=WorkflowMode.LOCAL,
-                interactive=False,
+                    interactive=False,
                 user_input="confirm",  # Simulate user confirming the plan
                 template_path=create_template_file(tmp_path),
             )
@@ -114,7 +113,6 @@ class TestPlanPhaseWithStatusCodes:
             permission_handler=permission_handler,
                 git_ops=mock_git_ops,
             spec_file=str(requirements_file),
-            workflow_mode=WorkflowMode.LOCAL,
             interactive=True,
             template_path=create_template_file(tmp_path),
         )
@@ -173,8 +171,7 @@ class TestPlanPhaseWithStatusCodes:
                 permission_handler=permission_handler,
                     git_ops=mock_git_ops,
                 spec_file=str(requirements_file),
-                workflow_mode=WorkflowMode.LOCAL,
-                interactive=False,
+                    interactive=False,
                 user_input="confirm",  # Simulate user confirming the plan
                 template_path=create_template_file(tmp_path),
             )
@@ -220,7 +217,6 @@ class TestPlanPhaseWithStatusCodes:
             permission_handler=permission_handler,
                 git_ops=mock_git_ops,
             spec_file=str(requirements_file),
-            workflow_mode=WorkflowMode.LOCAL,
             interactive=True,  # Must be interactive to continue iterations
             template_path=create_template_file(tmp_path),
         )
@@ -277,8 +273,7 @@ class TestPlanPhaseWithStatusCodes:
                 permission_handler=permission_handler,
                     git_ops=mock_git_ops,
                 spec_file=str(requirements_file),
-                workflow_mode=WorkflowMode.LOCAL,
-                interactive=False,
+                    interactive=False,
                 user_input="confirm",  # Simulate user confirming the plan
                 template_path=create_template_file(tmp_path),
             )

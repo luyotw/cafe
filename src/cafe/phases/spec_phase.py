@@ -13,7 +13,7 @@ from cafe.core.git import GitOperations
 from cafe.core.permission import PermissionHandler
 from cafe.core.phase import Phase
 from cafe.core.status_codes import PhaseStatusCode, StatusCodeParser, generate_status_code_prompt
-from cafe.core.types import PhaseProgress, PhaseResult, PhaseStatus, WorkflowMode
+from cafe.core.types import PhaseProgress, PhaseResult, PhaseStatus
 from cafe.ui.display import Display
 from cafe.ui.phase_prompts import prompt_for_input_method, prompt_for_rigor, fetch_github_issue
 from cafe.utils.git_utils import get_github_repo_name, get_repo_root, to_cwd_relative_path
@@ -64,8 +64,6 @@ class SpecPhase(Phase):
         agent_manager: AgentManager,
         permission_handler: PermissionHandler,
         git_ops: GitOperations,
-        workflow_mode: WorkflowMode,
-        issue_id: Optional[str] = None,
         pm_agent: str = "Roger",
         interactive: bool = True,
         issue_name: Optional[str] = None,
@@ -81,8 +79,6 @@ class SpecPhase(Phase):
             agent_manager: Agent manager
             permission_handler: Permission handler
             git_ops: Git operations
-            workflow_mode: Workflow mode (local or github)
-            issue_id: GitHub issue ID (required for github mode)
             pm_agent: PM agent name (default: Roger)
             interactive: Enable interactive mode for user input (default: True)
             issue_name: Issue name for history tracking (default: derived from current branch)
@@ -98,8 +94,6 @@ class SpecPhase(Phase):
 
         self.agent_manager = agent_manager
         self.permission_handler = permission_handler
-        self.workflow_mode = workflow_mode
-        self.issue_id = issue_id
         self.pm_agent = pm_agent
         self.user_input = user_input
         self.fetch_issue_id = fetch_issue_id
@@ -222,16 +216,12 @@ class SpecPhase(Phase):
             if already_completed:
                 return already_completed
 
-            # Validate inputs
-            # Note: GitHub mode can now work without issue_id (will create new issue)
-
-            if self.workflow_mode == WorkflowMode.LOCAL:
-                # Check if spec file exists
-                spec_path = Path(self.spec_file)
-                if spec_path.exists():
-                    # File already exists (resume case), skip to execution
-                    pass
-                elif iteration_number == 1:
+            # Check if spec file exists
+            spec_path = Path(self.spec_file)
+            if spec_path.exists():
+                # File already exists (resume case), skip to execution
+                pass
+            elif iteration_number == 1:
                     # File doesn't exist AND this is first iteration - get initial user story
                     if self.interactive:
                         # If --issue-id not provided, check config or ask user to choose input method
@@ -456,9 +446,6 @@ class SpecPhase(Phase):
             Dict containing phase-specific data, will be merged into PhaseResult.data
         """
         data = {}
-        # Add issue_id if GitHub mode and created new issue
-        if self.workflow_mode == WorkflowMode.GITHUB and hasattr(self, '_created_issue_id'):
-            data["issue_id"] = self._created_issue_id
 
         # Post spec.md back to GitHub issue if fetched from GitHub
         if hasattr(self, '_fetched_issue_id'):
@@ -744,33 +731,15 @@ class SpecPhase(Phase):
         spec_path.write_text(content, encoding="utf-8")
 
     def _sync_spec_to_github(self, response: str) -> None:
-        """Sync spec file to GitHub issue (GitHub workflow mode only).
+        """Sync spec file to GitHub issue (no-op in local mode).
 
-        Note: This method **is not responsible for writing spec file**. PM agent has directly written to spec_file via Write tool.
-
-        Purpose of this method:
-        - Local mode: No action (agent has written file, no additional processing needed)
-        - GitHub mode: Sync local spec_file content to GitHub issue
+        Note: This method is now a no-op since GitHub mode is removed.
 
         Args:
-            response: Agent response content (unused, because agent has written file via Write tool)
+            response: Agent response content (unused)
         """
-        spec_path = Path(self.spec_file)
-        if not spec_path.exists():
-            return  # Agent has not written file yet
-
-        if self.workflow_mode == WorkflowMode.GITHUB:
-            # Sync local file content to GitHub issue
-            content = spec_path.read_text()
-            if not self.issue_id and not hasattr(self, '_created_issue_id'):
-                # First time creating GitHub issue
-                self._created_issue_id = create_github_issue(content)
-            elif hasattr(self, '_created_issue_id'):
-                # Update previously created issue
-                update_github_issue(self._created_issue_id, content)
-            else:
-                # Update existing issue
-                update_github_issue(self.issue_id, content)
+        # No-op: GitHub mode has been removed
+        pass
 
     def _create_github_issue(self, content: str) -> str:
         """Create a new GitHub issue with requirements.
@@ -800,10 +769,7 @@ class SpecPhase(Phase):
         Returns:
             Prompt string
         """
-        if self.workflow_mode == WorkflowMode.GITHUB:
-            return self._generate_github_prompt(user_input)
-        else:
-            return self._generate_local_prompt(user_input)
+        return self._generate_local_prompt(user_input)
 
     def _get_non_technical_guidelines(self) -> str:
         """Get non-technical guidelines for PM.
@@ -983,54 +949,6 @@ Read {current_spec_file} for initial requirements content.{template_instruction}
 
         # --- 5. Return the final prompt ---
         return base_prompt
-
-    def _generate_github_prompt(self, user_input: str = "") -> str:
-        """Generate prompt for GitHub workflow.
-
-        Args:
-            user_input: User's response/clarification for this iteration
-
-        Returns:
-            Prompt string
-        """
-        status_code_prompt = generate_status_code_prompt(
-            valid_codes=[
-                PhaseStatusCode.CONFIRMED,
-                PhaseStatusCode.NEED_CLARIFICATION,
-            ],
-            descriptions={
-                PhaseStatusCode.CONFIRMED: "Requirements are clear, can proceed with development",
-                PhaseStatusCode.NEED_CLARIFICATION: "Requirements have unclear parts that need clarification",
-            },
-        )
-
-        # Get checklist file path
-        iteration_dir = self._get_iteration_dir(self.iteration)
-        checklist_file = iteration_dir / "checklist.md"
-        try:
-            checklist_path = to_cwd_relative_path(checklist_file)
-        except ValueError:
-            checklist_path = str(checklist_file.resolve())
-
-        checklist_instruction = format_checklist_instruction(checklist_path)
-        if self.iteration == 1:
-            return f"""This is round {self.iteration} requirements analysis.
-
-Use `gh issue view {self.issue_id}` to read Issue content.
-
-{checklist_instruction}
-
-{status_code_prompt}
-"""
-        else:
-            return f"""This is round {self.iteration} requirements analysis.
-
-Use `gh issue view {self.issue_id}` to view Issue's latest content.
-
-{checklist_instruction}
-
-{status_code_prompt}
-"""
 
     def _load_issue_config(self) -> None:
         """Load issue configuration (issue_id, rigor, input_method) from config.yaml if exists."""

@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from cafe.core.types import PhaseResult, PhaseStatus, WorkflowMode
+from cafe.core.types import PhaseResult, PhaseStatus
 from cafe.core.phase import Phase
 from cafe.phases.pr_phase import PRPhase
 from cafe.utils.checklist_validator import ChecklistValidationResult
@@ -80,7 +80,6 @@ def test_prepare_pr_content_stops_on_need_permission(tmp_path):
             git_ops=git_ops,
             github_ops=github_ops,
             spec_file=str(spec_file),
-            workflow_mode=WorkflowMode.LOCAL,
             issue_name="test-issue",
             interactive=False,
         )
@@ -171,7 +170,6 @@ def test_pr_phase_stops_on_need_permission(tmp_path):
             git_ops=git_ops,
             github_ops=github_ops,
             spec_file=str(spec_file),
-            workflow_mode=WorkflowMode.LOCAL,
             issue_name="test-issue",
             interactive=False,
         )

@@ -4,7 +4,6 @@ import pytest
 from pathlib import Path
 from unittest.mock import Mock, patch
 from cafe.phases.pr_phase import PRPhase
-from cafe.core.types import WorkflowMode
 
 
 class TestStatusAnalysisPrompt:
@@ -35,7 +34,6 @@ class TestStatusAnalysisPrompt:
                     git_ops=Mock(),
                     github_ops=Mock(),
                     spec_file=str(spec_file),
-                    workflow_mode=WorkflowMode.LOCAL,
                 )
                 
                 prompt = phase._get_status_analysis_prompt()
@@ -73,7 +71,6 @@ class TestStatusAnalysisPrompt:
                     git_ops=Mock(),
                     github_ops=Mock(),
                     spec_file=str(spec_file),
-                    workflow_mode=WorkflowMode.LOCAL,
                 )
                 
                 prompt = phase._get_status_analysis_prompt()
@@ -109,7 +106,6 @@ class TestStatusAnalysisPrompt:
                     git_ops=Mock(),
                     github_ops=Mock(),
                     spec_file=str(spec_file),
-                    workflow_mode=WorkflowMode.LOCAL,
                 )
                 
                 prompt = phase._get_status_analysis_prompt()

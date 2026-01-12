@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from cafe.core.types import PhaseStatus, WorkflowMode
+from cafe.core.types import PhaseStatus
 from cafe.phases.develop_phase import DevelopPhase
 
 
@@ -75,7 +75,6 @@ class TestDevelopPhasePromptGeneration:
                 git_ops=mock_git_ops,
                 spec_file=str(spec_file),
                 plan_file=str(plan_file),
-                workflow_mode=WorkflowMode.LOCAL,
                 issue_name="test-issue",
                 pr_number="123",  # PR number is set
             )
@@ -165,7 +164,6 @@ class TestDevelopPhasePromptGeneration:
                 git_ops=mock_git_ops,
                 spec_file=str(spec_file),
                 plan_file=str(plan_file),
-                workflow_mode=WorkflowMode.LOCAL,
                 issue_name="test-issue",
                 pr_number="123",
             )
@@ -247,7 +245,6 @@ class TestDevelopPhasePromptGeneration:
                 git_ops=mock_git_ops,
                 spec_file=str(spec_file),
                 plan_file=str(plan_file),
-                workflow_mode=WorkflowMode.LOCAL,
                 issue_name="test-issue",
                 pr_number="123",
             )
