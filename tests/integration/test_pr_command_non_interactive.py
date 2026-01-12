@@ -11,7 +11,7 @@ from unittest.mock import MagicMock, patch
 from cafe.agents.manager import AgentManager
 from cafe.core.permission import PermissionHandler
 from cafe.core.git import GitOperations
-from cafe.core.types import AgentConfig, AgentCLI, WorkflowMode, PhaseStatus
+from cafe.core.types import AgentConfig, AgentCLI, PhaseStatus
 from cafe.phases.pr_phase import PRPhase
 from cafe.utils.github import GitHubOps
 
@@ -97,8 +97,7 @@ class TestPRCommandNonInteractiveBasics:
                     git_ops=mock_git_ops,
                     github_ops=mock_github_ops,
                     spec_file=spec_file,
-                    workflow_mode=WorkflowMode.LOCAL,
-                    issue_name="test-issue",
+                        issue_name="test-issue",
                     draft=True,
                     interactive=False,
                     custom_title="Test PR Title",
@@ -148,8 +147,7 @@ class TestPRCommandNonInteractiveBasics:
                     git_ops=mock_git_ops,
                     github_ops=mock_github_ops,
                     spec_file=spec_file,
-                    workflow_mode=WorkflowMode.LOCAL,
-                    issue_name="test-issue",
+                        issue_name="test-issue",
                     draft=False,
                     interactive=False,
                     custom_title="Test PR Title",
@@ -201,8 +199,7 @@ class TestPRCommandCustomTitleAndBody:
                     git_ops=mock_git_ops,
                     github_ops=mock_github_ops,
                     spec_file=spec_file,
-                    workflow_mode=WorkflowMode.LOCAL,
-                    issue_name="test-issue",
+                        issue_name="test-issue",
                     draft=True,
                     custom_title=custom_title,
                     custom_body=custom_body,
@@ -260,7 +257,6 @@ class TestPRCommandCustomTitleAndBody:
                 git_ops=mock_git_ops,
                 github_ops=mock_github_ops,
                 spec_file=spec_file,
-                workflow_mode=WorkflowMode.LOCAL,
                 issue_name="test-issue",
                 draft=True,
                 custom_title=None,  # Auto-generate
@@ -309,7 +305,6 @@ class TestPRCommandErrorHandling:
                 git_ops=mock_git_ops,
                 github_ops=mock_github_ops,
                 spec_file=spec_file,  # 不存在檔案
-                workflow_mode=WorkflowMode.LOCAL,
                 issue_name="test-issue",
                 draft=True,
                 interactive=False,
@@ -348,7 +343,6 @@ class TestPRCommandErrorHandling:
                 git_ops=mock_git_ops,
                 github_ops=mock_github_ops,
                 spec_file=spec_file,
-                workflow_mode=WorkflowMode.LOCAL,
                 issue_name="test-issue",
                 draft=True,
                 interactive=False,

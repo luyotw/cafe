@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 from cafe.phases.plan_phase import PlanPhase
 from cafe.agents.manager import AgentManager
 from cafe.core.git import GitOperations
-from cafe.core.types import WorkflowMode, TokenUsage
+from cafe.core.types import TokenUsage
 from cafe.core.permission import PermissionHandler
 
 
@@ -42,7 +42,6 @@ class TestTemplateMode:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             spec_file="requirements.md",
-            workflow_mode=WorkflowMode.LOCAL,
             git_ops=mock_git_ops,
             template_mode="auto",
         )
@@ -60,7 +59,6 @@ class TestTemplateMode:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             spec_file="requirements.md",
-            workflow_mode=WorkflowMode.LOCAL,
             git_ops=mock_git_ops,
             template_mode="manual",
             template_path="/path/to/template.md",
@@ -99,7 +97,6 @@ class TestTemplateMode:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             spec_file=str(spec_file),
-            workflow_mode=WorkflowMode.LOCAL,
             git_ops=mock_git_ops,
             template_mode="auto",
             interactive=False,
@@ -140,7 +137,6 @@ class TestTemplateMode:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             spec_file=str(spec_file),
-            workflow_mode=WorkflowMode.LOCAL,
             git_ops=mock_git_ops,
             template_mode="manual",
             template_path=str(template_file),
@@ -164,7 +160,6 @@ class TestTemplateMode:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             spec_file="requirements.md",
-            workflow_mode=WorkflowMode.LOCAL,
             git_ops=mock_git_ops,
         )
 
@@ -195,7 +190,6 @@ class TestTemplateMode:
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             spec_file=str(spec_file),
-            workflow_mode=WorkflowMode.LOCAL,
             git_ops=mock_git_ops,
             interactive=True,
         )
@@ -238,8 +232,7 @@ class TestTemplateMode:
                 agent_manager=agent_manager,
                 permission_handler=permission_handler,
                 spec_file=str(spec_file),
-                workflow_mode=WorkflowMode.LOCAL,
-                git_ops=mock_git_ops,
+                    git_ops=mock_git_ops,
                 interactive=True,
             )
 

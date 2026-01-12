@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 import yaml
 
 from cafe.utils.config import ConfigManager, ConfigError
-from cafe.core.types import WorkflowMode, AgentCLI
+from cafe.core.types import AgentCLI
 
 
 @pytest.fixture

@@ -12,7 +12,7 @@ from cafe.agents.manager import AgentManager
 from cafe.core.git import GitOperations
 from cafe.core.permission import PermissionHandler
 from cafe.core.phase import Phase
-from cafe.core.types import PhaseResult, PhaseStatus, WorkflowMode
+from cafe.core.types import PhaseResult, PhaseStatus
 from cafe.ui.inquirer_prompts import prompt_confirm
 from cafe.utils.github import GitHubOps, GitHubError
 from cafe.utils.prompt_utils import format_checklist_instruction
@@ -28,7 +28,6 @@ class PRPhase(Phase):
         git_ops: GitOperations,
         github_ops: GitHubOps,
         spec_file: str,
-        workflow_mode: WorkflowMode,
         issue_id: Optional[str] = None,
         issue_name: Optional[str] = None,
         dev_agent: str = "David",
@@ -48,9 +47,8 @@ class PRPhase(Phase):
             git_ops: Git operations
             github_ops: GitHub operations
             spec_file: Path to spec file (deprecated - will be computed from latest version)
-            workflow_mode: Workflow mode (local or github)
-            issue_id: GitHub issue ID (required for github mode)
-            issue_name: Issue name (for local mode branch naming)
+            issue_id: GitHub issue ID (optional, for linking PR to issue)
+            issue_name: Issue name (for branch naming)
             dev_agent: Developer agent name (default: David)
             draft: Create as draft PR (default: True)
             custom_title: Custom PR title (None for auto-generation)
@@ -66,7 +64,6 @@ class PRPhase(Phase):
         self.permission_handler = permission_handler
         self.git_ops = git_ops
         self.github_ops = github_ops
-        self.workflow_mode = workflow_mode
         self.issue_id = issue_id
         self.issue_name = issue_name
         self.dev_agent = dev_agent
@@ -288,21 +285,13 @@ class PRPhase(Phase):
                 config_file = self.issue_dir / "issue.yaml"
                 self.issue_id = self._get_issue_config_value(config_file, "issue_id")
 
-            # Validate inputs
-            if self.workflow_mode == WorkflowMode.GITHUB and not self.issue_id:
+            # Check requirements file exists
+            req_path = Path(self.spec_file)
+            if not req_path.exists():
                 return PhaseResult(
                     status=PhaseStatus.FAILED,
-                    message="GitHub mode requires issue_id",
+                    message=f"Spec file not found: {self.spec_file}",
                 )
-
-            if self.workflow_mode == WorkflowMode.LOCAL:
-                # Check requirements file exists
-                req_path = Path(self.spec_file)
-                if not req_path.exists():
-                    return PhaseResult(
-                        status=PhaseStatus.FAILED,
-                        message=f"Spec file not found: {self.spec_file}",
-                    )
 
             # Get branch name
             branch_name = self._get_branch_name()
@@ -614,26 +603,23 @@ class PRPhase(Phase):
         return result
 
     def _get_branch_name(self) -> str:
-        """Get branch name based on workflow mode.
+        """Get branch name.
 
         Returns:
             Branch name
         """
-        if self.workflow_mode == WorkflowMode.GITHUB:
-            return f"issue-{self.issue_id}"
-        else:
-            # Use issue_name directly if provided
-            if self.issue_name:
-                return self.issue_name
+        # Use issue_name directly if provided
+        if self.issue_name:
+            return self.issue_name
 
-            # Fallback: Extract from requirements filename
-            # e.g., "20250101-feature.md" -> "feature"
-            filename = Path(self.spec_file).stem
-            # Remove date prefix if exists
-            match = re.match(r"^\d{8}-(.+)$", filename)
-            if match:
-                return match.group(1)
-            return filename
+        # Fallback: Extract from requirements filename
+        # e.g., "20250101-feature.md" -> "feature"
+        filename = Path(self.spec_file).stem
+        # Remove date prefix if exists
+        match = re.match(r"^\d{8}-(.+)$", filename)
+        if match:
+            return match.group(1)
+        return filename
 
     def _prepare_pr_content(self) -> tuple[PhaseResult | None, tuple[str, str] | None]:
         """Prepare PR title and body.
@@ -746,8 +732,8 @@ class PRPhase(Phase):
         # Use shared method to get only commits from current feature branch
         commits = self._get_current_branch_commits(self.git_ops, self.base_branch)
 
-        # Build issue reference for GitHub mode
-        issue_instruction = f"\n- Add `Closes #{self.issue_id}` at the beginning of body" if self.workflow_mode == WorkflowMode.GITHUB else ""
+        # Build issue reference if issue_id is provided
+        issue_instruction = f"\n- Add `Closes #{self.issue_id}` at the beginning of body" if self.issue_id else ""
 
         # Generate prompt for agent
         checklist_instruction = format_checklist_instruction(checklist_path_str)

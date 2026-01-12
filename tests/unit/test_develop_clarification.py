@@ -3,7 +3,7 @@ import pytest
 from unittest.mock import MagicMock, patch
 from pathlib import Path
 from cafe.phases.develop_phase import DevelopPhase
-from cafe.core.types import PhaseStatus, WorkflowMode
+from cafe.core.types import PhaseStatus
 from cafe.core.status_codes import PhaseStatusCode
 
 

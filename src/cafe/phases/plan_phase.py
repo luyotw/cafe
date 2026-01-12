@@ -10,7 +10,7 @@ from cafe.agents.manager import AgentManager
 from cafe.core.permission import PermissionHandler
 from cafe.core.phase import Phase
 from cafe.core.status_codes import PhaseStatusCode, StatusCodeParser, generate_status_code_prompt
-from cafe.core.types import PhaseProgress, PhaseResult, PhaseStatus, WorkflowMode
+from cafe.core.types import PhaseProgress, PhaseResult, PhaseStatus
 from cafe.ui.display import Display
 from cafe.utils.git_utils import get_repo_root
 from cafe.utils.prompt_utils import format_checklist_instruction
@@ -28,8 +28,6 @@ class PlanPhase(Phase):
         permission_handler: PermissionHandler,
         git_ops: "GitOperations",
         spec_file: str,
-        workflow_mode: WorkflowMode,
-        issue_id: Optional[str] = None,
         issue_name: Optional[str] = None,
         dev_agent: str = "David",
         interactive: bool = True,
@@ -44,8 +42,6 @@ class PlanPhase(Phase):
             permission_handler: Permission handler
             git_ops: Git operations (for deriving issue directory from current branch)
             spec_file: Path to spec file
-            workflow_mode: Workflow mode (local or github)
-            issue_id: GitHub issue ID (required for github mode)
             issue_name: Issue name for history tracking (default: derived from current branch)
             dev_agent: Developer agent name (default: David)
             template_path: Path to plan template file (optional, used when template_mode='manual')
@@ -58,8 +54,6 @@ class PlanPhase(Phase):
         self.agent_manager = agent_manager
         self.permission_handler = permission_handler
         self.spec_file = spec_file
-        self.workflow_mode = workflow_mode
-        self.issue_id = issue_id
         self.dev_agent = dev_agent
         self.template_path = template_path
         self.template_mode = template_mode
@@ -103,13 +97,6 @@ class PlanPhase(Phase):
             if early_exit_result:
                 return early_exit_result
 
-            # Validate inputs
-            if self.workflow_mode == WorkflowMode.GITHUB and not self.issue_id:
-                return PhaseResult(
-                    status=PhaseStatus.FAILED,
-                    message="GitHub mode requires issue_id",
-                )
-
             # Increment iteration and execute agent
             self.iteration += 1
 
@@ -130,83 +117,82 @@ class PlanPhase(Phase):
             # Calculate versioned plan file path
             self.plan_file = self._get_versioned_file_path("plan", iteration_number, self.phase_dir)
 
-            if self.workflow_mode == WorkflowMode.LOCAL:
-                # Check requirements file exists
-                req_path = Path(self.spec_file)
-                if not req_path.exists():
-                    return PhaseResult(
-                        status=PhaseStatus.FAILED,
-                        message=f"Spec file not found: {self.spec_file}",
-                    )
+            # Check requirements file exists
+            req_path = Path(self.spec_file)
+            if not req_path.exists():
+                return PhaseResult(
+                    status=PhaseStatus.FAILED,
+                    message=f"Spec file not found: {self.spec_file}",
+                )
 
-                # Check if this is first iteration (no history files or plan files)
-                has_history = bool(list(self.phase_dir.glob("iteration_*/context.json")))
-                is_first_iteration = not has_history
+            # Check if this is first iteration (no history files or plan files)
+            has_history = bool(list(self.phase_dir.glob("iteration_*/context.json")))
+            is_first_iteration = not has_history
 
-                # First iteration requires template (unless template_mode is 'auto')
-                if is_first_iteration and not self.template_path and self.template_mode != "auto":
-                    if self.interactive:
-                        # Interactive mode: prompt for template selection
-                        from cafe.templates.manager import TemplateManager
-                        from cafe.ui.template_selector import select_template
-                        from rich.console import Console
-                        console = Console()
+            # First iteration requires template (unless template_mode is 'auto')
+            if is_first_iteration and not self.template_path and self.template_mode != "auto":
+                if self.interactive:
+                    # Interactive mode: prompt for template selection
+                    from cafe.templates.manager import TemplateManager
+                    from cafe.ui.template_selector import select_template
+                    from rich.console import Console
+                    console = Console()
 
-                        template_manager = TemplateManager()
-                        templates_with_source = template_manager.list_templates()
+                    template_manager = TemplateManager()
+                    templates_with_source = template_manager.list_templates()
 
-                        if not templates_with_source:
-                            return PhaseResult(
-                                status=PhaseStatus.FAILED,
-                                message="No templates found. Use 'cafe template add <source> <name>' to add templates.",
-                            )
-
-                        templates = [name for name, _ in templates_with_source]
-                        console.print()
-                        console.print("[yellow]First iteration requires a template.[/yellow]")
-                        template_paths = {name: template_manager.get_template_path(name) for name in templates}
-                        selected_template = select_template(templates, template_paths)
-
-                        if selected_template:
-                            self.template_path = str(template_manager.get_template_path(selected_template))
-                            console.print(f"[dim]Using template: {selected_template}[/dim]")
-                        else:
-                            return PhaseResult(
-                                status=PhaseStatus.FAILED,
-                                message="Template selection cancelled",
-                            )
-                    else:
-                        # Non-interactive mode: require --template option
+                    if not templates_with_source:
                         return PhaseResult(
                             status=PhaseStatus.FAILED,
-                            message="Template is required for first iteration. Use --template option.",
+                            message="No templates found. Use 'cafe template add <source> <name>' to add templates.",
                         )
 
-                # Only prompt for dev guide in first iteration
-                # Note: self.iteration is determined by history files, not versioned plan files
-                if is_first_iteration:
-                    # Check for any existing plan file with development guide section
-                    # Always check plan_001.md (first versioned file), not self.plan_file
-                    first_plan_file = self._get_versioned_file_path("plan", 1, self.phase_dir)
-                    plan_exists = first_plan_file.exists() and self._has_dev_guide_section(first_plan_file)
-                else:
-                    # Not first iteration: plan should already exist
-                    plan_exists = True
+                    templates = [name for name, _ in templates_with_source]
+                    console.print()
+                    console.print("[yellow]First iteration requires a template.[/yellow]")
+                    template_paths = {name: template_manager.get_template_path(name) for name in templates}
+                    selected_template = select_template(templates, template_paths)
 
-                # First round: no plan file exists or no dev guide
-                if is_first_iteration and not plan_exists:
-                    # Need to get dev guide (optional)
-                    dev_guide = ""
-                    if self.interactive:
-                        # Interactive: prompt user for development guide
-                        dev_guide = self._get_dev_guide_from_user()
+                    if selected_template:
+                        self.template_path = str(template_manager.get_template_path(selected_template))
+                        console.print(f"[dim]Using template: {selected_template}[/dim]")
                     else:
-                        # Non-interactive: use user_input as dev guide (can be empty)
-                        dev_guide = self.user_input
+                        return PhaseResult(
+                            status=PhaseStatus.FAILED,
+                            message="Template selection cancelled",
+                        )
+                else:
+                    # Non-interactive mode: require --template option
+                    return PhaseResult(
+                        status=PhaseStatus.FAILED,
+                        message="Template is required for first iteration. Use --template option.",
+                    )
 
-                    # Save development guide as initial versioned plan file
-                    self.plan_file.parent.mkdir(parents=True, exist_ok=True)
-                    self.plan_file.write_text(f"## Development Guide\n\n{dev_guide}\n")
+            # Only prompt for dev guide in first iteration
+            # Note: self.iteration is determined by history files, not versioned plan files
+            if is_first_iteration:
+                # Check for any existing plan file with development guide section
+                # Always check plan_001.md (first versioned file), not self.plan_file
+                first_plan_file = self._get_versioned_file_path("plan", 1, self.phase_dir)
+                plan_exists = first_plan_file.exists() and self._has_dev_guide_section(first_plan_file)
+            else:
+                # Not first iteration: plan should already exist
+                plan_exists = True
+
+            # First round: no plan file exists or no dev guide
+            if is_first_iteration and not plan_exists:
+                # Need to get dev guide (optional)
+                dev_guide = ""
+                if self.interactive:
+                    # Interactive: prompt user for development guide
+                    dev_guide = self._get_dev_guide_from_user()
+                else:
+                    # Non-interactive: use user_input as dev guide (can be empty)
+                    dev_guide = self.user_input
+
+                # Save development guide as initial versioned plan file
+                self.plan_file.parent.mkdir(parents=True, exist_ok=True)
+                self.plan_file.write_text(f"## Development Guide\n\n{dev_guide}\n")
 
             # Generate checklist for this iteration
             from cafe.utils.checklist_generator import generate_plan_checklist
@@ -323,10 +309,7 @@ class PlanPhase(Phase):
         Returns:
             Prompt string
         """
-        if self.workflow_mode == WorkflowMode.GITHUB:
-            return self._generate_github_prompt(user_input)
-        else:
-            return self._generate_local_prompt(user_input)
+        return self._generate_local_prompt(user_input)
 
     def _generate_local_prompt(self, user_input: str) -> str:
         """Generate prompt for local workflow.
@@ -488,87 +471,6 @@ Continue analyzing the latest version of {spec_file_path}.
 """
 
             return base_prompt
-
-    def _generate_github_prompt(self, user_input: str) -> str:
-        """Generate prompt for GitHub workflow.
-
-        Args:
-            user_input: User's input/feedback for this iteration
-
-        Returns:
-            Prompt string
-        """
-        status_code_prompt = generate_status_code_prompt(
-            valid_codes=[
-                PhaseStatusCode.READY_FOR_REVIEW,
-                PhaseStatusCode.NEED_CLARIFICATION,
-            ],
-            descriptions={
-                PhaseStatusCode.READY_FOR_REVIEW: "Implementation analysis completed, ready for user review",
-                PhaseStatusCode.NEED_CLARIFICATION: "Need more information or confirmation",
-            },
-        )
-
-        # Get checklist file path
-        iteration_dir = self._get_iteration_dir(self.iteration)
-        checklist_file = iteration_dir / "checklist.md"
-        from cafe.utils.git_utils import to_cwd_relative_path
-        try:
-            checklist_path = to_cwd_relative_path(checklist_file)
-        except ValueError:
-            checklist_path = str(checklist_file.resolve())
-
-        checklist_instruction = format_checklist_instruction(checklist_path)
-        if self.iteration == 1:
-            return f"""Analyze GitHub Issue #{self.issue_id} and plan implementation steps.
-
-**Your Role:**
-You are an experienced Developer, responsible for planning detailed implementation steps based on requirements specifications and development guidelines.
-
-{checklist_instruction}
-
-This is iteration {self.iteration} of implementation analysis.
-
-Please use `gh issue view {self.issue_id}` to read Issue content, plan detailed implementation steps based on requirements and development guidelines.
-
-{status_code_prompt}
-
-**If need more information:**
-Use `gh issue comment {self.issue_id}` to post a comment and ask questions.
-
-**If analysis complete:**
-Reply with confirmation message.
-"""
-        else:
-            # Add user's modification request section for iteration 2+
-            user_request_section = ""
-            if user_input:
-                user_request_section = f"""
-**User's Modification Request:**
-{user_input}
-
-"""
-
-            return f"""Continue analyzing GitHub Issue #{self.issue_id}.
-
-**Your Role:**
-You are an experienced Developer, responsible for planning detailed implementation steps based on requirements specifications and development guidelines.
-
-{checklist_instruction}
-
-This is iteration {self.iteration} of implementation analysis.
-
-{user_request_section}Please use `gh issue view {self.issue_id}` to view the latest Issue content.
-
-{status_code_prompt}
-
-**If need more information:**
-Use `gh issue comment {self.issue_id}` to post a comment and ask questions.
-
-**If analysis complete:**
-Reply with confirmation message.
-"""
-
 
     def _has_dev_guide_section(self, plan_file: Path) -> bool:
         """Check if plan.md has development guide section.
