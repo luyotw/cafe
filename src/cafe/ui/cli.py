@@ -51,15 +51,13 @@ ALL_PHASES = ["spec", "plan", "develop", "review", "pr"]
 VALID_PHASES = ["spec", "plan", "develop", "review", "pr"]
 VALID_CONTENT_TYPES = [
     "context", "output", "streaming", "error",
-    "title", "body", "status", "iterations", "checklist"
+    "status", "iterations", "checklist"
 ]
 CONTENT_TYPE_FILE_MAP = {
     "context": "context.json",
     "output": "output.md",
     "streaming": "streaming.jsonl",
     "error": "error.json",
-    "title": "title.txt",
-    "body": "body.md",
     "status": "status.json",
     "iterations": "iterations.jsonl",
     "checklist": "checklist.md",
@@ -4531,6 +4529,10 @@ def show(
                 except json.JSONDecodeError:
                     # If JSON parsing fails, output raw content
                     console.print(content)
+            elif content_type == "checklist":
+                # For checklist, output raw content without Rich formatting
+                # Rich treats [x] as special markup and removes it
+                print(content)
             else:
                 # Output other files directly
                 console.print(content)
@@ -4656,51 +4658,6 @@ def chat_with_agent(
 
     # Exit normally, return CLI tool's exit code
     raise typer.Exit(result.returncode)
-
-
-@app.command()
-def test() -> None:
-    """🧪 Simulate agent execution test (for reproducing contamination issues).
-
-    Execute scripts/simulate_agent_test.sh to simulate agent behavior in worktree.
-    This command will:
-    1. Execute tests
-    2. Attempt commit (triggers pre-commit hook)
-    3. Check for contaminated commits
-    """
-    import subprocess
-    from pathlib import Path
-
-    # Find script file
-    script_path = Path(__file__).parent.parent.parent.parent / "scripts" / "simulate_agent_test.sh"
-
-    if not script_path.exists():
-        console.print(f"[red]Error: Script not found at {script_path}[/red]")
-        raise typer.Exit(1)
-
-    console.print("[bold blue]🤖 Simulating Agent execution test...[/bold blue]")
-    console.print(f"[dim]Script: {script_path}[/dim]")
-    console.print("")
-
-    try:
-        # Execute script (no cwd specified, use current directory)
-        result = subprocess.run(
-            ["bash", str(script_path)],
-            # No cwd specified, execute from current directory (for testing worktree)
-            # No env specified, inherit current environment (simulate agent behavior)
-        )
-
-        if result.returncode == 0:
-            console.print("")
-            console.print("[green]✅ Test completed, no contamination detected[/green]")
-        else:
-            console.print("")
-            console.print("[red]❌ Contamination detected or test failed![/red]")
-            raise typer.Exit(1)
-
-    except Exception as e:
-        console.print(f"[red]Error: {e}[/red]")
-        raise typer.Exit(1)
 
 
 def main() -> None:

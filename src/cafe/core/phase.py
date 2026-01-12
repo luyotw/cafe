@@ -225,13 +225,13 @@ class Phase(ABC):
             logger.warning(f"Failed to append iteration index: {e}")
 
     def _save_streaming_jsonl(self, streaming_log: List[str]) -> None:
-        """Save streaming fragments as JSONL format file.
+        """Save streaming output as JSONL format file.
 
-        Save each fragment in streaming_log as JSONL format (one JSON object per line),
-        saved to iteration_XXX/streaming.jsonl.
+        For stream-json format CLIs (Claude, Gemini), streaming_log contains raw JSON lines.
+        For non-stream-json CLIs (Copilot, Cursor), streaming_log contains text that needs wrapping.
 
         Args:
-            streaming_log: List of streaming fragments
+            streaming_log: Raw output lines (JSON for stream-json, text for others)
         """
         # If streaming_log is empty, don't create file
         if not streaming_log:
@@ -250,17 +250,32 @@ class Phase(ABC):
         # Create JSONL file path
         jsonl_file = iteration_dir / "streaming.jsonl"
 
-        # Write JSONL file (one JSON object per line)
+        # Check if using stream-json format (read from context.json)
+        context_file = iteration_dir / "context.json"
+        use_stream_json = False
+        if context_file.exists():
+            import json
+            with open(context_file, "r", encoding="utf-8") as f:
+                context_data = json.load(f)
+                cli_command_args = context_data.get("cli_command_args") or []
+                # Check if output format is stream-json
+                use_stream_json = "stream-json" in cli_command_args
+
+        # Write JSONL file
         with open(jsonl_file, "w", encoding="utf-8") as f:
-            for index, content in enumerate(streaming_log):
-                # Create JSON object
-                json_obj = {
-                    "index": index,
-                    "timestamp": datetime.now().astimezone().isoformat(),
-                    "content": content
-                }
-                # Write one line of JSON (without indentation)
-                f.write(json.dumps(json_obj, ensure_ascii=False) + "\n")
+            if use_stream_json:
+                # For stream-json: streaming_log already contains raw JSON lines
+                for line in streaming_log:
+                    f.write(line.rstrip('\n') + "\n")
+            else:
+                # For non-stream-json: wrap text in JSON objects
+                for index, content in enumerate(streaming_log):
+                    json_obj = {
+                        "index": index,
+                        "timestamp": datetime.now().astimezone().isoformat(),
+                        "content": content
+                    }
+                    f.write(json.dumps(json_obj, ensure_ascii=False) + "\n")
 
     def _get_iteration_dir(self, iteration: int) -> Path:
         """Get iteration directory path.

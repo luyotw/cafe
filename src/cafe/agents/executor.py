@@ -399,6 +399,7 @@ class AgentExecutor:
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
+                stdin=subprocess.DEVNULL,  # Close stdin to prevent CLI from waiting for input
                 text=True,
                 bufsize=1,  # Line buffered
             )
@@ -424,7 +425,17 @@ class AgentExecutor:
             if process.stderr in ready:
                 # Read first line of stderr if available (non-blocking)
                 stderr_line = process.stderr.readline()
-                if stderr_line and ("already in use" in stderr_line.lower() or "error:" in stderr_line.lower() or "limit reached" in stderr_line.lower()):
+                # Only treat as fatal error if it's NOT a tool execution error
+                # Tool errors like "Error executing tool" are recoverable and agent continues
+                is_tool_error = "error executing tool" in stderr_line.lower()
+                is_fatal_error = (
+                    stderr_line and
+                    ("already in use" in stderr_line.lower() or
+                     "limit reached" in stderr_line.lower() or
+                     ("error" in stderr_line.lower() and not is_tool_error))
+                )
+
+                if is_fatal_error:
                     # Likely a fatal error, read rest and terminate
                     process.kill()
                     remaining_stderr = process.stderr.read()
@@ -460,26 +471,29 @@ class AgentExecutor:
         session_id = None
         permission_denials: List[PermissionDenial] = []
         
-        # Add idle timeout to prevent hanging when process doesn't close stdout (mainly for copilot)
+        # Add idle timeout to prevent hanging when process stops outputting
         import select
         import sys
         import time
-        
-        use_idle_timeout = (cli_name.lower() == "copilot" and sys.platform != 'win32')
-        idle_timeout = 300  # seconds - timeout if no new output
+
+        use_idle_timeout = (sys.platform != 'win32')
+        # Gemini needs longer timeout (10 min), others use 5 min
+        idle_timeout = 600 if self.config.cli == AgentCLI.GEMINI else 300  # seconds - timeout if no new output
         last_output_time = time.time() if use_idle_timeout else None
+        idle_timeout_triggered = False  # Track if we exited due to idle timeout
 
         if process.stdout:
             while True:
-                # Check if stdout has data available (with timeout) - only for copilot on Unix
+                # Check if stdout has data available (with timeout)
                 if use_idle_timeout:
-                    # Unix + Copilot: use select with timeout
+                    # Unix-like systems: use select with timeout to prevent indefinite blocking
                     ready, _, _ = select.select([process.stdout], [], [], 1.0)  # 1 second timeout per check
                     
                     if not ready:
                         # No data available, check if idle timeout exceeded
                         if time.time() - last_output_time > idle_timeout:
                             print(f"\n⚠️  No output from {cli_name} for {idle_timeout}s, assuming completion...")
+                            idle_timeout_triggered = True
                             break
                         continue  # Continue waiting
                 
@@ -514,6 +528,11 @@ class AgentExecutor:
                             err.error_type = "invalid_request"
                             err.cli_command_args = cmd[1:]
                             raise err
+
+                        # Check for result message (indicates completion for Gemini/Claude)
+                        # When type is "result", the CLI has completed and we should stop reading
+                        if data.get("type") == "result":
+                            break
 
                         # Extract content using custom extractor or default Claude extractor
                         # FIXME: Should implement extractors seperately for each CLI
@@ -580,29 +599,53 @@ class AgentExecutor:
 
         print(f"\n{'='*80}\n")
 
-        # Add timeout to prevent hanging (especially for copilot)
-        # Timeout starts after all output has been read from stdout
-        # If timeout, terminate and treat as success if we got output
-        try:
-            returncode = process.wait(timeout=300)
-            # Only read stderr after process completes normally
-            stderr_output = process.stderr.read() if process.stderr else ""
-        except subprocess.TimeoutExpired:
-            print(f"⚠️  {cli_name} process did not exit within timeout, terminating...")
+        # If idle timeout triggered, terminate process immediately
+        if idle_timeout_triggered:
+            print(f"⚠️  Terminating {cli_name} process due to idle timeout...")
             process.terminate()
             try:
                 returncode = process.wait(timeout=2)
             except subprocess.TimeoutExpired:
+                print(f"⚠️  Process did not respond to SIGTERM, sending SIGKILL...")
                 process.kill()
-                returncode = process.wait()
-            
+                try:
+                    returncode = process.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    # If even kill doesn't work, something is very wrong
+                    print(f"❌ Process could not be killed, giving up...")
+                    returncode = -1
+
             # Read stderr after termination
             stderr_output = process.stderr.read() if process.stderr else ""
-            
-            # If we got output, treat timeout as success (agent likely finished but didn't exit)
+
+            # Treat as success if we got output
             if output_lines:
-                print(f"✓ Got output from {cli_name}, treating as success despite timeout")
+                print(f"✓ Got output from {cli_name}, treating as success despite idle timeout")
                 returncode = 0
+        else:
+            # Add timeout to prevent hanging (especially for copilot)
+            # Timeout starts after all output has been read from stdout
+            # If timeout, terminate and treat as success if we got output
+            try:
+                returncode = process.wait(timeout=300)
+                # Only read stderr after process completes normally
+                stderr_output = process.stderr.read() if process.stderr else ""
+            except subprocess.TimeoutExpired:
+                print(f"⚠️  {cli_name} process did not exit within timeout, terminating...")
+                process.terminate()
+                try:
+                    returncode = process.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    returncode = process.wait()
+
+                # Read stderr after termination
+                stderr_output = process.stderr.read() if process.stderr else ""
+
+                # If we got output, treat timeout as success (agent likely finished but didn't exit)
+                if output_lines:
+                    print(f"✓ Got output from {cli_name}, treating as success despite timeout")
+                    returncode = 0
 
         if returncode != 0:
             # Check if it's a rate limit error
@@ -638,7 +681,8 @@ class AgentExecutor:
         if parse_stream_json:
             # response_text is already the last fragment, use output_lines if empty
             final_response = response_text if response_text else ''.join(output_lines)
-            final_streaming_log = streaming_log if streaming_log else []
+            # For stream-json, use raw output_lines for streaming.jsonl
+            final_streaming_log = output_lines if output_lines else []
         else:
             # Copilot/non-JSON style: full output as response
             # All lines (with newlines) combined into complete text

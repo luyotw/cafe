@@ -308,8 +308,14 @@ class TestStreamingExecution:
 
         # Check response content (should be last fragment only)
         assert agent_response.response == "world"
-        # Check streaming_log (should contain all fragments)
-        assert agent_response.streaming_log == ["Hello ", "world"]
+        # Check streaming_log (should contain raw JSON lines for stream-json)
+        assert agent_response.streaming_log == [
+            '{"content": "Hello "}\n',
+            '{"content": "world"}\n',
+            '{"session_id": "test-session-123"}\n',
+            '{"usage": {"input_tokens": 10, "output_tokens": 5}}\n',
+            '{"total_cost_usd": 0.01}\n',
+        ]
 
         # Check token usage
         assert agent_response.token_usage.input_tokens == 10
@@ -373,8 +379,12 @@ class TestStreamingExecution:
 
         # Should have last fragment as response
         assert agent_response.response == " more valid"
-        # Should have all valid JSON contents in streaming_log
-        assert agent_response.streaming_log == ["Valid JSON", " more valid"]
+        # Should have raw JSON lines in streaming_log (including invalid line)
+        assert agent_response.streaming_log == [
+            '{"content": "Valid JSON"}\n',
+            'Not valid JSON\n',
+            '{"content": " more valid"}\n',
+        ]
 
         # Check that invalid line was still printed
         captured = capsys.readouterr()
@@ -1362,7 +1372,7 @@ class TestAllowedDirectoriesParameter:
         mock_process.wait.return_value = 0
 
         with patch("subprocess.Popen", return_value=mock_process) as mock_popen, \
-             patch("select.select", return_value=([], [], [])):
+             patch("sys.platform", "win32"):
             agent_response = executor.execute(
                 "Test prompt",
                 allowed_directories=[".cafe", "src"]
@@ -1397,7 +1407,7 @@ class TestAllowedDirectoriesParameter:
 
         with patch("subprocess.Popen", return_value=mock_process) as mock_popen, \
              patch("cafe.agents.cli.gemini.GeminiCLI.ensure_geminiignore"), \
-             patch("select.select", return_value=([], [], [])):
+             patch("sys.platform", "win32"):
             agent_response = executor.execute(
                 "Test prompt",
                 allowed_directories=[".cafe", "docs"]
@@ -1470,7 +1480,7 @@ class TestAllowedDirectoriesParameter:
         mock_process.wait.return_value = 0
 
         with patch("subprocess.Popen", return_value=mock_process) as mock_popen, \
-             patch("select.select", return_value=([], [], [])):
+             patch("sys.platform", "win32"):
             executor.execute("Test prompt")
 
             # Verify no --add-dir in command when allowed_directories is None

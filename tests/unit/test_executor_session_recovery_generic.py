@@ -50,7 +50,7 @@ class TestGenericSessionRecovery:
                     stdout='{"session_id": "new-session"}',
                     stderr=""
                 )
-                with patch("select.select", return_value=([], [], [])):
+                with patch("sys.platform", "win32"):
                     response = executor.execute("Test prompt")
 
         # 驗證成功恢復
@@ -134,7 +134,7 @@ class TestGenericSessionRecovery:
             return mock_proc
 
         with patch("subprocess.Popen", side_effect=mock_popen):
-            with patch("select.select", return_value=([], [], [])):
+            with patch("sys.platform", "win32"):
                 with pytest.raises(Exception) as exc_info:
                     executor.execute("Test prompt")
 
@@ -183,7 +183,7 @@ class TestGenericSessionRecovery:
                     stdout='{"session_id": "fresh-session"}',
                     stderr=""
                 )
-                with patch("select.select", return_value=([], [], [])):
+                with patch("sys.platform", "win32"):
                     executor.execute("Test prompt")
 
         # 驗證 session_id 已更新
@@ -233,7 +233,7 @@ class TestGenericSessionRecovery:
 
         with patch("subprocess.Popen", side_effect=mock_popen):
             with patch("subprocess.run", side_effect=mock_run_for_session_creation):
-                with patch("select.select", return_value=([], [], [])):
+                with patch("sys.platform", "win32"):
                     response = executor.execute("Test prompt")
 
         # 驗證成功執行
@@ -278,7 +278,7 @@ class TestGenericSessionRecovery:
 
         with patch("subprocess.Popen", side_effect=mock_popen):
             with patch("subprocess.run", side_effect=mock_run_for_session_creation):
-                with patch("select.select", return_value=([], [], [])):
+                with patch("sys.platform", "win32"):
                     with pytest.raises(AgentExecutionError):
                         executor.execute("Test prompt")
 

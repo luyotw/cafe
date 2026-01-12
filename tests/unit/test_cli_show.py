@@ -132,8 +132,7 @@ class TestGetShowFilePath:
         assert _get_show_file_path(phase_dir, 2, "output") == phase_dir / "iteration_002" / "output.md"
         assert _get_show_file_path(phase_dir, 3, "streaming") == phase_dir / "iteration_003" / "streaming.jsonl"
         assert _get_show_file_path(phase_dir, 1, "error") == phase_dir / "iteration_001" / "error.json"
-        assert _get_show_file_path(phase_dir, 1, "title") == phase_dir / "iteration_001" / "title.txt"
-        assert _get_show_file_path(phase_dir, 1, "body") == phase_dir / "iteration_001" / "body.md"
+        assert _get_show_file_path(phase_dir, 1, "checklist") == phase_dir / "iteration_001" / "checklist.md"
 
     def test_get_show_file_path_phase_files(self, tmp_path):
         """測試階段層級的檔案路徑"""
