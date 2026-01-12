@@ -2106,7 +2106,6 @@ def spec(
             agent_manager=agent_manager,
             permission_handler=permission_handler,
             git_ops=git_ops,
-            issue_id=issue_id,
             pm_agent=pm_agent,
             interactive=is_interactive,
             rigor=spec_rigor,
