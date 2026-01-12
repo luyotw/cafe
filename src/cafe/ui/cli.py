@@ -2467,7 +2467,6 @@ def plan(
             spec_file=(
                 str(spec_file_path) if spec_file_path else ""
             ),  # Deprecated - computed internally
-            issue_id=issue_id,
             issue_name=issue_name,
             dev_agent=dev_agent,
             interactive=interactive,
@@ -2953,7 +2952,6 @@ def review(
             git_ops=git_ops,
             spec_file=spec_file,
             plan_file=plan_file,
-            issue_id=issue_id,
             review_agent=reviewer_agent,
             target_commit=commit,
             base_branch=base_branch,
