@@ -993,20 +993,8 @@ Read {agent_file} to understand your complete role definition and responsibiliti
             base_allowed_tools = ["write", "read", "edit", "bash", "grep", "glob", "ls", "web_fetch", "web_search"]
             approved_tools_from_denials, permission_user_input = self._handle_previous_permission_denials()
 
-            # Check if user rejected all tools (no approvals)
-            prev_data = self._load_previous_iteration_data()
-            if prev_data and prev_data.get("permission_denials") and not approved_tools_from_denials:
-                return PhaseResult(
-                    status=PhaseStatus.FAILED,
-                    message="No tools approved - all permission requests were rejected.",
-                    data={
-                        "iterations": self.iteration,
-                        "last_response": prev_data.get('response', ''),
-                        "permission_denials": prev_data.get("permission_denials", []),
-                    },
-                )
-
             # Merge base tools + previous iteration's tools + newly approved tools
+            # Even if no tools were approved from denials, agent can still use base_allowed_tools
             allowed_tools = self._merge_allowed_tools(base_allowed_tools, approved_tools_from_denials)
 
             # If user provided additional input about permissions, append to current_user_input
