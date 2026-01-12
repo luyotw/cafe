@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, Mock, patch
 
 from cafe.ui.cli import app, _setup_agents
 from cafe.core.git import GitOperations
-from cafe.core.types import AgentCLI, PhaseResult, PhaseStatus, WorkflowMode
+from cafe.core.types import AgentCLI, PhaseResult, PhaseStatus
 from cafe.utils.config import ConfigManager
 
 
@@ -298,11 +298,11 @@ class TestPlanCommand:
         mock_git_ops: Mock,
         tmp_path: Path,
     ) -> None:
-        """測試 plan 指令 github mode 使用 issue ID"""
+        """測試 plan 指令使用 issue ID"""
         # Setup: Create config.yaml
         _create_minimal_config(tmp_path)
 
-        # Setup: GitHub mode still checks if versioned spec file exists first (new structure)
+        # Setup: Checks if versioned spec file exists first (new structure)
         branch_name = "test-issue"
         spec_dir = tmp_path / ".cafe" / "issues" / branch_name / "spec"
         iter_dir = spec_dir / "iteration_001"
@@ -338,7 +338,7 @@ class TestPlanCommand:
         old_cwd = os.getcwd()
         try:
             os.chdir(tmp_path)
-            result = runner.invoke(app, ["plan", "-m", "github", "-i", "123", "--no-interactive", "--template", "default"])
+            result = runner.invoke(app, ["plan", "-i", "123", "--no-interactive", "--template", "default"])
         finally:
             os.chdir(old_cwd)
 
@@ -404,37 +404,6 @@ class TestPlanCommand:
         assert result.exit_code == 1
         assert "Plan phase failed" in result.stdout
 
-    @patch("cafe.ui.cli.GitOperations")
-    def test_plan_invalid_mode_fails(self, mock_git_ops: Mock, tmp_path: Path) -> None:
-        """測試 plan 指令使用無效 mode"""
-        branch_name = "test-issue"
-        config_file = tmp_path / "config.yaml"
-
-        # Setup: Create spec file in the expected location
-        spec_file = tmp_path / ".cafe" / "issues" / branch_name / "spec" / "spec.md"
-        spec_file.parent.mkdir(parents=True, exist_ok=True)
-        spec_file.write_text("# Spec")
-
-        # Mock Git operations
-        mock_git_instance = MagicMock()
-        mock_git_instance.is_valid_branch.return_value = True
-        mock_git_instance.get_current_branch.return_value = branch_name
-        mock_git_ops.return_value = mock_git_instance
-
-        # Execute
-        import os
-        old_cwd = os.getcwd()
-        try:
-            os.chdir(tmp_path)
-            result = runner.invoke(
-                app,
-                ["plan", "-m", "invalid", "--config", str(config_file)]
-            )
-        finally:
-            os.chdir(old_cwd)
-
-        assert result.exit_code == 1
-        assert "Invalid mode" in result.stdout
 
     @patch("cafe.ui.cli.GitOperations")
     @patch("cafe.ui.cli.select_template")

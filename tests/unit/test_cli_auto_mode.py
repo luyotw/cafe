@@ -115,32 +115,30 @@ class TestAutoModeConfigPreservation:
         """測試 spec phase 不會覆寫 issue config（例如 worktree_path）"""
         # This test uses real SpecPhase to ensure config preservation works
         from cafe.phases.spec_phase import SpecPhase
-        from cafe.core.types import SpecRigor, WorkflowMode
+        from cafe.core.types import SpecRigor
         from cafe.core.permission import PermissionHandler
-        
+
         # Add worktree_path to config
         config_file = prepared_issue / "issue.yaml"
         with open(config_file, 'r') as f:
             config_data = yaml.safe_load(f)
-        
+
         config_data["worktree_path"] = "/some/worktree/path"
-        
+
         with open(config_file, 'w') as f:
             yaml.dump(config_data, f)
-        
+
         # Create mock dependencies
         mock_agent_manager = MagicMock()
         mock_permission = PermissionHandler()
-        
+
         # Create real SpecPhase instance
         phase = SpecPhase(
             issue_name="test-issue",
             rigor=SpecRigor.MEDIUM,
-            issue_id=None,
             agent_manager=mock_agent_manager,
             permission_handler=mock_permission,
             git_ops=mock_git_ops,
-            workflow_mode=WorkflowMode.LOCAL,
         )
         
         # Save config (this is what happens during execution)

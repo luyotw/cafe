@@ -13,7 +13,7 @@ from cafe.core.git import GitOperations
 from cafe.core.permission import PermissionHandler
 from cafe.core.phase import Phase
 from cafe.core.status_codes import PhaseStatusCode, StatusCodeParser, generate_status_code_prompt
-from cafe.core.types import PhaseProgress, PhaseResult, PhaseStatus, WorkflowMode
+from cafe.core.types import PhaseProgress, PhaseResult, PhaseStatus
 from cafe.ui.display import Display
 from cafe.utils.github import get_pr_comments, filter_unresolved_comments, format_comments_for_prompt
 from cafe.utils.prompt_utils import format_checklist_instruction
@@ -29,7 +29,6 @@ class DevelopPhase(Phase):
         git_ops: GitOperations,
         spec_file: str,
         plan_file: str,
-        workflow_mode: WorkflowMode,
         issue_id: Optional[str] = None,
         issue_name: Optional[str] = None,
         dev_agent: str = "David",
@@ -46,8 +45,7 @@ class DevelopPhase(Phase):
             git_ops: Git operations
             spec_file: Path to spec file
             plan_file: Path to plan file
-            workflow_mode: Workflow mode (local or github)
-            issue_id: GitHub issue ID (required for github mode)
+            issue_id: GitHub issue ID (optional)
             issue_name: Issue name for history tracking (default: derived from current branch)
             dev_agent: Developer agent name (default: David)
             interactive: Enable interactive mode (default: True)
@@ -62,7 +60,6 @@ class DevelopPhase(Phase):
         self.git_ops = git_ops
         self.spec_file = spec_file
         self.plan_file = plan_file
-        self.workflow_mode = workflow_mode
         self.issue_id = issue_id
         self.dev_agent = dev_agent
         self.user_input = user_input
@@ -880,20 +877,13 @@ Read {agent_file} to understand your complete role definition and responsibiliti
                 )
 
             # Validate inputs
-            if self.workflow_mode == WorkflowMode.GITHUB and not self.issue_id:
+            # Check requirements file exists
+            req_path = Path(self.spec_file)
+            if not req_path.exists():
                 return PhaseResult(
                     status=PhaseStatus.FAILED,
-                    message="GitHub mode requires issue_id",
+                    message=f"Spec file not found: {self.spec_file}",
                 )
-
-            if self.workflow_mode == WorkflowMode.LOCAL:
-                # Check requirements file exists
-                req_path = Path(self.spec_file)
-                if not req_path.exists():
-                    return PhaseResult(
-                        status=PhaseStatus.FAILED,
-                        message=f"Spec file not found: {self.spec_file}",
-                    )
 
             # Auto-detect PR number if not provided (must happen before already_completed check)
             if not self.pr_number:
@@ -1279,11 +1269,8 @@ If NO (does not meet criteria): Continue with development work and return approp
         Returns:
             Branch name
         """
-        if self.workflow_mode == WorkflowMode.GITHUB:
-            return f"issue-{self.issue_id}"
-        else:
-            # Use issue name as branch name
-            return self.issue_name
+        # Use issue name as branch name
+        return self.issue_name
 
     def _get_status_analysis_prompt(self) -> str:
         """Get prompt for analyzing status code.

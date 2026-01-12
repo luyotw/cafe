@@ -4,7 +4,7 @@ import pytest
 from pathlib import Path
 from unittest.mock import Mock, patch, MagicMock
 from cafe.phases.pr_phase import PRPhase
-from cafe.core.types import WorkflowMode, PhaseResult, PhaseStatus
+from cafe.core.types import PhaseResult, PhaseStatus
 
 
 class TestGeneratePRContentWithOutputMd:
@@ -28,7 +28,6 @@ class TestGeneratePRContentWithOutputMd:
                     git_ops=Mock(),
                     github_ops=Mock(),
                     spec_file=str(spec_file),
-                    workflow_mode=WorkflowMode.LOCAL,
                 )
                 phase.iteration = 1
                 phase.base_branch = "main"
@@ -65,7 +64,6 @@ class TestGeneratePRContentWithOutputMd:
                     git_ops=Mock(),
                     github_ops=Mock(),
                     spec_file=str(spec_file),
-                    workflow_mode=WorkflowMode.LOCAL,
                 )
                 phase.iteration = 1
                 phase.base_branch = "main"
@@ -98,7 +96,6 @@ class TestGeneratePRContentWithOutputMd:
                     git_ops=Mock(),
                     github_ops=Mock(),
                     spec_file=str(spec_file),
-                    workflow_mode=WorkflowMode.LOCAL,
                 )
                 phase.iteration = 1
                 phase.base_branch = "main"

@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from cafe.core.types import PhaseStatus, WorkflowMode
+from cafe.core.types import PhaseStatus
 from cafe.core.status_codes import PhaseStatusCode
 from cafe.phases.develop_phase import DevelopPhase
 
@@ -85,7 +85,6 @@ class TestDevelopPhaseReviewPriority:
             git_ops=mock_git_ops,
             spec_file=str(spec_file),
             plan_file=str(plan_file),
-            workflow_mode=WorkflowMode.LOCAL,
             issue_name="test-issue",
             pr_number="123",  # This triggers PR comment check
         )
@@ -139,7 +138,6 @@ class TestDevelopPhaseReviewPriority:
             git_ops=mock_git_ops,
             spec_file=str(spec_file),
             plan_file=str(plan_file),
-            workflow_mode=WorkflowMode.LOCAL,
             issue_name="test-issue",
             pr_number="123",
         )
@@ -201,7 +199,6 @@ class TestDevelopPhaseReviewPriority:
             git_ops=mock_git_ops,
             spec_file=str(spec_file),
             plan_file=str(plan_file),
-            workflow_mode=WorkflowMode.LOCAL,
             issue_name="test-issue",
             pr_number=None,  # No PR number
         )

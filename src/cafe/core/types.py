@@ -7,13 +7,6 @@ from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 
 
-class WorkflowMode(str, Enum):
-    """Workflow execution mode."""
-
-    GITHUB = "github"
-    LOCAL = "local"
-
-
 class AgentCLI(str, Enum):
     """Supported agent CLIs."""
 
@@ -176,7 +169,6 @@ class SessionData(BaseModel):
 class SessionConfig(BaseModel):
     """Session configuration."""
 
-    workflow_mode: WorkflowMode
     issue_id: Optional[str] = None
     spec_file: Optional[str] = None
     sessions_dir: str = ".cafe/sessions"
