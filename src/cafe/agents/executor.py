@@ -723,8 +723,8 @@ class AgentExecutor:
         if parse_stream_json:
             # response_text is already the last fragment, use output_lines if empty
             final_response = response_text if response_text else ''.join(output_lines)
-            # For stream-json, use raw output_lines for streaming.jsonl
-            final_streaming_log = output_lines if output_lines else []
+            # streaming_log contains extracted text content for context.json
+            final_streaming_log = streaming_log if streaming_log else []
         else:
             # Copilot/non-JSON style: full output as response
             # All lines (with newlines) combined into complete text

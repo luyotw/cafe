@@ -308,13 +308,10 @@ class TestStreamingExecution:
 
         # Check response content (should be last fragment only)
         assert agent_response.response == "world"
-        # Check streaming_log (should contain raw JSON lines for stream-json)
+        # Check streaming_log (should contain extracted text content)
         assert agent_response.streaming_log == [
-            '{"content": "Hello "}\n',
-            '{"content": "world"}\n',
-            '{"session_id": "test-session-123"}\n',
-            '{"usage": {"input_tokens": 10, "output_tokens": 5}}\n',
-            '{"total_cost_usd": 0.01}\n',
+            'Hello ',
+            'world',
         ]
 
         # Check token usage
@@ -379,11 +376,10 @@ class TestStreamingExecution:
 
         # Should have last fragment as response
         assert agent_response.response == " more valid"
-        # Should have raw JSON lines in streaming_log (including invalid line)
+        # Should have extracted text content in streaming_log (excluding invalid JSON)
         assert agent_response.streaming_log == [
-            '{"content": "Valid JSON"}\n',
-            'Not valid JSON\n',
-            '{"content": " more valid"}\n',
+            'Valid JSON',
+            ' more valid',
         ]
 
         # Check that invalid line was still printed
