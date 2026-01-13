@@ -40,7 +40,7 @@ class TestPhaseStatusAnalysisWithTools:
         
         # 只設定分析執行返回值（測試只呼叫分析, 不呼叫原始執行）
         mock_agent_manager.execute.return_value = (
-            "CAFE_READY_FOR_REVIEW", None, [], {}, []
+            "CAFE_READY_FOR_REVIEW", None, [], {}, [], None
         )
         
         # Mock other dependencies
@@ -114,7 +114,7 @@ class TestPhaseStatusAnalysisWithTools:
         # Mock agent manager
         mock_agent_manager = MagicMock(spec=AgentManager)
         mock_agent_manager.execute.return_value = (
-            "CAFE_READY_FOR_REVIEW", None, [], {}, []
+            "CAFE_READY_FOR_REVIEW", None, [], {}, [], None
         )
         
         # Mock other dependencies
@@ -250,7 +250,7 @@ class TestPhaseStatusAnalysisWithTools:
         mock_agent_manager = MagicMock(spec=AgentManager)
         mock_agent_manager.execute.return_value = (
             "CAFE_NEED_CLARIFICATION\n\nThis spec needs more details.",
-            None, [], {}, []
+            None, [], {}, [], None
         )
         
         mock_permission_handler = MagicMock(spec=PermissionHandler)

@@ -48,12 +48,12 @@ class TestGeminiSessionIntegration:
 
             # Execute PM_Agent
             mock_popen.return_value = mock_process_pm
-            pm_response, pm_usage, pm_denials, pm_cmd, pm_log = agent_manager.execute("PM_Agent", "PM prompt")
+            pm_response, pm_usage, pm_denials, pm_cmd, pm_log, pm_model = agent_manager.execute("PM_Agent", "PM prompt")
             assert pm_response == "PM response"
 
             # Execute Developer_Agent
             mock_popen.return_value = mock_process_dev
-            dev_response, dev_usage, dev_denials, dev_cmd, dev_log = agent_manager.execute("Developer_Agent", "Dev prompt")
+            dev_response, dev_usage, dev_denials, dev_cmd, dev_log, dev_model = agent_manager.execute("Developer_Agent", "Dev prompt")
             assert dev_response == "Dev response"
 
             # Verify PM_Agent has its own session_id
@@ -90,7 +90,7 @@ class TestGeminiSessionIntegration:
             mock_process_1.wait.return_value = 0
             mock_popen.return_value = mock_process_1
 
-            response1, _, _, _, _ = agent_manager.execute("PM_Agent", "First prompt")
+            response1, _, _, _, _, _ = agent_manager.execute("PM_Agent", "First prompt")
             assert response1 == "First response"
 
             # Verify session_id was saved
@@ -109,7 +109,7 @@ class TestGeminiSessionIntegration:
             mock_process_2.wait.return_value = 0
             mock_popen.return_value = mock_process_2
 
-            response2, _, _, _, _ = agent_manager.execute("PM_Agent", "What did I say?")
+            response2, _, _, _, _, _ = agent_manager.execute("PM_Agent", "What did I say?")
             assert "First prompt" in response2 or "You said" in response2
 
             # Verify second call included --resume parameter

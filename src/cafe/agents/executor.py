@@ -475,6 +475,7 @@ class AgentExecutor:
         streaming_log: List[str] = []  # Record all streaming fragments
         token_usage = TokenUsage()
         session_id = None
+        model: Optional[str] = None
         permission_denials: List[PermissionDenial] = []
 
         # Add idle timeout to prevent hanging when process stops outputting
@@ -598,7 +599,7 @@ class AgentExecutor:
 
                         # Extract model (from init or result message)
                         if "model" in data and data["model"]:
-                            token_usage.model = data["model"]
+                            model = data["model"]
 
                         # Check for result message (indicates completion for Gemini/Claude)
                         # When type is "result", the CLI has completed and we should stop reading
@@ -750,9 +751,11 @@ class AgentExecutor:
             final_response = ''.join(output_lines) if output_lines else ""
             final_streaming_log = output_lines
 
+        # Model is already tracked separately, duration stays in token_usage
         return AgentResponse(
             response=final_response,
             token_usage=token_usage,
             permission_denials=permission_denials,
-            streaming_log=final_streaming_log
+            streaming_log=final_streaming_log,
+            model=model
         )

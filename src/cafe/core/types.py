@@ -65,14 +65,13 @@ class AgentConfig(BaseModel):
 
 
 class TokenUsage(BaseModel):
-    """Token usage statistics."""
+    """Token usage and execution statistics."""
 
     input_tokens: int = 0
     output_tokens: int = 0
     cache_creation_input_tokens: int = 0
     cache_read_input_tokens: int = 0
     total_cost_usd: float = 0.0
-    model: Optional[str] = None
     duration_ms: Optional[int] = None
     duration_api_ms: Optional[int] = None
 
@@ -85,6 +84,7 @@ class AgentResponse(BaseModel):
     permission_denials: List["PermissionDenial"] = Field(default_factory=list)
     cli_command_args: Optional[List[str]] = None  # CLI command arguments (excluding prompt)
     streaming_log: List[str] = Field(default_factory=list)  # Streaming fragment history
+    model: Optional[str] = None  # Model name
 
 
 class PhaseResult(BaseModel):

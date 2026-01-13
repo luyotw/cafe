@@ -137,6 +137,7 @@ class Phase(ABC):
         cli_command_args: Optional[List[str]] = None,
         status_code: Optional[PhaseStatusCode] = None,
         token_usage: Optional["TokenUsage"] = None,
+        model: Optional[str] = None,
     ) -> None:
         """Update iteration history with agent response and metadata.
 
@@ -151,6 +152,8 @@ class Phase(ABC):
             denied_tools: List of tools unavailable to agent
             cli_command_args: CLI command argument list (excluding prompt)
             status_code: Phase status code (e.g. CONFIRMED, NEED_CLARIFICATION)
+            token_usage: Token usage stats
+            model: Model name used
         """
         # Ensure phase_dir exists
         if not hasattr(self, "phase_dir"):
@@ -195,9 +198,12 @@ class Phase(ABC):
         context_data["cli_command_args"] = cli_command_args
         context_data["status_code"] = status_code.value if status_code is not None else None
 
-        # Save token usage if provided
+        # Save model at top level
+        context_data["model"] = model
+
+        # Save stats (token usage) if provided
         if token_usage is not None:
-            context_data["token_usage"] = token_usage.model_dump()
+            context_data["stats"] = token_usage.model_dump()
 
         # Save updated context.json file
         with open(context_file, "w", encoding="utf-8") as f:
@@ -389,8 +395,6 @@ class Phase(ABC):
             target.cache_creation_input_tokens += source.cache_creation_input_tokens
             target.cache_read_input_tokens += source.cache_read_input_tokens
             target.total_cost_usd += source.total_cost_usd
-            if source.model:
-                target.model = source.model
             if source.duration_ms is not None:
                 if target.duration_ms is None:
                     target.duration_ms = source.duration_ms
@@ -402,8 +406,11 @@ class Phase(ABC):
                 else:
                     target.duration_api_ms += source.duration_api_ms
 
+        # Track model separately (use latest value, don't accumulate)
+        model: Optional[str] = None
+
         try:
-            response, token_usage, permission_denials, cli_command_args, streaming_log = self.agent_manager.execute(
+            response, token_usage, permission_denials, cli_command_args, streaming_log, model = self.agent_manager.execute(
                 agent_name,
                 prompt,
                 allowed_tools=allowed_tools,
@@ -566,6 +573,7 @@ class Phase(ABC):
                 cli_command_args=cli_command_args,
                 status_code=no_response_status,
                 token_usage=cumulative_token_usage,
+                model=model,
             )
             return response, no_response_status
 
@@ -600,12 +608,16 @@ class Phase(ABC):
                     # Send continue prompt and attach original prompt as reference
                     # This way even if session is recreated, agent can understand complete context
                     continue_prompt = f"If completed respond with status code, if not continue\n\nBelow is the original task description for reference:\n\n{prompt}"
-                    continue_response, continue_token_usage, _, _, _ = self.agent_manager.execute(
+                    continue_response, continue_token_usage, _, _, _, continue_model = self.agent_manager.execute(
                         agent_name,
                         continue_prompt,
                         allowed_tools=allowed_tools,
                         allowed_directories=self._get_allowed_directories(),
                     )
+
+                    # Update model if returned (use latest value)
+                    if continue_model:
+                        model = continue_model
 
                     # Accumulate token usage from continue prompt
                     accumulate_token_usage(cumulative_token_usage, continue_token_usage)
@@ -675,6 +687,7 @@ class Phase(ABC):
             cli_command_args=cli_command_args,
             status_code=None,  # Don't save status_code yet - will be saved after checklist validation
             token_usage=cumulative_token_usage,
+            model=model,
         )
 
         # 8. Don't save progress yet - will be saved after checklist validation
@@ -928,6 +941,7 @@ class Phase(ABC):
             return
 
         token_usage = self.agent_manager.get_total_token_usage()
+        model = self.agent_manager.get_last_model()
 
         print()
         print("=" * 60)
@@ -935,7 +949,7 @@ class Phase(ABC):
         print("=" * 60)
 
         # Model
-        model_str = token_usage.model if token_usage.model else "--"
+        model_str = model if model else "--"
         print(f"Model:                     {model_str}")
 
         # Input tokens
@@ -1728,7 +1742,7 @@ Do NOT return a status code until ALL checklist items are marked as complete [x]
 
             # Execute agent with retry prompt
             try:
-                retry_response, _, _, _, retry_streaming_log = self.agent_manager.execute(
+                retry_response, _, _, _, retry_streaming_log, _ = self.agent_manager.execute(
                     agent_name,
                     retry_prompt,
                     allowed_tools=allowed_tools,
@@ -1912,7 +1926,7 @@ The system will verify checklist completion. If unchecked items remain, you will
             return None
 
         # Call agent to analyze status (only needs response)
-        response, _, _, _, _ = self.agent_manager.execute(
+        response, _, _, _, _, _ = self.agent_manager.execute(
             agent_name, prompt, allowed_directories=self._get_allowed_directories()
         )
 
@@ -1948,7 +1962,7 @@ The system will verify checklist completion. If unchecked items remain, you will
         try:
             # Call agent to analyze status (needs read permission)
             allowed_tools = ["read", "grep", "glob", "ls"]
-            response, _, _, _, _ = self.agent_manager.execute(
+            response, _, _, _, _, _ = self.agent_manager.execute(
                 agent_name,
                 prompt,
                 allowed_tools=allowed_tools,

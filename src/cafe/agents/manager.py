@@ -35,6 +35,7 @@ class AgentManager:
         self.agents: Dict[str, AgentExecutor] = {}
         self.current_agent_name: Optional[str] = None
         self._total_token_usage = TokenUsage()
+        self._last_model: Optional[str] = None  # Track latest model used
         self.show_prompt = False  # CLI can set this to True to show prompts
         self._use_mock = os.getenv("CAFE_MOCK_AGENTS", "").lower() in ("true", "1", "yes")
 
@@ -120,7 +121,7 @@ class AgentManager:
         allowed_tools: Optional[List[str]] = None,
         allowed_directories: Optional[List[str]] = None,
         streaming_output_file: Optional[str] = None
-    ) -> Tuple[str, TokenUsage, List, Optional[List[str]], List[str]]:
+    ) -> Tuple[str, TokenUsage, List, Optional[List[str]], List[str], Optional[str]]:
         """Execute prompt with specified agent.
 
         Args:
@@ -131,7 +132,7 @@ class AgentManager:
             streaming_output_file: Optional file path to write streaming output line-by-line
 
         Returns:
-            Tuple of (agent's response, token usage, permission denials, cli_command_args, streaming_log)
+            Tuple of (agent's response, token usage, permission denials, cli_command_args, streaming_log, model)
 
         Raises:
             AgentNotFoundError: If agent not found
@@ -172,6 +173,7 @@ class AgentManager:
         permission_denials = agent_response.permission_denials
         cli_command_args = agent_response.cli_command_args
         streaming_log = agent_response.streaming_log
+        model = agent_response.model
 
         # Save session ID if it was created during execution
         if executor.config.session_id:
@@ -186,9 +188,11 @@ class AgentManager:
         self._total_token_usage.cache_read_input_tokens += token_usage.cache_read_input_tokens
         self._total_token_usage.total_cost_usd += token_usage.total_cost_usd
 
-        # For model and duration, use the latest value (not accumulate)
-        if token_usage.model:
-            self._total_token_usage.model = token_usage.model
+        # Track latest model (only in execute, not execute_current which doesn't return model)
+        if 'model' in locals() and model:
+            self._last_model = model
+
+        # For duration, accumulate the values
         if token_usage.duration_ms is not None:
             if self._total_token_usage.duration_ms is None:
                 self._total_token_usage.duration_ms = token_usage.duration_ms
@@ -200,7 +204,7 @@ class AgentManager:
             else:
                 self._total_token_usage.duration_api_ms += token_usage.duration_api_ms
 
-        return response, token_usage, permission_denials, cli_command_args, streaming_log
+        return response, token_usage, permission_denials, cli_command_args, streaming_log, model
 
     def execute_current(self, prompt: str) -> str:
         """Execute prompt with current agent.
@@ -233,9 +237,11 @@ class AgentManager:
         self._total_token_usage.cache_read_input_tokens += token_usage.cache_read_input_tokens
         self._total_token_usage.total_cost_usd += token_usage.total_cost_usd
 
-        # For model and duration, use the latest value (not accumulate)
-        if token_usage.model:
-            self._total_token_usage.model = token_usage.model
+        # Track latest model (only in execute, not execute_current which doesn't return model)
+        if 'model' in locals() and model:
+            self._last_model = model
+
+        # For duration, accumulate the values
         if token_usage.duration_ms is not None:
             if self._total_token_usage.duration_ms is None:
                 self._total_token_usage.duration_ms = token_usage.duration_ms
@@ -256,6 +262,14 @@ class AgentManager:
             Total token usage statistics
         """
         return self._total_token_usage
+
+    def get_last_model(self) -> Optional[str]:
+        """Get the last model name used.
+
+        Returns:
+            Last model name, or None if no model has been used yet
+        """
+        return self._last_model
 
     def delete_session(self, agent_name: str) -> None:
         """Delete session for an agent.
