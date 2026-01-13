@@ -4683,6 +4683,8 @@ def _check_dependencies() -> None:
         return
 
     try:
+        from packaging.requirements import Requirement
+
         with open(pyproject_file, "rb") as f:
             pyproject = tomllib.load(f)
 
@@ -4690,8 +4692,13 @@ def _check_dependencies() -> None:
         missing = []
 
         for dep in dependencies:
-            # Parse dependency string (e.g., "typer>=0.9.0" -> "typer")
-            package_name = dep.split("[")[0].split(">")[0].split("=")[0].split("<")[0].strip()
+            # Parse dependency using packaging library
+            req = Requirement(dep)
+            package_name = req.name
+
+            # Skip if the dependency's environment marker doesn't apply to current environment
+            if req.marker and not req.marker.evaluate():
+                continue
 
             try:
                 importlib.metadata.version(package_name)
