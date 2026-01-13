@@ -155,3 +155,101 @@ class TestRenderVerticalTimeline:
         result = display.render_vertical_timeline(entries)
         assert isinstance(result, str)
         assert "Spec" in result
+
+
+class TestRenderTable:
+    """測試 render_table() 方法的表格顯示功能"""
+
+    def test_render_table_with_empty_entries(self):
+        """測試空資料的表格渲染"""
+        display = SummaryDisplay()
+        # 空列表不應該崩潰，應該顯示訊息或空表格
+        display.render_table([])  # Should not raise exception
+
+    def test_render_table_with_single_entry(self):
+        """測試單一 entry 的表格顯示"""
+        display = SummaryDisplay()
+        entry = TimelineEntry(
+            entry_type="iteration",
+            name="Iteration 1",
+            phase="spec",
+            start_time=datetime(2026, 1, 14, 10, 0, 0, tzinfo=timezone.utc),
+            end_time=datetime(2026, 1, 14, 10, 15, 0, tzinfo=timezone.utc),
+            status=PhaseStatus.COMPLETED,
+            iteration=1,
+            status_code="CAFE_CONFIRMED"
+        )
+        # 應該能渲染而不崩潰
+        display.render_table([entry])
+
+    def test_render_table_with_multiple_entries(self):
+        """測試多個 entries 的表格顯示"""
+        display = SummaryDisplay()
+        entries = [
+            TimelineEntry(
+                entry_type="iteration",
+                name="Iteration 1",
+                phase="spec",
+                start_time=datetime(2026, 1, 14, 10, 0, 0, tzinfo=timezone.utc),
+                end_time=datetime(2026, 1, 14, 10, 15, 0, tzinfo=timezone.utc),
+                status=PhaseStatus.COMPLETED,
+                iteration=1,
+                status_code="CAFE_READY_FOR_REVIEW"
+            ),
+            TimelineEntry(
+                entry_type="iteration",
+                name="Iteration 2",
+                phase="spec",
+                start_time=datetime(2026, 1, 14, 11, 0, 0, tzinfo=timezone.utc),
+                end_time=datetime(2026, 1, 14, 11, 10, 0, tzinfo=timezone.utc),
+                status=PhaseStatus.COMPLETED,
+                iteration=2,
+                status_code="CAFE_CONFIRMED"
+            ),
+        ]
+        # 應該能渲染多個 entries
+        display.render_table(entries)
+
+    def test_render_table_with_missing_end_time(self):
+        """測試缺少 end_time 的 entry（進行中的 iteration）"""
+        display = SummaryDisplay()
+        entry = TimelineEntry(
+            entry_type="iteration",
+            name="Iteration 1",
+            phase="plan",
+            start_time=datetime(2026, 1, 14, 12, 0, 0, tzinfo=timezone.utc),
+            end_time=None,  # 進行中，沒有 end_time
+            status=PhaseStatus.IN_PROGRESS,
+            iteration=1,
+            status_code="CAFE_NEED_CLARIFICATION"
+        )
+        # 應該顯示 "N/A" 而不是崩潰
+        display.render_table([entry])
+
+    def test_render_table_with_multiple_phases(self):
+        """測試跨多個 phases 的表格顯示"""
+        display = SummaryDisplay()
+        entries = [
+            TimelineEntry(
+                entry_type="iteration",
+                name="Iteration 1",
+                phase="spec",
+                start_time=datetime(2026, 1, 14, 10, 0, 0, tzinfo=timezone.utc),
+                end_time=datetime(2026, 1, 14, 10, 15, 0, tzinfo=timezone.utc),
+                status=PhaseStatus.COMPLETED,
+                iteration=1,
+                status_code="CAFE_CONFIRMED"
+            ),
+            TimelineEntry(
+                entry_type="iteration",
+                name="Iteration 1",
+                phase="plan",
+                start_time=datetime(2026, 1, 14, 11, 0, 0, tzinfo=timezone.utc),
+                end_time=datetime(2026, 1, 14, 11, 20, 0, tzinfo=timezone.utc),
+                status=PhaseStatus.COMPLETED,
+                iteration=1,
+                status_code="CAFE_READY_FOR_REVIEW"
+            ),
+        ]
+        # 應該能顯示不同 phases
+        display.render_table(entries)
