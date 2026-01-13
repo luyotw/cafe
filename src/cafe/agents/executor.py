@@ -564,37 +564,6 @@ class AgentExecutor:
                             err.cli_command_args = cmd[1:]
                             raise err
 
-                        # Check for result message (indicates completion for Gemini/Claude)
-                        # When type is "result", the CLI has completed and we should stop reading
-                        if data.get("type") == "result":
-                            break
-
-                        # Extract content using custom extractor or default Claude extractor
-                        # FIXME: Should implement extractors seperately for each CLI
-                        if json_content_extractor:
-                            content = json_content_extractor(data)
-                            if content:
-                                print(content, end='\n\n', flush=True)
-                                streaming_log.append(content)
-                                response_text = content  # Only save the last fragment
-                        else:
-                            # Default Claude format extractor
-                            # Extract content from message.content[] (new Claude format)
-                            if "message" in data and "content" in data["message"]:
-                                for content_block in data["message"]["content"]:
-                                    if content_block.get("type") == "text":
-                                        text = content_block.get("text", "")
-                                        print(text, end='\n\n', flush=True)
-                                        streaming_log.append(text)
-                                        response_text = text  # Only save the last fragment
-
-                            # Old format: direct content field
-                            elif "content" in data:
-                                content = data["content"]
-                                print(content, end='\n\n', flush=True)
-                                streaming_log.append(content)
-                                response_text = content  # Only save the last fragment
-
                         # Extract session_id (from init message for Gemini, or any message for Claude)
                         if "session_id" in data and not session_id:
                             session_id = data["session_id"]
@@ -630,6 +599,37 @@ class AgentExecutor:
                         # Extract model (from init or result message)
                         if "model" in data and data["model"]:
                             token_usage.model = data["model"]
+
+                        # Check for result message (indicates completion for Gemini/Claude)
+                        # When type is "result", the CLI has completed and we should stop reading
+                        if data.get("type") == "result":
+                            break
+
+                        # Extract content using custom extractor or default Claude extractor
+                        # FIXME: Should implement extractors seperately for each CLI
+                        if json_content_extractor:
+                            content = json_content_extractor(data)
+                            if content:
+                                print(content, end='\n\n', flush=True)
+                                streaming_log.append(content)
+                                response_text = content  # Only save the last fragment
+                        else:
+                            # Default Claude format extractor
+                            # Extract content from message.content[] (new Claude format)
+                            if "message" in data and "content" in data["message"]:
+                                for content_block in data["message"]["content"]:
+                                    if content_block.get("type") == "text":
+                                        text = content_block.get("text", "")
+                                        print(text, end='\n\n', flush=True)
+                                        streaming_log.append(text)
+                                        response_text = text  # Only save the last fragment
+
+                            # Old format: direct content field
+                            elif "content" in data:
+                                content = data["content"]
+                                print(content, end='\n\n', flush=True)
+                                streaming_log.append(content)
+                                response_text = content  # Only save the last fragment
 
                         # Extract permission_denials (usually in final message)
                         if "permission_denials" in data and data["permission_denials"]:
