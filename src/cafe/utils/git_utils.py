@@ -343,7 +343,22 @@ def get_github_repo_name(cwd: Optional[Path] = None) -> str:
     else:
         cwd = Path(cwd)
 
-    git_path = cwd / ".git"
+    # Try to find git repository root directory using git command
+    # This works even from subdirectories
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        repo_root = Path(result.stdout.strip())
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        # Fallback: assume cwd is the repo root (for tests that only create .git/config)
+        repo_root = cwd
+
+    git_path = repo_root / ".git"
 
     # Handle worktree: .git is a file pointing to the real git directory
     if git_path.is_file():

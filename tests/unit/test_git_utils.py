@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch, mock_open
 
 import pytest
 
-from cafe.utils.git_utils import rewrite_commit_message, is_branch_initialized, to_cwd_relative_path
+from cafe.utils.git_utils import rewrite_commit_message, is_branch_initialized, to_cwd_relative_path, get_github_repo_name
 
 
 class TestRewriteCommitMessage:
@@ -269,10 +269,98 @@ class TestToCwdRelativePath:
     def test_handles_path_with_dots(self, tmp_path, monkeypatch):
         """測試處理包含點路徑"""
         monkeypatch.chdir(tmp_path)
-        
+
         # 包含點目錄名稱
         test_file = tmp_path / ".hidden" / "spec_001.md"
-        
+
         result = to_cwd_relative_path(test_file)
-        
+
         assert result == "./.hidden/spec_001.md"
+
+
+class TestGetGithubRepoName:
+    """測試 get_github_repo_name 函數"""
+
+    def test_get_github_repo_name_from_root(self, tmp_path):
+        """測試從 repo root 取得 GitHub repo 名稱"""
+        # 初始化 git repo
+        subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True)
+        subprocess.run(
+            ["git", "remote", "add", "origin", "https://github.com/owner/repo.git"],
+            cwd=tmp_path,
+            check=True,
+            capture_output=True
+        )
+
+        result = get_github_repo_name(cwd=tmp_path)
+        assert result == "owner/repo"
+
+    def test_get_github_repo_name_from_subdirectory(self, tmp_path):
+        """測試從子目錄取得 GitHub repo 名稱"""
+        # 初始化 git repo
+        subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True)
+        subprocess.run(
+            ["git", "remote", "add", "origin", "git@github.com:test-owner/test-repo.git"],
+            cwd=tmp_path,
+            check=True,
+            capture_output=True
+        )
+
+        # 建立子目錄
+        subdir = tmp_path / "scripts" / "subdir"
+        subdir.mkdir(parents=True)
+
+        # 從子目錄取得 repo 名稱
+        result = get_github_repo_name(cwd=subdir)
+        assert result == "test-owner/test-repo"
+
+    def test_get_github_repo_name_ssh_url(self, tmp_path):
+        """測試 SSH URL 格式"""
+        subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True)
+        subprocess.run(
+            ["git", "remote", "add", "origin", "git@github.com:ssh-owner/ssh-repo.git"],
+            cwd=tmp_path,
+            check=True,
+            capture_output=True
+        )
+
+        result = get_github_repo_name(cwd=tmp_path)
+        assert result == "ssh-owner/ssh-repo"
+
+    def test_get_github_repo_name_https_url(self, tmp_path):
+        """測試 HTTPS URL 格式"""
+        subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True)
+        subprocess.run(
+            ["git", "remote", "add", "origin", "https://github.com/https-owner/https-repo.git"],
+            cwd=tmp_path,
+            check=True,
+            capture_output=True
+        )
+
+        result = get_github_repo_name(cwd=tmp_path)
+        assert result == "https-owner/https-repo"
+
+    def test_get_github_repo_name_not_git_repo(self, tmp_path):
+        """測試不是 git repo 時拋出錯誤"""
+        with pytest.raises(FileNotFoundError, match=".git/config not found"):
+            get_github_repo_name(cwd=tmp_path)
+
+    def test_get_github_repo_name_no_origin(self, tmp_path):
+        """測試沒有 origin remote 時拋出錯誤"""
+        subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True)
+
+        with pytest.raises(ValueError, match="No remote 'origin' found"):
+            get_github_repo_name(cwd=tmp_path)
+
+    def test_get_github_repo_name_non_github_url(self, tmp_path):
+        """測試非 GitHub URL 時拋出錯誤"""
+        subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True)
+        subprocess.run(
+            ["git", "remote", "add", "origin", "https://gitlab.com/owner/repo.git"],
+            cwd=tmp_path,
+            check=True,
+            capture_output=True
+        )
+
+        with pytest.raises(ValueError, match="Invalid GitHub URL"):
+            get_github_repo_name(cwd=tmp_path)
