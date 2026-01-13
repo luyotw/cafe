@@ -205,6 +205,9 @@ class Phase(ABC):
         if token_usage is not None:
             context_data["stats"] = token_usage.model_dump()
 
+        # Save end_time for this iteration
+        context_data["end_time"] = datetime.now().astimezone().isoformat()
+
         # Save updated context.json file
         with open(context_file, "w", encoding="utf-8") as f:
             json.dump(context_data, f, ensure_ascii=False, indent=2)
