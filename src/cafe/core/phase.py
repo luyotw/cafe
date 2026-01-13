@@ -136,6 +136,7 @@ class Phase(ABC):
         denied_tools: Optional[List[str]] = None,
         cli_command_args: Optional[List[str]] = None,
         status_code: Optional[PhaseStatusCode] = None,
+        token_usage: Optional["TokenUsage"] = None,
     ) -> None:
         """Update iteration history with agent response and metadata.
 
@@ -193,6 +194,10 @@ class Phase(ABC):
         context_data["denied_tools"] = denied_tools
         context_data["cli_command_args"] = cli_command_args
         context_data["status_code"] = status_code.value if status_code is not None else None
+
+        # Save token usage if provided
+        if token_usage is not None:
+            context_data["token_usage"] = token_usage.model_dump()
 
         # Save updated context.json file
         with open(context_file, "w", encoding="utf-8") as f:
@@ -373,6 +378,30 @@ class Phase(ABC):
         # Prepare streaming.jsonl file path for real-time writing
         streaming_jsonl_file = iteration_dir / "streaming.jsonl"
 
+        # Initialize cumulative token usage for this iteration
+        from cafe.core.types import TokenUsage
+        cumulative_token_usage = TokenUsage()
+
+        def accumulate_token_usage(target: TokenUsage, source: TokenUsage) -> None:
+            """Accumulate token usage from source to target."""
+            target.input_tokens += source.input_tokens
+            target.output_tokens += source.output_tokens
+            target.cache_creation_input_tokens += source.cache_creation_input_tokens
+            target.cache_read_input_tokens += source.cache_read_input_tokens
+            target.total_cost_usd += source.total_cost_usd
+            if source.model:
+                target.model = source.model
+            if source.duration_ms is not None:
+                if target.duration_ms is None:
+                    target.duration_ms = source.duration_ms
+                else:
+                    target.duration_ms += source.duration_ms
+            if source.duration_api_ms is not None:
+                if target.duration_api_ms is None:
+                    target.duration_api_ms = source.duration_api_ms
+                else:
+                    target.duration_api_ms += source.duration_api_ms
+
         try:
             response, token_usage, permission_denials, cli_command_args, streaming_log = self.agent_manager.execute(
                 agent_name,
@@ -381,6 +410,10 @@ class Phase(ABC):
                 allowed_directories=self._get_allowed_directories(),
                 streaming_output_file=str(streaming_jsonl_file),
             )
+
+            # Accumulate token usage for this iteration
+            accumulate_token_usage(cumulative_token_usage, token_usage)
+
         except Exception as e:
             # Agent execution failed - attempt recovery
             from cafe.agents.executor import AgentExecutionError
@@ -532,6 +565,7 @@ class Phase(ABC):
                 denied_tools=denied_tools,
                 cli_command_args=cli_command_args,
                 status_code=no_response_status,
+                token_usage=cumulative_token_usage,
             )
             return response, no_response_status
 
@@ -566,12 +600,15 @@ class Phase(ABC):
                     # Send continue prompt and attach original prompt as reference
                     # This way even if session is recreated, agent can understand complete context
                     continue_prompt = f"If completed respond with status code, if not continue\n\nBelow is the original task description for reference:\n\n{prompt}"
-                    continue_response, _, _, _, _ = self.agent_manager.execute(
+                    continue_response, continue_token_usage, _, _, _ = self.agent_manager.execute(
                         agent_name,
                         continue_prompt,
                         allowed_tools=allowed_tools,
                         allowed_directories=self._get_allowed_directories(),
                     )
+
+                    # Accumulate token usage from continue prompt
+                    accumulate_token_usage(cumulative_token_usage, continue_token_usage)
 
                     # Try to extract status code from continue response
                     continue_status_code = StatusCodeParser.extract(
@@ -637,6 +674,7 @@ class Phase(ABC):
             denied_tools=denied_tools,
             cli_command_args=cli_command_args,
             status_code=None,  # Don't save status_code yet - will be saved after checklist validation
+            token_usage=cumulative_token_usage,
         )
 
         # 8. Don't save progress yet - will be saved after checklist validation
