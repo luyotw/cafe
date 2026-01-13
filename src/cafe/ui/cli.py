@@ -563,7 +563,7 @@ def init() -> None:
             if not agents:
                 console.print(f"[red]Error: Agent files not found for {role_display} role.[/red]")
                 console.print(
-                    f"[yellow]Please ensure valid .md files exist in .cafe/agents/{role_key}/ directory.[/yellow]"
+                    f"[yellow]Please ensure valid .md files exist in ~/.cafe/agents/{role_key}/ or src/cafe/data/agents/{role_key}/ directory.[/yellow]"
                 )
                 raise typer.Exit(1)
 
