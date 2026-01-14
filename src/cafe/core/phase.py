@@ -1746,7 +1746,7 @@ Do NOT return a status code until ALL checklist items are marked as complete [x]
 
             # Execute agent with retry prompt
             try:
-                retry_response, _, _, _, retry_streaming_log, _ = self.agent_manager.execute(
+                retry_response, _, _, _, retry_streaming_log, retry_model = self.agent_manager.execute(
                     agent_name,
                     retry_prompt,
                     allowed_tools=allowed_tools,
@@ -1795,6 +1795,9 @@ Do NOT return a status code until ALL checklist items are marked as complete [x]
                         context_data["streaming_log"] = merged_streaming_log
                         context_data["checklist_validation_attempts"] = retry_count
                         context_data["status_code"] = retry_status_code.value if retry_status_code else None
+                        # Update model if retry returned one
+                        if retry_model is not None:
+                            context_data["model"] = retry_model
 
                         with open(context_file, "w", encoding="utf-8") as f:
                             json.dump(context_data, f, ensure_ascii=False, indent=2)
