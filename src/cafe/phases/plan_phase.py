@@ -197,12 +197,16 @@ class PlanPhase(Phase):
             # Generate checklist for this iteration
             from cafe.utils.checklist_generator import generate_plan_checklist
 
+            # Define basic principles
+            basic_principles = """- Write plan content in your native language"""
+
             checklist_path = self._get_iteration_dir(self.iteration) / "checklist.md"
             generate_plan_checklist(
                 agent_name=self.dev_agent,
                 plan_file_path=str(self.plan_file),
                 spec_file_path=self.spec_file,
                 checklist_file_path=checklist_path,
+                basic_principles=basic_principles,
             )
 
             # Prepare user_input for this iteration

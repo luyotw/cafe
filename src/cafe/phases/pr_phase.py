@@ -704,6 +704,9 @@ class PRPhase(Phase):
         # Generate checklist for this iteration
         from cafe.utils.checklist_generator import generate_pr_checklist
 
+        # Define basic principles
+        basic_principles = """- Use same language as commit messages for PR title and description"""
+
         checklist_path = iteration_dir / "checklist.md"
         output_file = iteration_dir / "output.md"
         generate_pr_checklist(
@@ -712,6 +715,7 @@ class PRPhase(Phase):
             plan_file_path=str(plan_file),
             pr_file=str(output_file),
             checklist_file_path=checklist_path,
+            basic_principles=basic_principles,
         )
 
         # Use path relative to current working directory (supports worktree)
@@ -972,6 +976,9 @@ Please return only one status code (example: CAFE_CONFIRMED), with no other cont
         plan_dir = spec_path.parent.parent.parent / "plan"
         plan_file = self._get_versioned_file_path("plan", None, plan_dir)
 
+        # Define basic principles
+        basic_principles = """- Use same language as commit messages for PR title and description"""
+
         # Generate checklist using the same rules as normal execution
         generate_pr_checklist(
             agent_name=self.dev_agent,
@@ -979,6 +986,7 @@ Please return only one status code (example: CAFE_CONFIRMED), with no other cont
             plan_file_path=str(plan_file),
             pr_file=output_file,
             checklist_file_path=checklist_path,
+            basic_principles=basic_principles,
         )
 
         print(f"✅ Rebuilt checklist for PR phase iteration {iteration}")

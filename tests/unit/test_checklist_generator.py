@@ -223,3 +223,108 @@ class TestChecklistFileCreation:
         content = checklist_path.read_text()
         # Should have agent guidelines checklist section
         assert "## Agent Guidelines Checklist" in content
+
+
+class TestBasicPrinciples:
+    """Tests for basic principles in checklists."""
+
+    def test_spec_checklist_with_basic_principles(self, tmp_path):
+        """Test spec checklist includes basic principles when provided."""
+        checklist_path = tmp_path / "checklist.md"
+
+        basic_principles = """- Write in native language
+- No technical details"""
+
+        generate_spec_checklist(
+            iteration=1,
+            agent_name="Roger",
+            current_spec_file=".cafe/issues/test/spec/iteration_001/output.md",
+            prev_spec_file=None,
+            checklist_file_path=checklist_path,
+            basic_principles=basic_principles,
+        )
+
+        content = checklist_path.read_text()
+        assert "## Basic Principles" in content
+        assert "[ ] Write in native language" in content
+        assert "[ ] No technical details" in content
+
+    def test_plan_checklist_with_basic_principles(self, tmp_path):
+        """Test plan checklist includes basic principles when provided."""
+        checklist_path = tmp_path / "checklist.md"
+
+        basic_principles = """- Write plan content in your native language"""
+
+        generate_plan_checklist(
+            agent_name="Nick",
+            plan_file_path=".cafe/issues/test/plan/iteration_001/output.md",
+            spec_file_path=".cafe/issues/test/spec/iteration_001/output.md",
+            checklist_file_path=checklist_path,
+            basic_principles=basic_principles,
+        )
+
+        content = checklist_path.read_text()
+        assert "## Basic Principles" in content
+        assert "[ ] Write plan content in your native language" in content
+
+    def test_develop_checklist_with_basic_principles(self, tmp_path):
+        """Test develop checklist includes basic principles when provided."""
+        checklist_path = tmp_path / "checklist.md"
+
+        basic_principles = """- Follow existing commit message style
+- Use same language as existing code comments
+- Maximize code reuse"""
+
+        generate_develop_checklist(
+            agent_name="David",
+            spec_file_path=".cafe/issues/test/spec/iteration_001/output.md",
+            plan_file_path=".cafe/issues/test/plan/iteration_001/output.md",
+            develop_file=None,
+            checklist_file_path=checklist_path,
+            correction_mode=False,
+            basic_principles=basic_principles,
+        )
+
+        content = checklist_path.read_text()
+        assert "## Basic Principles" in content
+        assert "[ ] Follow existing commit message style" in content
+        assert "[ ] Use same language as existing code comments" in content
+        assert "[ ] Maximize code reuse" in content
+
+    def test_pr_checklist_with_basic_principles(self, tmp_path):
+        """Test PR checklist includes basic principles when provided."""
+        checklist_path = tmp_path / "checklist.md"
+
+        basic_principles = """- Use same language as commit messages"""
+
+        generate_pr_checklist(
+            agent_name="David",
+            spec_file_path=".cafe/issues/test/spec/iteration_001/output.md",
+            plan_file_path=".cafe/issues/test/plan/iteration_001/output.md",
+            pr_file=".cafe/issues/test/pr/iteration_001/output.md",
+            checklist_file_path=checklist_path,
+            basic_principles=basic_principles,
+        )
+
+        content = checklist_path.read_text()
+        assert "## Basic Principles" in content
+        assert "[ ] Use same language as commit messages" in content
+
+    def test_checklist_without_basic_principles(self, tmp_path):
+        """Test checklist works without basic principles (backward compatibility)."""
+        checklist_path = tmp_path / "checklist.md"
+
+        generate_spec_checklist(
+            iteration=1,
+            agent_name="Roger",
+            current_spec_file=".cafe/issues/test/spec/iteration_001/output.md",
+            prev_spec_file=None,
+            checklist_file_path=checklist_path,
+            basic_principles=None,
+        )
+
+        content = checklist_path.read_text()
+        # Should not have basic principles section
+        assert "## Basic Principles" not in content
+        # But should still have the main checklist
+        assert "## Checklist" in content

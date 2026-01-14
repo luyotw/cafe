@@ -18,6 +18,7 @@ def generate_spec_checklist(
     current_spec_file: str,
     prev_spec_file: Optional[str],
     checklist_file_path: Path,
+    basic_principles: Optional[str] = None,
 ) -> None:
     """Generate checklist file for spec phase.
 
@@ -27,6 +28,7 @@ def generate_spec_checklist(
         current_spec_file: Path to current spec file
         prev_spec_file: Path to previous spec file (None for iteration 1)
         checklist_file_path: Path where checklist file should be created
+        basic_principles: Basic principles text in "- item" format (optional)
     """
     # Get agent file path
     agent_file = AgentManager.get_agent_file_path(agent_name, "pm")
@@ -45,8 +47,13 @@ def generate_spec_checklist(
     # Get agent guidelines checklist
     agent_guidelines = extract_agent_guidelines_checklist(agent_file)
 
+    # Convert basic principles to checklist format
+    basic_principles_checklist = ""
+    if basic_principles:
+        basic_principles_checklist = convert_to_checklist(basic_principles, "Basic Principles")
+
     # Combine all sections
-    checklist_content = f"{execution_steps}\n{iteration_note}\n{agent_guidelines}"
+    checklist_content = f"{execution_steps}\n{basic_principles_checklist}\n{iteration_note}\n{agent_guidelines}"
 
     # Build placeholders dict
     placeholders = {
@@ -69,6 +76,7 @@ def generate_plan_checklist(
     plan_file_path: str,
     spec_file_path: str,
     checklist_file_path: Path,
+    basic_principles: Optional[str] = None,
 ) -> None:
     """Generate checklist file for plan phase.
 
@@ -77,6 +85,7 @@ def generate_plan_checklist(
         plan_file_path: Path to plan file
         spec_file_path: Path to spec file
         checklist_file_path: Path where checklist file should be created
+        basic_principles: Basic principles text in "- item" format (optional)
     """
     # Get agent file path
     agent_file = AgentManager.get_agent_file_path(agent_name, "developer")
@@ -87,8 +96,13 @@ def generate_plan_checklist(
     # Get agent guidelines checklist
     agent_guidelines = extract_agent_guidelines_checklist(agent_file)
 
+    # Convert basic principles to checklist format
+    basic_principles_checklist = ""
+    if basic_principles:
+        basic_principles_checklist = convert_to_checklist(basic_principles, "Basic Principles")
+
     # Combine all sections
-    checklist_content = f"{execution_steps}\n{agent_guidelines}"
+    checklist_content = f"{execution_steps}\n{basic_principles_checklist}\n{agent_guidelines}"
 
     # Build placeholders dict
     placeholders = {
@@ -213,6 +227,7 @@ def generate_pr_checklist(
     plan_file_path: str,
     pr_file: str,
     checklist_file_path: Path,
+    basic_principles: Optional[str] = None,
 ) -> None:
     """Generate checklist file for PR phase.
 
@@ -222,6 +237,7 @@ def generate_pr_checklist(
         plan_file_path: Path to plan file
         pr_file: Path to PR output file (output.md)
         checklist_file_path: Path where checklist file should be created
+        basic_principles: Basic principles text in "- item" format (optional)
     """
     # Get agent file path
     agent_file = AgentManager.get_agent_file_path(agent_name, "developer")
@@ -232,8 +248,13 @@ def generate_pr_checklist(
     # Get agent guidelines checklist
     agent_guidelines = extract_agent_guidelines_checklist(agent_file)
 
+    # Convert basic principles to checklist format
+    basic_principles_checklist = ""
+    if basic_principles:
+        basic_principles_checklist = convert_to_checklist(basic_principles, "Basic Principles")
+
     # Combine all sections
-    checklist_content = f"{execution_steps}\n{agent_guidelines}"
+    checklist_content = f"{execution_steps}\n{basic_principles_checklist}\n{agent_guidelines}"
 
     # Build placeholders dict
     placeholders = {

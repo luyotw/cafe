@@ -326,12 +326,18 @@ class SpecPhase(Phase):
                 if prev_spec_path.exists():
                     prev_spec_file = str(prev_spec_path)
 
+            # Define basic principles
+            basic_principles = """- Write analysis results in your native language
+- Do not include technical details (implementation, architecture, languages, frameworks, databases)
+- Do not provide technical solutions or suggestions"""
+
             generate_spec_checklist(
                 iteration=self.iteration,
                 agent_name=self.pm_agent,
                 current_spec_file=self.spec_file,
                 prev_spec_file=prev_spec_file,
                 checklist_file_path=checklist_path,
+                basic_principles=basic_principles,
             )
 
             # Prepare user_input for this iteration
