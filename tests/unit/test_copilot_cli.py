@@ -140,6 +140,74 @@ class TestCopilotCLIParseResponse:
         assert isinstance(token_usage, TokenUsage)
         assert len(permission_denials) == 0
 
+    def test_parse_response_with_usage_summary(self, copilot_config):
+        """測試解析包含使用統計的回應."""
+        cli = CopilotCLI(copilot_config)
+        output_lines = [
+            "HI! 👋\n",
+            "\n",
+            "I'm GitHub Copilot CLI.\n",
+            "\n",
+            "\n",
+            "Total usage est:       1 Premium request\n",
+            "Total duration (API):  7s\n",
+            "Total duration (wall): 11s\n",
+            "Total code changes:    0 lines added, 0 lines removed\n",
+            "Usage by model:\n",
+            "    claude-sonnet-4.5    14.2k input, 53 output, 10.2k cache read (Est. 1 Premium request)\n"
+        ]
+
+        response, token_usage, permission_denials = cli.parse_response(output_lines)
+
+        # Response 應該不包含統計資訊
+        assert "Total usage est:" not in response
+        assert response.startswith("HI! 👋")
+        
+        # Token usage 應該正確提取
+        assert token_usage.input_tokens == 14200
+        assert token_usage.output_tokens == 53
+        assert token_usage.cache_read_input_tokens == 10200
+        assert token_usage.duration_api_ms == 7000
+        assert token_usage.duration_ms == 11000
+
+    def test_parse_response_without_cache(self, copilot_config):
+        """測試解析不包含 cache 的使用統計."""
+        cli = CopilotCLI(copilot_config)
+        output_lines = [
+            "Response text\n",
+            "\n",
+            "\n",
+            "Total usage est:       1 Premium request\n",
+            "Total duration (API):  5s\n",
+            "Total duration (wall): 8s\n",
+            "Usage by model:\n",
+            "    claude-sonnet-4.5    1.5k input, 120 output (Est. 1 Premium request)\n"
+        ]
+
+        response, token_usage, permission_denials = cli.parse_response(output_lines)
+
+        assert token_usage.input_tokens == 1500
+        assert token_usage.output_tokens == 120
+        assert token_usage.cache_read_input_tokens == 0
+        assert token_usage.duration_api_ms == 5000
+        assert token_usage.duration_ms == 8000
+
+    def test_parse_token_count_with_k_suffix(self, copilot_config):
+        """測試解析帶 k 後綴的 token 數量."""
+        cli = CopilotCLI(copilot_config)
+        
+        assert cli._parse_token_count("14.2k") == 14200
+        assert cli._parse_token_count("1.5k") == 1500
+        assert cli._parse_token_count("10k") == 10000
+        
+    def test_parse_token_count_without_suffix(self, copilot_config):
+        """測試解析不帶後綴的 token 數量."""
+        cli = CopilotCLI(copilot_config)
+        
+        assert cli._parse_token_count("53") == 53
+        assert cli._parse_token_count("120") == 120
+        assert cli._parse_token_count("1000") == 1000
+
 
 class TestCopilotCLIExtractSessionId:
     """測試 extract_session_id() 方法."""

@@ -77,14 +77,69 @@ class CopilotCLI(AbstractCLI):
         Returns:
             (response, token_usage, permission_denials) tuple
         """
+        import re
+        
         # Copilot uses plain text output, join all lines
-        response = "".join(output_lines)
+        full_output = "".join(output_lines)
         token_usage = TokenUsage()
         permission_denials = []
 
-        # TODO: If Copilot provides token usage or permission denials, parse here
+        # Extract token usage from usage summary at the end
+        # Example format:
+        # Usage by model:
+        #     claude-sonnet-4.5    14.3k input, 39 output, 10.2k cache read (Est. 1 Premium request)
+        
+        # Find the "Usage by model:" section
+        usage_match = re.search(r'Usage by model:\s*\n\s+[\w.-]+\s+([\d.]+k?)\s+input,\s+([\d.]+k?)\s+output(?:,\s+([\d.]+k?)\s+cache read)?', full_output)
+        
+        if usage_match:
+            # Parse input tokens
+            input_str = usage_match.group(1)
+            token_usage.input_tokens = self._parse_token_count(input_str)
+            
+            # Parse output tokens
+            output_str = usage_match.group(2)
+            token_usage.output_tokens = self._parse_token_count(output_str)
+            
+            # Parse cache read tokens (optional)
+            if usage_match.group(3):
+                cache_str = usage_match.group(3)
+                token_usage.cache_read_input_tokens = self._parse_token_count(cache_str)
+        
+        # Extract duration from "Total duration (API):" line
+        api_duration_match = re.search(r'Total duration \(API\):\s+(\d+)s', full_output)
+        if api_duration_match:
+            duration_sec = int(api_duration_match.group(1))
+            token_usage.duration_api_ms = duration_sec * 1000
+        
+        # Extract total duration from "Total duration (wall):" line
+        wall_duration_match = re.search(r'Total duration \(wall\):\s+(\d+)s', full_output)
+        if wall_duration_match:
+            duration_sec = int(wall_duration_match.group(1))
+            token_usage.duration_ms = duration_sec * 1000
+        
+        # Remove the usage summary from response (everything after "Total usage est:")
+        response_parts = full_output.split("\n\nTotal usage est:")
+        response = response_parts[0] if response_parts else full_output
 
         return response, token_usage, permission_denials
+
+    def _parse_token_count(self, token_str: str) -> int:
+        """Parse token count string (e.g., '14.3k' or '39') to integer.
+        
+        Args:
+            token_str: Token count string
+            
+        Returns:
+            Token count as integer
+        """
+        token_str = token_str.strip()
+        if token_str.endswith('k'):
+            # Convert 'k' notation to thousands
+            number = float(token_str[:-1])
+            return int(number * 1000)
+        else:
+            return int(token_str)
 
     def translate_allowed_tools(self, tools: List[str]) -> List[str]:
         """Convert tool names to Copilot format.
