@@ -846,6 +846,11 @@ Read {agent_file} to understand your complete role definition and responsibiliti
 **Your Role:** Developer
 Read {agent_file} to understand your complete role definition and responsibilities.
 
+**Basic Principles (MUST follow before writing any code):**
+- Follow existing commit message style (format, language, structure)
+- Use same language as existing code comments when writing new comments
+- Maximize code reuse by looking for existing patterns and utilities
+
 {checklist_instruction}
 
 **Task:** Execute development work according to the implementation plan.
@@ -961,6 +966,11 @@ Read {agent_file} to understand your complete role definition and responsibiliti
                 if review_file_path and review_file_path.exists():
                     review_file = str(review_file_path)
 
+            # Define basic principles
+            basic_principles = """- Follow existing commit message style (format, language, structure)
+- Use same language as existing code comments when writing new comments
+- Maximize code reuse by looking for existing patterns and utilities"""
+
             generate_develop_checklist(
                 agent_name=self.dev_agent,
                 spec_file_path=self.spec_file,
@@ -969,6 +979,7 @@ Read {agent_file} to understand your complete role definition and responsibiliti
                 checklist_file_path=checklist_path,
                 correction_mode=correction_mode,
                 review_file_path=review_file,
+                basic_principles=basic_principles,
             )
 
             # Prepare user_input for this iteration

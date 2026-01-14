@@ -8,7 +8,7 @@ from cafe.utils.checklist_utils import (
 )
 from cafe.utils import checklist_templates
 from cafe.agents.manager import AgentManager
-from cafe.utils.prompt_utils import extract_agent_guidelines_checklist
+from cafe.utils.prompt_utils import extract_agent_guidelines_checklist, convert_to_checklist
 from cafe.utils.git_utils import to_cwd_relative_path
 
 
@@ -112,6 +112,7 @@ def generate_develop_checklist(
     checklist_file_path: Path,
     correction_mode: bool = False,
     review_file_path: Optional[str] = None,
+    basic_principles: Optional[str] = None,
 ) -> None:
     """Generate checklist file for develop phase.
 
@@ -123,6 +124,7 @@ def generate_develop_checklist(
         checklist_file_path: Path where checklist file should be created
         correction_mode: True if in correction mode, False for normal mode
         review_file_path: Path to review file (for correction mode)
+        basic_principles: Basic principles text in "- item" format (optional)
     """
     # Get agent file path
     agent_file = AgentManager.get_agent_file_path(agent_name, "developer")
@@ -136,8 +138,13 @@ def generate_develop_checklist(
     # Get agent guidelines checklist
     agent_guidelines = extract_agent_guidelines_checklist(agent_file)
 
+    # Convert basic principles to checklist format
+    basic_principles_checklist = ""
+    if basic_principles:
+        basic_principles_checklist = convert_to_checklist(basic_principles, "Basic Principles")
+
     # Combine all sections
-    checklist_content = f"{execution_steps}\n{agent_guidelines}"
+    checklist_content = f"{execution_steps}\n{basic_principles_checklist}\n{agent_guidelines}"
 
     # Build placeholders dict
     placeholders = {

@@ -28,6 +28,55 @@ IMPORTANT: You MUST edit the checklist file and mark each completed item with [x
 Do NOT return a status code until ALL checklist items are marked as [x]."""
 
 
+def convert_to_checklist(content: str, section_title: str) -> str:
+    """Convert bullet points to checklist format.
+
+    Args:
+        content: Text with bullet points in "- item" format
+        section_title: Title for the checklist section
+
+    Returns:
+        Formatted checklist string with "[ ]" prefix for each item
+
+    Example:
+        Input:
+        ```
+        - Follow commit style
+        - Use same language
+        ```
+
+        Output:
+        ```
+        ## Basic Principles
+
+        [ ] Follow commit style
+        [ ] Use same language
+        ```
+    """
+    if not content:
+        return ""
+
+    lines = content.split('\n')
+    items = []
+
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith('- '):
+            # Remove the leading "- " and convert to checklist format
+            item_text = stripped[2:]  # Remove "- "
+            items.append(f"[ ] {item_text}")
+
+    if not items:
+        return ""
+
+    # Build the checklist section
+    checklist = f"## {section_title}\n\n"
+    checklist += '\n'.join(items)
+    checklist += '\n'
+
+    return checklist
+
+
 def extract_agent_guidelines_checklist(agent_file_path: str) -> str:
     """Extract bullet points from agent md file and convert to checklist format.
 
@@ -59,26 +108,7 @@ def extract_agent_guidelines_checklist(agent_file_path: str) -> str:
 
     try:
         content = agent_path.read_text(encoding='utf-8')
-        lines = content.split('\n')
-
-        # Extract lines starting with "- "
-        guidelines = []
-        for line in lines:
-            stripped = line.strip()
-            if stripped.startswith('- '):
-                # Remove the leading "- " and convert to checklist format
-                guideline_text = stripped[2:]  # Remove "- "
-                guidelines.append(f"[ ] {guideline_text}")
-
-        if not guidelines:
-            return ""
-
-        # Build the checklist section
-        checklist = "## Agent Guidelines Checklist\n\n"
-        checklist += '\n'.join(guidelines)
-        checklist += '\n'
-
-        return checklist
+        return convert_to_checklist(content, "Agent Guidelines Checklist")
 
     except Exception:
         # If any error occurs, return empty string
