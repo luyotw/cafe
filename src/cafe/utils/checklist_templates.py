@@ -154,8 +154,9 @@ PR_EXECUTION_STEPS = """## Checklist
 [ ] Read the requirements specification {spec_file_path}
 [ ] Read the implementation plan {plan_file_path}
 [ ] Review all commits in the current branch
-[ ] Generate PR title (concise and descriptive)
-[ ] Generate PR description (summarize all changes)
+[ ] Check commit message language (Chinese/English) to determine PR language
+[ ] Generate PR title (concise and descriptive, use same language as commits)
+[ ] Generate PR description (summarize all changes, use same language as commits)
 [ ] Include reference to original requirements
 [ ] List all major changes and commits
 [ ] Write PR content to {pr_file}
