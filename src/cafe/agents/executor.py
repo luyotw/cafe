@@ -181,10 +181,11 @@ class AgentExecutor:
             cmd = cli_strategy.build_command(prompt, cli_translated_tools, allowed_directories)
 
             # Execute with streaming
-            if self.config.cli == AgentCLI.COPILOT or self.config.cli == AgentCLI.CURSOR:
-                # Copilot and Cursor don't use stream-json
+            if self.config.cli == AgentCLI.COPILOT:
+                # Copilot doesn't use stream-json (plain text output)
                 parse_stream_json = False
             else:
+                # Gemini, Claude, Cursor use stream-json format
                 parse_stream_json = True
 
             # Execute with session recovery if session_id configured
@@ -746,9 +747,15 @@ class AgentExecutor:
             # streaming_log contains extracted text content for context.json
             final_streaming_log = streaming_log if streaming_log else []
         else:
-            # Copilot/non-JSON style: full output as response
-            # All lines (with newlines) combined into complete text
-            final_response = ''.join(output_lines) if output_lines else ""
+            # Copilot plain text style: need to parse response to extract token usage
+            # Get Copilot CLI strategy instance
+            from cafe.agents.cli.copilot import CopilotCLI
+            
+            cli_strategy = CopilotCLI(self.config)
+            # Parse response to extract token usage and clean response
+            final_response, token_usage, parsed_denials = cli_strategy.parse_response(output_lines)
+            # Merge any permission denials from parsing with those already collected
+            permission_denials.extend(parsed_denials)
             final_streaming_log = output_lines
 
         # Model is already tracked separately, duration stays in token_usage

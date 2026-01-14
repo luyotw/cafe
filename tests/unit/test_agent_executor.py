@@ -238,6 +238,124 @@ class TestTokenUsageTracking:
             assert total_usage.total_cost_usd == 0.03
 
 
+class TestCopilotTokenUsageExtraction:
+    """Test Copilot CLI token usage extraction in executor."""
+
+    def test_copilot_extracts_token_usage_from_plain_text(self) -> None:
+        """Test that Copilot CLI token usage is extracted from plain text output."""
+        config = AgentConfig(name="Roger", cli=AgentCLI.COPILOT)
+        executor = AgentExecutor(config)
+
+        # Mock Copilot output with usage summary
+        mock_process = MagicMock()
+        mock_process.stdout.readline.side_effect = [
+            "HI! 👋\n",
+            "\n",
+            "I'm GitHub Copilot CLI.\n",
+            "\n",
+            "\n",
+            "Total usage est:       1 Premium request\n",
+            "Total duration (API):  7s\n",
+            "Total duration (wall): 11s\n",
+            "Total code changes:    0 lines added, 0 lines removed\n",
+            "Usage by model:\n",
+            "    claude-sonnet-4.5    14.2k input, 53 output, 10.2k cache read (Est. 1 Premium request)\n",
+            "",
+        ]
+        mock_process.stderr.read.return_value = ""
+        mock_process.wait.return_value = 0
+
+        mock_run_result = MagicMock(stdout='{"session_id": "test-session"}', returncode=0)
+
+        with patch("subprocess.run", return_value=mock_run_result), \
+             patch("subprocess.Popen", return_value=mock_process), \
+             patch("sys.platform", "win32"):
+            agent_response = executor.execute("Test prompt")
+
+            # Verify token usage was extracted
+            assert agent_response.token_usage.input_tokens == 14200
+            assert agent_response.token_usage.output_tokens == 53
+            assert agent_response.token_usage.cache_read_input_tokens == 10200
+            assert agent_response.token_usage.duration_api_ms == 7000
+            assert agent_response.token_usage.duration_ms == 11000
+
+            # Verify usage summary was removed from response
+            assert "Total usage est:" not in agent_response.response
+            assert "Usage by model:" not in agent_response.response
+            assert agent_response.response.startswith("HI! 👋")
+
+    def test_copilot_without_usage_summary_returns_empty(self) -> None:
+        """Test Copilot without usage summary returns empty token usage."""
+        config = AgentConfig(name="Roger", cli=AgentCLI.COPILOT)
+        executor = AgentExecutor(config)
+
+        # Mock Copilot output without usage summary
+        mock_process = MagicMock()
+        mock_process.stdout.readline.side_effect = [
+            "Response without usage\n",
+            "",
+        ]
+        mock_process.stderr.read.return_value = ""
+        mock_process.wait.return_value = 0
+
+        mock_run_result = MagicMock(stdout='{"session_id": "test-session"}', returncode=0)
+
+        with patch("subprocess.run", return_value=mock_run_result), \
+             patch("subprocess.Popen", return_value=mock_process), \
+             patch("sys.platform", "win32"):
+            agent_response = executor.execute("Test prompt")
+
+            # Verify empty token usage
+            assert agent_response.token_usage.input_tokens == 0
+            assert agent_response.token_usage.output_tokens == 0
+            assert agent_response.token_usage.cache_read_input_tokens == 0
+            assert agent_response.response == "Response without usage\n"
+
+    def test_copilot_token_usage_accumulates(self) -> None:
+        """Test that Copilot token usage accumulates across calls."""
+        config = AgentConfig(name="Roger", cli=AgentCLI.COPILOT)
+        executor = AgentExecutor(config)
+
+        mock_process = MagicMock()
+        mock_process.stdout.readline.side_effect = [
+            # First call
+            "First response\n",
+            "\n",
+            "Total usage est: 1 Premium request\n",
+            "Total duration (API): 5s\n",
+            "Total duration (wall): 8s\n",
+            "Usage by model:\n",
+            "    claude-sonnet-4.5    10k input, 20 output, 5k cache read\n",
+            "",
+            # Second call
+            "Second response\n",
+            "\n",
+            "Total usage est: 1 Premium request\n",
+            "Total duration (API): 3s\n",
+            "Total duration (wall): 6s\n",
+            "Usage by model:\n",
+            "    claude-sonnet-4.5    15k input, 30 output, 8k cache read\n",
+            "",
+        ]
+        mock_process.stderr.read.return_value = ""
+        mock_process.wait.return_value = 0
+
+        mock_run_result = MagicMock(stdout='{"session_id": "test-session"}', returncode=0)
+
+        with patch("subprocess.run", return_value=mock_run_result), \
+             patch("subprocess.Popen", return_value=mock_process), \
+             patch("sys.platform", "win32"):
+            executor.execute("First prompt")
+            executor.execute("Second prompt")
+
+            total_usage = executor.get_total_token_usage()
+
+            # Verify accumulated token usage
+            assert total_usage.input_tokens == 25000  # 10k + 15k
+            assert total_usage.output_tokens == 50  # 20 + 30
+            assert total_usage.cache_read_input_tokens == 13000  # 5k + 8k
+
+
 class TestStreamingExecution:
     """測試 streaming 輸出功能"""
 
