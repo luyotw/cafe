@@ -519,6 +519,7 @@ class Phase(ABC):
                     denied_tools=denied_tools,
                     cli_command_args=cli_args,
                     status_code=status_code,
+                    model=model,
                 )
 
                 # Save progress
