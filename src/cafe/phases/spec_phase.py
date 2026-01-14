@@ -448,25 +448,14 @@ class SpecPhase(Phase):
     def _get_completion_data(self) -> dict:
         """Get additional data when phase completes (provided to base class's _handle_standard_status_codes).
 
+        Note: This method is NOT called when user confirms (CONFIRMED status),
+        because confirmation bypasses agent execution and returns PhaseResult directly.
+        GitHub sync for CONFIRMED status is handled in _sync_confirmed_spec_to_github().
+
         Returns:
             Dict containing phase-specific data, will be merged into PhaseResult.data
         """
         data = {}
-
-        # Post spec.md back to GitHub issue if fetched from GitHub
-        if hasattr(self, '_fetched_issue_id'):
-            try:
-                spec_path = Path(self.spec_file)
-                if spec_path.exists():
-                    spec_content = spec_path.read_text(encoding="utf-8")
-
-                    # Post comment to GitHub issue
-                    gh_ops = GitHubOps()
-                    gh_ops.add_issue_comment(self._fetched_issue_id, spec_content)
-
-            except GitHubError as e:
-                # Log error but don't fail the phase
-                print(f"Warning: Failed to post spec to GitHub issue: {e}")
 
         # Always include spec_file in completion data (Issue 1: Add full file path)
         # Find the latest existing output.md file (in case current iteration doesn't have one)
@@ -536,12 +525,20 @@ class SpecPhase(Phase):
                     )
 
             # Handle user choice (no longer distinguish interactive/non-interactive)
-            return self._process_review_decision(
+            result_or_input = self._process_review_decision(
                 choice,
                 prev_data,
                 "Specification",
                 {"pm_agent": self.pm_agent},
             )
+            
+            # If user confirmed (returned PhaseResult with CONFIRMED status),
+            # sync spec to GitHub before returning
+            if isinstance(result_or_input, PhaseResult):
+                if result_or_input.data.get("status_code") == PhaseStatusCode.CONFIRMED.value:
+                    self._sync_confirmed_spec_to_github()
+            
+            return result_or_input
 
         elif prev_status == "CAFE_NEED_CLARIFICATION":
             return self._handle_need_clarification_input(prev_data, agent_display_name="PM")
@@ -746,6 +743,31 @@ class SpecPhase(Phase):
         """
         # No-op: GitHub mode has been removed
         pass
+
+    def _sync_confirmed_spec_to_github(self) -> None:
+        """Sync confirmed spec to GitHub issue as a comment.
+        
+        Only syncs when:
+        1. Spec was fetched from GitHub (has _fetched_issue_id)
+        2. User has confirmed the spec (CAFE_CONFIRMED status)
+        """
+        if not hasattr(self, '_fetched_issue_id'):
+            return
+        
+        try:
+            spec_path = Path(self.spec_file)
+            if not spec_path.exists():
+                return
+            
+            spec_content = spec_path.read_text(encoding="utf-8")
+            
+            # Post confirmed spec as comment to GitHub issue
+            gh_ops = GitHubOps()
+            gh_ops.add_issue_comment(self._fetched_issue_id, spec_content)
+            
+        except GitHubError as e:
+            # Log error but don't fail the phase
+            print(f"Warning: Failed to post confirmed spec to GitHub issue: {e}")
 
     def _create_github_issue(self, content: str) -> str:
         """Create a new GitHub issue with requirements.
