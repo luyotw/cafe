@@ -93,6 +93,18 @@ class GeminiCLI(AbstractCLI):
                 if "response" in data:
                     full_response = data["response"]
 
+                # Extract token usage from result
+                if data.get("type") == "result":
+                    stats = data.get("stats", {})
+                    if stats:
+                        token_usage.input_tokens = stats.get("input_tokens", 0)
+                        token_usage.output_tokens = stats.get("output_tokens", 0)
+                        token_usage.cache_creation_input_tokens = stats.get("cache_creation_input_tokens", 0)
+                        token_usage.cache_read_input_tokens = stats.get("cache_read_input_tokens", 0)
+                        token_usage.duration_ms = stats.get("duration_ms")
+                        # Note: Gemini doesn't separate API duration, use total duration
+                        token_usage.duration_api_ms = stats.get("duration_ms")
+
                 # Track tool_use for use on tool_result error
                 if data.get("type") == "tool_use":
                     tool_id = data.get("tool_id")

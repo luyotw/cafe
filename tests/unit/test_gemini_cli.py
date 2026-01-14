@@ -198,6 +198,48 @@ class TestGeminiCLIParseResponse:
         # tool_input 應該從前面的 tool_use 訊息中提取
         assert permission_denials[0].tool_input == {"file_path": "~/tmp/test.txt", "content": "Hello world!"}
 
+    def test_parse_response_extracts_token_usage(self, gemini_config):
+        """測試解析並提取 token usage 資訊."""
+        cli = GeminiCLI(gemini_config)
+        output_lines = [
+            json.dumps({"type": "init", "timestamp": "2026-01-14T11:11:31.549Z", "session_id": "test-session", "model": "auto"}),
+            json.dumps({"type": "message", "timestamp": "2026-01-14T11:11:31.551Z", "role": "user", "content": "say HI"}),
+            json.dumps({"type": "message", "timestamp": "2026-01-14T11:11:37.391Z", "role": "assistant", "content": "HI", "delta": True}),
+            json.dumps({"type": "result", "timestamp": "2026-01-14T11:11:37.394Z", "status": "success", "stats": {"total_tokens": 11077, "input_tokens": 10792, "output_tokens": 58, "duration_ms": 5849, "tool_calls": 0}}),
+        ]
+
+        response, token_usage, permission_denials = cli.parse_response(output_lines)
+
+        assert response == "HI"
+        assert token_usage.input_tokens == 10792
+        assert token_usage.output_tokens == 58
+        assert token_usage.duration_ms == 5849
+        assert token_usage.duration_api_ms == 5849
+        assert token_usage.cache_creation_input_tokens == 0
+        assert token_usage.cache_read_input_tokens == 0
+
+    def test_parse_response_extracts_token_usage_with_cache(self, gemini_config):
+        """測試解析包含 cache 資訊的 token usage."""
+        cli = GeminiCLI(gemini_config)
+        output_lines = [
+            json.dumps({"type": "message", "role": "assistant", "content": "Response"}),
+            json.dumps({"type": "result", "status": "success", "stats": {
+                "input_tokens": 1000,
+                "output_tokens": 100,
+                "cache_creation_input_tokens": 500,
+                "cache_read_input_tokens": 300,
+                "duration_ms": 2000
+            }}),
+        ]
+
+        response, token_usage, permission_denials = cli.parse_response(output_lines)
+
+        assert token_usage.input_tokens == 1000
+        assert token_usage.output_tokens == 100
+        assert token_usage.cache_creation_input_tokens == 500
+        assert token_usage.cache_read_input_tokens == 300
+        assert token_usage.duration_ms == 2000
+
 
 class TestGeminiCLIExtractSessionId:
     """測試 extract_session_id() 方法."""
