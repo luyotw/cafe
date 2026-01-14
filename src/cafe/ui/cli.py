@@ -4752,11 +4752,9 @@ def summary() -> None:
         builder = TimelineBuilder(issue_name)
         entries = builder.build_timeline_entries(phase_statuses, iteration_data)
 
-        # Display timeline (keep times in UTC as they appear in data files)
+        # Display as table
         display = SummaryDisplay()
-        output = display.render_vertical_timeline(entries)
-
-        console.print(output)
+        display.render_table(entries)
 
     except Exception as e:
         console.print(f"[red]Error: Failed to display summary: {e}[/red]")

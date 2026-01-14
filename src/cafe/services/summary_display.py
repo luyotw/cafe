@@ -3,14 +3,17 @@
 from typing import List
 
 from cafe.services.timeline_builder import TimelineEntry
-from cafe.services.time_formatter import format_timestamp_utc, format_duration, calculate_elapsed_time
+from cafe.services.time_formatter import format_timestamp_local, format_timestamp_utc, format_duration, calculate_elapsed_time
 from cafe.core.types import PhaseStatus
 
 try:
-    import rich
+    from rich.console import Console
+    from rich.table import Table
     RICH_AVAILABLE = True
 except ImportError:
     RICH_AVAILABLE = False
+
+console = Console() if RICH_AVAILABLE else None
 
 
 class SummaryDisplay:
@@ -128,3 +131,61 @@ class SummaryDisplay:
 
         lines.append("")
         return "\n".join(lines)
+
+    def render_table(self, entries: List[TimelineEntry]) -> None:
+        """Render timeline entries as a table.
+
+        Args:
+            entries: List of timeline entries in chronological order
+        """
+        if not RICH_AVAILABLE:
+            # Fallback to vertical timeline if rich is not available
+            print(self.render_vertical_timeline(entries))
+            return
+
+        if not entries:
+            console.print("[dim]No workflow iterations have started yet.[/dim]")
+            return
+
+        # Create table
+        table = Table(
+            title="📋 CAFE Workflow Summary",
+            show_header=True,
+            header_style="bold cyan"
+        )
+
+        # Add columns
+        table.add_column("Phase", style="green")
+        table.add_column("Iteration", style="cyan", justify="right")
+        table.add_column("Status Code", style="yellow")
+        table.add_column("Start", style="dim")
+        table.add_column("End", style="dim")
+        table.add_column("Duration", style="magenta")
+
+        # Add data rows
+        for entry in entries:
+            # Format start time
+            start_str = format_timestamp_local(entry.start_time) if entry.start_time else "N/A"
+
+            # Format end time
+            end_str = format_timestamp_local(entry.end_time) if entry.end_time else "N/A"
+
+            # Calculate duration
+            if entry.start_time and entry.end_time:
+                duration = entry.end_time - entry.start_time
+                duration_str = format_duration(duration)
+            else:
+                duration_str = "N/A"
+
+            # Add row
+            table.add_row(
+                entry.phase,
+                str(entry.iteration) if entry.iteration else "N/A",
+                entry.status_code or "N/A",
+                start_str,
+                end_str,
+                duration_str
+            )
+
+        # Print table
+        console.print(table)

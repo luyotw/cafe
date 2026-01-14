@@ -155,3 +155,101 @@ class TestRenderVerticalTimeline:
         result = display.render_vertical_timeline(entries)
         assert isinstance(result, str)
         assert "Spec" in result
+
+
+class TestRenderTable:
+    """Test cases for render_table() method."""
+
+    def test_render_table_with_empty_entries(self):
+        """Test rendering table with empty entries."""
+        display = SummaryDisplay()
+        # Empty list should not crash, should display message or empty table
+        display.render_table([])  # Should not raise exception
+
+    def test_render_table_with_single_entry(self):
+        """Test rendering table with single entry."""
+        display = SummaryDisplay()
+        entry = TimelineEntry(
+            entry_type="iteration",
+            name="Iteration 1",
+            phase="spec",
+            start_time=datetime(2026, 1, 14, 10, 0, 0, tzinfo=timezone.utc),
+            end_time=datetime(2026, 1, 14, 10, 15, 0, tzinfo=timezone.utc),
+            status=PhaseStatus.COMPLETED,
+            iteration=1,
+            status_code="CAFE_CONFIRMED"
+        )
+        # Should render without crashing
+        display.render_table([entry])
+
+    def test_render_table_with_multiple_entries(self):
+        """Test rendering table with multiple entries."""
+        display = SummaryDisplay()
+        entries = [
+            TimelineEntry(
+                entry_type="iteration",
+                name="Iteration 1",
+                phase="spec",
+                start_time=datetime(2026, 1, 14, 10, 0, 0, tzinfo=timezone.utc),
+                end_time=datetime(2026, 1, 14, 10, 15, 0, tzinfo=timezone.utc),
+                status=PhaseStatus.COMPLETED,
+                iteration=1,
+                status_code="CAFE_READY_FOR_REVIEW"
+            ),
+            TimelineEntry(
+                entry_type="iteration",
+                name="Iteration 2",
+                phase="spec",
+                start_time=datetime(2026, 1, 14, 11, 0, 0, tzinfo=timezone.utc),
+                end_time=datetime(2026, 1, 14, 11, 10, 0, tzinfo=timezone.utc),
+                status=PhaseStatus.COMPLETED,
+                iteration=2,
+                status_code="CAFE_CONFIRMED"
+            ),
+        ]
+        # Should render multiple entries
+        display.render_table(entries)
+
+    def test_render_table_with_missing_end_time(self):
+        """Test rendering entry with missing end_time (in-progress iteration)."""
+        display = SummaryDisplay()
+        entry = TimelineEntry(
+            entry_type="iteration",
+            name="Iteration 1",
+            phase="plan",
+            start_time=datetime(2026, 1, 14, 12, 0, 0, tzinfo=timezone.utc),
+            end_time=None,  # In progress, no end_time
+            status=PhaseStatus.IN_PROGRESS,
+            iteration=1,
+            status_code="CAFE_NEED_CLARIFICATION"
+        )
+        # Should display "N/A" without crashing
+        display.render_table([entry])
+
+    def test_render_table_with_multiple_phases(self):
+        """Test rendering table with multiple phases."""
+        display = SummaryDisplay()
+        entries = [
+            TimelineEntry(
+                entry_type="iteration",
+                name="Iteration 1",
+                phase="spec",
+                start_time=datetime(2026, 1, 14, 10, 0, 0, tzinfo=timezone.utc),
+                end_time=datetime(2026, 1, 14, 10, 15, 0, tzinfo=timezone.utc),
+                status=PhaseStatus.COMPLETED,
+                iteration=1,
+                status_code="CAFE_CONFIRMED"
+            ),
+            TimelineEntry(
+                entry_type="iteration",
+                name="Iteration 1",
+                phase="plan",
+                start_time=datetime(2026, 1, 14, 11, 0, 0, tzinfo=timezone.utc),
+                end_time=datetime(2026, 1, 14, 11, 20, 0, tzinfo=timezone.utc),
+                status=PhaseStatus.COMPLETED,
+                iteration=1,
+                status_code="CAFE_READY_FOR_REVIEW"
+            ),
+        ]
+        # Should display different phases
+        display.render_table(entries)
