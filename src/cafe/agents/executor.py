@@ -738,6 +738,9 @@ class AgentExecutor:
             # If parser doesn't provide streaming_log, use our accumulated one
             if not parsed_response.streaming_log:
                 parsed_response.streaming_log = streaming_log if streaming_log else []
+            # Preserve model extracted during streaming
+            if model is not None:
+                parsed_response.model = model
             return parsed_response
 
         # Return response (either from stream-json or combined lines)
