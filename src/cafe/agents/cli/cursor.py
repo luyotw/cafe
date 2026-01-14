@@ -53,7 +53,7 @@ class CursorCLI(AbstractCLI):
         output_lines: List[str],
         streaming_log: Optional[List[str]] = None,
     ) -> Tuple[str, TokenUsage, List[PermissionDenial]]:
-        """Parse Cursor CLI's JSON output.
+        """Parse Cursor CLI's stream-json output.
 
         Args:
             output_lines: List of lines from CLI output
@@ -62,18 +62,40 @@ class CursorCLI(AbstractCLI):
         Returns:
             (response, token_usage, permission_denials) tuple
         """
-        full_output = "".join(output_lines)
+        response = ""
         token_usage = TokenUsage()
         permission_denials = []
 
-        # Parse JSON output
-        try:
-            data = json.loads(full_output.strip())
-            response = data.get("response", full_output)
-            # TODO: If Cursor provides token usage or permission denials, parse here
-        except json.JSONDecodeError:
-            # If not JSON, return original output
-            response = full_output
+        # Parse each line as JSON
+        for line in output_lines:
+            try:
+                data = json.loads(line.strip())
+                
+                # Extract assistant message
+                if data.get("type") == "assistant":
+                    message = data.get("message", {})
+                    content_blocks = message.get("content", [])
+                    for block in content_blocks:
+                        if block.get("type") == "text":
+                            response += block.get("text", "")
+                
+                # Extract token usage and duration from result
+                if data.get("type") == "result":
+                    duration_ms = data.get("duration_ms")
+                    duration_api_ms = data.get("duration_api_ms")
+                    
+                    if duration_ms is not None:
+                        token_usage.duration_ms = duration_ms
+                    if duration_api_ms is not None:
+                        token_usage.duration_api_ms = duration_api_ms
+                    
+                    # Also get response from result if not already extracted
+                    if not response and "result" in data:
+                        response = data["result"]
+                
+            except json.JSONDecodeError:
+                # If not JSON, skip this line
+                continue
 
         return response, token_usage, permission_denials
 
@@ -112,7 +134,7 @@ class CursorCLI(AbstractCLI):
         Returns:
             Output format related command line parameters
         """
-        return ["--output-format", "json"]
+        return ["--output-format", "stream-json"]
 
     def extract_session_id(self, output_lines: List[str]) -> Optional[str]:
         """Extract session ID from output.

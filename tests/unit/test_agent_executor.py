@@ -565,7 +565,7 @@ class TestCLICommandArgsGeneration:
 
             # Check basic args (Cursor doesn't use --session parameter)
             assert "--output-format" in agent_response.cli_command_args
-            assert "json" in agent_response.cli_command_args
+            assert "stream-json" in agent_response.cli_command_args
 
             # Check for allowed-tools (Cursor does not have this parameter, we can only use --force to allow all operations)
             assert "--force" in agent_response.cli_command_args

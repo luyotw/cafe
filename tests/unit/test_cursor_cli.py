@@ -53,7 +53,7 @@ class TestCursorCLIBuildCommand:
 
         assert "--output-format" in cmd
         format_idx = cmd.index("--output-format")
-        assert cmd[format_idx + 1] == "json"
+        assert cmd[format_idx + 1] == "stream-json"
 
     def test_build_command_ignores_allowed_tools(self, cursor_config):
         """測試 Cursor 忽略 allowed_tools 參數."""
@@ -113,35 +113,72 @@ class TestCursorCLIGetOutputFormat:
         result = cli.get_output_format()
 
         assert "--output-format" in result
-        assert "json" in result
+        assert "stream-json" in result
 
 
 class TestCursorCLIParseResponse:
     """測試 parse_response() 方法."""
 
-    def test_parse_response_with_json(self, cursor_config):
-        """測試解析 JSON 格式的回應."""
+    def test_parse_response_with_stream_json(self, cursor_config):
+        """測試解析 stream-json 格式的回應."""
         cli = CursorCLI(cursor_config)
-        json_response = json.dumps({"response": "Cursor response text"})
-        output_lines = [json_response]
+        output_lines = [
+            json.dumps({"type": "system", "subtype": "init", "session_id": "test-session", "model": "Auto"}),
+            json.dumps({"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": "say HI"}]}}),
+            json.dumps({"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "HI 🙂"}]}}),
+            json.dumps({"type": "result", "subtype": "success", "duration_ms": 7896, "duration_api_ms": 7896, "result": "HI 🙂"}),
+        ]
 
         response, token_usage, permission_denials = cli.parse_response(output_lines)
 
-        assert response == "Cursor response text"
+        assert response == "HI 🙂"
+        assert token_usage.duration_ms == 7896
+        assert token_usage.duration_api_ms == 7896
         assert isinstance(token_usage, TokenUsage)
         assert len(permission_denials) == 0
+
+    def test_parse_response_extracts_from_assistant_message(self, cursor_config):
+        """測試從 assistant 訊息中提取回應."""
+        cli = CursorCLI(cursor_config)
+        output_lines = [
+            json.dumps({"type": "assistant", "message": {"role": "assistant", "content": [
+                {"type": "text", "text": "First part "},
+                {"type": "text", "text": "Second part"}
+            ]}}),
+            json.dumps({"type": "result", "duration_ms": 5000, "duration_api_ms": 4500}),
+        ]
+
+        response, token_usage, permission_denials = cli.parse_response(output_lines)
+
+        assert response == "First part Second part"
+        assert token_usage.duration_ms == 5000
+        assert token_usage.duration_api_ms == 4500
+
+    def test_parse_response_fallback_to_result(self, cursor_config):
+        """測試當沒有 assistant 訊息時從 result 提取回應."""
+        cli = CursorCLI(cursor_config)
+        output_lines = [
+            json.dumps({"type": "result", "result": "Fallback response", "duration_ms": 3000}),
+        ]
+
+        response, token_usage, permission_denials = cli.parse_response(output_lines)
+
+        assert response == "Fallback response"
+        assert token_usage.duration_ms == 3000
 
     def test_parse_response_with_invalid_json(self, cursor_config):
         """測試解析非 JSON 格式的回應."""
         cli = CursorCLI(cursor_config)
-        output_lines = ["Some non-JSON output"]
+        output_lines = [
+            "Some non-JSON output",
+            json.dumps({"type": "result", "result": "Valid response", "duration_ms": 1000}),
+        ]
 
         response, token_usage, permission_denials = cli.parse_response(output_lines)
 
-        # 應該回傳原始輸出
-        assert response == "Some non-JSON output"
-        assert isinstance(token_usage, TokenUsage)
-        assert len(permission_denials) == 0
+        # 應該跳過非 JSON 行，提取有效的回應
+        assert response == "Valid response"
+        assert token_usage.duration_ms == 1000
 
 
 class TestCursorCLIExtractSessionId:
