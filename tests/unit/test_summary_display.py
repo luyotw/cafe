@@ -158,16 +158,16 @@ class TestRenderVerticalTimeline:
 
 
 class TestRenderTable:
-    """測試 render_table() 方法的表格顯示功能"""
+    """Test cases for render_table() method."""
 
     def test_render_table_with_empty_entries(self):
-        """測試空資料的表格渲染"""
+        """Test rendering table with empty entries."""
         display = SummaryDisplay()
-        # 空列表不應該崩潰，應該顯示訊息或空表格
+        # Empty list should not crash, should display message or empty table
         display.render_table([])  # Should not raise exception
 
     def test_render_table_with_single_entry(self):
-        """測試單一 entry 的表格顯示"""
+        """Test rendering table with single entry."""
         display = SummaryDisplay()
         entry = TimelineEntry(
             entry_type="iteration",
@@ -179,11 +179,11 @@ class TestRenderTable:
             iteration=1,
             status_code="CAFE_CONFIRMED"
         )
-        # 應該能渲染而不崩潰
+        # Should render without crashing
         display.render_table([entry])
 
     def test_render_table_with_multiple_entries(self):
-        """測試多個 entries 的表格顯示"""
+        """Test rendering table with multiple entries."""
         display = SummaryDisplay()
         entries = [
             TimelineEntry(
@@ -207,27 +207,27 @@ class TestRenderTable:
                 status_code="CAFE_CONFIRMED"
             ),
         ]
-        # 應該能渲染多個 entries
+        # Should render multiple entries
         display.render_table(entries)
 
     def test_render_table_with_missing_end_time(self):
-        """測試缺少 end_time 的 entry（進行中的 iteration）"""
+        """Test rendering entry with missing end_time (in-progress iteration)."""
         display = SummaryDisplay()
         entry = TimelineEntry(
             entry_type="iteration",
             name="Iteration 1",
             phase="plan",
             start_time=datetime(2026, 1, 14, 12, 0, 0, tzinfo=timezone.utc),
-            end_time=None,  # 進行中，沒有 end_time
+            end_time=None,  # In progress, no end_time
             status=PhaseStatus.IN_PROGRESS,
             iteration=1,
             status_code="CAFE_NEED_CLARIFICATION"
         )
-        # 應該顯示 "N/A" 而不是崩潰
+        # Should display "N/A" without crashing
         display.render_table([entry])
 
     def test_render_table_with_multiple_phases(self):
-        """測試跨多個 phases 的表格顯示"""
+        """Test rendering table with multiple phases."""
         display = SummaryDisplay()
         entries = [
             TimelineEntry(
@@ -251,5 +251,5 @@ class TestRenderTable:
                 status_code="CAFE_READY_FOR_REVIEW"
             ),
         ]
-        # 應該能顯示不同 phases
+        # Should display different phases
         display.render_table(entries)

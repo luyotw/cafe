@@ -147,14 +147,14 @@ class SummaryDisplay:
             console.print("[dim]No workflow iterations have started yet.[/dim]")
             return
 
-        # 建立表格
+        # Create table
         table = Table(
             title="📋 CAFE Workflow Summary",
             show_header=True,
             header_style="bold cyan"
         )
 
-        # 新增欄位
+        # Add columns
         table.add_column("Phase", style="green")
         table.add_column("Iteration", style="cyan", justify="right")
         table.add_column("Status Code", style="yellow")
@@ -162,22 +162,22 @@ class SummaryDisplay:
         table.add_column("End", style="dim")
         table.add_column("Duration", style="magenta")
 
-        # 新增資料列
+        # Add data rows
         for entry in entries:
-            # 格式化 start time
+            # Format start time
             start_str = format_timestamp_local(entry.start_time) if entry.start_time else "N/A"
 
-            # 格式化 end time
+            # Format end time
             end_str = format_timestamp_local(entry.end_time) if entry.end_time else "N/A"
 
-            # 計算 duration
+            # Calculate duration
             if entry.start_time and entry.end_time:
                 duration = entry.end_time - entry.start_time
                 duration_str = format_duration(duration)
             else:
                 duration_str = "N/A"
 
-            # 新增列
+            # Add row
             table.add_row(
                 entry.phase,
                 str(entry.iteration) if entry.iteration else "N/A",
@@ -187,5 +187,5 @@ class SummaryDisplay:
                 duration_str
             )
 
-        # 輸出表格
+        # Print table
         console.print(table)

@@ -232,7 +232,7 @@ class TestLoadIterationStatuses:
         phase_dir = tmp_path / ".cafe/issues/test-issue/review"
         phase_dir.mkdir(parents=True)
 
-        # 建立 4 個 iteration 的 context.json 檔案
+        # Create 4 iteration context.json files
         for i in range(1, 5):
             (phase_dir / f"iteration_{i:03d}").mkdir(parents=True)
             context = {
@@ -251,10 +251,10 @@ class TestLoadIterationStatuses:
 
 
 class TestLoadIterationContexts:
-    """測試從 context.json 載入 iteration 資料"""
+    """Test loading iteration data from context.json"""
 
     def test_load_iteration_statuses_reads_from_context_json(self, tmp_path, monkeypatch):
-        """驗證 load_iteration_statuses() 從 context.json 讀取資料"""
+        """Verify load_iteration_statuses() reads data from context.json"""
         from cafe.services.summary_service import SummaryService
 
         monkeypatch.chdir(tmp_path)
@@ -264,7 +264,7 @@ class TestLoadIterationContexts:
         (phase_dir / "iteration_001").mkdir(parents=True)
         (phase_dir / "iteration_002").mkdir(parents=True)
 
-        # 建立 context.json 檔案（包含 start_time 和 end_time）
+        # Create context.json files (including start_time and end_time)
         context1 = {
             "iteration": 1,
             "timestamp": "2026-01-14T10:00:00+08:00",
@@ -289,7 +289,7 @@ class TestLoadIterationContexts:
         assert result[0]["status_code"] == "CAFE_READY_FOR_REVIEW"
 
     def test_load_iteration_statuses_handles_missing_end_time(self, tmp_path, monkeypatch):
-        """驗證缺少 end_time 時的處理"""
+        """Verify handling when end_time is missing"""
         from cafe.services.summary_service import SummaryService
 
         monkeypatch.chdir(tmp_path)
@@ -298,7 +298,7 @@ class TestLoadIterationContexts:
         phase_dir = tmp_path / ".cafe/issues/test-issue/plan"
         (phase_dir / "iteration_001").mkdir(parents=True)
 
-        # 建立沒有 end_time 的 context.json（模擬進行中的 iteration）
+        # Create context.json without end_time (simulating in-progress iteration)
         context = {
             "iteration": 1,
             "timestamp": "2026-01-14T11:00:00+08:00",
@@ -309,18 +309,18 @@ class TestLoadIterationContexts:
         result = service.load_iteration_statuses("test-issue", "plan")
         assert isinstance(result, list)
         assert len(result) == 1
-        # end_time 應該是 None 或不存在
+        # end_time should be None or not exist
         assert result[0].get("end_time") is None
 
     def test_load_iteration_statuses_preserves_chronological_order(self, tmp_path, monkeypatch):
-        """驗證 iterations 按照編號順序排列"""
+        """Verify iterations are ordered by iteration number"""
         from cafe.services.summary_service import SummaryService
 
         monkeypatch.chdir(tmp_path)
 
         service = SummaryService()
         phase_dir = tmp_path / ".cafe/issues/test-issue/develop"
-        # 以非順序建立目錄
+        # Create directories in non-sequential order
         (phase_dir / "iteration_003").mkdir(parents=True)
         (phase_dir / "iteration_001").mkdir(parents=True)
         (phase_dir / "iteration_002").mkdir(parents=True)
@@ -337,7 +337,7 @@ class TestLoadIterationContexts:
         result = service.load_iteration_statuses("test-issue", "develop")
         assert isinstance(result, list)
         assert len(result) == 3
-        # 驗證順序正確
+        # Verify order is correct
         assert result[0]["iteration"] == 1
         assert result[1]["iteration"] == 2
         assert result[2]["iteration"] == 3
