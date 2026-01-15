@@ -250,7 +250,7 @@ class TestBasicPrinciples:
         assert "[ ] No technical details" in content
 
     def test_spec_checklist_with_template_file(self, tmp_path):
-        """Test spec checklist includes template instruction when provided."""
+        """Test spec checklist includes template instruction when provided in manual mode."""
         checklist_path = tmp_path / "checklist.md"
 
         generate_spec_checklist(
@@ -260,10 +260,27 @@ class TestBasicPrinciples:
             prev_spec_file=None,
             checklist_file_path=checklist_path,
             template_file=".cafe/templates/spec.md",
+            template_mode="manual",
         )
 
         content = checklist_path.read_text()
         assert ".cafe/templates/spec.md" in content
+
+    def test_spec_checklist_auto_template_mode(self, tmp_path):
+        """Test spec checklist lists available templates in auto mode."""
+        checklist_path = tmp_path / "checklist.md"
+
+        generate_spec_checklist(
+            iteration=1,
+            agent_name="Roger",
+            current_spec_file=".cafe/issues/test/spec/iteration_001/output.md",
+            prev_spec_file=None,
+            checklist_file_path=checklist_path,
+            template_mode="auto",
+        )
+
+        content = checklist_path.read_text()
+        assert "Pick a most suitable spec template" in content
 
     def test_plan_checklist_with_basic_principles(self, tmp_path):
         """Test plan checklist includes basic principles when provided."""

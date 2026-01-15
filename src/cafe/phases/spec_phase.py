@@ -72,6 +72,7 @@ class SpecPhase(Phase):
         fetch_issue_id: Optional[int] = None,
         spec_file: Optional[str] = None,  # Deprecated: kept for backward compatibility
         template_path: Optional[Path] = None,
+        template_mode: str = "auto",
     ) -> None:
         """Initialize requirements phase.
 
@@ -87,6 +88,7 @@ class SpecPhase(Phase):
             fetch_issue_id: GitHub issue number to fetch content from (optional)
             spec_file: (Deprecated) Spec file path - ignored, kept for backward compatibility
             template_path: Path to spec template file (optional)
+            template_mode: Template selection mode ('auto' or 'manual', default: 'auto')
         """
         super().__init__(interactive=interactive, git_ops=git_ops)
 
@@ -98,6 +100,7 @@ class SpecPhase(Phase):
         self.user_input = user_input
         self.fetch_issue_id = fetch_issue_id
         self.template_path = template_path
+        self.template_mode = template_mode
         self.phase_name = "spec"  # For base class progress tracking
 
         # Track if rigor was explicitly set (for interactive prompting)
@@ -347,6 +350,7 @@ class SpecPhase(Phase):
                 checklist_file_path=checklist_path,
                 basic_principles=basic_principles,
                 template_file=template_file,
+                template_mode=self.template_mode,
             )
 
             # Prepare user_input for this iteration

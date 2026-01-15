@@ -20,6 +20,7 @@ def generate_spec_checklist(
     checklist_file_path: Path,
     basic_principles: Optional[str] = None,
     template_file: Optional[str] = None,
+    template_mode: str = "auto",
 ) -> None:
     """Generate checklist file for spec phase.
 
@@ -31,6 +32,7 @@ def generate_spec_checklist(
         checklist_file_path: Path where checklist file should be created
         basic_principles: Basic principles text in "- item" format (optional)
         template_file: Path to spec template file (optional)
+        template_mode: Template selection mode ('auto' or 'manual', default: 'auto')
     """
     # Get agent file path
     agent_file = AgentManager.get_agent_file_path(agent_name, "pm")
@@ -48,8 +50,19 @@ def generate_spec_checklist(
 
     # Add template instruction for iteration 1
     template_instruction = ""
-    if iteration == 1 and template_file:
-        template_instruction = f"[ ] Read {template_file} as reference for output format and structure\n[ ] Follow template structure when writing analysis results\n"
+    if iteration == 1:
+        if template_mode == "auto":
+            # Auto mode: list available templates for agent to choose
+            from cafe.templates.manager import TemplateManager
+            template_manager = TemplateManager(template_type="spec")
+            available_templates_with_source = template_manager.list_templates()
+            if available_templates_with_source:
+                available_templates = [name for name, _ in available_templates_with_source]
+                template_list_str = ", ".join(f"`{t}`" for t in available_templates)
+                template_instruction = f"[ ] Pick a most suitable spec template (available: {template_list_str}) and read it\n[ ] Follow template structure when writing analysis results\n"
+        elif template_file:
+            # Manual mode: use the specified template
+            template_instruction = f"[ ] Read {template_file} as reference for output format and structure\n[ ] Follow template structure when writing analysis results\n"
 
     # Get agent guidelines checklist
     agent_guidelines = extract_agent_guidelines_checklist(agent_file)

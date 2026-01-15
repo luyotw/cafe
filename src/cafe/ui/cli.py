@@ -2101,6 +2101,9 @@ def spec(
             )
             raise typer.Exit(1)
 
+        # Determine template mode
+        template_mode = "auto" if spec_template == "auto" else "manual"
+
         # Create and execute spec phase
         phase = SpecPhase(
             agent_manager=agent_manager,
@@ -2113,6 +2116,7 @@ def spec(
             issue_name=issue_name,
             fetch_issue_id=fetch_issue_id,
             template_path=spec_template_path,
+            template_mode=template_mode,
         )
 
         console.print("[bold]Starting conversational spec generation...[/bold]")
