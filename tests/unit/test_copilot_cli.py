@@ -133,12 +133,13 @@ class TestCopilotCLIParseResponse:
         cli = CopilotCLI(copilot_config)
         output_lines = ["Line 1\n", "Line 2\n", "Line 3"]
 
-        response, token_usage, permission_denials = cli.parse_response(output_lines)
+        response, token_usage, permission_denials, model = cli.parse_response(output_lines)
 
         # 應該連接所有行
         assert response == "Line 1\nLine 2\nLine 3"
         assert isinstance(token_usage, TokenUsage)
         assert len(permission_denials) == 0
+        assert model is None  # No usage summary, so no model
 
     def test_parse_response_with_usage_summary(self, copilot_config):
         """測試解析包含使用統計的回應."""
@@ -157,11 +158,14 @@ class TestCopilotCLIParseResponse:
             "    claude-sonnet-4.5    14.2k input, 53 output, 10.2k cache read (Est. 1 Premium request)\n"
         ]
 
-        response, token_usage, permission_denials = cli.parse_response(output_lines)
+        response, token_usage, permission_denials, model = cli.parse_response(output_lines)
 
         # Response 應該不包含統計資訊
         assert "Total usage est:" not in response
         assert response.startswith("HI! 👋")
+        
+        # Model 應該被提取
+        assert model == "claude-sonnet-4.5"
         
         # Token usage 應該正確提取
         assert token_usage.input_tokens == 14200
@@ -184,8 +188,9 @@ class TestCopilotCLIParseResponse:
             "    claude-sonnet-4.5    1.5k input, 120 output (Est. 1 Premium request)\n"
         ]
 
-        response, token_usage, permission_denials = cli.parse_response(output_lines)
+        response, token_usage, permission_denials, model = cli.parse_response(output_lines)
 
+        assert model == "claude-sonnet-4.5"
         assert token_usage.input_tokens == 1500
         assert token_usage.output_tokens == 120
         assert token_usage.cache_read_input_tokens == 0
@@ -207,6 +212,35 @@ class TestCopilotCLIParseResponse:
         assert cli._parse_token_count("53") == 53
         assert cli._parse_token_count("120") == 120
         assert cli._parse_token_count("1000") == 1000
+
+    def test_parse_response_with_minute_duration(self, copilot_config):
+        """測試解析包含分鐘格式的 duration."""
+        cli = CopilotCLI(copilot_config)
+        output_lines = [
+            "Response text\n",
+            "\n",
+            "\n",
+            "Total usage est:       1 Premium request\n",
+            "Total duration (API):  1m 7.26s\n",
+            "Total duration (wall): 1m 18.152s\n",
+            "Usage by model:\n",
+            "    claude-sonnet-4.5    232.5k input, 4.8k output, 217.7k cache read (Est. 1 Premium request)\n"
+        ]
+
+        response, token_usage, permission_denials, model = cli.parse_response(output_lines)
+
+        # Verify model was extracted
+        assert model == "claude-sonnet-4.5"
+        
+        # Verify token usage
+        assert token_usage.input_tokens == 232500
+        assert token_usage.output_tokens == 4800
+        assert token_usage.cache_read_input_tokens == 217700
+        
+        # Verify duration parsing (1m 7.26s = 67.26s = 67260ms)
+        assert token_usage.duration_api_ms == 67260
+        # 1m 18.152s = 78.152s = 78152ms
+        assert token_usage.duration_ms == 78152
 
 
 class TestCopilotCLIExtractSessionId:

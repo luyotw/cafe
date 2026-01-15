@@ -278,6 +278,9 @@ class TestCopilotTokenUsageExtraction:
             assert agent_response.token_usage.cache_read_input_tokens == 10200
             assert agent_response.token_usage.duration_api_ms == 7000
             assert agent_response.token_usage.duration_ms == 11000
+            
+            # Verify model was extracted
+            assert agent_response.model == "claude-sonnet-4.5"
 
             # Verify usage summary was removed from response
             assert "Total usage est:" not in agent_response.response
@@ -354,6 +357,50 @@ class TestCopilotTokenUsageExtraction:
             assert total_usage.input_tokens == 25000  # 10k + 15k
             assert total_usage.output_tokens == 50  # 20 + 30
             assert total_usage.cache_read_input_tokens == 13000  # 5k + 8k
+
+    def test_copilot_extracts_usage_from_stderr(self) -> None:
+        """Test that Copilot CLI token usage is extracted from stderr when not in stdout."""
+        config = AgentConfig(name="Roger", cli=AgentCLI.COPILOT)
+        executor = AgentExecutor(config)
+
+        # Mock Copilot output with usage summary in stderr
+        mock_process = MagicMock()
+        mock_process.stdout.readline.side_effect = [
+            "HI! 👋\n",
+            "\n",
+            "I'm GitHub Copilot CLI.\n",
+            "",
+        ]
+        # Usage summary in stderr
+        mock_process.stderr.read.return_value = (
+            "\n"
+            "Total usage est:       1 Premium request\n"
+            "Total duration (API):  5s\n"
+            "Total duration (wall): 8s\n"
+            "Usage by model:\n"
+            "    claude-sonnet-4.5    8.5k input, 42 output, 6.1k cache read (Est. 1 Premium request)\n"
+        )
+        mock_process.wait.return_value = 0
+
+        mock_run_result = MagicMock(stdout='{"session_id": "test-session"}', returncode=0)
+
+        with patch("subprocess.run", return_value=mock_run_result), \
+             patch("subprocess.Popen", return_value=mock_process), \
+             patch("sys.platform", "win32"):
+            agent_response = executor.execute("Test prompt")
+
+            # Verify token usage was extracted from stderr
+            assert agent_response.token_usage.input_tokens == 8500
+            assert agent_response.token_usage.output_tokens == 42
+            assert agent_response.token_usage.cache_read_input_tokens == 6100
+            assert agent_response.token_usage.duration_api_ms == 5000
+            assert agent_response.token_usage.duration_ms == 8000
+            
+            # Verify model was extracted from stderr
+            assert agent_response.model == "claude-sonnet-4.5"
+            
+            # Response should not contain usage summary
+            assert "Usage by model:" not in agent_response.response
 
 
 class TestStreamingExecution:

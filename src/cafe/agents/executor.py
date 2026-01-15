@@ -375,6 +375,45 @@ class AgentExecutor:
             "status 429" in error_lower
         )
 
+    def _is_usage_summary_only(self, stderr_text: str) -> bool:
+        """Check if stderr only contains usage summary (not a real error).
+
+        Args:
+            stderr_text: stderr output text
+
+        Returns:
+            True if it only contains usage summary
+        """
+        if not stderr_text:
+            return False
+        
+        # Check if stderr contains usage summary markers
+        has_usage = "Usage by model:" in stderr_text or "Total usage est:" in stderr_text
+        
+        # Check if stderr contains actual error indicators (must check before "Execution failed:")
+        # because usage summary comes after error message
+        lines = stderr_text.split('\n')
+        
+        # Look for error lines that appear BEFORE usage summary
+        for i, line in enumerate(lines):
+            # Stop when we reach usage summary
+            if "Total usage est:" in line:
+                break
+            
+            # Check for error indicators in lines before usage summary
+            line_lower = line.lower()
+            if any(indicator in line_lower for indicator in [
+                "error:",
+                "failed:",
+                "exception",
+                "traceback",
+                "missing finish_reason",
+            ]):
+                return False  # Found real error
+        
+        # Only usage summary if it has usage markers and no error found before it
+        return has_usage
+
     def _execute_with_streaming(
         self,
         cmd: List[str],
@@ -704,21 +743,30 @@ class AgentExecutor:
                     returncode = 0
 
         if returncode != 0:
-            # Check if it's a rate limit error
-            is_rate_limit = stderr_output and self._is_rate_limit_error(stderr_output)
-            if is_rate_limit:
-                print(f"\n❌ {cli_name} API rate limit reached\n")
-                print(f"Error message: {stderr_output.strip()}\n")
+            # Check if stderr only contains usage summary (Copilot may output usage to stderr)
+            if stderr_output and self._is_usage_summary_only(stderr_output):
+                # Treat as success if we got valid output and stderr is just usage summary
+                if output_lines:
+                    print(f"✓ Got valid output from {cli_name}, ignoring non-zero exit code (stderr contains only usage summary)")
+                    returncode = 0
+            
+            # If still non-zero, it's a real error
+            if returncode != 0:
+                # Check if it's a rate limit error
+                is_rate_limit = stderr_output and self._is_rate_limit_error(stderr_output)
+                if is_rate_limit:
+                    print(f"\n❌ {cli_name} API rate limit reached\n")
+                    print(f"Error message: {stderr_output.strip()}\n")
 
-            err = AgentExecutionError(
-                f"{cli_name} execution failed with code {returncode}: {stderr_output}"
-            )
-            # Set error_type for rate limit errors
-            if is_rate_limit:
-                err.error_type = "rate_limit"
-            # Attach actual CLI arguments for Phase to write to iteration history on error
-            err.cli_command_args = cmd[1:]
-            raise err
+                err = AgentExecutionError(
+                    f"{cli_name} execution failed with code {returncode}: {stderr_output}"
+                )
+                # Set error_type for rate limit errors
+                if is_rate_limit:
+                    err.error_type = "rate_limit"
+                # Attach actual CLI arguments for Phase to write to iteration history on error
+                err.cli_command_args = cmd[1:]
+                raise err
 
         # Close streaming output file
         if streaming_file_handle:
@@ -750,13 +798,27 @@ class AgentExecutor:
             # streaming_log contains extracted text content for context.json
             final_streaming_log = streaming_log if streaming_log else []
         else:
-            # Copilot plain text style: need to parse response to extract token usage
-            # Get Copilot CLI strategy instance
+            # Non-stream-json style (Copilot): parse response to extract token usage
+            # Get CLI strategy instance to parse the response
             from cafe.agents.cli.copilot import CopilotCLI
             
             cli_strategy = CopilotCLI(self.config)
             # Parse response to extract token usage and clean response
-            final_response, token_usage, parsed_denials = cli_strategy.parse_response(output_lines)
+            # Pass stderr_output separately as usage summary may be in stderr
+            parse_result = cli_strategy.parse_response(
+                output_lines, stderr_output=stderr_output
+            )
+            
+            # Check if parser returns model (4-tuple) or not (3-tuple)
+            if len(parse_result) == 4:
+                final_response, token_usage, parsed_denials, parsed_model = parse_result
+                # Use parsed model if available
+                if parsed_model:
+                    model = parsed_model
+            else:
+                # Old 3-tuple format (backward compatibility)
+                final_response, token_usage, parsed_denials = parse_result
+            
             # Merge any permission denials from parsing with those already collected
             permission_denials.extend(parsed_denials)
             final_streaming_log = output_lines

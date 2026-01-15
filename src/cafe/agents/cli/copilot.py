@@ -67,62 +67,78 @@ class CopilotCLI(AbstractCLI):
         self,
         output_lines: List[str],
         streaming_log: Optional[List[str]] = None,
-    ) -> Tuple[str, TokenUsage, List[PermissionDenial]]:
+        stderr_output: str = "",
+    ) -> Tuple[str, TokenUsage, List[PermissionDenial], Optional[str]]:
         """Parse Copilot CLI's plain text output.
 
         Args:
-            output_lines: List of lines from CLI output
+            output_lines: List of lines from CLI output (stdout)
             streaming_log: Streaming output log (optional, not used here)
+            stderr_output: Output from stderr (may contain usage summary)
 
         Returns:
-            (response, token_usage, permission_denials) tuple
+            (response, token_usage, permission_denials, model) tuple
         """
         import re
         
-        # Copilot uses plain text output, join all lines
+        # Copilot uses plain text output, join all lines from stdout
         full_output = "".join(output_lines)
+        
+        # Copilot may output usage summary to stderr, append it for parsing
+        if stderr_output:
+            full_output = full_output + "\n" + stderr_output
         token_usage = TokenUsage()
         permission_denials = []
+        model: Optional[str] = None
 
         # Extract token usage from usage summary at the end
         # Example format:
         # Usage by model:
         #     claude-sonnet-4.5    14.3k input, 39 output, 10.2k cache read (Est. 1 Premium request)
         
-        # Find the "Usage by model:" section
-        usage_match = re.search(r'Usage by model:\s*\n\s+[\w.-]+\s+([\d.]+k?)\s+input,\s+([\d.]+k?)\s+output(?:,\s+([\d.]+k?)\s+cache read)?', full_output)
+        # Find the "Usage by model:" section (also capture model name)
+        usage_match = re.search(r'Usage by model:\s*\n\s+([\w.-]+)\s+([\d.]+k?)\s+input,\s+([\d.]+k?)\s+output(?:,\s+([\d.]+k?)\s+cache read)?', full_output)
         
         if usage_match:
+            # Extract model name
+            model = usage_match.group(1)
+            
             # Parse input tokens
-            input_str = usage_match.group(1)
+            input_str = usage_match.group(2)
             token_usage.input_tokens = self._parse_token_count(input_str)
             
             # Parse output tokens
-            output_str = usage_match.group(2)
+            output_str = usage_match.group(3)
             token_usage.output_tokens = self._parse_token_count(output_str)
             
             # Parse cache read tokens (optional)
-            if usage_match.group(3):
-                cache_str = usage_match.group(3)
+            if usage_match.group(4):
+                cache_str = usage_match.group(4)
                 token_usage.cache_read_input_tokens = self._parse_token_count(cache_str)
         
         # Extract duration from "Total duration (API):" line
-        api_duration_match = re.search(r'Total duration \(API\):\s+(\d+)s', full_output)
+        # Format examples: "5s", "1m 7.26s", "1m 7s"
+        api_duration_match = re.search(r'Total duration \(API\):\s+((?:(\d+)m\s+)?([\d.]+)s)', full_output)
         if api_duration_match:
-            duration_sec = int(api_duration_match.group(1))
-            token_usage.duration_api_ms = duration_sec * 1000
+            minutes = int(api_duration_match.group(2)) if api_duration_match.group(2) else 0
+            seconds = float(api_duration_match.group(3))
+            total_seconds = minutes * 60 + seconds
+            token_usage.duration_api_ms = int(total_seconds * 1000)
         
         # Extract total duration from "Total duration (wall):" line
-        wall_duration_match = re.search(r'Total duration \(wall\):\s+(\d+)s', full_output)
+        # Format examples: "8s", "1m 18.152s", "2m 30s"
+        wall_duration_match = re.search(r'Total duration \(wall\):\s+((?:(\d+)m\s+)?([\d.]+)s)', full_output)
         if wall_duration_match:
-            duration_sec = int(wall_duration_match.group(1))
-            token_usage.duration_ms = duration_sec * 1000
+            minutes = int(wall_duration_match.group(2)) if wall_duration_match.group(2) else 0
+            seconds = float(wall_duration_match.group(3))
+            total_seconds = minutes * 60 + seconds
+            token_usage.duration_ms = int(total_seconds * 1000)
         
         # Remove the usage summary from response (everything after "Total usage est:")
         response_parts = full_output.split("\n\nTotal usage est:")
         response = response_parts[0] if response_parts else full_output
 
-        return response, token_usage, permission_denials
+        return response, token_usage, permission_denials, model
 
     def _parse_token_count(self, token_str: str) -> int:
         """Parse token count string (e.g., '14.3k' or '39') to integer.
