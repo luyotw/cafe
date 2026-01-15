@@ -543,3 +543,72 @@ class TestUpdatePR:
 
         with pytest.raises(GitHubError, match="Failed to update PR"):
             gh_ops.update_pr("10", title="New Title")
+
+
+class TestUpdateIssue:
+    """Test update_issue functionality."""
+
+    @patch("subprocess.run")
+    def test_update_issue_title_only(self, mock_run: Mock) -> None:
+        """測試只更新 title"""
+        mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
+
+        gh_ops = GitHubOps()
+        gh_ops.update_issue("123", title="New Title")
+
+        # Should be called twice: once for --version check, once for actual call
+        assert mock_run.call_count == 2
+        # Check the actual call (last one)
+        args = mock_run.call_args[0][0]
+        assert "gh" in args
+        assert "issue" in args
+        assert "edit" in args
+        assert "123" in args
+        assert "--title" in args
+        assert "New Title" in args
+        assert "--body" not in args
+
+    @patch("subprocess.run")
+    def test_update_issue_body_only(self, mock_run: Mock) -> None:
+        """測試只更新 body"""
+        mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
+
+        gh_ops = GitHubOps()
+        gh_ops.update_issue("123", body="New Body")
+
+        # Should be called twice: once for --version check, once for actual call
+        assert mock_run.call_count == 2
+        # Check the actual call (last one)
+        args = mock_run.call_args[0][0]
+        assert "--body" in args
+        assert "New Body" in args
+        assert "--title" not in args
+
+    @patch("subprocess.run")
+    def test_update_issue_both(self, mock_run: Mock) -> None:
+        """測試同時更新 title and body"""
+        mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
+
+        gh_ops = GitHubOps()
+        gh_ops.update_issue("123", title="New Title", body="New Body")
+
+        # Should be called twice: once for --version check, once for actual call
+        assert mock_run.call_count == 2
+        # Check the actual call (last one)
+        args = mock_run.call_args[0][0]
+        assert "--title" in args
+        assert "New Title" in args
+        assert "--body" in args
+        assert "New Body" in args
+
+    @patch("subprocess.run")
+    def test_update_issue_error(self, mock_run: Mock) -> None:
+        """測試更新失敗"""
+        mock_run.side_effect = subprocess.CalledProcessError(
+            1, ["gh", "issue", "edit", "123"], stderr="Issue not found"
+        )
+
+        gh_ops = GitHubOps()
+
+        with pytest.raises(GitHubError, match="Failed to update issue"):
+            gh_ops.update_issue("123", title="New Title")

@@ -326,6 +326,35 @@ class GitHubOps:
         except subprocess.CalledProcessError as e:
             raise GitHubError(f"Failed to update PR {pr_number}: {e.stderr}") from e
 
+    def update_issue(self, issue_id: str, title: Optional[str] = None, body: Optional[str] = None) -> None:
+        """Update an existing GitHub issue.
+
+        Args:
+            issue_id: Issue number or ID
+            title: New issue title (optional)
+            body: New issue body/description (optional)
+
+        Raises:
+            GitHubError: If failed to update issue
+        """
+        try:
+            cmd = ["gh", "issue", "edit", issue_id]
+
+            if title is not None:
+                cmd.extend(["--title", title])
+            if body is not None:
+                cmd.extend(["--body", body])
+
+            subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+
+        except subprocess.CalledProcessError as e:
+            raise GitHubError(f"Failed to update issue {issue_id}: {e.stderr}") from e
+
 
 # PR Comments utilities
 
