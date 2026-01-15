@@ -196,9 +196,18 @@ class PlanPhase(Phase):
 
             # Generate checklist for this iteration
             from cafe.utils.checklist_generator import generate_plan_checklist
+            from cafe.utils.git_utils import to_cwd_relative_path
 
             # Define basic principles
             basic_principles = """- Write plan content in your native language"""
+
+            # Get template file path (convert to relative path for display)
+            template_file = None
+            if self.template_path:
+                try:
+                    template_file = to_cwd_relative_path(Path(self.template_path))
+                except (ValueError, OSError):
+                    template_file = str(self.template_path)
 
             checklist_path = self._get_iteration_dir(self.iteration) / "checklist.md"
             generate_plan_checklist(
@@ -207,6 +216,8 @@ class PlanPhase(Phase):
                 spec_file_path=self.spec_file,
                 checklist_file_path=checklist_path,
                 basic_principles=basic_principles,
+                template_file=template_file,
+                template_mode=self.template_mode,
             )
 
             # Prepare user_input for this iteration
@@ -287,6 +298,21 @@ class PlanPhase(Phase):
         except Exception as e:
             return self._handle_exception_in_execute(e, "Plan phase failed")
 
+    def _get_allowed_directories(self) -> List[str]:
+        """Get list of allowed directories for plan phase.
+
+        Extends base class to include plan templates directory.
+
+        Returns:
+            List of allowed directories
+        """
+        from cafe.utils.prompt_utils import get_template_allowed_directories
+
+        dirs = super()._get_allowed_directories()
+        template_path = Path(self.template_path) if self.template_path else None
+        dirs.extend(get_template_allowed_directories(self.template_mode, template_path, "plan"))
+        return dirs
+
     def _get_completion_data(self) -> dict:
         """Get additional data when phase completes (provided to base class's _handle_standard_status_codes).
 
@@ -363,33 +389,6 @@ class PlanPhase(Phase):
             },
         )
 
-        # Add template reference
-        template_instruction = ""
-        if self.template_mode == "auto":
-            # Auto mode: include template list and ask agent to pick
-            from cafe.templates.manager import TemplateManager
-            template_manager = TemplateManager()
-            available_templates_with_source = template_manager.list_templates()
-
-            if available_templates_with_source:
-                available_templates = [name for name, _ in available_templates_with_source]
-                template_list_str = ", ".join(f"`{t}`" for t in available_templates)
-                template_instruction = f"""
-**Important: Must pick a most suitable template**
-Please pick a most suitable template (available: {template_list_str}). After reading the requirements, select the template that best fits the task type and complexity.
-"""
-        elif template_path:
-            # Manual mode: use the specified template
-            template_instruction = f"""
-**Important: Must strictly follow template format**
-Please first read {template_path}, then strictly follow the template's format, section structure, and writing style to write plan.md.
-- Strictly use the same section titles and structure as the template
-- Reference the level of detail and writing style in the template
-- For parts with words like "strictly" or "must", please maintain consistency
-- Keep it concise, avoid overly verbose explanations
-- Do not write actual implementation content (code, config files, etc.) in the document, only write plans and steps
-"""
-
         if self.iteration == 1:
             from cafe.agents.manager import AgentManager
 
@@ -404,10 +403,6 @@ Please first read {template_path}, then strictly follow the template's format, s
             except ValueError:
                 checklist_path = str(checklist_file.resolve())
 
-            template_note = ""
-            if template_instruction:
-                template_note = f"\n{template_instruction}"
-
             checklist_instruction = format_checklist_instruction(checklist_path)
             base_prompt = f"""# Plan Phase
 
@@ -418,7 +413,6 @@ Read {agent_file} to understand your complete role definition and responsibiliti
 
 This is iteration {self.iteration} of implementation analysis.
 Analyze {spec_file_path} and plan implementation steps.
-{template_note}
 
 **Output Format:**
 - **CAFE_NEED_CLARIFICATION**: Append "## Implementation Plan" and "## Questions to Confirm" sections
@@ -450,10 +444,6 @@ Analyze {spec_file_path} and plan implementation steps.
 {user_input}
 """
 
-            template_note = ""
-            if template_instruction:
-                template_note = f"\n{template_instruction}"
-
             checklist_instruction = format_checklist_instruction(checklist_path)
             base_prompt = f"""# Plan Phase
 
@@ -465,7 +455,6 @@ Read {agent_file} to understand your complete role definition and responsibiliti
 This is iteration {self.iteration} of implementation analysis.
 Continue analyzing the latest version of {spec_file_path}.
 {user_request_section}
-{template_note}
 
 **Output Format:**
 - **CAFE_NEED_CLARIFICATION**: Update relevant sections and list questions in "## Questions to Confirm"

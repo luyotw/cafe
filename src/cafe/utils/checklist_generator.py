@@ -52,14 +52,19 @@ def generate_spec_checklist(
     template_instruction = ""
     if iteration == 1:
         if template_mode == "auto":
-            # Auto mode: list available templates for agent to choose
+            # Auto mode: list available templates with paths for agent to choose
             from cafe.templates.manager import TemplateManager
             template_manager = TemplateManager(template_type="spec")
             available_templates_with_source = template_manager.list_templates()
             if available_templates_with_source:
-                available_templates = [name for name, _ in available_templates_with_source]
-                template_list_str = ", ".join(f"`{t}`" for t in available_templates)
-                template_instruction = f"[ ] Pick a most suitable spec template (available: {template_list_str}) and read it\n[ ] Follow template structure when writing analysis results\n"
+                # Build template list with paths (one per line for readability)
+                template_lines = []
+                for name, _ in available_templates_with_source:
+                    path = template_manager.get_template_path(name)
+                    if path:
+                        template_lines.append(f"  - `{name}`: {path}")
+                template_list_str = "\n".join(template_lines)
+                template_instruction = f"[ ] Pick a most suitable spec template and read it. Available templates:\n{template_list_str}\n[ ] Follow template structure when writing analysis results\n"
         elif template_file:
             # Manual mode: use the specified template
             template_instruction = f"[ ] Read {template_file} as reference for output format and structure\n[ ] Follow template structure when writing analysis results\n"
@@ -97,6 +102,8 @@ def generate_plan_checklist(
     spec_file_path: str,
     checklist_file_path: Path,
     basic_principles: Optional[str] = None,
+    template_file: Optional[str] = None,
+    template_mode: str = "auto",
 ) -> None:
     """Generate checklist file for plan phase.
 
@@ -106,12 +113,34 @@ def generate_plan_checklist(
         spec_file_path: Path to spec file
         checklist_file_path: Path where checklist file should be created
         basic_principles: Basic principles text in "- item" format (optional)
+        template_file: Path to plan template file (optional)
+        template_mode: Template selection mode ('auto' or 'manual', default: 'auto')
     """
     # Get agent file path
     agent_file = AgentManager.get_agent_file_path(agent_name, "developer")
 
     # Get templates
     execution_steps = checklist_templates.PLAN_EXECUTION_STEPS
+
+    # Add template instruction
+    template_instruction = ""
+    if template_mode == "auto":
+        # Auto mode: list available templates with paths for agent to choose
+        from cafe.templates.manager import TemplateManager
+        template_manager = TemplateManager(template_type="plan")
+        available_templates_with_source = template_manager.list_templates()
+        if available_templates_with_source:
+            # Build template list with paths (one per line for readability)
+            template_lines = []
+            for name, _ in available_templates_with_source:
+                path = template_manager.get_template_path(name)
+                if path:
+                    template_lines.append(f"  - `{name}`: {path}")
+            template_list_str = "\n".join(template_lines)
+            template_instruction = f"[ ] Pick a most suitable plan template and read it. Available templates:\n{template_list_str}\n[ ] Follow template structure when writing plan\n"
+    elif template_file:
+        # Manual mode: use the specified template
+        template_instruction = f"[ ] Read {template_file} as reference for output format and structure\n[ ] Follow template structure when writing plan\n"
 
     # Get agent guidelines checklist
     agent_guidelines = extract_agent_guidelines_checklist(agent_file)
@@ -122,7 +151,7 @@ def generate_plan_checklist(
         basic_principles_checklist = convert_to_checklist(basic_principles, "Basic Principles")
 
     # Combine all sections
-    checklist_content = f"{execution_steps}\n{basic_principles_checklist}\n{agent_guidelines}"
+    checklist_content = f"{execution_steps}\n{template_instruction}{basic_principles_checklist}\n{agent_guidelines}"
 
     # Build placeholders dict
     placeholders = {

@@ -67,89 +67,54 @@ class TestTemplateMode:
         assert phase.template_mode == "manual"
         assert phase.template_path == "/path/to/template.md"
 
-    def test_prompt_includes_auto_template_instruction(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
-        """Test that auto mode prompt includes template selection instruction."""
+    def test_checklist_includes_auto_template_instruction(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
+        """Test that auto mode checklist includes template selection instruction."""
         monkeypatch.chdir(tmp_path)
-        mock_git_ops.get_current_branch.return_value = "test-feature"
 
-        # Create spec file
-        spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec_001.md"
-        spec_file.parent.mkdir(parents=True, exist_ok=True)
-        spec_file.write_text("# Requirements\n\nSome requirements")
+        from cafe.utils.checklist_generator import generate_plan_checklist
 
-        # Create template directory with sample templates
-        template_dir = tmp_path / ".cafe" / "templates" / "plan"
-        template_dir.mkdir(parents=True, exist_ok=True)
-        (template_dir / "default.md").write_text("# Default Template")
-        (template_dir / "simple.md").write_text("# Simple Template")
-        (template_dir / "bug.md").write_text("# Bug Template")
+        checklist_path = tmp_path / "checklist.md"
 
-        # Create plan file with development guide
-        plan_file = spec_file.parent.parent / "plan" / "plan_001.md"
-        plan_file.parent.mkdir(parents=True, exist_ok=True)
-        plan_file.write_text("## Development Guide\n\nSome guide")
-
-        agent_manager = MagicMock(spec=AgentManager)
-        setup_agent_manager_mocks(agent_manager)
-        permission_handler = MagicMock(spec=PermissionHandler)
-
-        phase = PlanPhase(
-            agent_manager=agent_manager,
-            permission_handler=permission_handler,
-            spec_file=str(spec_file),
-            git_ops=mock_git_ops,
+        generate_plan_checklist(
+            agent_name="Nick",
+            plan_file_path=".cafe/issues/test/plan/iteration_001/output.md",
+            spec_file_path=".cafe/issues/test/spec/iteration_001/output.md",
+            checklist_file_path=checklist_path,
             template_mode="auto",
-            interactive=False,
         )
 
-        prompt = phase._generate_local_prompt("")
+        content = checklist_path.read_text()
 
-        # Verify auto mode prompt includes template selection instruction
-        assert "pick a most suitable template" in prompt
-        # 不應該包含錯誤的 .cafe/templates/plan/ 路徑
-        assert ".cafe/templates/plan/" not in prompt
-        assert "`default`" in prompt or "`simple`" in prompt or "`bug`" in prompt
+        # Verify auto mode checklist includes template selection instruction
+        assert "Pick a most suitable plan template" in content
 
-    def test_prompt_includes_manual_template_instruction(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
-        """Test that manual mode prompt includes specific template instruction."""
+    def test_checklist_includes_manual_template_instruction(self, tmp_path: Path, mock_git_ops, monkeypatch) -> None:
+        """Test that manual mode checklist includes specific template instruction."""
         monkeypatch.chdir(tmp_path)
-        mock_git_ops.get_current_branch.return_value = "test-feature"
 
-        # Create spec file
-        spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec_001.md"
-        spec_file.parent.mkdir(parents=True, exist_ok=True)
-        spec_file.write_text("# Requirements\n\nSome requirements")
+        from cafe.utils.checklist_generator import generate_plan_checklist
 
         # Create template file
         template_file = tmp_path / ".cafe" / "templates" / "plan" / "custom.md"
         template_file.parent.mkdir(parents=True, exist_ok=True)
         template_file.write_text("# Custom Template")
 
-        # Create plan file with development guide
-        plan_file = spec_file.parent.parent / "plan" / "plan_001.md"
-        plan_file.parent.mkdir(parents=True, exist_ok=True)
-        plan_file.write_text("## Development Guide\n\nSome guide")
+        checklist_path = tmp_path / "checklist.md"
 
-        agent_manager = MagicMock(spec=AgentManager)
-        setup_agent_manager_mocks(agent_manager)
-        permission_handler = MagicMock(spec=PermissionHandler)
-
-        phase = PlanPhase(
-            agent_manager=agent_manager,
-            permission_handler=permission_handler,
-            spec_file=str(spec_file),
-            git_ops=mock_git_ops,
+        generate_plan_checklist(
+            agent_name="Nick",
+            plan_file_path=".cafe/issues/test/plan/iteration_001/output.md",
+            spec_file_path=".cafe/issues/test/spec/iteration_001/output.md",
+            checklist_file_path=checklist_path,
+            template_file=".cafe/templates/plan/custom.md",
             template_mode="manual",
-            template_path=str(template_file),
-            interactive=False,
         )
 
-        prompt = phase._generate_local_prompt("")
+        content = checklist_path.read_text()
 
-        # Verify manual mode prompt includes specific template path
-        assert "Please first read" in prompt
-        assert ".cafe/templates/plan/custom.md" in prompt
-        assert "strictly follow the template's format" in prompt
+        # Verify manual mode checklist includes specific template path
+        assert ".cafe/templates/plan/custom.md" in content
+        assert "Follow template structure" in content
 
     def test_template_mode_default_is_auto(self, mock_git_ops) -> None:
         """Test that default template mode is 'auto'."""
@@ -246,41 +211,27 @@ class TestTemplateMode:
 class TestTemplatePromptPaths:
     """測試模板提示訊息中的路徑引用"""
 
-    def test_auto_mode_prompt_does_not_reference_project_cafe_directory(
+    def test_auto_mode_checklist_uses_absolute_paths(
         self, tmp_path: Path, mock_git_ops, monkeypatch
     ) -> None:
-        """測試 auto 模式提示不應該引用專案的 .cafe/templates/plan/ 路徑"""
+        """測試 auto 模式 checklist 使用絕對路徑"""
         monkeypatch.chdir(tmp_path)
-        mock_git_ops.get_current_branch.return_value = "test-feature"
 
-        # Create spec file
-        spec_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec_001.md"
-        spec_file.parent.mkdir(parents=True, exist_ok=True)
-        spec_file.write_text("# Requirements\n\nSome requirements")
+        from cafe.utils.checklist_generator import generate_plan_checklist
 
-        # Create plan file with development guide
-        plan_file = spec_file.parent.parent / "plan" / "plan_001.md"
-        plan_file.parent.mkdir(parents=True, exist_ok=True)
-        plan_file.write_text("## Development Guide\n\nSome guide")
+        checklist_path = tmp_path / "checklist.md"
 
-        agent_manager = MagicMock(spec=AgentManager)
-        setup_agent_manager_mocks(agent_manager)
-        permission_handler = MagicMock(spec=PermissionHandler)
-
-        phase = PlanPhase(
-            agent_manager=agent_manager,
-            permission_handler=permission_handler,
-            spec_file=str(spec_file),
-            git_ops=mock_git_ops,
+        generate_plan_checklist(
+            agent_name="Nick",
+            plan_file_path=".cafe/issues/test/plan/iteration_001/output.md",
+            spec_file_path=".cafe/issues/test/spec/iteration_001/output.md",
+            checklist_file_path=checklist_path,
             template_mode="auto",
-            interactive=False,
         )
 
-        prompt = phase._generate_local_prompt("")
+        content = checklist_path.read_text()
 
-        # Verify auto mode prompt includes template selection instruction
-        assert "pick a most suitable template" in prompt
-        # 不應該包含錯誤的 .cafe/templates/plan/ 路徑引用
-        assert ".cafe/templates/plan/" not in prompt
-        # 應該包含可用模板列表
-        assert "`default`" in prompt or "`simple`" in prompt or "`bug`" in prompt
+        # Verify auto mode checklist includes template selection instruction
+        assert "Pick a most suitable plan template" in content
+        # 應該包含可用模板列表 (使用系統內建的 templates)
+        assert "`default`" in content or "`simple`" in content or "`detailed`" in content

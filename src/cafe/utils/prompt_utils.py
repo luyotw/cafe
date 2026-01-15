@@ -113,3 +113,35 @@ def extract_agent_guidelines_checklist(agent_file_path: str) -> str:
     except Exception:
         # If any error occurs, return empty string
         return ""
+
+
+def get_template_allowed_directories(template_mode: str, template_path: Optional[Path], template_type: str) -> list[str]:
+    """Get list of allowed directories for template access.
+
+    Args:
+        template_mode: Template selection mode ('auto' or 'manual')
+        template_path: Path to template file (for manual mode)
+        template_type: Type of template ('spec' or 'plan')
+
+    Returns:
+        List of directory paths that should be added to allowed_directories
+    """
+    from cafe.utils.config import get_global_cafe_dir
+
+    dirs = []
+
+    if template_mode == "auto":
+        # Auto mode: add both system and custom templates directories
+        # System templates directory (package data)
+        package_data_dir = Path(__file__).parent.parent / "data" / "templates" / template_type
+        if package_data_dir.exists():
+            dirs.append(str(package_data_dir.resolve()))
+        # Custom templates directory (global cafe dir)
+        custom_templates_dir = get_global_cafe_dir() / "templates" / template_type
+        if custom_templates_dir.exists():
+            dirs.append(str(custom_templates_dir.resolve()))
+    elif template_path:
+        # Manual mode: add the specified template's directory
+        dirs.append(str(template_path.parent.resolve()))
+
+    return dirs

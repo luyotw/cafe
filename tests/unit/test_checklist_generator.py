@@ -300,6 +300,21 @@ class TestBasicPrinciples:
         assert "## Basic Principles" in content
         assert "[ ] Write plan content in your native language" in content
 
+    def test_plan_checklist_auto_template_mode(self, tmp_path):
+        """Test plan checklist lists available templates in auto mode."""
+        checklist_path = tmp_path / "checklist.md"
+
+        generate_plan_checklist(
+            agent_name="Nick",
+            plan_file_path=".cafe/issues/test/plan/iteration_001/output.md",
+            spec_file_path=".cafe/issues/test/spec/iteration_001/output.md",
+            checklist_file_path=checklist_path,
+            template_mode="auto",
+        )
+
+        content = checklist_path.read_text()
+        assert "Pick a most suitable plan template" in content
+
     def test_develop_checklist_with_basic_principles(self, tmp_path):
         """Test develop checklist includes basic principles when provided."""
         checklist_path = tmp_path / "checklist.md"

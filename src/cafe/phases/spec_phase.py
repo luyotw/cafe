@@ -458,6 +458,20 @@ class SpecPhase(Phase):
                 result.data["spec_file"] = spec_file
             return result
 
+    def _get_allowed_directories(self) -> List[str]:
+        """Get list of allowed directories for spec phase.
+
+        Extends base class to include spec templates directory.
+
+        Returns:
+            List of allowed directories
+        """
+        from cafe.utils.prompt_utils import get_template_allowed_directories
+
+        dirs = super()._get_allowed_directories()
+        dirs.extend(get_template_allowed_directories(self.template_mode, self.template_path, "spec"))
+        return dirs
+
     def _get_completion_data(self) -> dict:
         """Get additional data when phase completes (provided to base class's _handle_standard_status_codes).
 
