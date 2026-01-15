@@ -19,6 +19,7 @@ def generate_spec_checklist(
     prev_spec_file: Optional[str],
     checklist_file_path: Path,
     basic_principles: Optional[str] = None,
+    template_file: Optional[str] = None,
 ) -> None:
     """Generate checklist file for spec phase.
 
@@ -29,6 +30,7 @@ def generate_spec_checklist(
         prev_spec_file: Path to previous spec file (None for iteration 1)
         checklist_file_path: Path where checklist file should be created
         basic_principles: Basic principles text in "- item" format (optional)
+        template_file: Path to spec template file (optional)
     """
     # Get agent file path
     agent_file = AgentManager.get_agent_file_path(agent_name, "pm")
@@ -44,6 +46,11 @@ def generate_spec_checklist(
     if iteration >= 4:
         iteration_note = checklist_templates.SPEC_IMPORTANT_NOTES_ITERATION_4_PLUS
 
+    # Add template instruction for iteration 1
+    template_instruction = ""
+    if iteration == 1 and template_file:
+        template_instruction = f"[ ] Read {template_file} as reference for output format and structure\n[ ] Follow template structure when writing analysis results\n"
+
     # Get agent guidelines checklist
     agent_guidelines = extract_agent_guidelines_checklist(agent_file)
 
@@ -53,7 +60,7 @@ def generate_spec_checklist(
         basic_principles_checklist = convert_to_checklist(basic_principles, "Basic Principles")
 
     # Combine all sections
-    checklist_content = f"{execution_steps}\n{basic_principles_checklist}\n{iteration_note}\n{agent_guidelines}"
+    checklist_content = f"{execution_steps}\n{template_instruction}{basic_principles_checklist}\n{iteration_note}\n{agent_guidelines}"
 
     # Build placeholders dict
     placeholders = {

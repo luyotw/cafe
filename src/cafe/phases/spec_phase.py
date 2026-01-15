@@ -331,6 +331,14 @@ class SpecPhase(Phase):
 - Do not include technical details (implementation, architecture, languages, frameworks, databases)
 - Do not provide technical solutions or suggestions"""
 
+            # Get template file path (convert to relative path for display)
+            template_file = None
+            if self.template_path:
+                try:
+                    template_file = to_cwd_relative_path(self.template_path)
+                except (ValueError, OSError):
+                    template_file = str(self.template_path)
+
             generate_spec_checklist(
                 iteration=self.iteration,
                 agent_name=self.pm_agent,
@@ -338,6 +346,7 @@ class SpecPhase(Phase):
                 prev_spec_file=prev_spec_file,
                 checklist_file_path=checklist_path,
                 basic_principles=basic_principles,
+                template_file=template_file,
             )
 
             # Prepare user_input for this iteration

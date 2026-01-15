@@ -249,6 +249,22 @@ class TestBasicPrinciples:
         assert "[ ] Write in native language" in content
         assert "[ ] No technical details" in content
 
+    def test_spec_checklist_with_template_file(self, tmp_path):
+        """Test spec checklist includes template instruction when provided."""
+        checklist_path = tmp_path / "checklist.md"
+
+        generate_spec_checklist(
+            iteration=1,
+            agent_name="Roger",
+            current_spec_file=".cafe/issues/test/spec/iteration_001/output.md",
+            prev_spec_file=None,
+            checklist_file_path=checklist_path,
+            template_file=".cafe/templates/spec.md",
+        )
+
+        content = checklist_path.read_text()
+        assert ".cafe/templates/spec.md" in content
+
     def test_plan_checklist_with_basic_principles(self, tmp_path):
         """Test plan checklist includes basic principles when provided."""
         checklist_path = tmp_path / "checklist.md"
