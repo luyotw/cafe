@@ -558,13 +558,13 @@ class SpecPhase(Phase):
                 "Specification",
                 {"pm_agent": self.pm_agent},
             )
-            
+
             # If user confirmed (returned PhaseResult with CONFIRMED status),
             # sync spec to GitHub before returning
             if isinstance(result_or_input, PhaseResult):
                 if result_or_input.data.get("status_code") == PhaseStatusCode.CONFIRMED.value:
                     self._sync_confirmed_spec_to_github()
-            
+
             return result_or_input
 
         elif prev_status == "CAFE_NEED_CLARIFICATION":
@@ -636,8 +636,8 @@ class SpecPhase(Phase):
             # Override user_input with fetched content
             self.user_input = fetched_content
 
-            # Store issue_id for later comment posting
-            self._fetched_issue_id = str(issue_id)
+            # Store issue_id for sync
+            self._config_issue_id = int(issue_id)
 
             # Save issue config
             self._save_issue_config()
@@ -775,22 +775,23 @@ class SpecPhase(Phase):
         """Sync confirmed spec to GitHub issue description.
 
         Only syncs when:
-        1. Spec was fetched from GitHub (has _fetched_issue_id)
+        1. Spec was loaded from GitHub issue (has _config_issue_id)
         2. User has confirmed the spec (CAFE_CONFIRMED status)
         """
-        if not hasattr(self, '_fetched_issue_id'):
+        if not self._config_issue_id:
             return
 
         try:
-            spec_path = Path(self.spec_file)
-            if not spec_path.exists():
+            # Get latest versioned spec file (the confirmed spec)
+            latest_spec_path = self._get_latest_versioned_file("spec", self.phase_dir)
+            if not latest_spec_path:
                 return
 
-            spec_content = spec_path.read_text(encoding="utf-8")
+            spec_content = latest_spec_path.read_text(encoding="utf-8")
 
             # Update GitHub issue description with confirmed spec
             gh_ops = GitHubOps()
-            gh_ops.update_issue(self._fetched_issue_id, body=spec_content)
+            gh_ops.update_issue(str(self._config_issue_id), body=spec_content)
 
         except GitHubError as e:
             # Log error but don't fail the phase
@@ -1006,15 +1007,15 @@ Read {current_spec_file} for initial requirements content.{template_instruction}
         return base_prompt
 
     def _load_issue_config(self) -> None:
-        """Load issue configuration (issue_id, rigor, input_method) from config.yaml if exists."""
+        """Load issue configuration (issue_id, rigor, input_method) from issue.yaml if exists."""
         from cafe.core.types import SpecRigor
 
-        # Path: .cafe/issues/{issue_name}/config.yaml
+        # Path: .cafe/issues/{issue_name}/issue.yaml
         config_file = self.issue_dir / "issue.yaml"
 
         config_data = self._read_issue_config(config_file)
         if config_data:
-            # Load from new spec section if exists
+            # Load from spec section
             spec_config = config_data.get("spec", {})
 
             # Load input_method and issue_id from spec section
@@ -1032,21 +1033,9 @@ Read {current_spec_file} for initial requirements content.{template_instruction}
                     # Invalid rigor value in config, use default
                     pass
 
-            # Backwards compatibility: load from root level if spec section doesn't exist
-            if not spec_config:
-                if "issue_id" in config_data:
-                    self._fetched_issue_id = config_data["issue_id"]
-                # Load rigor from config if not explicitly set by user
-                if "rigor" in config_data and not self._rigor_explicitly_set:
-                    try:
-                        self.rigor = SpecRigor(config_data["rigor"])
-                    except (ValueError, KeyError):
-                        # Invalid rigor value in config, use default
-                        pass
-
     def _save_issue_config(self) -> None:
-        """Save issue configuration (issue_id, rigor) to config.yaml."""
-        # Path: .cafe/issues/{issue_name}/config.yaml
+        """Save issue configuration (issue_id, rigor) to issue.yaml."""
+        # Path: .cafe/issues/{issue_name}/issue.yaml
         config_file = self.issue_dir / "issue.yaml"
 
         # Read existing config to preserve base_branch, feature_branch, and worktree_path
@@ -1055,12 +1044,17 @@ Read {current_spec_file} for initial requirements content.{template_instruction}
         # Prepare new config data
         config_data = {**existing_config}
 
-        # Add issue_id if available
-        if hasattr(self, '_fetched_issue_id'):
-            config_data["issue_id"] = self._fetched_issue_id
+        # Ensure spec section exists
+        if "spec" not in config_data:
+            config_data["spec"] = {}
+
+        # Save issue_id if available
+        if self._config_issue_id:
+            config_data["spec"]["issue_id"] = self._config_issue_id
+            config_data["spec"]["input_method"] = "github"
 
         # Always save rigor (even if it's the default) so subsequent iterations use the same value
-        config_data["rigor"] = self.rigor.value
+        config_data["spec"]["rigor"] = self.rigor.value
 
         # Write config
         self._write_issue_config(config_file, config_data)

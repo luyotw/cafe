@@ -37,12 +37,18 @@ def spec_phase(tmp_path, mock_dependencies):
         issue_name="test-issue",
         user_input="test requirements",
     )
-    
+
     # Setup phase directory and spec file
     phase.phase_dir = tmp_path / ".cafe" / "issues" / "test-issue" / "spec"
     phase.phase_dir.mkdir(parents=True, exist_ok=True)
-    phase.spec_file = str(phase.phase_dir / "output.md")
-    
+
+    # Simulate iteration 2 (confirm iteration)
+    # The confirmed spec is in iteration 1
+    phase.iteration = 2
+    iteration_001_dir = phase.phase_dir / "iteration_001"
+    iteration_001_dir.mkdir(parents=True, exist_ok=True)
+    phase.spec_file = str(iteration_001_dir / "output.md")
+
     return phase
 
 
@@ -51,10 +57,10 @@ class TestSyncConfirmedSpecToGitHub:
     
     def test_sync_when_fetched_from_github(self, spec_phase):
         """Test sync updates issue description when spec was fetched from GitHub."""
-        # Setup: Create spec file and set _fetched_issue_id
+        # Setup: Create spec file and set _config_issue_id
         spec_content = "# Confirmed Requirements\n\nTest spec content"
         Path(spec_phase.spec_file).write_text(spec_content)
-        spec_phase._fetched_issue_id = "123"
+        spec_phase._config_issue_id = 123
 
         # Execute
         with patch("cafe.phases.spec_phase.GitHubOps") as mock_gh_ops_cls:
@@ -67,9 +73,9 @@ class TestSyncConfirmedSpecToGitHub:
             mock_gh_ops.update_issue.assert_called_once_with("123", body=spec_content)
             mock_gh_ops.add_issue_comment.assert_not_called()
     
-    def test_no_sync_without_fetched_issue_id(self, spec_phase):
+    def test_no_sync_without_config_issue_id(self, spec_phase):
         """Test no sync when spec was not fetched from GitHub."""
-        # Setup: Create spec file but no _fetched_issue_id
+        # Setup: Create spec file but no _config_issue_id
         Path(spec_phase.spec_file).write_text("# Test spec")
 
         # Execute
@@ -85,8 +91,8 @@ class TestSyncConfirmedSpecToGitHub:
     
     def test_no_sync_when_spec_file_missing(self, spec_phase):
         """Test no sync when spec file doesn't exist."""
-        # Setup: Set _fetched_issue_id but no spec file
-        spec_phase._fetched_issue_id = "123"
+        # Setup: Set _config_issue_id but no spec file
+        spec_phase._config_issue_id = 123
 
         # Execute
         with patch("cafe.phases.spec_phase.GitHubOps") as mock_gh_ops_cls:
@@ -104,7 +110,7 @@ class TestSyncConfirmedSpecToGitHub:
         # Setup
         spec_content = "# Test spec"
         Path(spec_phase.spec_file).write_text(spec_content)
-        spec_phase._fetched_issue_id = "123"
+        spec_phase._config_issue_id = 123
 
         # Execute
         with patch("cafe.phases.spec_phase.GitHubOps") as mock_gh_ops_cls:
@@ -142,7 +148,7 @@ class TestConfirmedSyncInWorkflow:
         # Create spec file
         spec_content = "# Final Spec\n\nConfirmed requirements"
         Path(spec_phase.spec_file).write_text(spec_content)
-        spec_phase._fetched_issue_id = "123"
+        spec_phase._config_issue_id = "123"
         spec_phase.iteration = 2
         
         # Execute: Simulate user confirming
@@ -182,7 +188,7 @@ class TestConfirmedSyncInWorkflow:
         import json
         (prev_iteration_dir / "context.json").write_text(json.dumps(prev_context))
         
-        spec_phase._fetched_issue_id = "123"
+        spec_phase._config_issue_id = "123"
         spec_phase.iteration = 2
         
         # Execute: Simulate user requesting modifications
@@ -205,7 +211,7 @@ class TestGetCompletionDataNoSync:
         """Test _get_completion_data no longer posts to GitHub."""
         # Setup
         Path(spec_phase.spec_file).write_text("# Test spec")
-        spec_phase._fetched_issue_id = "123"
+        spec_phase._config_issue_id = "123"
 
         # Execute
         with patch("cafe.phases.spec_phase.GitHubOps") as mock_gh_ops_cls:
