@@ -50,50 +50,53 @@ class TestSyncConfirmedSpecToGitHub:
     """Test _sync_confirmed_spec_to_github method."""
     
     def test_sync_when_fetched_from_github(self, spec_phase):
-        """Test sync posts comment when spec was fetched from GitHub."""
+        """Test sync updates issue description when spec was fetched from GitHub."""
         # Setup: Create spec file and set _fetched_issue_id
         spec_content = "# Confirmed Requirements\n\nTest spec content"
         Path(spec_phase.spec_file).write_text(spec_content)
         spec_phase._fetched_issue_id = "123"
-        
+
         # Execute
         with patch("cafe.phases.spec_phase.GitHubOps") as mock_gh_ops_cls:
             mock_gh_ops = MagicMock()
             mock_gh_ops_cls.return_value = mock_gh_ops
-            
+
             spec_phase._sync_confirmed_spec_to_github()
-            
-            # Verify
-            mock_gh_ops.add_issue_comment.assert_called_once_with("123", spec_content)
+
+            # Verify: Should update issue description, not add comment
+            mock_gh_ops.update_issue.assert_called_once_with("123", body=spec_content)
+            mock_gh_ops.add_issue_comment.assert_not_called()
     
     def test_no_sync_without_fetched_issue_id(self, spec_phase):
         """Test no sync when spec was not fetched from GitHub."""
         # Setup: Create spec file but no _fetched_issue_id
         Path(spec_phase.spec_file).write_text("# Test spec")
-        
+
         # Execute
         with patch("cafe.phases.spec_phase.GitHubOps") as mock_gh_ops_cls:
             mock_gh_ops = MagicMock()
             mock_gh_ops_cls.return_value = mock_gh_ops
-            
+
             spec_phase._sync_confirmed_spec_to_github()
-            
+
             # Verify: No API call made
+            mock_gh_ops.update_issue.assert_not_called()
             mock_gh_ops.add_issue_comment.assert_not_called()
     
     def test_no_sync_when_spec_file_missing(self, spec_phase):
         """Test no sync when spec file doesn't exist."""
         # Setup: Set _fetched_issue_id but no spec file
         spec_phase._fetched_issue_id = "123"
-        
+
         # Execute
         with patch("cafe.phases.spec_phase.GitHubOps") as mock_gh_ops_cls:
             mock_gh_ops = MagicMock()
             mock_gh_ops_cls.return_value = mock_gh_ops
-            
+
             spec_phase._sync_confirmed_spec_to_github()
-            
+
             # Verify: No API call made
+            mock_gh_ops.update_issue.assert_not_called()
             mock_gh_ops.add_issue_comment.assert_not_called()
     
     def test_handles_github_error_gracefully(self, spec_phase, capsys):
@@ -102,19 +105,19 @@ class TestSyncConfirmedSpecToGitHub:
         spec_content = "# Test spec"
         Path(spec_phase.spec_file).write_text(spec_content)
         spec_phase._fetched_issue_id = "123"
-        
+
         # Execute
         with patch("cafe.phases.spec_phase.GitHubOps") as mock_gh_ops_cls:
             mock_gh_ops = MagicMock()
-            mock_gh_ops.add_issue_comment.side_effect = GitHubError("API rate limit exceeded")
+            mock_gh_ops.update_issue.side_effect = GitHubError("API rate limit exceeded")
             mock_gh_ops_cls.return_value = mock_gh_ops
-            
+
             # Should not raise exception
             spec_phase._sync_confirmed_spec_to_github()
-            
+
             # Verify warning message
             captured = capsys.readouterr()
-            assert "Warning: Failed to post confirmed spec to GitHub issue" in captured.out
+            assert "Warning: Failed to update GitHub issue description" in captured.out
             assert "API rate limit exceeded" in captured.out
 
 
@@ -203,16 +206,17 @@ class TestGetCompletionDataNoSync:
         # Setup
         Path(spec_phase.spec_file).write_text("# Test spec")
         spec_phase._fetched_issue_id = "123"
-        
+
         # Execute
         with patch("cafe.phases.spec_phase.GitHubOps") as mock_gh_ops_cls:
             mock_gh_ops = MagicMock()
             mock_gh_ops_cls.return_value = mock_gh_ops
-            
+
             data = spec_phase._get_completion_data()
-            
+
             # Verify: No GitHub API call made
+            mock_gh_ops.update_issue.assert_not_called()
             mock_gh_ops.add_issue_comment.assert_not_called()
-            
+
             # Verify: Still returns spec_file path
             assert "spec_file" in data

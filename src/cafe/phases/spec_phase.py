@@ -772,29 +772,29 @@ class SpecPhase(Phase):
         pass
 
     def _sync_confirmed_spec_to_github(self) -> None:
-        """Sync confirmed spec to GitHub issue as a comment.
-        
+        """Sync confirmed spec to GitHub issue description.
+
         Only syncs when:
         1. Spec was fetched from GitHub (has _fetched_issue_id)
         2. User has confirmed the spec (CAFE_CONFIRMED status)
         """
         if not hasattr(self, '_fetched_issue_id'):
             return
-        
+
         try:
             spec_path = Path(self.spec_file)
             if not spec_path.exists():
                 return
-            
+
             spec_content = spec_path.read_text(encoding="utf-8")
-            
-            # Post confirmed spec as comment to GitHub issue
+
+            # Update GitHub issue description with confirmed spec
             gh_ops = GitHubOps()
-            gh_ops.add_issue_comment(self._fetched_issue_id, spec_content)
-            
+            gh_ops.update_issue(self._fetched_issue_id, body=spec_content)
+
         except GitHubError as e:
             # Log error but don't fail the phase
-            print(f"Warning: Failed to post confirmed spec to GitHub issue: {e}")
+            print(f"Warning: Failed to update GitHub issue description: {e}")
 
     def _create_github_issue(self, content: str) -> str:
         """Create a new GitHub issue with requirements.
