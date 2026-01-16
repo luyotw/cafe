@@ -1023,6 +1023,8 @@ Read {current_spec_file} for initial requirements content.{template_instruction}
                 # If method is github, also load issue_id
                 if spec_config.get("issue_id"):
                     self._config_issue_id = int(spec_config["issue_id"])
+                    # Set _fetched_issue_id for sync functionality
+                    self._fetched_issue_id = str(spec_config["issue_id"])
 
             # Load rigor from spec section
             if "rigor" in spec_config and not self._rigor_explicitly_set:
@@ -1031,18 +1033,6 @@ Read {current_spec_file} for initial requirements content.{template_instruction}
                 except (ValueError, KeyError):
                     # Invalid rigor value in config, use default
                     pass
-
-            # Backwards compatibility: load from root level if spec section doesn't exist
-            if not spec_config:
-                if "issue_id" in config_data:
-                    self._fetched_issue_id = config_data["issue_id"]
-                # Load rigor from config if not explicitly set by user
-                if "rigor" in config_data and not self._rigor_explicitly_set:
-                    try:
-                        self.rigor = SpecRigor(config_data["rigor"])
-                    except (ValueError, KeyError):
-                        # Invalid rigor value in config, use default
-                        pass
 
     def _save_issue_config(self) -> None:
         """Save issue configuration (issue_id, rigor) to config.yaml."""
