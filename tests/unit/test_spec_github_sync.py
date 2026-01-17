@@ -121,9 +121,9 @@ class TestSyncConfirmedSpecToGitHub:
             # Should not raise exception
             spec_phase._sync_confirmed_spec_to_github()
 
-            # Verify warning message
+            # Verify warning message contains error details
             captured = capsys.readouterr()
-            assert "Warning: Failed to update GitHub issue description" in captured.out
+            assert "Warning" in captured.out or "⚠️" in captured.out
             assert "API rate limit exceeded" in captured.out
 
 

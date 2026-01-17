@@ -790,12 +790,14 @@ class SpecPhase(Phase):
             spec_content = latest_spec_path.read_text(encoding="utf-8")
 
             # Update GitHub issue description with confirmed spec
+            print(f"\n📤 Syncing confirmed spec to GitHub issue #{self._config_issue_id}...")
             gh_ops = GitHubOps()
             gh_ops.update_issue(str(self._config_issue_id), body=spec_content)
+            print(f"✅ Successfully synced spec to GitHub issue #{self._config_issue_id}")
 
         except GitHubError as e:
             # Log error but don't fail the phase
-            print(f"Warning: Failed to update GitHub issue description: {e}")
+            print(f"⚠️  Warning: Failed to sync spec to GitHub issue #{self._config_issue_id}: {e}")
 
     def _create_github_issue(self, content: str) -> str:
         """Create a new GitHub issue with requirements.
