@@ -32,6 +32,7 @@ from cafe.ui.init_helpers import (
 )
 from cafe.ui.phase_prompts import prompt_for_input_method, prompt_for_rigor
 from cafe.ui.template_selector import select_template
+from cafe.services.delta_display import DeltaDisplay
 from cafe.utils.config import ConfigManager
 from cafe.utils.git_utils import is_branch_initialized
 from cafe.utils.github import GitHubError, GitHubOps
@@ -479,6 +480,30 @@ def _execute_next_phase_auto(next_phase: str, issue_name: str) -> None:
     except Exception as e:
         console.print(f"[bold red]❌ Error executing {next_phase}: {e}[/bold red]")
         raise typer.Exit(1)
+
+
+def _display_iteration_delta(
+    iteration_count: int,
+    output_file: Optional[str],
+    console: Console,
+) -> None:
+    """Display delta between current and previous iteration output files.
+
+    Args:
+        iteration_count: Current iteration number
+        output_file: Path to current iteration output file (spec_file or plan_file)
+        console: Rich console for output
+    """
+    if iteration_count > 1 and output_file:
+        current_file = Path(output_file)
+        # Calculate previous iteration path
+        iteration_dir = current_file.parent
+        phase_dir = iteration_dir.parent
+        prev_iteration_num = iteration_count - 1
+        previous_file = phase_dir / f"iteration_{prev_iteration_num:03d}" / "output.md"
+
+        delta_display = DeltaDisplay()
+        delta_display.display_delta(current_file, previous_file, console)
 
 
 @app.command()
@@ -2164,6 +2189,13 @@ def spec(
                 else:  # CAFE_READY_FOR_REVIEW
                     console.print("[yellow]📝 Draft ready for review[/yellow]")
 
+                # Display delta if not first iteration
+                _display_iteration_delta(
+                    iteration_count,
+                    result.data.get("spec_file"),
+                    console,
+                )
+
                 # Decide whether to continue
                 should_continue = False
                 if auto:
@@ -2531,6 +2563,13 @@ def plan(
                     console.print("[yellow]💬 Agent needs clarification[/yellow]")
                 else:  # CAFE_READY_FOR_REVIEW
                     console.print("[yellow]📋 Plan ready for review[/yellow]")
+
+                # Display delta if not first iteration
+                _display_iteration_delta(
+                    iteration_count,
+                    result.data.get("plan_file"),
+                    console,
+                )
 
                 # Decide whether to continue
                 should_continue = False
