@@ -39,9 +39,9 @@ def plan_phase(mock_agent_manager, mock_permission_handler, mock_git_ops, tmp_pa
     return phase
 
 def test_sync_plan_to_github_success(plan_phase, tmp_path):
-    # Setup issue.yaml with issue_id
+    # Setup issue.yaml with issue_id in spec section
     issue_config = tmp_path / ".cafe" / "issues" / "test-issue" / "issue.yaml"
-    issue_config.write_text("issue_id: '123'\n")
+    issue_config.write_text("spec:\n  issue_id: '123'\n")
     
     # Setup plan_001.md
     plan_file = tmp_path / ".cafe" / "issues" / "test-issue" / "plan" / "plan_001.md"
@@ -74,9 +74,9 @@ def test_sync_plan_to_github_no_issue_id(plan_phase, tmp_path):
         mock_gh.add_issue_comment.assert_not_called()
 
 def test_sync_plan_to_github_gh_not_installed(plan_phase, tmp_path):
-    # Setup issue.yaml with issue_id
+    # Setup issue.yaml with issue_id in spec section
     issue_config = tmp_path / ".cafe" / "issues" / "test-issue" / "issue.yaml"
-    issue_config.write_text("issue_id: '123'\n")
+    issue_config.write_text("spec:\n  issue_id: '123'\n")
     
     with patch("cafe.phases.plan_phase.GitHubOps") as MockGitHubOps:
         mock_gh = MockGitHubOps.return_value
@@ -87,9 +87,9 @@ def test_sync_plan_to_github_gh_not_installed(plan_phase, tmp_path):
         mock_gh.add_issue_comment.assert_not_called()
 
 def test_sync_plan_to_github_error_silenced(plan_phase, tmp_path):
-    # Setup issue.yaml with issue_id
+    # Setup issue.yaml with issue_id in spec section
     issue_config = tmp_path / ".cafe" / "issues" / "test-issue" / "issue.yaml"
-    issue_config.write_text("issue_id: '123'\n")
+    issue_config.write_text("spec:\n  issue_id: '123'\n")
     
     # Setup plan_001.md
     plan_file = tmp_path / ".cafe" / "issues" / "test-issue" / "plan" / "plan_001.md"

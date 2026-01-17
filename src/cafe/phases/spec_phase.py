@@ -1,4 +1,4 @@
-"""Specification phase (requirements clarification)."""
+"Specification phase (requirements clarification)."
 
 import json
 import os
@@ -127,11 +127,11 @@ class SpecPhase(Phase):
         # spec_file will be set in execute() based on iteration number
         self.spec_file: str = ""
 
-        # Config-based settings (loaded from config.yaml by _load_issue_config())
+        # Config-based settings (loaded from issue.yaml by _load_issue_config())
         self._config_input_method: Optional[str] = None
         self._config_issue_id: Optional[int] = None
 
-        # Load issue_id from config.json if exists (for comment posting after resume)
+        # Load issue_id from issue.yaml if exists (for comment posting after resume)
         self._load_issue_config()
 
         # Store original requirement (from first iteration)
@@ -414,7 +414,7 @@ class SpecPhase(Phase):
             # Phase-specific post-processing: Sync spec to GitHub (no-op in local mode)
             self._sync_spec_to_github("")
 
-            # Save rigor setting to config after each iteration
+            # Save rigor setting to issue.yaml after each iteration
             self._save_issue_config()
 
             # Since we removed the while loop, if result is None (meaning need to continue),
@@ -438,9 +438,9 @@ class SpecPhase(Phase):
 
         except KeyboardInterrupt:
             # User paused with Ctrl+C - save progress and allow resume
-            print("\n\n⏸️  Paused by user (Ctrl+C).")
-            print(f"💾 Progress saved. Current iteration: {self.iteration}")
-            print(f"📝 To resume, run: cafe spec {self.issue_name}")
+            self.display.console.print("\n\n⏸️  Paused by user (Ctrl+C).")
+            self.display.console.print(f"💾 Progress saved. Current iteration: {self.iteration}")
+            self.display.console.print(f"📝 To resume, run: cafe spec {self.issue_name}")
             return PhaseResult(
                 status=PhaseStatus.IN_PROGRESS,
                 message="Paused by user - can resume later",
@@ -577,7 +577,7 @@ class SpecPhase(Phase):
         prev_iteration = self.iteration - 1
         if prev_iteration > 0:
             prev_spec_file = self._get_versioned_file_path("spec", prev_iteration, self.phase_dir)
-            print(f"\n💾 Loading latest requirements specification file: {prev_spec_file}\n")
+            self.display.console.print(f"\n💾 Loading latest requirements specification file: {prev_spec_file}\n")
             spec_content = prev_spec_file.read_text() if prev_spec_file.exists() else "(File not generated)"
         else:
             spec_content = "(File not generated)"
@@ -585,11 +585,11 @@ class SpecPhase(Phase):
         # Get PM CLI info for display
         pm_cli = self.agent_manager.get_agent_config(self.pm_agent).cli.value
 
-        print(f"\n{'='*60}")
-        print(f"PM ({self.pm_agent} by {pm_cli}) - Current specification content (Iteration {self.iteration - 1}):")
-        print(f"{'='*60}")
-        print(spec_content)
-        print(f"{'='*60}\n")
+        self.display.console.print(f"\n{'='*60}")
+        self.display.console.print(f"PM ({self.pm_agent} by {pm_cli}) - Current specification content (Iteration {self.iteration - 1}):")
+        self.display.console.print(f"{'='*60}")
+        self.display.console.print(spec_content)
+        self.display.console.print(f"{'='*60}\n")
 
     def _prompt_for_rigor(self) -> None:
         """Prompt user to select rigor level if not already set."""
@@ -654,10 +654,10 @@ class SpecPhase(Phase):
             spec_path.parent.mkdir(parents=True, exist_ok=True)
             spec_path.write_text(f"# Initial Requirements\n\n{fetched_content}\n")
 
-            print()
-            print(f"✅ Requirements loaded from GitHub Issue and written to {spec_path}")
-            print("   Starting clarification...")
-            print()
+            self.display.console.print()
+            self.display.console.print(f"✅ Requirements loaded from GitHub Issue and written to {spec_path}")
+            self.display.console.print("   Starting clarification...")
+            self.display.console.print()
 
             return None  # Success
 
@@ -680,22 +680,22 @@ class SpecPhase(Phase):
 
     def _prompt_for_user_story(self) -> None:
         """Prompt user to write initial requirement when no requirements file exists."""
-        print("\n" + "="*70)
-        print("Please describe your requirements:")
-        print("="*70)
-        print()
-        print("Recommended to write as user stories:")
-        print("   Format: As a [role], I want [feature], so that [purpose/value]")
-        print()
-        print("   Examples:")
-        print("   - As a product manager, I want to quickly understand project progress to report development status to the team")
-        print("   - As a user, I want to see clear error messages to know what went wrong and how to fix it")
-        print()
-        print("Or describe requirements in general terms:")
-        print("   - Add a CSV export feature")
-        print("   - Fix bug where login page cannot submit")
-        print("   - Optimize homepage loading speed")
-        print()
+        self.display.console.print("\n" + "="*70)
+        self.display.console.print("Please describe your requirements:")
+        self.display.console.print("="*70)
+        self.display.console.print()
+        self.display.console.print("Recommended to write as user stories:")
+        self.display.console.print("   Format: As a [role], I want [feature], so that [purpose/value]")
+        self.display.console.print()
+        self.display.console.print("   Examples:")
+        self.display.console.print("   - As a product manager, I want to quickly understand project progress to report development status to the team")
+        self.display.console.print("   - As a user, I want to see clear error messages to know what went wrong and how to fix it")
+        self.display.console.print()
+        self.display.console.print("Or describe requirements in general terms:")
+        self.display.console.print("   - Add a CSV export feature")
+        self.display.console.print("   - Fix bug where login page cannot submit")
+        self.display.console.print("   - Optimize homepage loading speed")
+        self.display.console.print()
 
         # Get user's requirement using prompt_multiline for better UX
         from cafe.ui.inquirer_prompts import prompt_multiline
@@ -709,9 +709,9 @@ class SpecPhase(Phase):
         spec_path.parent.mkdir(parents=True, exist_ok=True)
         spec_path.write_text(f"# Initial Requirements\n\n{user_requirement}\n")
 
-        print()
-        print("✅ Requirements recorded, starting clarification...")
-        print()
+        self.display.console.print()
+        self.display.console.print("✅ Requirements recorded, starting clarification...")
+        self.display.console.print()
 
     def _backup_spec(self, spec_path: Path) -> None:
         """Backup original spec file.
@@ -794,7 +794,7 @@ class SpecPhase(Phase):
 
         except GitHubError as e:
             # Log error but don't fail the phase
-            print(f"Warning: Failed to update GitHub issue description: {e}")
+            self.display.console.print(f"Warning: Failed to update GitHub issue description: {e}")
 
     def _create_github_issue(self, content: str) -> str:
         """Create a new GitHub issue with requirements.
@@ -832,12 +832,7 @@ class SpecPhase(Phase):
         Returns:
             Guidelines string
         """
-        return """**Important: Absolutely no technical details!**
-- ❌ Do not mention implementation methods, technical architecture, programming languages, frameworks, databases, etc.
-- ❌ Do not suggest any technical solutions
-- ❌ Do not modify code yourself
-- ✅ Only focus on "what users want" "why they want it" "what the expected outcome is"
-- ✅ Think from product and business perspectives"""
+        return """**Important: Absolutely no technical details!**\n- ❌ Do not mention implementation methods, technical architecture, programming languages, frameworks, databases, etc.\n- ❌ Do not suggest any technical solutions\n- ❌ Do not modify code yourself\n- ✅ Only focus on \"what users want\" \"why they want it\" \"what the expected outcome is\"\n- ✅ Think from product and business perspectives"""
 
     def _get_status_code_prompt(self) -> str:
         """Get status code prompt.
@@ -865,28 +860,11 @@ class SpecPhase(Phase):
         from cafe.core.types import SpecRigor
 
         if self.rigor == SpecRigor.LOW:
-            return """**Rigor level: Low (fast development)**
-- Only ask for the most critical information (what is the core function)
-- Do not ask for details that developers can decide themselves
-- Allow some ambiguity, trust developers to make reasonable choices
-- If requirements are basically clear, can confirm
-- Goal: Quickly start development, adjust as you go"""
+            return """**Rigor level: Low (fast development)**\n- Only ask for the most critical information (what is the core function)\n- Do not ask for details that developers can decide themselves\n- Allow some ambiguity, trust developers to make reasonable choices\n- If requirements are basically clear, can confirm\n- Goal: Quickly start development, adjust as you go"""
         elif self.rigor == SpecRigor.HIGH:
-            return """**Rigor level: High (precise specification)**
-- Ask all details in depth (including edge cases, error handling, special scenarios)
-- Ensure every function's input, output, and behavior is clearly defined
-- Ask for acceptance criteria to ensure requirements are testable
-- Do not allow any vague or "it depends" descriptions
-- Must reach the level where test cases can be directly written
-- Goal: The clearer the specification, the better, reduce subsequent communication costs"""
+            return """**Rigor level: High (precise specification)**\n- Ask all details in depth (including edge cases, error handling, special scenarios)\n- Ensure every function's input, output, and behavior is clearly defined\n- Ask for acceptance criteria to ensure requirements are testable\n- Do not allow any vague or \"it depends\" descriptions\n- Must reach the level where test cases can be directly written\n- Goal: The clearer the specification, the better, reduce subsequent communication costs"""
         else:  # MEDIUM (default)
-            return """**Rigor level: Medium (balanced mode)**
-- Ask important details and key scenarios
-- Ask about obviously unclear areas, but don't over-pursue minor details
-- Ensure main functions and expected behaviors are clear
-- Accept reasonable flexibility for secondary details
-- Ask for acceptance criteria, but don't require excessive detail
-- Goal: Balance between speed and precision"""
+            return """**Rigor level: Medium (balanced mode)**\n- Ask important details and key scenarios\n- Ask about obviously unclear areas, but don't over-pursue minor details\n- Ensure main functions and expected behaviors are clear\n- Accept reasonable flexibility for secondary details\n- Ask for acceptance criteria, but don't require excessive detail\n- Goal: Balance between speed and precision"""
 
     def _generate_local_prompt(self, user_input: str = "") -> str:
         """Generate prompt for local workflow.
@@ -947,34 +925,18 @@ class SpecPhase(Phase):
                     template_file = to_cwd_relative_path(self.template_path)
                 except (ValueError, OSError):
                     template_file = str(self.template_path)
-                template_instruction = f"""
-**Template Reference:**
-Use Read tool to read {template_file} as a reference for output format and structure."""
+                template_instruction = f"""\n**Template Reference:**\nUse Read tool to read {template_file} as a reference for output format and structure."""
 
-            initial_instruction = f"""**Round 1 Requirements Clarification**
-
-Read {current_spec_file} for initial requirements content.{template_instruction}"""
+            initial_instruction = f"""**Round 1 Requirements Clarification**\n\nRead {current_spec_file} for initial requirements content.{template_instruction}"""
             context_section = ""
         else:  # Iteration 2+
             # Round 2 onwards: Read previous round spec file and user_input, write new spec file
-            initial_instruction = f"""**Round {self.iteration} Requirements Clarification**
-
-1. Use Read tool to read {prev_spec_file}(previous round analysis results)
-2. View user's latest answer (see below)
-3. Modify {current_spec_file}, update content (new version)"""
+            initial_instruction = f"""**Round {self.iteration} Requirements Clarification**\n\n1. Use Read tool to read {prev_spec_file}(previous round analysis results)\n2. View user's latest answer (see below)\n3. Modify {current_spec_file}, update content (new version)"""
             
             if user_input:
-                context_section = f"""
-**User's Answer:**
-{user_input}
-"""
+                context_section = f"""\n**User's Answer:**\n{user_input}\n"""
             if self.iteration >= 4:
-                restriction = f"""
-⚠️ **Important Constraints:**
-- You are now in round {self.iteration} , can only continue asking about "pending questions".
-- **Cannot propose new questions**.
-- Can only deeply clarify questions already raised.
-"""
+                restriction = f"""\n⚠️ **Important Constraints:**\n- You are now in round {self.iteration} , can only continue asking about \"pending questions\".\n- **Cannot propose new questions**.\n- Can only deeply clarify questions already raised.\n"""
 
         # --- 2. Get agent file path for reference ---
         from cafe.agents.manager import AgentManager
@@ -991,30 +953,21 @@ Read {current_spec_file} for initial requirements content.{template_instruction}
 
         # --- 4. Build prompt ---
         checklist_instruction = format_checklist_instruction(checklist_path)
-        base_prompt = f"""# Specification Phase
-
-{checklist_instruction}
-
-{initial_instruction}
-{context_section}
-{rigor_guidelines}
-
-{status_code_prompt}
-"""
+        base_prompt = f"""# Specification Phase\n\n{checklist_instruction}\n\n{initial_instruction}\n{context_section}\n{rigor_guidelines}\n\n{status_code_prompt}\n"""
 
         # --- 5. Return the final prompt ---
         return base_prompt
 
     def _load_issue_config(self) -> None:
-        """Load issue configuration (issue_id, rigor, input_method) from config.yaml if exists."""
+        """Load issue configuration (issue_id, rigor, input_method) from issue.yaml if exists."""
         from cafe.core.types import SpecRigor
 
-        # Path: .cafe/issues/{issue_name}/config.yaml
+        # Path: .cafe/issues/{issue_name}/issue.yaml
         config_file = self.issue_dir / "issue.yaml"
 
         config_data = self._read_issue_config(config_file)
         if config_data:
-            # Load from new spec section if exists
+            # Load from spec section if exists
             spec_config = config_data.get("spec", {})
 
             # Load input_method and issue_id from spec section
@@ -1035,8 +988,8 @@ Read {current_spec_file} for initial requirements content.{template_instruction}
                     pass
 
     def _save_issue_config(self) -> None:
-        """Save issue configuration (issue_id, rigor) to config.yaml."""
-        # Path: .cafe/issues/{issue_name}/config.yaml
+        """Save issue configuration (issue_id, rigor) to issue.yaml."""
+        # Path: .cafe/issues/{issue_name}/issue.yaml
         config_file = self.issue_dir / "issue.yaml"
 
         # Read existing config to preserve base_branch, feature_branch, and worktree_path
@@ -1045,12 +998,16 @@ Read {current_spec_file} for initial requirements content.{template_instruction}
         # Prepare new config data
         config_data = {**existing_config}
 
+        # Initialize spec section if not exists
+        if "spec" not in config_data:
+            config_data["spec"] = {}
+
         # Add issue_id if available
         if hasattr(self, '_fetched_issue_id'):
-            config_data["issue_id"] = self._fetched_issue_id
+            config_data["spec"]["issue_id"] = self._fetched_issue_id
 
         # Always save rigor (even if it's the default) so subsequent iterations use the same value
-        config_data["rigor"] = self.rigor.value
+        config_data["spec"]["rigor"] = self.rigor.value
 
         # Write config
         self._write_issue_config(config_file, config_data)
@@ -1075,14 +1032,7 @@ Read {current_spec_file} for initial requirements content.{template_instruction}
         if not spec_path.is_absolute():
             spec_path = spec_path.resolve()
         
-        return f"""Please use Read tool to read {spec_path}  and analyze current status.
-
-Based on the following conditions, determine which status code to return:
-
-- CAFE_READY_FOR_REVIEW: Requirements specification completed, all necessary information clarified, no pending questions
-- CAFE_NEED_CLARIFICATION: Specification still has issues that need user confirmation, or unclear details
-
-Please return only one status code (e.g., CAFE_READY_FOR_REVIEW), no other content."""
+        return f"""Please use Read tool to read {spec_path}  and analyze current status.\n\nBased on the following conditions, determine which status code to return:\n\n- CAFE_READY_FOR_REVIEW: Requirements specification completed, all necessary information clarified, no pending questions\n- CAFE_NEED_CLARIFICATION: Specification still has issues that need user confirmation, or unclear details\n\nPlease return only one status code (e.g., CAFE_READY_FOR_REVIEW), no other content."""
 
     def _detect_written_output_files(self) -> List[Path]:
         """Check if spec file was written before failure.

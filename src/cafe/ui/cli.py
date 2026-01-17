@@ -2087,7 +2087,7 @@ def spec(
         # Determine if should be interactive
         import sys
 
-        is_interactive = interactive and sys.stdin.isatty()
+        is_interactive = (interactive and sys.stdin.isatty()) or os.getenv("CAFE_FORCE_INTERACTIVE") == "1"
 
         # Validate auto mode constraints
         if auto and not is_interactive:
@@ -2413,7 +2413,7 @@ def plan(
                 if interactive:
                     # Interactive mode: prompt user to select 'auto' or a specific template
                     import sys
-                    is_interactive = sys.stdin.isatty()
+                    is_interactive = sys.stdin.isatty() or os.getenv("CAFE_FORCE_INTERACTIVE") == "1"
 
                     if is_interactive:
                         from cafe.ui.template_selector import select_template
@@ -2481,7 +2481,7 @@ def plan(
         # Determine if should be interactive
         import sys
 
-        is_interactive = interactive and sys.stdin.isatty()
+        is_interactive = (interactive and sys.stdin.isatty()) or os.getenv("CAFE_FORCE_INTERACTIVE") == "1"
 
         # Validate auto mode constraints
         if auto and not is_interactive:
