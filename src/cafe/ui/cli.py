@@ -2547,6 +2547,20 @@ def plan(
                 else:  # CAFE_READY_FOR_REVIEW
                     console.print("[yellow]📋 Plan ready for review[/yellow]")
 
+                # Display delta if not first iteration
+                if iteration_count > 1:
+                    plan_file = result.data.get("plan_file")
+                    if plan_file:
+                        current_file = Path(plan_file)
+                        # Calculate previous iteration path
+                        iteration_dir = current_file.parent
+                        phase_dir = iteration_dir.parent
+                        prev_iteration_num = iteration_count - 1
+                        previous_file = phase_dir / f"iteration_{prev_iteration_num:03d}" / "output.md"
+
+                        delta_display = DeltaDisplay()
+                        delta_display.display_delta(current_file, previous_file, console)
+
                 # Decide whether to continue
                 should_continue = False
                 if auto:
