@@ -482,6 +482,30 @@ def _execute_next_phase_auto(next_phase: str, issue_name: str) -> None:
         raise typer.Exit(1)
 
 
+def _display_iteration_delta(
+    iteration_count: int,
+    output_file: Optional[str],
+    console: Console,
+) -> None:
+    """Display delta between current and previous iteration output files.
+
+    Args:
+        iteration_count: Current iteration number
+        output_file: Path to current iteration output file (spec_file or plan_file)
+        console: Rich console for output
+    """
+    if iteration_count > 1 and output_file:
+        current_file = Path(output_file)
+        # Calculate previous iteration path
+        iteration_dir = current_file.parent
+        phase_dir = iteration_dir.parent
+        prev_iteration_num = iteration_count - 1
+        previous_file = phase_dir / f"iteration_{prev_iteration_num:03d}" / "output.md"
+
+        delta_display = DeltaDisplay()
+        delta_display.display_delta(current_file, previous_file, console)
+
+
 @app.command()
 def init() -> None:
     """Initialize CAFE configuration for the project.
@@ -2166,18 +2190,11 @@ def spec(
                     console.print("[yellow]📝 Draft ready for review[/yellow]")
 
                 # Display delta if not first iteration
-                if iteration_count > 1:
-                    spec_file = result.data.get("spec_file")
-                    if spec_file:
-                        current_file = Path(spec_file)
-                        # Calculate previous iteration path
-                        iteration_dir = current_file.parent
-                        phase_dir = iteration_dir.parent
-                        prev_iteration_num = iteration_count - 1
-                        previous_file = phase_dir / f"iteration_{prev_iteration_num:03d}" / "output.md"
-
-                        delta_display = DeltaDisplay()
-                        delta_display.display_delta(current_file, previous_file, console)
+                _display_iteration_delta(
+                    iteration_count,
+                    result.data.get("spec_file"),
+                    console,
+                )
 
                 # Decide whether to continue
                 should_continue = False
@@ -2548,18 +2565,11 @@ def plan(
                     console.print("[yellow]📋 Plan ready for review[/yellow]")
 
                 # Display delta if not first iteration
-                if iteration_count > 1:
-                    plan_file = result.data.get("plan_file")
-                    if plan_file:
-                        current_file = Path(plan_file)
-                        # Calculate previous iteration path
-                        iteration_dir = current_file.parent
-                        phase_dir = iteration_dir.parent
-                        prev_iteration_num = iteration_count - 1
-                        previous_file = phase_dir / f"iteration_{prev_iteration_num:03d}" / "output.md"
-
-                        delta_display = DeltaDisplay()
-                        delta_display.display_delta(current_file, previous_file, console)
+                _display_iteration_delta(
+                    iteration_count,
+                    result.data.get("plan_file"),
+                    console,
+                )
 
                 # Decide whether to continue
                 should_continue = False
