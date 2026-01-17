@@ -1,4 +1,4 @@
-"""Implementation plan phase."""
+"Implementation plan phase."
 
 import json
 import re
@@ -14,6 +14,7 @@ from cafe.core.types import PhaseProgress, PhaseResult, PhaseStatus
 from cafe.ui.display import Display
 from cafe.utils.git_utils import get_repo_root
 from cafe.utils.prompt_utils import format_checklist_instruction
+from cafe.utils.github import GitHubOps, GitHubError
 
 # Maximum number of planning iterations to prevent infinite loops
 MAX_PLANNING_ITERATIONS = 10
@@ -148,14 +149,14 @@ class PlanPhase(Phase):
                         )
 
                     templates = [name for name, _ in templates_with_source]
-                    console.print()
-                    console.print("[yellow]First iteration requires a template.[/yellow]")
+                    self.display.console.print()
+                    self.display.console.print("[yellow]First iteration requires a template.[/yellow]")
                     template_paths = {name: template_manager.get_template_path(name) for name in templates}
                     selected_template = select_template(templates, template_paths)
 
                     if selected_template:
                         self.template_path = str(template_manager.get_template_path(selected_template))
-                        console.print(f"[dim]Using template: {selected_template}[/dim]")
+                        self.display.console.print(f"[dim]Using template: {selected_template}[/dim]")
                     else:
                         return PhaseResult(
                             status=PhaseStatus.FAILED,
@@ -415,7 +416,7 @@ This is iteration {self.iteration} of implementation analysis.
 Analyze {spec_file_path} and plan implementation steps.
 
 **Output Format:**
-- **CAFE_NEED_CLARIFICATION**: Append "## Implementation Plan" and "## Questions to Confirm" sections
+- **CAFE_NEED_CLARIFICATION**: Append \"## Implementation Plan\" and \"## Questions to Confirm\" sections
 - **CAFE_READY_FOR_REVIEW**: Append complete implementation plan following template structure
 
 {status_code_prompt}
@@ -457,7 +458,7 @@ Continue analyzing the latest version of {spec_file_path}.
 {user_request_section}
 
 **Output Format:**
-- **CAFE_NEED_CLARIFICATION**: Update relevant sections and list questions in "## Questions to Confirm"
+- **CAFE_NEED_CLARIFICATION**: Update relevant sections and list questions in \"## Questions to Confirm\"
 - **CAFE_READY_FOR_REVIEW**: Update sections to meet user's requirements
 
 {status_code_prompt}
@@ -478,17 +479,8 @@ Continue analyzing the latest version of {spec_file_path}.
             return False
 
         content = plan_file.read_text()
-        # Check for development guide heading
-        patterns = [
-            r"##\s*Development\s+Guide",
-            r"##\s*[Dd]evelopment\s+[Gg]uide",
-        ]
-
-        for pattern in patterns:
-            if re.search(pattern, content, re.IGNORECASE):
-                return True
-
-        return False
+        # Check for development guide heading (case-insensitive)
+        return bool(re.search(r"##\s*Development\s+Guide", content, re.IGNORECASE))
 
     def _get_dev_guide_from_user(self) -> str:
         """Prompt user to provide development guide.
@@ -496,28 +488,28 @@ Continue analyzing the latest version of {spec_file_path}.
         Returns:
             Development guide content from user input
         """
-        print("\n" + "="*70)
-        print("📝 Development Guide")
-        print("="*70)
-        print()
-        print("Provide implementation direction and technical background:")
-        print("  • Technical solution/direction")
-        print("  • Related code locations")
-        print("  • Technical constraints or dependencies")
-        print("  • Key background information")
-        print()
+        self.display.console.print("\n" + "="*70)
+        self.display.console.print("📝 Development Guide")
+        self.display.console.print("="*70)
+        self.display.console.print()
+        self.display.console.print("Provide implementation direction and technical background:")
+        self.display.console.print("  • Technical solution/direction")
+        self.display.console.print("  • Related code locations")
+        self.display.console.print("  • Technical constraints or dependencies")
+        self.display.console.print("  • Key background information")
+        self.display.console.print()
 
         # Get development guide using prompt_multiline for better UX
         from cafe.ui.inquirer_prompts import prompt_multiline
         dev_guide = prompt_multiline("Please enter development guide (can be left empty)").strip()
 
         if dev_guide:
-            print()
-            print("✅ Development guide recorded, starting implementation planning...")
+            self.display.console.print()
+            self.display.console.print("✅ Development guide recorded, starting implementation planning...")
         else:
-            print()
-            print("ℹ️  No development guide provided, will start implementation planning directly...")
-        print()
+            self.display.console.print()
+            self.display.console.print("ℹ️  No development guide provided, will start implementation planning directly...")
+        self.display.console.print()
 
         return dev_guide
 
@@ -581,12 +573,20 @@ Continue analyzing the latest version of {spec_file_path}.
                     )
 
             # Process user choice (no longer distinguish interactive/non-interactive)
-            return self._process_review_decision(
+            result_or_input = self._process_review_decision(
                 choice,
                 prev_data,
                 "Implementation plan",
                 {"dev_agent": self.dev_agent},
             )
+            
+            # If user confirmed (returned PhaseResult with CONFIRMED status),
+            # sync plan to GitHub before returning
+            if isinstance(result_or_input, PhaseResult):
+                if result_or_input.data.get("status_code") == PhaseStatusCode.CONFIRMED.value:
+                    self._sync_plan_to_github()
+
+            return result_or_input
 
         elif prev_status == "CAFE_NEED_CLARIFICATION":
             return self._handle_need_clarification_input(prev_data, agent_display_name="Developer")
@@ -599,7 +599,7 @@ Continue analyzing the latest version of {spec_file_path}.
         prev_iteration = self.iteration - 1
         if prev_iteration > 0:
             prev_plan_file = self._get_versioned_file_path("plan", prev_iteration, self.phase_dir)
-            print(f"\n💾 Loading latest plan file: {prev_plan_file}\n")
+            self.display.console.print(f"\n💾 Loading latest plan file: {prev_plan_file}\n")
             plan_content = prev_plan_file.read_text() if prev_plan_file.exists() else "(File not generated)"
         else:
             plan_content = "(File not generated)"
@@ -607,11 +607,11 @@ Continue analyzing the latest version of {spec_file_path}.
         # Get agent CLI info for display
         agent_cli = self.agent_manager.get_agent_config(self.dev_agent).cli.value
 
-        print(f"\n{'='*60}")
-        print(f"Dev ({self.dev_agent} by {agent_cli}) - Current Plan Content (Iteration {self.iteration - 1}):")
-        print(f"{'='*60}")
-        print(plan_content)
-        print(f"{'='*60}\n")
+        self.display.console.print(f"\n{'='*60}")
+        self.display.console.print(f"Dev ({self.dev_agent} by {agent_cli}) - Current Plan Content (Iteration {self.iteration - 1}):")
+        self.display.console.print(f"{'='*60}")
+        self.display.console.print(plan_content)
+        self.display.console.print(f"{'='*60}\n")
 
     def _get_status_analysis_prompt(self) -> str:
         """Get prompt for analyzing status code.
@@ -638,12 +638,12 @@ Please only return one status code (e.g., CAFE_READY_FOR_REVIEW) without any oth
         return [Path(plan_file)] if Path(plan_file).exists() else []
 
     def _load_plan_config(self) -> None:
-        """Load plan configuration (template) from config.yaml if exists."""
+        """Load plan configuration (template) from issue.yaml if exists."""
         # If template_path is already explicitly provided, don't override it
         if self.template_path:
             return
 
-        # Path: .cafe/issues/{issue_name}/config.yaml
+        # Path: .cafe/issues/{issue_name}/issue.yaml
         config_file = self.issue_dir / "issue.yaml"
 
         config_data = self._read_issue_config(config_file)
@@ -666,4 +666,57 @@ Please only return one status code (e.g., CAFE_READY_FOR_REVIEW) without any oth
                         self.template_path = str(template_path)
                         self.template_mode = "manual"
 
+    def _sync_plan_to_github(self) -> None:
+        """Sync confirmed plan to GitHub issue as a comment.
 
+        Only syncs when:
+        1. An associated GitHub issue ID exists in issue.yaml
+        2. User has confirmed the plan (CAFE_CONFIRMED status)
+        """
+        # Path: .cafe/issues/{issue_name}/issue.yaml
+        config_file = self.issue_dir / "issue.yaml"
+        
+        # Try to get issue_id from top level first, then from spec section
+        issue_id = self._get_issue_config_value(config_file, "issue_id")
+        if not issue_id:
+            issue_id = self._get_issue_config_value(config_file, "spec.issue_id")
+            
+        if not issue_id:
+            return
+
+        try:
+            # Get latest plan file content
+            # If self.plan_file is set, use it; otherwise find the latest versioned file
+            plan_path = None
+            if hasattr(self, 'plan_file') and self.plan_file and self.plan_file.exists():
+                plan_path = self.plan_file
+            else:
+                plan_path = self._get_latest_versioned_file("plan", self.phase_dir)
+                
+            if not plan_path or not plan_path.exists():
+                return
+
+            plan_content = plan_path.read_text(encoding="utf-8")
+            
+            # Format comment body
+            comment_body = f"### 📝 Implementation Plan (Confirmed)\n\n{plan_content}"
+
+            # Post comment to GitHub issue
+            gh_ops = GitHubOps()
+            if not gh_ops.check_gh_installed():
+                return
+                
+            if not gh_ops.check_gh_auth():
+                self.display.console.print(f"[yellow]Warning: gh CLI not authenticated, skipping plan sync to GitHub issue #{issue_id}[/yellow]")
+                return
+
+            self.display.console.print(f"Syncing plan to GitHub issue #{issue_id}...")
+            gh_ops.add_issue_comment(str(issue_id), comment_body)
+            self.display.console.print(f"[green]✅ Plan synced to GitHub issue #{issue_id} as a comment.[/green]")
+
+        except GitHubError as e:
+            # Log error but don't fail the phase
+            self.display.console.print(f"[yellow]Warning: Failed to sync plan to GitHub: {e}[/yellow]")
+        except Exception as e:
+            # Log unexpected errors but don't fail
+            self.display.console.print(f"[yellow]Warning: Unexpected error during GitHub sync: {e}[/yellow]")
