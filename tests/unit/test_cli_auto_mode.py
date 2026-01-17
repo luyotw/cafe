@@ -123,6 +123,9 @@ class TestAutoModeConfigPreservation:
             final_config = yaml.safe_load(f)
         assert "worktree_path" in final_config
         assert final_config["worktree_path"] == "/some/worktree/path"
+        assert final_config["base_branch"] == "main"
+        assert final_config["feature_branch"] == "test-issue"
+        assert final_config["auto"]["max_review_iterations"] == 5
         assert final_config["spec"]["rigor"] == "medium"
 
     def test_plan_phase_preserves_issue_config(self, temp_repo_dir, mock_git_ops, prepared_issue, force_interactive):

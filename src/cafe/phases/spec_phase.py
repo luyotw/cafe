@@ -558,13 +558,13 @@ class SpecPhase(Phase):
                 "Specification",
                 {"pm_agent": self.pm_agent},
             )
-            
+
             # If user confirmed (returned PhaseResult with CONFIRMED status),
             # sync spec to GitHub before returning
             if isinstance(result_or_input, PhaseResult):
                 if result_or_input.data.get("status_code") == PhaseStatusCode.CONFIRMED.value:
                     self._sync_confirmed_spec_to_github()
-            
+
             return result_or_input
 
         elif prev_status == "CAFE_NEED_CLARIFICATION":
@@ -636,8 +636,8 @@ class SpecPhase(Phase):
             # Override user_input with fetched content
             self.user_input = fetched_content
 
-            # Store issue_id for later comment posting
-            self._fetched_issue_id = str(issue_id)
+            # Store issue_id for sync
+            self._config_issue_id = int(issue_id)
 
             # Save issue config
             self._save_issue_config()
@@ -775,26 +775,33 @@ class SpecPhase(Phase):
         """Sync confirmed spec to GitHub issue description.
 
         Only syncs when:
-        1. Spec was fetched from GitHub (has _fetched_issue_id)
+        1. Spec was loaded from GitHub issue (has _config_issue_id)
         2. User has confirmed the spec (CAFE_CONFIRMED status)
         """
-        if not hasattr(self, '_fetched_issue_id'):
+        if not self._config_issue_id:
             return
 
         try:
-            spec_path = Path(self.spec_file)
-            if not spec_path.exists():
+            # Get latest versioned spec file (the confirmed spec)
+            latest_spec_path = self._get_latest_versioned_file("spec", self.phase_dir)
+            if not latest_spec_path:
                 return
 
-            spec_content = spec_path.read_text(encoding="utf-8")
+            spec_content = latest_spec_path.read_text(encoding="utf-8")
 
             # Update GitHub issue description with confirmed spec
+            print(f"\n📤 Syncing confirmed spec to GitHub issue #{self._config_issue_id}...")
             gh_ops = GitHubOps()
-            gh_ops.update_issue(self._fetched_issue_id, body=spec_content)
+            gh_ops.update_issue(str(self._config_issue_id), body=spec_content)
+            print(f"✅ Successfully synced spec to GitHub issue #{self._config_issue_id}")
 
         except GitHubError as e:
             # Log error but don't fail the phase
-            self.display.console.print(f"Warning: Failed to update GitHub issue description: {e}")
+<<<<<<< HEAD
+            self.display.console.print(f"⚠️  Warning: Failed to sync spec to GitHub issue #{self._config_issue_id}: {e}")
+=======
+            print(f"⚠️  Warning: Failed to sync spec to GitHub issue #{self._config_issue_id}: {e}")
+>>>>>>> refs/rewritten/develop
 
     def _create_github_issue(self, content: str) -> str:
         """Create a new GitHub issue with requirements.
@@ -967,7 +974,7 @@ class SpecPhase(Phase):
 
         config_data = self._read_issue_config(config_file)
         if config_data:
-            # Load from spec section if exists
+            # Load from spec section
             spec_config = config_data.get("spec", {})
 
             # Load input_method and issue_id from spec section
@@ -998,13 +1005,14 @@ class SpecPhase(Phase):
         # Prepare new config data
         config_data = {**existing_config}
 
-        # Initialize spec section if not exists
+        # Ensure spec section exists
         if "spec" not in config_data:
             config_data["spec"] = {}
 
-        # Add issue_id if available
-        if hasattr(self, '_fetched_issue_id'):
-            config_data["spec"]["issue_id"] = self._fetched_issue_id
+        # Save issue_id if available
+        if self._config_issue_id:
+            config_data["spec"]["issue_id"] = self._config_issue_id
+            config_data["spec"]["input_method"] = "github"
 
         # Always save rigor (even if it's the default) so subsequent iterations use the same value
         config_data["spec"]["rigor"] = self.rigor.value
