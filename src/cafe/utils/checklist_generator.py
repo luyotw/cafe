@@ -104,23 +104,30 @@ def generate_plan_checklist(
     basic_principles: Optional[str] = None,
     template_file: Optional[str] = None,
     template_mode: str = "auto",
+    iteration: int = 1,
+    prev_plan_file: Optional[str] = None,
 ) -> None:
     """Generate checklist file for plan phase.
 
     Args:
         agent_name: Developer agent name
-        plan_file_path: Path to plan file
+        plan_file_path: Path to current iteration plan file
         spec_file_path: Path to spec file
         checklist_file_path: Path where checklist file should be created
         basic_principles: Basic principles text in "- item" format (optional)
         template_file: Path to plan template file (optional)
         template_mode: Template selection mode ('auto' or 'manual', default: 'auto')
+        iteration: Current iteration number (default: 1)
+        prev_plan_file: Path to previous iteration plan file (for iteration > 1)
     """
     # Get agent file path
     agent_file = AgentManager.get_agent_file_path(agent_name, "developer")
 
-    # Get templates
-    execution_steps = checklist_templates.PLAN_EXECUTION_STEPS
+    # Get templates based on iteration
+    if iteration == 1:
+        execution_steps = checklist_templates.PLAN_EXECUTION_STEPS_ITERATION_1
+    else:
+        execution_steps = checklist_templates.PLAN_EXECUTION_STEPS_ITERATION_N
 
     # Add template instruction
     template_instruction = ""
@@ -159,6 +166,11 @@ def generate_plan_checklist(
         "plan_file_path": plan_file_path,
         "spec_file_path": spec_file_path,
     }
+
+    # For iteration > 1, add prev_plan_file and current_plan_file
+    if iteration > 1:
+        placeholders["prev_plan_file"] = prev_plan_file if prev_plan_file else plan_file_path
+        placeholders["current_plan_file"] = plan_file_path
 
     # Resolve placeholders
     checklist_content = resolve_checklist_placeholders(checklist_content, placeholders)

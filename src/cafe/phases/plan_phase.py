@@ -211,6 +211,13 @@ class PlanPhase(Phase):
                     template_file = str(self.template_path)
 
             checklist_path = self._get_iteration_dir(self.iteration) / "checklist.md"
+
+            # Get previous plan file for iteration > 1
+            prev_plan_file = None
+            if self.iteration > 1:
+                prev_iteration_num = self.iteration - 1
+                prev_plan_file = str(self._get_versioned_file_path("plan", prev_iteration_num, self.phase_dir))
+
             generate_plan_checklist(
                 agent_name=self.dev_agent,
                 plan_file_path=str(self.plan_file),
@@ -219,6 +226,8 @@ class PlanPhase(Phase):
                 basic_principles=basic_principles,
                 template_file=template_file,
                 template_mode=self.template_mode,
+                iteration=self.iteration,
+                prev_plan_file=prev_plan_file,
             )
 
             # Prepare user_input for this iteration

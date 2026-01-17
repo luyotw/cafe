@@ -42,13 +42,27 @@ SPEC_IMPORTANT_NOTES_ITERATION_4_PLUS = """[ ] Round {iteration}: Only clarify e
 
 # Plan Phase Checklists
 
-PLAN_EXECUTION_STEPS = """## Checklist
+PLAN_EXECUTION_STEPS_ITERATION_1 = """## Checklist
 
 [ ] Read {agent_file} to understand your role and native language
 [ ] Read the development guide in {plan_file_path}
 [ ] Read the requirements document {spec_file_path}
 [ ] Plan implementation steps (planning, not implementation)
 [ ] Append plan after "## Development Guide" section
+[ ] Keep "## Development Guide" section unchanged
+[ ] Write content in your native language
+[ ] Confirm: Only wrote plans and steps, NO actual code
+[ ] Confirm: No code was modified
+[ ] Return appropriate status code
+"""
+
+PLAN_EXECUTION_STEPS_ITERATION_N = """## Checklist
+
+[ ] Read {agent_file} to understand your role and native language
+[ ] Read {prev_plan_file} to review previous plan
+[ ] Review user's feedback (provided below)
+[ ] Integrate feedback and update the plan
+[ ] Write updated plan to {current_plan_file} (NOT in your response)
 [ ] Keep "## Development Guide" section unchanged
 [ ] Write content in your native language
 [ ] Confirm: Only wrote plans and steps, NO actual code
