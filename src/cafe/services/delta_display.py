@@ -82,15 +82,24 @@ class DeltaDisplay:
             console.print()
             return
 
+        # Check if diff is too large (more than 1000 lines)
+        max_lines = 1000
+        is_truncated = len(diff_data) > max_lines
+
         # Display header
         console.print()
         console.print("[bold cyan]📊 Changes from previous iteration:[/bold cyan]")
+        if is_truncated:
+            console.print(
+                f"[yellow]⚠️  Output truncated to {max_lines} lines (total: {len(diff_data)} lines)[/yellow]"
+            )
         console.print("[dim]" + "─" * 60 + "[/dim]")
         console.print()
 
-        # Build styled text
+        # Build styled text (truncate if necessary)
         text = Text()
-        for operation, old_line, new_line in diff_data:
+        display_data = diff_data[:max_lines] if is_truncated else diff_data
+        for operation, old_line, new_line in display_data:
             if operation == "equal":
                 # Unchanged line - no special styling
                 text.append(new_line if new_line else "")
@@ -104,6 +113,10 @@ class DeltaDisplay:
         console.print(text)
         console.print()
         console.print("[dim]" + "─" * 60 + "[/dim]")
+        if is_truncated:
+            console.print(
+                f"[yellow]⚠️  {len(diff_data) - max_lines} lines omitted[/yellow]"
+            )
         console.print()
 
     def display_delta(
