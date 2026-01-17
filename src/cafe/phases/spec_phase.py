@@ -533,6 +533,10 @@ class SpecPhase(Phase):
         if prev_status == "CAFE_READY_FOR_REVIEW":
             # Need user choice: confirm/modify
             if self.interactive:
+                # Display delta from previous iteration before asking for decision
+                if self.iteration > 1:
+                    self._display_iteration_delta()
+
                 choice = self._ask_user_for_review_decision("Requirements specification", agent_name="PM")
             else:
                 choice = self.user_input
@@ -590,6 +594,20 @@ class SpecPhase(Phase):
         self.display.console.print(f"{'='*60}")
         self.display.console.print(spec_content)
         self.display.console.print(f"{'='*60}\n")
+
+    def _display_iteration_delta(self) -> None:
+        """Display changes from previous iteration."""
+        from cafe.ui.cli import _display_iteration_delta
+
+        # Get previous iteration's file path (which is the current READY_FOR_REVIEW version)
+        prev_iteration = self.iteration - 1
+        prev_spec_file = self._get_versioned_file_path("spec", prev_iteration, self.phase_dir)
+
+        _display_iteration_delta(
+            prev_iteration,
+            str(prev_spec_file),
+            self.display.console,
+        )
 
     def _prompt_for_rigor(self) -> None:
         """Prompt user to select rigor level if not already set."""

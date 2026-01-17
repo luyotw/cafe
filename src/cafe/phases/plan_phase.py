@@ -554,6 +554,10 @@ Continue analyzing the latest version of {spec_file_path}.
         if prev_status == "CAFE_READY_FOR_REVIEW":
             # Need user choice: confirm/modify
             if self.interactive:
+                # Display delta from previous iteration before asking for decision
+                if self.iteration > 1:
+                    self._display_iteration_delta()
+
                 choice = self._ask_user_for_review_decision("Implementation Plan", agent_name=self.dev_agent)
             else:
                 choice = self.user_input
@@ -612,6 +616,20 @@ Continue analyzing the latest version of {spec_file_path}.
         self.display.console.print(f"{'='*60}")
         self.display.console.print(plan_content)
         self.display.console.print(f"{'='*60}\n")
+
+    def _display_iteration_delta(self) -> None:
+        """Display changes from previous iteration."""
+        from cafe.ui.cli import _display_iteration_delta
+
+        # Get previous iteration's file path (which is the current READY_FOR_REVIEW version)
+        prev_iteration = self.iteration - 1
+        prev_plan_file = self._get_versioned_file_path("plan", prev_iteration, self.phase_dir)
+
+        _display_iteration_delta(
+            prev_iteration,
+            str(prev_plan_file),
+            self.display.console,
+        )
 
     def _get_status_analysis_prompt(self) -> str:
         """Get prompt for analyzing status code.
