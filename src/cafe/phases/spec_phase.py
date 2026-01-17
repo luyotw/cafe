@@ -797,11 +797,7 @@ class SpecPhase(Phase):
 
         except GitHubError as e:
             # Log error but don't fail the phase
-<<<<<<< HEAD
             self.display.console.print(f"⚠️  Warning: Failed to sync spec to GitHub issue #{self._config_issue_id}: {e}")
-=======
-            print(f"⚠️  Warning: Failed to sync spec to GitHub issue #{self._config_issue_id}: {e}")
->>>>>>> refs/rewritten/develop
 
     def _create_github_issue(self, content: str) -> str:
         """Create a new GitHub issue with requirements.
