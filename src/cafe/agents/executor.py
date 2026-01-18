@@ -358,8 +358,31 @@ class AgentExecutor:
                 # Other error, re-raise
                 raise
 
+    # CLI-specific rate limit error patterns
+    RATE_LIMIT_PATTERNS = {
+        "claude": [
+            "limit reached",
+        ],
+        "gemini": [
+            "exhausted your capacity",
+            "code: 429",
+            "quota will reset",
+        ],
+        "copilot": [
+            "rate limit",
+            "status 429",
+        ],
+        "cursor-agent": [
+            "rate limit",
+            "status 429",
+        ],
+    }
+
     def _is_rate_limit_error(self, error_text: str) -> bool:
         """Check if error message indicates a rate limit error.
+
+        This method checks for CLI-specific rate limit error patterns.
+        Each CLI may have different error message formats.
 
         Args:
             error_text: Error message text
@@ -368,12 +391,23 @@ class AgentExecutor:
             True if it's a rate limit error
         """
         error_lower = error_text.lower()
-        return (
-            "limit reached" in error_lower or
-            "ratelimitexceeded" in error_lower or
-            "resource_exhausted" in error_lower or
-            "status 429" in error_lower
-        )
+
+        # Check all CLI-specific patterns
+        for cli_name, patterns in self.RATE_LIMIT_PATTERNS.items():
+            for pattern in patterns:
+                if pattern.lower() in error_lower:
+                    return True
+
+        # Generic fallback patterns
+        generic_patterns = [
+            "resource_exhausted",
+            "ratelimitexceeded",
+        ]
+        for pattern in generic_patterns:
+            if pattern.lower() in error_lower:
+                return True
+
+        return False
 
     def _is_usage_summary_only(self, stderr_text: str) -> bool:
         """Check if stderr only contains usage summary (not a real error).
