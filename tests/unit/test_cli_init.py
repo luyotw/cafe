@@ -27,7 +27,7 @@ class TestInitCommandEnvironmentChecks:
         monkeypatch.chdir(tmp_path)
 
         # Mock prompt_confirm to return False (user cancels)
-        with patch("cafe.ui.inquirer_prompts.prompt_confirm") as mock_confirm:
+        with patch("cafe.ui.cli.prompt_confirm") as mock_confirm:
             mock_confirm.return_value = False
 
             result = runner.invoke(app, ["init"])
@@ -64,12 +64,14 @@ class TestInitCommandEnvironmentChecks:
         monkeypatch.chdir(tmp_path)
 
         # Mock prompts
-        with patch("cafe.ui.inquirer_prompts.prompt_confirm") as mock_confirm, \
-             patch("cafe.ui.cli.prompt_list") as mock_prompt_list, \
-             patch("cafe.ui.cli.prompt_text") as mock_prompt_text:
+        with (
+            patch("cafe.ui.cli.prompt_confirm") as mock_confirm,
+            patch("cafe.ui.cli.prompt_list") as mock_prompt_list,
+            patch("cafe.ui.cli.prompt_text") as mock_prompt_text
+        ):
 
-            # User confirms overwrite
-            mock_confirm.return_value = True
+            # User confirms overwrite (True), then declines phase config for 3 roles (False, False, False)
+            mock_confirm.side_effect = [True, False, False, False]
 
             # Setup agent selection
             mock_prompt_list.side_effect = [
@@ -135,10 +137,13 @@ class TestInitCommandInteractiveFlow:
 
         monkeypatch.chdir(tmp_path)
 
-        # 模擬 prompt_list and prompt_text 方法
-        with patch("cafe.ui.cli.prompt_list") as mock_prompt_list, patch(
-            "cafe.ui.cli.prompt_text"
-        ) as mock_prompt_text:
+        # 模擬 prompt_list, prompt_text, prompt_confirm 方法
+        with (
+            patch("cafe.ui.cli.prompt_list") as mock_prompt_list,
+            patch("cafe.ui.cli.prompt_text") as mock_prompt_text,
+            patch("cafe.ui.cli.prompt_confirm") as mock_prompt_confirm
+        ):
+            
             # 設定 prompt_list 返回值（CLI and agent 選擇）
             mock_prompt_list.side_effect = [
                 "claude",  # PM CLI
@@ -151,6 +156,9 @@ class TestInitCommandInteractiveFlow:
 
             # 設定 prompt_text 返回值（model 輸入）
             mock_prompt_text.side_effect = ["", "sonnet", ""]
+            
+            # 設定 prompt_confirm 返回值（phase config 確認 -> 全部否）
+            mock_prompt_confirm.return_value = False
 
             _result = runner.invoke(app, ["init"])
 
@@ -158,6 +166,8 @@ class TestInitCommandInteractiveFlow:
         assert mock_prompt_list.call_count == 6
         # 驗證 prompt_text 被呼叫 3 次（3 個角色 × 1: model）
         assert mock_prompt_text.call_count == 3
+        # 驗證 prompt_confirm 被呼叫 3 次（3 個角色 × 1: phase config）
+        assert mock_prompt_confirm.call_count == 3
 
     @patch("cafe.ui.cli.shutil.which")
     @patch("cafe.ui.cli.init_helpers.copy_data_directory")
@@ -241,10 +251,13 @@ class TestInitCommandConfigSaving:
 
         monkeypatch.chdir(tmp_path)
 
-        # 模擬 prompt_list and prompt_text 方法
-        with patch("cafe.ui.cli.prompt_list") as mock_prompt_list, patch(
-            "cafe.ui.cli.prompt_text"
-        ) as mock_prompt_text:
+        # 模擬 prompt_list, prompt_text, prompt_confirm 方法
+        with (
+            patch("cafe.ui.cli.prompt_list") as mock_prompt_list,
+            patch("cafe.ui.cli.prompt_text") as mock_prompt_text,
+            patch("cafe.ui.cli.prompt_confirm") as mock_prompt_confirm
+        ):
+            
             # 設定 prompt_list 返回值（CLI and agent 選擇）
             mock_prompt_list.side_effect = [
                 "copilot",  # PM CLI
@@ -257,6 +270,9 @@ class TestInitCommandConfigSaving:
 
             # 設定 prompt_text 返回值（model 輸入）
             mock_prompt_text.side_effect = ["", "sonnet", ""]
+            
+            # 設定 prompt_confirm 返回值（phase config 確認 -> 全部否）
+            mock_prompt_confirm.return_value = False
 
             _result = runner.invoke(app, ["init"])
 
@@ -298,10 +314,13 @@ class TestInitCommandConfigSaving:
 
         monkeypatch.chdir(tmp_path)
 
-        # 模擬 prompt_list and prompt_text 方法
-        with patch("cafe.ui.cli.prompt_list") as mock_prompt_list, patch(
-            "cafe.ui.cli.prompt_text"
-        ) as mock_prompt_text:
+        # 模擬 prompt_list, prompt_text, prompt_confirm 方法
+        with (
+            patch("cafe.ui.cli.prompt_list") as mock_prompt_list,
+            patch("cafe.ui.cli.prompt_text") as mock_prompt_text,
+            patch("cafe.ui.cli.prompt_confirm") as mock_prompt_confirm
+        ):
+            
             # 每個角色都選擇相同設定
             mock_prompt_list.side_effect = [
                 "claude",
@@ -312,6 +331,9 @@ class TestInitCommandConfigSaving:
                 "Roger: PM agent (system default)",
             ]
             mock_prompt_text.side_effect = ["", "", ""]
+            
+            # 設定 prompt_confirm 返回值（phase config 確認 -> 全部否）
+            mock_prompt_confirm.return_value = False
 
             result = runner.invoke(app, ["init"])
 
@@ -342,10 +364,13 @@ class TestInitCommandConfigSaving:
 
         monkeypatch.chdir(tmp_path)
 
-        # 模擬 prompt_list and prompt_text 方法（model 輸入為空）
-        with patch("cafe.ui.cli.prompt_list") as mock_prompt_list, patch(
-            "cafe.ui.cli.prompt_text"
-        ) as mock_prompt_text:
+        # 模擬 prompt_list, prompt_text, prompt_confirm 方法（model 輸入為空）
+        with (
+            patch("cafe.ui.cli.prompt_list") as mock_prompt_list,
+            patch("cafe.ui.cli.prompt_text") as mock_prompt_text,
+            patch("cafe.ui.cli.prompt_confirm") as mock_prompt_confirm
+        ):
+            
             mock_prompt_list.side_effect = [
                 "claude",
                 "Roger: PM agent (system default)",
@@ -355,6 +380,9 @@ class TestInitCommandConfigSaving:
                 "Roger: PM agent (system default)",
             ]
             mock_prompt_text.side_effect = ["", "", ""]  # empty models
+            
+            # 設定 prompt_confirm 返回值（phase config 確認 -> 全部否）
+            mock_prompt_confirm.return_value = False
 
             result = runner.invoke(app, ["init"])
 

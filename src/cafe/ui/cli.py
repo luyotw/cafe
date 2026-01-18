@@ -188,12 +188,17 @@ def _get_and_validate_branch(ctx: typer.Context, phase_name: str) -> str:
         raise typer.Exit(1)
 
 
-def _setup_agents(config_manager: ConfigManager, issue_name: Optional[str] = None) -> AgentManager:
+def _setup_agents(
+    config_manager: ConfigManager,
+    issue_name: Optional[str] = None,
+    phase_name: Optional[str] = None,
+) -> AgentManager:
     """Setup agent manager with default agents.
 
     Args:
         config_manager: Configuration manager
         issue_name: Issue name for issue-specific sessions
+        phase_name: Current phase name for phase-specific model resolution
 
     Returns:
         Configured agent manager
@@ -223,26 +228,39 @@ def _setup_agents(config_manager: ConfigManager, issue_name: Optional[str] = Non
         },
     )
 
+    # Helper to resolve model
+    def resolve_model(config: dict, phase: Optional[str]) -> Optional[str]:
+        model = None
+        if phase and phase in config:
+            phase_config = config[phase]
+            if isinstance(phase_config, dict):
+                model = phase_config.get("model")
+
+        if model is None:
+            model = config.get("model")
+
+        return model
+
     # Register agents
     agent_manager.register_agent(
         AgentConfig(
             name=pm_config["name"],
             cli=AgentCLI(pm_config["cli"]),
-            model=pm_config.get("model"),
+            model=resolve_model(pm_config, phase_name),
         )
     )
     agent_manager.register_agent(
         AgentConfig(
             name=dev_config["name"],
             cli=AgentCLI(dev_config["cli"]),
-            model=dev_config.get("model"),
+            model=resolve_model(dev_config, phase_name),
         )
     )
     agent_manager.register_agent(
         AgentConfig(
             name=reviewer_config["name"],
             cli=AgentCLI(reviewer_config["cli"]),
-            model=reviewer_config.get("model"),
+            model=resolve_model(reviewer_config, phase_name),
         )
     )
 
@@ -522,7 +540,6 @@ def init() -> None:
             console.print()
 
             # Ask user if they want to overwrite
-            from cafe.ui.inquirer_prompts import prompt_confirm
             overwrite = prompt_confirm(
                 message="Do you want to overwrite the existing configuration?",
                 default=False
@@ -618,6 +635,32 @@ def init() -> None:
 
             if model_name:
                 config["agents"][role_key]["model"] = model_name
+
+            # Configure phase-specific models
+            role_phases = {
+                "pm": ["spec"],
+                "developer": ["plan", "develop", "pr"],
+                "reviewer": ["review"],
+            }
+            phases = role_phases.get(role_key, [])
+            
+            if phases:
+                configure_phases = prompt_confirm(
+                    message=f"Configure phase-specific models for {role_display} ({', '.join(phases)})?",
+                    default=False,
+                )
+                
+                if configure_phases:
+                    for phase in phases:
+                        default_model_display = model_name or "default"
+                        phase_model = prompt_text(
+                            message=f"Enter model for {phase} phase (default: {default_model_display}):",
+                            default="",
+                        )
+                        if phase_model and phase_model.strip():
+                            if phase not in config["agents"][role_key]:
+                                config["agents"][role_key][phase] = {}
+                            config["agents"][role_key][phase]["model"] = phase_model.strip()
 
             console.print("")
 
@@ -2078,7 +2121,7 @@ def spec(
             str(Path(config_file).parent) if config_file != ".cafe/config.yaml" else ".cafe"
         )
         config_manager = ConfigManager(config_dir)
-        agent_manager = _setup_agents(config_manager, issue_name=issue_name)
+        agent_manager = _setup_agents(config_manager, issue_name=issue_name, phase_name="spec")
         permission_handler = PermissionHandler()
         git_ops = GitOperations()
 
@@ -2385,7 +2428,7 @@ def plan(
             str(Path(config_file).parent) if config_file != ".cafe/config.yaml" else ".cafe"
         )
         config_manager = ConfigManager(config_dir)
-        agent_manager = _setup_agents(config_manager, issue_name=issue_name)
+        agent_manager = _setup_agents(config_manager, issue_name=issue_name, phase_name="plan")
         permission_handler = PermissionHandler()
         git_ops = GitOperations()
 
@@ -2740,7 +2783,7 @@ def develop(
             str(Path(config_file).parent) if config_file != ".cafe/config.yaml" else ".cafe"
         )
         config_manager = ConfigManager(config_dir)
-        agent_manager = _setup_agents(config_manager, issue_name=issue_name)
+        agent_manager = _setup_agents(config_manager, issue_name=issue_name, phase_name="develop")
         permission_handler = PermissionHandler()
         git_ops = GitOperations()
 
@@ -2972,7 +3015,7 @@ def review(
             str(Path(config_file).parent) if config_file != ".cafe/config.yaml" else ".cafe"
         )
         config_manager = ConfigManager(config_dir)
-        agent_manager = _setup_agents(config_manager, issue_name=issue_name)
+        agent_manager = _setup_agents(config_manager, issue_name=issue_name, phase_name="review")
         permission_handler = PermissionHandler()
         git_ops = GitOperations()
 
@@ -3197,7 +3240,7 @@ def pr(
             str(Path(config_file).parent) if config_file != ".cafe/config.yaml" else ".cafe"
         )
         config_manager = ConfigManager(config_dir)
-        agent_manager = _setup_agents(config_manager, issue_name=issue_name)
+        agent_manager = _setup_agents(config_manager, issue_name=issue_name, phase_name="pr")
         permission_handler = PermissionHandler()
         git_ops = GitOperations()
 
