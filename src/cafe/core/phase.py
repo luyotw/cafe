@@ -1154,6 +1154,11 @@ class Phase(ABC):
         if not prev_data:
             return ([], "")
 
+        # Only handle permission denials if previous status was CAFE_NEED_PERMISSION
+        prev_status = prev_data.get("status_code", "")
+        if prev_status != "CAFE_NEED_PERMISSION":
+            return ([], "")
+
         # Check if there are permission_denials
         permission_denials_data = prev_data.get("permission_denials", [])
         if not permission_denials_data:
