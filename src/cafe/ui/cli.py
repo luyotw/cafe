@@ -653,7 +653,6 @@ def init() -> None:
             }
 
             # Prompt for phase-specific models with recommendations
-            first_phase_model = None
             if phases:
                 for phase in phases:
                     recommendation = phase_recommendations.get(phase, "")
@@ -666,13 +665,6 @@ def init() -> None:
                         if phase not in config["agents"][role_key]:
                             config["agents"][role_key][phase] = {}
                         config["agents"][role_key][phase]["model"] = phase_model.strip()
-                        # Store first phase model for role-level fallback
-                        if first_phase_model is None:
-                            first_phase_model = phase_model.strip()
-
-            # Store role-level model for fallback chain (use first phase model if provided)
-            if first_phase_model:
-                config["agents"][role_key]["model"] = first_phase_model
 
             console.print("")
 
@@ -682,12 +674,29 @@ def init() -> None:
         # 6. Display success message
         console.print("[bold green]Configuration saved successfully![/bold green]\n")
 
+        role_phases = {
+            "pm": ["spec"],
+            "developer": ["plan", "develop", "pr"],
+            "reviewer": ["review"],
+        }
+
         for role_key, role_display in roles:
             role_config = config["agents"][role_key]
-            model_display = role_config.get("model") or "default"
+            phases = role_phases.get(role_key, [])
+
+            # Build phase models display
+            phase_models = []
+            for phase in phases:
+                if phase in role_config and "model" in role_config[phase]:
+                    phase_models.append(f"{phase}: {role_config[phase]['model']}")
+                else:
+                    phase_models.append(f"{phase}: default")
+
+            models_display = ", ".join(phase_models) if phase_models else "default"
+
             console.print(
                 f"- {role_display}: {role_config['cli']} "
-                f"(model: {model_display}) (agent: {role_config['name']})"
+                f"(models: {models_display}) (agent: {role_config['name']})"
             )
 
         console.print("\n[cyan]You can now use `cafe prepare` to start a new development task.[/cyan]")

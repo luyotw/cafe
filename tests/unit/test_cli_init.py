@@ -310,7 +310,8 @@ class TestInitCommandConfigSaving:
         assert config["agents"]["pm"]["cli"] == "copilot"
         assert config["agents"]["developer"]["name"] == "David"
         assert config["agents"]["developer"]["cli"] == "claude"
-        assert config["agents"]["developer"]["model"] == "sonnet"
+        # Verify phase-specific models are stored (not role-level)
+        assert config["agents"]["developer"]["plan"]["model"] == "sonnet"
         assert config["agents"]["reviewer"]["name"] == "Richard"
         assert config["agents"]["reviewer"]["cli"] == "gemini"
 

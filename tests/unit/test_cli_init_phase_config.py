@@ -71,7 +71,8 @@ def test_init_prompts_for_phase_specific_models(mock_dependencies):
 
         # Verify developer config
         dev_config = mock_config["agents"]["developer"]
-        assert dev_config["model"] == "plan-model"  # Role-level set to first phase model
+        # No role-level model should be stored
+        assert "model" not in dev_config
         assert dev_config["plan"]["model"] == "plan-model"
         # develop and pr should not be in config when empty string is provided
         assert "develop" not in dev_config
@@ -80,15 +81,15 @@ def test_init_prompts_for_phase_specific_models(mock_dependencies):
         # Verify PM and Reviewer configs
         pm_config = mock_config["agents"]["pm"]
         reviewer_config = mock_config["agents"]["reviewer"]
-        # PM and Reviewer should NOT have role-level model when empty string provided
+        # PM and Reviewer should NOT have role-level model
         assert "model" not in pm_config
         assert "model" not in reviewer_config
         # spec and review should not be in config when empty string is provided
         assert "spec" not in pm_config
         assert "review" not in reviewer_config
 
-def test_init_with_pm_reviewer_models_creates_fallback_chain(mock_dependencies):
-    """Test that PM and Reviewer get both role-level and phase-specific models for fallback."""
+def test_init_with_pm_reviewer_models_stores_only_phase_specific(mock_dependencies):
+    """Test that all roles store only phase-specific models without role-level."""
 
     with patch("cafe.ui.cli.prompt_list") as mock_prompt_list, \
          patch("cafe.ui.cli.prompt_text") as mock_prompt_text, \
@@ -106,7 +107,7 @@ def test_init_with_pm_reviewer_models_creates_fallback_chain(mock_dependencies):
         # PM, Developer, and Reviewer provide phase-specific models
         mock_prompt_text.side_effect = [
             "pm-model",  # PM: spec phase
-            "dev-plan", "", "",  # Dev: plan, develop, pr phases
+            "dev-plan", "dev-develop", "dev-pr",  # Dev: plan, develop, pr phases
             "reviewer-model",  # Reviewer: review phase
         ]
 
@@ -119,20 +120,19 @@ def test_init_with_pm_reviewer_models_creates_fallback_chain(mock_dependencies):
         # Verify config structure
         mock_config = mock_dependencies["config_manager"].save_config.call_args[0][0]
 
-        # Verify PM config has both role-level and phase-specific model
+        # Verify PM config has only phase-specific model (no role-level)
         pm_config = mock_config["agents"]["pm"]
-        assert pm_config["model"] == "pm-model"  # Role-level set from first phase
-        assert pm_config["spec"]["model"] == "pm-model"  # Phase-specific
+        assert "model" not in pm_config  # No role-level model
+        assert pm_config["spec"]["model"] == "pm-model"  # Phase-specific only
 
-        # Verify Reviewer config has both role-level and phase-specific model
+        # Verify Reviewer config has only phase-specific model (no role-level)
         reviewer_config = mock_config["agents"]["reviewer"]
-        assert reviewer_config["model"] == "reviewer-model"  # Role-level set from first phase
-        assert reviewer_config["review"]["model"] == "reviewer-model"  # Phase-specific
+        assert "model" not in reviewer_config  # No role-level model
+        assert reviewer_config["review"]["model"] == "reviewer-model"  # Phase-specific only
 
-        # Verify Developer config
+        # Verify Developer config has only phase-specific models (no role-level)
         dev_config = mock_config["agents"]["developer"]
-        assert dev_config["model"] == "dev-plan"  # Role-level set from first phase
+        assert "model" not in dev_config  # No role-level model
         assert dev_config["plan"]["model"] == "dev-plan"
-        # develop and pr should not be in config when empty strings are provided
-        assert "develop" not in dev_config
-        assert "pr" not in dev_config
+        assert dev_config["develop"]["model"] == "dev-develop"
+        assert dev_config["pr"]["model"] == "dev-pr"
