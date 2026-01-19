@@ -639,23 +639,37 @@ class PRPhase(Phase):
 
         # Check if output.md already exists from a previous run
         if not output_file.exists():
-            # File doesn't exist yet, so we need to either write custom content or generate
-            final_title = self.custom_title
-            final_body = self.custom_body
+            # For iteration > 1, copy from previous iteration as starting point
+            if self.iteration > 1:
+                prev_iteration_num = self.iteration - 1
+                prev_output_file = pr_dir / f"iteration_{prev_iteration_num:03d}" / "output.md"
+                if prev_output_file.exists():
+                    import shutil
+                    shutil.copy2(prev_output_file, output_file)
+                    # File now exists, skip to agent generation step
+                    result = self._generate_pr_content()
+                    if result:
+                        return result, None
+                # If previous iteration file doesn't exist, continue with normal flow
 
-            # Write custom values if provided
-            if final_title and final_body:
-                output_file.write_text(f"# {final_title}\n\n{final_body}")
-            elif final_title:
-                output_file.write_text(f"# {final_title}\n\n")
-            elif final_body:
-                output_file.write_text(f"# TODO: Write PR title\n\n{final_body}")
-            else:
-                # No custom values and file doesn't exist - need agent generation
-                result = self._generate_pr_content()
-                # If agent returned a result (e.g., NEED_PERMISSION), propagate it
-                if result:
-                    return result, None
+            # File doesn't exist yet, so we need to either write custom content or generate
+            if not output_file.exists():
+                final_title = self.custom_title
+                final_body = self.custom_body
+
+                # Write custom values if provided
+                if final_title and final_body:
+                    output_file.write_text(f"# {final_title}\n\n{final_body}")
+                elif final_title:
+                    output_file.write_text(f"# {final_title}\n\n")
+                elif final_body:
+                    output_file.write_text(f"# TODO: Write PR title\n\n{final_body}")
+                else:
+                    # No custom values and file doesn't exist - need agent generation
+                    result = self._generate_pr_content()
+                    # If agent returned a result (e.g., NEED_PERMISSION), propagate it
+                    if result:
+                        return result, None
 
         # Read PR title and body from files (unified approach)
         pr_title = self._get_pr_title()
@@ -709,6 +723,13 @@ class PRPhase(Phase):
 
         checklist_path = iteration_dir / "checklist.md"
         output_file = iteration_dir / "output.md"
+
+        # Get previous PR file for iteration > 1
+        prev_pr_file = None
+        if self.iteration > 1:
+            prev_iteration_num = self.iteration - 1
+            prev_pr_file = str(pr_dir / f"iteration_{prev_iteration_num:03d}" / "output.md")
+
         generate_pr_checklist(
             agent_name=self.dev_agent,
             spec_file_path=self.spec_file,
@@ -716,6 +737,8 @@ class PRPhase(Phase):
             pr_file=str(output_file),
             checklist_file_path=checklist_path,
             basic_principles=basic_principles,
+            iteration=self.iteration,
+            prev_pr_file=prev_pr_file,
         )
 
         # Use path relative to current working directory (supports worktree)
@@ -743,7 +766,7 @@ class PRPhase(Phase):
         checklist_instruction = format_checklist_instruction(checklist_path_str)
         prompt = f"""# PR Phase
 
-**Task:** Generate PR title and description for this Pull Request.
+**Task:** Edit `{output_file_pattern}` to generate PR title and description for this Pull Request.
 
 {checklist_instruction}
 
@@ -756,30 +779,16 @@ class PRPhase(Phase):
 
 ## Requirements
 
-1. Edit existing file `{output_file}`, replace content with PR title and description in the following format:
-
-```markdown
-# [Your PR Title Here]
-
-## Summary
-[Brief description in 2-3 sentences]
-
-## Changes
-[Main changes as bullet points]
-
-## Test Plan
-[How to test these changes]{issue_instruction}
-```
-
-**Title Requirements:**
-- One line after `#`, concise and clear (max 80 characters)
+**Title (first line after #):**
+- Concise and clear (max 80 characters)
 - Describe what this PR does
 - Example: "Add user authentication with OAuth2 support"
 
-**Body Requirements:**
+**Body:**
 - Use Markdown format
-- Write in your native language
-- Include Summary, Changes, and Test Plan sections
+- Write in same language as commit messages
+- Keep the existing structure: Summary, Changes, and Test Plan sections
+- Fill in each section with specific details
 """
 
         # Execute agent
@@ -796,13 +805,25 @@ class PRPhase(Phase):
 
         full_prompt = prompt + "\n\n" + checklist_reminder + "\n\n" + status_code_prompt
 
-        # Set allowed tools for editing
-        allowed_tools = ["read", "grep", "glob", "ls", "web_fetch", "web_search"]
-
-        # Touch file with placeholder content before agent execution to ensure it exists for edit tool
+        # Write initial template content to output.md (for iteration 1)
         output_file.parent.mkdir(parents=True, exist_ok=True)
         if not output_file.exists():
-            output_file.write_text("# TODO: Write PR title\n\nTODO: Write PR body\n")
+            issue_ref = f"Closes #{self.issue_id}\n\n" if self.issue_id else ""
+            initial_content = f"""# [Your PR Title Here]
+
+{issue_ref}## Summary
+[Brief description in 2-3 sentences]
+
+## Changes
+[Main changes as bullet points]
+
+## Test Plan
+[How to test these changes]
+"""
+            output_file.write_text(initial_content)
+
+        # Set allowed tools - only edit permission for output.md
+        allowed_tools = ["read", "grep", "glob", "ls", "web_fetch", "web_search"]
         allowed_tools.append(f"edit({output_file_pattern})")
 
         # Get checklist path for this iteration and add edit permission
