@@ -48,28 +48,24 @@ def test_init_prompts_for_phase_specific_models(mock_dependencies):
             "AgentName: Description (system default)",
         ]
         
-        # prompt_text calls (always prompt for phase-specific models):
-        # 1. PM Model -> ""
-        # 2. PM Spec Phase Model -> ""
-        # 3. Dev Model -> "dev-default"
-        # 4. Dev Plan Phase Model -> "plan-model"
-        # 5. Dev Develop Phase Model -> ""
-        # 6. Dev PR Phase Model -> ""
-        # 7. Reviewer Model -> ""
-        # 8. Reviewer Review Phase Model -> ""
+        # prompt_text calls (new behavior):
+        # PM: only 1 call for model (goes directly to spec.model)
+        # Developer: 4 calls (model + 3 phase models)
+        # Reviewer: only 1 call for model (goes directly to review.model)
+        # Total: 6 calls
         mock_prompt_text.side_effect = [
-            "", "",  # PM: model, spec
+            "",  # PM: model (will be set to spec.model)
             "dev-default", "plan-model", "", "",  # Dev: model, plan, develop, pr
-            "", "",  # Reviewer: model, review
+            "",  # Reviewer: model (will be set to review.model)
         ]
 
         # prompt_confirm calls (not used for phase config anymore)
         mock_prompt_confirm.side_effect = []
-        
+
         result = runner.invoke(app, ["init"])
-        
+
         assert result.exit_code == 0
-        
+
         # Verify config structure
         mock_config = mock_dependencies["config_manager"].save_config.call_args[0][0]
 
@@ -81,9 +77,12 @@ def test_init_prompts_for_phase_specific_models(mock_dependencies):
         assert "develop" not in dev_config
         assert "pr" not in dev_config
 
-        # Verify PM and Reviewer configs exist (even with empty models they should be prompted)
+        # Verify PM and Reviewer configs (no role-level model, only phase-specific)
         pm_config = mock_config["agents"]["pm"]
         reviewer_config = mock_config["agents"]["reviewer"]
-        # Spec and review should not be in config when empty string is provided
-        assert "spec" not in pm_config or (isinstance(pm_config.get("spec"), dict) and "model" not in pm_config["spec"])
-        assert "review" not in reviewer_config or (isinstance(reviewer_config.get("review"), dict) and "model" not in reviewer_config["review"])
+        # PM and Reviewer should NOT have role-level model
+        assert "model" not in pm_config
+        assert "model" not in reviewer_config
+        # spec and review should not be in config when empty string is provided
+        assert "spec" not in pm_config
+        assert "review" not in reviewer_config

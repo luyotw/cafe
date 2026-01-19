@@ -83,13 +83,13 @@ class TestInitCommandEnvironmentChecks:
                 "Roger: PM agent (system default)",
             ]
             # 設定 prompt_text 返回值（model 輸入 + phase-specific models）
-            # PM: model + spec phase model
+            # PM: model (goes directly to spec.model, no additional prompt)
             # Developer: model + plan + develop + pr phase models
-            # Reviewer: model + review phase model
+            # Reviewer: model (goes directly to review.model, no additional prompt)
             mock_prompt_text.side_effect = [
-                "", "",  # PM: model, spec
+                "",  # PM: model
                 "", "", "", "",  # Developer: model, plan, develop, pr
-                "", ""  # Reviewer: model, review
+                ""  # Reviewer: model
             ]
 
             result = runner.invoke(app, ["init"])
@@ -163,13 +163,13 @@ class TestInitCommandInteractiveFlow:
             ]
 
             # 設定 prompt_text 返回值（model 輸入 + phase-specific models）
-            # PM: model + spec phase model
+            # PM: model (goes directly to spec.model, no additional prompt)
             # Developer: model + plan + develop + pr phase models
-            # Reviewer: model + review phase model
+            # Reviewer: model (goes directly to review.model, no additional prompt)
             mock_prompt_text.side_effect = [
-                "", "",  # PM: model, spec
+                "",  # PM: model
                 "sonnet", "", "", "",  # Developer: model, plan, develop, pr
-                "", ""  # Reviewer: model, review
+                ""  # Reviewer: model
             ]
 
             # 設定 prompt_confirm 返回值（不再使用）
@@ -179,8 +179,8 @@ class TestInitCommandInteractiveFlow:
 
         # 驗證 prompt_list 被呼叫 6 次（3 個角色 × 2: CLI + agent）
         assert mock_prompt_list.call_count == 6
-        # 驗證 prompt_text 被呼叫 8 次（PM: 1+1, Developer: 1+3, Reviewer: 1+1）
-        assert mock_prompt_text.call_count == 8
+        # 驗證 prompt_text 被呼叫 6 次（PM: 1, Developer: 1+3, Reviewer: 1）
+        assert mock_prompt_text.call_count == 6
 
     @patch("cafe.ui.cli.shutil.which")
     @patch("cafe.ui.cli.init_helpers.copy_data_directory")
@@ -282,13 +282,13 @@ class TestInitCommandConfigSaving:
             ]
 
             # 設定 prompt_text 返回值（model 輸入 + phase-specific models）
-            # PM: model + spec phase model
+            # PM: model (goes directly to spec.model, no additional prompt)
             # Developer: model + plan + develop + pr phase models
-            # Reviewer: model + review phase model
+            # Reviewer: model (goes directly to review.model, no additional prompt)
             mock_prompt_text.side_effect = [
-                "", "",  # PM: model, spec
+                "",  # PM: model
                 "sonnet", "", "", "",  # Developer: model, plan, develop, pr
-                "", ""  # Reviewer: model, review
+                ""  # Reviewer: model
             ]
 
             # 設定 prompt_confirm 返回值（不再使用）
@@ -351,13 +351,13 @@ class TestInitCommandConfigSaving:
                 "Roger: PM agent (system default)",
             ]
             # 設定 prompt_text 返回值（model 輸入 + phase-specific models）
-            # PM: model + spec phase model
+            # PM: model (goes directly to spec.model, no additional prompt)
             # Developer: model + plan + develop + pr phase models
-            # Reviewer: model + review phase model
+            # Reviewer: model (goes directly to review.model, no additional prompt)
             mock_prompt_text.side_effect = [
-                "", "",  # PM: model, spec
+                "",  # PM: model
                 "", "", "", "",  # Developer: model, plan, develop, pr
-                "", ""  # Reviewer: model, review
+                ""  # Reviewer: model
             ]
 
             # 設定 prompt_confirm 返回值（不再使用）
@@ -408,13 +408,13 @@ class TestInitCommandConfigSaving:
                 "Roger: PM agent (system default)",
             ]
             # 設定 prompt_text 返回值（model 輸入 + phase-specific models）
-            # PM: model + spec phase model
+            # PM: model (goes directly to spec.model, no additional prompt)
             # Developer: model + plan + develop + pr phase models
-            # Reviewer: model + review phase model
+            # Reviewer: model (goes directly to review.model, no additional prompt)
             mock_prompt_text.side_effect = [
-                "", "",  # PM: model, spec
+                "",  # PM: model
                 "", "", "", "",  # Developer: model, plan, develop, pr
-                "", ""  # Reviewer: model, review
+                ""  # Reviewer: model
             ]
 
             # 設定 prompt_confirm 返回值（不再使用）
