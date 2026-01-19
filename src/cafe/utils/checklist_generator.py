@@ -289,6 +289,8 @@ def generate_pr_checklist(
     pr_file: str,
     checklist_file_path: Path,
     basic_principles: Optional[str] = None,
+    iteration: int = 1,
+    prev_pr_file: Optional[str] = None,
 ) -> None:
     """Generate checklist file for PR phase.
 
@@ -296,15 +298,20 @@ def generate_pr_checklist(
         agent_name: Developer agent name
         spec_file_path: Path to spec file
         plan_file_path: Path to plan file
-        pr_file: Path to PR output file (output.md)
+        pr_file: Path to current iteration PR output file (output.md)
         checklist_file_path: Path where checklist file should be created
         basic_principles: Basic principles text in "- item" format (optional)
+        iteration: Current iteration number (default: 1)
+        prev_pr_file: Path to previous iteration PR file (for iteration > 1)
     """
     # Get agent file path
     agent_file = AgentManager.get_agent_file_path(agent_name, "developer")
 
-    # Get templates
-    execution_steps = checklist_templates.PR_EXECUTION_STEPS
+    # Get templates based on iteration
+    if iteration == 1:
+        execution_steps = checklist_templates.PR_EXECUTION_STEPS_ITERATION_1
+    else:
+        execution_steps = checklist_templates.PR_EXECUTION_STEPS_ITERATION_N
 
     # Get agent guidelines checklist
     agent_guidelines = extract_agent_guidelines_checklist(agent_file)
@@ -324,6 +331,11 @@ def generate_pr_checklist(
         "plan_file_path": plan_file_path,
         "pr_file": pr_file,
     }
+
+    # For iteration > 1, add prev_pr_file and current_pr_file
+    if iteration > 1:
+        placeholders["prev_pr_file"] = prev_pr_file if prev_pr_file else pr_file
+        placeholders["current_pr_file"] = pr_file
 
     # Resolve placeholders
     checklist_content = resolve_checklist_placeholders(checklist_content, placeholders)

@@ -162,18 +162,28 @@ REVIEW_EXECUTION_STEPS = """## Checklist
 
 # PR Phase Checklists
 
-PR_EXECUTION_STEPS = """## Checklist
+PR_EXECUTION_STEPS_ITERATION_1 = """## Checklist
 
 [ ] Read {agent_file} to understand your role and native language
 [ ] Read the requirements specification {spec_file_path}
 [ ] Read the implementation plan {plan_file_path}
 [ ] Review all commits in the current branch
 [ ] Check {spec_file_path} language to determine PR language (use same language as original requirements)
-[ ] Generate PR title (concise and descriptive, use same language as original requirements)
-[ ] Generate PR description (summarize all changes, use same language as original requirements)
+[ ] Edit {pr_file} to fill in PR title and description (NOT in your response)
+[ ] Ensure PR title is concise and descriptive (max 80 characters)
 [ ] Include reference to original requirements
-[ ] List all major changes and commits
-[ ] Write PR content to {pr_file}
+[ ] List all major changes and commits in the Changes section
+[ ] Return ONLY the status code in your response
+[ ] Return appropriate status code
+"""
+
+PR_EXECUTION_STEPS_ITERATION_N = """## Checklist
+
+[ ] Read {agent_file} to understand your role and native language
+[ ] Read {prev_pr_file} to review previous PR content
+[ ] Review unpushed commits to identify new changes
+[ ] Edit {current_pr_file} to update PR content based on new changes (NOT in your response)
+[ ] Ensure PR language matches {spec_file_path} language
 [ ] Return ONLY the status code in your response
 [ ] Return appropriate status code
 """

@@ -44,7 +44,18 @@ class TestGeneratePRContentWithOutputMd:
                 
                 assert output_file.exists()
                 content = output_file.read_text()
-                assert content == "# TODO: Write PR title\n\nTODO: Write PR body\n"
+                expected = """# [Your PR Title Here]
+
+## Summary
+[Brief description in 2-3 sentences]
+
+## Changes
+[Main changes as bullet points]
+
+## Test Plan
+[How to test these changes]
+"""
+                assert content == expected
 
     def test_prompt_references_single_output_file(self, tmp_path):
         """Test that agent prompt references only output.md"""
