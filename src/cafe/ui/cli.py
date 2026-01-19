@@ -643,24 +643,32 @@ def init() -> None:
                 "reviewer": ["review"],
             }
             phases = role_phases.get(role_key, [])
-            
-            if phases:
-                configure_phases = prompt_confirm(
-                    message=f"Configure phase-specific models for {role_display} ({', '.join(phases)})?",
-                    default=False,
-                )
-                
-                if configure_phases:
-                    for phase in phases:
-                        default_model_display = model_name or "default"
-                        phase_model = prompt_text(
-                            message=f"Enter model for {phase} phase (default: {default_model_display}):",
-                            default="",
-                        )
-                        if phase_model and phase_model.strip():
-                            if phase not in config["agents"][role_key]:
-                                config["agents"][role_key][phase] = {}
-                            config["agents"][role_key][phase]["model"] = phase_model.strip()
+
+            # Always configure phase-specific models for PM and Reviewer
+            # For Developer, configure regardless of user choice to ensure new configs use phase-specific settings
+            if phases and (role_key in ["pm", "reviewer"]):
+                for phase in phases:
+                    default_model_display = model_name or "default"
+                    phase_model = prompt_text(
+                        message=f"Enter model for {phase} phase (default: {default_model_display}):",
+                        default="",
+                    )
+                    if phase_model and phase_model.strip():
+                        if phase not in config["agents"][role_key]:
+                            config["agents"][role_key][phase] = {}
+                        config["agents"][role_key][phase]["model"] = phase_model.strip()
+            elif phases and role_key == "developer":
+                # Always configure phase-specific models for developer
+                for phase in phases:
+                    default_model_display = model_name or "default"
+                    phase_model = prompt_text(
+                        message=f"Enter model for {phase} phase (default: {default_model_display}):",
+                        default="",
+                    )
+                    if phase_model and phase_model.strip():
+                        if phase not in config["agents"][role_key]:
+                            config["agents"][role_key][phase] = {}
+                        config["agents"][role_key][phase]["model"] = phase_model.strip()
 
             console.print("")
 

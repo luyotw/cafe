@@ -48,31 +48,23 @@ def test_init_prompts_for_phase_specific_models(mock_dependencies):
             "AgentName: Description (system default)",
         ]
         
-        # prompt_text calls:
+        # prompt_text calls (always prompt for phase-specific models):
         # 1. PM Model -> ""
-        # 2. Dev Model -> "dev-default"
-        # 3. Dev Plan Model -> "plan-model"
-        # 4. Dev Develop Model -> ""
-        # 5. Dev PR Model -> ""
-        # 6. Reviewer Model -> ""
+        # 2. PM Spec Phase Model -> ""
+        # 3. Dev Model -> "dev-default"
+        # 4. Dev Plan Phase Model -> "plan-model"
+        # 5. Dev Develop Phase Model -> ""
+        # 6. Dev PR Phase Model -> ""
+        # 7. Reviewer Model -> ""
+        # 8. Reviewer Review Phase Model -> ""
         mock_prompt_text.side_effect = [
-            "",
-            "dev-default",
-            "plan-model",
-            "",
-            "",
-            "",
+            "", "",  # PM: model, spec
+            "dev-default", "plan-model", "", "",  # Dev: model, plan, develop, pr
+            "", "",  # Reviewer: model, review
         ]
-        
-        # prompt_confirm calls:
-        # 1. PM Phase Config? -> False
-        # 2. Dev Phase Config? -> True
-        # 3. Reviewer Phase Config? -> False
-        mock_prompt_confirm.side_effect = [
-            False,
-            True,
-            False
-        ]
+
+        # prompt_confirm calls (not used for phase config anymore)
+        mock_prompt_confirm.side_effect = []
         
         result = runner.invoke(app, ["init"])
         
@@ -80,9 +72,18 @@ def test_init_prompts_for_phase_specific_models(mock_dependencies):
         
         # Verify config structure
         mock_config = mock_dependencies["config_manager"].save_config.call_args[0][0]
-        
+
+        # Verify developer config
         dev_config = mock_config["agents"]["developer"]
         assert dev_config["model"] == "dev-default"
         assert dev_config["plan"]["model"] == "plan-model"
+        # develop and pr should not be in config when empty string is provided
         assert "develop" not in dev_config
         assert "pr" not in dev_config
+
+        # Verify PM and Reviewer configs exist (even with empty models they should be prompted)
+        pm_config = mock_config["agents"]["pm"]
+        reviewer_config = mock_config["agents"]["reviewer"]
+        # Spec and review should not be in config when empty string is provided
+        assert "spec" not in pm_config or (isinstance(pm_config.get("spec"), dict) and "model" not in pm_config["spec"])
+        assert "review" not in reviewer_config or (isinstance(reviewer_config.get("review"), dict) and "model" not in reviewer_config["review"])

@@ -70,8 +70,8 @@ class TestInitCommandEnvironmentChecks:
             patch("cafe.ui.cli.prompt_text") as mock_prompt_text
         ):
 
-            # User confirms overwrite (True), then declines phase config for 3 roles (False, False, False)
-            mock_confirm.side_effect = [True, False, False, False]
+            # User confirms overwrite (True)
+            mock_confirm.side_effect = [True]
 
             # Setup agent selection
             mock_prompt_list.side_effect = [
@@ -82,7 +82,15 @@ class TestInitCommandEnvironmentChecks:
                 "claude",
                 "Roger: PM agent (system default)",
             ]
-            mock_prompt_text.side_effect = ["", "", ""]
+            # 設定 prompt_text 返回值（model 輸入 + phase-specific models）
+            # PM: model + spec phase model
+            # Developer: model + plan + develop + pr phase models
+            # Reviewer: model + review phase model
+            mock_prompt_text.side_effect = [
+                "", "",  # PM: model, spec
+                "", "", "", "",  # Developer: model, plan, develop, pr
+                "", ""  # Reviewer: model, review
+            ]
 
             result = runner.invoke(app, ["init"])
 
@@ -154,20 +162,25 @@ class TestInitCommandInteractiveFlow:
                 "Roger: PM agent (system default)",  # Reviewer agent
             ]
 
-            # 設定 prompt_text 返回值（model 輸入）
-            mock_prompt_text.side_effect = ["", "sonnet", ""]
-            
-            # 設定 prompt_confirm 返回值（phase config 確認 -> 全部否）
+            # 設定 prompt_text 返回值（model 輸入 + phase-specific models）
+            # PM: model + spec phase model
+            # Developer: model + plan + develop + pr phase models
+            # Reviewer: model + review phase model
+            mock_prompt_text.side_effect = [
+                "", "",  # PM: model, spec
+                "sonnet", "", "", "",  # Developer: model, plan, develop, pr
+                "", ""  # Reviewer: model, review
+            ]
+
+            # 設定 prompt_confirm 返回值（不再使用）
             mock_prompt_confirm.return_value = False
 
             _result = runner.invoke(app, ["init"])
 
         # 驗證 prompt_list 被呼叫 6 次（3 個角色 × 2: CLI + agent）
         assert mock_prompt_list.call_count == 6
-        # 驗證 prompt_text 被呼叫 3 次（3 個角色 × 1: model）
-        assert mock_prompt_text.call_count == 3
-        # 驗證 prompt_confirm 被呼叫 3 次（3 個角色 × 1: phase config）
-        assert mock_prompt_confirm.call_count == 3
+        # 驗證 prompt_text 被呼叫 8 次（PM: 1+1, Developer: 1+3, Reviewer: 1+1）
+        assert mock_prompt_text.call_count == 8
 
     @patch("cafe.ui.cli.shutil.which")
     @patch("cafe.ui.cli.init_helpers.copy_data_directory")
@@ -268,10 +281,17 @@ class TestInitCommandConfigSaving:
                 "Richard: Reviewer agent (system default)",  # Reviewer agent
             ]
 
-            # 設定 prompt_text 返回值（model 輸入）
-            mock_prompt_text.side_effect = ["", "sonnet", ""]
-            
-            # 設定 prompt_confirm 返回值（phase config 確認 -> 全部否）
+            # 設定 prompt_text 返回值（model 輸入 + phase-specific models）
+            # PM: model + spec phase model
+            # Developer: model + plan + develop + pr phase models
+            # Reviewer: model + review phase model
+            mock_prompt_text.side_effect = [
+                "", "",  # PM: model, spec
+                "sonnet", "", "", "",  # Developer: model, plan, develop, pr
+                "", ""  # Reviewer: model, review
+            ]
+
+            # 設定 prompt_confirm 返回值（不再使用）
             mock_prompt_confirm.return_value = False
 
             _result = runner.invoke(app, ["init"])
@@ -330,9 +350,17 @@ class TestInitCommandConfigSaving:
                 "claude",
                 "Roger: PM agent (system default)",
             ]
-            mock_prompt_text.side_effect = ["", "", ""]
-            
-            # 設定 prompt_confirm 返回值（phase config 確認 -> 全部否）
+            # 設定 prompt_text 返回值（model 輸入 + phase-specific models）
+            # PM: model + spec phase model
+            # Developer: model + plan + develop + pr phase models
+            # Reviewer: model + review phase model
+            mock_prompt_text.side_effect = [
+                "", "",  # PM: model, spec
+                "", "", "", "",  # Developer: model, plan, develop, pr
+                "", ""  # Reviewer: model, review
+            ]
+
+            # 設定 prompt_confirm 返回值（不再使用）
             mock_prompt_confirm.return_value = False
 
             result = runner.invoke(app, ["init"])
@@ -379,9 +407,17 @@ class TestInitCommandConfigSaving:
                 "claude",
                 "Roger: PM agent (system default)",
             ]
-            mock_prompt_text.side_effect = ["", "", ""]  # empty models
-            
-            # 設定 prompt_confirm 返回值（phase config 確認 -> 全部否）
+            # 設定 prompt_text 返回值（model 輸入 + phase-specific models）
+            # PM: model + spec phase model
+            # Developer: model + plan + develop + pr phase models
+            # Reviewer: model + review phase model
+            mock_prompt_text.side_effect = [
+                "", "",  # PM: model, spec
+                "", "", "", "",  # Developer: model, plan, develop, pr
+                "", ""  # Reviewer: model, review
+            ]
+
+            # 設定 prompt_confirm 返回值（不再使用）
             mock_prompt_confirm.return_value = False
 
             result = runner.invoke(app, ["init"])
