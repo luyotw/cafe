@@ -645,6 +645,10 @@ def init() -> None:
                 "cli": selected_cli,
             }
 
+            # Store role-level model for all roles (required for fallback chain)
+            if model_name:
+                config["agents"][role_key]["model"] = model_name
+
             # Configure phase-specific models
             role_phases = {
                 "pm": ["spec"],
@@ -653,17 +657,14 @@ def init() -> None:
             }
             phases = role_phases.get(role_key, [])
 
-            # For PM and Reviewer (single-phase roles), directly set phase-specific model
-            if role_key in ["pm", "reviewer"] and phases:
-                # Store model only in phase-specific config, not at role level
-                if model_name:
-                    phase = phases[0]  # PM has "spec", Reviewer has "review"
-                    config["agents"][role_key][phase] = {"model": model_name}
-            # For Developer (multi-phase role), set role-level model and prompt for phase-specific
-            elif role_key == "developer":
-                if model_name:
-                    config["agents"][role_key]["model"] = model_name
-
+            # For PM and Reviewer (single-phase roles), auto-populate phase-specific model
+            if role_key in ["pm", "reviewer"] and phases and model_name:
+                # Automatically set phase-specific model to same as role-level
+                # This avoids asking the user twice for single-phase roles
+                phase = phases[0]  # PM has "spec", Reviewer has "review"
+                config["agents"][role_key][phase] = {"model": model_name}
+            # For Developer (multi-phase role), prompt for each phase-specific model
+            elif role_key == "developer" and phases:
                 # Always prompt for phase-specific models for developer
                 for phase in phases:
                     default_model_display = model_name or "default"
