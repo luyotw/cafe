@@ -49,14 +49,14 @@ def test_init_prompts_for_phase_specific_models(mock_dependencies):
         ]
         
         # prompt_text calls (new behavior):
-        # PM: only 1 call for model (goes directly to spec.model)
-        # Developer: 4 calls (model + 3 phase models)
-        # Reviewer: only 1 call for model (goes directly to review.model)
-        # Total: 6 calls
+        # PM: 1 call for spec phase
+        # Developer: 3 calls for plan, develop, pr phases
+        # Reviewer: 1 call for review phase
+        # Total: 5 calls
         mock_prompt_text.side_effect = [
-            "",  # PM: model (will be set to spec.model)
-            "dev-default", "plan-model", "", "",  # Dev: model, plan, develop, pr
-            "",  # Reviewer: model (will be set to review.model)
+            "",  # PM: spec phase
+            "plan-model", "", "",  # Dev: plan, develop, pr
+            "",  # Reviewer: review phase
         ]
 
         # prompt_confirm calls (not used for phase config anymore)
@@ -71,7 +71,7 @@ def test_init_prompts_for_phase_specific_models(mock_dependencies):
 
         # Verify developer config
         dev_config = mock_config["agents"]["developer"]
-        assert dev_config["model"] == "dev-default"
+        assert dev_config["model"] == "plan-model"  # Role-level set to first phase model
         assert dev_config["plan"]["model"] == "plan-model"
         # develop and pr should not be in config when empty string is provided
         assert "develop" not in dev_config
@@ -84,7 +84,6 @@ def test_init_prompts_for_phase_specific_models(mock_dependencies):
         assert "model" not in pm_config
         assert "model" not in reviewer_config
         # spec and review should not be in config when empty string is provided
-        # (no role-level model means no auto-populate to phase-specific)
         assert "spec" not in pm_config
         assert "review" not in reviewer_config
 
@@ -104,11 +103,11 @@ def test_init_with_pm_reviewer_models_creates_fallback_chain(mock_dependencies):
             "AgentName: Description (system default)",
         ]
 
-        # PM and Reviewer provide models, Developer provides model + phase models
+        # PM, Developer, and Reviewer provide phase-specific models
         mock_prompt_text.side_effect = [
-            "pm-model",  # PM: model (will be set to both role-level and spec.model)
-            "dev-default", "", "", "",  # Dev: model, plan, develop, pr
-            "reviewer-model",  # Reviewer: model (will be set to both role-level and review.model)
+            "pm-model",  # PM: spec phase
+            "dev-plan", "", "",  # Dev: plan, develop, pr phases
+            "reviewer-model",  # Reviewer: review phase
         ]
 
         mock_prompt_confirm.side_effect = []
@@ -122,18 +121,18 @@ def test_init_with_pm_reviewer_models_creates_fallback_chain(mock_dependencies):
 
         # Verify PM config has both role-level and phase-specific model
         pm_config = mock_config["agents"]["pm"]
-        assert pm_config["model"] == "pm-model"  # Role-level for fallback
-        assert pm_config["spec"]["model"] == "pm-model"  # Phase-specific auto-populated
+        assert pm_config["model"] == "pm-model"  # Role-level set from first phase
+        assert pm_config["spec"]["model"] == "pm-model"  # Phase-specific
 
         # Verify Reviewer config has both role-level and phase-specific model
         reviewer_config = mock_config["agents"]["reviewer"]
-        assert reviewer_config["model"] == "reviewer-model"  # Role-level for fallback
-        assert reviewer_config["review"]["model"] == "reviewer-model"  # Phase-specific auto-populated
+        assert reviewer_config["model"] == "reviewer-model"  # Role-level set from first phase
+        assert reviewer_config["review"]["model"] == "reviewer-model"  # Phase-specific
 
         # Verify Developer config
         dev_config = mock_config["agents"]["developer"]
-        assert dev_config["model"] == "dev-default"
-        # No phase-specific models provided (empty strings)
-        assert "plan" not in dev_config
+        assert dev_config["model"] == "dev-plan"  # Role-level set from first phase
+        assert dev_config["plan"]["model"] == "dev-plan"
+        # develop and pr should not be in config when empty strings are provided
         assert "develop" not in dev_config
         assert "pr" not in dev_config

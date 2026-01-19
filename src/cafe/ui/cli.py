@@ -601,16 +601,6 @@ def init() -> None:
                 console.print("\n[yellow]Configuration incomplete, cancelled.[/yellow]")
                 raise typer.Exit(1)
 
-            # Input model name
-            model_name_input = prompt_text(
-                message=f"Enter model name for {selected_cli} (optional, press Enter to use default):",
-                default="",
-            )
-            if model_name_input is None:
-                console.print("\n[yellow]Configuration incomplete, cancelled.[/yellow]")
-                raise typer.Exit(1)
-            model_name = model_name_input.strip() if model_name_input else None
-
             # List available agents for this role
             agents = list_available_agents(role_key)
 
@@ -645,10 +635,6 @@ def init() -> None:
                 "cli": selected_cli,
             }
 
-            # Store role-level model for all roles (required for fallback chain)
-            if model_name:
-                config["agents"][role_key]["model"] = model_name
-
             # Configure phase-specific models
             role_phases = {
                 "pm": ["spec"],
@@ -657,25 +643,36 @@ def init() -> None:
             }
             phases = role_phases.get(role_key, [])
 
-            # For PM and Reviewer (single-phase roles), auto-populate phase-specific model
-            if role_key in ["pm", "reviewer"] and phases and model_name:
-                # Automatically set phase-specific model to same as role-level
-                # This avoids asking the user twice for single-phase roles
-                phase = phases[0]  # PM has "spec", Reviewer has "review"
-                config["agents"][role_key][phase] = {"model": model_name}
-            # For Developer (multi-phase role), prompt for each phase-specific model
-            elif role_key == "developer" and phases:
-                # Always prompt for phase-specific models for developer
+            # Phase model recommendations
+            phase_recommendations = {
+                "spec": "high-speed / economical models",
+                "plan": "smarter models",
+                "develop": "smarter models",
+                "review": "flexible based on your needs",
+                "pr": "high-speed / economical models",
+            }
+
+            # Prompt for phase-specific models with recommendations
+            first_phase_model = None
+            if phases:
                 for phase in phases:
-                    default_model_display = model_name or "default"
+                    recommendation = phase_recommendations.get(phase, "")
+                    recommendation_text = f" (Recommended: {recommendation})" if recommendation else ""
                     phase_model = prompt_text(
-                        message=f"Enter model for {phase} phase (default: {default_model_display}):",
+                        message=f"Enter {selected_cli} model for {phase} phase{recommendation_text}. Press Enter for default:",
                         default="",
                     )
                     if phase_model and phase_model.strip():
                         if phase not in config["agents"][role_key]:
                             config["agents"][role_key][phase] = {}
                         config["agents"][role_key][phase]["model"] = phase_model.strip()
+                        # Store first phase model for role-level fallback
+                        if first_phase_model is None:
+                            first_phase_model = phase_model.strip()
+
+            # Store role-level model for fallback chain (use first phase model if provided)
+            if first_phase_model:
+                config["agents"][role_key]["model"] = first_phase_model
 
             console.print("")
 
