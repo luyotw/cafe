@@ -236,6 +236,7 @@ class ReviewPhase(Phase):
                 "bash(git diff)",               # View code changes
                 "bash(git show)",               # View specific commit details
                 "bash(git status)",             # View specific commit details
+                "bash(gh pr view)",             # View PR details and comments
                 f"edit({review_file_pattern})", # Allow editing to specific review file
                 f"edit({checklist_pattern})",   # Allow editing checklist
             ]
