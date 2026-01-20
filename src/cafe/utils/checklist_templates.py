@@ -103,6 +103,11 @@ DEVELOP_EXECUTION_STEPS_CORRECTION = """## Checklist
 [ ] Confirm: All issues are fixed
 [ ] Confirm: All tests pass
 [ ] Return status code
+
+## Status Codes
+
+- CAFE_CONFIRMED: All issues fixed, ready for review
+- CAFE_NO_CHANGES_NEEDED: You believe reviewer's feedback is incorrect/unnecessary and have valid technical reasons to disagree. You MUST explain your reasoning clearly.
 """
 
 
