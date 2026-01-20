@@ -113,6 +113,8 @@ REVIEW_EXECUTION_STEPS = """## Checklist
 [ ] Read {agent_file} to understand your role and native language
 [ ] Read the requirements specification {spec_file_path}
 [ ] Read the implementation plan {plan_file_path}
+[ ] Check PR comments using `gh pr view --comments` to see user feedback and requests
+[ ] Prioritize user feedback from PR comments over spec requirements if there are conflicts
 
 ## Git Status and Security Check
 [ ] Check for uncommitted changes (if any, development is incomplete)
