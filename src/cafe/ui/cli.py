@@ -3003,7 +3003,7 @@ def review(
         # Auto-detect PR number if not provided
         if pr_number is None:
             try:
-                from cafe.core.github import GitHubOps
+                from cafe.utils.github import GitHubOps
                 github_ops = GitHubOps()
                 current_branch = git_ops.get_current_branch()
                 pr_data = github_ops.get_pr_for_branch(current_branch)
