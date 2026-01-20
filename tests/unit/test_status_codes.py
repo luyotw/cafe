@@ -329,3 +329,43 @@ class TestPhaseStatusCodeEnum:
         # str(enum) returns the full name, use .value for just the value
         assert code.value == "CAFE_CONFIRMED"
         assert isinstance(code, str)  # PhaseStatusCode inherits from str
+
+
+class TestNewStatusCodes:
+    """Test new status codes for dispute resolution."""
+
+    def test_no_changes_needed_status_exists(self) -> None:
+        """測試 NO_CHANGES_NEEDED 狀態碼存在"""
+        assert PhaseStatusCode.NO_CHANGES_NEEDED.value == "CAFE_NO_CHANGES_NEEDED"
+
+    def test_skip_review_status_exists(self) -> None:
+        """測試 SKIP_REVIEW 狀態碼存在"""
+        assert PhaseStatusCode.SKIP_REVIEW.value == "CAFE_SKIP_REVIEW"
+
+    def test_extract_no_changes_needed(self) -> None:
+        """測試能正確提取 NO_CHANGES_NEEDED 狀態碼"""
+        response = "CAFE_NO_CHANGES_NEEDED\nI believe the reviewer's feedback is incorrect."
+
+        code = StatusCodeParser.extract(response)
+
+        assert code == PhaseStatusCode.NO_CHANGES_NEEDED
+
+    def test_extract_skip_review(self) -> None:
+        """測試能正確提取 SKIP_REVIEW 狀態碼"""
+        response = "CAFE_SKIP_REVIEW\nUser agreed with developer."
+
+        code = StatusCodeParser.extract(response)
+
+        assert code == PhaseStatusCode.SKIP_REVIEW
+
+    def test_no_changes_needed_in_valid_codes_list(self) -> None:
+        """測試 NO_CHANGES_NEEDED 可以在 valid_codes 中使用"""
+        response = "CAFE_NO_CHANGES_NEEDED"
+        valid_codes = [
+            PhaseStatusCode.CONFIRMED,
+            PhaseStatusCode.NO_CHANGES_NEEDED,
+        ]
+
+        code = StatusCodeParser.extract(response, valid_codes)
+
+        assert code == PhaseStatusCode.NO_CHANGES_NEEDED
