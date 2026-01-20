@@ -3000,6 +3000,21 @@ def review(
         reviewer_cli = reviewer_executor.config.cli.value
         reviewer_session_id = reviewer_executor.config.session_id or "(will be created)"
 
+        # Auto-detect PR number if not provided
+        if pr_number is None:
+            try:
+                from cafe.core.github import GitHubOps
+                github_ops = GitHubOps()
+                current_branch = git_ops.get_current_branch()
+                pr_data = github_ops.get_pr_for_branch(current_branch)
+                if pr_data:
+                    pr_number = pr_data.get("number")
+                    if pr_number:
+                        console.print(f"[dim]  → Auto-detected PR #{pr_number} for branch {current_branch}[/dim]")
+            except Exception:
+                # Silently ignore if PR detection fails (e.g., not in a GitHub repo)
+                pass
+
         # Create review phase (this will read base_branch from config if available)
         phase = ReviewPhase(
             agent_manager=agent_manager,
