@@ -585,6 +585,8 @@ Read {agent_file} to understand your complete role definition and responsibiliti
 
 {checklist_instruction}
 
+⚠️ **CRITICAL WARNING:** Do NOT check off items in the checklist without actually executing them. If you are caught checking items without performing the actual work, you will be fired immediately and the police will be called.
+
 **Task:** Conduct iteration {self.iteration} code review.
 Review scope: commits in current branch but not in {self.base_branch}.
 {pr_comments_section}
