@@ -482,8 +482,9 @@ class DevelopPhase(Phase):
         print(f"{'='*60}\n")
 
         # Display the developer's output file
-        develop_file = self._get_develop_file_path()
-        if develop_file and develop_file.exists():
+        develop_dir = self.issue_dir / "develop"
+        develop_file = develop_dir / f"iteration_{self.iteration - 1:03d}" / "output.md"
+        if develop_file.exists():
             print(f"Developer's response: {develop_file}\n")
 
         choices = [
@@ -518,9 +519,10 @@ class DevelopPhase(Phase):
         from rich.console import Console
 
         prev_iteration = self.iteration - 1
-        develop_file = self._get_develop_file_path()
+        develop_dir = self.issue_dir / "develop"
+        develop_file = develop_dir / f"iteration_{prev_iteration:03d}" / "output.md"
 
-        if develop_file:
+        if develop_file.exists():
             _display_iteration_delta(
                 prev_iteration,
                 str(develop_file),
@@ -1387,27 +1389,6 @@ If NO (does not meet criteria): Continue with development work and return approp
                                     "status_code": response_status.value,
                                 },
                             )
-                elif response_status == PhaseStatusCode.NO_CHANGES_NEEDED:
-                    # Developer believes no changes are needed (disputes reviewer)
-                    # Return IN_PROGRESS and let user decide in cli.py
-                    if self.interactive:
-                        print(f"\n{'='*60}")
-                        print(f"Dev ({self.dev_agent}) - Iteration {self.iteration}:")
-                        print(f"{'='*60}")
-                        print(response)
-                        print(f"{'='*60}\n")
-                        print("💡 Developer believes no changes are needed.")
-
-                    return PhaseResult(
-                        status=PhaseStatus.IN_PROGRESS,
-                        message=f"Developer disputes reviewer feedback in iteration {self.iteration}.",
-                        data={
-                            "iterations": self.iteration,
-                            "last_response": response,
-                            "status_code": response_status.value,
-                            "develop_file": str(self._get_develop_file_path()),
-                        },
-                    )
 
             # Phase-specific post-processing: Handle review feedback timestamp
             if result and result.status == PhaseStatus.COMPLETED:
