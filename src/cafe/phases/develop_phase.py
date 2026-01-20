@@ -833,11 +833,13 @@ class DevelopPhase(Phase):
                 PhaseStatusCode.CONFIRMED,
                 PhaseStatusCode.NEED_PERMISSION,
                 PhaseStatusCode.NEED_CLARIFICATION,
+                PhaseStatusCode.NO_CHANGES_NEEDED,
             ],
             descriptions={
                 PhaseStatusCode.CONFIRMED: "Development work completed",
                 PhaseStatusCode.NEED_PERMISSION: "Need to request tool usage permissions",
                 PhaseStatusCode.NEED_CLARIFICATION: "Need user to clarify next steps",
+                PhaseStatusCode.NO_CHANGES_NEEDED: "You believe reviewer's feedback is incorrect/unnecessary and have valid technical reasons to disagree",
             },
         )
 
