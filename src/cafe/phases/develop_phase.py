@@ -393,6 +393,140 @@ class DevelopPhase(Phase):
             },
         )
 
+    def _handle_no_changes_needed_input(self, prev_data: dict) -> "PhaseResult | str":
+        """Handle user input for NO_CHANGES_NEEDED status (developer disputes reviewer).
+
+        Similar to READY_FOR_REVIEW handling:
+        - user_input == "confirm": User agrees, save SKIP_REVIEW status and return completion
+        - user_input has content: User disagrees, return their feedback as user_input
+        - No user_input (interactive): Ask user for decision
+        - No user_input (non-interactive): Return failure
+
+        Args:
+            prev_data: Previous iteration data
+
+        Returns:
+            PhaseResult: If user agrees (skip review) or non-interactive without input
+            str: User's feedback if they disagree
+        """
+        if self.interactive:
+            # Display delta from previous iteration
+            if self.iteration > 1:
+                self._display_iteration_delta()
+
+            # Ask user for decision
+            choice = self._ask_user_for_no_changes_decision()
+        else:
+            choice = self.user_input
+            self.user_input = ""  # Clear after use
+
+            if not choice:
+                return PhaseResult(
+                    status=PhaseStatus.FAILED,
+                    message="Developer returned NO_CHANGES_NEEDED in non-interactive mode without user input. Use --user-input confirm to agree, or provide feedback.",
+                    data={
+                        "iterations": prev_data.get("iteration", self.iteration - 1),
+                        "last_response": prev_data.get("response", ""),
+                        "status_code": "CAFE_NO_CHANGES_NEEDED",
+                    },
+                )
+
+        # Handle user choice
+        if choice.strip().lower() == "confirm":
+            # User agrees with developer - save SKIP_REVIEW status
+            print("✅ User agreed with developer - skipping review phase")
+
+            # Save user confirmation as a new iteration
+            self._save_user_input(
+                user_input="confirm",
+                phase_specific_data={},
+            )
+            self._update_iteration_history(
+                phase_specific_data={
+                    "response": "User agreed with developer - skip review",
+                    "user_action": "confirm_skip_review",
+                },
+                prompt="",
+                agent_cli=None,
+                agent_session_id=None,
+                allowed_tools=None,
+                status_code=PhaseStatusCode.SKIP_REVIEW,
+            )
+            self._save_progress(PhaseStatusCode.SKIP_REVIEW)
+
+            return PhaseResult(
+                status=PhaseStatus.COMPLETED,
+                message="User agreed with developer - skipping review phase",
+                data={
+                    "branch": self._get_branch_name(),
+                    "iterations": self.iteration,
+                    "status_code": PhaseStatusCode.SKIP_REVIEW.value,
+                    "skip_review": True,
+                },
+            )
+        else:
+            # User disagrees - return their feedback as user_input for this iteration
+            print(f"ℹ️  User provided feedback, continuing development...")
+            return choice
+
+    def _ask_user_for_no_changes_decision(self) -> str:
+        """Ask user whether they agree with developer's NO_CHANGES_NEEDED decision.
+
+        Returns:
+            str: "confirm" if user agrees, or user's feedback if they disagree
+        """
+        from cafe.ui.inquirer_prompts import prompt_list, prompt_multiline
+
+        print(f"\n{'='*60}")
+        print(f"Developer ({self.dev_agent}) believes no changes are needed.")
+        print(f"{'='*60}\n")
+
+        # Display the developer's output file
+        develop_file = self._get_develop_file_path()
+        if develop_file and develop_file.exists():
+            print(f"Developer's response: {develop_file}\n")
+
+        choices = [
+            {"name": "Agree - Skip review and proceed to PR", "value": "c"},
+            {"name": "Disagree - Provide feedback for developer", "value": "m"},
+        ]
+
+        choice = prompt_list(
+            "Do you agree with the developer?",
+            choices,
+            default=None,
+        )
+
+        if choice == "c":
+            return "confirm"
+        else:
+            feedback = prompt_multiline("Please provide feedback for the developer")
+
+            if not feedback.strip():
+                print("\n⚠️  No feedback entered, please try again.")
+                return self._ask_user_for_no_changes_decision()
+
+            print()
+            print("✅ Received your feedback...")
+            print()
+
+            return feedback
+
+    def _display_iteration_delta(self) -> None:
+        """Display changes from previous iteration."""
+        from cafe.ui.cli import _display_iteration_delta
+        from rich.console import Console
+
+        prev_iteration = self.iteration - 1
+        develop_file = self._get_develop_file_path()
+
+        if develop_file:
+            _display_iteration_delta(
+                prev_iteration,
+                str(develop_file),
+                Console(),
+            )
+
     def _get_completion_data(self) -> dict:
         """Get additional data when phase completes (provided to base class _handle_standard_status_codes).
 
@@ -467,6 +601,10 @@ class DevelopPhase(Phase):
         # Handle NEED_CLARIFICATION - use base class method
         if prev_status == "CAFE_NEED_CLARIFICATION":
             return self._handle_need_clarification_input(prev_data, agent_display_name="Developer")
+
+        # Handle NO_CHANGES_NEEDED - developer disputes reviewer's feedback
+        if prev_status == "CAFE_NO_CHANGES_NEEDED":
+            return self._handle_no_changes_needed_input(prev_data)
 
         # No special handling needed - clear user_input to avoid misuse
         self.user_input = ""
@@ -1013,13 +1151,14 @@ Read {agent_file} to understand your complete role definition and responsibiliti
                     PhaseStatusCode.CONFIRMED,
                     PhaseStatusCode.NEED_PERMISSION,
                     PhaseStatusCode.NEED_CLARIFICATION,
+                    PhaseStatusCode.NO_CHANGES_NEEDED,
                 ],
                 allowed_tools=allowed_tools,
                 complete_codes=[PhaseStatusCode.CONFIRMED],
                 continue_codes=[],  # No automatic continue codes
             )
 
-            # Handle NEED_PERMISSION and NEED_CLARIFICATION specially - return and wait for next invocation
+            # Handle NEED_PERMISSION, NEED_CLARIFICATION, NO_CHANGES_NEEDED specially - return and wait for next invocation
             if response:
                 response_status = StatusCodeParser.extract(
                     response,
@@ -1027,6 +1166,7 @@ Read {agent_file} to understand your complete role definition and responsibiliti
                         PhaseStatusCode.CONFIRMED,
                         PhaseStatusCode.NEED_PERMISSION,
                         PhaseStatusCode.NEED_CLARIFICATION,
+                        PhaseStatusCode.NO_CHANGES_NEEDED,
                     ],
                 )
                 if response_status == PhaseStatusCode.NEED_PERMISSION:
@@ -1247,6 +1387,27 @@ If NO (does not meet criteria): Continue with development work and return approp
                                     "status_code": response_status.value,
                                 },
                             )
+                elif response_status == PhaseStatusCode.NO_CHANGES_NEEDED:
+                    # Developer believes no changes are needed (disputes reviewer)
+                    # Return IN_PROGRESS and let user decide in cli.py
+                    if self.interactive:
+                        print(f"\n{'='*60}")
+                        print(f"Dev ({self.dev_agent}) - Iteration {self.iteration}:")
+                        print(f"{'='*60}")
+                        print(response)
+                        print(f"{'='*60}\n")
+                        print("💡 Developer believes no changes are needed.")
+
+                    return PhaseResult(
+                        status=PhaseStatus.IN_PROGRESS,
+                        message=f"Developer disputes reviewer feedback in iteration {self.iteration}.",
+                        data={
+                            "iterations": self.iteration,
+                            "last_response": response,
+                            "status_code": response_status.value,
+                            "develop_file": str(self._get_develop_file_path()),
+                        },
+                    )
 
             # Phase-specific post-processing: Handle review feedback timestamp
             if result and result.status == PhaseStatus.COMPLETED:

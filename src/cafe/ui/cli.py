@@ -2871,20 +2871,29 @@ def develop(
 
         # Display result
         if result.status.value == "completed":
+            status_code = result.data.get("status_code")
+            skip_review = result.data.get("skip_review", False) or status_code == "CAFE_SKIP_REVIEW"
+
             console.print()
-            console.print("[bold green]✅ Development completed![/bold green]")
+            if skip_review:
+                console.print("[bold green]✅ Skipping review phase[/bold green]")
+            else:
+                console.print("[bold green]✅ Development completed![/bold green]")
             console.print(f"Branch: {result.data.get('branch', 'N/A')}")
             console.print(f"Iterations: {result.data.get('iterations', 'N/A')}")
             console.print()
 
-            # Auto mode: execute next phase
+            # Auto mode: execute next phase (skip review if user agreed)
             if auto:
-                _execute_next_phase_auto("review", issue_name)
+                if skip_review:
+                    _execute_next_phase_auto("pr", issue_name)
+                else:
+                    _execute_next_phase_auto("review", issue_name)
             else:
-                console.print("[dim]Next steps:[/dim]")
-                console.print("[dim]  1. Review changes: git diff[/dim]")
-                console.print("[dim]  2. Run tests: pytest[/dim]")
-                console.print("[dim]  3. Code review: cafe review[/dim]")
+                if skip_review:
+                    console.print("[dim]Next step: cafe pr[/dim]")
+                else:
+                    console.print("[dim]Next step: cafe review[/dim]")
         elif result.status.value == "failed":
             console.print(f"[red]❌ Development failed: {result.message}[/red]")
             raise typer.Exit(1)

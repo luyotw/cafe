@@ -26,6 +26,10 @@ class PhaseStatusCode(str, Enum):
     # ========== Review Phase ==========
     NEEDS_CHANGES = "CAFE_NEEDS_CHANGES"   # Code needs changes
 
+    # ========== Develop Phase ==========
+    NO_CHANGES_NEEDED = "CAFE_NO_CHANGES_NEEDED"  # Developer believes no changes needed (dispute reviewer)
+    SKIP_REVIEW = "CAFE_SKIP_REVIEW"              # User agreed with developer, skip review phase
+
     # ========== Authorization ==========
     NEED_PERMISSION = "CAFE_NEED_PERMISSION"       # Need user permission
 
