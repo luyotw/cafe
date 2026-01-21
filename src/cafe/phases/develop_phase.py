@@ -1114,6 +1114,7 @@ Read {agent_file} to understand your complete role definition and responsibiliti
 - Maximize code reuse by looking for existing patterns and utilities"""
 
             # Calculate output file path for this iteration
+            iteration_dir = self._get_iteration_dir(self.iteration)
             output_file = str(iteration_dir / "output.md")
 
             generate_develop_checklist(
