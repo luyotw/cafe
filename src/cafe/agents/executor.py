@@ -572,159 +572,173 @@ class AgentExecutor:
             except Exception as e:
                 print(f"⚠️  Failed to open streaming output file: {e}")
 
-        if process.stdout:
-            while True:
-                # Check if stdout has data available (with timeout)
-                if use_idle_timeout:
-                    # Unix-like systems: use select with timeout to prevent indefinite blocking
-                    ready, _, _ = select.select([process.stdout], [], [], 1.0)  # 1 second timeout per check
-                    
-                    if not ready:
-                        # No data available, check if idle timeout exceeded
-                        if time.time() - last_output_time > idle_timeout:
-                            print(f"\n⚠️  No output from {cli_name} for {idle_timeout}s, assuming completion...")
-                            idle_timeout_triggered = True
-                            break
-                        continue  # Continue waiting
-                
-                # Read the line
-                line = process.stdout.readline()
-                if not line:
-                    break
+        try:
+            if process.stdout:
+                while True:
+                    # Check if stdout has data available (with timeout)
+                    if use_idle_timeout:
+                        # Unix-like systems: use select with timeout to prevent indefinite blocking
+                        ready, _, _ = select.select([process.stdout], [], [], 1.0)  # 1 second timeout per check
 
-                # Update last output time (if tracking)
-                if use_idle_timeout:
-                    last_output_time = time.time()
+                        if not ready:
+                            # No data available, check if idle timeout exceeded
+                            if time.time() - last_output_time > idle_timeout:
+                                print(f"\n⚠️  No output from {cli_name} for {idle_timeout}s, assuming completion...")
+                                idle_timeout_triggered = True
+                                break
+                            continue  # Continue waiting
 
-                # Write line to streaming output file immediately
-                if streaming_file_handle:
-                    try:
-                        if parse_stream_json:
-                            # For stream-json: write raw JSON line
-                            streaming_file_handle.write(line)
-                        else:
-                            # For non-stream-json: wrap in JSON object with index and timestamp
-                            from datetime import datetime
-                            json_obj = {
-                                "index": streaming_line_index,
-                                "timestamp": datetime.now().astimezone().isoformat(),
-                                "content": line.rstrip('\n')
-                            }
-                            streaming_file_handle.write(json.dumps(json_obj, ensure_ascii=False) + "\n")
-                            streaming_line_index += 1
-                        streaming_file_handle.flush()
-                    except Exception as e:
-                        print(f"⚠️  Failed to write to streaming output file: {e}")
+                    # Read the line
+                    line = process.stdout.readline()
+                    if not line:
+                        break
 
-                if parse_stream_json:
-                    # Parse stream-json format
-                    try:
-                        data = json.loads(line.strip())
+                    # Update last output time (if tracking)
+                    if use_idle_timeout:
+                        last_output_time = time.time()
 
-                        # Always collect the line for response_parser (e.g., Gemini needs last line)
-                        output_lines.append(line)
+                    # Write line to streaming output file immediately
+                    if streaming_file_handle:
+                        try:
+                            if parse_stream_json:
+                                # For stream-json: write raw JSON line
+                                streaming_file_handle.write(line)
+                            else:
+                                # For non-stream-json: wrap in JSON object with index and timestamp
+                                from datetime import datetime
+                                json_obj = {
+                                    "index": streaming_line_index,
+                                    "timestamp": datetime.now().astimezone().isoformat(),
+                                    "content": line.rstrip('\n')
+                                }
+                                streaming_file_handle.write(json.dumps(json_obj, ensure_ascii=False) + "\n")
+                                streaming_line_index += 1
+                            streaming_file_handle.flush()
+                        except Exception as e:
+                            print(f"⚠️  Failed to write to streaming output file: {e}")
 
-                        # Check for error field (e.g., "invalid_request" for prompt too long)
-                        if "error" in data and data.get("error") == "invalid_request":
-                            # Extract error message from response text
-                            error_text = response_text or ""
-                            if "message" in data and "content" in data["message"]:
-                                for content_block in data["message"]["content"]:
-                                    if content_block.get("type") == "text":
-                                        error_text = content_block.get("text", "")
+                    if parse_stream_json:
+                        # Parse stream-json format
+                        try:
+                            data = json.loads(line.strip())
 
-                            # Raise error with specific type for session recovery handling
-                            err = AgentExecutionError(f"{cli_name} invalid request: {error_text}")
-                            err.error_type = "invalid_request"
-                            err.cli_command_args = cmd[1:]
-                            raise err
+                            # Always collect the line for response_parser (e.g., Gemini needs last line)
+                            output_lines.append(line)
 
-                        # Extract session_id (from init message for Gemini, or any message for Claude)
-                        if "session_id" in data and not session_id:
-                            session_id = data["session_id"]
+                            # Check for error field (e.g., "invalid_request" for prompt too long)
+                            if "error" in data and data.get("error") == "invalid_request":
+                                # Extract error message from response text
+                                error_text = response_text or ""
+                                if "message" in data and "content" in data["message"]:
+                                    for content_block in data["message"]["content"]:
+                                        if content_block.get("type") == "text":
+                                            error_text = content_block.get("text", "")
 
-                        # Extract token usage (usually in final message)
-                        if "usage" in data:
-                            usage_data = data["usage"]
-                            token_usage = TokenUsage(
-                                input_tokens=usage_data.get("input_tokens", 0),
-                                output_tokens=usage_data.get("output_tokens", 0),
-                                cache_creation_input_tokens=usage_data.get("cache_creation_input_tokens", 0),
-                                cache_read_input_tokens=usage_data.get("cache_read_input_tokens", 0),
-                            )
+                                # Raise error with specific type for session recovery handling
+                                err = AgentExecutionError(f"{cli_name} invalid request: {error_text}")
+                                err.error_type = "invalid_request"
+                                err.cli_command_args = cmd[1:]
+                                raise err
 
-                        if "total_cost_usd" in data:
-                            token_usage.total_cost_usd = data["total_cost_usd"]
+                            # Extract session_id (from init message for Gemini, or any message for Claude)
+                            if "session_id" in data and not session_id:
+                                session_id = data["session_id"]
 
-                        # Extract duration (from result message)
-                        if "duration_ms" in data:
-                            token_usage.duration_ms = data["duration_ms"]
-                        if "duration_api_ms" in data:
-                            token_usage.duration_api_ms = data["duration_api_ms"]
-
-                        # Extract stats (Gemini format)
-                        if "stats" in data:
-                            stats_data = data["stats"]
-                            if "total_tokens" in stats_data:
-                                token_usage.input_tokens = stats_data.get("input_tokens", 0)
-                                token_usage.output_tokens = stats_data.get("output_tokens", 0)
-                            if "duration_ms" in stats_data:
-                                token_usage.duration_ms = stats_data["duration_ms"]
-
-                        # Extract model (from init or result message)
-                        if "model" in data and data["model"]:
-                            model = data["model"]
-
-                        # Check for result message (indicates completion for Gemini/Claude)
-                        # When type is "result", the CLI has completed and we should stop reading
-                        if data.get("type") == "result":
-                            break
-
-                        # Extract content using custom extractor or default Claude extractor
-                        # FIXME: Should implement extractors seperately for each CLI
-                        if json_content_extractor:
-                            content = json_content_extractor(data)
-                            if content:
-                                print(content, end='\n\n', flush=True)
-                                streaming_log.append(content)
-                                response_text = content  # Only save the last fragment
-                        else:
-                            # Default Claude format extractor
-                            # Extract content from message.content[] (new Claude format)
-                            if "message" in data and "content" in data["message"]:
-                                for content_block in data["message"]["content"]:
-                                    if content_block.get("type") == "text":
-                                        text = content_block.get("text", "")
-                                        print(text, end='\n\n', flush=True)
-                                        streaming_log.append(text)
-                                        response_text = text  # Only save the last fragment
-
-                            # Old format: direct content field
-                            elif "content" in data:
-                                content = data["content"]
-                                print(content, end='\n\n', flush=True)
-                                streaming_log.append(content)
-                                response_text = content  # Only save the last fragment
-
-                        # Extract permission_denials (usually in final message)
-                        if "permission_denials" in data and data["permission_denials"]:
-                            for denial_data in data["permission_denials"]:
-                                permission_denials.append(
-                                    PermissionDenial(
-                                        tool_name=denial_data["tool_name"],
-                                        tool_input=denial_data["tool_input"]
-                                    )
+                            # Extract token usage (usually in final message)
+                            if "usage" in data:
+                                usage_data = data["usage"]
+                                token_usage = TokenUsage(
+                                    input_tokens=usage_data.get("input_tokens", 0),
+                                    output_tokens=usage_data.get("output_tokens", 0),
+                                    cache_creation_input_tokens=usage_data.get("cache_creation_input_tokens", 0),
+                                    cache_read_input_tokens=usage_data.get("cache_read_input_tokens", 0),
                                 )
 
-                    except json.JSONDecodeError:
-                        # Non-JSON line, just print it
+                            if "total_cost_usd" in data:
+                                token_usage.total_cost_usd = data["total_cost_usd"]
+
+                            # Extract duration (from result message)
+                            if "duration_ms" in data:
+                                token_usage.duration_ms = data["duration_ms"]
+                            if "duration_api_ms" in data:
+                                token_usage.duration_api_ms = data["duration_api_ms"]
+
+                            # Extract stats (Gemini format)
+                            if "stats" in data:
+                                stats_data = data["stats"]
+                                if "total_tokens" in stats_data:
+                                    token_usage.input_tokens = stats_data.get("input_tokens", 0)
+                                    token_usage.output_tokens = stats_data.get("output_tokens", 0)
+                                if "duration_ms" in stats_data:
+                                    token_usage.duration_ms = stats_data["duration_ms"]
+
+                            # Extract model (from init or result message)
+                            if "model" in data and data["model"]:
+                                model = data["model"]
+
+                            # Check for result message (indicates completion for Gemini/Claude)
+                            # When type is "result", the CLI has completed and we should stop reading
+                            if data.get("type") == "result":
+                                break
+
+                            # Extract content using custom extractor or default Claude extractor
+                            # FIXME: Should implement extractors seperately for each CLI
+                            if json_content_extractor:
+                                content = json_content_extractor(data)
+                                if content:
+                                    print(content, end='\n\n', flush=True)
+                                    streaming_log.append(content)
+                                    response_text = content  # Only save the last fragment
+                            else:
+                                # Default Claude format extractor
+                                # Extract content from message.content[] (new Claude format)
+                                if "message" in data and "content" in data["message"]:
+                                    for content_block in data["message"]["content"]:
+                                        if content_block.get("type") == "text":
+                                            text = content_block.get("text", "")
+                                            print(text, end='\n\n', flush=True)
+                                            streaming_log.append(text)
+                                            response_text = text  # Only save the last fragment
+
+                                # Old format: direct content field
+                                elif "content" in data:
+                                    content = data["content"]
+                                    print(content, end='\n\n', flush=True)
+                                    streaming_log.append(content)
+                                    response_text = content  # Only save the last fragment
+
+                            # Extract permission_denials (usually in final message)
+                            if "permission_denials" in data and data["permission_denials"]:
+                                for denial_data in data["permission_denials"]:
+                                    permission_denials.append(
+                                        PermissionDenial(
+                                            tool_name=denial_data["tool_name"],
+                                            tool_input=denial_data["tool_input"]
+                                        )
+                                    )
+
+                        except json.JSONDecodeError:
+                            # Non-JSON line, just print it
+                            print(line, end='')
+                            output_lines.append(line)
+                    else:
+                        # Simple line-by-line streaming (Copilot style)
                         print(line, end='')
                         output_lines.append(line)
-                else:
-                    # Simple line-by-line streaming (Copilot style)
-                    print(line, end='')
-                    output_lines.append(line)
-                    streaming_log.append(line)  # Record each line to streaming_log
+                        streaming_log.append(line)  # Record each line to streaming_log
+        except KeyboardInterrupt:
+            print(f"\n\n⚠️  Interrupted by user, terminating {cli_name} process...")
+            process.terminate()
+            try:
+                process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                print(f"⚠️  Process did not respond to SIGTERM, sending SIGKILL...")
+                process.kill()
+                process.wait(timeout=2)
+            # Close streaming file handle if open
+            if streaming_file_handle:
+                streaming_file_handle.close()
+            raise
 
         print(f"\n{'='*80}\n")
 
