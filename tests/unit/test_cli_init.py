@@ -312,6 +312,9 @@ class TestInitCommandConfigSaving:
         assert config["agents"]["developer"]["cli"] == "claude"
         # Verify phase-specific models are stored (not role-level)
         assert config["agents"]["developer"]["plan"]["model"] == "sonnet"
+        assert "model" not in config["agents"]["pm"]
+        assert "model" not in config["agents"]["developer"]
+        assert "model" not in config["agents"]["reviewer"]
         assert config["agents"]["reviewer"]["name"] == "Richard"
         assert config["agents"]["reviewer"]["cli"] == "gemini"
 
