@@ -438,17 +438,7 @@ class SpecPhase(Phase):
 
         except KeyboardInterrupt:
             # User paused with Ctrl+C - save progress and allow resume
-            self.display.console.print("\n\n⏸️  Paused by user (Ctrl+C).")
-            self.display.console.print(f"💾 Progress saved. Current iteration: {self.iteration}")
-            self.display.console.print(f"📝 To resume, run: cafe spec {self.issue_name}")
-            return PhaseResult(
-                status=PhaseStatus.IN_PROGRESS,
-                message="Paused by user - can resume later",
-                data={
-                    "iterations": self.iteration,
-                    "spec_file": self.spec_file,  # Issue 1: Add full file path
-                },
-            )
+            return self._handle_keyboard_interrupt("spec", {"spec_file": self.spec_file})
         except Exception as e:
             # Use base class helper to handle critical errors
             result = self._handle_exception_in_execute(e, "Spec phase failed")

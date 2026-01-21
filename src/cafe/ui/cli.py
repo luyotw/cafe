@@ -2893,6 +2893,12 @@ def develop(
             console.print(f"[red]❌ Development failed: {result.message}[/red]")
             raise typer.Exit(1)
         elif result.status.value == "in_progress":
+            # Check if user interrupted (Ctrl+C)
+            if result.data.get("user_interrupted", False):
+                console.print(f"[yellow]⏸️  Development paused: {result.message}[/yellow]")
+                console.print("[dim]Resume with: cafe develop[/dim]")
+                return
+            
             # Development paused (e.g., NEED_CLARIFICATION, NEED_PERMISSION)
             if auto:
                 _execute_next_phase_auto("develop", issue_name)

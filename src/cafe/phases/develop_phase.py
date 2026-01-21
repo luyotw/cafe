@@ -1536,14 +1536,7 @@ If NO (does not meet criteria): Continue with development work and return approp
             )
 
         except KeyboardInterrupt:
-            print("\n\n⏸️  Paused by user (Ctrl+C).")
-            print(f"💾 Progress saved. Current iteration: {self.iteration}")
-            print(f"📝 To resume, run: cafe develop {self.issue_name}")
-            return PhaseResult(
-                status=PhaseStatus.IN_PROGRESS,
-                message="Paused by user - can resume later",
-                data={"iterations": self.iteration},
-            )
+            return self._handle_keyboard_interrupt("develop")
         except Exception as e:
             return self._handle_exception_in_execute(e, "Development phase failed")
 
