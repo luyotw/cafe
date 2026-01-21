@@ -486,6 +486,10 @@ class DevelopPhase(Phase):
         develop_file = develop_dir / f"iteration_{self.iteration - 1:03d}" / "output.md"
         if develop_file.exists():
             print(f"Developer's response: {develop_file}\n")
+            with open(develop_file, "r", encoding="utf-8") as f:
+                content = f.read()
+                print(content)
+                print(f"\n{'='*60}\n")
 
         choices = [
             {"name": "Agree - Skip review and proceed to PR", "value": "c"},
