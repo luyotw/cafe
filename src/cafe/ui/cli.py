@@ -5,6 +5,7 @@ import os
 import shutil
 import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
@@ -1898,7 +1899,33 @@ def reset(
             iterations_file = phase_dir / "iterations.jsonl"
 
             if target_iteration > 0:
-                # Read iterations.jsonl to get status for target iteration
+                # Read target iteration's context.json to get status_code
+                target_context_file = phase_dir / f"iteration_{target_iteration:03d}" / "context.json"
+                target_status_code = None
+                target_timestamp = None
+
+                if target_context_file.exists():
+                    with open(target_context_file, "r", encoding="utf-8") as f:
+                        target_context = json.load(f)
+                        target_status_code = target_context.get("status_code")
+                        target_timestamp = target_context.get("timestamp")
+
+                # Update status.json with target iteration's data
+                status_data = {
+                    "phase": phase,
+                    "status": "completed",
+                    "status_code": target_status_code,
+                    "timestamp": target_timestamp or datetime.now().astimezone().isoformat(),
+                    "iteration": target_iteration,
+                    "message": f"Phase completed with {target_status_code}" if target_status_code else "Phase reset to this iteration",
+                }
+
+                with open(status_file, "w", encoding="utf-8") as f:
+                    json.dump(status_data, f, indent=2, ensure_ascii=False)
+
+                console.print(f"[green]✓ Updated {phase} phase status to iteration_{target_iteration:03d}[/green]")
+
+                # Update iterations.jsonl to remove deleted iterations
                 if iterations_file.exists():
                     iterations_data = []
                     content = iterations_file.read_text(encoding="utf-8").strip()
@@ -1907,44 +1934,12 @@ def reset(
                             if line.strip():
                                 iterations_data.append(json.loads(line))
 
-                    # Find the target iteration's data
-                    target_data = None
-                    for iteration_record in iterations_data:
-                        if iteration_record.get("iteration") == target_iteration:
-                            target_data = iteration_record
-                            break
+                    kept_iterations = [rec for rec in iterations_data if rec.get("iteration", 0) <= target_iteration]
+                    with open(iterations_file, "w", encoding="utf-8") as f:
+                        for record in kept_iterations:
+                            f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
-                    if target_data:
-                        # Update status.json with target iteration's data
-                        status_data = {
-                            "phase": phase,
-                            "status": "completed",
-                            "status_code": target_data.get("status"),
-                            "timestamp": target_data.get("timestamp"),
-                            "iteration": target_iteration,
-                            "message": f"Phase completed with {target_data.get('status')}",
-                        }
-
-                        # Add end_time if it exists in the iteration data
-                        if "end_time" in target_data:
-                            status_data["end_time"] = target_data["end_time"]
-
-                        with open(status_file, "w", encoding="utf-8") as f:
-                            json.dump(status_data, f, indent=2, ensure_ascii=False)
-
-                        console.print(f"[green]✓ Updated {phase} phase status to iteration_{target_iteration:03d}[/green]")
-
-                        # Update iterations.jsonl to remove deleted iterations
-                        kept_iterations = [rec for rec in iterations_data if rec.get("iteration", 0) <= target_iteration]
-                        with open(iterations_file, "w", encoding="utf-8") as f:
-                            for record in kept_iterations:
-                                f.write(json.dumps(record, ensure_ascii=False) + "\n")
-
-                        console.print(f"[green]✓ Updated iterations.jsonl[/green]")
-                    else:
-                        console.print(f"[yellow]⚠️  Could not find iteration {target_iteration} in iterations.jsonl[/yellow]")
-                else:
-                    console.print(f"[yellow]⚠️  iterations.jsonl not found[/yellow]")
+                    console.print(f"[green]✓ Updated iterations.jsonl[/green]")
             else:
                 # No iterations left, delete status.json and iterations.jsonl
                 if status_file.exists():
