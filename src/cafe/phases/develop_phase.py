@@ -1113,6 +1113,9 @@ Read {agent_file} to understand your complete role definition and responsibiliti
 - Use same language as existing code comments when writing new comments
 - Maximize code reuse by looking for existing patterns and utilities"""
 
+            # Calculate output file path for this iteration
+            output_file = str(iteration_dir / "output.md")
+
             generate_develop_checklist(
                 agent_name=self.dev_agent,
                 spec_file_path=self.spec_file,
@@ -1122,6 +1125,7 @@ Read {agent_file} to understand your complete role definition and responsibiliti
                 correction_mode=correction_mode,
                 review_file_path=review_file,
                 basic_principles=basic_principles,
+                output_file=output_file,
             )
 
             # Prepare user_input for this iteration
@@ -1199,6 +1203,117 @@ Read {agent_file} to understand your complete role definition and responsibiliti
                             data={
                                 "iterations": self.iteration,
                                 "last_response": response,
+                            },
+                        )
+                elif response_status == PhaseStatusCode.NO_CHANGES_NEEDED:
+                    # Check if output.md exists and has content
+                    print(f"\n⚠️  Developer returned CAFE_NO_CHANGES_NEEDED, checking for reasoning in output.md...")
+
+                    iteration_dir = self._get_iteration_dir(self.iteration)
+                    output_file = iteration_dir / "output.md"
+
+                    has_reasoning = output_file.exists() and output_file.stat().st_size > 0
+
+                    if not has_reasoning:
+                        # No reasoning provided, require agent to write it
+                        print(f"⚠️  No reasoning found in output.md. Requesting agent to provide explanation...")
+
+                        continue_prompt = f"""Your response returned CAFE_NO_CHANGES_NEEDED.
+
+You MUST provide your reasoning and explain why the reviewer's feedback is incorrect or unnecessary.
+
+Please:
+1. Write your detailed reasoning to {output_file}
+2. Return CAFE_NO_CHANGES_NEEDED again
+
+Do NOT return any other status code until you have written your reasoning."""
+
+                        # Execute agent again to get reasoning
+                        try:
+                            continuation_response, continuation_streaming_log, continuation_token_usage, _, continuation_streaming_log_list, _ = self.agent_manager.execute(
+                                self.dev_agent,
+                                continue_prompt,
+                                allowed_tools=allowed_tools,
+                                allowed_directories=self._get_allowed_directories(),
+                            )
+
+                            # Extract status code from continuation response
+                            continuation_status = StatusCodeParser.extract(
+                                continuation_response,
+                                valid_codes=[PhaseStatusCode.NO_CHANGES_NEEDED],
+                            )
+
+                            # Merge responses
+                            merged_response = response + "\n\n[Reasoning Request]\n" + continuation_response
+
+                            # Get streaming logs from context
+                            context_file = iteration_dir / "context.json"
+                            original_streaming_log = []
+                            if context_file.exists():
+                                with open(context_file, "r", encoding="utf-8") as f:
+                                    context_data = json.load(f)
+                                    original_streaming_log = context_data.get("streaming_log", [])
+
+                            merged_streaming_log = original_streaming_log + continuation_streaming_log_list
+
+                            # Update iteration history
+                            self._update_iteration_history(
+                                phase_specific_data={
+                                    "response": merged_response,
+                                    "streaming_log": merged_streaming_log,
+                                },
+                                prompt=prompt,
+                                agent_cli=None,
+                                agent_session_id=None,
+                                allowed_tools=allowed_tools,
+                            )
+
+                            # Check again if output.md has content now
+                            has_reasoning_now = output_file.exists() and output_file.stat().st_size > 0
+
+                            if has_reasoning_now and continuation_status == PhaseStatusCode.NO_CHANGES_NEEDED:
+                                print(f"✅ Developer provided reasoning in output.md")
+                                # Return IN_PROGRESS and wait for user decision in next iteration
+                                return PhaseResult(
+                                    status=PhaseStatus.IN_PROGRESS,
+                                    message=f"Developer returned NO_CHANGES_NEEDED with reasoning in iteration {self.iteration}. Run command again to respond.",
+                                    data={
+                                        "iterations": self.iteration,
+                                        "last_response": merged_response,
+                                        "status_code": PhaseStatusCode.NO_CHANGES_NEEDED.value,
+                                    },
+                                )
+                            else:
+                                # Still no valid reasoning
+                                print(f"❌ Agent did not provide reasoning in output.md")
+                                return PhaseResult(
+                                    status=PhaseStatus.FAILED,
+                                    message=f"Developer returned NO_CHANGES_NEEDED but did not provide reasoning in output.md",
+                                    data={
+                                        "iterations": self.iteration,
+                                        "last_response": merged_response,
+                                    },
+                                )
+                        except Exception as e:
+                            print(f"⚠️  Failed to request reasoning: {e}")
+                            return PhaseResult(
+                                status=PhaseStatus.FAILED,
+                                message=f"Error while requesting reasoning for NO_CHANGES_NEEDED: {e}",
+                                data={
+                                    "iterations": self.iteration,
+                                    "last_response": response,
+                                },
+                            )
+                    else:
+                        print(f"✅ Developer provided reasoning in output.md")
+                        # Return IN_PROGRESS and wait for user decision in next iteration
+                        return PhaseResult(
+                            status=PhaseStatus.IN_PROGRESS,
+                            message=f"Developer returned NO_CHANGES_NEEDED with reasoning in iteration {self.iteration}. Run command again to respond.",
+                            data={
+                                "iterations": self.iteration,
+                                "last_response": response,
+                                "status_code": PhaseStatusCode.NO_CHANGES_NEEDED.value,
                             },
                         )
                 elif response_status == PhaseStatusCode.NEED_CLARIFICATION:
