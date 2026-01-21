@@ -689,15 +689,15 @@ def init() -> None:
             phase_models = []
             for phase in phases:
                 if phase in role_config and "model" in role_config[phase]:
-                    phase_models.append(f"{phase}: {role_config[phase]['model']}")
+                    phase_models.append(f"{phase}={role_config[phase]['model']}")
                 else:
-                    phase_models.append(f"{phase}: default")
+                    phase_models.append(f"{phase}=default")
 
             models_display = ", ".join(phase_models) if phase_models else "default"
 
             console.print(
                 f"- {role_display}: {role_config['cli']} "
-                f"(models: {models_display}) (agent: {role_config['name']})"
+                f"(agent: {role_config['name']}, models: {models_display})"
             )
 
         console.print("\n[cyan]You can now use `cafe prepare` to start a new development task.[/cyan]")
