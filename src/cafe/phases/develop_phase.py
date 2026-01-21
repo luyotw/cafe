@@ -1247,13 +1247,15 @@ Do NOT return any other status code until you have written your reasoning."""
                             # Merge responses
                             merged_response = response + "\n\n[Reasoning Request]\n" + continuation_response
 
-                            # Get streaming logs from context
+                            # Get streaming logs and prompt from context
                             context_file = iteration_dir / "context.json"
                             original_streaming_log = []
+                            original_prompt = ""
                             if context_file.exists():
                                 with open(context_file, "r", encoding="utf-8") as f:
                                     context_data = json.load(f)
                                     original_streaming_log = context_data.get("streaming_log", [])
+                                    original_prompt = context_data.get("prompt", "")
 
                             merged_streaming_log = original_streaming_log + continuation_streaming_log_list
 
@@ -1263,7 +1265,7 @@ Do NOT return any other status code until you have written your reasoning."""
                                     "response": merged_response,
                                     "streaming_log": merged_streaming_log,
                                 },
-                                prompt=prompt,
+                                prompt=original_prompt,
                                 agent_cli=None,
                                 agent_session_id=None,
                                 allowed_tools=allowed_tools,
