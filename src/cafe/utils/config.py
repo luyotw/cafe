@@ -118,7 +118,7 @@ class ConfigManager:
             config: Configuration to save
         """
         with open(self.config_file, "w") as f:
-            yaml.dump(config, f, default_flow_style=False, allow_unicode=True)
+            yaml.dump(config, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
         self._config = config
 
     def validate_config(self, config: Dict[str, Any]) -> bool:
