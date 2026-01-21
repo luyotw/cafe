@@ -188,6 +188,7 @@ def generate_develop_checklist(
     correction_mode: bool = False,
     review_file_path: Optional[str] = None,
     basic_principles: Optional[str] = None,
+    output_file: Optional[str] = None,
 ) -> None:
     """Generate checklist file for develop phase.
 
@@ -200,6 +201,7 @@ def generate_develop_checklist(
         correction_mode: True if in correction mode, False for normal mode
         review_file_path: Path to review file (for correction mode)
         basic_principles: Basic principles text in "- item" format (optional)
+        output_file: Path to output file (for NO_CHANGES_NEEDED reasoning)
     """
     # Get agent file path
     agent_file = AgentManager.get_agent_file_path(agent_name, "developer")
@@ -231,6 +233,8 @@ def generate_develop_checklist(
         placeholders["develop_file"] = develop_file
     if review_file_path:
         placeholders["review_file_path"] = review_file_path
+    if output_file:
+        placeholders["output_file"] = output_file
 
     # Resolve placeholders
     checklist_content = resolve_checklist_placeholders(checklist_content, placeholders)
