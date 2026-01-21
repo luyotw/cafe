@@ -1483,6 +1483,18 @@ class Phase(ABC):
                 # Validation failed after max retries - alert user
                 print(f"⚠️  Checklist validation failed after maximum retries")
                 # Continue with original response and status_code
+        else:
+            # No checklist validation needed - save status_code to context.json directly
+            if status_code is None:
+                raise ValueError(f"Failed to extract status code from agent response in iteration {self.iteration}")
+            iteration_dir = self._get_iteration_dir(self.iteration)
+            context_file = iteration_dir / "context.json"
+            if context_file.exists():
+                with open(context_file, "r", encoding="utf-8") as f:
+                    context_data = json.load(f)
+                context_data["status_code"] = status_code.value
+                with open(context_file, "w", encoding="utf-8") as f:
+                    json.dump(context_data, f, ensure_ascii=False, indent=2)
 
         # Use base class method to handle standard status codes
         result = self._handle_standard_status_codes(
