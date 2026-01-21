@@ -66,6 +66,38 @@ class Phase(ABC):
             data={},
         )
 
+    def _handle_keyboard_interrupt(self, phase_name: str, data: Optional[Dict[str, Any]] = None) -> PhaseResult:
+        """Unified KeyboardInterrupt handling for all phases.
+        
+        This method should be called in the except KeyboardInterrupt block of each phase's execute().
+        It displays pause message and returns IN_PROGRESS result with user_interrupted flag.
+        
+        Args:
+            phase_name: Name of the phase (e.g., "spec", "develop", "review")
+            data: Additional data to include in the result (e.g., iterations, file paths)
+            
+        Returns:
+            PhaseResult with IN_PROGRESS status and user_interrupted flag set to True
+        """
+        issue_name = getattr(self, 'issue_name', None) or getattr(self, 'issue_id', 'unknown')
+        iteration = getattr(self, 'iteration', None)
+        
+        print("\n\n⏸️  Paused by user (Ctrl+C).")
+        if iteration is not None:
+            print(f"💾 Progress saved. Current iteration: {iteration}")
+        print(f"📝 To resume, run: cafe {phase_name} {issue_name if issue_name != 'unknown' else ''}")
+        
+        result_data = data or {}
+        result_data["user_interrupted"] = True
+        if iteration is not None:
+            result_data.setdefault("iterations", iteration)
+        
+        return PhaseResult(
+            status=PhaseStatus.IN_PROGRESS,
+            message="Paused by user - can resume later",
+            data=result_data,
+        )
+
     @abstractmethod
     def execute(self) -> PhaseResult:
         """Execute the phase and return the result.
