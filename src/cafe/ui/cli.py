@@ -34,7 +34,7 @@ from cafe.ui.init_helpers import (
 from cafe.ui.phase_prompts import prompt_for_input_method, prompt_for_rigor
 from cafe.ui.template_selector import select_template
 from cafe.services.delta_display import DeltaDisplay
-from cafe.utils.config import ConfigManager
+from cafe.utils.config import ConfigManager, ConfigError
 from cafe.utils.git_utils import is_branch_initialized
 from cafe.utils.github import GitHubError, GitHubOps
 
@@ -3432,7 +3432,11 @@ def config(
 
     # No arguments: show all config
     if not action:
-        loaded_config = config_manager.load_config()
+        try:
+            loaded_config = config_manager.load_config()
+        except ConfigError as e:
+            console.print(f"[red]{e}[/red]")
+            return
         console.print("[bold cyan]Current Configuration:[/bold cyan]")
         console.print(yaml.dump(loaded_config, default_flow_style=False, allow_unicode=True))
         return
