@@ -135,27 +135,22 @@ class TestDevelopPhasePromptGeneration:
         # Mock get_agent_file_path and get_pr_comments
         # Must patch at the module where they're imported (develop_phase) not where they're defined (github)
         with patch('cafe.agents.manager.AgentManager.get_agent_file_path', return_value=str(agent_file)), \
-             patch('cafe.phases.develop_phase.get_pr_comments', return_value=[
-                {
-                    "id": 1,
-                    "body": "Please fix this",
-                    "user": {"login": "reviewer"},
-                    "created_at": "2026-01-07T03:31:33Z",
-                    "path": "test.py",
-                    "line": 10
-                }
-            ]), \
-             patch('cafe.phases.develop_phase.filter_unresolved_comments', return_value=[
-                {
-                    "id": 1,
-                    "body": "Please fix this",
-                    "user": {"login": "reviewer"},
-                    "created_at": "2026-01-07T03:31:33Z",
-                    "path": "test.py",
-                    "line": 10
-                }
-            ]), \
-             patch('cafe.phases.develop_phase.format_comments_for_prompt', return_value="Formatted PR comments"):
+             patch('cafe.phases.develop_phase.get_all_pr_comments') as mock_get_all, \
+             patch('cafe.phases.develop_phase.format_comments_for_prompt', return_value="Formatted PR comments") as mock_format:
+
+            from cafe.utils.github import PRComment
+            mock_get_all.return_value = [
+                PRComment(
+                    id="1",
+                    body="Please fix this",
+                    author="reviewer",
+                    created_at="2026-01-07T03:31:33Z",
+                    path="test.py",
+                    line=10,
+                    is_resolved=False,
+                    comment_type="review"
+                )
+            ]
 
             # Create phase with pr_number set
             phase = DevelopPhase(
@@ -216,27 +211,22 @@ class TestDevelopPhasePromptGeneration:
         # Mock get_agent_file_path and get_pr_comments
         # Must patch at the module where they're imported (develop_phase) not where they're defined (github)
         with patch('cafe.agents.manager.AgentManager.get_agent_file_path', return_value=str(agent_file)), \
-             patch('cafe.phases.develop_phase.get_pr_comments', return_value=[
-                {
-                    "id": 1,
-                    "body": "Please fix this",
-                    "user": {"login": "reviewer"},
-                    "created_at": "2026-01-07T03:31:33Z",
-                    "path": "test.py",
-                    "line": 10
-                }
-            ]), \
-             patch('cafe.phases.develop_phase.filter_unresolved_comments', return_value=[
-                {
-                    "id": 1,
-                    "body": "Please fix this",
-                    "user": {"login": "reviewer"},
-                    "created_at": "2026-01-07T03:31:33Z",
-                    "path": "test.py",
-                    "line": 10
-                }
-            ]), \
-             patch('cafe.phases.develop_phase.format_comments_for_prompt', return_value="Formatted PR comments"):
+             patch('cafe.phases.develop_phase.get_all_pr_comments') as mock_get_all, \
+             patch('cafe.phases.develop_phase.format_comments_for_prompt', return_value="Formatted PR comments") as mock_format:
+
+            from cafe.utils.github import PRComment
+            mock_get_all.return_value = [
+                PRComment(
+                    id="1",
+                    body="Please fix this",
+                    author="reviewer",
+                    created_at="2026-01-07T03:31:33Z",
+                    path="test.py",
+                    line=10,
+                    is_resolved=False,
+                    comment_type="review"
+                )
+            ]
 
             # Create phase with pr_number set
             phase = DevelopPhase(
