@@ -2623,13 +2623,6 @@ def plan(
                 else:  # CAFE_READY_FOR_REVIEW
                     console.print("[yellow]📋 Plan ready for review[/yellow]")
 
-                # Display delta if not first iteration
-                _display_iteration_delta(
-                    iteration_count,
-                    result.data.get("plan_file"),
-                    console,
-                )
-
                 # Decide whether to continue
                 should_continue = False
                 if auto:
