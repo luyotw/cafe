@@ -15,6 +15,7 @@ SPEC_EXECUTION_STEPS_ITERATION_1 = """## Checklist
 [ ] Search codebase using Read/Grep tools to find answers before asking users
 [ ] Identify unclear areas that need clarification
 [ ] Write analysis results to {current_spec_file} (NOT in your response)
+[ ] Write content in your native language
 [ ] Write ONLY the status code in your response
 [ ] Confirm: No technical details were included (no implementation, architecture, languages, frameworks, databases)
 [ ] Confirm: No technical solutions or suggestions were provided
@@ -29,6 +30,7 @@ SPEC_EXECUTION_STEPS_ITERATION_N = """## Checklist
 [ ] Review user's answer (provided below)
 [ ] Integrate new information into specification
 [ ] Write updated analysis to {current_spec_file} (NOT in your response)
+[ ] Write content in your native language
 [ ] Write ONLY the status code in your response
 [ ] Confirm: No technical details were included (no implementation, architecture, languages, frameworks, databases)
 [ ] Confirm: No technical solutions or suggestions were provided

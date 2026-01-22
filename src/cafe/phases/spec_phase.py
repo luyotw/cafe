@@ -73,6 +73,7 @@ class SpecPhase(Phase):
         spec_file: Optional[str] = None,  # Deprecated: kept for backward compatibility
         template_path: Optional[Path] = None,
         template_mode: str = "auto",
+        spec_sync_remote: Optional[bool] = None,
     ) -> None:
         """Initialize requirements phase.
 
@@ -89,6 +90,7 @@ class SpecPhase(Phase):
             spec_file: (Deprecated) Spec file path - ignored, kept for backward compatibility
             template_path: Path to spec template file (optional)
             template_mode: Template selection mode ('auto' or 'manual', default: 'auto')
+            spec_sync_remote: Enable syncing confirmed spec to remote GitHub issue (None=read from config, default: True)
         """
         super().__init__(interactive=interactive, git_ops=git_ops)
 
@@ -102,6 +104,16 @@ class SpecPhase(Phase):
         self.template_path = template_path
         self.template_mode = template_mode
         self.phase_name = "spec"  # For base class progress tracking
+
+        # Set sync flag with explicit override handling
+        # If explicitly provided (not None), use that value
+        # Otherwise, will be loaded from config or default to True
+        if spec_sync_remote is not None:
+            self._spec_sync_remote = spec_sync_remote
+            self._spec_sync_remote_explicitly_set = True
+        else:
+            self._spec_sync_remote = True  # Default
+            self._spec_sync_remote_explicitly_set = False
 
         # Track if rigor was explicitly set (for interactive prompting)
         if rigor is not None:
@@ -783,9 +795,12 @@ class SpecPhase(Phase):
         """Sync confirmed spec to GitHub issue description.
 
         Only syncs when:
-        1. Spec was loaded from GitHub issue (has _config_issue_id)
-        2. User has confirmed the spec (CAFE_CONFIRMED status)
+        1. Sync flag is enabled (_spec_sync_remote)
+        2. Spec was loaded from GitHub issue (has _config_issue_id)
+        3. User has confirmed the spec (CAFE_CONFIRMED status)
         """
+        if not self._spec_sync_remote:
+            return
         if not self._config_issue_id:
             return
 
@@ -998,6 +1013,10 @@ class SpecPhase(Phase):
                     # Invalid rigor value in config, use default
                     pass
 
+            # Load sync_remote from spec section (only if not explicitly set via CLI)
+            if "sync_remote" in spec_config and not self._spec_sync_remote_explicitly_set:
+                self._spec_sync_remote = spec_config["sync_remote"]
+
     def _save_issue_config(self) -> None:
         """Save issue configuration (issue_id, rigor) to issue.yaml."""
         # Path: .cafe/issues/{issue_name}/issue.yaml
@@ -1020,6 +1039,9 @@ class SpecPhase(Phase):
 
         # Always save rigor (even if it's the default) so subsequent iterations use the same value
         config_data["spec"]["rigor"] = self.rigor.value
+
+        # Save sync_remote setting
+        config_data["spec"]["sync_remote"] = self._spec_sync_remote
 
         # Write config
         self._write_issue_config(config_file, config_data)

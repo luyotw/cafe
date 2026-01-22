@@ -35,6 +35,7 @@ class PlanPhase(Phase):
         template_path: Optional[str] = None,
         template_mode: str = "auto",
         user_input: str = "",
+        plan_sync_remote: Optional[bool] = None,
     ) -> None:
         """Initialize plan phase.
 
@@ -49,6 +50,7 @@ class PlanPhase(Phase):
             template_mode: Template selection mode ('auto' or 'manual', default: 'auto')
             interactive: Whether to allow interactive prompts (default: True)
             user_input: User input for non-interactive mode (default: "")
+            plan_sync_remote: Enable syncing confirmed plan to remote GitHub issue (None=read from config, default: True)
         """
         super().__init__(interactive=interactive, git_ops=git_ops)
 
@@ -62,6 +64,16 @@ class PlanPhase(Phase):
         self.display = Display()
         self.iteration = 0
         self.phase_name = "plan"  # For base class progress tracking
+
+        # Set sync flag with explicit override handling
+        # If explicitly provided (not None), use that value
+        # Otherwise, will be loaded from config or default to True
+        if plan_sync_remote is not None:
+            self._plan_sync_remote = plan_sync_remote
+            self._plan_sync_remote_explicitly_set = True
+        else:
+            self._plan_sync_remote = True  # Default
+            self._plan_sync_remote_explicitly_set = False
 
         # Determine issue name for history tracking (issue_dir is set by base class)
         if issue_name:
@@ -287,6 +299,9 @@ class PlanPhase(Phase):
                 continue_codes=[PhaseStatusCode.NEED_CLARIFICATION],
                 phase_specific_data={"dev_agent": self.dev_agent},
             )
+
+            # Save sync_remote setting to issue.yaml after each iteration
+            self._save_plan_config()
 
             if result:
                 return result
@@ -665,11 +680,7 @@ Please only return one status code (e.g., CAFE_READY_FOR_REVIEW) without any oth
         return [Path(plan_file)] if Path(plan_file).exists() else []
 
     def _load_plan_config(self) -> None:
-        """Load plan configuration (template) from issue.yaml if exists."""
-        # If template_path is already explicitly provided, don't override it
-        if self.template_path:
-            return
-
+        """Load plan configuration (template, sync_remote) from issue.yaml if exists."""
         # Path: .cafe/issues/{issue_name}/issue.yaml
         config_file = self.issue_dir / "issue.yaml"
 
@@ -678,7 +689,8 @@ Please only return one status code (e.g., CAFE_READY_FOR_REVIEW) without any oth
             # Load from plan section if exists
             plan_config = config_data.get("plan", {})
 
-            if "template" in plan_config:
+            # Load template (only if not explicitly provided)
+            if not self.template_path and "template" in plan_config:
                 template_name = plan_config["template"]
                 # If template is 'auto', set template_mode and skip path resolution
                 if template_name == "auto":
@@ -693,21 +705,50 @@ Please only return one status code (e.g., CAFE_READY_FOR_REVIEW) without any oth
                         self.template_path = str(template_path)
                         self.template_mode = "manual"
 
+            # Load sync_remote from plan section (only if not explicitly set via CLI)
+            if "sync_remote" in plan_config and not self._plan_sync_remote_explicitly_set:
+                self._plan_sync_remote = plan_config["sync_remote"]
+
+    def _save_plan_config(self) -> None:
+        """Save plan configuration (sync_remote) to issue.yaml."""
+        # Path: .cafe/issues/{issue_name}/issue.yaml
+        config_file = self.issue_dir / "issue.yaml"
+
+        # Read existing config to preserve other settings
+        existing_config = self._read_issue_config(config_file) or {}
+
+        # Prepare new config data
+        config_data = {**existing_config}
+
+        # Ensure plan section exists
+        if "plan" not in config_data:
+            config_data["plan"] = {}
+
+        # Save sync_remote setting
+        config_data["plan"]["sync_remote"] = self._plan_sync_remote
+
+        # Write config
+        self._write_issue_config(config_file, config_data)
+
     def _sync_plan_to_github(self) -> None:
         """Sync confirmed plan to GitHub issue as a comment.
 
         Only syncs when:
-        1. An associated GitHub issue ID exists in issue.yaml
-        2. User has confirmed the plan (CAFE_CONFIRMED status)
+        1. Sync flag is enabled (_plan_sync_remote)
+        2. An associated GitHub issue ID exists in issue.yaml
+        3. User has confirmed the plan (CAFE_CONFIRMED status)
         """
+        if not self._plan_sync_remote:
+            return
+
         # Path: .cafe/issues/{issue_name}/issue.yaml
         config_file = self.issue_dir / "issue.yaml"
-        
+
         # Try to get issue_id from top level first, then from spec section
         issue_id = self._get_issue_config_value(config_file, "issue_id")
         if not issue_id:
             issue_id = self._get_issue_config_value(config_file, "spec.issue_id")
-            
+
         if not issue_id:
             return
 

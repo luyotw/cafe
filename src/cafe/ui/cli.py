@@ -784,6 +784,16 @@ def prepare(
         "--auto-create-pr/--no-auto-create-pr",
         help="Automatically create PR after development (default: False, GitHub repos only)",
     ),
+    spec_sync_remote: bool = typer.Option(
+        True,
+        "--spec-sync-remote/--no-spec-sync-remote",
+        help="Enable/disable syncing spec to remote GitHub issue (default: enabled)",
+    ),
+    plan_sync_remote: bool = typer.Option(
+        True,
+        "--plan-sync-remote/--no-plan-sync-remote",
+        help="Enable/disable syncing plan to remote GitHub issue (default: enabled)",
+    ),
 ) -> None:
     """Prepare issue environment (directory, config, git branch) before running spec phase.
 
@@ -1031,10 +1041,12 @@ def prepare(
             spec_config["rigor"] = rigor
             if spec_template:
                 spec_config["template"] = spec_template
+            spec_config["sync_remote"] = spec_sync_remote
 
             # Plan config
             if plan_template:
                 plan_config["template"] = plan_template
+            plan_config["sync_remote"] = plan_sync_remote
 
             # PR config (only for GitHub repos)
             if is_github_repo() and auto_create_pr:
@@ -2030,6 +2042,11 @@ def spec(
         "--template",
         help="Spec template name (default: auto, reads from issue.yaml if present)",
     ),
+    spec_sync_remote: Optional[bool] = typer.Option(
+        None,
+        "--spec-sync-remote/--no-spec-sync-remote",
+        help="Enable/disable syncing confirmed spec to remote GitHub issue (default: enabled, reads from issue.yaml if present)",
+    ),
 ) -> None:
     """Run specification phase: Spec clarification with conversational generation.
 
@@ -2201,6 +2218,7 @@ def spec(
             fetch_issue_id=fetch_issue_id,
             template_path=spec_template_path,
             template_mode=template_mode,
+            spec_sync_remote=spec_sync_remote,
         )
 
         console.print("[bold]Starting conversational spec generation...[/bold]")
@@ -2375,6 +2393,11 @@ def plan(
         False,
         "--auto",
         help="Auto mode: automatically continue iterations until CAFE_CONFIRMED",
+    ),
+    plan_sync_remote: Optional[bool] = typer.Option(
+        None,
+        "--plan-sync-remote/--no-plan-sync-remote",
+        help="Enable/disable syncing confirmed plan to remote GitHub issue (default: enabled, reads from issue.yaml if present)",
     ),
 ) -> None:
     """Run plan phase: Implementation planning with developer agent.
@@ -2560,6 +2583,7 @@ def plan(
             interactive=interactive,
             template_path=template_path_str,
             template_mode=template_mode,  # Pass template mode to plan phase
+            plan_sync_remote=plan_sync_remote,
         )
 
         # Determine if should be interactive
