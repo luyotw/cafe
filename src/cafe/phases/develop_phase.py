@@ -1342,7 +1342,7 @@ If NO (does not meet criteria): Continue with development work and return approp
 - Do NOT include any summary or explanation"""
 
                     try:
-                        confirmation_response, _, _, _, confirmation_streaming_log = self.agent_manager.execute(
+                        confirmation_response, _, _, _, confirmation_streaming_log, _ = self.agent_manager.execute(
                             self.dev_agent,
                             confirmation_prompt,
                             allowed_tools=allowed_tools,
