@@ -809,6 +809,35 @@ All tests are passing now.
         assert result["skipped"][1]["id"] == "222"
         assert result["skipped"][2]["id"] == "333"
 
+    def test_parse_comment_processing_results_with_github_style_ids(self):
+        """測試解析帶有 GitHub 樣式 ID 的評論（包含字母、下劃線）
+
+        情境：Agent 回應包含真實的 GitHub comment IDs（如 IC_kwDOQCpNoM7h2rLv）
+        預期：正確解析這些非純數字的 IDs
+        """
+        from cafe.utils.github import parse_comment_processing_results
+
+        agent_response = """
+CAFE_CONFIRMED
+
+### Processed Comments
+- [#IC_kwDOQCpNoM7hfWZl] Fixed the bug in authentication flow
+
+### Skipped Comments
+- [#IC_kwDOQCpNoM7h2rLv] Test comment - no action needed, verifying the comment tracking system works correctly
+"""
+
+        result = parse_comment_processing_results(agent_response)
+
+        # Should parse GitHub-style IDs correctly
+        assert len(result["processed"]) == 1
+        assert result["processed"][0]["id"] == "IC_kwDOQCpNoM7hfWZl"
+        assert "Fixed the bug" in result["processed"][0]["description"]
+
+        assert len(result["skipped"]) == 1
+        assert result["skipped"][0]["id"] == "IC_kwDOQCpNoM7h2rLv"
+        assert "Test comment" in result["skipped"][0]["reason"]
+
 
 class TestGetProcessedCommentIDs:
     """測試從歷史記錄中獲取已處理的 comment IDs"""

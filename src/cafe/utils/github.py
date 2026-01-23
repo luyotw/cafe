@@ -636,7 +636,8 @@ def parse_comment_processing_results(agent_response: str) -> dict:
         # Support multiple bullet formats: -, *, •, or no bullet
         if current_section and (line.startswith("-") or line.startswith("*") or line.startswith("•") or line.startswith("[")):
             # Extract ID and content using regex - flexible bullet pattern
-            match = re.match(r'[-*•]?\s*\[#(\d+)\]\s*(.+)', line)
+            # Support both numeric IDs (123) and GitHub-style IDs (IC_kwDOQCpNoM7h2rLv)
+            match = re.match(r'[-*•]?\s*\[#([^\]]+)\]\s*(.+)', line)
             if match:
                 comment_id = match.group(1)
                 content = match.group(2).strip()
