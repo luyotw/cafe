@@ -786,6 +786,12 @@ class DevelopPhase(Phase):
                 last_develop_timestamp = existing_progress.timestamp
                 print(f"  → Last develop completed at: {last_develop_timestamp.isoformat()}")
 
+            # Load already-processed comment IDs from previous iterations to avoid re-presenting them
+            from cafe.utils.github import get_processed_comment_ids_from_history
+            processed_comment_ids = get_processed_comment_ids_from_history(self.phase_dir)
+            if processed_comment_ids:
+                print(f"  → Found {len(processed_comment_ids)} already-processed comment IDs from history")
+
             # Filter only unresolved review comments, keep all timeline comments
             review_comments = [c for c in comments if c.comment_type == "review"]
             timeline_comments = [c for c in comments if c.comment_type == "timeline"]
@@ -835,6 +841,13 @@ class DevelopPhase(Phase):
 
             # For review comments, still apply unresolved filter (in addition to timestamp filter)
             unresolved_review = filter_unresolved_comments(review_comments)
+
+            # Exclude already-processed comment IDs (applies to both review and timeline comments)
+            if processed_comment_ids:
+                unresolved_review = [c for c in unresolved_review if c.id not in processed_comment_ids]
+                timeline_comments = [c for c in timeline_comments if c.id not in processed_comment_ids]
+                print(f"  → Excluded {len(processed_comment_ids)} already-processed comments from presentation")
+
             comments_to_present = unresolved_review + timeline_comments
 
             print(f"  → {len(unresolved_review)} unresolved review comments + {len(timeline_comments)} NEW timeline comments")

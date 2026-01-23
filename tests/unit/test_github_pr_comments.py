@@ -12,6 +12,7 @@ from cafe.utils.github import (
     get_all_pr_comments,
     filter_unresolved_comments,
     format_comments_for_prompt,
+    get_processed_comment_ids_from_history,
     PRComment,
     GitHubError,
 )
@@ -807,3 +808,151 @@ All tests are passing now.
         assert result["skipped"][0]["id"] == "111"
         assert result["skipped"][1]["id"] == "222"
         assert result["skipped"][2]["id"] == "333"
+
+
+class TestGetProcessedCommentIDs:
+    """測試從歷史記錄中獲取已處理的 comment IDs"""
+
+    def test_get_processed_comment_ids_from_single_iteration(self):
+        """測試從單個 iteration 中獲取已處理的 comment IDs
+
+        情境：只有一個 iteration，其中包含已處理的 comments
+        預期：返回該 iteration 中所有已處理的 comment IDs
+        """
+        from cafe.utils.github import get_processed_comment_ids_from_history
+        from pathlib import Path
+        from tempfile import TemporaryDirectory
+        import json
+
+        with TemporaryDirectory() as tmpdir:
+            # Create a mock iteration directory with context.json
+            iteration_dir = Path(tmpdir) / "iteration_001"
+            iteration_dir.mkdir(parents=True)
+
+            context_data = {
+                "iteration": 1,
+                "pr_comments_processed": [
+                    {"id": "123", "description": "Fixed bug"},
+                    {"id": "456", "description": "Added feature"}
+                ],
+                "pr_comments_skipped": [
+                    {"id": "789", "reason": "Not applicable"}
+                ]
+            }
+
+            with open(iteration_dir / "context.json", "w") as f:
+                json.dump(context_data, f)
+
+            # Get processed comment IDs
+            result = get_processed_comment_ids_from_history(Path(tmpdir))
+
+            # Should include both processed and skipped comments
+            assert "123" in result
+            assert "456" in result
+            assert "789" in result
+            assert len(result) == 3
+
+    def test_get_processed_comment_ids_from_multiple_iterations(self):
+        """測試從多個 iterations 中獲取已處理的 comment IDs
+
+        情境：有多個 iterations，每個都包含不同的已處理 comments
+        預期：返回所有 iterations 中的已處理 comment IDs 集合
+        """
+        from cafe.utils.github import get_processed_comment_ids_from_history
+        from pathlib import Path
+        from tempfile import TemporaryDirectory
+        import json
+
+        with TemporaryDirectory() as tmpdir:
+            # Create iteration 1
+            iter1_dir = Path(tmpdir) / "iteration_001"
+            iter1_dir.mkdir(parents=True)
+            context1 = {
+                "iteration": 1,
+                "pr_comments_processed": [{"id": "111", "description": "Fix 1"}],
+                "pr_comments_skipped": []
+            }
+            with open(iter1_dir / "context.json", "w") as f:
+                json.dump(context1, f)
+
+            # Create iteration 2
+            iter2_dir = Path(tmpdir) / "iteration_002"
+            iter2_dir.mkdir(parents=True)
+            context2 = {
+                "iteration": 2,
+                "pr_comments_processed": [{"id": "222", "description": "Fix 2"}],
+                "pr_comments_skipped": [{"id": "333", "reason": "Skip"}]
+            }
+            with open(iter2_dir / "context.json", "w") as f:
+                json.dump(context2, f)
+
+            # Create iteration 3
+            iter3_dir = Path(tmpdir) / "iteration_003"
+            iter3_dir.mkdir(parents=True)
+            context3 = {
+                "iteration": 3,
+                "pr_comments_processed": [],
+                "pr_comments_skipped": [{"id": "444", "reason": "Skip 2"}]
+            }
+            with open(iter3_dir / "context.json", "w") as f:
+                json.dump(context3, f)
+
+            # Get processed comment IDs
+            result = get_processed_comment_ids_from_history(Path(tmpdir))
+
+            # Should include all comments from all iterations
+            assert "111" in result
+            assert "222" in result
+            assert "333" in result
+            assert "444" in result
+            assert len(result) == 4
+
+    def test_get_processed_comment_ids_no_history(self):
+        """測試當沒有歷史記錄時的情況
+
+        情境：phase_dir 不存在或沒有 iteration 目錄
+        預期：返回空集合
+        """
+        from cafe.utils.github import get_processed_comment_ids_from_history
+        from pathlib import Path
+        from tempfile import TemporaryDirectory
+
+        with TemporaryDirectory() as tmpdir:
+            result = get_processed_comment_ids_from_history(Path(tmpdir))
+            assert len(result) == 0
+
+    def test_get_processed_comment_ids_ignores_malformed_files(self):
+        """測試當某些 context.json 文件格式錯誤時的情況
+
+        情境：有些 iteration 的 context.json 存在但沒有 comment 數據
+        預期：跳過格式錯誤的文件，返回有效的 comment IDs
+        """
+        from cafe.utils.github import get_processed_comment_ids_from_history
+        from pathlib import Path
+        from tempfile import TemporaryDirectory
+        import json
+
+        with TemporaryDirectory() as tmpdir:
+            # Create iteration 1 with valid data
+            iter1_dir = Path(tmpdir) / "iteration_001"
+            iter1_dir.mkdir(parents=True)
+            context1 = {
+                "iteration": 1,
+                "pr_comments_processed": [{"id": "111", "description": "Fix"}]
+            }
+            with open(iter1_dir / "context.json", "w") as f:
+                json.dump(context1, f)
+
+            # Create iteration 2 with no comment data
+            iter2_dir = Path(tmpdir) / "iteration_002"
+            iter2_dir.mkdir(parents=True)
+            context2 = {"iteration": 2}  # Missing pr_comments_processed
+            with open(iter2_dir / "context.json", "w") as f:
+                json.dump(context2, f)
+
+            # Get processed comment IDs
+            result = get_processed_comment_ids_from_history(Path(tmpdir))
+
+            # Should only include valid comment IDs
+            assert "111" in result
+            assert len(result) == 1

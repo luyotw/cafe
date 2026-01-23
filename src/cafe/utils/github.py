@@ -753,3 +753,55 @@ def get_all_pr_comments(pr_number: int) -> List[PRComment]:
         raise GitHubError(f"Failed to get any comments for PR #{pr_number}: {error_msg}")
 
     return comments
+
+
+def get_processed_comment_ids_from_history(phase_dir: "Path") -> set:
+    """Get all processed and skipped comment IDs from previous iterations' history.
+
+    Loads context.json from all iteration_XXX directories and collects comment IDs
+    from pr_comments_processed and pr_comments_skipped fields.
+
+    Args:
+        phase_dir: Path to the phase directory (e.g., .cafe/issues/issue123/develop)
+
+    Returns:
+        Set of comment IDs that have been processed or skipped in previous iterations
+    """
+    from pathlib import Path
+    import json
+
+    processed_ids = set()
+
+    if not phase_dir.exists():
+        return processed_ids
+
+    # Find all iteration_XXX directories
+    for item in phase_dir.iterdir():
+        if not item.is_dir() or not item.name.startswith("iteration_"):
+            continue
+
+        context_file = item / "context.json"
+        if not context_file.exists():
+            continue
+
+        try:
+            with open(context_file, "r", encoding="utf-8") as f:
+                context_data = json.load(f)
+
+            # Collect IDs from pr_comments_processed
+            processed = context_data.get("pr_comments_processed", [])
+            for comment in processed:
+                if "id" in comment:
+                    processed_ids.add(comment["id"])
+
+            # Collect IDs from pr_comments_skipped
+            skipped = context_data.get("pr_comments_skipped", [])
+            for comment in skipped:
+                if "id" in comment:
+                    processed_ids.add(comment["id"])
+
+        except (json.JSONDecodeError, KeyError, TypeError):
+            # Skip files with invalid JSON or unexpected structure
+            continue
+
+    return processed_ids
