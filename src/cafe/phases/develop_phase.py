@@ -332,22 +332,30 @@ class DevelopPhase(Phase):
                     handled_review_timestamp = develop_status.get("handled_review_timestamp")
 
                     if handled_review_timestamp == review_timestamp:
-                        # This review has already been handled
-                        return PhaseResult(
-                            status=PhaseStatus.COMPLETED,
-                            message=f"Development already completed in {existing_progress.iteration} iteration(s)",
-                            data={
-                                "branch": self._get_branch_name(),
-                                "iterations": existing_progress.iteration,
-                                "status_code": existing_progress.status_code,
-                            },
-                        )
-
-            # Review exists and hasn't been handled yet, continue execution
-            return None  # Don't return early - let execution continue to handle review feedback
+                        # This review has already been handled, clear the flag and continue to check PR comments
+                        self._has_review_feedback = False
+                        print(f"ℹ️  Review feedback already addressed, checking for PR comments...")
+                        # Don't return here - continue to check PR comments below
+                    else:
+                        # Review exists and hasn't been handled yet, continue execution
+                        return None  # Don't return early - let execution continue to handle review feedback
+            else:
+                # Review exists and hasn't been handled yet, continue execution
+                return None  # Don't return early - let execution continue to handle review feedback
 
         # Check PR comments (only if no review feedback)
         if self.pr_number:
+            # First, check if there are any NEW unresolved comments that need attention
+            try:
+                pr_comments, unresolved_count, pr_comment_objects = self._load_pr_comments()
+                if unresolved_count > 0:
+                    # There are unresolved comments, need to continue development
+                    print(f"ℹ️  Found {unresolved_count} unresolved PR comment(s) - development needed")
+                    return None
+            except Exception as e:
+                # If we can't load PR comments, continue with timestamp-based check
+                print(f"⚠️  Could not load PR comments: {e}")
+
             print(f"ℹ️  PR #{self.pr_number} comments will be addressed")
             # Check if there are unpushed commits that address PR comments
             if self.git_ops.has_unpushed_commits():
@@ -770,14 +778,42 @@ class DevelopPhase(Phase):
             comments = get_all_pr_comments(self.pr_number)
             print(f"  → Got {len(comments)} total comments")
 
+            # Get last develop completion timestamp to filter out old comments
+            from datetime import datetime, timezone
+            last_develop_timestamp = None
+            existing_progress = self._load_progress()
+            if existing_progress and existing_progress.status == PhaseStatus.COMPLETED:
+                last_develop_timestamp = existing_progress.timestamp
+                print(f"  → Last develop completed at: {last_develop_timestamp.isoformat()}")
+
             # Filter only unresolved review comments, keep all timeline comments
             review_comments = [c for c in comments if c.comment_type == "review"]
             timeline_comments = [c for c in comments if c.comment_type == "timeline"]
 
+            # Filter timeline comments to only include those newer than last develop
+            if last_develop_timestamp:
+                new_timeline_comments = []
+                for comment in timeline_comments:
+                    try:
+                        timestamp_str = comment.created_at
+                        if timestamp_str.endswith('Z'):
+                            timestamp_str = timestamp_str.replace('Z', '+00:00')
+                        comment_time = datetime.fromisoformat(timestamp_str)
+                        if comment_time.tzinfo is None:
+                            comment_time = comment_time.replace(tzinfo=timezone.utc)
+
+                        if comment_time > last_develop_timestamp:
+                            new_timeline_comments.append(comment)
+                            print(f"  → NEW timeline comment [{comment.id}] from {comment.author} at {comment_time.isoformat()}")
+                    except Exception:
+                        # If can't parse timestamp, include the comment to be safe
+                        new_timeline_comments.append(comment)
+                timeline_comments = new_timeline_comments
+
             unresolved_review = filter_unresolved_comments(review_comments)
             comments_to_present = unresolved_review + timeline_comments
 
-            print(f"  → {len(unresolved_review)} unresolved review comments + {len(timeline_comments)} timeline comments")
+            print(f"  → {len(unresolved_review)} unresolved review comments + {len(timeline_comments)} NEW timeline comments")
 
             result = format_comments_for_prompt(comments_to_present)
             if result:
