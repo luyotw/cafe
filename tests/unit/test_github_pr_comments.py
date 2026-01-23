@@ -772,3 +772,38 @@ All tests are passing now.
 
         assert len(result["skipped"]) == 1
         assert result["skipped"][0]["id"] == "789"
+
+    def test_parse_comment_processing_results_different_bullet_formats(self):
+        """測試不同的 bullet 格式
+
+        情境：Agent 使用不同的 bullet 符號（-, *, •）或沒有 bullet
+        預期：所有格式都能正確解析
+        """
+        from cafe.utils.github import parse_comment_processing_results
+
+        agent_response = """
+### Processed Comments
+- [#123] Fixed with dash bullet
+* [#456] Fixed with asterisk bullet
+• [#789] Fixed with bullet point
+[#999] Fixed without bullet
+
+### Skipped Comments
+- [#111] Skipped with dash
+* [#222] Skipped with asterisk
+• [#333] Skipped with bullet point
+"""
+
+        result = parse_comment_processing_results(agent_response)
+
+        # Should parse all different bullet formats
+        assert len(result["processed"]) == 4
+        assert result["processed"][0]["id"] == "123"
+        assert result["processed"][1]["id"] == "456"
+        assert result["processed"][2]["id"] == "789"
+        assert result["processed"][3]["id"] == "999"
+
+        assert len(result["skipped"]) == 3
+        assert result["skipped"][0]["id"] == "111"
+        assert result["skipped"][1]["id"] == "222"
+        assert result["skipped"][2]["id"] == "333"

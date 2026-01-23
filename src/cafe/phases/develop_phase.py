@@ -808,8 +808,9 @@ class DevelopPhase(Phase):
                         if comment_time > last_develop_timestamp:
                             new_review_comments.append(comment)
                             print(f"  → NEW review comment [{comment.id}] from {comment.author} at {comment_time.isoformat()}")
-                    except Exception:
+                    except Exception as e:
                         # If can't parse timestamp, include the comment to be safe
+                        print(f"  ⚠️  Failed to parse timestamp for review comment [{comment.id}]: {e}")
                         new_review_comments.append(comment)
                 review_comments = new_review_comments
 
@@ -826,8 +827,9 @@ class DevelopPhase(Phase):
                         if comment_time > last_develop_timestamp:
                             new_timeline_comments.append(comment)
                             print(f"  → NEW timeline comment [{comment.id}] from {comment.author} at {comment_time.isoformat()}")
-                    except Exception:
+                    except Exception as e:
                         # If can't parse timestamp, include the comment to be safe
+                        print(f"  ⚠️  Failed to parse timestamp for timeline comment [{comment.id}]: {e}")
                         new_timeline_comments.append(comment)
                 timeline_comments = new_timeline_comments
 

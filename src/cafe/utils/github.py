@@ -519,6 +519,7 @@ def format_comments_for_prompt(comments: List[PRComment]) -> str:
     timeline_comments = [c for c in comments if c.comment_type == "timeline"]
 
     lines = []
+    comment_number = 1  # Sequential numbering across both sections
 
     # Format review comments section
     if review_comments:
@@ -531,8 +532,8 @@ def format_comments_for_prompt(comments: List[PRComment]) -> str:
             ""
         ])
 
-        for i, comment in enumerate(review_comments, 1):
-            lines.append(f"Comment #{i} [ID: {comment.id}]")
+        for comment in review_comments:
+            lines.append(f"Comment #{comment_number} [ID: {comment.id}]")
             lines.append(f"Author: {comment.author}")
             if comment.path:
                 location = f"{comment.path}"
@@ -545,6 +546,7 @@ def format_comments_for_prompt(comments: List[PRComment]) -> str:
             lines.append("")
             lines.append("-" * 80)
             lines.append("")
+            comment_number += 1
 
     # Format timeline comments section
     if timeline_comments:
@@ -557,8 +559,8 @@ def format_comments_for_prompt(comments: List[PRComment]) -> str:
             ""
         ])
 
-        for i, comment in enumerate(timeline_comments, 1):
-            lines.append(f"Comment #{i} [ID: {comment.id}]")
+        for comment in timeline_comments:
+            lines.append(f"Comment #{comment_number} [ID: {comment.id}]")
             lines.append(f"Author: {comment.author}")
             lines.append(f"Created: {comment.created_at}")
             lines.append("")
@@ -566,6 +568,7 @@ def format_comments_for_prompt(comments: List[PRComment]) -> str:
             lines.append("")
             lines.append("-" * 80)
             lines.append("")
+            comment_number += 1
 
     # Add comment processing instructions
     lines.extend([
@@ -630,9 +633,10 @@ def parse_comment_processing_results(agent_response: str) -> dict:
             continue
 
         # Parse comment lines in format: - [#ID] Description/Reason
-        if current_section and line.startswith("-"):
-            # Extract ID and content using regex
-            match = re.match(r'-\s*\[#(\d+)\]\s*(.+)', line)
+        # Support multiple bullet formats: -, *, •, or no bullet
+        if current_section and (line.startswith("-") or line.startswith("*") or line.startswith("•") or line.startswith("[")):
+            # Extract ID and content using regex - flexible bullet pattern
+            match = re.match(r'[-*•]?\s*\[#(\d+)\]\s*(.+)', line)
             if match:
                 comment_id = match.group(1)
                 content = match.group(2).strip()
