@@ -685,8 +685,8 @@ def get_pr_timeline_comments(pr_number: int) -> List[PRComment]:
 
         comments = []
         for comment_data in timeline_comments_data:
-            # Use databaseId (integer) for compatibility
-            comment_id = str(comment_data.get("databaseId", ""))
+            # Use id field (always present in GitHub API)
+            comment_id = comment_data.get("id", "")
             author_data = comment_data.get("author", {})
             author = author_data.get("login", "unknown") if author_data else "unknown"
 

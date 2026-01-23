@@ -183,13 +183,13 @@ class TestGetPRTimelineComments:
         mock_pr_output = json.dumps({
             "comments": [
                 {
-                    "databaseId": 111,
+                    "id": "IC_kwDOQCpNoM111",
                     "body": "整體來說不錯，但請加上文檔",
                     "author": {"login": "maintainer"},
                     "createdAt": "2025-01-02T09:00:00Z"
                 },
                 {
-                    "databaseId": 222,
+                    "id": "IC_kwDOQCpNoM222",
                     "body": "我同意這個改動",
                     "author": {"login": "contributor"},
                     "createdAt": "2025-01-03T10:00:00Z"
@@ -218,14 +218,14 @@ class TestGetPRTimelineComments:
 
             # Verify results
             assert len(comments) == 2
-            assert comments[0].id == "111"
+            assert comments[0].id == "IC_kwDOQCpNoM111"
             assert comments[0].body == "整體來說不錯，但請加上文檔"
             assert comments[0].author == "maintainer"
             assert comments[0].comment_type == "timeline"
             assert comments[0].path is None
             assert comments[0].line is None
 
-            assert comments[1].id == "222"
+            assert comments[1].id == "IC_kwDOQCpNoM222"
             assert comments[1].body == "我同意這個改動"
             assert comments[1].comment_type == "timeline"
 

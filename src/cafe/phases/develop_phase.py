@@ -790,9 +790,30 @@ class DevelopPhase(Phase):
             review_comments = [c for c in comments if c.comment_type == "review"]
             timeline_comments = [c for c in comments if c.comment_type == "timeline"]
 
-            # Filter timeline comments to only include those newer than last develop
+            # Filter both review and timeline comments to only include those newer than last develop
             if last_develop_timestamp:
+                new_review_comments = []
                 new_timeline_comments = []
+
+                # Filter review comments by timestamp
+                for comment in review_comments:
+                    try:
+                        timestamp_str = comment.created_at
+                        if timestamp_str.endswith('Z'):
+                            timestamp_str = timestamp_str.replace('Z', '+00:00')
+                        comment_time = datetime.fromisoformat(timestamp_str)
+                        if comment_time.tzinfo is None:
+                            comment_time = comment_time.replace(tzinfo=timezone.utc)
+
+                        if comment_time > last_develop_timestamp:
+                            new_review_comments.append(comment)
+                            print(f"  → NEW review comment [{comment.id}] from {comment.author} at {comment_time.isoformat()}")
+                    except Exception:
+                        # If can't parse timestamp, include the comment to be safe
+                        new_review_comments.append(comment)
+                review_comments = new_review_comments
+
+                # Filter timeline comments by timestamp
                 for comment in timeline_comments:
                     try:
                         timestamp_str = comment.created_at
@@ -810,6 +831,7 @@ class DevelopPhase(Phase):
                         new_timeline_comments.append(comment)
                 timeline_comments = new_timeline_comments
 
+            # For review comments, still apply unresolved filter (in addition to timestamp filter)
             unresolved_review = filter_unresolved_comments(review_comments)
             comments_to_present = unresolved_review + timeline_comments
 
