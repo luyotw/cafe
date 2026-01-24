@@ -347,10 +347,10 @@ class DevelopPhase(Phase):
         if self.pr_number:
             # First, check if there are any NEW unresolved comments that need attention
             try:
-                pr_comments, unresolved_count, pr_comment_objects = self._load_pr_comments()
-                if unresolved_count > 0:
-                    # There are unresolved comments, need to continue development
-                    print(f"ℹ️  Found {unresolved_count} unresolved PR comment(s) - development needed")
+                pr_comments, new_comment_count, pr_comment_objects = self._load_pr_comments()
+                if new_comment_count > 0:
+                    # There are new comments to address, need to continue development
+                    print(f"ℹ️  Found {new_comment_count} new PR comment(s) to address - development needed")
                     return None
             except Exception as e:
                 # If we can't load PR comments, continue with timestamp-based check
@@ -764,7 +764,7 @@ class DevelopPhase(Phase):
         Only loads comments that are newer than the last develop timestamp.
 
         Returns:
-            Tuple of (formatted comments string, new unresolved count, comment objects list)
+            Tuple of (formatted comments string, new comment count, comment objects list)
         """
         if not self.pr_number:
             return "", 0, []
@@ -937,16 +937,16 @@ class DevelopPhase(Phase):
         if hasattr(self, '_has_review_feedback') and self._has_review_feedback:
             pr_comments_section = ""
             has_pr_comments = False
-            unresolved_count = 0
+            new_comment_count = 0
         elif pr_auto_create is False:
             # Use local PR feedback
             local_feedback = self._load_local_pr_feedback()
             pr_comments_section = f"\n\n## PR Feedback (Local)\n\n{local_feedback}\n" if local_feedback else ""
             has_pr_comments = bool(local_feedback)
-            unresolved_count = 0  # Not applicable for local feedback
+            new_comment_count = 0  # Not applicable for local feedback
         else:
             # Use GitHub PR comments
-            pr_comments, unresolved_count, pr_comment_objects = self._load_pr_comments()
+            pr_comments, new_comment_count, pr_comment_objects = self._load_pr_comments()
             pr_comments_section = f"\n\n{pr_comments}\n" if pr_comments else ""
             has_pr_comments = bool(pr_comments)
 
@@ -1016,7 +1016,7 @@ Steps for requesting clarification:
             if review_file_path:
                 review_sources.append(str(review_file_path))
             if has_pr_comments:
-                review_sources.append(f"PR comments (see {unresolved_count} unresolved comments above)")
+                review_sources.append(f"PR comments (see {new_comment_count} comments above)")
 
             review_source_text = ""
             if len(review_sources) == 1:
@@ -1142,9 +1142,9 @@ Read {agent_file} to understand your complete role definition and responsibiliti
             # as the developer may still have work to do based on the plan
             if self.pr_number and (not hasattr(self, '_has_review_feedback') or not self._has_review_feedback):
                 print(f"\n🔍 Checking PR #{self.pr_number} for unresolved comments...")
-                pr_comments, unresolved_count, pr_comment_objects = self._load_pr_comments()
-                if unresolved_count > 0:
-                    print(f"✅ Found {unresolved_count} new unresolved PR comment(s) to address")
+                pr_comments, new_comment_count, pr_comment_objects = self._load_pr_comments()
+                if new_comment_count > 0:
+                    print(f"✅ Found {new_comment_count} new PR comment(s) to address")
                 else:
                     print(f"ℹ️  No new unresolved PR comments since last develop")
                 print()
