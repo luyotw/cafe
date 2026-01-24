@@ -375,6 +375,7 @@ class AgentExecutor:
         "cursor-agent": [
             "rate limit",
             "status 429",
+            "you've hit your usage limit",
         ],
     }
 
