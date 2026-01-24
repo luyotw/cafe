@@ -14,6 +14,7 @@ SPEC_EXECUTION_STEPS_ITERATION_1 = """## Checklist
 [ ] Read README.md for project context
 [ ] Search codebase using Read/Grep tools to find answers before asking users
 [ ] Identify unclear areas that need clarification
+[ ] Preserve original requirements content - Keep the "Initial Requirements" section and "Issue Title" (if present) unchanged, only add your analysis below
 [ ] Write analysis results to {current_spec_file} (NOT in your response)
 [ ] Write ONLY the status code in your response
 [ ] Confirm: No technical details were included (no implementation, architecture, languages, frameworks, databases)
@@ -28,6 +29,7 @@ SPEC_EXECUTION_STEPS_ITERATION_N = """## Checklist
 [ ] Read {prev_spec_file} to review previous analysis
 [ ] Review user's answer (provided below)
 [ ] Integrate new information into specification
+[ ] Preserve original requirements content - Keep the "Initial Requirements" section and "Issue Title" (if present) unchanged from the first iteration
 [ ] Write updated analysis to {current_spec_file} (NOT in your response)
 [ ] Write ONLY the status code in your response
 [ ] Confirm: No technical details were included (no implementation, architecture, languages, frameworks, databases)
@@ -122,6 +124,7 @@ REVIEW_EXECUTION_STEPS = """## Checklist
 [ ] Prioritize user feedback from PR comments over spec requirements if there are conflicts
 
 ## Git Status and Security Check
+[ ] Check if there are new commits (use `git log {base_branch}..HEAD`). If no commits exist, development is incomplete - return CAFE_NEEDS_CHANGES
 [ ] Check for uncommitted changes (if any, development is incomplete)
 [ ] Check for sensitive info in committed files (passwords, API keys, credentials)
 [ ] If sensitive info found: treat as critical issue, require immediate removal from commit history
