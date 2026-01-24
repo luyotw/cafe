@@ -660,7 +660,21 @@ class SpecPhase(Phase):
                 spec_path = Path(self.spec_file)
 
             spec_path.parent.mkdir(parents=True, exist_ok=True)
-            spec_path.write_text(f"# Initial Requirements\n\n{fetched_content}\n")
+            # Extract title from fetched_content if it exists
+            # fetched_content format: "# {title}\n\n{body}" or just "{body}"
+            lines = fetched_content.split('\n', 1)
+            if lines[0].startswith('# '):
+                # Title is present as H1
+                issue_title = lines[0][2:].strip()  # Remove "# " prefix
+                issue_body = lines[1].strip() if len(lines) > 1 else ""
+                # Write with title explicitly included at the top
+                if issue_body:
+                    spec_path.write_text(f"# Initial Requirements\n\n**Issue Title:** {issue_title}\n\n{issue_body}\n")
+                else:
+                    spec_path.write_text(f"# Initial Requirements\n\n**Issue Title:** {issue_title}\n")
+            else:
+                # No title in fetched_content, write as-is
+                spec_path.write_text(f"# Initial Requirements\n\n{fetched_content}\n")
 
             self.display.console.print()
             self.display.console.print(f"✅ Requirements loaded from GitHub Issue and written to {spec_path}")
@@ -938,11 +952,11 @@ class SpecPhase(Phase):
                     template_file = str(self.template_path)
                 template_instruction = f"""\n**Template Reference:**\nUse Read tool to read {template_file} as a reference for output format and structure."""
 
-            initial_instruction = f"""**Round 1 Requirements Clarification**\n\nRead {current_spec_file} for initial requirements content.{template_instruction}"""
+            initial_instruction = f"""**Round 1 Requirements Clarification**\n\nRead {current_spec_file} for initial requirements content.{template_instruction}\n\n**Important:** Preserve the original requirements content (including "Initial Requirements" section and "Issue Title" if present). Only add your analysis and clarification below, do not modify or remove the original content."""
             context_section = ""
         else:  # Iteration 2+
             # Round 2 onwards: Read previous round spec file and user_input, write new spec file
-            initial_instruction = f"""**Round {self.iteration} Requirements Clarification**\n\n1. Use Read tool to read {prev_spec_file}(previous round analysis results)\n2. View user's latest answer (see below)\n3. Modify {current_spec_file}, update content (new version)"""
+            initial_instruction = f"""**Round {self.iteration} Requirements Clarification**\n\n1. Use Read tool to read {prev_spec_file}(previous round analysis results)\n2. View user's latest answer (see below)\n3. Modify {current_spec_file}, update content (new version)\n\n**Important:** Preserve the original requirements content from the first iteration (including "Initial Requirements" section and "Issue Title" if present). Only update your analysis sections, do not modify or remove the original requirements."""
             
             if user_input:
                 context_section = f"""\n**User's Answer:**\n{user_input}\n"""
