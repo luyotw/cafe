@@ -368,6 +368,7 @@ class PRComment(BaseModel):
     path: Optional[str] = None
     line: Optional[int] = None
     is_resolved: bool = False
+    comment_type: str = "review"  # "review" or "timeline"
 
 
 def get_pr_comments(pr_number: int) -> List[PRComment]:
@@ -502,40 +503,306 @@ def filter_unresolved_comments(comments: List[PRComment]) -> List[PRComment]:
 
 
 def format_comments_for_prompt(comments: List[PRComment]) -> str:
-    """Format PR comments into a prompt-friendly string.
+    """Format PR comments into a prompt-friendly string with separate sections for review and timeline comments.
 
     Args:
         comments: List of PRComment objects (should be unresolved)
 
     Returns:
-        Formatted string for inclusion in agent prompt
+        Formatted string for inclusion in agent prompt, with comment IDs for tracking
     """
     if not comments:
         return ""
 
-    count = len(comments)
-    plural = "s" if count > 1 else ""
-    
-    lines = [
-        "=" * 80,
-        f"📝 PR Review Comments ({count} unresolved comment{plural})",
-        "=" * 80,
-        ""
-    ]
+    # Separate comments by type
+    review_comments = [c for c in comments if c.comment_type == "review"]
+    timeline_comments = [c for c in comments if c.comment_type == "timeline"]
 
-    for i, comment in enumerate(comments, 1):
-        lines.append(f"Comment #{i}")
-        lines.append(f"Author: {comment.author}")
-        if comment.path:
-            location = f"{comment.path}"
-            if comment.line:
-                location += f" (line {comment.line})"
-            lines.append(f"Location: {location}")
-        lines.append(f"Created: {comment.created_at}")
-        lines.append("")
-        lines.append(comment.body)
-        lines.append("")
-        lines.append("-" * 80)
-        lines.append("")
+    lines = []
+    comment_number = 1  # Sequential numbering across both sections
+
+    # Format review comments section
+    if review_comments:
+        count = len(review_comments)
+        plural = "s" if count > 1 else ""
+        lines.extend([
+            "=" * 80,
+            f"📝 PR Review Comments ({count} unresolved comment{plural})",
+            "=" * 80,
+            ""
+        ])
+
+        for comment in review_comments:
+            lines.append(f"Comment #{comment_number} [ID: {comment.id}]")
+            lines.append(f"Author: {comment.author}")
+            if comment.path:
+                location = f"{comment.path}"
+                if comment.line:
+                    location += f" (line {comment.line})"
+                lines.append(f"Location: {location}")
+            lines.append(f"Created: {comment.created_at}")
+            lines.append("")
+            lines.append(comment.body)
+            lines.append("")
+            lines.append("-" * 80)
+            lines.append("")
+            comment_number += 1
+
+    # Format timeline comments section
+    if timeline_comments:
+        count = len(timeline_comments)
+        plural = "s" if count > 1 else ""
+        lines.extend([
+            "=" * 80,
+            f"💬 PR Discussion Comments ({count} comment{plural})",
+            "=" * 80,
+            ""
+        ])
+
+        for comment in timeline_comments:
+            lines.append(f"Comment #{comment_number} [ID: {comment.id}]")
+            lines.append(f"Author: {comment.author}")
+            lines.append(f"Created: {comment.created_at}")
+            lines.append("")
+            lines.append(comment.body)
+            lines.append("")
+            lines.append("-" * 80)
+            lines.append("")
+            comment_number += 1
+
+    # Add comment processing instructions
+    lines.extend([
+        "=" * 80,
+        "📋 Comment Processing Instructions",
+        "=" * 80,
+        "",
+        "Please address all comments above and include the following in your response:",
+        "",
+        "### Processed Comments",
+        "- [#<ID>] Description of what you did (e.g., [#123456] Fixed the type error in main.py)",
+        "",
+        "### Skipped Comments",
+        "- [#<ID>] Reason why you skipped (e.g., [#789012] No action needed - acknowledgment only)",
+        "",
+        "This helps track which comments have been processed in this iteration.",
+        ""
+    ])
 
     return "\n".join(lines)
+
+
+def parse_comment_processing_results(agent_response: str) -> dict:
+    """Parse comment processing results from agent response.
+
+    Extracts the "Comment Processing Summary" section from agent response and parses
+    processed and skipped comments.
+
+    Args:
+        agent_response: The agent's response text
+
+    Returns:
+        Dictionary with structure:
+        {
+            "processed": [{"id": "123", "description": "Fixed issue"}],
+            "skipped": [{"id": "456", "reason": "Not applicable"}]
+        }
+    """
+    import re
+
+    result = {
+        "processed": [],
+        "skipped": []
+    }
+
+    lines = agent_response.split('\n')
+    current_section = None
+
+    for line in lines:
+        line = line.strip()
+
+        # Detect section headers
+        if "### Processed Comments" in line or "###Processed Comments" in line:
+            current_section = "processed"
+            continue
+        elif "### Skipped Comments" in line or "###Skipped Comments" in line:
+            current_section = "skipped"
+            continue
+        elif line.startswith("###") or line.startswith("##"):
+            # New section that's not processed/skipped, exit parsing
+            current_section = None
+            continue
+
+        # Parse comment lines in format: - [#ID] Description/Reason
+        # Support multiple bullet formats: -, *, •, or no bullet
+        if current_section and (line.startswith("-") or line.startswith("*") or line.startswith("•") or line.startswith("[")):
+            # Extract ID and content using regex - flexible bullet pattern
+            # Support both numeric IDs (123) and GitHub-style IDs (IC_kwDOQCpNoM7h2rLv)
+            match = re.match(r'[-*•]?\s*\[#([^\]]+)\]\s*(.+)', line)
+            if match:
+                comment_id = match.group(1)
+                content = match.group(2).strip()
+
+                if current_section == "processed":
+                    result["processed"].append({
+                        "id": comment_id,
+                        "description": content
+                    })
+                elif current_section == "skipped":
+                    result["skipped"].append({
+                        "id": comment_id,
+                        "reason": content
+                    })
+
+    return result
+
+
+def get_pr_timeline_comments(pr_number: int) -> List[PRComment]:
+    """Get timeline comments from a Pull Request.
+
+    Timeline comments are general discussion comments not tied to specific code lines.
+
+    Args:
+        pr_number: PR number
+
+    Returns:
+        List of PRComment objects with comment_type="timeline"
+
+    Raises:
+        ValueError: If PR not found or invalid
+        GitHubError: If failed to get PR comments
+    """
+    try:
+        # Use gh pr view to fetch timeline comments
+        result = subprocess.run(
+            ["gh", "pr", "view", str(pr_number), "--json", "comments"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        if result.returncode != 0:
+            if "not found" in result.stderr.lower() or "could not resolve" in result.stderr.lower():
+                raise ValueError(f"PR #{pr_number} not found")
+            raise GitHubError(f"Failed to get PR timeline comments: {result.stderr}")
+
+        pr_data = json.loads(result.stdout)
+        timeline_comments_data = pr_data.get("comments", [])
+
+        comments = []
+        for comment_data in timeline_comments_data:
+            # Use id field (always present in GitHub API)
+            comment_id = comment_data.get("id", "")
+            author_data = comment_data.get("author", {})
+            author = author_data.get("login", "unknown") if author_data else "unknown"
+
+            comments.append(PRComment(
+                id=comment_id,
+                body=comment_data.get("body", ""),
+                author=author,
+                created_at=comment_data.get("createdAt", ""),
+                comment_type="timeline",
+            ))
+
+        return comments
+
+    except json.JSONDecodeError as e:
+        raise GitHubError(f"Failed to parse PR timeline comments: {e}") from e
+    except Exception as e:
+        if isinstance(e, (ValueError, GitHubError)):
+            raise
+        raise GitHubError(f"Unexpected error getting PR timeline comments: {e}") from e
+
+
+def get_all_pr_comments(pr_number: int) -> List[PRComment]:
+    """Get all PR comments (both review comments and timeline comments).
+
+    Combines review comments from code review threads and general timeline comments.
+    Continues gracefully if one type fails, as long as at least one type succeeds.
+
+    Args:
+        pr_number: PR number
+
+    Returns:
+        List of PRComment objects (both review and timeline types)
+
+    Raises:
+        ValueError: If PR not found or invalid
+        GitHubError: If failed to get PR comments
+    """
+    comments = []
+    errors = []
+
+    # Get review comments (code review comments on specific lines)
+    try:
+        review_comments = get_pr_comments(pr_number)
+        comments.extend(review_comments)
+    except (ValueError, GitHubError) as e:
+        # If review comments fail, log but continue to get timeline comments
+        errors.append(f"Failed to get review comments: {e}")
+
+    # Get timeline comments (general discussion comments)
+    try:
+        timeline_comments = get_pr_timeline_comments(pr_number)
+        comments.extend(timeline_comments)
+    except (ValueError, GitHubError) as e:
+        # If timeline comments fail, log but continue
+        errors.append(f"Failed to get timeline comments: {e}")
+
+    # If both failed, raise error
+    if not comments:
+        error_msg = "; ".join(errors)
+        raise GitHubError(f"Failed to get any comments for PR #{pr_number}: {error_msg}")
+
+    return comments
+
+
+def get_processed_comment_ids_from_history(phase_dir: "Path") -> set:
+    """Get all processed and skipped comment IDs from previous iterations' history.
+
+    Loads context.json from all iteration_XXX directories and collects comment IDs
+    from pr_comments_processed and pr_comments_skipped fields.
+
+    Args:
+        phase_dir: Path to the phase directory (e.g., .cafe/issues/issue123/develop)
+
+    Returns:
+        Set of comment IDs that have been processed or skipped in previous iterations
+    """
+    from pathlib import Path
+    import json
+
+    processed_ids = set()
+
+    if not phase_dir.exists():
+        return processed_ids
+
+    # Find all iteration_XXX directories
+    for item in phase_dir.iterdir():
+        if not item.is_dir() or not item.name.startswith("iteration_"):
+            continue
+
+        context_file = item / "context.json"
+        if not context_file.exists():
+            continue
+
+        try:
+            with open(context_file, "r", encoding="utf-8") as f:
+                context_data = json.load(f)
+
+            # Collect IDs from pr_comments_processed
+            processed = context_data.get("pr_comments_processed", [])
+            for comment in processed:
+                if "id" in comment:
+                    processed_ids.add(comment["id"])
+
+            # Collect IDs from pr_comments_skipped
+            skipped = context_data.get("pr_comments_skipped", [])
+            for comment in skipped:
+                if "id" in comment:
+                    processed_ids.add(comment["id"])
+
+        except (json.JSONDecodeError, KeyError, TypeError):
+            # Skip files with invalid JSON or unexpected structure
+            continue
+
+    return processed_ids

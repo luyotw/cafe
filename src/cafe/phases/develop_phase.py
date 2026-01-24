@@ -15,7 +15,7 @@ from cafe.core.phase import Phase
 from cafe.core.status_codes import PhaseStatusCode, StatusCodeParser, generate_status_code_prompt
 from cafe.core.types import PhaseProgress, PhaseResult, PhaseStatus
 from cafe.ui.display import Display
-from cafe.utils.github import get_pr_comments, filter_unresolved_comments, format_comments_for_prompt
+from cafe.utils.github import get_pr_comments, get_all_pr_comments, filter_unresolved_comments, format_comments_for_prompt, parse_comment_processing_results
 from cafe.utils.prompt_utils import format_checklist_instruction
 
 
@@ -332,22 +332,30 @@ class DevelopPhase(Phase):
                     handled_review_timestamp = develop_status.get("handled_review_timestamp")
 
                     if handled_review_timestamp == review_timestamp:
-                        # This review has already been handled
-                        return PhaseResult(
-                            status=PhaseStatus.COMPLETED,
-                            message=f"Development already completed in {existing_progress.iteration} iteration(s)",
-                            data={
-                                "branch": self._get_branch_name(),
-                                "iterations": existing_progress.iteration,
-                                "status_code": existing_progress.status_code,
-                            },
-                        )
-
-            # Review exists and hasn't been handled yet, continue execution
-            return None  # Don't return early - let execution continue to handle review feedback
+                        # This review has already been handled, clear the flag and continue to check PR comments
+                        self._has_review_feedback = False
+                        print(f"ℹ️  Review feedback already addressed, checking for PR comments...")
+                        # Don't return here - continue to check PR comments below
+                    else:
+                        # Review exists and hasn't been handled yet, continue execution
+                        return None  # Don't return early - let execution continue to handle review feedback
+            else:
+                # Review exists and hasn't been handled yet, continue execution
+                return None  # Don't return early - let execution continue to handle review feedback
 
         # Check PR comments (only if no review feedback)
         if self.pr_number:
+            # First, check if there are any NEW unresolved comments that need attention
+            try:
+                pr_comments, new_comment_count, pr_comment_objects = self._load_pr_comments()
+                if new_comment_count > 0:
+                    # There are new comments to address, need to continue development
+                    print(f"ℹ️  Found {new_comment_count} new PR comment(s) to address - development needed")
+                    return None
+            except Exception as e:
+                # If we can't load PR comments, continue with timestamp-based check
+                print(f"⚠️  Could not load PR comments: {e}")
+
             print(f"ℹ️  PR #{self.pr_number} comments will be addressed")
             # Check if there are unpushed commits that address PR comments
             if self.git_ops.has_unpushed_commits():
@@ -750,42 +758,116 @@ class DevelopPhase(Phase):
         latest_pr_file = pr_files[-1]
         return latest_pr_file.read_text()
 
-    def _load_pr_comments(self) -> tuple[str, int]:
+    def _load_pr_comments(self) -> tuple[str, int, list]:
         """Load PR comments if pr_number is provided.
 
         Only loads comments that are newer than the last develop timestamp.
 
         Returns:
-            Tuple of (formatted comments string, new unresolved count)
+            Tuple of (formatted comments string, new comment count, comment objects list)
         """
         if not self.pr_number:
-            return "", 0
+            return "", 0, []
 
         # Return cached result if already loaded
         if self._pr_comments_cache is not None:
             return self._pr_comments_cache
 
         try:
-            print(f"  → Calling get_pr_comments({self.pr_number})")
-            comments = get_pr_comments(self.pr_number)
+            print(f"  → Calling get_all_pr_comments({self.pr_number})")
+            comments = get_all_pr_comments(self.pr_number)
             print(f"  → Got {len(comments)} total comments")
 
-            unresolved = filter_unresolved_comments(comments)
-            print(f"  → {len(unresolved)} unresolved comments")
+            # Get last develop completion timestamp to filter out old comments
+            from datetime import datetime, timezone
+            last_develop_timestamp = None
+            existing_progress = self._load_progress()
+            if existing_progress and existing_progress.status == PhaseStatus.COMPLETED:
+                last_develop_timestamp = existing_progress.timestamp
+                print(f"  → Last develop completed at: {last_develop_timestamp.isoformat()}")
 
-            result = format_comments_for_prompt(unresolved)
+            # Load already-processed comment IDs from previous iterations to avoid re-presenting them
+            from cafe.utils.github import get_processed_comment_ids_from_history
+            processed_comment_ids = get_processed_comment_ids_from_history(self.phase_dir)
+            if processed_comment_ids:
+                print(f"  → Found {len(processed_comment_ids)} already-processed comment IDs from history")
+
+            # Filter only unresolved review comments, keep all timeline comments
+            review_comments = [c for c in comments if c.comment_type == "review"]
+            timeline_comments = [c for c in comments if c.comment_type == "timeline"]
+
+            # Filter both review and timeline comments to only include those newer than last develop
+            if last_develop_timestamp:
+                new_review_comments = []
+                new_timeline_comments = []
+
+                # Filter review comments by timestamp
+                for comment in review_comments:
+                    try:
+                        timestamp_str = comment.created_at
+                        if timestamp_str.endswith('Z'):
+                            timestamp_str = timestamp_str.replace('Z', '+00:00')
+                        comment_time = datetime.fromisoformat(timestamp_str)
+                        if comment_time.tzinfo is None:
+                            comment_time = comment_time.replace(tzinfo=timezone.utc)
+
+                        if comment_time > last_develop_timestamp:
+                            new_review_comments.append(comment)
+                            print(f"  → NEW review comment [{comment.id}] from {comment.author} at {comment_time.isoformat()}")
+                    except Exception as e:
+                        # If can't parse timestamp, include the comment to be safe
+                        print(f"  ⚠️  Failed to parse timestamp for review comment [{comment.id}]: {e}")
+                        new_review_comments.append(comment)
+                review_comments = new_review_comments
+
+                # Filter timeline comments by timestamp
+                for comment in timeline_comments:
+                    try:
+                        timestamp_str = comment.created_at
+                        if timestamp_str.endswith('Z'):
+                            timestamp_str = timestamp_str.replace('Z', '+00:00')
+                        comment_time = datetime.fromisoformat(timestamp_str)
+                        if comment_time.tzinfo is None:
+                            comment_time = comment_time.replace(tzinfo=timezone.utc)
+
+                        if comment_time > last_develop_timestamp:
+                            new_timeline_comments.append(comment)
+                            print(f"  → NEW timeline comment [{comment.id}] from {comment.author} at {comment_time.isoformat()}")
+                    except Exception as e:
+                        # If can't parse timestamp, include the comment to be safe
+                        print(f"  ⚠️  Failed to parse timestamp for timeline comment [{comment.id}]: {e}")
+                        new_timeline_comments.append(comment)
+                timeline_comments = new_timeline_comments
+
+            # For review comments, still apply unresolved filter (in addition to timestamp filter)
+            unresolved_review = filter_unresolved_comments(review_comments)
+
+            # Exclude already-processed comment IDs (applies to both review and timeline comments)
+            if processed_comment_ids:
+                unresolved_review = [c for c in unresolved_review if c.id not in processed_comment_ids]
+                timeline_comments = [c for c in timeline_comments if c.id not in processed_comment_ids]
+                print(f"  → Excluded {len(processed_comment_ids)} already-processed comments from presentation")
+
+            comments_to_present = unresolved_review + timeline_comments
+
+            print(f"  → {len(unresolved_review)} unresolved review comments + {len(timeline_comments)} NEW timeline comments")
+
+            result = format_comments_for_prompt(comments_to_present)
             if result:
                 print(f"  → Formatted result length: {len(result)} chars")
 
-            # Cache the result
-            self._pr_comments_cache = (result, len(unresolved))
+            # Cache the result (formatted string, count, comment objects)
+            self._pr_comments_cache = (result, len(comments_to_present), comments_to_present)
+            # Store comment objects for later processing
+            self._pr_comment_objects = comments_to_present
             return self._pr_comments_cache
         except (ValueError, Exception) as e:
             # Log error but don't fail - PR comments are optional context
             print(f"⚠️  Failed to load PR comments: {e}")
             import traceback
             traceback.print_exc()
-            self._pr_comments_cache = ("", 0)
+            self._pr_comments_cache = ("", 0, [])
+            self._pr_comment_objects = []
             return self._pr_comments_cache
 
     def _get_latest_pr_comment_timestamp(self) -> Optional["datetime"]:
@@ -799,9 +881,9 @@ class DevelopPhase(Phase):
 
         try:
             from datetime import datetime, timezone
-            from cafe.utils.github import get_pr_comments
+            from cafe.utils.github import get_all_pr_comments
 
-            comments = get_pr_comments(self.pr_number)
+            comments = get_all_pr_comments(self.pr_number)
             if not comments:
                 return None
 
@@ -855,16 +937,16 @@ class DevelopPhase(Phase):
         if hasattr(self, '_has_review_feedback') and self._has_review_feedback:
             pr_comments_section = ""
             has_pr_comments = False
-            unresolved_count = 0
+            new_comment_count = 0
         elif pr_auto_create is False:
             # Use local PR feedback
             local_feedback = self._load_local_pr_feedback()
             pr_comments_section = f"\n\n## PR Feedback (Local)\n\n{local_feedback}\n" if local_feedback else ""
             has_pr_comments = bool(local_feedback)
-            unresolved_count = 0  # Not applicable for local feedback
+            new_comment_count = 0  # Not applicable for local feedback
         else:
             # Use GitHub PR comments
-            pr_comments, unresolved_count = self._load_pr_comments()
+            pr_comments, new_comment_count, pr_comment_objects = self._load_pr_comments()
             pr_comments_section = f"\n\n{pr_comments}\n" if pr_comments else ""
             has_pr_comments = bool(pr_comments)
 
@@ -934,7 +1016,7 @@ Steps for requesting clarification:
             if review_file_path:
                 review_sources.append(str(review_file_path))
             if has_pr_comments:
-                review_sources.append(f"PR comments (see {unresolved_count} unresolved comments above)")
+                review_sources.append(f"PR comments (see {new_comment_count} comments above)")
 
             review_source_text = ""
             if len(review_sources) == 1:
@@ -1060,9 +1142,9 @@ Read {agent_file} to understand your complete role definition and responsibiliti
             # as the developer may still have work to do based on the plan
             if self.pr_number and (not hasattr(self, '_has_review_feedback') or not self._has_review_feedback):
                 print(f"\n🔍 Checking PR #{self.pr_number} for unresolved comments...")
-                pr_comments, unresolved_count = self._load_pr_comments()
-                if unresolved_count > 0:
-                    print(f"✅ Found {unresolved_count} new unresolved PR comment(s) to address")
+                pr_comments, new_comment_count, pr_comment_objects = self._load_pr_comments()
+                if new_comment_count > 0:
+                    print(f"✅ Found {new_comment_count} new PR comment(s) to address")
                 else:
                     print(f"ℹ️  No new unresolved PR comments since last develop")
                 print()
@@ -1575,3 +1657,87 @@ Please return only one status code (example: CAFE_CONFIRMED), with no other cont
         develop_dir = self.issue_dir / "develop"
         develop_file = develop_dir / f"iteration_{self.iteration:03d}" / "output.md"
         return [develop_file] if develop_file.exists() else []
+
+    def _update_iteration_history(
+        self,
+        phase_specific_data: Dict[str, Any],
+        prompt: Optional[str] = None,
+        agent_cli: Optional[str] = None,
+        agent_session_id: Optional[str] = None,
+        allowed_tools: Optional[List[str]] = None,
+        denied_tools: Optional[List[str]] = None,
+        cli_command_args: Optional[List[str]] = None,
+        status_code: Optional[PhaseStatusCode] = None,
+        token_usage: Optional["TokenUsage"] = None,
+        model: Optional[str] = None,
+    ) -> None:
+        """Override to add comment processing tracking.
+
+        Processes agent response for comment processing results and adds tracking data.
+        """
+        # Check if we have PR comments and agent response
+        if hasattr(self, '_pr_comment_objects') and self._pr_comment_objects:
+            response = phase_specific_data.get("response", "")
+            if response:
+                # Parse comment processing results from agent response
+                processing_results = parse_comment_processing_results(response)
+
+                # Build pr_comments_presented list
+                pr_comments_presented = [
+                    {
+                        "id": c.id,
+                        "type": c.comment_type,
+                        "author": c.author
+                    }
+                    for c in self._pr_comment_objects
+                ]
+
+                # Add comment tracking data to phase_specific_data
+                phase_specific_data["pr_comments_presented"] = pr_comments_presented
+                phase_specific_data["pr_comments_processed"] = processing_results["processed"]
+                phase_specific_data["pr_comments_skipped"] = processing_results["skipped"]
+
+        # Call parent implementation
+        super()._update_iteration_history(
+            phase_specific_data=phase_specific_data,
+            prompt=prompt,
+            agent_cli=agent_cli,
+            agent_session_id=agent_session_id,
+            allowed_tools=allowed_tools,
+            denied_tools=denied_tools,
+            cli_command_args=cli_command_args,
+            status_code=status_code,
+            token_usage=token_usage,
+            model=model,
+        )
+
+        # Display comment processing summary to user
+        self._display_comment_processing_summary(phase_specific_data)
+
+    def _display_comment_processing_summary(self, phase_specific_data: Dict[str, Any]) -> None:
+        """Display summary of comment processing results to user.
+
+        Args:
+            phase_specific_data: Data containing pr_comments_processed and pr_comments_skipped
+        """
+        processed = phase_specific_data.get("pr_comments_processed", [])
+        skipped = phase_specific_data.get("pr_comments_skipped", [])
+
+        if not processed and not skipped:
+            return  # No comment processing occurred
+
+        print("\n" + "=" * 80)
+        print("📊 PR Comments Processing Summary")
+        print("=" * 80)
+
+        if processed:
+            print(f"  ✅ Processed: {len(processed)} comment(s)")
+            for item in processed:
+                print(f"     - [#{item['id']}] {item['description']}")
+
+        if skipped:
+            print(f"\n  ⏭️  Skipped: {len(skipped)} comment(s)")
+            for item in skipped:
+                print(f"     - [#{item['id']}] {item['reason']}")
+
+        print("=" * 80 + "\n")

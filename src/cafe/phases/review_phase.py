@@ -13,7 +13,7 @@ from cafe.core.permission import PermissionHandler
 from cafe.core.phase import Phase
 from cafe.core.status_codes import PhaseStatusCode, StatusCodeParser, generate_status_code_prompt
 from cafe.core.types import PhaseProgress, PhaseResult, PhaseStatus
-from cafe.utils.github import get_pr_comments, filter_unresolved_comments, format_comments_for_prompt
+from cafe.utils.github import get_pr_comments, get_all_pr_comments, filter_unresolved_comments, format_comments_for_prompt
 from cafe.utils.prompt_utils import format_checklist_instruction
 
 
@@ -318,6 +318,8 @@ class ReviewPhase(Phase):
     def _load_pr_comments(self) -> tuple[str, int]:
         """Load PR comments if pr_number is provided.
 
+        Fetches both review comments and timeline comments.
+
         Returns:
             Tuple of (formatted comments string, unresolved count)
         """
@@ -329,19 +331,25 @@ class ReviewPhase(Phase):
             return self._pr_comments_cache
 
         try:
-            print(f"  → Calling get_pr_comments({self.pr_number})")
-            comments = get_pr_comments(self.pr_number)
+            print(f"  → Calling get_all_pr_comments({self.pr_number})")
+            comments = get_all_pr_comments(self.pr_number)
             print(f"  → Got {len(comments)} total comments")
 
-            unresolved = filter_unresolved_comments(comments)
-            print(f"  → {len(unresolved)} unresolved comments")
+            # Filter: unresolved review comments + all timeline comments
+            review_comments = [c for c in comments if c.comment_type == "review"]
+            timeline_comments = [c for c in comments if c.comment_type == "timeline"]
 
-            result = format_comments_for_prompt(unresolved)
+            unresolved_review = filter_unresolved_comments(review_comments)
+            comments_to_present = unresolved_review + timeline_comments
+
+            print(f"  → {len(unresolved_review)} unresolved review comments + {len(timeline_comments)} timeline comments")
+
+            result = format_comments_for_prompt(comments_to_present)
             if result:
                 print(f"  → Formatted result length: {len(result)} chars")
 
             # Cache the result
-            self._pr_comments_cache = (result, len(unresolved))
+            self._pr_comments_cache = (result, len(comments_to_present))
             return self._pr_comments_cache
         except (ValueError, Exception) as e:
             # Log error but don't fail - PR comments are optional context
@@ -361,7 +369,7 @@ class ReviewPhase(Phase):
             return None
 
         try:
-            comments = get_pr_comments(self.pr_number)
+            comments = get_all_pr_comments(self.pr_number)
             if not comments:
                 return None
 
