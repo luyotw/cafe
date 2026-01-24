@@ -1199,6 +1199,12 @@ Read {agent_file} to understand your complete role definition and responsibiliti
 - Use same language as existing code comments when writing new comments
 - Maximize code reuse by looking for existing patterns and utilities"""
 
+            # Add worktree file modification restriction if in worktree mode
+            config_file = self.issue_dir / "issue.yaml"
+            worktree_path = self._get_issue_config_value(config_file, "worktree_path")
+            if worktree_path:
+                basic_principles += f"\n- In worktree mode: Only modify files under {worktree_path}, modifying project root files is strictly prohibited"
+
             # Calculate output file path for this iteration
             iteration_dir = self._get_iteration_dir(self.iteration)
             output_file = str(iteration_dir / "output.md")
