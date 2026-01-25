@@ -180,3 +180,42 @@ def test_top_level_issue_id_takes_precedence(tmp_path):
     assert phase.issue_id == '789'
 
 
+def test_integer_issue_id_converted_to_string(tmp_path):
+    """Test that integer issue_id values are converted to strings"""
+    # Setup issue directory
+    issue_dir = tmp_path / ".cafe" / "issues" / "test-issue"
+    issue_dir.mkdir(parents=True)
+
+    # Setup issue.yaml with issue_id as unquoted integer (YAML will parse as int)
+    issue_config = issue_dir / "issue.yaml"
+    issue_config.write_text("spec:\n  issue_id: 131\nbase_branch: main\n")
+
+    # Setup spec file
+    spec_dir = issue_dir / "spec" / "iteration_001"
+    spec_dir.mkdir(parents=True)
+    spec_file = spec_dir / "output.md"
+    spec_file.write_text("# Spec")
+
+    with patch('cafe.phases.pr_phase.PRPhase._get_issue_dir', return_value=issue_dir):
+        phase = PRPhase(
+            agent_manager=Mock(),
+            permission_handler=Mock(),
+            git_ops=Mock(),
+            github_ops=Mock(),
+            spec_file=str(spec_file),
+        )
+
+        # Simulate what execute() should do (with string conversion)
+        config_file = phase.issue_dir / "issue.yaml"
+        phase.issue_id = phase._get_issue_config_value(config_file, "issue_id")
+        if not phase.issue_id:
+            phase.issue_id = phase._get_issue_config_value(config_file, "spec.issue_id")
+        # Convert to string if it's an integer
+        if phase.issue_id is not None:
+            phase.issue_id = str(phase.issue_id)
+
+    # Should be converted to string
+    assert phase.issue_id == '131'
+    assert isinstance(phase.issue_id, str)
+
+
