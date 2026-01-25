@@ -183,7 +183,7 @@ class Phase(ABC):
         if user_input_file.exists():
             return user_input_file.read_text(encoding="utf-8")
 
-        # Fall back to context.json
+        # Fall back to context.json (deprecated - for backward compatibility only)
         context_file = iteration_dir / "context.json"
         if context_file.exists():
             with open(context_file, "r", encoding="utf-8") as f:
