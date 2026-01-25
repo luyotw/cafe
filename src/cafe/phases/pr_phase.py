@@ -283,7 +283,13 @@ class PRPhase(Phase):
             # Read issue_id from config if not provided
             if not self.issue_id:
                 config_file = self.issue_dir / "issue.yaml"
+                # Try to get issue_id from top level first, then from spec section
                 self.issue_id = self._get_issue_config_value(config_file, "issue_id")
+                if not self.issue_id:
+                    self.issue_id = self._get_issue_config_value(config_file, "spec.issue_id")
+                # Convert to string if it's an integer (YAML may parse unquoted numbers as int)
+                if self.issue_id is not None:
+                    self.issue_id = str(self.issue_id)
 
             # Check requirements file exists
             req_path = Path(self.spec_file)
