@@ -142,6 +142,11 @@ class Phase(ABC):
         iteration_dir = self._get_iteration_dir(self.iteration)
         iteration_dir.mkdir(parents=True, exist_ok=True)
 
+        # Save user_input to dedicated markdown file
+        user_input_file = iteration_dir / "user_input.md"
+        with open(user_input_file, "w", encoding="utf-8") as f:
+            f.write(user_input)
+
         # Create initial context data
         context_data: Dict[str, Any] = {
             "iteration": self.iteration,

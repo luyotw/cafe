@@ -229,3 +229,46 @@ class TestSaveUserInput:
 
         assert data["template"] == "default"
         assert data["agent_name"] == "PM"
+
+    def test_creates_user_input_md_file(self, tmp_path):
+        """驗證會建立 user_input.md 檔案"""
+        phase_dir = tmp_path / "spec"
+        phase_dir.mkdir()
+        phase = ConcretePhase(phase_dir=phase_dir)
+        phase.iteration = 1
+
+        phase._save_user_input("Test user input content")
+
+        # 驗證 user_input.md 存在
+        user_input_file = phase_dir / "iteration_001" / "user_input.md"
+        assert user_input_file.exists()
+
+    def test_user_input_md_contains_correct_content(self, tmp_path):
+        """驗證 user_input.md 包含正確內容"""
+        phase_dir = tmp_path / "spec"
+        phase_dir.mkdir()
+        phase = ConcretePhase(phase_dir=phase_dir)
+        phase.iteration = 1
+
+        user_input_content = "# Test Requirements\n\nThis is a test."
+        phase._save_user_input(user_input_content)
+
+        user_input_file = phase_dir / "iteration_001" / "user_input.md"
+        content = user_input_file.read_text(encoding="utf-8")
+        assert content == user_input_content
+
+    def test_maintains_backward_compatibility_with_context_json(self, tmp_path):
+        """驗證 context.json 中仍保留 user_input（向後相容）"""
+        phase_dir = tmp_path / "spec"
+        phase_dir.mkdir()
+        phase = ConcretePhase(phase_dir=phase_dir)
+        phase.iteration = 1
+
+        user_input_content = "Test input for backward compatibility"
+        phase._save_user_input(user_input_content)
+
+        # 驗證 context.json 仍包含 user_input
+        context_file = phase_dir / "iteration_001" / "context.json"
+        data = json.loads(context_file.read_text())
+        assert "user_input" in data
+        assert data["user_input"] == user_input_content
