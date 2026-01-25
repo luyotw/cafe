@@ -740,29 +740,105 @@ class DevelopPhase(Phase):
 
         return False
 
-    def _load_local_pr_feedback(self) -> Optional[str]:
-        """Load local PR feedback from pr_XXX.md files.
+    def _load_pr_comments_from_iteration_file(self) -> Optional[str]:
+        """Load PR comments from pr/iteration_XXX/user_input.md.
+
+        This is the new unified approach for loading PR feedback in both local
+        and GitHub modes. Checks timestamp of latest PR iteration and compares
+        with develop phase. Only loads feedback if PR iteration is newer.
 
         Returns:
-            Feedback content if found, None otherwise
+            Feedback content if found and newer, None otherwise
+
+        Raises:
+            FileNotFoundError: If PR iteration is newer but user_input.md not found
+            ValueError: If PR iteration is newer but user_input.md is empty
         """
+        from datetime import datetime, timezone
+        import json
+
         pr_dir = self.issue_dir / "pr"
         if not pr_dir.exists():
             return None
 
-        # Find all pr_XXX.md files
-        pr_files = sorted(pr_dir.glob("pr_*.md"))
-        if not pr_files:
+        # Find latest PR iteration directory
+        iteration_dirs = sorted(pr_dir.glob("iteration_*"))
+        if not iteration_dirs:
             return None
 
-        # Return the latest one
-        latest_pr_file = pr_files[-1]
-        return latest_pr_file.read_text()
+        latest_pr_iteration_dir = iteration_dirs[-1]
+        pr_context_file = latest_pr_iteration_dir / "context.json"
+
+        if not pr_context_file.exists():
+            return None
+
+        # Load PR iteration timestamp
+        with open(pr_context_file, "r", encoding="utf-8") as f:
+            pr_context = json.load(f)
+
+        pr_timestamp_str = pr_context.get("timestamp")
+        if not pr_timestamp_str:
+            return None
+
+        # Parse PR timestamp
+        pr_timestamp = datetime.fromisoformat(pr_timestamp_str)
+        if pr_timestamp.tzinfo is None:
+            pr_timestamp = pr_timestamp.replace(tzinfo=timezone.utc)
+
+        # Get latest develop phase timestamp
+        existing_progress = self._load_progress()
+        if existing_progress and existing_progress.timestamp:
+            develop_timestamp = existing_progress.timestamp
+            if develop_timestamp.tzinfo is None:
+                develop_timestamp = develop_timestamp.replace(tzinfo=timezone.utc)
+
+            # If PR iteration is not newer, ignore it
+            if pr_timestamp <= develop_timestamp:
+                print(f"  → PR iteration {latest_pr_iteration_dir.name} is not newer than develop phase, skipping")
+                return None
+
+        # PR iteration is newer (or develop has never run) - load user_input.md
+        user_input_file = latest_pr_iteration_dir / "user_input.md"
+
+        if not user_input_file.exists():
+            # PR iteration exists and is newer, but user_input.md not found
+            raise FileNotFoundError(
+                f"PR iteration {latest_pr_iteration_dir.name} is newer than develop phase, "
+                f"but {user_input_file} does not exist"
+            )
+
+        content = user_input_file.read_text(encoding="utf-8").strip()
+        if not content:
+            # PR iteration exists and is newer, but user_input.md is empty
+            raise ValueError(
+                f"PR iteration {latest_pr_iteration_dir.name} is newer than develop phase, "
+                f"but {user_input_file} is empty"
+            )
+
+        print(f"  → Loaded PR feedback from {latest_pr_iteration_dir.name}/user_input.md")
+        return content
+
+    def _load_local_pr_feedback(self) -> Optional[str]:
+        """Load local PR feedback from pr/iteration_XXX/user_input.md.
+
+        This is now a wrapper around _load_pr_comments_from_iteration_file()
+        for backward compatibility.
+
+        Returns:
+            Feedback content if found and newer, None otherwise
+
+        Raises:
+            FileNotFoundError: If PR iteration is newer but user_input.md not found
+            ValueError: If PR iteration is newer but user_input.md is empty
+        """
+        return self._load_pr_comments_from_iteration_file()
 
     def _load_pr_comments(self) -> tuple[str, int, list]:
-        """Load PR comments if pr_number is provided.
+        """Load PR comments from pr/iteration_XXX/user_input.md or GitHub API.
 
-        Only loads comments that are newer than the last develop timestamp.
+        New behavior: Checks for pr/iteration_XXX/user_input.md first.
+        If found and newer than develop phase, loads from there.
+        Otherwise, falls back to fetching from GitHub API (legacy behavior).
 
         Returns:
             Tuple of (formatted comments string, new comment count, comment objects list)
@@ -774,6 +850,25 @@ class DevelopPhase(Phase):
         if self._pr_comments_cache is not None:
             return self._pr_comments_cache
 
+        # Try to load from pr/iteration_XXX/user_input.md first (new approach)
+        try:
+            pr_feedback_from_file = self._load_pr_comments_from_iteration_file()
+            if pr_feedback_from_file is not None:
+                # Successfully loaded from iteration file
+                # Return in same format as get_all_pr_comments
+                # Note: comment count and list are not available from file,
+                # so we return 0 and empty list (not used in this path)
+                self._pr_comments_cache = (pr_feedback_from_file, 0, [])
+                self._pr_comment_objects = []
+                return self._pr_comments_cache
+        except (FileNotFoundError, ValueError) as e:
+            # If PR iteration is newer but file not found/empty, raise error
+            raise
+        except Exception as e:
+            # For other errors, log and fall through to GitHub API
+            print(f"  ⚠️  Failed to load PR comments from iteration file: {e}")
+
+        # Fall back to GitHub API (legacy behavior)
         try:
             print(f"  → Calling get_all_pr_comments({self.pr_number})")
             comments = get_all_pr_comments(self.pr_number)
