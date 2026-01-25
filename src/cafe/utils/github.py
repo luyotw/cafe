@@ -713,17 +713,131 @@ def get_pr_timeline_comments(pr_number: int) -> List[PRComment]:
         raise GitHubError(f"Unexpected error getting PR timeline comments: {e}") from e
 
 
-def get_all_pr_comments(pr_number: int) -> List[PRComment]:
-    """Get all PR comments (both review comments and timeline comments).
+def get_pr_review_body_comments(pr_number: int) -> List[PRComment]:
+    """Get review body comments from a Pull Request.
 
-    Combines review comments from code review threads and general timeline comments.
+    Review body comments are summary comments written at the top when submitting
+    a review, which have a body but are not bound to a specific line of code.
+
+    Args:
+        pr_number: PR number
+
+    Returns:
+        List of PRComment objects with comment_type="review_body"
+
+    Raises:
+        ValueError: If PR not found or invalid
+        GitHubError: If failed to get PR review body comments
+    """
+    try:
+        # Get repo info first
+        repo_result = subprocess.run(
+            ["gh", "repo", "view", "--json", "owner,name"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        if repo_result.returncode != 0:
+            raise GitHubError(f"Failed to get repo info: {repo_result.stderr}")
+
+        repo_data = json.loads(repo_result.stdout)
+        owner = repo_data["owner"]["login"]
+        repo_name = repo_data["name"]
+
+        # Use GraphQL API to get reviews with body field
+        graphql_query = """
+        query($owner: String!, $name: String!, $number: Int!) {
+          repository(owner: $owner, name: $name) {
+            pullRequest(number: $number) {
+              reviews(first: 100) {
+                nodes {
+                  id
+                  databaseId
+                  body
+                  author {
+                    login
+                  }
+                  createdAt
+                  state
+                }
+              }
+            }
+          }
+        }
+        """
+
+        # Execute GraphQL query using gh api graphql
+        result = subprocess.run(
+            ["gh", "api", "graphql",
+             "-f", f"query={graphql_query}",
+             "-f", f"owner={owner}",
+             "-f", f"name={repo_name}",
+             "-F", f"number={pr_number}"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        if result.returncode != 0:
+            if "not found" in result.stderr.lower() or "could not resolve" in result.stderr.lower():
+                raise ValueError(f"PR #{pr_number} not found")
+            raise GitHubError(f"Failed to get PR review body comments: {result.stderr}")
+
+        response_data = json.loads(result.stdout)
+
+        # Check for GraphQL errors
+        if "errors" in response_data:
+            error_messages = [e.get("message", str(e)) for e in response_data["errors"]]
+            raise GitHubError(f"GraphQL errors: {', '.join(error_messages)}")
+
+        # Extract reviews
+        pr_data = response_data.get("data", {}).get("repository", {}).get("pullRequest")
+        if not pr_data:
+            raise ValueError(f"PR #{pr_number} not found")
+
+        reviews = pr_data.get("reviews", {}).get("nodes", [])
+
+        comments = []
+        for review in reviews:
+            # Only include reviews with non-empty body
+            body = review.get("body", "").strip()
+            if not body:
+                continue
+
+            # Use databaseId (integer) for compatibility with existing code
+            comment_id = str(review.get("databaseId", ""))
+
+            comments.append(PRComment(
+                id=comment_id,
+                body=body,
+                author=review.get("author", {}).get("login", "unknown") if review.get("author") else "unknown",
+                created_at=review.get("createdAt", ""),
+                comment_type="review_body",
+            ))
+
+        return comments
+
+    except json.JSONDecodeError as e:
+        raise GitHubError(f"Failed to parse PR review body comments: {e}") from e
+    except Exception as e:
+        if isinstance(e, (ValueError, GitHubError)):
+            raise
+        raise GitHubError(f"Unexpected error getting PR review body comments: {e}") from e
+
+
+def get_all_pr_comments(pr_number: int) -> List[PRComment]:
+    """Get all PR comments (review comments, timeline comments, and review body comments).
+
+    Combines review comments from code review threads, general timeline comments,
+    and review body comments (summary comments from reviews).
     Continues gracefully if one type fails, as long as at least one type succeeds.
 
     Args:
         pr_number: PR number
 
     Returns:
-        List of PRComment objects (both review and timeline types)
+        List of PRComment objects (review, timeline, and review_body types)
 
     Raises:
         ValueError: If PR not found or invalid
@@ -748,7 +862,15 @@ def get_all_pr_comments(pr_number: int) -> List[PRComment]:
         # If timeline comments fail, log but continue
         errors.append(f"Failed to get timeline comments: {e}")
 
-    # If both failed, raise error
+    # Get review body comments (summary comments from reviews)
+    try:
+        review_body_comments = get_pr_review_body_comments(pr_number)
+        comments.extend(review_body_comments)
+    except (ValueError, GitHubError) as e:
+        # If review body comments fail, log but continue
+        errors.append(f"Failed to get review body comments: {e}")
+
+    # If all failed, raise error
     if not comments:
         error_msg = "; ".join(errors)
         raise GitHubError(f"Failed to get any comments for PR #{pr_number}: {error_msg}")

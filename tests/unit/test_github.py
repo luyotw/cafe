@@ -612,3 +612,182 @@ class TestUpdateIssue:
 
         with pytest.raises(GitHubError, match="Failed to update issue"):
             gh_ops.update_issue("123", title="New Title")
+
+
+class TestGetPRReviewBodyComments:
+    """Test get_pr_review_body_comments functionality."""
+
+    @patch("subprocess.run")
+    def test_get_pr_review_body_comments_success(self, mock_run: Mock) -> None:
+        """測試成功獲取 PR review body comments"""
+        # Mock repo info call
+        repo_response = Mock(
+            returncode=0,
+            stdout='{"owner":{"login":"testowner"},"name":"testrepo"}'
+        )
+        # Mock GraphQL call
+        graphql_response = Mock(
+            returncode=0,
+            stdout='''{
+                "data": {
+                    "repository": {
+                        "pullRequest": {
+                            "reviews": {
+                                "nodes": [
+                                    {
+                                        "id": "R_001",
+                                        "databaseId": 123,
+                                        "body": "Overall looks good!",
+                                        "author": {"login": "reviewer1"},
+                                        "createdAt": "2025-01-26T10:00:00Z",
+                                        "state": "APPROVED"
+                                    },
+                                    {
+                                        "id": "R_002",
+                                        "databaseId": 124,
+                                        "body": "",
+                                        "author": {"login": "reviewer2"},
+                                        "createdAt": "2025-01-26T11:00:00Z",
+                                        "state": "COMMENTED"
+                                    },
+                                    {
+                                        "id": "R_003",
+                                        "databaseId": 125,
+                                        "body": "Needs some changes",
+                                        "author": {"login": "reviewer3"},
+                                        "createdAt": "2025-01-26T12:00:00Z",
+                                        "state": "CHANGES_REQUESTED"
+                                    }
+                                ]
+                            }
+                        }
+                    }
+                }
+            }'''
+        )
+
+        mock_run.side_effect = [repo_response, graphql_response]
+
+        from cafe.utils.github import get_pr_review_body_comments
+
+        comments = get_pr_review_body_comments(456)
+
+        # Should return 2 comments (excluding empty body)
+        assert len(comments) == 2
+        assert comments[0].id == "123"
+        assert comments[0].body == "Overall looks good!"
+        assert comments[0].author == "reviewer1"
+        assert comments[0].comment_type == "review_body"
+        assert comments[0].path is None
+        assert comments[0].line is None
+
+        assert comments[1].id == "125"
+        assert comments[1].body == "Needs some changes"
+        assert comments[1].author == "reviewer3"
+
+    @patch("subprocess.run")
+    def test_get_pr_review_body_comments_pr_not_found(self, mock_run: Mock) -> None:
+        """測試 PR 不存在時拋出錯誤"""
+        repo_response = Mock(
+            returncode=0,
+            stdout='{"owner":{"login":"testowner"},"name":"testrepo"}'
+        )
+        graphql_response = Mock(
+            returncode=0,
+            stdout='{"errors":[{"message":"Could not resolve to a PullRequest"}]}'
+        )
+
+        mock_run.side_effect = [repo_response, graphql_response]
+
+        from cafe.utils.github import get_pr_review_body_comments, GitHubError
+
+        with pytest.raises(GitHubError, match="GraphQL errors"):
+            get_pr_review_body_comments(999)
+
+    @patch("subprocess.run")
+    def test_get_pr_review_body_comments_no_reviews(self, mock_run: Mock) -> None:
+        """測試沒有 review body comments 時返回空列表"""
+        repo_response = Mock(
+            returncode=0,
+            stdout='{"owner":{"login":"testowner"},"name":"testrepo"}'
+        )
+        graphql_response = Mock(
+            returncode=0,
+            stdout='''{
+                "data": {
+                    "repository": {
+                        "pullRequest": {
+                            "reviews": {
+                                "nodes": []
+                            }
+                        }
+                    }
+                }
+            }'''
+        )
+
+        mock_run.side_effect = [repo_response, graphql_response]
+
+        from cafe.utils.github import get_pr_review_body_comments
+
+        comments = get_pr_review_body_comments(456)
+
+        assert len(comments) == 0
+
+
+class TestGetAllPRCommentsWithReviewBody:
+    """Test get_all_pr_comments with review body comments included."""
+
+    @patch("cafe.utils.github.get_pr_comments")
+    @patch("cafe.utils.github.get_pr_timeline_comments")
+    @patch("cafe.utils.github.get_pr_review_body_comments")
+    def test_get_all_pr_comments_includes_review_body(
+        self,
+        mock_review_body: Mock,
+        mock_timeline: Mock,
+        mock_review: Mock
+    ) -> None:
+        """測試 get_all_pr_comments 包含所有三種類型的 comments"""
+        from cafe.utils.github import PRComment, get_all_pr_comments
+
+        # Mock review comments
+        mock_review.return_value = [
+            PRComment(
+                id="1",
+                body="Review comment",
+                author="user1",
+                created_at="2025-01-26T10:00:00Z",
+                path="file.py",
+                line=10,
+                comment_type="review"
+            )
+        ]
+
+        # Mock timeline comments
+        mock_timeline.return_value = [
+            PRComment(
+                id="2",
+                body="Timeline comment",
+                author="user2",
+                created_at="2025-01-26T11:00:00Z",
+                comment_type="timeline"
+            )
+        ]
+
+        # Mock review body comments
+        mock_review_body.return_value = [
+            PRComment(
+                id="3",
+                body="Review body comment",
+                author="user3",
+                created_at="2025-01-26T12:00:00Z",
+                comment_type="review_body"
+            )
+        ]
+
+        comments = get_all_pr_comments(456)
+
+        assert len(comments) == 3
+        assert comments[0].comment_type == "review"
+        assert comments[1].comment_type == "timeline"
+        assert comments[2].comment_type == "review_body"
