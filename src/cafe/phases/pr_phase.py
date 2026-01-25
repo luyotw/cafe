@@ -425,7 +425,7 @@ class PRPhase(Phase):
             # Add PR link to GitHub issue if issue_id is configured
             if self.issue_id:
                 try:
-                    comment = f"Pull Request created: #{pr_number}\n\n{pr_url}"
+                    comment = f"Pull Request created: {pr_url}"
                     self.github_ops.add_issue_comment(self.issue_id, comment)
                 except Exception as e:
                     # Don't fail the entire PR phase if commenting fails
