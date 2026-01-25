@@ -18,7 +18,7 @@ SPEC_EXECUTION_STEPS_ITERATION_1 = """## Checklist
 [ ] Write analysis results to {current_spec_file} (NOT in your response)
 [ ] Write ONLY the status code in your response
 [ ] Confirm: No technical details were included (no implementation, architecture, languages, frameworks, databases)
-[ ] Confirm: No technical solutions or suggestions were provided
+[ ] Confirm: Only provided 2-3 high-level approach options if any, without prescribing specific technical solutions
 [ ] Confirm: No code was modified
 [ ] Return appropriate status code
 """
@@ -33,7 +33,7 @@ SPEC_EXECUTION_STEPS_ITERATION_N = """## Checklist
 [ ] Write updated analysis to {current_spec_file} (NOT in your response)
 [ ] Write ONLY the status code in your response
 [ ] Confirm: No technical details were included (no implementation, architecture, languages, frameworks, databases)
-[ ] Confirm: No technical solutions or suggestions were provided
+[ ] Confirm: Only provided 2-3 high-level approach options if any, without prescribing specific technical solutions
 [ ] Confirm: No code was modified
 [ ] Return appropriate status code
 """

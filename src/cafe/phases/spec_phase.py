@@ -332,7 +332,7 @@ class SpecPhase(Phase):
             # Define basic principles
             basic_principles = """- Write analysis results in your native language
 - Do not include technical details (implementation, architecture, languages, frameworks, databases)
-- Do not provide technical solutions or suggestions"""
+- You may provide 2-3 high-level approach options for the user to consider, but avoid prescribing specific technical solutions"""
 
             # Get template file path (convert to relative path for display)
             template_file = None
