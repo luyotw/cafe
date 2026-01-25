@@ -562,39 +562,71 @@ class PRPhase(Phase):
         if isinstance(result, str):
             modification_request = result
 
-            # Save to versioned pr file
+            # Increment iteration for this feedback
+            self.iteration += 1
+
+            # Save to iteration directory structure (pr/iteration_XXX/user_input.md)
             pr_dir = self.issue_dir / "pr"
-            pr_dir.mkdir(exist_ok=True)
+            iteration_dir = pr_dir / f"iteration_{self.iteration:03d}"
+            iteration_dir.mkdir(parents=True, exist_ok=True)
 
-            # Get next version number
-            existing_files = sorted(pr_dir.glob("pr_*.md"))
-            next_version = len(existing_files) + 1
-            pr_file = pr_dir / f"pr_{next_version:03d}.md"
+            # Save modification request to user_input.md
+            user_input_file = iteration_dir / "user_input.md"
+            user_input_file.write_text(modification_request)
 
-            # Save modification request
-            pr_file.write_text(modification_request)
+            # Save context.json for this iteration
+            from datetime import datetime
+            context_data = {
+                "iteration": self.iteration,
+                "timestamp": datetime.now().astimezone().isoformat(),
+                "user_input": modification_request,
+                "status_code": PhaseStatusCode.NEEDS_CHANGES.value,
+                "local_review": True,
+            }
+            context_file = iteration_dir / "context.json"
+            with open(context_file, "w", encoding="utf-8") as f:
+                json.dump(context_data, f, ensure_ascii=False, indent=2)
 
             # Get relative path (works with both regular and worktree modes)
             from cafe.utils.git_utils import to_cwd_relative_path
             try:
-                pr_file_display = to_cwd_relative_path(pr_file)
+                user_input_file_display = to_cwd_relative_path(user_input_file)
             except ValueError:
                 # Fallback to absolute path if not under cwd
-                pr_file_display = str(pr_file)
+                user_input_file_display = str(user_input_file)
 
             console.print()
-            console.print(f"[green]✓ Modification request saved to {pr_file_display}[/green]")
+            console.print(f"[green]✓ Modification request saved to {user_input_file_display}[/green]")
             console.print()
             console.print("[bold]Next step:[/bold] cafe develop --auto (or cafe make)")
             console.print()
 
             return PhaseResult(
                 status=PhaseStatus.COMPLETED,
-                message=f"Local review completed - modification requested (saved to {pr_file.name})",
-                data={"status_code": PhaseStatusCode.NEEDS_CHANGES.value, "pr_file": str(pr_file), "local_review": True},
+                message=f"Local review completed - modification requested (saved to {user_input_file.name})",
+                data={"status_code": PhaseStatusCode.NEEDS_CHANGES.value, "pr_file": str(user_input_file), "local_review": True},
             )
 
         # Otherwise, it's a PhaseResult (confirm)
+        # Increment iteration for this confirmation
+        self.iteration += 1
+
+        # Create iteration directory and save context.json for confirmation
+        pr_dir = self.issue_dir / "pr"
+        iteration_dir = pr_dir / f"iteration_{self.iteration:03d}"
+        iteration_dir.mkdir(parents=True, exist_ok=True)
+
+        from datetime import datetime
+        context_data = {
+            "iteration": self.iteration,
+            "timestamp": datetime.now().astimezone().isoformat(),
+            "status_code": PhaseStatusCode.CONFIRMED.value,
+            "local_review": True,
+        }
+        context_file = iteration_dir / "context.json"
+        with open(context_file, "w", encoding="utf-8") as f:
+            json.dump(context_data, f, ensure_ascii=False, indent=2)
+
         # Add custom message for local review
         if result.status == PhaseStatus.COMPLETED:
             console.print()
