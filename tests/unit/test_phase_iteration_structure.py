@@ -272,3 +272,83 @@ class TestSaveUserInput:
         data = json.loads(context_file.read_text())
         assert "user_input" in data
         assert data["user_input"] == user_input_content
+
+
+class TestLoadUserInput:
+    """測試 _load_user_input() 方法"""
+
+    def test_loads_from_user_input_md_first(self, tmp_path):
+        """驗證優先從 user_input.md 載入"""
+        phase_dir = tmp_path / "spec"
+        phase_dir.mkdir()
+        phase = ConcretePhase(phase_dir=phase_dir)
+
+        # 建立 iteration_001 目錄和 user_input.md
+        iteration_dir = phase_dir / "iteration_001"
+        iteration_dir.mkdir()
+        user_input_file = iteration_dir / "user_input.md"
+        user_input_file.write_text("Content from user_input.md", encoding="utf-8")
+
+        # 同時建立 context.json（但內容不同，以驗證優先讀取 .md）
+        context_file = iteration_dir / "context.json"
+        context_data = {
+            "iteration": 1,
+            "timestamp": "2025-12-27T10:00:00Z",
+            "user_input": "Content from context.json",
+        }
+        context_file.write_text(json.dumps(context_data), encoding="utf-8")
+
+        # 載入並驗證
+        result = phase._load_user_input(1)
+        assert result == "Content from user_input.md"
+
+    def test_fallback_to_context_json_when_md_not_found(self, tmp_path):
+        """驗證當 user_input.md 不存在時，回退到 context.json"""
+        phase_dir = tmp_path / "spec"
+        phase_dir.mkdir()
+        phase = ConcretePhase(phase_dir=phase_dir)
+
+        # 只建立 context.json，不建立 user_input.md
+        iteration_dir = phase_dir / "iteration_001"
+        iteration_dir.mkdir()
+        context_file = iteration_dir / "context.json"
+        context_data = {
+            "iteration": 1,
+            "timestamp": "2025-12-27T10:00:00Z",
+            "user_input": "Content from context.json only",
+        }
+        context_file.write_text(json.dumps(context_data), encoding="utf-8")
+
+        # 載入並驗證
+        result = phase._load_user_input(1)
+        assert result == "Content from context.json only"
+
+    def test_returns_empty_string_when_both_not_found(self, tmp_path):
+        """驗證當兩者都不存在時返回空字串"""
+        phase_dir = tmp_path / "spec"
+        phase_dir.mkdir()
+        phase = ConcretePhase(phase_dir=phase_dir)
+
+        # iteration_001 目錄不存在
+        result = phase._load_user_input(1)
+        assert result == ""
+
+    def test_returns_empty_string_when_user_input_key_missing_in_context(self, tmp_path):
+        """驗證當 context.json 存在但缺少 user_input 欄位時返回空字串"""
+        phase_dir = tmp_path / "spec"
+        phase_dir.mkdir()
+        phase = ConcretePhase(phase_dir=phase_dir)
+
+        # 建立 context.json 但不包含 user_input 欄位
+        iteration_dir = phase_dir / "iteration_001"
+        iteration_dir.mkdir()
+        context_file = iteration_dir / "context.json"
+        context_data = {
+            "iteration": 1,
+            "timestamp": "2025-12-27T10:00:00Z",
+        }
+        context_file.write_text(json.dumps(context_data), encoding="utf-8")
+
+        # 載入並驗證
+        result = phase._load_user_input(1)
+        assert result == ""

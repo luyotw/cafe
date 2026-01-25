@@ -163,6 +163,35 @@ class Phase(ABC):
         with open(context_file, "w", encoding="utf-8") as f:
             json.dump(context_data, f, ensure_ascii=False, indent=2)
 
+    def _load_user_input(self, iteration: int) -> str:
+        """Load user_input from user_input.md or context.json.
+
+        Try loading from user_input.md first, then fall back to context.json
+        if the .md file doesn't exist. This provides backward compatibility
+        for iterations created before the user_input.md feature.
+
+        Args:
+            iteration: Iteration number to load from
+
+        Returns:
+            User input string, or empty string if not found
+        """
+        iteration_dir = self._get_iteration_dir(iteration)
+        user_input_file = iteration_dir / "user_input.md"
+
+        # Try loading from user_input.md first
+        if user_input_file.exists():
+            return user_input_file.read_text(encoding="utf-8")
+
+        # Fall back to context.json
+        context_file = iteration_dir / "context.json"
+        if context_file.exists():
+            with open(context_file, "r", encoding="utf-8") as f:
+                context_data = json.load(f)
+                return context_data.get("user_input", "")
+
+        return ""
+
     def _update_iteration_history(
         self,
         phase_specific_data: Dict[str, Any],
