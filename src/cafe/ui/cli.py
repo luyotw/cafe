@@ -105,7 +105,7 @@ def _handle_phase_exception(e: Exception, phase_name: str, auto: bool = False) -
             console.print()
             console.print("[bold]Next steps (choose one):[/bold]")
             console.print("  • Wait for quota reset or switch to a different account, OR")
-            console.print("  • Use [cyan]cafe config[/cyan] to switch to a different CLI tool")
+            console.print("  • Use [cyan]cafe config edit[/cyan] to switch to a different CLI tool")
             console.print()
             console.print("Then run [cyan]cafe make[/cyan] again to resume from where it stopped")
             console.print()
