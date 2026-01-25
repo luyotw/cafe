@@ -593,5 +593,6 @@ class TestShowCommandUserInput:
             # Execute command
             result = runner.invoke(app, ["show", "spec", "user_input"])
 
-            # Should show error
+            # Should show error with specific message
             assert result.exit_code != 0
+            assert "No user input markdown file found for this iteration." in result.stdout
