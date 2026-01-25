@@ -574,7 +574,8 @@ class DevelopPhase(Phase):
             # Check if this iteration was interrupted (has prompt but no response)
             if current_data.get("prompt") and not current_data.get("response"):
                 # Reuse the user_input from interrupted iteration
-                interrupted_user_input = current_data.get("user_input", "")
+                # Load from user_input.md or context.json for backward compatibility
+                interrupted_user_input = self._load_user_input(self.iteration)
                 return interrupted_user_input
 
         # Check for previous iteration data
@@ -729,12 +730,12 @@ class DevelopPhase(Phase):
                 continue
 
             try:
-                with open(iteration_file, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                    # If this iteration has user_input, the clarification was answered
-                    if data.get('user_input', '').strip():
-                        return True
-            except (json.JSONDecodeError, IOError):
+                # Load user_input from user_input.md or context.json for backward compatibility
+                user_input = self._load_user_input(iteration_num)
+                # If this iteration has user_input, the clarification was answered
+                if user_input.strip():
+                    return True
+            except Exception:
                 continue
 
         return False

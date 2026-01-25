@@ -544,9 +544,11 @@ Continue analyzing the latest version of {spec_file_path}.
 
         # Iteration 2+: Check if current iteration was interrupted (has user_input but no response)
         current_data = self._load_current_iteration_data()
-        if current_data and current_data.get("user_input") and not current_data.get("response"):
-            # Restore interrupted iteration, directly use saved user_input
-            return current_data["user_input"]
+        if current_data and not current_data.get("response"):
+            # Restore interrupted iteration, load user_input from user_input.md or context.json
+            user_input = self._load_user_input(self.iteration)
+            if user_input:
+                return user_input
 
         # Iteration 2+: Display current plan.md content (interactive only)
         if self.interactive:

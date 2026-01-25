@@ -53,7 +53,7 @@ ALL_PHASES = ["spec", "plan", "develop", "review", "pr"]
 VALID_PHASES = ["spec", "plan", "develop", "review", "pr"]
 VALID_CONTENT_TYPES = [
     "context", "output", "streaming", "error",
-    "status", "iterations", "checklist"
+    "status", "iterations", "checklist", "user_input"
 ]
 CONTENT_TYPE_FILE_MAP = {
     "context": "context.json",
@@ -63,6 +63,7 @@ CONTENT_TYPE_FILE_MAP = {
     "status": "status.json",
     "iterations": "iterations.jsonl",
     "checklist": "checklist.md",
+    "user_input": "user_input.md",
 }
 
 
@@ -4630,9 +4631,13 @@ def show(
 
         # Check if file exists
         if not file_path.exists():
-            console.print(f"[red]Error: File not found: {file_path}[/red]")
-            if resolved_iteration is not None:
-                console.print(f"[dim]File '{content_type}' does not exist in iteration {resolved_iteration}[/dim]")
+            # Special error message for user_input content type
+            if content_type == "user_input":
+                console.print("[red]No user input markdown file found for this iteration.[/red]")
+            else:
+                console.print(f"[red]Error: File not found: {file_path}[/red]")
+                if resolved_iteration is not None:
+                    console.print(f"[dim]File '{content_type}' does not exist in iteration {resolved_iteration}[/dim]")
             raise typer.Exit(1)
 
         # Read and display file content
@@ -4661,7 +4666,11 @@ def show(
             raise typer.Exit(1)
 
     except ValueError as e:
-        console.print(f"[red]Error: {e}[/red]")
+        # Special error message for user_input content type
+        if content_type == "user_input":
+            console.print("[red]No user input markdown file found for this iteration.[/red]")
+        else:
+            console.print(f"[red]Error: {e}[/red]")
         raise typer.Exit(1)
     except Exception as e:
         console.print(f"[red]Unexpected error: {e}[/red]")

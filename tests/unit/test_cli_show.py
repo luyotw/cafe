@@ -465,3 +465,134 @@ class TestShowCommandChecklist:
 
             # Should show error
             assert result.exit_code != 0
+
+
+class TestShowCommandUserInput:
+    """Tests for cafe show user_input command."""
+
+    def test_show_user_input_content_type_valid(self, tmp_path):
+        """Test user_input is a valid content type."""
+        from cafe.ui.cli import VALID_CONTENT_TYPES
+        assert "user_input" in VALID_CONTENT_TYPES
+
+    def test_show_user_input_file_mapping(self, tmp_path):
+        """Test user_input maps to user_input.md file."""
+        from cafe.ui.cli import CONTENT_TYPE_FILE_MAP
+        assert CONTENT_TYPE_FILE_MAP["user_input"] == "user_input.md"
+
+    def test_show_spec_user_input(self, tmp_path):
+        """Test showing spec phase user_input."""
+        # Prepare test environment
+        cafe_dir = tmp_path / ".cafe"
+        issues_dir = cafe_dir / "issues" / "test-issue" / "spec"
+        issues_dir.mkdir(parents=True)
+
+        # Create iteration with user_input.md
+        iteration_dir = issues_dir / "iteration_001"
+        iteration_dir.mkdir()
+        (iteration_dir / "context.json").write_text("{}")
+        user_input_file = iteration_dir / "user_input.md"
+        user_input_file.write_text("# Initial Requirements\n\nAdd login feature")
+
+        # Mock git operations and config
+        with patch("cafe.ui.cli.GitOperations") as mock_git_cls, \
+             patch("cafe.ui.cli.ConfigManager") as mock_config_cls, \
+             patch("cafe.ui.cli.Path.cwd", return_value=tmp_path):
+
+            mock_git = mock_git_cls.return_value
+            mock_git.get_current_branch.return_value = "test-issue"
+
+            # Execute command
+            result = runner.invoke(app, ["show", "spec", "user_input"])
+
+            # Verify output
+            assert result.exit_code == 0
+            assert "Initial Requirements" in result.stdout
+            assert "Add login feature" in result.stdout
+
+    def test_show_plan_user_input(self, tmp_path):
+        """Test showing plan phase user_input."""
+        # Prepare test environment
+        cafe_dir = tmp_path / ".cafe"
+        issues_dir = cafe_dir / "issues" / "test-issue" / "plan"
+        issues_dir.mkdir(parents=True)
+
+        # Create iteration with user_input.md
+        iteration_dir = issues_dir / "iteration_001"
+        iteration_dir.mkdir()
+        (iteration_dir / "context.json").write_text("{}")
+        user_input_file = iteration_dir / "user_input.md"
+        user_input_file.write_text("Please add error handling")
+
+        # Mock git operations and config
+        with patch("cafe.ui.cli.GitOperations") as mock_git_cls, \
+             patch("cafe.ui.cli.ConfigManager") as mock_config_cls, \
+             patch("cafe.ui.cli.Path.cwd", return_value=tmp_path):
+
+            mock_git = mock_git_cls.return_value
+            mock_git.get_current_branch.return_value = "test-issue"
+
+            # Execute command
+            result = runner.invoke(app, ["show", "plan", "user_input"])
+
+            # Verify output
+            assert result.exit_code == 0
+            assert "Please add error handling" in result.stdout
+
+    def test_show_user_input_with_iteration_flag(self, tmp_path):
+        """Test showing user_input with specific iteration."""
+        # Prepare test environment
+        cafe_dir = tmp_path / ".cafe"
+        issues_dir = cafe_dir / "issues" / "test-issue" / "spec"
+        issues_dir.mkdir(parents=True)
+
+        # Create two iterations with different user_input
+        for i in [1, 2]:
+            iteration_dir = issues_dir / f"iteration_{i:03d}"
+            iteration_dir.mkdir()
+            (iteration_dir / "context.json").write_text("{}")
+            user_input_file = iteration_dir / "user_input.md"
+            user_input_file.write_text(f"User input for iteration {i}")
+
+        # Mock git operations and config
+        with patch("cafe.ui.cli.GitOperations") as mock_git_cls, \
+             patch("cafe.ui.cli.ConfigManager") as mock_config_cls, \
+             patch("cafe.ui.cli.Path.cwd", return_value=tmp_path):
+
+            mock_git = mock_git_cls.return_value
+            mock_git.get_current_branch.return_value = "test-issue"
+
+            # Execute command with iteration 1
+            result = runner.invoke(app, ["show", "spec", "user_input", "-i", "1"])
+
+            # Verify output
+            assert result.exit_code == 0
+            assert "iteration 1" in result.stdout
+
+    def test_show_user_input_file_not_found(self, tmp_path):
+        """Test error when user_input.md file doesn't exist."""
+        # Prepare test environment
+        cafe_dir = tmp_path / ".cafe"
+        issues_dir = cafe_dir / "issues" / "test-issue" / "spec"
+        issues_dir.mkdir(parents=True)
+
+        # Create iteration WITHOUT user_input.md
+        iteration_dir = issues_dir / "iteration_001"
+        iteration_dir.mkdir()
+        (iteration_dir / "context.json").write_text("{}")
+        # No user_input.md file
+
+        # Mock git operations and config
+        with patch("cafe.ui.cli.GitOperations") as mock_git_cls, \
+             patch("cafe.ui.cli.ConfigManager") as mock_config_cls, \
+             patch("cafe.ui.cli.Path.cwd", return_value=tmp_path):
+
+            mock_git = mock_git_cls.return_value
+            mock_git.get_current_branch.return_value = "test-issue"
+
+            # Execute command
+            result = runner.invoke(app, ["show", "spec", "user_input"])
+
+            # Should show error with specific message
+            assert result.exit_code != 0
+            assert "No user input markdown file found for this iteration." in result.stdout
