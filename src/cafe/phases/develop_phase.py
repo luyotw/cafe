@@ -300,12 +300,16 @@ class DevelopPhase(Phase):
 
                 # If PR has NEEDS_CHANGES and is newer than develop, need to execute
                 if pr_status_code == PhaseStatusCode.NEEDS_CHANGES.value and pr_timestamp > develop_timestamp:
-                    # Find the latest pr_XXX.md file to show user
+                    # Find the latest pr/iteration_XXX/user_input.md file to show user
                     pr_dir = self.issue_dir / "pr"
-                    pr_files = sorted(pr_dir.glob("pr_*.md"))
-                    if pr_files:
-                        latest_pr_file = pr_files[-1]
-                        print(f"ℹ️  PR feedback detected - changes requested: {latest_pr_file.name}")
+                    iteration_dirs = sorted(pr_dir.glob("iteration_*"))
+                    if iteration_dirs:
+                        latest_iteration_dir = iteration_dirs[-1]
+                        user_input_file = latest_iteration_dir / "user_input.md"
+                        if user_input_file.exists():
+                            print(f"ℹ️  PR feedback detected - changes requested: {latest_iteration_dir.name}/user_input.md")
+                        else:
+                            print(f"ℹ️  PR feedback detected - changes requested")
                     else:
                         print(f"ℹ️  PR feedback detected - changes requested")
                     return None  # Continue execution
@@ -865,106 +869,20 @@ class DevelopPhase(Phase):
             # If PR iteration is newer but file not found/empty, raise error
             raise
         except Exception as e:
-            # For other errors, log and fall through to GitHub API
-            print(f"  ⚠️  Failed to load PR comments from iteration file: {e}")
+            # For other unexpected errors, raise them
+            # The develop phase exclusively relies on user_input.md as per spec
+            raise RuntimeError(
+                f"Failed to load PR comments from pr/iteration_XXX/user_input.md: {e}. "
+                f"The develop phase exclusively reads from user_input.md files created by the PR phase. "
+                f"Please run 'cafe pr' first to fetch and save PR comments."
+            ) from e
 
-        # Fall back to GitHub API (legacy behavior)
-        try:
-            print(f"  → Calling get_all_pr_comments({self.pr_number})")
-            comments = get_all_pr_comments(self.pr_number)
-            print(f"  → Got {len(comments)} total comments")
-
-            # Get last develop completion timestamp to filter out old comments
-            from datetime import datetime, timezone
-            last_develop_timestamp = None
-            existing_progress = self._load_progress()
-            if existing_progress and existing_progress.status == PhaseStatus.COMPLETED:
-                last_develop_timestamp = existing_progress.timestamp
-                print(f"  → Last develop completed at: {last_develop_timestamp.isoformat()}")
-
-            # Load already-processed comment IDs from previous iterations to avoid re-presenting them
-            from cafe.utils.github import get_processed_comment_ids_from_history
-            processed_comment_ids = get_processed_comment_ids_from_history(self.phase_dir)
-            if processed_comment_ids:
-                print(f"  → Found {len(processed_comment_ids)} already-processed comment IDs from history")
-
-            # Filter only unresolved review comments, keep all timeline comments
-            review_comments = [c for c in comments if c.comment_type == "review"]
-            timeline_comments = [c for c in comments if c.comment_type == "timeline"]
-
-            # Filter both review and timeline comments to only include those newer than last develop
-            if last_develop_timestamp:
-                new_review_comments = []
-                new_timeline_comments = []
-
-                # Filter review comments by timestamp
-                for comment in review_comments:
-                    try:
-                        timestamp_str = comment.created_at
-                        if timestamp_str.endswith('Z'):
-                            timestamp_str = timestamp_str.replace('Z', '+00:00')
-                        comment_time = datetime.fromisoformat(timestamp_str)
-                        if comment_time.tzinfo is None:
-                            comment_time = comment_time.replace(tzinfo=timezone.utc)
-
-                        if comment_time > last_develop_timestamp:
-                            new_review_comments.append(comment)
-                            print(f"  → NEW review comment [{comment.id}] from {comment.author} at {comment_time.isoformat()}")
-                    except Exception as e:
-                        # If can't parse timestamp, include the comment to be safe
-                        print(f"  ⚠️  Failed to parse timestamp for review comment [{comment.id}]: {e}")
-                        new_review_comments.append(comment)
-                review_comments = new_review_comments
-
-                # Filter timeline comments by timestamp
-                for comment in timeline_comments:
-                    try:
-                        timestamp_str = comment.created_at
-                        if timestamp_str.endswith('Z'):
-                            timestamp_str = timestamp_str.replace('Z', '+00:00')
-                        comment_time = datetime.fromisoformat(timestamp_str)
-                        if comment_time.tzinfo is None:
-                            comment_time = comment_time.replace(tzinfo=timezone.utc)
-
-                        if comment_time > last_develop_timestamp:
-                            new_timeline_comments.append(comment)
-                            print(f"  → NEW timeline comment [{comment.id}] from {comment.author} at {comment_time.isoformat()}")
-                    except Exception as e:
-                        # If can't parse timestamp, include the comment to be safe
-                        print(f"  ⚠️  Failed to parse timestamp for timeline comment [{comment.id}]: {e}")
-                        new_timeline_comments.append(comment)
-                timeline_comments = new_timeline_comments
-
-            # For review comments, still apply unresolved filter (in addition to timestamp filter)
-            unresolved_review = filter_unresolved_comments(review_comments)
-
-            # Exclude already-processed comment IDs (applies to both review and timeline comments)
-            if processed_comment_ids:
-                unresolved_review = [c for c in unresolved_review if c.id not in processed_comment_ids]
-                timeline_comments = [c for c in timeline_comments if c.id not in processed_comment_ids]
-                print(f"  → Excluded {len(processed_comment_ids)} already-processed comments from presentation")
-
-            comments_to_present = unresolved_review + timeline_comments
-
-            print(f"  → {len(unresolved_review)} unresolved review comments + {len(timeline_comments)} NEW timeline comments")
-
-            result = format_comments_for_prompt(comments_to_present)
-            if result:
-                print(f"  → Formatted result length: {len(result)} chars")
-
-            # Cache the result (formatted string, count, comment objects)
-            self._pr_comments_cache = (result, len(comments_to_present), comments_to_present)
-            # Store comment objects for later processing
-            self._pr_comment_objects = comments_to_present
-            return self._pr_comments_cache
-        except (ValueError, Exception) as e:
-            # Log error but don't fail - PR comments are optional context
-            print(f"⚠️  Failed to load PR comments: {e}")
-            import traceback
-            traceback.print_exc()
-            self._pr_comments_cache = ("", 0, [])
-            self._pr_comment_objects = []
-            return self._pr_comments_cache
+        # No fallback to GitHub API - develop phase exclusively uses user_input.md
+        # If we reach here, no PR feedback was found
+        print(f"  → No PR feedback found in pr/iteration_XXX/user_input.md")
+        self._pr_comments_cache = ("", 0, [])
+        self._pr_comment_objects = []
+        return self._pr_comments_cache
 
     def _get_latest_pr_comment_timestamp(self) -> Optional["datetime"]:
         """Get timestamp of the latest PR comment.

@@ -338,6 +338,10 @@ class PRPhase(Phase):
                 pr_number = str(existing_pr["number"])
                 pr_url = existing_pr["url"]
 
+                # Fetch and save PR comments (centralize comment detection in PR phase)
+                # This ensures develop/review phases can read from user_input.md
+                self._save_pr_comments_to_user_input(int(pr_number))
+
                 if not self.update:
                     # Ask user if they want to update
                     if self.interactive:
@@ -639,6 +643,79 @@ class PRPhase(Phase):
         result.data["local_review"] = True
 
         return result
+
+    def _save_pr_comments_to_user_input(self, pr_number: int) -> Optional[str]:
+        """Fetch PR comments from GitHub and save to pr/iteration_XXX/user_input.md.
+
+        This centralizes PR comment detection in the PR phase. When a PR exists on GitHub,
+        this method fetches all comments (review, timeline, and review body) and persists
+        them to the current iteration's user_input.md file.
+
+        Args:
+            pr_number: GitHub PR number
+
+        Returns:
+            Path to saved user_input.md file if comments were saved, None if no new comments
+        """
+        from cafe.utils.github import get_all_pr_comments, format_comments_for_prompt
+        from datetime import datetime
+        from rich.console import Console
+
+        console = Console()
+
+        try:
+            # Fetch all PR comments (review, timeline, and review body)
+            print(f"  → Fetching PR comments for PR #{pr_number}")
+            comments = get_all_pr_comments(pr_number)
+            print(f"  → Got {len(comments)} total comments")
+
+            if not comments:
+                print(f"  → No comments found for PR #{pr_number}")
+                return None
+
+            # Format comments for saving
+            formatted_comments = format_comments_for_prompt(comments)
+
+            if not formatted_comments or not formatted_comments.strip():
+                print(f"  → No non-empty comments to save")
+                return None
+
+            # Save to pr/iteration_XXX/user_input.md
+            pr_dir = self.issue_dir / "pr"
+            iteration_dir = pr_dir / f"iteration_{self.iteration:03d}"
+            iteration_dir.mkdir(parents=True, exist_ok=True)
+
+            user_input_file = iteration_dir / "user_input.md"
+            user_input_file.write_text(formatted_comments, encoding="utf-8")
+
+            # Save context.json for this iteration
+            context_data = {
+                "iteration": self.iteration,
+                "timestamp": datetime.now().astimezone().isoformat(),
+                "pr_number": pr_number,
+                "comment_count": len(comments),
+                "source": "github_pr_comments",
+            }
+            context_file = iteration_dir / "context.json"
+            with open(context_file, "w", encoding="utf-8") as f:
+                json.dump(context_data, f, ensure_ascii=False, indent=2)
+
+            from cafe.utils.git_utils import to_cwd_relative_path
+            try:
+                user_input_file_display = to_cwd_relative_path(user_input_file)
+            except ValueError:
+                user_input_file_display = str(user_input_file)
+
+            console.print()
+            console.print(f"[green]✓ Saved {len(comments)} PR comments to {user_input_file_display}[/green]")
+            console.print()
+
+            return str(user_input_file)
+
+        except Exception as e:
+            # Log error but don't fail the PR phase
+            console.print(f"[yellow]⚠️  Warning: Failed to fetch/save PR comments: {e}[/yellow]")
+            return None
 
     def _get_branch_name(self) -> str:
         """Get branch name.

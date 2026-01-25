@@ -424,38 +424,19 @@ class ReviewPhase(Phase):
             # If PR iteration is newer but file not found/empty, raise error
             raise
         except Exception as e:
-            # For other errors, log and fall through to GitHub API
-            print(f"  ⚠️  Failed to load PR comments from iteration file: {e}")
+            # For other unexpected errors, raise them
+            # The review phase exclusively relies on user_input.md as per spec
+            raise RuntimeError(
+                f"Failed to load PR comments from pr/iteration_XXX/user_input.md: {e}. "
+                f"The review phase exclusively reads from user_input.md files created by the PR phase. "
+                f"Please run 'cafe pr' first to fetch and save PR comments."
+            ) from e
 
-        # Fall back to GitHub API (legacy behavior)
-        try:
-            print(f"  → Calling get_all_pr_comments({self.pr_number})")
-            comments = get_all_pr_comments(self.pr_number)
-            print(f"  → Got {len(comments)} total comments")
-
-            # Filter: unresolved review comments + all timeline comments
-            review_comments = [c for c in comments if c.comment_type == "review"]
-            timeline_comments = [c for c in comments if c.comment_type == "timeline"]
-
-            unresolved_review = filter_unresolved_comments(review_comments)
-            comments_to_present = unresolved_review + timeline_comments
-
-            print(f"  → {len(unresolved_review)} unresolved review comments + {len(timeline_comments)} timeline comments")
-
-            result = format_comments_for_prompt(comments_to_present)
-            if result:
-                print(f"  → Formatted result length: {len(result)} chars")
-
-            # Cache the result
-            self._pr_comments_cache = (result, len(comments_to_present))
-            return self._pr_comments_cache
-        except (ValueError, Exception) as e:
-            # Log error but don't fail - PR comments are optional context
-            print(f"⚠️  Failed to load PR comments: {e}")
-            import traceback
-            traceback.print_exc()
-            self._pr_comments_cache = ("", 0)
-            return self._pr_comments_cache
+        # No fallback to GitHub API - review phase exclusively uses user_input.md
+        # If we reach here, no PR feedback was found
+        print(f"  → No PR feedback found in pr/iteration_XXX/user_input.md")
+        self._pr_comments_cache = ("", 0)
+        return self._pr_comments_cache
 
     def _get_latest_pr_comment_timestamp(self):
         """Get timestamp of the latest PR comment.
