@@ -347,21 +347,6 @@ class DevelopPhase(Phase):
                 # Review exists and hasn't been handled yet, continue execution
                 return None  # Don't return early - let execution continue to handle review feedback
 
-        # Check PR comments (only if no review feedback)
-        if self.pr_number:
-            # First, check if there are any NEW unresolved comments that need attention
-            try:
-                pr_comments, new_comment_count, pr_comment_objects = self._load_pr_comments()
-                if new_comment_count > 0:
-                    # There are new comments to address, need to continue development
-                    print(f"ℹ️  Found {new_comment_count} new PR comment(s) to address - development needed")
-                    return None
-            except Exception as e:
-                # If we can't load PR comments, continue with timestamp-based check
-                print(f"⚠️  Could not load PR comments: {e}")
-
-            # PR comments will be addressed in this iteration
-            return None
 
         # No review feedback or PR comments, phase is truly completed
         return PhaseResult(

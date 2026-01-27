@@ -165,18 +165,6 @@ class ReviewPhase(Phase):
             # Note: We don't check if diff is empty here - let the review agent
             # see the empty diff and decide (usually NEEDS_CHANGES)
 
-            # Check PR comments if pr_number is provided
-            if self.pr_number:
-                print(f"ℹ️  PR #{self.pr_number} comments will be reviewed")
-                _, unresolved_count = self._load_pr_comments()
-                if unresolved_count == 0:
-                    return PhaseResult(
-                        status=PhaseStatus.COMPLETED,
-                        message=f"PR #{self.pr_number} has no unresolved comments. Nothing to review.",
-                        data={
-                            "pr_number": self.pr_number,
-                        },
-                    )
 
 
             # Calculate iteration number based on iteration history
@@ -538,9 +526,9 @@ class ReviewPhase(Phase):
         Returns:
             Review prompt string
         """
-        # Load PR comments if available
-        pr_comments, _ = self._load_pr_comments()
-        pr_comments_section = f"\n\n{pr_comments}\n" if pr_comments else ""
+        # Load PR comments from pr/iteration_XXX/user_input.md if available
+        pr_comments = self._load_pr_comments_from_iteration_file()
+        pr_comments_section = f"\n\n## PR Feedback\n\n{pr_comments}\n" if pr_comments else ""
 
         # Check if need to re-run checks (develop is newer than review)
         develop_is_newer = self._check_if_develop_is_newer()
