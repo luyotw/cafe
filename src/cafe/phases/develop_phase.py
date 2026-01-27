@@ -890,17 +890,12 @@ class DevelopPhase(Phase):
             pr_comments_section = ""
             has_pr_comments = False
             new_comment_count = 0
-        elif pr_auto_create is False:
-            # Use local PR feedback
-            local_feedback = self._load_local_pr_feedback()
-            pr_comments_section = f"\n\n## PR Feedback (Local)\n\n{local_feedback}\n" if local_feedback else ""
-            has_pr_comments = bool(local_feedback)
-            new_comment_count = 0  # Not applicable for local feedback
         else:
-            # Use GitHub PR comments
-            pr_comments, new_comment_count, pr_comment_objects = self._load_pr_comments()
-            pr_comments_section = f"\n\n{pr_comments}\n" if pr_comments else ""
-            has_pr_comments = bool(pr_comments)
+            # Load PR feedback from pr/iteration_XXX/user_input.md (unified for both modes)
+            pr_feedback = self._load_pr_comments_from_iteration_file()
+            pr_comments_section = f"\n\n## PR Feedback\n\n{pr_feedback}\n" if pr_feedback else ""
+            has_pr_comments = bool(pr_feedback)
+            new_comment_count = 0  # Not tracking count anymore
 
         # Check for existing develop clarification file
         develop_dir = self.issue_dir / "develop"
@@ -1089,20 +1084,6 @@ Read {agent_file} to understand your complete role definition and responsibiliti
             if already_completed:
                 return already_completed
 
-            # Load PR comments only if there's no review feedback (review takes priority)
-            # Note: We don't skip execution even if there are no new comments,
-            # as the developer may still have work to do based on the plan
-            if self.pr_number and (not hasattr(self, '_has_review_feedback') or not self._has_review_feedback):
-                print(f"\n🔍 Checking PR #{self.pr_number} for unresolved comments...")
-                pr_comments, new_comment_count, pr_comment_objects = self._load_pr_comments()
-                if new_comment_count > 0:
-                    print(f"✅ Found {new_comment_count} new PR comment(s) to address")
-                else:
-                    print(f"ℹ️  No new unresolved PR comments since last develop")
-                print()
-            elif hasattr(self, '_has_review_feedback') and self._has_review_feedback:
-                print(f"ℹ️  Skipping PR comments check - prioritizing review feedback")
-                print()
 
             # Create or checkout branch
             branch_name = self._get_branch_name()
