@@ -804,9 +804,6 @@ class DevelopPhase(Phase):
         Returns:
             Tuple of (formatted comments string, new comment count, comment objects list)
         """
-        if not self.pr_number:
-            return "", 0, []
-
         # Return cached result if already loaded
         if self._pr_comments_cache is not None:
             return self._pr_comments_cache
@@ -1050,19 +1047,6 @@ Read {agent_file} to understand your complete role definition and responsibiliti
                     message=f"Spec file not found: {self.spec_file}",
                 )
 
-            # Auto-detect PR number if not provided (must happen before already_completed check)
-            if not self.pr_number:
-                try:
-                    from cafe.utils.github import GitHubOps
-                    github_ops = GitHubOps()
-                    branch_name = self._get_branch_name()
-                    pr_data = github_ops.get_pr_for_branch(branch_name)
-                    if pr_data:
-                        self.pr_number = pr_data["number"]
-                        print(f"ℹ️  Auto-detected PR #{self.pr_number} for branch '{branch_name}'")
-                except Exception as e:
-                    # Silently ignore errors - PR detection is optional
-                    print(f"ℹ️  No PR detected for current branch (this is normal if PR hasn't been created yet)")
 
             # Check if already completed (with review feedback awareness)
             already_completed = self._check_if_already_completed_with_review()
