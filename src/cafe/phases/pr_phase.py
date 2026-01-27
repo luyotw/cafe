@@ -591,7 +591,7 @@ class PRPhase(Phase):
             if user_input_path:
                 # New comments found and saved - create new iteration
                 self.iteration = (pr_iteration_info["iteration_number"] + 1) if pr_iteration_info else 1
-                self._save_progress(PhaseStatusCode.CONFIRMED)
+                self._save_progress(PhaseStatusCode.NEEDS_CHANGES)
 
                 console.print()
                 console.print(f"[green]✓ Fetched new PR comments to iteration_{self.iteration:03d}/user_input.md[/green]")
@@ -600,7 +600,7 @@ class PRPhase(Phase):
                 return PhaseResult(
                     status=PhaseStatus.COMPLETED,
                     message=f"Fetched new comments from PR #{pr_number}",
-                    data={"pr_number": str(pr_number), "pr_url": pr_url, "branch": branch_name, "status_code": "CAFE_CONFIRMED"},
+                    data={"pr_number": str(pr_number), "pr_url": pr_url, "branch": branch_name, "status_code": "CAFE_NEEDS_CHANGES"},
                 )
             else:
                 # No new comments
