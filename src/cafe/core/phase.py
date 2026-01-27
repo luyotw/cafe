@@ -143,9 +143,11 @@ class Phase(ABC):
         iteration_dir.mkdir(parents=True, exist_ok=True)
 
         # Save user_input to dedicated markdown file
+        # Don't overwrite existing non-empty user_input.md (e.g., from PR phase)
         user_input_file = iteration_dir / "user_input.md"
-        with open(user_input_file, "w", encoding="utf-8") as f:
-            f.write(user_input)
+        if not user_input_file.exists() or user_input_file.stat().st_size == 0:
+            with open(user_input_file, "w", encoding="utf-8") as f:
+                f.write(user_input)
 
         # Create initial context data
         context_data: Dict[str, Any] = {

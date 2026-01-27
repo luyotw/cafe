@@ -230,6 +230,51 @@ class PRPhase(Phase):
         with open(status_file, 'w', encoding='utf-8') as f:
             json.dump(progress.to_dict(), f, ensure_ascii=False, indent=2)
 
+    def _get_incomplete_iteration_info(self) -> Optional[dict]:
+        """Get information about the latest incomplete iteration (without status_code).
+
+        Returns:
+            Dictionary with iteration info, or None if no incomplete iteration exists:
+            {
+                "iteration_dir": Path,
+                "iteration_number": int,
+                "has_user_input": bool,
+                "user_input_path": Path or None
+            }
+        """
+        pr_dir = self.issue_dir / "pr"
+        if not pr_dir.exists():
+            return None
+
+        # Find all iteration directories
+        iteration_dirs = sorted(pr_dir.glob("iteration_*"))
+        if not iteration_dirs:
+            return None
+
+        # Check the last iteration - if it has no status_code, it's incomplete
+        last_iter_dir = iteration_dirs[-1]
+        context_file = last_iter_dir / "context.json"
+
+        if context_file.exists():
+            with open(context_file, "r", encoding="utf-8") as f:
+                context = json.load(f)
+                # If has status_code, it's complete, not incomplete
+                if context.get("status_code"):
+                    return None
+
+        # Last iteration is incomplete - check for user_input.md
+        user_input_file = last_iter_dir / "user_input.md"
+        has_user_input = user_input_file.exists() and user_input_file.read_text(encoding="utf-8").strip()
+
+        iteration_num = int(last_iter_dir.name.split("_")[1])
+
+        return {
+            "iteration_dir": last_iter_dir,
+            "iteration_number": iteration_num,
+            "has_user_input": bool(has_user_input),
+            "user_input_path": user_input_file if has_user_input else None,
+        }
+
     def _get_latest_pr_iteration_info(self) -> Optional[dict]:
         """Get information about the latest PR iteration.
 
@@ -249,28 +294,37 @@ class PRPhase(Phase):
         if not pr_dir.exists():
             return None
 
-        # Find latest iteration directory
+        # Find latest completed iteration directory (with status_code in context.json)
         iteration_dirs = sorted(pr_dir.glob("iteration_*"))
         if not iteration_dirs:
             return None
 
-        latest_iteration_dir = iteration_dirs[-1]
-
-        # Extract iteration number
-        iteration_num = int(latest_iteration_dir.name.split("_")[1])
-
-        # Check for context.json to get end_time
-        context_file = latest_iteration_dir / "context.json"
+        # Find the latest iteration with status_code (completed iteration)
+        latest_iteration_dir = None
+        iteration_num = None
         end_time = None
-        if context_file.exists():
-            with open(context_file, "r", encoding="utf-8") as f:
-                context = json.load(f)
-                end_time_str = context.get("end_time") or context.get("timestamp")
-                if end_time_str:
-                    end_time = datetime.fromisoformat(end_time_str)
-                    if end_time.tzinfo is None:
-                        from datetime import timezone
-                        end_time = end_time.replace(tzinfo=timezone.utc)
+
+        for iter_dir in reversed(iteration_dirs):
+            context_file = iter_dir / "context.json"
+            if context_file.exists():
+                with open(context_file, "r", encoding="utf-8") as f:
+                    context = json.load(f)
+                    # Only consider iterations with status_code (completed)
+                    if context.get("status_code"):
+                        latest_iteration_dir = iter_dir
+                        iteration_num = int(iter_dir.name.split("_")[1])
+
+                        # Get end_time
+                        end_time_str = context.get("end_time") or context.get("timestamp")
+                        if end_time_str:
+                            end_time = datetime.fromisoformat(end_time_str)
+                            if end_time.tzinfo is None:
+                                from datetime import timezone
+                                end_time = end_time.replace(tzinfo=timezone.utc)
+                        break
+
+        if not latest_iteration_dir:
+            return None
 
         # Check for user_input.md
         user_input_file = latest_iteration_dir / "user_input.md"
@@ -385,21 +439,72 @@ class PRPhase(Phase):
         except Exception as e:
             return self._handle_exception_in_execute(e, "PR phase failed")
 
+    def _check_and_resume_incomplete_iteration(self, pr_number: int = 0, pr_url: str = "", branch_name: str = "") -> Optional[PhaseResult]:
+        """Check for incomplete iteration and resume if exists.
+
+        This is Step 0 of the PR phase workflow, shared by both GitHub and local modes.
+
+        Args:
+            pr_number: PR number (0 for local mode)
+            pr_url: PR URL ("" for local mode)
+            branch_name: Branch name ("" for local mode)
+
+        Returns:
+            PhaseResult if incomplete iteration was resumed, None otherwise
+        """
+        from rich.console import Console
+        from cafe.core.status_codes import PhaseStatusCode
+
+        console = Console()
+
+        incomplete_iteration_info = self._get_incomplete_iteration_info()
+        if incomplete_iteration_info and incomplete_iteration_info["has_user_input"]:
+            console.print()
+            console.print(f"[dim]Resuming incomplete iteration_{self.iteration:03d}...[/dim]")
+
+            # Call agent to organize comments into todo list
+            result = self._organize_comments_to_todo_list(pr_number, pr_url, branch_name)
+
+            # Save progress with NEEDS_CHANGES status
+            self._save_progress(PhaseStatusCode.NEEDS_CHANGES)
+
+            return result
+
+        return None
+
+    def _check_waiting_for_develop(self) -> Optional[dict]:
+        """Check if we're waiting for develop phase to process feedback.
+
+        Returns:
+            pr_iteration_info if waiting for develop, None if should continue
+        """
+        pr_iteration_info = self._get_latest_pr_iteration_info()
+
+        # If no completed iteration exists, continue
+        if not pr_iteration_info:
+            return None
+
+        # If latest iteration has no user_input, it's not waiting for develop
+        if not pr_iteration_info["has_user_input"]:
+            return None
+
+        # Latest iteration has user_input - check if develop has processed it
+        should_start_new = self._should_start_new_iteration(pr_iteration_info)
+
+        # If should NOT start new (develop hasn't processed feedback yet), return the info
+        if not should_start_new:
+            return pr_iteration_info
+
+        # Develop has processed feedback, should start new iteration
+        return None
+
     def _execute_github_mode(self) -> PhaseResult:
         """Execute GitHub PR mode.
 
-        New logic:
-        1. Check if latest PR iteration has user_input
-           - No user_input -> open GitHub web page -> end
-           - Has user_input -> go to step 2
-
-        2. Compare PR iteration end_time vs develop end_time
-           - PR end_time > develop end_time -> end (waiting for develop)
-           - PR end_time <= develop end_time -> go to step 3 (start new iteration)
-
-        3. Check for new commits
-           - Has new commits -> push & update PR -> create new iteration -> end
-           - No new commits -> fetch GitHub comments -> if has comments, create new iteration -> end
+        Workflow:
+        0. Check for incomplete iteration -> resume if exists
+        1-2. Check iteration state -> return early if waiting
+        3. GitHub-specific: push commits, create/update PR, or fetch comments
 
         Returns:
             Phase result
@@ -445,50 +550,80 @@ class PRPhase(Phase):
         # Check if PR exists on GitHub
         existing_pr = self.github_ops.get_pr_for_branch(branch_name)
 
-        # Step 1: Check latest PR iteration
+        # Step 0: Check for incomplete iteration (shared logic)
+        pr_number = existing_pr["number"] if existing_pr else 0
+        pr_url = existing_pr["url"] if existing_pr else ""
+        result = self._check_and_resume_incomplete_iteration(pr_number, pr_url, branch_name)
+        if result:
+            return result
+
+        # Step 1: Check if waiting for develop phase (shared logic)
+        waiting_iteration_info = self._check_waiting_for_develop()
+        if waiting_iteration_info:
+            console.print()
+            console.print("[yellow]ℹ️  Latest PR iteration is waiting for develop phase to process feedback[/yellow]")
+            console.print()
+            return PhaseResult(
+                status=PhaseStatus.COMPLETED,
+                message="Waiting for develop phase to process PR feedback",
+                data={"branch": branch_name},
+            )
+
+        # Step 2: GitHub-specific logic
         pr_iteration_info = self._get_latest_pr_iteration_info()
 
+        # Check if latest iteration is waiting for comments from GitHub
         if pr_iteration_info and not pr_iteration_info["has_user_input"]:
-            # Latest iteration has no user_input yet
+            # Latest iteration has no user_input yet - check GitHub for new comments
             if existing_pr:
                 pr_number = existing_pr["number"]
                 pr_url = existing_pr["url"]
-                console.print()
-                console.print(f"[yellow]ℹ️  PR #{pr_number} is waiting for review feedback[/yellow]")
-                console.print(f"  URL: {pr_url}")
-                console.print()
-                console.print("[dim]Opening PR in browser...[/dim]")
 
-                # Open PR in browser
-                import webbrowser
-                webbrowser.open(pr_url)
+                console.print()
+                console.print(f"[dim]Checking for new comments on PR #{pr_number}...[/dim]")
 
-                return PhaseResult(
-                    status=PhaseStatus.COMPLETED,
-                    message=f"PR #{pr_number} is waiting for review feedback",
-                    data={"pr_number": str(pr_number), "pr_url": pr_url, "branch": branch_name},
-                )
+                # Create new iteration for comments
+                self.iteration = pr_iteration_info["iteration_number"] + 1
+
+                # Try to fetch comments from GitHub
+                user_input_path = self._save_pr_comments_to_user_input(int(pr_number))
+
+                if user_input_path:
+                    # Found comments - organize them into checklist format
+                    console.print()
+                    console.print(f"[green]✓ Fetched new PR comments to iteration_{self.iteration:03d}/user_input.md[/green]")
+                    console.print()
+                    console.print("[dim]Organizing comments into todo list...[/dim]")
+
+                    # Call agent to organize comments into todo list
+                    result = self._organize_comments_to_todo_list(pr_number, pr_url, branch_name)
+
+                    # Save progress with NEEDS_CHANGES status
+                    self._save_progress(PhaseStatusCode.NEEDS_CHANGES)
+
+                    return result
+                else:
+                    # No comments yet - still waiting
+                    console.print()
+                    console.print(f"[yellow]ℹ️  PR #{pr_number} is waiting for review feedback[/yellow]")
+                    console.print(f"  URL: {pr_url}")
+                    console.print()
+                    console.print("[dim]Opening PR in browser...[/dim]")
+
+                    # Open PR in browser
+                    import webbrowser
+                    webbrowser.open(pr_url)
+
+                    return PhaseResult(
+                        status=PhaseStatus.COMPLETED,
+                        message=f"PR #{pr_number} is waiting for review feedback",
+                        data={"pr_number": str(pr_number), "pr_url": pr_url, "branch": branch_name},
+                    )
             else:
                 # This shouldn't happen - iteration exists but no PR
                 console.print("[yellow]⚠️  Warning: PR iteration exists but no GitHub PR found[/yellow]")
 
-        # Step 2: Check if should start new iteration
-        should_start_new = self._should_start_new_iteration(pr_iteration_info)
-
-        if not should_start_new:
-            # Don't start new iteration - either waiting for develop or no initial iteration yet
-            if pr_iteration_info:
-                console.print()
-                console.print("[yellow]ℹ️  Latest PR iteration is waiting for develop phase to process feedback[/yellow]")
-                console.print()
-                return PhaseResult(
-                    status=PhaseStatus.COMPLETED,
-                    message="Waiting for develop phase to process PR feedback",
-                    data={"branch": branch_name},
-                )
-            # else: continue to create first iteration/PR
-
-        # Step 3: Check for new commits and decide action
+        # Check for new commits and decide action
         has_new_commits = self._has_new_commits()
 
         if has_new_commits:
@@ -615,14 +750,38 @@ class PRPhase(Phase):
                 )
 
     def _execute_local_mode(self) -> PhaseResult:
-        """Execute local review mode (renamed from _execute_local_review_mode).
+        """Execute local review mode (no GitHub PR).
 
-        TODO: Implement new logic similar to GitHub mode but for local mode
+        Workflow:
+        0. Check for incomplete iteration -> resume if exists (shared logic)
+        1-2. Check iteration state -> return early if waiting (shared logic)
+        3. Local-specific: show diff and ask for review
 
         Returns:
             Phase result
         """
-        # For now, call the old implementation
+        from rich.console import Console
+
+        console = Console()
+
+        # Step 0: Check for incomplete iteration (shared logic)
+        result = self._check_and_resume_incomplete_iteration(pr_number=0, pr_url="local", branch_name="local")
+        if result:
+            return result
+
+        # Step 1: Check if waiting for develop phase (shared logic)
+        waiting_iteration_info = self._check_waiting_for_develop()
+        if waiting_iteration_info:
+            console.print()
+            console.print("[yellow]ℹ️  Latest PR iteration is waiting for develop phase to process feedback[/yellow]")
+            console.print()
+            return PhaseResult(
+                status=PhaseStatus.COMPLETED,
+                message="Waiting for develop phase to process PR feedback",
+                data={"local_review": True},
+            )
+
+        # Step 2: Local-specific logic - show diff and ask for review
         return self._execute_local_review_mode()
 
     def _execute_local_review_mode(self) -> PhaseResult:
@@ -745,13 +904,12 @@ class PRPhase(Phase):
             user_input_file = iteration_dir / "user_input.md"
             user_input_file.write_text(modification_request)
 
-            # Save context.json for this iteration
+            # Save context.json for this iteration (WITHOUT status_code - incomplete iteration)
             from datetime import datetime
             context_data = {
                 "iteration": self.iteration,
                 "timestamp": datetime.now().astimezone().isoformat(),
                 "user_input": modification_request,
-                "status_code": PhaseStatusCode.NEEDS_CHANGES.value,
                 "local_review": True,
             }
             context_file = iteration_dir / "context.json"
@@ -769,14 +927,15 @@ class PRPhase(Phase):
             console.print()
             console.print(f"[green]✓ Modification request saved to {user_input_file_display}[/green]")
             console.print()
-            console.print("[bold]Next step:[/bold] cafe develop --auto (or cafe make)")
-            console.print()
+            console.print("[dim]Organizing comments into todo list...[/dim]")
 
-            return PhaseResult(
-                status=PhaseStatus.COMPLETED,
-                message=f"Local review completed - modification requested (saved to {user_input_file.name})",
-                data={"status_code": PhaseStatusCode.NEEDS_CHANGES.value, "pr_file": str(user_input_file), "local_review": True},
-            )
+            # Call agent to organize comments into todo list (same as GitHub mode)
+            result = self._organize_comments_to_todo_list(pr_number=0, pr_url="local", branch_name="local")
+
+            # Save progress with NEEDS_CHANGES status
+            self._save_progress(PhaseStatusCode.NEEDS_CHANGES)
+
+            return result
 
         # Otherwise, it's a PhaseResult (confirm)
         # Increment iteration for this confirmation
@@ -883,6 +1042,176 @@ class PRPhase(Phase):
             # Log error but don't fail the PR phase
             console.print(f"[yellow]⚠️  Warning: Failed to fetch/save PR comments: {e}[/yellow]")
             return None
+
+    def _organize_comments_to_todo_list(self, pr_number: int, pr_url: str, branch_name: str) -> PhaseResult:
+        """Organize PR comments into actionable todo list format.
+
+        Calls agent to read user_input.md and organize comments into a todo list
+        written to output.md for developer reference.
+
+        Args:
+            pr_number: PR number
+            pr_url: PR URL
+            branch_name: Branch name
+
+        Returns:
+            PhaseResult
+        """
+        from cafe.core.status_codes import PhaseStatusCode
+        from cafe.utils.git_utils import to_cwd_relative_path
+        from cafe.utils.checklist_generator import generate_pr_comments_checklist
+        from cafe.utils.prompt_utils import format_checklist_instruction
+
+        # Get iteration directory
+        iteration_dir = self.issue_dir / "pr" / f"iteration_{self.iteration:03d}"
+        output_file = iteration_dir / "output.md"
+        user_input_file = iteration_dir / "user_input.md"
+        checklist_file = iteration_dir / "checklist.md"
+
+        # Find previous todo list output.md (most recent iteration with user_input.md)
+        pr_dir = self.issue_dir / "pr"
+        prev_output_pattern = None
+
+        if self.iteration > 1:
+            # Look backwards from current iteration - 1 for iterations with user_input.md
+            for i in range(self.iteration - 1, 0, -1):
+                prev_iter_dir = pr_dir / f"iteration_{i:03d}"
+                prev_user_input = prev_iter_dir / "user_input.md"
+                prev_output = prev_iter_dir / "output.md"
+
+                # Only consider iterations that have user_input.md (indicating it's a todo list, not PR title/body)
+                if prev_user_input.exists() and prev_output.exists():
+                    try:
+                        prev_output_pattern = to_cwd_relative_path(prev_output)
+                    except ValueError:
+                        prev_output_pattern = str(prev_output.resolve())
+                    break
+
+        # Generate checklist for this iteration
+        try:
+            user_input_pattern = to_cwd_relative_path(user_input_file)
+        except ValueError:
+            user_input_pattern = str(user_input_file.resolve())
+
+        try:
+            output_pattern = to_cwd_relative_path(output_file)
+        except ValueError:
+            output_pattern = str(output_file.resolve())
+
+        generate_pr_comments_checklist(
+            agent_name=self.dev_agent,
+            user_input_file_path=user_input_pattern,
+            output_file_path=output_pattern,
+            prev_output_file_path=prev_output_pattern,
+            checklist_file_path=checklist_file,
+        )
+
+        # Get relative paths for tool permissions
+        try:
+            output_file_pattern = to_cwd_relative_path(output_file)
+        except ValueError:
+            output_file_pattern = str(output_file.resolve())
+
+        try:
+            checklist_pattern = to_cwd_relative_path(checklist_file)
+        except ValueError:
+            checklist_pattern = str(checklist_file.resolve())
+
+        # Get agent file path
+        from cafe.agents.manager import AgentManager
+        agent_file = AgentManager.get_agent_file_path(self.dev_agent, "developer")
+
+        # Create prompt for agent
+        checklist_instruction = format_checklist_instruction(checklist_pattern)
+
+        from cafe.core.status_codes import generate_status_code_prompt
+        status_code_prompt = generate_status_code_prompt(
+            valid_codes=[PhaseStatusCode.NEEDS_CHANGES],
+            descriptions={
+                PhaseStatusCode.NEEDS_CHANGES: "PR comment organization completed",
+            },
+        )
+
+        prompt = f"""# PR Comment Organization
+
+**Your Role:** Developer
+Read {agent_file} to understand your complete role definition and responsibilities.
+
+**Task Checklist:**
+Read {checklist_pattern} for detailed execution steps and requirements.
+
+IMPORTANT: You MUST edit the checklist file and mark each completed item with [x] format (e.g., "[x] Read agent file").
+Do NOT return a status code until ALL checklist items are marked as [x].
+
+**Task:** Organize PR comments into actionable todo list.
+
+**Context:**
+- PR comments file: {user_input_pattern}
+- Output file: {output_pattern}
+
+**Output format:**
+```markdown
+# PR Review Feedback
+
+## Todo List
+
+### [Category/Theme]
+- [ ] Todo item 1
+- [ ] Todo item 2
+```
+
+
+⚠️ **IMPORTANT - Checklist Completion Requirement:**
+
+Before returning ANY status code, you MUST:
+1. Review and complete ALL items in {checklist_pattern}
+2. Mark each completed item with [x] (change [ ] to [x])
+3. Verify that NO unchecked items [ ] remain in the checklist
+4. ONLY return a status code after ALL checklist items are marked as complete [x]
+
+The system will verify checklist completion. If unchecked items remain, you will be asked to complete them.
+
+{status_code_prompt}
+
+**Response format:**
+- Return ONLY the status code on the first line
+- Do NOT include any summary or explanation
+"""
+
+        # Define allowed tools
+        allowed_tools = [
+            "read",
+            "grep", 
+            "glob",
+            f"edit({output_file_pattern})",
+            f"write({output_file_pattern})",
+            f"edit({checklist_pattern})",
+        ]
+
+        # Execute agent
+        response, status_code = self._execute_agent_iteration(
+            agent_name=self.dev_agent,
+            prompt=prompt,
+            user_input="",
+            valid_status_codes=[PhaseStatusCode.NEEDS_CHANGES],
+            allowed_tools=allowed_tools,
+        )
+
+        # Validate checklist completion
+        from cafe.utils.checklist_validator import validate_checklist
+        validation_result = validate_checklist(checklist_file)
+        if not validation_result.is_complete:
+            return PhaseResult(
+                status=PhaseStatus.FAILED,
+                message=f"Checklist validation failed - {validation_result.unchecked_count} items not marked as complete",
+            )
+
+        # Return success result
+        return PhaseResult(
+            status=PhaseStatus.COMPLETED,
+            message=f"Organized PR comments into todo list (iteration_{self.iteration:03d}/output.md)",
+            data={"pr_number": str(pr_number), "pr_url": pr_url, "branch": branch_name, "status_code": "CAFE_NEEDS_CHANGES"},
+        )
 
     def _get_branch_name(self) -> str:
         """Get branch name.

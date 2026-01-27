@@ -346,3 +346,46 @@ def generate_pr_checklist(
 
     # Generate checklist file
     generate_checklist_file(checklist_file_path, checklist_content)
+
+
+def generate_pr_comments_checklist(
+    agent_name: str,
+    user_input_file_path: str,
+    output_file_path: str,
+    prev_output_file_path: Optional[str],
+    checklist_file_path: Path,
+) -> None:
+    """Generate checklist file for PR comments organization.
+
+    Args:
+        agent_name: Developer agent name
+        user_input_file_path: Path to user_input.md containing PR comments
+        output_file_path: Path to output.md where todo list will be written
+        prev_output_file_path: Path to previous output.md (None if first iteration)
+        checklist_file_path: Path where checklist file should be created
+    """
+    # Get agent file path
+    agent_file = AgentManager.get_agent_file_path(agent_name, "developer")
+
+    # Use PR comments organization template
+    execution_steps = checklist_templates.PR_COMMENTS_ORGANIZATION_STEPS
+
+    # Get agent guidelines checklist
+    agent_guidelines = extract_agent_guidelines_checklist(agent_file)
+
+    # Combine all sections
+    checklist_content = f"{execution_steps}\n{agent_guidelines}"
+
+    # Build placeholders dict
+    placeholders = {
+        "agent_file": agent_file,
+        "user_input_file": user_input_file_path,
+        "output_file": output_file_path,
+        "prev_output_file": prev_output_file_path or "N/A (first iteration)",
+    }
+
+    # Resolve placeholders
+    checklist_content = resolve_checklist_placeholders(checklist_content, placeholders)
+
+    # Generate checklist file
+    generate_checklist_file(checklist_file_path, checklist_content)

@@ -66,12 +66,13 @@ class TestPRPhaseIterationLogic:
         spec_file.parent.mkdir(parents=True)
         spec_file.write_text("# Test Spec")
 
-        # Create context.json
+        # Create context.json with status_code (completed iteration)
         context_file = iteration_dir / "context.json"
         context_file.write_text(json.dumps({
             "iteration": 1,
             "timestamp": "2026-01-27T10:00:00+08:00",
-            "end_time": "2026-01-27T10:05:00+08:00"
+            "end_time": "2026-01-27T10:05:00+08:00",
+            "status_code": "CAFE_NEEDS_CHANGES"
         }))
 
         # Create user_input.md
@@ -106,12 +107,13 @@ class TestPRPhaseIterationLogic:
         spec_file.parent.mkdir(parents=True)
         spec_file.write_text("# Test Spec")
 
-        # Create context.json only (no user_input.md)
+        # Create context.json with status_code (completed iteration, no user_input.md)
         context_file = iteration_dir / "context.json"
         context_file.write_text(json.dumps({
             "iteration": 1,
             "timestamp": "2026-01-27T10:00:00+08:00",
-            "end_time": "2026-01-27T10:05:00+08:00"
+            "end_time": "2026-01-27T10:05:00+08:00",
+            "status_code": "CAFE_CONFIRMED"
         }))
 
         with patch.object(PRPhase, "_get_issue_dir", return_value=issue_dir):
@@ -374,3 +376,281 @@ class TestPRPhaseIterationLogic:
             # Assert
             assert result is not None
             assert result == datetime.fromisoformat("2026-01-27T10:05:00+08:00")
+
+    def test_get_incomplete_iteration_info_no_iterations(self, tmp_path, mock_dependencies):
+        """Test _get_incomplete_iteration_info returns None when no iterations exist."""
+        # Setup
+        issue_dir = tmp_path / ".cafe" / "issues" / "test-issue"
+        issue_dir.mkdir(parents=True)
+
+        spec_file = issue_dir / "spec" / "iteration_001" / "output.md"
+        spec_file.parent.mkdir(parents=True)
+        spec_file.write_text("# Test Spec")
+
+        with patch.object(PRPhase, "_get_issue_dir", return_value=issue_dir):
+            phase = PRPhase(
+                spec_file=str(spec_file),
+                issue_name="test-issue",
+                **mock_dependencies
+            )
+
+            # Test
+            result = phase._get_incomplete_iteration_info()
+
+            # Assert
+            assert result is None
+
+    def test_get_incomplete_iteration_info_complete_iteration(self, tmp_path, mock_dependencies):
+        """Test _get_incomplete_iteration_info returns None when latest iteration is complete."""
+        # Setup
+        issue_dir = tmp_path / ".cafe" / "issues" / "test-issue"
+        pr_dir = issue_dir / "pr"
+        iteration_dir = pr_dir / "iteration_001"
+        iteration_dir.mkdir(parents=True)
+
+        spec_file = issue_dir / "spec" / "iteration_001" / "output.md"
+        spec_file.parent.mkdir(parents=True)
+        spec_file.write_text("# Test Spec")
+
+        # Create context.json with status_code (complete iteration)
+        context_file = iteration_dir / "context.json"
+        context_file.write_text(json.dumps({
+            "iteration": 1,
+            "timestamp": "2026-01-27T10:00:00+08:00",
+            "status_code": "CAFE_CONFIRMED"
+        }))
+
+        with patch.object(PRPhase, "_get_issue_dir", return_value=issue_dir):
+            phase = PRPhase(
+                spec_file=str(spec_file),
+                issue_name="test-issue",
+                **mock_dependencies
+            )
+
+            # Test
+            result = phase._get_incomplete_iteration_info()
+
+            # Assert
+            assert result is None
+
+    def test_get_incomplete_iteration_info_incomplete_with_user_input(self, tmp_path, mock_dependencies):
+        """Test _get_incomplete_iteration_info detects incomplete iteration with user_input."""
+        # Setup
+        issue_dir = tmp_path / ".cafe" / "issues" / "test-issue"
+        pr_dir = issue_dir / "pr"
+        iteration_dir = pr_dir / "iteration_001"
+        iteration_dir.mkdir(parents=True)
+
+        spec_file = issue_dir / "spec" / "iteration_001" / "output.md"
+        spec_file.parent.mkdir(parents=True)
+        spec_file.write_text("# Test Spec")
+
+        # Create context.json without status_code (incomplete iteration)
+        context_file = iteration_dir / "context.json"
+        context_file.write_text(json.dumps({
+            "iteration": 1,
+            "timestamp": "2026-01-27T10:00:00+08:00"
+        }))
+
+        # Create user_input.md
+        user_input_file = iteration_dir / "user_input.md"
+        user_input_file.write_text("Please fix the bug")
+
+        with patch.object(PRPhase, "_get_issue_dir", return_value=issue_dir):
+            phase = PRPhase(
+                spec_file=str(spec_file),
+                issue_name="test-issue",
+                **mock_dependencies
+            )
+
+            # Test
+            result = phase._get_incomplete_iteration_info()
+
+            # Assert
+            assert result is not None
+            assert result["iteration_number"] == 1
+            assert result["has_user_input"] is True
+            assert result["user_input_path"] == user_input_file
+
+    def test_get_incomplete_iteration_info_incomplete_without_user_input(self, tmp_path, mock_dependencies):
+        """Test _get_incomplete_iteration_info detects incomplete iteration without user_input."""
+        # Setup
+        issue_dir = tmp_path / ".cafe" / "issues" / "test-issue"
+        pr_dir = issue_dir / "pr"
+        iteration_dir = pr_dir / "iteration_001"
+        iteration_dir.mkdir(parents=True)
+
+        spec_file = issue_dir / "spec" / "iteration_001" / "output.md"
+        spec_file.parent.mkdir(parents=True)
+        spec_file.write_text("# Test Spec")
+
+        # Create context.json without status_code (incomplete iteration)
+        context_file = iteration_dir / "context.json"
+        context_file.write_text(json.dumps({
+            "iteration": 1,
+            "timestamp": "2026-01-27T10:00:00+08:00"
+        }))
+
+        # No user_input.md
+
+        with patch.object(PRPhase, "_get_issue_dir", return_value=issue_dir):
+            phase = PRPhase(
+                spec_file=str(spec_file),
+                issue_name="test-issue",
+                **mock_dependencies
+            )
+
+            # Test
+            result = phase._get_incomplete_iteration_info()
+
+            # Assert
+            assert result is not None
+            assert result["iteration_number"] == 1
+            assert result["has_user_input"] is False
+            assert result["user_input_path"] is None
+
+    def test_check_waiting_for_develop_no_iterations(self, tmp_path, mock_dependencies):
+        """Test _check_waiting_for_develop returns None when no iterations exist."""
+        # Setup
+        issue_dir = tmp_path / ".cafe" / "issues" / "test-issue"
+        issue_dir.mkdir(parents=True)
+
+        spec_file = issue_dir / "spec" / "iteration_001" / "output.md"
+        spec_file.parent.mkdir(parents=True)
+        spec_file.write_text("# Test Spec")
+
+        with patch.object(PRPhase, "_get_issue_dir", return_value=issue_dir):
+            phase = PRPhase(
+                spec_file=str(spec_file),
+                issue_name="test-issue",
+                **mock_dependencies
+            )
+
+            # Test
+            result = phase._check_waiting_for_develop()
+
+            # Assert
+            assert result is None
+
+    def test_check_waiting_for_develop_no_user_input(self, tmp_path, mock_dependencies):
+        """Test _check_waiting_for_develop returns None when latest iteration has no user_input."""
+        # Setup
+        issue_dir = tmp_path / ".cafe" / "issues" / "test-issue"
+        pr_dir = issue_dir / "pr"
+        iteration_dir = pr_dir / "iteration_001"
+        iteration_dir.mkdir(parents=True)
+
+        spec_file = issue_dir / "spec" / "iteration_001" / "output.md"
+        spec_file.parent.mkdir(parents=True)
+        spec_file.write_text("# Test Spec")
+
+        # Create context.json with status_code but no user_input
+        context_file = iteration_dir / "context.json"
+        context_file.write_text(json.dumps({
+            "iteration": 1,
+            "timestamp": "2026-01-27T10:00:00+08:00",
+            "end_time": "2026-01-27T10:05:00+08:00",
+            "status_code": "CAFE_CONFIRMED"
+        }))
+
+        with patch.object(PRPhase, "_get_issue_dir", return_value=issue_dir):
+            phase = PRPhase(
+                spec_file=str(spec_file),
+                issue_name="test-issue",
+                **mock_dependencies
+            )
+
+            # Test
+            result = phase._check_waiting_for_develop()
+
+            # Assert
+            assert result is None
+
+    def test_check_waiting_for_develop_waiting(self, tmp_path, mock_dependencies):
+        """Test _check_waiting_for_develop returns iteration info when waiting for develop."""
+        # Setup
+        issue_dir = tmp_path / ".cafe" / "issues" / "test-issue"
+        pr_dir = issue_dir / "pr"
+        iteration_dir = pr_dir / "iteration_001"
+        iteration_dir.mkdir(parents=True)
+
+        spec_file = issue_dir / "spec" / "iteration_001" / "output.md"
+        spec_file.parent.mkdir(parents=True)
+        spec_file.write_text("# Test Spec")
+
+        # Create PR iteration with user_input (NEEDS_CHANGES)
+        pr_context_file = iteration_dir / "context.json"
+        pr_context_file.write_text(json.dumps({
+            "iteration": 1,
+            "timestamp": "2026-01-27T10:00:00+08:00",
+            "end_time": "2026-01-27T10:05:00+08:00",
+            "status_code": "CAFE_NEEDS_CHANGES"
+        }))
+
+        user_input_file = iteration_dir / "user_input.md"
+        user_input_file.write_text("Please fix")
+
+        # Develop hasn't run yet (no develop status)
+        with patch.object(PRPhase, "_get_issue_dir", return_value=issue_dir):
+            phase = PRPhase(
+                spec_file=str(spec_file),
+                issue_name="test-issue",
+                **mock_dependencies
+            )
+
+            # Test
+            result = phase._check_waiting_for_develop()
+
+            # Assert - should be waiting because develop hasn't processed feedback
+            assert result is not None
+            assert result["iteration_number"] == 1
+            assert result["has_user_input"] is True
+
+    def test_check_waiting_for_develop_not_waiting(self, tmp_path, mock_dependencies):
+        """Test _check_waiting_for_develop returns None when develop has processed feedback."""
+        # Setup
+        issue_dir = tmp_path / ".cafe" / "issues" / "test-issue"
+        pr_dir = issue_dir / "pr"
+        iteration_dir = pr_dir / "iteration_001"
+        iteration_dir.mkdir(parents=True)
+
+        spec_file = issue_dir / "spec" / "iteration_001" / "output.md"
+        spec_file.parent.mkdir(parents=True)
+        spec_file.write_text("# Test Spec")
+
+        # Create PR iteration with user_input at 10:00
+        pr_context_file = iteration_dir / "context.json"
+        pr_context_file.write_text(json.dumps({
+            "iteration": 1,
+            "timestamp": "2026-01-27T10:00:00+08:00",
+            "end_time": "2026-01-27T10:05:00+08:00",
+            "status_code": "CAFE_NEEDS_CHANGES"
+        }))
+
+        user_input_file = iteration_dir / "user_input.md"
+        user_input_file.write_text("Please fix")
+
+        # Create develop status at 10:10 (after PR feedback)
+        develop_dir = issue_dir / "develop"
+        develop_dir.mkdir(parents=True)
+        develop_status_file = develop_dir / "status.json"
+        develop_status_file.write_text(json.dumps({
+            "phase": "develop",
+            "status": "completed",
+            "timestamp": "2026-01-27T10:10:00+08:00",
+            "end_time": "2026-01-27T10:10:00+08:00",
+            "iteration": 2
+        }))
+
+        with patch.object(PRPhase, "_get_issue_dir", return_value=issue_dir):
+            phase = PRPhase(
+                spec_file=str(spec_file),
+                issue_name="test-issue",
+                **mock_dependencies
+            )
+
+            # Test
+            result = phase._check_waiting_for_develop()
+
+            # Assert - should NOT be waiting because develop has processed feedback
+            assert result is None

@@ -3362,27 +3362,44 @@ def pr(
                         _execute_next_phase_auto("develop", issue_name)
             elif pr_url:
                 # GitHub PR mode: Show PR URL and GitHub-specific next steps
-                files_url = pr_url + "/files"
-                console.print(f"[bold cyan]{files_url}[/bold cyan]")
-                console.print()
-                console.print("[dim]Next steps:[/dim]")
-                console.print(
-                    "[dim]  1. Review PR: open the link above or run [bold]gh pr diff --web[/bold][/dim]"
-                )
-                console.print(
-                    "[dim]  2. If OK: [bold]merge[/bold] the PR, then run [bold]cafe close[/bold][/dim]"
-                )
-                console.print(
-                    "[dim]  3. If issues found: add comments and submit review, then run [bold]cafe develop --auto[/bold] (or [bold]cafe make[/bold])[/dim]"
-                )
 
-                # Automatically open PR diff in browser
-                try:
-                    subprocess.run(["gh", "pr", "diff", "--web"], capture_output=True, check=False, timeout=5)
-                except (subprocess.TimeoutExpired, FileNotFoundError):
-                    pass  # Silently ignore timeout or gh not found
-                except Exception:
-                    pass  # Silently ignore any other errors
+                # Check if this is a comment organization result (NEEDS_CHANGES)
+                if status_code == "CAFE_NEEDS_CHANGES":
+                    # Comment organization completed - ready for develop phase
+                    # If in auto mode, automatically run develop phase
+                    if auto:
+                        console.print("[dim]Auto mode: proceeding to develop phase...[/dim]")
+                        console.print()
+                        _execute_next_phase_auto("develop", issue_name)
+                    else:
+                        # Interactive mode: prompt user to run develop
+                        console.print("[dim]Next steps:[/dim]")
+                        console.print(
+                            "[dim]  1. Run [bold]cafe develop --auto[/bold] (or [bold]cafe make[/bold]) to address the feedback[/dim]"
+                        )
+                else:
+                    # Regular PR creation/update - show review instructions
+                    files_url = pr_url + "/files"
+                    console.print(f"[bold cyan]{files_url}[/bold cyan]")
+                    console.print()
+                    console.print("[dim]Next steps:[/dim]")
+                    console.print(
+                        "[dim]  1. Review PR: open the link above or run [bold]gh pr diff --web[/bold][/dim]"
+                    )
+                    console.print(
+                        "[dim]  2. If OK: [bold]merge[/bold] the PR, then run [bold]cafe close[/bold][/dim]"
+                    )
+                    console.print(
+                        "[dim]  3. If issues found: add comments and submit review, then run [bold]cafe develop --auto[/bold] (or [bold]cafe make[/bold])[/dim]"
+                    )
+
+                    # Automatically open PR diff in browser (only for regular PR, not comment organization)
+                    try:
+                        subprocess.run(["gh", "pr", "diff", "--web"], capture_output=True, check=False, timeout=5)
+                    except (subprocess.TimeoutExpired, FileNotFoundError):
+                        pass  # Silently ignore timeout or gh not found
+                    except Exception:
+                        pass  # Silently ignore any other errors
         else:
             console.print()
             console.print(f"[bold red]❌ PR phase failed: {result.message}[/bold red]")
