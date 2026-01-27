@@ -376,19 +376,17 @@ class ReviewPhase(Phase):
         user_input_file = latest_pr_iteration_dir / "user_input.md"
 
         if not user_input_file.exists():
-            # PR iteration exists and is newer, but user_input.md not found
-            raise FileNotFoundError(
-                f"PR iteration {latest_pr_iteration_dir.name} is newer than review phase, "
-                f"but {user_input_file} does not exist"
-            )
+            # PR iteration exists but user_input.md not found yet
+            # This is normal - PR was just created but no comments yet
+            print(f"  → PR iteration {latest_pr_iteration_dir.name} exists but no user_input.md yet (no comments)")
+            return None
 
         content = user_input_file.read_text(encoding="utf-8").strip()
         if not content:
-            # PR iteration exists and is newer, but user_input.md is empty
-            raise ValueError(
-                f"PR iteration {latest_pr_iteration_dir.name} is newer than review phase, "
-                f"but {user_input_file} is empty"
-            )
+            # PR iteration exists but user_input.md is empty
+            # This is normal - PR was just created but no comments yet
+            print(f"  → PR iteration {latest_pr_iteration_dir.name}/user_input.md is empty (no comments yet)")
+            return None
 
         print(f"  → Loaded PR feedback from {latest_pr_iteration_dir.name}/user_input.md")
         return content
