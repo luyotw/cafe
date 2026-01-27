@@ -1129,9 +1129,10 @@ class PRPhase(Phase):
 
         from cafe.core.status_codes import generate_status_code_prompt
         status_code_prompt = generate_status_code_prompt(
-            valid_codes=[PhaseStatusCode.NEEDS_CHANGES],
+            valid_codes=[PhaseStatusCode.NEEDS_CHANGES, PhaseStatusCode.CONFIRMED],
             descriptions={
-                PhaseStatusCode.NEEDS_CHANGES: "PR comment organization completed",
+                PhaseStatusCode.NEEDS_CHANGES: "Todo list created/updated with pending items",
+                PhaseStatusCode.CONFIRMED: "All todo items are completed (all marked with [x])",
             },
         )
 
@@ -1196,7 +1197,7 @@ The system will verify checklist completion. If unchecked items remain, you will
             agent_name=self.dev_agent,
             prompt=prompt,
             user_input="",
-            valid_status_codes=[PhaseStatusCode.NEEDS_CHANGES],
+            valid_status_codes=[PhaseStatusCode.NEEDS_CHANGES, PhaseStatusCode.CONFIRMED],
             allowed_tools=allowed_tools,
         )
 
@@ -1209,11 +1210,13 @@ The system will verify checklist completion. If unchecked items remain, you will
                 message=f"Checklist validation failed - {validation_result.unchecked_count} items not marked as complete",
             )
 
+        # Use the status code returned by agent
+        # Agent decides based on whether all todo items are completed
         # Return success result
         return PhaseResult(
             status=PhaseStatus.COMPLETED,
             message=f"Organized PR comments into todo list (iteration_{self.iteration:03d}/output.md)",
-            data={"pr_number": str(pr_number), "pr_url": pr_url, "branch": branch_name, "status_code": "CAFE_NEEDS_CHANGES"},
+            data={"pr_number": str(pr_number), "pr_url": pr_url, "branch": branch_name, "status_code": status_code.value},
         )
 
     def _get_branch_name(self) -> str:
