@@ -300,23 +300,31 @@ class DevelopPhase(Phase):
 
                 # If PR has NEEDS_CHANGES and is newer than develop, need to execute
                 if pr_status_code == PhaseStatusCode.NEEDS_CHANGES.value and pr_timestamp > develop_timestamp:
-                    # Find the latest pr/iteration_XXX/user_input.md file to show user
+                    # Find the latest pr/iteration_XXX files to show user
                     pr_dir = self.issue_dir / "pr"
                     iteration_dirs = sorted(pr_dir.glob("iteration_*"))
                     if iteration_dirs:
                         latest_iteration_dir = iteration_dirs[-1]
                         user_input_file = latest_iteration_dir / "user_input.md"
+                        output_file = latest_iteration_dir / "output.md"
+
+                        from cafe.utils.git_utils import to_cwd_relative_path
+
+                        # Show PR comments file
                         if user_input_file.exists():
-                            from cafe.utils.git_utils import to_cwd_relative_path
                             try:
                                 user_input_path = to_cwd_relative_path(user_input_file)
                             except ValueError:
                                 user_input_path = str(user_input_file.resolve())
-                            print(f"ℹ️  PR feedback detected - changes requested: {user_input_path}")
-                        else:
-                            print(f"ℹ️  PR feedback detected - changes requested")
-                    else:
-                        print(f"ℹ️  PR feedback detected - changes requested")
+                            print(f"  → PR comments: {user_input_path}")
+
+                        # Show todo list file
+                        if output_file.exists():
+                            try:
+                                output_path = to_cwd_relative_path(output_file)
+                            except ValueError:
+                                output_path = str(output_file.resolve())
+                            print(f"  → Todo list: {output_path}")
                     return None  # Continue execution
 
                 # If develop is newer than PR, changes have been addressed
