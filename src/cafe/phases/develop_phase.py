@@ -307,7 +307,12 @@ class DevelopPhase(Phase):
                         latest_iteration_dir = iteration_dirs[-1]
                         user_input_file = latest_iteration_dir / "user_input.md"
                         if user_input_file.exists():
-                            print(f"ℹ️  PR feedback detected - changes requested: {latest_iteration_dir.name}/user_input.md")
+                            from cafe.utils.git_utils import to_cwd_relative_path
+                            try:
+                                user_input_path = to_cwd_relative_path(user_input_file)
+                            except ValueError:
+                                user_input_path = str(user_input_file.resolve())
+                            print(f"ℹ️  PR feedback detected - changes requested: {user_input_path}")
                         else:
                             print(f"ℹ️  PR feedback detected - changes requested")
                     else:
@@ -786,17 +791,7 @@ class DevelopPhase(Phase):
         config_file = self.issue_dir / "issue.yaml"
         pr_auto_create = self._get_issue_config_value(config_file, "pr.auto_create")
 
-        # Skip PR comments if review feedback exists (review takes priority)
-        if hasattr(self, '_has_review_feedback') and self._has_review_feedback:
-            pr_comments_section = ""
-            has_pr_comments = False
-            new_comment_count = 0
-        else:
-            # Load PR feedback from pr/iteration_XXX/user_input.md (unified for both modes)
-            pr_feedback = self._load_pr_comments_from_iteration_file()
-            pr_comments_section = f"\n\n## PR Feedback\n\n{pr_feedback}\n" if pr_feedback else ""
-            has_pr_comments = bool(pr_feedback)
-            new_comment_count = 0  # Not tracking count anymore
+        # PR feedback is now handled via checklist, not in prompt
 
         # Check for existing develop clarification file
         develop_dir = self.issue_dir / "develop"
@@ -859,18 +854,7 @@ Steps for requesting clarification:
 
             user_input_section = f"\n\n**Additional user notes:**\n{user_input}\n" if user_input else ""
 
-            # Build review sources instruction
-            review_sources = []
-            if review_file_path:
-                review_sources.append(str(review_file_path))
-            if has_pr_comments:
-                review_sources.append(f"PR comments (see {new_comment_count} comments above)")
-
-            review_source_text = ""
-            if len(review_sources) == 1:
-                review_source_text = review_sources[0]
-            else:
-                review_source_text = " and ".join(review_sources)
+            # Review sources are now listed in checklist, not needed in prompt text
 
             # Get checklist file path
             iteration_dir = self._get_iteration_dir(self.iteration)
@@ -889,13 +873,12 @@ Read {agent_file} to understand your complete role definition and responsibiliti
 
 {checklist_instruction}
 
-**Task:** Make corrections based on Code Review feedback.
+**Task:** Make corrections based on feedback.
 
 **File paths:**
-- Review Feedback: {review_file_path}
 - Requirements Specification: {self.spec_file}
 - Implementation Plan: {self.plan_file}{develop_file_section}
-{pr_comments_section}{user_input_section}
+{user_input_section}
 
 {status_code_prompt}
 
@@ -934,7 +917,7 @@ Read {agent_file} to understand your complete role definition and responsibiliti
 **File paths:**
 - Requirements Specification: {self.spec_file}
 - Implementation Plan: {self.plan_file}{develop_file_section}
-{pr_comments_section}{user_input_section}
+{user_input_section}
 
 {status_code_prompt}
 
@@ -1004,7 +987,7 @@ Read {agent_file} to understand your complete role definition and responsibiliti
                 if prev_output.exists():
                     develop_file = str(prev_output)
 
-            # Check if in correction mode (has review feedback)
+            # Check if in correction mode (has review feedback or PR feedback)
             correction_mode = hasattr(self, '_has_review_feedback') and self._has_review_feedback
 
             # Get review file path if in correction mode
@@ -1014,6 +997,24 @@ Read {agent_file} to understand your complete role definition and responsibiliti
                 review_file_path = self._get_latest_versioned_file("review", review_dir)
                 if review_file_path and review_file_path.exists():
                     review_file = str(review_file_path)
+
+            # Check for PR feedback todo list
+            pr_feedback_file = None
+            pr_dir = self.issue_dir / "pr"
+            if pr_dir.exists():
+                iteration_dirs = sorted(pr_dir.glob("iteration_*"))
+                if iteration_dirs:
+                    latest_pr_iteration_dir = iteration_dirs[-1]
+                    pr_output_file = latest_pr_iteration_dir / "output.md"
+                    if pr_output_file.exists() and pr_output_file.read_text(encoding="utf-8").strip():
+                        from cafe.utils.git_utils import to_cwd_relative_path
+                        try:
+                            pr_feedback_file = to_cwd_relative_path(pr_output_file)
+                        except ValueError:
+                            pr_feedback_file = str(pr_output_file.resolve())
+                        # If we have PR feedback, we're in correction mode
+                        if not correction_mode:
+                            correction_mode = True
 
             # Define basic principles
             basic_principles = """- Follow existing commit message style (format, language, structure)
@@ -1038,6 +1039,7 @@ Read {agent_file} to understand your complete role definition and responsibiliti
                 checklist_file_path=checklist_path,
                 correction_mode=correction_mode,
                 review_file_path=review_file,
+                pr_feedback_file_path=pr_feedback_file,
                 basic_principles=basic_principles,
                 output_file=output_file,
             )

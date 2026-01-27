@@ -99,13 +99,14 @@ class TestDevelopPhasePromptGeneration:
             # Act: Generate prompt
             prompt = phase._generate_prompt(user_input="")
 
-        # Assert: PR comments should NOT be in prompt
+        # Assert: PR comments should NOT be in prompt (they're in checklist now)
         assert "PR Review Comments" not in prompt
         assert "PR comment content" not in prompt
         assert "unresolved comment" not in prompt.lower()
 
-        # Assert: Review feedback path should be in prompt
-        assert "review/iteration_001/output.md" in prompt
+        # Assert: Review feedback and PR feedback are handled via checklist, not in prompt
+        # The prompt should reference the checklist for these items
+        assert "checklist.md" in prompt.lower()
 
         # Assert: _load_pr_comments should NOT have been called
         assert not load_pr_comments_called

@@ -97,8 +97,10 @@ DEVELOP_EXECUTION_STEPS_CORRECTION = """## Checklist
 [ ] Read {agent_file} to understand your role and native language
 [ ] Read questions in {develop_file} (if exists)
 [ ] Carefully read {spec_file_path} and {plan_file_path}
-[ ] Read review feedback in {review_file_path}
-[ ] Address each issue raised in the review
+[ ] Read review feedback in {review_file_path} (if exists)
+[ ] Read PR feedback todo list in {pr_feedback_file_path} (if exists)
+[ ] Address each issue raised in the feedback
+[ ] Mark completed items in {pr_feedback_file_path} if applicable (change - [ ] to - [x])
 [ ] Commit changes with descriptive messages
 [ ] Confirm: Maximized code reuse by looking for existing patterns and utilities
 [ ] Confirm: Commit messages strictly match existing format, language, and structure

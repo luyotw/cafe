@@ -126,7 +126,7 @@ class TestGenerateDevelopChecklist:
         assert checklist_path.exists()
         content = checklist_path.read_text()
         assert ".cafe/issues/test/develop/iteration_001/output.md" in content
-        assert "Address each issue raised in the review" in content
+        assert "Address each issue raised in the feedback" in content
 
 
 class TestGenerateReviewChecklist:
