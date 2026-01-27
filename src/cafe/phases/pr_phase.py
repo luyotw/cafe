@@ -459,6 +459,9 @@ class PRPhase(Phase):
 
         incomplete_iteration_info = self._get_incomplete_iteration_info()
         if incomplete_iteration_info and incomplete_iteration_info["has_user_input"]:
+            # Update iteration number to the incomplete iteration
+            self.iteration = incomplete_iteration_info["iteration_number"]
+
             console.print()
             console.print(f"[dim]Resuming incomplete iteration_{self.iteration:03d}...[/dim]")
 

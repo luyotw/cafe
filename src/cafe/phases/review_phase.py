@@ -294,87 +294,6 @@ class ReviewPhase(Phase):
         except Exception as e:
             return self._handle_exception_in_execute(e, "Review phase failed")
 
-    def _load_pr_comments_from_iteration_file(self) -> Optional[str]:
-        """Load PR comments from pr/iteration_XXX/user_input.md.
-
-        This is the new unified approach for loading PR feedback in both local
-        and GitHub modes. Checks timestamp of latest PR iteration and compares
-        with review phase. Only loads feedback if PR iteration is newer.
-
-        Returns:
-            Feedback content if found and newer, None otherwise
-
-        Raises:
-            FileNotFoundError: If PR iteration is newer but user_input.md not found
-            ValueError: If PR iteration is newer but user_input.md is empty
-        """
-        from datetime import datetime, timezone
-        import json
-
-        pr_dir = self.issue_dir / "pr"
-        if not pr_dir.exists():
-            return None
-
-        # Find latest PR iteration directory
-        iteration_dirs = sorted(pr_dir.glob("iteration_*"))
-        if not iteration_dirs:
-            return None
-
-        latest_pr_iteration_dir = iteration_dirs[-1]
-        pr_context_file = latest_pr_iteration_dir / "context.json"
-
-        if not pr_context_file.exists():
-            return None
-
-        # Load PR iteration timestamp
-        with open(pr_context_file, "r", encoding="utf-8") as f:
-            pr_context = json.load(f)
-
-        pr_end_time_str = pr_context.get("end_time")
-        if not pr_end_time_str:
-            # Fallback to timestamp for backward compatibility
-            pr_end_time_str = pr_context.get("timestamp")
-            if not pr_end_time_str:
-                return None
-
-        # Parse PR end_time
-        pr_end_time = datetime.fromisoformat(pr_end_time_str)
-        if pr_end_time.tzinfo is None:
-            pr_end_time = pr_end_time.replace(tzinfo=timezone.utc)
-
-        # Get latest review phase end_time
-        existing_progress = self._load_progress()
-        if existing_progress:
-            # Try to get end_time first, fallback to timestamp for backward compatibility
-            review_end_time = getattr(existing_progress, 'end_time', None) or existing_progress.timestamp
-            if review_end_time:
-                if review_end_time.tzinfo is None:
-                    review_end_time = review_end_time.replace(tzinfo=timezone.utc)
-
-                # If PR iteration end_time is not newer than review end_time, ignore it
-                if pr_end_time <= review_end_time:
-                    print(f"  → PR iteration {latest_pr_iteration_dir.name} is not newer than review phase, skipping")
-                    return None
-
-        # PR iteration is newer (or review has never run) - load user_input.md
-        user_input_file = latest_pr_iteration_dir / "user_input.md"
-
-        if not user_input_file.exists():
-            # PR iteration exists but user_input.md not found yet
-            # This is normal - PR was just created but no comments yet
-            print(f"  → PR iteration {latest_pr_iteration_dir.name} exists but no user_input.md yet (no comments)")
-            return None
-
-        content = user_input_file.read_text(encoding="utf-8").strip()
-        if not content:
-            # PR iteration exists but user_input.md is empty
-            # This is normal - PR was just created but no comments yet
-            print(f"  → PR iteration {latest_pr_iteration_dir.name}/user_input.md is empty (no comments yet)")
-            return None
-
-        print(f"  → Loaded PR feedback from {latest_pr_iteration_dir.name}/user_input.md")
-        return content
-
     def _load_pr_comments(self) -> tuple[str, int]:
         """Load PR comments from pr/iteration_XXX/user_input.md or GitHub API.
 
@@ -452,32 +371,9 @@ class ReviewPhase(Phase):
         Args:
             status_code: Phase status code
         """
-        import json
-        from datetime import datetime
-        from cafe.core.types import PhaseStatus, PhaseProgress
-
-        status_file = self._get_status_file()
-        status_file.parent.mkdir(parents=True, exist_ok=True)
-
         # Both CONFIRMED and NEEDS_CHANGES are completion statuses for review
         complete_codes = [PhaseStatusCode.CONFIRMED, PhaseStatusCode.NEEDS_CHANGES]
-        phase_status = PhaseStatus.COMPLETED if status_code in complete_codes else PhaseStatus.IN_PROGRESS
-
-        # Set end_time when phase completes
-        end_time = datetime.now().astimezone() if phase_status == PhaseStatus.COMPLETED else None
-
-        progress = PhaseProgress(
-            phase=self.phase_name,
-            status=phase_status,
-            status_code=status_code.value,
-            timestamp=datetime.now().astimezone(),
-            iteration=self.iteration,
-            message=f"Code review completed with {status_code.value}" if phase_status == PhaseStatus.COMPLETED else f"Iteration {self.iteration}",
-            end_time=end_time,
-        )
-
-        with open(status_file, 'w', encoding='utf-8') as f:
-            json.dump(progress.to_dict(), f, ensure_ascii=False, indent=2)
+        super()._save_progress(status_code, complete_codes=complete_codes)
 
     def _check_if_develop_is_newer(self) -> bool:
         """Check if develop phase timestamp is newer than last review.
