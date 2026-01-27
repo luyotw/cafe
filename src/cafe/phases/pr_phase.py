@@ -230,6 +230,127 @@ class PRPhase(Phase):
         with open(status_file, 'w', encoding='utf-8') as f:
             json.dump(progress.to_dict(), f, ensure_ascii=False, indent=2)
 
+    def _get_latest_pr_iteration_info(self) -> Optional[dict]:
+        """Get information about the latest PR iteration.
+
+        Returns:
+            Dictionary with iteration info, or None if no iterations exist:
+            {
+                "iteration_dir": Path,
+                "iteration_number": int,
+                "end_time": datetime or None,
+                "has_user_input": bool,
+                "user_input_path": Path or None
+            }
+        """
+        from datetime import datetime
+
+        pr_dir = self.issue_dir / "pr"
+        if not pr_dir.exists():
+            return None
+
+        # Find latest iteration directory
+        iteration_dirs = sorted(pr_dir.glob("iteration_*"))
+        if not iteration_dirs:
+            return None
+
+        latest_iteration_dir = iteration_dirs[-1]
+
+        # Extract iteration number
+        iteration_num = int(latest_iteration_dir.name.split("_")[1])
+
+        # Check for context.json to get end_time
+        context_file = latest_iteration_dir / "context.json"
+        end_time = None
+        if context_file.exists():
+            with open(context_file, "r", encoding="utf-8") as f:
+                context = json.load(f)
+                end_time_str = context.get("end_time") or context.get("timestamp")
+                if end_time_str:
+                    end_time = datetime.fromisoformat(end_time_str)
+                    if end_time.tzinfo is None:
+                        from datetime import timezone
+                        end_time = end_time.replace(tzinfo=timezone.utc)
+
+        # Check for user_input.md
+        user_input_file = latest_iteration_dir / "user_input.md"
+        has_user_input = user_input_file.exists() and user_input_file.read_text(encoding="utf-8").strip()
+
+        return {
+            "iteration_dir": latest_iteration_dir,
+            "iteration_number": iteration_num,
+            "end_time": end_time,
+            "has_user_input": bool(has_user_input),
+            "user_input_path": user_input_file if has_user_input else None,
+        }
+
+    def _get_latest_develop_end_time(self) -> Optional["datetime"]:
+        """Get end_time of the latest develop phase iteration.
+
+        Returns:
+            datetime object or None if develop has never run
+        """
+        develop_dir = self.issue_dir / "develop"
+        if not develop_dir.exists():
+            return None
+
+        status_file = develop_dir / "status.json"
+        if not status_file.exists():
+            return None
+
+        try:
+            with open(status_file, "r", encoding="utf-8") as f:
+                from cafe.core.types import PhaseProgress
+                status_data = json.load(f)
+                progress = PhaseProgress.from_dict(status_data)
+
+                # Try to get end_time first, fallback to timestamp
+                end_time = getattr(progress, 'end_time', None) or progress.timestamp
+                return end_time
+        except Exception:
+            return None
+
+    def _should_start_new_iteration(self, pr_iteration_info: Optional[dict]) -> bool:
+        """Determine if we should start a new PR iteration.
+
+        Args:
+            pr_iteration_info: Latest PR iteration info from _get_latest_pr_iteration_info()
+
+        Returns:
+            True if should start new iteration, False otherwise
+        """
+        # If no PR iterations exist yet, start first iteration
+        if not pr_iteration_info:
+            return True
+
+        # If latest PR iteration has no user_input, don't start new iteration
+        # (waiting for user feedback)
+        if not pr_iteration_info["has_user_input"]:
+            return False
+
+        # If latest PR iteration has user_input, check if develop has processed it
+        pr_end_time = pr_iteration_info["end_time"]
+        develop_end_time = self._get_latest_develop_end_time()
+
+        # If no develop history, don't start new iteration (waiting for develop)
+        if not develop_end_time:
+            return False
+
+        # If develop hasn't processed this PR iteration yet, don't start new iteration
+        if pr_end_time and pr_end_time > develop_end_time:
+            return False
+
+        # Develop has processed the PR iteration, should start new iteration
+        return True
+
+    def _has_new_commits(self) -> bool:
+        """Check if there are new commits to push/review.
+
+        Returns:
+            True if there are unpushed commits, False otherwise
+        """
+        return self.git_ops.has_unpushed_commits()
+
     def execute(self) -> PhaseResult:
         """Execute PR creation phase.
 
@@ -250,205 +371,11 @@ class PRPhase(Phase):
                     # Non-interactive mode: default to True (GitHub PR mode)
                     pr_auto_create = True
 
-            # If pr.auto_create is False, use local review mode
+            # Route to appropriate mode
             if pr_auto_create is False:
-                result = self._execute_local_review_mode()
-                # Save progress if there's a status code
-                if result.data and "status_code" in result.data:
-                    from cafe.core.status_codes import PhaseStatusCode
-                    status_code_str = result.data["status_code"]
-                    # Convert string to PhaseStatusCode enum
-                    status_code = PhaseStatusCode(status_code_str)
-                    # iteration is already set in _execute_local_review_mode()
-                    self._save_progress(status_code)
-                return result
-
-            # Otherwise, continue with GitHub PR creation
-            # Increment iteration for this execution
-            self.iteration += 1
-
-            # Check gh CLI authentication status
-            try:
-                if not self.github_ops.check_gh_auth():
-                    return PhaseResult(
-                        status=PhaseStatus.FAILED,
-                        message="gh CLI is not authenticated. Please run: gh auth login",
-                    )
-            except GitHubError as e:
-                return PhaseResult(
-                    status=PhaseStatus.FAILED,
-                    message=f"Failed to check gh authentication: {e}",
-                )
-
-            # Read issue_id from config if not provided
-            if not self.issue_id:
-                config_file = self.issue_dir / "issue.yaml"
-                # Try to get issue_id from top level first, then from spec section
-                self.issue_id = self._get_issue_config_value(config_file, "issue_id")
-                if not self.issue_id:
-                    self.issue_id = self._get_issue_config_value(config_file, "spec.issue_id")
-                # Convert to string if it's an integer (YAML may parse unquoted numbers as int)
-                if self.issue_id is not None:
-                    self.issue_id = str(self.issue_id)
-
-            # Check requirements file exists
-            req_path = Path(self.spec_file)
-            if not req_path.exists():
-                return PhaseResult(
-                    status=PhaseStatus.FAILED,
-                    message=f"Spec file not found: {self.spec_file}",
-                )
-
-            # Get branch name
-            branch_name = self._get_branch_name()
-
-            # Check if there are unpushed commits before pushing
-            if self.git_ops.has_unpushed_commits():
-                unpushed_commits = self.git_ops.get_unpushed_commits()
-                from rich.console import Console
-                console = Console()
-                console.print()
-                console.print(f"[bold]Pushing {len(unpushed_commits)} unpushed commit(s) to remote...[/bold]")
-                for commit in unpushed_commits:
-                    console.print(f"  [dim]- {commit['hash'][:8]} {commit['message']}[/dim]")
-                console.print()
-
-                self.git_ops.push(branch_name, set_upstream=True, force=self.force_push)
+                return self._execute_local_mode()
             else:
-                if not self.git_ops.has_upstream_branch():
-                    from rich.console import Console
-                    console = Console()
-                    console.print()
-                    console.print(f"[bold]Pushing branch '{branch_name}' to remote for the first time...[/bold]")
-                    console.print()
-
-                    self.git_ops.push(branch_name, set_upstream=True, force=self.force_push)
-                else:
-                    from rich.console import Console
-                    console = Console()
-                    console.print()
-                    console.print(f"[yellow]ℹ️  No new commits to push - branch '{branch_name}' is already up to date[/yellow]")
-                    console.print()
-
-            # Check if PR already exists on GitHub
-            existing_pr = self.github_ops.get_pr_for_branch(branch_name)
-
-            if existing_pr:
-                # PR already exists on GitHub
-                pr_number = str(existing_pr["number"])
-                pr_url = existing_pr["url"]
-
-                # Fetch and save PR comments (centralize comment detection in PR phase)
-                # This ensures develop/review phases can read from user_input.md
-                self._save_pr_comments_to_user_input(int(pr_number))
-
-                if not self.update:
-                    # Ask user if they want to update
-                    if self.interactive:
-                        from rich.console import Console
-                        console = Console()
-                        console.print(f"\n[yellow]⚠️  PR #{pr_number} already exists for branch '{branch_name}'.[/yellow]")
-                        console.print(f"  URL: {pr_url}")
-                        console.print()
-
-                        try:
-                            update_pr = prompt_confirm("Do you want to update it?", default=False)
-                        except (KeyboardInterrupt, EOFError):
-                            console.print("\n[dim]Cancelled[/dim]")
-                            return PhaseResult(
-                                status=PhaseStatus.COMPLETED,
-                                message=f"Pull Request #{pr_number} already exists (no update)",
-                                data={"pr_number": pr_number, "pr_url": pr_url, "branch": branch_name},
-                            )
-
-                        if not update_pr:
-                            return PhaseResult(
-                                status=PhaseStatus.COMPLETED,
-                                message=f"Pull Request #{pr_number} already exists (no update)",
-                                data={"pr_number": pr_number, "pr_url": pr_url, "branch": branch_name},
-                            )
-                    else:
-                        # Non-interactive mode without --update flag, fail
-                        return PhaseResult(
-                            status=PhaseStatus.FAILED,
-                            message=f"PR #{pr_number} already exists for branch '{branch_name}'. Use --update to update it.",
-                        )
-
-                # User wants to update or --update flag is set
-                result, content = self._prepare_pr_content()
-                if result:
-                    return result
-                pr_title, pr_body = content
-
-                # Display updating message
-                from rich.console import Console
-                console = Console()
-                console.print()
-                console.print("[bold]Updating pull request...[/bold]")
-                console.print()
-
-                # Update existing PR
-                self.github_ops.update_pr(pr_number, title=pr_title, body=pr_body)
-
-                result = PhaseResult(
-                    status=PhaseStatus.COMPLETED,
-                    message=f"Pull Request #{pr_number} updated successfully",
-                    data={"pr_number": pr_number, "pr_url": pr_url, "branch": branch_name, "status_code": "CAFE_CONFIRMED"},
-                )
-
-                # Save progress for GitHub PR mode
-                from cafe.core.status_codes import PhaseStatusCode
-                self._save_progress(PhaseStatusCode.CONFIRMED)
-
-                return result
-
-            # PR doesn't exist, create new one
-            result, content = self._prepare_pr_content()
-            if result:
-                return result
-            pr_title, pr_body = content
-
-            # Display creating message
-            from rich.console import Console
-            console = Console()
-            console.print()
-            console.print("[bold]Creating pull request...[/bold]")
-            console.print()
-
-            # Create PR using GitHub operations
-            pr_url = self.github_ops.create_pr(
-                title=pr_title, body=pr_body, draft=self.draft, base=self.base_branch
-            )
-
-            # Extract PR number from URL
-            match = re.search(r"/pull/(\d+)", pr_url)
-            if not match:
-                raise RuntimeError(f"Failed to extract PR number from: {pr_url}")
-            pr_number = match.group(1)
-
-            # Add PR link to GitHub issue if issue_id is configured
-            if self.issue_id:
-                try:
-                    comment = f"Pull Request created: {pr_url}"
-                    self.github_ops.add_issue_comment(self.issue_id, comment)
-                except Exception as e:
-                    # Don't fail the entire PR phase if commenting fails
-                    # Just log the warning (user can manually add comment)
-                    from rich.console import Console
-                    console = Console()
-                    console.print(f"[yellow]⚠️  Warning: Failed to add PR link to issue #{self.issue_id}: {e}[/yellow]")
-
-            result = PhaseResult(
-                status=PhaseStatus.COMPLETED,
-                message=f"Pull Request #{pr_number} created successfully",
-                data={"pr_number": pr_number, "pr_url": pr_url, "branch": branch_name, "status_code": "CAFE_CONFIRMED"},
-            )
-
-            # Save progress for GitHub PR mode
-            from cafe.core.status_codes import PhaseStatusCode
-            self._save_progress(PhaseStatusCode.CONFIRMED)
-
-            return result
+                return self._execute_github_mode()
 
         except FileNotFoundError as e:
             return PhaseResult(
@@ -457,6 +384,246 @@ class PRPhase(Phase):
             )
         except Exception as e:
             return self._handle_exception_in_execute(e, "PR phase failed")
+
+    def _execute_github_mode(self) -> PhaseResult:
+        """Execute GitHub PR mode.
+
+        New logic:
+        1. Check if latest PR iteration has user_input
+           - No user_input -> open GitHub web page -> end
+           - Has user_input -> go to step 2
+
+        2. Compare PR iteration end_time vs develop end_time
+           - PR end_time > develop end_time -> end (waiting for develop)
+           - PR end_time <= develop end_time -> go to step 3 (start new iteration)
+
+        3. Check for new commits
+           - Has new commits -> push & update PR -> create new iteration -> end
+           - No new commits -> fetch GitHub comments -> if has comments, create new iteration -> end
+
+        Returns:
+            Phase result
+        """
+        from rich.console import Console
+        from cafe.core.status_codes import PhaseStatusCode
+
+        console = Console()
+
+        # Check gh CLI authentication
+        try:
+            if not self.github_ops.check_gh_auth():
+                return PhaseResult(
+                    status=PhaseStatus.FAILED,
+                    message="gh CLI is not authenticated. Please run: gh auth login",
+                )
+        except GitHubError as e:
+            return PhaseResult(
+                status=PhaseStatus.FAILED,
+                message=f"Failed to check gh authentication: {e}",
+            )
+
+        # Read issue_id from config if not provided
+        if not self.issue_id:
+            config_file = self.issue_dir / "issue.yaml"
+            self.issue_id = self._get_issue_config_value(config_file, "issue_id")
+            if not self.issue_id:
+                self.issue_id = self._get_issue_config_value(config_file, "spec.issue_id")
+            if self.issue_id is not None:
+                self.issue_id = str(self.issue_id)
+
+        # Check requirements file exists
+        req_path = Path(self.spec_file)
+        if not req_path.exists():
+            return PhaseResult(
+                status=PhaseStatus.FAILED,
+                message=f"Spec file not found: {self.spec_file}",
+            )
+
+        # Get branch name
+        branch_name = self._get_branch_name()
+
+        # Check if PR exists on GitHub
+        existing_pr = self.github_ops.get_pr_for_branch(branch_name)
+
+        # Step 1: Check latest PR iteration
+        pr_iteration_info = self._get_latest_pr_iteration_info()
+
+        if pr_iteration_info and not pr_iteration_info["has_user_input"]:
+            # Latest iteration has no user_input yet
+            if existing_pr:
+                pr_number = existing_pr["number"]
+                pr_url = existing_pr["url"]
+                console.print()
+                console.print(f"[yellow]ℹ️  PR #{pr_number} is waiting for review feedback[/yellow]")
+                console.print(f"  URL: {pr_url}")
+                console.print()
+                console.print("[dim]Opening PR in browser...[/dim]")
+
+                # Open PR in browser
+                import webbrowser
+                webbrowser.open(pr_url)
+
+                return PhaseResult(
+                    status=PhaseStatus.COMPLETED,
+                    message=f"PR #{pr_number} is waiting for review feedback",
+                    data={"pr_number": str(pr_number), "pr_url": pr_url, "branch": branch_name},
+                )
+            else:
+                # This shouldn't happen - iteration exists but no PR
+                console.print("[yellow]⚠️  Warning: PR iteration exists but no GitHub PR found[/yellow]")
+
+        # Step 2: Check if should start new iteration
+        should_start_new = self._should_start_new_iteration(pr_iteration_info)
+
+        if not should_start_new:
+            # Don't start new iteration - either waiting for develop or no initial iteration yet
+            if pr_iteration_info:
+                console.print()
+                console.print("[yellow]ℹ️  Latest PR iteration is waiting for develop phase to process feedback[/yellow]")
+                console.print()
+                return PhaseResult(
+                    status=PhaseStatus.COMPLETED,
+                    message="Waiting for develop phase to process PR feedback",
+                    data={"branch": branch_name},
+                )
+            # else: continue to create first iteration/PR
+
+        # Step 3: Check for new commits and decide action
+        has_new_commits = self._has_new_commits()
+
+        if has_new_commits:
+            # Push new commits and update/create PR
+            unpushed_commits = self.git_ops.get_unpushed_commits()
+            console.print()
+            console.print(f"[bold]Pushing {len(unpushed_commits)} unpushed commit(s) to remote...[/bold]")
+            for commit in unpushed_commits:
+                console.print(f"  [dim]- {commit['hash'][:8]} {commit['message']}[/dim]")
+            console.print()
+
+            self.git_ops.push(branch_name, set_upstream=True, force=self.force_push)
+
+            # Prepare PR content
+            result, content = self._prepare_pr_content()
+            if result:
+                return result
+            pr_title, pr_body = content
+
+            if existing_pr:
+                # Update existing PR
+                pr_number = str(existing_pr["number"])
+                pr_url = existing_pr["url"]
+
+                console.print("[bold]Updating pull request...[/bold]")
+                console.print()
+
+                self.github_ops.update_pr(pr_number, title=pr_title, body=pr_body)
+
+                # Create new iteration (without user_input)
+                self.iteration = (pr_iteration_info["iteration_number"] + 1) if pr_iteration_info else 1
+                self._save_progress(PhaseStatusCode.CONFIRMED)
+
+                return PhaseResult(
+                    status=PhaseStatus.COMPLETED,
+                    message=f"Pull Request #{pr_number} updated successfully",
+                    data={"pr_number": pr_number, "pr_url": pr_url, "branch": branch_name, "status_code": "CAFE_CONFIRMED"},
+                )
+            else:
+                # Create new PR
+                console.print("[bold]Creating pull request...[/bold]")
+                console.print()
+
+                pr_url = self.github_ops.create_pr(
+                    title=pr_title, body=pr_body, draft=self.draft, base=self.base_branch
+                )
+
+                # Extract PR number
+                match = re.search(r"/pull/(\d+)", pr_url)
+                if not match:
+                    raise RuntimeError(f"Failed to extract PR number from: {pr_url}")
+                pr_number = match.group(1)
+
+                # Add PR link to issue if configured
+                if self.issue_id:
+                    try:
+                        comment = f"Pull Request created: {pr_url}"
+                        self.github_ops.add_issue_comment(self.issue_id, comment)
+                    except Exception as e:
+                        console.print(f"[yellow]⚠️  Warning: Failed to add PR link to issue #{self.issue_id}: {e}[/yellow]")
+
+                # Create new iteration (without user_input)
+                self.iteration = 1
+                self._save_progress(PhaseStatusCode.CONFIRMED)
+
+                console.print()
+                console.print(f"[green]✓ Pull Request #{pr_number} created successfully[/green]")
+                console.print(f"  URL: {pr_url}")
+                console.print()
+
+                return PhaseResult(
+                    status=PhaseStatus.COMPLETED,
+                    message=f"Pull Request #{pr_number} created successfully",
+                    data={"pr_number": pr_number, "pr_url": pr_url, "branch": branch_name, "status_code": "CAFE_CONFIRMED"},
+                )
+
+        else:
+            # No new commits - check for GitHub comments
+            if not existing_pr:
+                # No PR and no commits - nothing to do
+                console.print()
+                console.print("[yellow]ℹ️  No new commits to push and no existing PR[/yellow]")
+                console.print()
+                return PhaseResult(
+                    status=PhaseStatus.COMPLETED,
+                    message="No new commits to push",
+                    data={"branch": branch_name},
+                )
+
+            # Fetch PR comments from GitHub
+            pr_number = existing_pr["number"]
+            pr_url = existing_pr["url"]
+
+            console.print()
+            console.print(f"[dim]Checking for new comments on PR #{pr_number}...[/dim]")
+
+            # Save PR comments to user_input.md (creates new iteration if has comments)
+            user_input_path = self._save_pr_comments_to_user_input(int(pr_number))
+
+            if user_input_path:
+                # New comments found and saved - create new iteration
+                self.iteration = (pr_iteration_info["iteration_number"] + 1) if pr_iteration_info else 1
+                self._save_progress(PhaseStatusCode.CONFIRMED)
+
+                console.print()
+                console.print(f"[green]✓ Fetched new PR comments to iteration_{self.iteration:03d}/user_input.md[/green]")
+                console.print()
+
+                return PhaseResult(
+                    status=PhaseStatus.COMPLETED,
+                    message=f"Fetched new comments from PR #{pr_number}",
+                    data={"pr_number": str(pr_number), "pr_url": pr_url, "branch": branch_name, "status_code": "CAFE_CONFIRMED"},
+                )
+            else:
+                # No new comments
+                console.print()
+                console.print(f"[yellow]ℹ️  No new comments on PR #{pr_number}[/yellow]")
+                console.print()
+
+                return PhaseResult(
+                    status=PhaseStatus.COMPLETED,
+                    message=f"PR #{pr_number} has no new comments",
+                    data={"pr_number": str(pr_number), "pr_url": pr_url, "branch": branch_name},
+                )
+
+    def _execute_local_mode(self) -> PhaseResult:
+        """Execute local review mode (renamed from _execute_local_review_mode).
+
+        TODO: Implement new logic similar to GitHub mode but for local mode
+
+        Returns:
+            Phase result
+        """
+        # For now, call the old implementation
+        return self._execute_local_review_mode()
 
     def _execute_local_review_mode(self) -> PhaseResult:
         """Execute local review mode (no GitHub PR).

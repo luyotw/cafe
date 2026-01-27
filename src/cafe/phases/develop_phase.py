@@ -360,38 +360,7 @@ class DevelopPhase(Phase):
                 # If we can't load PR comments, continue with timestamp-based check
                 print(f"⚠️  Could not load PR comments: {e}")
 
-            print(f"ℹ️  PR #{self.pr_number} comments will be addressed")
-            # Check if there are unpushed commits that address PR comments
-            if self.git_ops.has_unpushed_commits():
-                latest_unpushed_timestamp_str = self.git_ops.get_latest_unpushed_commit_timestamp()
-
-                if latest_unpushed_timestamp_str:
-                    from datetime import datetime, timezone
-
-                    latest_unpushed_timestamp = datetime.fromisoformat(latest_unpushed_timestamp_str)
-                    if latest_unpushed_timestamp.tzinfo is None:
-                        latest_unpushed_timestamp = latest_unpushed_timestamp.replace(tzinfo=timezone.utc)
-
-                    latest_pr_comment_timestamp = self._get_latest_pr_comment_timestamp()
-
-                    if latest_pr_comment_timestamp:
-                        if latest_unpushed_timestamp > latest_pr_comment_timestamp:
-                            print(f"✅ Development already completed - unpushed commits address PR comments")
-                            print(f"   Latest unpushed commit: {latest_unpushed_timestamp.isoformat()}")
-                            print(f"   Latest PR comment: {latest_pr_comment_timestamp.isoformat()}")
-                            print(f"   Next step: Run 'cafe pr' to push and create/update PR")
-
-                            return PhaseResult(
-                                status=PhaseStatus.COMPLETED,
-                                message=f"Development already completed - {len(self.git_ops.get_unpushed_commits())} unpushed commit(s) address PR comments",
-                                data={
-                                    "branch": self._get_branch_name(),
-                                    "iterations": existing_progress.iteration,
-                                    "status_code": existing_progress.status_code,
-                                    "unpushed_commits": len(self.git_ops.get_unpushed_commits()),
-                                },
-                            )
-
+            # PR comments will be addressed in this iteration
             return None
 
         # No review feedback or PR comments, phase is truly completed
@@ -776,30 +745,35 @@ class DevelopPhase(Phase):
         if not pr_context_file.exists():
             return None
 
-        # Load PR iteration timestamp
+        # Load PR iteration end_time
         with open(pr_context_file, "r", encoding="utf-8") as f:
             pr_context = json.load(f)
 
-        pr_timestamp_str = pr_context.get("timestamp")
-        if not pr_timestamp_str:
-            return None
-
-        # Parse PR timestamp
-        pr_timestamp = datetime.fromisoformat(pr_timestamp_str)
-        if pr_timestamp.tzinfo is None:
-            pr_timestamp = pr_timestamp.replace(tzinfo=timezone.utc)
-
-        # Get latest develop phase timestamp
-        existing_progress = self._load_progress()
-        if existing_progress and existing_progress.timestamp:
-            develop_timestamp = existing_progress.timestamp
-            if develop_timestamp.tzinfo is None:
-                develop_timestamp = develop_timestamp.replace(tzinfo=timezone.utc)
-
-            # If PR iteration is not newer, ignore it
-            if pr_timestamp <= develop_timestamp:
-                print(f"  → PR iteration {latest_pr_iteration_dir.name} is not newer than develop phase, skipping")
+        pr_end_time_str = pr_context.get("end_time")
+        if not pr_end_time_str:
+            # Fallback to timestamp for backward compatibility
+            pr_end_time_str = pr_context.get("timestamp")
+            if not pr_end_time_str:
                 return None
+
+        # Parse PR end_time
+        pr_end_time = datetime.fromisoformat(pr_end_time_str)
+        if pr_end_time.tzinfo is None:
+            pr_end_time = pr_end_time.replace(tzinfo=timezone.utc)
+
+        # Get latest develop phase end_time
+        existing_progress = self._load_progress()
+        if existing_progress:
+            # Try to get end_time first, fallback to timestamp for backward compatibility
+            develop_end_time = getattr(existing_progress, 'end_time', None) or existing_progress.timestamp
+            if develop_end_time:
+                if develop_end_time.tzinfo is None:
+                    develop_end_time = develop_end_time.replace(tzinfo=timezone.utc)
+
+                # If PR iteration end_time is not newer than develop end_time, ignore it
+                if pr_end_time <= develop_end_time:
+                    print(f"  → PR iteration {latest_pr_iteration_dir.name} is not newer than develop phase, skipping")
+                    return None
 
         # PR iteration is newer (or develop has never run) - load user_input.md
         user_input_file = latest_pr_iteration_dir / "user_input.md"
@@ -882,40 +856,6 @@ class DevelopPhase(Phase):
         self._pr_comment_objects = []
         return self._pr_comments_cache
 
-    def _get_latest_pr_comment_timestamp(self) -> Optional["datetime"]:
-        """Get timestamp of the latest PR comment.
-
-        Returns:
-            Timezone-aware datetime object of latest comment, or None if no comments
-        """
-        if not self.pr_number:
-            return None
-
-        try:
-            from datetime import datetime, timezone
-            from cafe.utils.github import get_all_pr_comments
-
-            comments = get_all_pr_comments(self.pr_number)
-            if not comments:
-                return None
-
-            latest_timestamp = None
-            for comment in comments:
-                timestamp_str = comment.created_at
-                if timestamp_str.endswith('Z'):
-                    timestamp_str = timestamp_str.replace('Z', '+00:00')
-                comment_time = datetime.fromisoformat(timestamp_str)
-
-                if comment_time.tzinfo is None:
-                    comment_time = comment_time.replace(tzinfo=timezone.utc)
-
-                if latest_timestamp is None or comment_time > latest_timestamp:
-                    latest_timestamp = comment_time
-
-            return latest_timestamp
-        except Exception as e:
-            print(f"⚠️  Failed to get latest PR comment timestamp: {e}")
-            return None
 
     def _generate_prompt(self, user_input: str = "") -> str:
         """Generate prompt for current iteration.

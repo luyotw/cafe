@@ -178,15 +178,6 @@ class ReviewPhase(Phase):
                         },
                     )
 
-                # Check if there are commits since the latest PR comment
-                if not self._has_commits_since_pr_comments():
-                    return PhaseResult(
-                        status=PhaseStatus.COMPLETED,
-                        message=f"PR #{self.pr_number} has no new commits since latest PR comment. Nothing to review.",
-                        data={
-                            "pr_number": self.pr_number,
-                        },
-                    )
 
             # Calculate iteration number based on iteration history
             self.iteration = self._get_next_iteration_number("review", self.review_dir)
@@ -351,26 +342,31 @@ class ReviewPhase(Phase):
         with open(pr_context_file, "r", encoding="utf-8") as f:
             pr_context = json.load(f)
 
-        pr_timestamp_str = pr_context.get("timestamp")
-        if not pr_timestamp_str:
-            return None
-
-        # Parse PR timestamp
-        pr_timestamp = datetime.fromisoformat(pr_timestamp_str)
-        if pr_timestamp.tzinfo is None:
-            pr_timestamp = pr_timestamp.replace(tzinfo=timezone.utc)
-
-        # Get latest review phase timestamp
-        existing_progress = self._load_progress()
-        if existing_progress and existing_progress.timestamp:
-            review_timestamp = existing_progress.timestamp
-            if review_timestamp.tzinfo is None:
-                review_timestamp = review_timestamp.replace(tzinfo=timezone.utc)
-
-            # If PR iteration is not newer, ignore it
-            if pr_timestamp <= review_timestamp:
-                print(f"  → PR iteration {latest_pr_iteration_dir.name} is not newer than review phase, skipping")
+        pr_end_time_str = pr_context.get("end_time")
+        if not pr_end_time_str:
+            # Fallback to timestamp for backward compatibility
+            pr_end_time_str = pr_context.get("timestamp")
+            if not pr_end_time_str:
                 return None
+
+        # Parse PR end_time
+        pr_end_time = datetime.fromisoformat(pr_end_time_str)
+        if pr_end_time.tzinfo is None:
+            pr_end_time = pr_end_time.replace(tzinfo=timezone.utc)
+
+        # Get latest review phase end_time
+        existing_progress = self._load_progress()
+        if existing_progress:
+            # Try to get end_time first, fallback to timestamp for backward compatibility
+            review_end_time = getattr(existing_progress, 'end_time', None) or existing_progress.timestamp
+            if review_end_time:
+                if review_end_time.tzinfo is None:
+                    review_end_time = review_end_time.replace(tzinfo=timezone.utc)
+
+                # If PR iteration end_time is not newer than review end_time, ignore it
+                if pr_end_time <= review_end_time:
+                    print(f"  → PR iteration {latest_pr_iteration_dir.name} is not newer than review phase, skipping")
+                    return None
 
         # PR iteration is newer (or review has never run) - load user_input.md
         user_input_file = latest_pr_iteration_dir / "user_input.md"
@@ -436,57 +432,7 @@ class ReviewPhase(Phase):
         self._pr_comments_cache = ("", 0)
         return self._pr_comments_cache
 
-    def _get_latest_pr_comment_timestamp(self):
-        """Get timestamp of the latest PR comment.
 
-        Returns:
-            datetime object of the latest comment, or None if no comments
-        """
-        if not self.pr_number:
-            return None
-
-        try:
-            comments = get_all_pr_comments(self.pr_number)
-            if not comments:
-                return None
-
-            # Find the latest comment by created_at timestamp
-            from datetime import datetime
-            latest_timestamp = None
-            for comment in comments:
-                timestamp_str = comment.created_at
-                if timestamp_str.endswith('Z'):
-                    timestamp_str = timestamp_str.replace('Z', '+00:00')
-                comment_time = datetime.fromisoformat(timestamp_str)
-
-                if latest_timestamp is None or comment_time > latest_timestamp:
-                    latest_timestamp = comment_time
-
-            return latest_timestamp
-        except Exception as e:
-            print(f"⚠️  Failed to get latest PR comment timestamp: {e}")
-            return None
-
-    def _has_commits_since_pr_comments(self) -> bool:
-        """Check if there are commits since the latest PR comment.
-
-        Returns:
-            True if there are new commits, False otherwise
-        """
-        latest_comment_time = self._get_latest_pr_comment_timestamp()
-        if not latest_comment_time:
-            # No PR comments, so proceed with review
-            return True
-
-        try:
-            # Get commits since the latest PR comment timestamp
-            timestamp_str = latest_comment_time.isoformat()
-            commits = self.git_ops.get_commits_since(timestamp_str)
-            return len(commits) > 0
-        except Exception as e:
-            print(f"⚠️  Failed to check commits since PR comments: {e}")
-            # On error, assume there are new commits to be safe
-            return True
 
     def _generate_prompt(self, user_input: str) -> str:
         """Generate review prompt (implements abstract method from Phase).
