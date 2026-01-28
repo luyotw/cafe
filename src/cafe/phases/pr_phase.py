@@ -468,8 +468,9 @@ class PRPhase(Phase):
             # Call agent to organize comments into todo list
             result = self._organize_comments_to_todo_list(pr_number, pr_url, branch_name)
 
-            # Save progress with NEEDS_CHANGES status
-            self._save_progress(PhaseStatusCode.NEEDS_CHANGES)
+            # Save progress with the actual status code returned by agent
+            result_status = result.data.get("status_code", PhaseStatusCode.NEEDS_CHANGES.value) if result and result.data else PhaseStatusCode.NEEDS_CHANGES.value
+            self._save_progress(PhaseStatusCode(result_status))
 
             return result
 
