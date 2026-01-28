@@ -1010,20 +1010,27 @@ class Phase(ABC):
         if not pr_dir.exists():
             return None
 
-        # Find latest PR iteration directory
+        # Find latest PR iteration directory with a completed status_code
         iteration_dirs = sorted(pr_dir.glob("iteration_*"))
         if not iteration_dirs:
             return None
 
-        latest_pr_iteration_dir = iteration_dirs[-1]
-        pr_context_file = latest_pr_iteration_dir / "context.json"
+        # Search backwards for the latest iteration that has a status_code
+        latest_pr_iteration_dir = None
+        pr_context = None
+        for iteration_dir in reversed(iteration_dirs):
+            context_file = iteration_dir / "context.json"
+            if not context_file.exists():
+                continue
+            with open(context_file, "r", encoding="utf-8") as f:
+                ctx = json.load(f)
+            if ctx.get("status_code"):
+                latest_pr_iteration_dir = iteration_dir
+                pr_context = ctx
+                break
 
-        if not pr_context_file.exists():
+        if not latest_pr_iteration_dir or not pr_context:
             return None
-
-        # Load PR iteration end_time
-        with open(pr_context_file, "r", encoding="utf-8") as f:
-            pr_context = json.load(f)
 
         pr_end_time_str = pr_context.get("end_time")
         if not pr_end_time_str:

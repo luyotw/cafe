@@ -1006,14 +1006,21 @@ Read {agent_file} to understand your complete role definition and responsibiliti
                 if review_file_path and review_file_path.exists():
                     review_file = str(review_file_path)
 
-            # Check for PR feedback todo list
+            # Check for PR feedback todo list (only from completed iterations)
             pr_feedback_file = None
             pr_dir = self.issue_dir / "pr"
             if pr_dir.exists():
                 iteration_dirs = sorted(pr_dir.glob("iteration_*"))
-                if iteration_dirs:
-                    latest_pr_iteration_dir = iteration_dirs[-1]
-                    pr_output_file = latest_pr_iteration_dir / "output.md"
+                # Search backwards for the latest iteration with a completed status_code
+                for iteration_dir in reversed(iteration_dirs):
+                    context_file = iteration_dir / "context.json"
+                    if not context_file.exists():
+                        continue
+                    with open(context_file, "r", encoding="utf-8") as f:
+                        ctx = json.load(f)
+                    if not ctx.get("status_code"):
+                        continue
+                    pr_output_file = iteration_dir / "output.md"
                     if pr_output_file.exists() and pr_output_file.read_text(encoding="utf-8").strip():
                         from cafe.utils.git_utils import to_cwd_relative_path
                         try:
@@ -1023,6 +1030,7 @@ Read {agent_file} to understand your complete role definition and responsibiliti
                         # If we have PR feedback, we're in correction mode
                         if not correction_mode:
                             correction_mode = True
+                    break
 
             # Define basic principles
             basic_principles = """- Follow existing commit message style (format, language, structure)
