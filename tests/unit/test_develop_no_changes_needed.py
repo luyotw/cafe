@@ -192,7 +192,7 @@ class TestNoChangesNeededReasoningValidation:
                 develop_file=None,
                 checklist_file_path=checklist_path,
                 correction_mode=True,
-                review_file_path=None,
+                feedback_file_path=None,
                 basic_principles=None,
                 output_file=str(output_file),
             )

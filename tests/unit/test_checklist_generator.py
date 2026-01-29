@@ -128,6 +128,30 @@ class TestGenerateDevelopChecklist:
         assert ".cafe/issues/test/develop/iteration_001/output.md" in content
         assert "Address each issue raised in the feedback" in content
 
+    def test_develop_checklist_correction_mode_uses_unified_feedback_file_path(self, tmp_path):
+        """Test that correction mode uses {feedback_file_path} instead of separate review/PR paths."""
+        checklist_path = tmp_path / "checklist.md"
+
+        generate_develop_checklist(
+            agent_name="David",
+            spec_file_path=".cafe/issues/test/spec/iteration_001/output.md",
+            plan_file_path=".cafe/issues/test/plan/iteration_001/output.md",
+            develop_file=None,
+            checklist_file_path=checklist_path,
+            correction_mode=True,
+            feedback_file_path=".cafe/issues/test/review/iteration_001/output.md",
+        )
+
+        assert checklist_path.exists()
+        content = checklist_path.read_text()
+        # Should have unified feedback_file_path
+        assert ".cafe/issues/test/review/iteration_001/output.md" in content
+        assert "Read feedback todo list" in content
+        assert "Mark completed items" in content
+        # Should NOT have separate review_file_path or pr_feedback_file_path placeholders
+        assert "{review_file_path}" not in content
+        assert "{pr_feedback_file_path}" not in content
+
 
 class TestGenerateReviewChecklist:
     """Tests for generate_review_checklist function."""
@@ -166,6 +190,24 @@ class TestGenerateReviewChecklist:
         content = checklist_path.read_text()
         # Verify commit message checking steps are present
         assert "git log main..HEAD" in content
+
+    def test_review_checklist_includes_todo_list_format_instructions(self, tmp_path):
+        """Test that review checklist includes instructions to output in todo list format."""
+        checklist_path = tmp_path / "checklist.md"
+
+        generate_review_checklist(
+            agent_name="Richard",
+            spec_file_path=".cafe/issues/test/spec/iteration_001/output.md",
+            review_file_path=".cafe/issues/test/review/iteration_001/output.md",
+            base_branch="main",
+            checklist_file_path=checklist_path,
+        )
+
+        content = checklist_path.read_text()
+        # Verify todo list format instructions are present
+        assert "## Todo List" in content
+        assert "- [ ]" in content
+        assert "- [x]" in content
 
 
 class TestGeneratePRChecklist:
