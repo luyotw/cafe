@@ -615,7 +615,11 @@ class PRPhase(Phase):
 
             self.git_ops.push(branch_name, set_upstream=True, force=self.force_push)
 
-            # Prepare PR content
+            # Determine iteration number BEFORE calling _prepare_pr_content
+            pr_iteration_info = self._get_latest_pr_iteration_info()
+            self.iteration = (pr_iteration_info["iteration_number"] + 1) if pr_iteration_info else 1
+
+            # Prepare PR content (calls agent to generate title/body)
             result, content = self._prepare_pr_content()
             if result:
                 return result
@@ -631,9 +635,7 @@ class PRPhase(Phase):
 
                 self.github_ops.update_pr(pr_number, title=pr_title, body=pr_body)
 
-                # Create new iteration (without user_input) - READY_FOR_REVIEW means waiting for reviewer feedback
-                pr_iteration_info = self._get_latest_pr_iteration_info()
-                self.iteration = (pr_iteration_info["iteration_number"] + 1) if pr_iteration_info else 1
+                # Save progress - READY_FOR_REVIEW means waiting for reviewer feedback
                 self._save_progress(PhaseStatusCode.READY_FOR_REVIEW)
 
                 # Update iteration history with status_code
@@ -670,8 +672,7 @@ class PRPhase(Phase):
                     except Exception as e:
                         console.print(f"[yellow]⚠️  Warning: Failed to add PR link to issue #{self.issue_id}: {e}[/yellow]")
 
-                # Create new iteration (without user_input) - READY_FOR_REVIEW means waiting for reviewer feedback
-                self.iteration = 1
+                # Save progress - READY_FOR_REVIEW means waiting for reviewer feedback
                 self._save_progress(PhaseStatusCode.READY_FOR_REVIEW)
 
                 # Update iteration history with status_code

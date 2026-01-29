@@ -173,6 +173,30 @@ class ReviewPhase(Phase):
             iteration_dir = self.review_dir / f"iteration_{self.iteration:03d}"
             review_file_path = iteration_dir / "output.md"
 
+            # Check for PR feedback file (from completed PR iterations)
+            pr_feedback_file = None
+            pr_dir = self.issue_dir / "pr"
+            if pr_dir.exists():
+                iteration_dirs = sorted(pr_dir.glob("iteration_*"))
+                # Search backwards for the latest iteration with a completed status_code
+                for iteration_dir_pr in reversed(iteration_dirs):
+                    context_file = iteration_dir_pr / "context.json"
+                    if not context_file.exists():
+                        continue
+                    import json
+                    with open(context_file, "r", encoding="utf-8") as f:
+                        ctx = json.load(f)
+                    if not ctx.get("status_code"):
+                        continue
+                    pr_user_input_file = iteration_dir_pr / "user_input.md"
+                    if pr_user_input_file.exists() and pr_user_input_file.read_text(encoding="utf-8").strip():
+                        from cafe.utils.git_utils import to_cwd_relative_path
+                        try:
+                            pr_feedback_file = to_cwd_relative_path(pr_user_input_file)
+                        except ValueError:
+                            pr_feedback_file = str(pr_user_input_file.resolve())
+                    break
+
             # Generate checklist for this iteration
             from cafe.utils.checklist_generator import generate_review_checklist
 
@@ -183,6 +207,7 @@ class ReviewPhase(Phase):
                 review_file_path=str(review_file_path),
                 base_branch=self.base_branch,
                 checklist_file_path=checklist_path,
+                pr_feedback_file_path=pr_feedback_file,
             )
 
             # Use path relative to current working directory (supports worktree)
@@ -373,10 +398,6 @@ class ReviewPhase(Phase):
         Returns:
             Review prompt string
         """
-        # Load PR comments from pr/iteration_XXX/user_input.md if available
-        pr_comments = self._load_pr_comments_from_iteration_file()
-        pr_comments_section = f"\n\n## PR Feedback\n\n{pr_comments}\n" if pr_comments else ""
-
         # Check if need to re-run checks (develop is newer than review)
         develop_is_newer = self._check_if_develop_is_newer()
         recheck_instruction = ""
@@ -454,7 +475,6 @@ Read {agent_file} to understand your complete role definition and responsibiliti
 
 **Task:** Conduct iteration {self.iteration} code review.
 Review scope: commits in current branch but not in {self.base_branch}.
-{pr_comments_section}
 {recheck_note}
 {restriction_note}
 

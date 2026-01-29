@@ -253,6 +253,7 @@ def generate_review_checklist(
     review_file_path: str,
     base_branch: str,
     checklist_file_path: Path,
+    pr_feedback_file_path: Optional[str] = None,
 ) -> None:
     """Generate checklist file for review phase.
 
@@ -262,6 +263,7 @@ def generate_review_checklist(
         review_file_path: Path to review file
         base_branch: Base branch name
         checklist_file_path: Path where checklist file should be created
+        pr_feedback_file_path: Optional path to PR feedback file (user_input.md from PR phase)
     """
     # Get agent file path
     agent_file = AgentManager.get_agent_file_path(agent_name, "reviewer")
@@ -281,6 +283,7 @@ def generate_review_checklist(
         "spec_file_path": spec_file_path,
         "review_file_path": review_file_path,
         "base_branch": base_branch,
+        "pr_feedback_file_path": pr_feedback_file_path or "(not available)",
     }
 
     # Resolve placeholders

@@ -122,7 +122,7 @@ REVIEW_EXECUTION_STEPS = """## Checklist
 [ ] Read {agent_file} to understand your role and native language
 [ ] Read the requirements specification {spec_file_path}
 [ ] Read the implementation plan {plan_file_path}
-[ ] Check PR comments (if provided in the prompt) to see user feedback and requests
+[ ] Read PR feedback in {pr_feedback_file_path} (if exists) to see user feedback and requests
 [ ] Prioritize user feedback from PR comments over spec requirements if there are conflicts
 
 ## Git Status and Security Check

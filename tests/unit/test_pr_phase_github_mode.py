@@ -676,3 +676,179 @@ class TestPRPhasePriorityNewCommits:
         assert result.status == PhaseStatus.COMPLETED
         assert result.data.get("status_code") == "CAFE_READY_FOR_REVIEW"
         mock_dependencies["github_ops"].update_pr.assert_called_once()
+
+
+class TestPRPhaseAgentCalled:
+    """Test that _generate_pr_content (agent) is called during PR create/update."""
+
+    @pytest.fixture
+    def mock_dependencies(self):
+        """Create mock dependencies."""
+        agent_manager = MagicMock()
+        permission_handler = MagicMock()
+        git_ops = MagicMock()
+        github_ops = MagicMock()
+
+        git_ops.get_current_branch.return_value = "test-issue"
+        git_ops.get_repo_root.return_value = Path("/tmp")
+
+        return {
+            "agent_manager": agent_manager,
+            "permission_handler": permission_handler,
+            "git_ops": git_ops,
+            "github_ops": github_ops,
+        }
+
+    @pytest.fixture
+    def setup_issue_dir(self, tmp_path):
+        """Setup basic issue directory structure."""
+        issue_dir = tmp_path / ".cafe" / "issues" / "test-issue"
+        issue_dir.mkdir(parents=True)
+
+        spec_file = issue_dir / "spec" / "iteration_001" / "output.md"
+        spec_file.parent.mkdir(parents=True)
+        spec_file.write_text("# Test Spec")
+
+        plan_file = issue_dir / "plan" / "iteration_001" / "output.md"
+        plan_file.parent.mkdir(parents=True)
+        plan_file.write_text("# Test Plan")
+
+        return issue_dir, spec_file
+
+    def test_create_pr_calls_generate_pr_content(
+        self, tmp_path, mock_dependencies, setup_issue_dir
+    ):
+        """Creating a PR should call _generate_pr_content (agent)."""
+        issue_dir, spec_file = setup_issue_dir
+
+        # Setup mocks
+        mock_dependencies["git_ops"].has_unpushed_commits.return_value = True
+        mock_dependencies["git_ops"].get_unpushed_commits.return_value = [
+            {"hash": "abc1234", "message": "feat: add feature"}
+        ]
+        mock_dependencies["github_ops"].check_gh_auth.return_value = True
+        mock_dependencies["github_ops"].get_pr_for_branch.return_value = None
+        mock_dependencies["github_ops"].create_pr.return_value = "https://github.com/test/repo/pull/1"
+
+        with patch.object(PRPhase, "_get_issue_dir", return_value=issue_dir):
+            with patch.object(PRPhase, "_generate_pr_content", return_value=None) as mock_generate:
+                with patch.object(PRPhase, "_get_pr_title", return_value="Test PR Title"):
+                    with patch.object(PRPhase, "_get_pr_body", return_value="Test PR Body"):
+                        phase = PRPhase(
+                            spec_file=str(spec_file),
+                            issue_name="test-issue",
+                            **mock_dependencies
+                        )
+
+                        result = phase._execute_github_mode()
+
+        # Assert agent was called
+        mock_generate.assert_called_once()
+        assert result.status == PhaseStatus.COMPLETED
+        assert result.data.get("status_code") == "CAFE_READY_FOR_REVIEW"
+
+    def test_update_pr_calls_generate_pr_content(
+        self, tmp_path, mock_dependencies, setup_issue_dir
+    ):
+        """Updating a PR should call _generate_pr_content (agent) for new iteration."""
+        issue_dir, spec_file = setup_issue_dir
+
+        # Create existing PR iteration_001 with READY_FOR_REVIEW and output.md
+        pr_dir = issue_dir / "pr"
+        iteration_001 = pr_dir / "iteration_001"
+        iteration_001.mkdir(parents=True)
+        (iteration_001 / "context.json").write_text(json.dumps({
+            "iteration": 1,
+            "timestamp": "2026-01-27T10:00:00+08:00",
+            "end_time": "2026-01-27T10:05:00+08:00",
+            "status_code": "CAFE_READY_FOR_REVIEW"
+        }))
+        (iteration_001 / "output.md").write_text("# Old PR Title\n\nOld body")
+
+        # Setup mocks
+        mock_dependencies["git_ops"].has_unpushed_commits.return_value = True
+        mock_dependencies["git_ops"].get_unpushed_commits.return_value = [
+            {"hash": "def5678", "message": "fix: bug fix"}
+        ]
+        mock_dependencies["github_ops"].check_gh_auth.return_value = True
+        mock_dependencies["github_ops"].get_pr_for_branch.return_value = {
+            "number": 1,
+            "url": "https://github.com/test/repo/pull/1"
+        }
+
+        with patch.object(PRPhase, "_get_issue_dir", return_value=issue_dir):
+            with patch.object(PRPhase, "_generate_pr_content", return_value=None) as mock_generate:
+                with patch.object(PRPhase, "_get_pr_title", return_value="Updated PR Title"):
+                    with patch.object(PRPhase, "_get_pr_body", return_value="Updated PR Body"):
+                        phase = PRPhase(
+                            spec_file=str(spec_file),
+                            issue_name="test-issue",
+                            **mock_dependencies
+                        )
+
+                        result = phase._execute_github_mode()
+
+        # Assert agent was called for iteration 2
+        mock_generate.assert_called_once()
+        assert result.status == PhaseStatus.COMPLETED
+        assert result.data.get("status_code") == "CAFE_READY_FOR_REVIEW"
+        mock_dependencies["github_ops"].update_pr.assert_called_once()
+
+        # Verify iteration_002 directory was created (agent writes to correct iteration)
+        iteration_002 = pr_dir / "iteration_002"
+        assert iteration_002.exists()
+
+    def test_update_pr_uses_correct_iteration_number(
+        self, tmp_path, mock_dependencies, setup_issue_dir
+    ):
+        """Updating PR should set self.iteration BEFORE calling _prepare_pr_content."""
+        issue_dir, spec_file = setup_issue_dir
+
+        # Create existing PR iteration_001 with READY_FOR_REVIEW
+        pr_dir = issue_dir / "pr"
+        iteration_001 = pr_dir / "iteration_001"
+        iteration_001.mkdir(parents=True)
+        (iteration_001 / "context.json").write_text(json.dumps({
+            "iteration": 1,
+            "timestamp": "2026-01-27T10:00:00+08:00",
+            "end_time": "2026-01-27T10:05:00+08:00",
+            "status_code": "CAFE_READY_FOR_REVIEW"
+        }))
+        (iteration_001 / "output.md").write_text("# Old PR Title\n\nOld body")
+
+        # Setup mocks
+        mock_dependencies["git_ops"].has_unpushed_commits.return_value = True
+        mock_dependencies["git_ops"].get_unpushed_commits.return_value = [
+            {"hash": "def5678", "message": "fix: bug fix"}
+        ]
+        mock_dependencies["github_ops"].check_gh_auth.return_value = True
+        mock_dependencies["github_ops"].get_pr_for_branch.return_value = {
+            "number": 1,
+            "url": "https://github.com/test/repo/pull/1"
+        }
+
+        captured_iteration = {}
+
+        def mock_generate_side_effect():
+            """Capture self.iteration at the time _generate_pr_content is called."""
+            # Access phase.iteration via closure
+            captured_iteration["value"] = phase.iteration
+            return None
+
+        with patch.object(PRPhase, "_get_issue_dir", return_value=issue_dir):
+            with patch.object(PRPhase, "_generate_pr_content", side_effect=mock_generate_side_effect) as mock_generate:
+                with patch.object(PRPhase, "_get_pr_title", return_value="Updated PR"):
+                    with patch.object(PRPhase, "_get_pr_body", return_value="Updated body"):
+                        phase = PRPhase(
+                            spec_file=str(spec_file),
+                            issue_name="test-issue",
+                            **mock_dependencies
+                        )
+
+                        result = phase._execute_github_mode()
+
+        # Assert iteration was set to 2 BEFORE _generate_pr_content was called
+        mock_generate.assert_called_once()
+        assert captured_iteration["value"] == 2, (
+            f"Expected iteration 2 when _generate_pr_content was called, got {captured_iteration['value']}"
+        )
