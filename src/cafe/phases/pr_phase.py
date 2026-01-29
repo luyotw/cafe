@@ -284,6 +284,7 @@ class PRPhase(Phase):
                 "iteration_dir": Path,
                 "iteration_number": int,
                 "end_time": datetime or None,
+                "status_code": str or None,
                 "has_user_input": bool,
                 "user_input_path": Path or None
             }
@@ -303,6 +304,7 @@ class PRPhase(Phase):
         latest_iteration_dir = None
         iteration_num = None
         end_time = None
+        status_code = None
 
         for iter_dir in reversed(iteration_dirs):
             context_file = iter_dir / "context.json"
@@ -313,6 +315,7 @@ class PRPhase(Phase):
                     if context.get("status_code"):
                         latest_iteration_dir = iter_dir
                         iteration_num = int(iter_dir.name.split("_")[1])
+                        status_code = context.get("status_code")
 
                         # Get end_time
                         end_time_str = context.get("end_time") or context.get("timestamp")
@@ -334,6 +337,7 @@ class PRPhase(Phase):
             "iteration_dir": latest_iteration_dir,
             "iteration_number": iteration_num,
             "end_time": end_time,
+            "status_code": status_code,
             "has_user_input": bool(has_user_input),
             "user_input_path": user_input_file if has_user_input else None,
         }
@@ -454,31 +458,48 @@ class PRPhase(Phase):
         """
         from rich.console import Console
         from cafe.core.status_codes import PhaseStatusCode
+        from cafe.core.types import PhaseStatus, PhaseResult
 
         console = Console()
 
         incomplete_iteration_info = self._get_incomplete_iteration_info()
-        if incomplete_iteration_info and incomplete_iteration_info["has_user_input"]:
+        if incomplete_iteration_info:
             # Update iteration number to the incomplete iteration
             self.iteration = incomplete_iteration_info["iteration_number"]
 
             console.print()
             console.print(f"[dim]Resuming incomplete iteration_{self.iteration:03d}...[/dim]")
 
-            # Call agent to organize comments into todo list
-            result = self._organize_comments_to_todo_list(pr_number, pr_url, branch_name)
+            if incomplete_iteration_info["has_user_input"]:
+                # Has user_input - resume organizing comments into todo list
+                result = self._organize_comments_to_todo_list(pr_number, pr_url, branch_name)
 
-            # Save progress with the actual status code returned by agent
-            result_status = result.data.get("status_code", PhaseStatusCode.NEEDS_CHANGES.value) if result and result.data else PhaseStatusCode.NEEDS_CHANGES.value
-            self._save_progress(PhaseStatusCode(result_status))
+                # Save progress with the actual status code returned by agent
+                result_status = result.data.get("status_code", PhaseStatusCode.NEEDS_CHANGES.value) if result and result.data else PhaseStatusCode.NEEDS_CHANGES.value
+                self._save_progress(PhaseStatusCode(result_status))
 
-            # Update iteration context.json with status_code
-            self._update_iteration_history(
-                phase_specific_data=result.data if result else {},
-                status_code=PhaseStatusCode(result_status),
-            )
+                # Update iteration context.json with status_code
+                self._update_iteration_history(
+                    phase_specific_data=result.data if result else {},
+                    status_code=PhaseStatusCode(result_status),
+                )
 
-            return result
+                return result
+            else:
+                # No user_input - this was a PR create/update iteration, complete it with READY_FOR_REVIEW
+                self._save_progress(PhaseStatusCode.READY_FOR_REVIEW)
+
+                # Update iteration context.json with status_code
+                self._update_iteration_history(
+                    phase_specific_data={"pr_number": str(pr_number), "pr_url": pr_url, "branch": branch_name},
+                    status_code=PhaseStatusCode.READY_FOR_REVIEW,
+                )
+
+                return PhaseResult(
+                    status=PhaseStatus.COMPLETED,
+                    message=f"Resumed and completed PR iteration",
+                    data={"pr_number": str(pr_number), "pr_url": pr_url, "branch": branch_name, "status_code": "CAFE_READY_FOR_REVIEW"},
+                )
 
         return None
 
@@ -494,11 +515,12 @@ class PRPhase(Phase):
         if not pr_iteration_info:
             return None
 
-        # If latest iteration has no user_input, it's not waiting for develop
-        if not pr_iteration_info["has_user_input"]:
+        # Only wait if status_code is NEEDS_CHANGES (not READY_FOR_REVIEW or CONFIRMED)
+        status_code = pr_iteration_info.get("status_code")
+        if status_code != "CAFE_NEEDS_CHANGES":
             return None
 
-        # Latest iteration has user_input - check if develop has processed it
+        # Latest iteration has NEEDS_CHANGES - check if develop has processed it
         should_start_new = self._should_start_new_iteration(pr_iteration_info)
 
         # If should NOT start new (develop hasn't processed feedback yet), return the info
@@ -579,61 +601,7 @@ class PRPhase(Phase):
                 data={"branch": branch_name},
             )
 
-        # Step 2: GitHub-specific logic
-        pr_iteration_info = self._get_latest_pr_iteration_info()
-
-        # Check if latest iteration is waiting for comments from GitHub
-        if pr_iteration_info and not pr_iteration_info["has_user_input"]:
-            # Latest iteration has no user_input yet - check GitHub for new comments
-            if existing_pr:
-                pr_number = existing_pr["number"]
-                pr_url = existing_pr["url"]
-
-                console.print()
-                console.print(f"[dim]Checking for new comments on PR #{pr_number}...[/dim]")
-
-                # Create new iteration for comments
-                self.iteration = pr_iteration_info["iteration_number"] + 1
-
-                # Try to fetch comments from GitHub
-                user_input_path = self._save_pr_comments_to_user_input(int(pr_number))
-
-                if user_input_path:
-                    # Found comments - organize them into checklist format
-                    console.print()
-                    console.print(f"[green]✓ Fetched new PR comments to iteration_{self.iteration:03d}/user_input.md[/green]")
-                    console.print()
-                    console.print("[dim]Organizing comments into todo list...[/dim]")
-
-                    # Call agent to organize comments into todo list
-                    result = self._organize_comments_to_todo_list(pr_number, pr_url, branch_name)
-
-                    # Save progress with NEEDS_CHANGES status
-                    self._save_progress(PhaseStatusCode.NEEDS_CHANGES)
-
-                    return result
-                else:
-                    # No comments yet - still waiting
-                    console.print()
-                    console.print(f"[yellow]ℹ️  PR #{pr_number} is waiting for review feedback[/yellow]")
-                    console.print(f"  URL: {pr_url}")
-                    console.print()
-                    console.print("[dim]Opening PR in browser...[/dim]")
-
-                    # Open PR in browser
-                    import webbrowser
-                    webbrowser.open(pr_url)
-
-                    return PhaseResult(
-                        status=PhaseStatus.COMPLETED,
-                        message=f"PR #{pr_number} is waiting for review feedback",
-                        data={"pr_number": str(pr_number), "pr_url": pr_url, "branch": branch_name},
-                    )
-            else:
-                # This shouldn't happen - iteration exists but no PR
-                console.print("[yellow]⚠️  Warning: PR iteration exists but no GitHub PR found[/yellow]")
-
-        # Check for new commits and decide action
+        # Step 2: Check for new commits first - always prioritize pushing commits
         has_new_commits = self._has_new_commits()
 
         if has_new_commits:
@@ -663,14 +631,21 @@ class PRPhase(Phase):
 
                 self.github_ops.update_pr(pr_number, title=pr_title, body=pr_body)
 
-                # Create new iteration (without user_input)
+                # Create new iteration (without user_input) - READY_FOR_REVIEW means waiting for reviewer feedback
+                pr_iteration_info = self._get_latest_pr_iteration_info()
                 self.iteration = (pr_iteration_info["iteration_number"] + 1) if pr_iteration_info else 1
-                self._save_progress(PhaseStatusCode.CONFIRMED)
+                self._save_progress(PhaseStatusCode.READY_FOR_REVIEW)
+
+                # Update iteration history with status_code
+                self._update_iteration_history(
+                    phase_specific_data={"pr_number": pr_number, "pr_url": pr_url, "branch": branch_name},
+                    status_code=PhaseStatusCode.READY_FOR_REVIEW,
+                )
 
                 return PhaseResult(
                     status=PhaseStatus.COMPLETED,
                     message=f"Pull Request #{pr_number} updated successfully",
-                    data={"pr_number": pr_number, "pr_url": pr_url, "branch": branch_name, "status_code": "CAFE_CONFIRMED"},
+                    data={"pr_number": pr_number, "pr_url": pr_url, "branch": branch_name, "status_code": "CAFE_READY_FOR_REVIEW"},
                 )
             else:
                 # Create new PR
@@ -695,9 +670,15 @@ class PRPhase(Phase):
                     except Exception as e:
                         console.print(f"[yellow]⚠️  Warning: Failed to add PR link to issue #{self.issue_id}: {e}[/yellow]")
 
-                # Create new iteration (without user_input)
+                # Create new iteration (without user_input) - READY_FOR_REVIEW means waiting for reviewer feedback
                 self.iteration = 1
-                self._save_progress(PhaseStatusCode.CONFIRMED)
+                self._save_progress(PhaseStatusCode.READY_FOR_REVIEW)
+
+                # Update iteration history with status_code
+                self._update_iteration_history(
+                    phase_specific_data={"pr_number": pr_number, "pr_url": pr_url, "branch": branch_name},
+                    status_code=PhaseStatusCode.READY_FOR_REVIEW,
+                )
 
                 console.print()
                 console.print(f"[green]✓ Pull Request #{pr_number} created successfully[/green]")
@@ -707,57 +688,94 @@ class PRPhase(Phase):
                 return PhaseResult(
                     status=PhaseStatus.COMPLETED,
                     message=f"Pull Request #{pr_number} created successfully",
-                    data={"pr_number": pr_number, "pr_url": pr_url, "branch": branch_name, "status_code": "CAFE_CONFIRMED"},
+                    data={"pr_number": pr_number, "pr_url": pr_url, "branch": branch_name, "status_code": "CAFE_READY_FOR_REVIEW"},
                 )
 
-        else:
-            # No new commits - check for GitHub comments
-            if not existing_pr:
-                # No PR and no commits - nothing to do
-                console.print()
-                console.print("[yellow]ℹ️  No new commits to push and no existing PR[/yellow]")
-                console.print()
-                return PhaseResult(
-                    status=PhaseStatus.COMPLETED,
-                    message="No new commits to push",
-                    data={"branch": branch_name},
-                )
+        # Step 3: No new commits - check state and decide action
+        pr_iteration_info = self._get_latest_pr_iteration_info()
 
-            # Fetch PR comments from GitHub
-            pr_number = existing_pr["number"]
-            pr_url = existing_pr["url"]
-
+        # No PR exists - nothing to do
+        if not existing_pr:
             console.print()
-            console.print(f"[dim]Checking for new comments on PR #{pr_number}...[/dim]")
+            console.print("[yellow]ℹ️  No new commits to push and no existing PR[/yellow]")
+            console.print()
+            return PhaseResult(
+                status=PhaseStatus.COMPLETED,
+                message="No new commits to push",
+                data={"branch": branch_name},
+            )
 
-            # Save PR comments to user_input.md (creates new iteration if has comments)
-            user_input_path = self._save_pr_comments_to_user_input(int(pr_number))
+        pr_number = existing_pr["number"]
+        pr_url = existing_pr["url"]
 
-            if user_input_path:
-                # New comments found and saved - create new iteration
-                self.iteration = (pr_iteration_info["iteration_number"] + 1) if pr_iteration_info else 1
-                self._save_progress(PhaseStatusCode.NEEDS_CHANGES)
+        # Check latest iteration status_code to decide action
+        if pr_iteration_info:
+            status_code = pr_iteration_info.get("status_code")
 
+            # If CONFIRMED, we're done - nothing more to do
+            if status_code == "CAFE_CONFIRMED":
                 console.print()
-                console.print(f"[green]✓ Fetched new PR comments to iteration_{self.iteration:03d}/user_input.md[/green]")
+                console.print(f"[green]✓ PR #{pr_number} feedback has been fully addressed[/green]")
                 console.print()
-
                 return PhaseResult(
                     status=PhaseStatus.COMPLETED,
-                    message=f"Fetched new comments from PR #{pr_number}",
-                    data={"pr_number": str(pr_number), "pr_url": pr_url, "branch": branch_name, "status_code": "CAFE_NEEDS_CHANGES"},
-                )
-            else:
-                # No new comments
-                console.print()
-                console.print(f"[yellow]ℹ️  No new comments on PR #{pr_number}[/yellow]")
-                console.print()
-
-                return PhaseResult(
-                    status=PhaseStatus.COMPLETED,
-                    message=f"PR #{pr_number} has no new comments",
+                    message=f"PR #{pr_number} is complete",
                     data={"pr_number": str(pr_number), "pr_url": pr_url, "branch": branch_name},
                 )
+
+            # If READY_FOR_REVIEW, fetch comments from GitHub
+            if status_code == "CAFE_READY_FOR_REVIEW":
+                console.print()
+                console.print(f"[dim]Checking for new comments on PR #{pr_number}...[/dim]")
+
+                # Create new iteration for comments
+                self.iteration = pr_iteration_info["iteration_number"] + 1
+
+                # Fetch comments from GitHub
+                user_input_path = self._save_pr_comments_to_user_input(int(pr_number))
+
+                if user_input_path:
+                    # New comments found - organize into todo list
+                    console.print()
+                    console.print(f"[green]✓ Fetched new PR comments to iteration_{self.iteration:03d}/user_input.md[/green]")
+                    console.print()
+                    console.print("[dim]Organizing comments into todo list...[/dim]")
+
+                    # Call agent to organize comments into todo list
+                    result = self._organize_comments_to_todo_list(pr_number, pr_url, branch_name)
+
+                    # Save progress with the actual status code returned by agent
+                    result_status = result.data.get("status_code", PhaseStatusCode.NEEDS_CHANGES.value) if result and result.data else PhaseStatusCode.NEEDS_CHANGES.value
+                    self._save_progress(PhaseStatusCode(result_status))
+
+                    # Update iteration context.json with status_code
+                    self._update_iteration_history(
+                        phase_specific_data=result.data if result else {},
+                        status_code=PhaseStatusCode(result_status),
+                    )
+
+                    return result
+                else:
+                    # No comments yet - still waiting for review
+                    console.print()
+                    console.print(f"[yellow]ℹ️  No new comments on PR #{pr_number}[/yellow]")
+                    console.print()
+                    return PhaseResult(
+                        status=PhaseStatus.COMPLETED,
+                        message=f"PR #{pr_number} has no new comments",
+                        data={"pr_number": str(pr_number), "pr_url": pr_url, "branch": branch_name},
+                    )
+
+        # No iteration exists yet but PR exists - this shouldn't happen normally
+        # (PR should have been created with an iteration)
+        console.print()
+        console.print(f"[yellow]ℹ️  PR #{pr_number} exists but no iteration found[/yellow]")
+        console.print()
+        return PhaseResult(
+            status=PhaseStatus.COMPLETED,
+            message=f"PR #{pr_number} exists but no iteration",
+            data={"pr_number": str(pr_number), "pr_url": pr_url, "branch": branch_name},
+        )
 
     def _execute_local_mode(self) -> PhaseResult:
         """Execute local review mode (no GitHub PR).

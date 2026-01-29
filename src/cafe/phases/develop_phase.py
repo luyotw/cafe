@@ -15,7 +15,6 @@ from cafe.core.phase import Phase
 from cafe.core.status_codes import PhaseStatusCode, StatusCodeParser, generate_status_code_prompt
 from cafe.core.types import PhaseProgress, PhaseResult, PhaseStatus
 from cafe.ui.display import Display
-from cafe.utils.github import get_pr_comments, get_all_pr_comments, filter_unresolved_comments, format_comments_for_prompt, parse_comment_processing_results
 from cafe.utils.prompt_utils import format_checklist_instruction
 
 
@@ -65,7 +64,6 @@ class DevelopPhase(Phase):
         self.user_input = user_input
         self.approved_denial_indices = approved_denial_indices if approved_denial_indices is not None else []
         self.pr_number = pr_number
-        self._pr_comments_cache = None  # Cache for PR comments to avoid duplicate loading
         self.phase_name = "develop"  # For base class progress tracking
 
         # Iteration tracking
@@ -300,31 +298,33 @@ class DevelopPhase(Phase):
 
                 # If PR has NEEDS_CHANGES and is newer than develop, need to execute
                 if pr_status_code == PhaseStatusCode.NEEDS_CHANGES.value and pr_timestamp > develop_timestamp:
-                    # Find the latest pr/iteration_XXX files to show user
+                    # Find the latest pr/iteration_XXX with output.md (todo list) to show user
                     pr_dir = self.issue_dir / "pr"
-                    iteration_dirs = sorted(pr_dir.glob("iteration_*"))
-                    if iteration_dirs:
-                        latest_iteration_dir = iteration_dirs[-1]
-                        user_input_file = latest_iteration_dir / "user_input.md"
-                        output_file = latest_iteration_dir / "output.md"
+                    iteration_dirs = sorted(pr_dir.glob("iteration_*"), reverse=True)
 
-                        from cafe.utils.git_utils import to_cwd_relative_path
+                    from cafe.utils.git_utils import to_cwd_relative_path
 
-                        # Show PR comments file
-                        if user_input_file.exists():
-                            try:
-                                user_input_path = to_cwd_relative_path(user_input_file)
-                            except ValueError:
-                                user_input_path = str(user_input_file.resolve())
-                            print(f"  → PR comments: {user_input_path}")
-
-                        # Show todo list file
+                    # Prioritize showing todo list - find latest iteration with output.md
+                    for iteration_dir in iteration_dirs:
+                        output_file = iteration_dir / "output.md"
                         if output_file.exists():
+                            # Show todo list file (prioritized)
                             try:
                                 output_path = to_cwd_relative_path(output_file)
                             except ValueError:
                                 output_path = str(output_file.resolve())
                             print(f"  → Todo list: {output_path}")
+
+                            # Only show user_input.md if it exists for the same iteration
+                            user_input_file = iteration_dir / "user_input.md"
+                            if user_input_file.exists():
+                                try:
+                                    user_input_path = to_cwd_relative_path(user_input_file)
+                                except ValueError:
+                                    user_input_path = str(user_input_file.resolve())
+                                print(f"  → PR comments: {user_input_path}")
+                            break
+
                     return None  # Continue execution
 
                 # If develop is newer than PR, changes have been addressed
@@ -710,66 +710,6 @@ class DevelopPhase(Phase):
                 continue
 
         return False
-
-    def _load_local_pr_feedback(self) -> Optional[str]:
-        """Load local PR feedback from pr/iteration_XXX/user_input.md.
-
-        This is now a wrapper around _load_pr_comments_from_iteration_file()
-        for backward compatibility.
-
-        Returns:
-            Feedback content if found and newer, None otherwise
-
-        Raises:
-            FileNotFoundError: If PR iteration is newer but user_input.md not found
-            ValueError: If PR iteration is newer but user_input.md is empty
-        """
-        return self._load_pr_comments_from_iteration_file()
-
-    def _load_pr_comments(self) -> tuple[str, int, list]:
-        """Load PR comments from pr/iteration_XXX/user_input.md or GitHub API.
-
-        New behavior: Checks for pr/iteration_XXX/user_input.md first.
-        If found and newer than develop phase, loads from there.
-        Otherwise, falls back to fetching from GitHub API (legacy behavior).
-
-        Returns:
-            Tuple of (formatted comments string, new comment count, comment objects list)
-        """
-        # Return cached result if already loaded
-        if self._pr_comments_cache is not None:
-            return self._pr_comments_cache
-
-        # Try to load from pr/iteration_XXX/user_input.md first (new approach)
-        try:
-            pr_feedback_from_file = self._load_pr_comments_from_iteration_file()
-            if pr_feedback_from_file is not None:
-                # Successfully loaded from iteration file
-                # Return in same format as get_all_pr_comments
-                # Note: comment count and list are not available from file,
-                # so we return 0 and empty list (not used in this path)
-                self._pr_comments_cache = (pr_feedback_from_file, 0, [])
-                self._pr_comment_objects = []
-                return self._pr_comments_cache
-        except (FileNotFoundError, ValueError) as e:
-            # If PR iteration is newer but file not found/empty, raise error
-            raise
-        except Exception as e:
-            # For other unexpected errors, raise them
-            # The develop phase exclusively relies on user_input.md as per spec
-            raise RuntimeError(
-                f"Failed to load PR comments from pr/iteration_XXX/user_input.md: {e}. "
-                f"The develop phase exclusively reads from user_input.md files created by the PR phase. "
-                f"Please run 'cafe pr' first to fetch and save PR comments."
-            ) from e
-
-        # No fallback to GitHub API - develop phase exclusively uses user_input.md
-        # If we reach here, no PR feedback was found
-        print(f"  → No PR feedback found in pr/iteration_XXX/user_input.md")
-        self._pr_comments_cache = ("", 0, [])
-        self._pr_comment_objects = []
-        return self._pr_comments_cache
-
 
     def _generate_prompt(self, user_input: str = "") -> str:
         """Generate prompt for current iteration.
@@ -1503,86 +1443,3 @@ Please return only one status code (example: CAFE_CONFIRMED), with no other cont
         develop_file = develop_dir / f"iteration_{self.iteration:03d}" / "output.md"
         return [develop_file] if develop_file.exists() else []
 
-    def _update_iteration_history(
-        self,
-        phase_specific_data: Dict[str, Any],
-        prompt: Optional[str] = None,
-        agent_cli: Optional[str] = None,
-        agent_session_id: Optional[str] = None,
-        allowed_tools: Optional[List[str]] = None,
-        denied_tools: Optional[List[str]] = None,
-        cli_command_args: Optional[List[str]] = None,
-        status_code: Optional[PhaseStatusCode] = None,
-        token_usage: Optional["TokenUsage"] = None,
-        model: Optional[str] = None,
-    ) -> None:
-        """Override to add comment processing tracking.
-
-        Processes agent response for comment processing results and adds tracking data.
-        """
-        # Check if we have PR comments and agent response
-        if hasattr(self, '_pr_comment_objects') and self._pr_comment_objects:
-            response = phase_specific_data.get("response", "")
-            if response:
-                # Parse comment processing results from agent response
-                processing_results = parse_comment_processing_results(response)
-
-                # Build pr_comments_presented list
-                pr_comments_presented = [
-                    {
-                        "id": c.id,
-                        "type": c.comment_type,
-                        "author": c.author
-                    }
-                    for c in self._pr_comment_objects
-                ]
-
-                # Add comment tracking data to phase_specific_data
-                phase_specific_data["pr_comments_presented"] = pr_comments_presented
-                phase_specific_data["pr_comments_processed"] = processing_results["processed"]
-                phase_specific_data["pr_comments_skipped"] = processing_results["skipped"]
-
-        # Call parent implementation
-        super()._update_iteration_history(
-            phase_specific_data=phase_specific_data,
-            prompt=prompt,
-            agent_cli=agent_cli,
-            agent_session_id=agent_session_id,
-            allowed_tools=allowed_tools,
-            denied_tools=denied_tools,
-            cli_command_args=cli_command_args,
-            status_code=status_code,
-            token_usage=token_usage,
-            model=model,
-        )
-
-        # Display comment processing summary to user
-        self._display_comment_processing_summary(phase_specific_data)
-
-    def _display_comment_processing_summary(self, phase_specific_data: Dict[str, Any]) -> None:
-        """Display summary of comment processing results to user.
-
-        Args:
-            phase_specific_data: Data containing pr_comments_processed and pr_comments_skipped
-        """
-        processed = phase_specific_data.get("pr_comments_processed", [])
-        skipped = phase_specific_data.get("pr_comments_skipped", [])
-
-        if not processed and not skipped:
-            return  # No comment processing occurred
-
-        print("\n" + "=" * 80)
-        print("📊 PR Comments Processing Summary")
-        print("=" * 80)
-
-        if processed:
-            print(f"  ✅ Processed: {len(processed)} comment(s)")
-            for item in processed:
-                print(f"     - [#{item['id']}] {item['description']}")
-
-        if skipped:
-            print(f"\n  ⏭️  Skipped: {len(skipped)} comment(s)")
-            for item in skipped:
-                print(f"     - [#{item['id']}] {item['reason']}")
-
-        print("=" * 80 + "\n")
