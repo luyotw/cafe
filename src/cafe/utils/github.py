@@ -368,7 +368,8 @@ class PRComment(BaseModel):
     path: Optional[str] = None
     line: Optional[int] = None
     is_resolved: bool = False
-    comment_type: str = "review"  # "review" or "timeline"
+    comment_type: str = "review"  # "review", "timeline", or "review_body"
+    review_id: Optional[str] = None  # ID of the parent review (for grouping)
 
 
 def get_pr_comments(pr_number: int) -> List[PRComment]:
@@ -517,13 +518,20 @@ def format_comments_for_prompt(comments: List[PRComment]) -> str:
     # Separate comments by type
     review_comments = [c for c in comments if c.comment_type == "review"]
     timeline_comments = [c for c in comments if c.comment_type == "timeline"]
+    review_body_comments = [c for c in comments if c.comment_type == "review_body"]
+
+    # Collect review_ids that have a review body (so we can exclude their line comments from standalone section)
+    review_ids_with_body = {c.review_id for c in review_body_comments if c.review_id}
+
+    # Separate standalone review comments (not associated with a review body) from those that are
+    standalone_review_comments = [c for c in review_comments if not c.review_id or c.review_id not in review_ids_with_body]
 
     lines = []
-    comment_number = 1  # Sequential numbering across both sections
+    comment_number = 1  # Sequential numbering across all sections
 
-    # Format review comments section
-    if review_comments:
-        count = len(review_comments)
+    # Format standalone review comments section (not grouped under a general review)
+    if standalone_review_comments:
+        count = len(standalone_review_comments)
         plural = "s" if count > 1 else ""
         lines.extend([
             "=" * 80,
@@ -532,7 +540,7 @@ def format_comments_for_prompt(comments: List[PRComment]) -> str:
             ""
         ])
 
-        for comment in review_comments:
+        for comment in standalone_review_comments:
             lines.append(f"Comment #{comment_number} [ID: {comment.id}]")
             lines.append(f"Author: {comment.author}")
             if comment.path:
@@ -570,23 +578,41 @@ def format_comments_for_prompt(comments: List[PRComment]) -> str:
             lines.append("")
             comment_number += 1
 
-    # Add comment processing instructions
-    lines.extend([
-        "=" * 80,
-        "📋 Comment Processing Instructions",
-        "=" * 80,
-        "",
-        "Please address all comments above and include the following in your response:",
-        "",
-        "### Processed Comments",
-        "- [#<ID>] Description of what you did (e.g., [#123456] Fixed the type error in main.py)",
-        "",
-        "### Skipped Comments",
-        "- [#<ID>] Reason why you skipped (e.g., [#789012] No action needed - acknowledgment only)",
-        "",
-        "This helps track which comments have been processed in this iteration.",
-        ""
-    ])
+    # Format review body comments section (general review comments with their line comments)
+    if review_body_comments:
+        count = len(review_body_comments)
+        plural = "s" if count > 1 else ""
+        lines.extend([
+            "=" * 80,
+            f"📋 General Review Comments ({count} comment{plural})",
+            "=" * 80,
+            ""
+        ])
+
+        for review_body in review_body_comments:
+            lines.append(f"Comment #{comment_number} [ID: {review_body.id}]")
+            lines.append(f"Author: {review_body.author}")
+            lines.append(f"Created: {review_body.created_at}")
+            lines.append("")
+            lines.append(review_body.body)
+            lines.append("")
+
+            # Find and display line-specific comments under this review
+            related_comments = [c for c in review_comments if c.review_id == review_body.review_id]
+            if related_comments:
+                lines.append("**Related line-specific comments:**")
+                lines.append("")
+                for related in related_comments:
+                    location = f"{related.path}"
+                    if related.line:
+                        location += f" (line {related.line})"
+                    lines.append(f"  - {location}")
+                    lines.append(f"    {related.body}")
+                    lines.append("")
+
+            lines.append("-" * 80)
+            lines.append("")
+            comment_number += 1
 
     return "\n".join(lines)
 
@@ -713,17 +739,160 @@ def get_pr_timeline_comments(pr_number: int) -> List[PRComment]:
         raise GitHubError(f"Unexpected error getting PR timeline comments: {e}") from e
 
 
-def get_all_pr_comments(pr_number: int) -> List[PRComment]:
-    """Get all PR comments (both review comments and timeline comments).
+def get_pr_review_body_comments(pr_number: int) -> List[PRComment]:
+    """Get review body comments from a Pull Request.
 
-    Combines review comments from code review threads and general timeline comments.
+    Review body comments are summary comments written at the top when submitting
+    a review, which have a body but are not bound to a specific line of code.
+
+    Args:
+        pr_number: PR number
+
+    Returns:
+        List of PRComment objects with comment_type="review_body"
+
+    Raises:
+        ValueError: If PR not found or invalid
+        GitHubError: If failed to get PR review body comments
+    """
+    try:
+        # Get repo info first
+        repo_result = subprocess.run(
+            ["gh", "repo", "view", "--json", "owner,name"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        if repo_result.returncode != 0:
+            raise GitHubError(f"Failed to get repo info: {repo_result.stderr}")
+
+        repo_data = json.loads(repo_result.stdout)
+        owner = repo_data["owner"]["login"]
+        repo_name = repo_data["name"]
+
+        # Use GraphQL API to get reviews with body field and their comments
+        graphql_query = """
+        query($owner: String!, $name: String!, $number: Int!) {
+          repository(owner: $owner, name: $name) {
+            pullRequest(number: $number) {
+              reviews(first: 100) {
+                nodes {
+                  id
+                  databaseId
+                  body
+                  author {
+                    login
+                  }
+                  createdAt
+                  state
+                  comments(first: 100) {
+                    nodes {
+                      databaseId
+                      body
+                      author {
+                        login
+                      }
+                      createdAt
+                      path
+                      line
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+        """
+
+        # Execute GraphQL query using gh api graphql
+        result = subprocess.run(
+            ["gh", "api", "graphql",
+             "-f", f"query={graphql_query}",
+             "-f", f"owner={owner}",
+             "-f", f"name={repo_name}",
+             "-F", f"number={pr_number}"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        if result.returncode != 0:
+            if "not found" in result.stderr.lower() or "could not resolve" in result.stderr.lower():
+                raise ValueError(f"PR #{pr_number} not found")
+            raise GitHubError(f"Failed to get PR review body comments: {result.stderr}")
+
+        response_data = json.loads(result.stdout)
+
+        # Check for GraphQL errors
+        if "errors" in response_data:
+            error_messages = [e.get("message", str(e)) for e in response_data["errors"]]
+            raise GitHubError(f"GraphQL errors: {', '.join(error_messages)}")
+
+        # Extract reviews
+        pr_data = response_data.get("data", {}).get("repository", {}).get("pullRequest")
+        if not pr_data:
+            raise ValueError(f"PR #{pr_number} not found")
+
+        reviews = pr_data.get("reviews", {}).get("nodes", [])
+
+        comments = []
+        for review in reviews:
+            # Only include reviews with non-empty body
+            body = review.get("body", "").strip()
+            if not body:
+                continue
+
+            # Use databaseId (integer) for compatibility with existing code
+            review_id = str(review.get("databaseId", ""))
+
+            # Add review body comment
+            comments.append(PRComment(
+                id=review_id,
+                body=body,
+                author=review.get("author", {}).get("login", "unknown") if review.get("author") else "unknown",
+                created_at=review.get("createdAt", ""),
+                comment_type="review_body",
+                review_id=review_id,
+            ))
+
+            # Add line-specific comments under this review
+            review_comments = review.get("comments", {}).get("nodes", [])
+            for comment in review_comments:
+                comment_id = str(comment.get("databaseId", ""))
+                comments.append(PRComment(
+                    id=comment_id,
+                    body=comment.get("body", ""),
+                    author=comment.get("author", {}).get("login", "unknown") if comment.get("author") else "unknown",
+                    created_at=comment.get("createdAt", ""),
+                    path=comment.get("path"),
+                    line=comment.get("line"),
+                    comment_type="review",
+                    review_id=review_id,
+                ))
+
+        return comments
+
+    except json.JSONDecodeError as e:
+        raise GitHubError(f"Failed to parse PR review body comments: {e}") from e
+    except Exception as e:
+        if isinstance(e, (ValueError, GitHubError)):
+            raise
+        raise GitHubError(f"Unexpected error getting PR review body comments: {e}") from e
+
+
+def get_all_pr_comments(pr_number: int) -> List[PRComment]:
+    """Get all PR comments (review comments, timeline comments, and review body comments).
+
+    Combines review comments from code review threads, general timeline comments,
+    and review body comments (summary comments from reviews).
     Continues gracefully if one type fails, as long as at least one type succeeds.
 
     Args:
         pr_number: PR number
 
     Returns:
-        List of PRComment objects (both review and timeline types)
+        List of PRComment objects (review, timeline, and review_body types)
 
     Raises:
         ValueError: If PR not found or invalid
@@ -748,12 +917,31 @@ def get_all_pr_comments(pr_number: int) -> List[PRComment]:
         # If timeline comments fail, log but continue
         errors.append(f"Failed to get timeline comments: {e}")
 
-    # If both failed, raise error
+    # Get review body comments (summary comments from reviews)
+    try:
+        review_body_comments = get_pr_review_body_comments(pr_number)
+        comments.extend(review_body_comments)
+    except (ValueError, GitHubError) as e:
+        # If review body comments fail, log but continue
+        errors.append(f"Failed to get review body comments: {e}")
+
+    # If all failed, raise error
     if not comments:
         error_msg = "; ".join(errors)
         raise GitHubError(f"Failed to get any comments for PR #{pr_number}: {error_msg}")
 
-    return comments
+    # Deduplicate comments by ID, preferring those with review_id (from get_pr_review_body_comments)
+    # because they have the review context
+    comments_by_id = {}
+    for comment in comments:
+        if comment.id in comments_by_id:
+            # Keep the one with review_id if available
+            if comment.review_id and not comments_by_id[comment.id].review_id:
+                comments_by_id[comment.id] = comment
+        else:
+            comments_by_id[comment.id] = comment
+
+    return list(comments_by_id.values())
 
 
 def get_processed_comment_ids_from_history(phase_dir: "Path") -> set:

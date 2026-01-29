@@ -230,6 +230,185 @@ class PRPhase(Phase):
         with open(status_file, 'w', encoding='utf-8') as f:
             json.dump(progress.to_dict(), f, ensure_ascii=False, indent=2)
 
+    def _get_incomplete_iteration_info(self) -> Optional[dict]:
+        """Get information about the latest incomplete iteration (without status_code).
+
+        Returns:
+            Dictionary with iteration info, or None if no incomplete iteration exists:
+            {
+                "iteration_dir": Path,
+                "iteration_number": int,
+                "has_user_input": bool,
+                "user_input_path": Path or None
+            }
+        """
+        pr_dir = self.issue_dir / "pr"
+        if not pr_dir.exists():
+            return None
+
+        # Find all iteration directories
+        iteration_dirs = sorted(pr_dir.glob("iteration_*"))
+        if not iteration_dirs:
+            return None
+
+        # Check the last iteration - if it has no status_code, it's incomplete
+        last_iter_dir = iteration_dirs[-1]
+        context_file = last_iter_dir / "context.json"
+
+        if context_file.exists():
+            with open(context_file, "r", encoding="utf-8") as f:
+                context = json.load(f)
+                # If has status_code, it's complete, not incomplete
+                if context.get("status_code"):
+                    return None
+
+        # Last iteration is incomplete - check for user_input.md
+        user_input_file = last_iter_dir / "user_input.md"
+        has_user_input = user_input_file.exists() and user_input_file.read_text(encoding="utf-8").strip()
+
+        iteration_num = int(last_iter_dir.name.split("_")[1])
+
+        return {
+            "iteration_dir": last_iter_dir,
+            "iteration_number": iteration_num,
+            "has_user_input": bool(has_user_input),
+            "user_input_path": user_input_file if has_user_input else None,
+        }
+
+    def _get_latest_pr_iteration_info(self) -> Optional[dict]:
+        """Get information about the latest PR iteration.
+
+        Returns:
+            Dictionary with iteration info, or None if no iterations exist:
+            {
+                "iteration_dir": Path,
+                "iteration_number": int,
+                "end_time": datetime or None,
+                "status_code": str or None,
+                "has_user_input": bool,
+                "user_input_path": Path or None
+            }
+        """
+        from datetime import datetime
+
+        pr_dir = self.issue_dir / "pr"
+        if not pr_dir.exists():
+            return None
+
+        # Find latest completed iteration directory (with status_code in context.json)
+        iteration_dirs = sorted(pr_dir.glob("iteration_*"))
+        if not iteration_dirs:
+            return None
+
+        # Find the latest iteration with status_code (completed iteration)
+        latest_iteration_dir = None
+        iteration_num = None
+        end_time = None
+        status_code = None
+
+        for iter_dir in reversed(iteration_dirs):
+            context_file = iter_dir / "context.json"
+            if context_file.exists():
+                with open(context_file, "r", encoding="utf-8") as f:
+                    context = json.load(f)
+                    # Only consider iterations with status_code (completed)
+                    if context.get("status_code"):
+                        latest_iteration_dir = iter_dir
+                        iteration_num = int(iter_dir.name.split("_")[1])
+                        status_code = context.get("status_code")
+
+                        # Get end_time
+                        end_time_str = context.get("end_time") or context.get("timestamp")
+                        if end_time_str:
+                            end_time = datetime.fromisoformat(end_time_str)
+                            if end_time.tzinfo is None:
+                                from datetime import timezone
+                                end_time = end_time.replace(tzinfo=timezone.utc)
+                        break
+
+        if not latest_iteration_dir:
+            return None
+
+        # Check for user_input.md
+        user_input_file = latest_iteration_dir / "user_input.md"
+        has_user_input = user_input_file.exists() and user_input_file.read_text(encoding="utf-8").strip()
+
+        return {
+            "iteration_dir": latest_iteration_dir,
+            "iteration_number": iteration_num,
+            "end_time": end_time,
+            "status_code": status_code,
+            "has_user_input": bool(has_user_input),
+            "user_input_path": user_input_file if has_user_input else None,
+        }
+
+    def _get_latest_develop_end_time(self) -> Optional["datetime"]:
+        """Get end_time of the latest develop phase iteration.
+
+        Returns:
+            datetime object or None if develop has never run
+        """
+        develop_dir = self.issue_dir / "develop"
+        if not develop_dir.exists():
+            return None
+
+        status_file = develop_dir / "status.json"
+        if not status_file.exists():
+            return None
+
+        try:
+            with open(status_file, "r", encoding="utf-8") as f:
+                from cafe.core.types import PhaseProgress
+                status_data = json.load(f)
+                progress = PhaseProgress.from_dict(status_data)
+
+                # Try to get end_time first, fallback to timestamp
+                end_time = getattr(progress, 'end_time', None) or progress.timestamp
+                return end_time
+        except Exception:
+            return None
+
+    def _should_start_new_iteration(self, pr_iteration_info: Optional[dict]) -> bool:
+        """Determine if we should start a new PR iteration.
+
+        Args:
+            pr_iteration_info: Latest PR iteration info from _get_latest_pr_iteration_info()
+
+        Returns:
+            True if should start new iteration, False otherwise
+        """
+        # If no PR iterations exist yet, start first iteration
+        if not pr_iteration_info:
+            return True
+
+        # If latest PR iteration has no user_input, don't start new iteration
+        # (waiting for user feedback)
+        if not pr_iteration_info["has_user_input"]:
+            return False
+
+        # If latest PR iteration has user_input, check if develop has processed it
+        pr_end_time = pr_iteration_info["end_time"]
+        develop_end_time = self._get_latest_develop_end_time()
+
+        # If no develop history, don't start new iteration (waiting for develop)
+        if not develop_end_time:
+            return False
+
+        # If develop hasn't processed this PR iteration yet, don't start new iteration
+        if pr_end_time and pr_end_time > develop_end_time:
+            return False
+
+        # Develop has processed the PR iteration, should start new iteration
+        return True
+
+    def _has_new_commits(self) -> bool:
+        """Check if there are new commits to push/review.
+
+        Returns:
+            True if there are unpushed commits, False otherwise
+        """
+        return self.git_ops.has_unpushed_commits()
+
     def execute(self) -> PhaseResult:
         """Execute PR creation phase.
 
@@ -250,201 +429,11 @@ class PRPhase(Phase):
                     # Non-interactive mode: default to True (GitHub PR mode)
                     pr_auto_create = True
 
-            # If pr.auto_create is False, use local review mode
+            # Route to appropriate mode
             if pr_auto_create is False:
-                result = self._execute_local_review_mode()
-                # Save progress if there's a status code
-                if result.data and "status_code" in result.data:
-                    from cafe.core.status_codes import PhaseStatusCode
-                    status_code_str = result.data["status_code"]
-                    # Convert string to PhaseStatusCode enum
-                    status_code = PhaseStatusCode(status_code_str)
-                    # iteration is already set in _execute_local_review_mode()
-                    self._save_progress(status_code)
-                return result
-
-            # Otherwise, continue with GitHub PR creation
-            # Increment iteration for this execution
-            self.iteration += 1
-
-            # Check gh CLI authentication status
-            try:
-                if not self.github_ops.check_gh_auth():
-                    return PhaseResult(
-                        status=PhaseStatus.FAILED,
-                        message="gh CLI is not authenticated. Please run: gh auth login",
-                    )
-            except GitHubError as e:
-                return PhaseResult(
-                    status=PhaseStatus.FAILED,
-                    message=f"Failed to check gh authentication: {e}",
-                )
-
-            # Read issue_id from config if not provided
-            if not self.issue_id:
-                config_file = self.issue_dir / "issue.yaml"
-                # Try to get issue_id from top level first, then from spec section
-                self.issue_id = self._get_issue_config_value(config_file, "issue_id")
-                if not self.issue_id:
-                    self.issue_id = self._get_issue_config_value(config_file, "spec.issue_id")
-                # Convert to string if it's an integer (YAML may parse unquoted numbers as int)
-                if self.issue_id is not None:
-                    self.issue_id = str(self.issue_id)
-
-            # Check requirements file exists
-            req_path = Path(self.spec_file)
-            if not req_path.exists():
-                return PhaseResult(
-                    status=PhaseStatus.FAILED,
-                    message=f"Spec file not found: {self.spec_file}",
-                )
-
-            # Get branch name
-            branch_name = self._get_branch_name()
-
-            # Check if there are unpushed commits before pushing
-            if self.git_ops.has_unpushed_commits():
-                unpushed_commits = self.git_ops.get_unpushed_commits()
-                from rich.console import Console
-                console = Console()
-                console.print()
-                console.print(f"[bold]Pushing {len(unpushed_commits)} unpushed commit(s) to remote...[/bold]")
-                for commit in unpushed_commits:
-                    console.print(f"  [dim]- {commit['hash'][:8]} {commit['message']}[/dim]")
-                console.print()
-
-                self.git_ops.push(branch_name, set_upstream=True, force=self.force_push)
+                return self._execute_local_mode()
             else:
-                if not self.git_ops.has_upstream_branch():
-                    from rich.console import Console
-                    console = Console()
-                    console.print()
-                    console.print(f"[bold]Pushing branch '{branch_name}' to remote for the first time...[/bold]")
-                    console.print()
-
-                    self.git_ops.push(branch_name, set_upstream=True, force=self.force_push)
-                else:
-                    from rich.console import Console
-                    console = Console()
-                    console.print()
-                    console.print(f"[yellow]ℹ️  No new commits to push - branch '{branch_name}' is already up to date[/yellow]")
-                    console.print()
-
-            # Check if PR already exists on GitHub
-            existing_pr = self.github_ops.get_pr_for_branch(branch_name)
-
-            if existing_pr:
-                # PR already exists on GitHub
-                pr_number = str(existing_pr["number"])
-                pr_url = existing_pr["url"]
-
-                if not self.update:
-                    # Ask user if they want to update
-                    if self.interactive:
-                        from rich.console import Console
-                        console = Console()
-                        console.print(f"\n[yellow]⚠️  PR #{pr_number} already exists for branch '{branch_name}'.[/yellow]")
-                        console.print(f"  URL: {pr_url}")
-                        console.print()
-
-                        try:
-                            update_pr = prompt_confirm("Do you want to update it?", default=False)
-                        except (KeyboardInterrupt, EOFError):
-                            console.print("\n[dim]Cancelled[/dim]")
-                            return PhaseResult(
-                                status=PhaseStatus.COMPLETED,
-                                message=f"Pull Request #{pr_number} already exists (no update)",
-                                data={"pr_number": pr_number, "pr_url": pr_url, "branch": branch_name},
-                            )
-
-                        if not update_pr:
-                            return PhaseResult(
-                                status=PhaseStatus.COMPLETED,
-                                message=f"Pull Request #{pr_number} already exists (no update)",
-                                data={"pr_number": pr_number, "pr_url": pr_url, "branch": branch_name},
-                            )
-                    else:
-                        # Non-interactive mode without --update flag, fail
-                        return PhaseResult(
-                            status=PhaseStatus.FAILED,
-                            message=f"PR #{pr_number} already exists for branch '{branch_name}'. Use --update to update it.",
-                        )
-
-                # User wants to update or --update flag is set
-                result, content = self._prepare_pr_content()
-                if result:
-                    return result
-                pr_title, pr_body = content
-
-                # Display updating message
-                from rich.console import Console
-                console = Console()
-                console.print()
-                console.print("[bold]Updating pull request...[/bold]")
-                console.print()
-
-                # Update existing PR
-                self.github_ops.update_pr(pr_number, title=pr_title, body=pr_body)
-
-                result = PhaseResult(
-                    status=PhaseStatus.COMPLETED,
-                    message=f"Pull Request #{pr_number} updated successfully",
-                    data={"pr_number": pr_number, "pr_url": pr_url, "branch": branch_name, "status_code": "CAFE_CONFIRMED"},
-                )
-
-                # Save progress for GitHub PR mode
-                from cafe.core.status_codes import PhaseStatusCode
-                self._save_progress(PhaseStatusCode.CONFIRMED)
-
-                return result
-
-            # PR doesn't exist, create new one
-            result, content = self._prepare_pr_content()
-            if result:
-                return result
-            pr_title, pr_body = content
-
-            # Display creating message
-            from rich.console import Console
-            console = Console()
-            console.print()
-            console.print("[bold]Creating pull request...[/bold]")
-            console.print()
-
-            # Create PR using GitHub operations
-            pr_url = self.github_ops.create_pr(
-                title=pr_title, body=pr_body, draft=self.draft, base=self.base_branch
-            )
-
-            # Extract PR number from URL
-            match = re.search(r"/pull/(\d+)", pr_url)
-            if not match:
-                raise RuntimeError(f"Failed to extract PR number from: {pr_url}")
-            pr_number = match.group(1)
-
-            # Add PR link to GitHub issue if issue_id is configured
-            if self.issue_id:
-                try:
-                    comment = f"Pull Request created: {pr_url}"
-                    self.github_ops.add_issue_comment(self.issue_id, comment)
-                except Exception as e:
-                    # Don't fail the entire PR phase if commenting fails
-                    # Just log the warning (user can manually add comment)
-                    from rich.console import Console
-                    console = Console()
-                    console.print(f"[yellow]⚠️  Warning: Failed to add PR link to issue #{self.issue_id}: {e}[/yellow]")
-
-            result = PhaseResult(
-                status=PhaseStatus.COMPLETED,
-                message=f"Pull Request #{pr_number} created successfully",
-                data={"pr_number": pr_number, "pr_url": pr_url, "branch": branch_name, "status_code": "CAFE_CONFIRMED"},
-            )
-
-            # Save progress for GitHub PR mode
-            from cafe.core.status_codes import PhaseStatusCode
-            self._save_progress(PhaseStatusCode.CONFIRMED)
-
-            return result
+                return self._execute_github_mode()
 
         except FileNotFoundError as e:
             return PhaseResult(
@@ -453,6 +442,376 @@ class PRPhase(Phase):
             )
         except Exception as e:
             return self._handle_exception_in_execute(e, "PR phase failed")
+
+    def _check_and_resume_incomplete_iteration(self, pr_number: int = 0, pr_url: str = "", branch_name: str = "") -> Optional[PhaseResult]:
+        """Check for incomplete iteration and resume if exists.
+
+        This is Step 0 of the PR phase workflow, shared by both GitHub and local modes.
+
+        Args:
+            pr_number: PR number (0 for local mode)
+            pr_url: PR URL ("" for local mode)
+            branch_name: Branch name ("" for local mode)
+
+        Returns:
+            PhaseResult if incomplete iteration was resumed, None otherwise
+        """
+        from rich.console import Console
+        from cafe.core.status_codes import PhaseStatusCode
+        from cafe.core.types import PhaseStatus, PhaseResult
+
+        console = Console()
+
+        incomplete_iteration_info = self._get_incomplete_iteration_info()
+        if incomplete_iteration_info:
+            # Update iteration number to the incomplete iteration
+            self.iteration = incomplete_iteration_info["iteration_number"]
+
+            console.print()
+            console.print(f"[dim]Resuming incomplete iteration_{self.iteration:03d}...[/dim]")
+
+            if incomplete_iteration_info["has_user_input"]:
+                # Has user_input - resume organizing comments into todo list
+                result = self._organize_comments_to_todo_list(pr_number, pr_url, branch_name)
+
+                # Save progress with the actual status code returned by agent
+                result_status = result.data.get("status_code", PhaseStatusCode.NEEDS_CHANGES.value) if result and result.data else PhaseStatusCode.NEEDS_CHANGES.value
+                self._save_progress(PhaseStatusCode(result_status))
+
+                # Update iteration context.json with status_code
+                self._update_iteration_history(
+                    phase_specific_data=result.data if result else {},
+                    status_code=PhaseStatusCode(result_status),
+                )
+
+                return result
+            else:
+                # No user_input - this was a PR create/update iteration, complete it with READY_FOR_REVIEW
+                self._save_progress(PhaseStatusCode.READY_FOR_REVIEW)
+
+                # Update iteration context.json with status_code
+                self._update_iteration_history(
+                    phase_specific_data={"pr_number": str(pr_number), "pr_url": pr_url, "branch": branch_name},
+                    status_code=PhaseStatusCode.READY_FOR_REVIEW,
+                )
+
+                return PhaseResult(
+                    status=PhaseStatus.COMPLETED,
+                    message=f"Resumed and completed PR iteration",
+                    data={"pr_number": str(pr_number), "pr_url": pr_url, "branch": branch_name, "status_code": "CAFE_READY_FOR_REVIEW"},
+                )
+
+        return None
+
+    def _check_waiting_for_develop(self) -> Optional[dict]:
+        """Check if we're waiting for develop phase to process feedback.
+
+        Returns:
+            pr_iteration_info if waiting for develop, None if should continue
+        """
+        pr_iteration_info = self._get_latest_pr_iteration_info()
+
+        # If no completed iteration exists, continue
+        if not pr_iteration_info:
+            return None
+
+        # Only wait if status_code is NEEDS_CHANGES (not READY_FOR_REVIEW or CONFIRMED)
+        status_code = pr_iteration_info.get("status_code")
+        if status_code != "CAFE_NEEDS_CHANGES":
+            return None
+
+        # Latest iteration has NEEDS_CHANGES - check if develop has processed it
+        should_start_new = self._should_start_new_iteration(pr_iteration_info)
+
+        # If should NOT start new (develop hasn't processed feedback yet), return the info
+        if not should_start_new:
+            return pr_iteration_info
+
+        # Develop has processed feedback, should start new iteration
+        return None
+
+    def _execute_github_mode(self) -> PhaseResult:
+        """Execute GitHub PR mode.
+
+        Workflow:
+        0. Check for incomplete iteration -> resume if exists
+        1-2. Check iteration state -> return early if waiting
+        3. GitHub-specific: push commits, create/update PR, or fetch comments
+
+        Returns:
+            Phase result
+        """
+        from rich.console import Console
+        from cafe.core.status_codes import PhaseStatusCode
+
+        console = Console()
+
+        # Check gh CLI authentication
+        try:
+            if not self.github_ops.check_gh_auth():
+                return PhaseResult(
+                    status=PhaseStatus.FAILED,
+                    message="gh CLI is not authenticated. Please run: gh auth login",
+                )
+        except GitHubError as e:
+            return PhaseResult(
+                status=PhaseStatus.FAILED,
+                message=f"Failed to check gh authentication: {e}",
+            )
+
+        # Read issue_id from config if not provided
+        if not self.issue_id:
+            config_file = self.issue_dir / "issue.yaml"
+            self.issue_id = self._get_issue_config_value(config_file, "issue_id")
+            if not self.issue_id:
+                self.issue_id = self._get_issue_config_value(config_file, "spec.issue_id")
+            if self.issue_id is not None:
+                self.issue_id = str(self.issue_id)
+
+        # Check requirements file exists
+        req_path = Path(self.spec_file)
+        if not req_path.exists():
+            return PhaseResult(
+                status=PhaseStatus.FAILED,
+                message=f"Spec file not found: {self.spec_file}",
+            )
+
+        # Get branch name
+        branch_name = self._get_branch_name()
+
+        # Check if PR exists on GitHub
+        existing_pr = self.github_ops.get_pr_for_branch(branch_name)
+
+        # Step 0: Check for incomplete iteration (shared logic)
+        pr_number = existing_pr["number"] if existing_pr else 0
+        pr_url = existing_pr["url"] if existing_pr else ""
+        result = self._check_and_resume_incomplete_iteration(pr_number, pr_url, branch_name)
+        if result:
+            return result
+
+        # Step 1: Check if waiting for develop phase (shared logic)
+        waiting_iteration_info = self._check_waiting_for_develop()
+        if waiting_iteration_info:
+            console.print()
+            console.print("[yellow]ℹ️  Latest PR iteration is waiting for develop phase to process feedback[/yellow]")
+            console.print()
+            return PhaseResult(
+                status=PhaseStatus.COMPLETED,
+                message="Waiting for develop phase to process PR feedback",
+                data={"branch": branch_name},
+            )
+
+        # Step 2: Check for new commits first - always prioritize pushing commits
+        has_new_commits = self._has_new_commits()
+
+        if has_new_commits:
+            # Push new commits and update/create PR
+            unpushed_commits = self.git_ops.get_unpushed_commits()
+            console.print()
+            console.print(f"[bold]Pushing {len(unpushed_commits)} unpushed commit(s) to remote...[/bold]")
+            for commit in unpushed_commits:
+                console.print(f"  [dim]- {commit['hash'][:8]} {commit['message']}[/dim]")
+            console.print()
+
+            self.git_ops.push(branch_name, set_upstream=True, force=self.force_push)
+
+            # Determine iteration number BEFORE calling _prepare_pr_content
+            pr_iteration_info = self._get_latest_pr_iteration_info()
+            self.iteration = (pr_iteration_info["iteration_number"] + 1) if pr_iteration_info else 1
+
+            # Prepare PR content (calls agent to generate title/body)
+            result, content = self._prepare_pr_content()
+            if result:
+                return result
+            pr_title, pr_body = content
+
+            if existing_pr:
+                # Update existing PR
+                pr_number = str(existing_pr["number"])
+                pr_url = existing_pr["url"]
+
+                console.print("[bold]Updating pull request...[/bold]")
+                console.print()
+
+                self.github_ops.update_pr(pr_number, title=pr_title, body=pr_body)
+
+                # Save progress - READY_FOR_REVIEW means waiting for reviewer feedback
+                self._save_progress(PhaseStatusCode.READY_FOR_REVIEW)
+
+                # Update iteration history with status_code
+                self._update_iteration_history(
+                    phase_specific_data={"pr_number": pr_number, "pr_url": pr_url, "branch": branch_name},
+                    status_code=PhaseStatusCode.READY_FOR_REVIEW,
+                )
+
+                return PhaseResult(
+                    status=PhaseStatus.COMPLETED,
+                    message=f"Pull Request #{pr_number} updated successfully",
+                    data={"pr_number": pr_number, "pr_url": pr_url, "branch": branch_name, "status_code": "CAFE_READY_FOR_REVIEW"},
+                )
+            else:
+                # Create new PR
+                console.print("[bold]Creating pull request...[/bold]")
+                console.print()
+
+                pr_url = self.github_ops.create_pr(
+                    title=pr_title, body=pr_body, draft=self.draft, base=self.base_branch
+                )
+
+                # Extract PR number
+                match = re.search(r"/pull/(\d+)", pr_url)
+                if not match:
+                    raise RuntimeError(f"Failed to extract PR number from: {pr_url}")
+                pr_number = match.group(1)
+
+                # Add PR link to issue if configured
+                if self.issue_id:
+                    try:
+                        comment = f"Pull Request created: {pr_url}"
+                        self.github_ops.add_issue_comment(self.issue_id, comment)
+                    except Exception as e:
+                        console.print(f"[yellow]⚠️  Warning: Failed to add PR link to issue #{self.issue_id}: {e}[/yellow]")
+
+                # Save progress - READY_FOR_REVIEW means waiting for reviewer feedback
+                self._save_progress(PhaseStatusCode.READY_FOR_REVIEW)
+
+                # Update iteration history with status_code
+                self._update_iteration_history(
+                    phase_specific_data={"pr_number": pr_number, "pr_url": pr_url, "branch": branch_name},
+                    status_code=PhaseStatusCode.READY_FOR_REVIEW,
+                )
+
+                console.print()
+                console.print(f"[green]✓ Pull Request #{pr_number} created successfully[/green]")
+                console.print(f"  URL: {pr_url}")
+                console.print()
+
+                return PhaseResult(
+                    status=PhaseStatus.COMPLETED,
+                    message=f"Pull Request #{pr_number} created successfully",
+                    data={"pr_number": pr_number, "pr_url": pr_url, "branch": branch_name, "status_code": "CAFE_READY_FOR_REVIEW"},
+                )
+
+        # Step 3: No new commits - check state and decide action
+        pr_iteration_info = self._get_latest_pr_iteration_info()
+
+        # No PR exists - nothing to do
+        if not existing_pr:
+            console.print()
+            console.print("[yellow]ℹ️  No new commits to push and no existing PR[/yellow]")
+            console.print()
+            return PhaseResult(
+                status=PhaseStatus.COMPLETED,
+                message="No new commits to push",
+                data={"branch": branch_name},
+            )
+
+        pr_number = existing_pr["number"]
+        pr_url = existing_pr["url"]
+
+        # Check latest iteration status_code to decide action
+        if pr_iteration_info:
+            status_code = pr_iteration_info.get("status_code")
+
+            # If CONFIRMED, we're done - nothing more to do
+            if status_code == "CAFE_CONFIRMED":
+                console.print()
+                console.print(f"[green]✓ PR #{pr_number} feedback has been fully addressed[/green]")
+                console.print()
+                return PhaseResult(
+                    status=PhaseStatus.COMPLETED,
+                    message=f"PR #{pr_number} is complete",
+                    data={"pr_number": str(pr_number), "pr_url": pr_url, "branch": branch_name},
+                )
+
+            # If READY_FOR_REVIEW, fetch comments from GitHub
+            if status_code == "CAFE_READY_FOR_REVIEW":
+                console.print()
+                console.print(f"[dim]Checking for new comments on PR #{pr_number}...[/dim]")
+
+                # Create new iteration for comments
+                self.iteration = pr_iteration_info["iteration_number"] + 1
+
+                # Fetch comments from GitHub
+                user_input_path = self._save_pr_comments_to_user_input(int(pr_number))
+
+                if user_input_path:
+                    # New comments found - organize into todo list
+                    console.print()
+                    console.print(f"[green]✓ Fetched new PR comments to iteration_{self.iteration:03d}/user_input.md[/green]")
+                    console.print()
+                    console.print("[dim]Organizing comments into todo list...[/dim]")
+
+                    # Call agent to organize comments into todo list
+                    result = self._organize_comments_to_todo_list(pr_number, pr_url, branch_name)
+
+                    # Save progress with the actual status code returned by agent
+                    result_status = result.data.get("status_code", PhaseStatusCode.NEEDS_CHANGES.value) if result and result.data else PhaseStatusCode.NEEDS_CHANGES.value
+                    self._save_progress(PhaseStatusCode(result_status))
+
+                    # Update iteration context.json with status_code
+                    self._update_iteration_history(
+                        phase_specific_data=result.data if result else {},
+                        status_code=PhaseStatusCode(result_status),
+                    )
+
+                    return result
+                else:
+                    # No comments yet - still waiting for review
+                    console.print()
+                    console.print(f"[yellow]ℹ️  No new comments on PR #{pr_number}[/yellow]")
+                    console.print()
+                    return PhaseResult(
+                        status=PhaseStatus.COMPLETED,
+                        message=f"PR #{pr_number} has no new comments",
+                        data={"pr_number": str(pr_number), "pr_url": pr_url, "branch": branch_name},
+                    )
+
+        # No iteration exists yet but PR exists - this shouldn't happen normally
+        # (PR should have been created with an iteration)
+        console.print()
+        console.print(f"[yellow]ℹ️  PR #{pr_number} exists but no iteration found[/yellow]")
+        console.print()
+        return PhaseResult(
+            status=PhaseStatus.COMPLETED,
+            message=f"PR #{pr_number} exists but no iteration",
+            data={"pr_number": str(pr_number), "pr_url": pr_url, "branch": branch_name},
+        )
+
+    def _execute_local_mode(self) -> PhaseResult:
+        """Execute local review mode (no GitHub PR).
+
+        Workflow:
+        0. Check for incomplete iteration -> resume if exists (shared logic)
+        1-2. Check iteration state -> return early if waiting (shared logic)
+        3. Local-specific: show diff and ask for review
+
+        Returns:
+            Phase result
+        """
+        from rich.console import Console
+
+        console = Console()
+
+        # Step 0: Check for incomplete iteration (shared logic)
+        result = self._check_and_resume_incomplete_iteration(pr_number=0, pr_url="local", branch_name="local")
+        if result:
+            return result
+
+        # Step 1: Check if waiting for develop phase (shared logic)
+        waiting_iteration_info = self._check_waiting_for_develop()
+        if waiting_iteration_info:
+            console.print()
+            console.print("[yellow]ℹ️  Latest PR iteration is waiting for develop phase to process feedback[/yellow]")
+            console.print()
+            return PhaseResult(
+                status=PhaseStatus.COMPLETED,
+                message="Waiting for develop phase to process PR feedback",
+                data={"local_review": True},
+            )
+
+        # Step 2: Local-specific logic - show diff and ask for review
+        return self._execute_local_review_mode()
 
     def _execute_local_review_mode(self) -> PhaseResult:
         """Execute local review mode (no GitHub PR).
@@ -562,39 +921,71 @@ class PRPhase(Phase):
         if isinstance(result, str):
             modification_request = result
 
-            # Save to versioned pr file
+            # Increment iteration for this feedback
+            self.iteration += 1
+
+            # Save to iteration directory structure (pr/iteration_XXX/user_input.md)
             pr_dir = self.issue_dir / "pr"
-            pr_dir.mkdir(exist_ok=True)
+            iteration_dir = pr_dir / f"iteration_{self.iteration:03d}"
+            iteration_dir.mkdir(parents=True, exist_ok=True)
 
-            # Get next version number
-            existing_files = sorted(pr_dir.glob("pr_*.md"))
-            next_version = len(existing_files) + 1
-            pr_file = pr_dir / f"pr_{next_version:03d}.md"
+            # Save modification request to user_input.md
+            user_input_file = iteration_dir / "user_input.md"
+            user_input_file.write_text(modification_request)
 
-            # Save modification request
-            pr_file.write_text(modification_request)
+            # Save context.json for this iteration (WITHOUT status_code - incomplete iteration)
+            from datetime import datetime
+            context_data = {
+                "iteration": self.iteration,
+                "timestamp": datetime.now().astimezone().isoformat(),
+                "user_input": modification_request,
+                "local_review": True,
+            }
+            context_file = iteration_dir / "context.json"
+            with open(context_file, "w", encoding="utf-8") as f:
+                json.dump(context_data, f, ensure_ascii=False, indent=2)
 
             # Get relative path (works with both regular and worktree modes)
             from cafe.utils.git_utils import to_cwd_relative_path
             try:
-                pr_file_display = to_cwd_relative_path(pr_file)
+                user_input_file_display = to_cwd_relative_path(user_input_file)
             except ValueError:
                 # Fallback to absolute path if not under cwd
-                pr_file_display = str(pr_file)
+                user_input_file_display = str(user_input_file)
 
             console.print()
-            console.print(f"[green]✓ Modification request saved to {pr_file_display}[/green]")
+            console.print(f"[green]✓ Modification request saved to {user_input_file_display}[/green]")
             console.print()
-            console.print("[bold]Next step:[/bold] cafe develop --auto (or cafe make)")
-            console.print()
+            console.print("[dim]Organizing comments into todo list...[/dim]")
 
-            return PhaseResult(
-                status=PhaseStatus.COMPLETED,
-                message=f"Local review completed - modification requested (saved to {pr_file.name})",
-                data={"status_code": PhaseStatusCode.NEEDS_CHANGES.value, "pr_file": str(pr_file), "local_review": True},
-            )
+            # Call agent to organize comments into todo list (same as GitHub mode)
+            result = self._organize_comments_to_todo_list(pr_number=0, pr_url="local", branch_name="local")
+
+            # Save progress with NEEDS_CHANGES status
+            self._save_progress(PhaseStatusCode.NEEDS_CHANGES)
+
+            return result
 
         # Otherwise, it's a PhaseResult (confirm)
+        # Increment iteration for this confirmation
+        self.iteration += 1
+
+        # Create iteration directory and save context.json for confirmation
+        pr_dir = self.issue_dir / "pr"
+        iteration_dir = pr_dir / f"iteration_{self.iteration:03d}"
+        iteration_dir.mkdir(parents=True, exist_ok=True)
+
+        from datetime import datetime
+        context_data = {
+            "iteration": self.iteration,
+            "timestamp": datetime.now().astimezone().isoformat(),
+            "status_code": PhaseStatusCode.CONFIRMED.value,
+            "local_review": True,
+        }
+        context_file = iteration_dir / "context.json"
+        with open(context_file, "w", encoding="utf-8") as f:
+            json.dump(context_data, f, ensure_ascii=False, indent=2)
+
         # Add custom message for local review
         if result.status == PhaseStatus.COMPLETED:
             console.print()
@@ -607,6 +998,252 @@ class PRPhase(Phase):
         result.data["local_review"] = True
 
         return result
+
+    def _save_pr_comments_to_user_input(self, pr_number: int) -> Optional[str]:
+        """Fetch PR comments from GitHub and save to pr/iteration_XXX/user_input.md.
+
+        This centralizes PR comment detection in the PR phase. When a PR exists on GitHub,
+        this method fetches all comments (review, timeline, and review body) and persists
+        them to the current iteration's user_input.md file.
+
+        Args:
+            pr_number: GitHub PR number
+
+        Returns:
+            Path to saved user_input.md file if comments were saved, None if no new comments
+        """
+        from cafe.utils.github import get_all_pr_comments, format_comments_for_prompt
+        from datetime import datetime
+        from rich.console import Console
+
+        console = Console()
+
+        try:
+            # Fetch all PR comments (review, timeline, and review body)
+            print(f"  → Fetching PR comments for PR #{pr_number}")
+            comments = get_all_pr_comments(pr_number)
+            print(f"  → Got {len(comments)} total comments")
+
+            if not comments:
+                print(f"  → No comments found for PR #{pr_number}")
+                return None
+
+            # Format comments for saving
+            formatted_comments = format_comments_for_prompt(comments)
+
+            if not formatted_comments or not formatted_comments.strip():
+                print(f"  → No non-empty comments to save")
+                return None
+
+            # Save to pr/iteration_XXX/user_input.md
+            pr_dir = self.issue_dir / "pr"
+            iteration_dir = pr_dir / f"iteration_{self.iteration:03d}"
+            iteration_dir.mkdir(parents=True, exist_ok=True)
+
+            user_input_file = iteration_dir / "user_input.md"
+            user_input_file.write_text(formatted_comments, encoding="utf-8")
+
+            # Save context.json for this iteration
+            context_data = {
+                "iteration": self.iteration,
+                "timestamp": datetime.now().astimezone().isoformat(),
+                "pr_number": pr_number,
+                "comment_count": len(comments),
+                "source": "github_pr_comments",
+            }
+            context_file = iteration_dir / "context.json"
+            with open(context_file, "w", encoding="utf-8") as f:
+                json.dump(context_data, f, ensure_ascii=False, indent=2)
+
+            from cafe.utils.git_utils import to_cwd_relative_path
+            try:
+                user_input_file_display = to_cwd_relative_path(user_input_file)
+            except ValueError:
+                user_input_file_display = str(user_input_file)
+
+            console.print()
+            console.print(f"[green]✓ Saved {len(comments)} PR comments to {user_input_file_display}[/green]")
+            console.print()
+
+            return str(user_input_file)
+
+        except Exception as e:
+            # Log error but don't fail the PR phase
+            console.print(f"[yellow]⚠️  Warning: Failed to fetch/save PR comments: {e}[/yellow]")
+            return None
+
+    def _organize_comments_to_todo_list(self, pr_number: int, pr_url: str, branch_name: str) -> PhaseResult:
+        """Organize PR comments into actionable todo list format.
+
+        Calls agent to read user_input.md and organize comments into a todo list
+        written to output.md for developer reference.
+
+        Args:
+            pr_number: PR number
+            pr_url: PR URL
+            branch_name: Branch name
+
+        Returns:
+            PhaseResult
+        """
+        from cafe.core.status_codes import PhaseStatusCode
+        from cafe.utils.git_utils import to_cwd_relative_path
+        from cafe.utils.checklist_generator import generate_pr_comments_checklist
+        from cafe.utils.prompt_utils import format_checklist_instruction
+
+        # Get iteration directory
+        iteration_dir = self.issue_dir / "pr" / f"iteration_{self.iteration:03d}"
+        output_file = iteration_dir / "output.md"
+        user_input_file = iteration_dir / "user_input.md"
+        checklist_file = iteration_dir / "checklist.md"
+
+        # Find previous todo list output.md (most recent iteration with user_input.md)
+        pr_dir = self.issue_dir / "pr"
+        prev_output_pattern = None
+
+        if self.iteration > 1:
+            # Look backwards from current iteration - 1 for iterations with user_input.md
+            for i in range(self.iteration - 1, 0, -1):
+                prev_iter_dir = pr_dir / f"iteration_{i:03d}"
+                prev_user_input = prev_iter_dir / "user_input.md"
+                prev_output = prev_iter_dir / "output.md"
+
+                # Only consider iterations that have user_input.md (indicating it's a todo list, not PR title/body)
+                if prev_user_input.exists() and prev_output.exists():
+                    try:
+                        prev_output_pattern = to_cwd_relative_path(prev_output)
+                    except ValueError:
+                        prev_output_pattern = str(prev_output.resolve())
+                    break
+
+        # Generate checklist for this iteration
+        try:
+            user_input_pattern = to_cwd_relative_path(user_input_file)
+        except ValueError:
+            user_input_pattern = str(user_input_file.resolve())
+
+        try:
+            output_pattern = to_cwd_relative_path(output_file)
+        except ValueError:
+            output_pattern = str(output_file.resolve())
+
+        generate_pr_comments_checklist(
+            agent_name=self.dev_agent,
+            user_input_file_path=user_input_pattern,
+            output_file_path=output_pattern,
+            prev_output_file_path=prev_output_pattern,
+            checklist_file_path=checklist_file,
+        )
+
+        # Get relative paths for tool permissions
+        try:
+            output_file_pattern = to_cwd_relative_path(output_file)
+        except ValueError:
+            output_file_pattern = str(output_file.resolve())
+
+        try:
+            checklist_pattern = to_cwd_relative_path(checklist_file)
+        except ValueError:
+            checklist_pattern = str(checklist_file.resolve())
+
+        # Get agent file path
+        from cafe.agents.manager import AgentManager
+        agent_file = AgentManager.get_agent_file_path(self.dev_agent, "developer")
+
+        # Create prompt for agent
+        checklist_instruction = format_checklist_instruction(checklist_pattern)
+
+        from cafe.core.status_codes import generate_status_code_prompt
+        status_code_prompt = generate_status_code_prompt(
+            valid_codes=[PhaseStatusCode.NEEDS_CHANGES, PhaseStatusCode.CONFIRMED],
+            descriptions={
+                PhaseStatusCode.NEEDS_CHANGES: "Todo list created/updated with pending items",
+                PhaseStatusCode.CONFIRMED: "All todo items are completed (all marked with [x])",
+            },
+        )
+
+        prompt = f"""# PR Comment Organization
+
+**Your Role:** Developer
+Read {agent_file} to understand your complete role definition and responsibilities.
+
+**Task Checklist:**
+Read {checklist_pattern} for detailed execution steps and requirements.
+
+IMPORTANT: You MUST edit the checklist file and mark each completed item with [x] format (e.g., "[x] Read agent file").
+Do NOT return a status code until ALL checklist items are marked as [x].
+
+**Task:** Organize PR comments into actionable todo list.
+
+**Context:**
+- PR comments file: {user_input_pattern}
+- Output file: {output_pattern}
+
+**Output format:**
+```markdown
+# PR Review Feedback
+
+## Todo List
+
+### [Category/Theme]
+- [ ] Todo item 1
+- [ ] Todo item 2
+```
+
+
+⚠️ **IMPORTANT - Checklist Completion Requirement:**
+
+Before returning ANY status code, you MUST:
+1. Review and complete ALL items in {checklist_pattern}
+2. Mark each completed item with [x] (change [ ] to [x])
+3. Verify that NO unchecked items [ ] remain in the checklist
+4. ONLY return a status code after ALL checklist items are marked as complete [x]
+
+The system will verify checklist completion. If unchecked items remain, you will be asked to complete them.
+
+{status_code_prompt}
+
+**Response format:**
+- Return ONLY the status code on the first line
+- Do NOT include any summary or explanation
+"""
+
+        # Define allowed tools
+        allowed_tools = [
+            "read",
+            "grep", 
+            "glob",
+            f"edit({output_file_pattern})",
+            f"write({output_file_pattern})",
+            f"edit({checklist_pattern})",
+        ]
+
+        # Execute agent
+        response, status_code = self._execute_agent_iteration(
+            agent_name=self.dev_agent,
+            prompt=prompt,
+            user_input="",
+            valid_status_codes=[PhaseStatusCode.NEEDS_CHANGES, PhaseStatusCode.CONFIRMED],
+            allowed_tools=allowed_tools,
+        )
+
+        # Validate checklist completion
+        from cafe.utils.checklist_validator import validate_checklist
+        validation_result = validate_checklist(checklist_file)
+        if not validation_result.is_complete:
+            return PhaseResult(
+                status=PhaseStatus.FAILED,
+                message=f"Checklist validation failed - {validation_result.unchecked_count} items not marked as complete",
+            )
+
+        # Use the status code returned by agent
+        # Agent decides based on whether all todo items are completed
+        # Return success result
+        return PhaseResult(
+            status=PhaseStatus.COMPLETED,
+            message=f"Organized PR comments into todo list (iteration_{self.iteration:03d}/output.md)",
+            data={"pr_number": str(pr_number), "pr_url": pr_url, "branch": branch_name, "status_code": status_code.value},
+        )
 
     def _get_branch_name(self) -> str:
         """Get branch name.

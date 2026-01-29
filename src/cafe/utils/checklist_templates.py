@@ -97,8 +97,10 @@ DEVELOP_EXECUTION_STEPS_CORRECTION = """## Checklist
 [ ] Read {agent_file} to understand your role and native language
 [ ] Read questions in {develop_file} (if exists)
 [ ] Carefully read {spec_file_path} and {plan_file_path}
-[ ] Read review feedback in {review_file_path}
-[ ] Address each issue raised in the review
+[ ] Read review feedback in {review_file_path} (if exists)
+[ ] Read PR feedback todo list in {pr_feedback_file_path} (if exists)
+[ ] Address each issue raised in the feedback
+[ ] Mark completed items in {pr_feedback_file_path} if applicable (change - [ ] to - [x])
 [ ] Commit changes with descriptive messages
 [ ] Confirm: Maximized code reuse by looking for existing patterns and utilities
 [ ] Confirm: Commit messages strictly match existing format, language, and structure
@@ -120,7 +122,7 @@ REVIEW_EXECUTION_STEPS = """## Checklist
 [ ] Read {agent_file} to understand your role and native language
 [ ] Read the requirements specification {spec_file_path}
 [ ] Read the implementation plan {plan_file_path}
-[ ] Check PR comments (if provided in the prompt) to see user feedback and requests
+[ ] Read PR feedback in {pr_feedback_file_path} (if exists) to see user feedback and requests
 [ ] Prioritize user feedback from PR comments over spec requirements if there are conflicts
 
 ## Git Status and Security Check
@@ -196,4 +198,15 @@ PR_EXECUTION_STEPS_ITERATION_N = """## Checklist
 [ ] Ensure PR language matches {spec_file_path} language
 [ ] Return ONLY the status code in your response
 [ ] Return appropriate status code
+"""
+
+PR_COMMENTS_ORGANIZATION_STEPS = """## Checklist
+
+[ ] Read {agent_file} to understand your role and native language
+[ ] Read PR comments from {user_input_file}
+[ ] Check {prev_output_file} (if exists) - skip todo items that are already completed there
+[ ] Group related comments together
+[ ] Convert comments into actionable todo list items (markdown checkbox format: - [ ] Item)
+[ ] Write organized todo list to {output_file}
+[ ] Return ONLY the status code in your response
 """

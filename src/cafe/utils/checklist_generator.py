@@ -187,6 +187,7 @@ def generate_develop_checklist(
     checklist_file_path: Path,
     correction_mode: bool = False,
     review_file_path: Optional[str] = None,
+    pr_feedback_file_path: Optional[str] = None,
     basic_principles: Optional[str] = None,
     output_file: Optional[str] = None,
 ) -> None:
@@ -200,6 +201,7 @@ def generate_develop_checklist(
         checklist_file_path: Path where checklist file should be created
         correction_mode: True if in correction mode, False for normal mode
         review_file_path: Path to review file (for correction mode)
+        pr_feedback_file_path: Path to PR feedback todo list file (for correction mode)
         basic_principles: Basic principles text in "- item" format (optional)
         output_file: Path to output file (for NO_CHANGES_NEEDED reasoning)
     """
@@ -233,6 +235,8 @@ def generate_develop_checklist(
         placeholders["develop_file"] = develop_file
     if review_file_path:
         placeholders["review_file_path"] = review_file_path
+    if pr_feedback_file_path:
+        placeholders["pr_feedback_file_path"] = pr_feedback_file_path
     if output_file:
         placeholders["output_file"] = output_file
 
@@ -249,6 +253,7 @@ def generate_review_checklist(
     review_file_path: str,
     base_branch: str,
     checklist_file_path: Path,
+    pr_feedback_file_path: Optional[str] = None,
 ) -> None:
     """Generate checklist file for review phase.
 
@@ -258,6 +263,7 @@ def generate_review_checklist(
         review_file_path: Path to review file
         base_branch: Base branch name
         checklist_file_path: Path where checklist file should be created
+        pr_feedback_file_path: Optional path to PR feedback file (user_input.md from PR phase)
     """
     # Get agent file path
     agent_file = AgentManager.get_agent_file_path(agent_name, "reviewer")
@@ -277,6 +283,7 @@ def generate_review_checklist(
         "spec_file_path": spec_file_path,
         "review_file_path": review_file_path,
         "base_branch": base_branch,
+        "pr_feedback_file_path": pr_feedback_file_path or "(not available)",
     }
 
     # Resolve placeholders
@@ -340,6 +347,49 @@ def generate_pr_checklist(
     if iteration > 1:
         placeholders["prev_pr_file"] = prev_pr_file if prev_pr_file else pr_file
         placeholders["current_pr_file"] = pr_file
+
+    # Resolve placeholders
+    checklist_content = resolve_checklist_placeholders(checklist_content, placeholders)
+
+    # Generate checklist file
+    generate_checklist_file(checklist_file_path, checklist_content)
+
+
+def generate_pr_comments_checklist(
+    agent_name: str,
+    user_input_file_path: str,
+    output_file_path: str,
+    prev_output_file_path: Optional[str],
+    checklist_file_path: Path,
+) -> None:
+    """Generate checklist file for PR comments organization.
+
+    Args:
+        agent_name: Developer agent name
+        user_input_file_path: Path to user_input.md containing PR comments
+        output_file_path: Path to output.md where todo list will be written
+        prev_output_file_path: Path to previous output.md (None if first iteration)
+        checklist_file_path: Path where checklist file should be created
+    """
+    # Get agent file path
+    agent_file = AgentManager.get_agent_file_path(agent_name, "developer")
+
+    # Use PR comments organization template
+    execution_steps = checklist_templates.PR_COMMENTS_ORGANIZATION_STEPS
+
+    # Get agent guidelines checklist
+    agent_guidelines = extract_agent_guidelines_checklist(agent_file)
+
+    # Combine all sections
+    checklist_content = f"{execution_steps}\n{agent_guidelines}"
+
+    # Build placeholders dict
+    placeholders = {
+        "agent_file": agent_file,
+        "user_input_file": user_input_file_path,
+        "output_file": output_file_path,
+        "prev_output_file": prev_output_file_path or "N/A (first iteration)",
+    }
 
     # Resolve placeholders
     checklist_content = resolve_checklist_placeholders(checklist_content, placeholders)

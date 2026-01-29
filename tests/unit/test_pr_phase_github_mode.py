@@ -1,0 +1,854 @@
+"""Test PR phase GitHub mode execution flow."""
+import json
+from datetime import datetime, timezone
+from pathlib import Path
+from unittest.mock import MagicMock, patch, PropertyMock
+
+import pytest
+
+from cafe.phases.pr_phase import PRPhase
+from cafe.core.types import PhaseStatus, PhaseResult
+from cafe.core.status_codes import PhaseStatusCode
+
+
+class TestPRPhaseGitHubMode:
+    """Test _execute_github_mode flow scenarios."""
+
+    @pytest.fixture
+    def mock_dependencies(self):
+        """Create mock dependencies."""
+        agent_manager = MagicMock()
+        permission_handler = MagicMock()
+        git_ops = MagicMock()
+        github_ops = MagicMock()
+
+        git_ops.get_current_branch.return_value = "test-issue"
+        git_ops.get_repo_root.return_value = Path("/tmp")
+
+        return {
+            "agent_manager": agent_manager,
+            "permission_handler": permission_handler,
+            "git_ops": git_ops,
+            "github_ops": github_ops,
+        }
+
+    @pytest.fixture
+    def setup_issue_dir(self, tmp_path):
+        """Setup basic issue directory structure."""
+        issue_dir = tmp_path / ".cafe" / "issues" / "test-issue"
+        issue_dir.mkdir(parents=True)
+
+        spec_file = issue_dir / "spec" / "iteration_001" / "output.md"
+        spec_file.parent.mkdir(parents=True)
+        spec_file.write_text("# Test Spec")
+
+        plan_file = issue_dir / "plan" / "iteration_001" / "output.md"
+        plan_file.parent.mkdir(parents=True)
+        plan_file.write_text("# Test Plan")
+
+        return issue_dir, spec_file
+
+    # =========================================================================
+    # Scenario A: Has new commits, no PR exists -> Create PR
+    # =========================================================================
+    def test_scenario_a_create_pr_with_new_commits(
+        self, tmp_path, mock_dependencies, setup_issue_dir
+    ):
+        """Scenario A: Has new commits, no PR -> Push + Create PR + Call agent -> READY_FOR_REVIEW."""
+        issue_dir, spec_file = setup_issue_dir
+
+        # Setup mocks
+        mock_dependencies["git_ops"].has_unpushed_commits.return_value = True
+        mock_dependencies["git_ops"].get_unpushed_commits.return_value = [
+            {"hash": "abc1234", "message": "feat: add feature"}
+        ]
+        mock_dependencies["github_ops"].check_gh_auth.return_value = True
+        mock_dependencies["github_ops"].get_pr_for_branch.return_value = None  # No PR exists
+        mock_dependencies["github_ops"].create_pr.return_value = "https://github.com/test/repo/pull/1"
+
+        with patch.object(PRPhase, "_get_issue_dir", return_value=issue_dir):
+            with patch.object(PRPhase, "_prepare_pr_content", return_value=(None, ("Test PR", "Test body"))):
+                phase = PRPhase(
+                    spec_file=str(spec_file),
+                    issue_name="test-issue",
+                    **mock_dependencies
+                )
+
+                result = phase._execute_github_mode()
+
+        # Assert
+        assert result.status == PhaseStatus.COMPLETED
+        assert "created" in result.message.lower()
+        assert result.data.get("status_code") == "CAFE_READY_FOR_REVIEW"
+
+        # Verify iteration context.json was created with correct status_code
+        iteration_dir = issue_dir / "pr" / "iteration_001"
+        context_file = iteration_dir / "context.json"
+        assert context_file.exists()
+        with open(context_file) as f:
+            context = json.load(f)
+        assert context.get("status_code") == "CAFE_READY_FOR_REVIEW"
+
+    # =========================================================================
+    # Scenario B: Has new commits, PR exists -> Update PR
+    # =========================================================================
+    def test_scenario_b_update_pr_with_new_commits(
+        self, tmp_path, mock_dependencies, setup_issue_dir
+    ):
+        """Scenario B: Has new commits, PR exists -> Push + Update PR + Call agent -> READY_FOR_REVIEW."""
+        issue_dir, spec_file = setup_issue_dir
+
+        # Create existing PR iteration_001 with READY_FOR_REVIEW
+        pr_dir = issue_dir / "pr"
+        iteration_001 = pr_dir / "iteration_001"
+        iteration_001.mkdir(parents=True)
+        (iteration_001 / "context.json").write_text(json.dumps({
+            "iteration": 1,
+            "timestamp": "2026-01-27T10:00:00+08:00",
+            "end_time": "2026-01-27T10:05:00+08:00",
+            "status_code": "CAFE_READY_FOR_REVIEW"
+        }))
+
+        # Setup mocks
+        mock_dependencies["git_ops"].has_unpushed_commits.return_value = True
+        mock_dependencies["git_ops"].get_unpushed_commits.return_value = [
+            {"hash": "def5678", "message": "fix: bug fix"}
+        ]
+        mock_dependencies["github_ops"].check_gh_auth.return_value = True
+        mock_dependencies["github_ops"].get_pr_for_branch.return_value = {
+            "number": 1,
+            "url": "https://github.com/test/repo/pull/1"
+        }
+
+        with patch.object(PRPhase, "_get_issue_dir", return_value=issue_dir):
+            with patch.object(PRPhase, "_prepare_pr_content", return_value=(None, ("Updated PR", "Updated body"))):
+                phase = PRPhase(
+                    spec_file=str(spec_file),
+                    issue_name="test-issue",
+                    **mock_dependencies
+                )
+
+                result = phase._execute_github_mode()
+
+        # Assert
+        assert result.status == PhaseStatus.COMPLETED
+        assert "updated" in result.message.lower()
+        assert result.data.get("status_code") == "CAFE_READY_FOR_REVIEW"
+
+        # Verify new iteration_002 was created
+        iteration_002 = issue_dir / "pr" / "iteration_002"
+        context_file = iteration_002 / "context.json"
+        assert context_file.exists()
+        with open(context_file) as f:
+            context = json.load(f)
+        assert context.get("status_code") == "CAFE_READY_FOR_REVIEW"
+
+    # =========================================================================
+    # Scenario C: No new commits, no PR -> Return "nothing to do"
+    # =========================================================================
+    def test_scenario_c_no_commits_no_pr(
+        self, tmp_path, mock_dependencies, setup_issue_dir
+    ):
+        """Scenario C: No new commits, no PR -> Return 'nothing to do'."""
+        issue_dir, spec_file = setup_issue_dir
+
+        # Setup mocks
+        mock_dependencies["git_ops"].has_unpushed_commits.return_value = False
+        mock_dependencies["github_ops"].check_gh_auth.return_value = True
+        mock_dependencies["github_ops"].get_pr_for_branch.return_value = None
+
+        with patch.object(PRPhase, "_get_issue_dir", return_value=issue_dir):
+            phase = PRPhase(
+                spec_file=str(spec_file),
+                issue_name="test-issue",
+                **mock_dependencies
+            )
+
+            result = phase._execute_github_mode()
+
+        # Assert
+        assert result.status == PhaseStatus.COMPLETED
+        assert "no new commits" in result.message.lower() or "no commits" in result.message.lower()
+
+    # =========================================================================
+    # Scenario D: No new commits, PR exists, last iteration READY_FOR_REVIEW
+    #             -> Fetch comments, call agent -> CONFIRMED or NEEDS_CHANGES
+    # =========================================================================
+    def test_scenario_d_fetch_comments_after_ready_for_review(
+        self, tmp_path, mock_dependencies, setup_issue_dir
+    ):
+        """Scenario D: No commits, PR exists, READY_FOR_REVIEW -> Fetch comments -> NEEDS_CHANGES."""
+        issue_dir, spec_file = setup_issue_dir
+
+        # Create existing PR iteration_001 with READY_FOR_REVIEW
+        pr_dir = issue_dir / "pr"
+        iteration_001 = pr_dir / "iteration_001"
+        iteration_001.mkdir(parents=True)
+        (iteration_001 / "context.json").write_text(json.dumps({
+            "iteration": 1,
+            "timestamp": "2026-01-27T10:00:00+08:00",
+            "end_time": "2026-01-27T10:05:00+08:00",
+            "status_code": "CAFE_READY_FOR_REVIEW"
+        }))
+
+        # Setup mocks
+        mock_dependencies["git_ops"].has_unpushed_commits.return_value = False
+        mock_dependencies["github_ops"].check_gh_auth.return_value = True
+        mock_dependencies["github_ops"].get_pr_for_branch.return_value = {
+            "number": 1,
+            "url": "https://github.com/test/repo/pull/1"
+        }
+
+        # Mock fetching comments
+        with patch.object(PRPhase, "_get_issue_dir", return_value=issue_dir):
+            with patch.object(PRPhase, "_save_pr_comments_to_user_input") as mock_save_comments:
+                mock_save_comments.return_value = iteration_001 / "iteration_002" / "user_input.md"
+                with patch.object(PRPhase, "_organize_comments_to_todo_list") as mock_organize:
+                    mock_organize.return_value = PhaseResult(
+                        status=PhaseStatus.COMPLETED,
+                        message="Organized comments",
+                        data={"status_code": "CAFE_NEEDS_CHANGES"}
+                    )
+
+                    phase = PRPhase(
+                        spec_file=str(spec_file),
+                        issue_name="test-issue",
+                        **mock_dependencies
+                    )
+
+                    result = phase._execute_github_mode()
+
+        # Assert
+        assert result.status == PhaseStatus.COMPLETED
+        assert result.data.get("status_code") in ["CAFE_NEEDS_CHANGES", "CAFE_CONFIRMED"]
+
+    # =========================================================================
+    # Scenario E: No new commits, PR exists, last iteration CONFIRMED
+    #             -> Return "already completed"
+    # =========================================================================
+    def test_scenario_e_already_confirmed(
+        self, tmp_path, mock_dependencies, setup_issue_dir
+    ):
+        """Scenario E: No commits, PR exists, CONFIRMED -> Return 'already completed'."""
+        issue_dir, spec_file = setup_issue_dir
+
+        # Create existing PR iteration_001 with CONFIRMED
+        pr_dir = issue_dir / "pr"
+        iteration_001 = pr_dir / "iteration_001"
+        iteration_001.mkdir(parents=True)
+        (iteration_001 / "context.json").write_text(json.dumps({
+            "iteration": 1,
+            "timestamp": "2026-01-27T10:00:00+08:00",
+            "end_time": "2026-01-27T10:05:00+08:00",
+            "status_code": "CAFE_CONFIRMED"
+        }))
+        (iteration_001 / "user_input.md").write_text("Some feedback")
+
+        # Setup mocks
+        mock_dependencies["git_ops"].has_unpushed_commits.return_value = False
+        mock_dependencies["github_ops"].check_gh_auth.return_value = True
+        mock_dependencies["github_ops"].get_pr_for_branch.return_value = {
+            "number": 1,
+            "url": "https://github.com/test/repo/pull/1"
+        }
+
+        with patch.object(PRPhase, "_get_issue_dir", return_value=issue_dir):
+            phase = PRPhase(
+                spec_file=str(spec_file),
+                issue_name="test-issue",
+                **mock_dependencies
+            )
+
+            result = phase._execute_github_mode()
+
+        # Assert - should return completed without doing anything
+        assert result.status == PhaseStatus.COMPLETED
+        # Should not create new iteration
+        assert not (issue_dir / "pr" / "iteration_002").exists()
+
+    # =========================================================================
+    # Scenario F: No new commits, PR exists, last iteration NEEDS_CHANGES
+    #             -> Should be blocked by Step 1 (_check_waiting_for_develop)
+    # =========================================================================
+    def test_scenario_f_needs_changes_waiting_for_develop(
+        self, tmp_path, mock_dependencies, setup_issue_dir
+    ):
+        """Scenario F: NEEDS_CHANGES -> Blocked by _check_waiting_for_develop."""
+        issue_dir, spec_file = setup_issue_dir
+
+        # Create existing PR iteration with NEEDS_CHANGES
+        pr_dir = issue_dir / "pr"
+        iteration_001 = pr_dir / "iteration_001"
+        iteration_001.mkdir(parents=True)
+        (iteration_001 / "context.json").write_text(json.dumps({
+            "iteration": 1,
+            "timestamp": "2026-01-27T10:00:00+08:00",
+            "end_time": "2026-01-27T10:05:00+08:00",
+            "status_code": "CAFE_NEEDS_CHANGES"
+        }))
+        (iteration_001 / "user_input.md").write_text("Please fix this")
+
+        # No develop phase has run (so develop hasn't processed feedback)
+
+        # Setup mocks
+        mock_dependencies["git_ops"].has_unpushed_commits.return_value = False
+        mock_dependencies["github_ops"].check_gh_auth.return_value = True
+        mock_dependencies["github_ops"].get_pr_for_branch.return_value = {
+            "number": 1,
+            "url": "https://github.com/test/repo/pull/1"
+        }
+
+        with patch.object(PRPhase, "_get_issue_dir", return_value=issue_dir):
+            phase = PRPhase(
+                spec_file=str(spec_file),
+                issue_name="test-issue",
+                **mock_dependencies
+            )
+
+            result = phase._execute_github_mode()
+
+        # Assert - should be waiting for develop
+        assert result.status == PhaseStatus.COMPLETED
+        assert "waiting" in result.message.lower() or "develop" in result.message.lower()
+
+
+class TestPRPhaseStep0ResumeIncomplete:
+    """Test Step 0: Resume incomplete iteration."""
+
+    @pytest.fixture
+    def mock_dependencies(self):
+        """Create mock dependencies."""
+        agent_manager = MagicMock()
+        permission_handler = MagicMock()
+        git_ops = MagicMock()
+        github_ops = MagicMock()
+
+        git_ops.get_current_branch.return_value = "test-issue"
+        git_ops.get_repo_root.return_value = Path("/tmp")
+
+        return {
+            "agent_manager": agent_manager,
+            "permission_handler": permission_handler,
+            "git_ops": git_ops,
+            "github_ops": github_ops,
+        }
+
+    @pytest.fixture
+    def setup_issue_dir(self, tmp_path):
+        """Setup basic issue directory structure."""
+        issue_dir = tmp_path / ".cafe" / "issues" / "test-issue"
+        issue_dir.mkdir(parents=True)
+
+        spec_file = issue_dir / "spec" / "iteration_001" / "output.md"
+        spec_file.parent.mkdir(parents=True)
+        spec_file.write_text("# Test Spec")
+
+        return issue_dir, spec_file
+
+    def test_resume_incomplete_iteration_with_user_input(
+        self, tmp_path, mock_dependencies, setup_issue_dir
+    ):
+        """Resume incomplete iteration that has user_input but no status_code."""
+        issue_dir, spec_file = setup_issue_dir
+
+        # Create incomplete iteration (no status_code)
+        pr_dir = issue_dir / "pr"
+        iteration_001 = pr_dir / "iteration_001"
+        iteration_001.mkdir(parents=True)
+        (iteration_001 / "context.json").write_text(json.dumps({
+            "iteration": 1,
+            "timestamp": "2026-01-27T10:00:00+08:00"
+            # No status_code - incomplete!
+        }))
+        (iteration_001 / "user_input.md").write_text("Please fix the bug")
+
+        # Setup mocks
+        mock_dependencies["github_ops"].check_gh_auth.return_value = True
+        mock_dependencies["github_ops"].get_pr_for_branch.return_value = {
+            "number": 1,
+            "url": "https://github.com/test/repo/pull/1"
+        }
+
+        with patch.object(PRPhase, "_get_issue_dir", return_value=issue_dir):
+            with patch.object(PRPhase, "_organize_comments_to_todo_list") as mock_organize:
+                mock_organize.return_value = PhaseResult(
+                    status=PhaseStatus.COMPLETED,
+                    message="Organized",
+                    data={"status_code": "CAFE_NEEDS_CHANGES"}
+                )
+
+                phase = PRPhase(
+                    spec_file=str(spec_file),
+                    issue_name="test-issue",
+                    **mock_dependencies
+                )
+
+                result = phase._execute_github_mode()
+
+        # Assert - should have resumed and completed
+        mock_organize.assert_called_once()
+
+        # Verify status_code was saved to context.json
+        context_file = iteration_001 / "context.json"
+        with open(context_file) as f:
+            context = json.load(f)
+        assert context.get("status_code") == "CAFE_NEEDS_CHANGES"
+
+    def test_resume_incomplete_iteration_without_user_input(
+        self, tmp_path, mock_dependencies, setup_issue_dir
+    ):
+        """Resume incomplete iteration that has no user_input (PR update iteration)."""
+        issue_dir, spec_file = setup_issue_dir
+
+        # Create incomplete iteration (no status_code, no user_input)
+        pr_dir = issue_dir / "pr"
+        iteration_001 = pr_dir / "iteration_001"
+        iteration_001.mkdir(parents=True)
+        (iteration_001 / "context.json").write_text(json.dumps({
+            "iteration": 1,
+            "timestamp": "2026-01-27T10:00:00+08:00"
+            # No status_code - incomplete!
+        }))
+        # No user_input.md - this was a PR create/update iteration
+
+        # Setup mocks
+        mock_dependencies["github_ops"].check_gh_auth.return_value = True
+        mock_dependencies["github_ops"].get_pr_for_branch.return_value = {
+            "number": 1,
+            "url": "https://github.com/test/repo/pull/1"
+        }
+        mock_dependencies["git_ops"].has_unpushed_commits.return_value = False
+
+        with patch.object(PRPhase, "_get_issue_dir", return_value=issue_dir):
+            with patch.object(PRPhase, "_prepare_pr_content", return_value=(None, ("Title", "Body"))):
+                phase = PRPhase(
+                    spec_file=str(spec_file),
+                    issue_name="test-issue",
+                    **mock_dependencies
+                )
+
+                result = phase._execute_github_mode()
+
+        # Assert - should have completed the iteration
+        context_file = iteration_001 / "context.json"
+        with open(context_file) as f:
+            context = json.load(f)
+        assert context.get("status_code") == "CAFE_READY_FOR_REVIEW"
+
+
+class TestPRPhaseStep1WaitingForDevelop:
+    """Test Step 1: Check waiting for develop."""
+
+    @pytest.fixture
+    def mock_dependencies(self):
+        """Create mock dependencies."""
+        agent_manager = MagicMock()
+        permission_handler = MagicMock()
+        git_ops = MagicMock()
+        github_ops = MagicMock()
+
+        git_ops.get_current_branch.return_value = "test-issue"
+        git_ops.get_repo_root.return_value = Path("/tmp")
+
+        return {
+            "agent_manager": agent_manager,
+            "permission_handler": permission_handler,
+            "git_ops": git_ops,
+            "github_ops": github_ops,
+        }
+
+    @pytest.fixture
+    def setup_issue_dir(self, tmp_path):
+        """Setup basic issue directory structure."""
+        issue_dir = tmp_path / ".cafe" / "issues" / "test-issue"
+        issue_dir.mkdir(parents=True)
+
+        spec_file = issue_dir / "spec" / "iteration_001" / "output.md"
+        spec_file.parent.mkdir(parents=True)
+        spec_file.write_text("# Test Spec")
+
+        return issue_dir, spec_file
+
+    def test_check_waiting_uses_status_code_not_user_input(
+        self, tmp_path, mock_dependencies, setup_issue_dir
+    ):
+        """_check_waiting_for_develop should use status_code == NEEDS_CHANGES, not has_user_input."""
+        issue_dir, spec_file = setup_issue_dir
+
+        # Create iteration with NEEDS_CHANGES status
+        pr_dir = issue_dir / "pr"
+        iteration_001 = pr_dir / "iteration_001"
+        iteration_001.mkdir(parents=True)
+        (iteration_001 / "context.json").write_text(json.dumps({
+            "iteration": 1,
+            "timestamp": "2026-01-27T10:00:00+08:00",
+            "end_time": "2026-01-27T10:05:00+08:00",
+            "status_code": "CAFE_NEEDS_CHANGES"
+        }))
+        # Note: No user_input.md needed - decision should be based on status_code
+
+        with patch.object(PRPhase, "_get_issue_dir", return_value=issue_dir):
+            phase = PRPhase(
+                spec_file=str(spec_file),
+                issue_name="test-issue",
+                **mock_dependencies
+            )
+
+            result = phase._check_waiting_for_develop()
+
+        # Assert - should be waiting because status_code is NEEDS_CHANGES
+        assert result is not None
+
+    def test_not_waiting_when_status_code_is_ready_for_review(
+        self, tmp_path, mock_dependencies, setup_issue_dir
+    ):
+        """Should NOT wait when status_code is READY_FOR_REVIEW."""
+        issue_dir, spec_file = setup_issue_dir
+
+        # Create iteration with READY_FOR_REVIEW status
+        pr_dir = issue_dir / "pr"
+        iteration_001 = pr_dir / "iteration_001"
+        iteration_001.mkdir(parents=True)
+        (iteration_001 / "context.json").write_text(json.dumps({
+            "iteration": 1,
+            "timestamp": "2026-01-27T10:00:00+08:00",
+            "end_time": "2026-01-27T10:05:00+08:00",
+            "status_code": "CAFE_READY_FOR_REVIEW"
+        }))
+
+        with patch.object(PRPhase, "_get_issue_dir", return_value=issue_dir):
+            phase = PRPhase(
+                spec_file=str(spec_file),
+                issue_name="test-issue",
+                **mock_dependencies
+            )
+
+            result = phase._check_waiting_for_develop()
+
+        # Assert - should NOT be waiting
+        assert result is None
+
+    def test_not_waiting_when_status_code_is_confirmed(
+        self, tmp_path, mock_dependencies, setup_issue_dir
+    ):
+        """Should NOT wait when status_code is CONFIRMED."""
+        issue_dir, spec_file = setup_issue_dir
+
+        # Create iteration with CONFIRMED status
+        pr_dir = issue_dir / "pr"
+        iteration_001 = pr_dir / "iteration_001"
+        iteration_001.mkdir(parents=True)
+        (iteration_001 / "context.json").write_text(json.dumps({
+            "iteration": 1,
+            "timestamp": "2026-01-27T10:00:00+08:00",
+            "end_time": "2026-01-27T10:05:00+08:00",
+            "status_code": "CAFE_CONFIRMED"
+        }))
+
+        with patch.object(PRPhase, "_get_issue_dir", return_value=issue_dir):
+            phase = PRPhase(
+                spec_file=str(spec_file),
+                issue_name="test-issue",
+                **mock_dependencies
+            )
+
+            result = phase._check_waiting_for_develop()
+
+        # Assert - should NOT be waiting
+        assert result is None
+
+
+class TestPRPhasePriorityNewCommits:
+    """Test that new commits take priority over other states."""
+
+    @pytest.fixture
+    def mock_dependencies(self):
+        """Create mock dependencies."""
+        agent_manager = MagicMock()
+        permission_handler = MagicMock()
+        git_ops = MagicMock()
+        github_ops = MagicMock()
+
+        git_ops.get_current_branch.return_value = "test-issue"
+        git_ops.get_repo_root.return_value = Path("/tmp")
+
+        return {
+            "agent_manager": agent_manager,
+            "permission_handler": permission_handler,
+            "git_ops": git_ops,
+            "github_ops": github_ops,
+        }
+
+    @pytest.fixture
+    def setup_issue_dir(self, tmp_path):
+        """Setup basic issue directory structure."""
+        issue_dir = tmp_path / ".cafe" / "issues" / "test-issue"
+        issue_dir.mkdir(parents=True)
+
+        spec_file = issue_dir / "spec" / "iteration_001" / "output.md"
+        spec_file.parent.mkdir(parents=True)
+        spec_file.write_text("# Test Spec")
+
+        return issue_dir, spec_file
+
+    def test_new_commits_override_ready_for_review(
+        self, tmp_path, mock_dependencies, setup_issue_dir
+    ):
+        """New commits should update PR even if last iteration was READY_FOR_REVIEW."""
+        issue_dir, spec_file = setup_issue_dir
+
+        # Create iteration with READY_FOR_REVIEW
+        pr_dir = issue_dir / "pr"
+        iteration_001 = pr_dir / "iteration_001"
+        iteration_001.mkdir(parents=True)
+        (iteration_001 / "context.json").write_text(json.dumps({
+            "iteration": 1,
+            "timestamp": "2026-01-27T10:00:00+08:00",
+            "end_time": "2026-01-27T10:05:00+08:00",
+            "status_code": "CAFE_READY_FOR_REVIEW"
+        }))
+
+        # Setup mocks - has new commits
+        mock_dependencies["git_ops"].has_unpushed_commits.return_value = True
+        mock_dependencies["git_ops"].get_unpushed_commits.return_value = [
+            {"hash": "abc1234", "message": "fix: new fix"}
+        ]
+        mock_dependencies["github_ops"].check_gh_auth.return_value = True
+        mock_dependencies["github_ops"].get_pr_for_branch.return_value = {
+            "number": 1,
+            "url": "https://github.com/test/repo/pull/1"
+        }
+
+        with patch.object(PRPhase, "_get_issue_dir", return_value=issue_dir):
+            with patch.object(PRPhase, "_prepare_pr_content", return_value=(None, ("Title", "Body"))):
+                    phase = PRPhase(
+                        spec_file=str(spec_file),
+                        issue_name="test-issue",
+                        **mock_dependencies
+                    )
+
+                    result = phase._execute_github_mode()
+
+        # Assert - should update PR, not fetch comments
+        assert result.status == PhaseStatus.COMPLETED
+        assert result.data.get("status_code") == "CAFE_READY_FOR_REVIEW"
+        mock_dependencies["github_ops"].update_pr.assert_called_once()
+
+    def test_new_commits_override_confirmed(
+        self, tmp_path, mock_dependencies, setup_issue_dir
+    ):
+        """New commits should update PR even if last iteration was CONFIRMED."""
+        issue_dir, spec_file = setup_issue_dir
+
+        # Create iteration with CONFIRMED
+        pr_dir = issue_dir / "pr"
+        iteration_001 = pr_dir / "iteration_001"
+        iteration_001.mkdir(parents=True)
+        (iteration_001 / "context.json").write_text(json.dumps({
+            "iteration": 1,
+            "timestamp": "2026-01-27T10:00:00+08:00",
+            "end_time": "2026-01-27T10:05:00+08:00",
+            "status_code": "CAFE_CONFIRMED"
+        }))
+
+        # Setup mocks - has new commits
+        mock_dependencies["git_ops"].has_unpushed_commits.return_value = True
+        mock_dependencies["git_ops"].get_unpushed_commits.return_value = [
+            {"hash": "abc1234", "message": "fix: new fix"}
+        ]
+        mock_dependencies["github_ops"].check_gh_auth.return_value = True
+        mock_dependencies["github_ops"].get_pr_for_branch.return_value = {
+            "number": 1,
+            "url": "https://github.com/test/repo/pull/1"
+        }
+
+        with patch.object(PRPhase, "_get_issue_dir", return_value=issue_dir):
+            with patch.object(PRPhase, "_prepare_pr_content", return_value=(None, ("Title", "Body"))):
+                    phase = PRPhase(
+                        spec_file=str(spec_file),
+                        issue_name="test-issue",
+                        **mock_dependencies
+                    )
+
+                    result = phase._execute_github_mode()
+
+        # Assert - should update PR
+        assert result.status == PhaseStatus.COMPLETED
+        assert result.data.get("status_code") == "CAFE_READY_FOR_REVIEW"
+        mock_dependencies["github_ops"].update_pr.assert_called_once()
+
+
+class TestPRPhaseAgentCalled:
+    """Test that _generate_pr_content (agent) is called during PR create/update."""
+
+    @pytest.fixture
+    def mock_dependencies(self):
+        """Create mock dependencies."""
+        agent_manager = MagicMock()
+        permission_handler = MagicMock()
+        git_ops = MagicMock()
+        github_ops = MagicMock()
+
+        git_ops.get_current_branch.return_value = "test-issue"
+        git_ops.get_repo_root.return_value = Path("/tmp")
+
+        return {
+            "agent_manager": agent_manager,
+            "permission_handler": permission_handler,
+            "git_ops": git_ops,
+            "github_ops": github_ops,
+        }
+
+    @pytest.fixture
+    def setup_issue_dir(self, tmp_path):
+        """Setup basic issue directory structure."""
+        issue_dir = tmp_path / ".cafe" / "issues" / "test-issue"
+        issue_dir.mkdir(parents=True)
+
+        spec_file = issue_dir / "spec" / "iteration_001" / "output.md"
+        spec_file.parent.mkdir(parents=True)
+        spec_file.write_text("# Test Spec")
+
+        plan_file = issue_dir / "plan" / "iteration_001" / "output.md"
+        plan_file.parent.mkdir(parents=True)
+        plan_file.write_text("# Test Plan")
+
+        return issue_dir, spec_file
+
+    def test_create_pr_calls_generate_pr_content(
+        self, tmp_path, mock_dependencies, setup_issue_dir
+    ):
+        """Creating a PR should call _generate_pr_content (agent)."""
+        issue_dir, spec_file = setup_issue_dir
+
+        # Setup mocks
+        mock_dependencies["git_ops"].has_unpushed_commits.return_value = True
+        mock_dependencies["git_ops"].get_unpushed_commits.return_value = [
+            {"hash": "abc1234", "message": "feat: add feature"}
+        ]
+        mock_dependencies["github_ops"].check_gh_auth.return_value = True
+        mock_dependencies["github_ops"].get_pr_for_branch.return_value = None
+        mock_dependencies["github_ops"].create_pr.return_value = "https://github.com/test/repo/pull/1"
+
+        with patch.object(PRPhase, "_get_issue_dir", return_value=issue_dir):
+            with patch.object(PRPhase, "_generate_pr_content", return_value=None) as mock_generate:
+                with patch.object(PRPhase, "_get_pr_title", return_value="Test PR Title"):
+                    with patch.object(PRPhase, "_get_pr_body", return_value="Test PR Body"):
+                        phase = PRPhase(
+                            spec_file=str(spec_file),
+                            issue_name="test-issue",
+                            **mock_dependencies
+                        )
+
+                        result = phase._execute_github_mode()
+
+        # Assert agent was called
+        mock_generate.assert_called_once()
+        assert result.status == PhaseStatus.COMPLETED
+        assert result.data.get("status_code") == "CAFE_READY_FOR_REVIEW"
+
+    def test_update_pr_calls_generate_pr_content(
+        self, tmp_path, mock_dependencies, setup_issue_dir
+    ):
+        """Updating a PR should call _generate_pr_content (agent) for new iteration."""
+        issue_dir, spec_file = setup_issue_dir
+
+        # Create existing PR iteration_001 with READY_FOR_REVIEW and output.md
+        pr_dir = issue_dir / "pr"
+        iteration_001 = pr_dir / "iteration_001"
+        iteration_001.mkdir(parents=True)
+        (iteration_001 / "context.json").write_text(json.dumps({
+            "iteration": 1,
+            "timestamp": "2026-01-27T10:00:00+08:00",
+            "end_time": "2026-01-27T10:05:00+08:00",
+            "status_code": "CAFE_READY_FOR_REVIEW"
+        }))
+        (iteration_001 / "output.md").write_text("# Old PR Title\n\nOld body")
+
+        # Setup mocks
+        mock_dependencies["git_ops"].has_unpushed_commits.return_value = True
+        mock_dependencies["git_ops"].get_unpushed_commits.return_value = [
+            {"hash": "def5678", "message": "fix: bug fix"}
+        ]
+        mock_dependencies["github_ops"].check_gh_auth.return_value = True
+        mock_dependencies["github_ops"].get_pr_for_branch.return_value = {
+            "number": 1,
+            "url": "https://github.com/test/repo/pull/1"
+        }
+
+        with patch.object(PRPhase, "_get_issue_dir", return_value=issue_dir):
+            with patch.object(PRPhase, "_generate_pr_content", return_value=None) as mock_generate:
+                with patch.object(PRPhase, "_get_pr_title", return_value="Updated PR Title"):
+                    with patch.object(PRPhase, "_get_pr_body", return_value="Updated PR Body"):
+                        phase = PRPhase(
+                            spec_file=str(spec_file),
+                            issue_name="test-issue",
+                            **mock_dependencies
+                        )
+
+                        result = phase._execute_github_mode()
+
+        # Assert agent was called for iteration 2
+        mock_generate.assert_called_once()
+        assert result.status == PhaseStatus.COMPLETED
+        assert result.data.get("status_code") == "CAFE_READY_FOR_REVIEW"
+        mock_dependencies["github_ops"].update_pr.assert_called_once()
+
+        # Verify iteration_002 directory was created (agent writes to correct iteration)
+        iteration_002 = pr_dir / "iteration_002"
+        assert iteration_002.exists()
+
+    def test_update_pr_uses_correct_iteration_number(
+        self, tmp_path, mock_dependencies, setup_issue_dir
+    ):
+        """Updating PR should set self.iteration BEFORE calling _prepare_pr_content."""
+        issue_dir, spec_file = setup_issue_dir
+
+        # Create existing PR iteration_001 with READY_FOR_REVIEW
+        pr_dir = issue_dir / "pr"
+        iteration_001 = pr_dir / "iteration_001"
+        iteration_001.mkdir(parents=True)
+        (iteration_001 / "context.json").write_text(json.dumps({
+            "iteration": 1,
+            "timestamp": "2026-01-27T10:00:00+08:00",
+            "end_time": "2026-01-27T10:05:00+08:00",
+            "status_code": "CAFE_READY_FOR_REVIEW"
+        }))
+        (iteration_001 / "output.md").write_text("# Old PR Title\n\nOld body")
+
+        # Setup mocks
+        mock_dependencies["git_ops"].has_unpushed_commits.return_value = True
+        mock_dependencies["git_ops"].get_unpushed_commits.return_value = [
+            {"hash": "def5678", "message": "fix: bug fix"}
+        ]
+        mock_dependencies["github_ops"].check_gh_auth.return_value = True
+        mock_dependencies["github_ops"].get_pr_for_branch.return_value = {
+            "number": 1,
+            "url": "https://github.com/test/repo/pull/1"
+        }
+
+        captured_iteration = {}
+
+        def mock_generate_side_effect():
+            """Capture self.iteration at the time _generate_pr_content is called."""
+            # Access phase.iteration via closure
+            captured_iteration["value"] = phase.iteration
+            return None
+
+        with patch.object(PRPhase, "_get_issue_dir", return_value=issue_dir):
+            with patch.object(PRPhase, "_generate_pr_content", side_effect=mock_generate_side_effect) as mock_generate:
+                with patch.object(PRPhase, "_get_pr_title", return_value="Updated PR"):
+                    with patch.object(PRPhase, "_get_pr_body", return_value="Updated body"):
+                        phase = PRPhase(
+                            spec_file=str(spec_file),
+                            issue_name="test-issue",
+                            **mock_dependencies
+                        )
+
+                        result = phase._execute_github_mode()
+
+        # Assert iteration was set to 2 BEFORE _generate_pr_content was called
+        mock_generate.assert_called_once()
+        assert captured_iteration["value"] == 2, (
+            f"Expected iteration 2 when _generate_pr_content was called, got {captured_iteration['value']}"
+        )

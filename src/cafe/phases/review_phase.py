@@ -13,7 +13,6 @@ from cafe.core.permission import PermissionHandler
 from cafe.core.phase import Phase
 from cafe.core.status_codes import PhaseStatusCode, StatusCodeParser, generate_status_code_prompt
 from cafe.core.types import PhaseProgress, PhaseResult, PhaseStatus
-from cafe.utils.github import get_pr_comments, get_all_pr_comments, filter_unresolved_comments, format_comments_for_prompt
 from cafe.utils.prompt_utils import format_checklist_instruction
 
 
@@ -64,7 +63,6 @@ class ReviewPhase(Phase):
         self.target_commit = target_commit
         self.iteration = 1  # Track iteration number for subsequent reviews
         self.pr_number = pr_number
-        self._pr_comments_cache = None  # Cache for PR comments to avoid duplicate loading
         self.force = force  # Store force flag for use in execute()
 
         # Get issue directory from current branch
@@ -165,28 +163,7 @@ class ReviewPhase(Phase):
             # Note: We don't check if diff is empty here - let the review agent
             # see the empty diff and decide (usually NEEDS_CHANGES)
 
-            # Check PR comments if pr_number is provided
-            if self.pr_number:
-                print(f"ℹ️  PR #{self.pr_number} comments will be reviewed")
-                _, unresolved_count = self._load_pr_comments()
-                if unresolved_count == 0:
-                    return PhaseResult(
-                        status=PhaseStatus.COMPLETED,
-                        message=f"PR #{self.pr_number} has no unresolved comments. Nothing to review.",
-                        data={
-                            "pr_number": self.pr_number,
-                        },
-                    )
 
-                # Check if there are commits since the latest PR comment
-                if not self._has_commits_since_pr_comments():
-                    return PhaseResult(
-                        status=PhaseStatus.COMPLETED,
-                        message=f"PR #{self.pr_number} has no new commits since latest PR comment. Nothing to review.",
-                        data={
-                            "pr_number": self.pr_number,
-                        },
-                    )
 
             # Calculate iteration number based on iteration history
             self.iteration = self._get_next_iteration_number("review", self.review_dir)
@@ -195,6 +172,30 @@ class ReviewPhase(Phase):
             # Use iteration_XXX/output.md format (consistent with other phases)
             iteration_dir = self.review_dir / f"iteration_{self.iteration:03d}"
             review_file_path = iteration_dir / "output.md"
+
+            # Check for PR feedback file (from completed PR iterations)
+            pr_feedback_file = None
+            pr_dir = self.issue_dir / "pr"
+            if pr_dir.exists():
+                iteration_dirs = sorted(pr_dir.glob("iteration_*"))
+                # Search backwards for the latest iteration with a completed status_code
+                for iteration_dir_pr in reversed(iteration_dirs):
+                    context_file = iteration_dir_pr / "context.json"
+                    if not context_file.exists():
+                        continue
+                    import json
+                    with open(context_file, "r", encoding="utf-8") as f:
+                        ctx = json.load(f)
+                    if not ctx.get("status_code"):
+                        continue
+                    pr_user_input_file = iteration_dir_pr / "user_input.md"
+                    if pr_user_input_file.exists() and pr_user_input_file.read_text(encoding="utf-8").strip():
+                        from cafe.utils.git_utils import to_cwd_relative_path
+                        try:
+                            pr_feedback_file = to_cwd_relative_path(pr_user_input_file)
+                        except ValueError:
+                            pr_feedback_file = str(pr_user_input_file.resolve())
+                    break
 
             # Generate checklist for this iteration
             from cafe.utils.checklist_generator import generate_review_checklist
@@ -206,6 +207,7 @@ class ReviewPhase(Phase):
                 review_file_path=str(review_file_path),
                 base_branch=self.base_branch,
                 checklist_file_path=checklist_path,
+                pr_feedback_file_path=pr_feedback_file,
             )
 
             # Use path relative to current working directory (supports worktree)
@@ -315,102 +317,6 @@ class ReviewPhase(Phase):
         except Exception as e:
             return self._handle_exception_in_execute(e, "Review phase failed")
 
-    def _load_pr_comments(self) -> tuple[str, int]:
-        """Load PR comments if pr_number is provided.
-
-        Fetches both review comments and timeline comments.
-
-        Returns:
-            Tuple of (formatted comments string, unresolved count)
-        """
-        if not self.pr_number:
-            return "", 0
-
-        # Return cached result if already loaded
-        if self._pr_comments_cache is not None:
-            return self._pr_comments_cache
-
-        try:
-            print(f"  → Calling get_all_pr_comments({self.pr_number})")
-            comments = get_all_pr_comments(self.pr_number)
-            print(f"  → Got {len(comments)} total comments")
-
-            # Filter: unresolved review comments + all timeline comments
-            review_comments = [c for c in comments if c.comment_type == "review"]
-            timeline_comments = [c for c in comments if c.comment_type == "timeline"]
-
-            unresolved_review = filter_unresolved_comments(review_comments)
-            comments_to_present = unresolved_review + timeline_comments
-
-            print(f"  → {len(unresolved_review)} unresolved review comments + {len(timeline_comments)} timeline comments")
-
-            result = format_comments_for_prompt(comments_to_present)
-            if result:
-                print(f"  → Formatted result length: {len(result)} chars")
-
-            # Cache the result
-            self._pr_comments_cache = (result, len(comments_to_present))
-            return self._pr_comments_cache
-        except (ValueError, Exception) as e:
-            # Log error but don't fail - PR comments are optional context
-            print(f"⚠️  Failed to load PR comments: {e}")
-            import traceback
-            traceback.print_exc()
-            self._pr_comments_cache = ("", 0)
-            return self._pr_comments_cache
-
-    def _get_latest_pr_comment_timestamp(self):
-        """Get timestamp of the latest PR comment.
-
-        Returns:
-            datetime object of the latest comment, or None if no comments
-        """
-        if not self.pr_number:
-            return None
-
-        try:
-            comments = get_all_pr_comments(self.pr_number)
-            if not comments:
-                return None
-
-            # Find the latest comment by created_at timestamp
-            from datetime import datetime
-            latest_timestamp = None
-            for comment in comments:
-                timestamp_str = comment.created_at
-                if timestamp_str.endswith('Z'):
-                    timestamp_str = timestamp_str.replace('Z', '+00:00')
-                comment_time = datetime.fromisoformat(timestamp_str)
-
-                if latest_timestamp is None or comment_time > latest_timestamp:
-                    latest_timestamp = comment_time
-
-            return latest_timestamp
-        except Exception as e:
-            print(f"⚠️  Failed to get latest PR comment timestamp: {e}")
-            return None
-
-    def _has_commits_since_pr_comments(self) -> bool:
-        """Check if there are commits since the latest PR comment.
-
-        Returns:
-            True if there are new commits, False otherwise
-        """
-        latest_comment_time = self._get_latest_pr_comment_timestamp()
-        if not latest_comment_time:
-            # No PR comments, so proceed with review
-            return True
-
-        try:
-            # Get commits since the latest PR comment timestamp
-            timestamp_str = latest_comment_time.isoformat()
-            commits = self.git_ops.get_commits_since(timestamp_str)
-            return len(commits) > 0
-        except Exception as e:
-            print(f"⚠️  Failed to check commits since PR comments: {e}")
-            # On error, assume there are new commits to be safe
-            return True
-
     def _generate_prompt(self, user_input: str) -> str:
         """Generate review prompt (implements abstract method from Phase).
 
@@ -441,32 +347,9 @@ class ReviewPhase(Phase):
         Args:
             status_code: Phase status code
         """
-        import json
-        from datetime import datetime
-        from cafe.core.types import PhaseStatus, PhaseProgress
-
-        status_file = self._get_status_file()
-        status_file.parent.mkdir(parents=True, exist_ok=True)
-
         # Both CONFIRMED and NEEDS_CHANGES are completion statuses for review
         complete_codes = [PhaseStatusCode.CONFIRMED, PhaseStatusCode.NEEDS_CHANGES]
-        phase_status = PhaseStatus.COMPLETED if status_code in complete_codes else PhaseStatus.IN_PROGRESS
-
-        # Set end_time when phase completes
-        end_time = datetime.now().astimezone() if phase_status == PhaseStatus.COMPLETED else None
-
-        progress = PhaseProgress(
-            phase=self.phase_name,
-            status=phase_status,
-            status_code=status_code.value,
-            timestamp=datetime.now().astimezone(),
-            iteration=self.iteration,
-            message=f"Code review completed with {status_code.value}" if phase_status == PhaseStatus.COMPLETED else f"Iteration {self.iteration}",
-            end_time=end_time,
-        )
-
-        with open(status_file, 'w', encoding='utf-8') as f:
-            json.dump(progress.to_dict(), f, ensure_ascii=False, indent=2)
+        super()._save_progress(status_code, complete_codes=complete_codes)
 
     def _check_if_develop_is_newer(self) -> bool:
         """Check if develop phase timestamp is newer than last review.
@@ -515,10 +398,6 @@ class ReviewPhase(Phase):
         Returns:
             Review prompt string
         """
-        # Load PR comments if available
-        pr_comments, _ = self._load_pr_comments()
-        pr_comments_section = f"\n\n{pr_comments}\n" if pr_comments else ""
-
         # Check if need to re-run checks (develop is newer than review)
         develop_is_newer = self._check_if_develop_is_newer()
         recheck_instruction = ""
@@ -596,7 +475,6 @@ Read {agent_file} to understand your complete role definition and responsibiliti
 
 **Task:** Conduct iteration {self.iteration} code review.
 Review scope: commits in current branch but not in {self.base_branch}.
-{pr_comments_section}
 {recheck_note}
 {restriction_note}
 

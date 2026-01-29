@@ -143,9 +143,11 @@ class Phase(ABC):
         iteration_dir.mkdir(parents=True, exist_ok=True)
 
         # Save user_input to dedicated markdown file
+        # Don't overwrite existing non-empty user_input.md (e.g., from PR phase)
         user_input_file = iteration_dir / "user_input.md"
-        with open(user_input_file, "w", encoding="utf-8") as f:
-            f.write(user_input)
+        if not user_input_file.exists() or user_input_file.stat().st_size == 0:
+            with open(user_input_file, "w", encoding="utf-8") as f:
+                f.write(user_input)
 
         # Create initial context data
         context_data: Dict[str, Any] = {
@@ -931,11 +933,17 @@ class Phase(ABC):
             print(f"⚠️  Failed to recover from written files: {e}")
             return None, None
 
-    def _save_progress(self, status_code: PhaseStatusCode) -> None:
+    def _save_progress(
+        self,
+        status_code: PhaseStatusCode,
+        complete_codes: Optional[List[PhaseStatusCode]] = None,
+    ) -> None:
         """Save phase progress to status.json (common method).
 
         Args:
             status_code: Phase status code (CONFIRMED, READY_FOR_REVIEW, NEED_CLARIFICATION, etc.)
+            complete_codes: Optional list of status codes that indicate completion.
+                           If not provided, defaults to [CONFIRMED, READY_FOR_REVIEW]
         """
         if not hasattr(self, "iteration"):
             raise AttributeError("Phase must have 'iteration' attribute")
@@ -946,7 +954,8 @@ class Phase(ABC):
         status_file.parent.mkdir(parents=True, exist_ok=True)
 
         # Determine phase status based on status code
-        complete_codes = [PhaseStatusCode.CONFIRMED, PhaseStatusCode.READY_FOR_REVIEW]
+        if complete_codes is None:
+            complete_codes = [PhaseStatusCode.CONFIRMED, PhaseStatusCode.READY_FOR_REVIEW]
         phase_status = PhaseStatus.COMPLETED if status_code in complete_codes else PhaseStatus.IN_PROGRESS
 
         # Set end_time when phase completes
@@ -980,6 +989,93 @@ class Phase(ABC):
 
         from cafe.core.types import PhaseProgress
         return PhaseProgress.from_dict(data)
+
+    def _load_pr_comments_from_iteration_file(self) -> Optional[str]:
+        """Load PR comments from pr/iteration_XXX/user_input.md.
+
+        This is a unified approach for loading PR feedback in both local
+        and GitHub modes. Checks timestamp of latest PR iteration and compares
+        with current phase. Only loads feedback if PR iteration is newer.
+
+        Returns:
+            Feedback content if found and newer, None otherwise
+
+        Raises:
+            FileNotFoundError: If PR iteration is newer but user_input.md not found
+            ValueError: If PR iteration is newer but user_input.md is empty
+        """
+        from datetime import datetime, timezone
+
+        pr_dir = self.issue_dir / "pr"
+        if not pr_dir.exists():
+            return None
+
+        # Find latest PR iteration directory with a completed status_code
+        iteration_dirs = sorted(pr_dir.glob("iteration_*"))
+        if not iteration_dirs:
+            return None
+
+        # Search backwards for the latest iteration that has a status_code
+        latest_pr_iteration_dir = None
+        pr_context = None
+        for iteration_dir in reversed(iteration_dirs):
+            context_file = iteration_dir / "context.json"
+            if not context_file.exists():
+                continue
+            with open(context_file, "r", encoding="utf-8") as f:
+                ctx = json.load(f)
+            if ctx.get("status_code"):
+                latest_pr_iteration_dir = iteration_dir
+                pr_context = ctx
+                break
+
+        if not latest_pr_iteration_dir or not pr_context:
+            return None
+
+        pr_end_time_str = pr_context.get("end_time")
+        if not pr_end_time_str:
+            # Fallback to timestamp for backward compatibility
+            pr_end_time_str = pr_context.get("timestamp")
+            if not pr_end_time_str:
+                return None
+
+        # Parse PR end_time
+        pr_end_time = datetime.fromisoformat(pr_end_time_str)
+        if pr_end_time.tzinfo is None:
+            pr_end_time = pr_end_time.replace(tzinfo=timezone.utc)
+
+        # Get latest phase end_time
+        existing_progress = self._load_progress()
+        if existing_progress:
+            # Try to get end_time first, fallback to timestamp for backward compatibility
+            phase_end_time = getattr(existing_progress, 'end_time', None) or existing_progress.timestamp
+            if phase_end_time:
+                if phase_end_time.tzinfo is None:
+                    phase_end_time = phase_end_time.replace(tzinfo=timezone.utc)
+
+                # If PR iteration end_time is not newer than phase end_time, ignore it
+                if pr_end_time <= phase_end_time:
+                    print(f"  → PR iteration {latest_pr_iteration_dir.name} is not newer than {self.phase_name} phase, skipping")
+                    return None
+
+        # PR iteration is newer (or phase has never run) - load user_input.md
+        user_input_file = latest_pr_iteration_dir / "user_input.md"
+
+        if not user_input_file.exists():
+            # PR iteration exists but user_input.md not found yet
+            # This is normal - PR was just created but no comments yet
+            print(f"  → PR iteration {latest_pr_iteration_dir.name} exists but no user_input.md yet (no comments)")
+            return None
+
+        content = user_input_file.read_text(encoding="utf-8").strip()
+        if not content:
+            # PR iteration exists but user_input.md is empty
+            # This is normal - PR was just created but no comments yet
+            print(f"  → PR iteration {latest_pr_iteration_dir.name}/user_input.md is empty (no comments yet)")
+            return None
+
+        print(f"  → Loaded PR feedback from {latest_pr_iteration_dir.name}/user_input.md")
+        return content
 
     def _get_phase_timestamp(self, phase_name: str) -> Optional[str]:
         """Get the timestamp of the latest iteration for a specified phase.
