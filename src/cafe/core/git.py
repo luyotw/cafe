@@ -333,7 +333,18 @@ class GitOperations:
             True if there are unpushed commits, False otherwise
         """
         if not self.has_upstream_branch():
-            return False
+            # No upstream branch - check if remote branch exists
+            try:
+                branch_name = self.get_current_branch()
+                # Check if remote branch exists
+                self.run_git("rev-parse", "--verify", f"origin/{branch_name}")
+                # Remote exists but no tracking - compare with remote
+                output = self.run_git("log", f"origin/{branch_name}..HEAD", "--oneline")
+                return bool(output.strip())
+            except GitError:
+                # Remote branch doesn't exist - any local commits count as unpushed
+                output = self.run_git("rev-list", "--count", "HEAD")
+                return int(output.strip()) > 0
         try:
             output = self.run_git("log", "@{u}..HEAD", "--oneline")
             return bool(output.strip())
@@ -347,11 +358,22 @@ class GitOperations:
             List of commit dictionaries with 'hash', 'timestamp', and 'message' keys.
             Timestamp is in ISO 8601 format.
         """
+        range_spec = "@{u}..HEAD"
+
         if not self.has_upstream_branch():
-            return []
+            # No upstream branch - check if remote branch exists
+            try:
+                branch_name = self.get_current_branch()
+                self.run_git("rev-parse", "--verify", f"origin/{branch_name}")
+                # Remote exists but no tracking - compare with remote
+                range_spec = f"origin/{branch_name}..HEAD"
+            except GitError:
+                # Remote branch doesn't exist - return empty list (caller should handle first push differently)
+                return []
+
         try:
             # Format: <hash>|<iso-timestamp>|<subject>
-            output = self.run_git("log", "@{u}..HEAD", "--format=%H|%aI|%s")
+            output = self.run_git("log", range_spec, "--format=%H|%aI|%s")
             if not output:
                 return []
 

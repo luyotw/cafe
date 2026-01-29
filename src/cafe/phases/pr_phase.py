@@ -608,11 +608,17 @@ class PRPhase(Phase):
             # Push new commits and update/create PR
             unpushed_commits = self.git_ops.get_unpushed_commits()
             console.print()
-            console.print(f"[bold]Pushing {len(unpushed_commits)} unpushed commit(s) to remote...[/bold]")
-            for commit in unpushed_commits:
-                console.print(f"  [dim]- {commit['hash'][:8]} {commit['message']}[/dim]")
-            console.print()
 
+            if unpushed_commits:
+                # Show commits when we have them (incremental push)
+                console.print(f"[bold]Pushing {len(unpushed_commits)} unpushed commit(s) to remote...[/bold]")
+                for commit in unpushed_commits:
+                    console.print(f"  [dim]- {commit['hash'][:8]} {commit['message']}[/dim]")
+            else:
+                # First push - no commit list
+                console.print(f"[bold]Pushing branch to remote...[/bold]")
+
+            console.print()
             self.git_ops.push(branch_name, set_upstream=True, force=self.force_push)
 
             # Determine iteration number BEFORE calling _prepare_pr_content
