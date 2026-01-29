@@ -186,8 +186,7 @@ def generate_develop_checklist(
     develop_file: Optional[str],
     checklist_file_path: Path,
     correction_mode: bool = False,
-    review_file_path: Optional[str] = None,
-    pr_feedback_file_path: Optional[str] = None,
+    feedback_file_path: Optional[str] = None,
     basic_principles: Optional[str] = None,
     output_file: Optional[str] = None,
 ) -> None:
@@ -200,8 +199,7 @@ def generate_develop_checklist(
         develop_file: Path to develop file (for correction mode)
         checklist_file_path: Path where checklist file should be created
         correction_mode: True if in correction mode, False for normal mode
-        review_file_path: Path to review file (for correction mode)
-        pr_feedback_file_path: Path to PR feedback todo list file (for correction mode)
+        feedback_file_path: Path to feedback todo list file (from review or PR phase, for correction mode)
         basic_principles: Basic principles text in "- item" format (optional)
         output_file: Path to output file (for NO_CHANGES_NEEDED reasoning)
     """
@@ -233,10 +231,8 @@ def generate_develop_checklist(
     }
     if develop_file:
         placeholders["develop_file"] = develop_file
-    if review_file_path:
-        placeholders["review_file_path"] = review_file_path
-    if pr_feedback_file_path:
-        placeholders["pr_feedback_file_path"] = pr_feedback_file_path
+    if feedback_file_path:
+        placeholders["feedback_file_path"] = feedback_file_path
     if output_file:
         placeholders["output_file"] = output_file
 
