@@ -938,16 +938,10 @@ Read {agent_file} to understand your complete role definition and responsibiliti
             # Check if in correction mode (has review feedback or PR feedback)
             correction_mode = hasattr(self, '_has_review_feedback') and self._has_review_feedback
 
-            # Get review file path if in correction mode
-            review_file = None
-            if correction_mode:
-                review_dir = self.issue_dir / "review"
-                review_file_path = self._get_latest_versioned_file("review", review_dir)
-                if review_file_path and review_file_path.exists():
-                    review_file = str(review_file_path)
+            # Determine single feedback file: PR feedback takes priority over review feedback
+            feedback_file = None
 
-            # Check for PR feedback todo list (only from completed iterations)
-            pr_feedback_file = None
+            # First check for PR feedback todo list (only from completed iterations)
             pr_dir = self.issue_dir / "pr"
             if pr_dir.exists():
                 iteration_dirs = sorted(pr_dir.glob("iteration_*"))
@@ -964,13 +958,20 @@ Read {agent_file} to understand your complete role definition and responsibiliti
                     if pr_output_file.exists() and pr_output_file.read_text(encoding="utf-8").strip():
                         from cafe.utils.git_utils import to_cwd_relative_path
                         try:
-                            pr_feedback_file = to_cwd_relative_path(pr_output_file)
+                            feedback_file = to_cwd_relative_path(pr_output_file)
                         except ValueError:
-                            pr_feedback_file = str(pr_output_file.resolve())
+                            feedback_file = str(pr_output_file.resolve())
                         # If we have PR feedback, we're in correction mode
                         if not correction_mode:
                             correction_mode = True
                     break
+
+            # If no PR feedback, check for review feedback
+            if not feedback_file and correction_mode:
+                review_dir = self.issue_dir / "review"
+                review_file_path = self._get_latest_versioned_file("review", review_dir)
+                if review_file_path and review_file_path.exists():
+                    feedback_file = str(review_file_path)
 
             # Define basic principles
             basic_principles = """- Follow existing commit message style (format, language, structure)
@@ -994,8 +995,7 @@ Read {agent_file} to understand your complete role definition and responsibiliti
                 develop_file=develop_file,
                 checklist_file_path=checklist_path,
                 correction_mode=correction_mode,
-                review_file_path=review_file,
-                pr_feedback_file_path=pr_feedback_file,
+                feedback_file_path=feedback_file,
                 basic_principles=basic_principles,
                 output_file=output_file,
             )

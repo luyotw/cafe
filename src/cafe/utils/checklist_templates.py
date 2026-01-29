@@ -97,10 +97,9 @@ DEVELOP_EXECUTION_STEPS_CORRECTION = """## Checklist
 [ ] Read {agent_file} to understand your role and native language
 [ ] Read questions in {develop_file} (if exists)
 [ ] Carefully read {spec_file_path} and {plan_file_path}
-[ ] Read review feedback in {review_file_path} (if exists)
-[ ] Read PR feedback todo list in {pr_feedback_file_path} (if exists)
+[ ] Read feedback todo list in {feedback_file_path}
 [ ] Address each issue raised in the feedback
-[ ] Mark completed items in {pr_feedback_file_path} if applicable (change - [ ] to - [x])
+[ ] Mark completed items in {feedback_file_path} if applicable (change - [ ] to - [x])
 [ ] Commit changes with descriptive messages
 [ ] Confirm: Maximized code reuse by looking for existing patterns and utilities
 [ ] Confirm: Commit messages strictly match existing format, language, and structure
@@ -164,8 +163,11 @@ REVIEW_EXECUTION_STEPS = """## Checklist
 
 ## Final Steps
 [ ] Confirm: No code was modified
-[ ] Save complete review result to {review_file_path} in your native language
-[ ] List file paths and line numbers with issue explanations
+[ ] Write review findings to {review_file_path} in todo list format (same format as PR phase)
+[ ] Use this structure: ## Todo List / ### [Category] / - [ ] item or - [x] item
+[ ] Group issues by category (e.g., "Commit Message Style", "Code Quality", "Testing")
+[ ] Each issue should be a checkbox item with file path and line number
+[ ] If no issues found, all items should be marked [x]
 [ ] Do NOT provide code solutions, only identify issues
 [ ] Return ONLY the status code in your response
 [ ] Return appropriate status code
