@@ -244,16 +244,17 @@ class TimelineBuilder:
         return [entry for entry in entries if entry.entry_type == "iteration"]
 
     def sort_chronologically(self, entries: List[TimelineEntry]) -> List[TimelineEntry]:
-        """Sort entries chronologically in flat order by start_time.
+        """Sort entries chronologically using end_time with start_time fallback.
 
         Args:
             entries: List of timeline entries
 
         Returns:
-            Sorted list with all entries in chronological order by start_time
+            Sorted list with all entries in chronological order by end_time when available,
+            falling back to start_time for in-progress entries
         """
-        # Sort all entries together by start_time
-        return sorted(entries, key=lambda e: e.start_time)
+        # Sort by end_time when available, fallback to start_time
+        return sorted(entries, key=lambda e: e.end_time if e.end_time else e.start_time)
 
     def convert_to_local_timezone(self, entries: List[TimelineEntry]) -> List[TimelineEntry]:
         """Convert all UTC timestamps to local timezone.

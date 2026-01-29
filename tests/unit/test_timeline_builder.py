@@ -256,3 +256,106 @@ class TestTimezoneConversion:
 
         converted = builder.convert_to_local_timezone(entries)
         assert len(converted) == 2
+
+
+class TestSortChronologicallyWithEndTime:
+    """Test sort_chronologically uses end_time with start_time fallback"""
+
+    def test_completed_entries_sorted_by_end_time(self):
+        """Verify completed entries are sorted by end_time when available"""
+        from datetime import datetime, timezone
+        from cafe.services.timeline_builder import TimelineBuilder, TimelineEntry
+        from cafe.core.types import PhaseStatus
+
+        builder = TimelineBuilder("test-issue")
+
+        # Create entries with different start and end times
+        entry1 = TimelineEntry(
+            entry_type="iteration",
+            name="Iteration 1",
+            phase="spec",
+            start_time=datetime(2026, 1, 27, 10, 0, tzinfo=timezone.utc),  # Started first
+            end_time=datetime(2026, 1, 27, 10, 20, tzinfo=timezone.utc),    # Ended last
+            status=PhaseStatus.COMPLETED
+        )
+        entry2 = TimelineEntry(
+            entry_type="iteration",
+            name="Iteration 2",
+            phase="plan",
+            start_time=datetime(2026, 1, 27, 10, 5, tzinfo=timezone.utc),  # Started second
+            end_time=datetime(2026, 1, 27, 10, 10, tzinfo=timezone.utc),    # Ended first
+            status=PhaseStatus.COMPLETED
+        )
+
+        entries = [entry1, entry2]
+        sorted_entries = builder.sort_chronologically(entries)
+
+        # Should be sorted by end_time: entry2 (10:10) before entry1 (10:20)
+        assert sorted_entries[0].name == "Iteration 2"
+        assert sorted_entries[1].name == "Iteration 1"
+
+    def test_in_progress_entries_sorted_by_start_time(self):
+        """Verify in-progress entries (no end_time) are sorted by start_time"""
+        from datetime import datetime, timezone
+        from cafe.services.timeline_builder import TimelineBuilder, TimelineEntry
+        from cafe.core.types import PhaseStatus
+
+        builder = TimelineBuilder("test-issue")
+
+        entry1 = TimelineEntry(
+            entry_type="iteration",
+            name="Iteration 1",
+            phase="spec",
+            start_time=datetime(2026, 1, 27, 10, 5, tzinfo=timezone.utc),  # Started second
+            end_time=None,
+            status=PhaseStatus.IN_PROGRESS
+        )
+        entry2 = TimelineEntry(
+            entry_type="iteration",
+            name="Iteration 2",
+            phase="plan",
+            start_time=datetime(2026, 1, 27, 10, 0, tzinfo=timezone.utc),  # Started first
+            end_time=None,
+            status=PhaseStatus.IN_PROGRESS
+        )
+
+        entries = [entry1, entry2]
+        sorted_entries = builder.sort_chronologically(entries)
+
+        # Should be sorted by start_time: entry2 (10:00) before entry1 (10:05)
+        assert sorted_entries[0].name == "Iteration 2"
+        assert sorted_entries[1].name == "Iteration 1"
+
+    def test_mixed_completed_and_in_progress_entries(self):
+        """Verify mixed completed/in-progress entries sort correctly"""
+        from datetime import datetime, timezone
+        from cafe.services.timeline_builder import TimelineBuilder, TimelineEntry
+        from cafe.core.types import PhaseStatus
+
+        builder = TimelineBuilder("test-issue")
+
+        # Completed entry (has end_time)
+        completed = TimelineEntry(
+            entry_type="iteration",
+            name="Completed",
+            phase="spec",
+            start_time=datetime(2026, 1, 27, 10, 0, tzinfo=timezone.utc),
+            end_time=datetime(2026, 1, 27, 10, 15, tzinfo=timezone.utc),
+            status=PhaseStatus.COMPLETED
+        )
+        # In-progress entry (no end_time)
+        in_progress = TimelineEntry(
+            entry_type="iteration",
+            name="In Progress",
+            phase="plan",
+            start_time=datetime(2026, 1, 27, 10, 10, tzinfo=timezone.utc),
+            end_time=None,
+            status=PhaseStatus.IN_PROGRESS
+        )
+
+        entries = [in_progress, completed]
+        sorted_entries = builder.sort_chronologically(entries)
+
+        # Completed (end 10:15) should come after in_progress (start 10:10, treated as 10:10)
+        assert sorted_entries[0].name == "In Progress"
+        assert sorted_entries[1].name == "Completed"
