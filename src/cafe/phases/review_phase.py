@@ -13,7 +13,6 @@ from cafe.core.permission import PermissionHandler
 from cafe.core.phase import Phase
 from cafe.core.status_codes import PhaseStatusCode, StatusCodeParser, generate_status_code_prompt
 from cafe.core.types import PhaseProgress, PhaseResult, PhaseStatus
-from cafe.utils.github import get_pr_comments, get_all_pr_comments, filter_unresolved_comments, format_comments_for_prompt
 from cafe.utils.prompt_utils import format_checklist_instruction
 
 
@@ -64,7 +63,6 @@ class ReviewPhase(Phase):
         self.target_commit = target_commit
         self.iteration = 1  # Track iteration number for subsequent reviews
         self.pr_number = pr_number
-        self._pr_comments_cache = None  # Cache for PR comments to avoid duplicate loading
         self.force = force  # Store force flag for use in execute()
 
         # Get issue directory from current branch
@@ -293,53 +291,6 @@ class ReviewPhase(Phase):
 
         except Exception as e:
             return self._handle_exception_in_execute(e, "Review phase failed")
-
-    def _load_pr_comments(self) -> tuple[str, int]:
-        """Load PR comments from pr/iteration_XXX/user_input.md or GitHub API.
-
-        New behavior: Checks for pr/iteration_XXX/user_input.md first.
-        If found and newer than review phase, loads from there.
-        Otherwise, falls back to fetching from GitHub API (legacy behavior).
-
-        Returns:
-            Tuple of (formatted comments string, unresolved count)
-        """
-        if not self.pr_number:
-            return "", 0
-
-        # Return cached result if already loaded
-        if self._pr_comments_cache is not None:
-            return self._pr_comments_cache
-
-        # Try to load from pr/iteration_XXX/user_input.md first (new approach)
-        try:
-            pr_feedback_from_file = self._load_pr_comments_from_iteration_file()
-            if pr_feedback_from_file is not None:
-                # Successfully loaded from iteration file
-                # Return in same format as get_all_pr_comments
-                # Note: unresolved count is not available from file,
-                # so we return 0 (not used in this path)
-                self._pr_comments_cache = (pr_feedback_from_file, 0)
-                return self._pr_comments_cache
-        except (FileNotFoundError, ValueError) as e:
-            # If PR iteration is newer but file not found/empty, raise error
-            raise
-        except Exception as e:
-            # For other unexpected errors, raise them
-            # The review phase exclusively relies on user_input.md as per spec
-            raise RuntimeError(
-                f"Failed to load PR comments from pr/iteration_XXX/user_input.md: {e}. "
-                f"The review phase exclusively reads from user_input.md files created by the PR phase. "
-                f"Please run 'cafe pr' first to fetch and save PR comments."
-            ) from e
-
-        # No fallback to GitHub API - review phase exclusively uses user_input.md
-        # If we reach here, no PR feedback was found
-        print(f"  → No PR feedback found in pr/iteration_XXX/user_input.md")
-        self._pr_comments_cache = ("", 0)
-        return self._pr_comments_cache
-
-
 
     def _generate_prompt(self, user_input: str) -> str:
         """Generate review prompt (implements abstract method from Phase).
