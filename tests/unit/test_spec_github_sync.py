@@ -54,9 +54,9 @@ def spec_phase(tmp_path, mock_dependencies):
 
 class TestSyncConfirmedSpecToGitHub:
     """Test _sync_confirmed_spec_to_github method."""
-    
+
     def test_sync_when_fetched_from_github(self, spec_phase):
-        """Test sync updates issue description when spec was fetched from GitHub."""
+        """Test sync adds comment to issue when spec was fetched from GitHub."""
         # Setup: Create spec file and set _config_issue_id
         spec_content = "# Confirmed Requirements\n\nTest spec content"
         Path(spec_phase.spec_file).write_text(spec_content)
@@ -65,13 +65,19 @@ class TestSyncConfirmedSpecToGitHub:
         # Execute
         with patch("cafe.phases.spec_phase.GitHubOps") as mock_gh_ops_cls:
             mock_gh_ops = MagicMock()
+            mock_gh_ops.check_gh_installed.return_value = True
+            mock_gh_ops.check_gh_auth.return_value = True
             mock_gh_ops_cls.return_value = mock_gh_ops
 
             spec_phase._sync_confirmed_spec_to_github()
 
-            # Verify: Should update issue description, not add comment
-            mock_gh_ops.update_issue.assert_called_once_with("123", body=spec_content)
-            mock_gh_ops.add_issue_comment.assert_not_called()
+            # Verify: Should add comment with spec content, not update issue body
+            mock_gh_ops.add_issue_comment.assert_called_once()
+            args, kwargs = mock_gh_ops.add_issue_comment.call_args
+            assert args[0] == "123"
+            assert "### 📋 Requirements Specification (Confirmed)" in args[1]
+            assert spec_content in args[1]
+            mock_gh_ops.update_issue.assert_not_called()
     
     def test_no_sync_without_config_issue_id(self, spec_phase):
         """Test no sync when spec was not fetched from GitHub."""
@@ -115,7 +121,9 @@ class TestSyncConfirmedSpecToGitHub:
         # Execute
         with patch("cafe.phases.spec_phase.GitHubOps") as mock_gh_ops_cls:
             mock_gh_ops = MagicMock()
-            mock_gh_ops.update_issue.side_effect = GitHubError("API rate limit exceeded")
+            mock_gh_ops.check_gh_installed.return_value = True
+            mock_gh_ops.check_gh_auth.return_value = True
+            mock_gh_ops.add_issue_comment.side_effect = GitHubError("API rate limit exceeded")
             mock_gh_ops_cls.return_value = mock_gh_ops
 
             # Should not raise exception
@@ -123,7 +131,7 @@ class TestSyncConfirmedSpecToGitHub:
 
             # Verify warning message contains error details
             captured = capsys.readouterr()
-            assert "Warning" in captured.out or "⚠️" in captured.out
+            assert "Warning" in captured.out or "warning" in captured.out.lower()
             assert "API rate limit exceeded" in captured.out
 
 
@@ -206,12 +214,12 @@ class TestConfirmedSyncInWorkflow:
 
 class TestGetCompletionDataNoSync:
     """Test that _get_completion_data no longer syncs to GitHub."""
-    
+
     def test_get_completion_data_does_not_sync(self, spec_phase):
         """Test _get_completion_data no longer posts to GitHub."""
         # Setup
         Path(spec_phase.spec_file).write_text("# Test spec")
-        spec_phase._config_issue_id = "123"
+        spec_phase._config_issue_id = 123
 
         # Execute
         with patch("cafe.phases.spec_phase.GitHubOps") as mock_gh_ops_cls:

@@ -796,7 +796,7 @@ class SpecPhase(Phase):
         pass
 
     def _sync_confirmed_spec_to_github(self) -> None:
-        """Sync confirmed spec to GitHub issue description.
+        """Sync confirmed spec to GitHub issue as a comment.
 
         Only syncs when:
         1. Spec was loaded from GitHub issue (has _config_issue_id)
@@ -813,15 +813,28 @@ class SpecPhase(Phase):
 
             spec_content = latest_spec_path.read_text(encoding="utf-8")
 
-            # Update GitHub issue description with confirmed spec
-            print(f"\n📤 Syncing confirmed spec to GitHub issue #{self._config_issue_id}...")
+            # Format comment body
+            comment_body = f"### 📋 Requirements Specification (Confirmed)\n\n{spec_content}"
+
+            # Post comment to GitHub issue
             gh_ops = GitHubOps()
-            gh_ops.update_issue(str(self._config_issue_id), body=spec_content)
-            print(f"✅ Successfully synced spec to GitHub issue #{self._config_issue_id}")
+            if not gh_ops.check_gh_installed():
+                return
+
+            if not gh_ops.check_gh_auth():
+                self.display.console.print(f"[yellow]Warning: gh CLI not authenticated, skipping spec sync to GitHub issue #{self._config_issue_id}[/yellow]")
+                return
+
+            self.display.console.print(f"Syncing spec to GitHub issue #{self._config_issue_id}...")
+            gh_ops.add_issue_comment(str(self._config_issue_id), comment_body)
+            self.display.console.print(f"[green]✅ Spec synced to GitHub issue #{self._config_issue_id} as a comment.[/green]")
 
         except GitHubError as e:
             # Log error but don't fail the phase
-            self.display.console.print(f"⚠️  Warning: Failed to sync spec to GitHub issue #{self._config_issue_id}: {e}")
+            self.display.console.print(f"[yellow]Warning: Failed to sync spec to GitHub: {e}[/yellow]")
+        except Exception as e:
+            # Log unexpected errors but don't fail
+            self.display.console.print(f"[yellow]Warning: Unexpected error during GitHub sync: {e}[/yellow]")
 
     def _create_github_issue(self, content: str) -> str:
         """Create a new GitHub issue with requirements.
