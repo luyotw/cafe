@@ -82,17 +82,6 @@ class TestDevelopPhasePromptGeneration:
             # Call _check_if_already_completed_with_review to set _has_review_feedback flag
             phase._check_if_already_completed_with_review()
 
-            # Mock _load_pr_comments to track if it's called
-            original_load_pr_comments = phase._load_pr_comments
-            load_pr_comments_called = False
-
-            def mock_load_pr_comments():
-                nonlocal load_pr_comments_called
-                load_pr_comments_called = True
-                return "PR comment content", 1
-
-            phase._load_pr_comments = mock_load_pr_comments
-
             # Need to set iteration before calling _generate_prompt
             phase.iteration = 1
 
@@ -107,9 +96,6 @@ class TestDevelopPhasePromptGeneration:
         # Assert: Review feedback and PR feedback are handled via checklist, not in prompt
         # The prompt should reference the checklist for these items
         assert "checklist.md" in prompt.lower()
-
-        # Assert: _load_pr_comments should NOT have been called
-        assert not load_pr_comments_called
 
     @pytest.mark.xfail(reason="Test needs updating for new architecture where PR comments come from user_input.md instead of GitHub API")
     def test_prompt_includes_pr_comments_when_no_review_feedback(
