@@ -472,6 +472,12 @@ class PRPhase(Phase):
             result_status = result.data.get("status_code", PhaseStatusCode.NEEDS_CHANGES.value) if result and result.data else PhaseStatusCode.NEEDS_CHANGES.value
             self._save_progress(PhaseStatusCode(result_status))
 
+            # Update iteration context.json with status_code
+            self._update_iteration_history(
+                phase_specific_data=result.data if result else {},
+                status_code=PhaseStatusCode(result_status),
+            )
+
             return result
 
         return None
