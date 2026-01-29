@@ -317,8 +317,8 @@ class PRPhase(Phase):
                         iteration_num = int(iter_dir.name.split("_")[1])
                         status_code = context.get("status_code")
 
-                        # Get end_time
-                        end_time_str = context.get("end_time") or context.get("timestamp")
+                        # Get end_time only, do not fall back to timestamp
+                        end_time_str = context.get("end_time")
                         if end_time_str:
                             end_time = datetime.fromisoformat(end_time_str)
                             if end_time.tzinfo is None:
@@ -362,8 +362,8 @@ class PRPhase(Phase):
                 status_data = json.load(f)
                 progress = PhaseProgress.from_dict(status_data)
 
-                # Try to get end_time first, fallback to timestamp
-                end_time = getattr(progress, 'end_time', None) or progress.timestamp
+                # Return end_time only, do not fall back to timestamp
+                end_time = getattr(progress, 'end_time', None)
                 return end_time
         except Exception:
             return None
@@ -390,12 +390,12 @@ class PRPhase(Phase):
         pr_end_time = pr_iteration_info["end_time"]
         develop_end_time = self._get_latest_develop_end_time()
 
-        # If no develop history, don't start new iteration (waiting for develop)
-        if not develop_end_time:
+        # If either end_time is None, wait for phase to complete (graceful skip)
+        if pr_end_time is None or develop_end_time is None:
             return False
 
         # If develop hasn't processed this PR iteration yet, don't start new iteration
-        if pr_end_time and pr_end_time > develop_end_time:
+        if pr_end_time > develop_end_time:
             return False
 
         # Develop has processed the PR iteration, should start new iteration

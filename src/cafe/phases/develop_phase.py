@@ -293,45 +293,45 @@ class DevelopPhase(Phase):
                     pr_status = json.load(f)
 
                 pr_status_code = pr_status.get("status_code")
-                pr_timestamp = datetime.fromisoformat(pr_status["timestamp"])
-                develop_timestamp = existing_progress.timestamp
-
-                # If PR has NEEDS_CHANGES and is newer than develop, need to execute
-                if pr_status_code == PhaseStatusCode.NEEDS_CHANGES.value and pr_timestamp > develop_timestamp:
-                    # Find the latest pr/iteration_XXX with output.md (todo list) to show user
-                    pr_dir = self.issue_dir / "pr"
-                    iteration_dirs = sorted(pr_dir.glob("iteration_*"), reverse=True)
-
-                    from cafe.utils.git_utils import to_cwd_relative_path
-
-                    # Prioritize showing todo list - find latest iteration with output.md
-                    for iteration_dir in iteration_dirs:
-                        output_file = iteration_dir / "output.md"
-                        if output_file.exists():
-                            # Show todo list file (prioritized)
-                            try:
-                                output_path = to_cwd_relative_path(output_file)
-                            except ValueError:
-                                output_path = str(output_file.resolve())
-                            print(f"  → Todo list: {output_path}")
-
-                            # Only show user_input.md if it exists for the same iteration
-                            user_input_file = iteration_dir / "user_input.md"
-                            if user_input_file.exists():
-                                try:
-                                    user_input_path = to_cwd_relative_path(user_input_file)
-                                except ValueError:
-                                    user_input_path = str(user_input_file.resolve())
-                                print(f"  → PR comments: {user_input_path}")
-                            break
-
-                    return None  # Continue execution
-
-                # If develop is newer than PR, changes have been addressed
-                if develop_timestamp > pr_timestamp:
-                    # Check if there's a newer PR status we haven't seen yet
-                    # (This shouldn't happen in normal flow, but just in case)
+                # Use end_time for comparison, skip if not available
+                pr_end_time_str = pr_status.get("end_time")
+                if not pr_end_time_str:
+                    # PR phase not completed yet, skip comparison
                     pass
+                else:
+                    pr_end_time = datetime.fromisoformat(pr_end_time_str)
+                    develop_end_time = getattr(existing_progress, 'end_time', None)
+
+                    # If PR has NEEDS_CHANGES and is newer than develop, need to execute
+                    if pr_status_code == PhaseStatusCode.NEEDS_CHANGES.value and develop_end_time and pr_end_time > develop_end_time:
+                        # Find the latest pr/iteration_XXX with output.md (todo list) to show user
+                        pr_dir = self.issue_dir / "pr"
+                        iteration_dirs = sorted(pr_dir.glob("iteration_*"), reverse=True)
+
+                        from cafe.utils.git_utils import to_cwd_relative_path
+
+                        # Prioritize showing todo list - find latest iteration with output.md
+                        for iteration_dir in iteration_dirs:
+                            output_file = iteration_dir / "output.md"
+                            if output_file.exists():
+                                # Show todo list file (prioritized)
+                                try:
+                                    output_path = to_cwd_relative_path(output_file)
+                                except ValueError:
+                                    output_path = str(output_file.resolve())
+                                print(f"  → Todo list: {output_path}")
+
+                                # Only show user_input.md if it exists for the same iteration
+                                user_input_file = iteration_dir / "user_input.md"
+                                if user_input_file.exists():
+                                    try:
+                                        user_input_path = to_cwd_relative_path(user_input_file)
+                                    except ValueError:
+                                        user_input_path = str(user_input_file.resolve())
+                                    print(f"  → PR comments: {user_input_path}")
+                                break
+
+                        return None  # Continue execution
 
             except Exception:
                 # If error, continue with normal flow

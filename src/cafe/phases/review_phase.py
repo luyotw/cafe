@@ -113,24 +113,25 @@ class ReviewPhase(Phase):
                         with open(review_status_file, 'r', encoding='utf-8') as f:
                             review_status = json.load(f)
 
-                        review_timestamp_str = review_status.get("timestamp", "")
-                        if review_timestamp_str:
-                            review_timestamp = datetime.fromisoformat(review_timestamp_str)
-                            if review_timestamp.tzinfo is None:
-                                review_timestamp = review_timestamp.replace(tzinfo=timezone.utc)
+                        # Use end_time for comparison, skip if not available
+                        review_end_time_str = review_status.get("end_time", "")
+                        if review_end_time_str:
+                            review_end_time = datetime.fromisoformat(review_end_time_str)
+                            if review_end_time.tzinfo is None:
+                                review_end_time = review_end_time.replace(tzinfo=timezone.utc)
 
-                            # Check develop phase timestamp instead of commit timestamp
+                            # Check develop phase end_time instead of commit timestamp
                             # This prevents false "already completed" when develop runs but produces no commits
-                            develop_timestamp_str = self._get_phase_timestamp("develop")
-                            if develop_timestamp_str:
-                                develop_timestamp = datetime.fromisoformat(develop_timestamp_str)
-                                if develop_timestamp.tzinfo is None:
-                                    develop_timestamp = develop_timestamp.replace(tzinfo=timezone.utc)
+                            develop_end_time_str = self._get_phase_end_time("develop")
+                            if develop_end_time_str:
+                                develop_end_time = datetime.fromisoformat(develop_end_time_str)
+                                if develop_end_time.tzinfo is None:
+                                    develop_end_time = develop_end_time.replace(tzinfo=timezone.utc)
 
-                                if review_timestamp > develop_timestamp:
+                                if review_end_time > develop_end_time:
                                     print(f"✅ Code review already completed - no new development since last review")
-                                    print(f"   Last review: {review_timestamp.isoformat()}")
-                                    print(f"   Latest develop: {develop_timestamp.isoformat()}")
+                                    print(f"   Last review: {review_end_time.isoformat()}")
+                                    print(f"   Latest develop: {develop_end_time.isoformat()}")
                                     print(f"   Next step: Run 'cafe pr' to push changes")
 
                                     return PhaseResult(
@@ -138,8 +139,8 @@ class ReviewPhase(Phase):
                                         message=f"Review already completed - no new development since last review",
                                         data={
                                             "status_code": review_status.get("status_code"),
-                                            "review_timestamp": review_timestamp.isoformat(),
-                                            "latest_develop_timestamp": develop_timestamp.isoformat(),
+                                            "review_timestamp": review_end_time.isoformat(),
+                                            "latest_develop_timestamp": develop_end_time.isoformat(),
                                         },
                                     )
                                 else:
@@ -376,14 +377,21 @@ class ReviewPhase(Phase):
                 # First review, need to re-run all checks
                 return True
 
-            # Compare timestamps
+            # Compare end_time values, skip if not available
             with open(develop_status_file) as f:
                 develop_data = json.load(f)
             with open(review_status_file) as f:
                 review_data = json.load(f)
 
-            develop_time = datetime.fromisoformat(develop_data["timestamp"])
-            review_time = datetime.fromisoformat(review_data["timestamp"])
+            develop_end_time_str = develop_data.get("end_time")
+            review_end_time_str = review_data.get("end_time")
+
+            # If either end_time is missing, return True to re-run checks (graceful skip)
+            if not develop_end_time_str or not review_end_time_str:
+                return True
+
+            develop_time = datetime.fromisoformat(develop_end_time_str)
+            review_time = datetime.fromisoformat(review_end_time_str)
 
             # If develop time is newer than review, there are new changes
             return develop_time > review_time

@@ -1077,14 +1077,14 @@ class Phase(ABC):
         print(f"  → Loaded PR feedback from {latest_pr_iteration_dir.name}/user_input.md")
         return content
 
-    def _get_phase_timestamp(self, phase_name: str) -> Optional[str]:
-        """Get the timestamp of the latest iteration for a specified phase.
+    def _get_phase_end_time(self, phase_name: str) -> Optional[str]:
+        """Get the end_time of the latest iteration for a specified phase.
 
         Args:
             phase_name: Name of the phase (e.g., 'develop', 'review', 'plan')
 
         Returns:
-            ISO format timestamp string if phase status exists, None otherwise
+            ISO format end_time string if phase status exists and has end_time, None otherwise
         """
         phase_status_file = self.issue_dir / phase_name / "status.json"
         if not phase_status_file.exists():
@@ -1093,7 +1093,7 @@ class Phase(ABC):
         try:
             with open(phase_status_file, 'r', encoding='utf-8') as f:
                 phase_status = json.load(f)
-            return phase_status.get("timestamp")
+            return phase_status.get("end_time")
         except (json.JSONDecodeError, KeyError, IOError):
             return None
 
