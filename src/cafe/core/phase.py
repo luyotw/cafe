@@ -287,6 +287,7 @@ class Phase(ABC):
         iteration_index_data = {
             "iteration": self.iteration,
             "timestamp": context_data.get("timestamp", datetime.now().astimezone().isoformat()),
+            "end_time": context_data.get("end_time"),
             "status": status_code.value if status_code is not None else None,
             "has_error": "error" in context_data,
         }

@@ -352,3 +352,39 @@ class TestLoadUserInput:
         # 載入並驗證
         result = phase._load_user_input(1)
         assert result == ""
+
+
+class TestIterationIndexIncludesEndTime:
+    """Test that iterations.jsonl includes end_time field"""
+
+    def test_append_iteration_index_includes_end_time(self, tmp_path):
+        """Verify _append_iteration_index includes end_time in the iteration record"""
+        phase_dir = tmp_path / "spec"
+        phase_dir.mkdir()
+        phase = ConcretePhase(phase_dir=phase_dir)
+
+        # Prepare iteration data with end_time
+        iteration_data = {
+            "iteration": 1,
+            "timestamp": "2026-01-27T10:00:00+08:00",
+            "status": "CAFE_CONFIRMED",
+            "has_error": False,
+            "end_time": "2026-01-27T10:05:00+08:00"
+        }
+
+        # Append the iteration index
+        phase._append_iteration_index(iteration_data)
+
+        # Verify the iterations.jsonl file contains end_time
+        iterations_file = phase_dir / "iterations.jsonl"
+        assert iterations_file.exists()
+
+        with open(iterations_file, "r", encoding="utf-8") as f:
+            line = f.readline()
+            data = json.loads(line)
+
+        assert data["iteration"] == 1
+        assert data["timestamp"] == "2026-01-27T10:00:00+08:00"
+        assert data["end_time"] == "2026-01-27T10:05:00+08:00"
+        assert data["status"] == "CAFE_CONFIRMED"
+        assert data["has_error"] is False
