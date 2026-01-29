@@ -958,8 +958,8 @@ class Phase(ABC):
             complete_codes = [PhaseStatusCode.CONFIRMED, PhaseStatusCode.READY_FOR_REVIEW]
         phase_status = PhaseStatus.COMPLETED if status_code in complete_codes else PhaseStatus.IN_PROGRESS
 
-        # Set end_time when phase completes
-        end_time = datetime.now().astimezone() if phase_status == PhaseStatus.COMPLETED else None
+        # Always set end_time since status.json reflects the last iteration
+        end_time = datetime.now().astimezone()
 
         progress = PhaseProgress(
             phase=self.phase_name,
