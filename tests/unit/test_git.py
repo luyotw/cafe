@@ -363,15 +363,21 @@ class TestGitOperations:
                 assert has_unpushed is False
 
     def test_has_unpushed_commits_no_upstream(self) -> None:
-        """測試沒有 upstream 分支時回傳 False"""
+        """測試沒有 upstream 分支且遠端分支不存在時，有本地 commits 則回傳 True"""
         git = GitOperations()
 
         with patch.object(git, "has_upstream_branch") as mock_upstream:
-            mock_upstream.return_value = False
+            with patch.object(git, "run_git") as mock_run:
+                with patch.object(git, "get_current_branch") as mock_branch:
+                    mock_upstream.return_value = False
+                    mock_branch.return_value = "feature-branch"
+                    # First call: rev-parse to check remote branch (raises GitError - no remote)
+                    # Second call: rev-list to count local commits
+                    mock_run.side_effect = [GitError("not found"), "3"]
 
-            has_unpushed = git.has_unpushed_commits()
+                    has_unpushed = git.has_unpushed_commits()
 
-            assert has_unpushed is False
+                    assert has_unpushed is True
 
     def test_has_unpushed_commits_error(self) -> None:
         """測試發生錯誤時回傳 False"""
