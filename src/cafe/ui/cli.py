@@ -4904,6 +4904,9 @@ def summary() -> None:
         display = SummaryDisplay()
         display.render_table(entries)
 
+        # Display aggregated model token usage summary
+        display.render_model_summary_table(entries)
+
     except Exception as e:
         console.print(f"[red]Error: Failed to display summary: {e}[/red]")
         raise typer.Exit(1)
