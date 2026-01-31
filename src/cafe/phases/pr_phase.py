@@ -1251,6 +1251,50 @@ The system will verify checklist completion. If unchecked items remain, you will
                 message=f"Checklist validation failed - {validation_result.unchecked_count} items not marked as complete",
             )
 
+        # Additional validation: if agent returned CONFIRMED, verify this is correct
+        # CONFIRMED means: all PR review comments are already addressed or not applicable
+        # This iteration's task is to organize PR comments into a todo list for the developer
+        if status_code == PhaseStatusCode.CONFIRMED:
+            # Re-confirm with agent that all comments are truly complete/not applicable
+            try:
+                output_display_confirm = to_cwd_relative_path(output_file)
+            except ValueError:
+                output_display_confirm = str(output_file)
+
+            try:
+                user_input_display_confirm = to_cwd_relative_path(user_input_file)
+            except ValueError:
+                user_input_display_confirm = str(user_input_file)
+
+            confirmation_prompt = f"""You returned CAFE_CONFIRMED for the PR comment organization task.
+
+IMPORTANT: This iteration's task is to organize PR review comments from {user_input_display_confirm} into a todo list in {output_display_confirm}.
+
+CAFE_CONFIRMED should ONLY be returned when:
+- All PR review comments have already been fully addressed/completed (mark them as [x] in the todo list), OR
+- All PR review comments are invalid/not applicable (no action needed)
+
+CAFE_NEEDS_CHANGES should be returned when:
+- There are PR review comments that need to be addressed by the developer (create unchecked todo items - [ ])
+
+Please re-evaluate the PR comments and confirm:
+- If there are comments that require code changes or actions, return CAFE_NEEDS_CHANGES
+- If all comments are already addressed or not applicable, return CAFE_CONFIRMED
+
+Return ONLY the status code (CAFE_CONFIRMED or CAFE_NEEDS_CHANGES) with no explanation."""
+
+            # Re-execute agent with confirmation prompt
+            confirmation_response, confirmation_status_code = self._execute_agent_iteration(
+                agent_name=self.dev_agent,
+                prompt=confirmation_prompt,
+                user_input="",
+                valid_status_codes=[PhaseStatusCode.NEEDS_CHANGES, PhaseStatusCode.CONFIRMED],
+                allowed_tools=allowed_tools,
+            )
+
+            # Use the confirmed status code
+            status_code = confirmation_status_code
+
         # Use the status code returned by agent
         # Agent decides based on whether all todo items are completed
         # Return success result
