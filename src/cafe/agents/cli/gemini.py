@@ -99,8 +99,8 @@ class GeminiCLI(AbstractCLI):
                     if stats:
                         token_usage.input_tokens = stats.get("input_tokens", 0)
                         token_usage.output_tokens = stats.get("output_tokens", 0)
-                        token_usage.cache_creation_input_tokens = stats.get("cache_creation_input_tokens", 0)
-                        token_usage.cache_read_input_tokens = stats.get("cache_read_input_tokens", 0)
+                        # Gemini uses "cached" field for cache read tokens
+                        token_usage.cache_read_input_tokens = stats.get("cached", 0)
                         token_usage.duration_ms = stats.get("duration_ms")
                         # Note: Gemini doesn't separate API duration, use total duration
                         token_usage.duration_api_ms = stats.get("duration_ms")

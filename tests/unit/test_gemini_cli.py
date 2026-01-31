@@ -226,8 +226,7 @@ class TestGeminiCLIParseResponse:
             json.dumps({"type": "result", "status": "success", "stats": {
                 "input_tokens": 1000,
                 "output_tokens": 100,
-                "cache_creation_input_tokens": 500,
-                "cache_read_input_tokens": 300,
+                "cached": 300,
                 "duration_ms": 2000
             }}),
         ]
@@ -236,7 +235,7 @@ class TestGeminiCLIParseResponse:
 
         assert token_usage.input_tokens == 1000
         assert token_usage.output_tokens == 100
-        assert token_usage.cache_creation_input_tokens == 500
+        assert token_usage.cache_creation_input_tokens == 0
         assert token_usage.cache_read_input_tokens == 300
         assert token_usage.duration_ms == 2000
 
