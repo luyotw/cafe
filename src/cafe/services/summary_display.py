@@ -227,7 +227,46 @@ class SummaryDisplay:
             # Fallback - print simple text summary
             print("\n📊 Model Token Usage Summary")
             print("=" * 50)
-            # TODO: Could add simple text table here
+
+            # Aggregate token usage by cli-model combination
+            aggregated = {}
+            for entry in entries:
+                if not entry.cli or not entry.model:
+                    continue
+
+                key = f"{entry.cli}-{entry.model}"
+                if key not in aggregated:
+                    aggregated[key] = {
+                        "cli": entry.cli,
+                        "model": entry.model,
+                        "input_tokens": 0,
+                        "output_tokens": 0,
+                        "cache_read_tokens": 0,
+                        "cost_usd": 0.0,
+                    }
+
+                if entry.input_tokens:
+                    aggregated[key]["input_tokens"] += entry.input_tokens
+                if entry.output_tokens:
+                    aggregated[key]["output_tokens"] += entry.output_tokens
+                if entry.cache_read_tokens:
+                    aggregated[key]["cache_read_tokens"] += entry.cache_read_tokens
+                if entry.cost_usd:
+                    aggregated[key]["cost_usd"] += entry.cost_usd
+
+            if not aggregated:
+                return
+
+            # Print simple text table
+            for key in sorted(aggregated.keys()):
+                stats = aggregated[key]
+                print(f"\n{stats['cli']} - {stats['model']}")
+                print(f"  Input Tokens:  {self.format_token_count(stats['input_tokens'])}")
+                print(f"  Output Tokens: {self.format_token_count(stats['output_tokens'])}")
+                print(f"  Cache Read:    {self.format_token_count(stats['cache_read_tokens'])}")
+                cost_str = f"${stats['cost_usd']:.4f}" if stats['cost_usd'] > 0 else "--"
+                print(f"  Cost (USD):    {cost_str}")
+            print()
             return
 
         # Aggregate token usage by cli-model combination
@@ -247,13 +286,15 @@ class SummaryDisplay:
                     "cost_usd": 0.0,
                 }
 
-            # Accumulate token counts
+            # Accumulate token counts and costs
             if entry.input_tokens:
                 aggregated[key]["input_tokens"] += entry.input_tokens
             if entry.output_tokens:
                 aggregated[key]["output_tokens"] += entry.output_tokens
             if entry.cache_read_tokens:
                 aggregated[key]["cache_read_tokens"] += entry.cache_read_tokens
+            if entry.cost_usd:
+                aggregated[key]["cost_usd"] += entry.cost_usd
 
         # If no token data, don't show the table
         if not aggregated:

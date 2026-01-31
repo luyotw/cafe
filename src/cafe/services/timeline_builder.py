@@ -33,6 +33,7 @@ class TimelineEntry:
     input_tokens: Optional[int] = None
     output_tokens: Optional[int] = None
     cache_read_tokens: Optional[int] = None
+    cost_usd: Optional[float] = None
 
     def __post_init__(self):
         """Validate and normalize the entry."""
@@ -204,6 +205,7 @@ class TimelineBuilder:
         input_tokens = stats.get("input_tokens") if stats else None
         output_tokens = stats.get("output_tokens") if stats else None
         cache_read_tokens = stats.get("cache_read_input_tokens") if stats else None
+        cost_usd = stats.get("total_cost_usd") if stats else None
 
         return TimelineEntry(
             entry_type="iteration",
@@ -220,6 +222,7 @@ class TimelineBuilder:
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             cache_read_tokens=cache_read_tokens,
+            cost_usd=cost_usd,
         )
 
     def _parse_timestamp(self, timestamp_str: str) -> Optional[datetime]:

@@ -479,3 +479,41 @@ class TestRenderModelSummaryTable:
         ]
         # Should handle gracefully
         display.render_model_summary_table(entries)
+
+    def test_render_model_summary_table_aggregates_costs(self):
+        """Test that costs are properly aggregated across iterations"""
+        display = SummaryDisplay()
+        entries = [
+            TimelineEntry(
+                entry_type="iteration",
+                name="Iteration 1",
+                phase="spec",
+                start_time=datetime(2026, 1, 31, 10, 0, 0, tzinfo=timezone.utc),
+                end_time=datetime(2026, 1, 31, 10, 15, 0, tzinfo=timezone.utc),
+                status=PhaseStatus.COMPLETED,
+                iteration=1,
+                cli="claude",
+                model="claude-3-5-sonnet",
+                input_tokens=50000,
+                output_tokens=2000,
+                cache_read_tokens=10000,
+                cost_usd=0.10,
+            ),
+            TimelineEntry(
+                entry_type="iteration",
+                name="Iteration 2",
+                phase="plan",
+                start_time=datetime(2026, 1, 31, 11, 0, 0, tzinfo=timezone.utc),
+                end_time=datetime(2026, 1, 31, 11, 20, 0, tzinfo=timezone.utc),
+                status=PhaseStatus.COMPLETED,
+                iteration=2,
+                cli="claude",
+                model="claude-3-5-sonnet",
+                input_tokens=30000,
+                output_tokens=1500,
+                cache_read_tokens=5000,
+                cost_usd=0.05,
+            ),
+        ]
+        # Should aggregate costs: 0.10 + 0.05 = 0.15
+        display.render_model_summary_table(entries)
