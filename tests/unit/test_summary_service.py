@@ -341,3 +341,122 @@ class TestLoadIterationContexts:
         assert result[0]["iteration"] == 1
         assert result[1]["iteration"] == 2
         assert result[2]["iteration"] == 3
+
+
+class TestLoadTokenUsageData:
+    """Test loading token usage data from context.json"""
+
+    def test_load_iteration_statuses_extracts_token_usage(self, tmp_path, monkeypatch):
+        """Verify load_iteration_statuses() extracts cli, model, and stats fields"""
+        from cafe.services.summary_service import SummaryService
+
+        monkeypatch.chdir(tmp_path)
+
+        service = SummaryService()
+        phase_dir = tmp_path / ".cafe/issues/test-issue/spec"
+        (phase_dir / "iteration_001").mkdir(parents=True)
+
+        # Create context.json with token usage data
+        context = {
+            "iteration": 1,
+            "timestamp": "2026-01-31T10:00:00+08:00",
+            "end_time": "2026-01-31T10:15:00+08:00",
+            "status_code": "CAFE_CONFIRMED",
+            "cli": "gemini",
+            "model": "gemini-2.5-flash",
+            "stats": {
+                "input_tokens": 109260,
+                "output_tokens": 1607,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 48179,
+                "total_cost_usd": 0.0,
+                "duration_ms": 81850,
+                "duration_api_ms": 81850
+            }
+        }
+        (phase_dir / "iteration_001/context.json").write_text(json.dumps(context))
+
+        result = service.load_iteration_statuses("test-issue", "spec")
+        assert len(result) == 1
+        assert result[0]["cli"] == "gemini"
+        assert result[0]["model"] == "gemini-2.5-flash"
+        assert result[0]["stats"]["input_tokens"] == 109260
+        assert result[0]["stats"]["output_tokens"] == 1607
+        assert result[0]["stats"]["cache_read_input_tokens"] == 48179
+
+    def test_load_iteration_statuses_handles_missing_token_fields(self, tmp_path, monkeypatch):
+        """Verify handling when token usage fields are missing"""
+        from cafe.services.summary_service import SummaryService
+
+        monkeypatch.chdir(tmp_path)
+
+        service = SummaryService()
+        phase_dir = tmp_path / ".cafe/issues/test-issue/plan"
+        (phase_dir / "iteration_001").mkdir(parents=True)
+
+        # Create context.json without token usage data
+        context = {
+            "iteration": 1,
+            "timestamp": "2026-01-31T11:00:00+08:00",
+            "status_code": "CAFE_CONFIRMED"
+        }
+        (phase_dir / "iteration_001/context.json").write_text(json.dumps(context))
+
+        result = service.load_iteration_statuses("test-issue", "plan")
+        assert len(result) == 1
+        assert result[0].get("cli") is None
+        assert result[0].get("model") is None
+        assert result[0].get("stats") is None
+
+    def test_load_iteration_statuses_with_multiple_models(self, tmp_path, monkeypatch):
+        """Verify loading iterations with different models"""
+        from cafe.services.summary_service import SummaryService
+
+        monkeypatch.chdir(tmp_path)
+
+        service = SummaryService()
+        phase_dir = tmp_path / ".cafe/issues/test-issue/spec"
+
+        # Create multiple iterations with different models
+        contexts = [
+            {
+                "iteration": 1,
+                "timestamp": "2026-01-31T10:00:00+08:00",
+                "end_time": "2026-01-31T10:15:00+08:00",
+                "status_code": "CAFE_CONFIRMED",
+                "cli": "gemini",
+                "model": "gemini-2.5-flash",
+                "stats": {
+                    "input_tokens": 109260,
+                    "output_tokens": 1607,
+                    "cache_read_input_tokens": 48179,
+                    "total_cost_usd": 0.0
+                }
+            },
+            {
+                "iteration": 2,
+                "timestamp": "2026-01-31T11:00:00+08:00",
+                "end_time": "2026-01-31T11:20:00+08:00",
+                "status_code": "CAFE_CONFIRMED",
+                "cli": "claude",
+                "model": "claude-3-5-sonnet",
+                "stats": {
+                    "input_tokens": 50000,
+                    "output_tokens": 2000,
+                    "cache_read_input_tokens": 10000,
+                    "total_cost_usd": 0.15
+                }
+            }
+        ]
+
+        for i, context in enumerate(contexts, 1):
+            (phase_dir / f"iteration_{i:03d}").mkdir(parents=True)
+            (phase_dir / f"iteration_{i:03d}/context.json").write_text(json.dumps(context))
+
+        result = service.load_iteration_statuses("test-issue", "spec")
+        assert len(result) == 2
+        assert result[0]["cli"] == "gemini"
+        assert result[0]["model"] == "gemini-2.5-flash"
+        assert result[1]["cli"] == "claude"
+        assert result[1]["model"] == "claude-3-5-sonnet"
+        assert result[1]["stats"]["total_cost_usd"] == 0.15

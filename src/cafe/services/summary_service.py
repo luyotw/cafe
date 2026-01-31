@@ -68,7 +68,7 @@ class SummaryService:
 
         Returns:
             List of iteration context dictionaries with timestamp (start_time),
-            end_time, status_code, ordered by iteration number
+            end_time, status_code, cli, model, and stats, ordered by iteration number
         """
         phase_dir = Path(".cafe/issues") / issue_name / phase_name
 
@@ -89,12 +89,15 @@ class SummaryService:
             try:
                 with open(context_file, "r") as f:
                     context_data = json.load(f)
-                    # Extract only the fields needed for summary display
+                    # Extract fields needed for summary display including token usage
                     iteration_info = {
                         "iteration": context_data.get("iteration"),
                         "timestamp": context_data.get("timestamp"),
                         "end_time": context_data.get("end_time"),
                         "status_code": context_data.get("status_code"),
+                        "cli": context_data.get("cli"),
+                        "model": context_data.get("model"),
+                        "stats": context_data.get("stats"),
                     }
                     iterations.append(iteration_info)
             except (json.JSONDecodeError, IOError) as e:
