@@ -258,6 +258,66 @@ class TestTimezoneConversion:
         assert len(converted) == 2
 
 
+class TestTimelineEntryWithTokenUsage:
+    """Test TimelineEntry with token usage fields."""
+
+    def test_timeline_entry_with_token_fields(self):
+        """Test that TimelineEntry accepts optional token usage fields."""
+        entry = TimelineEntry(
+            entry_type="iteration",
+            name="Iteration 1",
+            phase="spec",
+            start_time=datetime.now(timezone.utc),
+            end_time=datetime.now(timezone.utc),
+            status=PhaseStatus.COMPLETED,
+            iteration=1,
+            status_code="CAFE_CONFIRMED",
+            cli="gemini",
+            model="gemini-2.5-flash",
+            input_tokens=109260,
+            output_tokens=1607,
+            cache_read_tokens=48179,
+        )
+        assert entry.cli == "gemini"
+        assert entry.model == "gemini-2.5-flash"
+        assert entry.input_tokens == 109260
+        assert entry.output_tokens == 1607
+        assert entry.cache_read_tokens == 48179
+
+    def test_timeline_entry_without_token_fields(self):
+        """Test that token fields are optional and default to None."""
+        entry = TimelineEntry(
+            entry_type="iteration",
+            name="Iteration 1",
+            phase="spec",
+            start_time=datetime.now(timezone.utc),
+            status=PhaseStatus.COMPLETED,
+        )
+        assert entry.cli is None
+        assert entry.model is None
+        assert entry.input_tokens is None
+        assert entry.output_tokens is None
+        assert entry.cache_read_tokens is None
+
+    def test_timeline_entry_with_partial_token_fields(self):
+        """Test that token fields can be partially populated."""
+        entry = TimelineEntry(
+            entry_type="iteration",
+            name="Iteration 1",
+            phase="spec",
+            start_time=datetime.now(timezone.utc),
+            status=PhaseStatus.COMPLETED,
+            cli="claude",
+            model="claude-3-5-sonnet",
+            input_tokens=50000,
+        )
+        assert entry.cli == "claude"
+        assert entry.model == "claude-3-5-sonnet"
+        assert entry.input_tokens == 50000
+        assert entry.output_tokens is None
+        assert entry.cache_read_tokens is None
+
+
 class TestSortChronologicallyWithEndTime:
     """Test sort_chronologically uses end_time with start_time fallback"""
 

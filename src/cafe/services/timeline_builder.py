@@ -27,6 +27,12 @@ class TimelineEntry:
     status: Optional[PhaseStatus] = None
     iteration: Optional[int] = None
     status_code: Optional[str] = None
+    # Token usage fields
+    cli: Optional[str] = None
+    model: Optional[str] = None
+    input_tokens: Optional[int] = None
+    output_tokens: Optional[int] = None
+    cache_read_tokens: Optional[int] = None
 
     def __post_init__(self):
         """Validate and normalize the entry."""
