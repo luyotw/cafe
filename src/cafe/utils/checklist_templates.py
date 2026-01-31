@@ -208,7 +208,7 @@ PR_COMMENTS_ORGANIZATION_STEPS = """## Checklist
 [ ] Read PR comments from {user_input_file}
 [ ] Check {prev_output_file} (if exists) - skip todo items that are already completed there
 [ ] Group related comments together
-[ ] Convert comments into actionable todo list items (markdown checkbox format: - [ ] Item)
+[ ] Convert comments into actionable todo list items (markdown checkbox format: - [ ] Item - keep all items UNCHECKED as they represent work to be done)
 [ ] Write organized todo list to {output_file}
 [ ] Return ONLY the status code in your response
 """
