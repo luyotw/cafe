@@ -743,8 +743,17 @@ class PRPhase(Phase):
 
                 if user_input_path:
                     # New comments found - organize into todo list
+                    pr_dir = self.issue_dir / "pr"
+                    iteration_dir = pr_dir / f"iteration_{self.iteration:03d}"
+                    user_input_file = iteration_dir / "user_input.md"
+                    from cafe.utils.git_utils import to_cwd_relative_path
+                    try:
+                        user_input_display = to_cwd_relative_path(user_input_file)
+                    except ValueError:
+                        user_input_display = str(user_input_file)
+
                     console.print()
-                    console.print(f"[green]✓ Fetched new PR comments to iteration_{self.iteration:03d}/user_input.md[/green]")
+                    console.print(f"[green]✓ Fetched new PR comments to {user_input_display}[/green]")
                     console.print()
                     console.print("[dim]Organizing comments into todo list...[/dim]")
 
@@ -1245,9 +1254,18 @@ The system will verify checklist completion. If unchecked items remain, you will
         # Use the status code returned by agent
         # Agent decides based on whether all todo items are completed
         # Return success result
+        pr_dir = self.issue_dir / "pr"
+        iteration_dir = pr_dir / f"iteration_{self.iteration:03d}"
+        output_file = iteration_dir / "output.md"
+        from cafe.utils.git_utils import to_cwd_relative_path
+        try:
+            output_display = to_cwd_relative_path(output_file)
+        except ValueError:
+            output_display = str(output_file)
+
         return PhaseResult(
             status=PhaseStatus.COMPLETED,
-            message=f"Organized PR comments into todo list (iteration_{self.iteration:03d}/output.md)",
+            message=f"Organized PR comments into todo list ({output_display})",
             data={"pr_number": str(pr_number), "pr_url": pr_url, "branch": branch_name, "status_code": status_code.value},
         )
 
