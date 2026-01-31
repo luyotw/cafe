@@ -318,6 +318,111 @@ class TestTimelineEntryWithTokenUsage:
         assert entry.cache_read_tokens is None
 
 
+class TestPopulateTokenUsageInIterations:
+    """Test _create_iteration_entry populating token usage fields"""
+
+    def test_create_iteration_entry_populates_token_usage(self):
+        """Test that _create_iteration_entry() extracts token usage from iteration_status"""
+        builder = TimelineBuilder("test-issue")
+
+        iteration_status = {
+            "iteration": 1,
+            "timestamp": "2026-01-31T10:00:00+08:00",
+            "end_time": "2026-01-31T10:15:00+08:00",
+            "status_code": "CAFE_CONFIRMED",
+            "cli": "gemini",
+            "model": "gemini-2.5-flash",
+            "stats": {
+                "input_tokens": 109260,
+                "output_tokens": 1607,
+                "cache_read_input_tokens": 48179,
+                "total_cost_usd": 0.0
+            }
+        }
+
+        entry = builder._create_iteration_entry("spec", iteration_status)
+
+        assert entry is not None
+        assert entry.cli == "gemini"
+        assert entry.model == "gemini-2.5-flash"
+        assert entry.input_tokens == 109260
+        assert entry.output_tokens == 1607
+        assert entry.cache_read_tokens == 48179
+
+    def test_create_iteration_entry_handles_missing_token_data(self):
+        """Test that _create_iteration_entry() handles missing token data gracefully"""
+        builder = TimelineBuilder("test-issue")
+
+        iteration_status = {
+            "iteration": 1,
+            "timestamp": "2026-01-31T10:00:00+08:00",
+            "status_code": "CAFE_CONFIRMED"
+        }
+
+        entry = builder._create_iteration_entry("spec", iteration_status)
+
+        assert entry is not None
+        assert entry.cli is None
+        assert entry.model is None
+        assert entry.input_tokens is None
+        assert entry.output_tokens is None
+        assert entry.cache_read_tokens is None
+
+    def test_create_iteration_entry_handles_partial_stats(self):
+        """Test that _create_iteration_entry() handles partial stats data"""
+        builder = TimelineBuilder("test-issue")
+
+        iteration_status = {
+            "iteration": 1,
+            "timestamp": "2026-01-31T10:00:00+08:00",
+            "status_code": "CAFE_CONFIRMED",
+            "cli": "claude",
+            "model": "claude-3-5-sonnet",
+            "stats": {
+                "input_tokens": 50000,
+                "output_tokens": 2000
+                # missing cache_read_input_tokens
+            }
+        }
+
+        entry = builder._create_iteration_entry("plan", iteration_status)
+
+        assert entry is not None
+        assert entry.cli == "claude"
+        assert entry.model == "claude-3-5-sonnet"
+        assert entry.input_tokens == 50000
+        assert entry.output_tokens == 2000
+        assert entry.cache_read_tokens is None
+
+    def test_build_timeline_entries_includes_token_usage(self):
+        """Test that build_timeline_entries() preserves token usage data"""
+        builder = TimelineBuilder("test-issue")
+
+        phase_statuses = {}
+        iteration_data = {
+            "spec": [{
+                "iteration": 1,
+                "timestamp": "2026-01-31T10:00:00+08:00",
+                "end_time": "2026-01-31T10:15:00+08:00",
+                "status_code": "CAFE_CONFIRMED",
+                "cli": "gemini",
+                "model": "gemini-2.5-flash",
+                "stats": {
+                    "input_tokens": 109260,
+                    "output_tokens": 1607,
+                    "cache_read_input_tokens": 48179
+                }
+            }]
+        }
+
+        entries = builder.build_timeline_entries(phase_statuses, iteration_data)
+
+        assert len(entries) == 1
+        assert entries[0].cli == "gemini"
+        assert entries[0].model == "gemini-2.5-flash"
+        assert entries[0].input_tokens == 109260
+
+
 class TestSortChronologicallyWithEndTime:
     """Test sort_chronologically uses end_time with start_time fallback"""
 

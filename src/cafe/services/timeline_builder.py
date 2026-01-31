@@ -197,6 +197,14 @@ class TimelineBuilder:
             except ValueError:
                 elapsed_time = None
 
+        # Extract token usage data from stats
+        cli = iteration_status.get("cli")
+        model = iteration_status.get("model")
+        stats = iteration_status.get("stats", {})
+        input_tokens = stats.get("input_tokens") if stats else None
+        output_tokens = stats.get("output_tokens") if stats else None
+        cache_read_tokens = stats.get("cache_read_input_tokens") if stats else None
+
         return TimelineEntry(
             entry_type="iteration",
             name=f"Iteration {iteration_num}",
@@ -207,6 +215,11 @@ class TimelineBuilder:
             status=status,
             iteration=iteration_num,
             status_code=status_code,
+            cli=cli,
+            model=model,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cache_read_tokens=cache_read_tokens,
         )
 
     def _parse_timestamp(self, timestamp_str: str) -> Optional[datetime]:
