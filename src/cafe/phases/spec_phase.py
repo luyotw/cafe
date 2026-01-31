@@ -411,6 +411,17 @@ class SpecPhase(Phase):
             # In mock mode or if agent doesn't use write tool, write spec from response
             self._ensure_spec_file_written(response)
 
+            # Verify content was actually updated (not identical to input/previous version)
+            content_check_result, final_response = self._verify_content_updated(
+                response=response,
+                spec_file_pattern=spec_file_pattern,
+                allowed_tools=allowed_tools,
+            )
+
+            # Use the final response if content was updated
+            if final_response:
+                response = final_response
+
             # Phase-specific post-processing: Sync spec to GitHub (no-op in local mode)
             self._sync_spec_to_github("")
 
@@ -1083,3 +1094,122 @@ class SpecPhase(Phase):
         """
         spec_file = self._get_versioned_file_path("spec", self.iteration, self.phase_dir)
         return [Path(spec_file)] if Path(spec_file).exists() else []
+
+    def _verify_content_updated(
+        self,
+        response: str,
+        spec_file_pattern: str,
+        allowed_tools: List[str],
+        max_retries: int = 3,
+    ) -> tuple[Optional[PhaseResult], Optional[str]]:
+        """Verify that agent actually updated the spec content.
+
+        Checks:
+        1. For iteration 1: output.md should differ from user_input.md
+        2. For iteration n: output.md should differ from previous iteration's output.md
+
+        Args:
+            response: Agent's response
+            spec_file_pattern: File pattern for spec file
+            allowed_tools: Tools allowed for agent
+            max_retries: Maximum number of retry attempts (default: 3)
+
+        Returns:
+            Tuple of (verification_result, final_response)
+            - verification_result: PhaseResult if verification failed, None if ok
+            - final_response: Updated response if agent corrected the output, None to use original
+        """
+        from cafe.core.status_codes import StatusCodeParser
+
+        # Extract status code from response
+        status_code = StatusCodeParser.extract(response)
+        if not status_code:
+            return None, None
+
+        # Read current spec file
+        spec_path = Path(self.spec_file)
+        if not spec_path.exists():
+            return None, None
+
+        current_content = spec_path.read_text(encoding="utf-8").strip()
+
+        # Determine what to compare against
+        compare_file = None
+        compare_label = ""
+
+        if self.iteration == 1:
+            # First iteration: compare with user_input.md
+            user_input_file = self._get_iteration_dir(1) / "user_input.md"
+            if user_input_file.exists():
+                compare_file = user_input_file
+                compare_label = "initial requirements (user_input.md)"
+        else:
+            # Later iterations: compare with previous iteration's output
+            prev_spec_path = self._get_versioned_file_path("spec", self.iteration - 1, self.phase_dir)
+            if prev_spec_path.exists():
+                compare_file = prev_spec_path
+                compare_label = f"previous iteration"
+
+        # If no comparison file, skip check
+        if not compare_file:
+            return None, None
+
+        # Compare content
+        compare_content = compare_file.read_text(encoding="utf-8").strip()
+
+        # If content is identical, ask agent to update
+        if current_content == compare_content:
+            retry_count = 0
+
+            while retry_count < max_retries:
+                retry_count += 1
+                print(f"\n⚠️  Spec content is identical to {compare_label}, asking agent to update... (attempt {retry_count}/{max_retries})")
+
+                # Build retry prompt
+                retry_prompt = f"""Your previous output in {spec_file_pattern} is IDENTICAL to the {compare_label}.
+
+This means you did not actually update or analyze the requirements - you just copied the input.
+
+Please:
+1. Read the current content in {spec_file_pattern}
+2. Perform your analysis and make meaningful updates
+3. Write the UPDATED analysis to {spec_file_pattern}
+4. Return ONLY the status code: {status_code.value}
+
+Remember: The content must be DIFFERENT from the input. Add your analysis, clarifications, or refinements."""
+
+                try:
+                    # Execute retry with agent
+                    retry_response, _ = self.agent_manager.execute(
+                        agent_name=self.pm_agent,
+                        prompt=retry_prompt,
+                        allowed_tools=allowed_tools,
+                    )
+
+                    # Check if content was updated
+                    updated_content = spec_path.read_text(encoding="utf-8").strip()
+                    if updated_content != compare_content:
+                        # Content was updated!
+                        print(f"✓ Agent successfully updated the spec content")
+
+                        # Extract status code from retry response
+                        retry_status = StatusCodeParser.extract(retry_response)
+                        if retry_status:
+                            return None, retry_response.strip()
+                        else:
+                            # No valid status code but content was updated, use original
+                            return None, None
+
+                    # Content still identical, continue retry loop
+
+                except Exception as e:
+                    print(f"⚠️  Error during content verification retry: {e}")
+                    # Continue retry loop
+
+            # Max retries exceeded
+            print(f"\n❌ Agent did not update spec content after {max_retries} attempts")
+            # Don't fail the phase, just warn and continue
+            return None, None
+
+        # Content is different, all good
+        return None, None
