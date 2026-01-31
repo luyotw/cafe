@@ -356,3 +356,126 @@ class TestFormatTokenCount:
         display = SummaryDisplay()
         result = display.format_token_count(None)
         assert result == "--"
+
+
+class TestRenderModelSummaryTable:
+    """Test render_model_summary_table() method"""
+
+    def test_render_model_summary_table_with_single_model(self):
+        """Test rendering aggregated summary with single model"""
+        display = SummaryDisplay()
+        entries = [
+            TimelineEntry(
+                entry_type="iteration",
+                name="Iteration 1",
+                phase="spec",
+                start_time=datetime(2026, 1, 31, 10, 0, 0, tzinfo=timezone.utc),
+                end_time=datetime(2026, 1, 31, 10, 15, 0, tzinfo=timezone.utc),
+                status=PhaseStatus.COMPLETED,
+                iteration=1,
+                status_code="CAFE_CONFIRMED",
+                cli="gemini",
+                model="gemini-2.5-flash",
+                input_tokens=109260,
+                output_tokens=1607,
+                cache_read_tokens=48179,
+            )
+        ]
+        # Should render without crashing
+        display.render_model_summary_table(entries)
+
+    def test_render_model_summary_table_with_multiple_models(self):
+        """Test aggregating statistics across multiple models"""
+        display = SummaryDisplay()
+        entries = [
+            TimelineEntry(
+                entry_type="iteration",
+                name="Iteration 1",
+                phase="spec",
+                start_time=datetime(2026, 1, 31, 10, 0, 0, tzinfo=timezone.utc),
+                end_time=datetime(2026, 1, 31, 10, 15, 0, tzinfo=timezone.utc),
+                status=PhaseStatus.COMPLETED,
+                iteration=1,
+                cli="gemini",
+                model="gemini-2.5-flash",
+                input_tokens=109260,
+                output_tokens=1607,
+                cache_read_tokens=48179,
+            ),
+            TimelineEntry(
+                entry_type="iteration",
+                name="Iteration 2",
+                phase="spec",
+                start_time=datetime(2026, 1, 31, 11, 0, 0, tzinfo=timezone.utc),
+                end_time=datetime(2026, 1, 31, 11, 20, 0, tzinfo=timezone.utc),
+                status=PhaseStatus.COMPLETED,
+                iteration=2,
+                cli="claude",
+                model="claude-3-5-sonnet",
+                input_tokens=50000,
+                output_tokens=2000,
+                cache_read_tokens=10000,
+            ),
+        ]
+        # Should aggregate and display both models
+        display.render_model_summary_table(entries)
+
+    def test_render_model_summary_table_aggregates_same_model(self):
+        """Test aggregating multiple iterations with same model"""
+        display = SummaryDisplay()
+        entries = [
+            TimelineEntry(
+                entry_type="iteration",
+                name="Iteration 1",
+                phase="spec",
+                start_time=datetime(2026, 1, 31, 10, 0, 0, tzinfo=timezone.utc),
+                end_time=datetime(2026, 1, 31, 10, 15, 0, tzinfo=timezone.utc),
+                status=PhaseStatus.COMPLETED,
+                iteration=1,
+                cli="gemini",
+                model="gemini-2.5-flash",
+                input_tokens=100000,
+                output_tokens=1000,
+                cache_read_tokens=50000,
+            ),
+            TimelineEntry(
+                entry_type="iteration",
+                name="Iteration 2",
+                phase="spec",
+                start_time=datetime(2026, 1, 31, 11, 0, 0, tzinfo=timezone.utc),
+                end_time=datetime(2026, 1, 31, 11, 20, 0, tzinfo=timezone.utc),
+                status=PhaseStatus.COMPLETED,
+                iteration=2,
+                cli="gemini",
+                model="gemini-2.5-flash",
+                input_tokens=50000,
+                output_tokens=500,
+                cache_read_tokens=25000,
+            ),
+        ]
+        # Should aggregate: 150000 input, 1500 output, 75000 cache_read
+        display.render_model_summary_table(entries)
+
+    def test_render_model_summary_table_empty_entries(self):
+        """Test rendering with empty entries list"""
+        display = SummaryDisplay()
+        # Should not crash with empty list
+        display.render_model_summary_table([])
+
+    def test_render_model_summary_table_handles_missing_token_data(self):
+        """Test handling entries without token usage data"""
+        display = SummaryDisplay()
+        entries = [
+            TimelineEntry(
+                entry_type="iteration",
+                name="Iteration 1",
+                phase="spec",
+                start_time=datetime(2026, 1, 31, 10, 0, 0, tzinfo=timezone.utc),
+                end_time=datetime(2026, 1, 31, 10, 15, 0, tzinfo=timezone.utc),
+                status=PhaseStatus.COMPLETED,
+                iteration=1,
+                # No token usage data
+            )
+        ]
+        # Should handle gracefully
+        display.render_model_summary_table(entries)

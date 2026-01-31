@@ -216,3 +216,76 @@ class SummaryDisplay:
 
         # Print table
         console.print(table)
+
+    def render_model_summary_table(self, entries: List[TimelineEntry]) -> None:
+        """Render aggregated token usage statistics by model.
+
+        Args:
+            entries: List of timeline entries to aggregate
+        """
+        if not RICH_AVAILABLE:
+            # Fallback - print simple text summary
+            print("\n📊 Model Token Usage Summary")
+            print("=" * 50)
+            # TODO: Could add simple text table here
+            return
+
+        # Aggregate token usage by cli-model combination
+        aggregated = {}
+        for entry in entries:
+            if not entry.cli or not entry.model:
+                continue  # Skip entries without model info
+
+            key = f"{entry.cli}-{entry.model}"
+            if key not in aggregated:
+                aggregated[key] = {
+                    "cli": entry.cli,
+                    "model": entry.model,
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                    "cache_read_tokens": 0,
+                    "cost_usd": 0.0,
+                }
+
+            # Accumulate token counts
+            if entry.input_tokens:
+                aggregated[key]["input_tokens"] += entry.input_tokens
+            if entry.output_tokens:
+                aggregated[key]["output_tokens"] += entry.output_tokens
+            if entry.cache_read_tokens:
+                aggregated[key]["cache_read_tokens"] += entry.cache_read_tokens
+
+        # If no token data, don't show the table
+        if not aggregated:
+            return
+
+        # Create summary table
+        table = Table(
+            title="📊 Model Token Usage Summary",
+            show_header=True,
+            header_style="bold cyan"
+        )
+
+        # Add columns
+        table.add_column("CLI", style="green")
+        table.add_column("Model", style="blue")
+        table.add_column("Input Tokens", style="cyan", justify="right")
+        table.add_column("Output Tokens", style="cyan", justify="right")
+        table.add_column("Cache Read", style="cyan", justify="right")
+        table.add_column("Cost (USD)", style="magenta", justify="right")
+
+        # Add rows for each model
+        for key in sorted(aggregated.keys()):
+            stats = aggregated[key]
+            table.add_row(
+                stats["cli"],
+                stats["model"],
+                self.format_token_count(stats["input_tokens"]),
+                self.format_token_count(stats["output_tokens"]),
+                self.format_token_count(stats["cache_read_tokens"]),
+                f"${stats['cost_usd']:.4f}" if stats['cost_usd'] > 0 else "--",
+            )
+
+        # Print summary table
+        console.print()
+        console.print(table)
