@@ -184,7 +184,6 @@ class ReviewPhase(Phase):
                     context_file = iteration_dir_pr / "context.json"
                     if not context_file.exists():
                         continue
-                    import json
                     with open(context_file, "r", encoding="utf-8") as f:
                         ctx = json.load(f)
                     if not ctx.get("status_code"):
