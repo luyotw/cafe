@@ -1,6 +1,6 @@
 """Display formatter for cafe summary timeline."""
 
-from typing import List
+from typing import List, Optional
 
 from cafe.services.timeline_builder import TimelineEntry
 from cafe.services.time_formatter import format_timestamp_local, format_timestamp_utc, format_duration, calculate_elapsed_time
@@ -31,6 +31,19 @@ class SummaryDisplay:
     def __init__(self):
         """Initialize display formatter."""
         pass
+
+    def format_token_count(self, count: Optional[int]) -> str:
+        """Format token count with comma separators.
+
+        Args:
+            count: Token count to format
+
+        Returns:
+            Formatted string with commas, or "--" for None/0
+        """
+        if count is None or count == 0:
+            return "--"
+        return f"{count:,}"
 
     def format_phase_entry(self, entry: TimelineEntry) -> str:
         """Format a phase entry for display.
@@ -158,6 +171,10 @@ class SummaryDisplay:
         table.add_column("Phase", style="green")
         table.add_column("Iteration", style="cyan", justify="right")
         table.add_column("Status Code", style="yellow")
+        table.add_column("Model", style="blue")
+        table.add_column("Input Tokens", style="cyan", justify="right")
+        table.add_column("Output Tokens", style="cyan", justify="right")
+        table.add_column("Cache Read", style="cyan", justify="right")
         table.add_column("Start", style="dim")
         table.add_column("End", style="dim")
         table.add_column("Duration", style="magenta")
@@ -177,11 +194,21 @@ class SummaryDisplay:
             else:
                 duration_str = "N/A"
 
+            # Format token usage
+            model_str = entry.model or "--"
+            input_tokens_str = self.format_token_count(entry.input_tokens)
+            output_tokens_str = self.format_token_count(entry.output_tokens)
+            cache_read_str = self.format_token_count(entry.cache_read_tokens)
+
             # Add row
             table.add_row(
                 entry.phase,
                 str(entry.iteration) if entry.iteration else "N/A",
                 entry.status_code or "N/A",
+                model_str,
+                input_tokens_str,
+                output_tokens_str,
+                cache_read_str,
                 start_str,
                 end_str,
                 duration_str

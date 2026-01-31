@@ -253,3 +253,106 @@ class TestRenderTable:
         ]
         # Should display different phases
         display.render_table(entries)
+
+
+class TestRenderTableWithTokenUsage:
+    """Test render_table() displaying token usage columns"""
+
+    def test_render_table_with_token_usage(self):
+        """Test that render_table() displays token usage columns"""
+        display = SummaryDisplay()
+        entry = TimelineEntry(
+            entry_type="iteration",
+            name="Iteration 1",
+            phase="spec",
+            start_time=datetime(2026, 1, 31, 10, 0, 0, tzinfo=timezone.utc),
+            end_time=datetime(2026, 1, 31, 10, 15, 0, tzinfo=timezone.utc),
+            status=PhaseStatus.COMPLETED,
+            iteration=1,
+            status_code="CAFE_CONFIRMED",
+            cli="gemini",
+            model="gemini-2.5-flash",
+            input_tokens=109260,
+            output_tokens=1607,
+            cache_read_tokens=48179,
+        )
+        # Should render without crashing
+        display.render_table([entry])
+
+    def test_render_table_with_missing_token_usage(self):
+        """Test that render_table() handles missing token usage fields"""
+        display = SummaryDisplay()
+        entry = TimelineEntry(
+            entry_type="iteration",
+            name="Iteration 1",
+            phase="spec",
+            start_time=datetime(2026, 1, 31, 10, 0, 0, tzinfo=timezone.utc),
+            end_time=datetime(2026, 1, 31, 10, 15, 0, tzinfo=timezone.utc),
+            status=PhaseStatus.COMPLETED,
+            iteration=1,
+            status_code="CAFE_CONFIRMED",
+        )
+        # Should render with "--" for missing fields
+        display.render_table([entry])
+
+    def test_render_table_with_mixed_token_usage(self):
+        """Test rendering table with some entries having token usage and some not"""
+        display = SummaryDisplay()
+        entries = [
+            TimelineEntry(
+                entry_type="iteration",
+                name="Iteration 1",
+                phase="spec",
+                start_time=datetime(2026, 1, 31, 10, 0, 0, tzinfo=timezone.utc),
+                end_time=datetime(2026, 1, 31, 10, 15, 0, tzinfo=timezone.utc),
+                status=PhaseStatus.COMPLETED,
+                iteration=1,
+                status_code="CAFE_CONFIRMED",
+                cli="gemini",
+                model="gemini-2.5-flash",
+                input_tokens=109260,
+                output_tokens=1607,
+                cache_read_tokens=48179,
+            ),
+            TimelineEntry(
+                entry_type="iteration",
+                name="Iteration 2",
+                phase="spec",
+                start_time=datetime(2026, 1, 31, 11, 0, 0, tzinfo=timezone.utc),
+                end_time=datetime(2026, 1, 31, 11, 10, 0, tzinfo=timezone.utc),
+                status=PhaseStatus.COMPLETED,
+                iteration=2,
+                status_code="CAFE_CONFIRMED",
+                # No token usage data
+            ),
+        ]
+        # Should render both entries correctly
+        display.render_table(entries)
+
+
+class TestFormatTokenCount:
+    """Test formatting token counts with comma separators"""
+
+    def test_format_token_count_with_commas(self):
+        """Test that format_token_count() adds comma separators"""
+        display = SummaryDisplay()
+        result = display.format_token_count(109260)
+        assert result == "109,260"
+
+    def test_format_token_count_small_number(self):
+        """Test formatting small token count without commas"""
+        display = SummaryDisplay()
+        result = display.format_token_count(1607)
+        assert result == "1,607"
+
+    def test_format_token_count_zero(self):
+        """Test that zero is displayed as '--'"""
+        display = SummaryDisplay()
+        result = display.format_token_count(0)
+        assert result == "--"
+
+    def test_format_token_count_none(self):
+        """Test that None is displayed as '--'"""
+        display = SummaryDisplay()
+        result = display.format_token_count(None)
+        assert result == "--"
