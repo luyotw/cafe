@@ -434,11 +434,16 @@ class TestGitOperations:
                 assert commits == []
 
     def test_get_unpushed_commits_no_upstream(self) -> None:
-        """測試沒有 upstream 分支時回傳空列表"""
+        """測試沒有 upstream 分支且沒有 remote 分支時回傳空列表"""
         git = GitOperations()
 
-        with patch.object(git, "has_upstream_branch") as mock_upstream:
+        with patch.object(git, "has_upstream_branch") as mock_upstream, \
+             patch.object(git, "get_current_branch") as mock_branch, \
+             patch.object(git, "run_git") as mock_run:
             mock_upstream.return_value = False
+            mock_branch.return_value = "test-branch"
+            # Simulate remote branch doesn't exist
+            mock_run.side_effect = GitError("fatal: Needed a single revision")
 
             commits = git.get_unpushed_commits()
 

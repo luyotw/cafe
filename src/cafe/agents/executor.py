@@ -371,6 +371,9 @@ class AgentExecutor:
         "copilot": [
             "rate limit",
             "status 429",
+            "quota exceeded",
+            "you have no quota",
+            "capierror: 402",
         ],
         "cursor-agent": [
             "rate limit",
