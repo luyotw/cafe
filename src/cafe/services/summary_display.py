@@ -170,14 +170,14 @@ class SummaryDisplay:
         # Add columns
         table.add_column("Phase", style="green")
         table.add_column("Iteration", style="cyan", justify="right")
-        table.add_column("Status Code", style="yellow")
-        table.add_column("Model", style="blue")
-        table.add_column("Input Tokens", style="cyan", justify="right")
-        table.add_column("Output Tokens", style="cyan", justify="right")
-        table.add_column("Cache Read", style="cyan", justify="right")
+        table.add_column("Status Code", style="yellow", no_wrap=False, overflow="fold")
         table.add_column("Start", style="dim")
         table.add_column("End", style="dim")
         table.add_column("Duration", style="magenta")
+        table.add_column("Model", style="blue", no_wrap=False, overflow="fold")
+        table.add_column("Input Tokens", style="cyan", justify="right")
+        table.add_column("Output Tokens", style="cyan", justify="right")
+        table.add_column("Cache Read", style="cyan", justify="right")
 
         # Add data rows
         for entry in entries:
@@ -205,13 +205,13 @@ class SummaryDisplay:
                 entry.phase,
                 str(entry.iteration) if entry.iteration else "N/A",
                 entry.status_code or "N/A",
+                start_str,
+                end_str,
+                duration_str,
                 model_str,
                 input_tokens_str,
                 output_tokens_str,
-                cache_read_str,
-                start_str,
-                end_str,
-                duration_str
+                cache_read_str
             )
 
         # Print table
