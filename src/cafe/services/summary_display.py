@@ -1,6 +1,6 @@
 """Display formatter for cafe summary timeline."""
 
-from typing import List
+from typing import List, Optional
 
 from cafe.services.timeline_builder import TimelineEntry
 from cafe.services.time_formatter import format_timestamp_local, format_timestamp_utc, format_duration, calculate_elapsed_time
@@ -31,6 +31,19 @@ class SummaryDisplay:
     def __init__(self):
         """Initialize display formatter."""
         pass
+
+    def format_token_count(self, count: Optional[int]) -> str:
+        """Format token count with comma separators.
+
+        Args:
+            count: Token count to format
+
+        Returns:
+            Formatted string with commas, or "--" for None/0
+        """
+        if count is None or count == 0:
+            return "--"
+        return f"{count:,}"
 
     def format_phase_entry(self, entry: TimelineEntry) -> str:
         """Format a phase entry for display.
@@ -157,10 +170,14 @@ class SummaryDisplay:
         # Add columns
         table.add_column("Phase", style="green")
         table.add_column("Iteration", style="cyan", justify="right")
-        table.add_column("Status Code", style="yellow")
+        table.add_column("Status Code", style="yellow", no_wrap=False, overflow="fold")
         table.add_column("Start", style="dim")
         table.add_column("End", style="dim")
         table.add_column("Duration", style="magenta")
+        table.add_column("Model", style="blue", no_wrap=False, overflow="fold")
+        table.add_column("Input Tokens", style="cyan", justify="right")
+        table.add_column("Output Tokens", style="cyan", justify="right")
+        table.add_column("Cache Read", style="cyan", justify="right")
 
         # Add data rows
         for entry in entries:
@@ -177,6 +194,12 @@ class SummaryDisplay:
             else:
                 duration_str = "N/A"
 
+            # Format token usage
+            model_str = entry.model or "--"
+            input_tokens_str = self.format_token_count(entry.input_tokens)
+            output_tokens_str = self.format_token_count(entry.output_tokens)
+            cache_read_str = self.format_token_count(entry.cache_read_tokens)
+
             # Add row
             table.add_row(
                 entry.phase,
@@ -184,8 +207,126 @@ class SummaryDisplay:
                 entry.status_code or "N/A",
                 start_str,
                 end_str,
-                duration_str
+                duration_str,
+                model_str,
+                input_tokens_str,
+                output_tokens_str,
+                cache_read_str
             )
 
         # Print table
+        console.print(table)
+
+    def render_model_summary_table(self, entries: List[TimelineEntry]) -> None:
+        """Render aggregated token usage statistics by model.
+
+        Args:
+            entries: List of timeline entries to aggregate
+        """
+        if not RICH_AVAILABLE:
+            # Fallback - print simple text summary
+            print("\n📊 Model Token Usage Summary")
+            print("=" * 50)
+
+            # Aggregate token usage by cli-model combination
+            aggregated = {}
+            for entry in entries:
+                if not entry.cli or not entry.model:
+                    continue
+
+                key = f"{entry.cli}-{entry.model}"
+                if key not in aggregated:
+                    aggregated[key] = {
+                        "cli": entry.cli,
+                        "model": entry.model,
+                        "input_tokens": 0,
+                        "output_tokens": 0,
+                        "cache_read_tokens": 0,
+                        "cost_usd": 0.0,
+                    }
+
+                if entry.input_tokens:
+                    aggregated[key]["input_tokens"] += entry.input_tokens
+                if entry.output_tokens:
+                    aggregated[key]["output_tokens"] += entry.output_tokens
+                if entry.cache_read_tokens:
+                    aggregated[key]["cache_read_tokens"] += entry.cache_read_tokens
+                if entry.cost_usd:
+                    aggregated[key]["cost_usd"] += entry.cost_usd
+
+            if not aggregated:
+                return
+
+            # Print simple text table
+            for key in sorted(aggregated.keys()):
+                stats = aggregated[key]
+                print(f"\n{stats['cli']} - {stats['model']}")
+                print(f"  Input Tokens:  {self.format_token_count(stats['input_tokens'])}")
+                print(f"  Output Tokens: {self.format_token_count(stats['output_tokens'])}")
+                print(f"  Cache Read:    {self.format_token_count(stats['cache_read_tokens'])}")
+                cost_str = f"${stats['cost_usd']:.4f}" if stats['cost_usd'] > 0 else "--"
+                print(f"  Cost (USD):    {cost_str}")
+            print()
+            return
+
+        # Aggregate token usage by cli-model combination
+        aggregated = {}
+        for entry in entries:
+            if not entry.cli or not entry.model:
+                continue  # Skip entries without model info
+
+            key = f"{entry.cli}-{entry.model}"
+            if key not in aggregated:
+                aggregated[key] = {
+                    "cli": entry.cli,
+                    "model": entry.model,
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                    "cache_read_tokens": 0,
+                    "cost_usd": 0.0,
+                }
+
+            # Accumulate token counts and costs
+            if entry.input_tokens:
+                aggregated[key]["input_tokens"] += entry.input_tokens
+            if entry.output_tokens:
+                aggregated[key]["output_tokens"] += entry.output_tokens
+            if entry.cache_read_tokens:
+                aggregated[key]["cache_read_tokens"] += entry.cache_read_tokens
+            if entry.cost_usd:
+                aggregated[key]["cost_usd"] += entry.cost_usd
+
+        # If no token data, don't show the table
+        if not aggregated:
+            return
+
+        # Create summary table
+        table = Table(
+            title="📊 Model Token Usage Summary",
+            show_header=True,
+            header_style="bold cyan"
+        )
+
+        # Add columns
+        table.add_column("CLI", style="green")
+        table.add_column("Model", style="blue")
+        table.add_column("Input Tokens", style="cyan", justify="right")
+        table.add_column("Output Tokens", style="cyan", justify="right")
+        table.add_column("Cache Read", style="cyan", justify="right")
+        table.add_column("Cost (USD)", style="magenta", justify="right")
+
+        # Add rows for each model
+        for key in sorted(aggregated.keys()):
+            stats = aggregated[key]
+            table.add_row(
+                stats["cli"],
+                stats["model"],
+                self.format_token_count(stats["input_tokens"]),
+                self.format_token_count(stats["output_tokens"]),
+                self.format_token_count(stats["cache_read_tokens"]),
+                f"${stats['cost_usd']:.4f}" if stats['cost_usd'] > 0 else "--",
+            )
+
+        # Print summary table
+        console.print()
         console.print(table)
