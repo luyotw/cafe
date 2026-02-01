@@ -300,3 +300,324 @@ class TestCopyDataDirectory:
         # 舊檔案會被保留（因為使用增量拷貝）
         assert (dest / "old_file.txt").exists()
         assert (dest / "old_file.txt").read_text() == "old content"
+
+
+class TestCopyAgentsToLocal:
+    """測試將 agent 檔案複製到本地 .cafe 目錄"""
+
+    def _setup_system_agents(self, system_dir: Path) -> None:
+        """建立模擬系統 agent 目錄結構"""
+        for role in ["pm", "developer", "reviewer"]:
+            role_dir = system_dir / role
+            role_dir.mkdir(parents=True)
+        (system_dir / "pm" / "Roger.md").write_text("# Roger (system)")
+        (system_dir / "developer" / "David.md").write_text("# David (system)")
+        (system_dir / "reviewer" / "Richard.md").write_text("# Richard (system)")
+
+    def test_copy_agents_with_system_defaults_only(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """測試僅有系統預設 agent 時，系統檔案被複製到本地"""
+        from cafe.ui.init_helpers import copy_agents_to_local
+
+        # 建立系統 agent 目錄
+        system_dir = tmp_path / "system_agents"
+        self._setup_system_agents(system_dir)
+
+        # 建立空的全域目錄
+        global_dir = tmp_path / "global_cafe"
+        (global_dir / "agents" / "pm").mkdir(parents=True)
+        (global_dir / "agents" / "developer").mkdir(parents=True)
+        (global_dir / "agents" / "reviewer").mkdir(parents=True)
+
+        # 建立本地 .cafe 目錄
+        cafe_dir = tmp_path / "project" / ".cafe"
+        cafe_dir.mkdir(parents=True)
+
+        monkeypatch.setattr(
+            "cafe.utils.config.get_global_cafe_dir", lambda: global_dir
+        )
+        monkeypatch.setattr(
+            "cafe.ui.init_helpers._get_system_agents_dir", lambda: system_dir
+        )
+
+        results = copy_agents_to_local(cafe_dir)
+
+        # 驗證所有系統 agent 被複製
+        assert (cafe_dir / "agents" / "pm" / "Roger.md").exists()
+        assert (cafe_dir / "agents" / "developer" / "David.md").exists()
+        assert (cafe_dir / "agents" / "reviewer" / "Richard.md").exists()
+
+        # 驗證回傳結果包含正確的來源類型
+        for filename, source_type, success in results:
+            assert success is True
+            assert source_type == "system default"
+
+    def test_copy_agents_global_custom_overrides_system(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """測試全域自定義 agent 優先於系統預設"""
+        from cafe.ui.init_helpers import copy_agents_to_local
+
+        # 建立系統 agent 目錄
+        system_dir = tmp_path / "system_agents"
+        self._setup_system_agents(system_dir)
+
+        # 建立全域自定義 agent（與系統 Roger 同名）
+        global_dir = tmp_path / "global_cafe"
+        (global_dir / "agents" / "pm").mkdir(parents=True)
+        (global_dir / "agents" / "developer").mkdir(parents=True)
+        (global_dir / "agents" / "reviewer").mkdir(parents=True)
+        (global_dir / "agents" / "pm" / "Roger.md").write_text("# Roger (custom)")
+
+        # 建立本地 .cafe 目錄
+        cafe_dir = tmp_path / "project" / ".cafe"
+        cafe_dir.mkdir(parents=True)
+
+        monkeypatch.setattr(
+            "cafe.utils.config.get_global_cafe_dir", lambda: global_dir
+        )
+        monkeypatch.setattr(
+            "cafe.ui.init_helpers._get_system_agents_dir", lambda: system_dir
+        )
+
+        results = copy_agents_to_local(cafe_dir)
+
+        # 驗證全域自定義版本被使用
+        assert (cafe_dir / "agents" / "pm" / "Roger.md").read_text() == "# Roger (custom)"
+
+        # 驗證 Roger 的來源類型為 custom
+        roger_results = [r for r in results if "Roger.md" in r[0]]
+        assert len(roger_results) == 1
+        assert roger_results[0][1] == "custom"
+        assert roger_results[0][2] is True
+
+    def test_copy_agents_overwrites_existing_local_files(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """測試複製時覆寫本地既有 agent 檔案"""
+        from cafe.ui.init_helpers import copy_agents_to_local
+
+        # 建立系統 agent 目錄
+        system_dir = tmp_path / "system_agents"
+        self._setup_system_agents(system_dir)
+
+        # 建立空的全域目錄
+        global_dir = tmp_path / "global_cafe"
+        (global_dir / "agents" / "pm").mkdir(parents=True)
+        (global_dir / "agents" / "developer").mkdir(parents=True)
+        (global_dir / "agents" / "reviewer").mkdir(parents=True)
+
+        # 建立本地 .cafe 目錄，並放入舊版 agent
+        cafe_dir = tmp_path / "project" / ".cafe"
+        (cafe_dir / "agents" / "pm").mkdir(parents=True)
+        (cafe_dir / "agents" / "pm" / "Roger.md").write_text("# Roger (old local)")
+
+        monkeypatch.setattr(
+            "cafe.utils.config.get_global_cafe_dir", lambda: global_dir
+        )
+        monkeypatch.setattr(
+            "cafe.ui.init_helpers._get_system_agents_dir", lambda: system_dir
+        )
+
+        copy_agents_to_local(cafe_dir)
+
+        # 驗證舊版本被覆寫
+        assert (cafe_dir / "agents" / "pm" / "Roger.md").read_text() == "# Roger (system)"
+
+    def test_copy_agents_handles_copy_error_gracefully(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """測試複製時遇到錯誤能優雅處理並回傳失敗訊息"""
+        from cafe.ui.init_helpers import copy_agents_to_local
+
+        # 建立系統 agent 目錄
+        system_dir = tmp_path / "system_agents"
+        self._setup_system_agents(system_dir)
+
+        # 建立空的全域目錄
+        global_dir = tmp_path / "global_cafe"
+        (global_dir / "agents" / "pm").mkdir(parents=True)
+        (global_dir / "agents" / "developer").mkdir(parents=True)
+        (global_dir / "agents" / "reviewer").mkdir(parents=True)
+
+        # 建立本地 .cafe 目錄
+        cafe_dir = tmp_path / "project" / ".cafe"
+        cafe_dir.mkdir(parents=True)
+
+        monkeypatch.setattr(
+            "cafe.utils.config.get_global_cafe_dir", lambda: global_dir
+        )
+        monkeypatch.setattr(
+            "cafe.ui.init_helpers._get_system_agents_dir", lambda: system_dir
+        )
+
+        # Mock shutil.copy2 拋出 PermissionError
+        with patch("shutil.copy2", side_effect=PermissionError("Permission denied")):
+            results = copy_agents_to_local(cafe_dir)
+
+        # 驗證所有複製均失敗，但函式不拋出例外
+        for filename, source_type, success in results:
+            assert success is False
+
+
+class TestCopyTemplatesToLocal:
+    """測試將 template 檔案複製到本地 .cafe 目錄"""
+
+    def _setup_system_templates(self, system_dir: Path) -> None:
+        """建立模擬系統 template 目錄結構"""
+        for phase in ["plan", "spec"]:
+            phase_dir = system_dir / phase
+            phase_dir.mkdir(parents=True)
+        (system_dir / "plan" / "default.md").write_text("# Default Plan (system)")
+        (system_dir / "plan" / "simple.md").write_text("# Simple Plan (system)")
+        (system_dir / "spec" / "default.md").write_text("# Default Spec (system)")
+
+    def test_copy_templates_with_system_defaults_only(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """測試僅有系統預設 template 時，系統檔案被複製到本地"""
+        from cafe.ui.init_helpers import copy_templates_to_local
+
+        # 建立系統 template 目錄
+        system_dir = tmp_path / "system_templates"
+        self._setup_system_templates(system_dir)
+
+        # 建立空的全域目錄
+        global_dir = tmp_path / "global_cafe"
+        (global_dir / "templates" / "plan").mkdir(parents=True)
+        (global_dir / "templates" / "spec").mkdir(parents=True)
+
+        # 建立本地 .cafe 目錄
+        cafe_dir = tmp_path / "project" / ".cafe"
+        cafe_dir.mkdir(parents=True)
+
+        monkeypatch.setattr(
+            "cafe.utils.config.get_global_cafe_dir", lambda: global_dir
+        )
+        monkeypatch.setattr(
+            "cafe.ui.init_helpers._get_system_templates_dir", lambda: system_dir
+        )
+
+        results = copy_templates_to_local(cafe_dir)
+
+        # 驗證所有系統 template 被複製
+        assert (cafe_dir / "templates" / "plan" / "default.md").exists()
+        assert (cafe_dir / "templates" / "plan" / "simple.md").exists()
+        assert (cafe_dir / "templates" / "spec" / "default.md").exists()
+
+        # 驗證回傳結果包含正確的來源類型
+        for filename, source_type, success in results:
+            assert success is True
+            assert source_type == "system default"
+
+    def test_copy_templates_global_custom_overrides_system(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """測試全域自定義 template 優先於系統預設"""
+        from cafe.ui.init_helpers import copy_templates_to_local
+
+        # 建立系統 template 目錄
+        system_dir = tmp_path / "system_templates"
+        self._setup_system_templates(system_dir)
+
+        # 建立全域自定義 template（與系統 default.md 同名）
+        global_dir = tmp_path / "global_cafe"
+        (global_dir / "templates" / "plan").mkdir(parents=True)
+        (global_dir / "templates" / "spec").mkdir(parents=True)
+        (global_dir / "templates" / "plan" / "default.md").write_text(
+            "# Default Plan (custom)"
+        )
+
+        # 建立本地 .cafe 目錄
+        cafe_dir = tmp_path / "project" / ".cafe"
+        cafe_dir.mkdir(parents=True)
+
+        monkeypatch.setattr(
+            "cafe.utils.config.get_global_cafe_dir", lambda: global_dir
+        )
+        monkeypatch.setattr(
+            "cafe.ui.init_helpers._get_system_templates_dir", lambda: system_dir
+        )
+
+        results = copy_templates_to_local(cafe_dir)
+
+        # 驗證全域自定義版本被使用
+        assert (
+            cafe_dir / "templates" / "plan" / "default.md"
+        ).read_text() == "# Default Plan (custom)"
+
+        # 驗證 default.md 的來源類型為 custom
+        default_results = [r for r in results if "default.md" in r[0] and "plan" in r[0]]
+        assert len(default_results) == 1
+        assert default_results[0][1] == "custom"
+
+    def test_copy_templates_overwrites_existing_local_files(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """測試複製時覆寫本地既有 template 檔案"""
+        from cafe.ui.init_helpers import copy_templates_to_local
+
+        # 建立系統 template 目錄
+        system_dir = tmp_path / "system_templates"
+        self._setup_system_templates(system_dir)
+
+        # 建立空的全域目錄
+        global_dir = tmp_path / "global_cafe"
+        (global_dir / "templates" / "plan").mkdir(parents=True)
+        (global_dir / "templates" / "spec").mkdir(parents=True)
+
+        # 建立本地 .cafe 目錄，並放入舊版 template
+        cafe_dir = tmp_path / "project" / ".cafe"
+        (cafe_dir / "templates" / "plan").mkdir(parents=True)
+        (cafe_dir / "templates" / "plan" / "default.md").write_text(
+            "# Default Plan (old local)"
+        )
+
+        monkeypatch.setattr(
+            "cafe.utils.config.get_global_cafe_dir", lambda: global_dir
+        )
+        monkeypatch.setattr(
+            "cafe.ui.init_helpers._get_system_templates_dir", lambda: system_dir
+        )
+
+        copy_templates_to_local(cafe_dir)
+
+        # 驗證舊版本被覆寫
+        assert (
+            cafe_dir / "templates" / "plan" / "default.md"
+        ).read_text() == "# Default Plan (system)"
+
+    def test_copy_templates_handles_copy_error_gracefully(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """測試複製時遇到錯誤能優雅處理並回傳失敗訊息"""
+        from cafe.ui.init_helpers import copy_templates_to_local
+
+        # 建立系統 template 目錄
+        system_dir = tmp_path / "system_templates"
+        self._setup_system_templates(system_dir)
+
+        # 建立空的全域目錄
+        global_dir = tmp_path / "global_cafe"
+        (global_dir / "templates" / "plan").mkdir(parents=True)
+        (global_dir / "templates" / "spec").mkdir(parents=True)
+
+        # 建立本地 .cafe 目錄
+        cafe_dir = tmp_path / "project" / ".cafe"
+        cafe_dir.mkdir(parents=True)
+
+        monkeypatch.setattr(
+            "cafe.utils.config.get_global_cafe_dir", lambda: global_dir
+        )
+        monkeypatch.setattr(
+            "cafe.ui.init_helpers._get_system_templates_dir", lambda: system_dir
+        )
+
+        # Mock shutil.copy2 拋出 PermissionError
+        with patch("shutil.copy2", side_effect=PermissionError("Permission denied")):
+            results = copy_templates_to_local(cafe_dir)
+
+        # 驗證所有複製均失敗，但函式不拋出例外
+        for filename, source_type, success in results:
+            assert success is False

@@ -2,7 +2,7 @@
 
 import shutil
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Tuple
 
 import yaml
 
@@ -113,3 +113,126 @@ def copy_data_directory(source: str, destination: str) -> None:
 
     # Copy directory (incremental copy)
     shutil.copytree(source_path, dest_path, dirs_exist_ok=True)
+
+
+# Agent 角色列表
+_AGENT_ROLES = ["pm", "developer", "reviewer"]
+
+# Template 類型列表
+_TEMPLATE_TYPES = ["plan", "spec"]
+
+
+def _get_system_agents_dir() -> Path:
+    """取得系統預設 agent 目錄路徑。
+
+    Returns:
+        系統 agent 目錄路徑 (src/cafe/data/agents/)
+    """
+    return Path(__file__).parent.parent / "data" / "agents"
+
+
+def _get_system_templates_dir() -> Path:
+    """取得系統預設 template 目錄路徑。
+
+    Returns:
+        系統 template 目錄路徑 (src/cafe/data/templates/)
+    """
+    return Path(__file__).parent.parent / "data" / "templates"
+
+
+def copy_agents_to_local(cafe_dir: Path) -> List[Tuple[str, str, bool]]:
+    """將 agent 檔案從全域自定義或系統預設目錄複製到本地 .cafe 目錄。
+
+    全域自定義 (~/.cafe/agents/<role>/) 優先於系統預設 (src/cafe/data/agents/<role>/)。
+    複製目標為 .cafe/agents/<role>/，會覆寫既有本地檔案。
+
+    Args:
+        cafe_dir: 本地 .cafe 目錄路徑
+
+    Returns:
+        複製結果列表，每個元素為 (相對路徑, 來源類型, 是否成功) 的元組
+    """
+    from cafe.utils.config import get_global_cafe_dir
+
+    results: List[Tuple[str, str, bool]] = []
+    system_agents_dir = _get_system_agents_dir()
+    global_agents_dir = get_global_cafe_dir() / "agents"
+
+    for role in _AGENT_ROLES:
+        # 收集該角色的所有 agent，全域自定義覆蓋系統預設
+        files: Dict[str, Tuple[Path, str]] = {}
+
+        # 先加入系統預設
+        system_role_dir = system_agents_dir / role
+        if system_role_dir.exists():
+            for agent_file in system_role_dir.glob("*.md"):
+                files[agent_file.name] = (agent_file, "system default")
+
+        # 再加入全域自定義（同名會覆蓋）
+        global_role_dir = global_agents_dir / role
+        if global_role_dir.exists():
+            for agent_file in global_role_dir.glob("*.md"):
+                files[agent_file.name] = (agent_file, "custom")
+
+        # 複製到本地
+        local_role_dir = cafe_dir / "agents" / role
+        local_role_dir.mkdir(parents=True, exist_ok=True)
+
+        for filename, (source_path, source_type) in files.items():
+            relative_path = f"agents/{role}/{filename}"
+            try:
+                shutil.copy2(source_path, local_role_dir / filename)
+                results.append((relative_path, source_type, True))
+            except (PermissionError, OSError):
+                results.append((relative_path, source_type, False))
+
+    return results
+
+
+def copy_templates_to_local(cafe_dir: Path) -> List[Tuple[str, str, bool]]:
+    """將 template 檔案從全域自定義或系統預設目錄複製到本地 .cafe 目錄。
+
+    全域自定義 (~/.cafe/templates/<phase>/) 優先於系統預設 (src/cafe/data/templates/<phase>/)。
+    複製目標為 .cafe/templates/<phase>/，會覆寫既有本地檔案。
+
+    Args:
+        cafe_dir: 本地 .cafe 目錄路徑
+
+    Returns:
+        複製結果列表，每個元素為 (相對路徑, 來源類型, 是否成功) 的元組
+    """
+    from cafe.utils.config import get_global_cafe_dir
+
+    results: List[Tuple[str, str, bool]] = []
+    system_templates_dir = _get_system_templates_dir()
+    global_templates_dir = get_global_cafe_dir() / "templates"
+
+    for template_type in _TEMPLATE_TYPES:
+        # 收集該類型的所有 template，全域自定義覆蓋系統預設
+        files: Dict[str, Tuple[Path, str]] = {}
+
+        # 先加入系統預設
+        system_type_dir = system_templates_dir / template_type
+        if system_type_dir.exists():
+            for template_file in system_type_dir.glob("*.md"):
+                files[template_file.name] = (template_file, "system default")
+
+        # 再加入全域自定義（同名會覆蓋）
+        global_type_dir = global_templates_dir / template_type
+        if global_type_dir.exists():
+            for template_file in global_type_dir.glob("*.md"):
+                files[template_file.name] = (template_file, "custom")
+
+        # 複製到本地
+        local_type_dir = cafe_dir / "templates" / template_type
+        local_type_dir.mkdir(parents=True, exist_ok=True)
+
+        for filename, (source_path, source_type) in files.items():
+            relative_path = f"templates/{template_type}/{filename}"
+            try:
+                shutil.copy2(source_path, local_type_dir / filename)
+                results.append((relative_path, source_type, True))
+            except (PermissionError, OSError):
+                results.append((relative_path, source_type, False))
+
+    return results
