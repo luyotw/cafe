@@ -29,6 +29,8 @@ from cafe.ui import init_helpers
 from cafe.ui.display import Display
 from cafe.ui.init_helpers import (
     check_available_clis,
+    copy_agents_to_local,
+    copy_templates_to_local,
     list_available_agents,
 )
 from cafe.ui.phase_prompts import prompt_for_input_method, prompt_for_rigor
@@ -566,9 +568,11 @@ def init() -> None:
             console.print("[yellow]⚠️  Proceeding to overwrite existing configuration...[/yellow]")
             console.print()
 
-        # 2. Copy agents and templates directories
-        # Note: Agents and templates are now managed globally at ~/.cafe/
-        # No need to copy them to project .cafe directory
+        # 2. Copy agents and templates directories to local .cafe
+        cafe_dir = Path(".cafe")
+        cafe_dir.mkdir(parents=True, exist_ok=True)
+        _ensure_default_content(cafe_dir)
+        console.print()
 
         # 3. Check available CLIs
         available_clis = check_available_clis()
@@ -718,14 +722,27 @@ def version() -> None:
 
 
 def _ensure_default_content(cafe_dir: Path) -> None:
-    """No-op function - agents and templates are now managed globally at ~/.cafe/
+    """Copy agent and template files into local .cafe directory.
+
+    Copies from global custom (~/.cafe/) and system default (src/cafe/data/)
+    directories. Global custom files take precedence over system defaults.
 
     Args:
-        cafe_dir: Path to .cafe directory (unused)
+        cafe_dir: Path to .cafe directory
     """
-    # Agents and templates are now stored globally at ~/.cafe/
-    # No need to copy them to project .cafe directory
-    pass
+    # 複製 agent 和 template 到本地，並顯示複製結果
+    agent_results = copy_agents_to_local(cafe_dir)
+    template_results = copy_templates_to_local(cafe_dir)
+
+    all_results = agent_results + template_results
+
+    # 顯示複製結果
+    for relative_path, source_type, success in all_results:
+        if success:
+            source_label = "custom" if source_type == "custom" else "system default"
+            console.print(f"  [green]✓[/green] Copied {relative_path} ({source_label})")
+        else:
+            console.print(f"  [yellow]⚠[/yellow] Warning: Failed to copy {relative_path}")
 
 
 @app.command()
