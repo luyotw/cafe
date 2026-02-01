@@ -352,8 +352,13 @@ class TestTemplateManager:
         assert manager.get_template_path("simple") is not None
         assert manager.get_template_path("detailed") is not None
 
-    def test_init_does_not_overwrite_existing_templates(self, tmp_path: Path) -> None:
-        """測試初始化時全域自定義 template 優先於系統 template"""
+    def test_init_does_not_overwrite_existing_templates(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """測試初始化時全域自定義 template 優先於系統 template（本地無 .cafe 時）"""
+        # chdir 到沒有本地 .cafe 的目錄，確保本地路徑不干涉
+        monkeypatch.chdir(tmp_path)
+
         fake_home = tmp_path / "home"
         fake_home.mkdir()
         global_template_dir = fake_home / ".cafe" / "templates" / "plan"
@@ -364,7 +369,6 @@ class TestTemplateManager:
         (global_template_dir / "default.md").write_text(custom_content)
 
         with patch("cafe.utils.config.Path.home", return_value=fake_home):
-            config_dir = tmp_path / ".cafe"
             # 初始化 manager
             manager = TemplateManager(template_type="plan")
 
@@ -372,3 +376,51 @@ class TestTemplateManager:
             path = manager.get_template_path("default")
             assert path == global_template_dir / "default.md"
             assert path.read_text() == custom_content
+
+
+class TestTemplateManagerLocalPath:
+    """測試 TemplateManager.get_template_path 本地路徑優先順序"""
+
+    def test_local_cafe_template_has_highest_priority(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """測試本地 .cafe/templates/ 優先於全域和系統預設"""
+        # 建立本地 template
+        local_template_dir = tmp_path / ".cafe" / "templates" / "plan"
+        local_template_dir.mkdir(parents=True)
+        (local_template_dir / "default.md").write_text("# Local default")
+
+        # 建立全域 template
+        fake_home = tmp_path / "home"
+        global_template_dir = fake_home / ".cafe" / "templates" / "plan"
+        global_template_dir.mkdir(parents=True)
+        (global_template_dir / "default.md").write_text("# Global default")
+
+        monkeypatch.chdir(tmp_path)
+
+        with patch("cafe.templates.manager.get_global_cafe_dir", return_value=fake_home / ".cafe"):
+            manager = TemplateManager(template_type="plan")
+            path = manager.get_template_path("default")
+
+        # 本地 .cafe/ 路徑優先（回傳相對路徑）
+        assert path is not None
+        assert path == Path(".cafe") / "templates" / "plan" / "default.md"
+
+    def test_falls_back_to_global_when_no_local(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """測試本地不存在時回退到全域 ~/.cafe/templates/"""
+        # 無本地 template
+        fake_home = tmp_path / "home"
+        global_template_dir = fake_home / ".cafe" / "templates" / "plan"
+        global_template_dir.mkdir(parents=True)
+        (global_template_dir / "custom.md").write_text("# Global custom")
+
+        monkeypatch.chdir(tmp_path)
+
+        with patch("cafe.templates.manager.get_global_cafe_dir", return_value=fake_home / ".cafe"):
+            manager = TemplateManager(template_type="plan")
+            path = manager.get_template_path("custom")
+
+        assert path is not None
+        assert path == global_template_dir / "custom.md"

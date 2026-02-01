@@ -390,3 +390,69 @@ class TestAgentConfiguration:
         # Verify None model is preserved
         executor = manager.get_agent("Roger")
         assert executor.config.model is None
+
+
+class TestGetAgentFilePath:
+    """測試 get_agent_file_path 路徑查找優先順序"""
+
+    def test_local_cafe_agent_has_highest_priority(
+        self, tmp_path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """測試本地 .cafe/agents/ 優先於全域和系統預設"""
+        from pathlib import Path as RealPath
+
+        # 建立本地 .cafe agent
+        local_agent = tmp_path / ".cafe" / "agents" / "pm" / "Roger.md"
+        local_agent.parent.mkdir(parents=True)
+        local_agent.write_text("# Roger (local)")
+
+        # 建立全域 agent
+        global_home = tmp_path / "global_home"
+        global_agent = global_home / ".cafe" / "agents" / "pm" / "Roger.md"
+        global_agent.parent.mkdir(parents=True)
+        global_agent.write_text("# Roger (global)")
+
+        monkeypatch.chdir(tmp_path)
+
+        with patch.object(RealPath, "home", return_value=global_home):
+            result = AgentManager.get_agent_file_path("Roger", "pm")
+
+        # 本地 .cafe/ 路徑優先（應為本地相對路徑而非全域絕對路徑）
+        assert result == ".cafe/agents/pm/Roger.md"
+
+    def test_falls_back_to_global_when_no_local(
+        self, tmp_path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """測試本地不存在時回退到全域 ~/.cafe/agents/"""
+        from pathlib import Path as RealPath
+
+        # 建立全域 agent
+        global_home = tmp_path / "global_home"
+        global_agent = global_home / ".cafe" / "agents" / "pm" / "Roger.md"
+        global_agent.parent.mkdir(parents=True)
+        global_agent.write_text("# Roger (global)")
+
+        # 本地無此 agent
+        monkeypatch.chdir(tmp_path)
+
+        with patch.object(RealPath, "home", return_value=global_home):
+            result = AgentManager.get_agent_file_path("Roger", "pm")
+
+        assert str(global_agent) == result
+
+    def test_falls_back_to_system_when_no_local_or_global(
+        self, tmp_path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """測試本地和全域都不存在時回退到系統預設"""
+        from pathlib import Path as RealPath
+
+        # 全域目錄不存在
+        global_home = tmp_path / "nonexistent_home"
+
+        monkeypatch.chdir(tmp_path)
+
+        with patch.object(RealPath, "home", return_value=global_home):
+            result = AgentManager.get_agent_file_path("Roger", "pm")
+
+        # 回退到系統預設路徑
+        assert result == "src/cafe/data/agents/pm/Roger.md"

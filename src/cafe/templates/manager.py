@@ -123,8 +123,9 @@ class TemplateManager:
 
     def get_template_path(self, template_name: str) -> Optional[Path]:
         """Get the path to a template file.
-        
-        Searches in order: global directory first, then system directory.
+
+        Searches in order: local .cafe/templates/ first, then global
+        ~/.cafe/templates/, then system directory (package data).
 
         Args:
             template_name: Name of the template (with or without .md)
@@ -136,13 +137,19 @@ class TemplateManager:
         if not template_name.endswith(".md"):
             template_name = f"{template_name}.md"
 
-        # First, check global directory
+        # 優先從本地 .cafe/templates/ 讀取（cafe init 複製到此）
+        local_template_dir = Path(".cafe") / "templates" / self.template_type
+        local_path = local_template_dir / template_name
+        if local_path.exists():
+            return local_path
+
+        # 次優先從全域 ~/.cafe/templates/ 讀取
         global_template_dir = get_global_cafe_dir() / "templates" / self.template_type
         global_path = global_template_dir / template_name
         if global_path.exists():
             return global_path
-        
-        # Then, check system directory (package data)
+
+        # 回退到系統預設（package data）
         package_data_dir = Path(__file__).parent.parent / "data" / "templates" / self.template_type
         system_path = package_data_dir / template_name
         if system_path.exists():

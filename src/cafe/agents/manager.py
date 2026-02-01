@@ -353,28 +353,30 @@ class AgentManager:
     def get_agent_file_path(cls, agent_name: str, role: str, cafe_dir: str = None) -> str:
         """Get the path to agent md file (for use in prompts).
 
+        Searches in order: local .cafe/agents/ first, then ~/.cafe/agents/,
+        then falls back to src/cafe/data/agents/.
+
         Args:
             agent_name: Agent name (e.g. "Roger", "David", "Richard", "John")
             role: Agent role directory name (e.g. "pm", "developer", "reviewer")
             cafe_dir: CAFE config directory path (deprecated, not used)
 
         Returns:
-            str: Agent file path (tries ~/.cafe/agents first, then src/cafe/data/agents)
-
-        Examples:
-            >>> AgentManager.get_agent_file_path("Roger", "pm")
-            'src/cafe/data/agents/pm/Roger.md'
-            >>> AgentManager.get_agent_file_path("David", "developer")
-            'src/cafe/data/agents/developer/David.md'
-            >>> AgentManager.get_agent_file_path("John", "developer")
-            'src/cafe/data/agents/developer/John.md'
+            str: Agent file path
         """
         from pathlib import Path
 
-        # Try ~/.cafe/agents first
-        home_path = Path.home() / ".cafe" / "agents" / role / f"{agent_name}.md"
+        agent_filename = f"{agent_name}.md"
+
+        # 優先從本地 .cafe/agents/ 讀取（cafe init 複製到此）
+        local_path = Path(".cafe") / "agents" / role / agent_filename
+        if local_path.exists():
+            return str(local_path)
+
+        # 次優先從全域 ~/.cafe/agents/ 讀取
+        home_path = Path.home() / ".cafe" / "agents" / role / agent_filename
         if home_path.exists():
             return str(home_path)
 
-        # Fall back to src/cafe/data/agents
+        # 回退到系統預設
         return f"src/cafe/data/agents/{role}/{agent_name}.md"

@@ -274,8 +274,13 @@ class TestNameConflictHandling:
 class TestSystemAndGlobalTemplateCoexistence:
     """Test that system and global templates can coexist."""
 
-    def test_global_template_overrides_system_template(self, runner, fake_home, tmp_path):
+    def test_global_template_overrides_system_template(
+        self, runner, fake_home, tmp_path, monkeypatch
+    ):
         """Test that global template with same name as system template takes precedence."""
+        # chdir 到沒有本地 .cafe 的目錄，確保本地路徑不干涉
+        monkeypatch.chdir(tmp_path)
+
         # Create a global template with the same name as a system template (e.g., "default")
         source_file = tmp_path / "custom_default.md"
         custom_content = "# Custom Default Template\nThis overrides system default"
