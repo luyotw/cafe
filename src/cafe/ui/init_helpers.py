@@ -115,42 +115,36 @@ def copy_data_directory(source: str, destination: str) -> None:
     shutil.copytree(source_path, dest_path, dirs_exist_ok=True)
 
 
-# Agent 角色列表
-_AGENT_ROLES = ["pm", "developer", "reviewer"]
-
-# Template 類型列表
-_TEMPLATE_TYPES = ["plan", "spec"]
-
-
 def _get_system_agents_dir() -> Path:
-    """取得系統預設 agent 目錄路徑。
+    """Get the system default agents directory path.
 
     Returns:
-        系統 agent 目錄路徑 (src/cafe/data/agents/)
+        Path to system agents directory (src/cafe/data/agents/)
     """
     return Path(__file__).parent.parent / "data" / "agents"
 
 
 def _get_system_templates_dir() -> Path:
-    """取得系統預設 template 目錄路徑。
+    """Get the system default templates directory path.
 
     Returns:
-        系統 template 目錄路徑 (src/cafe/data/templates/)
+        Path to system templates directory (src/cafe/data/templates/)
     """
     return Path(__file__).parent.parent / "data" / "templates"
 
 
 def copy_agents_to_local(cafe_dir: Path) -> List[Tuple[str, str, bool]]:
-    """將 agent 檔案從全域自定義或系統預設目錄複製到本地 .cafe 目錄。
+    """Copy agent files from global custom or system default directories to local .cafe.
 
-    全域自定義 (~/.cafe/agents/<role>/) 優先於系統預設 (src/cafe/data/agents/<role>/)。
-    複製目標為 .cafe/agents/<role>/，會覆寫既有本地檔案。
+    Global custom (~/.cafe/agents/<role>/) takes precedence over system default
+    (src/cafe/data/agents/<role>/). Copies to .cafe/agents/<role>/, overwriting
+    any existing local files.
 
     Args:
-        cafe_dir: 本地 .cafe 目錄路徑
+        cafe_dir: Path to the local .cafe directory
 
     Returns:
-        複製結果列表，每個元素為 (相對路徑, 來源類型, 是否成功) 的元組
+        List of (relative_path, source_type, success) tuples for each file
     """
     from cafe.utils.config import get_global_cafe_dir
 
@@ -158,23 +152,26 @@ def copy_agents_to_local(cafe_dir: Path) -> List[Tuple[str, str, bool]]:
     system_agents_dir = _get_system_agents_dir()
     global_agents_dir = get_global_cafe_dir() / "agents"
 
-    for role in _AGENT_ROLES:
-        # 收集該角色的所有 agent，全域自定義覆蓋系統預設
+    # Derive roles from the system agents directory structure
+    roles = [d.name for d in system_agents_dir.iterdir() if d.is_dir()] if system_agents_dir.exists() else []
+
+    for role in roles:
+        # Collect all agents for this role; global custom overrides system default
         files: Dict[str, Tuple[Path, str]] = {}
 
-        # 先加入系統預設
+        # Add system defaults first
         system_role_dir = system_agents_dir / role
         if system_role_dir.exists():
             for agent_file in system_role_dir.glob("*.md"):
                 files[agent_file.name] = (agent_file, "system default")
 
-        # 再加入全域自定義（同名會覆蓋）
+        # Overlay global custom files (same-name overrides)
         global_role_dir = global_agents_dir / role
         if global_role_dir.exists():
             for agent_file in global_role_dir.glob("*.md"):
                 files[agent_file.name] = (agent_file, "custom")
 
-        # 複製到本地
+        # Copy to local .cafe directory
         local_role_dir = cafe_dir / "agents" / role
         local_role_dir.mkdir(parents=True, exist_ok=True)
 
@@ -190,16 +187,17 @@ def copy_agents_to_local(cafe_dir: Path) -> List[Tuple[str, str, bool]]:
 
 
 def copy_templates_to_local(cafe_dir: Path) -> List[Tuple[str, str, bool]]:
-    """將 template 檔案從全域自定義或系統預設目錄複製到本地 .cafe 目錄。
+    """Copy template files from global custom or system default directories to local .cafe.
 
-    全域自定義 (~/.cafe/templates/<phase>/) 優先於系統預設 (src/cafe/data/templates/<phase>/)。
-    複製目標為 .cafe/templates/<phase>/，會覆寫既有本地檔案。
+    Global custom (~/.cafe/templates/<phase>/) takes precedence over system default
+    (src/cafe/data/templates/<phase>/). Copies to .cafe/templates/<phase>/, overwriting
+    any existing local files.
 
     Args:
-        cafe_dir: 本地 .cafe 目錄路徑
+        cafe_dir: Path to the local .cafe directory
 
     Returns:
-        複製結果列表，每個元素為 (相對路徑, 來源類型, 是否成功) 的元組
+        List of (relative_path, source_type, success) tuples for each file
     """
     from cafe.utils.config import get_global_cafe_dir
 
@@ -207,23 +205,26 @@ def copy_templates_to_local(cafe_dir: Path) -> List[Tuple[str, str, bool]]:
     system_templates_dir = _get_system_templates_dir()
     global_templates_dir = get_global_cafe_dir() / "templates"
 
-    for template_type in _TEMPLATE_TYPES:
-        # 收集該類型的所有 template，全域自定義覆蓋系統預設
+    # Derive template types from the system templates directory structure
+    template_types = [d.name for d in system_templates_dir.iterdir() if d.is_dir()] if system_templates_dir.exists() else []
+
+    for template_type in template_types:
+        # Collect all templates for this type; global custom overrides system default
         files: Dict[str, Tuple[Path, str]] = {}
 
-        # 先加入系統預設
+        # Add system defaults first
         system_type_dir = system_templates_dir / template_type
         if system_type_dir.exists():
             for template_file in system_type_dir.glob("*.md"):
                 files[template_file.name] = (template_file, "system default")
 
-        # 再加入全域自定義（同名會覆蓋）
+        # Overlay global custom files (same-name overrides)
         global_type_dir = global_templates_dir / template_type
         if global_type_dir.exists():
             for template_file in global_type_dir.glob("*.md"):
                 files[template_file.name] = (template_file, "custom")
 
-        # 複製到本地
+        # Copy to local .cafe directory
         local_type_dir = cafe_dir / "templates" / template_type
         local_type_dir.mkdir(parents=True, exist_ok=True)
 

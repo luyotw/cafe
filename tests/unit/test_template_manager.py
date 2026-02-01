@@ -379,18 +379,18 @@ class TestTemplateManager:
 
 
 class TestTemplateManagerLocalPath:
-    """測試 TemplateManager.get_template_path 本地路徑優先順序"""
+    """Tests for TemplateManager.get_template_path local path priority."""
 
     def test_local_cafe_template_has_highest_priority(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """測試本地 .cafe/templates/ 優先於全域和系統預設"""
-        # 建立本地 template
+        """Test that local .cafe/templates/ takes priority over global and system."""
+        # Set up local template
         local_template_dir = tmp_path / ".cafe" / "templates" / "plan"
         local_template_dir.mkdir(parents=True)
         (local_template_dir / "default.md").write_text("# Local default")
 
-        # 建立全域 template
+        # Set up global template
         fake_home = tmp_path / "home"
         global_template_dir = fake_home / ".cafe" / "templates" / "plan"
         global_template_dir.mkdir(parents=True)
@@ -402,15 +402,15 @@ class TestTemplateManagerLocalPath:
             manager = TemplateManager(template_type="plan")
             path = manager.get_template_path("default")
 
-        # 本地 .cafe/ 路徑優先（回傳相對路徑）
+        # Local .cafe/ path should be returned as relative path
         assert path is not None
         assert path == Path(".cafe") / "templates" / "plan" / "default.md"
 
     def test_falls_back_to_global_when_no_local(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """測試本地不存在時回退到全域 ~/.cafe/templates/"""
-        # 無本地 template
+        """Test that global ~/.cafe/templates/ is used when no local template exists."""
+        # No local template
         fake_home = tmp_path / "home"
         global_template_dir = fake_home / ".cafe" / "templates" / "plan"
         global_template_dir.mkdir(parents=True)

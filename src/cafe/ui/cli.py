@@ -730,13 +730,13 @@ def _ensure_default_content(cafe_dir: Path) -> None:
     Args:
         cafe_dir: Path to .cafe directory
     """
-    # 複製 agent 和 template 到本地，並顯示複製結果
+    # Copy agents and templates to local .cafe and display results
     agent_results = copy_agents_to_local(cafe_dir)
     template_results = copy_templates_to_local(cafe_dir)
 
     all_results = agent_results + template_results
 
-    # 顯示複製結果
+    # Display copy results
     for relative_path, source_type, success in all_results:
         if success:
             source_label = "custom" if source_type == "custom" else "system default"

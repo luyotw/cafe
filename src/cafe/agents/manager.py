@@ -368,15 +368,15 @@ class AgentManager:
 
         agent_filename = f"{agent_name}.md"
 
-        # 優先從本地 .cafe/agents/ 讀取（cafe init 複製到此）
+        # Check local .cafe/agents/ first (populated by cafe init)
         local_path = Path(".cafe") / "agents" / role / agent_filename
         if local_path.exists():
             return str(local_path)
 
-        # 次優先從全域 ~/.cafe/agents/ 讀取
+        # Fall back to global ~/.cafe/agents/
         home_path = Path.home() / ".cafe" / "agents" / role / agent_filename
         if home_path.exists():
             return str(home_path)
 
-        # 回退到系統預設
+        # Fall back to system default
         return f"src/cafe/data/agents/{role}/{agent_name}.md"

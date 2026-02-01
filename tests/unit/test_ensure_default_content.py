@@ -1,4 +1,4 @@
-"""測試 _ensure_default_content 函數"""
+"""Tests for _ensure_default_content function."""
 
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -10,14 +10,14 @@ from cafe.ui.cli import _ensure_default_content
 
 @pytest.fixture
 def temp_cafe_dir(tmp_path):
-    """創建臨時 .cafe 目錄"""
+    """Create a temporary .cafe directory."""
     cafe_dir = tmp_path / ".cafe"
     cafe_dir.mkdir(parents=True)
     return cafe_dir
 
 
 class TestEnsureDefaultContent:
-    """測試 _ensure_default_content 函數 - 複製 agent 和 template 到本地"""
+    """Tests for _ensure_default_content - copies agents and templates to local .cafe."""
 
     @patch("cafe.ui.cli.copy_templates_to_local")
     @patch("cafe.ui.cli.copy_agents_to_local")
@@ -27,7 +27,7 @@ class TestEnsureDefaultContent:
         mock_copy_templates: MagicMock,
         temp_cafe_dir: Path,
     ) -> None:
-        """測試 _ensure_default_content 會呼叫複製函式"""
+        """Test that _ensure_default_content calls both copy functions."""
         mock_copy_agents.return_value = []
         mock_copy_templates.return_value = []
 
@@ -44,8 +44,8 @@ class TestEnsureDefaultContent:
         mock_copy_templates: MagicMock,
         temp_cafe_dir: Path,
     ) -> None:
-        """測試複製成功時建立 agents 和 templates 目錄"""
-        # 模擬複製結果
+        """Test that successful copies complete without errors."""
+        # Mock copy results
         mock_copy_agents.return_value = [
             ("agents/pm/Roger.md", "system default", True),
             ("agents/developer/David.md", "custom", True),
@@ -56,7 +56,7 @@ class TestEnsureDefaultContent:
 
         _ensure_default_content(temp_cafe_dir)
 
-        # 函式應該正常完成（無例外）
+        # Function should complete normally without exceptions
         mock_copy_agents.assert_called_once()
         mock_copy_templates.assert_called_once()
 
@@ -68,17 +68,17 @@ class TestEnsureDefaultContent:
         mock_copy_templates: MagicMock,
         temp_cafe_dir: Path,
     ) -> None:
-        """測試部分複製失敗時不影響後續操作"""
-        # 模擬部分失敗
+        """Test that partial copy failures do not affect subsequent operations."""
+        # Mock partial failure
         mock_copy_agents.return_value = [
             ("agents/pm/Roger.md", "system default", True),
-            ("agents/pm/Custom.md", "custom", False),  # 複製失敗
+            ("agents/pm/Custom.md", "custom", False),  # copy failed
         ]
         mock_copy_templates.return_value = [
             ("templates/plan/default.md", "system default", True),
         ]
 
-        # 應該不拋出例外
+        # Should not raise exceptions
         _ensure_default_content(temp_cafe_dir)
 
         mock_copy_agents.assert_called_once()
