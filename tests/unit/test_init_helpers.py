@@ -1,4 +1,4 @@
-"""測試 init_helpers 模組輔助函式"""
+"""Tests for init_helpers module helper functions."""
 
 from pathlib import Path
 from unittest.mock import patch
@@ -14,12 +14,12 @@ from cafe.ui.init_helpers import (
 
 
 class TestCheckAvailableClis:
-    """測試檢查可用 CLI 工具功能"""
+    """Tests for check_available_clis function."""
 
     def test_check_available_clis_with_all_installed(self) -> None:
-        """測試所有 CLI 都已安裝情況"""
+        """Test when all CLIs are installed."""
         with patch("shutil.which") as mock_which:
-            # 模擬所有 CLI 都已安裝
+            # Mock all CLIs as installed
             mock_which.side_effect = lambda x: (
                 f"/usr/bin/{x}"
                 if x
@@ -41,9 +41,9 @@ class TestCheckAvailableClis:
             assert len(available) == 4
 
     def test_check_available_clis_with_partial_installed(self) -> None:
-        """測試部分 CLI 已安裝情況"""
+        """Test when only some CLIs are installed."""
         with patch("shutil.which") as mock_which:
-            # 只有 claude and gemini 安裝
+            # Only claude and gemini are installed
             mock_which.side_effect = lambda x: (
                 f"/usr/bin/{x}"
                 if x
@@ -63,7 +63,7 @@ class TestCheckAvailableClis:
             assert len(available) == 2
 
     def test_check_available_clis_with_none_installed(self) -> None:
-        """測試沒有 CLI 安裝情況"""
+        """Test when no CLIs are installed."""
         with patch("shutil.which", return_value=None):
             available = check_available_clis()
 
@@ -71,10 +71,10 @@ class TestCheckAvailableClis:
 
 
 class TestParseAgentFile:
-    """測試解析 agent 檔案功能"""
+    """Tests for parse_agent_file function."""
 
     def test_parse_agent_file_with_complete_frontmatter(self, tmp_path: Path) -> None:
-        """測試解析包含完整 front matter 檔案"""
+        """Test parsing an agent file with complete front matter."""
         agent_file = tmp_path / "Roger.md"
         agent_file.write_text(
             """---
@@ -92,7 +92,7 @@ Agent content here.
         assert result["description"] == "經驗豐富 Product Manager"
 
     def test_parse_agent_file_missing_name(self, tmp_path: Path) -> None:
-        """測試 front matter 缺少 name 時使用檔名"""
+        """Test that filename is used as name when front matter lacks name field."""
         agent_file = tmp_path / "David.md"
         agent_file.write_text(
             """---
@@ -109,7 +109,7 @@ Agent content here.
         assert result["description"] == "專門負責功能開發 agent"
 
     def test_parse_agent_file_missing_description(self, tmp_path: Path) -> None:
-        """測試 front matter 缺少 description 時顯示預設值"""
+        """Test that default description is shown when front matter lacks description."""
         agent_file = tmp_path / "Richard.md"
         agent_file.write_text(
             """---
@@ -126,7 +126,7 @@ Agent content here.
         assert result["description"] == "(No description)"
 
     def test_parse_agent_file_no_frontmatter(self, tmp_path: Path) -> None:
-        """測試沒有 front matter 檔案"""
+        """Test parsing an agent file without front matter."""
         agent_file = tmp_path / "John.md"
         agent_file.write_text("Just content without frontmatter.\n")
 
@@ -136,7 +136,7 @@ Agent content here.
         assert result["description"] == "(No description)"
 
     def test_parse_agent_file_empty_file(self, tmp_path: Path) -> None:
-        """測試空檔案"""
+        """Test parsing an empty agent file."""
         agent_file = tmp_path / "Empty.md"
         agent_file.write_text("")
 
@@ -147,23 +147,23 @@ Agent content here.
 
 
 class TestListAvailableAgents:
-    """測試列出可用 agents 功能"""
+    """Tests for list_available_agents function."""
 
     def test_list_available_agents_with_valid_files(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """測試列出有效 agent 檔案（包含系統和全域）"""
+        """Test listing valid agent files including system and global agents."""
         from cafe.utils.config import get_global_cafe_dir
-        
+
         # Mock get_global_cafe_dir to return test directory
         global_cafe_dir = tmp_path / "global_cafe"
         monkeypatch.setattr("cafe.utils.config.get_global_cafe_dir", lambda: global_cafe_dir)
-        
-        # 建立全域測試目錄結構
+
+        # Set up global test directory structure
         global_pm_dir = global_cafe_dir / "agents" / "pm"
         global_pm_dir.mkdir(parents=True)
 
-        # 建立測試檔案
+        # Set up test files
         alice = global_pm_dir / "Alice.md"
         alice.write_text(
             """---
@@ -188,14 +188,14 @@ description: 注重細節 PM
     def test_list_available_agents_with_empty_directory(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """測試空全域 agent 目錄（但仍有系統預設 agents）"""
+        """Test listing agents when global directory is empty but system defaults exist."""
         from cafe.utils.config import get_global_cafe_dir
-        
+
         # Mock get_global_cafe_dir to return empty test directory
         global_cafe_dir = tmp_path / "global_cafe"
         monkeypatch.setattr("cafe.utils.config.get_global_cafe_dir", lambda: global_cafe_dir)
-        
-        # 建立空的全域目錄
+
+        # Set up empty global directory
         global_pm_dir = global_cafe_dir / "agents" / "pm"
         global_pm_dir.mkdir(parents=True)
 
@@ -209,18 +209,18 @@ description: 注重細節 PM
     def test_list_available_agents_ignores_non_md_files(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """測試忽略非 .md 檔案"""
+        """Test that non-.md files are ignored when listing agents."""
         from cafe.utils.config import get_global_cafe_dir
-        
+
         # Mock get_global_cafe_dir to return test directory
         global_cafe_dir = tmp_path / "global_cafe"
         monkeypatch.setattr("cafe.utils.config.get_global_cafe_dir", lambda: global_cafe_dir)
-        
-        # 建立全域測試目錄結構
+
+        # Set up global test directory structure
         global_pm_dir = global_cafe_dir / "agents" / "pm"
         global_pm_dir.mkdir(parents=True)
 
-        # 建立 .md 檔案
+        # Create .md file
         alice = global_pm_dir / "Alice.md"
         alice.write_text(
             """---
@@ -230,13 +230,13 @@ description: 注重細節 PM
 """
         )
 
-        # 建立非 .md 檔案（應該被忽略）
+        # Create non-.md file (should be ignored)
         readme = global_pm_dir / "README.txt"
         readme.write_text("This is a readme")
 
         agents = list_available_agents("pm")
 
-        # Should have system agents + Alice (但不包含 README.txt)
+        # Should have system agents + Alice (but not README.txt)
         names = [agent[0] for agent in agents]
         assert "Alice" in names
         assert "Roger" in names
@@ -246,10 +246,10 @@ description: 注重細節 PM
 
 
 class TestCopyDataDirectory:
-    """測試複製目錄功能"""
+    """Tests for copy_data_directory function."""
 
     def test_copy_data_directory_success(self, tmp_path: Path) -> None:
-        """測試成功複製目錄"""
+        """Test successful directory copy."""
         source = tmp_path / "source"
         source.mkdir()
         (source / "file1.txt").write_text("content1")
@@ -264,7 +264,7 @@ class TestCopyDataDirectory:
         assert (dest / "file2.txt").read_text() == "content2"
 
     def test_copy_data_directory_source_not_exists(self, tmp_path: Path) -> None:
-        """測試來源目錄不存在時拋出錯誤"""
+        """Test that FileNotFoundError is raised when source directory does not exist."""
         source = tmp_path / "nonexistent"
         dest = tmp_path / "dest"
 
@@ -272,7 +272,7 @@ class TestCopyDataDirectory:
             copy_data_directory(str(source), str(dest))
 
     def test_copy_data_directory_permission_error(self, tmp_path: Path) -> None:
-        """測試權限錯誤時拋出異常"""
+        """Test that PermissionError is raised on permission failure."""
         source = tmp_path / "source"
         source.mkdir()
         (source / "file.txt").write_text("content")
@@ -284,7 +284,7 @@ class TestCopyDataDirectory:
                 copy_data_directory(str(source), str(dest))
 
     def test_copy_data_directory_overwrites_existing(self, tmp_path: Path) -> None:
-        """測試增量拷貝既有目錄"""
+        """Test incremental copy into an existing directory."""
         source = tmp_path / "source"
         source.mkdir()
         (source / "file.txt").write_text("new content")
@@ -297,7 +297,7 @@ class TestCopyDataDirectory:
 
         assert dest.exists()
         assert (dest / "file.txt").read_text() == "new content"
-        # 舊檔案會被保留（因為使用增量拷貝）
+        # Old files are preserved because copytree uses dirs_exist_ok
         assert (dest / "old_file.txt").exists()
         assert (dest / "old_file.txt").read_text() == "old content"
 

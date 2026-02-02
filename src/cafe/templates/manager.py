@@ -138,10 +138,15 @@ class TemplateManager:
             template_name = f"{template_name}.md"
 
         # Check local .cafe/templates/ first (populated by cafe init)
-        local_template_dir = Path(".cafe") / "templates" / self.template_type
-        local_path = local_template_dir / template_name
-        if local_path.exists():
-            return local_path
+        try:
+            from cafe.utils.git_utils import get_repo_root
+
+            repo_root = get_repo_root()
+            local_path = repo_root / ".cafe" / "templates" / self.template_type / template_name
+            if local_path.exists():
+                return local_path
+        except ValueError:
+            pass
 
         # Fall back to global ~/.cafe/templates/
         global_template_dir = get_global_cafe_dir() / "templates" / self.template_type

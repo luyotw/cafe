@@ -366,12 +366,18 @@ class AgentManager:
         """
         from pathlib import Path
 
+        from cafe.utils.git_utils import get_repo_root
+
         agent_filename = f"{agent_name}.md"
 
         # Check local .cafe/agents/ first (populated by cafe init)
-        local_path = Path(".cafe") / "agents" / role / agent_filename
-        if local_path.exists():
-            return str(local_path)
+        try:
+            repo_root = get_repo_root()
+            local_path = repo_root / ".cafe" / "agents" / role / agent_filename
+            if local_path.exists():
+                return str(local_path)
+        except ValueError:
+            pass
 
         # Fall back to global ~/.cafe/agents/
         home_path = Path.home() / ".cafe" / "agents" / role / agent_filename
