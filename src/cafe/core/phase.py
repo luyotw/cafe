@@ -2477,6 +2477,56 @@ The system will verify checklist completion. If unchecked items remain, you will
 
         return None
 
+    def _check_output_file_updated(
+        self,
+        output_file: Path,
+        iteration: int,
+        phase_dir: Path,
+        compare_content: Optional[str] = None,
+    ) -> bool:
+        """Check if output file was updated (common method for all phases).
+
+        Compares output file content with provided content or previous iteration.
+
+        Args:
+            output_file: Path to current iteration's output.md
+            iteration: Current iteration number
+            phase_dir: Phase directory path
+            compare_content: Optional content to compare against. If provided, checks if
+                           current content differs from this. If None, uses default logic:
+                           - iteration 1: compare with user_input.md
+                           - iteration n: compare with previous iteration's output.md
+
+        Returns:
+            True if output was updated (differs from comparison), False otherwise
+        """
+        if not output_file.exists():
+            return False
+
+        current_content = output_file.read_text(encoding="utf-8").strip()
+
+        # If explicit compare content provided, use it
+        if compare_content is not None:
+            return current_content != compare_content.strip()
+
+        # Otherwise use default logic based on iteration
+        if iteration == 1:
+            # First iteration: compare with user_input.md
+            user_input_file = phase_dir / "iteration_001" / "user_input.md"
+            if user_input_file.exists():
+                compare_content = user_input_file.read_text(encoding="utf-8").strip()
+                return current_content != compare_content
+        else:
+            # Later iterations: compare with previous iteration's output.md
+            prev_iteration_dir = phase_dir / f"iteration_{iteration - 1:03d}"
+            prev_output_file = prev_iteration_dir / "output.md"
+            if prev_output_file.exists():
+                compare_content = prev_output_file.read_text(encoding="utf-8").strip()
+                return current_content != compare_content
+
+        # No comparison available, consider it updated
+        return True
+
 
 def ensure_agent_file_exists(agent_name: str, agent_role: str, cafe_dir: Path = Path(".cafe")) -> None:
     """Check if agent md file exists, if not report error and prompt user to reset.
