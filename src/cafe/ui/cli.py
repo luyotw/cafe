@@ -4536,6 +4536,17 @@ def agent_edit() -> None:
             console.print(f"[green]✓[/green] Agent updated successfully: ~/{relative_path}")
         except ValueError:
             console.print(f"[green]✓[/green] Agent updated successfully: {agent_file}")
+
+        # Auto-sync agents to local .cafe directory
+        from cafe.ui.init_helpers import sync_agents
+        cafe_dir = Path(".cafe")
+        if cafe_dir.exists():
+            agent_success, agent_failed = sync_agents(cafe_dir)
+            if agent_success > 0:
+                console.print(f"  [green]✓[/green] Updated .cafe directory with {agent_success} agent(s)")
+            if agent_failed > 0:
+                console.print(f"  [yellow]⚠[/yellow] Warning: Failed to copy {agent_failed} agent file(s)")
+
     except subprocess.CalledProcessError:
         console.print("[red]Error: Failed to edit agent[/red]")
         raise typer.Exit(1)
