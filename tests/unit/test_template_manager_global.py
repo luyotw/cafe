@@ -128,23 +128,27 @@ class TestTemplateManagerGlobalSupport:
                     assert path.exists()
                     assert "default.md" in str(path)
 
-    def test_get_template_path_prefers_global_over_system(self) -> None:
-        """測試同名 template 時優先使用全域版本."""
+    def test_get_template_path_prefers_global_over_system(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """測試同名 template 時優先使用全域版本（本地無 .cafe 時）."""
         with tempfile.TemporaryDirectory() as tmpdir:
             fake_home = Path(tmpdir)
             global_template_dir = fake_home / ".cafe" / "templates" / "plan"
             global_template_dir.mkdir(parents=True)
-            
+
             # 創建與系統同名的全域 template，內容不同
             (global_template_dir / "default.md").write_text("CUSTOM DEFAULT")
-            
-            with patch("cafe.utils.config.Path.home", return_value=fake_home):
-                with tempfile.TemporaryDirectory() as tmpdir2:
-                    config_dir = Path(tmpdir2) / ".cafe"
+
+            with tempfile.TemporaryDirectory() as tmpdir2:
+                # chdir 到沒有本地 .cafe 的目錄，確保本地路徑不干涉
+                monkeypatch.chdir(tmpdir2)
+
+                with patch("cafe.utils.config.Path.home", return_value=fake_home):
                     manager = TemplateManager(template_type="plan")
-                    
+
                     path = manager.get_template_path("default")
-                    
+
                     # 應該回傳全域路徑且內容正確
                     assert path == global_template_dir / "default.md"
                     assert path.read_text() == "CUSTOM DEFAULT"

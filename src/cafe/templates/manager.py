@@ -123,8 +123,9 @@ class TemplateManager:
 
     def get_template_path(self, template_name: str) -> Optional[Path]:
         """Get the path to a template file.
-        
-        Searches in order: global directory first, then system directory.
+
+        Searches in order: local .cafe/templates/ first, then global
+        ~/.cafe/templates/, then system directory (package data).
 
         Args:
             template_name: Name of the template (with or without .md)
@@ -136,13 +137,24 @@ class TemplateManager:
         if not template_name.endswith(".md"):
             template_name = f"{template_name}.md"
 
-        # First, check global directory
+        # Check local .cafe/templates/ first (populated by cafe init)
+        try:
+            from cafe.utils.git_utils import get_repo_root
+
+            repo_root = get_repo_root()
+            local_path = repo_root / ".cafe" / "templates" / self.template_type / template_name
+            if local_path.exists():
+                return local_path
+        except ValueError:
+            pass
+
+        # Fall back to global ~/.cafe/templates/
         global_template_dir = get_global_cafe_dir() / "templates" / self.template_type
         global_path = global_template_dir / template_name
         if global_path.exists():
             return global_path
-        
-        # Then, check system directory (package data)
+
+        # Fall back to system default (package data)
         package_data_dir = Path(__file__).parent.parent / "data" / "templates" / self.template_type
         system_path = package_data_dir / template_name
         if system_path.exists():

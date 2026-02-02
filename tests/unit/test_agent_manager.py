@@ -13,20 +13,20 @@ class TestAgentManagerBasics:
     """Test basic AgentManager functionality."""
 
     def test_init_agent_manager(self) -> None:
-        """測試初始化 AgentManager"""
+        """Test AgentManager initialization."""
         manager = AgentManager()
         assert manager is not None
         assert manager.agents == {}
 
     def test_init_with_session_manager(self) -> None:
-        """測試使用 SessionManager 初始化"""
+        """Test initialization with SessionManager."""
         session_mgr = SessionManager()
         manager = AgentManager(session_manager=session_mgr)
 
         assert manager.session_manager == session_mgr
 
     def test_register_agent(self) -> None:
-        """測試註冊 agent"""
+        """Test registering an agent."""
         manager = AgentManager()
         config = AgentConfig(name="Roger", cli=AgentCLI.CLAUDE)
 
@@ -43,7 +43,7 @@ class TestAgentRetrieval:
     """Test agent retrieval."""
 
     def test_get_agent_returns_executor(self) -> None:
-        """測試取得 agent 回傳 AgentExecutor"""
+        """Test that get_agent returns an AgentExecutor."""
         manager = AgentManager()
         config = AgentConfig(name="David", cli=AgentCLI.CLAUDE)
         manager.register_agent(config)
@@ -54,14 +54,14 @@ class TestAgentRetrieval:
         assert executor.config.name == "David"
 
     def test_get_agent_not_found_raises_error(self) -> None:
-        """測試取得不存在 agent 拋出錯誤"""
+        """Test that getting a nonexistent agent raises an error."""
         manager = AgentManager()
 
         with pytest.raises(AgentNotFoundError, match="Agent 'Unknown' not found"):
             manager.get_agent("Unknown")
 
     def test_get_agent_no_session_until_execute(self) -> None:
-        """測試取得 agent 時 session 尚未建立（延遲創建）"""
+        """Test that session is not created when getting an agent (lazy creation)."""
         session_mgr = MagicMock(spec=SessionManager)
         session_mgr.load_session.return_value = None
 
@@ -81,7 +81,7 @@ class TestAgentSwitching:
     """Test agent switching."""
 
     def test_switch_to_existing_agent(self) -> None:
-        """測試切換到已存在 agent"""
+        """Test switching to an existing agent."""
         manager = AgentManager()
         manager.register_agent(AgentConfig(name="Roger", cli=AgentCLI.CLAUDE))
         manager.register_agent(AgentConfig(name="David", cli=AgentCLI.CLAUDE))
@@ -93,14 +93,14 @@ class TestAgentSwitching:
         assert manager.current_agent_name == "David"
 
     def test_switch_to_nonexistent_agent_raises_error(self) -> None:
-        """測試切換到不存在 agent 拋出錯誤"""
+        """Test that switching to a nonexistent agent raises an error."""
         manager = AgentManager()
 
         with pytest.raises(AgentNotFoundError):
             manager.switch_agent("Unknown")
 
     def test_get_current_agent(self) -> None:
-        """測試取得當前 agent"""
+        """Test getting the current agent."""
         manager = AgentManager()
         manager.register_agent(AgentConfig(name="Roger", cli=AgentCLI.CLAUDE))
         manager.switch_agent("Roger")
@@ -111,7 +111,7 @@ class TestAgentSwitching:
         assert current.config.name == "Roger"
 
     def test_get_current_agent_when_none_returns_none(self) -> None:
-        """測試沒有當前 agent 時回傳 None"""
+        """Test that get_current_agent returns None when no agent is selected."""
         manager = AgentManager()
 
         current = manager.get_current_agent()
@@ -123,7 +123,7 @@ class TestAgentExecution:
     """Test agent execution through manager."""
 
     def test_execute_with_agent_name(self) -> None:
-        """測試使用 agent 名稱執行"""
+        """Test executing an agent by name."""
         manager = AgentManager()
         config = AgentConfig(name="David", cli=AgentCLI.CLAUDE)
         manager.register_agent(config)
@@ -142,7 +142,7 @@ class TestAgentExecution:
             mock_execute.assert_called_once_with("Test prompt", None, None, None)
 
     def test_execute_returns_tuple_with_token_usage(self) -> None:
-        """測試 execute 回傳 6-tuple (response, token_usage, permission_denials, cli_command_args, streaming_log, model)"""
+        """Test that execute returns a 6-tuple (response, token_usage, permission_denials, cli_command_args, streaming_log, model)."""
         manager = AgentManager()
         config = AgentConfig(name="David", cli=AgentCLI.CLAUDE)
         manager.register_agent(config)
@@ -169,7 +169,7 @@ class TestAgentExecution:
             assert token_usage.output_tokens == 50
 
     def test_execute_current_agent(self) -> None:
-        """測試執行當前 agent"""
+        """Test executing the current agent."""
         manager = AgentManager()
         config = AgentConfig(name="Roger", cli=AgentCLI.CLAUDE)
         manager.register_agent(config)
@@ -184,7 +184,7 @@ class TestAgentExecution:
             assert response == "Current agent response"
 
     def test_execute_current_when_no_current_raises_error(self) -> None:
-        """測試沒有當前 agent 時執行拋出錯誤"""
+        """Test that executing with no current agent raises an error."""
         manager = AgentManager()
 
         with pytest.raises(AgentNotFoundError, match="No current agent selected"):
@@ -195,7 +195,7 @@ class TestSessionManagement:
     """Test session management through AgentManager."""
 
     def test_resume_existing_session(self) -> None:
-        """測試恢復現有 session"""
+        """Test resuming an existing session."""
         from cafe.core.types import SessionData
         from datetime import datetime
 
@@ -220,7 +220,7 @@ class TestSessionManagement:
         session_mgr.load_session.assert_called_once_with("David", AgentCLI.CLAUDE, None)
 
     def test_session_lazy_creation(self) -> None:
-        """測試 session 延遲創建（在首次執行時）"""
+        """Test that session creation is deferred until first execution."""
         session_mgr = MagicMock(spec=SessionManager)
         session_mgr.load_session.return_value = None
 
@@ -236,7 +236,7 @@ class TestSessionManagement:
         session_mgr.save_session.assert_not_called()
 
     def test_create_claude_session_calls_cli(self) -> None:
-        """測試 _create_claude_session 呼叫 Claude CLI 並解析 session ID"""
+        """Test that _create_claude_session calls Claude CLI and parses the session ID."""
         import subprocess
         import json
 
@@ -266,7 +266,7 @@ class TestSessionManagement:
             assert session_id == "0603a149-90f6-4bc0-b687-3610aae4e082"
 
     def test_create_claude_session_handles_error(self) -> None:
-        """測試 _create_claude_session 處理錯誤"""
+        """Test that _create_claude_session handles errors."""
         import subprocess
 
         session_mgr = MagicMock(spec=SessionManager)
@@ -282,7 +282,7 @@ class TestSessionManagement:
                 manager._create_claude_session()
 
     def test_delete_agent_session(self) -> None:
-        """測試刪除 agent session"""
+        """Test deleting an agent session."""
         session_mgr = MagicMock(spec=SessionManager)
         session_mgr.load_session.return_value = None  # Mock to return None
 
@@ -299,7 +299,7 @@ class TestMultipleAgents:
     """Test managing multiple agents."""
 
     def test_register_multiple_agents(self) -> None:
-        """測試註冊多個 agents"""
+        """Test registering multiple agents."""
         manager = AgentManager()
         manager.register_agent(AgentConfig(name="Roger", cli=AgentCLI.CLAUDE))
         manager.register_agent(AgentConfig(name="David", cli=AgentCLI.CLAUDE))
@@ -311,7 +311,7 @@ class TestMultipleAgents:
         assert "Cursor" in manager.agents
 
     def test_list_agents(self) -> None:
-        """測試列出所有 agents"""
+        """Test listing all agents."""
         manager = AgentManager()
         manager.register_agent(AgentConfig(name="Roger", cli=AgentCLI.CLAUDE))
         manager.register_agent(AgentConfig(name="David", cli=AgentCLI.CLAUDE))
@@ -323,7 +323,7 @@ class TestMultipleAgents:
         assert "David" in agent_names
 
     def test_has_agent(self) -> None:
-        """測試檢查 agent 是否存在"""
+        """Test checking whether an agent exists."""
         manager = AgentManager()
         manager.register_agent(AgentConfig(name="Roger", cli=AgentCLI.CLAUDE))
 
@@ -335,7 +335,7 @@ class TestAgentConfiguration:
     """Test agent configuration management."""
 
     def test_update_agent_config(self) -> None:
-        """測試更新 agent 設定"""
+        """Test updating agent configuration."""
         manager = AgentManager()
         config = AgentConfig(name="David", cli=AgentCLI.CLAUDE)
         manager.register_agent(config)
@@ -350,7 +350,7 @@ class TestAgentConfiguration:
         assert executor.config.cli == AgentCLI.GEMINI
 
     def test_get_agent_config(self) -> None:
-        """測試取得 agent 設定"""
+        """Test getting agent configuration."""
         manager = AgentManager()
         config = AgentConfig(
             name="Roger", cli=AgentCLI.CLAUDE
@@ -390,3 +390,90 @@ class TestAgentConfiguration:
         # Verify None model is preserved
         executor = manager.get_agent("Roger")
         assert executor.config.model is None
+
+
+class TestGetAgentFilePath:
+    """Tests for get_agent_file_path path lookup priority."""
+
+    def test_local_cafe_agent_has_highest_priority(
+        self, tmp_path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Test that local .cafe/agents/ takes priority over global and system,
+        even when CWD is a subdirectory of the repo root."""
+        from pathlib import Path as RealPath
+
+        # Set up repo root with local .cafe agent
+        repo_root = tmp_path / "repo"
+        local_agent = repo_root / ".cafe" / "agents" / "pm" / "Roger.md"
+        local_agent.parent.mkdir(parents=True)
+        local_agent.write_text("# Roger (local)")
+
+        # Set up global agent
+        global_home = tmp_path / "global_home"
+        global_agent = global_home / ".cafe" / "agents" / "pm" / "Roger.md"
+        global_agent.parent.mkdir(parents=True)
+        global_agent.write_text("# Roger (global)")
+
+        # Run from a subdirectory to verify repo-root-relative lookup
+        subdir = repo_root / "src" / "nested"
+        subdir.mkdir(parents=True)
+        monkeypatch.chdir(subdir)
+
+        with patch("cafe.utils.git_utils.get_repo_root", return_value=repo_root):
+            with patch.object(RealPath, "home", return_value=global_home):
+                result = AgentManager.get_agent_file_path("Roger", "pm")
+
+        # Local .cafe/ path should be an absolute path under repo root
+        assert result == str(repo_root / ".cafe" / "agents" / "pm" / "Roger.md")
+
+    def test_falls_back_to_global_when_no_local(
+        self, tmp_path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Test that global ~/.cafe/agents/ is used when no local agent exists."""
+        from pathlib import Path as RealPath
+
+        # Repo root has no local .cafe agents
+        repo_root = tmp_path / "repo"
+        repo_root.mkdir(parents=True)
+
+        # Set up global agent
+        global_home = tmp_path / "global_home"
+        global_agent = global_home / ".cafe" / "agents" / "pm" / "Roger.md"
+        global_agent.parent.mkdir(parents=True)
+        global_agent.write_text("# Roger (global)")
+
+        # Run from a subdirectory
+        subdir = repo_root / "subdir"
+        subdir.mkdir(parents=True)
+        monkeypatch.chdir(subdir)
+
+        with patch("cafe.utils.git_utils.get_repo_root", return_value=repo_root):
+            with patch.object(RealPath, "home", return_value=global_home):
+                result = AgentManager.get_agent_file_path("Roger", "pm")
+
+        assert result == str(global_agent)
+
+    def test_falls_back_to_system_when_no_local_or_global(
+        self, tmp_path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Test that system default path is used when neither local nor global exists."""
+        from pathlib import Path as RealPath
+
+        # Repo root with no local agents
+        repo_root = tmp_path / "repo"
+        repo_root.mkdir(parents=True)
+
+        # Global directory does not exist
+        global_home = tmp_path / "nonexistent_home"
+
+        # Run from a subdirectory
+        subdir = repo_root / "subdir"
+        subdir.mkdir(parents=True)
+        monkeypatch.chdir(subdir)
+
+        with patch("cafe.utils.git_utils.get_repo_root", return_value=repo_root):
+            with patch.object(RealPath, "home", return_value=global_home):
+                result = AgentManager.get_agent_file_path("Roger", "pm")
+
+        # Falls back to system default path
+        assert result == "src/cafe/data/agents/pm/Roger.md"

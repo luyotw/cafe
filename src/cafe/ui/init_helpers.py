@@ -2,7 +2,7 @@
 
 import shutil
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Tuple
 
 import yaml
 
@@ -113,3 +113,127 @@ def copy_data_directory(source: str, destination: str) -> None:
 
     # Copy directory (incremental copy)
     shutil.copytree(source_path, dest_path, dirs_exist_ok=True)
+
+
+def _get_system_agents_dir() -> Path:
+    """Get the system default agents directory path.
+
+    Returns:
+        Path to system agents directory (src/cafe/data/agents/)
+    """
+    return Path(__file__).parent.parent / "data" / "agents"
+
+
+def _get_system_templates_dir() -> Path:
+    """Get the system default templates directory path.
+
+    Returns:
+        Path to system templates directory (src/cafe/data/templates/)
+    """
+    return Path(__file__).parent.parent / "data" / "templates"
+
+
+def copy_agents_to_local(cafe_dir: Path) -> List[Tuple[str, str, bool]]:
+    """Copy agent files from global custom or system default directories to local .cafe.
+
+    Global custom (~/.cafe/agents/<role>/) takes precedence over system default
+    (src/cafe/data/agents/<role>/). Copies to .cafe/agents/<role>/, overwriting
+    any existing local files.
+
+    Args:
+        cafe_dir: Path to the local .cafe directory
+
+    Returns:
+        List of (relative_path, source_type, success) tuples for each file
+    """
+    from cafe.utils.config import get_global_cafe_dir
+
+    results: List[Tuple[str, str, bool]] = []
+    system_agents_dir = _get_system_agents_dir()
+    global_agents_dir = get_global_cafe_dir() / "agents"
+
+    # Derive roles from the system agents directory structure
+    roles = [d.name for d in system_agents_dir.iterdir() if d.is_dir()] if system_agents_dir.exists() else []
+
+    for role in roles:
+        # Collect all agents for this role; global custom overrides system default
+        files: Dict[str, Tuple[Path, str]] = {}
+
+        # Add system defaults first
+        system_role_dir = system_agents_dir / role
+        if system_role_dir.exists():
+            for agent_file in system_role_dir.glob("*.md"):
+                files[agent_file.name] = (agent_file, "system default")
+
+        # Overlay global custom files (same-name overrides)
+        global_role_dir = global_agents_dir / role
+        if global_role_dir.exists():
+            for agent_file in global_role_dir.glob("*.md"):
+                files[agent_file.name] = (agent_file, "custom")
+
+        # Copy to local .cafe directory
+        local_role_dir = cafe_dir / "agents" / role
+        local_role_dir.mkdir(parents=True, exist_ok=True)
+
+        for filename, (source_path, source_type) in files.items():
+            relative_path = f"agents/{role}/{filename}"
+            try:
+                shutil.copy2(source_path, local_role_dir / filename)
+                results.append((relative_path, source_type, True))
+            except (PermissionError, OSError):
+                results.append((relative_path, source_type, False))
+
+    return results
+
+
+def copy_templates_to_local(cafe_dir: Path) -> List[Tuple[str, str, bool]]:
+    """Copy template files from global custom or system default directories to local .cafe.
+
+    Global custom (~/.cafe/templates/<phase>/) takes precedence over system default
+    (src/cafe/data/templates/<phase>/). Copies to .cafe/templates/<phase>/, overwriting
+    any existing local files.
+
+    Args:
+        cafe_dir: Path to the local .cafe directory
+
+    Returns:
+        List of (relative_path, source_type, success) tuples for each file
+    """
+    from cafe.utils.config import get_global_cafe_dir
+
+    results: List[Tuple[str, str, bool]] = []
+    system_templates_dir = _get_system_templates_dir()
+    global_templates_dir = get_global_cafe_dir() / "templates"
+
+    # Derive template types from the system templates directory structure
+    template_types = [d.name for d in system_templates_dir.iterdir() if d.is_dir()] if system_templates_dir.exists() else []
+
+    for template_type in template_types:
+        # Collect all templates for this type; global custom overrides system default
+        files: Dict[str, Tuple[Path, str]] = {}
+
+        # Add system defaults first
+        system_type_dir = system_templates_dir / template_type
+        if system_type_dir.exists():
+            for template_file in system_type_dir.glob("*.md"):
+                files[template_file.name] = (template_file, "system default")
+
+        # Overlay global custom files (same-name overrides)
+        global_type_dir = global_templates_dir / template_type
+        if global_type_dir.exists():
+            for template_file in global_type_dir.glob("*.md"):
+                files[template_file.name] = (template_file, "custom")
+
+        # Copy to local .cafe directory
+        local_type_dir = cafe_dir / "templates" / template_type
+        local_type_dir.mkdir(parents=True, exist_ok=True)
+
+        for filename, (source_path, source_type) in files.items():
+            relative_path = f"templates/{template_type}/{filename}"
+            try:
+                shutil.copy2(source_path, local_type_dir / filename)
+                results.append((relative_path, source_type, True))
+            except (PermissionError, OSError):
+                results.append((relative_path, source_type, False))
+
+    return results

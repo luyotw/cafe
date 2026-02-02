@@ -353,28 +353,36 @@ class AgentManager:
     def get_agent_file_path(cls, agent_name: str, role: str, cafe_dir: str = None) -> str:
         """Get the path to agent md file (for use in prompts).
 
+        Searches in order: local .cafe/agents/ first, then ~/.cafe/agents/,
+        then falls back to src/cafe/data/agents/.
+
         Args:
             agent_name: Agent name (e.g. "Roger", "David", "Richard", "John")
             role: Agent role directory name (e.g. "pm", "developer", "reviewer")
             cafe_dir: CAFE config directory path (deprecated, not used)
 
         Returns:
-            str: Agent file path (tries ~/.cafe/agents first, then src/cafe/data/agents)
-
-        Examples:
-            >>> AgentManager.get_agent_file_path("Roger", "pm")
-            'src/cafe/data/agents/pm/Roger.md'
-            >>> AgentManager.get_agent_file_path("David", "developer")
-            'src/cafe/data/agents/developer/David.md'
-            >>> AgentManager.get_agent_file_path("John", "developer")
-            'src/cafe/data/agents/developer/John.md'
+            str: Agent file path
         """
         from pathlib import Path
 
-        # Try ~/.cafe/agents first
-        home_path = Path.home() / ".cafe" / "agents" / role / f"{agent_name}.md"
+        from cafe.utils.git_utils import get_repo_root
+
+        agent_filename = f"{agent_name}.md"
+
+        # Check local .cafe/agents/ first (populated by cafe init)
+        try:
+            repo_root = get_repo_root()
+            local_path = repo_root / ".cafe" / "agents" / role / agent_filename
+            if local_path.exists():
+                return str(local_path)
+        except ValueError:
+            pass
+
+        # Fall back to global ~/.cafe/agents/
+        home_path = Path.home() / ".cafe" / "agents" / role / agent_filename
         if home_path.exists():
             return str(home_path)
 
-        # Fall back to src/cafe/data/agents
+        # Fall back to system default
         return f"src/cafe/data/agents/{role}/{agent_name}.md"
