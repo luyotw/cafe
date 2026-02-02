@@ -237,3 +237,37 @@ def copy_templates_to_local(cafe_dir: Path) -> List[Tuple[str, str, bool]]:
                 results.append((relative_path, source_type, False))
 
     return results
+
+
+def sync_agents(cafe_dir: Path) -> Tuple[int, int]:
+    """Sync agent files from global/system sources to local .cafe directory.
+
+    Wrapper around copy_agents_to_local that returns success/failure counts.
+
+    Args:
+        cafe_dir: Path to the local .cafe directory
+
+    Returns:
+        Tuple of (success_count, fail_count)
+    """
+    results = copy_agents_to_local(cafe_dir)
+    success_count = sum(1 for _, _, success in results if success)
+    fail_count = sum(1 for _, _, success in results if not success)
+    return success_count, fail_count
+
+
+def sync_templates(cafe_dir: Path) -> Tuple[int, int]:
+    """Sync template files from global/system sources to local .cafe directory.
+
+    Wrapper around copy_templates_to_local that returns success/failure counts.
+
+    Args:
+        cafe_dir: Path to the local .cafe directory
+
+    Returns:
+        Tuple of (success_count, fail_count)
+    """
+    results = copy_templates_to_local(cafe_dir)
+    success_count = sum(1 for _, _, success in results if success)
+    fail_count = sum(1 for _, _, success in results if not success)
+    return success_count, fail_count
