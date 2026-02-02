@@ -1132,34 +1132,18 @@ class SpecPhase(Phase):
         if not spec_path.exists():
             return None, None
 
-        current_content = spec_path.read_text(encoding="utf-8").strip()
+        # Use shared method to check if content was updated
+        was_updated = self._check_output_file_updated(
+            output_file=spec_path,
+            iteration=self.iteration,
+            phase_dir=self.phase_dir,
+        )
 
-        # Determine what to compare against
-        compare_file = None
-        compare_label = ""
+        # Determine comparison label for error messages
+        compare_label = "initial requirements (user_input.md)" if self.iteration == 1 else "previous iteration"
 
-        if self.iteration == 1:
-            # First iteration: compare with user_input.md
-            user_input_file = self._get_iteration_dir(1) / "user_input.md"
-            if user_input_file.exists():
-                compare_file = user_input_file
-                compare_label = "initial requirements (user_input.md)"
-        else:
-            # Later iterations: compare with previous iteration's output
-            prev_spec_path = self._get_versioned_file_path("spec", self.iteration - 1, self.phase_dir)
-            if prev_spec_path.exists():
-                compare_file = prev_spec_path
-                compare_label = f"previous iteration"
-
-        # If no comparison file, skip check
-        if not compare_file:
-            return None, None
-
-        # Compare content
-        compare_content = compare_file.read_text(encoding="utf-8").strip()
-
-        # If content is identical, ask agent to update
-        if current_content == compare_content:
+        # If content was not updated (identical to comparison), ask agent to update
+        if not was_updated:
             retry_count = 0
 
             while retry_count < max_retries:
