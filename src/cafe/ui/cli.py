@@ -4593,6 +4593,34 @@ def agent_cat(
         console.print(content)
 
 
+@agent_app.command(name="sync")
+def agent_sync() -> None:
+    """Sync agent files from global/system sources to local .cafe directory.
+
+    Updates all agent files in .cafe/agents to their latest versions from
+    ~/.cafe/agents (custom) or src/cafe/data/agents (system default).
+    Global custom agents take precedence over system defaults.
+    """
+    from cafe.ui.init_helpers import sync_agents
+
+    # Check if .cafe directory exists
+    cafe_dir = Path(".cafe")
+    if not cafe_dir.exists():
+        console.print("[red]Error: CAFE not initialized in this directory[/red]")
+        console.print("[dim]Run 'cafe init' first[/dim]")
+        raise typer.Exit(1)
+
+    # Sync agents
+    agent_success, agent_failed = sync_agents(cafe_dir)
+
+    # Display summary
+    if agent_success > 0:
+        console.print(f"  [green]✓[/green] Updated .cafe directory with {agent_success} agent(s)")
+
+    if agent_failed > 0:
+        console.print(f"  [yellow]⚠[/yellow] Warning: Failed to copy {agent_failed} agent file(s)")
+
+
 @app.command()
 def show(
     phase_name: str = typer.Argument(
