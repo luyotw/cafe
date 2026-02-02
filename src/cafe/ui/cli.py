@@ -730,19 +730,22 @@ def _ensure_default_content(cafe_dir: Path) -> None:
     Args:
         cafe_dir: Path to .cafe directory
     """
-    # Copy agents and templates to local .cafe and display results
+    # Copy agents and templates to local .cafe
     agent_results = copy_agents_to_local(cafe_dir)
     template_results = copy_templates_to_local(cafe_dir)
 
-    all_results = agent_results + template_results
+    # Count results
+    agent_success = sum(1 for _, _, success in agent_results if success)
+    agent_failed = sum(1 for _, _, success in agent_results if not success)
+    template_success = sum(1 for _, _, success in template_results if success)
+    template_failed = sum(1 for _, _, success in template_results if not success)
 
-    # Display copy results
-    for relative_path, source_type, success in all_results:
-        if success:
-            source_label = "custom" if source_type == "custom" else "system default"
-            console.print(f"  [green]✓[/green] Copied {relative_path} ({source_label})")
-        else:
-            console.print(f"  [yellow]⚠[/yellow] Warning: Failed to copy {relative_path}")
+    # Display summary
+    if agent_success > 0 or template_success > 0:
+        console.print(f"  [green]✓[/green] Updated .cafe directory with {agent_success} agent(s) and {template_success} template(s)")
+
+    if agent_failed > 0 or template_failed > 0:
+        console.print(f"  [yellow]⚠[/yellow] Warning: Failed to copy {agent_failed + template_failed} file(s)")
 
 
 @app.command()
