@@ -4168,6 +4168,33 @@ def template_create(
         raise typer.Exit(1)
 
 
+@template_app.command(name="sync")
+def template_sync() -> None:
+    """Sync template files from global/system sources to local .cafe directory.
+
+    Updates all template files in .cafe/templates to their latest versions from
+    ~/.cafe/templates (custom) or src/cafe/data/templates (system default).
+    Global custom templates take precedence over system defaults.
+    """
+    from cafe.ui.init_helpers import sync_templates
+
+    # Check if .cafe directory exists
+    cafe_dir = Path(".cafe")
+    if not cafe_dir.exists():
+        console.print("[red]Error: CAFE not initialized in this directory[/red]")
+        console.print("[dim]Run 'cafe init' first[/dim]")
+        raise typer.Exit(1)
+
+    # Sync templates
+    template_success, template_failed = sync_templates(cafe_dir)
+
+    # Display summary
+    if template_success > 0:
+        console.print(f"  [green]✓[/green] Updated .cafe directory with {template_success} template(s)")
+
+    if template_failed > 0:
+        console.print(f"  [yellow]⚠[/yellow] Warning: Failed to copy {template_failed} template file(s)")
+
 
 @app.command()
 def make(
