@@ -478,11 +478,21 @@ class PRPhase(Phase):
                 result_status = result.data.get("status_code", PhaseStatusCode.NEEDS_CHANGES.value) if result and result.data else PhaseStatusCode.NEEDS_CHANGES.value
                 self._save_progress(PhaseStatusCode(result_status))
 
-                # Update iteration context.json with status_code
-                self._update_iteration_history(
-                    phase_specific_data=result.data if result else {},
-                    status_code=PhaseStatusCode(result_status),
-                )
+                # Update iteration context.json with status_code only,
+                # preserving agent metadata already saved by _execute_agent_iteration
+                iteration_dir = self._get_iteration_dir(self.iteration)
+                iteration_dir.mkdir(parents=True, exist_ok=True)
+                context_file = iteration_dir / "context.json"
+                if context_file.exists():
+                    with open(context_file, "r", encoding="utf-8") as f:
+                        context_data = json.load(f)
+                else:
+                    context_data = {}
+                if result and result.data:
+                    context_data.update(result.data)
+                context_data["status_code"] = result_status
+                with open(context_file, "w", encoding="utf-8") as f:
+                    json.dump(context_data, f, ensure_ascii=False, indent=2)
 
                 return result
             else:
@@ -764,11 +774,21 @@ class PRPhase(Phase):
                     result_status = result.data.get("status_code", PhaseStatusCode.NEEDS_CHANGES.value) if result and result.data else PhaseStatusCode.NEEDS_CHANGES.value
                     self._save_progress(PhaseStatusCode(result_status))
 
-                    # Update iteration context.json with status_code
-                    self._update_iteration_history(
-                        phase_specific_data=result.data if result else {},
-                        status_code=PhaseStatusCode(result_status),
-                    )
+                    # Update iteration context.json with status_code only,
+                    # preserving agent metadata already saved by _execute_agent_iteration
+                    iteration_dir = pr_dir / f"iteration_{self.iteration:03d}"
+                    iteration_dir.mkdir(parents=True, exist_ok=True)
+                    context_file = iteration_dir / "context.json"
+                    if context_file.exists():
+                        with open(context_file, "r", encoding="utf-8") as f:
+                            context_data = json.load(f)
+                    else:
+                        context_data = {}
+                    if result and result.data:
+                        context_data.update(result.data)
+                    context_data["status_code"] = result_status
+                    with open(context_file, "w", encoding="utf-8") as f:
+                        json.dump(context_data, f, ensure_ascii=False, indent=2)
 
                     return result
                 else:
@@ -948,17 +968,13 @@ class PRPhase(Phase):
             user_input_file = iteration_dir / "user_input.md"
             user_input_file.write_text(modification_request)
 
-            # Save context.json for this iteration (WITHOUT status_code - incomplete iteration)
-            from datetime import datetime
-            context_data = {
-                "iteration": self.iteration,
-                "timestamp": datetime.now().astimezone().isoformat(),
-                "user_input": modification_request,
-                "local_review": True,
-            }
-            context_file = iteration_dir / "context.json"
-            with open(context_file, "w", encoding="utf-8") as f:
-                json.dump(context_data, f, ensure_ascii=False, indent=2)
+            # Save context.json for this iteration using standardized method
+            self._update_iteration_history(
+                phase_specific_data={
+                    "user_input": modification_request,
+                    "local_review": True,
+                },
+            )
 
             # Get relative path (works with both regular and worktree modes)
             from cafe.utils.git_utils import to_cwd_relative_path
@@ -985,21 +1001,15 @@ class PRPhase(Phase):
         # Increment iteration for this confirmation
         self.iteration += 1
 
-        # Create iteration directory and save context.json for confirmation
+        # Save context.json for confirmation using standardized method
         pr_dir = self.issue_dir / "pr"
         iteration_dir = pr_dir / f"iteration_{self.iteration:03d}"
         iteration_dir.mkdir(parents=True, exist_ok=True)
 
-        from datetime import datetime
-        context_data = {
-            "iteration": self.iteration,
-            "timestamp": datetime.now().astimezone().isoformat(),
-            "status_code": PhaseStatusCode.CONFIRMED.value,
-            "local_review": True,
-        }
-        context_file = iteration_dir / "context.json"
-        with open(context_file, "w", encoding="utf-8") as f:
-            json.dump(context_data, f, ensure_ascii=False, indent=2)
+        self._update_iteration_history(
+            phase_specific_data={"local_review": True},
+            status_code=PhaseStatusCode.CONFIRMED,
+        )
 
         # Add custom message for local review
         if result.status == PhaseStatus.COMPLETED:
@@ -1058,17 +1068,14 @@ class PRPhase(Phase):
             user_input_file = iteration_dir / "user_input.md"
             user_input_file.write_text(formatted_comments, encoding="utf-8")
 
-            # Save context.json for this iteration
-            context_data = {
-                "iteration": self.iteration,
-                "timestamp": datetime.now().astimezone().isoformat(),
-                "pr_number": pr_number,
-                "comment_count": len(comments),
-                "source": "github_pr_comments",
-            }
-            context_file = iteration_dir / "context.json"
-            with open(context_file, "w", encoding="utf-8") as f:
-                json.dump(context_data, f, ensure_ascii=False, indent=2)
+            # Save context.json for this iteration using standardized method
+            self._update_iteration_history(
+                phase_specific_data={
+                    "pr_number": pr_number,
+                    "comment_count": len(comments),
+                    "source": "github_pr_comments",
+                },
+            )
 
             from cafe.utils.git_utils import to_cwd_relative_path
             try:
