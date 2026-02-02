@@ -332,7 +332,8 @@ class SpecPhase(Phase):
             # Define basic principles
             basic_principles = """- Write analysis results in your native language
 - Do not include technical details (implementation, architecture, languages, frameworks, databases)
-- You may provide 2-3 high-level approach options for the user to consider, but avoid prescribing specific technical solutions"""
+- You may provide 2-3 high-level approach options for the user to consider, but avoid prescribing specific technical solutions
+- Treat users as stakeholders unfamiliar with implementation - do NOT ask "how is this currently implemented" or "how should this be implemented"; instead, note such questions in the spec for developers"""
 
             # Get template file path (convert to relative path for display)
             template_file = None
