@@ -519,6 +519,8 @@ class PRPhase(Phase):
                         status_code=PhaseStatusCode.READY_FOR_REVIEW,
                     )
 
+                    self._display_pr_success(str(pr_number), pr_url, "completed")
+
                     return PhaseResult(
                         status=PhaseStatus.COMPLETED,
                         message=f"Completed incomplete PR iteration",
@@ -539,6 +541,8 @@ class PRPhase(Phase):
                         phase_specific_data={"pr_number": str(pr_number), "pr_url": pr_url, "branch": branch_name},
                         status_code=PhaseStatusCode.READY_FOR_REVIEW,
                     )
+
+                    self._display_pr_success(str(pr_number), pr_url, "completed")
 
                     return PhaseResult(
                         status=PhaseStatus.COMPLETED,
@@ -695,6 +699,8 @@ class PRPhase(Phase):
                     status_code=PhaseStatusCode.READY_FOR_REVIEW,
                 )
 
+                self._display_pr_success(pr_number, pr_url, "updated")
+
                 return PhaseResult(
                     status=PhaseStatus.COMPLETED,
                     message=f"Pull Request #{pr_number} updated successfully",
@@ -732,10 +738,7 @@ class PRPhase(Phase):
                     status_code=PhaseStatusCode.READY_FOR_REVIEW,
                 )
 
-                console.print()
-                console.print(f"[green]✓ Pull Request #{pr_number} created successfully[/green]")
-                console.print(f"  URL: {pr_url}")
-                console.print()
+                self._display_pr_success(pr_number, pr_url, "created")
 
                 return PhaseResult(
                     status=PhaseStatus.COMPLETED,
@@ -1459,6 +1462,22 @@ Return ONLY the status code (CAFE_CONFIRMED or CAFE_NEEDS_CHANGES) with no expla
 ## Test Plan
 [How to test these changes]
 """
+
+    def _display_pr_success(self, pr_number: str, pr_url: str, action: str) -> None:
+        """Display PR success message.
+
+        Args:
+            pr_number: PR number
+            pr_url: PR URL
+            action: Action performed (created/updated/completed)
+        """
+        from rich.console import Console
+
+        console = Console()
+        console.print()
+        console.print(f"[green]✓ Pull Request #{pr_number} {action} successfully[/green]")
+        console.print(f"  URL: {pr_url}")
+        console.print()
 
     def _generate_pr_content(self) -> PhaseResult | None:
         """Generate PR title and body using agent.
