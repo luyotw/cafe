@@ -410,6 +410,8 @@ class TestPRPhaseStep0ResumeIncomplete:
             # No status_code - incomplete!
         }))
         # No user_input.md - this was a PR create/update iteration
+        # Create output.md with real content (not template) so it's considered complete
+        (iteration_001 / "output.md").write_text("# Real PR Title\n\n## Summary\nThis is real content\n")
 
         # Setup mocks
         mock_dependencies["github_ops"].check_gh_auth.return_value = True

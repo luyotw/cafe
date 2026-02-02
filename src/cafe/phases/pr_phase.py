@@ -496,20 +496,55 @@ class PRPhase(Phase):
 
                 return result
             else:
-                # No user_input - this was a PR create/update iteration, complete it with READY_FOR_REVIEW
-                self._save_progress(PhaseStatusCode.READY_FOR_REVIEW)
+                # No user_input - this was a PR create/update iteration that is incomplete
+                # Check if output.md was actually updated from template
+                iteration_dir = incomplete_iteration_info["iteration_dir"]
+                output_file = iteration_dir / "output.md"
+                pr_dir = self.issue_dir / "pr"
 
-                # Update iteration context.json with status_code
-                self._update_iteration_history(
-                    phase_specific_data={"pr_number": str(pr_number), "pr_url": pr_url, "branch": branch_name},
-                    status_code=PhaseStatusCode.READY_FOR_REVIEW,
+                was_updated = self._check_output_file_updated(
+                    output_file=output_file,
+                    iteration=self.iteration,
+                    phase_dir=pr_dir,
+                    compare_content=self._get_pr_template_content(),
                 )
 
-                return PhaseResult(
-                    status=PhaseStatus.COMPLETED,
-                    message=f"Resumed and completed PR iteration",
-                    data={"pr_number": str(pr_number), "pr_url": pr_url, "branch": branch_name, "status_code": "CAFE_READY_FOR_REVIEW"},
-                )
+                if was_updated:
+                    # Output was updated from template - mark as completed
+                    console.print("[dim]PR content was generated - marking as completed...[/dim]")
+                    self._save_progress(PhaseStatusCode.READY_FOR_REVIEW)
+
+                    self._update_iteration_history(
+                        phase_specific_data={"pr_number": str(pr_number), "pr_url": pr_url, "branch": branch_name},
+                        status_code=PhaseStatusCode.READY_FOR_REVIEW,
+                    )
+
+                    return PhaseResult(
+                        status=PhaseStatus.COMPLETED,
+                        message=f"Completed incomplete PR iteration",
+                        data={"pr_number": str(pr_number), "pr_url": pr_url, "branch": branch_name, "status_code": "CAFE_READY_FOR_REVIEW"},
+                    )
+                else:
+                    # Still template content - need to retry generation
+                    console.print("[dim]PR content not generated - retrying...[/dim]")
+
+                    result = self._generate_pr_content()
+                    if result:
+                        return result
+
+                    # Successfully generated - mark as completed
+                    self._save_progress(PhaseStatusCode.READY_FOR_REVIEW)
+
+                    self._update_iteration_history(
+                        phase_specific_data={"pr_number": str(pr_number), "pr_url": pr_url, "branch": branch_name},
+                        status_code=PhaseStatusCode.READY_FOR_REVIEW,
+                    )
+
+                    return PhaseResult(
+                        status=PhaseStatus.COMPLETED,
+                        message=f"Completed incomplete PR iteration",
+                        data={"pr_number": str(pr_number), "pr_url": pr_url, "branch": branch_name, "status_code": "CAFE_READY_FOR_REVIEW"},
+                    )
 
         return None
 
@@ -1406,6 +1441,25 @@ Return ONLY the status code (CAFE_CONFIRMED or CAFE_NEEDS_CHANGES) with no expla
         """
         return self._current_prompt
 
+    def _get_pr_template_content(self) -> str:
+        """Get PR template content.
+
+        Returns:
+            PR template content string
+        """
+        issue_ref = f"Closes #{self.issue_id}\n\n" if self.issue_id else ""
+        return f"""# [Your PR Title Here]
+
+{issue_ref}## Summary
+[Brief description in 2-3 sentences]
+
+## Changes
+[Main changes as bullet points]
+
+## Test Plan
+[How to test these changes]
+"""
+
     def _generate_pr_content(self) -> PhaseResult | None:
         """Generate PR title and body using agent.
 
@@ -1526,19 +1580,7 @@ Return ONLY the status code (CAFE_CONFIRMED or CAFE_NEEDS_CHANGES) with no expla
         # Write initial template content to output.md (for iteration 1)
         output_file.parent.mkdir(parents=True, exist_ok=True)
         if not output_file.exists():
-            issue_ref = f"Closes #{self.issue_id}\n\n" if self.issue_id else ""
-            initial_content = f"""# [Your PR Title Here]
-
-{issue_ref}## Summary
-[Brief description in 2-3 sentences]
-
-## Changes
-[Main changes as bullet points]
-
-## Test Plan
-[How to test these changes]
-"""
-            output_file.write_text(initial_content)
+            output_file.write_text(self._get_pr_template_content())
 
         # Set allowed tools - only edit permission for output.md
         allowed_tools = ["read", "grep", "glob", "ls", "web_fetch", "web_search"]
