@@ -4049,6 +4049,17 @@ def template_edit(
     try:
         subprocess.run([editor, str(template_path)], check=True)
         console.print(f"[green]✅ Template '{name}' updated[/green]")
+
+        # Auto-sync templates to local .cafe directory
+        from cafe.ui.init_helpers import sync_templates
+        cafe_dir = Path(".cafe")
+        if cafe_dir.exists():
+            template_success, template_failed = sync_templates(cafe_dir)
+            if template_success > 0:
+                console.print(f"  [green]✓[/green] Updated .cafe directory with {template_success} template(s)")
+            if template_failed > 0:
+                console.print(f"  [yellow]⚠[/yellow] Warning: Failed to copy {template_failed} template file(s)")
+
     except subprocess.CalledProcessError:
         console.print("[red]Error: Failed to edit template[/red]")
         raise typer.Exit(1)
