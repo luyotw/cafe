@@ -834,6 +834,18 @@ def prepare(
             console.print("[yellow]Please run 'cafe init' first to set up CAFE.[/yellow]")
             raise typer.Exit(1)
 
+        # 1.1. Sync agents and templates at the beginning of prepare
+        from cafe.ui.init_helpers import sync_agents, sync_templates
+        cafe_dir = Path(".cafe")
+        agent_success, agent_failed = sync_agents(cafe_dir)
+        template_success, template_failed = sync_templates(cafe_dir)
+
+        # Display sync summary
+        if agent_success > 0 or template_success > 0:
+            console.print(f"  [green]✓[/green] Updated .cafe directory with {agent_success} agent(s) and {template_success} template(s)")
+        if agent_failed > 0 or template_failed > 0:
+            console.print(f"  [yellow]⚠[/yellow] Warning: Failed to copy {agent_failed + template_failed} file(s)")
+
         # 2. Determine interactive mode and config prompt behavior
         # should_prompt_for_config: Should we show config prompts?
         #   - True if user didn't provide issue_name as argument AND interactive flag is True
