@@ -653,7 +653,22 @@ class SpecPhase(Phase):
 
             # Fetch issue content using shared function
             gh_ops = GitHubOps()
-            fetched_content = fetch_github_issue(gh_ops, issue_id)
+            fetched_content, image_urls = fetch_github_issue(gh_ops, issue_id)
+
+            # Download images if present
+            if image_urls:
+                images_dir = self.phase_dir / "images"
+                try:
+                    saved_paths = gh_ops.download_issue_images(image_urls, images_dir)
+                    if saved_paths:
+                        self.display.console.print()
+                        self.display.console.print(f"✅ Downloaded {len(saved_paths)} image(s) to {images_dir}")
+                    if len(saved_paths) < len(image_urls):
+                        failed_count = len(image_urls) - len(saved_paths)
+                        self.display.console.print(f"⚠️  Warning: {failed_count} image(s) failed to download")
+                except Exception as e:
+                    # Don't fail the whole process if image download fails
+                    self.display.console.print(f"⚠️  Warning: Failed to download images: {e}")
 
             # Override user_input with fetched content
             self.user_input = fetched_content
