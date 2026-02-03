@@ -4,7 +4,7 @@ This module provides reusable UI interaction functions for spec/plan phases and 
 """
 
 from pathlib import Path
-from typing import Optional, Any, Dict
+from typing import Optional, Any, Dict, List, Tuple
 import yaml
 
 from cafe.core.types import SpecRigor
@@ -100,7 +100,7 @@ def prompt_for_rigor(display: Display) -> str:
         return "medium"
 
 
-def fetch_github_issue(github_ops: GitHubOps, issue_id: int) -> str:
+def fetch_github_issue(github_ops: GitHubOps, issue_id: int) -> Tuple[str, List[str]]:
     """Fetch GitHub Issue content
 
     Args:
@@ -108,7 +108,9 @@ def fetch_github_issue(github_ops: GitHubOps, issue_id: int) -> str:
         issue_id: GitHub issue ID
 
     Returns:
-        Requirement text combining title and body
+        Tuple of (content, image_urls):
+        - content: Requirement text combining title and body
+        - image_urls: List of image URLs extracted from issue body
 
     Raises:
         GitHubError: Failed to fetch issue
@@ -125,7 +127,10 @@ def fetch_github_issue(github_ops: GitHubOps, issue_id: int) -> str:
     issue_body = issue_data.get("body", "")
     fetched_content = f"# {issue_title}\n\n{issue_body}" if issue_title else issue_body
 
-    return fetched_content
+    # Extract image URLs from issue body
+    image_urls = github_ops.extract_image_urls(issue_body) if issue_body else []
+
+    return fetched_content, image_urls
 
 
 def prompt_and_save_auto_create(config_file: Path, config_key: str) -> bool:

@@ -153,10 +153,12 @@ class TestFetchGithubIssue:
             "title": "Test Issue",
             "body": "This is a test issue body.",
         }
+        github_ops.extract_image_urls.return_value = []
 
-        content = fetch_github_issue(github_ops, 123)
+        content, image_urls = fetch_github_issue(github_ops, 123)
 
         assert content == "# Test Issue\n\nThis is a test issue body."
+        assert image_urls == []
         github_ops.check_gh_auth.assert_called_once()
         github_ops.get_issue.assert_called_once_with("123", include_comments=False)
 
@@ -169,10 +171,11 @@ class TestFetchGithubIssue:
             "body": "",
         }
 
-        content = fetch_github_issue(github_ops, 456)
+        content, image_urls = fetch_github_issue(github_ops, 456)
 
         # When title exists but body is empty, returns "# title\n\n"
         assert content == "# Test Issue\n\n"
+        assert image_urls == []
         github_ops.get_issue.assert_called_once_with("456", include_comments=False)
 
     def test_Issue只有body沒有title(self):
@@ -183,10 +186,12 @@ class TestFetchGithubIssue:
             "title": "",
             "body": "Body without title",
         }
+        github_ops.extract_image_urls.return_value = []
 
-        content = fetch_github_issue(github_ops, 789)
+        content, image_urls = fetch_github_issue(github_ops, 789)
 
         assert content == "Body without title"
+        assert image_urls == []
 
     def test_gh_CLI未認證(self):
         """測試 gh CLI 未認證時拋出錯誤"""
@@ -207,3 +212,34 @@ class TestFetchGithubIssue:
 
         with pytest.raises(GitHubError):
             fetch_github_issue(github_ops, 999)
+
+    def test_回傳包含圖片URL的tuple(self):
+        """測試回傳值為 (content, image_urls) 的 tuple"""
+        github_ops = Mock(spec=GitHubOps)
+        github_ops.check_gh_auth.return_value = True
+        github_ops.get_issue.return_value = {
+            "title": "Test with Images",
+            "body": "Description\n![img](https://example.com/image.png)",
+        }
+        github_ops.extract_image_urls.return_value = ["https://example.com/image.png"]
+
+        content, image_urls = fetch_github_issue(github_ops, 123)
+
+        assert content == "# Test with Images\n\nDescription\n![img](https://example.com/image.png)"
+        assert image_urls == ["https://example.com/image.png"]
+        github_ops.extract_image_urls.assert_called_once()
+
+    def test_無圖片時回傳空列表(self):
+        """測試無圖片時 image_urls 為空列表"""
+        github_ops = Mock(spec=GitHubOps)
+        github_ops.check_gh_auth.return_value = True
+        github_ops.get_issue.return_value = {
+            "title": "No Images",
+            "body": "Just text",
+        }
+        github_ops.extract_image_urls.return_value = []
+
+        content, image_urls = fetch_github_issue(github_ops, 456)
+
+        assert content == "# No Images\n\nJust text"
+        assert image_urls == []
