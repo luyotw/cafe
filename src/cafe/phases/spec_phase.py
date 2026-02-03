@@ -994,7 +994,17 @@ class SpecPhase(Phase):
                     template_file = str(self.template_path)
                 template_instruction = f"""\n**Template Reference:**\nUse Read tool to read {template_file} as a reference for output format and structure."""
 
-            initial_instruction = f"""**Round 1 Requirements Clarification**\n\nRead {current_spec_file} for initial requirements content.{template_instruction}\n\n**Important:** Preserve the original requirements content (including "Initial Requirements" section and "Issue Title" if present). Only add your analysis and clarification below, do not modify or remove the original content."""
+            # Check for images
+            images_dir = self.phase_dir / "images"
+            images_instruction = ""
+            if images_dir.exists() and any(images_dir.iterdir()):
+                try:
+                    images_path = to_cwd_relative_path(images_dir)
+                except (ValueError, OSError):
+                    images_path = str(images_dir.resolve())
+                images_instruction = f"""\n\n**Images:** This issue includes screenshots/images. Use the Read tool to view images in `{images_path}/` for UI/UX requirements and visual context."""
+
+            initial_instruction = f"""**Round 1 Requirements Clarification**\n\nRead {current_spec_file} for initial requirements content.{template_instruction}{images_instruction}\n\n**Important:** Preserve the original requirements content (including "Initial Requirements" section and "Issue Title" if present). Only add your analysis and clarification below, do not modify or remove the original content."""
             context_section = ""
         else:  # Iteration 2+
             # Round 2 onwards: Read previous round spec file and user_input, write new spec file
