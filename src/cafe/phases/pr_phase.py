@@ -509,24 +509,7 @@ class PRPhase(Phase):
                     compare_content=self._get_pr_template_content(),
                 )
 
-                if was_updated:
-                    # Output was updated from template - mark as completed
-                    console.print("[dim]PR content was generated - marking as completed...[/dim]")
-                    self._save_progress(PhaseStatusCode.READY_FOR_REVIEW)
-
-                    self._update_iteration_history(
-                        phase_specific_data={"pr_number": str(pr_number), "pr_url": pr_url, "branch": branch_name},
-                        status_code=PhaseStatusCode.READY_FOR_REVIEW,
-                    )
-
-                    self._display_pr_success(str(pr_number), pr_url, "completed")
-
-                    return PhaseResult(
-                        status=PhaseStatus.COMPLETED,
-                        message=f"Completed incomplete PR iteration",
-                        data={"pr_number": str(pr_number), "pr_url": pr_url, "branch": branch_name, "status_code": "CAFE_READY_FOR_REVIEW"},
-                    )
-                else:
+                if not was_updated:
                     # Still template content - need to retry generation
                     console.print("[dim]PR content not generated - retrying...[/dim]")
 
@@ -534,21 +517,13 @@ class PRPhase(Phase):
                     if result:
                         return result
 
-                    # Successfully generated - mark as completed
-                    self._save_progress(PhaseStatusCode.READY_FOR_REVIEW)
+                # PR content is ready - now create/update the actual PR
+                console.print("[dim]PR content ready - creating/updating PR...[/dim]")
 
-                    self._update_iteration_history(
-                        phase_specific_data={"pr_number": str(pr_number), "pr_url": pr_url, "branch": branch_name},
-                        status_code=PhaseStatusCode.READY_FOR_REVIEW,
-                    )
+                # Build existing_pr dict for _create_or_update_pr
+                existing_pr = {"number": pr_number, "url": pr_url} if pr_number > 0 else None
 
-                    self._display_pr_success(str(pr_number), pr_url, "completed")
-
-                    return PhaseResult(
-                        status=PhaseStatus.COMPLETED,
-                        message=f"Completed incomplete PR iteration",
-                        data={"pr_number": str(pr_number), "pr_url": pr_url, "branch": branch_name, "status_code": "CAFE_READY_FOR_REVIEW"},
-                    )
+                return self._create_or_update_pr(existing_pr, branch_name)
 
         return None
 
@@ -674,77 +649,8 @@ class PRPhase(Phase):
             pr_iteration_info = self._get_latest_pr_iteration_info()
             self.iteration = (pr_iteration_info["iteration_number"] + 1) if pr_iteration_info else 1
 
-            # Prepare PR content (calls agent to generate title/body)
-            result, content = self._prepare_pr_content()
-            if result:
-                return result
-            pr_title, pr_body = content
-
-            if existing_pr:
-                # Update existing PR
-                pr_number = str(existing_pr["number"])
-                pr_url = existing_pr["url"]
-
-                console.print("[bold]Updating pull request...[/bold]")
-                console.print()
-
-                self.github_ops.update_pr(pr_number, title=pr_title, body=pr_body)
-
-                # Save progress - READY_FOR_REVIEW means waiting for reviewer feedback
-                self._save_progress(PhaseStatusCode.READY_FOR_REVIEW)
-
-                # Update iteration history with status_code
-                self._update_iteration_history(
-                    phase_specific_data={"pr_number": pr_number, "pr_url": pr_url, "branch": branch_name},
-                    status_code=PhaseStatusCode.READY_FOR_REVIEW,
-                )
-
-                self._display_pr_success(pr_number, pr_url, "updated")
-
-                return PhaseResult(
-                    status=PhaseStatus.COMPLETED,
-                    message=f"Pull Request #{pr_number} updated successfully",
-                    data={"pr_number": pr_number, "pr_url": pr_url, "branch": branch_name, "status_code": "CAFE_READY_FOR_REVIEW"},
-                )
-            else:
-                # Create new PR
-                console.print("[bold]Creating pull request...[/bold]")
-                console.print()
-
-                pr_url = self.github_ops.create_pr(
-                    title=pr_title, body=pr_body, draft=self.draft, base=self.base_branch
-                )
-
-                # Extract PR number
-                match = re.search(r"/pull/(\d+)", pr_url)
-                if not match:
-                    raise RuntimeError(f"Failed to extract PR number from: {pr_url}")
-                pr_number = match.group(1)
-
-                # Add PR link to issue if configured
-                if self.issue_id:
-                    try:
-                        comment = f"Pull Request created: {pr_url}"
-                        self.github_ops.add_issue_comment(self.issue_id, comment)
-                    except Exception as e:
-                        console.print(f"[yellow]⚠️  Warning: Failed to add PR link to issue #{self.issue_id}: {e}[/yellow]")
-
-                # Save progress - READY_FOR_REVIEW means waiting for reviewer feedback
-                self._save_progress(PhaseStatusCode.READY_FOR_REVIEW)
-
-                # Update iteration history with status_code
-                self._update_iteration_history(
-                    phase_specific_data={"pr_number": pr_number, "pr_url": pr_url, "branch": branch_name},
-                    status_code=PhaseStatusCode.READY_FOR_REVIEW,
-                )
-
-                self._display_pr_success(pr_number, pr_url, "created")
-
-                return PhaseResult(
-                    status=PhaseStatus.COMPLETED,
-                    message=f"Pull Request #{pr_number} created successfully",
-                    data={"pr_number": pr_number, "pr_url": pr_url, "branch": branch_name, "status_code": "CAFE_READY_FOR_REVIEW"},
-                )
+            # Create or update PR with prepared content
+            return self._create_or_update_pr(existing_pr, branch_name)
 
         # Step 3: No new commits - check state and decide action
         pr_iteration_info = self._get_latest_pr_iteration_info()
@@ -1478,6 +1384,93 @@ Return ONLY the status code (CAFE_CONFIRMED or CAFE_NEEDS_CHANGES) with no expla
         console.print(f"[green]✓ Pull Request #{pr_number} {action} successfully[/green]")
         console.print(f"  URL: {pr_url}")
         console.print()
+
+    def _create_or_update_pr(self, existing_pr: dict | None, branch_name: str) -> PhaseResult:
+        """Create or update PR with prepared content.
+
+        Args:
+            existing_pr: Existing PR info (None if no PR exists)
+            branch_name: Branch name
+
+        Returns:
+            PhaseResult
+        """
+        from rich.console import Console
+        from cafe.core.status_codes import PhaseStatusCode
+
+        console = Console()
+
+        # Prepare PR content (calls agent to generate title/body)
+        result, content = self._prepare_pr_content()
+        if result:
+            return result
+        pr_title, pr_body = content
+
+        if existing_pr:
+            # Update existing PR
+            pr_number = str(existing_pr["number"])
+            pr_url = existing_pr["url"]
+
+            console.print("[bold]Updating pull request...[/bold]")
+            console.print()
+
+            self.github_ops.update_pr(pr_number, title=pr_title, body=pr_body)
+
+            # Save progress - READY_FOR_REVIEW means waiting for reviewer feedback
+            self._save_progress(PhaseStatusCode.READY_FOR_REVIEW)
+
+            # Update iteration history with status_code
+            self._update_iteration_history(
+                phase_specific_data={"pr_number": pr_number, "pr_url": pr_url, "branch": branch_name},
+                status_code=PhaseStatusCode.READY_FOR_REVIEW,
+            )
+
+            self._display_pr_success(pr_number, pr_url, "updated")
+
+            return PhaseResult(
+                status=PhaseStatus.COMPLETED,
+                message=f"Pull Request #{pr_number} updated successfully",
+                data={"pr_number": pr_number, "pr_url": pr_url, "branch": branch_name, "status_code": "CAFE_READY_FOR_REVIEW"},
+            )
+        else:
+            # Create new PR
+            console.print("[bold]Creating pull request...[/bold]")
+            console.print()
+
+            pr_url = self.github_ops.create_pr(
+                title=pr_title, body=pr_body, draft=self.draft, base=self.base_branch
+            )
+
+            # Extract PR number
+            match = re.search(r"/pull/(\d+)", pr_url)
+            if not match:
+                raise RuntimeError(f"Failed to extract PR number from: {pr_url}")
+            pr_number = match.group(1)
+
+            # Add PR link to issue if configured
+            if self.issue_id:
+                try:
+                    comment = f"Pull Request created: {pr_url}"
+                    self.github_ops.add_issue_comment(self.issue_id, comment)
+                except Exception as e:
+                    console.print(f"[yellow]⚠️  Warning: Failed to add PR link to issue #{self.issue_id}: {e}[/yellow]")
+
+            # Save progress - READY_FOR_REVIEW means waiting for reviewer feedback
+            self._save_progress(PhaseStatusCode.READY_FOR_REVIEW)
+
+            # Update iteration history with status_code
+            self._update_iteration_history(
+                phase_specific_data={"pr_number": pr_number, "pr_url": pr_url, "branch": branch_name},
+                status_code=PhaseStatusCode.READY_FOR_REVIEW,
+            )
+
+            self._display_pr_success(pr_number, pr_url, "created")
+
+            return PhaseResult(
+                status=PhaseStatus.COMPLETED,
+                message=f"Pull Request #{pr_number} created successfully",
+                data={"pr_number": pr_number, "pr_url": pr_url, "branch": branch_name, "status_code": "CAFE_READY_FOR_REVIEW"},
+            )
 
     def _generate_pr_content(self) -> PhaseResult | None:
         """Generate PR title and body using agent.
