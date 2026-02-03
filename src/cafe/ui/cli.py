@@ -4463,12 +4463,16 @@ description: {description}
 # Please write the agent's code of conduct below
 # Delete this comment and write the agent's behavior guidelines and responsibilities
 #
+# IMPORTANT: Each guideline MUST start with "-" to maximize effectiveness
+#
 # Example:
 # You are a {description}.
 # Your responsibilities include:
-# - Writing clean and maintainable code
-# - Following best practices and coding standards
-# - Providing helpful and accurate responses
+# - Use camelCase for variable names (e.g., userName, not user_name)
+# - Always add JSDoc comments for public functions
+# - Prefer async/await over Promise.then() chains
+# - Write unit tests in __tests__/ directory using Jest
+# - Follow the project's existing error handling patterns
 
 """
 
