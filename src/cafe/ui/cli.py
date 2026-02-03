@@ -834,6 +834,18 @@ def prepare(
             console.print("[yellow]Please run 'cafe init' first to set up CAFE.[/yellow]")
             raise typer.Exit(1)
 
+        # 1.1. Sync agents and templates at the beginning of prepare
+        from cafe.ui.init_helpers import sync_agents, sync_templates
+        cafe_dir = Path(".cafe")
+        agent_success, agent_failed = sync_agents(cafe_dir)
+        template_success, template_failed = sync_templates(cafe_dir)
+
+        # Display sync summary
+        if agent_success > 0 or template_success > 0:
+            console.print(f"  [green]✓[/green] Updated .cafe directory with {agent_success} agent(s) and {template_success} template(s)")
+        if agent_failed > 0 or template_failed > 0:
+            console.print(f"  [yellow]⚠[/yellow] Warning: Failed to copy {agent_failed + template_failed} file(s)")
+
         # 2. Determine interactive mode and config prompt behavior
         # should_prompt_for_config: Should we show config prompts?
         #   - True if user didn't provide issue_name as argument AND interactive flag is True
@@ -4049,6 +4061,17 @@ def template_edit(
     try:
         subprocess.run([editor, str(template_path)], check=True)
         console.print(f"[green]✅ Template '{name}' updated[/green]")
+
+        # Auto-sync templates to local .cafe directory
+        from cafe.ui.init_helpers import sync_templates
+        cafe_dir = Path(".cafe")
+        if cafe_dir.exists():
+            template_success, template_failed = sync_templates(cafe_dir)
+            if template_success > 0:
+                console.print(f"  [green]✓[/green] Updated .cafe directory with {template_success} template(s)")
+            if template_failed > 0:
+                console.print(f"  [yellow]⚠[/yellow] Warning: Failed to copy {template_failed} template file(s)")
+
     except subprocess.CalledProcessError:
         console.print("[red]Error: Failed to edit template[/red]")
         raise typer.Exit(1)
@@ -4167,6 +4190,33 @@ def template_create(
         console.print(f"[red]Error: {e}[/red]")
         raise typer.Exit(1)
 
+
+@template_app.command(name="sync")
+def template_sync() -> None:
+    """Sync template files from global/system sources to local .cafe directory.
+
+    Updates all template files in .cafe/templates to their latest versions from
+    ~/.cafe/templates (custom) or src/cafe/data/templates (system default).
+    Global custom templates take precedence over system defaults.
+    """
+    from cafe.ui.init_helpers import sync_templates
+
+    # Check if .cafe directory exists
+    cafe_dir = Path(".cafe")
+    if not cafe_dir.exists():
+        console.print("[red]Error: CAFE not initialized in this directory[/red]")
+        console.print("[dim]Run 'cafe init' first[/dim]")
+        raise typer.Exit(1)
+
+    # Sync templates
+    template_success, template_failed = sync_templates(cafe_dir)
+
+    # Display summary
+    if template_success > 0:
+        console.print(f"  [green]✓[/green] Updated .cafe directory with {template_success} template(s)")
+
+    if template_failed > 0:
+        console.print(f"  [yellow]⚠[/yellow] Warning: Failed to copy {template_failed} template file(s)")
 
 
 @app.command()
@@ -4509,6 +4559,17 @@ def agent_edit() -> None:
             console.print(f"[green]✓[/green] Agent updated successfully: ~/{relative_path}")
         except ValueError:
             console.print(f"[green]✓[/green] Agent updated successfully: {agent_file}")
+
+        # Auto-sync agents to local .cafe directory
+        from cafe.ui.init_helpers import sync_agents
+        cafe_dir = Path(".cafe")
+        if cafe_dir.exists():
+            agent_success, agent_failed = sync_agents(cafe_dir)
+            if agent_success > 0:
+                console.print(f"  [green]✓[/green] Updated .cafe directory with {agent_success} agent(s)")
+            if agent_failed > 0:
+                console.print(f"  [yellow]⚠[/yellow] Warning: Failed to copy {agent_failed} agent file(s)")
+
     except subprocess.CalledProcessError:
         console.print("[red]Error: Failed to edit agent[/red]")
         raise typer.Exit(1)
@@ -4591,6 +4652,34 @@ def agent_cat(
         # Fallback: print to console
         content = agent_path.read_text()
         console.print(content)
+
+
+@agent_app.command(name="sync")
+def agent_sync() -> None:
+    """Sync agent files from global/system sources to local .cafe directory.
+
+    Updates all agent files in .cafe/agents to their latest versions from
+    ~/.cafe/agents (custom) or src/cafe/data/agents (system default).
+    Global custom agents take precedence over system defaults.
+    """
+    from cafe.ui.init_helpers import sync_agents
+
+    # Check if .cafe directory exists
+    cafe_dir = Path(".cafe")
+    if not cafe_dir.exists():
+        console.print("[red]Error: CAFE not initialized in this directory[/red]")
+        console.print("[dim]Run 'cafe init' first[/dim]")
+        raise typer.Exit(1)
+
+    # Sync agents
+    agent_success, agent_failed = sync_agents(cafe_dir)
+
+    # Display summary
+    if agent_success > 0:
+        console.print(f"  [green]✓[/green] Updated .cafe directory with {agent_success} agent(s)")
+
+    if agent_failed > 0:
+        console.print(f"  [yellow]⚠[/yellow] Warning: Failed to copy {agent_failed} agent file(s)")
 
 
 @app.command()
