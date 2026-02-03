@@ -3,6 +3,7 @@
 import json
 import re
 import subprocess
+from pathlib import Path
 from typing import Any, Dict, Optional, List
 from pydantic import BaseModel
 
@@ -266,6 +267,91 @@ class GitHubOps:
             return match.group(1)
 
         raise GitHubError(f"Invalid issue URL or number: {issue_url_or_number}")
+
+    @staticmethod
+    def extract_image_urls(body: str) -> List[str]:
+        """從 Markdown 內容中解析圖片 URL
+
+        支援標準 Markdown 圖片語法 ![alt](url) 和 GitHub user-attachments 格式
+
+        Args:
+            body: Markdown 內容
+
+        Returns:
+            圖片 URL 列表
+        """
+        # 標準圖片格式：![alt](url) 且 URL 帶有常見圖片副檔名
+        standard_pattern = re.compile(
+            r'!\[[^\]]*\]\((https?://[^)]+\.(?:png|jpg|jpeg|gif|webp|svg)(?:\?[^)]*)?)\)',
+            re.IGNORECASE
+        )
+        # GitHub user-attachments 格式（不帶副檔名）
+        github_assets_pattern = re.compile(
+            r'!\[[^\]]*\]\((https://github\.com/user-attachments/assets/[^)]+)\)',
+            re.IGNORECASE
+        )
+
+        urls = []
+        # 解析標準格式
+        urls.extend(standard_pattern.findall(body))
+        # 解析 GitHub assets 格式
+        urls.extend(github_assets_pattern.findall(body))
+
+        return urls
+
+    def download_issue_images(self, image_urls: List[str], save_dir: Path) -> List[Path]:
+        """下載 issue 中的圖片到指定目錄
+
+        使用 curl 下載圖片，檔名格式為 image_001.ext, image_002.ext 等
+
+        Args:
+            image_urls: 圖片 URL 列表
+            save_dir: 儲存目錄路徑
+
+        Returns:
+            成功下載的圖片路徑列表
+        """
+        if not image_urls:
+            return []
+
+        # 建立目錄
+        save_dir.mkdir(parents=True, exist_ok=True)
+
+        saved_paths = []
+        for idx, url in enumerate(image_urls, start=1):
+            # 解析副檔名
+            # 移除 query string 後提取副檔名
+            url_path = url.split('?')[0]
+            # 嘗試從 URL 中提取副檔名
+            match = re.search(r'\.([a-zA-Z]+)$', url_path)
+            if match:
+                ext = match.group(1).lower()
+            else:
+                # 無副檔名預設為 png（通常是 GitHub assets）
+                ext = "png"
+
+            # 建立檔名
+            filename = f"image_{idx:03d}.{ext}"
+            save_path = save_dir / filename
+
+            # 使用 curl 下載
+            try:
+                result = subprocess.run(
+                    ["curl", "-L", "-o", str(save_path), url],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+
+                if result.returncode == 0:
+                    saved_paths.append(save_path)
+                # 下載失敗時繼續處理其他圖片，不拋出異常
+
+            except (FileNotFoundError, subprocess.CalledProcessError):
+                # curl 不存在或執行失敗，繼續處理其他圖片
+                continue
+
+        return saved_paths
 
     def get_pr_for_branch(self, branch: str) -> Optional[Dict[str, Any]]:
         """Check if a PR exists for the given branch.
