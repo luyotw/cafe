@@ -1626,11 +1626,27 @@ Return ONLY the status code (CAFE_CONFIRMED or CAFE_NEEDS_CHANGES) with no expla
         # Build issue reference if issue_id is provided
         issue_instruction = f"\n- Add `Closes #{self.issue_id}` at the beginning of body" if self.issue_id else ""
 
-        # Generate prompt for agent
+        # Generate prompt for agent - different instructions for first vs subsequent iterations
         checklist_instruction = format_checklist_instruction(checklist_path_str)
+
+        if self.iteration == 1:
+            task_instruction = f"**Task:** Edit `{output_file_pattern}` to generate PR title and description for this Pull Request."
+            body_instruction = """**Body:**
+- Use Markdown format
+- Write in same language as commit messages
+- Keep the existing structure: Summary, Changes, and Test Plan sections
+- Fill in each section with specific details"""
+        else:
+            task_instruction = f"**Task:** Edit `{output_file_pattern}` to UPDATE the existing PR content with new changes (iteration {self.iteration})."
+            body_instruction = """**Body:**
+- Use Markdown format
+- Write in same language as commit messages
+- UPDATE existing sections to reflect the complete PR state
+- ADD new changes to the Changes section (preserve previous changes)"""
+
         prompt = f"""# PR Phase
 
-**Task:** Edit `{output_file_pattern}` to generate PR title and description for this Pull Request.
+{task_instruction}
 
 {checklist_instruction}
 
@@ -1648,11 +1664,7 @@ Return ONLY the status code (CAFE_CONFIRMED or CAFE_NEEDS_CHANGES) with no expla
 - Describe what this PR does
 - Example: "Add user authentication with OAuth2 support"
 
-**Body:**
-- Use Markdown format
-- Write in same language as commit messages
-- Keep the existing structure: Summary, Changes, and Test Plan sections
-- Fill in each section with specific details
+{body_instruction}
 """
 
         # Execute agent
