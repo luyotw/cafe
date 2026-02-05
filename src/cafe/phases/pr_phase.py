@@ -1170,9 +1170,8 @@ class PRPhase(Phase):
                     image_paths.append(to_cwd_relative_path(img))
                 except (ValueError, OSError):
                     image_paths.append(str(img.resolve()))
-            # Use comma-separated format as specified in requirements
-            image_list = ", ".join(image_paths)
-            images_instruction = f"\n- Images: {image_list}"
+            image_list = "\n".join(f"  - `{p}`" for p in image_paths)
+            images_instruction = f"\n\n**Images:** PR comments include screenshots/images. Use the Read tool to view these images for visual context:\n{image_list}"
 
         from cafe.core.status_codes import generate_status_code_prompt
         status_code_prompt = generate_status_code_prompt(
