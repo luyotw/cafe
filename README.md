@@ -86,6 +86,12 @@ Support for more CLI agent tools is planned for the future. Stay tuned!
 
 ## Installation
 
+### From PyPI
+
+```bash
+pip install cafe-engine
+```
+
 ### From Source
 
 ```bash

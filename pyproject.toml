@@ -1,5 +1,5 @@
 [project]
-name = "cafe"
+name = "cafe-engine"
 version = "0.1.0"
 description = "CLI Agent Flow Engine - Automated development workflow with AI agents"
 readme = "README.md"
