@@ -1141,6 +1141,12 @@ class PRPhase(Phase):
             checklist_file_path=checklist_file,
         )
 
+        # Copy user_input.md to output.md as starting point
+        # Agent will then append todo list below the original content
+        if user_input_file.exists() and not output_file.exists():
+            import shutil
+            shutil.copy2(user_input_file, output_file)
+
         # Get relative paths for tool permissions
         try:
             output_file_pattern = to_cwd_relative_path(output_file)
@@ -1196,12 +1202,15 @@ Do NOT return a status code until ALL checklist items are marked as [x].
 **Task:** Organize PR comments into actionable todo list.
 
 **Context:**
-- PR comments file: {user_input_pattern}
-- Output file: {output_pattern}{images_instruction}
+- Output file: {output_pattern} (already contains PR comments, append todo list below){images_instruction}
 
-**Output format:**
+**Instructions:**
+1. Read the output file which already contains the PR comments
+2. Analyze the comments and organize them into actionable todo items
+3. Append the todo list to the END of the output file (do not remove the original content)
+
+**Output format to append:**
 ```markdown
-# PR Review Feedback
 
 ## Todo List
 
@@ -1228,15 +1237,18 @@ The system will verify checklist completion. If unchecked items remain, you will
 - Do NOT include any summary or explanation
 """
 
-        # Define allowed tools
-        allowed_tools = [
+        # Define allowed tools (consistent with other phases: spec, plan, review)
+        base_allowed_tools = [
             "read",
-            "grep", 
+            "grep",
             "glob",
+            "ls",
+            "web_fetch",
+            "web_search",
             f"edit({output_file_pattern})",
-            f"write({output_file_pattern})",
             f"edit({checklist_pattern})",
         ]
+        allowed_tools = self._merge_allowed_tools(base_allowed_tools)
 
         # Execute agent
         response, status_code = self._execute_agent_iteration(
@@ -1254,6 +1266,20 @@ The system will verify checklist completion. If unchecked items remain, you will
             return PhaseResult(
                 status=PhaseStatus.FAILED,
                 message=f"Checklist validation failed - {validation_result.unchecked_count} items not marked as complete",
+            )
+
+        # Validate output.md was updated (should differ from user_input.md)
+        pr_dir = self.issue_dir / "pr"
+        was_updated = self._check_output_file_updated(
+            output_file=output_file,
+            iteration=self.iteration,
+            phase_dir=pr_dir,
+            compare_content=user_input_file.read_text(encoding="utf-8") if user_input_file.exists() else None,
+        )
+        if not was_updated:
+            return PhaseResult(
+                status=PhaseStatus.FAILED,
+                message="Agent did not update output.md with todo list",
             )
 
         # Additional validation: if agent returned CONFIRMED, verify this is correct

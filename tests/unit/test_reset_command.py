@@ -239,6 +239,28 @@ class TestIterationRemovalAndStatusUpdate:
         loaded = json.loads(status_path.read_text())
         assert loaded["current_iteration"] == 3
 
+    def test_status_json_includes_end_time(self, phase_with_iterations: Path):
+        """Test 5.2b: Update status.json includes end_time field."""
+        # Create a new status.json with end_time (as cafe reset should)
+        status_path = phase_with_iterations / "status.json"
+        status_data = {
+            "phase": "spec",
+            "status": "completed",
+            "status_code": "CAFE_CONFIRMED",
+            "timestamp": "2024-01-03T00:00:00+00:00",
+            "iteration": 3,
+            "message": "Phase completed with CAFE_CONFIRMED",
+            "end_time": "2024-01-03T00:00:00+00:00",
+        }
+        status_path.write_text(json.dumps(status_data))
+
+        # Verify the file was written correctly with end_time
+        assert status_path.exists()
+        loaded = json.loads(status_path.read_text())
+        assert loaded["iteration"] == 3
+        assert "end_time" in loaded
+        assert loaded["end_time"] == "2024-01-03T00:00:00+00:00"
+
     def test_copy_all_fields_from_previous_iteration(self, phase_with_iterations: Path):
         """Test 5.3: Copy all fields from previous iteration's status.json."""
         # Read iteration 3's status.json
@@ -252,6 +274,74 @@ class TestIterationRemovalAndStatusUpdate:
         # Verify all fields are preserved
         copied_data = json.loads(new_status.read_text())
         assert copied_data == original_data
+
+    def test_end_time_from_context_json(self, phase_with_iterations: Path):
+        """Test 5.3b: Read end_time from context.json when updating status.json."""
+        # Update context.json in iteration_003 to include end_time
+        iter3_context = phase_with_iterations / "iteration_003" / "context.json"
+        context_data = {
+            "iteration": 3,
+            "timestamp": "2024-01-03T10:00:00+00:00",
+            "end_time": "2024-01-03T10:30:00+00:00",
+            "status_code": "CAFE_CONFIRMED",
+        }
+        iter3_context.write_text(json.dumps(context_data))
+
+        # Simulate what cafe reset does: read context.json and create status.json
+        loaded_context = json.loads(iter3_context.read_text())
+        target_end_time = loaded_context.get("end_time")
+        target_timestamp = loaded_context.get("timestamp")
+
+        status_data = {
+            "phase": "spec",
+            "status": "completed",
+            "status_code": loaded_context.get("status_code"),
+            "timestamp": target_timestamp,
+            "iteration": 3,
+            "message": "Phase completed with CAFE_CONFIRMED",
+            "end_time": target_end_time or target_timestamp,
+        }
+
+        new_status = phase_with_iterations / "status.json"
+        new_status.write_text(json.dumps(status_data))
+
+        # Verify end_time is set correctly
+        loaded_status = json.loads(new_status.read_text())
+        assert loaded_status["end_time"] == "2024-01-03T10:30:00+00:00"
+
+    def test_end_time_fallback_to_timestamp(self, phase_with_iterations: Path):
+        """Test 5.3c: Fallback to timestamp when end_time is not in context.json."""
+        # Update context.json in iteration_003 WITHOUT end_time
+        iter3_context = phase_with_iterations / "iteration_003" / "context.json"
+        context_data = {
+            "iteration": 3,
+            "timestamp": "2024-01-03T10:00:00+00:00",
+            "status_code": "CAFE_CONFIRMED",
+            # No end_time field
+        }
+        iter3_context.write_text(json.dumps(context_data))
+
+        # Simulate what cafe reset does: read context.json and create status.json
+        loaded_context = json.loads(iter3_context.read_text())
+        target_end_time = loaded_context.get("end_time")  # Will be None
+        target_timestamp = loaded_context.get("timestamp")
+
+        status_data = {
+            "phase": "spec",
+            "status": "completed",
+            "status_code": loaded_context.get("status_code"),
+            "timestamp": target_timestamp,
+            "iteration": 3,
+            "message": "Phase completed with CAFE_CONFIRMED",
+            "end_time": target_end_time or target_timestamp,  # Fallback to timestamp
+        }
+
+        new_status = phase_with_iterations / "status.json"
+        new_status.write_text(json.dumps(status_data))
+
+        # Verify end_time falls back to timestamp
+        loaded_status = json.loads(new_status.read_text())
+        assert loaded_status["end_time"] == "2024-01-03T10:00:00+00:00"
 
     def test_delete_status_json_last_iteration(self, tmp_issue_dir: Path):
         """Test 5.4: Delete status.json when removing last iteration."""

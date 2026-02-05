@@ -1971,12 +1971,14 @@ def reset(
                 target_context_file = phase_dir / f"iteration_{target_iteration:03d}" / "context.json"
                 target_status_code = None
                 target_timestamp = None
+                target_end_time = None
 
                 if target_context_file.exists():
                     with open(target_context_file, "r", encoding="utf-8") as f:
                         target_context = json.load(f)
                         target_status_code = target_context.get("status_code")
                         target_timestamp = target_context.get("timestamp")
+                        target_end_time = target_context.get("end_time")
 
                 # Update status.json with target iteration's data
                 status_data = {
@@ -1986,6 +1988,7 @@ def reset(
                     "timestamp": target_timestamp or datetime.now().astimezone().isoformat(),
                     "iteration": target_iteration,
                     "message": f"Phase completed with {target_status_code}" if target_status_code else "Phase reset to this iteration",
+                    "end_time": target_end_time or target_timestamp or datetime.now().astimezone().isoformat(),
                 }
 
                 with open(status_file, "w", encoding="utf-8") as f:
