@@ -83,7 +83,7 @@ class TestDownloadIssueImages:
     @patch("subprocess.run")
     def test_成功下載單張圖片(self, mock_run: Mock, tmp_path: Path) -> None:
         """測試成功下載單張圖片"""
-        mock_run.return_value = Mock(returncode=0)
+        mock_run.return_value = Mock(returncode=0, stdout=b"fake image data")
 
         gh_ops = GitHubOps()
         image_urls = ["https://example.com/image.png"]
@@ -93,22 +93,21 @@ class TestDownloadIssueImages:
 
         assert len(saved_paths) == 1
         assert saved_paths[0].parent == save_dir
-        assert saved_paths[0].name == "image_001.png"
+        assert saved_paths[0].name == "image.png"
         assert save_dir.exists()
 
-        # 驗證 curl 被正確呼叫（第二次呼叫，第一次是 gh --version）
+        # 驗證 gh api 被正確呼叫（第二次呼叫，第一次是 gh --version）
         assert mock_run.call_count == 2
-        curl_call = mock_run.call_args_list[1]
-        call_args = curl_call[0][0]
-        assert "curl" in call_args
-        assert "-L" in call_args
-        assert "-o" in call_args
+        gh_call = mock_run.call_args_list[1]
+        call_args = gh_call[0][0]
+        assert "gh" in call_args
+        assert "api" in call_args
         assert "https://example.com/image.png" in call_args
 
     @patch("subprocess.run")
     def test_成功下載多張圖片(self, mock_run: Mock, tmp_path: Path) -> None:
         """測試成功下載多張圖片並正確命名"""
-        mock_run.return_value = Mock(returncode=0)
+        mock_run.return_value = Mock(returncode=0, stdout=b"fake image data")
 
         gh_ops = GitHubOps()
         image_urls = [
@@ -121,10 +120,10 @@ class TestDownloadIssueImages:
         saved_paths = gh_ops.download_issue_images(image_urls, save_dir)
 
         assert len(saved_paths) == 3
-        assert saved_paths[0].name == "image_001.jpg"
-        assert saved_paths[1].name == "image_002.png"
-        assert saved_paths[2].name == "image_003.png"  # 無副檔名預設為 png
-        # 1 次 gh --version + 3 次 curl
+        assert saved_paths[0].name == "image1.jpg"
+        assert saved_paths[1].name == "image2.png"
+        assert saved_paths[2].name == "abc123.png"  # 無副檔名預設為 png
+        # 1 次 gh --version + 3 次 gh api
         assert mock_run.call_count == 4
 
     @patch("subprocess.run")
@@ -133,9 +132,9 @@ class TestDownloadIssueImages:
         # gh --version + 第一張成功，第二張失敗，第三張成功
         mock_run.side_effect = [
             Mock(returncode=0),  # gh --version
-            Mock(returncode=0),  # curl 1
-            Mock(returncode=1, stderr="Failed to download"),  # curl 2 失敗
-            Mock(returncode=0),  # curl 3
+            Mock(returncode=0, stdout=b"fake image 1"),  # gh api 1
+            Mock(returncode=1, stderr="Failed to download"),  # gh api 2 失敗
+            Mock(returncode=0, stdout=b"fake image 3"),  # gh api 3
         ]
 
         gh_ops = GitHubOps()
@@ -150,13 +149,13 @@ class TestDownloadIssueImages:
 
         # 只回傳成功下載的路徑
         assert len(saved_paths) == 2
-        assert saved_paths[0].name == "image_001.png"
-        assert saved_paths[1].name == "image_003.png"
+        assert saved_paths[0].name == "ok1.png"
+        assert saved_paths[1].name == "ok2.png"
 
     @patch("subprocess.run")
     def test_自動建立目錄(self, mock_run: Mock, tmp_path: Path) -> None:
         """測試當目錄不存在時自動建立"""
-        mock_run.return_value = Mock(returncode=0)
+        mock_run.return_value = Mock(returncode=0, stdout=b"fake image data")
 
         gh_ops = GitHubOps()
         image_urls = ["https://example.com/image.png"]
@@ -181,13 +180,13 @@ class TestDownloadIssueImages:
         saved_paths = gh_ops.download_issue_images(image_urls, save_dir)
 
         assert saved_paths == []
-        # 只有 gh --version 被呼叫，沒有 curl
+        # 只有 gh --version 被呼叫，沒有 gh api
         assert mock_run.call_count == 1
 
     @patch("subprocess.run")
     def test_解析副檔名(self, mock_run: Mock, tmp_path: Path) -> None:
         """測試正確解析不同格式的圖片副檔名"""
-        mock_run.return_value = Mock(returncode=0)
+        mock_run.return_value = Mock(returncode=0, stdout=b"fake image data")
 
         gh_ops = GitHubOps()
         image_urls = [
@@ -199,6 +198,6 @@ class TestDownloadIssueImages:
 
         saved_paths = gh_ops.download_issue_images(image_urls, save_dir)
 
-        assert saved_paths[0].name == "image_001.jpg"  # 轉小寫
-        assert saved_paths[1].name == "image_002.png"
-        assert saved_paths[2].name == "image_003.png"  # 預設 png
+        assert saved_paths[0].name == "photo.JPG"  # 保留原始檔名
+        assert saved_paths[1].name == "image.png"
+        assert saved_paths[2].name == "xyz.png"  # 預設 png

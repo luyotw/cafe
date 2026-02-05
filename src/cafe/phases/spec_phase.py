@@ -662,7 +662,16 @@ class SpecPhase(Phase):
                     saved_paths = gh_ops.download_issue_images(image_urls, images_dir)
                     if saved_paths:
                         self.display.console.print()
-                        self.display.console.print(f"✅ Downloaded {len(saved_paths)} image(s) to {images_dir}")
+                        self.display.console.print(f"✅ Downloaded {len(saved_paths)} image(s):")
+                        for path in saved_paths:
+                            size_bytes = path.stat().st_size
+                            if size_bytes >= 1024 * 1024:
+                                size_str = f"{size_bytes / (1024 * 1024):.1f} MB"
+                            elif size_bytes >= 1024:
+                                size_str = f"{size_bytes / 1024:.1f} KB"
+                            else:
+                                size_str = f"{size_bytes} B"
+                            self.display.console.print(f"   {path} ({size_str})")
                     if len(saved_paths) < len(image_urls):
                         failed_count = len(image_urls) - len(saved_paths)
                         self.display.console.print(f"⚠️  Warning: {failed_count} image(s) failed to download")
@@ -998,11 +1007,15 @@ class SpecPhase(Phase):
             images_dir = self.phase_dir / "images"
             images_instruction = ""
             if images_dir.exists() and any(images_dir.iterdir()):
-                try:
-                    images_path = to_cwd_relative_path(images_dir)
-                except (ValueError, OSError):
-                    images_path = str(images_dir.resolve())
-                images_instruction = f"""\n\n**Images:** This issue includes screenshots/images. Use the Read tool to view images in `{images_path}/` for UI/UX requirements and visual context."""
+                image_files = sorted(images_dir.iterdir())
+                image_paths = []
+                for img in image_files:
+                    try:
+                        image_paths.append(to_cwd_relative_path(img))
+                    except (ValueError, OSError):
+                        image_paths.append(str(img.resolve()))
+                image_list = "\n".join(f"  - `{p}`" for p in image_paths)
+                images_instruction = f"""\n\n**Images:** This issue includes screenshots/images. Use the Read tool to view these images for UI/UX requirements and visual context:\n{image_list}"""
 
             initial_instruction = f"""**Round 1 Requirements Clarification**\n\nRead {current_spec_file} for initial requirements content.{template_instruction}{images_instruction}\n\n**Important:** Preserve the original requirements content (including "Initial Requirements" section and "Issue Title" if present). Only add your analysis and clarification below, do not modify or remove the original content."""
             context_section = ""

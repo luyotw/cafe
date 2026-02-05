@@ -318,37 +318,39 @@ class GitHubOps:
         save_dir.mkdir(parents=True, exist_ok=True)
 
         saved_paths = []
-        for idx, url in enumerate(image_urls, start=1):
-            # 解析副檔名
-            # 移除 query string 後提取副檔名
+        for url in image_urls:
+            # 移除 query string 後提取副檔名和檔名
             url_path = url.split('?')[0]
+            # 從 URL 最後一段取得檔名
+            url_filename = url_path.rsplit('/', 1)[-1]
+
             # 嘗試從 URL 中提取副檔名
             match = re.search(r'\.([a-zA-Z]+)$', url_path)
             if match:
                 ext = match.group(1).lower()
+                filename = url_filename
             else:
                 # 無副檔名預設為 png（通常是 GitHub assets）
                 ext = "png"
+                filename = f"{url_filename}.{ext}"
 
-            # 建立檔名
-            filename = f"image_{idx:03d}.{ext}"
             save_path = save_dir / filename
 
-            # 使用 curl 下載
+            # 使用 gh api 下載（自動帶認證）
             try:
                 result = subprocess.run(
-                    ["curl", "-L", "-o", str(save_path), url],
+                    ["gh", "api", url, "--method", "GET"],
                     capture_output=True,
-                    text=True,
                     check=False,
                 )
 
                 if result.returncode == 0:
+                    save_path.write_bytes(result.stdout)
                     saved_paths.append(save_path)
                 # 下載失敗時繼續處理其他圖片，不拋出異常
 
             except (FileNotFoundError, subprocess.CalledProcessError):
-                # curl 不存在或執行失敗，繼續處理其他圖片
+                # gh 不存在或執行失敗，繼續處理其他圖片
                 continue
 
         return saved_paths
