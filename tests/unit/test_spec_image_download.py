@@ -1,4 +1,4 @@
-"""測試 spec phase 圖片下載功能"""
+"""Test spec phase image download functionality"""
 
 import pytest
 from pathlib import Path
@@ -10,7 +10,7 @@ from cafe.core.types import PhaseResult, PhaseStatus
 
 @pytest.fixture
 def mock_dependencies():
-    """建立 SpecPhase 所需的 mock dependencies"""
+    """Create mock dependencies for SpecPhase"""
     mock_agent_manager = MagicMock()
     mock_permission_handler = MagicMock()
     mock_git_ops = MagicMock()
@@ -25,7 +25,7 @@ def mock_dependencies():
 
 @pytest.fixture
 def spec_phase(tmp_path, mock_dependencies):
-    """建立測試用的 SpecPhase instance"""
+    """Create a SpecPhase instance for testing"""
     phase = SpecPhase(
         agent_manager=mock_dependencies["agent_manager"],
         permission_handler=mock_dependencies["permission_handler"],
@@ -35,12 +35,12 @@ def spec_phase(tmp_path, mock_dependencies):
         issue_name="test-issue",
     )
 
-    # 設定 phase directory 和 issue directory
+    # Set up phase directory and issue directory
     phase.issue_dir = tmp_path / ".cafe" / "issues" / "test-issue"
     phase.phase_dir = phase.issue_dir / "spec"
     phase.phase_dir.mkdir(parents=True, exist_ok=True)
 
-    # 設定 iteration
+    # Set up iteration
     phase.iteration = 1
     iteration_dir = phase.phase_dir / "iteration_001"
     iteration_dir.mkdir(parents=True, exist_ok=True)
@@ -50,13 +50,13 @@ def spec_phase(tmp_path, mock_dependencies):
 
 
 class TestFetchGitHubIssueWithImages:
-    """測試 _fetch_github_issue 下載圖片功能"""
+    """Test _fetch_github_issue image download functionality"""
 
     @patch("cafe.phases.spec_phase.get_github_repo_name")
     @patch("cafe.phases.spec_phase.GitHubOps")
     @patch("cafe.phases.spec_phase.fetch_github_issue")
-    def test_下載圖片成功(self, mock_fetch, mock_gh_ops_cls, mock_get_repo, spec_phase):
-        """測試成功下載圖片"""
+    def test_download_images_success(self, mock_fetch, mock_gh_ops_cls, mock_get_repo, spec_phase):
+        """Test successfully downloading images"""
         # Setup
         mock_get_repo.return_value = "test/repo"
         mock_fetch.return_value = (
@@ -83,8 +83,8 @@ class TestFetchGitHubIssueWithImages:
     @patch("cafe.phases.spec_phase.get_github_repo_name")
     @patch("cafe.phases.spec_phase.GitHubOps")
     @patch("cafe.phases.spec_phase.fetch_github_issue")
-    def test_無圖片時不下載(self, mock_fetch, mock_gh_ops_cls, mock_get_repo, spec_phase):
-        """測試無圖片時不呼叫下載"""
+    def test_no_download_when_no_images(self, mock_fetch, mock_gh_ops_cls, mock_get_repo, spec_phase):
+        """Test no download call when there are no images"""
         # Setup
         mock_get_repo.return_value = "test/repo"
         mock_fetch.return_value = (
@@ -105,8 +105,8 @@ class TestFetchGitHubIssueWithImages:
     @patch("cafe.phases.spec_phase.get_github_repo_name")
     @patch("cafe.phases.spec_phase.GitHubOps")
     @patch("cafe.phases.spec_phase.fetch_github_issue")
-    def test_部分圖片下載失敗(self, mock_fetch, mock_gh_ops_cls, mock_get_repo, spec_phase):
-        """測試部分圖片下載失敗時繼續處理"""
+    def test_partial_download_failure(self, mock_fetch, mock_gh_ops_cls, mock_get_repo, spec_phase):
+        """Test continues processing when some images fail to download"""
         # Setup
         mock_get_repo.return_value = "test/repo"
         mock_fetch.return_value = (
@@ -117,7 +117,7 @@ class TestFetchGitHubIssueWithImages:
         mock_gh_ops = MagicMock()
         mock_gh_ops_cls.return_value = mock_gh_ops
 
-        # 只有 2 張成功
+        # Only 2 succeeded
         saved_paths = [
             spec_phase.phase_dir / "images" / "image_001.png",
             spec_phase.phase_dir / "images" / "image_003.png"
@@ -127,14 +127,14 @@ class TestFetchGitHubIssueWithImages:
         # Execute
         result = spec_phase._fetch_github_issue(123)
 
-        # Verify - 不應該失敗
+        # Verify - should not fail
         assert result is None
 
     @patch("cafe.phases.spec_phase.get_github_repo_name")
     @patch("cafe.phases.spec_phase.GitHubOps")
     @patch("cafe.phases.spec_phase.fetch_github_issue")
-    def test_圖片下載異常不影響主流程(self, mock_fetch, mock_gh_ops_cls, mock_get_repo, spec_phase):
-        """測試圖片下載拋出異常時不中斷主流程"""
+    def test_download_exception_does_not_interrupt_main_flow(self, mock_fetch, mock_gh_ops_cls, mock_get_repo, spec_phase):
+        """Test image download exception does not interrupt main flow"""
         # Setup
         mock_get_repo.return_value = "test/repo"
         mock_fetch.return_value = (
@@ -149,7 +149,7 @@ class TestFetchGitHubIssueWithImages:
         # Execute
         result = spec_phase._fetch_github_issue(123)
 
-        # Verify - 應該成功，只是警告圖片下載失敗
+        # Verify - should succeed, just warn about image download failure
         assert result is None  # Success
-        # Spec file 應該仍然被寫入
+        # Spec file should still be written
         assert Path(spec_phase.spec_file).exists()

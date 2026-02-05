@@ -1,4 +1,4 @@
-"""測試圖片 URL 解析與下載功能"""
+"""Test image URL extraction and download functionality"""
 
 import pytest
 from pathlib import Path
@@ -7,10 +7,10 @@ from cafe.utils.github import GitHubOps, GitHubError
 
 
 class TestExtractImageUrls:
-    """測試 extract_image_urls 靜態方法"""
+    """Test extract_image_urls static method"""
 
-    def test_解析標準Markdown圖片格式(self) -> None:
-        """測試解析標準 Markdown 圖片語法 ![alt](url)"""
+    def test_parse_standard_markdown_image_format(self) -> None:
+        """Test parsing standard Markdown image syntax ![alt](url)"""
         body = """
         Here is a screenshot:
         ![screenshot](https://example.com/image.png)
@@ -22,8 +22,8 @@ class TestExtractImageUrls:
         assert "https://example.com/image.png" in urls
         assert "https://example.com/demo.jpg" in urls
 
-    def test_解析GitHub_user_attachments格式(self) -> None:
-        """測試解析 GitHub user-attachments 格式（不帶副檔名）"""
+    def test_parse_github_user_attachments_format(self) -> None:
+        """Test parsing GitHub user-attachments format (no file extension)"""
         body = """
         ![image](https://github.com/user-attachments/assets/abc123-def456)
         """
@@ -31,14 +31,14 @@ class TestExtractImageUrls:
         assert len(urls) == 1
         assert "https://github.com/user-attachments/assets/abc123-def456" in urls
 
-    def test_無圖片時回傳空列表(self) -> None:
-        """測試當 Markdown 中無圖片時回傳空列表"""
+    def test_returns_empty_list_when_no_images(self) -> None:
+        """Test returns empty list when Markdown has no images"""
         body = "Just some text without images"
         urls = GitHubOps.extract_image_urls(body)
         assert urls == []
 
-    def test_混合內容解析(self) -> None:
-        """測試混合標準格式與 GitHub assets 格式"""
+    def test_parse_mixed_content(self) -> None:
+        """Test parsing mixed standard format and GitHub assets format"""
         body = """
         # Title
         ![standard](https://example.com/image.png)
@@ -52,8 +52,8 @@ class TestExtractImageUrls:
         assert "https://github.com/user-attachments/assets/xyz789" in urls
         assert "https://test.com/photo.jpeg?size=large" in urls
 
-    def test_支援多種圖片副檔名(self) -> None:
-        """測試支援 png, jpg, jpeg, gif, webp, svg 等副檔名"""
+    def test_supports_multiple_image_extensions(self) -> None:
+        """Test support for png, jpg, jpeg, gif, webp, svg extensions"""
         body = """
         ![png](https://example.com/1.png)
         ![jpg](https://example.com/2.jpg)
@@ -65,8 +65,8 @@ class TestExtractImageUrls:
         urls = GitHubOps.extract_image_urls(body)
         assert len(urls) == 6
 
-    def test_忽略非圖片連結(self) -> None:
-        """測試忽略非圖片的 Markdown 連結"""
+    def test_ignores_non_image_links(self) -> None:
+        """Test ignores non-image Markdown links"""
         body = """
         [Link to docs](https://example.com/docs.html)
         ![image](https://example.com/image.png)
@@ -78,11 +78,11 @@ class TestExtractImageUrls:
 
 
 class TestDownloadIssueImages:
-    """測試 download_issue_images 方法"""
+    """Test download_issue_images method"""
 
     @patch("subprocess.run")
-    def test_成功下載單張圖片(self, mock_run: Mock, tmp_path: Path) -> None:
-        """測試成功下載單張圖片"""
+    def test_download_single_image_success(self, mock_run: Mock, tmp_path: Path) -> None:
+        """Test successfully downloading a single image"""
         mock_run.return_value = Mock(returncode=0, stdout=b"fake image data")
 
         gh_ops = GitHubOps()
@@ -96,7 +96,7 @@ class TestDownloadIssueImages:
         assert saved_paths[0].name == "image.png"
         assert save_dir.exists()
 
-        # 驗證 gh api 被正確呼叫（第二次呼叫，第一次是 gh --version）
+        # Verify gh api was called correctly (second call, first is gh --version)
         assert mock_run.call_count == 2
         gh_call = mock_run.call_args_list[1]
         call_args = gh_call[0][0]
@@ -105,8 +105,8 @@ class TestDownloadIssueImages:
         assert "https://example.com/image.png" in call_args
 
     @patch("subprocess.run")
-    def test_成功下載多張圖片(self, mock_run: Mock, tmp_path: Path) -> None:
-        """測試成功下載多張圖片並正確命名"""
+    def test_download_multiple_images_success(self, mock_run: Mock, tmp_path: Path) -> None:
+        """Test successfully downloading multiple images with correct naming"""
         mock_run.return_value = Mock(returncode=0, stdout=b"fake image data")
 
         gh_ops = GitHubOps()
@@ -122,18 +122,18 @@ class TestDownloadIssueImages:
         assert len(saved_paths) == 3
         assert saved_paths[0].name == "image1.jpg"
         assert saved_paths[1].name == "image2.png"
-        assert saved_paths[2].name == "abc123.png"  # 無副檔名預設為 png
-        # 1 次 gh --version + 3 次 gh api
+        assert saved_paths[2].name == "abc123.png"  # Default to png for no extension
+        # 1 gh --version + 3 gh api calls
         assert mock_run.call_count == 4
 
     @patch("subprocess.run")
-    def test_下載失敗繼續處理其他圖片(self, mock_run: Mock, tmp_path: Path) -> None:
-        """測試某張圖片下載失敗時，繼續處理其他圖片"""
-        # gh --version + 第一張成功，第二張失敗，第三張成功
+    def test_continues_on_download_failure(self, mock_run: Mock, tmp_path: Path) -> None:
+        """Test continues processing other images when one fails"""
+        # gh --version + first success, second fails, third success
         mock_run.side_effect = [
             Mock(returncode=0),  # gh --version
             Mock(returncode=0, stdout=b"fake image 1"),  # gh api 1
-            Mock(returncode=1, stderr="Failed to download"),  # gh api 2 失敗
+            Mock(returncode=1, stderr="Failed to download"),  # gh api 2 fails
             Mock(returncode=0, stdout=b"fake image 3"),  # gh api 3
         ]
 
@@ -147,14 +147,14 @@ class TestDownloadIssueImages:
 
         saved_paths = gh_ops.download_issue_images(image_urls, save_dir)
 
-        # 只回傳成功下載的路徑
+        # Only returns successfully downloaded paths
         assert len(saved_paths) == 2
         assert saved_paths[0].name == "ok1.png"
         assert saved_paths[1].name == "ok2.png"
 
     @patch("subprocess.run")
-    def test_自動建立目錄(self, mock_run: Mock, tmp_path: Path) -> None:
-        """測試當目錄不存在時自動建立"""
+    def test_creates_directory_automatically(self, mock_run: Mock, tmp_path: Path) -> None:
+        """Test automatically creates directory when it doesn't exist"""
         mock_run.return_value = Mock(returncode=0, stdout=b"fake image data")
 
         gh_ops = GitHubOps()
@@ -169,8 +169,8 @@ class TestDownloadIssueImages:
         assert len(saved_paths) == 1
 
     @patch("subprocess.run")
-    def test_空列表時回傳空列表(self, mock_run: Mock, tmp_path: Path) -> None:
-        """測試傳入空的 URL 列表時回傳空列表"""
+    def test_returns_empty_list_for_empty_input(self, mock_run: Mock, tmp_path: Path) -> None:
+        """Test returns empty list when given empty URL list"""
         mock_run.return_value = Mock(returncode=0)
 
         gh_ops = GitHubOps()
@@ -180,24 +180,24 @@ class TestDownloadIssueImages:
         saved_paths = gh_ops.download_issue_images(image_urls, save_dir)
 
         assert saved_paths == []
-        # 只有 gh --version 被呼叫，沒有 gh api
+        # Only gh --version was called, no gh api
         assert mock_run.call_count == 1
 
     @patch("subprocess.run")
-    def test_解析副檔名(self, mock_run: Mock, tmp_path: Path) -> None:
-        """測試正確解析不同格式的圖片副檔名"""
+    def test_parses_file_extensions(self, mock_run: Mock, tmp_path: Path) -> None:
+        """Test correctly parses different image file extensions"""
         mock_run.return_value = Mock(returncode=0, stdout=b"fake image data")
 
         gh_ops = GitHubOps()
         image_urls = [
-            "https://example.com/photo.JPG",  # 大寫
-            "https://example.com/image.png?size=large",  # 帶參數
-            "https://github.com/user-attachments/assets/xyz",  # 無副檔名
+            "https://example.com/photo.JPG",  # uppercase
+            "https://example.com/image.png?size=large",  # with query params
+            "https://github.com/user-attachments/assets/xyz",  # no extension
         ]
         save_dir = tmp_path / "images"
 
         saved_paths = gh_ops.download_issue_images(image_urls, save_dir)
 
-        assert saved_paths[0].name == "photo.JPG"  # 保留原始檔名
+        assert saved_paths[0].name == "photo.JPG"  # preserves original filename
         assert saved_paths[1].name == "image.png"
-        assert saved_paths[2].name == "xyz.png"  # 預設 png
+        assert saved_paths[2].name == "xyz.png"  # defaults to png

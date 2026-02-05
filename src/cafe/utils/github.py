@@ -270,73 +270,73 @@ class GitHubOps:
 
     @staticmethod
     def extract_image_urls(body: str) -> List[str]:
-        """從 Markdown 內容中解析圖片 URL
+        """Extract image URLs from Markdown content.
 
-        支援標準 Markdown 圖片語法 ![alt](url) 和 GitHub user-attachments 格式
+        Supports standard Markdown image syntax ![alt](url) and GitHub user-attachments format.
 
         Args:
-            body: Markdown 內容
+            body: Markdown content
 
         Returns:
-            圖片 URL 列表
+            List of image URLs
         """
-        # 標準圖片格式：![alt](url) 且 URL 帶有常見圖片副檔名
+        # Standard image format: ![alt](url) with common image extensions
         standard_pattern = re.compile(
             r'!\[[^\]]*\]\((https?://[^)]+\.(?:png|jpg|jpeg|gif|webp|svg)(?:\?[^)]*)?)\)',
             re.IGNORECASE
         )
-        # GitHub user-attachments 格式（不帶副檔名）
+        # GitHub user-attachments format (no file extension)
         github_assets_pattern = re.compile(
             r'!\[[^\]]*\]\((https://github\.com/user-attachments/assets/[^)]+)\)',
             re.IGNORECASE
         )
 
         urls = []
-        # 解析標準格式
+        # Parse standard format
         urls.extend(standard_pattern.findall(body))
-        # 解析 GitHub assets 格式
+        # Parse GitHub assets format
         urls.extend(github_assets_pattern.findall(body))
 
         return urls
 
     def download_issue_images(self, image_urls: List[str], save_dir: Path) -> List[Path]:
-        """下載 issue 中的圖片到指定目錄
+        """Download images from issue to specified directory.
 
-        使用 curl 下載圖片，檔名格式為 image_001.ext, image_002.ext 等
+        Uses gh api to download images with authentication.
 
         Args:
-            image_urls: 圖片 URL 列表
-            save_dir: 儲存目錄路徑
+            image_urls: List of image URLs
+            save_dir: Directory path to save images
 
         Returns:
-            成功下載的圖片路徑列表
+            List of successfully downloaded image paths
         """
         if not image_urls:
             return []
 
-        # 建立目錄
+        # Create directory
         save_dir.mkdir(parents=True, exist_ok=True)
 
         saved_paths = []
         for url in image_urls:
-            # 移除 query string 後提取副檔名和檔名
+            # Remove query string and extract extension and filename
             url_path = url.split('?')[0]
-            # 從 URL 最後一段取得檔名
+            # Get filename from last segment of URL
             url_filename = url_path.rsplit('/', 1)[-1]
 
-            # 嘗試從 URL 中提取副檔名
+            # Try to extract extension from URL
             match = re.search(r'\.([a-zA-Z]+)$', url_path)
             if match:
                 ext = match.group(1).lower()
                 filename = url_filename
             else:
-                # 無副檔名預設為 png（通常是 GitHub assets）
+                # Default to png for URLs without extension (usually GitHub assets)
                 ext = "png"
                 filename = f"{url_filename}.{ext}"
 
             save_path = save_dir / filename
 
-            # 使用 gh api 下載（自動帶認證）
+            # Use gh api to download (with automatic authentication)
             try:
                 result = subprocess.run(
                     ["gh", "api", url, "--method", "GET"],
@@ -347,10 +347,10 @@ class GitHubOps:
                 if result.returncode == 0:
                     save_path.write_bytes(result.stdout)
                     saved_paths.append(save_path)
-                # 下載失敗時繼續處理其他圖片，不拋出異常
+                # Continue processing other images on failure
 
             except (FileNotFoundError, subprocess.CalledProcessError):
-                # gh 不存在或執行失敗，繼續處理其他圖片
+                # gh not found or execution failed, continue with other images
                 continue
 
         return saved_paths
