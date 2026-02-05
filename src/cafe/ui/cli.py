@@ -1780,9 +1780,9 @@ def restore(
 
 @app.command()
 def reset(
-    phase: str = typer.Argument(
-        ...,
-        help="Phase name (spec, plan, develop, review, pr)"
+    phase: Optional[str] = typer.Argument(
+        None,
+        help="Phase name (spec, plan, develop, review, pr). If not provided, resets the last phase with iterations"
     ),
     iteration: int = typer.Option(
         0,
@@ -1797,18 +1797,13 @@ def reset(
 
     \b
     Examples:
+        cafe reset                   # Remove latest iteration from last phase
         cafe reset spec              # Remove latest iteration from spec
         cafe reset develop -i 2      # Keep only iteration_002, remove all after
         cafe reset plan -i -1        # Same as cafe reset plan (remove latest)
     """
     try:
-        # 1. Validate phase name
-        if phase not in VALID_PHASES:
-            console.print(f"[red]Error: Invalid phase '{phase}'[/red]")
-            console.print(f"[dim]Valid phases: {', '.join(VALID_PHASES)}[/dim]")
-            raise typer.Exit(1)
-
-        # 2. Get current branch name (issue_name)
+        # 1. Get current branch name (issue_name)
         try:
             git_ops = GitOperations()
             issue_name = git_ops.get_current_branch()
@@ -1816,13 +1811,53 @@ def reset(
             console.print(f"[red]Error: Failed to get current branch: {e}[/red]")
             raise typer.Exit(1)
 
-        # 3. Verify phase directory exists
+        # 2. If phase not provided, find the last phase with iterations based on end_time or timestamp
+        if phase is None:
+            from cafe.services.summary_service import SummaryService
+            from datetime import datetime
+
+            service = SummaryService()
+            latest_phase = None
+            latest_time = None
+
+            # Check all phases to find the one with the latest end_time (or timestamp if incomplete)
+            for phase_name in VALID_PHASES:
+                iterations = service.load_iteration_statuses(issue_name, phase_name)
+                if not iterations:
+                    continue
+
+                for iteration_info in iterations:
+                    # Prefer end_time, fallback to timestamp for incomplete iterations
+                    time_str = iteration_info.get("end_time") or iteration_info.get("timestamp")
+                    if time_str:
+                        try:
+                            time = datetime.fromisoformat(time_str)
+                            if latest_time is None or time > latest_time:
+                                latest_time = time
+                                latest_phase = phase_name
+                        except (ValueError, TypeError):
+                            continue
+
+            if latest_phase is None:
+                console.print("[yellow]ℹ️  No phases with iterations found[/yellow]")
+                raise typer.Exit(0)
+
+            phase = latest_phase
+            console.print(f"[dim]Auto-detected last phase: {phase}[/dim]")
+
+        # 3. Validate phase name
+        if phase not in VALID_PHASES:
+            console.print(f"[red]Error: Invalid phase '{phase}'[/red]")
+            console.print(f"[dim]Valid phases: {', '.join(VALID_PHASES)}[/dim]")
+            raise typer.Exit(1)
+
+        # 4. Verify phase directory exists
         phase_dir = Path.cwd() / ".cafe" / "issues" / issue_name / phase
         if not phase_dir.exists():
             console.print(f"[red]Error: Phase directory not found: {phase_dir}[/red]")
             raise typer.Exit(1)
 
-        # 4. Get all iterations in phase
+        # 5. Get all iterations in phase
         all_iteration_dirs = sorted([d for d in phase_dir.glob("iteration_*") if d.is_dir()])
         if not all_iteration_dirs:
             console.print(f"[yellow]ℹ️  No iterations found in {phase} phase[/yellow]")
@@ -1840,7 +1875,7 @@ def reset(
             console.print(f"[yellow]ℹ️  No valid iterations found in {phase} phase[/yellow]")
             raise typer.Exit(0)
 
-        # 5. Resolve iteration number to target iteration using shared logic
+        # 6. Resolve iteration number to target iteration using shared logic
         try:
             if iteration == 0:
                 # Special case for reset: -i 0 means remove latest only
@@ -1864,7 +1899,7 @@ def reset(
             console.print(f"[yellow]ℹ️  No iterations to remove[/yellow]")
             raise typer.Exit(0)
 
-        # 6. Display confirmation prompt
+        # 7. Display confirmation prompt
         console.print()
         console.print(f"[yellow]⚠️  About to reset {phase} phase[/yellow]")
         console.print()
@@ -1890,7 +1925,7 @@ def reset(
             console.print()
             raise typer.Exit(0)
 
-        # 7. Create backup of entire issue directory
+        # 8. Create backup of entire issue directory
         try:
             console.print("[dim]Backing up issue data...[/dim]")
             archive_base = archive_path.parent
@@ -1911,7 +1946,7 @@ def reset(
             console.print()
             raise typer.Exit(1)
 
-        # 8. Remove iterations
+        # 9. Remove iterations
         try:
             console.print("[dim]Removing iterations...[/dim]")
             for iter_num in sorted(to_remove):
@@ -4463,12 +4498,16 @@ description: {description}
 # Please write the agent's code of conduct below
 # Delete this comment and write the agent's behavior guidelines and responsibilities
 #
+# IMPORTANT: Each guideline MUST start with "-" to maximize effectiveness
+#
 # Example:
 # You are a {description}.
 # Your responsibilities include:
-# - Writing clean and maintainable code
-# - Following best practices and coding standards
-# - Providing helpful and accurate responses
+# - Use camelCase for variable names (e.g., userName, not user_name)
+# - Always add JSDoc comments for public functions
+# - Prefer async/await over Promise.then() chains
+# - Write unit tests in __tests__/ directory using Jest
+# - Follow the project's existing error handling patterns
 
 """
 
