@@ -44,7 +44,15 @@ A PM clarifies intent, a Developer implements changes, and a Reviewer evaluates 
 
 Clarify requirements → Confirm implementation plan → Grab a coffee → Review the PR → Done.
 
-CAFE supports `git worktree`, enabling parallel development across multiple issues without context switching, so you can make progress while the agents work in the background.
+---
+
+### Git Worktree Support for Parallel Development
+
+CAFE supports `git worktree`, enabling parallel development across multiple issues without context switching. Each worktree operates in an isolated environment with its own configuration, allowing you to:
+
+- Work on multiple features simultaneously without stashing changes
+- Let agents work in the background while you focus on other tasks
+- Maintain separate agent configurations per task (e.g., different models for different complexity levels)
 
 ---
 
@@ -133,11 +141,16 @@ cafe --help
     You can adjust the CLI agent settings at any time using the `cafe config` command set. For example:
 
     ```bash
-    cafe config set agents.pm.cli gemini
-    cafe config set agents.pm.model gemini-2.5-flash
+    cafe config set agents.developer.cli gemini
+    cafe config set agents.developer.plan.model gemini-3-pro-preview
     ```
-    Or to edit the configuration file directly in your default editor:
 
+    To view the current configuration:
+    ```bash
+    cafe config
+    ```
+
+    Or to edit the configuration file directly in your default editor:
     ```bash
     cafe config edit
     ```
