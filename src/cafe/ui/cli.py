@@ -1811,28 +1811,29 @@ def reset(
             console.print(f"[red]Error: Failed to get current branch: {e}[/red]")
             raise typer.Exit(1)
 
-        # 2. If phase not provided, find the last phase with iterations based on end_time
+        # 2. If phase not provided, find the last phase with iterations based on end_time or timestamp
         if phase is None:
             from cafe.services.summary_service import SummaryService
             from datetime import datetime
 
             service = SummaryService()
             latest_phase = None
-            latest_end_time = None
+            latest_time = None
 
-            # Check all phases to find the one with the latest end_time
+            # Check all phases to find the one with the latest end_time (or timestamp if incomplete)
             for phase_name in VALID_PHASES:
                 iterations = service.load_iteration_statuses(issue_name, phase_name)
                 if not iterations:
                     continue
 
                 for iteration_info in iterations:
-                    end_time_str = iteration_info.get("end_time")
-                    if end_time_str:
+                    # Prefer end_time, fallback to timestamp for incomplete iterations
+                    time_str = iteration_info.get("end_time") or iteration_info.get("timestamp")
+                    if time_str:
                         try:
-                            end_time = datetime.fromisoformat(end_time_str)
-                            if latest_end_time is None or end_time > latest_end_time:
-                                latest_end_time = end_time
+                            time = datetime.fromisoformat(time_str)
+                            if latest_time is None or time > latest_time:
+                                latest_time = time
                                 latest_phase = phase_name
                         except (ValueError, TypeError):
                             continue
