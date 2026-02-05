@@ -981,7 +981,7 @@ class PRPhase(Phase):
         Returns:
             Path to saved user_input.md file if comments were saved, None if no new comments
         """
-        from cafe.utils.github import get_all_pr_comments, format_comments_for_prompt
+        from cafe.utils.github import get_all_pr_comments, format_comments_for_prompt, GitHubOps
         from datetime import datetime
         from rich.console import Console
 
@@ -1012,14 +1012,54 @@ class PRPhase(Phase):
             user_input_file = iteration_dir / "user_input.md"
             user_input_file.write_text(formatted_comments, encoding="utf-8")
 
+            # Extract and download images from PR comments
+            all_image_urls = []
+            for comment in comments:
+                image_urls = GitHubOps.extract_image_urls(comment.body)
+                all_image_urls.extend(image_urls)
+
+            # Deduplicate image URLs
+            unique_image_urls = list(set(all_image_urls))
+
+            # Download images if present
+            image_paths = []
+            if unique_image_urls:
+                images_dir = iteration_dir / "images"
+                try:
+                    gh_ops = GitHubOps()
+                    saved_paths = gh_ops.download_issue_images(unique_image_urls, images_dir)
+                    if saved_paths:
+                        console.print()
+                        console.print(f"✅ Downloaded {len(saved_paths)} image(s):")
+                        for path in saved_paths:
+                            size_bytes = path.stat().st_size
+                            if size_bytes >= 1024 * 1024:
+                                size_str = f"{size_bytes / (1024 * 1024):.1f} MB"
+                            elif size_bytes >= 1024:
+                                size_str = f"{size_bytes / 1024:.1f} KB"
+                            else:
+                                size_str = f"{size_bytes} B"
+                            console.print(f"   {path} ({size_str})")
+                            # Store relative path from iteration directory
+                            image_paths.append(f"images/{path.name}")
+                    if len(saved_paths) < len(unique_image_urls):
+                        failed_count = len(unique_image_urls) - len(saved_paths)
+                        console.print(f"⚠️  Warning: {failed_count} image(s) failed to download")
+                except Exception as e:
+                    # Don't fail the whole process if image download fails
+                    console.print(f"⚠️  Warning: Failed to download images: {e}")
+
             # Save context.json for this iteration using standardized method
-            self._update_iteration_history(
-                phase_specific_data={
-                    "pr_number": pr_number,
-                    "comment_count": len(comments),
-                    "source": "github_pr_comments",
-                },
-            )
+            phase_specific_data = {
+                "pr_number": pr_number,
+                "comment_count": len(comments),
+                "source": "github_pr_comments",
+            }
+            if image_paths:
+                phase_specific_data["image_count"] = len(image_paths)
+                phase_specific_data["image_paths"] = image_paths
+
+            self._update_iteration_history(phase_specific_data=phase_specific_data)
 
             from cafe.utils.git_utils import to_cwd_relative_path
             try:
@@ -1119,6 +1159,20 @@ class PRPhase(Phase):
         # Create prompt for agent
         checklist_instruction = format_checklist_instruction(checklist_pattern)
 
+        # Check for images
+        images_dir = iteration_dir / "images"
+        images_instruction = ""
+        if images_dir.exists() and any(images_dir.iterdir()):
+            image_files = sorted(images_dir.iterdir())
+            image_paths = []
+            for img in image_files:
+                try:
+                    image_paths.append(to_cwd_relative_path(img))
+                except (ValueError, OSError):
+                    image_paths.append(str(img.resolve()))
+            image_list = "\n".join(f"  - `{p}`" for p in image_paths)
+            images_instruction = f"\n\n**Images:** PR comments include screenshots/images. Use the Read tool to view these images for visual context:\n{image_list}"
+
         from cafe.core.status_codes import generate_status_code_prompt
         status_code_prompt = generate_status_code_prompt(
             valid_codes=[PhaseStatusCode.NEEDS_CHANGES, PhaseStatusCode.CONFIRMED],
@@ -1143,7 +1197,7 @@ Do NOT return a status code until ALL checklist items are marked as [x].
 
 **Context:**
 - PR comments file: {user_input_pattern}
-- Output file: {output_pattern}
+- Output file: {output_pattern}{images_instruction}
 
 **Output format:**
 ```markdown
