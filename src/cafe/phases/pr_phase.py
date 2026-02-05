@@ -1159,6 +1159,21 @@ class PRPhase(Phase):
         # Create prompt for agent
         checklist_instruction = format_checklist_instruction(checklist_pattern)
 
+        # Check for images
+        images_dir = iteration_dir / "images"
+        images_instruction = ""
+        if images_dir.exists() and any(images_dir.iterdir()):
+            image_files = sorted(images_dir.iterdir())
+            image_paths = []
+            for img in image_files:
+                try:
+                    image_paths.append(to_cwd_relative_path(img))
+                except (ValueError, OSError):
+                    image_paths.append(str(img.resolve()))
+            # Use comma-separated format as specified in requirements
+            image_list = ", ".join(image_paths)
+            images_instruction = f"\n- Images: {image_list}"
+
         from cafe.core.status_codes import generate_status_code_prompt
         status_code_prompt = generate_status_code_prompt(
             valid_codes=[PhaseStatusCode.NEEDS_CHANGES, PhaseStatusCode.CONFIRMED],
@@ -1183,7 +1198,7 @@ Do NOT return a status code until ALL checklist items are marked as [x].
 
 **Context:**
 - PR comments file: {user_input_pattern}
-- Output file: {output_pattern}
+- Output file: {output_pattern}{images_instruction}
 
 **Output format:**
 ```markdown
