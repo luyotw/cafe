@@ -11,6 +11,7 @@ SPEC_EXECUTION_STEPS_ITERATION_1 = """## Checklist
 
 [ ] Read {agent_file} to understand your role and native language
 [ ] Read {current_spec_file} to understand initial requirements
+[ ] If images exist in spec/images/, read and analyze them for UI/UX requirements and visual context
 [ ] Read README.md for project context
 [ ] Search codebase using Read/Grep tools to find answers before asking users
 [ ] Identify unclear areas that need clarification

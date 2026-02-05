@@ -3,6 +3,7 @@
 import json
 import re
 import subprocess
+from pathlib import Path
 from typing import Any, Dict, Optional, List
 from pydantic import BaseModel
 
@@ -266,6 +267,93 @@ class GitHubOps:
             return match.group(1)
 
         raise GitHubError(f"Invalid issue URL or number: {issue_url_or_number}")
+
+    @staticmethod
+    def extract_image_urls(body: str) -> List[str]:
+        """Extract image URLs from Markdown content.
+
+        Supports standard Markdown image syntax ![alt](url) and GitHub user-attachments format.
+
+        Args:
+            body: Markdown content
+
+        Returns:
+            List of image URLs
+        """
+        # Standard image format: ![alt](url) with common image extensions
+        standard_pattern = re.compile(
+            r'!\[[^\]]*\]\((https?://[^)]+\.(?:png|jpg|jpeg|gif|webp|svg)(?:\?[^)]*)?)\)',
+            re.IGNORECASE
+        )
+        # GitHub user-attachments format (no file extension)
+        github_assets_pattern = re.compile(
+            r'!\[[^\]]*\]\((https://github\.com/user-attachments/assets/[^)]+)\)',
+            re.IGNORECASE
+        )
+
+        urls = []
+        # Parse standard format
+        urls.extend(standard_pattern.findall(body))
+        # Parse GitHub assets format
+        urls.extend(github_assets_pattern.findall(body))
+
+        return urls
+
+    def download_issue_images(self, image_urls: List[str], save_dir: Path) -> List[Path]:
+        """Download images from issue to specified directory.
+
+        Uses gh api to download images with authentication.
+
+        Args:
+            image_urls: List of image URLs
+            save_dir: Directory path to save images
+
+        Returns:
+            List of successfully downloaded image paths
+        """
+        if not image_urls:
+            return []
+
+        # Create directory
+        save_dir.mkdir(parents=True, exist_ok=True)
+
+        saved_paths = []
+        for url in image_urls:
+            # Remove query string and extract extension and filename
+            url_path = url.split('?')[0]
+            # Get filename from last segment of URL
+            url_filename = url_path.rsplit('/', 1)[-1]
+
+            # Try to extract extension from URL
+            match = re.search(r'\.([a-zA-Z]+)$', url_path)
+            if match:
+                ext = match.group(1).lower()
+                filename = url_filename
+            else:
+                # Default to png for URLs without extension (usually GitHub assets)
+                ext = "png"
+                filename = f"{url_filename}.{ext}"
+
+            save_path = save_dir / filename
+
+            # Use gh api to download (with automatic authentication)
+            try:
+                result = subprocess.run(
+                    ["gh", "api", url, "--method", "GET"],
+                    capture_output=True,
+                    check=False,
+                )
+
+                if result.returncode == 0:
+                    save_path.write_bytes(result.stdout)
+                    saved_paths.append(save_path)
+                # Continue processing other images on failure
+
+            except (FileNotFoundError, subprocess.CalledProcessError):
+                # gh not found or execution failed, continue with other images
+                continue
+
+        return saved_paths
 
     def get_pr_for_branch(self, branch: str) -> Optional[Dict[str, Any]]:
         """Check if a PR exists for the given branch.
