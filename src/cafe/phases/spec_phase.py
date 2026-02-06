@@ -1087,25 +1087,22 @@ class SpecPhase(Phase):
                     pass
 
             # Load sync_github from spec section
-            # Priority: CLI-provided value > config value > default based on issue_id
-            if self._sync_github_explicit is not None:
-                # CLI value takes precedence
-                self._sync_github = self._sync_github_explicit
-            elif "sync_github" in spec_config:
-                # Use value from config
-                self._sync_github = bool(spec_config["sync_github"])
-            elif self._config_issue_id:
-                # Default to True if issue_id is present (backward compatibility)
-                self._sync_github = True
-            else:
-                # Default to False if no issue_id
-                self._sync_github = False
+            from cafe.utils.config import resolve_sync_github_config
+
+            self._sync_github = resolve_sync_github_config(
+                cli_value=self._sync_github_explicit,
+                config_value=bool(spec_config["sync_github"]) if "sync_github" in spec_config else None,
+                has_issue_id=bool(self._config_issue_id)
+            )
         else:
             # No config file: use CLI value if provided, otherwise default to False
-            if self._sync_github_explicit is not None:
-                self._sync_github = self._sync_github_explicit
-            else:
-                self._sync_github = False
+            from cafe.utils.config import resolve_sync_github_config
+
+            self._sync_github = resolve_sync_github_config(
+                cli_value=self._sync_github_explicit,
+                config_value=None,
+                has_issue_id=False
+            )
 
     def _save_issue_config(self) -> None:
         """Save issue configuration (issue_id, rigor, sync_github) to issue.yaml."""

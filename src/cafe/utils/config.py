@@ -26,7 +26,7 @@ def get_global_cafe_dir() -> Path:
 
 def ensure_global_directories() -> None:
     """Ensure global CAFE directories exist.
-    
+
     Creates the following directory structure:
     ~/.cafe/
     ├── agents/
@@ -38,14 +38,49 @@ def ensure_global_directories() -> None:
         └── spec/
     """
     global_dir = get_global_cafe_dir()
-    
+
     # Create agent subdirectories
     for role in ["pm", "developer", "reviewer"]:
         (global_dir / "agents" / role).mkdir(parents=True, exist_ok=True)
-    
+
     # Create template subdirectories
     for template_type in ["plan", "spec"]:
         (global_dir / "templates" / template_type).mkdir(parents=True, exist_ok=True)
+
+
+def resolve_sync_github_config(
+    cli_value: Optional[bool],
+    config_value: Optional[bool],
+    has_issue_id: bool
+) -> bool:
+    """Resolve sync_github configuration value with proper priority.
+
+    Priority order:
+    1. CLI-provided value (--sync-github/--no-sync-github)
+    2. Config file value (from issue.yaml)
+    3. Default based on issue_id presence (True if issue_id exists, False otherwise)
+
+    Args:
+        cli_value: Value from CLI flag (None if not provided)
+        config_value: Value from config file (None if not in config)
+        has_issue_id: Whether issue_id is present in config
+
+    Returns:
+        Resolved boolean value for sync_github
+    """
+    # Priority: CLI value > config value > default based on issue_id
+    if cli_value is not None:
+        # CLI value takes precedence
+        return cli_value
+    elif config_value is not None:
+        # Use value from config
+        return config_value
+    elif has_issue_id:
+        # Default to True if issue_id is present (backward compatibility)
+        return True
+    else:
+        # Default to False if no issue_id
+        return False
 
 
 class ConfigManager:
