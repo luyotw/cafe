@@ -90,18 +90,20 @@ class TestPrepareCommand:
     @patch("cafe.ui.cli.prompt_confirm")
     @patch("cafe.ui.template_selector.prompt_list")
     @patch("cafe.ui.phase_prompts.prompt_list")
+    @patch("cafe.ui.cli.prompt_list")
     @patch("cafe.ui.cli.prompt_text")
-    def test_prepare_interactive_mode(self, mock_prompt_text, mock_phase_list, mock_template_list, mock_cli_confirm, mock_phase_confirm, temp_repo_dir, mock_git_ops):
+    def test_prepare_interactive_mode(self, mock_prompt_text, mock_cli_list, mock_phase_list, mock_template_list, mock_cli_confirm, mock_phase_confirm, temp_repo_dir, mock_git_ops):
         """測試互動式輸入 issue name"""
         # Mock user inputs
         mock_prompt_text.return_value = "my-feature"
         mock_cli_confirm.return_value = False  # worktree (n)
         mock_phase_confirm.return_value = True  # pr auto_create (y)
+        mock_cli_list.return_value = "Custom configuration"  # setup mode
         mock_phase_list.side_effect = [
             "1. Manual input",  # input method (manual)
             "Medium - Balanced mode [Default]\n   • Ask important details and key scenarios\n   • Balance speed and precision\n   • Suitable for: general feature development",  # rigor
         ]
-        mock_template_list.return_value = "1. default"  # template
+        mock_template_list.return_value = "default (system default)"  # template
 
         result = runner.invoke(app, ["prepare"])
 
@@ -352,18 +354,20 @@ class TestPrepareCommandWorktree:
     @patch("cafe.ui.cli.prompt_confirm")
     @patch("cafe.ui.template_selector.prompt_list")
     @patch("cafe.ui.phase_prompts.prompt_list")
+    @patch("cafe.ui.cli.prompt_list")
     @patch("cafe.ui.cli.prompt_text")
-    def test_prepare_interactive_worktree_prompt_yes(self, mock_prompt_text, mock_phase_list, mock_template_list, mock_cli_confirm, mock_phase_confirm, temp_repo_dir, mock_git_ops):
+    def test_prepare_interactive_worktree_prompt_yes(self, mock_prompt_text, mock_cli_list, mock_phase_list, mock_template_list, mock_cli_confirm, mock_phase_confirm, temp_repo_dir, mock_git_ops):
         """測試互動模式詢問是否使用 worktree, 使用者選擇 Yes"""
         # Mock user inputs: issue name, worktree path
         mock_prompt_text.side_effect = ["my-feature", "worktrees/my-feature"]
         mock_cli_confirm.return_value = True  # worktree (y)
         mock_phase_confirm.return_value = True  # pr auto_create (y)
+        mock_cli_list.return_value = "Custom configuration"  # setup mode
         mock_phase_list.side_effect = [
             "1. Manual input",  # input method (manual)
             "Medium - Balanced mode [Default]\n   • Ask important details and key scenarios\n   • Balance speed and precision\n   • Suitable for: general feature development",  # rigor
         ]
-        mock_template_list.return_value = "1. default"
+        mock_template_list.return_value = "default (system default)"
 
         result = runner.invoke(app, ["prepare"])
 
@@ -386,18 +390,20 @@ class TestPrepareCommandWorktree:
     @patch("cafe.ui.cli.prompt_confirm")
     @patch("cafe.ui.template_selector.prompt_list")
     @patch("cafe.ui.phase_prompts.prompt_list")
+    @patch("cafe.ui.cli.prompt_list")
     @patch("cafe.ui.cli.prompt_text")
-    def test_prepare_interactive_worktree_prompt_no(self, mock_prompt_text, mock_phase_list, mock_template_list, mock_cli_confirm, mock_phase_confirm, temp_repo_dir, mock_git_ops):
+    def test_prepare_interactive_worktree_prompt_no(self, mock_prompt_text, mock_cli_list, mock_phase_list, mock_template_list, mock_cli_confirm, mock_phase_confirm, temp_repo_dir, mock_git_ops):
         """測試互動模式詢問是否使用 worktree, 使用者選擇 No"""
         # Mock user inputs
         mock_prompt_text.return_value = "normal-feature"
         mock_cli_confirm.return_value = False  # worktree (n)
         mock_phase_confirm.return_value = True  # pr auto_create (y)
+        mock_cli_list.return_value = "Custom configuration"  # setup mode
         mock_phase_list.side_effect = [
             "1. Manual input",  # input method (manual)
             "Medium - Balanced mode [Default]\n   • Ask important details and key scenarios\n   • Balance speed and precision\n   • Suitable for: general feature development",  # rigor
         ]
-        mock_template_list.return_value = "1. default"
+        mock_template_list.return_value = "default (system default)"
 
         result = runner.invoke(app, ["prepare"])
 
@@ -416,18 +422,20 @@ class TestPrepareCommandWorktree:
     @patch("cafe.ui.cli.prompt_confirm")
     @patch("cafe.ui.template_selector.prompt_list")
     @patch("cafe.ui.phase_prompts.prompt_list")
+    @patch("cafe.ui.cli.prompt_list")
     @patch("cafe.ui.cli.prompt_text")
-    def test_prepare_interactive_worktree_default_path_suggestion(self, mock_prompt_text, mock_phase_list, mock_template_list, mock_cli_confirm, mock_phase_confirm, temp_repo_dir, mock_git_ops):
+    def test_prepare_interactive_worktree_default_path_suggestion(self, mock_prompt_text, mock_cli_list, mock_phase_list, mock_template_list, mock_cli_confirm, mock_phase_confirm, temp_repo_dir, mock_git_ops):
         """測試互動模式建議預設路徑 .cafe/worktrees/{issue-name}"""
         # Mock user inputs: issue name, default path (empty string)
         mock_prompt_text.side_effect = ["test-issue", ".cafe/worktrees/test-issue"]
         mock_cli_confirm.return_value = True  # worktree (y)
         mock_phase_confirm.return_value = True  # pr auto_create (y)
+        mock_cli_list.return_value = "Custom configuration"  # setup mode
         mock_phase_list.side_effect = [
             "1. Manual input",  # input method (manual)
             "Medium - Balanced mode [Default]\n   • Ask important details and key scenarios\n   • Balance speed and precision\n   • Suitable for: general feature development",  # rigor
         ]
-        mock_template_list.return_value = "1. default"
+        mock_template_list.return_value = "default (system default)"
 
         result = runner.invoke(app, ["prepare"])
 
@@ -482,18 +490,20 @@ class TestPrepareCommandWorktree:
     @patch("cafe.ui.cli.prompt_confirm")
     @patch("cafe.ui.template_selector.prompt_list")
     @patch("cafe.ui.phase_prompts.prompt_list")
+    @patch("cafe.ui.cli.prompt_list")
     @patch("cafe.ui.cli.prompt_text")
-    def test_prepare_interactive_saves_pr_auto_create_true(self, mock_prompt_text, mock_phase_list, mock_template_list, mock_cli_confirm, mock_phase_confirm, temp_repo_dir, mock_git_ops):
+    def test_prepare_interactive_saves_pr_auto_create_true(self, mock_prompt_text, mock_cli_list, mock_phase_list, mock_template_list, mock_cli_confirm, mock_phase_confirm, temp_repo_dir, mock_git_ops):
         """測試互動模式選擇自動建立 PR (yes)"""
         # Mock user inputs
         mock_prompt_text.return_value = "test-issue"
         mock_cli_confirm.return_value = False  # worktree (n)
         mock_phase_confirm.return_value = True  # pr auto_create (y)
+        mock_cli_list.return_value = "Custom configuration"  # setup mode
         mock_phase_list.side_effect = [
             "1. Manual input",  # input method (manual)
             "Medium - Balanced mode [Default]\n   • Ask important details and key scenarios\n   • Balance speed and precision\n   • Suitable for: general feature development",  # rigor
         ]
-        mock_template_list.return_value = "1. default"
+        mock_template_list.return_value = "default (system default)"
 
         result = runner.invoke(app, ["prepare"])
 
@@ -511,18 +521,20 @@ class TestPrepareCommandWorktree:
     @patch("cafe.ui.cli.prompt_confirm")
     @patch("cafe.ui.template_selector.prompt_list")
     @patch("cafe.ui.phase_prompts.prompt_list")
+    @patch("cafe.ui.cli.prompt_list")
     @patch("cafe.ui.cli.prompt_text")
-    def test_prepare_interactive_saves_pr_auto_create_false(self, mock_prompt_text, mock_phase_list, mock_template_list, mock_cli_confirm, mock_phase_confirm, temp_repo_dir, mock_git_ops):
+    def test_prepare_interactive_saves_pr_auto_create_false(self, mock_prompt_text, mock_cli_list, mock_phase_list, mock_template_list, mock_cli_confirm, mock_phase_confirm, temp_repo_dir, mock_git_ops):
         """測試互動模式選擇不自動建立 PR (no)"""
         # Mock user inputs
         mock_prompt_text.return_value = "test-issue"
         mock_cli_confirm.return_value = False  # worktree (n)
         mock_phase_confirm.return_value = False  # pr auto_create (n)
+        mock_cli_list.return_value = "Custom configuration"  # setup mode
         mock_phase_list.side_effect = [
             "1. Manual input",  # input method (manual)
             "Medium - Balanced mode [Default]\n   • Ask important details and key scenarios\n   • Balance speed and precision\n   • Suitable for: general feature development",  # rigor
         ]
-        mock_template_list.return_value = "1. default"
+        mock_template_list.return_value = "default (system default)"
 
         result = runner.invoke(app, ["prepare"])
 
@@ -747,3 +759,157 @@ class TestPrepareSpecTemplateParameter:
             # Default is "auto"
             if "template" in config_data["spec"]:
                 assert config_data["spec"]["template"] == "auto"
+
+
+class TestPrepareCommandSetupMode:
+    """測試 prepare 命令的 Quick setup vs Custom configuration 功能"""
+
+    @patch("cafe.ui.phase_prompts.prompt_confirm")
+    @patch("cafe.ui.cli.prompt_confirm")
+    @patch("cafe.ui.template_selector.prompt_list")
+    @patch("cafe.ui.phase_prompts.prompt_list")
+    @patch("cafe.ui.cli.prompt_list")
+    @patch("cafe.ui.cli.prompt_text")
+    def test_quick_setup_skips_all_config_questions(self, mock_prompt_text, mock_cli_list, mock_phase_list, mock_template_list, mock_cli_confirm, mock_phase_confirm, temp_repo_dir, mock_git_ops):
+        """測試選擇 Quick setup 時跳過所有設定問題並套用預設值"""
+        # Mock user inputs
+        mock_prompt_text.return_value = "test-feature"
+        mock_cli_confirm.return_value = False  # worktree (n)
+        
+        # Setup mode 選擇 -> Quick setup
+        mock_cli_list.return_value = "Quick setup (use recommended defaults)"
+        
+        # 不應該再有其他的 prompt 被呼叫
+        
+        # 不應該再有其他的 prompt 被呼叫
+        
+        result = runner.invoke(app, ["prepare"])
+
+        assert result.exit_code == 0
+        
+        # 驗證設定檔包含預設值
+        config_file = temp_repo_dir / ".cafe" / "issues" / "test-feature" / "issue.yaml"
+        with open(config_file) as f:
+            config_data = yaml.safe_load(f)
+            
+            # 驗證套用預設值
+            assert config_data["spec"]["rigor"] == "medium"
+            assert config_data["spec"]["template"] == "auto"
+            assert config_data["spec"]["input_method"] == "manual"
+            assert config_data["spec"]["sync_github"] == False  # manual input -> false
+            assert config_data["plan"]["template"] == "auto"
+            assert config_data["plan"]["sync_github"] == False  # manual input -> false
+            assert config_data["pr"]["auto_create"] == True  # GitHub repo -> true
+
+        # 驗證只呼叫了設定模式選擇 (mock_cli_list)
+        mock_cli_list.assert_called_once()
+        # 驗證沒有詢問 input method, rigor (mock_phase_list 不應該被呼叫)
+        mock_phase_list.assert_not_called()
+        # 驗證沒有詢問 templates (mock_template_list 不應該被呼叫)
+        mock_template_list.assert_not_called()
+        # 驗證沒有詢問 sync 相關問題 (mock_phase_confirm 不應該被呼叫)
+        mock_phase_confirm.assert_not_called()
+
+    @patch("cafe.ui.phase_prompts.prompt_confirm")
+    @patch("cafe.ui.cli.prompt_confirm")
+    @patch("cafe.ui.template_selector.prompt_list")
+    @patch("cafe.ui.phase_prompts.prompt_list")
+    @patch("cafe.ui.cli.prompt_list")
+    @patch("cafe.ui.cli.prompt_text")
+    def test_custom_configuration_asks_all_questions(self, mock_prompt_text, mock_cli_list, mock_phase_list, mock_template_list, mock_cli_confirm, mock_phase_confirm, temp_repo_dir, mock_git_ops):
+        """測試選擇 Custom configuration 時詢問所有設定問題"""
+        # Mock user inputs
+        mock_prompt_text.return_value = "custom-feature"
+        mock_cli_confirm.return_value = False  # worktree (n)
+        mock_phase_confirm.return_value = True  # sync/pr prompts (y)
+        
+        # Setup mode 選擇 -> Custom configuration
+        mock_cli_list.return_value = "Custom configuration"
+        
+        # input method -> rigor
+        mock_phase_list.side_effect = [
+            "1. Manual input",  # input method (manual)
+            "High - Precise specification mode\n   • Ask all details and edge cases\n   • Ensure requirements are testable, no ambiguity\n   • Suitable for: core features, API design, external products",  # rigor
+        ]
+        mock_template_list.return_value = "default (system default)"  # template selector parses this
+
+        result = runner.invoke(app, ["prepare"])
+
+        assert result.exit_code == 0
+        
+        # 驗證設定檔包含使用者選擇
+        config_file = temp_repo_dir / ".cafe" / "issues" / "custom-feature" / "issue.yaml"
+        with open(config_file) as f:
+            config_data = yaml.safe_load(f)
+            
+            # 驗證使用者選擇的值
+            assert config_data["spec"]["rigor"] == "high"
+            assert config_data["spec"]["template"] == "default"
+            assert config_data["plan"]["template"] == "default"
+
+        # 驗證詢問了設定模式
+        mock_cli_list.assert_called_once()
+        # 驗證詢問了 input method、rigor (2 個 prompt_list)
+        assert mock_phase_list.call_count == 2
+        # 驗證詢問了 templates (2 次：spec 和 plan)
+        assert mock_template_list.call_count == 2
+
+    @patch("cafe.ui.phase_prompts.prompt_confirm")
+    @patch("cafe.ui.cli.prompt_confirm")
+    @patch("cafe.ui.template_selector.prompt_list")
+    @patch("cafe.ui.phase_prompts.prompt_list")
+    @patch("cafe.ui.cli.prompt_list")
+    @patch("cafe.ui.cli.prompt_text")
+    def test_quick_setup_displays_default_values_summary(self, mock_prompt_text, mock_cli_list, mock_phase_list, mock_template_list, mock_cli_confirm, mock_phase_confirm, temp_repo_dir, mock_git_ops):
+        """測試 Quick setup 顯示預設值摘要"""
+        # Mock user inputs
+        mock_prompt_text.return_value = "summary-test"
+        mock_cli_confirm.return_value = False  # worktree (n)
+        
+        mock_cli_list.return_value = "Quick setup (use recommended defaults)"
+
+        result = runner.invoke(app, ["prepare"])
+
+        assert result.exit_code == 0
+        
+        # 驗證輸出包含預設值摘要資訊
+        assert "Quick setup" in result.stdout or "default" in result.stdout.lower() or "recommended" in result.stdout.lower()
+
+    def test_non_interactive_mode_not_affected_by_setup_mode(self, temp_repo_dir, mock_git_ops):
+        """測試 non-interactive mode 不受設定模式影響"""
+        result = runner.invoke(app, [
+            "prepare", "non-interactive-test",
+            "--no-interactive",
+            "--input-method=manual",
+            "--rigor=low",
+            "--spec-template=auto",
+            "--plan-template=default"
+        ])
+
+        assert result.exit_code == 0
+        
+        # 驗證設定檔使用 CLI 參數的值
+        config_file = temp_repo_dir / ".cafe" / "issues" / "non-interactive-test" / "issue.yaml"
+        with open(config_file) as f:
+            config_data = yaml.safe_load(f)
+            
+            assert config_data["spec"]["rigor"] == "low"
+            assert config_data["spec"]["template"] == "auto"
+            assert config_data["plan"]["template"] == "default"
+
+    def test_issue_name_argument_skips_setup_mode_prompt(self, temp_repo_dir, mock_git_ops):
+        """測試提供 issue name 參數時不顯示設定模式提示（向後相容）"""
+        result = runner.invoke(app, ["prepare", "backward-compat-test"])
+
+        assert result.exit_code == 0
+        
+        # 不應該詢問設定模式，直接使用舊的行為
+        # 驗證不會產生 spec/plan 設定（舊行為）
+        config_file = temp_repo_dir / ".cafe" / "issues" / "backward-compat-test" / "issue.yaml"
+        with open(config_file) as f:
+            config_data = yaml.safe_load(f)
+            
+            # 舊行為：不儲存 spec/plan 設定
+            assert "spec" not in config_data
+            assert "plan" not in config_data
+            assert "pr" not in config_data

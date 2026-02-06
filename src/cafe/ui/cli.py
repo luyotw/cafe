@@ -999,86 +999,132 @@ def prepare(
             display = Display()
             github_ops = GitHubOps()
 
-            # Prompt for input method and issue ID (only for GitHub repos)
-            from cafe.utils.git_utils import is_github_repo
-
-            if is_github_repo():
-                input_method, issue_id = prompt_for_input_method(display, github_ops)
-                spec_config["input_method"] = input_method
-                if issue_id is not None:
-                    spec_config["issue_id"] = str(issue_id)
-
-                    # Prompt for sync settings (only when issue_id is present)
-                    console.print()
-                    sync_spec = prompt_confirm(
-                        "Sync spec to GitHub issue when confirmed?",
-                        default=True
-                    )
-                    spec_config["sync_github"] = sync_spec
-
-                    console.print()
-                    sync_plan = prompt_confirm(
-                        "Sync plan to GitHub issue when confirmed?",
-                        default=True
-                    )
-                    plan_config["sync_github"] = sync_plan
-                    console.print()
-            else:
-                # Non-GitHub repo: use manual input only
+            # Prompt for setup mode: Quick setup vs Custom configuration
+            setup_mode_choices = [
+                "Quick setup (use recommended defaults)",
+                "Custom configuration",
+            ]
+            setup_mode_choice = prompt_list(
+                message="Choose setup mode:",
+                choices=setup_mode_choices,
+                default=setup_mode_choices[0],
+            )
+            
+            use_quick_setup = setup_mode_choice.startswith("Quick setup")
+            
+            if use_quick_setup:
+                # Quick setup: Apply default values without prompting
+                from cafe.utils.git_utils import is_github_repo
+                
+                # Default values
+                spec_config["rigor"] = "medium"
+                spec_config["template"] = "auto"
+                plan_config["template"] = "auto"
+                
+                # For quick setup, always default to manual input (safest default)
                 spec_config["input_method"] = "manual"
-
-            # Prompt for rigor level
-            rigor = prompt_for_rigor(display)
-            spec_config["rigor"] = rigor
-
-            # Prompt for spec template
-            spec_template_manager = TemplateManager(template_type="spec")
-            spec_templates_with_source = spec_template_manager.list_templates()
-            spec_templates = [name for name, _ in spec_templates_with_source]
-
-            if spec_templates:
+                spec_config["sync_github"] = False  # Manual input -> no sync
+                plan_config["sync_github"] = False  # Manual input -> no sync
+                
+                # Auto create PR depends on whether it's a GitHub repo
+                if is_github_repo():
+                    pr_config["auto_create"] = True
+                else:
+                    pr_config["auto_create"] = False
+                
+                # Display default values summary
                 console.print()
-                console.print("[bold cyan]Please select a spec template:[/bold cyan]")
-                spec_template_paths = {
-                    name: spec_template_manager.get_template_path(name) for name in spec_templates
-                }
-                selected_spec_template = select_template(
-                    spec_templates, spec_template_paths, spec_templates_with_source
-                )
-                if selected_spec_template:
-                    spec_config["template"] = selected_spec_template
-
-            # Prompt for plan template
-            plan_template_manager = TemplateManager(template_type="plan")
-            plan_templates_with_source = plan_template_manager.list_templates()
-            plan_templates = [name for name, _ in plan_templates_with_source]
-
-            if plan_templates:
+                console.print("[green]✓ Quick setup applied with recommended defaults:[/green]")
+                console.print(f"  • Rigor level: {spec_config['rigor']}")
+                console.print(f"  • Spec template: {spec_config['template']}")
+                console.print(f"  • Plan template: {plan_config['template']}")
+                console.print(f"  • Input method: {spec_config['input_method']}")
+                if is_github_repo():
+                    console.print(f"  • Sync to GitHub: {spec_config.get('sync_github', False)}")
+                    console.print(f"  • Auto create PR: {pr_config.get('auto_create', False)}")
                 console.print()
-                console.print("[bold cyan]Please select a plan template:[/bold cyan]")
-                plan_template_paths = {
-                    name: plan_template_manager.get_template_path(name) for name in plan_templates
-                }
-                selected_plan_template = select_template(
-                    plan_templates, plan_template_paths, plan_templates_with_source
-                )
-                if selected_plan_template:
-                    plan_config["template"] = selected_plan_template
             else:
-                console.print()
-                console.print(
-                    "[yellow]⚠️  No plan templates found. Using default template.[/yellow]"
-                )
-                console.print(
-                    "[dim]    Tip: Use 'cafe template add <source> <name>' to add templates.[/dim]"
-                )
+                # Custom configuration: Prompt for all settings
+                # Prompt for input method and issue ID (only for GitHub repos)
+                from cafe.utils.git_utils import is_github_repo
 
-            # Prompt for PR auto-create setting (only for GitHub repos)
-            from cafe.ui.phase_prompts import prompt_and_save_auto_create
+                if is_github_repo():
+                    input_method, issue_id = prompt_for_input_method(display, github_ops)
+                    spec_config["input_method"] = input_method
+                    if issue_id is not None:
+                        spec_config["issue_id"] = str(issue_id)
 
-            config_file = Path(".cafe") / "issues" / issue_name / "issue.yaml"
-            auto_create_pr_result = prompt_and_save_auto_create(config_file, "pr.auto_create")
-            pr_config["auto_create"] = auto_create_pr_result
+                        # Prompt for sync settings (only when issue_id is present)
+                        console.print()
+                        sync_spec = prompt_confirm(
+                            "Sync spec to GitHub issue when confirmed?",
+                            default=True
+                        )
+                        spec_config["sync_github"] = sync_spec
+
+                        console.print()
+                        sync_plan = prompt_confirm(
+                            "Sync plan to GitHub issue when confirmed?",
+                            default=True
+                        )
+                        plan_config["sync_github"] = sync_plan
+                        console.print()
+                else:
+                    # Non-GitHub repo: use manual input only
+                    spec_config["input_method"] = "manual"
+
+                # Prompt for rigor level
+                rigor = prompt_for_rigor(display)
+                spec_config["rigor"] = rigor
+
+                # Prompt for spec template
+                spec_template_manager = TemplateManager(template_type="spec")
+                spec_templates_with_source = spec_template_manager.list_templates()
+                spec_templates = [name for name, _ in spec_templates_with_source]
+
+                if spec_templates:
+                    console.print()
+                    console.print("[bold cyan]Please select a spec template:[/bold cyan]")
+                    spec_template_paths = {
+                        name: spec_template_manager.get_template_path(name) for name in spec_templates
+                    }
+                    selected_spec_template = select_template(
+                        spec_templates, spec_template_paths, spec_templates_with_source
+                    )
+                    if selected_spec_template:
+                        spec_config["template"] = selected_spec_template
+
+                # Prompt for plan template
+                plan_template_manager = TemplateManager(template_type="plan")
+                plan_templates_with_source = plan_template_manager.list_templates()
+                plan_templates = [name for name, _ in plan_templates_with_source]
+
+                if plan_templates:
+                    console.print()
+                    console.print("[bold cyan]Please select a plan template:[/bold cyan]")
+                    plan_template_paths = {
+                        name: plan_template_manager.get_template_path(name) for name in plan_templates
+                    }
+                    selected_plan_template = select_template(
+                        plan_templates, plan_template_paths, plan_templates_with_source
+                    )
+                    if selected_plan_template:
+                        plan_config["template"] = selected_plan_template
+                else:
+                    console.print()
+                    console.print(
+                        "[yellow]⚠️  No plan templates found. Using default template.[/yellow]"
+                    )
+                    console.print(
+                        "[dim]    Tip: Use 'cafe template add <source> <name>' to add templates.[/dim]"
+                    )
+
+                # Prompt for PR auto-create setting (only for GitHub repos)
+                from cafe.ui.phase_prompts import prompt_and_save_auto_create
+
+                config_file = Path(".cafe") / "issues" / issue_name / "issue.yaml"
+                auto_create_pr_result = prompt_and_save_auto_create(config_file, "pr.auto_create")
+                pr_config["auto_create"] = auto_create_pr_result
         elif not interactive:
             # Explicit non-interactive mode (--no-interactive): use CLI parameters
             from cafe.utils.git_utils import is_github_repo

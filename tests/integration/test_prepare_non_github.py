@@ -59,17 +59,19 @@ class TestPrepareNonGitHubRepo:
     @patch("cafe.ui.cli.prompt_confirm")
     @patch("cafe.ui.template_selector.prompt_list")
     @patch("cafe.ui.phase_prompts.prompt_list")
+    @patch("cafe.ui.cli.prompt_list")
     @patch("cafe.ui.cli.prompt_text")
     def test_prepare_non_github_repo_interactive_skips_input_method_prompt(
-        self, mock_prompt_text, mock_phase_list, mock_template_list, mock_prompt_confirm, temp_repo_dir, mock_git_ops_non_github
+        self, mock_prompt_text, mock_cli_list, mock_phase_list, mock_template_list, mock_prompt_confirm, temp_repo_dir, mock_git_ops_non_github
     ):
         """測試在非 GitHub repo 中執行 prepare 會自動設定 spec.input_method 為 manual."""
         # Mock user inputs: issue name, worktree (n), rigor, template
         # Note: Should NOT ask for input method or PR auto-create in non-GitHub repos
         mock_prompt_text.return_value = "test-issue"
         mock_prompt_confirm.return_value = False  # worktree (n)
+        mock_cli_list.return_value = "Custom configuration"  # setup mode
         mock_phase_list.return_value = "Medium - Balanced mode [Default]\n   • Ask important details and key scenarios\n   • Balance speed and precision\n   • Suitable for: general feature development"
-        mock_template_list.return_value = "1. default"
+        mock_template_list.return_value = "default (system default)"
 
         result = runner.invoke(app, ["prepare"])
 
@@ -91,16 +93,18 @@ class TestPrepareNonGitHubRepo:
     @patch("cafe.ui.cli.prompt_confirm")
     @patch("cafe.ui.template_selector.prompt_list")
     @patch("cafe.ui.phase_prompts.prompt_list")
+    @patch("cafe.ui.cli.prompt_list")
     @patch("cafe.ui.cli.prompt_text")
     def test_prepare_non_github_repo_sets_pr_auto_create_false(
-        self, mock_prompt_text, mock_phase_list, mock_template_list, mock_prompt_confirm, temp_repo_dir, mock_git_ops_non_github
+        self, mock_prompt_text, mock_cli_list, mock_phase_list, mock_template_list, mock_prompt_confirm, temp_repo_dir, mock_git_ops_non_github
     ):
         """測試在非 GitHub repo 中執行 prepare 會自動設定 pr.auto_create 為 False."""
         # Mock user inputs
         mock_prompt_text.return_value = "my-feature"
         mock_prompt_confirm.return_value = False  # worktree (n)
+        mock_cli_list.return_value = "Custom configuration"  # setup mode
         mock_phase_list.return_value = "Medium - Balanced mode [Default]\n   • Ask important details and key scenarios\n   • Balance speed and precision\n   • Suitable for: general feature development"
-        mock_template_list.return_value = "1. default"
+        mock_template_list.return_value = "default (system default)"
 
         result = runner.invoke(app, ["prepare"])
 
@@ -168,21 +172,23 @@ class TestPrepareGitHubRepo:
     @patch("cafe.ui.cli.prompt_confirm")
     @patch("cafe.ui.template_selector.prompt_list")
     @patch("cafe.ui.phase_prompts.prompt_list")
+    @patch("cafe.ui.cli.prompt_list")
     @patch("cafe.ui.cli.prompt_text")
     def test_prepare_github_repo_interactive_asks_input_method(
-        self, mock_prompt_text, mock_phase_list, mock_template_list, mock_cli_confirm, mock_phase_confirm, temp_repo_dir, mock_git_ops_github
+        self, mock_prompt_text, mock_cli_list, mock_phase_list, mock_template_list, mock_cli_confirm, mock_phase_confirm, temp_repo_dir, mock_git_ops_github
     ):
         """測試在 GitHub repo 中執行 prepare 會詢問 input method."""
         # Mock user inputs: issue name, worktree (n), input method (manual), rigor, template, pr (y)
         mock_prompt_text.return_value = "gh-issue"
         mock_cli_confirm.return_value = False  # worktree (n)
         mock_phase_confirm.return_value = True  # pr (y)
+        mock_cli_list.return_value = "Custom configuration"  # setup mode
         # Note: phase_prompts has input method selection too, need to handle both
         mock_phase_list.side_effect = [
             "1. Manual input",  # input method
             "Medium - Balanced mode [Default]\n   • Ask important details and key scenarios\n   • Balance speed and precision\n   • Suitable for: general feature development",  # rigor
         ]
-        mock_template_list.return_value = "1. default"  # template
+        mock_template_list.return_value = "default (system default)"  # template
 
         result = runner.invoke(app, ["prepare"])
 
