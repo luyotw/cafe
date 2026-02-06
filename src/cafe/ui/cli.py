@@ -805,6 +805,16 @@ def prepare(
         "--auto-create-pr/--no-auto-create-pr",
         help="Automatically create PR after development (default: False, GitHub repos only)",
     ),
+    sync_spec_github: Optional[bool] = typer.Option(
+        None,
+        "--sync-spec-github/--no-sync-spec-github",
+        help="Sync spec to GitHub issue when confirmed (default: auto-detect based on issue_id)",
+    ),
+    sync_plan_github: Optional[bool] = typer.Option(
+        None,
+        "--sync-plan-github/--no-sync-plan-github",
+        help="Sync plan to GitHub issue when confirmed (default: auto-detect based on issue_id)",
+    ),
 ) -> None:
     """Prepare issue environment (directory, config, git branch) before running spec phase.
 
@@ -997,6 +1007,22 @@ def prepare(
                 spec_config["input_method"] = input_method
                 if issue_id is not None:
                     spec_config["issue_id"] = str(issue_id)
+
+                    # Prompt for sync settings (only when issue_id is present)
+                    console.print()
+                    sync_spec = prompt_confirm(
+                        "Sync spec to GitHub issue when confirmed?",
+                        default=True
+                    )
+                    spec_config["sync_github"] = sync_spec
+
+                    console.print()
+                    sync_plan = prompt_confirm(
+                        "Sync plan to GitHub issue when confirmed?",
+                        default=True
+                    )
+                    plan_config["sync_github"] = sync_plan
+                    console.print()
             else:
                 # Non-GitHub repo: use manual input only
                 spec_config["input_method"] = "manual"
@@ -1064,10 +1090,14 @@ def prepare(
             spec_config["rigor"] = rigor
             if spec_template:
                 spec_config["template"] = spec_template
+            if sync_spec_github is not None:
+                spec_config["sync_github"] = sync_spec_github
 
             # Plan config
             if plan_template:
                 plan_config["template"] = plan_template
+            if sync_plan_github is not None:
+                plan_config["sync_github"] = sync_plan_github
 
             # PR config (only for GitHub repos)
             if is_github_repo() and auto_create_pr:
@@ -2101,6 +2131,11 @@ def spec(
         "--template",
         help="Spec template name (default: auto, reads from issue.yaml if present)",
     ),
+    sync_github: Optional[bool] = typer.Option(
+        None,
+        "--sync-github/--no-sync-github",
+        help="Sync spec to GitHub issue when confirmed (default: auto-detect based on issue_id)",
+    ),
 ) -> None:
     """Run specification phase: Spec clarification with conversational generation.
 
@@ -2272,6 +2307,7 @@ def spec(
             fetch_issue_id=fetch_issue_id,
             template_path=spec_template_path,
             template_mode=template_mode,
+            sync_github=sync_github,
         )
 
         console.print("[bold]Starting conversational spec generation...[/bold]")
@@ -2446,6 +2482,11 @@ def plan(
         False,
         "--auto",
         help="Auto mode: automatically continue iterations until CAFE_CONFIRMED",
+    ),
+    sync_github: Optional[bool] = typer.Option(
+        None,
+        "--sync-github/--no-sync-github",
+        help="Sync plan to GitHub issue when confirmed (default: auto-detect based on issue_id)",
     ),
 ) -> None:
     """Run plan phase: Implementation planning with developer agent.
@@ -2631,6 +2672,7 @@ def plan(
             interactive=interactive,
             template_path=template_path_str,
             template_mode=template_mode,  # Pass template mode to plan phase
+            sync_github=sync_github,
         )
 
         # Determine if should be interactive

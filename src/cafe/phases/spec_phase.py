@@ -73,6 +73,7 @@ class SpecPhase(Phase):
         spec_file: Optional[str] = None,  # Deprecated: kept for backward compatibility
         template_path: Optional[Path] = None,
         template_mode: str = "auto",
+        sync_github: Optional[bool] = None,
     ) -> None:
         """Initialize requirements phase.
 
@@ -89,6 +90,7 @@ class SpecPhase(Phase):
             spec_file: (Deprecated) Spec file path - ignored, kept for backward compatibility
             template_path: Path to spec template file (optional)
             template_mode: Template selection mode ('auto' or 'manual', default: 'auto')
+            sync_github: Whether to sync to GitHub (None=use config default based on issue_id presence)
         """
         super().__init__(interactive=interactive, git_ops=git_ops)
 
@@ -110,6 +112,10 @@ class SpecPhase(Phase):
         else:
             self.rigor = SpecRigor.MEDIUM  # Default, will prompt if interactive
             self._rigor_explicitly_set = False
+
+        # Track sync_github setting (resolved at load time if None)
+        self._sync_github_explicit = sync_github  # Store CLI-provided value
+        self._sync_github: bool = False  # Default, will be set by _load_issue_config()
 
         self.iteration = 0
 
@@ -329,8 +335,9 @@ class SpecPhase(Phase):
                 if prev_spec_path.exists():
                     prev_spec_file = str(prev_spec_path)
 
-            # Define basic principles
-            basic_principles = """- Write analysis results in your native language
+            # Define basic principles (language selection is dynamic based on sync setting)
+            language_instruction = "the original requirement's language" if self._sync_github else "your native language"
+            basic_principles = f"""- Write analysis results in {language_instruction}
 - Do not include technical details (implementation, architecture, languages, frameworks, databases)
 - You may provide 2-3 high-level approach options for the user to consider, but avoid prescribing specific technical solutions
 - Treat users as stakeholders unfamiliar with implementation - do NOT ask "how is this currently implemented" or "how should this be implemented"; instead, note such questions in the spec for developers"""
@@ -568,10 +575,11 @@ class SpecPhase(Phase):
             )
 
             # If user confirmed (returned PhaseResult with CONFIRMED status),
-            # sync spec to GitHub before returning
+            # sync spec to GitHub before returning (if sync is enabled)
             if isinstance(result_or_input, PhaseResult):
                 if result_or_input.data.get("status_code") == PhaseStatusCode.CONFIRMED.value:
-                    self._sync_confirmed_spec_to_github()
+                    if self._sync_github:
+                        self._sync_confirmed_spec_to_github()
 
             return result_or_input
 
@@ -1049,7 +1057,7 @@ class SpecPhase(Phase):
         return base_prompt
 
     def _load_issue_config(self) -> None:
-        """Load issue configuration (issue_id, rigor, input_method) from issue.yaml if exists."""
+        """Load issue configuration (issue_id, rigor, input_method, sync_github) from issue.yaml if exists."""
         from cafe.core.types import SpecRigor
 
         # Path: .cafe/issues/{issue_name}/issue.yaml
@@ -1063,11 +1071,12 @@ class SpecPhase(Phase):
             # Load input_method and issue_id from spec section
             if "input_method" in spec_config:
                 self._config_input_method = spec_config["input_method"]
-                # If method is github, also load issue_id
-                if spec_config.get("issue_id"):
-                    self._config_issue_id = int(spec_config["issue_id"])
-                    # Set _fetched_issue_id for sync functionality
-                    self._fetched_issue_id = str(spec_config["issue_id"])
+
+            # Load issue_id if present (independent of input_method)
+            if spec_config.get("issue_id"):
+                self._config_issue_id = int(spec_config["issue_id"])
+                # Set _fetched_issue_id for sync functionality
+                self._fetched_issue_id = str(spec_config["issue_id"])
 
             # Load rigor from spec section
             if "rigor" in spec_config and not self._rigor_explicitly_set:
@@ -1077,8 +1086,26 @@ class SpecPhase(Phase):
                     # Invalid rigor value in config, use default
                     pass
 
+            # Load sync_github from spec section
+            from cafe.utils.config import resolve_sync_github_config
+
+            self._sync_github = resolve_sync_github_config(
+                cli_value=self._sync_github_explicit,
+                config_value=bool(spec_config["sync_github"]) if "sync_github" in spec_config else None,
+                has_issue_id=bool(self._config_issue_id)
+            )
+        else:
+            # No config file: use CLI value if provided, otherwise default to False
+            from cafe.utils.config import resolve_sync_github_config
+
+            self._sync_github = resolve_sync_github_config(
+                cli_value=self._sync_github_explicit,
+                config_value=None,
+                has_issue_id=False
+            )
+
     def _save_issue_config(self) -> None:
-        """Save issue configuration (issue_id, rigor) to issue.yaml."""
+        """Save issue configuration (issue_id, rigor, sync_github) to issue.yaml."""
         # Path: .cafe/issues/{issue_name}/issue.yaml
         config_file = self.issue_dir / "issue.yaml"
 
@@ -1099,6 +1126,9 @@ class SpecPhase(Phase):
 
         # Always save rigor (even if it's the default) so subsequent iterations use the same value
         config_data["spec"]["rigor"] = self.rigor.value
+
+        # Save sync_github setting
+        config_data["spec"]["sync_github"] = self._sync_github
 
         # Write config
         self._write_issue_config(config_file, config_data)
