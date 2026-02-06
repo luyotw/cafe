@@ -5,6 +5,4 @@
 .pytest_cache/
 .coverage
 .cafe
-MagicMock
-pr/
 dist/
