@@ -1016,11 +1016,13 @@ def prepare(
                     )
                     spec_config["sync_github"] = sync_spec
 
+                    console.print()
                     sync_plan = prompt_confirm(
                         "Sync plan to GitHub issue when confirmed?",
                         default=True
                     )
                     plan_config["sync_github"] = sync_plan
+                    console.print()
             else:
                 # Non-GitHub repo: use manual input only
                 spec_config["input_method"] = "manual"
