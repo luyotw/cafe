@@ -73,6 +73,7 @@ class SpecPhase(Phase):
         spec_file: Optional[str] = None,  # Deprecated: kept for backward compatibility
         template_path: Optional[Path] = None,
         template_mode: str = "auto",
+        sync_github: Optional[bool] = None,
     ) -> None:
         """Initialize requirements phase.
 
@@ -89,6 +90,7 @@ class SpecPhase(Phase):
             spec_file: (Deprecated) Spec file path - ignored, kept for backward compatibility
             template_path: Path to spec template file (optional)
             template_mode: Template selection mode ('auto' or 'manual', default: 'auto')
+            sync_github: Whether to sync to GitHub (None=use config default based on issue_id presence)
         """
         super().__init__(interactive=interactive, git_ops=git_ops)
 
@@ -110,6 +112,10 @@ class SpecPhase(Phase):
         else:
             self.rigor = SpecRigor.MEDIUM  # Default, will prompt if interactive
             self._rigor_explicitly_set = False
+
+        # Track sync_github setting (resolved at load time if None)
+        self._sync_github_explicit = sync_github  # Store CLI-provided value
+        self._sync_github: bool = False  # Default, will be set by _load_issue_config()
 
         self.iteration = 0
 
@@ -568,10 +574,11 @@ class SpecPhase(Phase):
             )
 
             # If user confirmed (returned PhaseResult with CONFIRMED status),
-            # sync spec to GitHub before returning
+            # sync spec to GitHub before returning (if sync is enabled)
             if isinstance(result_or_input, PhaseResult):
                 if result_or_input.data.get("status_code") == PhaseStatusCode.CONFIRMED.value:
-                    self._sync_confirmed_spec_to_github()
+                    if self._sync_github:
+                        self._sync_confirmed_spec_to_github()
 
             return result_or_input
 
@@ -1049,7 +1056,7 @@ class SpecPhase(Phase):
         return base_prompt
 
     def _load_issue_config(self) -> None:
-        """Load issue configuration (issue_id, rigor, input_method) from issue.yaml if exists."""
+        """Load issue configuration (issue_id, rigor, input_method, sync_github) from issue.yaml if exists."""
         from cafe.core.types import SpecRigor
 
         # Path: .cafe/issues/{issue_name}/issue.yaml
@@ -1063,11 +1070,12 @@ class SpecPhase(Phase):
             # Load input_method and issue_id from spec section
             if "input_method" in spec_config:
                 self._config_input_method = spec_config["input_method"]
-                # If method is github, also load issue_id
-                if spec_config.get("issue_id"):
-                    self._config_issue_id = int(spec_config["issue_id"])
-                    # Set _fetched_issue_id for sync functionality
-                    self._fetched_issue_id = str(spec_config["issue_id"])
+
+            # Load issue_id if present (independent of input_method)
+            if spec_config.get("issue_id"):
+                self._config_issue_id = int(spec_config["issue_id"])
+                # Set _fetched_issue_id for sync functionality
+                self._fetched_issue_id = str(spec_config["issue_id"])
 
             # Load rigor from spec section
             if "rigor" in spec_config and not self._rigor_explicitly_set:
@@ -1077,8 +1085,29 @@ class SpecPhase(Phase):
                     # Invalid rigor value in config, use default
                     pass
 
+            # Load sync_github from spec section
+            # Priority: CLI-provided value > config value > default based on issue_id
+            if self._sync_github_explicit is not None:
+                # CLI value takes precedence
+                self._sync_github = self._sync_github_explicit
+            elif "sync_github" in spec_config:
+                # Use value from config
+                self._sync_github = bool(spec_config["sync_github"])
+            elif self._config_issue_id:
+                # Default to True if issue_id is present (backward compatibility)
+                self._sync_github = True
+            else:
+                # Default to False if no issue_id
+                self._sync_github = False
+        else:
+            # No config file: use CLI value if provided, otherwise default to False
+            if self._sync_github_explicit is not None:
+                self._sync_github = self._sync_github_explicit
+            else:
+                self._sync_github = False
+
     def _save_issue_config(self) -> None:
-        """Save issue configuration (issue_id, rigor) to issue.yaml."""
+        """Save issue configuration (issue_id, rigor, sync_github) to issue.yaml."""
         # Path: .cafe/issues/{issue_name}/issue.yaml
         config_file = self.issue_dir / "issue.yaml"
 
@@ -1099,6 +1128,9 @@ class SpecPhase(Phase):
 
         # Always save rigor (even if it's the default) so subsequent iterations use the same value
         config_data["spec"]["rigor"] = self.rigor.value
+
+        # Save sync_github setting
+        config_data["spec"]["sync_github"] = self._sync_github
 
         # Write config
         self._write_issue_config(config_file, config_data)

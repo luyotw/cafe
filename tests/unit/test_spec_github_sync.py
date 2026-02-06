@@ -157,6 +157,7 @@ class TestConfirmedSyncInWorkflow:
         spec_content = "# Final Spec\n\nConfirmed requirements"
         Path(spec_phase.spec_file).write_text(spec_content)
         spec_phase._config_issue_id = "123"
+        spec_phase._sync_github = True  # Enable sync for this test
         spec_phase.iteration = 2
         
         # Execute: Simulate user confirming
