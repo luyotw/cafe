@@ -35,6 +35,7 @@ class PlanPhase(Phase):
         template_path: Optional[str] = None,
         template_mode: str = "auto",
         user_input: str = "",
+        sync_github: Optional[bool] = None,
     ) -> None:
         """Initialize plan phase.
 
@@ -49,6 +50,7 @@ class PlanPhase(Phase):
             template_mode: Template selection mode ('auto' or 'manual', default: 'auto')
             interactive: Whether to allow interactive prompts (default: True)
             user_input: User input for non-interactive mode (default: "")
+            sync_github: Whether to sync to GitHub (None=use config default based on issue_id presence)
         """
         super().__init__(interactive=interactive, git_ops=git_ops)
 
@@ -63,6 +65,10 @@ class PlanPhase(Phase):
         self.iteration = 0
         self.phase_name = "plan"  # For base class progress tracking
 
+        # Track sync_github setting (resolved at load time if None)
+        self._sync_github_explicit = sync_github  # Store CLI-provided value
+        self._sync_github: bool = False  # Default, will be set by _load_plan_config()
+
         # Determine issue name for history tracking (issue_dir is set by base class)
         if issue_name:
             self.issue_name = issue_name
@@ -70,7 +76,7 @@ class PlanPhase(Phase):
             # Derive from current branch name (via issue_dir)
             self.issue_name = self.issue_dir.name
 
-        # Load template from config if not explicitly provided
+        # Load template and sync_github from config if not explicitly provided
         self._load_plan_config()
 
         # Phase directory for plan phase (for versioned files)
@@ -596,10 +602,11 @@ Continue analyzing the latest version of {spec_file_path}.
             )
             
             # If user confirmed (returned PhaseResult with CONFIRMED status),
-            # sync plan to GitHub before returning
+            # sync plan to GitHub before returning (if sync is enabled)
             if isinstance(result_or_input, PhaseResult):
                 if result_or_input.data.get("status_code") == PhaseStatusCode.CONFIRMED.value:
-                    self._sync_plan_to_github()
+                    if self._sync_github:
+                        self._sync_plan_to_github()
 
             return result_or_input
 
@@ -667,11 +674,7 @@ Please only return one status code (e.g., CAFE_READY_FOR_REVIEW) without any oth
         return [Path(plan_file)] if Path(plan_file).exists() else []
 
     def _load_plan_config(self) -> None:
-        """Load plan configuration (template) from issue.yaml if exists."""
-        # If template_path is already explicitly provided, don't override it
-        if self.template_path:
-            return
-
+        """Load plan configuration (template, sync_github) from issue.yaml if exists."""
         # Path: .cafe/issues/{issue_name}/issue.yaml
         config_file = self.issue_dir / "issue.yaml"
 
@@ -679,8 +682,10 @@ Please only return one status code (e.g., CAFE_READY_FOR_REVIEW) without any oth
         if config_data:
             # Load from plan section if exists
             plan_config = config_data.get("plan", {})
+            spec_config = config_data.get("spec", {})
 
-            if "template" in plan_config:
+            # Load template if not explicitly provided
+            if not self.template_path and "template" in plan_config:
                 template_name = plan_config["template"]
                 # If template is 'auto', set template_mode and skip path resolution
                 if template_name == "auto":
@@ -694,6 +699,27 @@ Please only return one status code (e.g., CAFE_READY_FOR_REVIEW) without any oth
                     if template_path and template_path.exists():
                         self.template_path = str(template_path)
                         self.template_mode = "manual"
+
+            # Load sync_github from plan section
+            # Priority: CLI-provided value > config value > default based on issue_id
+            if self._sync_github_explicit is not None:
+                # CLI value takes precedence
+                self._sync_github = self._sync_github_explicit
+            elif "sync_github" in plan_config:
+                # Use value from config
+                self._sync_github = bool(plan_config["sync_github"])
+            elif spec_config.get("issue_id"):
+                # Default to True if issue_id is present (backward compatibility)
+                self._sync_github = True
+            else:
+                # Default to False if no issue_id
+                self._sync_github = False
+        else:
+            # No config file: use CLI value if provided, otherwise default to False
+            if self._sync_github_explicit is not None:
+                self._sync_github = self._sync_github_explicit
+            else:
+                self._sync_github = False
 
     def _sync_plan_to_github(self) -> None:
         """Sync confirmed plan to GitHub issue as a comment.
