@@ -335,8 +335,9 @@ class SpecPhase(Phase):
                 if prev_spec_path.exists():
                     prev_spec_file = str(prev_spec_path)
 
-            # Define basic principles
-            basic_principles = """- Write analysis results in your native language
+            # Define basic principles (language selection is dynamic based on sync setting)
+            language_instruction = "the original requirement's language" if self._sync_github else "your native language"
+            basic_principles = f"""- Write analysis results in {language_instruction}
 - Do not include technical details (implementation, architecture, languages, frameworks, databases)
 - You may provide 2-3 high-level approach options for the user to consider, but avoid prescribing specific technical solutions
 - Treat users as stakeholders unfamiliar with implementation - do NOT ask "how is this currently implemented" or "how should this be implemented"; instead, note such questions in the spec for developers"""
