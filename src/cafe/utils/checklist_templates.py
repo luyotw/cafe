@@ -53,7 +53,6 @@ PLAN_EXECUTION_STEPS_ITERATION_1 = """## Checklist
 [ ] Plan implementation steps (planning, not implementation)
 [ ] Append plan after "## Development Guide" section
 [ ] Keep "## Development Guide" section unchanged
-[ ] Write content in your native language
 [ ] Confirm: Only wrote plans and steps, NO actual code
 [ ] Confirm: No code was modified
 [ ] Return appropriate status code
@@ -67,7 +66,6 @@ PLAN_EXECUTION_STEPS_ITERATION_N = """## Checklist
 [ ] Integrate feedback and update the plan
 [ ] Write updated plan to {current_plan_file} (NOT in your response)
 [ ] Keep "## Development Guide" section unchanged
-[ ] Write content in your native language
 [ ] Confirm: Only wrote plans and steps, NO actual code
 [ ] Confirm: No code was modified
 [ ] Return appropriate status code
@@ -183,7 +181,6 @@ PR_EXECUTION_STEPS_ITERATION_1 = """## Checklist
 [ ] Read the requirements specification {spec_file_path}
 [ ] Read the implementation plan {plan_file_path}
 [ ] Review all commits in the current branch
-[ ] Check {spec_file_path} language to determine PR language (use same language as original requirements)
 [ ] Edit {pr_file} to fill in PR title and description (NOT in your response)
 [ ] Ensure PR title is concise and descriptive (max 80 characters)
 [ ] Include reference to original requirements
@@ -198,7 +195,6 @@ PR_EXECUTION_STEPS_ITERATION_N = """## Checklist
 [ ] Read {prev_pr_file} to review previous PR content
 [ ] Review unpushed commits to identify new changes
 [ ] Edit {current_pr_file} to update PR content based on new changes (NOT in your response)
-[ ] Ensure PR language matches {spec_file_path} language
 [ ] Return ONLY the status code in your response
 [ ] Return appropriate status code
 """
