@@ -68,7 +68,6 @@ def setup_plan_phase(tmp_path, monkeypatch):
 [x] Write plans and steps only, no actual code
 [x] Keep Development Guide section unchanged
 [x] Append implementation plan AFTER development guide
-[x] Write content in your native language
 [x] Follow template format strictly
 """)
 
