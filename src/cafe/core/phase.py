@@ -490,6 +490,9 @@ class Phase(ABC):
                 streaming_output_file=str(streaming_jsonl_file),
             )
 
+            # Update session_id after execution (in case it was created during execution)
+            agent_session_id = agent_executor.config.session_id
+
             # Accumulate token usage for this iteration
             accumulate_token_usage(cumulative_token_usage, token_usage)
 

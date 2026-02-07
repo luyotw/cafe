@@ -92,12 +92,18 @@ class CopilotCLI(AbstractCLI):
         model: Optional[str] = None
 
         # Extract token usage from usage summary at the end
-        # Example format:
-        # Usage by model:
-        #     claude-sonnet-4.5    14.3k input, 39 output, 10.2k cache read (Est. 1 Premium request)
-        
-        # Find the "Usage by model:" section (also capture model name)
-        usage_match = re.search(r'Usage by model:\s*\n\s+([\w.-]+)\s+([\d.]+k?)\s+input,\s+([\d.]+k?)\s+output(?:,\s+([\d.]+k?)\s+cache read)?', full_output)
+        # Example formats:
+        # Old: Usage by model:
+        #          claude-sonnet-4.5    14.3k input, 39 output, 10.2k cache read (Est. 1 Premium request)
+        # New: Breakdown by AI model:
+        #       claude-sonnet-4.5       16.0k in, 74 out, 0 cached (Est. 1 Premium request)
+
+        # Try new format first
+        usage_match = re.search(r'Breakdown by AI model:\s*\n\s+([\w.-]+)\s+([\d.]+k?)\s+in,\s+([\d.]+k?)\s+out(?:,\s+([\d.]+k?)\s+cached)?', full_output)
+
+        # Fall back to old format if new format not found
+        if not usage_match:
+            usage_match = re.search(r'Usage by model:\s*\n\s+([\w.-]+)\s+([\d.]+k?)\s+input,\s+([\d.]+k?)\s+output(?:,\s+([\d.]+k?)\s+cache read)?', full_output)
         
         if usage_match:
             # Extract model name
