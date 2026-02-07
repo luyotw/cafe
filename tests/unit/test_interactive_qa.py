@@ -1,0 +1,221 @@
+"""測試互動式問答 UI 流程"""
+
+from unittest.mock import MagicMock, call, patch
+
+import pytest
+
+from cafe.core.questions_schema import Question
+from cafe.ui.interactive_qa import (
+    BACK_SENTINEL,
+    OTHER_SENTINEL,
+    interactive_qa_flow,
+)
+
+
+def _make_questions(count=3):
+    """建立測試用問題列表"""
+    return [
+        Question(
+            id=str(i + 1),
+            title=f"Question {i + 1}?",
+            options=[f"Option {i + 1}A", f"Option {i + 1}B"],
+        )
+        for i in range(count)
+    ]
+
+
+class TestInteractiveQaFlowBasic:
+    """測試基本流程：逐題作答並確認"""
+
+    @patch("cafe.ui.interactive_qa.inquirer")
+    def test_basic_flow_select_options_and_confirm(self, mock_inquirer):
+        """測試使用者依序選擇選項後確認，回傳正確格式"""
+        questions = _make_questions(2)
+
+        # Mock: Q1 選 "Option 1A", Q2 選 "Option 2B", 確認 "Confirm and continue"
+        mock_select = MagicMock()
+        mock_select.execute = MagicMock(
+            side_effect=["Option 1A", "Option 2B", "Confirm and continue"]
+        )
+        mock_inquirer.select.return_value = mock_select
+
+        result = interactive_qa_flow(questions)
+
+        assert "Q1: Question 1?" in result
+        assert "A1: Option 1A" in result
+        assert "Q2: Question 2?" in result
+        assert "A2: Option 2B" in result
+
+    @patch("cafe.ui.interactive_qa.inquirer")
+    def test_return_format_has_qa_pairs(self, mock_inquirer):
+        """測試回傳格式包含 Q/A 對"""
+        questions = _make_questions(1)
+
+        mock_select = MagicMock()
+        mock_select.execute = MagicMock(
+            side_effect=["Option 1A", "Confirm and continue"]
+        )
+        mock_inquirer.select.return_value = mock_select
+
+        result = interactive_qa_flow(questions)
+
+        lines = result.strip().split("\n")
+        assert any("Q1:" in line for line in lines)
+        assert any("A1:" in line for line in lines)
+
+
+class TestInteractiveQaFlowOther:
+    """測試 'Other' 自由文字輸入流程"""
+
+    @patch("cafe.ui.interactive_qa.inquirer")
+    def test_other_option_triggers_text_input(self, mock_inquirer):
+        """測試選擇 Other 時觸發文字輸入"""
+        questions = _make_questions(1)
+
+        mock_select = MagicMock()
+        mock_text = MagicMock()
+
+        # Q1 選 OTHER_SENTINEL, 文字輸入 "My custom answer", 確認
+        mock_select.execute = MagicMock(
+            side_effect=[OTHER_SENTINEL, "Confirm and continue"]
+        )
+        mock_text.execute = MagicMock(return_value="My custom answer")
+
+        mock_inquirer.select.return_value = mock_select
+        mock_inquirer.text.return_value = mock_text
+
+        result = interactive_qa_flow(questions)
+
+        assert "A1: My custom answer" in result
+        mock_inquirer.text.assert_called_once()
+
+
+class TestInteractiveQaFlowBack:
+    """測試 'Back' 導覽行為"""
+
+    @patch("cafe.ui.interactive_qa.inquirer")
+    def test_back_returns_to_previous_question(self, mock_inquirer):
+        """測試選擇 Back 回到前一題，並保留前一次的回答"""
+        questions = _make_questions(2)
+
+        mock_select = MagicMock()
+        # Q1 選 "Option 1A"
+        # Q2 選 BACK_SENTINEL (回到 Q1)
+        # Q1 再選 "Option 1B"
+        # Q2 選 "Option 2A"
+        # 確認
+        mock_select.execute = MagicMock(
+            side_effect=[
+                "Option 1A",
+                BACK_SENTINEL,
+                "Option 1B",
+                "Option 2A",
+                "Confirm and continue",
+            ]
+        )
+        mock_inquirer.select.return_value = mock_select
+
+        result = interactive_qa_flow(questions)
+
+        # 最終結果應使用修改後的回答
+        assert "A1: Option 1B" in result
+        assert "A2: Option 2A" in result
+
+    @patch("cafe.ui.interactive_qa.inquirer")
+    def test_question_1_has_no_back_option(self, mock_inquirer):
+        """測試第一題不顯示 Back 選項"""
+        questions = _make_questions(2)
+
+        mock_select = MagicMock()
+        mock_select.execute = MagicMock(
+            side_effect=["Option 1A", "Option 2A", "Confirm and continue"]
+        )
+        mock_inquirer.select.return_value = mock_select
+
+        interactive_qa_flow(questions)
+
+        # 檢查第一次 inquirer.select 呼叫的 choices 不包含 BACK_SENTINEL
+        first_call_kwargs = mock_inquirer.select.call_args_list[0]
+        choices = first_call_kwargs.kwargs.get("choices", first_call_kwargs[1].get("choices", []))
+        choice_values = [c if isinstance(c, str) else getattr(c, "value", c) for c in choices]
+        assert BACK_SENTINEL not in choice_values
+
+    @patch("cafe.ui.interactive_qa.inquirer")
+    def test_question_2_has_back_option(self, mock_inquirer):
+        """測試第二題以後有 Back 選項"""
+        questions = _make_questions(2)
+
+        mock_select = MagicMock()
+        mock_select.execute = MagicMock(
+            side_effect=["Option 1A", "Option 2A", "Confirm and continue"]
+        )
+        mock_inquirer.select.return_value = mock_select
+
+        interactive_qa_flow(questions)
+
+        # 第二次呼叫 (Q2) 的 choices 應包含 BACK_SENTINEL
+        second_call_kwargs = mock_inquirer.select.call_args_list[1]
+        choices = second_call_kwargs.kwargs.get("choices", second_call_kwargs[1].get("choices", []))
+        choice_values = []
+        for c in choices:
+            if isinstance(c, str):
+                choice_values.append(c)
+            elif isinstance(c, dict):
+                choice_values.append(c.get("value", c))
+            else:
+                choice_values.append(getattr(c, "value", c))
+        assert BACK_SENTINEL in choice_values
+
+
+class TestInteractiveQaFlowSummaryAndModify:
+    """測試摘要確認與修改流程"""
+
+    @patch("cafe.ui.interactive_qa.inquirer")
+    def test_modify_flow_re_answers_selected_question(self, mock_inquirer):
+        """測試修改流程：選擇修改後回到摘要"""
+        questions = _make_questions(2)
+
+        mock_select = MagicMock()
+        # Q1 選 "Option 1A", Q2 選 "Option 2A"
+        # 確認畫面選 "Modify an answer..."
+        # 選擇修改 Q1
+        # 重新回答 Q1 選 "Option 1B"
+        # 確認畫面選 "Confirm and continue"
+        mock_select.execute = MagicMock(
+            side_effect=[
+                "Option 1A",
+                "Option 2A",
+                "Modify an answer...",
+                "1",  # 選擇修改 Q1 (id)
+                "Option 1B",  # 重新回答
+                "Confirm and continue",
+            ]
+        )
+        mock_inquirer.select.return_value = mock_select
+
+        result = interactive_qa_flow(questions)
+
+        assert "A1: Option 1B" in result
+        assert "A2: Option 2A" in result
+
+    @patch("cafe.ui.interactive_qa.inquirer")
+    def test_confirm_returns_formatted_answers(self, mock_inquirer):
+        """測試確認後回傳格式化結果"""
+        questions = _make_questions(3)
+
+        mock_select = MagicMock()
+        mock_select.execute = MagicMock(
+            side_effect=[
+                "Option 1A",
+                "Option 2B",
+                "Option 3A",
+                "Confirm and continue",
+            ]
+        )
+        mock_inquirer.select.return_value = mock_select
+
+        result = interactive_qa_flow(questions)
+
+        assert "Q1: Question 1?\nA1: Option 1A" in result
+        assert "Q2: Question 2?\nA2: Option 2B" in result
+        assert "Q3: Question 3?\nA3: Option 3A" in result
