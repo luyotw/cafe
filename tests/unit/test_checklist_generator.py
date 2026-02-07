@@ -473,3 +473,24 @@ class TestSpecChecklistXmlInstructions:
 
         content = checklist_path.read_text()
         assert "questions.xml" not in content
+
+    def test_xml_instructions_require_native_language(self, tmp_path):
+        """測試 XML 指示要求用 agent 母語撰寫問題"""
+        checklist_path = tmp_path / "checklist.md"
+
+        generate_spec_checklist(
+            iteration=1,
+            agent_name="Roger",
+            current_spec_file=".cafe/issues/test/spec/iteration_001/output.md",
+            prev_spec_file=None,
+            checklist_file_path=checklist_path,
+            questions_xml_file=".cafe/issues/test/spec/iteration_001/questions.xml",
+        )
+
+        content = checklist_path.read_text()
+        assert "questions.xml" in content
+        # 驗證 Rules 部分要求用母語撰寫問題
+        assert "Rules:" in content
+        # 檢查 Rules 後面有提到母語要求
+        rules_section = content.split("Rules:")[1].split("```")[0]
+        assert "native language" in rules_section.lower()

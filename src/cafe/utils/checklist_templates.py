@@ -68,6 +68,7 @@ If you are returning CAFE_NEED_CLARIFICATION, you MUST also write your clarifica
 ```
 
 Rules:
+- Write all questions and options in your native language (not English unless that is your native language)
 - Root element must be `<questions>`
 - Each question must have a unique `id` attribute, a `<title>`, and `<options>` with at least one `<option>`
 - Provide 2-4 suggested options per question
