@@ -596,3 +596,117 @@ class TestShowCommandUserInput:
             # Should show error with specific message
             assert result.exit_code != 0
             assert "No user input markdown file found for this iteration." in result.stdout
+
+
+class TestShowCommandQuestions:
+    """Tests for cafe show questions command."""
+
+    def test_show_questions_content_type_valid(self, tmp_path):
+        """Test questions is a valid content type."""
+        from cafe.ui.cli import VALID_CONTENT_TYPES
+        assert "questions" in VALID_CONTENT_TYPES
+
+    def test_show_questions_file_mapping(self, tmp_path):
+        """Test questions maps to questions.xml file."""
+        from cafe.ui.cli import CONTENT_TYPE_FILE_MAP
+        assert CONTENT_TYPE_FILE_MAP["questions"] == "questions.xml"
+
+    def test_show_spec_questions(self, tmp_path):
+        """Test showing spec phase questions."""
+        # Prepare test environment
+        cafe_dir = tmp_path / ".cafe"
+        issues_dir = cafe_dir / "issues" / "test-issue" / "spec"
+        issues_dir.mkdir(parents=True)
+
+        # Create iteration with questions.xml
+        iteration_dir = issues_dir / "iteration_001"
+        iteration_dir.mkdir()
+        (iteration_dir / "context.json").write_text("{}")
+        questions_file = iteration_dir / "questions.xml"
+        questions_file.write_text("""<?xml version="1.0" encoding="UTF-8"?>
+<questions>
+  <question>
+    <title>What is your preferred authentication method?</title>
+    <option>OAuth 2.0</option>
+    <option>JWT</option>
+  </question>
+</questions>""")
+
+        # Mock git operations and config
+        with patch("cafe.ui.cli.GitOperations") as mock_git_cls, \
+             patch("cafe.ui.cli.ConfigManager") as mock_config_cls, \
+             patch("cafe.ui.cli.Path.cwd", return_value=tmp_path):
+
+            mock_git = mock_git_cls.return_value
+            mock_git.get_current_branch.return_value = "test-issue"
+
+            # Execute command
+            result = runner.invoke(app, ["show", "spec", "questions"])
+
+            # Verify output
+            assert result.exit_code == 0
+            assert "authentication method" in result.stdout
+            assert "OAuth 2.0" in result.stdout
+
+    def test_show_questions_with_iteration_flag(self, tmp_path):
+        """Test showing questions with specific iteration."""
+        # Prepare test environment
+        cafe_dir = tmp_path / ".cafe"
+        issues_dir = cafe_dir / "issues" / "test-issue" / "spec"
+        issues_dir.mkdir(parents=True)
+
+        # Create two iterations with different questions
+        for i in [1, 2]:
+            iteration_dir = issues_dir / f"iteration_{i:03d}"
+            iteration_dir.mkdir()
+            (iteration_dir / "context.json").write_text("{}")
+            questions_file = iteration_dir / "questions.xml"
+            questions_file.write_text(f"""<?xml version="1.0" encoding="UTF-8"?>
+<questions>
+  <question>
+    <title>Question from iteration {i}?</title>
+    <option>Yes</option>
+  </question>
+</questions>""")
+
+        # Mock git operations and config
+        with patch("cafe.ui.cli.GitOperations") as mock_git_cls, \
+             patch("cafe.ui.cli.ConfigManager") as mock_config_cls, \
+             patch("cafe.ui.cli.Path.cwd", return_value=tmp_path):
+
+            mock_git = mock_git_cls.return_value
+            mock_git.get_current_branch.return_value = "test-issue"
+
+            # Execute command with iteration 1
+            result = runner.invoke(app, ["show", "spec", "questions", "-i", "1"])
+
+            # Verify output
+            assert result.exit_code == 0
+            assert "iteration 1" in result.stdout
+
+    def test_show_questions_file_not_found(self, tmp_path):
+        """Test error when questions.xml file doesn't exist."""
+        # Prepare test environment
+        cafe_dir = tmp_path / ".cafe"
+        issues_dir = cafe_dir / "issues" / "test-issue" / "spec"
+        issues_dir.mkdir(parents=True)
+
+        # Create iteration WITHOUT questions.xml
+        iteration_dir = issues_dir / "iteration_001"
+        iteration_dir.mkdir()
+        (iteration_dir / "context.json").write_text("{}")
+        # No questions.xml file
+
+        # Mock git operations and config
+        with patch("cafe.ui.cli.GitOperations") as mock_git_cls, \
+             patch("cafe.ui.cli.ConfigManager") as mock_config_cls, \
+             patch("cafe.ui.cli.Path.cwd", return_value=tmp_path):
+
+            mock_git = mock_git_cls.return_value
+            mock_git.get_current_branch.return_value = "test-issue"
+
+            # Execute command
+            result = runner.invoke(app, ["show", "spec", "questions"])
+
+            # Should show error
+            assert result.exit_code != 0
