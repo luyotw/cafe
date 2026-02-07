@@ -451,12 +451,19 @@ class SpecPhase(Phase):
             # Save rigor setting to issue.yaml after each iteration
             self._save_issue_config()
 
+            # Validate questions.xml when agent returns CAFE_NEED_CLARIFICATION
+            from cafe.core.status_codes import StatusCodeParser
+            status_code = StatusCodeParser.extract(response)
+            if status_code == PhaseStatusCode.NEED_CLARIFICATION:
+                self._validate_and_retry_questions_xml(
+                    xml_path=questions_xml_path,
+                    agent_name=self.pm_agent,
+                    allowed_tools=allowed_tools,
+                )
+
             # Since we removed the while loop, if result is None (meaning need to continue),
             # we should return IN_PROGRESS with the status code from response
             if result is None:
-                # Extract status code from response to include in result
-                from cafe.core.status_codes import StatusCodeParser
-                status_code = StatusCodeParser.extract(response)
 
                 return PhaseResult(
                     status=PhaseStatus.IN_PROGRESS,
@@ -1178,6 +1185,68 @@ class SpecPhase(Phase):
         """
         spec_file = self._get_versioned_file_path("spec", self.iteration, self.phase_dir)
         return [Path(spec_file)] if Path(spec_file).exists() else []
+
+    def _validate_and_retry_questions_xml(
+        self,
+        xml_path: Path,
+        agent_name: str,
+        allowed_tools: List[str],
+        max_retries: int = 3,
+    ) -> bool:
+        """Validate questions.xml and retry with agent if invalid.
+
+        Args:
+            xml_path: Path to questions.xml file
+            agent_name: Agent name for retry execution
+            allowed_tools: Tools allowed for agent
+            max_retries: Maximum number of retry attempts (default: 3)
+
+        Returns:
+            True if XML is valid (or was fixed), False otherwise
+        """
+        from cafe.core.questions_schema import validate_questions_xml
+
+        # Check if file exists
+        if not xml_path.exists():
+            return False
+
+        # First validation attempt
+        if validate_questions_xml(xml_path):
+            return True
+
+        # Retry loop: ask agent to fix invalid XML
+        for retry in range(max_retries):
+            print(f"\n⚠️  questions.xml format is invalid, asking agent to fix... (attempt {retry + 1}/{max_retries})")
+
+            retry_prompt = (
+                f"The questions XML file at {xml_path} has invalid format. "
+                f"Please fix it so that:\n"
+                f"- Root element is <questions>\n"
+                f"- Each <question> has a unique id attribute, a <title>, and <options> with at least one <option>\n"
+                f"- The file is well-formed XML\n\n"
+                f"Read the file, fix the issues, and write the corrected XML back to {xml_path}."
+            )
+
+            try:
+                self.agent_manager.execute(
+                    agent_name,
+                    retry_prompt,
+                    allowed_tools=allowed_tools,
+                )
+            except Exception as e:
+                print(f"⚠️  Error during XML fix retry: {e}")
+                continue
+
+            # Check if fixed
+            if xml_path.exists() and validate_questions_xml(xml_path):
+                print(f"✓ Agent successfully fixed questions.xml")
+                return True
+
+        # All retries failed - delete invalid file and fallback
+        print(f"\n❌ questions.xml still invalid after {max_retries} attempts, falling back to original Q&A")
+        if xml_path.exists():
+            xml_path.unlink()
+        return False
 
     def _verify_content_updated(
         self,

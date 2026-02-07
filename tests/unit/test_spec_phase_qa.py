@@ -1,0 +1,198 @@
+"""測試 Spec Phase 的 XML 問答驗證和重試機制"""
+
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+from cafe.phases.spec_phase import SpecPhase
+
+
+@pytest.fixture
+def mock_dependencies():
+    """建立 SpecPhase 的 mock 相依物件"""
+    mock_agent_manager = MagicMock()
+    mock_permission_handler = MagicMock()
+    mock_git_ops = MagicMock()
+    mock_git_ops.get_current_branch.return_value = "test-branch"
+
+    return {
+        "agent_manager": mock_agent_manager,
+        "permission_handler": mock_permission_handler,
+        "git_ops": mock_git_ops,
+    }
+
+
+@pytest.fixture
+def spec_phase(tmp_path, mock_dependencies):
+    """建立用於測試的 SpecPhase 實例"""
+    phase = SpecPhase(
+        agent_manager=mock_dependencies["agent_manager"],
+        permission_handler=mock_dependencies["permission_handler"],
+        git_ops=mock_dependencies["git_ops"],
+        pm_agent="Roger",
+        interactive=False,
+        issue_name="test-issue",
+        user_input="test requirements",
+    )
+
+    phase.phase_dir = tmp_path / ".cafe" / "issues" / "test-issue" / "spec"
+    phase.phase_dir.mkdir(parents=True, exist_ok=True)
+    phase.iteration = 1
+    return phase
+
+
+VALID_QUESTIONS_XML = """\
+<?xml version="1.0" encoding="UTF-8"?>
+<questions>
+  <question id="1">
+    <title>What is the expected error behavior?</title>
+    <options>
+      <option>Return error code</option>
+      <option>Throw exception</option>
+    </options>
+  </question>
+</questions>
+"""
+
+INVALID_QUESTIONS_XML = """\
+<?xml version="1.0" encoding="UTF-8"?>
+<questions>
+  <question id="1">
+    <title>Missing options question</title>
+  </question>
+</questions>
+"""
+
+
+class TestValidateAndRetryQuestionsXml:
+    """測試 _validate_and_retry_questions_xml() 方法"""
+
+    def test_returns_true_when_xml_is_valid(self, spec_phase, tmp_path):
+        """測試 XML 格式正確時回傳 True"""
+        xml_path = tmp_path / "questions.xml"
+        xml_path.write_text(VALID_QUESTIONS_XML)
+
+        result = spec_phase._validate_and_retry_questions_xml(
+            xml_path=xml_path,
+            agent_name="Roger",
+            allowed_tools=["read", "edit(questions.xml)"],
+        )
+
+        assert result is True
+
+    def test_returns_false_when_xml_not_exists(self, spec_phase, tmp_path):
+        """測試 XML 檔案不存在時回傳 False"""
+        xml_path = tmp_path / "questions.xml"
+
+        result = spec_phase._validate_and_retry_questions_xml(
+            xml_path=xml_path,
+            agent_name="Roger",
+            allowed_tools=["read", "edit(questions.xml)"],
+        )
+
+        assert result is False
+
+    def test_retries_on_invalid_xml_and_succeeds(self, spec_phase, tmp_path):
+        """測試 XML 格式不正確時呼叫 agent 修正，修正後回傳 True"""
+        xml_path = tmp_path / "questions.xml"
+        xml_path.write_text(INVALID_QUESTIONS_XML)
+
+        call_count = 0
+
+        def mock_execute(agent_name, prompt, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            # Agent fixes the XML on first retry
+            xml_path.write_text(VALID_QUESTIONS_XML)
+            return ("Fixed", MagicMock(), [], None, [], None)
+
+        spec_phase.agent_manager.execute = MagicMock(side_effect=mock_execute)
+
+        result = spec_phase._validate_and_retry_questions_xml(
+            xml_path=xml_path,
+            agent_name="Roger",
+            allowed_tools=["read", "edit(questions.xml)"],
+        )
+
+        assert result is True
+        assert call_count == 1
+
+    def test_retries_up_to_3_times_then_returns_false(self, spec_phase, tmp_path):
+        """測試重試 3 次後仍無效，刪除檔案並回傳 False"""
+        xml_path = tmp_path / "questions.xml"
+        xml_path.write_text(INVALID_QUESTIONS_XML)
+
+        call_count = 0
+
+        def mock_execute(agent_name, prompt, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            # Agent fails to fix the XML every time
+            return ("Still broken", MagicMock(), [], None, [], None)
+
+        spec_phase.agent_manager.execute = MagicMock(side_effect=mock_execute)
+
+        result = spec_phase._validate_and_retry_questions_xml(
+            xml_path=xml_path,
+            agent_name="Roger",
+            allowed_tools=["read", "edit(questions.xml)"],
+        )
+
+        assert result is False
+        assert call_count == 3
+        # Invalid XML file should be deleted
+        assert not xml_path.exists()
+
+    def test_retry_prompt_includes_xml_path(self, spec_phase, tmp_path):
+        """測試重試 prompt 包含 XML 檔案路徑"""
+        xml_path = tmp_path / "questions.xml"
+        xml_path.write_text(INVALID_QUESTIONS_XML)
+
+        captured_prompts = []
+
+        def mock_execute(agent_name, prompt, **kwargs):
+            captured_prompts.append(prompt)
+            # Fix on first retry
+            xml_path.write_text(VALID_QUESTIONS_XML)
+            return ("Fixed", MagicMock(), [], None, [], None)
+
+        spec_phase.agent_manager.execute = MagicMock(side_effect=mock_execute)
+
+        spec_phase._validate_and_retry_questions_xml(
+            xml_path=xml_path,
+            agent_name="Roger",
+            allowed_tools=["read", "edit(questions.xml)"],
+        )
+
+        assert len(captured_prompts) == 1
+        assert str(xml_path) in captured_prompts[0]
+
+    def test_agent_exception_during_retry_continues(self, spec_phase, tmp_path):
+        """測試 agent 重試時拋出例外，繼續下一次重試"""
+        xml_path = tmp_path / "questions.xml"
+        xml_path.write_text(INVALID_QUESTIONS_XML)
+
+        call_count = 0
+
+        def mock_execute(agent_name, prompt, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise Exception("Agent error")
+            elif call_count == 2:
+                # Fix on second retry
+                xml_path.write_text(VALID_QUESTIONS_XML)
+                return ("Fixed", MagicMock(), [], None, [], None)
+            return ("Still broken", MagicMock(), [], None, [], None)
+
+        spec_phase.agent_manager.execute = MagicMock(side_effect=mock_execute)
+
+        result = spec_phase._validate_and_retry_questions_xml(
+            xml_path=xml_path,
+            agent_name="Roger",
+            allowed_tools=["read", "edit(questions.xml)"],
+        )
+
+        assert result is True
+        assert call_count == 2
