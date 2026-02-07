@@ -999,7 +999,21 @@ def prepare(
             display = Display()
             github_ops = GitHubOps()
 
-            # Prompt for setup mode: Quick setup vs Custom configuration
+            # Step 1: Prompt for input method and issue ID (only for GitHub repos)
+            from cafe.utils.git_utils import is_github_repo
+
+            if is_github_repo():
+                input_method, issue_id = prompt_for_input_method(display, github_ops)
+                spec_config["input_method"] = input_method
+                if issue_id is not None:
+                    spec_config["issue_id"] = str(issue_id)
+            else:
+                # Non-GitHub repo: use manual input only
+                spec_config["input_method"] = "manual"
+                issue_id = None
+
+            # Step 2: Prompt for setup mode (after input method selection)
+            console.print()
             setup_mode_choices = [
                 "Quick setup (use recommended defaults)",
                 "Custom configuration",
@@ -1014,17 +1028,18 @@ def prepare(
             
             if use_quick_setup:
                 # Quick setup: Apply default values without prompting
-                from cafe.utils.git_utils import is_github_repo
-                
                 # Default values
                 spec_config["rigor"] = "medium"
                 spec_config["template"] = "auto"
                 plan_config["template"] = "auto"
                 
-                # For quick setup, always default to manual input (safest default)
-                spec_config["input_method"] = "manual"
-                spec_config["sync_github"] = False  # Manual input -> no sync
-                plan_config["sync_github"] = False  # Manual input -> no sync
+                # Sync settings based on input method
+                if issue_id is not None:
+                    spec_config["sync_github"] = True  # GitHub Issue -> sync
+                    plan_config["sync_github"] = True
+                else:
+                    spec_config["sync_github"] = False  # Manual input -> no sync
+                    plan_config["sync_github"] = False
                 
                 # Auto create PR depends on whether it's a GitHub repo
                 if is_github_repo():
@@ -1044,34 +1059,24 @@ def prepare(
                     console.print(f"  • Auto create PR: {pr_config.get('auto_create', False)}")
                 console.print()
             else:
-                # Custom configuration: Prompt for all settings
-                # Prompt for input method and issue ID (only for GitHub repos)
-                from cafe.utils.git_utils import is_github_repo
+                # Custom configuration: Prompt for remaining settings
+                
+                # Prompt for sync settings (only when issue_id is present)
+                if issue_id is not None:
+                    console.print()
+                    sync_spec = prompt_confirm(
+                        "Sync spec to GitHub issue when confirmed?",
+                        default=True
+                    )
+                    spec_config["sync_github"] = sync_spec
 
-                if is_github_repo():
-                    input_method, issue_id = prompt_for_input_method(display, github_ops)
-                    spec_config["input_method"] = input_method
-                    if issue_id is not None:
-                        spec_config["issue_id"] = str(issue_id)
-
-                        # Prompt for sync settings (only when issue_id is present)
-                        console.print()
-                        sync_spec = prompt_confirm(
-                            "Sync spec to GitHub issue when confirmed?",
-                            default=True
-                        )
-                        spec_config["sync_github"] = sync_spec
-
-                        console.print()
-                        sync_plan = prompt_confirm(
-                            "Sync plan to GitHub issue when confirmed?",
-                            default=True
-                        )
-                        plan_config["sync_github"] = sync_plan
-                        console.print()
-                else:
-                    # Non-GitHub repo: use manual input only
-                    spec_config["input_method"] = "manual"
+                    console.print()
+                    sync_plan = prompt_confirm(
+                        "Sync plan to GitHub issue when confirmed?",
+                        default=True
+                    )
+                    plan_config["sync_github"] = sync_plan
+                    console.print()
 
                 # Prompt for rigor level
                 rigor = prompt_for_rigor(display)

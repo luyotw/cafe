@@ -776,12 +776,11 @@ class TestPrepareCommandSetupMode:
         mock_prompt_text.return_value = "test-feature"
         mock_cli_confirm.return_value = False  # worktree (n)
         
-        # Setup mode 選擇 -> Quick setup
+        # Input method 選擇 -> Manual input (第一個 prompt)
+        mock_phase_list.return_value = "1. Manual input"
+        
+        # Setup mode 選擇 -> Quick setup (第二個 prompt)
         mock_cli_list.return_value = "Quick setup (use recommended defaults)"
-        
-        # 不應該再有其他的 prompt 被呼叫
-        
-        # 不應該再有其他的 prompt 被呼叫
         
         result = runner.invoke(app, ["prepare"])
 
@@ -801,13 +800,13 @@ class TestPrepareCommandSetupMode:
             assert config_data["plan"]["sync_github"] == False  # manual input -> false
             assert config_data["pr"]["auto_create"] == True  # GitHub repo -> true
 
-        # 驗證只呼叫了設定模式選擇 (mock_cli_list)
-        mock_cli_list.assert_called_once()
-        # 驗證沒有詢問 input method, rigor (mock_phase_list 不應該被呼叫)
-        mock_phase_list.assert_not_called()
+        # 驗證先詢問了 input method (mock_phase_list 呼叫 1 次)
+        assert mock_phase_list.call_count == 1
+        # 驗證然後詢問了設定模式 (mock_cli_list 呼叫 1 次)
+        assert mock_cli_list.call_count == 1
         # 驗證沒有詢問 templates (mock_template_list 不應該被呼叫)
         mock_template_list.assert_not_called()
-        # 驗證沒有詢問 sync 相關問題 (mock_phase_confirm 不應該被呼叫)
+        # 驗證沒有詢問 sync 或其他 confirm 問題 (mock_phase_confirm 不應該被呼叫)
         mock_phase_confirm.assert_not_called()
 
     @patch("cafe.ui.phase_prompts.prompt_confirm")
@@ -823,14 +822,14 @@ class TestPrepareCommandSetupMode:
         mock_cli_confirm.return_value = False  # worktree (n)
         mock_phase_confirm.return_value = True  # sync/pr prompts (y)
         
-        # Setup mode 選擇 -> Custom configuration
-        mock_cli_list.return_value = "Custom configuration"
-        
-        # input method -> rigor
+        # Input method 選擇 -> Manual input (第一個 prompt)
+        # Setup mode 選擇 -> Custom configuration (第二個 prompt)
+        # Rigor 選擇 -> High (第三個 prompt)
         mock_phase_list.side_effect = [
             "1. Manual input",  # input method (manual)
             "High - Precise specification mode\n   • Ask all details and edge cases\n   • Ensure requirements are testable, no ambiguity\n   • Suitable for: core features, API design, external products",  # rigor
         ]
+        mock_cli_list.return_value = "Custom configuration"
         mock_template_list.return_value = "default (system default)"  # template selector parses this
 
         result = runner.invoke(app, ["prepare"])
@@ -847,8 +846,8 @@ class TestPrepareCommandSetupMode:
             assert config_data["spec"]["template"] == "default"
             assert config_data["plan"]["template"] == "default"
 
-        # 驗證詢問了設定模式
-        mock_cli_list.assert_called_once()
+        # 驗證詢問了 input method 和設定模式
+        assert mock_cli_list.call_count == 1  # setup mode
         # 驗證詢問了 input method、rigor (2 個 prompt_list)
         assert mock_phase_list.call_count == 2
         # 驗證詢問了 templates (2 次：spec 和 plan)
@@ -866,6 +865,10 @@ class TestPrepareCommandSetupMode:
         mock_prompt_text.return_value = "summary-test"
         mock_cli_confirm.return_value = False  # worktree (n)
         
+        # Input method 選擇 -> Manual input
+        mock_phase_list.return_value = "1. Manual input"
+        
+        # Setup mode 選擇 -> Quick setup
         mock_cli_list.return_value = "Quick setup (use recommended defaults)"
 
         result = runner.invoke(app, ["prepare"])
@@ -913,3 +916,58 @@ class TestPrepareCommandSetupMode:
             assert "spec" not in config_data
             assert "plan" not in config_data
             assert "pr" not in config_data
+
+    @patch("cafe.ui.phase_prompts.prompt_text")
+    @patch("cafe.ui.phase_prompts.GitHubOps")
+    @patch("cafe.ui.cli.GitHubOps")
+    @patch("cafe.ui.phase_prompts.prompt_confirm")
+    @patch("cafe.ui.cli.prompt_confirm")
+    @patch("cafe.ui.template_selector.prompt_list")
+    @patch("cafe.ui.phase_prompts.prompt_list")
+    @patch("cafe.ui.cli.prompt_list")
+    @patch("cafe.ui.cli.prompt_text")
+    def test_github_issue_mode_quick_setup(self, mock_prompt_text_cli, mock_cli_list, mock_phase_list, mock_template_list, mock_cli_confirm, mock_phase_confirm, MockGitHubOps_cli, MockGitHubOps_phase, mock_prompt_text_phase, temp_repo_dir, mock_git_ops):
+        """測試選擇 GitHub Issue 模式後再選擇 Quick setup"""
+        # Mock GitHubOps
+        mock_github_ops = MagicMock()
+        MockGitHubOps_cli.return_value = mock_github_ops
+        MockGitHubOps_phase.return_value = mock_github_ops
+        mock_github_ops.extract_issue_number.return_value = "123"
+        
+        # Mock user inputs
+        mock_prompt_text_cli.return_value = "github-issue-test"  # Issue name
+        mock_prompt_text_phase.return_value = "123"  # GitHub Issue ID
+        mock_cli_confirm.return_value = False  # worktree (n)
+        
+        # Input method 選擇 -> Fetch from GitHub Issue (第一個 prompt)
+        mock_phase_list.return_value = "2. Fetch from GitHub Issue"
+        
+        # Setup mode 選擇 -> Quick setup (第二個 prompt，在輸入 Issue ID 後)
+        mock_cli_list.return_value = "Quick setup (use recommended defaults)"
+        
+        result = runner.invoke(app, ["prepare"])
+        
+        assert result.exit_code == 0
+        
+        # 驗證設定檔包含預設值，且 sync_github 為 true（因為使用 GitHub Issue）
+        config_file = temp_repo_dir / ".cafe" / "issues" / "github-issue-test" / "issue.yaml"
+        with open(config_file) as f:
+            config_data = yaml.safe_load(f)
+            
+            # 驗證套用預設值
+            assert config_data["spec"]["rigor"] == "medium"
+            assert config_data["spec"]["template"] == "auto"
+            assert config_data["spec"]["input_method"] == "github"
+            assert config_data["spec"]["issue_id"] == "123"
+            assert config_data["spec"]["sync_github"] == True  # GitHub Issue -> true
+            assert config_data["plan"]["template"] == "auto"
+            assert config_data["plan"]["sync_github"] == True  # GitHub Issue -> true
+            assert config_data["pr"]["auto_create"] == True  # GitHub repo -> true
+
+        # 驗證先詢問了 input method (mock_phase_list 呼叫 1 次)
+        assert mock_phase_list.call_count == 1
+        # 驗證然後詢問了設定模式 (mock_cli_list 呼叫 1 次)
+        assert mock_cli_list.call_count == 1
+        # 驗證沒有詢問 templates 或其他設定
+        mock_template_list.assert_not_called()
+        mock_phase_confirm.assert_not_called()
