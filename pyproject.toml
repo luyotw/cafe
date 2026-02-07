@@ -1,6 +1,6 @@
 [project]
 name = "cafe-engine"
-version = "0.1.0"
+version = "0.1.1"
 description = "CLI Agent Flow Engine - Automated development workflow with AI agents"
 readme = "README.md"
 requires-python = ">=3.10"
