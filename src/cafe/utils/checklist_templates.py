@@ -22,7 +22,7 @@ SPEC_EXECUTION_STEPS_ITERATION_1 = """## Checklist
 [ ] Confirm: Only provided 2-3 high-level approach options if any, without prescribing specific technical solutions
 [ ] Confirm: No code was modified
 [ ] Return appropriate status code
-"""
+{xml_questions_instruction}"""
 
 SPEC_EXECUTION_STEPS_ITERATION_N = """## Checklist
 
@@ -37,6 +37,42 @@ SPEC_EXECUTION_STEPS_ITERATION_N = """## Checklist
 [ ] Confirm: Only provided 2-3 high-level approach options if any, without prescribing specific technical solutions
 [ ] Confirm: No code was modified
 [ ] Return appropriate status code
+{xml_questions_instruction}"""
+
+SPEC_XML_QUESTIONS_INSTRUCTION = """
+## Interactive Q&A Questions (Required when returning CAFE_NEED_CLARIFICATION)
+
+If you are returning CAFE_NEED_CLARIFICATION, you MUST also write your clarification questions as an XML file to `{questions_xml_file}`.
+
+[ ] Write questions to {questions_xml_file} in the following XML format:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<questions>
+  <question id="1">
+    <title>Your question text here?</title>
+    <options>
+      <option>Suggested answer 1</option>
+      <option>Suggested answer 2</option>
+      <option>Suggested answer 3</option>
+    </options>
+  </question>
+  <question id="2">
+    <title>Another question?</title>
+    <options>
+      <option>Option A</option>
+      <option>Option B</option>
+    </options>
+  </question>
+</questions>
+```
+
+Rules:
+- Write all questions and options in your native language (not English unless that is your native language)
+- Root element must be `<questions>`
+- Each question must have a unique `id` attribute, a `<title>`, and `<options>` with at least one `<option>`
+- Provide 2-4 suggested options per question
+- Options should be concise and distinct
 """
 
 SPEC_IMPORTANT_NOTES_ITERATION_4_PLUS = """[ ] Round {iteration}: Only clarify existing questions, NO new questions

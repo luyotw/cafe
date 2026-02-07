@@ -18,6 +18,7 @@ from cafe.ui.display import Display
 from cafe.ui.phase_prompts import prompt_for_input_method, prompt_for_rigor, fetch_github_issue
 from cafe.utils.git_utils import get_github_repo_name, get_repo_root, to_cwd_relative_path
 from cafe.utils.github import GitHubOps, GitHubError
+from cafe.ui.interactive_qa import interactive_qa_flow
 from cafe.utils.prompt_utils import format_checklist_instruction
 
 # Maximum number of clarification iterations to prevent infinite loops
@@ -350,6 +351,13 @@ class SpecPhase(Phase):
                 except (ValueError, OSError):
                     template_file = str(self.template_path)
 
+            # Compute questions.xml path for this iteration
+            questions_xml_path = self._get_iteration_dir(self.iteration) / "questions.xml"
+            try:
+                questions_xml_file = to_cwd_relative_path(questions_xml_path)
+            except (ValueError, OSError):
+                questions_xml_file = str(questions_xml_path.resolve())
+
             generate_spec_checklist(
                 iteration=self.iteration,
                 agent_name=self.pm_agent,
@@ -359,6 +367,7 @@ class SpecPhase(Phase):
                 basic_principles=basic_principles,
                 template_file=template_file,
                 template_mode=self.template_mode,
+                questions_xml_file=questions_xml_file,
             )
 
             # Prepare user_input for this iteration
@@ -386,6 +395,12 @@ class SpecPhase(Phase):
             except ValueError:
                 checklist_pattern = str(checklist_file.resolve())
 
+            # Get questions.xml path for allowed_tools
+            try:
+                questions_xml_pattern = to_cwd_relative_path(questions_xml_path)
+            except (ValueError, OSError):
+                questions_xml_pattern = str(questions_xml_path.resolve())
+
             # Merge base tools with previous iteration's tools (if any)
             base_allowed_tools = [
                 "read",
@@ -396,6 +411,7 @@ class SpecPhase(Phase):
                 "web_search",
                 f"edit({spec_file_pattern})",
                 f"edit({checklist_pattern})",
+                f"edit({questions_xml_pattern})",
             ]
             allowed_tools = self._merge_allowed_tools(base_allowed_tools)
 
@@ -436,12 +452,19 @@ class SpecPhase(Phase):
             # Save rigor setting to issue.yaml after each iteration
             self._save_issue_config()
 
+            # Validate questions.xml when agent returns CAFE_NEED_CLARIFICATION
+            from cafe.core.status_codes import StatusCodeParser
+            status_code = StatusCodeParser.extract(response)
+            if status_code == PhaseStatusCode.NEED_CLARIFICATION:
+                self._validate_and_retry_questions_xml(
+                    xml_path=questions_xml_path,
+                    agent_name=self.pm_agent,
+                    allowed_tools=allowed_tools,
+                )
+
             # Since we removed the while loop, if result is None (meaning need to continue),
             # we should return IN_PROGRESS with the status code from response
             if result is None:
-                # Extract status code from response to include in result
-                from cafe.core.status_codes import StatusCodeParser
-                status_code = StatusCodeParser.extract(response)
 
                 return PhaseResult(
                     status=PhaseStatus.IN_PROGRESS,
@@ -620,6 +643,30 @@ class SpecPhase(Phase):
             str(prev_spec_file),
             self.display.console,
         )
+
+    def _ask_user_for_clarification(self) -> str:
+        """Ask user for answer to NEED_CLARIFICATION using interactive Q&A when available.
+
+        Overrides base class to check for questions.xml from previous iteration.
+        If found and valid, uses interactive_qa_flow(); otherwise falls back to prompt_multiline().
+
+        Returns:
+            str: User's answer
+        """
+        from cafe.core.questions_schema import parse_questions_xml, validate_questions_xml
+        from cafe.ui.inquirer_prompts import prompt_multiline
+
+        # Look for questions.xml in the previous iteration directory
+        if self.iteration > 1:
+            prev_iter_dir = self._get_iteration_dir(self.iteration - 1)
+            xml_path = prev_iter_dir / "questions.xml"
+
+            if xml_path.exists() and validate_questions_xml(xml_path):
+                questions = parse_questions_xml(xml_path)
+                return interactive_qa_flow(questions)
+
+        # Fallback to original multiline prompt
+        return prompt_multiline("Please answer the question")
 
     def _prompt_for_rigor(self) -> None:
         """Prompt user to select rigor level if not already set."""
@@ -1163,6 +1210,68 @@ class SpecPhase(Phase):
         """
         spec_file = self._get_versioned_file_path("spec", self.iteration, self.phase_dir)
         return [Path(spec_file)] if Path(spec_file).exists() else []
+
+    def _validate_and_retry_questions_xml(
+        self,
+        xml_path: Path,
+        agent_name: str,
+        allowed_tools: List[str],
+        max_retries: int = 3,
+    ) -> bool:
+        """Validate questions.xml and retry with agent if invalid.
+
+        Args:
+            xml_path: Path to questions.xml file
+            agent_name: Agent name for retry execution
+            allowed_tools: Tools allowed for agent
+            max_retries: Maximum number of retry attempts (default: 3)
+
+        Returns:
+            True if XML is valid (or was fixed), False otherwise
+        """
+        from cafe.core.questions_schema import validate_questions_xml
+
+        # Check if file exists
+        if not xml_path.exists():
+            return False
+
+        # First validation attempt
+        if validate_questions_xml(xml_path):
+            return True
+
+        # Retry loop: ask agent to fix invalid XML
+        for retry in range(max_retries):
+            print(f"\n⚠️  questions.xml format is invalid, asking agent to fix... (attempt {retry + 1}/{max_retries})")
+
+            retry_prompt = (
+                f"The questions XML file at {xml_path} has invalid format. "
+                f"Please fix it so that:\n"
+                f"- Root element is <questions>\n"
+                f"- Each <question> has a unique id attribute, a <title>, and <options> with at least one <option>\n"
+                f"- The file is well-formed XML\n\n"
+                f"Read the file, fix the issues, and write the corrected XML back to {xml_path}."
+            )
+
+            try:
+                self.agent_manager.execute(
+                    agent_name,
+                    retry_prompt,
+                    allowed_tools=allowed_tools,
+                )
+            except Exception as e:
+                print(f"⚠️  Error during XML fix retry: {e}")
+                continue
+
+            # Check if fixed
+            if xml_path.exists() and validate_questions_xml(xml_path):
+                print(f"✓ Agent successfully fixed questions.xml")
+                return True
+
+        # All retries failed - delete invalid file and fallback
+        print(f"\n❌ questions.xml still invalid after {max_retries} attempts, falling back to original Q&A")
+        if xml_path.exists():
+            xml_path.unlink()
+        return False
 
     def _verify_content_updated(
         self,
