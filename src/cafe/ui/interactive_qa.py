@@ -36,13 +36,13 @@ def interactive_qa_flow(questions: list[Question]) -> str:
     # Phase 1: Collect answers
     while idx < total:
         q = questions[idx]
-        choices = _build_choices(q, idx, total, answers.get(idx))
-        default = answers.get(idx)
+        previous_answer = answers.get(idx)
+        choices = _build_choices(q, idx, total, previous_answer)
 
         answer = inquirer.select(
             message=f"[{idx + 1}/{total}] {q.title}",
             choices=choices,
-            default=default,
+            default=previous_answer,
         ).execute()
 
         if answer == BACK_SENTINEL:
@@ -50,9 +50,11 @@ def interactive_qa_flow(questions: list[Question]) -> str:
             continue
 
         if answer == OTHER_SENTINEL:
-            answer = inquirer.text(
-                message="Type your answer:",
-            ).execute()
+            # Pre-populate with previous answer if user is returning to this question
+            text_kwargs = {"message": "Type your answer:"}
+            if previous_answer is not None:
+                text_kwargs["default"] = previous_answer
+            answer = inquirer.text(**text_kwargs).execute()
 
         answers[idx] = answer
         idx += 1
@@ -82,18 +84,21 @@ def interactive_qa_flow(questions: list[Question]) -> str:
         # Find index by question id
         modify_idx = next(i for i, q in enumerate(questions) if q.id == selected_id)
         q = questions[modify_idx]
-        choices = _build_choices(q, modify_idx, total, answers.get(modify_idx), force_no_back=True)
+        previous_answer = answers.get(modify_idx)
+        choices = _build_choices(q, modify_idx, total, previous_answer, force_no_back=True)
 
         answer = inquirer.select(
             message=f"[{modify_idx + 1}/{total}] {q.title}",
             choices=choices,
-            default=answers.get(modify_idx),
+            default=previous_answer,
         ).execute()
 
         if answer == OTHER_SENTINEL:
-            answer = inquirer.text(
-                message="Type your answer:",
-            ).execute()
+            # Pre-populate with previous answer if user is modifying
+            text_kwargs = {"message": "Type your answer:"}
+            if previous_answer is not None:
+                text_kwargs["default"] = previous_answer
+            answer = inquirer.text(**text_kwargs).execute()
 
         answers[modify_idx] = answer
 

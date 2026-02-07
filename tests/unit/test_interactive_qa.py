@@ -167,6 +167,94 @@ class TestInteractiveQaFlowBack:
         assert BACK_SENTINEL in choice_values
 
 
+class TestInteractiveQaFlowOtherAnswerMemorization:
+    """測試 'Other' 自由文字答案在返回時被記憶"""
+
+    @patch("cafe.ui.interactive_qa.inquirer")
+    def test_other_answer_memorized_when_back_navigation(self, mock_inquirer):
+        """測試使用 Back 返回時，先前透過 Other 輸入的答案會預填到文字輸入框"""
+        questions = _make_questions(2)
+
+        mock_select = MagicMock()
+        mock_text = MagicMock()
+
+        # Q1 選 OTHER_SENTINEL, 文字輸入 "custom answer"
+        # Q2 選 BACK_SENTINEL (回到 Q1)
+        # Q1 再次選 OTHER_SENTINEL, 文字輸入時應預填 "custom answer"
+        # Q1 輸入 "modified answer"
+        # Q2 選 "Option 2A"
+        # 確認
+        mock_select.execute = MagicMock(
+            side_effect=[
+                OTHER_SENTINEL,
+                BACK_SENTINEL,
+                OTHER_SENTINEL,
+                "Option 2A",
+                "Confirm and continue",
+            ]
+        )
+        mock_text.execute = MagicMock(
+            side_effect=["custom answer", "modified answer"]
+        )
+
+        mock_inquirer.select.return_value = mock_select
+        mock_inquirer.text.return_value = mock_text
+
+        result = interactive_qa_flow(questions)
+
+        # 檢查第二次 inquirer.text 呼叫時有傳入 default 參數
+        assert mock_inquirer.text.call_count == 2
+        second_text_call = mock_inquirer.text.call_args_list[1]
+        assert "default" in second_text_call.kwargs
+        assert second_text_call.kwargs["default"] == "custom answer"
+
+        # 最終結果應為修改後的答案
+        assert "A1: modified answer" in result
+
+    @patch("cafe.ui.interactive_qa.inquirer")
+    def test_other_answer_memorized_in_modify_flow(self, mock_inquirer):
+        """測試在修改流程中，先前透過 Other 輸入的答案會預填到文字輸入框"""
+        questions = _make_questions(2)
+
+        mock_select = MagicMock()
+        mock_text = MagicMock()
+
+        # Q1 選 OTHER_SENTINEL, 文字輸入 "first answer"
+        # Q2 選 "Option 2A"
+        # 確認畫面選 "Modify an answer..."
+        # 選擇修改 Q1
+        # 重新回答 Q1 選 OTHER_SENTINEL, 文字輸入時應預填 "first answer"
+        # 輸入 "modified answer"
+        # 確認畫面選 "Confirm and continue"
+        mock_select.execute = MagicMock(
+            side_effect=[
+                OTHER_SENTINEL,
+                "Option 2A",
+                "Modify an answer...",
+                "1",  # 選擇修改 Q1 (id)
+                OTHER_SENTINEL,
+                "Confirm and continue",
+            ]
+        )
+        mock_text.execute = MagicMock(
+            side_effect=["first answer", "modified answer"]
+        )
+
+        mock_inquirer.select.return_value = mock_select
+        mock_inquirer.text.return_value = mock_text
+
+        result = interactive_qa_flow(questions)
+
+        # 檢查第二次 inquirer.text 呼叫時有傳入 default 參數
+        assert mock_inquirer.text.call_count == 2
+        second_text_call = mock_inquirer.text.call_args_list[1]
+        assert "default" in second_text_call.kwargs
+        assert second_text_call.kwargs["default"] == "first answer"
+
+        # 最終結果應為修改後的答案
+        assert "A1: modified answer" in result
+
+
 class TestInteractiveQaFlowSummaryAndModify:
     """測試摘要確認與修改流程"""
 
