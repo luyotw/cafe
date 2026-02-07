@@ -455,3 +455,215 @@ class TestDevelopPhasePromptGeneration:
             assert 'feedback_file_path' in call_kwargs
             assert call_kwargs['feedback_file_path'] is not None
             assert 'review' in call_kwargs['feedback_file_path']
+
+
+class TestReviewFeedbackDetectionByEndTime:
+    """Test that review feedback handling uses end_time comparison instead of handled_review_timestamp."""
+
+    @pytest.fixture
+    def mock_git_ops(self):
+        git_ops = MagicMock()
+        git_ops.has_unpushed_commits.return_value = False
+        git_ops.get_latest_unpushed_commit_timestamp.return_value = None
+        git_ops.branch_exists.return_value = True
+        git_ops.get_current_branch.return_value = "test-issue"
+        return git_ops
+
+    @pytest.fixture
+    def mock_agent_manager(self):
+        return MagicMock()
+
+    @pytest.fixture
+    def mock_permission_handler(self):
+        return MagicMock()
+
+    @pytest.fixture
+    def setup_issue_dir(self, tmp_path):
+        """Create basic issue directory structure."""
+        issue_dir = tmp_path / ".cafe" / "issues" / "test-issue"
+        spec_file = issue_dir / "spec" / "iteration_001" / "output.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
+        spec_file.write_text("Test spec")
+
+        plan_file = issue_dir / "plan" / "iteration_001" / "output.md"
+        plan_file.parent.mkdir(parents=True, exist_ok=True)
+        plan_file.write_text("Test plan")
+
+        agent_dir = tmp_path / ".cafe" / "agents" / "developer"
+        agent_dir.mkdir(parents=True, exist_ok=True)
+        agent_file = agent_dir / "test-dev.md"
+        agent_file.write_text("Test developer agent")
+
+        return {
+            "issue_dir": issue_dir,
+            "spec_file": spec_file,
+            "plan_file": plan_file,
+            "agent_file": agent_file,
+        }
+
+    def _create_phase(self, setup, mock_git_ops, mock_agent_manager, mock_permission_handler):
+        """Helper to create a DevelopPhase instance."""
+        phase = DevelopPhase(
+            agent_manager=mock_agent_manager,
+            permission_handler=mock_permission_handler,
+            git_ops=mock_git_ops,
+            spec_file=str(setup["spec_file"]),
+            plan_file=str(setup["plan_file"]),
+            issue_name="test-issue",
+        )
+        phase.issue_dir = setup["issue_dir"]
+        phase.phase_dir = setup["issue_dir"] / "develop"
+        phase.history_dir = phase.phase_dir / "history"
+        return phase
+
+    def test_review_already_handled_when_develop_end_time_newer(
+        self, tmp_path, setup_issue_dir, mock_git_ops, mock_agent_manager, mock_permission_handler
+    ):
+        """When develop end_time > review end_time, review feedback is already handled."""
+        setup = setup_issue_dir
+        issue_dir = setup["issue_dir"]
+
+        # Create review status with NEEDS_CHANGES
+        review_dir = issue_dir / "review"
+        review_status_file = review_dir / "status.json"
+        review_status_file.parent.mkdir(parents=True, exist_ok=True)
+        review_status_file.write_text(json.dumps({
+            "status_code": "CAFE_NEEDS_CHANGES",
+            "timestamp": "2026-01-07T10:00:00+08:00",
+            "end_time": "2026-01-07T10:05:00+08:00",
+        }))
+
+        # Create develop status with end_time AFTER review
+        develop_dir = issue_dir / "develop"
+        develop_status_file = develop_dir / "status.json"
+        develop_status_file.parent.mkdir(parents=True, exist_ok=True)
+        develop_status_file.write_text(json.dumps({
+            "phase": "develop",
+            "status": "completed",
+            "status_code": "CAFE_CONFIRMED",
+            "timestamp": "2026-01-07T10:10:00+08:00",
+            "iteration": 3,
+            "message": "Phase completed with CAFE_CONFIRMED",
+            "end_time": "2026-01-07T10:15:00+08:00",
+        }))
+
+        with patch('cafe.agents.manager.AgentManager.get_agent_file_path', return_value=str(setup["agent_file"])):
+            phase = self._create_phase(setup, mock_git_ops, mock_agent_manager, mock_permission_handler)
+            result = phase._check_if_already_completed_with_review()
+
+        # Should return completed (review feedback already handled)
+        assert result is not None
+        assert result.status == PhaseStatus.COMPLETED
+
+    def test_review_needs_handling_when_review_end_time_newer(
+        self, tmp_path, setup_issue_dir, mock_git_ops, mock_agent_manager, mock_permission_handler
+    ):
+        """When review end_time > develop end_time, review feedback needs handling."""
+        setup = setup_issue_dir
+        issue_dir = setup["issue_dir"]
+
+        # Create review status with NEEDS_CHANGES, end_time AFTER develop
+        review_dir = issue_dir / "review"
+        review_status_file = review_dir / "status.json"
+        review_status_file.parent.mkdir(parents=True, exist_ok=True)
+        review_status_file.write_text(json.dumps({
+            "status_code": "CAFE_NEEDS_CHANGES",
+            "timestamp": "2026-01-07T10:20:00+08:00",
+            "end_time": "2026-01-07T10:25:00+08:00",
+        }))
+
+        # Create develop status with end_time BEFORE review
+        develop_dir = issue_dir / "develop"
+        develop_status_file = develop_dir / "status.json"
+        develop_status_file.parent.mkdir(parents=True, exist_ok=True)
+        develop_status_file.write_text(json.dumps({
+            "phase": "develop",
+            "status": "completed",
+            "status_code": "CAFE_CONFIRMED",
+            "timestamp": "2026-01-07T10:10:00+08:00",
+            "iteration": 3,
+            "message": "Phase completed with CAFE_CONFIRMED",
+            "end_time": "2026-01-07T10:15:00+08:00",
+        }))
+
+        with patch('cafe.agents.manager.AgentManager.get_agent_file_path', return_value=str(setup["agent_file"])):
+            phase = self._create_phase(setup, mock_git_ops, mock_agent_manager, mock_permission_handler)
+            result = phase._check_if_already_completed_with_review()
+
+        # Should return None (need to handle review feedback)
+        assert result is None
+        assert phase._has_review_feedback is True
+
+    def test_review_needs_handling_when_develop_has_no_end_time(
+        self, tmp_path, setup_issue_dir, mock_git_ops, mock_agent_manager, mock_permission_handler
+    ):
+        """When develop has no end_time, assume review feedback needs handling."""
+        setup = setup_issue_dir
+        issue_dir = setup["issue_dir"]
+
+        # Create review status with NEEDS_CHANGES
+        review_dir = issue_dir / "review"
+        review_status_file = review_dir / "status.json"
+        review_status_file.parent.mkdir(parents=True, exist_ok=True)
+        review_status_file.write_text(json.dumps({
+            "status_code": "CAFE_NEEDS_CHANGES",
+            "timestamp": "2026-01-07T10:20:00+08:00",
+            "end_time": "2026-01-07T10:25:00+08:00",
+        }))
+
+        # Create develop status WITHOUT end_time
+        develop_dir = issue_dir / "develop"
+        develop_status_file = develop_dir / "status.json"
+        develop_status_file.parent.mkdir(parents=True, exist_ok=True)
+        develop_status_file.write_text(json.dumps({
+            "phase": "develop",
+            "status": "completed",
+            "status_code": "CAFE_CONFIRMED",
+            "timestamp": "2026-01-07T10:10:00+08:00",
+            "iteration": 3,
+            "message": "Phase completed with CAFE_CONFIRMED",
+        }))
+
+        with patch('cafe.agents.manager.AgentManager.get_agent_file_path', return_value=str(setup["agent_file"])):
+            phase = self._create_phase(setup, mock_git_ops, mock_agent_manager, mock_permission_handler)
+            result = phase._check_if_already_completed_with_review()
+
+        # Should return None (can't determine, assume needs handling)
+        assert result is None
+
+    def test_review_needs_handling_when_review_has_no_end_time(
+        self, tmp_path, setup_issue_dir, mock_git_ops, mock_agent_manager, mock_permission_handler
+    ):
+        """When review has no end_time, assume review feedback needs handling."""
+        setup = setup_issue_dir
+        issue_dir = setup["issue_dir"]
+
+        # Create review status with NEEDS_CHANGES but NO end_time
+        review_dir = issue_dir / "review"
+        review_status_file = review_dir / "status.json"
+        review_status_file.parent.mkdir(parents=True, exist_ok=True)
+        review_status_file.write_text(json.dumps({
+            "status_code": "CAFE_NEEDS_CHANGES",
+            "timestamp": "2026-01-07T10:20:00+08:00",
+        }))
+
+        # Create develop status with end_time
+        develop_dir = issue_dir / "develop"
+        develop_status_file = develop_dir / "status.json"
+        develop_status_file.parent.mkdir(parents=True, exist_ok=True)
+        develop_status_file.write_text(json.dumps({
+            "phase": "develop",
+            "status": "completed",
+            "status_code": "CAFE_CONFIRMED",
+            "timestamp": "2026-01-07T10:10:00+08:00",
+            "iteration": 3,
+            "message": "Phase completed with CAFE_CONFIRMED",
+            "end_time": "2026-01-07T10:15:00+08:00",
+        }))
+
+        with patch('cafe.agents.manager.AgentManager.get_agent_file_path', return_value=str(setup["agent_file"])):
+            phase = self._create_phase(setup, mock_git_ops, mock_agent_manager, mock_permission_handler)
+            result = phase._check_if_already_completed_with_review()
+
+        # Should return None (can't determine, assume needs handling)
+        assert result is None
