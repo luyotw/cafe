@@ -45,6 +45,30 @@ class SummaryDisplay:
             return "--"
         return f"{count:,}"
 
+    def _format_entry(self, entry: TimelineEntry, prefix: str) -> str:
+        """Format an entry for display with the given prefix.
+
+        Args:
+            entry: Timeline entry to format
+            prefix: Prefix string (e.g., "[Phase] Spec" or "Develop Iteration 1")
+
+        Returns:
+            Formatted string for the entry
+        """
+        symbol = self.STATUS_SYMBOLS.get(entry.status, "?")
+        start_time = format_timestamp_utc(entry.start_time)
+
+        # If we have end_time, show fixed duration (regardless of status)
+        if entry.end_time:
+            duration_str = format_duration(entry.end_time - entry.start_time)
+            return f"{symbol} {prefix}: {start_time} - {format_timestamp_utc(entry.end_time)} ({duration_str})"
+        elif entry.status == PhaseStatus.IN_PROGRESS:
+            elapsed = calculate_elapsed_time(entry.start_time)
+            duration_str = format_duration(elapsed)
+            return f"{symbol} {prefix}: {start_time} (elapsed: {duration_str})"
+        else:
+            return f"{symbol} {prefix}: {start_time}"
+
     def format_phase_entry(self, entry: TimelineEntry) -> str:
         """Format a phase entry for display.
 
@@ -54,18 +78,8 @@ class SummaryDisplay:
         Returns:
             Formatted string for the phase
         """
-        symbol = self.STATUS_SYMBOLS.get(entry.status, "?")
-        start_time = format_timestamp_utc(entry.start_time)
-
-        if entry.status == PhaseStatus.IN_PROGRESS:
-            elapsed = calculate_elapsed_time(entry.start_time)
-            duration_str = format_duration(elapsed)
-            return f"{symbol} [Phase] {entry.name}: {start_time} (elapsed: {duration_str})"
-        elif entry.end_time:
-            duration_str = format_duration(entry.end_time - entry.start_time)
-            return f"{symbol} [Phase] {entry.name}: {start_time} - {format_timestamp_utc(entry.end_time)} ({duration_str})"
-        else:
-            return f"{symbol} [Phase] {entry.name}: {start_time}"
+        prefix = f"[Phase] {entry.name}"
+        return self._format_entry(entry, prefix)
 
     def format_iteration_entry(self, entry: TimelineEntry) -> str:
         """Format an iteration entry for display.
@@ -76,18 +90,8 @@ class SummaryDisplay:
         Returns:
             Formatted string for the iteration
         """
-        symbol = self.STATUS_SYMBOLS.get(entry.status, "?")
-        start_time = format_timestamp_utc(entry.start_time)
-
-        if entry.status == PhaseStatus.IN_PROGRESS:
-            elapsed = calculate_elapsed_time(entry.start_time)
-            duration_str = format_duration(elapsed)
-            return f"{symbol} {entry.phase.capitalize()} {entry.name}: {start_time} (elapsed: {duration_str})"
-        elif entry.end_time:
-            duration_str = format_duration(entry.end_time - entry.start_time)
-            return f"{symbol} {entry.phase.capitalize()} {entry.name}: {start_time} - {format_timestamp_utc(entry.end_time)} ({duration_str})"
-        else:
-            return f"{symbol} {entry.phase.capitalize()} {entry.name}: {start_time}"
+        prefix = f"{entry.phase.capitalize()} {entry.name}"
+        return self._format_entry(entry, prefix)
 
     def apply_status_styling(self, text: str, status: PhaseStatus) -> str:
         """Apply styling based on status.
