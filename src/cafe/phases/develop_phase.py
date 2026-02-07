@@ -215,30 +215,6 @@ class DevelopPhase(Phase):
             return None
 
 
-    def _save_progress_with_review_timestamp(
-        self,
-        status_code: PhaseStatusCode,
-        handled_review_timestamp: Optional[str] = None,
-    ) -> None:
-        """Save phase progress to status.json with review timestamp tracking.
-
-        Args:
-            status_code: Phase status code
-            handled_review_timestamp: Timestamp of review feedback that was handled (if any)
-        """
-        # Call base class method first
-        self._save_progress(status_code)
-
-        # Add handled_review_timestamp if provided
-        if handled_review_timestamp:
-            status_file = self._get_status_file()
-            with open(status_file, 'r', encoding='utf-8') as f:
-                progress_dict = json.load(f)
-            progress_dict["handled_review_timestamp"] = handled_review_timestamp
-            with open(status_file, 'w', encoding='utf-8') as f:
-                json.dump(progress_dict, f, ensure_ascii=False, indent=2)
-
-
     def _save_issue_config(self, base_branch: str, feature_branch: str) -> None:
         """Save issue configuration including base branch.
 
@@ -337,28 +313,25 @@ class DevelopPhase(Phase):
                 # If error, continue with normal flow
                 pass
 
-        # Check if review feedback has already been handled
+        # Check if review feedback has already been handled by comparing end_time
         if self._has_review_feedback:
-            review_timestamp = review_status.get("timestamp", "")
+            review_end_time_str = review_status.get("end_time")
+            develop_end_time = getattr(existing_progress, 'end_time', None)
 
-            # Load develop status.json to check handled_review_timestamp
-            status_file = self.history_dir.parent / "status.json"
-            if status_file.exists():
-                with open(status_file, 'r', encoding='utf-8') as f:
-                    develop_status = json.load(f)
-                    handled_review_timestamp = develop_status.get("handled_review_timestamp")
-
-                    if handled_review_timestamp == review_timestamp:
-                        # This review has already been handled, clear the flag and continue to check PR comments
-                        self._has_review_feedback = False
-                        print(f"ℹ️  Review feedback already addressed, checking for PR comments...")
-                        # Don't return here - continue to check PR comments below
-                    else:
-                        # Review exists and hasn't been handled yet, continue execution
-                        return None  # Don't return early - let execution continue to handle review feedback
+            if review_end_time_str and develop_end_time:
+                from datetime import datetime
+                review_end_time = datetime.fromisoformat(review_end_time_str)
+                if develop_end_time > review_end_time:
+                    # Develop completed after review, feedback was already handled
+                    self._has_review_feedback = False
+                    print(f"ℹ️  Review feedback already addressed, checking for PR comments...")
+                    # Don't return here - continue to check PR comments below
+                else:
+                    # Review is newer than develop, need to handle feedback
+                    return None
             else:
-                # Review exists and hasn't been handled yet, continue execution
-                return None  # Don't return early - let execution continue to handle review feedback
+                # Can't determine timing, assume review feedback needs handling
+                return None
 
 
         # No review feedback or PR comments, phase is truly completed
@@ -1380,17 +1353,6 @@ If NO (does not meet criteria): Continue with development work and return approp
                                     "status_code": response_status.value,
                                 },
                             )
-
-            # Phase-specific post-processing: Handle review feedback timestamp
-            if result and result.status == PhaseStatus.COMPLETED:
-                review_status = self._load_review_status()
-                if review_status and review_status.get("status_code") == "CAFE_NEEDS_CHANGES":
-                    handled_review_timestamp = review_status.get("timestamp")
-                    # Update status.json with handled_review_timestamp
-                    self._save_progress_with_review_timestamp(
-                        PhaseStatusCode.CONFIRMED,
-                        handled_review_timestamp
-                    )
 
             if result:
                 return result
