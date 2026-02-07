@@ -7,7 +7,7 @@ CAFE (CLI Agent Flow Engine) is an AI-driven development workflow automation sys
 
 CAFE is actively evolving—we're continuously iterating based on real-world usage and feedback to improve stability, usability, and integration with various AI agents.
 
-![image](https://github.com/luyotw/cafe/blob/main/images/CAFE-Flow.png)
+![image](https://github.com/luyotw/cafe/blob/main/images/cafe-flow.png)
 
 ---
 
