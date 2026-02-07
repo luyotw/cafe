@@ -418,3 +418,58 @@ class TestBasicPrinciples:
         assert "## Basic Principles" not in content
         # But should still have the main checklist
         assert "## Checklist" in content
+
+
+class TestSpecChecklistXmlInstructions:
+    """測試 spec checklist 包含 XML 問題檔產出指示"""
+
+    def test_iteration_1_contains_xml_instructions(self, tmp_path):
+        """測試 iteration 1 checklist 包含 XML 問題檔指示"""
+        checklist_path = tmp_path / "checklist.md"
+
+        generate_spec_checklist(
+            iteration=1,
+            agent_name="Roger",
+            current_spec_file=".cafe/issues/test/spec/iteration_001/output.md",
+            prev_spec_file=None,
+            checklist_file_path=checklist_path,
+            questions_xml_file=".cafe/issues/test/spec/iteration_001/questions.xml",
+        )
+
+        content = checklist_path.read_text()
+        assert "questions.xml" in content
+        assert "<questions>" in content
+        assert "<question" in content
+        assert "CAFE_NEED_CLARIFICATION" in content
+
+    def test_iteration_n_contains_xml_instructions(self, tmp_path):
+        """測試 iteration N checklist 包含 XML 問題檔指示"""
+        checklist_path = tmp_path / "checklist.md"
+
+        generate_spec_checklist(
+            iteration=2,
+            agent_name="Roger",
+            current_spec_file=".cafe/issues/test/spec/iteration_002/output.md",
+            prev_spec_file=".cafe/issues/test/spec/iteration_001/output.md",
+            checklist_file_path=checklist_path,
+            questions_xml_file=".cafe/issues/test/spec/iteration_002/questions.xml",
+        )
+
+        content = checklist_path.read_text()
+        assert "questions.xml" in content
+        assert "<questions>" in content
+
+    def test_no_xml_instructions_without_questions_xml_file(self, tmp_path):
+        """測試不提供 questions_xml_file 時不包含 XML 指示（向後相容）"""
+        checklist_path = tmp_path / "checklist.md"
+
+        generate_spec_checklist(
+            iteration=1,
+            agent_name="Roger",
+            current_spec_file=".cafe/issues/test/spec/iteration_001/output.md",
+            prev_spec_file=None,
+            checklist_file_path=checklist_path,
+        )
+
+        content = checklist_path.read_text()
+        assert "questions.xml" not in content

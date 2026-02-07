@@ -350,6 +350,13 @@ class SpecPhase(Phase):
                 except (ValueError, OSError):
                     template_file = str(self.template_path)
 
+            # Compute questions.xml path for this iteration
+            questions_xml_path = self._get_iteration_dir(self.iteration) / "questions.xml"
+            try:
+                questions_xml_file = to_cwd_relative_path(questions_xml_path)
+            except (ValueError, OSError):
+                questions_xml_file = str(questions_xml_path.resolve())
+
             generate_spec_checklist(
                 iteration=self.iteration,
                 agent_name=self.pm_agent,
@@ -359,6 +366,7 @@ class SpecPhase(Phase):
                 basic_principles=basic_principles,
                 template_file=template_file,
                 template_mode=self.template_mode,
+                questions_xml_file=questions_xml_file,
             )
 
             # Prepare user_input for this iteration
@@ -386,6 +394,12 @@ class SpecPhase(Phase):
             except ValueError:
                 checklist_pattern = str(checklist_file.resolve())
 
+            # Get questions.xml path for allowed_tools
+            try:
+                questions_xml_pattern = to_cwd_relative_path(questions_xml_path)
+            except (ValueError, OSError):
+                questions_xml_pattern = str(questions_xml_path.resolve())
+
             # Merge base tools with previous iteration's tools (if any)
             base_allowed_tools = [
                 "read",
@@ -396,6 +410,7 @@ class SpecPhase(Phase):
                 "web_search",
                 f"edit({spec_file_pattern})",
                 f"edit({checklist_pattern})",
+                f"edit({questions_xml_pattern})",
             ]
             allowed_tools = self._merge_allowed_tools(base_allowed_tools)
 

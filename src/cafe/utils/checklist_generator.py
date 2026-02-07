@@ -21,6 +21,7 @@ def generate_spec_checklist(
     basic_principles: Optional[str] = None,
     template_file: Optional[str] = None,
     template_mode: str = "auto",
+    questions_xml_file: Optional[str] = None,
 ) -> None:
     """Generate checklist file for spec phase.
 
@@ -33,6 +34,7 @@ def generate_spec_checklist(
         basic_principles: Basic principles text in "- item" format (optional)
         template_file: Path to spec template file (optional)
         template_mode: Template selection mode ('auto' or 'manual', default: 'auto')
+        questions_xml_file: Path to questions.xml file for interactive Q&A (optional)
     """
     # Get agent file path
     agent_file = AgentManager.get_agent_file_path(agent_name, "pm")
@@ -88,6 +90,18 @@ def generate_spec_checklist(
     }
     if prev_spec_file:
         placeholders["prev_spec_file"] = prev_spec_file
+
+    # Add XML questions instruction if path is provided
+    if questions_xml_file:
+        # Pre-resolve {questions_xml_file} in the instruction template before
+        # adding it as a placeholder value, since resolve_checklist_placeholders
+        # does a single pass and cannot resolve nested placeholders.
+        xml_instruction = checklist_templates.SPEC_XML_QUESTIONS_INSTRUCTION.replace(
+            "{questions_xml_file}", questions_xml_file
+        )
+        placeholders["xml_questions_instruction"] = xml_instruction
+    else:
+        placeholders["xml_questions_instruction"] = ""
 
     # Resolve placeholders
     checklist_content = resolve_checklist_placeholders(checklist_content, placeholders)
