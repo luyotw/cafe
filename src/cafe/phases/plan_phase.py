@@ -206,7 +206,7 @@ class PlanPhase(Phase):
             from cafe.utils.git_utils import to_cwd_relative_path
 
             # Define basic principles (language selection is dynamic based on sync setting)
-            language_instruction = "the original requirement's language" if self._sync_github else "your native language"
+            language_instruction = 'the same language as the "Initial Requirements" section in the spec document' if self._sync_github else "your native language"
             basic_principles = f"""- Write plan content in {language_instruction}"""
 
             # Get template file path (convert to relative path for display)

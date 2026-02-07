@@ -1583,7 +1583,7 @@ Return ONLY the status code (CAFE_CONFIRMED or CAFE_NEEDS_CHANGES) with no expla
         from cafe.utils.checklist_generator import generate_pr_checklist
 
         # Define basic principles
-        basic_principles = """- Use same language as original requirements for PR title and description"""
+        basic_principles = """- Use the same language as the "Initial Requirements" section in the spec document for PR title and description"""
 
         checklist_path = iteration_dir / "checklist.md"
         output_file = iteration_dir / "output.md"
@@ -1633,14 +1633,12 @@ Return ONLY the status code (CAFE_CONFIRMED or CAFE_NEEDS_CHANGES) with no expla
             task_instruction = f"**Task:** Edit `{output_file_pattern}` to generate PR title and description for this Pull Request."
             body_instruction = """**Body:**
 - Use Markdown format
-- Write in same language as original requirements
 - Keep the existing structure: Summary, Changes, and Test Plan sections
 - Fill in each section with specific details"""
         else:
             task_instruction = f"**Task:** Edit `{output_file_pattern}` to UPDATE the existing PR content with new changes (iteration {self.iteration})."
             body_instruction = """**Body:**
 - Use Markdown format
-- Write in same language as original requirements
 - UPDATE existing sections to reflect the complete PR state
 - ADD new changes to the Changes section (preserve previous changes)"""
 
@@ -1862,7 +1860,7 @@ Please return only one status code (example: CAFE_CONFIRMED), with no other cont
         plan_file = self._get_versioned_file_path("plan", None, plan_dir)
 
         # Define basic principles
-        basic_principles = """- Use same language as original requirements for PR title and description"""
+        basic_principles = """- Use the same language as the "Initial Requirements" section in the spec document for PR title and description"""
 
         # Generate checklist using the same rules as normal execution
         generate_pr_checklist(
