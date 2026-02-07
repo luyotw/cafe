@@ -130,7 +130,8 @@ class TimelineBuilder:
         if end_timestamp_str:
             end_time = self._parse_timestamp(end_timestamp_str)
 
-        if status == PhaseStatus.IN_PROGRESS:
+        # Only calculate elapsed_time if we don't have end_time (mutually exclusive)
+        if status == PhaseStatus.IN_PROGRESS and end_time is None:
             # Use utility function for calculating elapsed time
             try:
                 elapsed_time = calculate_elapsed_time(start_time)
@@ -191,7 +192,8 @@ class TimelineBuilder:
         if end_timestamp_str:
             end_time = self._parse_timestamp(end_timestamp_str)
 
-        if status == PhaseStatus.IN_PROGRESS:
+        # Only calculate elapsed_time if we don't have end_time (mutually exclusive)
+        if status == PhaseStatus.IN_PROGRESS and end_time is None:
             # Use utility function for calculating elapsed time
             try:
                 elapsed_time = calculate_elapsed_time(start_time)
