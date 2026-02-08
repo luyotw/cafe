@@ -201,19 +201,29 @@ You can create and manage custom templates with the `cafe template` command set.
 
 CAFE provides additional commands for managing issues and viewing execution details:
 
+#### Project Setup
 - `cafe init` - Initialize CAFE configuration for the project
-- `cafe prepare` - Prepare issue environment (directory, config, git branch)
-- `cafe close` - Close current feature and return to base branch
-- `cafe restore` - Restore archived issue from backup
-- `cafe reset` - Remove iterations from a phase when agent behaves unexpectedly
-- `cafe config` - Manage CAFE configuration
-- `cafe ls` - List all issues
-- `cafe rm` - Remove one or more issues and all their data
-- `cafe show` - Display iteration file contents (output, checklist, error, etc.)
-- `cafe chat` - Open interactive chat with specified role Agent
-- `cafe summary` - Display a comprehensive timeline of all workflow phases and iterations
-- `cafe template` - Manage plan and spec templates
-- `cafe agent` - Manage agents
+
+#### Workflow Execution
+- `cafe prepare` - Prepare issue environment (creates worktree, initializes config and git branch)
+- `cafe make` - Execute the complete automated workflow from current phase to PR creation
+- `cafe close` - Close current feature and return to base branch (syncs changes, removes worktree)
+
+#### Monitoring & Control
+- `cafe summary` - Display a comprehensive timeline of all workflow phases, iterations, and execution statistics
+- `cafe show` - Display iteration file contents (spec, plan, output, checklist, questions, error logs, etc.)
+- `cafe chat <pm|developer|reviewer>` - Open interactive chat with a specific role agent (extremely useful for confirming details or making changes outside the spec)
+- `cafe reset` - Rollback the previous iteration (CAFE's basic execution unit), useful for redoing work or reverting a mistaken confirm (note: does not revert git changes)
+
+#### Issue Management
+- `cafe ls` - List all CAFE issues with their worktree paths and current status
+- `cafe restore` - Restore archived issues from backup (recover closed issues and chat with historical agents)
+- `cafe rm` - Remove one or more issues and all their data without backing up (use with caution)
+
+#### Customization
+- `cafe config` - View and manage CAFE configuration settings
+- `cafe agent create` - Create custom agents with specific behaviors and prompts tailored to your needs
+- `cafe template create` - Create custom spec and plan templates for specialized workflows or domain-specific requirements
 
 Use `cafe <command> --help` to see detailed usage for each command.
 
