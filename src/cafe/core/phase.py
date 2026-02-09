@@ -1945,7 +1945,7 @@ Do NOT return a status code until ALL checklist items are marked as complete [x]
                 # Validate checklist again
                 retry_result = validate_checklist(checklist_path)
 
-                if retry_result.is_complete:
+                if retry_result.is_complete and retry_status_code is not None:
                     print(f"✅ Checklist validation passed after retry {retry_count}")
 
                     # Merge streaming logs
@@ -1987,8 +1987,11 @@ Do NOT return a status code until ALL checklist items are marked as complete [x]
 
                     return retry_response, retry_status_code, True
 
-                else:
+                elif not retry_result.is_complete:
                     print(f"⚠️  Checklist still has {retry_result.unchecked_count} unchecked items after retry {retry_count}")
+                else:
+                    # Checklist is complete but no valid status code extracted
+                    print(f"⚠️  Checklist complete but failed to extract valid status code from retry response (attempt {retry_count}/{max_retries})")
 
             except Exception as e:
                 print(f"⚠️  Failed to retry checklist completion: {e}")
