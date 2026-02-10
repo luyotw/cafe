@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.2]
+
+### Fixed
+- Fixed critical bug where `duration_ms` and `duration_api_ms` were lost when `response_parser` overwrites `token_usage` in executor
+- Fixed `cafe summary` not displaying model name for PR phase iterations due to `_update_iteration_history` overwriting model with None
+- Fixed `_update_iteration_history` overwriting existing field values when called multiple times (e.g., PR phase calls it after agent execution, then after PR creation)
+- Fixed `cafe show output` command stripping checkbox markup `[x]` due to Rich library formatting
+- Fixed checklist validation retry logic saving null status_code when retry response contained interference strings
+- Fixed conditional questions.xml checklist item description to be clearer about when to check vs complete
+- Fixed timeline display preventing simultaneous setting of `end_time` and `elapsed_time` fields
+
+### Changed
+- Improved `_update_iteration_history` to use incremental updates - only overwrites fields when parameters are explicitly provided
+- Improved executor to preserve `duration_ms` extracted from streaming when `response_parser` returns new token_usage object
+- Improved checklist retry validation to verify both checklist completion and successful status_code extraction
+- Improved README "Other Features" section with better categorization (Project Setup, Workflow Execution, Monitoring & Control, Issue Management, Customization)
+- Clarified `cafe reset` description to note it doesn't revert git changes
+
 ## [0.1.1]
 
 ### Added
