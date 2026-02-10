@@ -1338,6 +1338,9 @@ Return ONLY the status code (CAFE_CONFIRMED or CAFE_NEEDS_CHANGES) with no expla
         except ValueError:
             output_display = str(output_file)
 
+        # Display token usage summary before returning
+        self._print_token_usage_summary()
+
         return PhaseResult(
             status=PhaseStatus.COMPLETED,
             message=f"Organized PR comments into todo list ({output_display})",
