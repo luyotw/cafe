@@ -971,3 +971,189 @@ class TestPrepareCommandSetupMode:
         # 驗證沒有詢問 templates 或其他設定
         mock_template_list.assert_not_called()
         mock_phase_confirm.assert_not_called()
+
+
+class TestPrepareCommandPostPrTodoList:
+    """Test --post-pr-todo-list option in cafe prepare command."""
+
+    @patch("cafe.ui.phase_prompts.prompt_text")
+    @patch("cafe.ui.phase_prompts.GitHubOps")
+    @patch("cafe.ui.cli.GitHubOps")
+    @patch("cafe.ui.phase_prompts.prompt_confirm")
+    @patch("cafe.ui.cli.prompt_confirm")
+    @patch("cafe.ui.template_selector.prompt_list")
+    @patch("cafe.ui.phase_prompts.prompt_list")
+    @patch("cafe.ui.cli.prompt_list")
+    @patch("cafe.ui.cli.prompt_text")
+    def test_quick_setup_sets_post_todo_list_true(
+        self,
+        mock_prompt_text_cli,
+        mock_cli_list,
+        mock_phase_list,
+        mock_template_list,
+        mock_cli_confirm,
+        mock_phase_confirm,
+        MockGitHubOps_cli,
+        MockGitHubOps_phase,
+        mock_prompt_text_phase,
+        temp_repo_dir,
+        mock_git_ops,
+    ):
+        """Test 3.1: Quick setup モードでは pr_config.post_todo_list が True に設定される。"""
+        mock_github_ops = MagicMock()
+        MockGitHubOps_cli.return_value = mock_github_ops
+        MockGitHubOps_phase.return_value = mock_github_ops
+        mock_github_ops.extract_issue_number.return_value = "123"
+
+        mock_prompt_text_cli.return_value = "quick-setup-test"
+        mock_prompt_text_phase.return_value = "123"
+        mock_cli_confirm.return_value = False  # worktree (n)
+
+        mock_phase_list.return_value = "2. Fetch from GitHub Issue"
+        mock_cli_list.return_value = "Quick setup (use recommended defaults)"
+
+        result = runner.invoke(app, ["prepare"])
+
+        assert result.exit_code == 0
+
+        config_file = temp_repo_dir / ".cafe" / "issues" / "quick-setup-test" / "issue.yaml"
+        with open(config_file) as f:
+            config_data = yaml.safe_load(f)
+            assert config_data["pr"]["auto_create"] is True
+            assert config_data["pr"]["post_todo_list"] is True
+
+    @patch("cafe.ui.phase_prompts.prompt_text")
+    @patch("cafe.ui.phase_prompts.GitHubOps")
+    @patch("cafe.ui.cli.GitHubOps")
+    @patch("cafe.ui.phase_prompts.prompt_confirm")
+    @patch("cafe.ui.cli.prompt_confirm")
+    @patch("cafe.ui.template_selector.prompt_list")
+    @patch("cafe.ui.phase_prompts.prompt_list")
+    @patch("cafe.ui.cli.prompt_list")
+    @patch("cafe.ui.cli.prompt_text")
+    def test_custom_config_auto_create_true_prompts_post_todo_list(
+        self,
+        mock_prompt_text_cli,
+        mock_cli_list,
+        mock_phase_list,
+        mock_template_list,
+        mock_cli_confirm,
+        mock_phase_confirm,
+        MockGitHubOps_cli,
+        MockGitHubOps_phase,
+        mock_prompt_text_phase,
+        temp_repo_dir,
+        mock_git_ops,
+    ):
+        """Test 3.2: Custom 設定モードで auto_create=True の場合、post_todo_list が尋ねられる。"""
+        mock_github_ops = MagicMock()
+        MockGitHubOps_cli.return_value = mock_github_ops
+        MockGitHubOps_phase.return_value = mock_github_ops
+        mock_github_ops.extract_issue_number.return_value = "42"
+
+        mock_prompt_text_cli.return_value = "custom-auto-create"
+        mock_prompt_text_phase.return_value = "42"
+        # worktree=No, sync_spec=True, sync_plan=True, auto_create=True, post_todo_list=False
+        mock_cli_confirm.side_effect = [False, True, True, True, False]
+        mock_phase_confirm.side_effect = [True]  # auto_create prompt in phase_prompts
+
+        mock_phase_list.return_value = "2. Fetch from GitHub Issue"
+        mock_cli_list.return_value = "Custom configuration"
+        mock_template_list.return_value = "default (system default)"
+
+        result = runner.invoke(app, ["prepare"])
+
+        assert result.exit_code == 0
+
+        # post_todo_list should have been set (either True or False from prompt)
+        config_file = temp_repo_dir / ".cafe" / "issues" / "custom-auto-create" / "issue.yaml"
+        with open(config_file) as f:
+            config_data = yaml.safe_load(f)
+            # post_todo_list should be present when auto_create is True
+            assert "post_todo_list" in config_data.get("pr", {})
+
+    @patch("cafe.ui.phase_prompts.prompt_text")
+    @patch("cafe.ui.phase_prompts.GitHubOps")
+    @patch("cafe.ui.cli.GitHubOps")
+    @patch("cafe.ui.phase_prompts.prompt_confirm")
+    @patch("cafe.ui.cli.prompt_confirm")
+    @patch("cafe.ui.template_selector.prompt_list")
+    @patch("cafe.ui.phase_prompts.prompt_list")
+    @patch("cafe.ui.cli.prompt_list")
+    @patch("cafe.ui.cli.prompt_text")
+    def test_custom_config_auto_create_false_does_not_prompt_post_todo_list(
+        self,
+        mock_prompt_text_cli,
+        mock_cli_list,
+        mock_phase_list,
+        mock_template_list,
+        mock_cli_confirm,
+        mock_phase_confirm,
+        MockGitHubOps_cli,
+        MockGitHubOps_phase,
+        mock_prompt_text_phase,
+        temp_repo_dir,
+        mock_git_ops,
+    ):
+        """Test 3.3: Custom 設定モードで auto_create=False の場合、post_todo_list は尋ねられない。"""
+        mock_github_ops = MagicMock()
+        MockGitHubOps_cli.return_value = mock_github_ops
+        MockGitHubOps_phase.return_value = mock_github_ops
+        mock_github_ops.extract_issue_number.return_value = "42"
+
+        mock_prompt_text_cli.return_value = "custom-no-auto-create"
+        mock_prompt_text_phase.return_value = "42"
+        # worktree=No, sync_spec=True, sync_plan=True
+        mock_cli_confirm.side_effect = [False, True, True]
+        # auto_create prompt in phase_prompts returns False
+        mock_phase_confirm.side_effect = [False]
+
+        mock_phase_list.return_value = "2. Fetch from GitHub Issue"
+        mock_cli_list.return_value = "Custom configuration"
+        mock_template_list.return_value = "default (system default)"
+
+        result = runner.invoke(app, ["prepare"])
+
+        assert result.exit_code == 0
+
+        # post_todo_list should NOT be set when auto_create is False
+        config_file = temp_repo_dir / ".cafe" / "issues" / "custom-no-auto-create" / "issue.yaml"
+        with open(config_file) as f:
+            config_data = yaml.safe_load(f)
+            assert "post_todo_list" not in config_data.get("pr", {})
+
+    def test_non_interactive_post_pr_todo_list_flag_saves_to_config(self, temp_repo_dir, mock_git_ops):
+        """Test 3.4/3.5: --no-interactive モードで --post-pr-todo-list フラグが issue.yaml に保存される。"""
+        result = runner.invoke(app, [
+            "prepare", "noninteractive-test",
+            "--no-interactive",
+            "--input-method", "manual",
+            "--rigor", "medium",
+            "--auto-create-pr",
+            "--post-pr-todo-list",
+        ])
+
+        assert result.exit_code == 0
+
+        config_file = temp_repo_dir / ".cafe" / "issues" / "noninteractive-test" / "issue.yaml"
+        with open(config_file) as f:
+            config_data = yaml.safe_load(f)
+            assert config_data["pr"]["post_todo_list"] is True
+
+    def test_non_interactive_no_post_pr_todo_list_flag_saves_false_to_config(self, temp_repo_dir, mock_git_ops):
+        """Test 3.4b: --no-interactive モードで --no-post-pr-todo-list フラグが issue.yaml に保存される。"""
+        result = runner.invoke(app, [
+            "prepare", "noninteractive-false-test",
+            "--no-interactive",
+            "--input-method", "manual",
+            "--rigor", "medium",
+            "--auto-create-pr",
+            "--no-post-pr-todo-list",
+        ])
+
+        assert result.exit_code == 0
+
+        config_file = temp_repo_dir / ".cafe" / "issues" / "noninteractive-false-test" / "issue.yaml"
+        with open(config_file) as f:
+            config_data = yaml.safe_load(f)
+            assert config_data["pr"]["post_todo_list"] is False
