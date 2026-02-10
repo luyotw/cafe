@@ -40,11 +40,9 @@ SPEC_EXECUTION_STEPS_ITERATION_N = """## Checklist
 {xml_questions_instruction}"""
 
 SPEC_XML_QUESTIONS_INSTRUCTION = """
-## Interactive Q&A Questions (Required when returning CAFE_NEED_CLARIFICATION)
+## Interactive Q&A Questions (Conditional)
 
-If you are returning CAFE_NEED_CLARIFICATION, you MUST also write your clarification questions as an XML file to `{questions_xml_file}`.
-
-[ ] Write questions to {questions_xml_file} in the following XML format:
+[ ] If returning CAFE_NEED_CLARIFICATION: Write questions to {questions_xml_file} in the following XML format, otherwise mark this item as [x]:
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
