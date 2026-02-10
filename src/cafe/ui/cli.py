@@ -3397,6 +3397,11 @@ def pr(
         "--interactive/--no-interactive",
         help="Allow interactive prompts (default: True)",
     ),
+    post_todo_list: Optional[bool] = typer.Option(
+        None,
+        "--post-todo-list/--no-post-todo-list",
+        help="Post organized todo list as PR comment (default: auto-detect from config)",
+    ),
 ) -> None:
     """Create pull request for the issue.
 
@@ -3470,6 +3475,7 @@ def pr(
             force_push=force,
             interactive=interactive,
             base_branch=base if base != "main" else None,  # Pass base only if not default
+            post_todo_list=post_todo_list,
         )
 
         result = phase.execute()
