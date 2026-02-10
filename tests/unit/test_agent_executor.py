@@ -552,6 +552,46 @@ class TestStreamingExecution:
         assert "Not valid JSON" in captured.out
 
 
+    def test_execute_with_streaming_preserves_duration_with_response_parser(self, capsys) -> None:
+        """Test that duration_ms from result message is preserved when response_parser overwrites token_usage."""
+        config = AgentConfig(name="David", cli=AgentCLI.CLAUDE)
+        executor = AgentExecutor(config)
+
+        # Mock Popen process with stream-json output including result message with duration
+        mock_process = MagicMock()
+        mock_process.stdout.readline.side_effect = [
+            '{"message": {"content": [{"type": "text", "text": "Hello"}]}, "usage": {"input_tokens": 10, "output_tokens": 5, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}}\n',
+            '{"type": "result", "duration_ms": 12345, "duration_api_ms": 12000, "total_cost_usd": 0.05, "usage": {"input_tokens": 10, "output_tokens": 5, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}}\n',
+            "",
+        ]
+        mock_process.stderr.read.return_value = ""
+        mock_process.wait.return_value = 0
+
+        # response_parser that returns AgentResponse WITHOUT duration
+        def mock_parser(output_lines):
+            return AgentResponse(
+                response="Parsed response",
+                token_usage=TokenUsage(input_tokens=10, output_tokens=5),
+                permission_denials=[],
+            )
+
+        with patch("subprocess.run", return_value=MagicMock(stdout='{"session_id": "test-session"}', returncode=0)), \
+             patch("subprocess.Popen", return_value=mock_process), \
+             patch("sys.platform", "win32"):
+            agent_response = executor._execute_with_streaming(
+                cmd=["claude", "--print", "test"],
+                cli_name="Claude",
+                parse_stream_json=True,
+                response_parser=mock_parser,
+            )
+
+        # response_parser's response should be used
+        assert agent_response.response == "Parsed response"
+        # duration_ms from streaming should be preserved
+        assert agent_response.token_usage.duration_ms == 12345
+        assert agent_response.token_usage.duration_api_ms == 12000
+
+
 class TestCLICommandArgsGeneration:
     """測試 CLI command args 生成功能"""
 

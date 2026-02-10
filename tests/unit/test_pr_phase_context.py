@@ -293,3 +293,58 @@ class TestPRPhaseContextFields:
 
         # status_code should be set
         assert context["status_code"] == "CAFE_CONFIRMED"
+
+    def test_second_update_preserves_model_and_stats(
+        self, tmp_path, mock_dependencies, setup_issue_dir
+    ):
+        """Calling _update_iteration_history a second time without model/stats must not overwrite them.
+
+        Regression test: PR phase calls _update_iteration_history once after agent execution
+        (with model and token_usage), then again after PR creation (without model/token_usage).
+        The second call must not overwrite model to None or erase stats.
+        """
+        issue_dir, spec_file = setup_issue_dir
+        phase = self._create_phase(mock_dependencies, issue_dir, spec_file)
+
+        phase.iteration = 1
+
+        pr_dir = issue_dir / "pr"
+        iter_dir = pr_dir / "iteration_001"
+        iter_dir.mkdir(parents=True, exist_ok=True)
+
+        from cafe.core.status_codes import PhaseStatusCode
+        from cafe.core.types import TokenUsage
+
+        # First call: agent execution saves model and token_usage
+        with patch.object(phase, "_append_iteration_index"):
+            phase._update_iteration_history(
+                phase_specific_data={"response": "agent output", "permission_denials": [], "streaming_log": []},
+                prompt="test prompt",
+                agent_cli="claude",
+                model="claude-haiku-4-5-20251001",
+                token_usage=TokenUsage(input_tokens=100, output_tokens=50, duration_ms=5000, duration_api_ms=4800),
+            )
+
+        # Second call: PR creation updates only phase_specific_data and status_code
+        with patch.object(phase, "_append_iteration_index"):
+            phase._update_iteration_history(
+                phase_specific_data={"pr_number": "159", "pr_url": "https://example.com/pr/159", "branch": "issue158"},
+                status_code=PhaseStatusCode.READY_FOR_REVIEW,
+            )
+
+        context = json.loads((iter_dir / "context.json").read_text())
+
+        # model must be preserved from first call
+        assert context["model"] == "claude-haiku-4-5-20251001"
+        # stats must be preserved from first call
+        assert context["stats"]["input_tokens"] == 100
+        assert context["stats"]["output_tokens"] == 50
+        assert context["stats"]["duration_ms"] == 5000
+        assert context["stats"]["duration_api_ms"] == 4800
+        # cli must be preserved from first call
+        assert context["cli"] == "claude"
+        assert context["prompt"] == "test prompt"
+        # status_code should be updated from second call
+        assert context["status_code"] == "CAFE_READY_FOR_REVIEW"
+        # phase_specific_data from second call should be merged
+        assert context["pr_number"] == "159"
