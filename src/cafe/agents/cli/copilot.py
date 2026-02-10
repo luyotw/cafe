@@ -221,7 +221,7 @@ class CopilotCLI(AbstractCLI):
 
         if copilot_session_dir.exists():
             self._existing_sessions = {
-                f.name for f in copilot_session_dir.iterdir() if f.is_file()
+                f.name for f in copilot_session_dir.iterdir() if f.is_file() or f.is_dir()
             }
         else:
             self._existing_sessions = set()
@@ -229,7 +229,7 @@ class CopilotCLI(AbstractCLI):
     def extract_session_id(self, output_lines: List[str]) -> Optional[str]:
         """Extract newly created session ID from file system.
 
-        Copilot automatically creates session files, need to detect from file system.
+        Copilot automatically creates session directories, need to detect from file system.
 
         Args:
             output_lines: List of lines from CLI output (not used here)
@@ -245,9 +245,9 @@ class CopilotCLI(AbstractCLI):
         # Wait for file system to update
         time.sleep(0.1)
 
-        # Get current session files
+        # Get current session files and directories
         current_sessions = {
-            f.name for f in copilot_session_dir.iterdir() if f.is_file()
+            f.name for f in copilot_session_dir.iterdir() if f.is_file() or f.is_dir()
         }
 
         # Find newly created sessions
@@ -256,7 +256,7 @@ class CopilotCLI(AbstractCLI):
         if new_sessions:
             # Get newest session (sorted by name)
             newest_session = sorted(new_sessions)[-1]
-            # Remove .jsonl extension
+            # Remove .jsonl extension if present (for file-based sessions)
             session_id = newest_session.replace(".jsonl", "")
             return session_id
 

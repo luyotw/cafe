@@ -1136,8 +1136,15 @@ class Phase(ABC):
         if not hasattr(self, "agent_manager"):
             return
 
-        token_usage = self.agent_manager.get_total_token_usage()
-        model = self.agent_manager.get_last_model()
+        try:
+            token_usage = self.agent_manager.get_total_token_usage()
+            model = self.agent_manager.get_last_model()
+
+            # Verify we have real token usage data (not mocks)
+            if not isinstance(token_usage.input_tokens, int):
+                return
+        except (AttributeError, TypeError):
+            return
 
         print()
         print("=" * 60)

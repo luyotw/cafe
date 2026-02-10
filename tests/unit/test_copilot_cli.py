@@ -314,3 +314,46 @@ class TestCopilotCLIExtractSessionId:
         session_id = cli.extract_session_id(output_lines)
 
         assert session_id is None
+
+    @patch("cafe.agents.cli.copilot.Path")
+    @patch("cafe.agents.cli.copilot.time.sleep")
+    def test_extract_session_id_from_directories(self, mock_sleep, mock_path_class, copilot_config):
+        """Test extracting session ID from newly created session directories."""
+        cli = CopilotCLI(copilot_config)
+
+        # Mock Path.home() and session directory
+        mock_home = MagicMock()
+        mock_path_class.home.return_value = mock_home
+
+        mock_session_dir = MagicMock()
+        mock_session_dir.exists.return_value = True
+
+        # Mock initial file and directory
+        mock_file1 = MagicMock()
+        mock_file1.name = "old-session.jsonl"
+        mock_file1.is_file.return_value = True
+        mock_file1.is_dir.return_value = False
+
+        # Set up Path.home() / ".copilot" / "session-state" to return mock_session_dir
+        mock_home.__truediv__.return_value.__truediv__.return_value = mock_session_dir
+
+        # First call to iterdir (record_existing_sessions)
+        mock_session_dir.iterdir.return_value = [mock_file1]
+
+        # Record initial sessions
+        cli.record_existing_sessions()
+
+        # Mock newly created session directory
+        mock_dir2 = MagicMock()
+        mock_dir2.name = "87bd54bf-2d9f-4ac6-9a53-3827a30c1e19"
+        mock_dir2.is_file.return_value = False
+        mock_dir2.is_dir.return_value = True
+
+        # Second call to iterdir (extract_session_id) - new session directory added
+        mock_session_dir.iterdir.return_value = [mock_file1, mock_dir2]
+
+        output_lines = []
+        session_id = cli.extract_session_id(output_lines)
+
+        # Should extract new session ID from directory name
+        assert session_id == "87bd54bf-2d9f-4ac6-9a53-3827a30c1e19"
