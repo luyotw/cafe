@@ -257,17 +257,43 @@ class Phase(ABC):
         if "streaming_log" not in context_data:
             context_data["streaming_log"] = []
 
-        # Update shared agent metadata
-        context_data["prompt"] = prompt
-        context_data["cli"] = agent_cli
-        context_data["session_id"] = agent_session_id
-        context_data["allowed_tools"] = allowed_tools
-        context_data["denied_tools"] = denied_tools
-        context_data["cli_command_args"] = cli_command_args
-        context_data["status_code"] = status_code.value if status_code is not None else None
+        # Initialize agent metadata fields if not present (ensures all fields exist)
+        if "prompt" not in context_data:
+            context_data["prompt"] = None
+        if "cli" not in context_data:
+            context_data["cli"] = None
+        if "session_id" not in context_data:
+            context_data["session_id"] = None
+        if "allowed_tools" not in context_data:
+            context_data["allowed_tools"] = None
+        if "denied_tools" not in context_data:
+            context_data["denied_tools"] = None
+        if "cli_command_args" not in context_data:
+            context_data["cli_command_args"] = None
+        if "status_code" not in context_data:
+            context_data["status_code"] = None
+        if "model" not in context_data:
+            context_data["model"] = None
 
-        # Save model at top level
-        context_data["model"] = model
+        # Update shared agent metadata (only if provided, to preserve existing values)
+        if prompt is not None:
+            context_data["prompt"] = prompt
+        if agent_cli is not None:
+            context_data["cli"] = agent_cli
+        if agent_session_id is not None:
+            context_data["session_id"] = agent_session_id
+        if allowed_tools is not None:
+            context_data["allowed_tools"] = allowed_tools
+        if denied_tools is not None:
+            context_data["denied_tools"] = denied_tools
+        if cli_command_args is not None:
+            context_data["cli_command_args"] = cli_command_args
+        if status_code is not None:
+            context_data["status_code"] = status_code.value
+
+        # Update model (only if provided, to preserve existing value)
+        if model is not None:
+            context_data["model"] = model
 
         # Save stats (token usage) if provided
         if token_usage is not None:
