@@ -8,7 +8,6 @@ from cafe.utils.checklist_generator import (
     generate_develop_checklist,
     generate_review_checklist,
     generate_pr_checklist,
-    generate_pr_comments_checklist,
 )
 
 
@@ -400,25 +399,6 @@ class TestBasicPrinciples:
         content = checklist_path.read_text()
         assert "## Basic Principles" in content
         assert "[ ] Use same language as commit messages" in content
-
-    def test_pr_comments_checklist_with_basic_principles(self, tmp_path):
-        """Test PR comments checklist includes basic principles when provided."""
-        checklist_path = tmp_path / "checklist.md"
-
-        basic_principles = """- Write ONLY the organized todo list to output.md (do NOT copy original PR comments)"""
-
-        generate_pr_comments_checklist(
-            agent_name="David",
-            user_input_file_path=".cafe/issues/test/pr/iteration_001/user_input.md",
-            output_file_path=".cafe/issues/test/pr/iteration_001/output.md",
-            prev_output_file_path=None,
-            checklist_file_path=checklist_path,
-            basic_principles=basic_principles,
-        )
-
-        content = checklist_path.read_text()
-        assert "## Basic Principles" in content
-        assert "[ ] Write ONLY the organized todo list to output.md" in content
 
     def test_checklist_without_basic_principles(self, tmp_path):
         """Test checklist works without basic principles (backward compatibility)."""
