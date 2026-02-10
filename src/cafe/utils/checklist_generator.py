@@ -371,6 +371,7 @@ def generate_pr_comments_checklist(
     output_file_path: str,
     prev_output_file_path: Optional[str],
     checklist_file_path: Path,
+    basic_principles: Optional[str] = None,
 ) -> None:
     """Generate checklist file for PR comments organization.
 
@@ -380,6 +381,7 @@ def generate_pr_comments_checklist(
         output_file_path: Path to output.md where todo list will be written
         prev_output_file_path: Path to previous output.md (None if first iteration)
         checklist_file_path: Path where checklist file should be created
+        basic_principles: Basic principles text in "- item" format (optional)
     """
     # Get agent file path
     agent_file = AgentManager.get_agent_file_path(agent_name, "developer")
@@ -390,8 +392,13 @@ def generate_pr_comments_checklist(
     # Get agent guidelines checklist
     agent_guidelines = extract_agent_guidelines_checklist(agent_file)
 
+    # Convert basic principles to checklist format
+    basic_principles_checklist = ""
+    if basic_principles:
+        basic_principles_checklist = convert_to_checklist(basic_principles, "Basic Principles")
+
     # Combine all sections
-    checklist_content = f"{execution_steps}\n{agent_guidelines}"
+    checklist_content = f"{execution_steps}\n{basic_principles_checklist}\n{agent_guidelines}"
 
     # Build placeholders dict
     placeholders = {

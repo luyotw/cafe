@@ -1078,6 +1078,21 @@ class PRPhase(Phase):
             console.print(f"[yellow]⚠️  Warning: Failed to fetch/save PR comments: {e}[/yellow]")
             return None
 
+    @staticmethod
+    def _build_todo_list_comment(todo_content: str, user_input_path: str) -> str:
+        """Build PR comment body with todo list and user_input.md reference.
+
+        Args:
+            todo_content: The organized todo list content
+            user_input_path: File path to user_input.md for reference
+
+        Returns:
+            Formatted comment body with file path reference and todo list
+        """
+        return f"""> 📋 Original review comments: `{user_input_path}`
+
+{todo_content}"""
+
     def _organize_comments_to_todo_list(self, pr_number: int, pr_url: str, branch_name: str) -> PhaseResult:
         """Organize PR comments into actionable todo list format.
 
@@ -1139,13 +1154,13 @@ class PRPhase(Phase):
             output_file_path=output_pattern,
             prev_output_file_path=prev_output_pattern,
             checklist_file_path=checklist_file,
+            basic_principles=None,
         )
 
-        # Copy user_input.md to output.md as starting point
-        # Agent will then append todo list below the original content
-        if user_input_file.exists() and not output_file.exists():
-            import shutil
-            shutil.copy2(user_input_file, output_file)
+        # Create empty output.md file for agent to write todo list only
+        # Original PR comments remain in user_input.md for reference
+        if not output_file.exists():
+            output_file.write_text("", encoding="utf-8")
 
         # Get relative paths for tool permissions
         try:
@@ -1202,16 +1217,11 @@ Do NOT return a status code until ALL checklist items are marked as [x].
 **Task:** Organize PR comments into actionable todo list.
 
 **Context:**
-- Output file: {output_pattern} (already contains PR comments, append todo list below){images_instruction}
+- PR comments source: {user_input_pattern} (original review comments)
+- Output file: {output_pattern} (write organized todo list here){images_instruction}
 
-**Instructions:**
-1. Read the output file which already contains the PR comments
-2. Analyze the comments and organize them into actionable todo items
-3. Append the todo list to the END of the output file (do not remove the original content)
-
-**Output format to append:**
+**Output format to write:**
 ```markdown
-
 ## Todo List
 
 ### [Category/Theme]
@@ -1268,18 +1278,24 @@ The system will verify checklist completion. If unchecked items remain, you will
                 message=f"Checklist validation failed - {validation_result.unchecked_count} items not marked as complete",
             )
 
-        # Validate output.md was updated (should differ from user_input.md)
-        pr_dir = self.issue_dir / "pr"
-        was_updated = self._check_output_file_updated(
-            output_file=output_file,
-            iteration=self.iteration,
-            phase_dir=pr_dir,
-            compare_content=user_input_file.read_text(encoding="utf-8") if user_input_file.exists() else None,
-        )
-        if not was_updated:
+        # Validate output.md contains todo list content
+        if not output_file.exists():
             return PhaseResult(
                 status=PhaseStatus.FAILED,
-                message="Agent did not update output.md with todo list",
+                message="Agent did not create output.md file",
+            )
+
+        output_content = output_file.read_text(encoding="utf-8")
+        # Check if output.md contains todo list markers (either ## Todo List or checkbox items)
+        has_todo_list = ("## Todo List" in output_content or
+                        "## Todo" in output_content or
+                        "- [ ]" in output_content or
+                        "- [x]" in output_content)
+
+        if not has_todo_list:
+            return PhaseResult(
+                status=PhaseStatus.FAILED,
+                message="Agent did not write todo list to output.md (missing todo list markers)",
             )
 
         # Additional validation: if agent returned CONFIRMED, verify this is correct
@@ -1332,6 +1348,24 @@ Return ONLY the status code (CAFE_CONFIRMED or CAFE_NEEDS_CHANGES) with no expla
         pr_dir = self.issue_dir / "pr"
         iteration_dir = pr_dir / f"iteration_{self.iteration:03d}"
         output_file = iteration_dir / "output.md"
+        # Post todo list as PR comment in GitHub mode
+        if pr_number > 0:  # Only post in GitHub mode (not local mode)
+            try:
+                todo_list_content = output_file.read_text(encoding="utf-8")
+                from cafe.utils.git_utils import to_cwd_relative_path
+                try:
+                    user_input_display = to_cwd_relative_path(user_input_file)
+                except ValueError:
+                    user_input_display = str(user_input_file)
+
+                comment_body = self._build_todo_list_comment(todo_list_content, user_input_display)
+                self.github_ops.add_pr_comment(str(pr_number), comment_body)
+            except Exception as e:
+                # Don't fail the workflow if posting comment fails - just warn
+                from rich.console import Console
+                console = Console()
+                console.print(f"[yellow]⚠️  Warning: Failed to post todo list as PR comment: {e}[/yellow]")
+
         from cafe.utils.git_utils import to_cwd_relative_path
         try:
             output_display = to_cwd_relative_path(output_file)
