@@ -1078,6 +1078,21 @@ class PRPhase(Phase):
             console.print(f"[yellow]⚠️  Warning: Failed to fetch/save PR comments: {e}[/yellow]")
             return None
 
+    @staticmethod
+    def _build_todo_list_comment(todo_content: str, user_input_path: str) -> str:
+        """Build PR comment body with todo list and user_input.md reference.
+
+        Args:
+            todo_content: The organized todo list content
+            user_input_path: File path to user_input.md for reference
+
+        Returns:
+            Formatted comment body with file path reference and todo list
+        """
+        return f"""> 📋 Original review comments: `{user_input_path}`
+
+{todo_content}"""
+
     def _organize_comments_to_todo_list(self, pr_number: int, pr_url: str, branch_name: str) -> PhaseResult:
         """Organize PR comments into actionable todo list format.
 
@@ -1337,6 +1352,24 @@ Return ONLY the status code (CAFE_CONFIRMED or CAFE_NEEDS_CHANGES) with no expla
         pr_dir = self.issue_dir / "pr"
         iteration_dir = pr_dir / f"iteration_{self.iteration:03d}"
         output_file = iteration_dir / "output.md"
+        # Post todo list as PR comment in GitHub mode
+        if pr_number > 0:  # Only post in GitHub mode (not local mode)
+            try:
+                todo_list_content = output_file.read_text(encoding="utf-8")
+                from cafe.utils.git_utils import to_cwd_relative_path
+                try:
+                    user_input_display = to_cwd_relative_path(user_input_file)
+                except ValueError:
+                    user_input_display = str(user_input_file)
+
+                comment_body = self._build_todo_list_comment(todo_list_content, user_input_display)
+                self.github_ops.add_pr_comment(str(pr_number), comment_body)
+            except Exception as e:
+                # Don't fail the workflow if posting comment fails - just warn
+                from rich.console import Console
+                console = Console()
+                console.print(f"[yellow]⚠️  Warning: Failed to post todo list as PR comment: {e}[/yellow]")
+
         from cafe.utils.git_utils import to_cwd_relative_path
         try:
             output_display = to_cwd_relative_path(output_file)
