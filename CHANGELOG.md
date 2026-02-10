@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.3]
+
+### Added
+- Added `--post-todo-list` option to `cafe pr` command to post PR comment todo list as GitHub PR comment
+- Added `--post-pr-todo-list` option to `cafe prepare` command to set post-PR-todo-list mode for prepare phase
+- Added token usage summary display after PR comment organization completes
+
+### Fixed
+- Fixed copilot session_id detection to recognize both file-based (.jsonl) and directory-based session formats
+- Fixed `_print_token_usage_summary` to gracefully handle mocked agent_manager in tests
+
 ## [0.1.2]
 
 ### Fixed
