@@ -841,6 +841,11 @@ class AgentExecutor:
             # Preserve model extracted during streaming
             if model is not None:
                 parsed_response.model = model
+            # Preserve duration extracted during streaming (parser doesn't have this info)
+            if token_usage.duration_ms is not None:
+                parsed_response.token_usage.duration_ms = token_usage.duration_ms
+            if token_usage.duration_api_ms is not None:
+                parsed_response.token_usage.duration_api_ms = token_usage.duration_api_ms
             return parsed_response
 
         # Return response (either from stream-json or combined lines)
