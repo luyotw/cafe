@@ -1148,12 +1148,14 @@ class PRPhase(Phase):
         except ValueError:
             output_pattern = str(output_file.resolve())
 
+        basic_principles = f"- Write ONLY the organized todo list to {output_pattern} (do NOT copy original PR comments)"
         generate_pr_comments_checklist(
             agent_name=self.dev_agent,
             user_input_file_path=user_input_pattern,
             output_file_path=output_pattern,
             prev_output_file_path=prev_output_pattern,
             checklist_file_path=checklist_file,
+            basic_principles=basic_principles,
         )
 
         # Create empty output.md file for agent to write todo list only
