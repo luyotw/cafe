@@ -199,9 +199,95 @@ class TestPRCommandGitHubMode:
         assert pr_url in result.stdout
         
         # Verify subprocess was called with gh pr diff --web
-        calls = [call for call in mock_subprocess_run.call_args_list 
+        calls = [call for call in mock_subprocess_run.call_args_list
                  if call[0][0] == ["gh", "pr", "diff", "--web"]]
         assert len(calls) >= 1, "Expected subprocess to be called with gh pr diff --web"
+
+
+class TestPRCommandPostTodoListOption:
+    """Test --post-todo-list / --no-post-todo-list option passing to PRPhase."""
+
+    def _make_mocks(self, mock_git_cls, mock_config_cls, mock_agent_cls,
+                    mock_perm_cls, mock_github_ops_cls, mock_pr_phase_cls):
+        """Helper to set up common mocks."""
+        mock_git = MagicMock()
+        mock_git.get_current_branch.return_value = "test-issue"
+        mock_git_cls.return_value = mock_git
+
+        mock_config = MagicMock()
+        mock_config.get.return_value = {"name": "David", "cli": "copilot"}
+        mock_config_cls.return_value = mock_config
+
+        mock_agent_cls.return_value = MagicMock()
+        mock_perm_cls.return_value = MagicMock()
+        mock_github_ops_cls.return_value = MagicMock()
+
+        mock_pr_phase = MagicMock()
+        mock_pr_phase.execute.return_value = PhaseResult(
+            status=PhaseStatus.COMPLETED,
+            message="Done",
+            data={"pr_url": "https://github.com/test/repo/pull/1", "pr_number": 1},
+        )
+        mock_pr_phase_cls.return_value = mock_pr_phase
+        return mock_pr_phase_cls
+
+    @patch("subprocess.run")
+    @patch("cafe.ui.cli.GitHubOps")
+    @patch("cafe.ui.cli.PermissionHandler")
+    @patch("cafe.ui.cli.AgentManager")
+    @patch("cafe.ui.cli.ConfigManager")
+    @patch("cafe.ui.cli.GitOperations")
+    @patch("cafe.ui.cli.PRPhase")
+    def test_post_todo_list_flag_passes_true_to_pr_phase(
+        self,
+        mock_pr_phase_cls,
+        mock_git_cls,
+        mock_config_cls,
+        mock_agent_cls,
+        mock_perm_cls,
+        mock_github_ops_cls,
+        mock_subprocess_run,
+        temp_repo_dir,
+    ):
+        """Test 2.1: --post-todo-list フラグが PRPhase に post_todo_list=True で渡される。"""
+        mock_subprocess_run.return_value = MagicMock(returncode=0)
+        self._make_mocks(mock_git_cls, mock_config_cls, mock_agent_cls,
+                         mock_perm_cls, mock_github_ops_cls, mock_pr_phase_cls)
+
+        result = runner.invoke(app, ["pr", "--post-todo-list"])
+
+        assert result.exit_code == 0
+        call_kwargs = mock_pr_phase_cls.call_args[1]
+        assert call_kwargs.get("post_todo_list") is True
+
+    @patch("subprocess.run")
+    @patch("cafe.ui.cli.GitHubOps")
+    @patch("cafe.ui.cli.PermissionHandler")
+    @patch("cafe.ui.cli.AgentManager")
+    @patch("cafe.ui.cli.ConfigManager")
+    @patch("cafe.ui.cli.GitOperations")
+    @patch("cafe.ui.cli.PRPhase")
+    def test_no_post_todo_list_flag_passes_false_to_pr_phase(
+        self,
+        mock_pr_phase_cls,
+        mock_git_cls,
+        mock_config_cls,
+        mock_agent_cls,
+        mock_perm_cls,
+        mock_github_ops_cls,
+        mock_subprocess_run,
+        temp_repo_dir,
+    ):
+        """Test 2.2: --no-post-todo-list フラグが PRPhase に post_todo_list=False で渡される。"""
+        mock_subprocess_run.return_value = MagicMock(returncode=0)
+        self._make_mocks(mock_git_cls, mock_config_cls, mock_agent_cls,
+                         mock_perm_cls, mock_github_ops_cls, mock_pr_phase_cls)
+
+        result = runner.invoke(app, ["pr", "--no-post-todo-list"])
+
+        assert result.exit_code == 0
+        call_kwargs = mock_pr_phase_cls.call_args[1]
+        assert call_kwargs.get("post_todo_list") is False
 
     @patch("subprocess.run")
     @patch("cafe.ui.cli.GitHubOps")

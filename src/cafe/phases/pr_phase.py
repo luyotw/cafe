@@ -38,6 +38,7 @@ class PRPhase(Phase):
         force_push: bool = False,
         interactive: bool = True,
         base_branch: Optional[str] = None,
+        post_todo_list: Optional[bool] = None,
     ) -> None:
         """Initialize PR phase.
 
@@ -57,6 +58,7 @@ class PRPhase(Phase):
             force_push: Force push to remote (default: False)
             interactive: Enable interactive mode (default: True)
             base_branch: Target base branch (None for auto-detection from config)
+            post_todo_list: Post organized todo list as PR comment (None for auto-detect from config)
         """
         super().__init__(interactive=interactive)
 
@@ -92,6 +94,19 @@ class PRPhase(Phase):
             config_file = self.issue_dir / "issue.yaml"
             config_base = self._get_issue_config_value(config_file, "base_branch")
             self.base_branch = config_base if config_base else "main"
+
+        # Resolve post_todo_list: CLI value > config file value > default (True)
+        if post_todo_list is not None:
+            # CLI parameter takes precedence
+            self.post_todo_list = post_todo_list
+        else:
+            config_file = self.issue_dir / "issue.yaml"
+            config_value = self._get_issue_config_value(config_file, "pr.post_todo_list")
+            if config_value is not None:
+                self.post_todo_list = bool(config_value)
+            else:
+                # Default to True to maintain backward compatibility
+                self.post_todo_list = True
 
         # Set up history tracking (like other phases)
         self.phase_dir = self.issue_dir / "pr"
@@ -1348,8 +1363,8 @@ Return ONLY the status code (CAFE_CONFIRMED or CAFE_NEEDS_CHANGES) with no expla
         pr_dir = self.issue_dir / "pr"
         iteration_dir = pr_dir / f"iteration_{self.iteration:03d}"
         output_file = iteration_dir / "output.md"
-        # Post todo list as PR comment in GitHub mode
-        if pr_number > 0:  # Only post in GitHub mode (not local mode)
+        # Post todo list as PR comment in GitHub mode (if enabled)
+        if pr_number > 0 and self.post_todo_list:  # Only post in GitHub mode when option is enabled
             try:
                 todo_list_content = output_file.read_text(encoding="utf-8")
                 from cafe.utils.git_utils import to_cwd_relative_path

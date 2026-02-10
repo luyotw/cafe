@@ -118,7 +118,8 @@ Please add unit tests for this feature.
         pr_phase_instance.issue_dir = temp_issue_dir
 
         # Mock checklist validation
-        with patch('cafe.utils.checklist_validator.validate_checklist') as mock_validate:
+        with patch('cafe.utils.checklist_validator.validate_checklist') as mock_validate, \
+             patch.object(pr_phase_instance, '_print_token_usage_summary'):
             mock_validate.return_value = MagicMock(is_complete=True)
 
             # Act: Call _organize_comments_to_todo_list
@@ -175,7 +176,8 @@ Please add unit tests for this feature.
         pr_phase_instance.issue_dir = temp_issue_dir
 
         # Mock checklist validation
-        with patch('cafe.utils.checklist_validator.validate_checklist') as mock_validate:
+        with patch('cafe.utils.checklist_validator.validate_checklist') as mock_validate, \
+             patch.object(pr_phase_instance, '_print_token_usage_summary'):
             mock_validate.return_value = MagicMock(is_complete=True)
 
             # Act

@@ -816,6 +816,11 @@ def prepare(
         "--sync-plan-github/--no-sync-plan-github",
         help="Sync plan to GitHub issue when confirmed (default: auto-detect based on issue_id)",
     ),
+    post_pr_todo_list: Optional[bool] = typer.Option(
+        None,
+        "--post-pr-todo-list/--no-post-pr-todo-list",
+        help="Post organized PR comments as todo list to PR (default: True when auto-create PR is enabled)",
+    ),
 ) -> None:
     """Prepare issue environment (directory, config, git branch) before running spec phase.
 
@@ -1045,9 +1050,12 @@ def prepare(
                 # Auto create PR depends on whether it's a GitHub repo
                 if is_github_repo():
                     pr_config["auto_create"] = True
+                    # In Quick setup, auto_create is always True for GitHub repos,
+                    # so always enable post_todo_list as well
+                    pr_config["post_todo_list"] = True
                 else:
                     pr_config["auto_create"] = False
-                
+
                 # Display default values summary
                 console.print()
                 console.print("[green]✓ Quick setup applied with recommended defaults:[/green]")
@@ -1058,6 +1066,7 @@ def prepare(
                 if is_github_repo():
                     console.print(f"  • Sync to GitHub: {spec_config.get('sync_github', False)}")
                     console.print(f"  • Auto create PR: {pr_config.get('auto_create', False)}")
+                    console.print(f"  • Post PR todo list: {pr_config.get('post_todo_list', False)}")
                 console.print()
             else:
                 # Custom configuration: Prompt for remaining settings
@@ -1131,6 +1140,15 @@ def prepare(
                 config_file = Path(".cafe") / "issues" / issue_name / "issue.yaml"
                 auto_create_pr_result = prompt_and_save_auto_create(config_file, "pr.auto_create")
                 pr_config["auto_create"] = auto_create_pr_result
+
+                # Prompt for post_todo_list only when auto_create is enabled
+                if auto_create_pr_result:
+                    console.print()
+                    post_todo_list_result = prompt_confirm(
+                        "Post organized PR comments as todo list to PR?",
+                        default=True,
+                    )
+                    pr_config["post_todo_list"] = post_todo_list_result
         elif not interactive:
             # Explicit non-interactive mode (--no-interactive): use CLI parameters
             from cafe.utils.git_utils import is_github_repo
@@ -1154,6 +1172,8 @@ def prepare(
             # PR config (only for GitHub repos)
             if is_github_repo() and auto_create_pr:
                 pr_config["auto_create"] = True
+            if post_pr_todo_list is not None:
+                pr_config["post_todo_list"] = post_pr_todo_list
         # else: issue_name was provided as argument but not --no-interactive
         #       Don't save any config (old behavior for backward compatibility)
 
@@ -3397,6 +3417,11 @@ def pr(
         "--interactive/--no-interactive",
         help="Allow interactive prompts (default: True)",
     ),
+    post_todo_list: Optional[bool] = typer.Option(
+        None,
+        "--post-todo-list/--no-post-todo-list",
+        help="Post organized todo list as PR comment (default: auto-detect from config)",
+    ),
 ) -> None:
     """Create pull request for the issue.
 
@@ -3470,6 +3495,7 @@ def pr(
             force_push=force,
             interactive=interactive,
             base_branch=base if base != "main" else None,  # Pass base only if not default
+            post_todo_list=post_todo_list,
         )
 
         result = phase.execute()
