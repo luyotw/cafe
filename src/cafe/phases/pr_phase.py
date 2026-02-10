@@ -1141,11 +1141,10 @@ class PRPhase(Phase):
             checklist_file_path=checklist_file,
         )
 
-        # Copy user_input.md to output.md as starting point
-        # Agent will then append todo list below the original content
-        if user_input_file.exists() and not output_file.exists():
-            import shutil
-            shutil.copy2(user_input_file, output_file)
+        # Create empty output.md file for agent to write todo list only
+        # Original PR comments remain in user_input.md for reference
+        if not output_file.exists():
+            output_file.write_text("", encoding="utf-8")
 
         # Get relative paths for tool permissions
         try:
@@ -1202,16 +1201,16 @@ Do NOT return a status code until ALL checklist items are marked as [x].
 **Task:** Organize PR comments into actionable todo list.
 
 **Context:**
-- Output file: {output_pattern} (already contains PR comments, append todo list below){images_instruction}
+- PR comments source: {user_input_pattern} (original review comments)
+- Output file: {output_pattern} (write organized todo list here){images_instruction}
 
 **Instructions:**
-1. Read the output file which already contains the PR comments
+1. Read {user_input_pattern} which contains the PR review comments
 2. Analyze the comments and organize them into actionable todo items
-3. Append the todo list to the END of the output file (do not remove the original content)
+3. Write ONLY the organized todo list to {output_pattern} (do NOT copy the original comments)
 
-**Output format to append:**
+**Output format to write:**
 ```markdown
-
 ## Todo List
 
 ### [Category/Theme]
@@ -1268,18 +1267,24 @@ The system will verify checklist completion. If unchecked items remain, you will
                 message=f"Checklist validation failed - {validation_result.unchecked_count} items not marked as complete",
             )
 
-        # Validate output.md was updated (should differ from user_input.md)
-        pr_dir = self.issue_dir / "pr"
-        was_updated = self._check_output_file_updated(
-            output_file=output_file,
-            iteration=self.iteration,
-            phase_dir=pr_dir,
-            compare_content=user_input_file.read_text(encoding="utf-8") if user_input_file.exists() else None,
-        )
-        if not was_updated:
+        # Validate output.md contains todo list content
+        if not output_file.exists():
             return PhaseResult(
                 status=PhaseStatus.FAILED,
-                message="Agent did not update output.md with todo list",
+                message="Agent did not create output.md file",
+            )
+
+        output_content = output_file.read_text(encoding="utf-8")
+        # Check if output.md contains todo list markers (either ## Todo List or checkbox items)
+        has_todo_list = ("## Todo List" in output_content or
+                        "## Todo" in output_content or
+                        "- [ ]" in output_content or
+                        "- [x]" in output_content)
+
+        if not has_todo_list:
+            return PhaseResult(
+                status=PhaseStatus.FAILED,
+                message="Agent did not write todo list to output.md (missing todo list markers)",
             )
 
         # Additional validation: if agent returned CONFIRMED, verify this is correct

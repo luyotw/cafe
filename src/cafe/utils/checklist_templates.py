@@ -238,10 +238,10 @@ PR_EXECUTION_STEPS_ITERATION_N = """## Checklist
 PR_COMMENTS_ORGANIZATION_STEPS = """## Checklist
 
 [ ] Read {agent_file} to understand your role and native language
-[ ] Read {output_file} which already contains PR comments
+[ ] Read {user_input_file} which contains the original PR review comments
 [ ] Check {prev_output_file} (if exists) - skip todo items that are already completed there
 [ ] Group related comments together
 [ ] Convert comments into actionable todo list items (markdown checkbox format: - [ ] Item - keep all items UNCHECKED as they represent work to be done)
-[ ] Append organized todo list to the END of {output_file} (do not remove original content)
+[ ] Write ONLY the organized todo list to {output_file} (do NOT copy original PR comments)
 [ ] Return ONLY the status code in your response
 """
