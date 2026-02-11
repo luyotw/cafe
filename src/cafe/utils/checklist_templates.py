@@ -39,7 +39,7 @@ SPEC_EXECUTION_STEPS_ITERATION_N = """## Checklist
 [ ] Return appropriate status code
 {xml_questions_instruction}"""
 
-SPEC_XML_QUESTIONS_INSTRUCTION = """
+XML_QUESTIONS_INSTRUCTION = """
 ## Interactive Q&A Questions (Conditional)
 
 [ ] If returning CAFE_NEED_CLARIFICATION: Write questions to {questions_xml_file} in the following XML format, otherwise mark this item as [x]:
@@ -73,6 +73,9 @@ Rules:
 - Options should be concise and distinct
 """
 
+# Backwards compatibility alias
+SPEC_XML_QUESTIONS_INSTRUCTION = XML_QUESTIONS_INSTRUCTION
+
 SPEC_IMPORTANT_NOTES_ITERATION_4_PLUS = """[ ] Round {iteration}: Only clarify existing questions, NO new questions
 """
 
@@ -90,7 +93,7 @@ PLAN_EXECUTION_STEPS_ITERATION_1 = """## Checklist
 [ ] Confirm: Only wrote plans and steps, NO actual code
 [ ] Confirm: No code was modified
 [ ] Return appropriate status code
-"""
+{xml_questions_instruction}"""
 
 PLAN_EXECUTION_STEPS_ITERATION_N = """## Checklist
 
@@ -103,7 +106,7 @@ PLAN_EXECUTION_STEPS_ITERATION_N = """## Checklist
 [ ] Confirm: Only wrote plans and steps, NO actual code
 [ ] Confirm: No code was modified
 [ ] Return appropriate status code
-"""
+{xml_questions_instruction}"""
 
 
 # Develop Phase Checklists

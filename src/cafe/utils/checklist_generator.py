@@ -120,6 +120,7 @@ def generate_plan_checklist(
     template_mode: str = "auto",
     iteration: int = 1,
     prev_plan_file: Optional[str] = None,
+    questions_xml_file: Optional[str] = None,
 ) -> None:
     """Generate checklist file for plan phase.
 
@@ -133,6 +134,7 @@ def generate_plan_checklist(
         template_mode: Template selection mode ('auto' or 'manual', default: 'auto')
         iteration: Current iteration number (default: 1)
         prev_plan_file: Path to previous iteration plan file (for iteration > 1)
+        questions_xml_file: Path to questions.xml file for interactive Q&A (optional)
     """
     # Get agent file path
     agent_file = AgentManager.get_agent_file_path(agent_name, "developer")
@@ -185,6 +187,18 @@ def generate_plan_checklist(
     if iteration > 1:
         placeholders["prev_plan_file"] = prev_plan_file if prev_plan_file else plan_file_path
         placeholders["current_plan_file"] = plan_file_path
+
+    # Add XML questions instruction if path is provided
+    if questions_xml_file:
+        # Pre-resolve {questions_xml_file} in the instruction template before
+        # adding it as a placeholder value, since resolve_checklist_placeholders
+        # does a single pass and cannot resolve nested placeholders.
+        xml_instruction = checklist_templates.XML_QUESTIONS_INSTRUCTION.replace(
+            "{questions_xml_file}", questions_xml_file
+        )
+        placeholders["xml_questions_instruction"] = xml_instruction
+    else:
+        placeholders["xml_questions_instruction"] = ""
 
     # Resolve placeholders
     checklist_content = resolve_checklist_placeholders(checklist_content, placeholders)
