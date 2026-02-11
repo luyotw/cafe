@@ -148,3 +148,80 @@ class TestValidateAndRetryQuestionsXml:
         assert call_count == 3
         # Invalid XML file should be deleted
         assert not xml_path.exists()
+
+
+class TestAskUserForClarification:
+    """測試 _ask_user_for_clarification() 的互動式問答整合"""
+
+    def test_uses_interactive_qa_when_xml_exists(self, plan_phase, tmp_path):
+        """測試當前一輪的 questions.xml 存在且有效時，使用互動式問答介面"""
+        plan_phase.iteration = 2
+        plan_phase.interactive = True
+
+        # 在前一輪 (iteration 1) 的目錄建立 questions.xml
+        prev_iter_dir = plan_phase._get_iteration_dir(1)
+        prev_iter_dir.mkdir(parents=True, exist_ok=True)
+        xml_path = prev_iter_dir / "questions.xml"
+        xml_path.write_text(VALID_QUESTIONS_XML)
+
+        with patch("cafe.phases.plan_phase.interactive_qa_flow") as mock_qa_flow:
+            mock_qa_flow.return_value = "Q1: What is the preferred error handling approach?\nA1: Return error code"
+
+            result = plan_phase._ask_user_for_clarification()
+
+        assert "Q1:" in result
+        assert "A1:" in result
+        mock_qa_flow.assert_called_once()
+        # 驗證傳入的 questions 是正確解析的 Question 物件
+        questions_arg = mock_qa_flow.call_args[0][0]
+        assert len(questions_arg) == 1
+        assert questions_arg[0].title == "What is the preferred error handling approach?"
+
+    def test_falls_back_to_prompt_when_no_xml(self, plan_phase, tmp_path):
+        """測試 questions.xml 不存在時 fallback 到 prompt_multiline"""
+        plan_phase.iteration = 2
+        plan_phase.interactive = True
+
+        # 確保前一輪目錄存在但沒有 questions.xml
+        prev_iter_dir = plan_phase._get_iteration_dir(1)
+        prev_iter_dir.mkdir(parents=True, exist_ok=True)
+
+        with patch("cafe.phases.plan_phase.interactive_qa_flow") as mock_qa_flow, \
+             patch("cafe.ui.inquirer_prompts.prompt_multiline", return_value="manual answer"):
+
+            result = plan_phase._ask_user_for_clarification()
+
+        mock_qa_flow.assert_not_called()
+        assert result == "manual answer"
+
+    def test_falls_back_to_prompt_when_xml_invalid(self, plan_phase, tmp_path):
+        """測試 questions.xml 格式不正確時 fallback 到 prompt_multiline"""
+        plan_phase.iteration = 2
+        plan_phase.interactive = True
+
+        # 在前一輪目錄建立無效的 questions.xml
+        prev_iter_dir = plan_phase._get_iteration_dir(1)
+        prev_iter_dir.mkdir(parents=True, exist_ok=True)
+        xml_path = prev_iter_dir / "questions.xml"
+        xml_path.write_text(INVALID_QUESTIONS_XML)
+
+        with patch("cafe.phases.plan_phase.interactive_qa_flow") as mock_qa_flow, \
+             patch("cafe.ui.inquirer_prompts.prompt_multiline", return_value="fallback answer"):
+
+            result = plan_phase._ask_user_for_clarification()
+
+        mock_qa_flow.assert_not_called()
+        assert result == "fallback answer"
+
+    def test_iteration_1_falls_back_to_prompt(self, plan_phase, tmp_path):
+        """測試第一輪沒有前一輪目錄，fallback 到 prompt_multiline"""
+        plan_phase.iteration = 1
+        plan_phase.interactive = True
+
+        with patch("cafe.phases.plan_phase.interactive_qa_flow") as mock_qa_flow, \
+             patch("cafe.ui.inquirer_prompts.prompt_multiline", return_value="first iteration answer"):
+
+            result = plan_phase._ask_user_for_clarification()
+
+        mock_qa_flow.assert_not_called()
+        assert result == "first iteration answer"

@@ -12,6 +12,7 @@ from cafe.core.phase import Phase
 from cafe.core.status_codes import PhaseStatusCode, StatusCodeParser, generate_status_code_prompt
 from cafe.core.types import PhaseProgress, PhaseResult, PhaseStatus
 from cafe.ui.display import Display
+from cafe.ui.interactive_qa import interactive_qa_flow
 from cafe.utils.git_utils import get_repo_root
 from cafe.utils.prompt_utils import format_checklist_instruction
 from cafe.utils.github import GitHubOps, GitHubError
@@ -649,6 +650,30 @@ Continue analyzing the latest version of {spec_file_path}.
             str(prev_plan_file),
             self.display.console,
         )
+
+    def _ask_user_for_clarification(self) -> str:
+        """Ask user for answer to NEED_CLARIFICATION using interactive Q&A when available.
+
+        Overrides base class to check for questions.xml from previous iteration.
+        If found and valid, uses interactive_qa_flow(); otherwise falls back to prompt_multiline().
+
+        Returns:
+            str: User's answer
+        """
+        from cafe.core.questions_schema import parse_questions_xml, validate_questions_xml
+        from cafe.ui.inquirer_prompts import prompt_multiline
+
+        # Look for questions.xml in the previous iteration directory
+        if self.iteration > 1:
+            prev_iter_dir = self._get_iteration_dir(self.iteration - 1)
+            xml_path = prev_iter_dir / "questions.xml"
+
+            if xml_path.exists() and validate_questions_xml(xml_path):
+                questions = parse_questions_xml(xml_path)
+                return interactive_qa_flow(questions)
+
+        # Fallback to original multiline prompt
+        return prompt_multiline("Please answer the question")
 
     def _get_status_analysis_prompt(self) -> str:
         """Get prompt for analyzing status code.
