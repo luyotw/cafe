@@ -56,7 +56,29 @@ class PermissionAction(str, Enum):
 
 
 class AgentConfig(BaseModel):
-    """Configuration for an AI agent."""
+    """Configuration for an AI agent.
+
+    backup_clis 和 models_config 用於備份 agent 自動切換功能。
+    當主要 CLI 遇到 rate limit 時，AgentManager 會依序嘗試 backup_clis 中的備份 CLI。
+
+    config.yaml 設定範例::
+
+        agents:
+          developer:
+            name: David
+            cli: claude                    # 主要 CLI
+            backup:                        # 備份 CLI（依序嘗試）
+              - gemini
+              - copilot
+            models:                        # 各 CLI 對應的 phase model 設定
+              claude:
+                plan: opus
+                develop: sonnet
+              gemini:
+                plan: gemini-2.5-pro-preview
+                develop: gemini-2-flash-preview
+              copilot: {}                  # 使用 CLI 預設 model
+    """
 
     name: str
     cli: AgentCLI

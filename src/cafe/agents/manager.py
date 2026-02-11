@@ -235,6 +235,16 @@ class AgentManager:
     ) -> "AgentResponse":
         """嘗試備份 agents，直到有一個成功或全部失敗。
 
+        備份重試流程：
+        1. 若無備份 CLI 設定，直接拋出原始錯誤
+        2. 依序嘗試 backup_clis 中的每個備份 CLI
+        3. 若備份 CLI 也遇到 rate_limit 或 cli_not_found，繼續嘗試下一個
+        4. 若備份 CLI 遇到其他錯誤，直接拋出（不繼續嘗試）
+        5. 若所有備份均失敗，拋出包含所有已嘗試 CLI 清單的錯誤訊息
+
+        phase_name 用於從 models_config 查詢備份 CLI 對應此 phase 的 model，
+        例如在 "develop" phase 使用 gemini 備份時，查詢 models_config["gemini"]["develop"]。
+
         Args:
             primary_error: 主要 agent 拋出的錯誤
             primary_executor: 主要 agent executor
@@ -261,16 +271,19 @@ class AgentManager:
         primary_cli_name = config.cli.value
         print(f"❌ {primary_cli_name} API rate limit reached, trying backup agent...")
 
-        # 記錄已嘗試的 CLI，避免重複
+        # 記錄已嘗試的 CLI，避免重複（初始包含 primary CLI）
         tried_clis = {config.cli}
         failed_agents: List[str] = [f"{primary_cli_name} ({primary_error})"]
 
         for backup_cli in backup_clis:
+            # 跳過已嘗試過的 CLI（例如 backup_clis 中包含與 primary 相同的 CLI）
             if backup_cli in tried_clis:
                 continue
             tried_clis.add(backup_cli)
 
-            # 查詢此備份 CLI 的 phase-specific model
+            # 查詢此備份 CLI 在當前 phase 的 model 設定
+            # 例如：models_config = {"gemini": {"develop": "gemini-2-flash-preview"}}
+            # 若未設定或為空字串，使用 None（CLI 工具預設 model）
             backup_model: Optional[str] = None
             if phase_name and models_config:
                 backup_model = models_config.get(backup_cli.value, {}).get(phase_name) or None
@@ -281,6 +294,7 @@ class AgentManager:
 
             print(f"Trying {backup_cli.value}...")
 
+            # 以備份 CLI 建立新的 executor（fresh session，避免 session 污染）
             backup_config = AgentConfig(
                 name=config.name,
                 cli=backup_cli,
@@ -296,14 +310,15 @@ class AgentManager:
                 return agent_response
             except AgentExecutionError as backup_error:
                 if hasattr(backup_error, 'error_type') and backup_error.error_type in ("rate_limit", "cli_not_found"):
+                    # rate_limit 或 cli_not_found：記錄後繼續嘗試下一個備份
                     failed_agents.append(f"{backup_cli.value} ({backup_error})")
                     print(f"❌ {backup_cli.value} also hit rate limit, trying next agent...")
                     continue
                 else:
-                    # 非 rate_limit/cli_not_found 錯誤，直接拋出
+                    # 非 rate_limit/cli_not_found 錯誤（例如 prompt 格式錯誤），直接拋出
                     raise
 
-        # 所有 agent 都失敗
+        # 所有 agent（primary + 所有備份）均失敗，組合錯誤訊息
         tried_list = ", ".join(failed_agents)
         raise AgentExecutionError(
             f"All agents failed. Tried: {tried_list}. "
