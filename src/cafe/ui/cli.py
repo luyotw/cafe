@@ -7,7 +7,7 @@ import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 import typer
 
@@ -103,13 +103,20 @@ def _handle_phase_exception(e: Exception, phase_name: str, auto: bool = False) -
         console.print(f"[bold red]❌ Critical error in {phase_name} phase[/bold red]")
         console.print()
         if e.error_type == "rate_limit":
+            error_msg = str(e)
+            all_agents_exhausted = "All agents failed" in error_msg
             console.print("[yellow]⚠️  API rate limit reached[/yellow]")
             console.print()
-            console.print("[dim]The workflow has been stopped to prevent wasting resources.[/dim]")
+            if all_agents_exhausted:
+                console.print("[dim]All configured agents (primary + backups) have been exhausted.[/dim]")
+                console.print()
+                console.print(f"[dim]{error_msg}[/dim]")
+            else:
+                console.print("[dim]The workflow has been stopped to prevent wasting resources.[/dim]")
             console.print()
             console.print("[bold]Next steps (choose one):[/bold]")
             console.print("  • Wait for quota reset or switch to a different account, OR")
-            console.print("  • Use [cyan]cafe config edit[/cyan] to switch to a different CLI tool")
+            console.print("  • Use [cyan]cafe config edit[/cyan] to add backup agents or switch CLI tool")
             console.print()
             console.print("Then run [cyan]cafe make[/cyan] again to resume from where it stopped")
             console.print()
@@ -258,26 +265,61 @@ def _setup_agents(
 
         return model
 
+    # Helper to resolve backup CLIs（過濾掉與主要 CLI 相同的項目）
+    def resolve_backup_clis(config: dict, primary_cli: AgentCLI) -> List[AgentCLI]:
+        backup_raw = config.get("backup", [])
+        seen = {primary_cli}
+        result = []
+        for cli_str in backup_raw:
+            try:
+                cli = AgentCLI(cli_str)
+            except ValueError:
+                continue
+            if cli not in seen:
+                seen.add(cli)
+                result.append(cli)
+        return result
+
+    # Helper to resolve models config dict
+    def resolve_models_config(config: dict) -> Dict[str, Dict[str, str]]:
+        raw = config.get("models", {})
+        if not isinstance(raw, dict):
+            return {}
+        result: Dict[str, Dict[str, str]] = {}
+        for cli_name, phase_models in raw.items():
+            if isinstance(phase_models, dict):
+                result[cli_name] = {k: str(v) for k, v in phase_models.items()}
+        return result
+
     # Register agents
+    pm_cli = AgentCLI(pm_config["cli"])
     agent_manager.register_agent(
         AgentConfig(
             name=pm_config["name"],
-            cli=AgentCLI(pm_config["cli"]),
+            cli=pm_cli,
             model=resolve_model(pm_config, phase_name),
+            backup_clis=resolve_backup_clis(pm_config, pm_cli),
+            models_config=resolve_models_config(pm_config),
         )
     )
+    dev_cli = AgentCLI(dev_config["cli"])
     agent_manager.register_agent(
         AgentConfig(
             name=dev_config["name"],
-            cli=AgentCLI(dev_config["cli"]),
+            cli=dev_cli,
             model=resolve_model(dev_config, phase_name),
+            backup_clis=resolve_backup_clis(dev_config, dev_cli),
+            models_config=resolve_models_config(dev_config),
         )
     )
+    reviewer_cli = AgentCLI(reviewer_config["cli"])
     agent_manager.register_agent(
         AgentConfig(
             name=reviewer_config["name"],
-            cli=AgentCLI(reviewer_config["cli"]),
+            cli=reviewer_cli,
             model=resolve_model(reviewer_config, phase_name),
+            backup_clis=resolve_backup_clis(reviewer_config, reviewer_cli),
+            models_config=resolve_models_config(reviewer_config),
         )
     )
 
