@@ -62,6 +62,8 @@ class AgentConfig(BaseModel):
     cli: AgentCLI
     session_id: Optional[str] = None
     model: Optional[str] = None  # Optional model name for CLI (e.g., "sonnet", "opus")
+    backup_clis: List["AgentCLI"] = Field(default_factory=list)  # 有序備份 CLI 列表
+    models_config: Dict[str, Dict[str, str]] = Field(default_factory=dict)  # 各 CLI 對應的階段 model 設定
 
 
 class TokenUsage(BaseModel):
