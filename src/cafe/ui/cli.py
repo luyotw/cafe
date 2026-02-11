@@ -675,10 +675,15 @@ def init() -> None:
 
             console.print("")
 
-        # 5. Save configuration
+        # 5. Add auto-update setting (enabled by default)
+        config["settings"] = {
+            "auto_update": True,
+        }
+
+        # 6. Save configuration
         config_manager.save_config(config)
 
-        # 6. Display success message
+        # 7. Display success message
         console.print("[bold green]Configuration saved successfully![/bold green]\n")
 
         role_phases = {
@@ -5086,6 +5091,8 @@ def main() -> None:
     """Entry point for CLI."""
     # Check if all dependencies are installed
     _check_dependencies()
+    # Check for updates and auto-upgrade if available
+    _check_for_updates()
     app()
 
 
@@ -5137,6 +5144,102 @@ def _check_dependencies() -> None:
 
     except Exception:
         # If check fails, continue anyway
+        pass
+
+
+def _check_for_updates() -> None:
+    """Check for new versions of cafe-engine and auto-update if available.
+
+    This function:
+    1. Checks if auto-update is enabled in .cafe/config.yaml
+    2. Respects CAFE_SKIP_UPDATE_CHECK environment variable
+    3. Rate-limits checks to once per 24 hours
+    4. Queries PyPI for the latest version
+    5. Automatically upgrades if a newer version is available
+    6. Fails silently without blocking the workflow
+    """
+    import os
+    import urllib.request
+    import json
+    import importlib.metadata
+    from pathlib import Path
+    import subprocess
+
+    # Check if update check is explicitly disabled via environment variable
+    if os.getenv("CAFE_SKIP_UPDATE_CHECK"):
+        return
+
+    # Try to load config to check if auto-update is enabled
+    try:
+        config_manager = ConfigManager()
+        if config_manager.config_file.exists():
+            config = config_manager.load_config()
+            # Check if auto_update is explicitly disabled (default is True)
+            if config.get("settings", {}).get("auto_update") is False:
+                return
+    except Exception:
+        # If config loading fails, proceed with update check
+        pass
+
+    # Import helper functions from config module
+    from cafe.utils.config import should_check_for_updates, update_last_check_timestamp
+
+    # Check if enough time has passed since last update
+    if not should_check_for_updates():
+        return
+
+    try:
+        # Get current installed version
+        try:
+            current_version = importlib.metadata.version("cafe-engine")
+        except importlib.metadata.PackageNotFoundError:
+            # If package not found, skip update check
+            return
+
+        # Query PyPI for latest version
+        pypi_url = "https://pypi.org/pypi/cafe-engine/json"
+        try:
+            with urllib.request.urlopen(pypi_url, timeout=2) as response:
+                pypi_data = json.loads(response.read().decode())
+                latest_version = pypi_data["info"]["version"]
+        except Exception:
+            # If PyPI query fails, just update timestamp and return
+            update_last_check_timestamp()
+            return
+
+        # Update the last check timestamp
+        update_last_check_timestamp()
+
+        # Compare versions (simple string comparison works for semantic versioning)
+        # Parse versions properly for comparison
+        from packaging.version import Version
+
+        current = Version(current_version)
+        latest = Version(latest_version)
+
+        if latest > current:
+            # Newer version available, attempt upgrade
+            try:
+                # Run pip upgrade non-interactively
+                result = subprocess.run(
+                    ["pip", "install", "--upgrade", "cafe-engine"],
+                    capture_output=True,
+                    timeout=30,
+                )
+
+                if result.returncode == 0:
+                    console.print(
+                        f"\n[green]✓ cafe-engine upgraded from {current_version} to {latest_version}[/green]"
+                    )
+                else:
+                    # Upgrade failed, but don't block workflow
+                    pass
+            except Exception:
+                # If upgrade fails, don't block workflow
+                pass
+
+    except Exception:
+        # Catch all exceptions to ensure we never block the main workflow
         pass
 
 

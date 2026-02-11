@@ -1386,3 +1386,191 @@ class TestReviewEditCommand:
         # Verify - message from _edit_file_with_editor
         assert result.exit_code == 0
         mock_edit.assert_called_once()
+
+
+class TestAutoUpdate:
+    """Test auto-update functionality."""
+
+    def test_should_check_for_updates_no_file(self, tmp_path: Path) -> None:
+        """Test should_check_for_updates returns True when file doesn't exist."""
+        import sys
+        from pathlib import Path as PathlibPath
+
+        # Patch get_global_cafe_dir to use tmp_path
+        with patch("cafe.utils.config.get_global_cafe_dir") as mock_get_dir:
+            mock_get_dir.return_value = tmp_path / ".cafe"
+            from cafe.utils.config import should_check_for_updates
+
+            # When file doesn't exist, should return True
+            assert should_check_for_updates() is True
+
+    def test_should_check_for_updates_within_24h(self, tmp_path: Path) -> None:
+        """Test should_check_for_updates returns False when checked recently."""
+        import json
+        import time
+
+        with patch("cafe.utils.config.get_global_cafe_dir") as mock_get_dir:
+            cafe_dir = tmp_path / ".cafe"
+            cafe_dir.mkdir(parents=True, exist_ok=True)
+            mock_get_dir.return_value = cafe_dir
+
+            # Create timestamp file with recent timestamp
+            check_file = cafe_dir / "last_update_check.json"
+            with open(check_file, "w") as f:
+                json.dump({"timestamp": time.time()}, f)
+
+            from cafe.utils.config import should_check_for_updates
+
+            # Within 24 hours, should return False
+            assert should_check_for_updates() is False
+
+    def test_should_check_for_updates_after_24h(self, tmp_path: Path) -> None:
+        """Test should_check_for_updates returns True after 24 hours."""
+        import json
+        import time
+
+        with patch("cafe.utils.config.get_global_cafe_dir") as mock_get_dir:
+            cafe_dir = tmp_path / ".cafe"
+            cafe_dir.mkdir(parents=True, exist_ok=True)
+            mock_get_dir.return_value = cafe_dir
+
+            # Create timestamp file with old timestamp (>24 hours ago)
+            check_file = cafe_dir / "last_update_check.json"
+            old_time = time.time() - (25 * 3600)  # 25 hours ago
+            with open(check_file, "w") as f:
+                json.dump({"timestamp": old_time}, f)
+
+            from cafe.utils.config import should_check_for_updates
+
+            # After 24 hours, should return True
+            assert should_check_for_updates() is True
+
+    def test_update_last_check_timestamp(self, tmp_path: Path) -> None:
+        """Test update_last_check_timestamp creates and updates the file."""
+        import json
+
+        with patch("cafe.utils.config.get_global_cafe_dir") as mock_get_dir:
+            cafe_dir = tmp_path / ".cafe"
+            mock_get_dir.return_value = cafe_dir
+
+            from cafe.utils.config import update_last_check_timestamp
+
+            update_last_check_timestamp()
+
+            # Verify file was created
+            check_file = cafe_dir / "last_update_check.json"
+            assert check_file.exists()
+
+            # Verify timestamp was written
+            with open(check_file, "r") as f:
+                data = json.load(f)
+            assert "timestamp" in data
+            assert isinstance(data["timestamp"], (int, float))
+
+    def test_check_for_updates_respects_env_var(self, tmp_path: Path) -> None:
+        """Test _check_for_updates returns early when env var is set."""
+        import os
+
+        with patch.dict(os.environ, {"CAFE_SKIP_UPDATE_CHECK": "1"}):
+            with patch("cafe.ui.cli.ConfigManager") as mock_config:
+                from cafe.ui.cli import _check_for_updates
+
+                _check_for_updates()
+
+                # Should not call config manager when env var is set
+                mock_config.assert_not_called()
+
+    def test_check_for_updates_respects_config_disabled(self, tmp_path: Path) -> None:
+        """Test _check_for_updates respects config setting."""
+        import os
+
+        # Create config with auto_update disabled
+        config_dir = tmp_path / ".cafe"
+        config_dir.mkdir(parents=True)
+        config_file = config_dir / "config.yaml"
+        config_file.write_text("settings:\n  auto_update: false\n")
+
+        old_cwd = os.getcwd()
+        try:
+            os.chdir(tmp_path)
+
+            with patch("cafe.utils.config.should_check_for_updates") as mock_should:
+                from cafe.ui.cli import _check_for_updates
+
+                _check_for_updates()
+
+                # should_check_for_updates should not be called when disabled
+                mock_should.assert_not_called()
+        finally:
+            os.chdir(old_cwd)
+
+    def test_check_for_updates_with_newer_version(self, tmp_path: Path) -> None:
+        """Test _check_for_updates upgrades when newer version available."""
+        import os
+        import json
+
+        # Create config with auto_update enabled
+        config_dir = tmp_path / ".cafe"
+        config_dir.mkdir(parents=True)
+        config_file = config_dir / "config.yaml"
+        config_file.write_text("settings:\n  auto_update: true\n")
+
+        old_cwd = os.getcwd()
+        try:
+            os.chdir(tmp_path)
+
+            with patch("cafe.utils.config.should_check_for_updates", return_value=True):
+                with patch("cafe.utils.config.update_last_check_timestamp"):
+                    with patch("importlib.metadata.version", return_value="0.1.0"):
+                        with patch("urllib.request.urlopen") as mock_urlopen:
+                            # Mock PyPI response with newer version
+                            pypi_response = {
+                                "info": {"version": "0.1.1"}
+                            }
+                            mock_response = MagicMock()
+                            mock_response.read.return_value = json.dumps(pypi_response).encode()
+                            mock_urlopen.return_value.__enter__.return_value = mock_response
+
+                            with patch("subprocess.run") as mock_run:
+                                mock_run.return_value = MagicMock(returncode=0)
+                                from cafe.ui.cli import _check_for_updates
+
+                                _check_for_updates()
+
+                                # Should attempt pip upgrade
+                                mock_run.assert_called_once()
+                                call_args = mock_run.call_args[0][0]
+                                assert "pip" in call_args
+                                assert "install" in call_args
+                                assert "--upgrade" in call_args
+                                assert "cafe-engine" in call_args
+        finally:
+            os.chdir(old_cwd)
+
+    def test_check_for_updates_handles_pypi_failure(self, tmp_path: Path) -> None:
+        """Test _check_for_updates handles PyPI query failure gracefully."""
+        import os
+
+        config_dir = tmp_path / ".cafe"
+        config_dir.mkdir(parents=True)
+        config_file = config_dir / "config.yaml"
+        config_file.write_text("settings:\n  auto_update: true\n")
+
+        old_cwd = os.getcwd()
+        try:
+            os.chdir(tmp_path)
+
+            with patch("cafe.utils.config.should_check_for_updates", return_value=True):
+                with patch("cafe.utils.config.update_last_check_timestamp"):
+                    with patch("importlib.metadata.version", return_value="0.1.0"):
+                        with patch("urllib.request.urlopen", side_effect=Exception("Network error")):
+                            with patch("subprocess.run") as mock_run:
+                                from cafe.ui.cli import _check_for_updates
+
+                                # Should not raise exception
+                                _check_for_updates()
+
+                                # Should not attempt upgrade when PyPI fails
+                                mock_run.assert_not_called()
+        finally:
+            os.chdir(old_cwd)

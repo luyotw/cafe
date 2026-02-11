@@ -3,6 +3,8 @@
 from pathlib import Path
 from typing import Any, Dict, Optional
 import yaml
+import json
+import time
 
 from cafe.core.types import AgentCLI
 
@@ -309,3 +311,51 @@ class ConfigManager:
                 result[key] = value
 
         return result
+
+
+def get_last_update_check_file() -> Path:
+    """Get path to last update check timestamp file.
+
+    Returns:
+        Path to ~/.cafe/last_update_check.json
+    """
+    return get_global_cafe_dir() / "last_update_check.json"
+
+
+def should_check_for_updates() -> bool:
+    """Check if enough time has passed since last update check.
+
+    Checks if more than 24 hours have passed since the last update check.
+    Returns True if check file doesn't exist or if 24+ hours have passed.
+
+    Returns:
+        True if update check should be performed, False otherwise
+    """
+    check_file = get_last_update_check_file()
+
+    if not check_file.exists():
+        return True
+
+    try:
+        with open(check_file, "r") as f:
+            data = json.load(f)
+            last_check = data.get("timestamp", 0)
+
+        # Check if 24 hours (86400 seconds) have passed
+        elapsed = time.time() - last_check
+        return elapsed > 86400
+    except (json.JSONDecodeError, IOError):
+        # If file is corrupted, allow update check
+        return True
+
+
+def update_last_check_timestamp() -> None:
+    """Update the last update check timestamp.
+
+    Writes current timestamp to ~/.cafe/last_update_check.json
+    """
+    check_file = get_last_update_check_file()
+    check_file.parent.mkdir(parents=True, exist_ok=True)
+
+    with open(check_file, "w") as f:
+        json.dump({"timestamp": time.time()}, f)
