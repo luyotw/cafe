@@ -226,6 +226,13 @@ class PlanPhase(Phase):
                 prev_iteration_num = self.iteration - 1
                 prev_plan_file = str(self._get_versioned_file_path("plan", prev_iteration_num, self.phase_dir))
 
+            # Compute questions.xml path for this iteration
+            questions_xml_path = self._get_iteration_dir(self.iteration) / "questions.xml"
+            try:
+                questions_xml_file = to_cwd_relative_path(questions_xml_path)
+            except (ValueError, OSError):
+                questions_xml_file = str(questions_xml_path.resolve())
+
             generate_plan_checklist(
                 agent_name=self.dev_agent,
                 plan_file_path=str(self.plan_file),
@@ -236,6 +243,7 @@ class PlanPhase(Phase):
                 template_mode=self.template_mode,
                 iteration=self.iteration,
                 prev_plan_file=prev_plan_file,
+                questions_xml_file=questions_xml_file,
             )
 
             # Prepare user_input for this iteration
@@ -265,6 +273,13 @@ class PlanPhase(Phase):
             except ValueError:
                 checklist_pattern = str(checklist_file.resolve())
 
+            # Get questions.xml path for allowed_tools
+            questions_xml_file_path = iteration_dir / "questions.xml"
+            try:
+                questions_xml_pattern = to_cwd_relative_path(questions_xml_file_path)
+            except (ValueError, OSError):
+                questions_xml_pattern = str(questions_xml_file_path.resolve())
+
             # Merge base tools with previous iteration's tools (if any)
             base_allowed_tools = [
                 "read",
@@ -275,6 +290,7 @@ class PlanPhase(Phase):
                 "web_search",
                 f"edit({plan_file_pattern})",
                 f"edit({checklist_pattern})",
+                f"edit({questions_xml_pattern})",
             ]
             allowed_tools = self._merge_allowed_tools(base_allowed_tools)
 
@@ -296,14 +312,20 @@ class PlanPhase(Phase):
                 phase_specific_data={"dev_agent": self.dev_agent},
             )
 
+            # Validate questions.xml when agent returns NEED_CLARIFICATION
+            status_code = StatusCodeParser.extract(response)
+            if status_code == PhaseStatusCode.NEED_CLARIFICATION:
+                self._validate_and_retry_questions_xml(
+                    xml_path=questions_xml_file_path,
+                    agent_name=self.dev_agent,
+                    allowed_tools=allowed_tools,
+                )
+
             if result:
                 return result
 
             # Since we removed the while loop, if result is None (meaning need to continue),
             # we should return IN_PROGRESS with the status code from response
-            from cafe.core.status_codes import StatusCodeParser
-            status_code = StatusCodeParser.extract(response)
-
             return PhaseResult(
                 status=PhaseStatus.IN_PROGRESS,
                 message=f"Plan phase needs more iterations (iteration {self.iteration})",
