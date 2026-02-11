@@ -1310,6 +1310,12 @@ def prepare(
         console.print(f"  ⚙️  Config: .cafe/issues/{issue_name}/issue.yaml")
         console.print()
 
+        # Show hint about editing config or closing/reopening
+        console.print("[cyan]💡 Tip:[/cyan]")
+        console.print(f"  • Edit config: [bold]vim .cafe/issues/{issue_name}/issue.yaml[/bold]")
+        console.print(f"  • Close and reopen: [bold]cafe close && cafe prepare[/bold]")
+        console.print()
+
         # Show next steps
         if use_worktree:
             console.print("[dim]Next step:[/dim]")
