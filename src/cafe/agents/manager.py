@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from cafe.agents.executor import AgentExecutor, AgentExecutionError
 from cafe.core.session import SessionManager
-from cafe.core.types import AgentConfig, PermissionDenial, TokenUsage
+from cafe.core.types import AgentConfig, AgentResponse, PermissionDenial, TokenUsage
 
 
 class AgentNotFoundError(Exception):
@@ -63,12 +63,14 @@ class AgentManager:
         session_id = session_data.session_id if session_data else None
         # Note: Don't create session here - let executor handle it on first use
 
-        # Update config with session ID (may be None)
+        # Update config with session ID (may be None), preserve backup and models config
         config_with_session = AgentConfig(
             name=config.name,
             cli=config.cli,
             session_id=session_id,
             model=config.model,
+            backup_clis=config.backup_clis,
+            models_config=config.models_config,
         )
 
         # Create executor
@@ -120,7 +122,8 @@ class AgentManager:
         prompt: str,
         allowed_tools: Optional[List[str]] = None,
         allowed_directories: Optional[List[str]] = None,
-        streaming_output_file: Optional[str] = None
+        streaming_output_file: Optional[str] = None,
+        phase_name: Optional[str] = None,
     ) -> Tuple[str, TokenUsage, List, Optional[List[str]], List[str], Optional[str]]:
         """Execute prompt with specified agent.
 
@@ -130,12 +133,14 @@ class AgentManager:
             allowed_tools: List of allowed tools (using Claude naming convention)
             allowed_directories: List of allowed directories
             streaming_output_file: Optional file path to write streaming output line-by-line
+            phase_name: Current phase name for phase-specific model lookup in backup agents
 
         Returns:
             Tuple of (agent's response, token usage, permission denials, cli_command_args, streaming_log, model)
 
         Raises:
             AgentNotFoundError: If agent not found
+            AgentExecutionError: If all agents (primary + backups) fail
         """
         executor = self.get_agent(agent_name)
 
@@ -163,6 +168,18 @@ class AgentManager:
                     executor.config.session_id = None
 
                     # Loop will retry (with no session ID, a new one will be created)
+                elif hasattr(e, 'error_type') and e.error_type in ("rate_limit", "cli_not_found"):
+                    # 嘗試備份 agent
+                    agent_response = self._try_backup_agents(
+                        primary_error=e,
+                        primary_executor=executor,
+                        prompt=prompt,
+                        allowed_tools=allowed_tools,
+                        allowed_directories=allowed_directories,
+                        streaming_output_file=streaming_output_file,
+                        phase_name=phase_name,
+                    )
+                    break  # 備份成功，跳出迴圈
                 else:
                     # Not a session conflict, or already retried - re-raise
                     raise
@@ -205,6 +222,94 @@ class AgentManager:
                 self._total_token_usage.duration_api_ms += token_usage.duration_api_ms
 
         return response, token_usage, permission_denials, cli_command_args, streaming_log, model
+
+    def _try_backup_agents(
+        self,
+        primary_error: "AgentExecutionError",
+        primary_executor: AgentExecutor,
+        prompt: str,
+        allowed_tools: Optional[List[str]] = None,
+        allowed_directories: Optional[List[str]] = None,
+        streaming_output_file: Optional[str] = None,
+        phase_name: Optional[str] = None,
+    ) -> "AgentResponse":
+        """嘗試備份 agents，直到有一個成功或全部失敗。
+
+        Args:
+            primary_error: 主要 agent 拋出的錯誤
+            primary_executor: 主要 agent executor
+            prompt: 要執行的 prompt
+            allowed_tools: 允許的工具清單
+            allowed_directories: 允許的目錄清單
+            streaming_output_file: 串流輸出的檔案路徑
+            phase_name: 當前 phase 名稱，用於查詢 model 設定
+
+        Returns:
+            AgentResponse: 成功的 agent 回應
+
+        Raises:
+            AgentExecutionError: 所有 agent 都失敗時拋出
+        """
+        config = primary_executor.config
+        backup_clis = config.backup_clis
+        models_config = config.models_config
+
+        if not backup_clis:
+            # 無備份 agent，直接拋出原始錯誤
+            raise primary_error
+
+        primary_cli_name = config.cli.value
+        print(f"❌ {primary_cli_name} API rate limit reached, trying backup agent...")
+
+        # 記錄已嘗試的 CLI，避免重複
+        tried_clis = {config.cli}
+        failed_agents: List[str] = [f"{primary_cli_name} ({primary_error})"]
+
+        for backup_cli in backup_clis:
+            if backup_cli in tried_clis:
+                continue
+            tried_clis.add(backup_cli)
+
+            # 查詢此備份 CLI 的 phase-specific model
+            backup_model: Optional[str] = None
+            if phase_name and models_config:
+                backup_model = models_config.get(backup_cli.value, {}).get(phase_name) or None
+
+            # 若 model 為空字串，視為 None
+            if backup_model == "":
+                backup_model = None
+
+            print(f"Trying {backup_cli.value}...")
+
+            backup_config = AgentConfig(
+                name=config.name,
+                cli=backup_cli,
+                model=backup_model,
+            )
+            backup_executor = AgentExecutor(backup_config)
+
+            try:
+                agent_response = backup_executor.execute(
+                    prompt, allowed_tools, allowed_directories, streaming_output_file
+                )
+                print(f"✅ Successfully completed with {backup_cli.value}")
+                return agent_response
+            except AgentExecutionError as backup_error:
+                if hasattr(backup_error, 'error_type') and backup_error.error_type in ("rate_limit", "cli_not_found"):
+                    failed_agents.append(f"{backup_cli.value} ({backup_error})")
+                    print(f"❌ {backup_cli.value} also hit rate limit, trying next agent...")
+                    continue
+                else:
+                    # 非 rate_limit/cli_not_found 錯誤，直接拋出
+                    raise
+
+        # 所有 agent 都失敗
+        tried_list = ", ".join(failed_agents)
+        raise AgentExecutionError(
+            f"All agents failed. Tried: {tried_list}. "
+            f"Please wait for rate limits to reset or add more backup agents.",
+            error_type="rate_limit",
+        )
 
     def execute_current(self, prompt: str) -> str:
         """Execute prompt with current agent.
