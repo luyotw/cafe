@@ -302,10 +302,10 @@ class TestDevelopPhasePromptGeneration:
             assert call_kwargs['feedback_file_path'] is not None
             assert 'review' in call_kwargs['feedback_file_path']
 
-    def test_pr_feedback_takes_priority_over_review_feedback(
+    def test_pr_feedback_used_when_pr_end_time_is_newer(
         self, tmp_path, mock_git_ops, mock_agent_manager, mock_permission_handler
     ):
-        """Test that PR feedback takes priority when both review and PR feedback exist."""
+        """Test that PR feedback is used when PR end_time is newer than review end_time."""
         from unittest.mock import patch
 
         # Arrange: Create directory structure with both review and PR feedback
@@ -318,20 +318,21 @@ class TestDevelopPhasePromptGeneration:
         plan_file.parent.mkdir(parents=True, exist_ok=True)
         plan_file.write_text("Test plan")
 
-        # Create review feedback
+        # Create review feedback (older end_time)
         review_dir = issue_dir / "review"
         review_status_file = review_dir / "status.json"
         review_status_file.parent.mkdir(parents=True, exist_ok=True)
         review_status_file.write_text(json.dumps({
             "status_code": "CAFE_NEEDS_CHANGES",
-            "timestamp": "2026-01-07T11:39:41+08:00"
+            "timestamp": "2026-01-07T11:39:41+08:00",
+            "end_time": "2026-01-07T11:40:00+08:00"
         }))
 
         review_output = review_dir / "iteration_001" / "output.md"
         review_output.parent.mkdir(parents=True, exist_ok=True)
         review_output.write_text("## Todo List\n\n- [ ] Review issue")
 
-        # Create PR feedback (should take priority)
+        # Create PR feedback (newer end_time — should take priority)
         pr_dir = issue_dir / "pr"
         pr_iteration_dir = pr_dir / "iteration_001"
         pr_iteration_dir.mkdir(parents=True, exist_ok=True)
@@ -344,6 +345,13 @@ class TestDevelopPhasePromptGeneration:
             "iteration": 1,
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "status_code": "CAFE_NEEDS_CHANGES"
+        }))
+
+        # Create PR status.json with newer end_time
+        pr_status_file = pr_dir / "status.json"
+        pr_status_file.write_text(json.dumps({
+            "status_code": "CAFE_NEEDS_CHANGES",
+            "end_time": "2026-01-07T11:50:00+08:00"
         }))
 
         # Create agent file
@@ -378,13 +386,104 @@ class TestDevelopPhasePromptGeneration:
             except:
                 pass
 
-            # Assert: PR feedback path should be used, not review
+            # Assert: PR feedback path should be used (PR end_time is newer)
             assert mock_gen_checklist.called
             call_kwargs = mock_gen_checklist.call_args.kwargs
             assert 'feedback_file_path' in call_kwargs
             assert call_kwargs['feedback_file_path'] is not None
             assert 'pr' in call_kwargs['feedback_file_path']
             assert 'review' not in call_kwargs['feedback_file_path']
+
+    def test_review_feedback_takes_priority_when_review_end_time_is_newer(
+        self, tmp_path, mock_git_ops, mock_agent_manager, mock_permission_handler
+    ):
+        """Test that review feedback takes priority when review end_time is newer than PR end_time."""
+        from unittest.mock import patch
+
+        # Arrange: Create directory structure with both review and PR feedback
+        issue_dir = tmp_path / ".cafe" / "issues" / "test-issue"
+        spec_file = issue_dir / "spec" / "iteration_001" / "output.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
+        spec_file.write_text("Test spec")
+
+        plan_file = issue_dir / "plan" / "iteration_001" / "output.md"
+        plan_file.parent.mkdir(parents=True, exist_ok=True)
+        plan_file.write_text("Test plan")
+
+        # Create review feedback (newer end_time — should take priority)
+        review_dir = issue_dir / "review"
+        review_status_file = review_dir / "status.json"
+        review_status_file.parent.mkdir(parents=True, exist_ok=True)
+        review_status_file.write_text(json.dumps({
+            "status_code": "CAFE_NEEDS_CHANGES",
+            "timestamp": "2026-01-07T11:58:24+08:00",
+            "end_time": "2026-01-07T11:58:24+08:00"
+        }))
+
+        review_output = review_dir / "iteration_001" / "output.md"
+        review_output.parent.mkdir(parents=True, exist_ok=True)
+        review_output.write_text("## Todo List\n\n- [ ] Review issue")
+
+        # Create PR feedback (older end_time)
+        pr_dir = issue_dir / "pr"
+        pr_iteration_dir = pr_dir / "iteration_001"
+        pr_iteration_dir.mkdir(parents=True, exist_ok=True)
+
+        pr_output = pr_iteration_dir / "output.md"
+        pr_output.write_text("## Todo List\n\n- [ ] PR issue")
+
+        pr_context_file = pr_iteration_dir / "context.json"
+        pr_context_file.write_text(json.dumps({
+            "iteration": 1,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "status_code": "CAFE_NEEDS_CHANGES"
+        }))
+
+        # Create PR status.json with older end_time
+        pr_status_file = pr_dir / "status.json"
+        pr_status_file.write_text(json.dumps({
+            "status_code": "CAFE_NEEDS_CHANGES",
+            "end_time": "2026-01-07T11:42:12+08:00"
+        }))
+
+        # Create agent file
+        agent_dir = tmp_path / ".cafe" / "agents" / "developer"
+        agent_dir.mkdir(parents=True, exist_ok=True)
+        agent_file = agent_dir / "test-dev.md"
+        agent_file.write_text("Test developer agent")
+
+        # Mock get_agent_file_path and generate_develop_checklist
+        with patch('cafe.agents.manager.AgentManager.get_agent_file_path', return_value=str(agent_file)), \
+             patch('cafe.utils.checklist_generator.generate_develop_checklist') as mock_gen_checklist, \
+             patch.object(DevelopPhase, '_execute_and_handle_agent_response', return_value=(None, "CAFE_CONFIRMED")):
+
+            # Create phase
+            phase = DevelopPhase(
+                agent_manager=mock_agent_manager,
+                permission_handler=mock_permission_handler,
+                git_ops=mock_git_ops,
+                spec_file=str(spec_file),
+                plan_file=str(plan_file),
+                issue_name="test-issue",
+            )
+
+            # Override issue_dir to use tmp_path (since git operations use CWD)
+            phase.issue_dir = issue_dir
+            phase.phase_dir = issue_dir / "develop"
+            phase.history_dir = phase.phase_dir / "history"
+
+            # Act: Execute
+            try:
+                phase.execute()
+            except:
+                pass
+
+            # Assert: Review feedback path should be used (review end_time is newer)
+            assert mock_gen_checklist.called
+            call_kwargs = mock_gen_checklist.call_args.kwargs
+            assert 'feedback_file_path' in call_kwargs
+            assert call_kwargs['feedback_file_path'] is not None
+            assert 'review' in call_kwargs['feedback_file_path']
 
     def test_review_feedback_used_when_no_pr_feedback(
         self, tmp_path, mock_git_ops, mock_agent_manager, mock_permission_handler
