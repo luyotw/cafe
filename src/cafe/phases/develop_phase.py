@@ -234,6 +234,31 @@ class DevelopPhase(Phase):
 
         self._write_issue_config(config_file, config_data)
 
+    def _show_pr_todo_list(self) -> None:
+        """Display PR todo list and comments from the latest iteration with output.md."""
+        pr_dir = self.issue_dir / "pr"
+        iteration_dirs = sorted(pr_dir.glob("iteration_*"), reverse=True)
+
+        from cafe.utils.git_utils import to_cwd_relative_path
+
+        for iteration_dir in iteration_dirs:
+            output_file = iteration_dir / "output.md"
+            if output_file.exists():
+                try:
+                    output_path = to_cwd_relative_path(output_file)
+                except ValueError:
+                    output_path = str(output_file.resolve())
+                print(f"  → Todo list: {output_path}")
+
+                user_input_file = iteration_dir / "user_input.md"
+                if user_input_file.exists():
+                    try:
+                        user_input_path = to_cwd_relative_path(user_input_file)
+                    except ValueError:
+                        user_input_path = str(user_input_file.resolve())
+                    print(f"  → PR comments: {user_input_path}")
+                break
+
     def _check_if_already_completed_with_review(self) -> Optional[PhaseResult]:
         """Check if phase is already completed, considering special logic for review feedback and PR comments.
 
@@ -256,85 +281,72 @@ class DevelopPhase(Phase):
                 print(f"ℹ️  Review feedback detected: {review_file}")
             return None
 
-        # Check if PR phase has requested changes after this develop (both GitHub and local mode)
-        # If PR is newer than last develop with NEEDS_CHANGES, we need to execute develop
-        # If develop is newer than PR, changes have been addressed
+        # Collect NEEDS_CHANGES timestamps from review and PR phases
+        # Only phases newer than develop's end_time need to be handled
+        develop_end_time = getattr(existing_progress, 'end_time', None)
+
+        from cafe.core.status_codes import PhaseStatusCode
+
+        review_needs_changes_time = None
+        pr_needs_changes_time = None
+
+        # Check review phase end_time
+        if review_status and review_status.get("status_code") == "CAFE_NEEDS_CHANGES":
+            review_end_time_str = review_status.get("end_time")
+            if review_end_time_str:
+                review_needs_changes_time = datetime.fromisoformat(review_end_time_str)
+
+        # Check PR phase end_time
         pr_status_file = self.issue_dir / "pr" / "status.json"
         if pr_status_file.exists():
             try:
-                from datetime import datetime
-                from cafe.core.status_codes import PhaseStatusCode
-
                 with open(pr_status_file, 'r', encoding='utf-8') as f:
                     pr_status = json.load(f)
 
-                pr_status_code = pr_status.get("status_code")
-                # Use end_time for comparison, skip if not available
-                pr_end_time_str = pr_status.get("end_time")
-                if not pr_end_time_str:
-                    # PR phase not completed yet, skip comparison
-                    pass
-                else:
-                    pr_end_time = datetime.fromisoformat(pr_end_time_str)
-                    develop_end_time = getattr(existing_progress, 'end_time', None)
-
-                    # If PR has NEEDS_CHANGES and is newer than develop, need to execute
-                    if pr_status_code == PhaseStatusCode.NEEDS_CHANGES.value and develop_end_time and pr_end_time > develop_end_time:
-                        # Find the latest pr/iteration_XXX with output.md (todo list) to show user
-                        pr_dir = self.issue_dir / "pr"
-                        iteration_dirs = sorted(pr_dir.glob("iteration_*"), reverse=True)
-
-                        from cafe.utils.git_utils import to_cwd_relative_path
-
-                        # Prioritize showing todo list - find latest iteration with output.md
-                        for iteration_dir in iteration_dirs:
-                            output_file = iteration_dir / "output.md"
-                            if output_file.exists():
-                                # Show todo list file (prioritized)
-                                try:
-                                    output_path = to_cwd_relative_path(output_file)
-                                except ValueError:
-                                    output_path = str(output_file.resolve())
-                                print(f"  → Todo list: {output_path}")
-
-                                # Only show user_input.md if it exists for the same iteration
-                                user_input_file = iteration_dir / "user_input.md"
-                                if user_input_file.exists():
-                                    try:
-                                        user_input_path = to_cwd_relative_path(user_input_file)
-                                    except ValueError:
-                                        user_input_path = str(user_input_file.resolve())
-                                    print(f"  → PR comments: {user_input_path}")
-                                break
-
-                        return None  # Continue execution
-
+                if pr_status.get("status_code") == PhaseStatusCode.NEEDS_CHANGES.value:
+                    pr_end_time_str = pr_status.get("end_time")
+                    if pr_end_time_str:
+                        pr_needs_changes_time = datetime.fromisoformat(pr_end_time_str)
             except Exception:
-                # If error, continue with normal flow
                 pass
 
-        # Check if review feedback has already been handled by comparing end_time
-        if self._has_review_feedback:
-            review_end_time_str = review_status.get("end_time")
-            develop_end_time = getattr(existing_progress, 'end_time', None)
+        # Filter: only keep phases newer than develop's end_time
+        if develop_end_time:
+            if review_needs_changes_time and develop_end_time > review_needs_changes_time:
+                review_needs_changes_time = None
+                self._has_review_feedback = False
+            if pr_needs_changes_time and develop_end_time > pr_needs_changes_time:
+                pr_needs_changes_time = None
 
-            if review_end_time_str and develop_end_time:
-                from datetime import datetime
-                review_end_time = datetime.fromisoformat(review_end_time_str)
-                if develop_end_time > review_end_time:
-                    # Develop completed after review, feedback was already handled
-                    self._has_review_feedback = False
-                    print(f"ℹ️  Review feedback already addressed, checking for PR comments...")
-                    # Don't return here - continue to check PR comments below
-                else:
-                    # Review is newer than develop, need to handle feedback
-                    return None
-            else:
-                # Can't determine timing, assume review feedback needs handling
+        # Decide which phase to handle based on end_time priority
+        if review_needs_changes_time and pr_needs_changes_time:
+            # Both have NEEDS_CHANGES newer than develop — pick the newer one
+            if review_needs_changes_time >= pr_needs_changes_time:
+                # Review is newer or equal, handle review feedback
                 return None
+            else:
+                # PR is newer, handle PR feedback
+                self._has_review_feedback = False
+                self._show_pr_todo_list()
+                return None
+        elif review_needs_changes_time:
+            # Only review has NEEDS_CHANGES newer than develop
+            return None
+        elif pr_needs_changes_time:
+            # Only PR has NEEDS_CHANGES newer than develop
+            self._has_review_feedback = False
+            self._show_pr_todo_list()
+            return None
 
+        # If review has NEEDS_CHANGES but no end_time available, assume it needs handling
+        if self._has_review_feedback and not review_needs_changes_time:
+            if review_status and review_status.get("status_code") == "CAFE_NEEDS_CHANGES":
+                review_end_time_str = review_status.get("end_time")
+                if not review_end_time_str:
+                    return None
 
-        # No review feedback or PR comments, phase is truly completed
+        # No review feedback or PR comments newer than develop, phase is truly completed
+        self._has_review_feedback = False
         return PhaseResult(
             status=PhaseStatus.COMPLETED,
             message=f"Development already completed in {existing_progress.iteration} iteration(s)",
@@ -911,14 +923,20 @@ Read {agent_file} to understand your complete role definition and responsibiliti
             # Check if in correction mode (has review feedback or PR feedback)
             correction_mode = hasattr(self, '_has_review_feedback') and self._has_review_feedback
 
-            # Determine single feedback file: PR feedback takes priority over review feedback
+            # Determine feedback file by comparing end_time of PR and review phases
+            # The phase with the newer end_time takes priority (represents the latest failed gate)
             feedback_file = None
+            pr_feedback_file = None
+            pr_end_time = None
+            review_feedback_file = None
+            review_end_time = None
 
-            # First check for PR feedback todo list (only from completed iterations)
+            from cafe.utils.git_utils import to_cwd_relative_path
+
+            # Collect PR feedback file and its end_time
             pr_dir = self.issue_dir / "pr"
             if pr_dir.exists():
                 iteration_dirs = sorted(pr_dir.glob("iteration_*"))
-                # Search backwards for the latest iteration with a completed status_code
                 for iteration_dir in reversed(iteration_dirs):
                     context_file = iteration_dir / "context.json"
                     if not context_file.exists():
@@ -929,22 +947,56 @@ Read {agent_file} to understand your complete role definition and responsibiliti
                         continue
                     pr_output_file = iteration_dir / "output.md"
                     if pr_output_file.exists() and pr_output_file.read_text(encoding="utf-8").strip():
-                        from cafe.utils.git_utils import to_cwd_relative_path
                         try:
-                            feedback_file = to_cwd_relative_path(pr_output_file)
+                            pr_feedback_file = to_cwd_relative_path(pr_output_file)
                         except ValueError:
-                            feedback_file = str(pr_output_file.resolve())
-                        # If we have PR feedback, we're in correction mode
-                        if not correction_mode:
-                            correction_mode = True
+                            pr_feedback_file = str(pr_output_file.resolve())
                     break
 
-            # If no PR feedback, check for review feedback
-            if not feedback_file and correction_mode:
+                # Get PR end_time from status.json
+                pr_status_file = self.issue_dir / "pr" / "status.json"
+                if pr_status_file.exists():
+                    try:
+                        with open(pr_status_file, 'r', encoding='utf-8') as f:
+                            pr_status_data = json.load(f)
+                        pr_end_time_str = pr_status_data.get("end_time")
+                        if pr_end_time_str:
+                            pr_end_time = datetime.fromisoformat(pr_end_time_str)
+                    except Exception:
+                        pass
+
+            # Collect review feedback file and its end_time
+            if correction_mode:
                 review_dir = self.issue_dir / "review"
                 review_file_path = self._get_latest_versioned_file("review", review_dir)
                 if review_file_path and review_file_path.exists():
-                    feedback_file = str(review_file_path)
+                    review_feedback_file = str(review_file_path)
+
+                review_status = self._load_review_status()
+                if review_status:
+                    review_end_time_str = review_status.get("end_time")
+                    if review_end_time_str:
+                        review_end_time = datetime.fromisoformat(review_end_time_str)
+
+            # Select feedback file based on end_time priority
+            if pr_feedback_file and review_feedback_file:
+                # Both have feedback — pick the one with newer end_time
+                if pr_end_time and review_end_time:
+                    if review_end_time >= pr_end_time:
+                        feedback_file = review_feedback_file
+                    else:
+                        feedback_file = pr_feedback_file
+                        if not correction_mode:
+                            correction_mode = True
+                else:
+                    # Timestamps not available — default to review (earlier gate, safer)
+                    feedback_file = review_feedback_file
+            elif pr_feedback_file:
+                feedback_file = pr_feedback_file
+                if not correction_mode:
+                    correction_mode = True
+            elif review_feedback_file:
+                feedback_file = review_feedback_file
 
             # Define basic principles
             basic_principles = """- Follow existing commit message style (format, language, structure)
