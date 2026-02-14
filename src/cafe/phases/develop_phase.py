@@ -377,7 +377,7 @@ class DevelopPhase(Phase):
         """Handle user input for NO_CHANGES_NEEDED status (developer disputes reviewer).
 
         Similar to READY_FOR_REVIEW handling:
-        - user_input == "confirm": User agrees, save SKIP_REVIEW status and return completion
+        - user_input == "confirm": User agrees, save CONFIRMED_SKIP_REVIEW status and return completion
         - user_input has content: User disagrees, return their feedback as user_input
         - No user_input (interactive): Ask user for decision
         - No user_input (non-interactive): Return failure
@@ -413,7 +413,7 @@ class DevelopPhase(Phase):
 
         # Handle user choice
         if choice.strip().lower() == "confirm":
-            # User agrees with developer - save SKIP_REVIEW status
+            # User agrees with developer - save CONFIRMED_SKIP_REVIEW status
             print("✅ User agreed with developer - skipping review phase")
 
             # Save user confirmation as a new iteration
@@ -430,9 +430,9 @@ class DevelopPhase(Phase):
                 agent_cli=None,
                 agent_session_id=None,
                 allowed_tools=None,
-                status_code=PhaseStatusCode.SKIP_REVIEW,
+                status_code=PhaseStatusCode.CONFIRMED_SKIP_REVIEW,
             )
-            self._save_progress(PhaseStatusCode.SKIP_REVIEW)
+            self._save_progress(PhaseStatusCode.CONFIRMED_SKIP_REVIEW)
 
             return PhaseResult(
                 status=PhaseStatus.COMPLETED,
@@ -440,7 +440,7 @@ class DevelopPhase(Phase):
                 data={
                     "branch": self._get_branch_name(),
                     "iterations": self.iteration,
-                    "status_code": PhaseStatusCode.SKIP_REVIEW.value,
+                    "status_code": PhaseStatusCode.CONFIRMED_SKIP_REVIEW.value,
                     "skip_review": True,
                 },
             )

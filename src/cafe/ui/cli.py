@@ -3091,7 +3091,7 @@ def develop(
         # Display result
         if result.status.value == "completed":
             status_code = result.data.get("status_code")
-            skip_review = result.data.get("skip_review", False) or status_code == "CAFE_SKIP_REVIEW"
+            skip_review = result.data.get("skip_review", False) or status_code == "CAFE_CONFIRMED_SKIP_REVIEW"
 
             console.print()
             if skip_review:
