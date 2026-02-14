@@ -347,14 +347,18 @@ class DevelopPhase(Phase):
 
         # No review feedback or PR comments newer than develop, phase is truly completed
         self._has_review_feedback = False
+        phase_data: dict = {
+            "branch": self._get_branch_name(),
+            "iterations": existing_progress.iteration,
+            "status_code": existing_progress.status_code,
+        }
+        # 若之前以 CONFIRMED_SKIP_REVIEW 結束，恢復時需傳遞 skip_review 旗標
+        if existing_progress.status_code == PhaseStatusCode.CONFIRMED_SKIP_REVIEW.value:
+            phase_data["skip_review"] = True
         return PhaseResult(
             status=PhaseStatus.COMPLETED,
             message=f"Development already completed in {existing_progress.iteration} iteration(s)",
-            data={
-                "branch": self._get_branch_name(),
-                "iterations": existing_progress.iteration,
-                "status_code": existing_progress.status_code,
-            },
+            data=phase_data,
         )
 
     def _save_progress(self, status_code: "PhaseStatusCode") -> None:  # type: ignore[override]
