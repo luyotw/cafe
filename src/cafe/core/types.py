@@ -58,34 +58,34 @@ class PermissionAction(str, Enum):
 class AgentConfig(BaseModel):
     """Configuration for an AI agent.
 
-    backup_clis 和 models_config 用於備份 agent 自動切換功能。
-    當主要 CLI 遇到 rate limit 時，AgentManager 會依序嘗試 backup_clis 中的備份 CLI。
+    backup_clis and models_config support automatic backup agent switching.
+    When the primary CLI hits a rate limit, AgentManager tries each backup CLI in order.
 
-    config.yaml 設定範例::
+    Example config.yaml::
 
         agents:
           developer:
             name: David
-            cli: claude                    # 主要 CLI
-            backup:                        # 備份 CLI（依序嘗試）
+            cli: claude                    # Primary CLI
+            backup:                        # Backup CLIs (tried in order)
               - gemini
               - copilot
-            models:                        # 各 CLI 對應的 phase model 設定
+            models:                        # Per-CLI per-phase model configuration
               claude:
                 plan: opus
                 develop: sonnet
               gemini:
                 plan: gemini-2.5-pro-preview
                 develop: gemini-2-flash-preview
-              copilot: {}                  # 使用 CLI 預設 model
+              copilot: {}                  # Use CLI default model
     """
 
     name: str
     cli: AgentCLI
     session_id: Optional[str] = None
     model: Optional[str] = None  # Optional model name for CLI (e.g., "sonnet", "opus")
-    backup_clis: List["AgentCLI"] = Field(default_factory=list)  # 有序備份 CLI 列表
-    models_config: Dict[str, Dict[str, str]] = Field(default_factory=dict)  # 各 CLI 對應的階段 model 設定
+    backup_clis: List["AgentCLI"] = Field(default_factory=list)  # Ordered list of backup CLIs
+    models_config: Dict[str, Dict[str, str]] = Field(default_factory=dict)  # Per-CLI per-phase model configuration
 
 
 class TokenUsage(BaseModel):

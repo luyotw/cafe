@@ -169,7 +169,7 @@ class AgentManager:
 
                     # Loop will retry (with no session ID, a new one will be created)
                 elif hasattr(e, 'error_type') and e.error_type in ("rate_limit", "cli_not_found"):
-                    # 嘗試備份 agent
+                    # Try backup agents
                     agent_response = self._try_backup_agents(
                         primary_error=e,
                         primary_executor=executor,
@@ -179,7 +179,7 @@ class AgentManager:
                         streaming_output_file=streaming_output_file,
                         phase_name=phase_name,
                     )
-                    break  # 備份成功，跳出迴圈
+                    break  # Backup succeeded, exit loop
                 else:
                     # Not a session conflict, or already retried - re-raise
                     raise
@@ -233,68 +233,68 @@ class AgentManager:
         streaming_output_file: Optional[str] = None,
         phase_name: Optional[str] = None,
     ) -> "AgentResponse":
-        """嘗試備份 agents，直到有一個成功或全部失敗。
+        """Try backup agents in order until one succeeds or all fail.
 
-        備份重試流程：
-        1. 若無備份 CLI 設定，直接拋出原始錯誤
-        2. 依序嘗試 backup_clis 中的每個備份 CLI
-        3. 若備份 CLI 也遇到 rate_limit 或 cli_not_found，繼續嘗試下一個
-        4. 若備份 CLI 遇到其他錯誤，直接拋出（不繼續嘗試）
-        5. 若所有備份均失敗，拋出包含所有已嘗試 CLI 清單的錯誤訊息
+        Backup retry flow:
+        1. If no backup CLIs are configured, re-raise the original error immediately
+        2. Try each backup CLI in backup_clis in order
+        3. If a backup CLI also hits rate_limit or cli_not_found, continue to the next
+        4. If a backup CLI raises any other error, re-raise it immediately (do not continue)
+        5. If all backups fail, raise an error listing all attempted CLIs
 
-        phase_name 用於從 models_config 查詢備份 CLI 對應此 phase 的 model，
-        例如在 "develop" phase 使用 gemini 備份時，查詢 models_config["gemini"]["develop"]。
+        phase_name is used to look up the model for the backup CLI from models_config,
+        e.g. during the "develop" phase with gemini backup: models_config["gemini"]["develop"].
 
         Args:
-            primary_error: 主要 agent 拋出的錯誤
-            primary_executor: 主要 agent executor
-            prompt: 要執行的 prompt
-            allowed_tools: 允許的工具清單
-            allowed_directories: 允許的目錄清單
-            streaming_output_file: 串流輸出的檔案路徑
-            phase_name: 當前 phase 名稱，用於查詢 model 設定
+            primary_error: Error raised by the primary agent
+            primary_executor: Primary agent executor
+            prompt: Prompt to execute
+            allowed_tools: List of allowed tools
+            allowed_directories: List of allowed directories
+            streaming_output_file: File path for streaming output
+            phase_name: Current phase name, used to look up model configuration
 
         Returns:
-            AgentResponse: 成功的 agent 回應
+            AgentResponse: Response from the first successful backup agent
 
         Raises:
-            AgentExecutionError: 所有 agent 都失敗時拋出
+            AgentExecutionError: Raised when all agents (primary + backups) fail
         """
         config = primary_executor.config
         backup_clis = config.backup_clis
         models_config = config.models_config
 
         if not backup_clis:
-            # 無備份 agent，直接拋出原始錯誤
+            # No backup agents configured, re-raise the original error
             raise primary_error
 
         primary_cli_name = config.cli.value
         print(f"❌ {primary_cli_name} API rate limit reached, trying backup agent...")
 
-        # 記錄已嘗試的 CLI，避免重複（初始包含 primary CLI）
+        # Track tried CLIs to avoid duplicates (primary CLI is included from the start)
         tried_clis = {config.cli}
         failed_agents: List[str] = [f"{primary_cli_name} ({primary_error})"]
 
         for backup_cli in backup_clis:
-            # 跳過已嘗試過的 CLI（例如 backup_clis 中包含與 primary 相同的 CLI）
+            # Skip CLIs already tried (e.g. backup_clis contains the same CLI as primary)
             if backup_cli in tried_clis:
                 continue
             tried_clis.add(backup_cli)
 
-            # 查詢此備份 CLI 在當前 phase 的 model 設定
-            # 例如：models_config = {"gemini": {"develop": "gemini-2-flash-preview"}}
-            # 若未設定或為空字串，使用 None（CLI 工具預設 model）
+            # Look up the model for this backup CLI in the current phase
+            # e.g. models_config = {"gemini": {"develop": "gemini-2-flash-preview"}}
+            # If not configured or empty string, use None (CLI default model)
             backup_model: Optional[str] = None
             if phase_name and models_config:
                 backup_model = models_config.get(backup_cli.value, {}).get(phase_name) or None
 
-            # 若 model 為空字串，視為 None
+            # Treat empty string as None
             if backup_model == "":
                 backup_model = None
 
             print(f"Trying {backup_cli.value}...")
 
-            # 以備份 CLI 建立新的 executor（fresh session，避免 session 污染）
+            # Create a new executor for the backup CLI (fresh session to avoid session contamination)
             backup_config = AgentConfig(
                 name=config.name,
                 cli=backup_cli,
@@ -310,15 +310,15 @@ class AgentManager:
                 return agent_response
             except AgentExecutionError as backup_error:
                 if hasattr(backup_error, 'error_type') and backup_error.error_type in ("rate_limit", "cli_not_found"):
-                    # rate_limit 或 cli_not_found：記錄後繼續嘗試下一個備份
+                    # rate_limit or cli_not_found: record and continue to next backup
                     failed_agents.append(f"{backup_cli.value} ({backup_error})")
                     print(f"❌ {backup_cli.value} also hit rate limit, trying next agent...")
                     continue
                 else:
-                    # 非 rate_limit/cli_not_found 錯誤（例如 prompt 格式錯誤），直接拋出
+                    # Other errors (e.g. invalid prompt format): re-raise immediately
                     raise
 
-        # 所有 agent（primary + 所有備份）均失敗，組合錯誤訊息
+        # All agents (primary + all backups) failed, compose error message
         tried_list = ", ".join(failed_agents)
         raise AgentExecutionError(
             f"All agents failed. Tried: {tried_list}. "

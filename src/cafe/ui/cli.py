@@ -265,7 +265,7 @@ def _setup_agents(
 
         return model
 
-    # Helper to resolve backup CLIs（過濾掉與主要 CLI 相同的項目）
+    # Helper to resolve backup CLIs (filter out entries that match the primary CLI)
     def resolve_backup_clis(config: dict, primary_cli: AgentCLI) -> List[AgentCLI]:
         backup_raw = config.get("backup", [])
         seen = {primary_cli}
