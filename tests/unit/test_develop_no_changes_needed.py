@@ -345,3 +345,76 @@ class TestConfirmedSkipReviewSaveProgress:
         import json
         data = json.loads(status_file.read_text())
         assert data["status"] == PhaseStatus.IN_PROGRESS.value
+
+
+class TestConfirmedSkipReviewResumeIntegration:
+    """整合測試：模擬完整的中斷後恢復流程"""
+
+    @pytest.fixture
+    def setup_develop_phase(self):
+        """設置一個帶有暫存目錄的 DevelopPhase 實例"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            issue_dir = Path(tmpdir) / "issue123"
+            develop_dir = issue_dir / "develop"
+            develop_dir.mkdir(parents=True, exist_ok=True)
+
+            mock_agent_manager = MagicMock()
+            mock_permission_handler = MagicMock()
+            mock_git_ops = MagicMock()
+
+            phase = DevelopPhase(
+                agent_manager=mock_agent_manager,
+                permission_handler=mock_permission_handler,
+                git_ops=mock_git_ops,
+                spec_file=str(issue_dir / "spec.md"),
+                plan_file=str(issue_dir / "plan.md"),
+                issue_id="issue123",
+                interactive=False,
+                user_input="",
+            )
+
+            phase.issue_dir = issue_dir
+            phase.phase_dir = develop_dir
+            phase.phase_name = "develop"
+            phase.iteration = 1
+            phase._get_branch_name = MagicMock(return_value="issue123-dev")
+
+            yield phase, issue_dir, develop_dir
+
+    def test_resume_after_confirmed_skip_review_skips_develop_and_has_skip_flag(self, setup_develop_phase):
+        """整合測試：
+        情境A - 中斷恢復時的完整流程：
+        1. 以 CONFIRMED_SKIP_REVIEW 儲存進度
+        2. 再次呼叫 _check_if_already_completed_with_review
+        3. 應返回 COMPLETED 結果，且包含 skip_review=True
+        4. 不應再次執行開發階段（節省呼叫）
+        """
+        phase, issue_dir, develop_dir = setup_develop_phase
+
+        # 步驟一：模擬完成開發並以 CONFIRMED_SKIP_REVIEW 儲存
+        phase._save_progress(PhaseStatusCode.CONFIRMED_SKIP_REVIEW)
+
+        # 步驟二：模擬使用者中斷後重新執行 cafe make
+        # 此時 _check_if_already_completed_with_review 應識別出已完成
+        result = phase._check_if_already_completed_with_review()
+
+        # 步驟三：驗證返回結果正確
+        assert result is not None, "應返回已完成結果，不應重新執行開發"
+        assert result.status == PhaseStatus.COMPLETED
+        assert result.data.get("skip_review") is True, "應包含 skip_review=True 以便跳過 review 階段"
+        assert result.data.get("status_code") == PhaseStatusCode.CONFIRMED_SKIP_REVIEW.value
+
+    def test_new_iteration_does_not_skip_develop_when_no_prior_confirmed_skip_review(self, setup_develop_phase):
+        """整合測試：
+        情境B - 新 iteration 不應跳過開發階段：
+        1. 沒有儲存任何進度（全新的 iteration）
+        2. _check_if_already_completed_with_review 應返回 None
+        3. 開發階段應正常執行
+        """
+        phase, issue_dir, develop_dir = setup_develop_phase
+
+        # 沒有儲存任何進度（新的 iteration 或 PR feedback 觸發的新回合）
+        result = phase._check_if_already_completed_with_review()
+
+        # 應返回 None，讓開發階段正常繼續
+        assert result is None, "新 iteration 不應跳過開發階段"
