@@ -203,3 +203,218 @@ class TestNoChangesNeededReasoningValidation:
             # Should resolve {output_file} placeholder to actual path
             assert str(output_file) in checklist_content
             assert "{output_file}" not in checklist_content
+
+
+class TestConfirmedSkipReviewResumeFlag:
+    """Test that skip_review flag is correctly propagated when resuming from CONFIRMED_SKIP_REVIEW state"""
+
+    @pytest.fixture
+    def setup_develop_phase(self):
+        """Set up a DevelopPhase instance with a temporary directory"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            issue_dir = Path(tmpdir) / "issue123"
+            develop_dir = issue_dir / "develop"
+            develop_dir.mkdir(parents=True, exist_ok=True)
+
+            mock_agent_manager = MagicMock()
+            mock_permission_handler = MagicMock()
+            mock_git_ops = MagicMock()
+
+            phase = DevelopPhase(
+                agent_manager=mock_agent_manager,
+                permission_handler=mock_permission_handler,
+                git_ops=mock_git_ops,
+                spec_file=str(issue_dir / "spec.md"),
+                plan_file=str(issue_dir / "plan.md"),
+                issue_id="issue123",
+                interactive=False,
+                user_input="",
+            )
+
+            phase.issue_dir = issue_dir
+            phase.phase_dir = develop_dir
+            phase.phase_name = "develop"
+            phase.iteration = 1
+            phase._get_branch_name = MagicMock(return_value="issue123-dev")
+
+            yield phase, issue_dir, develop_dir
+
+    def test_resume_with_confirmed_skip_review_includes_skip_review_flag(self, setup_develop_phase):
+        """Test that resuming with CONFIRMED_SKIP_REVIEW status returns result with skip_review=True"""
+        from datetime import datetime, timezone
+        phase, issue_dir, develop_dir = setup_develop_phase
+
+        # Save a CONFIRMED_SKIP_REVIEW completion state
+        phase._save_progress(PhaseStatusCode.CONFIRMED_SKIP_REVIEW)
+
+        # Verify status is saved as COMPLETED
+        status_file = develop_dir / "status.json"
+        assert status_file.exists()
+        data = json.loads(status_file.read_text())
+        assert data["status"] == "completed"
+
+        # Call _check_if_already_completed_with_review, should return result with skip_review=True
+        result = phase._check_if_already_completed_with_review()
+
+        assert result is not None
+        assert result.data.get("skip_review") is True
+        assert result.data.get("status_code") == "CAFE_CONFIRMED_SKIP_REVIEW"
+
+    def test_resume_with_confirmed_status_does_not_include_skip_review_flag(self, setup_develop_phase):
+        """Test that resuming with CONFIRMED status does not include skip_review=True"""
+        phase, issue_dir, develop_dir = setup_develop_phase
+
+        # Save a CONFIRMED completion state
+        phase._save_progress(PhaseStatusCode.CONFIRMED)
+
+        result = phase._check_if_already_completed_with_review()
+
+        assert result is not None
+        assert result.data.get("skip_review") is not True
+
+
+class TestConfirmedSkipReviewSaveProgress:
+    """Test that CONFIRMED_SKIP_REVIEW status code is saved as COMPLETED status"""
+
+    @pytest.fixture
+    def setup_develop_phase(self):
+        """Set up a DevelopPhase instance with a temporary directory"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            issue_dir = Path(tmpdir) / "issue123"
+            develop_dir = issue_dir / "develop"
+            develop_dir.mkdir(parents=True, exist_ok=True)
+
+            mock_agent_manager = MagicMock()
+            mock_permission_handler = MagicMock()
+            mock_git_ops = MagicMock()
+
+            phase = DevelopPhase(
+                agent_manager=mock_agent_manager,
+                permission_handler=mock_permission_handler,
+                git_ops=mock_git_ops,
+                spec_file=str(issue_dir / "spec.md"),
+                plan_file=str(issue_dir / "plan.md"),
+                issue_id="issue123",
+                interactive=False,
+                user_input="",
+            )
+
+            phase.issue_dir = issue_dir
+            phase.phase_dir = develop_dir
+            phase.phase_name = "develop"
+            phase.iteration = 1
+
+            yield phase, issue_dir, develop_dir
+
+    def test_save_progress_confirmed_skip_review_saves_as_completed(self, setup_develop_phase):
+        """Test that _save_progress(CONFIRMED_SKIP_REVIEW) saves status as COMPLETED"""
+        phase, issue_dir, develop_dir = setup_develop_phase
+
+        phase._save_progress(PhaseStatusCode.CONFIRMED_SKIP_REVIEW)
+
+        status_file = develop_dir / "status.json"
+        assert status_file.exists()
+
+        import json
+        data = json.loads(status_file.read_text())
+        assert data["status"] == PhaseStatus.COMPLETED.value
+        assert data["status_code"] == "CAFE_CONFIRMED_SKIP_REVIEW"
+
+    def test_save_progress_confirmed_status_saves_as_completed(self, setup_develop_phase):
+        """Test that _save_progress(CONFIRMED) still saves status as COMPLETED"""
+        phase, issue_dir, develop_dir = setup_develop_phase
+
+        phase._save_progress(PhaseStatusCode.CONFIRMED)
+
+        status_file = develop_dir / "status.json"
+        assert status_file.exists()
+
+        import json
+        data = json.loads(status_file.read_text())
+        assert data["status"] == PhaseStatus.COMPLETED.value
+
+    def test_save_progress_need_clarification_saves_as_in_progress(self, setup_develop_phase):
+        """Test that _save_progress(NEED_CLARIFICATION) saves status as IN_PROGRESS"""
+        phase, issue_dir, develop_dir = setup_develop_phase
+
+        phase._save_progress(PhaseStatusCode.NEED_CLARIFICATION)
+
+        status_file = develop_dir / "status.json"
+        assert status_file.exists()
+
+        import json
+        data = json.loads(status_file.read_text())
+        assert data["status"] == PhaseStatus.IN_PROGRESS.value
+
+
+class TestConfirmedSkipReviewResumeIntegration:
+    """Integration tests simulating the full interrupt-and-resume workflow"""
+
+    @pytest.fixture
+    def setup_develop_phase(self):
+        """Set up a DevelopPhase instance with a temporary directory"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            issue_dir = Path(tmpdir) / "issue123"
+            develop_dir = issue_dir / "develop"
+            develop_dir.mkdir(parents=True, exist_ok=True)
+
+            mock_agent_manager = MagicMock()
+            mock_permission_handler = MagicMock()
+            mock_git_ops = MagicMock()
+
+            phase = DevelopPhase(
+                agent_manager=mock_agent_manager,
+                permission_handler=mock_permission_handler,
+                git_ops=mock_git_ops,
+                spec_file=str(issue_dir / "spec.md"),
+                plan_file=str(issue_dir / "plan.md"),
+                issue_id="issue123",
+                interactive=False,
+                user_input="",
+            )
+
+            phase.issue_dir = issue_dir
+            phase.phase_dir = develop_dir
+            phase.phase_name = "develop"
+            phase.iteration = 1
+            phase._get_branch_name = MagicMock(return_value="issue123-dev")
+
+            yield phase, issue_dir, develop_dir
+
+    def test_resume_after_confirmed_skip_review_skips_develop_and_has_skip_flag(self, setup_develop_phase):
+        """Integration test:
+        Scenario A - Full workflow when resuming after interruption:
+        1. Save progress with CONFIRMED_SKIP_REVIEW
+        2. Call _check_if_already_completed_with_review again
+        3. Should return COMPLETED result with skip_review=True
+        4. Should not re-execute develop phase
+        """
+        phase, issue_dir, develop_dir = setup_develop_phase
+
+        # Step 1: Simulate completing develop and saving with CONFIRMED_SKIP_REVIEW
+        phase._save_progress(PhaseStatusCode.CONFIRMED_SKIP_REVIEW)
+
+        # Step 2: Simulate user interruption then re-running cafe make
+        # _check_if_already_completed_with_review should recognize it as completed
+        result = phase._check_if_already_completed_with_review()
+
+        # Step 3: Verify result is correct
+        assert result is not None, "Should return completed result, not re-run develop phase"
+        assert result.status == PhaseStatus.COMPLETED
+        assert result.data.get("skip_review") is True, "Should include skip_review=True to skip review phase"
+        assert result.data.get("status_code") == PhaseStatusCode.CONFIRMED_SKIP_REVIEW.value
+
+    def test_new_iteration_does_not_skip_develop_when_no_prior_confirmed_skip_review(self, setup_develop_phase):
+        """Integration test:
+        Scenario B - New iteration should not skip develop phase:
+        1. No progress saved (fresh iteration)
+        2. _check_if_already_completed_with_review should return None
+        3. Develop phase should run normally
+        """
+        phase, issue_dir, develop_dir = setup_develop_phase
+
+        # No progress saved (new iteration or PR feedback triggered new round)
+        result = phase._check_if_already_completed_with_review()
+
+        # Should return None to allow develop phase to continue normally
+        assert result is None, "New iteration should not skip develop phase"

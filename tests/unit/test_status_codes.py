@@ -338,9 +338,9 @@ class TestNewStatusCodes:
         """測試 NO_CHANGES_NEEDED 狀態碼存在"""
         assert PhaseStatusCode.NO_CHANGES_NEEDED.value == "CAFE_NO_CHANGES_NEEDED"
 
-    def test_skip_review_status_exists(self) -> None:
-        """測試 SKIP_REVIEW 狀態碼存在"""
-        assert PhaseStatusCode.SKIP_REVIEW.value == "CAFE_SKIP_REVIEW"
+    def test_confirmed_skip_review_status_exists(self) -> None:
+        """測試 CONFIRMED_SKIP_REVIEW 狀態碼存在"""
+        assert PhaseStatusCode.CONFIRMED_SKIP_REVIEW.value == "CAFE_CONFIRMED_SKIP_REVIEW"
 
     def test_extract_no_changes_needed(self) -> None:
         """測試能正確提取 NO_CHANGES_NEEDED 狀態碼"""
@@ -350,13 +350,13 @@ class TestNewStatusCodes:
 
         assert code == PhaseStatusCode.NO_CHANGES_NEEDED
 
-    def test_extract_skip_review(self) -> None:
-        """測試能正確提取 SKIP_REVIEW 狀態碼"""
-        response = "CAFE_SKIP_REVIEW\nUser agreed with developer."
+    def test_extract_confirmed_skip_review(self) -> None:
+        """測試能正確提取 CONFIRMED_SKIP_REVIEW 狀態碼"""
+        response = "CAFE_CONFIRMED_SKIP_REVIEW\nUser agreed with developer."
 
         code = StatusCodeParser.extract(response)
 
-        assert code == PhaseStatusCode.SKIP_REVIEW
+        assert code == PhaseStatusCode.CONFIRMED_SKIP_REVIEW
 
     def test_no_changes_needed_in_valid_codes_list(self) -> None:
         """測試 NO_CHANGES_NEEDED 可以在 valid_codes 中使用"""

@@ -347,21 +347,37 @@ class DevelopPhase(Phase):
 
         # No review feedback or PR comments newer than develop, phase is truly completed
         self._has_review_feedback = False
+        phase_data: dict = {
+            "branch": self._get_branch_name(),
+            "iterations": existing_progress.iteration,
+            "status_code": existing_progress.status_code,
+        }
+        # If the previous iteration completed with CONFIRMED_SKIP_REVIEW, propagate skip_review flag on resume
+        if existing_progress.status_code == PhaseStatusCode.CONFIRMED_SKIP_REVIEW.value:
+            phase_data["skip_review"] = True
         return PhaseResult(
             status=PhaseStatus.COMPLETED,
             message=f"Development already completed in {existing_progress.iteration} iteration(s)",
-            data={
-                "branch": self._get_branch_name(),
-                "iterations": existing_progress.iteration,
-                "status_code": existing_progress.status_code,
-            },
+            data=phase_data,
         )
+
+    def _save_progress(self, status_code: "PhaseStatusCode") -> None:  # type: ignore[override]
+        """Override _save_progress to treat CONFIRMED_SKIP_REVIEW as a completion code.
+
+        Args:
+            status_code: Phase status code
+        """
+        complete_codes = [
+            PhaseStatusCode.CONFIRMED,
+            PhaseStatusCode.CONFIRMED_SKIP_REVIEW,
+        ]
+        super()._save_progress(status_code, complete_codes=complete_codes)
 
     def _handle_no_changes_needed_input(self, prev_data: dict) -> "PhaseResult | str":
         """Handle user input for NO_CHANGES_NEEDED status (developer disputes reviewer).
 
         Similar to READY_FOR_REVIEW handling:
-        - user_input == "confirm": User agrees, save SKIP_REVIEW status and return completion
+        - user_input == "confirm": User agrees, save CONFIRMED_SKIP_REVIEW status and return completion
         - user_input has content: User disagrees, return their feedback as user_input
         - No user_input (interactive): Ask user for decision
         - No user_input (non-interactive): Return failure
@@ -397,7 +413,7 @@ class DevelopPhase(Phase):
 
         # Handle user choice
         if choice.strip().lower() == "confirm":
-            # User agrees with developer - save SKIP_REVIEW status
+            # User agrees with developer - save CONFIRMED_SKIP_REVIEW status
             print("✅ User agreed with developer - skipping review phase")
 
             # Save user confirmation as a new iteration
@@ -414,9 +430,9 @@ class DevelopPhase(Phase):
                 agent_cli=None,
                 agent_session_id=None,
                 allowed_tools=None,
-                status_code=PhaseStatusCode.SKIP_REVIEW,
+                status_code=PhaseStatusCode.CONFIRMED_SKIP_REVIEW,
             )
-            self._save_progress(PhaseStatusCode.SKIP_REVIEW)
+            self._save_progress(PhaseStatusCode.CONFIRMED_SKIP_REVIEW)
 
             return PhaseResult(
                 status=PhaseStatus.COMPLETED,
@@ -424,7 +440,7 @@ class DevelopPhase(Phase):
                 data={
                     "branch": self._get_branch_name(),
                     "iterations": self.iteration,
-                    "status_code": PhaseStatusCode.SKIP_REVIEW.value,
+                    "status_code": PhaseStatusCode.CONFIRMED_SKIP_REVIEW.value,
                     "skip_review": True,
                 },
             )
