@@ -352,7 +352,7 @@ class DevelopPhase(Phase):
             "iterations": existing_progress.iteration,
             "status_code": existing_progress.status_code,
         }
-        # 若之前以 CONFIRMED_SKIP_REVIEW 結束，恢復時需傳遞 skip_review 旗標
+        # If the previous iteration completed with CONFIRMED_SKIP_REVIEW, propagate skip_review flag on resume
         if existing_progress.status_code == PhaseStatusCode.CONFIRMED_SKIP_REVIEW.value:
             phase_data["skip_review"] = True
         return PhaseResult(
@@ -362,10 +362,10 @@ class DevelopPhase(Phase):
         )
 
     def _save_progress(self, status_code: "PhaseStatusCode") -> None:  # type: ignore[override]
-        """覆寫 _save_progress，將 CONFIRMED_SKIP_REVIEW 視為完成狀態。
+        """Override _save_progress to treat CONFIRMED_SKIP_REVIEW as a completion code.
 
         Args:
-            status_code: 階段狀態碼
+            status_code: Phase status code
         """
         complete_codes = [
             PhaseStatusCode.CONFIRMED,

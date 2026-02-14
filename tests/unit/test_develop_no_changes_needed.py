@@ -206,11 +206,11 @@ class TestNoChangesNeededReasoningValidation:
 
 
 class TestConfirmedSkipReviewResumeFlag:
-    """測試從 CONFIRMED_SKIP_REVIEW 狀態恢復時，skip_review 旗標被正確傳遞"""
+    """Test that skip_review flag is correctly propagated when resuming from CONFIRMED_SKIP_REVIEW state"""
 
     @pytest.fixture
     def setup_develop_phase(self):
-        """設置一個帶有暫存目錄的 DevelopPhase 實例"""
+        """Set up a DevelopPhase instance with a temporary directory"""
         with tempfile.TemporaryDirectory() as tmpdir:
             issue_dir = Path(tmpdir) / "issue123"
             develop_dir = issue_dir / "develop"
@@ -240,20 +240,20 @@ class TestConfirmedSkipReviewResumeFlag:
             yield phase, issue_dir, develop_dir
 
     def test_resume_with_confirmed_skip_review_includes_skip_review_flag(self, setup_develop_phase):
-        """測試恢復時，若之前的狀態碼為 CONFIRMED_SKIP_REVIEW，返回結果應包含 skip_review=True"""
+        """Test that resuming with CONFIRMED_SKIP_REVIEW status returns result with skip_review=True"""
         from datetime import datetime, timezone
         phase, issue_dir, develop_dir = setup_develop_phase
 
-        # 先儲存一個 CONFIRMED_SKIP_REVIEW 完成狀態
+        # Save a CONFIRMED_SKIP_REVIEW completion state
         phase._save_progress(PhaseStatusCode.CONFIRMED_SKIP_REVIEW)
 
-        # 確認狀態被儲存為 COMPLETED
+        # Verify status is saved as COMPLETED
         status_file = develop_dir / "status.json"
         assert status_file.exists()
         data = json.loads(status_file.read_text())
         assert data["status"] == "completed"
 
-        # 呼叫 _check_if_already_completed_with_review，應返回含 skip_review=True 的結果
+        # Call _check_if_already_completed_with_review, should return result with skip_review=True
         result = phase._check_if_already_completed_with_review()
 
         assert result is not None
@@ -261,10 +261,10 @@ class TestConfirmedSkipReviewResumeFlag:
         assert result.data.get("status_code") == "CAFE_CONFIRMED_SKIP_REVIEW"
 
     def test_resume_with_confirmed_status_does_not_include_skip_review_flag(self, setup_develop_phase):
-        """測試恢復時，若之前的狀態碼為 CONFIRMED，不應包含 skip_review=True"""
+        """Test that resuming with CONFIRMED status does not include skip_review=True"""
         phase, issue_dir, develop_dir = setup_develop_phase
 
-        # 儲存一個 CONFIRMED 完成狀態
+        # Save a CONFIRMED completion state
         phase._save_progress(PhaseStatusCode.CONFIRMED)
 
         result = phase._check_if_already_completed_with_review()
@@ -274,11 +274,11 @@ class TestConfirmedSkipReviewResumeFlag:
 
 
 class TestConfirmedSkipReviewSaveProgress:
-    """測試 CONFIRMED_SKIP_REVIEW 狀態碼儲存後狀態為 COMPLETED"""
+    """Test that CONFIRMED_SKIP_REVIEW status code is saved as COMPLETED status"""
 
     @pytest.fixture
     def setup_develop_phase(self):
-        """設置一個帶有暫存目錄的 DevelopPhase 實例"""
+        """Set up a DevelopPhase instance with a temporary directory"""
         with tempfile.TemporaryDirectory() as tmpdir:
             issue_dir = Path(tmpdir) / "issue123"
             develop_dir = issue_dir / "develop"
@@ -307,7 +307,7 @@ class TestConfirmedSkipReviewSaveProgress:
             yield phase, issue_dir, develop_dir
 
     def test_save_progress_confirmed_skip_review_saves_as_completed(self, setup_develop_phase):
-        """測試 _save_progress(CONFIRMED_SKIP_REVIEW) 將狀態儲存為 COMPLETED"""
+        """Test that _save_progress(CONFIRMED_SKIP_REVIEW) saves status as COMPLETED"""
         phase, issue_dir, develop_dir = setup_develop_phase
 
         phase._save_progress(PhaseStatusCode.CONFIRMED_SKIP_REVIEW)
@@ -321,7 +321,7 @@ class TestConfirmedSkipReviewSaveProgress:
         assert data["status_code"] == "CAFE_CONFIRMED_SKIP_REVIEW"
 
     def test_save_progress_confirmed_status_saves_as_completed(self, setup_develop_phase):
-        """測試 _save_progress(CONFIRMED) 仍然儲存為 COMPLETED"""
+        """Test that _save_progress(CONFIRMED) still saves status as COMPLETED"""
         phase, issue_dir, develop_dir = setup_develop_phase
 
         phase._save_progress(PhaseStatusCode.CONFIRMED)
@@ -334,7 +334,7 @@ class TestConfirmedSkipReviewSaveProgress:
         assert data["status"] == PhaseStatus.COMPLETED.value
 
     def test_save_progress_need_clarification_saves_as_in_progress(self, setup_develop_phase):
-        """測試 _save_progress(NEED_CLARIFICATION) 儲存為 IN_PROGRESS"""
+        """Test that _save_progress(NEED_CLARIFICATION) saves status as IN_PROGRESS"""
         phase, issue_dir, develop_dir = setup_develop_phase
 
         phase._save_progress(PhaseStatusCode.NEED_CLARIFICATION)
@@ -348,11 +348,11 @@ class TestConfirmedSkipReviewSaveProgress:
 
 
 class TestConfirmedSkipReviewResumeIntegration:
-    """整合測試：模擬完整的中斷後恢復流程"""
+    """Integration tests simulating the full interrupt-and-resume workflow"""
 
     @pytest.fixture
     def setup_develop_phase(self):
-        """設置一個帶有暫存目錄的 DevelopPhase 實例"""
+        """Set up a DevelopPhase instance with a temporary directory"""
         with tempfile.TemporaryDirectory() as tmpdir:
             issue_dir = Path(tmpdir) / "issue123"
             develop_dir = issue_dir / "develop"
@@ -382,39 +382,39 @@ class TestConfirmedSkipReviewResumeIntegration:
             yield phase, issue_dir, develop_dir
 
     def test_resume_after_confirmed_skip_review_skips_develop_and_has_skip_flag(self, setup_develop_phase):
-        """整合測試：
-        情境A - 中斷恢復時的完整流程：
-        1. 以 CONFIRMED_SKIP_REVIEW 儲存進度
-        2. 再次呼叫 _check_if_already_completed_with_review
-        3. 應返回 COMPLETED 結果，且包含 skip_review=True
-        4. 不應再次執行開發階段（節省呼叫）
+        """Integration test:
+        Scenario A - Full workflow when resuming after interruption:
+        1. Save progress with CONFIRMED_SKIP_REVIEW
+        2. Call _check_if_already_completed_with_review again
+        3. Should return COMPLETED result with skip_review=True
+        4. Should not re-execute develop phase
         """
         phase, issue_dir, develop_dir = setup_develop_phase
 
-        # 步驟一：模擬完成開發並以 CONFIRMED_SKIP_REVIEW 儲存
+        # Step 1: Simulate completing develop and saving with CONFIRMED_SKIP_REVIEW
         phase._save_progress(PhaseStatusCode.CONFIRMED_SKIP_REVIEW)
 
-        # 步驟二：模擬使用者中斷後重新執行 cafe make
-        # 此時 _check_if_already_completed_with_review 應識別出已完成
+        # Step 2: Simulate user interruption then re-running cafe make
+        # _check_if_already_completed_with_review should recognize it as completed
         result = phase._check_if_already_completed_with_review()
 
-        # 步驟三：驗證返回結果正確
-        assert result is not None, "應返回已完成結果，不應重新執行開發"
+        # Step 3: Verify result is correct
+        assert result is not None, "Should return completed result, not re-run develop phase"
         assert result.status == PhaseStatus.COMPLETED
-        assert result.data.get("skip_review") is True, "應包含 skip_review=True 以便跳過 review 階段"
+        assert result.data.get("skip_review") is True, "Should include skip_review=True to skip review phase"
         assert result.data.get("status_code") == PhaseStatusCode.CONFIRMED_SKIP_REVIEW.value
 
     def test_new_iteration_does_not_skip_develop_when_no_prior_confirmed_skip_review(self, setup_develop_phase):
-        """整合測試：
-        情境B - 新 iteration 不應跳過開發階段：
-        1. 沒有儲存任何進度（全新的 iteration）
-        2. _check_if_already_completed_with_review 應返回 None
-        3. 開發階段應正常執行
+        """Integration test:
+        Scenario B - New iteration should not skip develop phase:
+        1. No progress saved (fresh iteration)
+        2. _check_if_already_completed_with_review should return None
+        3. Develop phase should run normally
         """
         phase, issue_dir, develop_dir = setup_develop_phase
 
-        # 沒有儲存任何進度（新的 iteration 或 PR feedback 觸發的新回合）
+        # No progress saved (new iteration or PR feedback triggered new round)
         result = phase._check_if_already_completed_with_review()
 
-        # 應返回 None，讓開發階段正常繼續
-        assert result is None, "新 iteration 不應跳過開發階段"
+        # Should return None to allow develop phase to continue normally
+        assert result is None, "New iteration should not skip develop phase"
