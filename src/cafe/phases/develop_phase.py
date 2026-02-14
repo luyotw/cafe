@@ -357,6 +357,18 @@ class DevelopPhase(Phase):
             },
         )
 
+    def _save_progress(self, status_code: "PhaseStatusCode") -> None:  # type: ignore[override]
+        """覆寫 _save_progress，將 CONFIRMED_SKIP_REVIEW 視為完成狀態。
+
+        Args:
+            status_code: 階段狀態碼
+        """
+        complete_codes = [
+            PhaseStatusCode.CONFIRMED,
+            PhaseStatusCode.CONFIRMED_SKIP_REVIEW,
+        ]
+        super()._save_progress(status_code, complete_codes=complete_codes)
+
     def _handle_no_changes_needed_input(self, prev_data: dict) -> "PhaseResult | str":
         """Handle user input for NO_CHANGES_NEEDED status (developer disputes reviewer).
 

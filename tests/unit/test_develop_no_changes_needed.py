@@ -203,3 +203,77 @@ class TestNoChangesNeededReasoningValidation:
             # Should resolve {output_file} placeholder to actual path
             assert str(output_file) in checklist_content
             assert "{output_file}" not in checklist_content
+
+
+class TestConfirmedSkipReviewSaveProgress:
+    """測試 CONFIRMED_SKIP_REVIEW 狀態碼儲存後狀態為 COMPLETED"""
+
+    @pytest.fixture
+    def setup_develop_phase(self):
+        """設置一個帶有暫存目錄的 DevelopPhase 實例"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            issue_dir = Path(tmpdir) / "issue123"
+            develop_dir = issue_dir / "develop"
+            develop_dir.mkdir(parents=True, exist_ok=True)
+
+            mock_agent_manager = MagicMock()
+            mock_permission_handler = MagicMock()
+            mock_git_ops = MagicMock()
+
+            phase = DevelopPhase(
+                agent_manager=mock_agent_manager,
+                permission_handler=mock_permission_handler,
+                git_ops=mock_git_ops,
+                spec_file=str(issue_dir / "spec.md"),
+                plan_file=str(issue_dir / "plan.md"),
+                issue_id="issue123",
+                interactive=False,
+                user_input="",
+            )
+
+            phase.issue_dir = issue_dir
+            phase.phase_dir = develop_dir
+            phase.phase_name = "develop"
+            phase.iteration = 1
+
+            yield phase, issue_dir, develop_dir
+
+    def test_save_progress_confirmed_skip_review_saves_as_completed(self, setup_develop_phase):
+        """測試 _save_progress(CONFIRMED_SKIP_REVIEW) 將狀態儲存為 COMPLETED"""
+        phase, issue_dir, develop_dir = setup_develop_phase
+
+        phase._save_progress(PhaseStatusCode.CONFIRMED_SKIP_REVIEW)
+
+        status_file = develop_dir / "status.json"
+        assert status_file.exists()
+
+        import json
+        data = json.loads(status_file.read_text())
+        assert data["status"] == PhaseStatus.COMPLETED.value
+        assert data["status_code"] == "CAFE_CONFIRMED_SKIP_REVIEW"
+
+    def test_save_progress_confirmed_status_saves_as_completed(self, setup_develop_phase):
+        """測試 _save_progress(CONFIRMED) 仍然儲存為 COMPLETED"""
+        phase, issue_dir, develop_dir = setup_develop_phase
+
+        phase._save_progress(PhaseStatusCode.CONFIRMED)
+
+        status_file = develop_dir / "status.json"
+        assert status_file.exists()
+
+        import json
+        data = json.loads(status_file.read_text())
+        assert data["status"] == PhaseStatus.COMPLETED.value
+
+    def test_save_progress_need_clarification_saves_as_in_progress(self, setup_develop_phase):
+        """測試 _save_progress(NEED_CLARIFICATION) 儲存為 IN_PROGRESS"""
+        phase, issue_dir, develop_dir = setup_develop_phase
+
+        phase._save_progress(PhaseStatusCode.NEED_CLARIFICATION)
+
+        status_file = develop_dir / "status.json"
+        assert status_file.exists()
+
+        import json
+        data = json.loads(status_file.read_text())
+        assert data["status"] == PhaseStatus.IN_PROGRESS.value
