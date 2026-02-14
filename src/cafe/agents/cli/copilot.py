@@ -97,13 +97,15 @@ class CopilotCLI(AbstractCLI):
         #          claude-sonnet-4.5    14.3k input, 39 output, 10.2k cache read (Est. 1 Premium request)
         # New: Breakdown by AI model:
         #       claude-sonnet-4.5       16.0k in, 74 out, 0 cached (Est. 1 Premium request)
+        #       claude-sonnet-4.5       1.2m in, 4.6k out, 1.1m cached (Est. 1 Premium request)
+        # Token counts can have k (thousands) or m (millions) suffix
 
         # Try new format first
-        usage_match = re.search(r'Breakdown by AI model:\s*\n\s+([\w.-]+)\s+([\d.]+k?)\s+in,\s+([\d.]+k?)\s+out(?:,\s+([\d.]+k?)\s+cached)?', full_output)
+        usage_match = re.search(r'Breakdown by AI model:\s*\n\s+([\w.-]+)\s+([\d.]+[km]?)\s+in,\s+([\d.]+[km]?)\s+out(?:,\s+([\d.]+[km]?)\s+cached)?', full_output)
 
         # Fall back to old format if new format not found
         if not usage_match:
-            usage_match = re.search(r'Usage by model:\s*\n\s+([\w.-]+)\s+([\d.]+k?)\s+input,\s+([\d.]+k?)\s+output(?:,\s+([\d.]+k?)\s+cache read)?', full_output)
+            usage_match = re.search(r'Usage by model:\s*\n\s+([\w.-]+)\s+([\d.]+[km]?)\s+input,\s+([\d.]+[km]?)\s+output(?:,\s+([\d.]+[km]?)\s+cache read)?', full_output)
         
         if usage_match:
             # Extract model name
@@ -147,17 +149,19 @@ class CopilotCLI(AbstractCLI):
         return response, token_usage, permission_denials, model
 
     def _parse_token_count(self, token_str: str) -> int:
-        """Parse token count string (e.g., '14.3k' or '39') to integer.
-        
+        """Parse token count string (e.g., '14.3k', '1.2m', or '39') to integer.
+
         Args:
-            token_str: Token count string
-            
+            token_str: Token count string with optional k (thousands) or m (millions) suffix
+
         Returns:
             Token count as integer
         """
         token_str = token_str.strip()
-        if token_str.endswith('k'):
-            # Convert 'k' notation to thousands
+        if token_str.endswith('m'):
+            number = float(token_str[:-1])
+            return int(number * 1_000_000)
+        elif token_str.endswith('k'):
             number = float(token_str[:-1])
             return int(number * 1000)
         else:

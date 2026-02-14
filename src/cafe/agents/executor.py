@@ -820,6 +820,21 @@ class AgentExecutor:
                 err.cli_command_args = cmd[1:]
                 raise err
 
+        # Append stderr to streaming output file (for debugging token usage parsing)
+        if streaming_file_handle and stderr_output:
+            try:
+                from datetime import datetime
+                stderr_obj = {
+                    "index": streaming_line_index,
+                    "timestamp": datetime.now().astimezone().isoformat(),
+                    "type": "stderr",
+                    "content": stderr_output.rstrip('\n'),
+                }
+                streaming_file_handle.write(json.dumps(stderr_obj, ensure_ascii=False) + "\n")
+                streaming_file_handle.flush()
+            except Exception as e:
+                print(f"⚠️  Failed to write stderr to streaming output file: {e}")
+
         # Close streaming output file
         if streaming_file_handle:
             try:
@@ -886,5 +901,5 @@ class AgentExecutor:
             token_usage=token_usage,
             permission_denials=permission_denials,
             streaming_log=final_streaming_log,
-            model=model
+            model=model,
         )
