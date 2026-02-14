@@ -841,3 +841,86 @@ class TestPhaseComparisonWithMissingEndTime:
 
             # Assert - should return False because develop_end_time is None (waiting for develop to complete)
             assert result is False
+
+    def test_organize_comments_saves_status_code_to_context(self, tmp_path, mock_dependencies):
+        """Test that _organize_comments_to_todo_list saves status_code to context.json.
+
+        Regression test: _execute_agent_iteration intentionally saves status_code=None
+        to context.json (waiting for checklist validation). _organize_comments_to_todo_list
+        must save the final status_code back to context.json before returning.
+        Without this fix, context.json ends up with status_code: null.
+        """
+        from cafe.core.status_codes import PhaseStatusCode
+
+        # Setup
+        issue_dir = tmp_path / ".cafe" / "issues" / "test-issue"
+        pr_dir = issue_dir / "pr"
+        iteration_dir = pr_dir / "iteration_001"
+        iteration_dir.mkdir(parents=True)
+
+        spec_file = issue_dir / "spec" / "iteration_001" / "output.md"
+        spec_file.parent.mkdir(parents=True)
+        spec_file.write_text("# Test Spec")
+
+        # Create user_input.md (PR comments)
+        user_input_file = iteration_dir / "user_input.md"
+        user_input_file.write_text("Please fix the bug in line 5\n")
+
+        # Create output.md with todo list content (agent would write this)
+        output_file = iteration_dir / "output.md"
+        output_file.write_text("## Todo List\n- [ ] Fix the bug in line 5\n")
+
+        # Create checklist.md with all items checked (validation will pass)
+        checklist_file = iteration_dir / "checklist.md"
+        checklist_file.write_text("- [x] Read PR comments\n- [x] Organize into todo list\n")
+
+        # Create context.json as _execute_agent_iteration would leave it (status_code=None)
+        context_file = iteration_dir / "context.json"
+        context_file.write_text(json.dumps({
+            "iteration": 1,
+            "timestamp": "2026-01-27T10:00:00+08:00",
+            "status_code": None,
+            "response": "CAFE_NEEDS_CHANGES",
+            "cli": "claude",
+            "session_id": "test-session",
+        }))
+
+        with patch.object(PRPhase, "_get_issue_dir", return_value=issue_dir):
+            phase = PRPhase(
+                spec_file=str(spec_file),
+                issue_name="test-issue",
+                **mock_dependencies
+            )
+            phase.iteration = 1
+            phase.issue_dir = issue_dir
+            phase.phase_dir = pr_dir
+            phase.post_todo_list = False
+
+            # Mock _execute_agent_iteration to return NEEDS_CHANGES
+            # (simulates agent processing PR comments and deciding changes are needed)
+            with patch.object(phase, "_execute_agent_iteration") as mock_exec:
+                mock_exec.return_value = (
+                    "CAFE_NEEDS_CHANGES",
+                    PhaseStatusCode.NEEDS_CHANGES,
+                )
+                # Mock _merge_allowed_tools
+                with patch.object(phase, "_merge_allowed_tools", return_value=["read", "edit"]):
+                    # Mock checklist generation (it overwrites our checklist file)
+                    with patch("cafe.utils.checklist_generator.generate_pr_comments_checklist"):
+                        # Mock checklist validation to pass
+                        with patch("cafe.utils.checklist_validator.validate_checklist") as mock_validate:
+                            mock_validate.return_value = MagicMock(is_complete=True)
+                            # Mock _print_token_usage_summary
+                            with patch.object(phase, "_print_token_usage_summary"):
+                                result = phase._organize_comments_to_todo_list(
+                                    pr_number=0, pr_url="", branch_name="test",
+                                )
+
+            # Verify the method returned correctly
+            assert result.status == PhaseStatus.COMPLETED
+            assert result.data["status_code"] == "CAFE_NEEDS_CHANGES"
+
+            # THE ACTUAL BUG CHECK: verify status_code was persisted to context.json
+            saved_context = json.loads(context_file.read_text())
+            assert saved_context["status_code"] == "CAFE_NEEDS_CHANGES", \
+                f"Bug: status_code in context.json is {saved_context.get('status_code')!r}, expected 'CAFE_NEEDS_CHANGES'"

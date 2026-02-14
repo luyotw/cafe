@@ -1390,6 +1390,14 @@ Return ONLY the status code (CAFE_CONFIRMED or CAFE_NEEDS_CHANGES) with no expla
         # Display token usage summary before returning
         self._print_token_usage_summary()
 
+        # Save status_code to context.json
+        # _execute_agent_iteration intentionally saves status_code=None (deferred for checklist validation),
+        # so we must persist the final status_code here after validation passes.
+        self._update_iteration_history(
+            phase_specific_data={},
+            status_code=status_code,
+        )
+
         return PhaseResult(
             status=PhaseStatus.COMPLETED,
             message=f"Organized PR comments into todo list ({output_display})",
