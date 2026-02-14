@@ -28,7 +28,7 @@ class PhaseStatusCode(str, Enum):
 
     # ========== Develop Phase ==========
     NO_CHANGES_NEEDED = "CAFE_NO_CHANGES_NEEDED"  # Developer believes no changes needed (dispute reviewer)
-    SKIP_REVIEW = "CAFE_SKIP_REVIEW"              # User agreed with developer, skip review phase
+    CONFIRMED_SKIP_REVIEW = "CAFE_CONFIRMED_SKIP_REVIEW"  # User confirmed to skip review phase (development completed)
 
     # ========== Authorization ==========
     NEED_PERMISSION = "CAFE_NEED_PERMISSION"       # Need user permission
@@ -130,9 +130,22 @@ class StatusCodeParser:
         response_upper = response.upper()
 
         # Search for all status codes in the response
-        codes_to_check = valid_codes if valid_codes else list(PhaseStatusCode)
+        # Sort by length descending so longer (more specific) codes are checked first
+        codes_to_check = sorted(
+            valid_codes if valid_codes else list(PhaseStatusCode),
+            key=lambda x: len(x.value),
+            reverse=True,
+        )
         for code in codes_to_check:
             if code.value in response_upper:
+                # Skip if this code is a prefix of an already-found longer code
+                if any(found.value.startswith(code.value) for found in found_codes):
+                    continue
+                # Remove any already-found codes that are prefixes of this code
+                found_codes = {
+                    found for found in found_codes
+                    if not code.value.startswith(found.value)
+                }
                 found_codes.add(code)
 
         return found_codes
