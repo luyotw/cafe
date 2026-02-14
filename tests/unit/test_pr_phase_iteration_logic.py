@@ -924,3 +924,163 @@ class TestPhaseComparisonWithMissingEndTime:
             saved_context = json.loads(context_file.read_text())
             assert saved_context["status_code"] == "CAFE_NEEDS_CHANGES", \
                 f"Bug: status_code in context.json is {saved_context.get('status_code')!r}, expected 'CAFE_NEEDS_CHANGES'"
+
+    def test_organize_comments_retries_when_output_md_empty(self, tmp_path, mock_dependencies):
+        """Test that _organize_comments_to_todo_list retries when output.md is missing todo list markers."""
+        from cafe.core.status_codes import PhaseStatusCode
+
+        # Setup
+        issue_dir = tmp_path / ".cafe" / "issues" / "test-issue"
+        pr_dir = issue_dir / "pr"
+        iteration_dir = pr_dir / "iteration_001"
+        iteration_dir.mkdir(parents=True)
+
+        spec_file = issue_dir / "spec" / "iteration_001" / "output.md"
+        spec_file.parent.mkdir(parents=True)
+        spec_file.write_text("# Test Spec")
+
+        # Create user_input.md (PR comments)
+        user_input_file = iteration_dir / "user_input.md"
+        user_input_file.write_text("Please fix the bug in line 5\n")
+
+        # Create output.md WITHOUT todo list content (simulates agent failure / linter revert)
+        output_file = iteration_dir / "output.md"
+        output_file.write_text("Some unrelated content\n")
+
+        # Create checklist.md with all items checked
+        checklist_file = iteration_dir / "checklist.md"
+        checklist_file.write_text("- [x] Read PR comments\n- [x] Organize into todo list\n")
+
+        # Create context.json
+        context_file = iteration_dir / "context.json"
+        context_file.write_text(json.dumps({
+            "iteration": 1,
+            "timestamp": "2026-01-27T10:00:00+08:00",
+            "status_code": None,
+            "response": "CAFE_NEEDS_CHANGES",
+            "cli": "claude",
+            "session_id": "test-session",
+        }))
+
+        # Track retry calls to simulate agent fixing output.md on retry
+        retry_call_count = 0
+
+        def mock_agent_execute(agent_name, prompt, **kwargs):
+            nonlocal retry_call_count
+            retry_call_count += 1
+            # On first retry, agent writes the todo list to output.md
+            output_file.write_text("## Todo List\n- [ ] Fix the bug in line 5\n")
+            return ("CAFE_NEEDS_CHANGES", MagicMock(), [], [], [], None)
+
+        with patch.object(PRPhase, "_get_issue_dir", return_value=issue_dir):
+            phase = PRPhase(
+                spec_file=str(spec_file),
+                issue_name="test-issue",
+                **mock_dependencies
+            )
+            phase.iteration = 1
+            phase.issue_dir = issue_dir
+            phase.phase_dir = pr_dir
+            phase.post_todo_list = False
+
+            with patch.object(phase, "_execute_agent_iteration") as mock_exec:
+                mock_exec.return_value = (
+                    "CAFE_NEEDS_CHANGES",
+                    PhaseStatusCode.NEEDS_CHANGES,
+                )
+                with patch.object(phase, "_merge_allowed_tools", return_value=["read", "edit"]):
+                    with patch("cafe.utils.checklist_generator.generate_pr_comments_checklist"):
+                        with patch("cafe.utils.checklist_validator.validate_checklist") as mock_validate:
+                            mock_validate.return_value = MagicMock(is_complete=True)
+                            with patch.object(phase, "_print_token_usage_summary"):
+                                with patch.object(phase, "_get_allowed_directories", return_value=[str(tmp_path)]):
+                                    # Mock agent_manager.execute for retry calls
+                                    mock_dependencies["agent_manager"].execute.side_effect = mock_agent_execute
+                                    result = phase._organize_comments_to_todo_list(
+                                        pr_number=0, pr_url="", branch_name="test",
+                                    )
+
+            # Verify: should succeed after retry
+            assert result.status == PhaseStatus.COMPLETED
+            assert result.data["status_code"] == "CAFE_NEEDS_CHANGES"
+            # Verify agent_manager.execute was called (retry happened)
+            assert retry_call_count == 1
+
+    def test_organize_comments_fails_after_max_retries(self, tmp_path, mock_dependencies):
+        """Test that _organize_comments_to_todo_list returns FAILED after exhausting all retries."""
+        from cafe.core.status_codes import PhaseStatusCode
+
+        # Setup
+        issue_dir = tmp_path / ".cafe" / "issues" / "test-issue"
+        pr_dir = issue_dir / "pr"
+        iteration_dir = pr_dir / "iteration_001"
+        iteration_dir.mkdir(parents=True)
+
+        spec_file = issue_dir / "spec" / "iteration_001" / "output.md"
+        spec_file.parent.mkdir(parents=True)
+        spec_file.write_text("# Test Spec")
+
+        # Create user_input.md (PR comments)
+        user_input_file = iteration_dir / "user_input.md"
+        user_input_file.write_text("Please fix the bug in line 5\n")
+
+        # Create output.md WITHOUT todo list content (agent never fixes it)
+        output_file = iteration_dir / "output.md"
+        output_file.write_text("The linter reverted my changes\n")
+
+        # Create checklist.md with all items checked
+        checklist_file = iteration_dir / "checklist.md"
+        checklist_file.write_text("- [x] Read PR comments\n- [x] Organize into todo list\n")
+
+        # Create context.json
+        context_file = iteration_dir / "context.json"
+        context_file.write_text(json.dumps({
+            "iteration": 1,
+            "timestamp": "2026-01-27T10:00:00+08:00",
+            "status_code": None,
+            "response": "CAFE_NEEDS_CHANGES",
+            "cli": "claude",
+            "session_id": "test-session",
+        }))
+
+        retry_call_count = 0
+
+        def mock_agent_execute(agent_name, prompt, **kwargs):
+            nonlocal retry_call_count
+            retry_call_count += 1
+            # Agent never fixes output.md - returns but doesn't write todo list
+            return ("CAFE_NEEDS_CHANGES", MagicMock(), [], [], [], None)
+
+        with patch.object(PRPhase, "_get_issue_dir", return_value=issue_dir):
+            phase = PRPhase(
+                spec_file=str(spec_file),
+                issue_name="test-issue",
+                **mock_dependencies
+            )
+            phase.iteration = 1
+            phase.issue_dir = issue_dir
+            phase.phase_dir = pr_dir
+            phase.post_todo_list = False
+
+            with patch.object(phase, "_execute_agent_iteration") as mock_exec:
+                mock_exec.return_value = (
+                    "CAFE_NEEDS_CHANGES",
+                    PhaseStatusCode.NEEDS_CHANGES,
+                )
+                with patch.object(phase, "_merge_allowed_tools", return_value=["read", "edit"]):
+                    with patch("cafe.utils.checklist_generator.generate_pr_comments_checklist"):
+                        with patch("cafe.utils.checklist_validator.validate_checklist") as mock_validate:
+                            mock_validate.return_value = MagicMock(is_complete=True)
+                            with patch.object(phase, "_print_token_usage_summary"):
+                                with patch.object(phase, "_get_allowed_directories", return_value=[str(tmp_path)]):
+                                    mock_dependencies["agent_manager"].execute.side_effect = mock_agent_execute
+                                    result = phase._organize_comments_to_todo_list(
+                                        pr_number=0, pr_url="", branch_name="test",
+                                    )
+
+            # Verify: should fail after max retries
+            assert result.status == PhaseStatus.FAILED
+            assert "missing todo list markers" in result.message
+            assert "after 3 retries" in result.message
+            # Verify all 3 retries were attempted
+            assert retry_call_count == 3

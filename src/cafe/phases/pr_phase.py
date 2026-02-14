@@ -1284,34 +1284,76 @@ The system will verify checklist completion. If unchecked items remain, you will
             allowed_tools=allowed_tools,
         )
 
-        # Validate checklist completion
+        # Validate checklist and output.md with retry loop
         from cafe.utils.checklist_validator import validate_checklist
-        validation_result = validate_checklist(checklist_file)
-        if not validation_result.is_complete:
-            return PhaseResult(
-                status=PhaseStatus.FAILED,
-                message=f"Checklist validation failed - {validation_result.unchecked_count} items not marked as complete",
+        from cafe.core.status_codes import StatusCodeParser
+
+        max_retries = 3
+        for retry in range(max_retries + 1):  # 0 = first check, 1-3 = retries
+            # Validate checklist completion
+            validation_result = validate_checklist(checklist_file)
+
+            # Validate output.md contains todo list content
+            has_todo_list = False
+            if output_file.exists():
+                output_content = output_file.read_text(encoding="utf-8")
+                has_todo_list = ("## Todo List" in output_content or
+                                "## Todo" in output_content or
+                                "- [ ]" in output_content or
+                                "- [x]" in output_content)
+
+            # Both validations passed - break out of retry loop
+            if validation_result.is_complete and has_todo_list:
+                break
+
+            # Last retry exhausted - return FAILED
+            if retry == max_retries:
+                if not validation_result.is_complete:
+                    return PhaseResult(
+                        status=PhaseStatus.FAILED,
+                        message=f"Checklist validation failed - {validation_result.unchecked_count} items not marked as complete (after {max_retries} retries)",
+                    )
+                return PhaseResult(
+                    status=PhaseStatus.FAILED,
+                    message=f"Agent did not write todo list to output.md (missing todo list markers, after {max_retries} retries)",
+                )
+
+            # Build retry prompt describing what's incomplete
+            issues = []
+            if not validation_result.is_complete:
+                issues.append(f"Checklist at {checklist_pattern} has {validation_result.unchecked_count} unchecked items remaining")
+            if not has_todo_list:
+                issues.append(f"output.md at {output_file_pattern} is missing todo list content (needs '## Todo List' header and '- [ ]' items)")
+
+            retry_prompt = (
+                "Your previous response was incomplete. The following issues were found:\n"
+                + "\n".join(f"- {issue}" for issue in issues)
+                + "\n\nPlease complete the remaining work. "
+                + "Write the todo list to the output file and mark all checklist items as [x], then return the status code."
             )
 
-        # Validate output.md contains todo list content
-        if not output_file.exists():
-            return PhaseResult(
-                status=PhaseStatus.FAILED,
-                message="Agent did not create output.md file",
-            )
+            print(f"⚠️  Validation failed, re-invoking agent... (retry {retry + 1}/{max_retries})")
 
-        output_content = output_file.read_text(encoding="utf-8")
-        # Check if output.md contains todo list markers (either ## Todo List or checkbox items)
-        has_todo_list = ("## Todo List" in output_content or
-                        "## Todo" in output_content or
-                        "- [ ]" in output_content or
-                        "- [x]" in output_content)
+            # Re-execute agent in the same session to complete the work
+            try:
+                retry_response, _, _, _, _, retry_model = self.agent_manager.execute(
+                    self.dev_agent,
+                    retry_prompt,
+                    allowed_tools=allowed_tools,
+                    allowed_directories=self._get_allowed_directories(),
+                )
 
-        if not has_todo_list:
-            return PhaseResult(
-                status=PhaseStatus.FAILED,
-                message="Agent did not write todo list to output.md (missing todo list markers)",
-            )
+                # Extract status code from retry response
+                retry_status_code = StatusCodeParser.extract(
+                    retry_response,
+                    valid_codes=[PhaseStatusCode.NEEDS_CHANGES, PhaseStatusCode.CONFIRMED],
+                )
+                if retry_status_code is not None:
+                    status_code = retry_status_code
+
+            except Exception as e:
+                print(f"⚠️  Retry {retry + 1} failed with error: {e}")
+                # Continue to next retry attempt
 
         # Additional validation: if agent returned CONFIRMED, verify this is correct
         # CONFIRMED means: all PR review comments are already addressed or not applicable
