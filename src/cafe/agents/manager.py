@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from cafe.agents.executor import AgentExecutor, AgentExecutionError
 from cafe.core.session import SessionManager
-from cafe.core.types import AgentConfig, PermissionDenial, TokenUsage
+from cafe.core.types import AgentConfig, AgentResponse, PermissionDenial, TokenUsage
 
 
 class AgentNotFoundError(Exception):
@@ -63,12 +63,14 @@ class AgentManager:
         session_id = session_data.session_id if session_data else None
         # Note: Don't create session here - let executor handle it on first use
 
-        # Update config with session ID (may be None)
+        # Update config with session ID (may be None), preserve backup and models config
         config_with_session = AgentConfig(
             name=config.name,
             cli=config.cli,
             session_id=session_id,
             model=config.model,
+            backup_clis=config.backup_clis,
+            models_config=config.models_config,
         )
 
         # Create executor
@@ -120,7 +122,8 @@ class AgentManager:
         prompt: str,
         allowed_tools: Optional[List[str]] = None,
         allowed_directories: Optional[List[str]] = None,
-        streaming_output_file: Optional[str] = None
+        streaming_output_file: Optional[str] = None,
+        phase_name: Optional[str] = None,
     ) -> Tuple[str, TokenUsage, List, Optional[List[str]], List[str], Optional[str]]:
         """Execute prompt with specified agent.
 
@@ -130,12 +133,14 @@ class AgentManager:
             allowed_tools: List of allowed tools (using Claude naming convention)
             allowed_directories: List of allowed directories
             streaming_output_file: Optional file path to write streaming output line-by-line
+            phase_name: Current phase name for phase-specific model lookup in backup agents
 
         Returns:
             Tuple of (agent's response, token usage, permission denials, cli_command_args, streaming_log, model)
 
         Raises:
             AgentNotFoundError: If agent not found
+            AgentExecutionError: If all agents (primary + backups) fail
         """
         executor = self.get_agent(agent_name)
 
@@ -163,6 +168,18 @@ class AgentManager:
                     executor.config.session_id = None
 
                     # Loop will retry (with no session ID, a new one will be created)
+                elif hasattr(e, 'error_type') and e.error_type in ("rate_limit", "cli_not_found"):
+                    # Try backup agents
+                    agent_response = self._try_backup_agents(
+                        primary_error=e,
+                        primary_executor=executor,
+                        prompt=prompt,
+                        allowed_tools=allowed_tools,
+                        allowed_directories=allowed_directories,
+                        streaming_output_file=streaming_output_file,
+                        phase_name=phase_name,
+                    )
+                    break  # Backup succeeded, exit loop
                 else:
                     # Not a session conflict, or already retried - re-raise
                     raise
@@ -205,6 +222,109 @@ class AgentManager:
                 self._total_token_usage.duration_api_ms += token_usage.duration_api_ms
 
         return response, token_usage, permission_denials, cli_command_args, streaming_log, model
+
+    def _try_backup_agents(
+        self,
+        primary_error: "AgentExecutionError",
+        primary_executor: AgentExecutor,
+        prompt: str,
+        allowed_tools: Optional[List[str]] = None,
+        allowed_directories: Optional[List[str]] = None,
+        streaming_output_file: Optional[str] = None,
+        phase_name: Optional[str] = None,
+    ) -> "AgentResponse":
+        """Try backup agents in order until one succeeds or all fail.
+
+        Backup retry flow:
+        1. If no backup CLIs are configured, re-raise the original error immediately
+        2. Try each backup CLI in backup_clis in order
+        3. If a backup CLI also hits rate_limit or cli_not_found, continue to the next
+        4. If a backup CLI raises any other error, re-raise it immediately (do not continue)
+        5. If all backups fail, raise an error listing all attempted CLIs
+
+        phase_name is used to look up the model for the backup CLI from models_config,
+        e.g. during the "develop" phase with gemini backup: models_config["gemini"]["develop"].
+
+        Args:
+            primary_error: Error raised by the primary agent
+            primary_executor: Primary agent executor
+            prompt: Prompt to execute
+            allowed_tools: List of allowed tools
+            allowed_directories: List of allowed directories
+            streaming_output_file: File path for streaming output
+            phase_name: Current phase name, used to look up model configuration
+
+        Returns:
+            AgentResponse: Response from the first successful backup agent
+
+        Raises:
+            AgentExecutionError: Raised when all agents (primary + backups) fail
+        """
+        config = primary_executor.config
+        backup_clis = config.backup_clis
+        models_config = config.models_config
+
+        if not backup_clis:
+            # No backup agents configured, re-raise the original error
+            raise primary_error
+
+        primary_cli_name = config.cli.value
+        print(f"❌ {primary_cli_name} API rate limit reached, trying backup agent...")
+
+        # Track tried CLIs to avoid duplicates (primary CLI is included from the start)
+        tried_clis = {config.cli}
+        failed_agents: List[str] = [f"{primary_cli_name} ({primary_error})"]
+
+        for backup_cli in backup_clis:
+            # Skip CLIs already tried (e.g. backup_clis contains the same CLI as primary)
+            if backup_cli in tried_clis:
+                continue
+            tried_clis.add(backup_cli)
+
+            # Look up the model for this backup CLI in the current phase
+            # e.g. models_config = {"gemini": {"develop": "gemini-2-flash-preview"}}
+            # If not configured or empty string, use None (CLI default model)
+            backup_model: Optional[str] = None
+            if phase_name and models_config:
+                backup_model = models_config.get(backup_cli.value, {}).get(phase_name) or None
+
+            # Treat empty string as None
+            if backup_model == "":
+                backup_model = None
+
+            print(f"Trying {backup_cli.value}...")
+
+            # Create a new executor for the backup CLI (fresh session to avoid session contamination)
+            backup_config = AgentConfig(
+                name=config.name,
+                cli=backup_cli,
+                model=backup_model,
+            )
+            backup_executor = AgentExecutor(backup_config)
+
+            try:
+                agent_response = backup_executor.execute(
+                    prompt, allowed_tools, allowed_directories, streaming_output_file
+                )
+                print(f"✅ Successfully completed with {backup_cli.value}")
+                return agent_response
+            except AgentExecutionError as backup_error:
+                if hasattr(backup_error, 'error_type') and backup_error.error_type in ("rate_limit", "cli_not_found"):
+                    # rate_limit or cli_not_found: record and continue to next backup
+                    failed_agents.append(f"{backup_cli.value} ({backup_error})")
+                    print(f"❌ {backup_cli.value} also hit rate limit, trying next agent...")
+                    continue
+                else:
+                    # Other errors (e.g. invalid prompt format): re-raise immediately
+                    raise
+
+        # All agents (primary + all backups) failed, compose error message
+        tried_list = ", ".join(failed_agents)
+        raise AgentExecutionError(
+            f"All agents failed. Tried: {tried_list}. "
+            f"Please wait for rate limits to reset or add more backup agents.",
+            error_type="rate_limit",
+        )
 
     def execute_current(self, prompt: str) -> str:
         """Execute prompt with current agent.

@@ -58,8 +58,34 @@ CAFE supports `git worktree`, enabling parallel development across multiple issu
 
 ### Flexible Integration with CLI Agent Tools
 
-CAFE integrates with multiple CLI-based AI agents (e.g., Claude Code, Cursor CLI).  
+CAFE integrates with multiple CLI-based AI agents (e.g., Claude Code, Cursor CLI).
 Different agents and models can be assigned per role, allowing you to balance cost, performance, and reasoning depth.
+
+### Automatic Backup Agent Switching on Rate Limits
+
+When a primary agent hits an API rate limit, CAFE automatically switches to backup agents in configured order—without stopping the workflow. If the backup agent also hits a rate limit, CAFE continues to the next backup until one succeeds or all are exhausted.
+
+You can configure backup agents and their per-phase models in `.cafe/config.yaml`:
+
+```yaml
+agents:
+  developer:
+    name: David
+    cli: claude                    # Primary CLI agent
+    backup:                        # Backup agents (tried in order on rate limit)
+      - gemini
+      - copilot
+    models:                        # Per-CLI, per-phase model configuration
+      claude:
+        plan: opus
+        develop: sonnet
+      gemini:
+        plan: gemini-2.5-pro-preview
+        develop: gemini-2-flash-preview
+      copilot: {}                  # Use CLI default model
+```
+
+If all agents (primary + backups) are exhausted, the workflow stops with a clear error message listing which agents were tried. You can add more backup agents with `cafe config edit`.
 
 ---
 

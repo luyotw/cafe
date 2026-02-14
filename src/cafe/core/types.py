@@ -56,12 +56,36 @@ class PermissionAction(str, Enum):
 
 
 class AgentConfig(BaseModel):
-    """Configuration for an AI agent."""
+    """Configuration for an AI agent.
+
+    backup_clis and models_config support automatic backup agent switching.
+    When the primary CLI hits a rate limit, AgentManager tries each backup CLI in order.
+
+    Example config.yaml::
+
+        agents:
+          developer:
+            name: David
+            cli: claude                    # Primary CLI
+            backup:                        # Backup CLIs (tried in order)
+              - gemini
+              - copilot
+            models:                        # Per-CLI per-phase model configuration
+              claude:
+                plan: opus
+                develop: sonnet
+              gemini:
+                plan: gemini-2.5-pro-preview
+                develop: gemini-2-flash-preview
+              copilot: {}                  # Use CLI default model
+    """
 
     name: str
     cli: AgentCLI
     session_id: Optional[str] = None
     model: Optional[str] = None  # Optional model name for CLI (e.g., "sonnet", "opus")
+    backup_clis: List["AgentCLI"] = Field(default_factory=list)  # Ordered list of backup CLIs
+    models_config: Dict[str, Dict[str, str]] = Field(default_factory=dict)  # Per-CLI per-phase model configuration
 
 
 class TokenUsage(BaseModel):
