@@ -280,6 +280,38 @@ class TestPrepareCommand:
                 assert config_data["base_branch"] == base_branch
 
 
+    def test_prepare_error_when_base_branch_equals_feature_branch(self, temp_repo_dir, mock_git_ops):
+        """Test error when user runs prepare on the feature branch without --base."""
+        # Simulate: user is already on the feature branch
+        mock_git_ops.get_current_branch.return_value = "my-feature"
+
+        result = runner.invoke(app, ["prepare", "my-feature"])
+
+        assert result.exit_code == 1
+        assert "base_branch and feature_branch are both" in result.stdout
+        assert "--base" in result.stdout
+
+        # Should not create directories or branches
+        issue_dir = temp_repo_dir / ".cafe" / "issues" / "my-feature"
+        assert not issue_dir.exists()
+        mock_git_ops.create_branch.assert_not_called()
+
+    def test_prepare_explicit_base_overrides_same_branch_check(self, temp_repo_dir, mock_git_ops):
+        """Test that --base flag works even when on the feature branch."""
+        mock_git_ops.get_current_branch.return_value = "my-feature"
+
+        result = runner.invoke(app, ["prepare", "my-feature", "--base", "main"])
+
+        assert result.exit_code == 0
+        assert "Base branch: main" in result.stdout
+
+        config_file = temp_repo_dir / ".cafe" / "issues" / "my-feature" / "issue.yaml"
+        with open(config_file) as f:
+            config_data = yaml.safe_load(f)
+            assert config_data["base_branch"] == "main"
+            assert config_data["feature_branch"] == "my-feature"
+
+
 class TestPrepareCommandWorktree:
     """Test prepare command with worktree support (TDD Red phase)."""
 

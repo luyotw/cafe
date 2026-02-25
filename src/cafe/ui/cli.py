@@ -984,6 +984,20 @@ def prepare(
         if not base_branch:
             base_branch = git_ops.get_current_branch()
 
+        # Validate base_branch != feature_branch
+        if base_branch == issue_name:
+            console.print(
+                f"[bold red]Error: base_branch and feature_branch are both '{base_branch}'.[/bold red]"
+            )
+            console.print(
+                "[yellow]This usually happens when you run 'cafe prepare' while already on the feature branch.[/yellow]"
+            )
+            console.print()
+            console.print("[dim]To fix this, either:[/dim]")
+            console.print(f"[dim]  1. Switch to the base branch first: git checkout main && cafe prepare {issue_name}[/dim]")
+            console.print(f"[dim]  2. Specify the base branch explicitly: cafe prepare {issue_name} --base main[/dim]")
+            raise typer.Exit(1)
+
         # 8. Determine worktree mode (interactive or from parameter)
         use_worktree = False
         worktree_path = None
