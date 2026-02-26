@@ -341,7 +341,8 @@ class SpecPhase(Phase):
             basic_principles = f"""- Write analysis results in {language_instruction}
 - Do not include technical details (implementation, architecture, languages, frameworks, databases)
 - You may provide 2-3 high-level approach options for the user to consider, but avoid prescribing specific technical solutions
-- Treat users as stakeholders unfamiliar with implementation - do NOT ask "how is this currently implemented" or "how should this be implemented"; instead, note such questions in the spec for developers"""
+- Treat users as stakeholders unfamiliar with implementation - do NOT ask "how is this currently implemented" or "how should this be implemented"; instead, note such questions in the spec for developers
+- Only write the finalized content to output.md - do not mention iteration-related information (e.g., "confirmed in iteration 2", "verified in previous round")"""
 
             # Get template file path (convert to relative path for display)
             template_file = None

@@ -208,7 +208,8 @@ class PlanPhase(Phase):
 
             # Define basic principles (language selection is dynamic based on sync setting)
             language_instruction = 'the same language as the "Initial Requirements" section in the spec document' if self._sync_github else "your native language"
-            basic_principles = f"""- Write plan content in {language_instruction}"""
+            basic_principles = f"""- Write plan content in {language_instruction}
+- Only write the finalized content to output.md - do not mention iteration-related information (e.g., "confirmed in iteration 2", "verified in previous round")"""
 
             # Get template file path (convert to relative path for display)
             template_file = None
