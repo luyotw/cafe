@@ -1685,7 +1685,7 @@ Return ONLY the status code (CAFE_CONFIRMED or CAFE_NEEDS_CHANGES) with no expla
         from cafe.utils.checklist_generator import generate_pr_checklist
 
         # Define basic principles
-        basic_principles = """- Use the same language as the "Initial Requirements" section in the spec document for PR title and description"""
+        basic_principles = """- Use the same language as the "Initial Requirements, not in your native language" section in the spec document for PR title and description"""
 
         checklist_path = iteration_dir / "checklist.md"
         output_file = iteration_dir / "output.md"

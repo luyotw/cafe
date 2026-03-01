@@ -207,7 +207,7 @@ class PlanPhase(Phase):
             from cafe.utils.git_utils import to_cwd_relative_path
 
             # Define basic principles (language selection is dynamic based on sync setting)
-            language_instruction = 'the same language as the "Initial Requirements" section in the spec document' if self._sync_github else "your native language"
+            language_instruction = 'the same language as the "Initial Requirements" section in the spec document, not in your native language' if self._sync_github else "your native language"
             basic_principles = f"""- Write plan content in {language_instruction}
 - Only write the finalized content to output.md - do not mention iteration-related information (e.g., "confirmed in iteration 2", "verified in previous round")"""
 

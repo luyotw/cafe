@@ -337,7 +337,7 @@ class SpecPhase(Phase):
                     prev_spec_file = str(prev_spec_path)
 
             # Define basic principles (language selection is dynamic based on sync setting)
-            language_instruction = 'the same language as the "Initial Requirements" section in the spec document' if self._sync_github else "your native language"
+            language_instruction = 'the same language as the "Initial Requirements" section in the spec document, not in your native language' if self._sync_github else "your native language"
             basic_principles = f"""- Write analysis results in {language_instruction}
 - Do not include technical details (implementation, architecture, languages, frameworks, databases)
 - You may provide 2-3 high-level approach options for the user to consider, but avoid prescribing specific technical solutions
