@@ -9,6 +9,7 @@ from cafe.utils.checklist_generator import (
     generate_review_checklist,
     generate_pr_checklist,
 )
+from cafe.utils import checklist_templates
 
 
 class TestGenerateSpecChecklist:
@@ -494,3 +495,122 @@ class TestSpecChecklistXmlInstructions:
         # 檢查 Rules 後面有提到母語要求
         rules_section = content.split("Rules:")[1].split("```")[0]
         assert "native language" in rules_section.lower()
+
+
+class TestSpecDodInstruction:
+    """Tests for DoD instruction constant in checklist_templates."""
+
+    def test_spec_dod_instruction_constant_exists(self) -> None:
+        """Test that SPEC_DOD_INSTRUCTION constant exists in checklist_templates."""
+        assert hasattr(checklist_templates, "SPEC_DOD_INSTRUCTION"), (
+            "SPEC_DOD_INSTRUCTION constant should exist in checklist_templates"
+        )
+
+    def test_spec_dod_instruction_contains_dod_questions(self) -> None:
+        """Test that SPEC_DOD_INSTRUCTION mentions DoD questions."""
+        instruction = checklist_templates.SPEC_DOD_INSTRUCTION
+        assert "DoD" in instruction, "SPEC_DOD_INSTRUCTION should mention DoD"
+
+    def test_spec_dod_instruction_mentions_functional_requirements(self) -> None:
+        """Test that SPEC_DOD_INSTRUCTION focuses on functional requirements."""
+        instruction = checklist_templates.SPEC_DOD_INSTRUCTION
+        assert "functional" in instruction.lower(), (
+            "SPEC_DOD_INSTRUCTION should focus on functional requirements"
+        )
+
+    def test_spec_dod_instruction_mentions_custom_input(self) -> None:
+        """Test that SPEC_DOD_INSTRUCTION allows custom user input."""
+        instruction = checklist_templates.SPEC_DOD_INSTRUCTION
+        assert "custom" in instruction.lower() or "optional" in instruction.lower(), (
+            "SPEC_DOD_INSTRUCTION should mention custom/optional user input"
+        )
+
+    def test_spec_dod_instruction_mentions_acceptance_criteria(self) -> None:
+        """Test that SPEC_DOD_INSTRUCTION instructs integration into Acceptance Criteria."""
+        instruction = checklist_templates.SPEC_DOD_INSTRUCTION
+        assert "Acceptance Criteria" in instruction, (
+            "SPEC_DOD_INSTRUCTION should mention integration into Acceptance Criteria"
+        )
+
+    def test_spec_dod_instruction_mentions_dod_prefix_format(self) -> None:
+        """Test that SPEC_DOD_INSTRUCTION specifies the DoD: prefix format."""
+        instruction = checklist_templates.SPEC_DOD_INSTRUCTION
+        assert "**DoD:**" in instruction, (
+            "SPEC_DOD_INSTRUCTION should specify the DoD: prefix format"
+        )
+
+
+class TestSpecChecklistDodIntegration:
+    """Tests for DoD instruction integration in spec checklist generation."""
+
+    def test_iteration_2_checklist_contains_dod_instruction(self, tmp_path: Path) -> None:
+        """Test that iteration 2+ checklist contains DoD instruction."""
+        checklist_path = tmp_path / "checklist.md"
+
+        generate_spec_checklist(
+            iteration=2,
+            agent_name="Roger",
+            current_spec_file=".cafe/issues/test/spec/iteration_002/output.md",
+            prev_spec_file=".cafe/issues/test/spec/iteration_001/output.md",
+            checklist_file_path=checklist_path,
+            questions_xml_file=".cafe/issues/test/spec/iteration_002/questions.xml",
+        )
+
+        content = checklist_path.read_text()
+        assert "DoD" in content, "Iteration 2+ checklist should contain DoD instruction"
+        assert "Definition of Done" in content, (
+            "Iteration 2+ checklist should contain 'Definition of Done' section"
+        )
+
+    def test_iteration_3_checklist_contains_dod_instruction(self, tmp_path: Path) -> None:
+        """Test that iteration 3+ checklist also contains DoD instruction."""
+        checklist_path = tmp_path / "checklist.md"
+
+        generate_spec_checklist(
+            iteration=3,
+            agent_name="Roger",
+            current_spec_file=".cafe/issues/test/spec/iteration_003/output.md",
+            prev_spec_file=".cafe/issues/test/spec/iteration_002/output.md",
+            checklist_file_path=checklist_path,
+        )
+
+        content = checklist_path.read_text()
+        assert "DoD" in content, "Iteration 3+ checklist should contain DoD instruction"
+
+    def test_iteration_1_checklist_does_not_contain_dod_instruction(self, tmp_path: Path) -> None:
+        """Test that iteration 1 checklist does NOT contain DoD instruction.
+
+        DoD is only asked after requirements clarification, not in first iteration.
+        """
+        checklist_path = tmp_path / "checklist.md"
+
+        generate_spec_checklist(
+            iteration=1,
+            agent_name="Roger",
+            current_spec_file=".cafe/issues/test/spec/iteration_001/output.md",
+            prev_spec_file=None,
+            checklist_file_path=checklist_path,
+            questions_xml_file=".cafe/issues/test/spec/iteration_001/questions.xml",
+        )
+
+        content = checklist_path.read_text()
+        assert "Definition of Done" not in content, (
+            "Iteration 1 checklist should NOT contain DoD instruction"
+        )
+
+    def test_dod_instruction_contains_cafe_ready_for_review_reference(self, tmp_path: Path) -> None:
+        """Test that DoD instruction references CAFE_READY_FOR_REVIEW timing."""
+        checklist_path = tmp_path / "checklist.md"
+
+        generate_spec_checklist(
+            iteration=2,
+            agent_name="Roger",
+            current_spec_file=".cafe/issues/test/spec/iteration_002/output.md",
+            prev_spec_file=".cafe/issues/test/spec/iteration_001/output.md",
+            checklist_file_path=checklist_path,
+        )
+
+        content = checklist_path.read_text()
+        assert "CAFE_READY_FOR_REVIEW" in content, (
+            "DoD instruction should reference CAFE_READY_FOR_REVIEW timing"
+        )

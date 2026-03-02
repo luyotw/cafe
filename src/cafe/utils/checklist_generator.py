@@ -71,6 +71,11 @@ def generate_spec_checklist(
             # Manual mode: use the specified template
             template_instruction = f"[ ] Read {template_file} as reference for output format and structure\n[ ] Follow template structure when writing analysis results\n"
 
+    # Add DoD instruction for iteration 2+ (DoD is asked after requirements clarification)
+    dod_instruction = ""
+    if iteration >= 2:
+        dod_instruction = checklist_templates.SPEC_DOD_INSTRUCTION
+
     # Get agent guidelines checklist
     agent_guidelines = extract_agent_guidelines_checklist(agent_file)
 
@@ -80,7 +85,7 @@ def generate_spec_checklist(
         basic_principles_checklist = convert_to_checklist(basic_principles, "Basic Principles")
 
     # Combine all sections
-    checklist_content = f"{execution_steps}\n{template_instruction}{basic_principles_checklist}\n{iteration_note}\n{agent_guidelines}"
+    checklist_content = f"{execution_steps}\n{template_instruction}{basic_principles_checklist}\n{iteration_note}{dod_instruction}\n{agent_guidelines}"
 
     # Build placeholders dict
     placeholders = {

@@ -79,6 +79,17 @@ SPEC_XML_QUESTIONS_INSTRUCTION = XML_QUESTIONS_INSTRUCTION
 SPEC_IMPORTANT_NOTES_ITERATION_4_PLUS = """[ ] Round {iteration}: Only clarify existing questions, NO new questions
 """
 
+SPEC_DOD_INSTRUCTION = """
+## Definition of Done (DoD)
+
+[ ] When requirements clarification is complete and you are about to return CAFE_READY_FOR_REVIEW, first ask DoD questions
+[ ] Write DoD questions to questions.xml (DoD focuses on functional requirements only)
+[ ] Include predefined options for common functional completion criteria (e.g., all major features working, error handling working, edge cases tested)
+[ ] The last DoD question should allow custom user input (optional, can be left empty)
+[ ] After collecting DoD answers, integrate selected items into the Acceptance Criteria section with "✅ **DoD:**" prefix
+[ ] Only then return CAFE_READY_FOR_REVIEW with DoD integrated into the spec document
+"""
+
 
 # Plan Phase Checklists
 
