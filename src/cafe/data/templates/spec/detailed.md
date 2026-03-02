@@ -78,6 +78,9 @@
 #### Must Have
 - ✅ [Critical criterion 1]
 - ✅ [Critical criterion 2]
+- ✅ **DoD:** [User-selected completion criterion 1]
+- ✅ **DoD:** [User-selected completion criterion 2]
+- ✅ **DoD:** [Custom user-provided criterion if any]
 
 #### Should Have
 - ✅ [Important criterion 1]

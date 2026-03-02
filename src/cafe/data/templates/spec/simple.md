@@ -13,6 +13,9 @@
 - ✅ [Criterion 1]
 - ✅ [Criterion 2]
 - ✅ [Criterion 3]
+- ✅ **DoD:** [User-selected completion criterion 1]
+- ✅ **DoD:** [User-selected completion criterion 2]
+- ✅ **DoD:** [Custom user-provided criterion if any]
 
 ## Questions
 
