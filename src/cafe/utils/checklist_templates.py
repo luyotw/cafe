@@ -82,12 +82,10 @@ SPEC_IMPORTANT_NOTES_ITERATION_4_PLUS = """[ ] Round {iteration}: Only clarify e
 SPEC_DOD_INSTRUCTION = """
 ## Definition of Done (DoD)
 
-[ ] When requirements clarification is complete and you are ready to finalize the specification, first ask DoD questions
-[ ] Write DoD questions to questions.xml (DoD focuses on functional requirements only)
-[ ] Include predefined options for common functional completion criteria (e.g., all major features working, error handling working, edge cases tested)
+[ ] When writing questions to questions.xml, append DoD questions at the end alongside your clarification questions
+[ ] DoD questions focus on functional requirements only (e.g., all major features working, error handling working, edge cases tested)
 [ ] The last DoD question should allow custom user input (optional, can be left empty)
-[ ] After collecting DoD answers, integrate selected items into the Acceptance Criteria section with "✅ **DoD:**" prefix
-[ ] Only finalize the specification (mark as ready for review) after DoD is integrated into the spec document
+[ ] After receiving user's DoD answers, integrate selected items into the Acceptance Criteria section with "✅ **DoD:**" prefix
 """
 
 

@@ -612,13 +612,8 @@ class TestSpecChecklistDodIntegration:
             "Iteration 1 checklist should NOT contain DoD instruction"
         )
 
-    def test_dod_instruction_references_finalization_timing(self, tmp_path: Path) -> None:
-        """Test that DoD instruction references when to finalize specification.
-
-        Note: DoD instruction must NOT contain literal status code strings like
-        CAFE_READY_FOR_REVIEW, because the status code parser (extract_all) would
-        find it in the agent response and treat it as a conflicting status code.
-        """
+    def test_dod_instruction_references_questions_xml(self, tmp_path: Path) -> None:
+        """Test that DoD instruction tells PM to append DoD questions to questions.xml."""
         checklist_path = tmp_path / "checklist.md"
 
         generate_spec_checklist(
@@ -630,6 +625,6 @@ class TestSpecChecklistDodIntegration:
         )
 
         content = checklist_path.read_text()
-        assert "finalize" in content.lower(), (
-            "DoD instruction should reference when to finalize the specification"
+        assert "questions.xml" in content, (
+            "DoD instruction should reference questions.xml"
         )
