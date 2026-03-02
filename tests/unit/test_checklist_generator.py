@@ -539,6 +539,20 @@ class TestSpecDodInstruction:
             "SPEC_DOD_INSTRUCTION should specify the DoD: prefix format"
         )
 
+    def test_spec_dod_instruction_does_not_contain_status_code_strings(self) -> None:
+        """Test that SPEC_DOD_INSTRUCTION does not contain literal CAFE_ status codes.
+
+        The status code parser (extract_all) scans the entire agent response for
+        CAFE_ prefixed codes. If the DoD instruction contains a literal status code
+        like CAFE_READY_FOR_REVIEW, and the agent also returns CAFE_NEED_CLARIFICATION,
+        the parser finds two different codes and returns None, causing the phase to fail.
+        """
+        instruction = checklist_templates.SPEC_DOD_INSTRUCTION
+        assert "CAFE_" not in instruction, (
+            "SPEC_DOD_INSTRUCTION must not contain literal CAFE_ status code strings "
+            "to avoid conflicts with status code parser"
+        )
+
 
 class TestSpecChecklistDodIntegration:
     """Tests for DoD instruction integration in spec checklist generation."""
@@ -598,8 +612,13 @@ class TestSpecChecklistDodIntegration:
             "Iteration 1 checklist should NOT contain DoD instruction"
         )
 
-    def test_dod_instruction_contains_cafe_ready_for_review_reference(self, tmp_path: Path) -> None:
-        """Test that DoD instruction references CAFE_READY_FOR_REVIEW timing."""
+    def test_dod_instruction_references_finalization_timing(self, tmp_path: Path) -> None:
+        """Test that DoD instruction references when to finalize specification.
+
+        Note: DoD instruction must NOT contain literal status code strings like
+        CAFE_READY_FOR_REVIEW, because the status code parser (extract_all) would
+        find it in the agent response and treat it as a conflicting status code.
+        """
         checklist_path = tmp_path / "checklist.md"
 
         generate_spec_checklist(
@@ -611,6 +630,6 @@ class TestSpecChecklistDodIntegration:
         )
 
         content = checklist_path.read_text()
-        assert "CAFE_READY_FOR_REVIEW" in content, (
-            "DoD instruction should reference CAFE_READY_FOR_REVIEW timing"
+        assert "finalize" in content.lower(), (
+            "DoD instruction should reference when to finalize the specification"
         )
