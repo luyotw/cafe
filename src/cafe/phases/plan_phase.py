@@ -17,9 +17,6 @@ from cafe.utils.git_utils import get_repo_root
 from cafe.utils.prompt_utils import format_checklist_instruction
 from cafe.utils.github import GitHubOps, GitHubError
 
-# Maximum number of planning iterations to prevent infinite loops
-MAX_PLANNING_ITERATIONS = 10
-
 
 class PlanPhase(Phase):
     """Phase 2: Implementation plan with developer agent."""
@@ -107,14 +104,6 @@ class PlanPhase(Phase):
 
             # Increment iteration and execute agent
             self.iteration += 1
-
-            # Safety check: prevent infinite loops
-            max_iterations_result = self._check_max_iterations(
-                MAX_PLANNING_ITERATIONS,
-                "Implementation plan"
-            )
-            if max_iterations_result:
-                return max_iterations_result
 
             # Get iteration number for versioned file
             iteration_number = self._get_next_iteration_number("plan", self.phase_dir)
