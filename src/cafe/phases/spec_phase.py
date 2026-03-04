@@ -21,9 +21,6 @@ from cafe.utils.github import GitHubOps, GitHubError
 from cafe.ui.interactive_qa import interactive_qa_flow
 from cafe.utils.prompt_utils import format_checklist_instruction
 
-# Maximum number of clarification iterations to prevent infinite loops
-MAX_CLARIFICATION_ITERATIONS = 10
-
 
 def create_github_issue(content: str) -> str:
     """Create a new GitHub issue with content.
@@ -317,14 +314,6 @@ class SpecPhase(Phase):
 
             # NOTE: self.iteration is already set from versioned files at line 183
             # No need to increment here as it's handled by _get_next_iteration_number()
-
-            # Safety check: prevent infinite loops
-            max_iterations_result = self._check_max_iterations(
-                MAX_CLARIFICATION_ITERATIONS,
-                "Requirements clarification"
-            )
-            if max_iterations_result:
-                return max_iterations_result
 
             # Generate checklist for this iteration
             from cafe.utils.checklist_generator import generate_spec_checklist
