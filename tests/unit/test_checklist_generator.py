@@ -539,6 +539,13 @@ class TestSpecDodInstruction:
             "SPEC_DOD_INSTRUCTION should specify the DoD: prefix format"
         )
 
+    def test_spec_dod_instruction_mentions_checkbox_type(self) -> None:
+        """Test that SPEC_DOD_INSTRUCTION instructs PM to use type="checkbox" for DoD questions."""
+        instruction = checklist_templates.SPEC_DOD_INSTRUCTION
+        assert "checkbox" in instruction, (
+            "SPEC_DOD_INSTRUCTION should instruct PM to use type='checkbox' for multi-select"
+        )
+
     def test_spec_dod_instruction_does_not_contain_status_code_strings(self) -> None:
         """Test that SPEC_DOD_INSTRUCTION does not contain literal CAFE_ status codes.
 

@@ -16,6 +16,7 @@ class Question:
     id: str
     title: str
     options: list[str]
+    multi_select: bool = False
 
 
 def parse_questions_xml(xml_path: Path) -> list[Question]:
@@ -40,6 +41,8 @@ def parse_questions_xml(xml_path: Path) -> list[Question]:
     questions = []
     for q_elem in root.findall("question"):
         q_id = q_elem.get("id", "")
+        q_type = q_elem.get("type", "")
+        multi_select = q_type == "checkbox"
         title_elem = q_elem.find("title")
         title = title_elem.text.strip() if title_elem is not None and title_elem.text else ""
 
@@ -50,7 +53,7 @@ def parse_questions_xml(xml_path: Path) -> list[Question]:
                 if opt_elem.text and opt_elem.text.strip():
                     options.append(opt_elem.text.strip())
 
-        questions.append(Question(id=q_id, title=title, options=options))
+        questions.append(Question(id=q_id, title=title, options=options, multi_select=multi_select))
 
     return questions
 
