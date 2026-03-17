@@ -3787,8 +3787,22 @@ def list_issues() -> None:
         console.print("Run 'cafe prepare' to create your first issue")
         return
 
-    # Get all issue directories
-    issues = [d for d in issues_dir.iterdir() if d.is_dir()]
+    # Get all issue directories (recursively find dirs containing issue.yaml or phase dirs)
+    def _find_issues(base_dir: Path) -> list[Path]:
+        """Find issue directories by looking for issue.yaml or phase subdirectories."""
+        found = []
+        for d in sorted(base_dir.iterdir()):
+            if not d.is_dir():
+                continue
+            # A directory is an issue if it contains issue.yaml or any phase dir
+            if (d / "issue.yaml").exists() or any((d / phase).exists() for phase in ALL_PHASES):
+                found.append(d)
+            else:
+                # Check subdirectories (for nested issue names like feature/chat-web-ui)
+                found.extend(_find_issues(d))
+        return found
+
+    issues = _find_issues(issues_dir)
 
     if not issues:
         console.print("[yellow]No issues found[/yellow]")
@@ -3823,7 +3837,7 @@ def list_issues() -> None:
         phases = []
         if worktree_path != "-":
             # Read phases from worktree/.cafe/issues/{issue_name}/
-            worktree_issue_dir = Path(worktree_path) / ".cafe" / "issues" / issue.name
+            worktree_issue_dir = Path(worktree_path) / ".cafe" / "issues" / issue.relative_to(issues_dir)
             if worktree_issue_dir.exists():
                 for phase in ALL_PHASES:
                     phase_dir = worktree_issue_dir / phase
@@ -3850,7 +3864,8 @@ def list_issues() -> None:
         mtime = datetime.datetime.fromtimestamp(issue.stat().st_mtime)
         mtime_str = mtime.strftime("%Y-%m-%d %H:%M")
 
-        table.add_row(issue.name, phases_str, worktree_path, mtime_str)
+        issue_name = str(issue.relative_to(issues_dir))
+        table.add_row(issue_name, phases_str, worktree_path, mtime_str)
 
     console.print(table)
     console.print(f"\n[dim]Total: {len(issues)} issue(s)[/dim]")
