@@ -135,11 +135,12 @@ class TestTemplateManager:
             assert "template1" in template_names
             assert "template2" in template_names
 
-    def test_list_templates_empty_directory(self, tmp_path: Path) -> None:
+    def test_list_templates_empty_directory(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """Test that an empty directory returns only built-in templates (system directory)."""
         fake_home = tmp_path / "home"
         fake_home.mkdir()
-        
+        monkeypatch.chdir(tmp_path)
+
         with patch("cafe.utils.config.Path.home", return_value=fake_home):
             config_dir = tmp_path / ".cafe"
             manager = TemplateManager()

@@ -59,11 +59,12 @@ class TemplateManager:
         return dest
 
     def list_templates(self) -> List[Tuple[str, str]]:
-        """List all available templates from both system and global directories.
+        """List all available templates from system, global, and local directories.
 
         Returns:
-            List of (template_name, source_type) tuples where source_type is either "system" or "custom"
-            Global templates take precedence over system templates with the same name.
+            List of (template_name, source_type) tuples where source_type is
+            "system", "custom" (global), or "local".
+            Local > global > system priority for name collisions.
         """
         templates = {}  # Use dict to handle name collisions
 
@@ -80,6 +81,17 @@ class TemplateManager:
             for file in global_template_dir.glob("*.md"):
                 template_name = file.stem
                 templates[template_name] = ("custom", file)
+
+        # Finally, collect local templates by searching upward from cwd (override global)
+        current = Path.cwd().resolve()
+        while current != current.parent:
+            local_dir = current / ".cafe" / "templates" / self.template_type
+            if local_dir.exists():
+                for file in local_dir.glob("*.md"):
+                    template_name = file.stem
+                    templates[template_name] = ("local", file)
+                break  # Use the nearest .cafe/templates/ found
+            current = current.parent
 
         # Return sorted list of (name, source_type) tuples
         return sorted([(name, source_type) for name, (source_type, _) in templates.items()])
@@ -137,16 +149,13 @@ class TemplateManager:
         if not template_name.endswith(".md"):
             template_name = f"{template_name}.md"
 
-        # Check local .cafe/templates/ first (populated by cafe init)
-        try:
-            from cafe.utils.git_utils import get_repo_root
-
-            repo_root = get_repo_root()
-            local_path = repo_root / ".cafe" / "templates" / self.template_type / template_name
+        # Search upward from cwd for .cafe/templates/ (works in worktrees and subdirectories)
+        current = Path.cwd().resolve()
+        while current != current.parent:
+            local_path = current / ".cafe" / "templates" / self.template_type / template_name
             if local_path.exists():
                 return local_path
-        except ValueError:
-            pass
+            current = current.parent
 
         # Fall back to global ~/.cafe/templates/
         global_template_dir = get_global_cafe_dir() / "templates" / self.template_type
