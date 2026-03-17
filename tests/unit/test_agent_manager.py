@@ -414,14 +414,13 @@ class TestGetAgentFilePath:
         global_agent.parent.mkdir(parents=True)
         global_agent.write_text("# Roger (global)")
 
-        # Run from a subdirectory to verify repo-root-relative lookup
+        # Run from a subdirectory to verify upward search finds .cafe/agents/
         subdir = repo_root / "src" / "nested"
         subdir.mkdir(parents=True)
         monkeypatch.chdir(subdir)
 
-        with patch("cafe.utils.git_utils.get_repo_root", return_value=repo_root):
-            with patch.object(RealPath, "home", return_value=global_home):
-                result = AgentManager.get_agent_file_path("Roger", "pm")
+        with patch.object(RealPath, "home", return_value=global_home):
+            result = AgentManager.get_agent_file_path("Roger", "pm")
 
         # Local .cafe/ path should be an absolute path under repo root
         assert result == str(repo_root / ".cafe" / "agents" / "pm" / "Roger.md")
@@ -447,9 +446,8 @@ class TestGetAgentFilePath:
         subdir.mkdir(parents=True)
         monkeypatch.chdir(subdir)
 
-        with patch("cafe.utils.git_utils.get_repo_root", return_value=repo_root):
-            with patch.object(RealPath, "home", return_value=global_home):
-                result = AgentManager.get_agent_file_path("Roger", "pm")
+        with patch.object(RealPath, "home", return_value=global_home):
+            result = AgentManager.get_agent_file_path("Roger", "pm")
 
         assert result == str(global_agent)
 
@@ -471,9 +469,8 @@ class TestGetAgentFilePath:
         subdir.mkdir(parents=True)
         monkeypatch.chdir(subdir)
 
-        with patch("cafe.utils.git_utils.get_repo_root", return_value=repo_root):
-            with patch.object(RealPath, "home", return_value=global_home):
-                result = AgentManager.get_agent_file_path("Roger", "pm")
+        with patch.object(RealPath, "home", return_value=global_home):
+            result = AgentManager.get_agent_file_path("Roger", "pm")
 
         # Falls back to system default path
         assert result == "src/cafe/data/agents/pm/Roger.md"
