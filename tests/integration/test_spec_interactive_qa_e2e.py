@@ -284,6 +284,10 @@ class TestCheckboxXmlParsing:
             )
             mock_inquirer.checkbox.return_value = mock_checkbox
 
+            mock_text = MagicMock()
+            mock_text.execute = MagicMock(return_value="")  # skip custom input
+            mock_inquirer.text.return_value = mock_text
+
             result = interactive_qa_flow(questions)
 
         assert "A1: Return error code and log message" in result
