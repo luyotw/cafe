@@ -38,55 +38,71 @@ class TestTemplateManagerGlobalSupport:
 
     def test_list_templates_returns_tuples_with_source_type(self) -> None:
         """測試 list_templates() 回傳包含來源類型的 tuple."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            fake_home = Path(tmpdir)
-            global_template_dir = fake_home / ".cafe" / "templates" / "plan"
-            global_template_dir.mkdir(parents=True)
-            
-            # 創建全域 template
-            (global_template_dir / "custom.md").write_text("Custom template")
-            
-            with patch("cafe.utils.config.Path.home", return_value=fake_home):
-                with tempfile.TemporaryDirectory() as tmpdir2:
-                    config_dir = Path(tmpdir2) / ".cafe"
+        import os
+        original_cwd = os.getcwd()
+        try:
+            with tempfile.TemporaryDirectory() as tmpdir:
+                fake_home = Path(tmpdir) / "home"
+                global_template_dir = fake_home / ".cafe" / "templates" / "plan"
+                global_template_dir.mkdir(parents=True)
+
+                # 創建全域 template
+                (global_template_dir / "custom.md").write_text("Custom template")
+
+                # Use a separate cwd without .cafe/ to isolate from local search
+                cwd_dir = Path(tmpdir) / "workdir"
+                cwd_dir.mkdir()
+                os.chdir(cwd_dir)
+
+                with patch("cafe.utils.config.Path.home", return_value=fake_home):
                     manager = TemplateManager(template_type="plan")
-                    
+
                     templates = manager.list_templates()
-                    
+
                     # 檢查格式: List[tuple[str, str]]
                     assert all(isinstance(t, tuple) and len(t) == 2 for t in templates)
-                    
+
                     # 檢查系統 template 的來源類型
                     system_templates = [t for t in templates if t[1] == "system"]
                     assert any(t[0] == "default" for t in system_templates)
-                    
+
                     # 檢查全域 template 的來源類型
                     custom_templates = [t for t in templates if t[1] == "custom"]
                     assert any(t[0] == "custom" for t in custom_templates)
+        finally:
+            os.chdir(original_cwd)
 
     def test_list_templates_global_overrides_system_on_name_collision(self) -> None:
         """測試名稱衝突時全域 template 優先."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            fake_home = Path(tmpdir)
-            global_template_dir = fake_home / ".cafe" / "templates" / "plan"
-            global_template_dir.mkdir(parents=True)
-            
-            # 創建與系統同名的全域 template
-            (global_template_dir / "default.md").write_text("Custom default")
-            
-            with patch("cafe.utils.config.Path.home", return_value=fake_home):
-                with tempfile.TemporaryDirectory() as tmpdir2:
-                    config_dir = Path(tmpdir2) / ".cafe"
+        import os
+        original_cwd = os.getcwd()
+        try:
+            with tempfile.TemporaryDirectory() as tmpdir:
+                fake_home = Path(tmpdir) / "home"
+                global_template_dir = fake_home / ".cafe" / "templates" / "plan"
+                global_template_dir.mkdir(parents=True)
+
+                # 創建與系統同名的全域 template
+                (global_template_dir / "default.md").write_text("Custom default")
+
+                # Use a separate cwd without .cafe/ to isolate from local search
+                cwd_dir = Path(tmpdir) / "workdir"
+                cwd_dir.mkdir()
+                os.chdir(cwd_dir)
+
+                with patch("cafe.utils.config.Path.home", return_value=fake_home):
                     manager = TemplateManager(template_type="plan")
-                    
+
                     templates = manager.list_templates()
-                    
+
                     # 找出 "default" template
                     default_templates = [t for t in templates if t[0] == "default"]
-                    
+
                     # 應該只有一個 default，且來源為 custom
                     assert len(default_templates) == 1
                     assert default_templates[0][1] == "custom"
+        finally:
+            os.chdir(original_cwd)
 
     def test_get_template_path_searches_global_first(self) -> None:
         """測試 get_template_path() 優先從全域搜尋."""
