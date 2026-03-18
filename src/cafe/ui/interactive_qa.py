@@ -156,14 +156,21 @@ def _ask_checkbox(
         choices=choices,
     ).execute()
 
-    result_items = list(selected) if selected else []
+    result_items = []
+    has_other = False
+    for item in (selected or []):
+        if item == OTHER_SENTINEL:
+            has_other = True
+        else:
+            result_items.append(item)
 
-    # Always prompt for optional custom input after checkbox
-    custom = inquirer.text(
-        message="Additional items (press Enter to skip):",
-    ).execute()
-    if custom and custom.strip():
-        result_items.append(custom.strip())
+    # Prompt for custom input only if user selected "Other"
+    if has_other:
+        custom = inquirer.text(
+            message="Type your answer:",
+        ).execute()
+        if custom and custom.strip():
+            result_items.append(custom.strip())
 
     if not result_items:
         return NONE_SELECTED
@@ -213,8 +220,7 @@ def _build_choices(
 def _build_checkbox_choices(question: Question) -> list:
     """Build choices list for a checkbox (multi-select) question.
 
-    No "Other" option is appended — a separate text prompt follows
-    the checkbox for custom input.
+    Appends an "Other (type your answer)" option at the end.
 
     Args:
         question: The question
@@ -222,10 +228,9 @@ def _build_checkbox_choices(question: Question) -> list:
     Returns:
         List of choices for inquirer.checkbox
     """
-    return [
-        {"name": opt, "value": opt}
-        for opt in question.options
-    ]
+    choices = [{"name": opt, "value": opt} for opt in question.options]
+    choices.append({"name": "Other (type your answer)", "value": OTHER_SENTINEL})
+    return choices
 
 
 def _print_summary(questions: list[Question], answers: dict[int, str]) -> None:
