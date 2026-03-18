@@ -217,6 +217,7 @@ def generate_develop_checklist(
     feedback_file_path: Optional[str] = None,
     basic_principles: Optional[str] = None,
     output_file: Optional[str] = None,
+    questions_xml_file: Optional[str] = None,
 ) -> None:
     """Generate checklist file for develop phase.
 
@@ -224,12 +225,13 @@ def generate_develop_checklist(
         agent_name: Developer agent name
         spec_file_path: Path to spec file
         plan_file_path: Path to plan file
-        develop_file: Path to develop file (for correction mode)
+        develop_file: Path to develop file (for correction mode, unused but kept for compatibility)
         checklist_file_path: Path where checklist file should be created
         correction_mode: True if in correction mode, False for normal mode
         feedback_file_path: Path to feedback todo list file (from review or PR phase, for correction mode)
         basic_principles: Basic principles text in "- item" format (optional)
         output_file: Path to output file (for NO_CHANGES_NEEDED reasoning)
+        questions_xml_file: Path to questions.xml file for CAFE_NEED_CLARIFICATION
     """
     # Get agent file path
     agent_file = AgentManager.get_agent_file_path(agent_name, "developer")
@@ -251,11 +253,20 @@ def generate_develop_checklist(
     # Combine all sections
     checklist_content = f"{execution_steps}\n{basic_principles_checklist}\n{agent_guidelines}"
 
+    # Build xml_questions_instruction (same pattern as spec/plan phases)
+    if questions_xml_file:
+        xml_questions_instruction = checklist_templates.XML_QUESTIONS_INSTRUCTION.replace(
+            "{questions_xml_file}", str(questions_xml_file)
+        )
+    else:
+        xml_questions_instruction = ""
+
     # Build placeholders dict
     placeholders = {
         "agent_file": agent_file,
         "spec_file_path": spec_file_path,
         "plan_file_path": plan_file_path,
+        "xml_questions_instruction": xml_questions_instruction,
     }
     if develop_file:
         placeholders["develop_file"] = develop_file

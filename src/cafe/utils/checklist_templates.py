@@ -126,12 +126,11 @@ DEVELOP_EXECUTION_STEPS_NORMAL = """## Checklist
 [ ] Confirm: All commits are made
 [ ] Confirm: No pending work remains
 [ ] Return status code
-"""
+{xml_questions_instruction}"""
 
 DEVELOP_EXECUTION_STEPS_CORRECTION = """## Checklist
 
 [ ] Read {agent_file} to understand your role and native language
-[ ] Read questions in {develop_file} (if exists)
 [ ] Carefully read {spec_file_path} and {plan_file_path}
 [ ] Read feedback todo list in {feedback_file_path}
 [ ] Address each issue raised in the feedback
@@ -147,7 +146,7 @@ DEVELOP_EXECUTION_STEPS_CORRECTION = """## Checklist
 
 - CAFE_CONFIRMED: All issues fixed, ready for review
 - CAFE_NO_CHANGES_NEEDED: You believe reviewer's feedback is incorrect/unnecessary. Write your reasoning to {output_file} then return this code.
-"""
+{xml_questions_instruction}"""
 
 
 # Review Phase Checklists

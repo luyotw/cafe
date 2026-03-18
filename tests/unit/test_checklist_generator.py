@@ -125,7 +125,6 @@ class TestGenerateDevelopChecklist:
 
         assert checklist_path.exists()
         content = checklist_path.read_text()
-        assert ".cafe/issues/test/develop/iteration_001/output.md" in content
         assert "Address each issue raised in the feedback" in content
 
     def test_develop_checklist_correction_mode_uses_unified_feedback_file_path(self, tmp_path):

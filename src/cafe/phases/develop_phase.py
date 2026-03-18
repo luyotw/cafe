@@ -112,39 +112,6 @@ class DevelopPhase(Phase):
 
         return False
 
-    def _save_develop_clarification(self, agent_response: str) -> None:
-        """Save developer clarification questions to develop_{it_num}.md file.
-
-        Args:
-            agent_response: Agent response content (including status code)
-        """
-        # Remove status code line from response
-        lines = agent_response.strip().split('\n')
-        # Skip first line (status code) and any empty lines after it
-        content_lines = []
-        skip_status = True
-        for line in lines:
-            if skip_status and line.strip().startswith('CAFE_'):
-                continue
-            skip_status = False
-            content_lines.append(line)
-
-        # Remove leading empty lines
-        while content_lines and not content_lines[0].strip():
-            content_lines.pop(0)
-
-        content = '\n'.join(content_lines)
-
-        # Get file path
-        develop_dir = self.issue_dir / "develop"
-        develop_file = self._get_versioned_file_path("develop", self.iteration, develop_dir)
-
-        # Ensure directory exists
-        develop_file.parent.mkdir(parents=True, exist_ok=True)
-
-        # Write content
-        develop_file.write_text(content, encoding='utf-8')
-
     def _get_review_file_path(self) -> Path:
         """Get full path to review file.
 
@@ -598,41 +565,27 @@ class DevelopPhase(Phase):
         return ""
 
     def _ask_user_for_clarification(self) -> str:
-        """Ask user for response to NEED_CLARIFICATION and display develop file content.
+        """Ask user for clarification using questions.xml from previous iteration.
 
-        Override base class method to display develop clarification file content.
+        Uses interactive_qa_flow() if questions.xml exists and is valid,
+        otherwise falls back to a plain multiline prompt.
 
         Returns:
             str: User's answer
         """
+        from cafe.core.questions_schema import parse_questions_xml, validate_questions_xml
         from cafe.ui.inquirer_prompts import prompt_multiline
+        from cafe.ui.interactive_qa import interactive_qa_flow
 
-        # Find the latest develop clarification file (iteration_XXX/output.md format)
-        develop_dir = self.issue_dir / "develop"
+        # Look for questions.xml in the previous iteration directory
+        if self.iteration > 1:
+            prev_iter_dir = self._get_iteration_dir(self.iteration - 1)
+            xml_path = prev_iter_dir / "questions.xml"
+            if xml_path.exists() and validate_questions_xml(xml_path):
+                questions = parse_questions_xml(xml_path)
+                return interactive_qa_flow(questions)
 
-        latest_develop_file = None
-        if develop_dir.exists():
-            iteration_files = sorted(develop_dir.glob("iteration_*/output.md"))
-            if iteration_files:
-                latest_develop_file = iteration_files[-1]
-
-        if latest_develop_file and latest_develop_file.exists():
-            print(f"\n{'='*60}")
-            print(f"Dev ({self.dev_agent}):")
-            print(f"{'='*60}")
-            develop_content = latest_develop_file.read_text(encoding='utf-8')
-            print(develop_content)
-            print(f"{'='*60}\n")
-            print("💡 Developer needs clarification.")
-            print()
-        else:
-            # No clarification file found - this shouldn't happen
-            print(f"\n{'='*60}")
-            print("⚠️  No clarification file found")
-            print(f"{'='*60}")
-            print(f"Expected location: {develop_dir}/iteration_XXX/output.md")
-            print(f"{'='*60}\n")
-
+        # Fallback to plain prompt
         return prompt_multiline("Please answer the question")
 
     def _get_last_develop_timestamp(self):
@@ -777,9 +730,8 @@ class DevelopPhase(Phase):
   - Message is one line (subject line only) or multiple lines (subject + body){worktree_note}
 """
 
-        # Get the develop file path for current iteration
-        develop_dir = self.issue_dir / "develop"
-        develop_file_path = develop_dir / f"iteration_{self.iteration:03d}" / "output.md"
+        # Compute questions.xml path for clarification instructions
+        questions_xml_file_path = self._get_iteration_dir(self.iteration) / "questions.xml"
 
         clarification_note = f"""
 Clarification can be requested only in these two cases, **any other situations strictly prohibit clarification requests, just decide the solution by yourself**:
@@ -789,11 +741,18 @@ Clarification can be requested only in these two cases, **any other situations s
 **⚠️ Never request clarification due to time pressure or token concerns - just do the work. CAFE has a resume mechanism to handle long tasks.**
 
 Steps for requesting clarification:
-1. Confirm again that your question meets the above conditions
-2. Write your question clearly to {develop_file_path}
+1. Confirm your question meets the above conditions
+2. Write structured questions to {questions_xml_file_path} following this XML schema:
+   <questions>
+     <question id="q1">
+       <title>Your question here</title>
+       <options>
+         <option>Option A</option>
+         <option>Option B</option>
+       </options>
+     </question>
+   </questions>
 3. Return CAFE_NEED_CLARIFICATION only, with no other content
-
-⚠️ **Important:** Write the markdown content in your native language (the language you were configured with).
 """
 
         if has_review_feedback:
@@ -1025,9 +984,16 @@ Read {agent_file} to understand your complete role definition and responsibiliti
             if worktree_path:
                 basic_principles += f"\n- In worktree mode: Only modify files under {worktree_path}, modifying project root files is strictly prohibited"
 
-            # Calculate output file path for this iteration
+            # Calculate output file and questions.xml paths for this iteration
             iteration_dir = self._get_iteration_dir(self.iteration)
             output_file = str(iteration_dir / "output.md")
+            questions_xml_path = iteration_dir / "questions.xml"
+
+            from cafe.utils.git_utils import to_cwd_relative_path as _to_cwd_rel
+            try:
+                questions_xml_file = _to_cwd_rel(questions_xml_path)
+            except (ValueError, OSError):
+                questions_xml_file = str(questions_xml_path.resolve())
 
             generate_develop_checklist(
                 agent_name=self.dev_agent,
@@ -1039,6 +1005,7 @@ Read {agent_file} to understand your complete role definition and responsibiliti
                 feedback_file_path=feedback_file,
                 basic_principles=basic_principles,
                 output_file=output_file,
+                questions_xml_file=questions_xml_file,
             )
 
             # Prepare user_input for this iteration
@@ -1232,195 +1199,38 @@ Do NOT return any other status code until you have written your reasoning."""
                             },
                         )
                 elif response_status == PhaseStatusCode.NEED_CLARIFICATION:
-                    # Verify that clarification request meets allowed criteria
-                    # Send confirmation prompt to agent
-                    print(f"\n⚠️  Developer returned CAFE_NEED_CLARIFICATION, verifying if it meets allowed criteria...")
+                    # Validate questions.xml — same mechanism as spec/plan phases
+                    # If agent didn't write questions.xml, the clarification request is rejected
+                    self._validate_and_retry_questions_xml(
+                        xml_path=questions_xml_path,
+                        agent_name=self.dev_agent,
+                        allowed_tools=allowed_tools,
+                    )
 
-                    confirmation_prompt = """Your previous response returned CAFE_NEED_CLARIFICATION.
-
-Please confirm: Does your clarification request meet one of these allowed criteria?
-1. Requested actions conflict with your behavioral guidelines
-2. Encountering technical problems beyond your current capability
-
-If YES (meets criteria): Return CAFE_NEED_CLARIFICATION again
-If NO (does not meet criteria): Continue with development work and return appropriate status code when done
-
-**Response format:**
-- Return ONLY the status code on the first line
-- Do NOT include any summary or explanation"""
-
-                    try:
-                        confirmation_response, _, _, _, confirmation_streaming_log, _ = self.agent_manager.execute(
-                            self.dev_agent,
-                            confirmation_prompt,
-                            allowed_tools=allowed_tools,
-                            allowed_directories=self._get_allowed_directories(),
+                    if not questions_xml_path.exists():
+                        return PhaseResult(
+                            status=PhaseStatus.FAILED,
+                            message=f"Developer returned CAFE_NEED_CLARIFICATION but did not write questions.xml in iteration {self.iteration}",
+                            data={
+                                "iterations": self.iteration,
+                                "last_response": response,
+                                "status_code": PhaseStatusCode.NEED_CLARIFICATION.value,
+                            },
                         )
 
-                        confirmation_status = StatusCodeParser.extract(
-                            confirmation_response,
-                            valid_codes=[
-                                PhaseStatusCode.CONFIRMED,
-                                PhaseStatusCode.NEED_PERMISSION,
-                                PhaseStatusCode.NEED_CLARIFICATION,
-                            ],
-                        )
+                    # Valid questions.xml exists — pause and wait for user response
+                    if self.interactive:
+                        print("💡 Developer needs clarification. Run 'cafe develop' again to respond.")
 
-                        # Merge original response and confirmation response
-                        merged_response = response + "\n\n" + confirmation_response
-
-                        # Get original streaming_log and prompt from context.json
-                        # Since we're in the middle of handling agent response, we need to get it from context
-                        iteration_dir = self._get_iteration_dir(self.iteration)
-                        context_file = iteration_dir / "context.json"
-                        original_streaming_log = []
-                        original_prompt = ""
-                        if context_file.exists():
-                            with open(context_file, "r", encoding="utf-8") as f:
-                                context_data = json.load(f)
-                                original_streaming_log = context_data.get("streaming_log", [])
-                                original_prompt = context_data.get("prompt", "")
-
-                        # Merge streaming logs
-                        merged_streaming_log = original_streaming_log + confirmation_streaming_log
-
-                        if confirmation_status == PhaseStatusCode.NEED_CLARIFICATION:
-                            # Agent confirmed that clarification is needed
-                            print(f"✅ Developer confirmed CAFE_NEED_CLARIFICATION is appropriate.")
-
-                            # Update iteration history with merged response and merged streaming_log
-                            self._update_iteration_history(
-                                phase_specific_data={
-                                    "response": merged_response,
-                                    "clarification_confirmed": True,
-                                    "streaming_log": merged_streaming_log,
-                                },
-                                prompt=original_prompt,
-                                agent_cli=None,
-                                agent_session_id=None,
-                                allowed_tools=allowed_tools,
-                            )
-
-                            # Save clarification to file
-                            self._save_develop_clarification(merged_response)
-
-                            # Display clarification request and return IN_PROGRESS
-                            if self.interactive:
-                                print(f"\n{'='*60}")
-                                print(f"Dev ({self.dev_agent}) - Iteration {self.iteration}:")
-                                print(f"{'='*60}")
-                                print(merged_response)
-                                print(f"{'='*60}\n")
-                                print("💡 Developer needs clarification. Run 'cafe develop' again to respond.")
-
-                                return PhaseResult(
-                                    status=PhaseStatus.IN_PROGRESS,
-                                    message=f"Clarification requested in iteration {self.iteration}. Run command again to respond.",
-                                    data={
-                                        "iterations": self.iteration,
-                                        "last_response": merged_response,
-                                        "status_code": PhaseStatusCode.NEED_CLARIFICATION.value,
-                                    },
-                                )
-                            else:
-                                return PhaseResult(
-                                    status=PhaseStatus.COMPLETED,
-                                    message="Clarification needed - saved to develop file. Re-run with --user-input to provide response.",
-                                    data={
-                                        "iterations": self.iteration,
-                                        "last_response": merged_response,
-                                        "status_code": PhaseStatusCode.NEED_CLARIFICATION.value,
-                                    },
-                                )
-                        else:
-                            # Agent decided to continue development (returned CONFIRMED or NEED_PERMISSION or other)
-                            print(f"✅ Developer decided to continue development instead of requesting clarification.")
-
-                            # Update iteration history with merged response and merged streaming_log
-                            self._update_iteration_history(
-                                phase_specific_data={
-                                    "response": merged_response,
-                                    "clarification_confirmed": False,
-                                    "streaming_log": merged_streaming_log,
-                                },
-                                prompt=original_prompt,
-                                agent_cli=None,
-                                agent_session_id=None,
-                                allowed_tools=allowed_tools,
-                            )
-
-                            # Update response and response_status for downstream processing
-                            response = merged_response
-                            response_status = confirmation_status
-
-                            # Continue to handle the new status code (fall through to code below)
-                            # Check if it's NEED_PERMISSION and handle it
-                            if confirmation_status == PhaseStatusCode.NEED_PERMISSION:
-                                # Display permission request and return IN_PROGRESS
-                                if self.interactive:
-                                    print(f"\n{'='*60}")
-                                    print(f"Dev ({self.dev_agent}) - Iteration {self.iteration}:")
-                                    print(f"{'='*60}")
-                                    print(merged_response)
-                                    print(f"{'='*60}\n")
-                                    print("💡 Developer requested permissions. Run 'cafe develop' again to respond.")
-
-                                    return PhaseResult(
-                                        status=PhaseStatus.IN_PROGRESS,
-                                        message=f"Permission requested in iteration {self.iteration}. Run command again to respond.",
-                                        data={
-                                            "iterations": self.iteration,
-                                            "last_response": merged_response,
-                                            "status_code": confirmation_status.value,
-                                        },
-                                    )
-                                else:
-                                    return PhaseResult(
-                                        status=PhaseStatus.FAILED,
-                                        message="Permission required but running in non-interactive mode",
-                                        data={
-                                            "iterations": self.iteration,
-                                            "last_response": merged_response,
-                                        },
-                                    )
-                            # If CONFIRMED, fall through to normal completion handling below
-
-                    except Exception as e:
-                        print(f"⚠️  Failed to verify CAFE_NEED_CLARIFICATION: {e}")
-                        # On verification failure, allow clarification to proceed
-                        # (safer to let human decide than to auto-reject)
-
-                        # Save clarification to file
-                        self._save_develop_clarification(response)
-
-                        # Display clarification request and return IN_PROGRESS
-                        if self.interactive:
-                            print(f"\n{'='*60}")
-                            print(f"Dev ({self.dev_agent}) - Iteration {self.iteration}:")
-                            print(f"{'='*60}")
-                            print(response)
-                            print(f"{'='*60}\n")
-                            print("💡 Developer needs clarification. Run 'cafe develop' again to respond.")
-
-                            return PhaseResult(
-                                status=PhaseStatus.IN_PROGRESS,
-                                message=f"Clarification requested in iteration {self.iteration}. Run command again to respond.",
-                                data={
-                                    "iterations": self.iteration,
-                                    "last_response": response,
-                                    "status_code": response_status.value,
-                                },
-                            )
-                        else:
-                            return PhaseResult(
-                                status=PhaseStatus.COMPLETED,
-                                message="Clarification needed - saved to develop file. Re-run with --user-input to provide response.",
-                                data={
-                                    "iterations": self.iteration,
-                                    "last_response": response,
-                                    "status_code": response_status.value,
-                                },
-                            )
+                    return PhaseResult(
+                        status=PhaseStatus.IN_PROGRESS,
+                        message=f"Clarification requested in iteration {self.iteration}. Run command again to respond.",
+                        data={
+                            "iterations": self.iteration,
+                            "last_response": response,
+                            "status_code": PhaseStatusCode.NEED_CLARIFICATION.value,
+                        },
+                    )
 
             if result:
                 return result
