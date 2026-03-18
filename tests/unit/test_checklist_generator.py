@@ -460,7 +460,7 @@ class TestSpecChecklistXmlInstructions:
         assert "<questions>" in content
 
     def test_no_xml_instructions_without_questions_xml_file(self, tmp_path):
-        """測試不提供 questions_xml_file 時不包含 XML 指示（向後相容）"""
+        """Test that XML schema instructions are not included when questions_xml_file is not provided."""
         checklist_path = tmp_path / "checklist.md"
 
         generate_spec_checklist(
@@ -472,7 +472,8 @@ class TestSpecChecklistXmlInstructions:
         )
 
         content = checklist_path.read_text()
-        assert "questions.xml" not in content
+        assert "<questions>" not in content
+        assert "CAFE_NEED_CLARIFICATION" not in content
 
     def test_xml_instructions_require_native_language(self, tmp_path):
         """測試 XML 指示要求用 agent 母語撰寫問題"""
@@ -597,10 +598,10 @@ class TestSpecChecklistDodIntegration:
         content = checklist_path.read_text()
         assert "DoD" in content, "Iteration 3+ checklist should contain DoD instruction"
 
-    def test_iteration_1_checklist_does_not_contain_dod_instruction(self, tmp_path: Path) -> None:
-        """Test that iteration 1 checklist does NOT contain DoD instruction.
+    def test_iteration_1_checklist_contains_dod_instruction(self, tmp_path: Path) -> None:
+        """Test that iteration 1 checklist also contains DoD instruction.
 
-        DoD is only asked after requirements clarification, not in first iteration.
+        DoD is asked in every iteration so it is not skipped when requirements are immediately clear.
         """
         checklist_path = tmp_path / "checklist.md"
 
@@ -614,8 +615,8 @@ class TestSpecChecklistDodIntegration:
         )
 
         content = checklist_path.read_text()
-        assert "Definition of Done" not in content, (
-            "Iteration 1 checklist should NOT contain DoD instruction"
+        assert "Definition of Done" in content, (
+            "Iteration 1 checklist should contain DoD instruction"
         )
 
     def test_dod_instruction_references_questions_xml(self, tmp_path: Path) -> None:

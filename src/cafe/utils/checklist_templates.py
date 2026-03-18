@@ -83,7 +83,7 @@ SPEC_IMPORTANT_NOTES_ITERATION_4_PLUS = """[ ] Round {iteration}: Only clarify e
 SPEC_DOD_INSTRUCTION = """
 ## Definition of Done (DoD)
 
-[ ] When writing questions to questions.xml, append DoD questions at the end alongside your clarification questions
+[ ] Before finalizing the spec, confirm DoD with user via questions.xml (append alongside clarification questions, or ask alone if requirements are already clear)
 [ ] DoD questions must use `type="checkbox"` attribute so users can select multiple items
 [ ] DoD questions focus on functional requirements only (e.g., all major features working, error handling working, edge cases tested)
 [ ] Do NOT add "Other" or custom input options to checkbox questions — the system automatically prompts for custom input after checkbox selection
