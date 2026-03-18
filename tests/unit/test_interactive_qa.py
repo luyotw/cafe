@@ -255,6 +255,181 @@ class TestInteractiveQaFlowOtherAnswerMemorization:
         assert "A1: modified answer" in result
 
 
+class TestInteractiveQaFlowCheckbox:
+    """測試 checkbox (multi_select) 問題流程"""
+
+    @patch("cafe.ui.interactive_qa.inquirer")
+    def test_checkbox_question_uses_checkbox_prompt(self, mock_inquirer):
+        """測試 multi_select=True 的問題使用 checkbox 而非 select"""
+        questions = [
+            Question(id="1", title="Select features?", options=["A", "B", "C"], multi_select=True),
+        ]
+
+        mock_checkbox = MagicMock()
+        mock_checkbox.execute = MagicMock(return_value=["A", "C"])
+        mock_inquirer.checkbox.return_value = mock_checkbox
+
+        mock_text = MagicMock()
+        mock_text.execute = MagicMock(return_value="")  # skip custom input
+        mock_inquirer.text.return_value = mock_text
+
+        mock_select = MagicMock()
+        mock_select.execute = MagicMock(side_effect=["Confirm and continue"])
+        mock_inquirer.select.return_value = mock_select
+
+        result = interactive_qa_flow(questions)
+
+        mock_inquirer.checkbox.assert_called_once()
+        assert "A1: A, C" in result
+
+    @patch("cafe.ui.interactive_qa.inquirer")
+    def test_checkbox_custom_input_after_selection(self, mock_inquirer):
+        """測試 checkbox 選完後可輸入自定義內容"""
+        questions = [
+            Question(id="1", title="Select items?", options=["A", "B"], multi_select=True),
+        ]
+
+        mock_checkbox = MagicMock()
+        mock_checkbox.execute = MagicMock(return_value=["A"])
+        mock_inquirer.checkbox.return_value = mock_checkbox
+
+        mock_text = MagicMock()
+        mock_text.execute = MagicMock(return_value="Custom item")
+        mock_inquirer.text.return_value = mock_text
+
+        mock_select = MagicMock()
+        mock_select.execute = MagicMock(side_effect=["Confirm and continue"])
+        mock_inquirer.select.return_value = mock_select
+
+        result = interactive_qa_flow(questions)
+
+        assert "A1: A, Custom item" in result
+
+    @patch("cafe.ui.interactive_qa.inquirer")
+    def test_checkbox_empty_selection_with_no_custom_input(self, mock_inquirer):
+        """測試 checkbox 問題不選任何選項且無自定義輸入時記錄為空"""
+        questions = [
+            Question(id="1", title="Select items?", options=["A", "B"], multi_select=True),
+        ]
+
+        mock_checkbox = MagicMock()
+        mock_checkbox.execute = MagicMock(return_value=[])
+        mock_inquirer.checkbox.return_value = mock_checkbox
+
+        mock_text = MagicMock()
+        mock_text.execute = MagicMock(return_value="")  # no custom input
+        mock_inquirer.text.return_value = mock_text
+
+        mock_select = MagicMock()
+        mock_select.execute = MagicMock(side_effect=["Confirm and continue"])
+        mock_inquirer.select.return_value = mock_select
+
+        result = interactive_qa_flow(questions)
+
+        assert "A1: (none selected)" in result
+
+    @patch("cafe.ui.interactive_qa.inquirer")
+    def test_checkbox_only_custom_input_no_checkbox_selection(self, mock_inquirer):
+        """測試 checkbox 不選任何選項但有自定義輸入"""
+        questions = [
+            Question(id="1", title="Select items?", options=["A", "B"], multi_select=True),
+        ]
+
+        mock_checkbox = MagicMock()
+        mock_checkbox.execute = MagicMock(return_value=[])
+        mock_inquirer.checkbox.return_value = mock_checkbox
+
+        mock_text = MagicMock()
+        mock_text.execute = MagicMock(return_value="My custom item")
+        mock_inquirer.text.return_value = mock_text
+
+        mock_select = MagicMock()
+        mock_select.execute = MagicMock(side_effect=["Confirm and continue"])
+        mock_inquirer.select.return_value = mock_select
+
+        result = interactive_qa_flow(questions)
+
+        assert "A1: My custom item" in result
+
+    @patch("cafe.ui.interactive_qa.inquirer")
+    def test_mixed_select_and_checkbox_questions(self, mock_inquirer):
+        """測試混合單選和複選問題的流程"""
+        questions = [
+            Question(id="1", title="Pick one?", options=["A", "B"]),
+            Question(id="2", title="Select many?", options=["X", "Y", "Z"], multi_select=True),
+        ]
+
+        mock_select = MagicMock()
+        mock_select.execute = MagicMock(side_effect=["A", "Confirm and continue"])
+        mock_inquirer.select.return_value = mock_select
+
+        mock_checkbox = MagicMock()
+        mock_checkbox.execute = MagicMock(return_value=["X", "Z"])
+        mock_inquirer.checkbox.return_value = mock_checkbox
+
+        mock_text = MagicMock()
+        mock_text.execute = MagicMock(return_value="")  # skip custom input
+        mock_inquirer.text.return_value = mock_text
+
+        result = interactive_qa_flow(questions)
+
+        assert "A1: A" in result
+        assert "A2: X, Z" in result
+
+    @patch("cafe.ui.interactive_qa.inquirer")
+    def test_checkbox_modify_flow(self, mock_inquirer):
+        """測試修改 checkbox 問題的流程"""
+        questions = [
+            Question(id="1", title="Select items?", options=["A", "B", "C"], multi_select=True),
+        ]
+
+        mock_checkbox = MagicMock()
+        # 第一次選 A, B；修改時選 B, C
+        mock_checkbox.execute = MagicMock(side_effect=[["A", "B"], ["B", "C"]])
+        mock_inquirer.checkbox.return_value = mock_checkbox
+
+        mock_text = MagicMock()
+        mock_text.execute = MagicMock(return_value="")  # skip custom input both times
+        mock_inquirer.text.return_value = mock_text
+
+        mock_select = MagicMock()
+        mock_select.execute = MagicMock(
+            side_effect=["Modify an answer...", "1", "Confirm and continue"]
+        )
+        mock_inquirer.select.return_value = mock_select
+
+        result = interactive_qa_flow(questions)
+
+        assert "A1: B, C" in result
+
+    @patch("cafe.ui.interactive_qa.inquirer")
+    def test_checkbox_choices_do_not_include_other(self, mock_inquirer):
+        """測試 checkbox 選項不包含 Other — 自定義輸入由獨立的文字提示處理"""
+        questions = [
+            Question(id="1", title="Select items?", options=["A", "B"], multi_select=True),
+        ]
+
+        mock_checkbox = MagicMock()
+        mock_checkbox.execute = MagicMock(return_value=["A"])
+        mock_inquirer.checkbox.return_value = mock_checkbox
+
+        mock_text = MagicMock()
+        mock_text.execute = MagicMock(return_value="")
+        mock_inquirer.text.return_value = mock_text
+
+        mock_select = MagicMock()
+        mock_select.execute = MagicMock(side_effect=["Confirm and continue"])
+        mock_inquirer.select.return_value = mock_select
+
+        interactive_qa_flow(questions)
+
+        # Verify checkbox choices don't include OTHER_SENTINEL
+        checkbox_call = mock_inquirer.checkbox.call_args
+        choices = checkbox_call.kwargs.get("choices", checkbox_call[1].get("choices", []))
+        choice_values = [c.get("value") if isinstance(c, dict) else c for c in choices]
+        assert OTHER_SENTINEL not in choice_values
+
+
 class TestInteractiveQaFlowSummaryAndModify:
     """測試摘要確認與修改流程"""
 

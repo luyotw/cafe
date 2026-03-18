@@ -220,6 +220,80 @@ class TestFallbackFlow:
         assert answer == "typed answer"
 
 
+VALID_QUESTIONS_WITH_CHECKBOX_XML = """\
+<?xml version="1.0" encoding="UTF-8"?>
+<questions>
+  <question id="1">
+    <title>What is the expected error behavior?</title>
+    <options>
+      <option>Return error code and log message</option>
+      <option>Throw exception to caller</option>
+    </options>
+  </question>
+  <question id="2" type="checkbox">
+    <title>Which DoD items should be verified?</title>
+    <options>
+      <option>All features working</option>
+      <option>Error handling tested</option>
+      <option>Edge cases covered</option>
+    </options>
+  </question>
+</questions>
+"""
+
+
+class TestCheckboxXmlParsing:
+    """測試 checkbox 類型問題的 XML 解析"""
+
+    def test_parse_checkbox_question_from_xml(self, tmp_path):
+        """測試從 XML 解析出 checkbox 問題"""
+        xml_path = tmp_path / "questions.xml"
+        xml_path.write_text(VALID_QUESTIONS_WITH_CHECKBOX_XML)
+
+        questions = parse_questions_xml(xml_path)
+
+        assert len(questions) == 2
+        assert questions[0].multi_select is False
+        assert questions[1].multi_select is True
+        assert questions[1].title == "Which DoD items should be verified?"
+
+    def test_validate_xml_with_checkbox_passes(self, tmp_path):
+        """測試含有 checkbox 類型的 XML 驗證通過"""
+        xml_path = tmp_path / "questions.xml"
+        xml_path.write_text(VALID_QUESTIONS_WITH_CHECKBOX_XML)
+
+        assert validate_questions_xml(xml_path) is True
+
+    def test_checkbox_question_interactive_flow(self, tmp_path):
+        """測試 checkbox 問題走互動式問答流程"""
+        xml_path = tmp_path / "questions.xml"
+        xml_path.write_text(VALID_QUESTIONS_WITH_CHECKBOX_XML)
+
+        questions = parse_questions_xml(xml_path)
+
+        with patch("cafe.ui.interactive_qa.inquirer") as mock_inquirer:
+            mock_select = MagicMock()
+            mock_select.execute = MagicMock(
+                side_effect=["Return error code and log message", "Confirm and continue"]
+            )
+            mock_inquirer.select.return_value = mock_select
+
+            mock_checkbox = MagicMock()
+            mock_checkbox.execute = MagicMock(
+                return_value=["All features working", "Edge cases covered"]
+            )
+            mock_inquirer.checkbox.return_value = mock_checkbox
+
+            mock_text = MagicMock()
+            mock_text.execute = MagicMock(return_value="")  # skip custom input
+            mock_inquirer.text.return_value = mock_text
+
+            result = interactive_qa_flow(questions)
+
+        assert "A1: Return error code and log message" in result
+        assert "A2: All features working, Edge cases covered" in result
+
+
 class TestInteractiveQaFlowIntegration:
     """測試 interactive_qa_flow 與 Question schema 的整合"""
 

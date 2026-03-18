@@ -71,12 +71,23 @@ Rules:
 - Each question must have a unique `id` attribute, a `<title>`, and `<options>` with at least one `<option>`
 - Provide 2-4 suggested options per question
 - Options should be concise and distinct
+- For multi-select questions (user can pick multiple options), add `type="checkbox"` attribute to the `<question>` element
 """
 
 # Backwards compatibility alias
 SPEC_XML_QUESTIONS_INSTRUCTION = XML_QUESTIONS_INSTRUCTION
 
 SPEC_IMPORTANT_NOTES_ITERATION_4_PLUS = """[ ] Round {iteration}: Only clarify existing questions, NO new questions
+"""
+
+SPEC_DOD_INSTRUCTION = """
+## Definition of Done (DoD)
+
+[ ] When writing questions to questions.xml, append DoD questions at the end alongside your clarification questions
+[ ] DoD questions must use `type="checkbox"` attribute so users can select multiple items
+[ ] DoD questions focus on functional requirements only (e.g., all major features working, error handling working, edge cases tested)
+[ ] Do NOT add "Other" or custom input options to checkbox questions — the system automatically prompts for custom input after checkbox selection
+[ ] After receiving user's DoD answers, integrate selected items into the Acceptance Criteria section with "✅ **DoD:**" prefix
 """
 
 

@@ -284,3 +284,104 @@ class TestQuestionDataclass:
         q1 = Question(id="1", title="Test?", options=["A", "B"])
         q2 = Question(id="1", title="Test?", options=["A", "B"])
         assert q1 == q2
+
+    def test_question_multi_select_defaults_to_false(self):
+        """測試 multi_select 預設為 False"""
+        q = Question(id="1", title="Test?", options=["A", "B"])
+        assert q.multi_select is False
+
+    def test_question_multi_select_can_be_set_true(self):
+        """測試 multi_select 可設定為 True"""
+        q = Question(id="1", title="Test?", options=["A", "B"], multi_select=True)
+        assert q.multi_select is True
+
+
+class TestParseQuestionsXmlMultiSelect:
+    """測試解析含有 type="checkbox" 的 XML"""
+
+    def test_parse_checkbox_type_sets_multi_select_true(self, tmp_path):
+        """測試 type="checkbox" 屬性被解析為 multi_select=True"""
+        xml_content = """<?xml version="1.0" encoding="UTF-8"?>
+<questions>
+  <question id="1" type="checkbox">
+    <title>Select all that apply?</title>
+    <options>
+      <option>Option A</option>
+      <option>Option B</option>
+      <option>Option C</option>
+    </options>
+  </question>
+</questions>"""
+        xml_path = tmp_path / "questions.xml"
+        xml_path.write_text(xml_content, encoding="utf-8")
+
+        questions = parse_questions_xml(xml_path)
+
+        assert len(questions) == 1
+        assert questions[0].multi_select is True
+
+    def test_parse_without_type_defaults_multi_select_false(self, tmp_path):
+        """測試沒有 type 屬性時 multi_select 預設為 False"""
+        xml_content = """<?xml version="1.0" encoding="UTF-8"?>
+<questions>
+  <question id="1">
+    <title>Pick one?</title>
+    <options>
+      <option>Option A</option>
+      <option>Option B</option>
+    </options>
+  </question>
+</questions>"""
+        xml_path = tmp_path / "questions.xml"
+        xml_path.write_text(xml_content, encoding="utf-8")
+
+        questions = parse_questions_xml(xml_path)
+
+        assert len(questions) == 1
+        assert questions[0].multi_select is False
+
+    def test_parse_mixed_single_and_checkbox_questions(self, tmp_path):
+        """測試混合單選和複選問題的解析"""
+        xml_content = """<?xml version="1.0" encoding="UTF-8"?>
+<questions>
+  <question id="1">
+    <title>Single select question?</title>
+    <options>
+      <option>A</option>
+      <option>B</option>
+    </options>
+  </question>
+  <question id="2" type="checkbox">
+    <title>Multi select question?</title>
+    <options>
+      <option>X</option>
+      <option>Y</option>
+      <option>Z</option>
+    </options>
+  </question>
+</questions>"""
+        xml_path = tmp_path / "questions.xml"
+        xml_path.write_text(xml_content, encoding="utf-8")
+
+        questions = parse_questions_xml(xml_path)
+
+        assert len(questions) == 2
+        assert questions[0].multi_select is False
+        assert questions[1].multi_select is True
+
+    def test_validate_xml_with_checkbox_type_returns_true(self, tmp_path):
+        """測試含有 type="checkbox" 的合法 XML 驗證通過"""
+        xml_content = """<?xml version="1.0" encoding="UTF-8"?>
+<questions>
+  <question id="1" type="checkbox">
+    <title>Select items?</title>
+    <options>
+      <option>Item A</option>
+      <option>Item B</option>
+    </options>
+  </question>
+</questions>"""
+        xml_path = tmp_path / "questions.xml"
+        xml_path.write_text(xml_content, encoding="utf-8")
+
+        assert validate_questions_xml(xml_path) is True
