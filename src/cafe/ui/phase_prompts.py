@@ -120,12 +120,22 @@ def fetch_github_issue(github_ops: GitHubOps, issue_id: int) -> Tuple[str, List[
     if not github_ops.check_gh_auth():
         raise RuntimeError("gh CLI is not authenticated. Please run: gh auth login")
 
-    issue_data = github_ops.get_issue(str(issue_id), include_comments=False)
+    issue_data = github_ops.get_issue(str(issue_id), include_comments=True)
 
     # Combine title and body as requirement content
     issue_title = issue_data.get("title", "")
     issue_body = issue_data.get("body", "")
     fetched_content = f"# {issue_title}\n\n{issue_body}" if issue_title else issue_body
+
+    # Append discussion thread if there are comments
+    comments = issue_data.get("comments", [])
+    if comments:
+        fetched_content += "\n\n---\n\n## Discussion Thread\n"
+        for comment in comments:
+            author = comment.get("author", {}).get("login", "unknown")
+            created_at = comment.get("createdAt", "")
+            body = comment.get("body", "")
+            fetched_content += f"\n### @{author} ({created_at})\n\n{body}\n"
 
     # Extract image URLs from issue body
     image_urls = github_ops.extract_image_urls(issue_body) if issue_body else []

@@ -160,7 +160,7 @@ class TestFetchGithubIssue:
         assert content == "# Test Issue\n\nThis is a test issue body."
         assert image_urls == []
         github_ops.check_gh_auth.assert_called_once()
-        github_ops.get_issue.assert_called_once_with("123", include_comments=False)
+        github_ops.get_issue.assert_called_once_with("123", include_comments=True)
 
     def test_issue_without_body(self):
         """Test Issue without body"""
@@ -176,7 +176,7 @@ class TestFetchGithubIssue:
         # When title exists but body is empty, returns "# title\n\n"
         assert content == "# Test Issue\n\n"
         assert image_urls == []
-        github_ops.get_issue.assert_called_once_with("456", include_comments=False)
+        github_ops.get_issue.assert_called_once_with("456", include_comments=True)
 
     def test_issue_with_body_only(self):
         """Test Issue with body but no title"""
@@ -243,3 +243,49 @@ class TestFetchGithubIssue:
 
         assert content == "# No Images\n\nJust text"
         assert image_urls == []
+
+    def test_includes_discussion_thread_when_comments_exist(self):
+        """Test that comments are appended as a discussion thread section"""
+        github_ops = Mock(spec=GitHubOps)
+        github_ops.check_gh_auth.return_value = True
+        github_ops.get_issue.return_value = {
+            "title": "Feature Request",
+            "body": "Please add this feature.",
+            "comments": [
+                {
+                    "author": {"login": "alice"},
+                    "createdAt": "2026-01-01T10:00:00Z",
+                    "body": "I agree this is needed.",
+                },
+                {
+                    "author": {"login": "bob"},
+                    "createdAt": "2026-01-02T12:00:00Z",
+                    "body": "Here is some more context.",
+                },
+            ],
+        }
+        github_ops.extract_image_urls.return_value = []
+
+        content, _ = fetch_github_issue(github_ops, 1)
+
+        assert "## Discussion Thread" in content
+        assert "### @alice (2026-01-01T10:00:00Z)" in content
+        assert "I agree this is needed." in content
+        assert "### @bob (2026-01-02T12:00:00Z)" in content
+        assert "Here is some more context." in content
+
+    def test_no_discussion_section_when_no_comments(self):
+        """Test that no discussion section is added when there are no comments"""
+        github_ops = Mock(spec=GitHubOps)
+        github_ops.check_gh_auth.return_value = True
+        github_ops.get_issue.return_value = {
+            "title": "Simple Issue",
+            "body": "Just a body.",
+            "comments": [],
+        }
+        github_ops.extract_image_urls.return_value = []
+
+        content, _ = fetch_github_issue(github_ops, 2)
+
+        assert "Discussion Thread" not in content
+        assert content == "# Simple Issue\n\nJust a body."
