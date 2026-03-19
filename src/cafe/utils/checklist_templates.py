@@ -40,9 +40,9 @@ SPEC_EXECUTION_STEPS_ITERATION_N = """## Checklist
 {xml_questions_instruction}"""
 
 XML_QUESTIONS_INSTRUCTION = """
-## Interactive Q&A Questions (Conditional)
+## Interactive Q&A Questions
 
-[ ] If returning CAFE_NEED_CLARIFICATION: Write questions to {questions_xml_file} in the following XML format, otherwise mark this item as [x]:
+[ ] If returning CAFE_NEED_CLARIFICATION: Write questions to {questions_xml_file} in the following XML format:
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
@@ -81,12 +81,13 @@ SPEC_IMPORTANT_NOTES_ITERATION_4_PLUS = """[ ] Round {iteration}: Only clarify e
 """
 
 SPEC_DOD_INSTRUCTION = """
-## Definition of Done (DoD)
+## Definition of Done (DoD) — MANDATORY
 
-[ ] Before finalizing the spec, confirm DoD with user via questions.xml (append alongside clarification questions, or ask alone if requirements are already clear)
+[ ] You MUST include DoD questions in questions.xml and request clarification (even if requirements are already clear — send DoD questions alone)
 [ ] DoD questions must use `type="checkbox"` attribute so users can select multiple items
 [ ] DoD questions focus on functional requirements only (e.g., all major features working, error handling working, edge cases tested)
 [ ] Do NOT add "Other" or custom input options to checkbox questions — the system automatically adds an "Other" option to every checkbox question
+[ ] NEVER mark the spec as ready for review without first confirming DoD with the user
 [ ] After receiving user's DoD answers, integrate selected items into the Acceptance Criteria section with "✅ **DoD:**" prefix
 """
 

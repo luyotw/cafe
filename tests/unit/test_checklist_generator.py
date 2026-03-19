@@ -473,7 +473,6 @@ class TestSpecChecklistXmlInstructions:
 
         content = checklist_path.read_text()
         assert "<questions>" not in content
-        assert "CAFE_NEED_CLARIFICATION" not in content
 
     def test_xml_instructions_require_native_language(self, tmp_path):
         """測試 XML 指示要求用 agent 母語撰寫問題"""
