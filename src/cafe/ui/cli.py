@@ -766,7 +766,9 @@ def init() -> None:
 @app.command()
 def version() -> None:
     """Show CAFE version."""
-    console.print("CAFE version 0.1.0")
+    from importlib.metadata import version as pkg_version
+
+    console.print(f"CAFE version {pkg_version('cafe-engine')}")
 
 
 def _ensure_default_content(cafe_dir: Path) -> None:
