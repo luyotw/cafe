@@ -174,8 +174,9 @@ class ReviewPhase(Phase):
             iteration_dir = self.review_dir / f"iteration_{self.iteration:03d}"
             review_file_path = iteration_dir / "output.md"
 
-            # Check for PR feedback file (from completed PR iterations)
+            # Check for PR feedback file and todo list (from completed PR iterations)
             pr_feedback_file = None
+            pr_todo_list_file = None
             pr_dir = self.issue_dir / "pr"
             if pr_dir.exists():
                 iteration_dirs = sorted(pr_dir.glob("iteration_*"))
@@ -195,6 +196,13 @@ class ReviewPhase(Phase):
                             pr_feedback_file = to_cwd_relative_path(pr_user_input_file)
                         except ValueError:
                             pr_feedback_file = str(pr_user_input_file.resolve())
+                        # Also capture the PR todo list (output.md in same iteration)
+                        pr_output_file = iteration_dir_pr / "output.md"
+                        if pr_output_file.exists() and pr_output_file.read_text(encoding="utf-8").strip():
+                            try:
+                                pr_todo_list_file = to_cwd_relative_path(pr_output_file)
+                            except ValueError:
+                                pr_todo_list_file = str(pr_output_file.resolve())
                     break
 
             # Generate checklist for this iteration
@@ -204,10 +212,12 @@ class ReviewPhase(Phase):
             generate_review_checklist(
                 agent_name=self.review_agent,
                 spec_file_path=self.spec_file,
+                plan_file_path=self.plan_file,
                 review_file_path=str(review_file_path),
                 base_branch=self.base_branch,
                 checklist_file_path=checklist_path,
                 pr_feedback_file_path=pr_feedback_file,
+                pr_todo_list_file_path=pr_todo_list_file,
             )
 
             # Use path relative to current working directory (supports worktree)

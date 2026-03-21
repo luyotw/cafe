@@ -1169,7 +1169,7 @@ class PRPhase(Phase):
             output_file_path=output_pattern,
             prev_output_file_path=prev_output_pattern,
             checklist_file_path=checklist_file,
-            basic_principles=None,
+            basic_principles="- Only include todo items you actually intend to do. Do NOT add items that will be ignored or skipped — if it's not going to be done, leave it out of the todo list entirely",
         )
 
         # Create empty output.md file for agent to write todo list only

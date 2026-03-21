@@ -291,6 +291,8 @@ def generate_review_checklist(
     base_branch: str,
     checklist_file_path: Path,
     pr_feedback_file_path: Optional[str] = None,
+    plan_file_path: Optional[str] = None,
+    pr_todo_list_file_path: Optional[str] = None,
 ) -> None:
     """Generate checklist file for review phase.
 
@@ -301,6 +303,8 @@ def generate_review_checklist(
         base_branch: Base branch name
         checklist_file_path: Path where checklist file should be created
         pr_feedback_file_path: Optional path to PR feedback file (user_input.md from PR phase)
+        plan_file_path: Optional path to plan file
+        pr_todo_list_file_path: Optional path to PR todo list file (output.md from PR phase)
     """
     # Get agent file path
     agent_file = AgentManager.get_agent_file_path(agent_name, "reviewer")
@@ -308,16 +312,26 @@ def generate_review_checklist(
     # Get templates
     execution_steps = checklist_templates.REVIEW_EXECUTION_STEPS
 
+    # Conditionally add PR todo list check section
+    pr_todo_list_section = ""
+    if pr_todo_list_file_path:
+        pr_todo_list_section = f"""
+## PR Todo List Check
+[ ] Read {pr_todo_list_file_path} - this is the todo list from the PR phase
+[ ] Check that ALL todo items are marked as completed [x]. If any unchecked items [ ] remain, return CAFE_NEEDS_CHANGES
+"""
+
     # Get agent guidelines checklist
     agent_guidelines = extract_agent_guidelines_checklist(agent_file)
 
     # Combine all sections
-    checklist_content = f"{execution_steps}\n{agent_guidelines}"
+    checklist_content = f"{execution_steps}\n{pr_todo_list_section}{agent_guidelines}"
 
     # Build placeholders dict
     placeholders = {
         "agent_file": agent_file,
         "spec_file_path": spec_file_path,
+        "plan_file_path": plan_file_path or "(not available)",
         "review_file_path": review_file_path,
         "base_branch": base_branch,
         "pr_feedback_file_path": pr_feedback_file_path or "(not available)",
