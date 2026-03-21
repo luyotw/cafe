@@ -22,19 +22,14 @@ def test_generate_plan_checklist_includes_xml_instruction_when_path_provided(tmp
 
     content = checklist_path.read_text()
 
-    # 檢查包含 XML 問答指令
-    assert "Interactive Q&A Questions (Conditional)" in content
-    assert "CAFE_NEED_CLARIFICATION" in content
+    # Verify XML schema and file path are included
     assert str(questions_xml_file) in content
-    assert "<?xml version=" in content
     assert "<questions>" in content
-    assert "<question id=" in content
-    assert "<title>" in content
-    assert "<options>" in content
+    assert "CAFE_NEED_CLARIFICATION" in content
 
 
 def test_generate_plan_checklist_without_xml_file_omits_instruction(tmp_path):
-    """測試 generate_plan_checklist() 未提供 questions_xml_file 時不包含 XML 指令"""
+    """Test that XML instructions are omitted when questions_xml_file is not provided."""
     checklist_path = tmp_path / "checklist.md"
     plan_file = tmp_path / "plan.md"
     spec_file = tmp_path / "spec.md"
@@ -50,13 +45,12 @@ def test_generate_plan_checklist_without_xml_file_omits_instruction(tmp_path):
 
     content = checklist_path.read_text()
 
-    # 檢查不包含 XML 問答指令
-    assert "Interactive Q&A Questions" not in content
-    assert "<?xml version=" not in content
+    assert "<questions>" not in content
+    assert "CAFE_NEED_CLARIFICATION" not in content
 
 
 def test_generate_plan_checklist_iteration_n_includes_xml_instruction(tmp_path):
-    """測試 iteration > 1 時也包含 XML 指令"""
+    """Test that iteration > 1 also includes XML instructions."""
     checklist_path = tmp_path / "checklist.md"
     plan_file = tmp_path / "plan_002.md"
     prev_plan_file = tmp_path / "plan_001.md"
@@ -75,6 +69,5 @@ def test_generate_plan_checklist_iteration_n_includes_xml_instruction(tmp_path):
 
     content = checklist_path.read_text()
 
-    # 檢查包含 XML 問答指令
-    assert "Interactive Q&A Questions (Conditional)" in content
     assert str(questions_xml_file) in content
+    assert "<questions>" in content

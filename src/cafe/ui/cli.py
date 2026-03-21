@@ -766,9 +766,19 @@ def init() -> None:
 @app.command()
 def version() -> None:
     """Show CAFE version."""
-    from importlib.metadata import version as pkg_version
+    console.print(f"CAFE version {_get_version()}")
 
-    console.print(f"CAFE version {pkg_version('cafe-engine')}")
+
+def _get_version() -> str:
+    """Get package version, trying both package names."""
+    from importlib.metadata import version as pkg_version, PackageNotFoundError
+
+    for name in ("cafe-engine", "cafe"):
+        try:
+            return pkg_version(name)
+        except PackageNotFoundError:
+            continue
+    return "unknown"
 
 
 def _ensure_default_content(cafe_dir: Path) -> None:

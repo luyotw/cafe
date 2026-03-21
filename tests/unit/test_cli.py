@@ -121,11 +121,13 @@ class TestVersionCommand:
     """Test version command."""
 
     def test_version_shows_version_number(self) -> None:
-        """測試 version 指令顯示版本號"""
+        """Test version command runs and shows a valid version string."""
+        import re
+
         result = runner.invoke(app, ["version"])
 
         assert result.exit_code == 0
-        assert "0.1.0" in result.stdout
+        assert re.search(r"CAFE version \d+\.\d+\.\d+", result.stdout)
 
 
 class TestConfigCommand:

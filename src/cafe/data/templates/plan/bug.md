@@ -46,3 +46,8 @@
 - [ ] Update documentation if necessary
 - [ ] Remove any debug code
 - [ ] Commit changes
+
+### Phase 6: Definition of Done (DoD)
+Copy the DoD items from the spec's Acceptance Criteria section (lines marked with `✅ **DoD:**`) and verify each one:
+- [ ] The reported bug no longer reproduces
+- [ ] No regressions in existing functionality

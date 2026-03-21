@@ -97,3 +97,9 @@
 - [ ] **Dev 5.5**: Run integration tests to ensure API behavior unchanged
 - [ ] **commit**: Write commit message strictly following existing commit message style
 - [ ] **Update**: Check completed items, update md file if necessary
+
+#### Task 6: Definition of Done (DoD)
+Copy the DoD items from the spec's Acceptance Criteria section (lines marked with `✅ **DoD:**`) and verify each one:
+- [ ] **Dev 6.1**: Login and registration work correctly through the new service layer
+- [ ] **Dev 6.2**: All error handling returns proper error codes and messages
+- [ ] **Dev 6.3**: API response format is unchanged from before refactoring
