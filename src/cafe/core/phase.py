@@ -1727,9 +1727,12 @@ class Phase(ABC):
             )
 
             # Update response and status_code with validated results
+            # Keep existing status_code if validation couldn't extract one
+            # (context.json response may be stale after continue-execution)
             if validation_passed:
                 response = final_response
-                status_code = final_status_code
+                if final_status_code is not None:
+                    status_code = final_status_code
 
                 # Checklist validation passed - now we can save status_code to context.json
                 iteration_dir = self._get_iteration_dir(self.iteration)
