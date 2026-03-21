@@ -1405,24 +1405,6 @@ Return ONLY the status code (CAFE_CONFIRMED or CAFE_NEEDS_CHANGES) with no expla
         pr_dir = self.issue_dir / "pr"
         iteration_dir = pr_dir / f"iteration_{self.iteration:03d}"
         output_file = iteration_dir / "output.md"
-        # Post todo list as PR comment in GitHub mode (if enabled)
-        if pr_number > 0 and self.post_todo_list:  # Only post in GitHub mode when option is enabled
-            try:
-                todo_list_content = output_file.read_text(encoding="utf-8")
-                from cafe.utils.git_utils import to_cwd_relative_path
-                try:
-                    user_input_display = to_cwd_relative_path(user_input_file)
-                except ValueError:
-                    user_input_display = str(user_input_file)
-
-                comment_body = self._build_todo_list_comment(todo_list_content, user_input_display)
-                self.github_ops.add_pr_comment(str(pr_number), comment_body)
-            except Exception as e:
-                # Don't fail the workflow if posting comment fails - just warn
-                from rich.console import Console
-                console = Console()
-                console.print(f"[yellow]⚠️  Warning: Failed to post todo list as PR comment: {e}[/yellow]")
-
         from cafe.utils.git_utils import to_cwd_relative_path
         try:
             output_display = to_cwd_relative_path(output_file)
@@ -1567,6 +1549,49 @@ Return ONLY the status code (CAFE_CONFIRMED or CAFE_NEEDS_CHANGES) with no expla
         console.print(f"  URL: {pr_url}")
         console.print()
 
+    def _post_plan_todo_list(self, pr_number: str) -> None:
+        """PR 作成・更新時に、plan のタスク一覧が全て完了済みであれば PR コメントとして投稿する。
+
+        Args:
+            pr_number: GitHub PR 番号（文字列）
+        """
+        if not self.post_todo_list:
+            return
+
+        # plan ファイルのパスを解決する（_generate_pr_content と同じパターン）
+        plan_dir = self.issue_dir / "plan"
+        plan_file = self._get_latest_versioned_file("plan", plan_dir)
+        if plan_file is None or not plan_file.exists():
+            plan_file = plan_dir / "plan.md"
+        if not plan_file.exists():
+            return
+
+        # タスクが全て完了しているか確認する
+        from cafe.utils.checklist_validator import validate_checklist
+        try:
+            result = validate_checklist(plan_file)
+        except FileNotFoundError:
+            return
+        if not result.is_complete:
+            return
+
+        # コメントを投稿する
+        try:
+            plan_content = plan_file.read_text(encoding="utf-8")
+            from cafe.utils.git_utils import to_cwd_relative_path
+            try:
+                plan_file_display = to_cwd_relative_path(plan_file)
+            except ValueError:
+                plan_file_display = str(plan_file)
+
+            comment_body = self._build_todo_list_comment(plan_content, plan_file_display)
+            self.github_ops.add_pr_comment(pr_number, comment_body)
+        except Exception as e:
+            # コメント投稿に失敗してもワークフローは継続する
+            from rich.console import Console
+            console = Console()
+            console.print(f"[yellow]⚠️  Warning: Failed to post plan todo list as PR comment: {e}[/yellow]")
+
     def _create_or_update_pr(self, existing_pr: dict | None, branch_name: str) -> PhaseResult:
         """Create or update PR with prepared content.
 
@@ -1608,6 +1633,7 @@ Return ONLY the status code (CAFE_CONFIRMED or CAFE_NEEDS_CHANGES) with no expla
             )
 
             self._display_pr_success(pr_number, pr_url, "updated")
+            self._post_plan_todo_list(pr_number)
 
             return PhaseResult(
                 status=PhaseStatus.COMPLETED,
@@ -1647,6 +1673,7 @@ Return ONLY the status code (CAFE_CONFIRMED or CAFE_NEEDS_CHANGES) with no expla
             )
 
             self._display_pr_success(pr_number, pr_url, "created")
+            self._post_plan_todo_list(pr_number)
 
             return PhaseResult(
                 status=PhaseStatus.COMPLETED,
