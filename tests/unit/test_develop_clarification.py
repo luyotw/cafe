@@ -127,7 +127,7 @@ class TestDevelopAskUserForClarification:
                 with patch("cafe.ui.interactive_qa.interactive_qa_flow", return_value="Option A") as mock_flow:
                     result = phase._ask_user_for_clarification()
 
-        mock_flow.assert_called_once_with(mock_questions, role="developer", issue_name="test-issue")
+        mock_flow.assert_called_once_with(mock_questions, role="developer", issue_name="test-issue", agent_name="David")
         assert result == "Option A"
 
     def test_falls_back_to_prompt_when_no_questions_xml(self, phase, monkeypatch, tmp_path):

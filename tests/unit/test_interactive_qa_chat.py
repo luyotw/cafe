@@ -46,6 +46,25 @@ class TestInteractiveQaFlowChat:
 
     @patch("cafe.ui.interactive_qa.launch_chat_session")
     @patch("cafe.ui.interactive_qa.inquirer")
+    def test_chat_option_uses_agent_name_not_role(self, mock_inquirer, mock_launch_chat):
+        """Test that chat option label shows agent_name (e.g. 'Roger') not role (e.g. 'pm')."""
+        questions = _make_questions(1)
+
+        mock_select = MagicMock()
+        mock_select.execute = MagicMock(side_effect=["Option 1A", "Confirm and continue"])
+        mock_inquirer.select.return_value = mock_select
+
+        interactive_qa_flow(questions, role="pm", issue_name="test-issue", agent_name="Roger")
+
+        summary_call_args = mock_inquirer.select.call_args_list[-1]
+        choices = summary_call_args[1]["choices"]
+        chat_choices = [c for c in choices if isinstance(c, dict) and "Chat" in c.get("name", "")]
+        assert len(chat_choices) == 1
+        assert "Roger" in chat_choices[0]["name"]
+        assert "pm" not in chat_choices[0]["name"]
+
+    @patch("cafe.ui.interactive_qa.launch_chat_session")
+    @patch("cafe.ui.interactive_qa.inquirer")
     def test_selecting_chat_in_summary_launches_session_and_re_prompts(
         self, mock_inquirer, mock_launch_chat
     ):

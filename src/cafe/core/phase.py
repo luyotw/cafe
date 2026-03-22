@@ -856,7 +856,9 @@ class Phase(ABC):
 
             return modification_request
 
-    def _ask_user_for_clarification(self, role: Optional[str] = None) -> str:
+    def _ask_user_for_clarification(
+        self, role: Optional[str] = None, agent_name: Optional[str] = None
+    ) -> str:
         """Ask user for answer to NEED_CLARIFICATION (interactive mode).
 
         When role is provided, shows a select prompt with a "Chat with agent"
@@ -864,7 +866,9 @@ class Phase(ABC):
 
         Args:
             role: Agent role for inline chat ("pm", "developer", "reviewer").
-                  When provided, a "Chat with [role]" option is shown.
+                  When provided, a "Chat with [agent_name]" option is shown.
+            agent_name: Display name of the agent (e.g. "Roger", "David"). Used in
+                        the "Chat with [agent_name]" label. Falls back to role if not given.
 
         Returns:
             str: User's answer
@@ -875,12 +879,13 @@ class Phase(ABC):
         from InquirerPy.separator import Separator
 
         issue_name = getattr(self, "issue_name", None) or ""
+        chat_label = agent_name or role
 
         while True:
             choices = [
                 {"name": "Answer question (text input)", "value": "answer"},
                 Separator(),
-                {"name": f"Chat with {role}", "value": "chat"},
+                {"name": f"Chat with {chat_label}", "value": "chat"},
             ]
 
             selection = prompt_list("Please select an option", choices, default=None)

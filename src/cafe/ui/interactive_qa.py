@@ -26,6 +26,7 @@ def interactive_qa_flow(
     questions: list[Question],
     role: Optional[str] = None,
     issue_name: Optional[str] = None,
+    agent_name: Optional[str] = None,
 ) -> str:
     """Run interactive Q&A flow and return formatted answers.
 
@@ -43,6 +44,8 @@ def interactive_qa_flow(
               together with issue_name, a "Chat with agent" option is shown in the
               summary confirmation prompt.
         issue_name: Current issue name for chat session resolution.
+        agent_name: Display name of the agent (e.g. "Roger", "David"). Used in the
+                    "Chat with [agent_name]" label. Falls back to role if not given.
 
     Returns:
         Formatted Q&A string for passing to agent as user_input
@@ -75,7 +78,8 @@ def interactive_qa_flow(
         summary_choices: list = ["Confirm and continue", "Modify an answer..."]
         if role and issue_name:
             summary_choices.append(Separator())
-            summary_choices.append({"name": f"Chat with {role}", "value": "chat"})
+            chat_label = agent_name or role
+            summary_choices.append({"name": f"Chat with {chat_label}", "value": "chat"})
 
         action = inquirer.select(
             message="Confirm answers?",

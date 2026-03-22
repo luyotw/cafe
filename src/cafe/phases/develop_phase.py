@@ -592,10 +592,10 @@ class DevelopPhase(Phase):
             xml_path = prev_iter_dir / "questions.xml"
             if xml_path.exists() and validate_questions_xml(xml_path):
                 questions = parse_questions_xml(xml_path)
-                return interactive_qa_flow(questions, role=role, issue_name=self.issue_name)
+                return interactive_qa_flow(questions, role=role, issue_name=self.issue_name, agent_name=self.dev_agent)
 
         # Fallback to base class prompt with chat option
-        return super()._ask_user_for_clarification(role=role)
+        return super()._ask_user_for_clarification(role=role, agent_name=self.dev_agent)
 
     def _get_last_develop_timestamp(self):
         """Get timestamp from last develop/status.json.

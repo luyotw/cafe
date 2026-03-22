@@ -107,3 +107,22 @@ class TestAskUserForClarificationChatFallback:
         assert result == "user answer"
         assert mock_launch_chat.call_count == 2
         assert mock_prompt_list.call_count == 3
+
+    @patch("cafe.core.phase.prompt_multiline")
+    @patch("cafe.core.phase.launch_chat_session")
+    @patch("cafe.core.phase.prompt_list")
+    def test_chat_label_uses_agent_name_not_role(
+        self, mock_prompt_list, mock_launch_chat, mock_multiline
+    ):
+        """Test that chat option label shows agent_name (e.g. 'Roger') not role (e.g. 'pm')."""
+        mock_prompt_list.return_value = "answer"
+        mock_multiline.return_value = "answer text"
+        phase = _make_phase()
+
+        phase._ask_user_for_clarification(role="pm", agent_name="Roger")
+
+        args, kwargs = mock_prompt_list.call_args
+        choices = args[1]
+        chat_choice = next(c for c in choices if isinstance(c, dict) and c.get("value") == "chat")
+        assert "Roger" in chat_choice["name"]
+        assert "pm" not in chat_choice["name"]
