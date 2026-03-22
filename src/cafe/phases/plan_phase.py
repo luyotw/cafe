@@ -682,7 +682,7 @@ Continue analyzing the latest version of {spec_file_path}.
 
             if xml_path.exists() and validate_questions_xml(xml_path):
                 questions = parse_questions_xml(xml_path)
-                return interactive_qa_flow(questions)
+                return interactive_qa_flow(questions, role="developer", issue_name=self.issue_name)
 
         # Fallback to original multiline prompt
         return prompt_multiline("Please answer the question")

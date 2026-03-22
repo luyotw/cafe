@@ -5,20 +5,28 @@ with support for back navigation, free-text input, answer modification,
 and checkbox (multi-select) questions.
 """
 
+from typing import Optional
+
 from InquirerPy import inquirer
 from InquirerPy.separator import Separator
 
 from cafe.core.questions_schema import Question
+from cafe.ui.chat import launch_chat_session
 
 # Sentinel values for special choices
 OTHER_SENTINEL = "__OTHER__"
 BACK_SENTINEL = "__BACK__"
+CHAT_SENTINEL = "__CHAT__"
 
 # Display text for empty checkbox selection
 NONE_SELECTED = "(none selected)"
 
 
-def interactive_qa_flow(questions: list[Question]) -> str:
+def interactive_qa_flow(
+    questions: list[Question],
+    role: Optional[str] = None,
+    issue_name: Optional[str] = None,
+) -> str:
     """Run interactive Q&A flow and return formatted answers.
 
     Presents questions one at a time with select menus. Supports:
@@ -26,10 +34,15 @@ def interactive_qa_flow(questions: list[Question]) -> str:
     - Checkbox (multi-select) for questions with multi_select=True
     - "Other" for free-text input
     - "Back" navigation (from question 2 onwards)
+    - "Chat with agent" in the summary confirmation (when role and issue_name are given)
     - Answer summary with confirm/modify
 
     Args:
         questions: List of Question objects from parsed XML
+        role: Agent role for inline chat ("pm", "developer", "reviewer"). When provided
+              together with issue_name, a "Chat with agent" option is shown in the
+              summary confirmation prompt.
+        issue_name: Current issue name for chat session resolution.
 
     Returns:
         Formatted Q&A string for passing to agent as user_input
@@ -59,10 +72,19 @@ def interactive_qa_flow(questions: list[Question]) -> str:
     while True:
         _print_summary(questions, answers)
 
+        summary_choices: list = ["Confirm and continue", "Modify an answer..."]
+        if role and issue_name:
+            summary_choices.append(Separator())
+            summary_choices.append({"name": f"Chat with {role}", "value": "chat"})
+
         action = inquirer.select(
             message="Confirm answers?",
-            choices=["Confirm and continue", "Modify an answer..."],
+            choices=summary_choices,
         ).execute()
+
+        if action == "chat":
+            launch_chat_session(role, issue_name)
+            continue
 
         if action == "Confirm and continue":
             break
