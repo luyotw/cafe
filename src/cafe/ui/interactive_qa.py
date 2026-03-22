@@ -16,7 +16,6 @@ from cafe.ui.chat import launch_chat_session
 # Sentinel values for special choices
 OTHER_SENTINEL = "__OTHER__"
 BACK_SENTINEL = "__BACK__"
-CHAT_SENTINEL = "__CHAT__"
 
 # Display text for empty checkbox selection
 NONE_SELECTED = "(none selected)"
