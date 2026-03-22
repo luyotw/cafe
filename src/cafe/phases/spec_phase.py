@@ -561,7 +561,7 @@ class SpecPhase(Phase):
                 if self.iteration > 1:
                     self._display_iteration_delta()
 
-                choice = self._ask_user_for_review_decision("Requirements specification", agent_name="PM")
+                choice = self._ask_user_for_review_decision("Requirements specification", agent_name="PM", role="pm")
             else:
                 choice = self.user_input
                 # Non-interactive mode: clear after use to ensure no reuse

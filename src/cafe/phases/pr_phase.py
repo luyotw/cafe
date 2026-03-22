@@ -895,7 +895,7 @@ class PRPhase(Phase):
 
         # Ask user for decision (c/r/m)
         if self.interactive:
-            choice = self._ask_user_for_review_decision("code changes", agent_name="Reviewer")
+            choice = self._ask_user_for_review_decision("code changes", agent_name="Reviewer", role="reviewer")
         else:
             # Non-interactive mode not supported for local review
             return PhaseResult(

@@ -589,7 +589,7 @@ Continue analyzing the latest version of {spec_file_path}.
                 if self.iteration > 1:
                     self._display_iteration_delta()
 
-                choice = self._ask_user_for_review_decision("Implementation Plan", agent_name=self.dev_agent)
+                choice = self._ask_user_for_review_decision("Implementation Plan", agent_name=self.dev_agent, role="developer")
             else:
                 choice = self.user_input
                 # Non-interactive mode: clear after use to ensure not reused

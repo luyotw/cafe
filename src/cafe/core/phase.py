@@ -10,6 +10,8 @@ import yaml
 
 from cafe.core.status_codes import PhaseStatusCode
 from cafe.core.types import PhaseProgress, PhaseResult, PhaseStatus, TokenUsage
+from cafe.ui.chat import launch_chat_session
+from cafe.ui.inquirer_prompts import prompt_list, prompt_multiline
 
 
 class Phase(ABC):
@@ -797,40 +799,56 @@ class Phase(ABC):
 
         return response, status_code
 
-    def _ask_user_for_review_decision(self, item_name: str = "content", agent_name: str = "Developer") -> str:
+    def _ask_user_for_review_decision(
+        self,
+        item_name: str = "content",
+        agent_name: str = "Developer",
+        role: str = "developer",
+    ) -> str:
         """Ask user for decision on READY_FOR_REVIEW (interactive mode).
 
         Args:
             item_name: Item name to confirm (e.g. "plan", "code", "requirements")
             agent_name: Agent name (e.g. "Developer", "PM", "Reviewer")
+            role: Agent role for chat ("pm", "developer", or "reviewer")
 
         Returns:
             str: "confirm" or modification opinion content
         """
-        from cafe.ui.inquirer_prompts import prompt_list, prompt_multiline
+        from InquirerPy.separator import Separator
+
+        issue_name = getattr(self, "issue_name", None) or ""
 
         print(f"{agent_name} thinks {item_name} is complete. Please confirm:")
 
-        # Use prompt_list for better UX with arrow keys
-        choices = [
-            {"name": "Confirm - Confirm, continue", "value": "c"},
-            {"name": "Modify - Request modification", "value": "m"},
-        ]
+        while True:
+            # Use prompt_list for better UX with arrow keys
+            choices = [
+                {"name": "Confirm - Confirm, continue", "value": "c"},
+                {"name": "Modify - Request modification", "value": "m"},
+                Separator(),
+                {"name": f"Chat with {agent_name}", "value": "chat"},
+            ]
 
-        choice = prompt_list(
-            "Please select an option",
-            choices,
-            default=None,
-        )
+            choice = prompt_list(
+                "Please select an option",
+                choices,
+                default=None,
+            )
 
-        if choice == "c":
-            return "confirm"
-        else:  # choice == "m"
+            if choice == "chat":
+                launch_chat_session(role, issue_name)
+                continue
+
+            if choice == "c":
+                return "confirm"
+
+            # choice == "m"
             modification_request = prompt_multiline("Please enter modification opinion")
 
             if not modification_request.strip():
                 print("\n⚠️  No modification opinion entered, please try again.")
-                return self._ask_user_for_review_decision(item_name, agent_name)
+                continue
 
             print()
             print("✅ Received your modification opinion...")
@@ -844,8 +862,6 @@ class Phase(ABC):
         Returns:
             str: User's answer
         """
-        from cafe.ui.inquirer_prompts import prompt_multiline
-
         return prompt_multiline("Please answer the question")
 
     def _validate_and_retry_questions_xml(
