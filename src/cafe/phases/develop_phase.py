@@ -14,7 +14,9 @@ from cafe.core.permission import PermissionHandler
 from cafe.core.phase import Phase
 from cafe.core.status_codes import PhaseStatusCode, StatusCodeParser, generate_status_code_prompt
 from cafe.core.types import PhaseProgress, PhaseResult, PhaseStatus
+from cafe.ui.chat import launch_chat_session
 from cafe.ui.display import Display
+from cafe.ui.inquirer_prompts import prompt_list, prompt_multiline
 from cafe.utils.prompt_utils import format_checklist_instruction
 
 
@@ -422,7 +424,7 @@ class DevelopPhase(Phase):
         Returns:
             str: "confirm" if user agrees, or user's feedback if they disagree
         """
-        from cafe.ui.inquirer_prompts import prompt_list, prompt_multiline
+        from InquirerPy.separator import Separator
 
         print(f"\n{'='*60}")
         print(f"Developer ({self.dev_agent}) believes no changes are needed.")
@@ -438,25 +440,33 @@ class DevelopPhase(Phase):
                 print(content)
                 print(f"\n{'='*60}\n")
 
-        choices = [
-            {"name": "Agree - Skip review and proceed to PR", "value": "c"},
-            {"name": "Disagree - Provide feedback for developer", "value": "m"},
-        ]
+        while True:
+            choices = [
+                {"name": "Agree - Skip review and proceed to PR", "value": "c"},
+                {"name": "Disagree - Provide feedback for developer", "value": "m"},
+                Separator(),
+                {"name": f"Chat with {self.dev_agent}", "value": "chat"},
+            ]
 
-        choice = prompt_list(
-            "Do you agree with the developer?",
-            choices,
-            default=None,
-        )
+            choice = prompt_list(
+                "Do you agree with the developer?",
+                choices,
+                default=None,
+            )
 
-        if choice == "c":
-            return "confirm"
-        else:
+            if choice == "chat":
+                launch_chat_session("developer", self.issue_name)
+                continue
+
+            if choice == "c":
+                return "confirm"
+
+            # choice == "m"
             feedback = prompt_multiline("Please provide feedback for the developer")
 
             if not feedback.strip():
                 print("\n⚠️  No feedback entered, please try again.")
-                return self._ask_user_for_no_changes_decision()
+                continue
 
             print()
             print("✅ Received your feedback...")
