@@ -634,17 +634,17 @@ class SpecPhase(Phase):
             self.display.console,
         )
 
-    def _ask_user_for_clarification(self) -> str:
+    def _ask_user_for_clarification(self, role: str = "pm") -> str:
         """Ask user for answer to NEED_CLARIFICATION using interactive Q&A when available.
 
         Overrides base class to check for questions.xml from previous iteration.
-        If found and valid, uses interactive_qa_flow(); otherwise falls back to prompt_multiline().
+        If found and valid, uses interactive_qa_flow(); otherwise falls back to base class
+        fallback which shows a prompt with optional chat.
 
         Returns:
             str: User's answer
         """
         from cafe.core.questions_schema import parse_questions_xml, validate_questions_xml
-        from cafe.ui.inquirer_prompts import prompt_multiline
 
         # Look for questions.xml in the previous iteration directory
         if self.iteration > 1:
@@ -653,10 +653,10 @@ class SpecPhase(Phase):
 
             if xml_path.exists() and validate_questions_xml(xml_path):
                 questions = parse_questions_xml(xml_path)
-                return interactive_qa_flow(questions, role="pm", issue_name=self.issue_name)
+                return interactive_qa_flow(questions, role=role, issue_name=self.issue_name)
 
-        # Fallback to original multiline prompt
-        return prompt_multiline("Please answer the question")
+        # Fallback to base class prompt with chat option
+        return super()._ask_user_for_clarification(role=role)
 
     def _prompt_for_rigor(self) -> None:
         """Prompt user to select rigor level if not already set."""

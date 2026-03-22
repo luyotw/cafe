@@ -574,17 +574,16 @@ class DevelopPhase(Phase):
         self.user_input = ""
         return ""
 
-    def _ask_user_for_clarification(self) -> str:
+    def _ask_user_for_clarification(self, role: str = "developer") -> str:
         """Ask user for clarification using questions.xml from previous iteration.
 
         Uses interactive_qa_flow() if questions.xml exists and is valid,
-        otherwise falls back to a plain multiline prompt.
+        otherwise falls back to base class prompt with optional chat.
 
         Returns:
             str: User's answer
         """
         from cafe.core.questions_schema import parse_questions_xml, validate_questions_xml
-        from cafe.ui.inquirer_prompts import prompt_multiline
         from cafe.ui.interactive_qa import interactive_qa_flow
 
         # Look for questions.xml in the previous iteration directory
@@ -593,10 +592,10 @@ class DevelopPhase(Phase):
             xml_path = prev_iter_dir / "questions.xml"
             if xml_path.exists() and validate_questions_xml(xml_path):
                 questions = parse_questions_xml(xml_path)
-                return interactive_qa_flow(questions, role="developer", issue_name=self.issue_name)
+                return interactive_qa_flow(questions, role=role, issue_name=self.issue_name)
 
-        # Fallback to plain prompt
-        return prompt_multiline("Please answer the question")
+        # Fallback to base class prompt with chat option
+        return super()._ask_user_for_clarification(role=role)
 
     def _get_last_develop_timestamp(self):
         """Get timestamp from last develop/status.json.

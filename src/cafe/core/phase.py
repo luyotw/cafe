@@ -856,13 +856,40 @@ class Phase(ABC):
 
             return modification_request
 
-    def _ask_user_for_clarification(self) -> str:
+    def _ask_user_for_clarification(self, role: Optional[str] = None) -> str:
         """Ask user for answer to NEED_CLARIFICATION (interactive mode).
+
+        When role is provided, shows a select prompt with a "Chat with agent"
+        option before the multiline text prompt.
+
+        Args:
+            role: Agent role for inline chat ("pm", "developer", "reviewer").
+                  When provided, a "Chat with [role]" option is shown.
 
         Returns:
             str: User's answer
         """
-        return prompt_multiline("Please answer the question")
+        if role is None:
+            return prompt_multiline("Please answer the question")
+
+        from InquirerPy.separator import Separator
+
+        issue_name = getattr(self, "issue_name", None) or ""
+
+        while True:
+            choices = [
+                {"name": "Answer question (text input)", "value": "answer"},
+                Separator(),
+                {"name": f"Chat with {role}", "value": "chat"},
+            ]
+
+            selection = prompt_list("Please select an option", choices, default=None)
+
+            if selection == "chat":
+                launch_chat_session(role, issue_name)
+                continue
+
+            return prompt_multiline("Please answer the question")
 
     def _validate_and_retry_questions_xml(
         self,
