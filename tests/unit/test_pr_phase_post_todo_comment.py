@@ -1,4 +1,4 @@
-"""Tests for PR phase posting plan todo list as PR comment at PR creation/update."""
+"""Tests for PR phase posting PR todo list as PR comment at PR creation/update."""
 
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -228,73 +228,102 @@ class TestPostTodoListComment:
         assert ".cafe/issues/test_issue/pr/iteration_001/user_input.md" in comment_body or "iteration_001/user_input.md" in comment_body
 
 
-class TestPostPlanTodoList:
-    """Test _post_plan_todo_list method behaviour."""
+class TestPostPrTodoList:
+    """Test _post_pr_todo_list method behaviour."""
+
+    def _setup_pr_todo_list(self, temp_issue_dir, todo_content="## Todo List\n\n- [x] Fix bug\n- [x] Add test\n"):
+        """Helper to create a PR iteration with user_input.md and output.md."""
+        pr_dir = temp_issue_dir / "pr" / "iteration_001"
+        pr_dir.mkdir(parents=True, exist_ok=True)
+        (pr_dir / "user_input.md").write_text("reviewer comment 1\nreviewer comment 2", encoding="utf-8")
+        (pr_dir / "output.md").write_text(todo_content, encoding="utf-8")
+        return pr_dir
 
     def test_all_items_checked_calls_add_pr_comment(self, temp_issue_dir):
-        """Dev 2.1: When all plan items are [x], add_pr_comment is called."""
+        """When all PR todo items are [x], add_pr_comment is called."""
+        self._setup_pr_todo_list(temp_issue_dir)
         pr_phase = _make_pr_phase(temp_issue_dir, post_todo_list=True)
         pr_phase.issue_dir = temp_issue_dir
 
-        pr_phase._post_plan_todo_list("42")
+        pr_phase._post_pr_todo_list("42")
 
         pr_phase.github_ops.add_pr_comment.assert_called_once()
         call_args = pr_phase.github_ops.add_pr_comment.call_args
         assert call_args[0][0] == "42"
-        assert "Task 1" in call_args[0][1]
-        assert "Task 2" in call_args[0][1]
+        assert "Fix bug" in call_args[0][1]
+        assert "Add test" in call_args[0][1]
 
     def test_unchecked_item_does_not_call_add_pr_comment(self, temp_issue_dir):
-        """Dev 2.2: When any plan item is unchecked, add_pr_comment is NOT called."""
-        plan_dir = temp_issue_dir / "plan" / "iteration_001"
-        plan_file = plan_dir / "output.md"
-        plan_file.write_text("# Plan\n\n- [x] Done\n- [ ] Not done\n", encoding="utf-8")
-
+        """When any PR todo item is unchecked, add_pr_comment is NOT called."""
+        self._setup_pr_todo_list(temp_issue_dir, "## Todo List\n\n- [x] Done\n- [ ] Not done\n")
         pr_phase = _make_pr_phase(temp_issue_dir, post_todo_list=True)
         pr_phase.issue_dir = temp_issue_dir
 
-        pr_phase._post_plan_todo_list("42")
+        pr_phase._post_pr_todo_list("42")
 
         pr_phase.github_ops.add_pr_comment.assert_not_called()
 
     def test_post_todo_list_false_does_not_call_add_pr_comment(self, temp_issue_dir):
-        """Dev 2.3: When post_todo_list=False, add_pr_comment is NOT called."""
+        """When post_todo_list=False, add_pr_comment is NOT called."""
+        self._setup_pr_todo_list(temp_issue_dir)
         pr_phase = _make_pr_phase(temp_issue_dir, post_todo_list=False)
         pr_phase.issue_dir = temp_issue_dir
 
-        pr_phase._post_plan_todo_list("42")
+        pr_phase._post_pr_todo_list("42")
 
         pr_phase.github_ops.add_pr_comment.assert_not_called()
 
-    def test_plan_file_not_found_does_not_raise(self, temp_issue_dir):
-        """Dev 2.4: When plan file does not exist, no error is raised and add_pr_comment is NOT called."""
-        # Remove the plan directory entirely
-        import shutil
-        shutil.rmtree(temp_issue_dir / "plan")
-
+    def test_no_pr_dir_does_not_raise(self, temp_issue_dir):
+        """When pr dir does not exist, no error is raised and add_pr_comment is NOT called."""
         pr_phase = _make_pr_phase(temp_issue_dir, post_todo_list=True)
         pr_phase.issue_dir = temp_issue_dir
 
-        # Should not raise
-        pr_phase._post_plan_todo_list("42")
+        pr_phase._post_pr_todo_list("42")
 
         pr_phase.github_ops.add_pr_comment.assert_not_called()
 
-    def test_add_pr_comment_failure_prints_warning_and_does_not_raise(self, temp_issue_dir, capsys):
-        """Dev 2.5: When add_pr_comment raises an exception, a warning is shown and no error is raised."""
+    def test_add_pr_comment_failure_prints_warning_and_does_not_raise(self, temp_issue_dir):
+        """When add_pr_comment raises an exception, a warning is shown and no error is raised."""
+        self._setup_pr_todo_list(temp_issue_dir)
         pr_phase = _make_pr_phase(temp_issue_dir, post_todo_list=True)
         pr_phase.issue_dir = temp_issue_dir
         pr_phase.github_ops.add_pr_comment.side_effect = RuntimeError("network error")
 
-        # Should not raise
-        pr_phase._post_plan_todo_list("42")
+        pr_phase._post_pr_todo_list("42")
 
-        # add_pr_comment was attempted
         pr_phase.github_ops.add_pr_comment.assert_called_once()
 
+    def test_picks_latest_iteration_with_user_input(self, temp_issue_dir):
+        """When multiple iterations exist, picks the latest one with user_input.md."""
+        # iteration_001: has user_input + output (old, unchecked)
+        pr_dir_1 = temp_issue_dir / "pr" / "iteration_001"
+        pr_dir_1.mkdir(parents=True)
+        (pr_dir_1 / "user_input.md").write_text("old comments", encoding="utf-8")
+        (pr_dir_1 / "output.md").write_text("## Todo List\n\n- [ ] Old item\n", encoding="utf-8")
 
-class TestPostPlanTodoListIntegration:
-    """Test _post_plan_todo_list is called from _create_or_update_pr."""
+        # iteration_002: PR content only (no user_input.md)
+        pr_dir_2 = temp_issue_dir / "pr" / "iteration_002"
+        pr_dir_2.mkdir(parents=True)
+        (pr_dir_2 / "output.md").write_text("PR title and body", encoding="utf-8")
+
+        # iteration_003: has user_input + output (latest, all checked)
+        pr_dir_3 = temp_issue_dir / "pr" / "iteration_003"
+        pr_dir_3.mkdir(parents=True)
+        (pr_dir_3 / "user_input.md").write_text("new comments", encoding="utf-8")
+        (pr_dir_3 / "output.md").write_text("## Todo List\n\n- [x] New item done\n", encoding="utf-8")
+
+        pr_phase = _make_pr_phase(temp_issue_dir, post_todo_list=True)
+        pr_phase.issue_dir = temp_issue_dir
+
+        pr_phase._post_pr_todo_list("42")
+
+        pr_phase.github_ops.add_pr_comment.assert_called_once()
+        comment_body = pr_phase.github_ops.add_pr_comment.call_args[0][1]
+        assert "New item done" in comment_body
+
+
+class TestPostPrTodoListIntegration:
+    """Test _post_pr_todo_list is called from _create_or_update_pr."""
 
     def _run_create_or_update_pr(self, pr_phase, existing_pr, branch_name="feature-branch"):
         """Helper to invoke _create_or_update_pr with mocked internals."""
@@ -302,12 +331,12 @@ class TestPostPlanTodoListIntegration:
              patch.object(pr_phase, "_display_pr_success"), \
              patch.object(pr_phase, "_save_progress"), \
              patch.object(pr_phase, "_update_iteration_history"), \
-             patch.object(pr_phase, "_post_plan_todo_list") as mock_post:
+             patch.object(pr_phase, "_post_pr_todo_list") as mock_post:
             result = pr_phase._create_or_update_pr(existing_pr, branch_name)
             return result, mock_post
 
-    def test_pr_created_calls_post_plan_todo_list(self, temp_issue_dir):
-        """Dev 3.1: When a PR is created, _post_plan_todo_list is called with the PR number."""
+    def test_pr_created_calls_post_pr_todo_list(self, temp_issue_dir):
+        """When a PR is created, _post_pr_todo_list is called with the PR number."""
         pr_phase = _make_pr_phase(temp_issue_dir, post_todo_list=True)
         pr_phase.issue_dir = temp_issue_dir
 
@@ -318,8 +347,8 @@ class TestPostPlanTodoListIntegration:
 
         mock_post.assert_called_once_with("99")
 
-    def test_pr_updated_calls_post_plan_todo_list(self, temp_issue_dir):
-        """Dev 3.2: When a PR is updated, _post_plan_todo_list is called with the PR number."""
+    def test_pr_updated_calls_post_pr_todo_list(self, temp_issue_dir):
+        """When a PR is updated, _post_pr_todo_list is called with the PR number."""
         pr_phase = _make_pr_phase(temp_issue_dir, post_todo_list=True)
         pr_phase.issue_dir = temp_issue_dir
 
