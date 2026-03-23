@@ -561,7 +561,13 @@ class SpecPhase(Phase):
                 if self.iteration > 1:
                     self._display_iteration_delta()
 
-                choice = self._ask_user_for_review_decision("Requirements specification", agent_name="PM", role="pm")
+                prev_spec_file = self._get_versioned_file_path("spec", self.iteration - 1, self.phase_dir)
+                choice = self._ask_user_for_review_decision(
+                    "Requirements specification",
+                    agent_name="PM",
+                    role="pm",
+                    output_file=prev_spec_file if self.iteration > 1 else None,
+                )
             else:
                 choice = self.user_input
                 # Non-interactive mode: clear after use to ensure no reuse

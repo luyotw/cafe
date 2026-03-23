@@ -804,6 +804,7 @@ class Phase(ABC):
         item_name: str = "content",
         agent_name: str = "Developer",
         role: str = "developer",
+        output_file: Optional[Path] = None,
     ) -> str:
         """Ask user for decision on READY_FOR_REVIEW (interactive mode).
 
@@ -811,6 +812,9 @@ class Phase(ABC):
             item_name: Item name to confirm (e.g. "plan", "code", "requirements")
             agent_name: Agent name (e.g. "Developer", "PM", "Reviewer")
             role: Agent role for chat ("pm", "developer", or "reviewer")
+            output_file: Optional path to the agent's output file. When provided,
+                         its content is re-printed after returning from chat so the
+                         user can re-read it before making a decision.
 
         Returns:
             str: "confirm" or modification opinion content
@@ -838,6 +842,11 @@ class Phase(ABC):
 
             if choice == "chat":
                 launch_chat_session(role, issue_name)
+                if output_file and output_file.exists():
+                    print()
+                    print(f"{'=' * 60}")
+                    print(output_file.read_text())
+                    print(f"{'=' * 60}")
                 continue
 
             if choice == "c":

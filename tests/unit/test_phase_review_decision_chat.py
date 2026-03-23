@@ -112,3 +112,38 @@ class TestAskUserForReviewDecisionChat:
         result = phase._ask_user_for_review_decision("plan", agent_name="David")
 
         assert result == "confirm"
+
+    @patch("cafe.core.phase.prompt_multiline")
+    @patch("cafe.core.phase.launch_chat_session")
+    @patch("cafe.core.phase.prompt_list")
+    def test_re_displays_output_file_after_chat(
+        self, mock_prompt_list, mock_launch_chat, mock_multiline, tmp_path
+    ):
+        """Test that output file content is printed after returning from chat."""
+        output_file = tmp_path / "output.md"
+        output_file.write_text("## Spec Content\nSome agent output here.")
+
+        mock_prompt_list.side_effect = ["chat", "c"]
+        phase = _make_phase(issue_name="my-issue")
+
+        with patch("builtins.print") as mock_print:
+            result = phase._ask_user_for_review_decision(
+                "plan", agent_name="David", role="developer", output_file=output_file
+            )
+
+        assert result == "confirm"
+        # Verify output file content was printed after chat returned
+        printed_text = " ".join(str(a) for call in mock_print.call_args_list for a in call[0])
+        assert "Some agent output here" in printed_text
+
+    @patch("cafe.core.phase.prompt_list")
+    def test_no_output_file_no_error(self, mock_prompt_list):
+        """Test that skipping output_file works fine (no error)."""
+        mock_prompt_list.side_effect = ["chat", "c"]
+        phase = _make_phase(issue_name="my-issue")
+
+        with patch("cafe.core.phase.launch_chat_session"):
+            # Should not raise even without output_file
+            result = phase._ask_user_for_review_decision("plan", agent_name="David", role="developer")
+
+        assert result == "confirm"
