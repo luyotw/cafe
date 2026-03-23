@@ -34,14 +34,14 @@ def interactive_qa_flow(
     - Checkbox (multi-select) for questions with multi_select=True
     - "Other" for free-text input
     - "Back" navigation (from question 2 onwards)
-    - "Chat with agent" in the summary confirmation (when role and issue_name are given)
+    - "Chat with agent" in each question prompt and summary confirmation (when role and issue_name are given)
     - Answer summary with confirm/modify
 
     Args:
         questions: List of Question objects from parsed XML
         role: Agent role for inline chat ("pm", "developer", "reviewer"). When provided
-              together with issue_name, a "Chat with agent" option is shown in the
-              summary confirmation prompt.
+              together with issue_name, a "Chat with agent" option is shown in each
+              question prompt and the summary confirmation prompt.
         issue_name: Current issue name for chat session resolution.
         agent_name: Display name of the agent (e.g. "Roger", "David"). Used in the
                     "Chat with [agent_name]" label. Falls back to role if not given.
@@ -61,7 +61,10 @@ def interactive_qa_flow(
         if q.multi_select:
             answer = _ask_checkbox(q, idx, total, previous_answer)
         else:
-            answer = _ask_select(q, idx, total, previous_answer)
+            answer = _ask_select(
+                q, idx, total, previous_answer,
+                role=role, issue_name=issue_name, agent_name=agent_name,
+            )
 
         if answer == BACK_SENTINEL:
             idx -= 1
@@ -133,30 +136,41 @@ def _ask_select(
     idx: int,
     total: int,
     previous_answer: str | None = None,
+    role: Optional[str] = None,
+    issue_name: Optional[str] = None,
+    agent_name: Optional[str] = None,
 ) -> str:
     """Ask a single-select question.
 
     Returns:
         Selected answer string, or BACK_SENTINEL / OTHER_SENTINEL processing result
     """
-    choices = _build_choices(question, idx, total, previous_answer)
+    while True:
+        choices = _build_choices(
+            question, idx, total, previous_answer,
+            role=role, issue_name=issue_name, agent_name=agent_name,
+        )
 
-    answer = inquirer.select(
-        message=f"[{idx + 1}/{total}] {question.title}",
-        choices=choices,
-        default=previous_answer,
-    ).execute()
+        answer = inquirer.select(
+            message=f"[{idx + 1}/{total}] {question.title}",
+            choices=choices,
+            default=previous_answer,
+        ).execute()
 
-    if answer == BACK_SENTINEL:
-        return BACK_SENTINEL
+        if answer == "chat":
+            launch_chat_session(role, issue_name)
+            continue
 
-    if answer == OTHER_SENTINEL:
-        text_kwargs = {"message": "Type your answer:"}
-        if previous_answer is not None:
-            text_kwargs["default"] = previous_answer
-        answer = inquirer.text(**text_kwargs).execute()
+        if answer == BACK_SENTINEL:
+            return BACK_SENTINEL
 
-    return answer
+        if answer == OTHER_SENTINEL:
+            text_kwargs = {"message": "Type your answer:"}
+            if previous_answer is not None:
+                text_kwargs["default"] = previous_answer
+            answer = inquirer.text(**text_kwargs).execute()
+
+        return answer
 
 
 def _ask_checkbox(
@@ -209,6 +223,9 @@ def _build_choices(
     total: int,
     previous_answer: str | None = None,
     force_no_back: bool = False,
+    role: Optional[str] = None,
+    issue_name: Optional[str] = None,
+    agent_name: Optional[str] = None,
 ) -> list:
     """Build choices list for a single-select question.
 
@@ -218,6 +235,9 @@ def _build_choices(
         total: Total number of questions
         previous_answer: Previous answer for this question (for default selection)
         force_no_back: If True, never include Back option (for modify flow)
+        role: Agent role for chat option ("pm", "developer", "reviewer")
+        issue_name: Current issue name for chat session resolution
+        agent_name: Display name for the chat option label
 
     Returns:
         List of choices for inquirer.select
@@ -238,6 +258,12 @@ def _build_choices(
         choices_with_values.append(
             {"name": f"← Back to [{idx}/{total}]", "value": BACK_SENTINEL}
         )
+
+    # Add chat option when role and issue_name are provided
+    if role and issue_name:
+        choices_with_values.append(Separator())
+        chat_label = agent_name or role
+        choices_with_values.append({"name": f"Chat with {chat_label}", "value": "chat"})
 
     return choices_with_values
 

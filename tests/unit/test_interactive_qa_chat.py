@@ -141,3 +141,89 @@ class TestInteractiveQaFlowChat:
         assert "Q2: Question 2?" in result
         assert "A2: Option 2B" in result
         mock_launch_chat.assert_not_called()
+
+
+class TestInteractiveQaPerQuestionChat:
+    """Tests for chat option in each individual question prompt."""
+
+    @patch("cafe.ui.interactive_qa.launch_chat_session")
+    @patch("cafe.ui.interactive_qa.inquirer")
+    def test_chat_option_present_in_per_question_prompt(self, mock_inquirer, mock_launch_chat):
+        """Test that chat option appears in each question's choices when role is provided."""
+        questions = _make_questions(1)
+
+        mock_select = MagicMock()
+        mock_select.execute = MagicMock(side_effect=["Option 1A", "Confirm and continue"])
+        mock_inquirer.select.return_value = mock_select
+
+        interactive_qa_flow(questions, role="pm", issue_name="test-issue", agent_name="Roger")
+
+        # First select call is the question prompt
+        question_call_args = mock_inquirer.select.call_args_list[0]
+        choices = question_call_args[1]["choices"]
+        chat_choices = [c for c in choices if isinstance(c, dict) and "Chat" in c.get("name", "")]
+        assert len(chat_choices) == 1
+        assert "Roger" in chat_choices[0]["name"]
+
+    @patch("cafe.ui.interactive_qa.launch_chat_session")
+    @patch("cafe.ui.interactive_qa.inquirer")
+    def test_selecting_chat_during_question_launches_session_and_re_prompts(
+        self, mock_inquirer, mock_launch_chat
+    ):
+        """Test that selecting chat during a question launches session and re-shows question."""
+        questions = _make_questions(1)
+
+        mock_select = MagicMock()
+        # Q1: chat, then answer, then confirm
+        mock_select.execute = MagicMock(
+            side_effect=["chat", "Option 1A", "Confirm and continue"]
+        )
+        mock_inquirer.select.return_value = mock_select
+
+        result = interactive_qa_flow(questions, role="pm", issue_name="my-issue")
+
+        mock_launch_chat.assert_called_with("pm", "my-issue")
+        assert "A1: Option 1A" in result
+
+    @patch("cafe.ui.interactive_qa.launch_chat_session")
+    @patch("cafe.ui.interactive_qa.inquirer")
+    def test_no_chat_option_in_questions_when_role_not_provided(
+        self, mock_inquirer, mock_launch_chat
+    ):
+        """Test backward compatibility: no chat in question prompt when role not given."""
+        questions = _make_questions(1)
+
+        mock_select = MagicMock()
+        mock_select.execute = MagicMock(side_effect=["Option 1A", "Confirm and continue"])
+        mock_inquirer.select.return_value = mock_select
+
+        interactive_qa_flow(questions)
+
+        # First call is question prompt — should have no chat option
+        question_call_args = mock_inquirer.select.call_args_list[0]
+        choices = question_call_args[1]["choices"]
+        chat_choices = [c for c in choices if isinstance(c, dict) and "Chat" in c.get("name", "")]
+        assert len(chat_choices) == 0
+
+    @patch("cafe.ui.interactive_qa.launch_chat_session")
+    @patch("cafe.ui.interactive_qa.inquirer")
+    def test_chat_option_in_all_questions(self, mock_inquirer, mock_launch_chat):
+        """Test that chat option appears in every question prompt, not just first."""
+        questions = _make_questions(3)
+
+        mock_select = MagicMock()
+        mock_select.execute = MagicMock(
+            side_effect=["Option 1A", "Option 2A", "Option 3A", "Confirm and continue"]
+        )
+        mock_inquirer.select.return_value = mock_select
+
+        interactive_qa_flow(questions, role="developer", issue_name="test-issue")
+
+        # First 3 calls are question prompts
+        for call_idx in range(3):
+            call_args = mock_inquirer.select.call_args_list[call_idx]
+            choices = call_args[1]["choices"]
+            chat_choices = [
+                c for c in choices if isinstance(c, dict) and "Chat" in c.get("name", "")
+            ]
+            assert len(chat_choices) == 1, f"Question {call_idx + 1} missing chat option"
