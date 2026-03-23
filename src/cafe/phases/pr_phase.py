@@ -1567,11 +1567,12 @@ Return ONLY the status code (CAFE_CONFIRMED or CAFE_NEEDS_CHANGES) with no expla
         console.print(f"  URL: {pr_url}")
         console.print()
 
-    def _post_plan_todo_list(self, pr_number: str) -> None:
-        """Post the plan's task breakdown as a PR comment if all items are checked.
+    def _post_pr_todo_list(self, pr_number: str) -> None:
+        """Post the PR todo list as a PR comment if all items are checked.
 
-        Called at PR creation/update time. Only posts when all plan task items are
-        marked [x] and the post_todo_list option is enabled.
+        Called at PR creation/update time. Finds the latest PR iteration that
+        has a user_input.md (indicating it's a comment-organization iteration)
+        and posts its output.md if all todo items are marked [x].
 
         Args:
             pr_number: GitHub PR number (string)
@@ -1579,39 +1580,45 @@ Return ONLY the status code (CAFE_CONFIRMED or CAFE_NEEDS_CHANGES) with no expla
         if not self.post_todo_list:
             return
 
-        # Resolve plan file path (same pattern as _generate_pr_content)
-        plan_dir = self.issue_dir / "plan"
-        plan_file = self._get_latest_versioned_file("plan", plan_dir)
-        if plan_file is None or not plan_file.exists():
-            plan_file = plan_dir / "plan.md"
-        if not plan_file.exists():
+        # Find the latest PR iteration with user_input.md (comment-organization iteration)
+        pr_dir = self.issue_dir / "pr"
+        if not pr_dir.exists():
             return
 
-        # Only post if all task items are completed
-        from cafe.utils.checklist_validator import validate_checklist
-        try:
-            result = validate_checklist(plan_file)
-        except FileNotFoundError:
-            return
-        if not result.is_complete:
-            return
+        iteration_dirs = sorted(pr_dir.glob("iteration_*"), reverse=True)
+        for iteration_dir in iteration_dirs:
+            user_input_file = iteration_dir / "user_input.md"
+            output_file = iteration_dir / "output.md"
+            if not user_input_file.exists() or not output_file.exists():
+                continue
+            if not output_file.read_text(encoding="utf-8").strip():
+                continue
 
-        # Post the plan as a PR comment
-        try:
-            plan_content = plan_file.read_text(encoding="utf-8")
-            from cafe.utils.git_utils import to_cwd_relative_path
+            # Only post if all todo items are completed
+            from cafe.utils.checklist_validator import validate_checklist
             try:
-                plan_file_display = to_cwd_relative_path(plan_file)
-            except ValueError:
-                plan_file_display = str(plan_file)
+                result = validate_checklist(output_file)
+            except FileNotFoundError:
+                return
+            if not result.is_complete:
+                return
 
-            comment_body = self._build_todo_list_comment(plan_content, plan_file_display)
-            self.github_ops.add_pr_comment(pr_number, comment_body)
-        except Exception as e:
-            # Don't fail the workflow if posting comment fails - just warn
-            from rich.console import Console
-            console = Console()
-            console.print(f"[yellow]⚠️  Warning: Failed to post plan todo list as PR comment: {e}[/yellow]")
+            # Post the todo list as a PR comment
+            try:
+                todo_content = output_file.read_text(encoding="utf-8")
+                from cafe.utils.git_utils import to_cwd_relative_path
+                try:
+                    user_input_display = to_cwd_relative_path(user_input_file)
+                except ValueError:
+                    user_input_display = str(user_input_file)
+
+                comment_body = self._build_todo_list_comment(todo_content, user_input_display)
+                self.github_ops.add_pr_comment(pr_number, comment_body)
+            except Exception as e:
+                from rich.console import Console
+                console = Console()
+                console.print(f"[yellow]⚠️  Warning: Failed to post PR todo list as PR comment: {e}[/yellow]")
+            return
 
     def _create_or_update_pr(self, existing_pr: dict | None, branch_name: str) -> PhaseResult:
         """Create or update PR with prepared content.
@@ -1654,7 +1661,7 @@ Return ONLY the status code (CAFE_CONFIRMED or CAFE_NEEDS_CHANGES) with no expla
             )
 
             self._display_pr_success(pr_number, pr_url, "updated")
-            self._post_plan_todo_list(pr_number)
+            self._post_pr_todo_list(pr_number)
 
             return PhaseResult(
                 status=PhaseStatus.COMPLETED,
@@ -1694,7 +1701,7 @@ Return ONLY the status code (CAFE_CONFIRMED or CAFE_NEEDS_CHANGES) with no expla
             )
 
             self._display_pr_success(pr_number, pr_url, "created")
-            self._post_plan_todo_list(pr_number)
+            self._post_pr_todo_list(pr_number)
 
             return PhaseResult(
                 status=PhaseStatus.COMPLETED,
