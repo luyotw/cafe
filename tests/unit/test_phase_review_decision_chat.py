@@ -147,3 +147,25 @@ class TestAskUserForReviewDecisionChat:
             result = phase._ask_user_for_review_decision("plan", agent_name="David", role="developer")
 
         assert result == "confirm"
+
+    @patch("cafe.core.phase.prompt_multiline")
+    @patch("cafe.core.phase.launch_chat_session")
+    @patch("cafe.core.phase.prompt_list")
+    def test_re_displays_display_content_after_chat(
+        self, mock_prompt_list, mock_launch_chat, mock_multiline
+    ):
+        """Test that display_content string is printed after returning from chat."""
+        mock_prompt_list.side_effect = ["chat", "c"]
+        phase = _make_phase(issue_name="my-issue")
+
+        with patch("builtins.print") as mock_print:
+            result = phase._ask_user_for_review_decision(
+                "code changes",
+                agent_name="David",
+                role="developer",
+                display_content="diff --git a/foo.py b/foo.py\n+new line",
+            )
+
+        assert result == "confirm"
+        printed_text = " ".join(str(a) for call in mock_print.call_args_list for a in call[0])
+        assert "diff --git a/foo.py b/foo.py" in printed_text
