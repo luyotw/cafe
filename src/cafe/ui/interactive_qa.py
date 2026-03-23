@@ -304,7 +304,7 @@ def _build_checkbox_choices(question: Question, prev_items: list[str] | None = N
         for opt in question.options
     ]
     choices.append({
-        "name": "Other (type your answer)",
+        "name": "Other (press Space to select, then Enter to type answer)",
         "value": OTHER_SENTINEL,
         "enabled": has_prev_other,
     })
