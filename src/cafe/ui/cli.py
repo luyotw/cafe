@@ -5170,6 +5170,34 @@ def chat_with_agent(
     raise typer.Exit(result.returncode)
 
 
+def _fetch_external_ip() -> str:
+    """向外部服務查詢目前的外網公開 IPv4 位址。
+
+    Returns:
+        外網 IPv4 位址字串（例如：203.0.113.1）
+
+    Raises:
+        urllib.error.URLError: 網路無法連線或查詢失敗時
+    """
+    import urllib.request
+
+    with urllib.request.urlopen("https://api.ipify.org", timeout=5) as response:
+        return response.read().decode("utf-8").strip()
+
+
+@app.command()
+def myip() -> None:
+    """顯示目前裝置的外網公開 IPv4 位址。"""
+    from urllib.error import URLError
+
+    try:
+        ip = _fetch_external_ip()
+        console.print(ip)
+    except URLError:
+        console.print("[red]Error: 無法取得外網 IP，請確認網路連線。[/red]")
+        raise typer.Exit(1)
+
+
 def main() -> None:
     """Entry point for CLI."""
     # Check if all dependencies are installed
