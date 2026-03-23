@@ -151,21 +151,48 @@ class TestAskUserForReviewDecisionChat:
     @patch("cafe.core.phase.prompt_multiline")
     @patch("cafe.core.phase.launch_chat_session")
     @patch("cafe.core.phase.prompt_list")
-    def test_re_displays_display_content_after_chat(
+    def test_calls_display_callback_after_chat(
         self, mock_prompt_list, mock_launch_chat, mock_multiline
     ):
-        """Test that display_content string is printed after returning from chat."""
+        """Test that display_callback is called after returning from chat."""
         mock_prompt_list.side_effect = ["chat", "c"]
         phase = _make_phase(issue_name="my-issue")
+        mock_callback = MagicMock()
+
+        result = phase._ask_user_for_review_decision(
+            "code changes",
+            agent_name="David",
+            role="developer",
+            display_callback=mock_callback,
+        )
+
+        assert result == "confirm"
+        mock_callback.assert_called_once()
+
+    @patch("cafe.core.phase.prompt_multiline")
+    @patch("cafe.core.phase.launch_chat_session")
+    @patch("cafe.core.phase.prompt_list")
+    def test_display_callback_takes_precedence_over_output_file(
+        self, mock_prompt_list, mock_launch_chat, mock_multiline, tmp_path
+    ):
+        """Test that display_callback is used instead of output_file when both provided."""
+        output_file = tmp_path / "output.md"
+        output_file.write_text("file content")
+        mock_prompt_list.side_effect = ["chat", "c"]
+        phase = _make_phase(issue_name="my-issue")
+        mock_callback = MagicMock()
 
         with patch("builtins.print") as mock_print:
             result = phase._ask_user_for_review_decision(
                 "code changes",
                 agent_name="David",
                 role="developer",
-                display_content="diff --git a/foo.py b/foo.py\n+new line",
+                output_file=output_file,
+                display_callback=mock_callback,
             )
 
         assert result == "confirm"
+        mock_callback.assert_called_once()
+        # output_file content should NOT be printed
         printed_text = " ".join(str(a) for call in mock_print.call_args_list for a in call[0])
-        assert "diff --git a/foo.py b/foo.py" in printed_text
+        assert "file content" not in printed_text

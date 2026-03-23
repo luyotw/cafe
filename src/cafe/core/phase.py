@@ -4,7 +4,7 @@ import json
 from abc import ABC, abstractmethod
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import yaml
 
@@ -805,7 +805,7 @@ class Phase(ABC):
         agent_name: str = "Developer",
         role: str = "developer",
         output_file: Optional[Path] = None,
-        display_content: Optional[str] = None,
+        display_callback: Optional[Callable[[], None]] = None,
     ) -> str:
         """Ask user for decision on READY_FOR_REVIEW (interactive mode).
 
@@ -816,9 +816,9 @@ class Phase(ABC):
             output_file: Optional path to the agent's output file. When provided,
                          its content is re-printed after returning from chat so the
                          user can re-read it before making a decision.
-            display_content: Optional string content to re-print after returning
-                             from chat (e.g. git diff). Takes precedence over
-                             output_file when both are provided.
+            display_callback: Optional callable to invoke after returning from chat
+                              to re-display content (e.g. Rich Syntax diff). Takes
+                              precedence over output_file when both are provided.
 
         Returns:
             str: "confirm" or modification opinion content
@@ -846,11 +846,8 @@ class Phase(ABC):
 
             if choice == "chat":
                 launch_chat_session(role, issue_name)
-                if display_content is not None:
-                    print()
-                    print(f"{'=' * 60}")
-                    print(display_content)
-                    print(f"{'=' * 60}")
+                if display_callback is not None:
+                    display_callback()
                 elif output_file and output_file.exists():
                     print()
                     print(f"{'=' * 60}")
