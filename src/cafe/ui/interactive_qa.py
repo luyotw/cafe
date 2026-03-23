@@ -183,15 +183,27 @@ def _ask_checkbox(
     """Ask a multi-select (checkbox) question.
 
     After checkbox selection, prompts for optional custom text input.
+    If previous_answer is provided, pre-selects those items (including Other).
 
     Returns:
         Comma-separated answer string, NONE_SELECTED if nothing selected,
         or BACK_SENTINEL for back navigation
     """
-    choices = _build_checkbox_choices(question)
+    # Parse previous answer to restore selections
+    prev_items: list[str] = []
+    prev_other_text: str | None = None
+    if previous_answer and previous_answer != NONE_SELECTED:
+        prev_items = [item.strip() for item in previous_answer.split(",")]
+        # Items not in question.options are custom "Other" text
+        option_set = set(question.options)
+        custom_items = [item for item in prev_items if item not in option_set]
+        if custom_items:
+            prev_other_text = ", ".join(custom_items)
+
+    choices = _build_checkbox_choices(question, prev_items)
 
     selected = inquirer.checkbox(
-        message=f"[{idx + 1}/{total}] {question.title}",
+        message=f"[{idx + 1}/{total}] {question.title} (multi-select, press Space to select)",
         choices=choices,
     ).execute()
 
@@ -205,9 +217,10 @@ def _ask_checkbox(
 
     # Prompt for custom input only if user selected "Other"
     if has_other:
-        custom = inquirer.text(
-            message="Type your answer:",
-        ).execute()
+        text_kwargs = {"message": "Type your answer:"}
+        if prev_other_text is not None:
+            text_kwargs["default"] = prev_other_text
+        custom = inquirer.text(**text_kwargs).execute()
         if custom and custom.strip():
             result_items.append(custom.strip())
 
@@ -268,19 +281,33 @@ def _build_choices(
     return choices_with_values
 
 
-def _build_checkbox_choices(question: Question) -> list:
+def _build_checkbox_choices(question: Question, prev_items: list[str] | None = None) -> list:
     """Build choices list for a checkbox (multi-select) question.
 
     Appends an "Other (type your answer)" option at the end.
+    If prev_items is provided, pre-selects matching options.
 
     Args:
         question: The question
+        prev_items: Previously selected items to pre-check
 
     Returns:
         List of choices for inquirer.checkbox
     """
-    choices = [{"name": opt, "value": opt} for opt in question.options]
-    choices.append({"name": "Other (type your answer)", "value": OTHER_SENTINEL})
+    prev_set = set(prev_items) if prev_items else set()
+    option_set = set(question.options)
+    # Pre-check "Other" if any previous item is not a known option
+    has_prev_other = bool(prev_set - option_set)
+
+    choices = [
+        {"name": opt, "value": opt, "enabled": opt in prev_set}
+        for opt in question.options
+    ]
+    choices.append({
+        "name": "Other (type your answer)",
+        "value": OTHER_SENTINEL,
+        "enabled": has_prev_other,
+    })
     return choices
 
 
