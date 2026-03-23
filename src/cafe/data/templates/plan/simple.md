@@ -1,19 +1,15 @@
 # Implementation Plan
 
 ## Goal
-[One-line description of what to implement]
+Add a "forgot password" link to the login page
 
 ## Tasks
-- [ ] [Task 1]
-- [ ] [Task 2]
-- [ ] [Task 3]
+- [ ] Task 1: Add `forgot_password()` view in `views/auth_views.py`
+- [ ] Task 2: Add "Forgot password?" link to `templates/auth/login.html`
+- [ ] Task 3 (DoD): Clicking "Forgot password?" on login page opens the reset form
+- [ ] Task 4 (DoD): Submitting a valid email sends a reset email with a working link
 - [ ] Add tests
 - [ ] Commit changes
 
-## Definition of Done (DoD)
-Copy the DoD items from the spec's Acceptance Criteria section (lines marked with `✅ **DoD:**`) and verify each one:
-- [ ] [DoD item 1 from spec]
-- [ ] [DoD item 2 from spec]
-
 ## Notes
-[Optional: Add any important notes or decisions]
+Uses existing `utils/email.py` for sending emails.
