@@ -98,8 +98,9 @@ def _make_pr_phase(temp_issue_dir, post_todo_list=None):
 class TestPostTodoListComment:
     """Test posting todo list as PR comment after organizing reviewer comments."""
 
-    def test_add_pr_comment_called_with_todo_list_in_github_mode(self, pr_phase_instance, temp_issue_dir):
-        """Test 2.1: Verify add_pr_comment is called with todo list content after successful organization in GitHub mode."""
+    def test_organize_does_not_post_comment_immediately(self, pr_phase_instance, temp_issue_dir):
+        """Organizing comments into todo list should NOT post a PR comment immediately.
+        Posting happens later via _post_pr_todo_list at PR create/update time."""
         # Arrange
         pr_dir = temp_issue_dir / "pr"
         iteration_dir = pr_dir / "iteration_001"
@@ -137,19 +138,8 @@ class TestPostTodoListComment:
                 branch_name="test-branch"
             )
 
-        # Assert: add_pr_comment should be called with todo list content
-        pr_phase_instance.github_ops.add_pr_comment.assert_called_once()
-        call_args = pr_phase_instance.github_ops.add_pr_comment.call_args
-        assert call_args[0][0] == "123"  # PR number
-        comment_body = call_args[0][1]
-
-        # Check comment contains todo list
-        assert "## Todo List" in comment_body
-        assert "- [ ] Add unit tests" in comment_body
-        assert "- [ ] Add integration tests" in comment_body
-
-        # Check comment contains user_input.md reference
-        assert "user_input.md" in comment_body
+        # Assert: add_pr_comment should NOT be called during organization
+        pr_phase_instance.github_ops.add_pr_comment.assert_not_called()
 
     def test_add_pr_comment_not_called_in_local_mode(self, pr_phase_instance, temp_issue_dir):
         """Test 2.2: Verify add_pr_comment is NOT called in local mode (pr_number=0)."""
@@ -186,46 +176,22 @@ class TestPostTodoListComment:
         # Assert: add_pr_comment should NOT be called in local mode
         pr_phase_instance.github_ops.add_pr_comment.assert_not_called()
 
-    def test_comment_includes_user_input_md_file_path_reference(self, pr_phase_instance, temp_issue_dir):
-        """Test 2.3: Verify the comment includes the user_input.md file path reference."""
-        # Arrange
-        pr_dir = temp_issue_dir / "pr"
-        iteration_dir = pr_dir / "iteration_001"
-        iteration_dir.mkdir(parents=True)
+    def test_comment_includes_user_input_md_file_path_reference(self, temp_issue_dir):
+        """Verify the PR comment includes the user_input.md file path reference (via _post_pr_todo_list)."""
+        # Set up a todo list iteration with all items checked
+        pr_dir = temp_issue_dir / "pr" / "iteration_001"
+        pr_dir.mkdir(parents=True)
+        (pr_dir / "user_input.md").write_text("PR Comment", encoding="utf-8")
+        (pr_dir / "output.md").write_text("## Todo List\n- [x] Fix bug", encoding="utf-8")
 
-        user_input_file = iteration_dir / "user_input.md"
-        user_input_file.write_text("PR Comment", encoding="utf-8")
+        pr_phase = _make_pr_phase(temp_issue_dir, post_todo_list=True)
+        pr_phase.issue_dir = temp_issue_dir
 
-        # Mock agent execution
-        def mock_execute_agent(*args, **kwargs):
-            output_file = iteration_dir / "output.md"
-            output_file.write_text("## Todo List\n- [ ] Fix bug", encoding="utf-8")
-            return ("Done", PhaseStatusCode.NEEDS_CHANGES)
+        pr_phase._post_pr_todo_list("456")
 
-        pr_phase_instance._execute_agent_iteration = mock_execute_agent
-        pr_phase_instance.iteration = 1
-        pr_phase_instance.issue_dir = temp_issue_dir
-
-        # Mock checklist validation
-        with patch('cafe.utils.checklist_validator.validate_checklist') as mock_validate, \
-             patch.object(pr_phase_instance, '_print_token_usage_summary'), \
-             patch('cafe.utils.git_utils.to_cwd_relative_path') as mock_path:
-            mock_validate.return_value = MagicMock(is_complete=True)
-            mock_path.return_value = ".cafe/issues/test_issue/pr/iteration_001/user_input.md"
-
-            # Act
-            result = pr_phase_instance._organize_comments_to_todo_list(
-                pr_number=456,
-                pr_url="https://github.com/test/repo/pull/456",
-                branch_name="feature-branch"
-            )
-
-        # Assert: Comment should reference user_input.md file path
-        pr_phase_instance.github_ops.add_pr_comment.assert_called_once()
-        comment_body = pr_phase_instance.github_ops.add_pr_comment.call_args[0][1]
-
+        pr_phase.github_ops.add_pr_comment.assert_called_once()
+        comment_body = pr_phase.github_ops.add_pr_comment.call_args[0][1]
         assert "user_input.md" in comment_body
-        assert ".cafe/issues/test_issue/pr/iteration_001/user_input.md" in comment_body or "iteration_001/user_input.md" in comment_body
 
 
 class TestPostPrTodoList:
@@ -320,6 +286,20 @@ class TestPostPrTodoList:
         pr_phase.github_ops.add_pr_comment.assert_called_once()
         comment_body = pr_phase.github_ops.add_pr_comment.call_args[0][1]
         assert "New item done" in comment_body
+
+    def test_skips_non_todo_list_output(self, temp_issue_dir):
+        """When output.md is PR body content (not a todo list), it should be skipped."""
+        pr_dir = temp_issue_dir / "pr" / "iteration_001"
+        pr_dir.mkdir(parents=True)
+        (pr_dir / "user_input.md").write_text("review comments", encoding="utf-8")
+        (pr_dir / "output.md").write_text("# Fix login bug\n\n## Summary\nFixed the login bug.", encoding="utf-8")
+
+        pr_phase = _make_pr_phase(temp_issue_dir, post_todo_list=True)
+        pr_phase.issue_dir = temp_issue_dir
+
+        pr_phase._post_pr_todo_list("42")
+
+        pr_phase.github_ops.add_pr_comment.assert_not_called()
 
 
 class TestPostPrTodoListIntegration:

@@ -1405,23 +1405,8 @@ Return ONLY the status code (CAFE_CONFIRMED or CAFE_NEEDS_CHANGES) with no expla
         pr_dir = self.issue_dir / "pr"
         iteration_dir = pr_dir / f"iteration_{self.iteration:03d}"
         output_file = iteration_dir / "output.md"
-        # Post todo list as PR comment in GitHub mode (if enabled)
-        if pr_number > 0 and self.post_todo_list:  # Only post in GitHub mode when option is enabled
-            try:
-                todo_list_content = output_file.read_text(encoding="utf-8")
-                from cafe.utils.git_utils import to_cwd_relative_path
-                try:
-                    user_input_display = to_cwd_relative_path(user_input_file)
-                except ValueError:
-                    user_input_display = str(user_input_file)
-
-                comment_body = self._build_todo_list_comment(todo_list_content, user_input_display)
-                self.github_ops.add_pr_comment(str(pr_number), comment_body)
-            except Exception as e:
-                # Don't fail the workflow if posting comment fails - just warn
-                from rich.console import Console
-                console = Console()
-                console.print(f"[yellow]⚠️  Warning: Failed to post todo list as PR comment: {e}[/yellow]")
+        # Note: todo list is posted by _post_pr_todo_list() at PR create/update time,
+        # only when all items are checked. No need to post here.
 
         from cafe.utils.git_utils import to_cwd_relative_path
         try:
@@ -1591,7 +1576,17 @@ Return ONLY the status code (CAFE_CONFIRMED or CAFE_NEEDS_CHANGES) with no expla
             output_file = iteration_dir / "output.md"
             if not user_input_file.exists() or not output_file.exists():
                 continue
-            if not output_file.read_text(encoding="utf-8").strip():
+            output_content = output_file.read_text(encoding="utf-8")
+            if not output_content.strip():
+                continue
+            # Verify this is a todo list (not PR body content)
+            is_todo_list = (
+                "## Todo List" in output_content
+                or "## Todo" in output_content
+                or "- [ ]" in output_content
+                or "- [x]" in output_content
+            )
+            if not is_todo_list:
                 continue
 
             # Only post if all todo items are completed
