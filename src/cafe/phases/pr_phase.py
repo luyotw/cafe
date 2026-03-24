@@ -1034,20 +1034,23 @@ class PRPhase(Phase):
         Returns:
             Path to saved user_input.md file if comments were saved, None if no new comments
         """
-        from cafe.utils.github import get_all_pr_comments, format_comments_for_prompt, GitHubOps
+        from cafe.utils.github import format_comments_for_prompt, GitHubOps
         from datetime import datetime
         from rich.console import Console
 
         console = Console()
 
         try:
-            # Fetch all PR comments (review, timeline, and review body)
+            # Get previously seen comment IDs to filter out already-processed comments
+            exclude_ids = self._get_last_seen_comment_ids()
+
+            # Fetch PR comments, excluding already-seen ones
             print(f"  → Fetching PR comments for PR #{pr_number}")
-            comments = get_all_pr_comments(pr_number)
-            print(f"  → Got {len(comments)} total comments")
+            comments = get_all_pr_comments(pr_number, exclude_ids=exclude_ids or None)
+            print(f"  → Got {len(comments)} new comments (excluded {len(exclude_ids)} previously seen)")
 
             if not comments:
-                print(f"  → No comments found for PR #{pr_number}")
+                print(f"  → No new comments found for PR #{pr_number}")
                 return None
 
             # Format comments for saving
