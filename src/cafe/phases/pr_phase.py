@@ -370,8 +370,6 @@ class PRPhase(Phase):
             Set of comment IDs seen at the last push, or empty set if no such
             record exists (first iteration or backward compatibility)
         """
-        from typing import Set as TypingSet
-
         pr_dir = self.issue_dir / "pr"
         if not pr_dir.exists():
             return set()
@@ -1046,7 +1044,7 @@ class PRPhase(Phase):
 
             # Fetch PR comments, excluding already-seen ones
             print(f"  → Fetching PR comments for PR #{pr_number}")
-            comments = get_all_pr_comments(pr_number, exclude_ids=exclude_ids or None)
+            comments = get_all_pr_comments(pr_number, exclude_ids=exclude_ids)
             print(f"  → Got {len(comments)} new comments (excluded {len(exclude_ids)} previously seen)")
 
             if not comments:
@@ -1656,6 +1654,21 @@ Return ONLY the status code (CAFE_CONFIRMED or CAFE_NEEDS_CHANGES) with no expla
                 console.print(f"[yellow]⚠️  Warning: Failed to post PR todo list as PR comment: {e}[/yellow]")
             return
 
+    def _snapshot_current_comment_ids(self, pr_number: str) -> list:
+        """Snapshot current comment IDs on the PR for incremental filtering next iteration.
+
+        Args:
+            pr_number: PR number (string or int)
+
+        Returns:
+            List of comment ID strings currently on the PR, or empty list on failure
+        """
+        try:
+            current_comments = get_all_pr_comments(int(pr_number))
+            return [c.id for c in current_comments]
+        except Exception:
+            return []
+
     def _create_or_update_pr(self, existing_pr: dict | None, branch_name: str) -> PhaseResult:
         """Create or update PR with prepared content.
 
@@ -1688,11 +1701,7 @@ Return ONLY the status code (CAFE_CONFIRMED or CAFE_NEEDS_CHANGES) with no expla
             self.github_ops.update_pr(pr_number, title=pr_title, body=pr_body)
 
             # Snapshot all current comment IDs so next iteration only fetches new ones
-            try:
-                current_comments = get_all_pr_comments(int(pr_number))
-                last_seen_comment_ids = [c.id for c in current_comments]
-            except Exception:
-                last_seen_comment_ids = []
+            last_seen_comment_ids = self._snapshot_current_comment_ids(pr_number)
 
             # Save progress - READY_FOR_REVIEW means waiting for reviewer feedback
             self._save_progress(PhaseStatusCode.READY_FOR_REVIEW)
@@ -1740,11 +1749,7 @@ Return ONLY the status code (CAFE_CONFIRMED or CAFE_NEEDS_CHANGES) with no expla
                     console.print(f"[yellow]⚠️  Warning: Failed to add PR link to issue #{self.issue_id}: {e}[/yellow]")
 
             # Snapshot all current comment IDs so next iteration only fetches new ones
-            try:
-                current_comments = get_all_pr_comments(int(pr_number))
-                last_seen_comment_ids = [c.id for c in current_comments]
-            except Exception:
-                last_seen_comment_ids = []
+            last_seen_comment_ids = self._snapshot_current_comment_ids(pr_number)
 
             # Save progress - READY_FOR_REVIEW means waiting for reviewer feedback
             self._save_progress(PhaseStatusCode.READY_FOR_REVIEW)
