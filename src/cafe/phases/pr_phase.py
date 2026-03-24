@@ -357,6 +357,44 @@ class PRPhase(Phase):
             "user_input_path": user_input_file if has_user_input else None,
         }
 
+    def _get_last_seen_comment_ids(self) -> "Set[str]":
+        """Get last seen comment IDs by searching PR iteration history backwards.
+
+        Searches all PR iteration directories in reverse order to find the most
+        recent context.json containing the last_seen_comment_ids field.
+        This is necessary because last_seen_comment_ids is only recorded in push
+        iterations (CAFE_READY_FOR_REVIEW), not in comment-fetch iterations
+        (CAFE_NEEDS_CHANGES). The relevant data may be 2+ iterations back.
+
+        Returns:
+            Set of comment IDs seen at the last push, or empty set if no such
+            record exists (first iteration or backward compatibility)
+        """
+        from typing import Set as TypingSet
+
+        pr_dir = self.issue_dir / "pr"
+        if not pr_dir.exists():
+            return set()
+
+        iteration_dirs = sorted(pr_dir.glob("iteration_*"))
+        if not iteration_dirs:
+            return set()
+
+        # Search backwards through all iterations for the most recent last_seen_comment_ids
+        for iter_dir in reversed(iteration_dirs):
+            context_file = iter_dir / "context.json"
+            if not context_file.exists():
+                continue
+            try:
+                with open(context_file, "r", encoding="utf-8") as f:
+                    context = json.load(f)
+                if "last_seen_comment_ids" in context:
+                    return set(context["last_seen_comment_ids"])
+            except (json.JSONDecodeError, TypeError, KeyError):
+                continue
+
+        return set()
+
     def _get_latest_develop_end_time(self) -> Optional["datetime"]:
         """Get end_time of the latest develop phase iteration.
 
