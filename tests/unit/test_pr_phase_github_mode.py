@@ -854,3 +854,193 @@ class TestPRPhaseAgentCalled:
         assert captured_iteration["value"] == 2, (
             f"Expected iteration 2 when _generate_pr_content was called, got {captured_iteration['value']}"
         )
+
+
+class TestCreateOrUpdatePRRecordsLastSeenCommentIds:
+    """Test that _create_or_update_pr() records last_seen_comment_ids in context.json."""
+
+    @pytest.fixture
+    def mock_dependencies(self):
+        """Create mock dependencies."""
+        agent_manager = MagicMock()
+        permission_handler = MagicMock()
+        git_ops = MagicMock()
+        github_ops = MagicMock()
+
+        git_ops.get_current_branch.return_value = "test-issue"
+        git_ops.get_repo_root.return_value = Path("/tmp")
+
+        return {
+            "agent_manager": agent_manager,
+            "permission_handler": permission_handler,
+            "git_ops": git_ops,
+            "github_ops": github_ops,
+        }
+
+    @pytest.fixture
+    def setup_issue_dir(self, tmp_path):
+        """Setup basic issue directory structure."""
+        issue_dir = tmp_path / ".cafe" / "issues" / "test-issue"
+        issue_dir.mkdir(parents=True)
+
+        spec_file = issue_dir / "spec" / "iteration_001" / "output.md"
+        spec_file.parent.mkdir(parents=True)
+        spec_file.write_text("# Test Spec")
+
+        plan_file = issue_dir / "plan" / "iteration_001" / "output.md"
+        plan_file.parent.mkdir(parents=True)
+        plan_file.write_text("# Test Plan")
+
+        return issue_dir, spec_file
+
+    def test_create_pr_records_last_seen_comment_ids_when_comments_exist(
+        self, tmp_path, mock_dependencies, setup_issue_dir
+    ):
+        """Test 3.1: create PR 後 context.json 中有 last_seen_comment_ids（有 comments 的情況）
+
+        情境：PR 建立成功，GitHub 上有現有 comments
+        預期：context.json 包含 last_seen_comment_ids，記錄當前所有 comment IDs
+        """
+        from cafe.utils.github import PRComment
+
+        issue_dir, spec_file = setup_issue_dir
+
+        mock_dependencies["git_ops"].has_unpushed_commits.return_value = True
+        mock_dependencies["git_ops"].get_unpushed_commits.return_value = [
+            {"hash": "abc1234", "message": "feat: add feature"}
+        ]
+        mock_dependencies["github_ops"].check_gh_auth.return_value = True
+        mock_dependencies["github_ops"].get_pr_for_branch.return_value = None
+        mock_dependencies["github_ops"].create_pr.return_value = "https://github.com/test/repo/pull/42"
+
+        existing_comments = [
+            PRComment(id="R1", body="舊 review comment", author="reviewer1",
+                      created_at="2025-01-01T10:00:00Z", comment_type="review"),
+            PRComment(id="T1", body="舊 timeline comment", author="maintainer",
+                      created_at="2025-01-02T09:00:00Z", comment_type="timeline"),
+        ]
+
+        with patch.object(PRPhase, "_get_issue_dir", return_value=issue_dir):
+            with patch.object(PRPhase, "_prepare_pr_content", return_value=(None, ("Test PR", "Test body"))):
+                with patch("cafe.phases.pr_phase.get_all_pr_comments", return_value=existing_comments):
+                    phase = PRPhase(
+                        spec_file=str(spec_file),
+                        issue_name="test-issue",
+                        **mock_dependencies
+                    )
+
+                    result = phase._execute_github_mode()
+
+        assert result.status == PhaseStatus.COMPLETED
+
+        context_file = issue_dir / "pr" / "iteration_001" / "context.json"
+        assert context_file.exists()
+        with open(context_file) as f:
+            context = json.load(f)
+
+        assert "last_seen_comment_ids" in context
+        assert set(context["last_seen_comment_ids"]) == {"R1", "T1"}
+
+    def test_create_pr_records_empty_last_seen_comment_ids_when_no_comments(
+        self, tmp_path, mock_dependencies, setup_issue_dir
+    ):
+        """Test 3.2: create PR 後 context.json 中有空的 last_seen_comment_ids（沒有 comments 的情況）
+
+        情境：PR 建立成功，GitHub 上沒有 comments（首次建立 PR）
+        預期：context.json 包含空的 last_seen_comment_ids
+        """
+        from cafe.utils.github import GitHubError
+
+        issue_dir, spec_file = setup_issue_dir
+
+        mock_dependencies["git_ops"].has_unpushed_commits.return_value = True
+        mock_dependencies["git_ops"].get_unpushed_commits.return_value = [
+            {"hash": "abc1234", "message": "feat: add feature"}
+        ]
+        mock_dependencies["github_ops"].check_gh_auth.return_value = True
+        mock_dependencies["github_ops"].get_pr_for_branch.return_value = None
+        mock_dependencies["github_ops"].create_pr.return_value = "https://github.com/test/repo/pull/42"
+
+        # No comments found
+        with patch.object(PRPhase, "_get_issue_dir", return_value=issue_dir):
+            with patch.object(PRPhase, "_prepare_pr_content", return_value=(None, ("Test PR", "Test body"))):
+                with patch("cafe.phases.pr_phase.get_all_pr_comments",
+                           side_effect=GitHubError("No comments found")):
+                    phase = PRPhase(
+                        spec_file=str(spec_file),
+                        issue_name="test-issue",
+                        **mock_dependencies
+                    )
+
+                    result = phase._execute_github_mode()
+
+        assert result.status == PhaseStatus.COMPLETED
+
+        context_file = issue_dir / "pr" / "iteration_001" / "context.json"
+        assert context_file.exists()
+        with open(context_file) as f:
+            context = json.load(f)
+
+        # Should still have the field, just empty
+        assert "last_seen_comment_ids" in context
+        assert context["last_seen_comment_ids"] == []
+
+    def test_update_pr_records_last_seen_comment_ids(
+        self, tmp_path, mock_dependencies, setup_issue_dir
+    ):
+        """Test 3.3: update PR 後 context.json 中有 last_seen_comment_ids
+
+        情境：PR 更新成功，GitHub 上有現有 comments
+        預期：新 iteration 的 context.json 包含 last_seen_comment_ids
+        """
+        from cafe.utils.github import PRComment
+
+        issue_dir, spec_file = setup_issue_dir
+
+        # Create existing PR iteration_001
+        pr_dir = issue_dir / "pr"
+        iteration_001 = pr_dir / "iteration_001"
+        iteration_001.mkdir(parents=True)
+        (iteration_001 / "context.json").write_text(json.dumps({
+            "iteration": 1,
+            "status_code": "CAFE_READY_FOR_REVIEW",
+            "last_seen_comment_ids": ["OLD1"]
+        }))
+
+        mock_dependencies["git_ops"].has_unpushed_commits.return_value = True
+        mock_dependencies["git_ops"].get_unpushed_commits.return_value = [
+            {"hash": "def5678", "message": "fix: bug fix"}
+        ]
+        mock_dependencies["github_ops"].check_gh_auth.return_value = True
+        mock_dependencies["github_ops"].get_pr_for_branch.return_value = {
+            "number": 42,
+            "url": "https://github.com/test/repo/pull/42"
+        }
+
+        current_comments = [
+            PRComment(id="OLD1", body="舊 comment", author="reviewer1",
+                      created_at="2025-01-01T10:00:00Z", comment_type="review"),
+            PRComment(id="NEW1", body="新 comment", author="reviewer2",
+                      created_at="2025-01-03T10:00:00Z", comment_type="timeline"),
+        ]
+
+        with patch.object(PRPhase, "_get_issue_dir", return_value=issue_dir):
+            with patch.object(PRPhase, "_prepare_pr_content", return_value=(None, ("Updated PR", "Updated body"))):
+                with patch("cafe.phases.pr_phase.get_all_pr_comments", return_value=current_comments):
+                    phase = PRPhase(
+                        spec_file=str(spec_file),
+                        issue_name="test-issue",
+                        **mock_dependencies
+                    )
+
+                    result = phase._execute_github_mode()
+
+        assert result.status == PhaseStatus.COMPLETED
+
+        context_file = issue_dir / "pr" / "iteration_002" / "context.json"
+        assert context_file.exists()
+        with open(context_file) as f:
+            context = json.load(f)
+
+        assert "last_seen_comment_ids" in context
+        assert set(context["last_seen_comment_ids"]) == {"OLD1", "NEW1"}

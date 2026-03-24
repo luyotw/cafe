@@ -14,7 +14,7 @@ from cafe.core.permission import PermissionHandler
 from cafe.core.phase import Phase
 from cafe.core.types import PhaseResult, PhaseStatus
 from cafe.ui.inquirer_prompts import prompt_confirm
-from cafe.utils.github import GitHubOps, GitHubError
+from cafe.utils.github import GitHubOps, GitHubError, get_all_pr_comments
 from cafe.utils.prompt_utils import format_checklist_instruction
 
 
@@ -1684,12 +1684,24 @@ Return ONLY the status code (CAFE_CONFIRMED or CAFE_NEEDS_CHANGES) with no expla
 
             self.github_ops.update_pr(pr_number, title=pr_title, body=pr_body)
 
+            # Snapshot all current comment IDs so next iteration only fetches new ones
+            try:
+                current_comments = get_all_pr_comments(int(pr_number))
+                last_seen_comment_ids = [c.id for c in current_comments]
+            except Exception:
+                last_seen_comment_ids = []
+
             # Save progress - READY_FOR_REVIEW means waiting for reviewer feedback
             self._save_progress(PhaseStatusCode.READY_FOR_REVIEW)
 
             # Update iteration history with status_code
             self._update_iteration_history(
-                phase_specific_data={"pr_number": pr_number, "pr_url": pr_url, "branch": branch_name},
+                phase_specific_data={
+                    "pr_number": pr_number,
+                    "pr_url": pr_url,
+                    "branch": branch_name,
+                    "last_seen_comment_ids": last_seen_comment_ids,
+                },
                 status_code=PhaseStatusCode.READY_FOR_REVIEW,
             )
 
@@ -1724,12 +1736,24 @@ Return ONLY the status code (CAFE_CONFIRMED or CAFE_NEEDS_CHANGES) with no expla
                 except Exception as e:
                     console.print(f"[yellow]⚠️  Warning: Failed to add PR link to issue #{self.issue_id}: {e}[/yellow]")
 
+            # Snapshot all current comment IDs so next iteration only fetches new ones
+            try:
+                current_comments = get_all_pr_comments(int(pr_number))
+                last_seen_comment_ids = [c.id for c in current_comments]
+            except Exception:
+                last_seen_comment_ids = []
+
             # Save progress - READY_FOR_REVIEW means waiting for reviewer feedback
             self._save_progress(PhaseStatusCode.READY_FOR_REVIEW)
 
             # Update iteration history with status_code
             self._update_iteration_history(
-                phase_specific_data={"pr_number": pr_number, "pr_url": pr_url, "branch": branch_name},
+                phase_specific_data={
+                    "pr_number": pr_number,
+                    "pr_url": pr_url,
+                    "branch": branch_name,
+                    "last_seen_comment_ids": last_seen_comment_ids,
+                },
                 status_code=PhaseStatusCode.READY_FOR_REVIEW,
             )
 
