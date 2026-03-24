@@ -389,6 +389,117 @@ class TestGetAllPRComments:
             with pytest.raises(GitHubError, match="Failed to get any comments"):
                 get_all_pr_comments(123)
 
+    def test_get_all_pr_comments_exclude_ids_none_returns_all(self):
+        """測試 exclude_ids=None 時行為與原本相同
+
+        情境：不傳入 exclude_ids（預設 None）
+        預期：返回所有 comments，行為與原本相同
+        """
+        review_comment = PRComment(
+            id="R1",
+            body="這行有 bug",
+            author="reviewer1",
+            created_at="2025-01-01T10:00:00Z",
+            comment_type="review"
+        )
+        timeline_comment = PRComment(
+            id="T1",
+            body="整體來說不錯",
+            author="maintainer",
+            created_at="2025-01-02T09:00:00Z",
+            comment_type="timeline"
+        )
+
+        with patch('cafe.utils.github.get_pr_comments') as mock_review, \
+             patch('cafe.utils.github.get_pr_timeline_comments') as mock_timeline, \
+             patch('cafe.utils.github.get_pr_review_body_comments') as mock_review_body:
+
+            mock_review.return_value = [review_comment]
+            mock_timeline.return_value = [timeline_comment]
+            mock_review_body.return_value = []
+
+            # 不傳入 exclude_ids（預設 None）
+            comments = get_all_pr_comments(123)
+
+            assert len(comments) == 2
+            assert {c.id for c in comments} == {"R1", "T1"}
+
+    def test_get_all_pr_comments_exclude_ids_filters_some(self):
+        """測試 exclude_ids 過濾部分 comments
+
+        情境：傳入 exclude_ids，包含部分 comment ID
+        預期：只返回不在 exclude_ids 中的新 comments
+        """
+        review_comment = PRComment(
+            id="R1",
+            body="舊的 review comment",
+            author="reviewer1",
+            created_at="2025-01-01T10:00:00Z",
+            comment_type="review"
+        )
+        timeline_comment_old = PRComment(
+            id="T1",
+            body="舊的 timeline comment",
+            author="maintainer",
+            created_at="2025-01-02T09:00:00Z",
+            comment_type="timeline"
+        )
+        timeline_comment_new = PRComment(
+            id="T2",
+            body="新的 timeline comment",
+            author="reviewer2",
+            created_at="2025-01-03T10:00:00Z",
+            comment_type="timeline"
+        )
+
+        with patch('cafe.utils.github.get_pr_comments') as mock_review, \
+             patch('cafe.utils.github.get_pr_timeline_comments') as mock_timeline, \
+             patch('cafe.utils.github.get_pr_review_body_comments') as mock_review_body:
+
+            mock_review.return_value = [review_comment]
+            mock_timeline.return_value = [timeline_comment_old, timeline_comment_new]
+            mock_review_body.return_value = []
+
+            # 排除 R1 和 T1（上一輪已看過的）
+            comments = get_all_pr_comments(123, exclude_ids={"R1", "T1"})
+
+            assert len(comments) == 1
+            assert comments[0].id == "T2"
+
+    def test_get_all_pr_comments_exclude_ids_filters_all(self):
+        """測試 exclude_ids 過濾所有 comments
+
+        情境：傳入 exclude_ids，包含所有 comment ID
+        預期：返回空列表（沒有新 comments）
+        """
+        review_comment = PRComment(
+            id="R1",
+            body="已看過的 review comment",
+            author="reviewer1",
+            created_at="2025-01-01T10:00:00Z",
+            comment_type="review"
+        )
+        timeline_comment = PRComment(
+            id="T1",
+            body="已看過的 timeline comment",
+            author="maintainer",
+            created_at="2025-01-02T09:00:00Z",
+            comment_type="timeline"
+        )
+
+        with patch('cafe.utils.github.get_pr_comments') as mock_review, \
+             patch('cafe.utils.github.get_pr_timeline_comments') as mock_timeline, \
+             patch('cafe.utils.github.get_pr_review_body_comments') as mock_review_body:
+
+            mock_review.return_value = [review_comment]
+            mock_timeline.return_value = [timeline_comment]
+            mock_review_body.return_value = []
+
+            # 排除所有 comment ID
+            comments = get_all_pr_comments(123, exclude_ids={"R1", "T1"})
+
+            assert comments == []
+
 
 class TestFilterUnresolvedComments:
     """測試過濾未 resolved comments 功能"""

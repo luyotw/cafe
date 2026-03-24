@@ -4,7 +4,7 @@ import json
 import re
 import subprocess
 from pathlib import Path
-from typing import Any, Dict, Optional, List
+from typing import Any, Dict, Optional, List, Set
 from pydantic import BaseModel
 
 
@@ -969,7 +969,7 @@ def get_pr_review_body_comments(pr_number: int) -> List[PRComment]:
         raise GitHubError(f"Unexpected error getting PR review body comments: {e}") from e
 
 
-def get_all_pr_comments(pr_number: int) -> List[PRComment]:
+def get_all_pr_comments(pr_number: int, exclude_ids: Optional[Set[str]] = None) -> List[PRComment]:
     """Get all PR comments (review comments, timeline comments, and review body comments).
 
     Combines review comments from code review threads, general timeline comments,
@@ -978,9 +978,12 @@ def get_all_pr_comments(pr_number: int) -> List[PRComment]:
 
     Args:
         pr_number: PR number
+        exclude_ids: Optional set of comment IDs to exclude from results.
+            Used to filter out previously seen comments and return only new ones.
 
     Returns:
-        List of PRComment objects (review, timeline, and review_body types)
+        List of PRComment objects (review, timeline, and review_body types),
+        excluding any comments whose ID is in exclude_ids
 
     Raises:
         ValueError: If PR not found or invalid
@@ -1028,6 +1031,10 @@ def get_all_pr_comments(pr_number: int) -> List[PRComment]:
                 comments_by_id[comment.id] = comment
         else:
             comments_by_id[comment.id] = comment
+
+    # Filter out previously seen comments if exclude_ids is provided
+    if exclude_ids:
+        return [c for c in comments_by_id.values() if c.id not in exclude_ids]
 
     return list(comments_by_id.values())
 
