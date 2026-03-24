@@ -14,7 +14,9 @@ from cafe.core.permission import PermissionHandler
 from cafe.core.phase import Phase
 from cafe.core.status_codes import PhaseStatusCode, StatusCodeParser, generate_status_code_prompt
 from cafe.core.types import PhaseProgress, PhaseResult, PhaseStatus
+from cafe.ui.chat import launch_chat_session
 from cafe.ui.display import Display
+from cafe.ui.inquirer_prompts import prompt_list, prompt_multiline
 from cafe.utils.prompt_utils import format_checklist_instruction
 
 
@@ -422,7 +424,7 @@ class DevelopPhase(Phase):
         Returns:
             str: "confirm" if user agrees, or user's feedback if they disagree
         """
-        from cafe.ui.inquirer_prompts import prompt_list, prompt_multiline
+        from InquirerPy.separator import Separator
 
         print(f"\n{'='*60}")
         print(f"Developer ({self.dev_agent}) believes no changes are needed.")
@@ -438,25 +440,33 @@ class DevelopPhase(Phase):
                 print(content)
                 print(f"\n{'='*60}\n")
 
-        choices = [
-            {"name": "Agree - Skip review and proceed to PR", "value": "c"},
-            {"name": "Disagree - Provide feedback for developer", "value": "m"},
-        ]
+        while True:
+            choices = [
+                {"name": "Agree - Skip review and proceed to PR", "value": "c"},
+                {"name": "Disagree - Provide feedback for developer", "value": "m"},
+                Separator(),
+                {"name": f"Chat with {self.dev_agent}", "value": "chat"},
+            ]
 
-        choice = prompt_list(
-            "Do you agree with the developer?",
-            choices,
-            default=None,
-        )
+            choice = prompt_list(
+                "Do you agree with the developer?",
+                choices,
+                default=None,
+            )
 
-        if choice == "c":
-            return "confirm"
-        else:
+            if choice == "chat":
+                launch_chat_session("developer", self.issue_name)
+                continue
+
+            if choice == "c":
+                return "confirm"
+
+            # choice == "m"
             feedback = prompt_multiline("Please provide feedback for the developer")
 
             if not feedback.strip():
                 print("\n⚠️  No feedback entered, please try again.")
-                return self._ask_user_for_no_changes_decision()
+                continue
 
             print()
             print("✅ Received your feedback...")
@@ -564,17 +574,16 @@ class DevelopPhase(Phase):
         self.user_input = ""
         return ""
 
-    def _ask_user_for_clarification(self) -> str:
+    def _ask_user_for_clarification(self, role: str = "developer") -> str:
         """Ask user for clarification using questions.xml from previous iteration.
 
         Uses interactive_qa_flow() if questions.xml exists and is valid,
-        otherwise falls back to a plain multiline prompt.
+        otherwise falls back to base class prompt with optional chat.
 
         Returns:
             str: User's answer
         """
         from cafe.core.questions_schema import parse_questions_xml, validate_questions_xml
-        from cafe.ui.inquirer_prompts import prompt_multiline
         from cafe.ui.interactive_qa import interactive_qa_flow
 
         # Look for questions.xml in the previous iteration directory
@@ -583,10 +592,10 @@ class DevelopPhase(Phase):
             xml_path = prev_iter_dir / "questions.xml"
             if xml_path.exists() and validate_questions_xml(xml_path):
                 questions = parse_questions_xml(xml_path)
-                return interactive_qa_flow(questions)
+                return interactive_qa_flow(questions, role=role, issue_name=self.issue_name, agent_name=self.dev_agent)
 
-        # Fallback to plain prompt
-        return prompt_multiline("Please answer the question")
+        # Fallback to base class prompt with chat option
+        return super()._ask_user_for_clarification(role=role, agent_name=self.dev_agent)
 
     def _get_last_develop_timestamp(self):
         """Get timestamp from last develop/status.json.
