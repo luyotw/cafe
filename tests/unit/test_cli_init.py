@@ -6,9 +6,25 @@ from unittest.mock import MagicMock, patch
 import pytest
 from typer.testing import CliRunner
 
-from cafe.ui.cli import app
+from cafe.ui.cli import app, CUSTOM_MODEL_SENTINEL
 
 runner = CliRunner()
+
+
+def _default_prompt_list_side_effect(cli="claude", agent="Roger: PM agent (system default)"):
+    """Build prompt_list side_effect for all-default init flow.
+
+    New flow: each role has CLI + agent + model steps (all via prompt_list).
+    PM: 3 calls (cli, agent, spec_model)
+    Developer: 5 calls (cli, agent, plan_model, develop_model, pr_model)
+    Reviewer: 3 calls (cli, agent, review_model)
+    Total: 11 calls
+    """
+    return [
+        cli, agent, "",              # PM
+        cli, agent, "", "", "",      # Developer
+        cli, agent, "",              # Reviewer
+    ]
 
 
 class TestInitCommandEnvironmentChecks:
@@ -63,34 +79,13 @@ class TestInitCommandEnvironmentChecks:
 
         monkeypatch.chdir(tmp_path)
 
-        # Mock prompts
         with (
             patch("cafe.ui.cli.prompt_confirm") as mock_confirm,
             patch("cafe.ui.cli.prompt_list") as mock_prompt_list,
             patch("cafe.ui.cli.prompt_text") as mock_prompt_text
         ):
-
-            # User confirms overwrite (True)
             mock_confirm.side_effect = [True]
-
-            # Setup agent selection
-            mock_prompt_list.side_effect = [
-                "claude",
-                "Roger: PM agent (system default)",
-                "claude",
-                "Roger: PM agent (system default)",
-                "claude",
-                "Roger: PM agent (system default)",
-            ]
-            # 設定 prompt_text 返回值（phase-specific models only）
-            # PM: spec phase model
-            # Developer: plan, develop, pr phase models
-            # Reviewer: review phase model
-            mock_prompt_text.side_effect = [
-                "",  # PM: spec
-                "", "", "",  # Developer: plan, develop, pr
-                ""  # Reviewer: review
-            ]
+            mock_prompt_list.side_effect = _default_prompt_list_side_effect()
 
             result = runner.invoke(app, ["init"])
 
@@ -118,9 +113,6 @@ class TestInitCommandEnvironmentChecks:
         assert result.exit_code == 1
         assert "No supported AI agents found" in result.stdout
 
-    # Tests removed: Agents and templates are no longer copied to project .cafe directory
-    # They are now managed globally at ~/.cafe/
-
 
 class TestInitCommandInteractiveFlow:
     """測試 init 指令互動式配置流程"""
@@ -137,50 +129,28 @@ class TestInitCommandInteractiveFlow:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """測試會為三個角色進行配置"""
-        # 模擬有可用 CLI
         mock_which.return_value = "/usr/bin/claude"
-
-        # 模擬 agent 列表
         mock_list_agents.return_value = [("Roger", "PM agent", Path(".cafe/agents/pm/Roger.md"), "system default")]
-
         monkeypatch.chdir(tmp_path)
 
-        # 模擬 prompt_list, prompt_text, prompt_confirm 方法
         with (
             patch("cafe.ui.cli.prompt_list") as mock_prompt_list,
             patch("cafe.ui.cli.prompt_text") as mock_prompt_text,
-            patch("cafe.ui.cli.prompt_confirm") as mock_prompt_confirm
         ):
-            
-            # 設定 prompt_list 返回值（CLI and agent 選擇）
+            agent = "Roger: PM agent (system default)"
             mock_prompt_list.side_effect = [
-                "claude",  # PM CLI
-                "Roger: PM agent (system default)",  # PM agent
-                "gemini",  # Developer CLI
-                "Roger: PM agent (system default)",  # Developer agent
-                "copilot",  # Reviewer CLI
-                "Roger: PM agent (system default)",  # Reviewer agent
+                "claude", agent, "",                      # PM
+                "gemini", agent, CUSTOM_MODEL_SENTINEL, "", "",  # Developer: plan=custom
+                "copilot", agent, "",                     # Reviewer
             ]
-
-            # 設定 prompt_text 返回值（phase-specific models only）
-            # PM: spec phase model
-            # Developer: plan, develop, pr phase models
-            # Reviewer: review phase model
-            mock_prompt_text.side_effect = [
-                "",  # PM: spec
-                "sonnet", "", "",  # Developer: plan, develop, pr
-                ""  # Reviewer: review
-            ]
-
-            # 設定 prompt_confirm 返回值（不再使用）
-            mock_prompt_confirm.return_value = False
+            mock_prompt_text.side_effect = ["sonnet"]  # Developer plan model
 
             _result = runner.invoke(app, ["init"])
 
-        # 驗證 prompt_list 被呼叫 6 次（3 個角色 × 2: CLI + agent）
-        assert mock_prompt_list.call_count == 6
-        # 驗證 prompt_text 被呼叫 5 次（PM: 1, Developer: 3, Reviewer: 1）
-        assert mock_prompt_text.call_count == 5
+        # 驗證 prompt_list: PM(3) + Developer(5) + Reviewer(3) = 11
+        assert mock_prompt_list.call_count == 11
+        # 驗證 prompt_text: only 1 custom model
+        assert mock_prompt_text.call_count == 1
 
     @patch("cafe.ui.cli.shutil.which")
     @patch("cafe.ui.cli.init_helpers.copy_data_directory")
@@ -194,18 +164,12 @@ class TestInitCommandInteractiveFlow:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """測試 Ctrl+C 中斷時顯示取消訊息"""
-        # 模擬有可用 CLI
         mock_which.return_value = "/usr/bin/claude"
-
-        # 模擬 agent 列表
         mock_list_agents.return_value = [("Roger", "PM agent", Path(".cafe/agents/pm/Roger.md"), "system default")]
-
         monkeypatch.chdir(tmp_path)
 
-        # 模擬 Ctrl+C
         with patch("cafe.ui.cli.prompt_list") as mock_prompt_list:
             mock_prompt_list.side_effect = KeyboardInterrupt()
-
             result = runner.invoke(app, ["init"])
 
         assert result.exit_code == 1
@@ -223,18 +187,13 @@ class TestInitCommandInteractiveFlow:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """測試空 agent 資料夾時提示錯誤"""
-        # 模擬有可用 CLI
         mock_which.return_value = "/usr/bin/claude"
-
-        # 模擬空 agent 列表
         mock_list_agents.return_value = []
-
         monkeypatch.chdir(tmp_path)
 
         result = runner.invoke(app, ["init"])
 
         assert result.exit_code == 1
-        # 應該顯示錯誤訊息
 
 
 class TestInitCommandConfigSaving:
@@ -252,57 +211,31 @@ class TestInitCommandConfigSaving:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """測試配置正確儲存到 .cafe/config.yaml"""
-        # 模擬有可用 CLI
         mock_which.return_value = "/usr/bin/claude"
-
-        # 模擬 agent 列表
         mock_list_agents.return_value = [
             ("Roger", "PM agent", Path(".cafe/agents/pm/Roger.md"), "system default"),
             ("David", "Dev agent", Path(".cafe/agents/developer/David.md"), "custom"),
             ("Richard", "Reviewer agent", Path(".cafe/agents/reviewer/Richard.md"), "system default"),
         ]
-
         monkeypatch.chdir(tmp_path)
 
-        # 模擬 prompt_list, prompt_text, prompt_confirm 方法
         with (
             patch("cafe.ui.cli.prompt_list") as mock_prompt_list,
             patch("cafe.ui.cli.prompt_text") as mock_prompt_text,
-            patch("cafe.ui.cli.prompt_confirm") as mock_prompt_confirm
         ):
-            
-            # 設定 prompt_list 返回值（CLI and agent 選擇）
             mock_prompt_list.side_effect = [
-                "copilot",  # PM CLI
-                "Roger: PM agent (system default)",  # PM agent
-                "claude",  # Developer CLI
-                "David: Dev agent (custom)",  # Developer agent
-                "gemini",  # Reviewer CLI
-                "Richard: Reviewer agent (system default)",  # Reviewer agent
+                "copilot", "Roger: PM agent (system default)", "",              # PM: all default
+                "claude", "David: Dev agent (custom)", CUSTOM_MODEL_SENTINEL, "", "",  # Dev: plan=custom
+                "gemini", "Richard: Reviewer agent (system default)", "",       # Reviewer: all default
             ]
-
-            # 設定 prompt_text 返回值（phase-specific models only）
-            # PM: spec phase model
-            # Developer: plan, develop, pr phase models
-            # Reviewer: review phase model
-            mock_prompt_text.side_effect = [
-                "",  # PM: spec
-                "sonnet", "", "",  # Developer: plan, develop, pr
-                ""  # Reviewer: review
-            ]
-
-            # 設定 prompt_confirm 返回值（不再使用）
-            mock_prompt_confirm.return_value = False
+            mock_prompt_text.side_effect = ["sonnet"]  # Developer plan model
 
             _result = runner.invoke(app, ["init"])
 
-        # 驗證配置檔案被建立
         config_file = tmp_path / ".cafe" / "config.yaml"
         assert config_file.exists()
 
-        # 讀取並驗證配置內容
         import yaml
-
         with open(config_file) as f:
             config = yaml.safe_load(f)
 
@@ -310,7 +243,6 @@ class TestInitCommandConfigSaving:
         assert config["agents"]["pm"]["cli"] == "copilot"
         assert config["agents"]["developer"]["name"] == "David"
         assert config["agents"]["developer"]["cli"] == "claude"
-        # Verify phase-specific models are stored (not role-level)
         assert config["agents"]["developer"]["plan"]["model"] == "sonnet"
         assert "model" not in config["agents"]["pm"]
         assert "model" not in config["agents"]["developer"]
@@ -330,43 +262,15 @@ class TestInitCommandConfigSaving:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """測試成功後顯示配置摘要"""
-        # 模擬有可用 CLI
         mock_which.return_value = "/usr/bin/claude"
-
-        # 模擬 agent 列表
         mock_list_agents.return_value = [("Roger", "PM agent", Path(".cafe/agents/pm/Roger.md"), "system default")]
-
         monkeypatch.chdir(tmp_path)
 
-        # 模擬 prompt_list, prompt_text, prompt_confirm 方法
         with (
             patch("cafe.ui.cli.prompt_list") as mock_prompt_list,
             patch("cafe.ui.cli.prompt_text") as mock_prompt_text,
-            patch("cafe.ui.cli.prompt_confirm") as mock_prompt_confirm
         ):
-            
-            # 每個角色都選擇相同設定
-            mock_prompt_list.side_effect = [
-                "claude",
-                "Roger: PM agent (system default)",
-                "claude",
-                "Roger: PM agent (system default)",
-                "claude",
-                "Roger: PM agent (system default)",
-            ]
-            # 設定 prompt_text 返回值（phase-specific models only）
-            # PM: spec phase model
-            # Developer: plan, develop, pr phase models
-            # Reviewer: review phase model
-            mock_prompt_text.side_effect = [
-                "",  # PM: spec
-                "", "", "",  # Developer: plan, develop, pr
-                ""  # Reviewer: review
-            ]
-
-            # 設定 prompt_confirm 返回值（不再使用）
-            mock_prompt_confirm.return_value = False
-
+            mock_prompt_list.side_effect = _default_prompt_list_side_effect()
             result = runner.invoke(app, ["init"])
 
         assert result.exit_code == 0
@@ -388,42 +292,15 @@ class TestInitCommandConfigSaving:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """測試 model 為 None 時顯示為「預設」"""
-        # 模擬有可用 CLI
         mock_which.return_value = "/usr/bin/claude"
-
-        # 模擬 agent 列表
         mock_list_agents.return_value = [("Roger", "PM agent", Path(".cafe/agents/pm/Roger.md"), "system default")]
-
         monkeypatch.chdir(tmp_path)
 
-        # 模擬 prompt_list, prompt_text, prompt_confirm 方法（model 輸入為空）
         with (
             patch("cafe.ui.cli.prompt_list") as mock_prompt_list,
             patch("cafe.ui.cli.prompt_text") as mock_prompt_text,
-            patch("cafe.ui.cli.prompt_confirm") as mock_prompt_confirm
         ):
-            
-            mock_prompt_list.side_effect = [
-                "claude",
-                "Roger: PM agent (system default)",
-                "claude",
-                "Roger: PM agent (system default)",
-                "claude",
-                "Roger: PM agent (system default)",
-            ]
-            # 設定 prompt_text 返回值（phase-specific models only）
-            # PM: spec phase model
-            # Developer: plan, develop, pr phase models
-            # Reviewer: review phase model
-            mock_prompt_text.side_effect = [
-                "",  # PM: spec
-                "", "", "",  # Developer: plan, develop, pr
-                ""  # Reviewer: review
-            ]
-
-            # 設定 prompt_confirm 返回值（不再使用）
-            mock_prompt_confirm.return_value = False
-
+            mock_prompt_list.side_effect = _default_prompt_list_side_effect()
             result = runner.invoke(app, ["init"])
 
         assert result.exit_code == 0
@@ -446,17 +323,10 @@ class TestInitCommandErrorMessages:
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """測試當沒有 agents 時錯誤訊息應該顯示正確的路徑 (不應該顯示 .cafe/agents/)"""
-        # 模擬有可用 CLI
+        """測試當沒有 agents 時錯誤訊息應該顯示正確的路徑"""
         mock_which.return_value = "/usr/bin/claude"
-
-        # 模擬選擇 CLI
         mock_prompt_list.return_value = "claude"
-        
-        # 模擬輸入 model (empty string)
         mock_prompt_text.return_value = ""
-        
-        # 模擬空 agent 列表
         mock_list_agents.return_value = []
 
         monkeypatch.chdir(tmp_path)
@@ -465,10 +335,6 @@ class TestInitCommandErrorMessages:
 
         assert result.exit_code == 1
         assert "Agent files not found" in result.stdout
-        # 不應該包含錯誤的 .cafe/agents/ 路徑引用 (但允許 ~/.cafe/agents/)
-        # 檢查是否包含正確引用而不是錯誤引用 "Please ensure valid .md files exist in .cafe/agents/"
         assert "in .cafe/agents/" not in result.stdout
-        # 應該提示正確的路徑：~/.cafe/agents/ 和 src/cafe/data/agents/
-        # Note: ANSI color codes may split the path, so check for the key components
         assert "~" in result.stdout and "/.cafe/agents/" in result.stdout
         assert "src/cafe/data/agents/" in result.stdout
