@@ -931,7 +931,22 @@ class PRPhase(Phase):
 
         # Ask user for decision (c/r/m)
         if self.interactive:
-            choice = self._ask_user_for_review_decision("code changes", agent_name="Reviewer")
+            def _redisplay_diff() -> None:
+                from rich.console import Console
+                from rich.syntax import Syntax
+                _console = Console()
+                _console.print()
+                _console.print(f"{'=' * 60}")
+                _syntax = Syntax(diff_output, "diff", theme="monokai", line_numbers=False)
+                _console.print(_syntax)
+                _console.print(f"{'=' * 60}")
+
+            choice = self._ask_user_for_review_decision(
+                "code changes",
+                agent_name=self.dev_agent,
+                role="developer",
+                display_callback=_redisplay_diff if diff_output.strip() else None,
+            )
         else:
             # Non-interactive mode not supported for local review
             return PhaseResult(

@@ -628,98 +628,14 @@ def init() -> None:
         console.print(f"[green]Found available AI agents: {', '.join(available_clis)}[/green]\n")
 
         # 4. Interactive configuration for three roles
+        agents_config = _interactive_agent_setup(available_clis)
+
+        # 5. Build full config
         config = {
-            "agents": {},
-        }
-
-        roles = [
-            ("pm", "PM"),
-            ("developer", "Developer"),
-            ("reviewer", "Reviewer"),
-        ]
-
-        for role_key, role_display in roles:
-            console.print(f"[bold cyan]Configuring {role_display} role:[/bold cyan]")
-
-            # Select CLI
-            selected_cli = prompt_list(
-                message=f"Please select an AI agent for {role_display}:",
-                choices=available_clis,
-            )
-            if not selected_cli:
-                console.print("\n[yellow]Configuration incomplete, cancelled.[/yellow]")
-                raise typer.Exit(1)
-
-            # List available agents for this role
-            agents = list_available_agents(role_key)
-
-            if not agents:
-                console.print(f"[red]Error: Agent files not found for {role_display} role.[/red]")
-                console.print(
-                    f"[yellow]Please ensure valid .md files exist in ~/.cafe/agents/{role_key}/ or src/cafe/data/agents/{role_key}/ directory.[/yellow]"
-                )
-                raise typer.Exit(1)
-
-            # Create agent choices in "name: description (source_type)" format
-            agent_choices = []
-            for name, desc, _, source_type in agents:
-                source_label = " (custom)" if source_type == "custom" else " (system default)"
-                agent_choices.append(f"{name}: {desc}{source_label}")
-
-            # Select agent
-            selected_agent_display = prompt_list(
-                message=f"Please select an agent for {role_display}:",
-                choices=agent_choices,
-            )
-            if not selected_agent_display:
-                console.print("\n[yellow]Configuration incomplete, cancelled.[/yellow]")
-                raise typer.Exit(1)
-
-            # Extract agent name from display string
-            selected_agent_name = selected_agent_display.split(":")[0].strip()
-
-            # Store configuration
-            config["agents"][role_key] = {
-                "name": selected_agent_name,
-                "cli": selected_cli,
-            }
-
-            # Configure phase-specific models
-            role_phases = {
-                "pm": ["spec"],
-                "developer": ["plan", "develop", "pr"],
-                "reviewer": ["review"],
-            }
-            phases = role_phases.get(role_key, [])
-
-            # Phase model recommendations
-            phase_recommendations = {
-                "spec": "high-speed / economical models",
-                "plan": "smarter models",
-                "develop": "smarter models",
-                "review": "flexible based on your needs",
-                "pr": "high-speed / economical models",
-            }
-
-            # Prompt for phase-specific models with recommendations
-            if phases:
-                for phase in phases:
-                    recommendation = phase_recommendations.get(phase, "")
-                    recommendation_text = f" (Recommended: {recommendation})" if recommendation else ""
-                    phase_model = prompt_text(
-                        message=f"Enter {selected_cli} model for {phase} phase{recommendation_text}. Press Enter for default:",
-                        default="",
-                    )
-                    if phase_model and phase_model.strip():
-                        if phase not in config["agents"][role_key]:
-                            config["agents"][role_key][phase] = {}
-                        config["agents"][role_key][phase]["model"] = phase_model.strip()
-
-            console.print("")
-
-        # 5. Add auto-update setting (enabled by default)
-        config["settings"] = {
-            "auto_update": True,
+            "agents": agents_config,
+            "settings": {
+                "auto_update": True,
+            },
         }
 
         # 6. Save configuration
@@ -727,35 +643,66 @@ def init() -> None:
 
         # 7. Display success message
         console.print("[bold green]Configuration saved successfully![/bold green]\n")
-
-        role_phases = {
-            "pm": ["spec"],
-            "developer": ["plan", "develop", "pr"],
-            "reviewer": ["review"],
-        }
-
-        for role_key, role_display in roles:
-            role_config = config["agents"][role_key]
-            phases = role_phases.get(role_key, [])
-
-            # Build phase models display
-            phase_models = []
-            for phase in phases:
-                if phase in role_config and "model" in role_config[phase]:
-                    phase_models.append(f"{phase}={role_config[phase]['model']}")
-                else:
-                    phase_models.append(f"{phase}=default")
-
-            models_display = ", ".join(phase_models) if phase_models else "default"
-
-            console.print(
-                f"- {role_display}: {role_config['cli']} "
-                f"(agent: {role_config['name']}, models: {models_display})"
-            )
+        _display_agent_summary(agents_config)
 
         console.print("\n[cyan]You can now use `cafe prepare` to start a new development task.[/cyan]")
         console.print(
             "[cyan]To modify settings, use `cafe config` commands. See `cafe config --help` for details.[/cyan]"
+        )
+
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Configuration incomplete, cancelled.[/yellow]")
+        raise typer.Exit(1)
+
+
+@app.command()
+def setup() -> None:
+    """Reconfigure agent roles (CLI, agent, and model assignments).
+
+    Re-runs the interactive agent configuration from `cafe init` without
+    reinitializing the project. Existing non-agent settings are preserved.
+
+    Requires `cafe init` to have been run first.
+    """
+    try:
+        config_manager = ConfigManager()
+
+        # Check that .cafe is initialized
+        if not config_manager.config_file.exists():
+            console.print("[red]Configuration not found. Please run `cafe init` first.[/red]")
+            raise typer.Exit(1)
+
+        # Load existing config
+        existing_config = config_manager.load_config()
+
+        # Check available CLIs
+        available_clis = check_available_clis()
+
+        if not available_clis:
+            console.print("[red]No supported AI agents found. Please install at least one agent before retrying.[/red]")
+            console.print("[yellow]Supported agents: claude, gemini, cursor-agent, copilot[/yellow]")
+            raise typer.Exit(1)
+
+        console.print(f"[green]Found available AI agents: {', '.join(available_clis)}[/green]\n")
+
+        # Display current agent configuration
+        if "agents" in existing_config:
+            console.print("[bold]Current agent configuration:[/bold]")
+            _display_agent_summary(existing_config["agents"])
+            console.print()
+
+        # Run interactive agent configuration
+        agents_config = _interactive_agent_setup(available_clis)
+
+        # Merge: update agents section, preserve everything else
+        existing_config["agents"] = agents_config
+        config_manager.save_config(existing_config)
+
+        console.print("[bold green]Agent configuration updated successfully![/bold green]\n")
+        _display_agent_summary(agents_config)
+
+        console.print(
+            "\n[cyan]To modify individual settings, use `cafe config` commands. See `cafe config --help` for details.[/cyan]"
         )
 
     except KeyboardInterrupt:
@@ -779,6 +726,197 @@ def _get_version() -> str:
         except PackageNotFoundError:
             continue
     return "unknown"
+
+
+BACK_SENTINEL = "__BACK__"
+CUSTOM_MODEL_SENTINEL = "__CUSTOM__"
+
+
+def _interactive_agent_setup(available_clis: list) -> dict:
+    """Run interactive agent configuration for all three roles.
+
+    Prompts user to select CLI, agent, and phase-specific models for each role.
+    Supports back navigation within each role's configuration steps.
+
+    Args:
+        available_clis: List of available CLI names
+
+    Returns:
+        Agents configuration dictionary
+
+    Raises:
+        typer.Exit: If user cancels or agents not found
+    """
+    from InquirerPy.separator import Separator
+
+    agents_config = {}
+
+    roles = [
+        ("pm", "PM"),
+        ("developer", "Developer"),
+        ("reviewer", "Reviewer"),
+    ]
+
+    role_phases = {
+        "pm": ["spec"],
+        "developer": ["plan", "develop", "pr"],
+        "reviewer": ["review"],
+    }
+
+    phase_recommendations = {
+        "spec": "high-speed / economical models",
+        "plan": "smarter models",
+        "develop": "smarter models",
+        "review": "flexible based on your needs",
+        "pr": "high-speed / economical models",
+    }
+
+    for role_key, role_display in roles:
+        console.print(f"[bold cyan]Configuring {role_display} role:[/bold cyan]")
+
+        phases = role_phases.get(role_key, [])
+
+        # Steps: 0=CLI, 1=agent, 2..N=phase models
+        step = 0
+        total_steps = 2 + len(phases)
+        selected_cli = None
+        selected_agent_name = None
+        phase_models = {}
+
+        while step < total_steps:
+            if step == 0:
+                # Step 0: Select CLI
+                selected_cli = prompt_list(
+                    message=f"Select CLI for {role_display}:",
+                    choices=available_clis,
+                )
+                if not selected_cli:
+                    console.print("\n[yellow]Configuration incomplete, cancelled.[/yellow]")
+                    raise typer.Exit(1)
+                step += 1
+
+            elif step == 1:
+                # Step 1: Select agent
+                agents = list_available_agents(role_key)
+
+                if not agents:
+                    console.print(f"[red]Error: Agent files not found for {role_display} role.[/red]")
+                    console.print(
+                        f"[yellow]Please ensure valid .md files exist in ~/.cafe/agents/{role_key}/ or src/cafe/data/agents/{role_key}/ directory.[/yellow]"
+                    )
+                    raise typer.Exit(1)
+
+                agent_choices = []
+                for name, desc, _, source_type in agents:
+                    source_label = " (custom)" if source_type == "custom" else " (system default)"
+                    agent_choices.append(f"{name}: {desc}{source_label}")
+
+                # Add back option
+                agent_choices.append(Separator())
+                agent_choices.append({"name": "\u2190 Back to CLI selection", "value": BACK_SENTINEL})
+
+                selected = prompt_list(
+                    message=f"Select agent for {role_display}:",
+                    choices=agent_choices,
+                )
+
+                if selected == BACK_SENTINEL:
+                    step = 0
+                    continue
+
+                if not selected:
+                    console.print("\n[yellow]Configuration incomplete, cancelled.[/yellow]")
+                    raise typer.Exit(1)
+
+                selected_agent_name = selected.split(":")[0].strip()
+                step += 1
+
+            else:
+                # Steps 2+: Phase model selection
+                phase_idx = step - 2
+                phase = phases[phase_idx]
+                recommendation = phase_recommendations.get(phase, "")
+                recommendation_text = f" (recommended: {recommendation})" if recommendation else ""
+
+                model_choices = [
+                    {"name": f"Use default model", "value": ""},
+                    {"name": f"Custom (type model name)", "value": CUSTOM_MODEL_SENTINEL},
+                    Separator(),
+                    {"name": f"\u2190 Back", "value": BACK_SENTINEL},
+                ]
+
+                selected = prompt_list(
+                    message=f"Model for {phase} phase{recommendation_text}:",
+                    choices=model_choices,
+                )
+
+                if selected == BACK_SENTINEL:
+                    step -= 1
+                    continue
+
+                if selected == CUSTOM_MODEL_SENTINEL:
+                    model_name = prompt_text(
+                        message=f"Enter {selected_cli} model name for {phase} phase:",
+                        default="",
+                    )
+                    if model_name and model_name.strip():
+                        phase_models[phase] = model_name.strip()
+                    else:
+                        phase_models.pop(phase, None)
+                else:
+                    phase_models.pop(phase, None)
+
+                step += 1
+
+        # Store configuration for this role
+        agents_config[role_key] = {
+            "name": selected_agent_name,
+            "cli": selected_cli,
+        }
+        for phase, model in phase_models.items():
+            agents_config[role_key][phase] = {"model": model}
+
+        console.print("")
+
+    return agents_config
+
+
+def _display_agent_summary(agents_config: dict) -> None:
+    """Display a summary of agent configuration.
+
+    Args:
+        agents_config: Agents configuration dictionary
+    """
+    roles = [
+        ("pm", "PM"),
+        ("developer", "Developer"),
+        ("reviewer", "Reviewer"),
+    ]
+
+    role_phases = {
+        "pm": ["spec"],
+        "developer": ["plan", "develop", "pr"],
+        "reviewer": ["review"],
+    }
+
+    for role_key, role_display in roles:
+        role_config = agents_config[role_key]
+        phases = role_phases.get(role_key, [])
+
+        # Build phase models display
+        phase_models = []
+        for phase in phases:
+            if phase in role_config and "model" in role_config[phase]:
+                phase_models.append(f"{phase}={role_config[phase]['model']}")
+            else:
+                phase_models.append(f"{phase}=default")
+
+        models_display = ", ".join(phase_models) if phase_models else "default"
+
+        console.print(
+            f"- {role_display}: {role_config['cli']} "
+            f"(agent: {role_config['name']}, models: {models_display})"
+        )
 
 
 def _ensure_default_content(cafe_dir: Path) -> None:

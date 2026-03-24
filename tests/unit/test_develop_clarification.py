@@ -127,29 +127,33 @@ class TestDevelopAskUserForClarification:
                 with patch("cafe.ui.interactive_qa.interactive_qa_flow", return_value="Option A") as mock_flow:
                     result = phase._ask_user_for_clarification()
 
-        mock_flow.assert_called_once_with(mock_questions)
+        mock_flow.assert_called_once_with(mock_questions, role="developer", issue_name="test-issue", agent_name="David")
         assert result == "Option A"
 
     def test_falls_back_to_prompt_when_no_questions_xml(self, phase, monkeypatch, tmp_path):
-        """Should fall back to plain prompt when no questions.xml exists."""
+        """Should fall back to prompt when no questions.xml exists."""
         monkeypatch.chdir(tmp_path)
         phase.iteration = 2
         # No questions.xml created
 
-        with patch("cafe.ui.inquirer_prompts.prompt_multiline", return_value="user answer") as mock_prompt:
-            result = phase._ask_user_for_clarification()
+        with patch("cafe.core.phase.prompt_list", return_value="answer") as mock_list:
+            with patch("cafe.core.phase.prompt_multiline", return_value="user answer") as mock_prompt:
+                result = phase._ask_user_for_clarification()
 
+        mock_list.assert_called_once()
         mock_prompt.assert_called_once()
         assert result == "user answer"
 
     def test_falls_back_to_prompt_on_iteration_1(self, phase, monkeypatch, tmp_path):
-        """Should use plain prompt on iteration 1 (no previous iteration)."""
+        """Should use prompt on iteration 1 (no previous iteration)."""
         monkeypatch.chdir(tmp_path)
         phase.iteration = 1
 
-        with patch("cafe.ui.inquirer_prompts.prompt_multiline", return_value="user answer") as mock_prompt:
-            result = phase._ask_user_for_clarification()
+        with patch("cafe.core.phase.prompt_list", return_value="answer") as mock_list:
+            with patch("cafe.core.phase.prompt_multiline", return_value="user answer") as mock_prompt:
+                result = phase._ask_user_for_clarification()
 
+        mock_list.assert_called_once()
         mock_prompt.assert_called_once()
         assert result == "user answer"
 

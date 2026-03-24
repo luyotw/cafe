@@ -229,6 +229,7 @@ CAFE provides additional commands for managing issues and viewing execution deta
 
 #### Project Setup
 - `cafe init` - Initialize CAFE configuration for the project
+- `cafe setup` - Reconfigure agent roles (CLI, agent, and model assignments) with back navigation support
 
 #### Workflow Execution
 - `cafe prepare` - Prepare issue environment (creates worktree, initializes config and git branch)

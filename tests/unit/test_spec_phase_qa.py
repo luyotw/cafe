@@ -227,7 +227,7 @@ class TestAskUserForClarification:
         assert questions_arg[0].title == "What is the expected error behavior?"
 
     def test_falls_back_to_prompt_when_no_xml(self, spec_phase, tmp_path):
-        """測試 questions.xml 不存在時 fallback 到 prompt_multiline"""
+        """測試 questions.xml 不存在時 fallback 到提示選單"""
         spec_phase.iteration = 2
         spec_phase.interactive = True
 
@@ -236,7 +236,8 @@ class TestAskUserForClarification:
         prev_iter_dir.mkdir(parents=True, exist_ok=True)
 
         with patch("cafe.phases.spec_phase.interactive_qa_flow") as mock_qa_flow, \
-             patch("cafe.ui.inquirer_prompts.prompt_multiline", return_value="manual answer"):
+             patch("cafe.core.phase.prompt_list", return_value="answer"), \
+             patch("cafe.core.phase.prompt_multiline", return_value="manual answer"):
 
             result = spec_phase._ask_user_for_clarification()
 
@@ -244,7 +245,7 @@ class TestAskUserForClarification:
         assert result == "manual answer"
 
     def test_falls_back_to_prompt_when_xml_invalid(self, spec_phase, tmp_path):
-        """測試 questions.xml 格式不正確時 fallback 到 prompt_multiline"""
+        """測試 questions.xml 格式不正確時 fallback 到提示選單"""
         spec_phase.iteration = 2
         spec_phase.interactive = True
 
@@ -255,7 +256,8 @@ class TestAskUserForClarification:
         xml_path.write_text(INVALID_QUESTIONS_XML)
 
         with patch("cafe.phases.spec_phase.interactive_qa_flow") as mock_qa_flow, \
-             patch("cafe.ui.inquirer_prompts.prompt_multiline", return_value="fallback answer"):
+             patch("cafe.core.phase.prompt_list", return_value="answer"), \
+             patch("cafe.core.phase.prompt_multiline", return_value="fallback answer"):
 
             result = spec_phase._ask_user_for_clarification()
 
@@ -263,12 +265,13 @@ class TestAskUserForClarification:
         assert result == "fallback answer"
 
     def test_iteration_1_falls_back_to_prompt(self, spec_phase, tmp_path):
-        """測試第一輪沒有前一輪目錄，fallback 到 prompt_multiline"""
+        """測試第一輪沒有前一輪目錄，fallback 到提示選單"""
         spec_phase.iteration = 1
         spec_phase.interactive = True
 
         with patch("cafe.phases.spec_phase.interactive_qa_flow") as mock_qa_flow, \
-             patch("cafe.ui.inquirer_prompts.prompt_multiline", return_value="first iteration answer"):
+             patch("cafe.core.phase.prompt_list", return_value="answer"), \
+             patch("cafe.core.phase.prompt_multiline", return_value="first iteration answer"):
 
             result = spec_phase._ask_user_for_clarification()
 
