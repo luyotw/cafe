@@ -12,6 +12,7 @@ from typing import Dict, List, Optional
 import typer
 
 from cafe.ui.inquirer_prompts import prompt_confirm, prompt_list, prompt_text
+from cafe.ui.menu import InteractiveMenu
 import yaml
 from rich.console import Console
 
@@ -43,10 +44,20 @@ from cafe.utils.github import GitHubError, GitHubOps
 app = typer.Typer(
     name="cafe",
     help="AI Agent Flow - Automated development workflow with AI agents",
-    no_args_is_help=True,
+    no_args_is_help=False,
     context_settings={"help_option_names": ["-h", "--help"]},
 )
 console = Console()
+
+
+@app.callback(invoke_without_command=True)
+def _menu_callback(ctx: typer.Context) -> None:
+    """Launch interactive menu when no subcommand is provided."""
+    if ctx.invoked_subcommand is None:
+        try:
+            InteractiveMenu().run()
+        except KeyboardInterrupt:
+            pass
 
 # List of all phases in order
 ALL_PHASES = ["spec", "plan", "develop", "review", "pr"]
