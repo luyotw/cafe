@@ -276,7 +276,11 @@ class TestCheckboxXmlParsing:
         with patch("cafe.ui.interactive_qa.inquirer") as mock_inquirer:
             mock_select = MagicMock()
             mock_select.execute = MagicMock(
-                side_effect=["Return error code and log message", "Confirm and continue"]
+                side_effect=[
+                    "Return error code and log message",  # Q1 single-select
+                    "continue",                           # Q2 checkbox action prompt
+                    "Confirm and continue",               # final summary confirmation
+                ]
             )
             mock_inquirer.select.return_value = mock_select
 
