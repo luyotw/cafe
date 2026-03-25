@@ -59,7 +59,10 @@ def interactive_qa_flow(
         previous_answer = answers.get(idx)
 
         if q.multi_select:
-            answer = _ask_checkbox(q, idx, total, previous_answer)
+            answer = _ask_checkbox(
+                q, idx, total, previous_answer,
+                role=role, issue_name=issue_name, agent_name=agent_name,
+            )
         else:
             answer = _ask_select(
                 q, idx, total, previous_answer,
@@ -179,55 +182,83 @@ def _ask_checkbox(
     total: int,
     previous_answer: str | None = None,
     force_no_back: bool = False,
+    role: Optional[str] = None,
+    issue_name: Optional[str] = None,
+    agent_name: Optional[str] = None,
 ) -> str:
     """Ask a multi-select (checkbox) question.
 
-    After checkbox selection, prompts for optional custom text input.
+    Back and Chat with agent options are shown directly in the checkbox list
+    (after a separator), matching the UX of single-select questions.
     If previous_answer is provided, pre-selects those items (including Other).
 
     Returns:
         Comma-separated answer string, NONE_SELECTED if nothing selected,
         or BACK_SENTINEL for back navigation
     """
-    # Parse previous answer to restore selections
-    prev_items: list[str] = []
-    prev_other_text: str | None = None
-    if previous_answer and previous_answer != NONE_SELECTED:
-        prev_items = [item.strip() for item in previous_answer.split(",")]
-        # Items not in question.options are custom "Other" text
-        option_set = set(question.options)
-        custom_items = [item for item in prev_items if item not in option_set]
-        if custom_items:
-            prev_other_text = ", ".join(custom_items)
+    CHAT_SENTINEL = "__CHAT__"
 
-    choices = _build_checkbox_choices(question, prev_items)
+    while True:
+        # Parse previous answer to restore selections
+        prev_items: list[str] = []
+        prev_other_text: str | None = None
+        if previous_answer and previous_answer != NONE_SELECTED:
+            prev_items = [item.strip() for item in previous_answer.split(",")]
+            # Items not in question.options are custom "Other" text
+            option_set = set(question.options)
+            custom_items = [item for item in prev_items if item not in option_set]
+            if custom_items:
+                prev_other_text = ", ".join(custom_items)
 
-    selected = inquirer.checkbox(
-        message=f"[{idx + 1}/{total}] {question.title} (multi-select, press Space to select)",
-        choices=choices,
-    ).execute()
+        choices = _build_checkbox_choices(question, prev_items)
 
-    result_items = []
-    has_other = False
-    for item in (selected or []):
-        if item == OTHER_SENTINEL:
-            has_other = True
-        else:
-            result_items.append(item)
+        # Add Back and Chat options directly in the checkbox list
+        if idx > 0 and not force_no_back:
+            choices.append(Separator())
+            choices.append({"name": f"← Back to [{idx}/{total}]", "value": BACK_SENTINEL, "enabled": False})
+        if role and issue_name:
+            choices.append(Separator())
+            chat_label = agent_name or role
+            choices.append({"name": f"Chat with {chat_label}", "value": CHAT_SENTINEL, "enabled": False})
 
-    # Prompt for custom input only if user selected "Other"
-    if has_other:
-        text_kwargs = {"message": "Type your answer:"}
-        if prev_other_text is not None:
-            text_kwargs["default"] = prev_other_text
-        custom = inquirer.text(**text_kwargs).execute()
-        if custom and custom.strip():
-            result_items.append(custom.strip())
+        selected = inquirer.checkbox(
+            message=f"[{idx + 1}/{total}] {question.title} (multi-select, press Space to select)",
+            choices=choices,
+        ).execute()
 
-    if not result_items:
-        return NONE_SELECTED
+        selected = selected or []
 
-    return ", ".join(result_items)
+        # Handle Back navigation
+        if BACK_SENTINEL in selected:
+            return BACK_SENTINEL
+
+        # Handle Chat with agent
+        if CHAT_SENTINEL in selected:
+            launch_chat_session(role, issue_name)
+            previous_answer = previous_answer  # preserve for re-display
+            continue
+
+        result_items = []
+        has_other = False
+        for item in selected:
+            if item == OTHER_SENTINEL:
+                has_other = True
+            else:
+                result_items.append(item)
+
+        # Prompt for custom input only if user selected "Other"
+        if has_other:
+            text_kwargs = {"message": "Type your answer:"}
+            if prev_other_text is not None:
+                text_kwargs["default"] = prev_other_text
+            custom = inquirer.text(**text_kwargs).execute()
+            if custom and custom.strip():
+                result_items.append(custom.strip())
+
+        if not result_items:
+            return NONE_SELECTED
+
+        return ", ".join(result_items)
 
 
 def _build_choices(
