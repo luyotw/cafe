@@ -270,7 +270,8 @@ class TestInteractiveQaFlowCheckbox:
         mock_inquirer.checkbox.return_value = mock_checkbox
 
         mock_select = MagicMock()
-        mock_select.execute = MagicMock(side_effect=["Confirm and continue"])
+        # action prompt "continue", then summary "Confirm and continue"
+        mock_select.execute = MagicMock(side_effect=["continue", "Confirm and continue"])
         mock_inquirer.select.return_value = mock_select
 
         result = interactive_qa_flow(questions)
@@ -295,7 +296,8 @@ class TestInteractiveQaFlowCheckbox:
         mock_inquirer.text.return_value = mock_text
 
         mock_select = MagicMock()
-        mock_select.execute = MagicMock(side_effect=["Confirm and continue"])
+        # action prompt "continue", then summary "Confirm and continue"
+        mock_select.execute = MagicMock(side_effect=["continue", "Confirm and continue"])
         mock_inquirer.select.return_value = mock_select
 
         result = interactive_qa_flow(questions)
@@ -315,7 +317,8 @@ class TestInteractiveQaFlowCheckbox:
         mock_inquirer.checkbox.return_value = mock_checkbox
 
         mock_select = MagicMock()
-        mock_select.execute = MagicMock(side_effect=["Confirm and continue"])
+        # action prompt "continue", then summary "Confirm and continue"
+        mock_select.execute = MagicMock(side_effect=["continue", "Confirm and continue"])
         mock_inquirer.select.return_value = mock_select
 
         result = interactive_qa_flow(questions)
@@ -339,7 +342,8 @@ class TestInteractiveQaFlowCheckbox:
         mock_inquirer.text.return_value = mock_text
 
         mock_select = MagicMock()
-        mock_select.execute = MagicMock(side_effect=["Confirm and continue"])
+        # action prompt "continue", then summary "Confirm and continue"
+        mock_select.execute = MagicMock(side_effect=["continue", "Confirm and continue"])
         mock_inquirer.select.return_value = mock_select
 
         result = interactive_qa_flow(questions)
@@ -355,7 +359,8 @@ class TestInteractiveQaFlowCheckbox:
         ]
 
         mock_select = MagicMock()
-        mock_select.execute = MagicMock(side_effect=["A", "Confirm and continue"])
+        # Q1 select, Q2 action prompt "continue", summary "Confirm and continue"
+        mock_select.execute = MagicMock(side_effect=["A", "continue", "Confirm and continue"])
         mock_inquirer.select.return_value = mock_select
 
         mock_checkbox = MagicMock()
@@ -385,8 +390,10 @@ class TestInteractiveQaFlowCheckbox:
         mock_inquirer.text.return_value = mock_text
 
         mock_select = MagicMock()
+        # action "continue", summary "Modify", pick Q1, action "continue" (modify flow, force_no_back),
+        # summary "Confirm"
         mock_select.execute = MagicMock(
-            side_effect=["Modify an answer...", "1", "Confirm and continue"]
+            side_effect=["continue", "Modify an answer...", "1", "continue", "Confirm and continue"]
         )
         mock_inquirer.select.return_value = mock_select
 
@@ -406,7 +413,8 @@ class TestInteractiveQaFlowCheckbox:
         mock_inquirer.checkbox.return_value = mock_checkbox
 
         mock_select = MagicMock()
-        mock_select.execute = MagicMock(side_effect=["Confirm and continue"])
+        # action prompt "continue", then summary "Confirm and continue"
+        mock_select.execute = MagicMock(side_effect=["continue", "Confirm and continue"])
         mock_inquirer.select.return_value = mock_select
 
         interactive_qa_flow(questions)
@@ -416,6 +424,75 @@ class TestInteractiveQaFlowCheckbox:
         choices = checkbox_call.kwargs.get("choices", checkbox_call[1].get("choices", []))
         choice_values = [c.get("value") if isinstance(c, dict) else c for c in choices]
         assert OTHER_SENTINEL in choice_values
+
+
+class TestInteractiveQaFlowCheckboxReselect:
+    """測試 checkbox reselect 流程"""
+
+    @patch("cafe.ui.interactive_qa.inquirer")
+    def test_reselect_preserves_previous_selections(self, mock_inquirer):
+        """測試 reselect 後重新顯示 checkbox 時保留之前的選擇"""
+        questions = [
+            Question(id="1", title="Select items?", options=["A", "B", "C"], multi_select=True),
+        ]
+
+        mock_checkbox = MagicMock()
+        # 第一次選 A, B；reselect 後改選 B, C
+        mock_checkbox.execute = MagicMock(side_effect=[["A", "B"], ["B", "C"]])
+        mock_inquirer.checkbox.return_value = mock_checkbox
+
+        mock_select = MagicMock()
+        # action "redo" (reselect), action "continue", summary "Confirm"
+        mock_select.execute = MagicMock(
+            side_effect=["redo", "continue", "Confirm and continue"]
+        )
+        mock_inquirer.select.return_value = mock_select
+
+        result = interactive_qa_flow(questions)
+
+        assert "A1: B, C" in result
+        assert mock_inquirer.checkbox.call_count == 2
+
+        # Verify second checkbox call has A and B pre-selected (from first selection)
+        second_checkbox_call = mock_inquirer.checkbox.call_args_list[1]
+        choices = second_checkbox_call.kwargs.get("choices", second_checkbox_call[1].get("choices", []))
+        enabled_values = [c["value"] for c in choices if isinstance(c, dict) and c.get("enabled")]
+        assert "A" in enabled_values
+        assert "B" in enabled_values
+
+    @patch("cafe.ui.interactive_qa.inquirer")
+    def test_reselect_with_commas_in_options(self, mock_inquirer):
+        """測試選項包含逗號時 reselect 不會切碎選項"""
+        questions = [
+            Question(
+                id="1", title="Select items?",
+                options=["Option A, B and C", "Option D"],
+                multi_select=True,
+            ),
+        ]
+
+        mock_checkbox = MagicMock()
+        # 第一次選含逗號的選項；reselect 後應正確還原
+        mock_checkbox.execute = MagicMock(
+            side_effect=[["Option A, B and C"], ["Option A, B and C", "Option D"]]
+        )
+        mock_inquirer.checkbox.return_value = mock_checkbox
+
+        mock_select = MagicMock()
+        mock_select.execute = MagicMock(
+            side_effect=["redo", "continue", "Confirm and continue"]
+        )
+        mock_inquirer.select.return_value = mock_select
+
+        result = interactive_qa_flow(questions)
+
+        assert "A1: Option A, B and C, Option D" in result
+
+        # Verify second checkbox has the comma-containing option pre-selected
+        second_checkbox_call = mock_inquirer.checkbox.call_args_list[1]
+        choices = second_checkbox_call.kwargs.get("choices", second_checkbox_call[1].get("choices", []))
+        enabled_values = [c["value"] for c in choices if isinstance(c, dict) and c.get("enabled")]
+        assert "Option A, B and C" in enabled_values
 
 
 class TestInteractiveQaFlowSummaryAndModify:

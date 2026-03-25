@@ -188,38 +188,27 @@ def _ask_checkbox(
 ) -> str:
     """Ask a multi-select (checkbox) question.
 
-    Back and Chat with agent options are shown directly in the checkbox list
-    (after a separator), matching the UX of single-select questions.
+    After checkbox selection, a follow-up single-select prompt offers
+    Confirm/Reselect/Back/Chat actions for consistent UX with single-select questions.
     If previous_answer is provided, pre-selects those items (including Other).
 
     Returns:
         Comma-separated answer string, NONE_SELECTED if nothing selected,
         or BACK_SENTINEL for back navigation
     """
-    CHAT_SENTINEL = "__CHAT__"
+    # Track selected items as a list to avoid comma-based round-trip issues
+    # (options may contain commas themselves)
+    prev_selected: list[str] = []
+    prev_other_text: str | None = None
+    if previous_answer and previous_answer != NONE_SELECTED:
+        prev_selected = _parse_previous_checkbox_answer(previous_answer, question.options)
+        option_set = set(question.options)
+        custom_items = [item for item in prev_selected if item not in option_set]
+        if custom_items:
+            prev_other_text = ", ".join(custom_items)
 
     while True:
-        # Parse previous answer to restore selections
-        prev_items: list[str] = []
-        prev_other_text: str | None = None
-        if previous_answer and previous_answer != NONE_SELECTED:
-            prev_items = [item.strip() for item in previous_answer.split(",")]
-            # Items not in question.options are custom "Other" text
-            option_set = set(question.options)
-            custom_items = [item for item in prev_items if item not in option_set]
-            if custom_items:
-                prev_other_text = ", ".join(custom_items)
-
-        choices = _build_checkbox_choices(question, prev_items)
-
-        # Add Back and Chat options directly in the checkbox list
-        if idx > 0 and not force_no_back:
-            choices.append(Separator())
-            choices.append({"name": f"← Back to [{idx}/{total}]", "value": BACK_SENTINEL, "enabled": False})
-        if role and issue_name:
-            choices.append(Separator())
-            chat_label = agent_name or role
-            choices.append({"name": f"Chat with {chat_label}", "value": CHAT_SENTINEL, "enabled": False})
+        choices = _build_checkbox_choices(question, prev_selected)
 
         selected = inquirer.checkbox(
             message=f"[{idx + 1}/{total}] {question.title} (multi-select, press Space to select)",
@@ -227,16 +216,6 @@ def _ask_checkbox(
         ).execute()
 
         selected = selected or []
-
-        # Handle Back navigation
-        if BACK_SENTINEL in selected:
-            return BACK_SENTINEL
-
-        # Handle Chat with agent
-        if CHAT_SENTINEL in selected:
-            launch_chat_session(role, issue_name)
-            previous_answer = previous_answer  # preserve for re-display
-            continue
 
         result_items = []
         has_other = False
@@ -255,10 +234,67 @@ def _ask_checkbox(
             if custom and custom.strip():
                 result_items.append(custom.strip())
 
+        # Show follow-up action prompt for Back/Chat navigation
+        action = _ask_checkbox_action(
+            idx, total, result_items, force_no_back,
+            role=role, issue_name=issue_name, agent_name=agent_name,
+        )
+
+        if action == BACK_SENTINEL:
+            return BACK_SENTINEL
+        if action == "redo":
+            prev_selected = list(result_items)
+            prev_other_text = None  # custom text already in result_items
+            continue
+        # action == "continue"
         if not result_items:
             return NONE_SELECTED
 
         return ", ".join(result_items)
+
+
+def _ask_checkbox_action(
+    idx: int,
+    total: int,
+    result_items: list[str],
+    force_no_back: bool = False,
+    role: Optional[str] = None,
+    issue_name: Optional[str] = None,
+    agent_name: Optional[str] = None,
+) -> str:
+    """Show a follow-up action prompt after checkbox selection.
+
+    Returns:
+        "continue" to accept selections, BACK_SENTINEL to go back,
+        or "redo" to re-display the checkbox (after chat or reselect).
+    """
+    selected_display = ", ".join(result_items) if result_items else NONE_SELECTED
+    action_choices: list = [
+        {"name": f"Confirm ({selected_display})", "value": "continue"},
+        {"name": "Reselect", "value": "redo"},
+    ]
+
+    if idx > 0 and not force_no_back:
+        action_choices.append(Separator())
+        action_choices.append(
+            {"name": f"← Back to [{idx}/{total}]", "value": BACK_SENTINEL}
+        )
+
+    if role and issue_name:
+        action_choices.append(Separator())
+        chat_label = agent_name or role
+        action_choices.append({"name": f"Chat with {chat_label}", "value": "chat"})
+
+    action = inquirer.select(
+        message="Action:",
+        choices=action_choices,
+    ).execute()
+
+    if action == "chat":
+        launch_chat_session(role, issue_name)
+        return "redo"
+
+    return action
 
 
 def _build_choices(
@@ -310,6 +346,28 @@ def _build_choices(
         choices_with_values.append({"name": f"Chat with {chat_label}", "value": "chat"})
 
     return choices_with_values
+
+
+def _parse_previous_checkbox_answer(answer: str, known_options: list[str]) -> list[str]:
+    """Parse a comma-joined checkbox answer back into individual items.
+
+    Handles options that contain commas by matching known options first,
+    then treating any remaining text as custom "Other" input.
+    """
+    result = []
+    remaining = answer
+    # Greedily match known options (longest first to avoid partial matches)
+    sorted_options = sorted(known_options, key=len, reverse=True)
+    for opt in sorted_options:
+        if opt in remaining:
+            result.append(opt)
+            # Remove the matched option and surrounding ", " separators
+            remaining = remaining.replace(opt, "", 1)
+    # Clean up separators left behind
+    remaining = remaining.strip().strip(",").strip()
+    if remaining:
+        result.append(remaining)
+    return result
 
 
 def _build_checkbox_choices(question: Question, prev_items: list[str] | None = None) -> list:

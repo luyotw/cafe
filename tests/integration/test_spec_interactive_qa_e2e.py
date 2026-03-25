@@ -278,6 +278,7 @@ class TestCheckboxXmlParsing:
             mock_select.execute = MagicMock(
                 side_effect=[
                     "Return error code and log message",  # Q1 single-select
+                    "continue",                           # Q2 checkbox action prompt
                     "Confirm and continue",               # final summary confirmation
                 ]
             )
