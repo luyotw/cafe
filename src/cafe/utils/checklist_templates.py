@@ -85,6 +85,7 @@ SPEC_DOD_INSTRUCTION = """
 
 [ ] You MUST include DoD questions in questions.xml and request clarification (even if requirements are already clear — send DoD questions alone)
 [ ] DoD questions must use `type="checkbox"` attribute so users can select multiple items
+[ ] Confirm: DoD question has `type="checkbox"` attribute set on the `<question>` element (not as a child element)
 [ ] DoD questions focus on functional requirements only (e.g., all major features working, error handling working, edge cases tested)
 [ ] Do NOT add "Other" or custom input options to checkbox questions — the system automatically adds an "Other" option to every checkbox question
 [ ] NEVER mark the spec as ready for review without first confirming DoD with the user
