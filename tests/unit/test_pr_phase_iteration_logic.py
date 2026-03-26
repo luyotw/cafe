@@ -1084,3 +1084,133 @@ class TestPhaseComparisonWithMissingEndTime:
             assert "after 3 retries" in result.message
             # Verify all 3 retries were attempted
             assert retry_call_count == 3
+
+
+class TestGetLastSeenCommentIds:
+    """Test _get_last_seen_comment_ids() method for retrieving previously seen comment IDs."""
+
+    @pytest.fixture
+    def mock_dependencies(self):
+        """Create mock dependencies."""
+        agent_manager = MagicMock()
+        permission_handler = MagicMock()
+        git_ops = MagicMock()
+        github_ops = MagicMock()
+
+        git_ops.get_current_branch.return_value = "test-issue"
+        git_ops.get_repo_root.return_value = Path("/tmp")
+
+        return {
+            "agent_manager": agent_manager,
+            "permission_handler": permission_handler,
+            "git_ops": git_ops,
+            "github_ops": github_ops,
+        }
+
+    def _make_phase(self, issue_dir, mock_dependencies):
+        """Helper to create PRPhase instance."""
+        spec_file = issue_dir / "spec" / "iteration_001" / "output.md"
+        spec_file.parent.mkdir(parents=True, exist_ok=True)
+        spec_file.write_text("# Test Spec")
+        with patch.object(PRPhase, "_get_issue_dir", return_value=issue_dir):
+            return PRPhase(
+                spec_file=str(spec_file),
+                issue_name="test-issue",
+                **mock_dependencies
+            )
+
+    def test_no_pr_iterations_returns_empty_set(self, tmp_path, mock_dependencies):
+        """Test _get_last_seen_comment_ids returns empty set when no PR iterations exist.
+
+        情境：pr/ 目錄不存在或沒有任何 iteration
+        預期：返回空 set（向後兼容）
+        """
+        issue_dir = tmp_path / ".cafe" / "issues" / "test-issue"
+        issue_dir.mkdir(parents=True)
+
+        with patch.object(PRPhase, "_get_issue_dir", return_value=issue_dir):
+            phase = self._make_phase(issue_dir, mock_dependencies)
+            result = phase._get_last_seen_comment_ids()
+
+        assert result == set()
+
+    def test_latest_iteration_has_last_seen_comment_ids(self, tmp_path, mock_dependencies):
+        """Test _get_last_seen_comment_ids returns IDs from latest iteration context.
+
+        情境：最新一輪 iteration 的 context.json 包含 last_seen_comment_ids
+        預期：返回該 set
+        """
+        issue_dir = tmp_path / ".cafe" / "issues" / "test-issue"
+        pr_dir = issue_dir / "pr"
+        iter_dir = pr_dir / "iteration_001"
+        iter_dir.mkdir(parents=True)
+
+        context_file = iter_dir / "context.json"
+        context_file.write_text(json.dumps({
+            "iteration": 1,
+            "status_code": "CAFE_READY_FOR_REVIEW",
+            "last_seen_comment_ids": ["123456", "IC_kwDOQCpNoM111", "789012"]
+        }))
+
+        with patch.object(PRPhase, "_get_issue_dir", return_value=issue_dir):
+            phase = self._make_phase(issue_dir, mock_dependencies)
+            result = phase._get_last_seen_comment_ids()
+
+        assert result == {"123456", "IC_kwDOQCpNoM111", "789012"}
+
+    def test_searches_backwards_when_latest_lacks_field(self, tmp_path, mock_dependencies):
+        """Test _get_last_seen_comment_ids searches backwards to find the field.
+
+        情境：iteration_002（comment-fetch 輪）沒有 last_seen_comment_ids，
+              但 iteration_001（push 輪）有
+        預期：找到 iteration_001 的 IDs 並返回
+        """
+        issue_dir = tmp_path / ".cafe" / "issues" / "test-issue"
+        pr_dir = issue_dir / "pr"
+
+        # iteration_001: push iteration with last_seen_comment_ids
+        iter_001 = pr_dir / "iteration_001"
+        iter_001.mkdir(parents=True)
+        (iter_001 / "context.json").write_text(json.dumps({
+            "iteration": 1,
+            "status_code": "CAFE_READY_FOR_REVIEW",
+            "last_seen_comment_ids": ["R1", "T1"]
+        }))
+
+        # iteration_002: comment-fetch iteration without last_seen_comment_ids
+        iter_002 = pr_dir / "iteration_002"
+        iter_002.mkdir(parents=True)
+        (iter_002 / "context.json").write_text(json.dumps({
+            "iteration": 2,
+            "status_code": "CAFE_NEEDS_CHANGES"
+            # last_seen_comment_ids 欄位不存在
+        }))
+
+        with patch.object(PRPhase, "_get_issue_dir", return_value=issue_dir):
+            phase = self._make_phase(issue_dir, mock_dependencies)
+            result = phase._get_last_seen_comment_ids()
+
+        assert result == {"R1", "T1"}
+
+    def test_no_iteration_has_last_seen_comment_ids_returns_empty(self, tmp_path, mock_dependencies):
+        """Test _get_last_seen_comment_ids returns empty set when no iteration has the field.
+
+        情境：所有 iteration 都沒有 last_seen_comment_ids（舊版本 context.json）
+        預期：返回空 set（向後兼容）
+        """
+        issue_dir = tmp_path / ".cafe" / "issues" / "test-issue"
+        pr_dir = issue_dir / "pr"
+
+        iter_001 = pr_dir / "iteration_001"
+        iter_001.mkdir(parents=True)
+        (iter_001 / "context.json").write_text(json.dumps({
+            "iteration": 1,
+            "status_code": "CAFE_READY_FOR_REVIEW"
+            # 沒有 last_seen_comment_ids（舊版本）
+        }))
+
+        with patch.object(PRPhase, "_get_issue_dir", return_value=issue_dir):
+            phase = self._make_phase(issue_dir, mock_dependencies)
+            result = phase._get_last_seen_comment_ids()
+
+        assert result == set()
