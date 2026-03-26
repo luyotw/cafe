@@ -216,10 +216,6 @@ class InteractiveMenu:
                 "value": "summary",
             },
             {
-                "name": "Show output           Display phase output files",
-                "value": "show",
-            },
-            {
                 "name": "Reset iteration       Remove last iteration",
                 "value": "reset",
             },
@@ -329,8 +325,6 @@ class InteractiveMenu:
             _run_command(["make"])
         elif selection == "summary":
             _run_command(["summary"])
-        elif selection == "show":
-            _run_command(["show"])
         elif selection == "reset":
             _run_command(["reset"])
         elif selection == "close":
@@ -361,65 +355,22 @@ class InteractiveMenu:
             elif selection == "template_ls":
                 _run_command(["template", "ls"])
 
-    def _get_active_phase(self, issue_name: str) -> Optional[str]:
-        """Detect the most recently started workflow phase for the given issue.
-
-        Iterates through phases in order (spec → plan → develop → review → pr)
-        and returns the last one that has an iteration directory, which represents
-        the currently active (or most recently run) phase.
-
-        Args:
-            issue_name: Issue name (branch name)
-
-        Returns:
-            Phase name string (e.g. "spec", "develop") or None if no phase started
-        """
-        phases = ["spec", "plan", "develop", "review", "pr"]
-        active_phase: Optional[str] = None
-        for phase in phases:
-            phase_dir = Path(".cafe/issues") / issue_name / phase
-            if phase_dir.exists() and phase_dir.is_dir():
-                active_phase = phase
-        return active_phase
-
     def _get_available_agents(self) -> List[Dict[str, str]]:
-        """Get agents configured for the current workflow phase.
+        """Get all configured agents.
 
-        Only returns agents relevant to the currently active phase:
-        - spec → pm
-        - plan, develop, pr → developer
-        - review → reviewer
+        Returns all agents (pm, developer, reviewer) that have been configured,
+        regardless of the current workflow phase.
 
         Returns:
-            List of dicts with "role" and "name" keys for agents in the current phase
+            List of dicts with "role" and "name" keys for all configured agents
         """
-        # Phase → agent role mapping
-        phase_role_map: Dict[str, str] = {
-            "spec": "pm",
-            "plan": "developer",
-            "develop": "developer",
-            "review": "reviewer",
-            "pr": "developer",
-        }
-
         agents: List[Dict[str, str]] = []
         try:
-            issue_name = self._detector.get_current_issue_name()
-            active_phase = self._get_active_phase(issue_name) if issue_name else None
-            relevant_role = phase_role_map.get(active_phase) if active_phase else None
-
             config_manager = ConfigManager()
-            if relevant_role:
-                # Only show the agent for the current phase
-                name = config_manager.get(f"agents.{relevant_role}.name")
+            for role in ("pm", "developer", "reviewer"):
+                name = config_manager.get(f"agents.{role}.name")
                 if name:
-                    agents.append({"role": relevant_role, "name": name})
-            else:
-                # No active phase detected — show all configured agents as fallback
-                for role in ("pm", "developer", "reviewer"):
-                    name = config_manager.get(f"agents.{role}.name")
-                    if name:
-                        agents.append({"role": role, "name": name})
+                    agents.append({"role": role, "name": name})
         except Exception:
             pass
         return agents
