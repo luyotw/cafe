@@ -2024,6 +2024,10 @@ def restore(
         # 7. Remember main repo root before potentially changing directory
         main_repo_root = Path.cwd().resolve()
 
+        # Resolve worktree_path to absolute before any chdir
+        if worktree_path:
+            worktree_path = str(Path(worktree_path).resolve())
+
         # Navigate to worktree directory if it was created
         if worktree_path:
             worktree_path_obj = Path(worktree_path)
