@@ -241,7 +241,7 @@ class InteractiveMenu:
         """
         return [
             {
-                "name": "Agent setup           Configure agent roles",
+                "name": "Agent setup           Set up CLI, model, and role for agents",
                 "value": "setup",
             },
             {
