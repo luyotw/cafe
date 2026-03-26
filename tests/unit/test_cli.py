@@ -1539,10 +1539,13 @@ class TestAutoUpdate:
 
                                 _check_for_updates()
 
-                                # Should attempt pip upgrade
-                                mock_run.assert_called_once()
-                                call_args = mock_run.call_args[0][0]
-                                assert "pip" in call_args
+                                # Should attempt pip upgrade (filter out git calls from ConfigManager)
+                                pip_calls = [
+                                    c for c in mock_run.call_args_list
+                                    if c[0] and "pip" in c[0][0]
+                                ]
+                                assert len(pip_calls) == 1
+                                call_args = pip_calls[0][0][0]
                                 assert "install" in call_args
                                 assert "--upgrade" in call_args
                                 assert "cafe-engine" in call_args
@@ -1567,12 +1570,17 @@ class TestAutoUpdate:
                     with patch("importlib.metadata.version", return_value="0.1.0"):
                         with patch("urllib.request.urlopen", side_effect=Exception("Network error")):
                             with patch("subprocess.run") as mock_run:
+                                mock_run.return_value = MagicMock(returncode=0)
                                 from cafe.ui.cli import _check_for_updates
 
                                 # Should not raise exception
                                 _check_for_updates()
 
-                                # Should not attempt upgrade when PyPI fails
-                                mock_run.assert_not_called()
+                                # Should not attempt pip upgrade when PyPI fails
+                                pip_calls = [
+                                    c for c in mock_run.call_args_list
+                                    if c[0] and "pip" in c[0][0]
+                                ]
+                                assert len(pip_calls) == 0
         finally:
             os.chdir(old_cwd)

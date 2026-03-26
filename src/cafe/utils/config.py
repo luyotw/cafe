@@ -2,6 +2,7 @@
 
 from pathlib import Path
 from typing import Any, Dict, Optional
+import subprocess
 import yaml
 import json
 import time
@@ -99,8 +100,39 @@ class ConfigManager:
         self.config_file = self.config_dir / "config.yaml"
         self._config: Optional[Dict[str, Any]] = None
 
+    @staticmethod
+    def _deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
+        """Deep merge override into base. Override values take precedence."""
+        result = base.copy()
+        for key, value in override.items():
+            if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+                result[key] = ConfigManager._deep_merge(result[key], value)
+            else:
+                result[key] = value
+        return result
+
+    def _get_issue_config(self) -> Optional[Dict[str, Any]]:
+        """Load issue-level config.yaml if it exists for the current branch."""
+        try:
+            branch = subprocess.run(
+                ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                capture_output=True, text=True, check=True,
+            ).stdout.strip()
+            if not branch or branch == "HEAD":
+                return None
+            issue_config = self.config_dir / "issues" / branch / "config.yaml"
+            if issue_config.exists():
+                with open(issue_config, "r") as f:
+                    return yaml.safe_load(f)
+        except Exception:
+            pass
+        return None
+
     def load_config(self) -> Dict[str, Any]:
         """Load configuration from file.
+
+        Loads .cafe/config.yaml as the base config, then overlays
+        .cafe/issues/{current_branch}/config.yaml if it exists.
 
         Returns:
             Configuration dictionary
@@ -108,7 +140,13 @@ class ConfigManager:
         Raises:
             ConfigError: If config file is invalid or doesn't exist
         """
+        # Try issue-level override first (may exist without base config after restore)
+        issue_config = self._get_issue_config()
+
         if not self.config_file.exists():
+            if issue_config:
+                self._config = issue_config
+                return self._config
             raise ConfigError(
                 f"Configuration file not found: {self.config_file}\n"
                 "Please run 'cafe init' first to initialize CAFE."
@@ -117,7 +155,9 @@ class ConfigManager:
         try:
             with open(self.config_file, "r") as f:
                 self._config = yaml.safe_load(f)
-                return self._config
+            if issue_config:
+                self._config = self._deep_merge(self._config, issue_config)
+            return self._config
         except yaml.YAMLError as e:
             raise ConfigError(f"Failed to load config: {e}") from e
 

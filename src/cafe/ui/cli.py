@@ -1656,6 +1656,7 @@ def close() -> None:
         # 5. Handle worktree mode vs normal mode
         if worktree_path:
             # === WORKTREE MODE ===
+
             # Step 1: Switch back to main repository
             try:
                 console.print("[dim]Switching to main repository...[/dim]")
@@ -1726,13 +1727,17 @@ def close() -> None:
                 console.print()
                 raise typer.Exit(1)
 
-            # Step 4: Sync .cafe/issues/{issue_name}/ from worktree to repo root
+            # Step 4: Move worktree config.yaml into issue dir before sync
+            # so it gets archived and restore puts it back in issue dir (override)
+            worktree_abs = Path(worktree_path).resolve()
+            worktree_config = worktree_abs / ".cafe" / "config.yaml"
+            worktree_issue_dir = worktree_abs / ".cafe" / "issues" / feature_branch
+            if worktree_config.exists() and worktree_issue_dir.exists():
+                shutil.move(str(worktree_config), str(worktree_issue_dir / "config.yaml"))
+
+            # Step 5: Sync .cafe/issues/{issue_name}/ from worktree to repo root
             try:
                 console.print("[dim]Syncing issue data from worktree to repo root...[/dim]")
-                import shutil
-
-                worktree_abs = Path(worktree_path).resolve()
-                worktree_issue_dir = worktree_abs / ".cafe" / "issues" / feature_branch
                 # Use absolute path for repo_issue_dir since we're in main_repo after os.chdir()
                 repo_issue_dir = (Path.cwd() / ".cafe" / "issues" / feature_branch).resolve()
 
@@ -1860,18 +1865,20 @@ def close() -> None:
             # Ensure archive directory exists
             archive_base.mkdir(parents=True, exist_ok=True)
 
-            # Move issue directory to archive
+            # Copy config.yaml into issue dir so it gets archived
+            # (non-worktree uses cp to keep .cafe/config.yaml for other issues)
             issue_dir = Path.cwd() / ".cafe" / "issues" / issue_name
+            if issue_dir.exists() and not worktree_path:
+                repo_config = Path.cwd() / ".cafe" / "config.yaml"
+                if repo_config.exists() and not (issue_dir / "config.yaml").exists():
+                    shutil.copy2(str(repo_config), str(issue_dir / "config.yaml"))
+
+            # Move issue directory to archive
             if issue_dir.exists():
                 # If archive already exists, remove it first
                 if archive_path.exists():
                     shutil.rmtree(archive_path)
                 shutil.move(str(issue_dir), str(archive_path))
-
-                # Also archive config.yaml so restore can bring it back
-                config_yaml = Path.cwd() / ".cafe" / "config.yaml"
-                if config_yaml.exists():
-                    shutil.copy2(config_yaml, archive_path / "config.yaml")
 
                 console.print(f"[green]✓ Archived issue data to: {archive_path}[/green]")
             else:
@@ -2083,16 +2090,6 @@ def restore(
         # Copy data from backup
         console.print(f"[dim]Copying data from backup...[/dim]")
         shutil.copytree(archive_path, issue_dir)
-
-        # For worktree mode, restore config.yaml to worktree/.cafe/
-        if worktree_path:
-            worktree_cafe_dir = Path(worktree_path) / ".cafe"
-            worktree_cafe_dir.mkdir(parents=True, exist_ok=True)
-
-            # Restore config.yaml from archive (backed up during close)
-            archived_config = issue_dir / "config.yaml"
-            if archived_config.exists():
-                shutil.copy2(archived_config, worktree_cafe_dir / "config.yaml")
 
         # 10. Display success message
         console.print()
