@@ -254,11 +254,11 @@ class InteractiveMenu:
             },
             {
                 "name": "Manage agents         List and manage agents",
-                "value": "agent_ls",
+                "value": "agent_edit",
             },
             {
                 "name": "Manage templates      List and manage templates",
-                "value": "template_ls",
+                "value": "template_edit",
             },
             {
                 "name": "Back                  Return to previous menu",
@@ -350,10 +350,10 @@ class InteractiveMenu:
                 _run_command(["config"])
             elif selection == "config_edit":
                 _run_command(["config", "edit"])
-            elif selection == "agent_ls":
-                _run_command(["agent", "ls"])
-            elif selection == "template_ls":
-                _run_command(["template", "ls"])
+            elif selection == "agent_edit":
+                _run_command(["agent", "edit"])
+            elif selection == "template_edit":
+                _run_command(["template", "edit"])
 
     def _get_available_agents(self) -> List[Dict[str, str]]:
         """Get all configured agents.

@@ -382,8 +382,8 @@ class TestInteractiveMenuSettingsSubmenu:
         assert "setup" in values
         assert "config" in values
         assert "config_edit" in values
-        assert "agent_ls" in values
-        assert "template_ls" in values
+        assert "agent_edit" in values
+        assert "template_edit" in values
         assert "back" in values
 
     def test_settings_back_from_main_menu_returns_to_main(self):
