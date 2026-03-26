@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Optional
 from rich.console import Console
 
 from cafe.core.git import GitOperations
-from cafe.ui.inquirer_prompts import prompt_list
+from cafe.ui.inquirer_prompts import prompt_list, prompt_text
 from cafe.utils.config import ConfigManager
 from cafe.utils.git_utils import is_branch_initialized
 
@@ -296,7 +296,10 @@ class InteractiveMenu:
         elif selection == "ls":
             _run_command(["ls"])
         elif selection == "restore":
-            _run_command(["restore"])
+            issue_name = prompt_text("Issue name to restore:")
+            if issue_name.strip():
+                _run_command(["restore", issue_name.strip()])
+                return _EXIT_SENTINEL
 
         return ""
 
@@ -329,6 +332,7 @@ class InteractiveMenu:
             _run_command(["reset"])
         elif selection == "close":
             _run_command(["close"])
+            return _EXIT_SENTINEL
 
         return ""
 

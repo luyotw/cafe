@@ -341,14 +341,10 @@ class TestInteractiveMenuIssueMenu:
         call_cmd = mock_run.call_args[0][0]
         assert "close" in call_cmd
 
-    def test_state_auto_refreshes_after_command(self):
-        """測試指令執行完畢後自動重新偵測狀態"""
+    def test_close_exits_menu_immediately(self):
+        """測試 close 指令執行後直接退出，不回主選單"""
         detector = MagicMock(spec=MenuStateDetector)
-        # State changes from ACTIVE_ISSUE to NO_ACTIVE_ISSUE after close
-        detector.detect_state.side_effect = [
-            MenuState.ACTIVE_ISSUE,   # initial detection
-            MenuState.NO_ACTIVE_ISSUE, # after close command
-        ]
+        detector.detect_state.return_value = MenuState.ACTIVE_ISSUE
         detector.get_current_issue_name.return_value = "my-issue"
 
         menu = InteractiveMenu(state_detector=detector)
@@ -358,11 +354,14 @@ class TestInteractiveMenuIssueMenu:
             patch("cafe.ui.menu.subprocess.run") as mock_run,
         ):
             mock_run.return_value = MagicMock(returncode=0)
-            # close → then exit from main menu
-            mock_prompt.side_effect = ["close", "exit"]
+            mock_prompt.side_effect = ["close"]
             menu.run()
 
-        assert detector.detect_state.call_count == 2
+        # detect_state only called once — no re-entry after close
+        assert detector.detect_state.call_count == 1
+        # close command was executed
+        call_cmd = mock_run.call_args[0][0]
+        assert "close" in call_cmd
 
 
 # ---------------------------------------------------------------------------
