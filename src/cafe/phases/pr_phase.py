@@ -14,7 +14,7 @@ from cafe.core.permission import PermissionHandler
 from cafe.core.phase import Phase
 from cafe.core.types import PhaseResult, PhaseStatus
 from cafe.ui.inquirer_prompts import prompt_confirm
-from cafe.utils.github import GitHubOps, GitHubError
+from cafe.utils.github import GitHubOps, GitHubError, get_all_pr_comments
 from cafe.utils.prompt_utils import format_checklist_instruction
 
 
@@ -356,6 +356,42 @@ class PRPhase(Phase):
             "has_user_input": bool(has_user_input),
             "user_input_path": user_input_file if has_user_input else None,
         }
+
+    def _get_last_seen_comment_ids(self) -> "Set[str]":
+        """Get last seen comment IDs by searching PR iteration history backwards.
+
+        Searches all PR iteration directories in reverse order to find the most
+        recent context.json containing the last_seen_comment_ids field.
+        This is necessary because last_seen_comment_ids is only recorded in push
+        iterations (CAFE_READY_FOR_REVIEW), not in comment-fetch iterations
+        (CAFE_NEEDS_CHANGES). The relevant data may be 2+ iterations back.
+
+        Returns:
+            Set of comment IDs seen at the last push, or empty set if no such
+            record exists (first iteration or backward compatibility)
+        """
+        pr_dir = self.issue_dir / "pr"
+        if not pr_dir.exists():
+            return set()
+
+        iteration_dirs = sorted(pr_dir.glob("iteration_*"))
+        if not iteration_dirs:
+            return set()
+
+        # Search backwards through all iterations for the most recent last_seen_comment_ids
+        for iter_dir in reversed(iteration_dirs):
+            context_file = iter_dir / "context.json"
+            if not context_file.exists():
+                continue
+            try:
+                with open(context_file, "r", encoding="utf-8") as f:
+                    context = json.load(f)
+                if "last_seen_comment_ids" in context:
+                    return set(context["last_seen_comment_ids"])
+            except (json.JSONDecodeError, TypeError, KeyError):
+                continue
+
+        return set()
 
     def _get_latest_develop_end_time(self) -> Optional["datetime"]:
         """Get end_time of the latest develop phase iteration.
@@ -1011,20 +1047,23 @@ class PRPhase(Phase):
         Returns:
             Path to saved user_input.md file if comments were saved, None if no new comments
         """
-        from cafe.utils.github import get_all_pr_comments, format_comments_for_prompt, GitHubOps
+        from cafe.utils.github import format_comments_for_prompt, GitHubOps
         from datetime import datetime
         from rich.console import Console
 
         console = Console()
 
         try:
-            # Fetch all PR comments (review, timeline, and review body)
+            # Get previously seen comment IDs to filter out already-processed comments
+            exclude_ids = self._get_last_seen_comment_ids()
+
+            # Fetch PR comments, excluding already-seen ones
             print(f"  → Fetching PR comments for PR #{pr_number}")
-            comments = get_all_pr_comments(pr_number)
-            print(f"  → Got {len(comments)} total comments")
+            comments = get_all_pr_comments(pr_number, exclude_ids=exclude_ids)
+            print(f"  → Got {len(comments)} new comments (excluded {len(exclude_ids)} previously seen)")
 
             if not comments:
-                print(f"  → No comments found for PR #{pr_number}")
+                print(f"  → No new comments found for PR #{pr_number}")
                 return None
 
             # Format comments for saving
@@ -1630,6 +1669,21 @@ Return ONLY the status code (CAFE_CONFIRMED or CAFE_NEEDS_CHANGES) with no expla
                 console.print(f"[yellow]⚠️  Warning: Failed to post PR todo list as PR comment: {e}[/yellow]")
             return
 
+    def _snapshot_current_comment_ids(self, pr_number: str) -> list:
+        """Snapshot current comment IDs on the PR for incremental filtering next iteration.
+
+        Args:
+            pr_number: PR number (string or int)
+
+        Returns:
+            List of comment ID strings currently on the PR, or empty list on failure
+        """
+        try:
+            current_comments = get_all_pr_comments(int(pr_number))
+            return [c.id for c in current_comments]
+        except Exception:
+            return []
+
     def _create_or_update_pr(self, existing_pr: dict | None, branch_name: str) -> PhaseResult:
         """Create or update PR with prepared content.
 
@@ -1661,12 +1715,20 @@ Return ONLY the status code (CAFE_CONFIRMED or CAFE_NEEDS_CHANGES) with no expla
 
             self.github_ops.update_pr(pr_number, title=pr_title, body=pr_body)
 
+            # Snapshot all current comment IDs so next iteration only fetches new ones
+            last_seen_comment_ids = self._snapshot_current_comment_ids(pr_number)
+
             # Save progress - READY_FOR_REVIEW means waiting for reviewer feedback
             self._save_progress(PhaseStatusCode.READY_FOR_REVIEW)
 
             # Update iteration history with status_code
             self._update_iteration_history(
-                phase_specific_data={"pr_number": pr_number, "pr_url": pr_url, "branch": branch_name},
+                phase_specific_data={
+                    "pr_number": pr_number,
+                    "pr_url": pr_url,
+                    "branch": branch_name,
+                    "last_seen_comment_ids": last_seen_comment_ids,
+                },
                 status_code=PhaseStatusCode.READY_FOR_REVIEW,
             )
 
@@ -1701,12 +1763,20 @@ Return ONLY the status code (CAFE_CONFIRMED or CAFE_NEEDS_CHANGES) with no expla
                 except Exception as e:
                     console.print(f"[yellow]⚠️  Warning: Failed to add PR link to issue #{self.issue_id}: {e}[/yellow]")
 
+            # Snapshot all current comment IDs so next iteration only fetches new ones
+            last_seen_comment_ids = self._snapshot_current_comment_ids(pr_number)
+
             # Save progress - READY_FOR_REVIEW means waiting for reviewer feedback
             self._save_progress(PhaseStatusCode.READY_FOR_REVIEW)
 
             # Update iteration history with status_code
             self._update_iteration_history(
-                phase_specific_data={"pr_number": pr_number, "pr_url": pr_url, "branch": branch_name},
+                phase_specific_data={
+                    "pr_number": pr_number,
+                    "pr_url": pr_url,
+                    "branch": branch_name,
+                    "last_seen_comment_ids": last_seen_comment_ids,
+                },
                 status_code=PhaseStatusCode.READY_FOR_REVIEW,
             )
 
