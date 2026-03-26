@@ -1715,6 +1715,10 @@ Return ONLY the status code (CAFE_CONFIRMED or CAFE_NEEDS_CHANGES) with no expla
 
             self.github_ops.update_pr(pr_number, title=pr_title, body=pr_body)
 
+            self._display_pr_success(pr_number, pr_url, "updated")
+            # Post todo list first so its comment ID is included in the snapshot below
+            self._post_pr_todo_list(pr_number)
+
             # Snapshot all current comment IDs so next iteration only fetches new ones
             last_seen_comment_ids = self._snapshot_current_comment_ids(pr_number)
 
@@ -1731,9 +1735,6 @@ Return ONLY the status code (CAFE_CONFIRMED or CAFE_NEEDS_CHANGES) with no expla
                 },
                 status_code=PhaseStatusCode.READY_FOR_REVIEW,
             )
-
-            self._display_pr_success(pr_number, pr_url, "updated")
-            self._post_pr_todo_list(pr_number)
 
             return PhaseResult(
                 status=PhaseStatus.COMPLETED,
@@ -1763,6 +1764,10 @@ Return ONLY the status code (CAFE_CONFIRMED or CAFE_NEEDS_CHANGES) with no expla
                 except Exception as e:
                     console.print(f"[yellow]⚠️  Warning: Failed to add PR link to issue #{self.issue_id}: {e}[/yellow]")
 
+            self._display_pr_success(pr_number, pr_url, "created")
+            # Post todo list first so its comment ID is included in the snapshot below
+            self._post_pr_todo_list(pr_number)
+
             # Snapshot all current comment IDs so next iteration only fetches new ones
             last_seen_comment_ids = self._snapshot_current_comment_ids(pr_number)
 
@@ -1779,9 +1784,6 @@ Return ONLY the status code (CAFE_CONFIRMED or CAFE_NEEDS_CHANGES) with no expla
                 },
                 status_code=PhaseStatusCode.READY_FOR_REVIEW,
             )
-
-            self._display_pr_success(pr_number, pr_url, "created")
-            self._post_pr_todo_list(pr_number)
 
             return PhaseResult(
                 status=PhaseStatus.COMPLETED,
