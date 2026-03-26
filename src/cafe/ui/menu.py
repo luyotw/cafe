@@ -164,35 +164,17 @@ class InteractiveMenu:
         choices: List[Dict[str, Any]] = []
 
         if state == MenuState.NOT_INITIALIZED:
-            choices.append({
-                "name": "Init project          Initialize CAFE in this project",
-                "value": "init",
-            })
+            choices.append({"name": "Init project", "value": "init"})
         else:
             choices += [
-                {
-                    "name": "New issue             Create a new issue",
-                    "value": "prepare",
-                },
-                {
-                    "name": "List issues           Show all issues",
-                    "value": "ls",
-                },
-                {
-                    "name": "Restore issue         Restore an archived issue",
-                    "value": "restore",
-                },
+                {"name": "New issue", "value": "prepare"},
+                {"name": "List issues", "value": "ls"},
+                {"name": "Restore archived issue", "value": "restore"},
             ]
 
         choices += [
-            {
-                "name": "Settings              Configure agents, templates and more",
-                "value": "settings",
-            },
-            {
-                "name": "Exit",
-                "value": "exit",
-            },
+            {"name": "Settings", "value": "settings"},
+            {"name": "Exit", "value": "exit"},
         ]
         return choices
 
@@ -203,34 +185,13 @@ class InteractiveMenu:
             List of InquirerPy choice dicts with "name" and "value" keys
         """
         return [
-            {
-                "name": "Continue workflow      Run the next workflow phase",
-                "value": "make",
-            },
-            {
-                "name": "Chat with agent       Open interactive chat with an agent",
-                "value": "chat",
-            },
-            {
-                "name": "Show status           Display workflow timeline",
-                "value": "summary",
-            },
-            {
-                "name": "Reset iteration       Remove last iteration",
-                "value": "reset",
-            },
-            {
-                "name": "Close issue           Close issue and return to base branch",
-                "value": "close",
-            },
-            {
-                "name": "Settings              Configure agents, templates and more",
-                "value": "settings",
-            },
-            {
-                "name": "Exit",
-                "value": "exit",
-            },
+            {"name": "Continue workflow", "value": "make"},
+            {"name": "Chat with agent", "value": "chat"},
+            {"name": "Show status", "value": "summary"},
+            {"name": "Reset iteration", "value": "reset"},
+            {"name": "Close issue", "value": "close"},
+            {"name": "Settings", "value": "settings"},
+            {"name": "Exit", "value": "exit"},
         ]
 
     def _build_settings_menu_choices(self) -> List[Dict[str, Any]]:
@@ -240,30 +201,12 @@ class InteractiveMenu:
             List of InquirerPy choice dicts with "name" and "value" keys
         """
         return [
-            {
-                "name": "Agent setup           Set up CLI, model, and role for agents",
-                "value": "setup",
-            },
-            {
-                "name": "View config           Show current configuration",
-                "value": "config",
-            },
-            {
-                "name": "Edit config           Open config in editor",
-                "value": "config_edit",
-            },
-            {
-                "name": "Manage agents         List and manage agents",
-                "value": "agent_edit",
-            },
-            {
-                "name": "Manage templates      List and manage templates",
-                "value": "template_edit",
-            },
-            {
-                "name": "Back                  Return to previous menu",
-                "value": "back",
-            },
+            {"name": "Agent CLI & model setup", "value": "setup"},
+            {"name": "View config", "value": "config"},
+            {"name": "Edit config", "value": "config_edit"},
+            {"name": "Manage agents", "value": "agent_edit"},
+            {"name": "Manage templates", "value": "template_edit"},
+            {"name": "Back", "value": "back"},
         ]
 
     # ------------------------------------------------------------------
