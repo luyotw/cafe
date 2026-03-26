@@ -1856,6 +1856,12 @@ def close() -> None:
                 if archive_path.exists():
                     shutil.rmtree(archive_path)
                 shutil.move(str(issue_dir), str(archive_path))
+
+                # Also archive config.yaml so restore can bring it back
+                config_yaml = Path.cwd() / ".cafe" / "config.yaml"
+                if config_yaml.exists():
+                    shutil.copy2(config_yaml, archive_path / "config.yaml")
+
                 console.print(f"[green]✓ Archived issue data to: {archive_path}[/green]")
             else:
                 console.print(
@@ -2004,7 +2010,10 @@ def restore(
                 console.print(f"[red]❌ Error: Failed to checkout branch {feature_branch}: {e}[/red]")
                 raise typer.Exit(1)
 
-        # 7. Navigate to worktree directory if it was created
+        # 7. Remember main repo root before potentially changing directory
+        main_repo_root = Path.cwd().resolve()
+
+        # Navigate to worktree directory if it was created
         if worktree_path:
             worktree_path_obj = Path(worktree_path)
             if worktree_path_obj.exists():
@@ -2060,26 +2069,15 @@ def restore(
         console.print(f"[dim]Copying data from backup...[/dim]")
         shutil.copytree(archive_path, issue_dir)
 
-        # For worktree mode, also copy config.yaml, agents, and templates to worktree/.cafe/
+        # For worktree mode, restore config.yaml to worktree/.cafe/
         if worktree_path:
             worktree_cafe_dir = Path(worktree_path) / ".cafe"
             worktree_cafe_dir.mkdir(parents=True, exist_ok=True)
 
-            # Copy config.yaml
-            repo_root = Path.cwd()
-            if current_branch != feature_branch:
-                # We're in worktree, go back to main repo
-                try:
-                    repo_root = Path(git_ops.run_git("rev-parse", "--show-toplevel").strip())
-                except Exception:
-                    pass
-
-            main_cafe_dir = repo_root / ".cafe"
-            if (main_cafe_dir / "config.yaml").exists():
-                shutil.copy2(main_cafe_dir / "config.yaml", worktree_cafe_dir / "config.yaml")
-
-            # Note: Agents and templates are now managed globally at ~/.cafe/
-            # No need to copy them to worktree .cafe directory
+            # Restore config.yaml from archive (backed up during close)
+            archived_config = issue_dir / "config.yaml"
+            if archived_config.exists():
+                shutil.copy2(archived_config, worktree_cafe_dir / "config.yaml")
 
         # 10. Display success message
         console.print()
