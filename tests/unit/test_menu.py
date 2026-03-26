@@ -500,10 +500,111 @@ class TestInteractiveMenuSettingsSubmenu:
 class TestChatWithAgent:
     """Tests for context-aware chat with agent feature."""
 
-    def test_chat_shows_configured_agents(self):
-        """測試 Chat with agent 顯示目前設定的 agents"""
+    def test_get_active_phase_returns_latest_phase(self, tmp_path, monkeypatch):
+        """測試 _get_active_phase 回傳最後一個已建立的 phase"""
+        monkeypatch.chdir(tmp_path)
+        issue_dir = tmp_path / ".cafe" / "issues" / "my-issue"
+        (issue_dir / "spec").mkdir(parents=True)
+        (issue_dir / "plan").mkdir(parents=True)
+
         detector = MagicMock(spec=MenuStateDetector)
-        detector.detect_state.return_value = MenuState.ACTIVE_ISSUE
+        menu = InteractiveMenu(state_detector=detector)
+
+        phase = menu._get_active_phase("my-issue")
+        assert phase == "plan"
+
+    def test_get_active_phase_returns_none_when_no_phases(self, tmp_path, monkeypatch):
+        """測試沒有任何 phase 目錄時回傳 None"""
+        monkeypatch.chdir(tmp_path)
+        issue_dir = tmp_path / ".cafe" / "issues" / "my-issue"
+        issue_dir.mkdir(parents=True)
+
+        detector = MagicMock(spec=MenuStateDetector)
+        menu = InteractiveMenu(state_detector=detector)
+
+        phase = menu._get_active_phase("my-issue")
+        assert phase is None
+
+    def test_get_available_agents_returns_pm_for_spec_phase(self, tmp_path, monkeypatch):
+        """測試 spec 階段時只回傳 pm agent"""
+        monkeypatch.chdir(tmp_path)
+        issue_dir = tmp_path / ".cafe" / "issues" / "my-issue"
+        (issue_dir / "spec").mkdir(parents=True)
+
+        detector = MagicMock(spec=MenuStateDetector)
+        detector.get_current_issue_name.return_value = "my-issue"
+
+        mock_config = MagicMock()
+        mock_config.get.side_effect = lambda key, default=None: {
+            "agents.pm.name": "Roger",
+        }.get(key, default)
+
+        menu = InteractiveMenu(state_detector=detector)
+
+        with patch("cafe.ui.menu.ConfigManager") as mock_config_cls:
+            mock_config_cls.return_value = mock_config
+            agents = menu._get_available_agents()
+
+        assert len(agents) == 1
+        assert agents[0]["role"] == "pm"
+
+    def test_get_available_agents_returns_developer_for_develop_phase(self, tmp_path, monkeypatch):
+        """測試 develop 階段時只回傳 developer agent"""
+        monkeypatch.chdir(tmp_path)
+        issue_dir = tmp_path / ".cafe" / "issues" / "my-issue"
+        (issue_dir / "spec").mkdir(parents=True)
+        (issue_dir / "plan").mkdir(parents=True)
+        (issue_dir / "develop").mkdir(parents=True)
+
+        detector = MagicMock(spec=MenuStateDetector)
+        detector.get_current_issue_name.return_value = "my-issue"
+
+        mock_config = MagicMock()
+        mock_config.get.side_effect = lambda key, default=None: {
+            "agents.developer.name": "Nick",
+        }.get(key, default)
+
+        menu = InteractiveMenu(state_detector=detector)
+
+        with patch("cafe.ui.menu.ConfigManager") as mock_config_cls:
+            mock_config_cls.return_value = mock_config
+            agents = menu._get_available_agents()
+
+        assert len(agents) == 1
+        assert agents[0]["role"] == "developer"
+
+    def test_get_available_agents_returns_reviewer_for_review_phase(self, tmp_path, monkeypatch):
+        """測試 review 階段時只回傳 reviewer agent"""
+        monkeypatch.chdir(tmp_path)
+        issue_dir = tmp_path / ".cafe" / "issues" / "my-issue"
+        (issue_dir / "spec").mkdir(parents=True)
+        (issue_dir / "plan").mkdir(parents=True)
+        (issue_dir / "develop").mkdir(parents=True)
+        (issue_dir / "review").mkdir(parents=True)
+
+        detector = MagicMock(spec=MenuStateDetector)
+        detector.get_current_issue_name.return_value = "my-issue"
+
+        mock_config = MagicMock()
+        mock_config.get.side_effect = lambda key, default=None: {
+            "agents.reviewer.name": "Richard",
+        }.get(key, default)
+
+        menu = InteractiveMenu(state_detector=detector)
+
+        with patch("cafe.ui.menu.ConfigManager") as mock_config_cls:
+            mock_config_cls.return_value = mock_config
+            agents = menu._get_available_agents()
+
+        assert len(agents) == 1
+        assert agents[0]["role"] == "reviewer"
+
+    def test_get_available_agents_falls_back_to_all_when_no_phase(self, tmp_path, monkeypatch):
+        """測試沒有偵測到 phase 時，回傳所有已設定的 agents"""
+        monkeypatch.chdir(tmp_path)
+        # No phase directories
+
+        detector = MagicMock(spec=MenuStateDetector)
         detector.get_current_issue_name.return_value = "my-issue"
 
         mock_config = MagicMock()
@@ -519,7 +620,10 @@ class TestChatWithAgent:
             mock_config_cls.return_value = mock_config
             agents = menu._get_available_agents()
 
-        assert len(agents) > 0
+        roles = [a["role"] for a in agents]
+        assert "pm" in roles
+        assert "developer" in roles
+        assert "reviewer" in roles
 
     def test_chat_dispatches_chat_command(self):
         """測試選擇 Chat 後執行 cafe chat <role>"""
@@ -532,14 +636,13 @@ class TestChatWithAgent:
         mock_config = MagicMock()
         mock_config.get.side_effect = lambda key, default=None: {
             "agents.pm.name": "Roger",
-            "agents.developer.name": "Nick",
-            "agents.reviewer.name": "Richard",
         }.get(key, default)
 
         with (
             patch("cafe.ui.menu.prompt_list") as mock_prompt,
             patch("cafe.ui.menu.subprocess.run") as mock_run,
             patch("cafe.ui.menu.ConfigManager") as mock_config_cls,
+            patch.object(menu, "_get_active_phase", return_value="spec"),
         ):
             mock_config_cls.return_value = mock_config
             mock_run.return_value = MagicMock(returncode=0)

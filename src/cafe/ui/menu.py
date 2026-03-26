@@ -290,7 +290,7 @@ class InteractiveMenu:
             return _EXIT_SENTINEL
 
         if selection == "settings":
-            self._show_settings_menu(parent="main")
+            self._show_settings_menu()
             return ""
 
         if selection == "init":
@@ -320,7 +320,7 @@ class InteractiveMenu:
             return _EXIT_SENTINEL
 
         if selection == "settings":
-            self._show_settings_menu(parent="issue")
+            self._show_settings_menu()
             return ""
 
         if selection == "chat":
@@ -338,14 +338,10 @@ class InteractiveMenu:
 
         return ""
 
-    def _show_settings_menu(self, parent: str = "main") -> None:
+    def _show_settings_menu(self) -> None:
         """Display the settings submenu and handle the user's selection.
 
         This menu loops until the user selects "Back".
-
-        Args:
-            parent: Which menu launched settings ("main" or "issue"),
-                    used to display a contextual title
         """
         while True:
             choices = self._build_settings_menu_choices()
@@ -365,24 +361,65 @@ class InteractiveMenu:
             elif selection == "template_ls":
                 _run_command(["template", "ls"])
 
-    def _get_available_agents(self) -> List[Dict[str, str]]:
-        """Get the list of agents configured in .cafe/config.yaml.
+    def _get_active_phase(self, issue_name: str) -> Optional[str]:
+        """Detect the most recently started workflow phase for the given issue.
+
+        Iterates through phases in order (spec → plan → develop → review → pr)
+        and returns the last one that has an iteration directory, which represents
+        the currently active (or most recently run) phase.
+
+        Args:
+            issue_name: Issue name (branch name)
 
         Returns:
-            List of dicts with "role" and "name" keys for each configured agent
+            Phase name string (e.g. "spec", "develop") or None if no phase started
         """
+        phases = ["spec", "plan", "develop", "review", "pr"]
+        active_phase: Optional[str] = None
+        for phase in phases:
+            phase_dir = Path(".cafe/issues") / issue_name / phase
+            if phase_dir.exists() and phase_dir.is_dir():
+                active_phase = phase
+        return active_phase
+
+    def _get_available_agents(self) -> List[Dict[str, str]]:
+        """Get agents configured for the current workflow phase.
+
+        Only returns agents relevant to the currently active phase:
+        - spec → pm
+        - plan, develop, pr → developer
+        - review → reviewer
+
+        Returns:
+            List of dicts with "role" and "name" keys for agents in the current phase
+        """
+        # Phase → agent role mapping
+        phase_role_map: Dict[str, str] = {
+            "spec": "pm",
+            "plan": "developer",
+            "develop": "developer",
+            "review": "reviewer",
+            "pr": "developer",
+        }
+
         agents: List[Dict[str, str]] = []
         try:
+            issue_name = self._detector.get_current_issue_name()
+            active_phase = self._get_active_phase(issue_name) if issue_name else None
+            relevant_role = phase_role_map.get(active_phase) if active_phase else None
+
             config_manager = ConfigManager()
-            role_keys = [
-                ("pm", "pm"),
-                ("developer", "developer"),
-                ("reviewer", "reviewer"),
-            ]
-            for config_key, role_label in role_keys:
-                name = config_manager.get(f"agents.{config_key}.name")
+            if relevant_role:
+                # Only show the agent for the current phase
+                name = config_manager.get(f"agents.{relevant_role}.name")
                 if name:
-                    agents.append({"role": role_label, "name": name})
+                    agents.append({"role": relevant_role, "name": name})
+            else:
+                # No active phase detected — show all configured agents as fallback
+                for role in ("pm", "developer", "reviewer"):
+                    name = config_manager.get(f"agents.{role}.name")
+                    if name:
+                        agents.append({"role": role, "name": name})
         except Exception:
             pass
         return agents
