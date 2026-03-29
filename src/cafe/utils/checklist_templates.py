@@ -133,7 +133,7 @@ DEVELOP_EXECUTION_STEPS_NORMAL = """## Checklist
 [ ] Confirm: Maximized code reuse by looking for existing patterns and utilities
 [ ] Confirm: Commit messages strictly match existing format, language, and structure
 [ ] Confirm: All tasks in {plan_file_path} are marked [x]
-[ ] Confirm: All tests pass
+[ ] Confirm: All tests pass and are not fragile
 [ ] Confirm: All commits are made
 [ ] Confirm: No pending work remains
 [ ] Return status code
@@ -150,7 +150,7 @@ DEVELOP_EXECUTION_STEPS_CORRECTION = """## Checklist
 [ ] Confirm: Maximized code reuse by looking for existing patterns and utilities
 [ ] Confirm: Commit messages strictly match existing format, language, and structure
 [ ] Confirm: All issues are fixed
-[ ] Confirm: All tests pass
+[ ] Confirm: All tests pass and are not fragile
 [ ] Return status code
 
 ## Status Codes
