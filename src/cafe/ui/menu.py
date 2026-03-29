@@ -169,6 +169,7 @@ class InteractiveMenu:
             choices += [
                 {"name": "New issue", "value": "prepare"},
                 {"name": "List issues", "value": "ls"},
+                {"name": "Remove issue", "value": "rm"},
                 {"name": "Restore archived issue", "value": "restore"},
             ]
 
@@ -238,6 +239,8 @@ class InteractiveMenu:
             _run_command(["prepare"])
         elif selection == "ls":
             _run_command(["ls"])
+        elif selection == "rm":
+            _run_command(["rm"])
         elif selection == "restore":
             issue_name = prompt_text("Issue name to restore:")
             if issue_name.strip():

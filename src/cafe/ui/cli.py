@@ -4033,14 +4033,24 @@ def list_issues() -> None:
 
 @app.command(name="rm")
 def remove_issue(
-    issue_names: list[str] = typer.Argument(
-        ..., help="Names of the issues to delete (supports wildcards like 'test-*')"
+    issue_names: Optional[list[str]] = typer.Argument(
+        None, help="Names of the issues to delete (supports wildcards like 'test-*')"
     ),
     force: bool = typer.Option(False, "--force", "-f", help="Skip confirmation prompt"),
 ) -> None:
     """Remove one or more issues and all their data."""
     import fnmatch
     import shutil
+
+    # If no arguments, show issue list and prompt for issue name
+    if not issue_names:
+        list_issues()
+        console.print()
+        issue_input = prompt_text("Issue name(s) to remove (space-separated):")
+        if not issue_input or not issue_input.strip():
+            console.print("[dim]Cancelled[/dim]")
+            raise typer.Exit(0)
+        issue_names = issue_input.strip().split()
 
     # Expand wildcards
     issues_dir = Path(".cafe/issues")
