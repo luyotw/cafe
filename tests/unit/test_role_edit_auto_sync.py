@@ -1,4 +1,4 @@
-"""Tests for automatic sync after cafe agent edit."""
+"""Tests for automatic sync after cafe role edit."""
 
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -16,7 +16,7 @@ def runner():
 
 
 class TestAgentEditAutoSync:
-    """Tests for automatic sync after agent edit."""
+    """Tests for automatic sync after role edit."""
 
     @patch("cafe.ui.cli.subprocess.run")
     @patch("cafe.ui.init_helpers.sync_agents")
@@ -31,7 +31,7 @@ class TestAgentEditAutoSync:
         runner: CliRunner,
         tmp_path: Path,
     ) -> None:
-        """Test that agent edit triggers sync after successful edit."""
+        """Test that role edit triggers sync after successful edit."""
         # Setup global cafe directory
         global_cafe_dir = tmp_path / ".cafe_global"
         global_cafe_dir.mkdir()
@@ -52,7 +52,7 @@ class TestAgentEditAutoSync:
             mock_path_instance.exists.return_value = True
             mock_path.return_value = mock_path_instance
 
-            result = runner.invoke(app, ["agent", "edit"])
+            result = runner.invoke(app, ["role", "edit"])
 
         # Verify sync was called after edit
         assert mock_sync_agents.called
@@ -70,7 +70,7 @@ class TestAgentEditAutoSync:
         runner: CliRunner,
         tmp_path: Path,
     ) -> None:
-        """Test that agent edit does not trigger sync if edit fails."""
+        """Test that role edit does not trigger sync if edit fails."""
         # Setup global cafe directory
         global_cafe_dir = tmp_path / ".cafe_global"
         global_cafe_dir.mkdir()
@@ -84,7 +84,7 @@ class TestAgentEditAutoSync:
         # Simulate subprocess failure
         mock_subprocess_run.side_effect = Exception("Editor failed")
 
-        result = runner.invoke(app, ["agent", "edit"])
+        result = runner.invoke(app, ["role", "edit"])
 
         # Verify sync was NOT called when edit fails
         assert not mock_sync_agents.called

@@ -1,4 +1,4 @@
-"""測試 cafe agent 指令集 CLI 介面."""
+"""測試 cafe role 指令集 CLI 介面."""
 
 import os
 import tempfile
@@ -31,18 +31,18 @@ def temp_global_dir(tmp_path):
 
 
 class TestAgentLsCommand:
-    """測試 cafe agent ls 指令."""
+    """測試 cafe role ls 指令."""
 
     def test_agent_ls_with_no_custom_agents(self, runner, temp_global_dir):
         """測試沒有自訂 agent 時顯示系統預設 agents."""
         # Mock Path.home() 返回 temp 目錄 (沒有自訂 agents)
         with patch("cafe.utils.config.Path.home", return_value=temp_global_dir.parent):
-            result = runner.invoke(app, ["agent", "ls"])
+            result = runner.invoke(app, ["role", "ls"])
 
         assert result.exit_code == 0
         # 應該會列出系統預設的 agents，不會顯示 "No agents found"
         # 至少會有一些系統預設的 agents
-        assert "Available Agents" in result.stdout or "pm" in result.stdout or "developer" in result.stdout or "reviewer" in result.stdout
+        assert "Available Roles" in result.stdout or "pm" in result.stdout or "developer" in result.stdout or "reviewer" in result.stdout
 
     def test_agent_ls_with_multiple_agents(self, runner, temp_global_dir):
         """測試有多個 agents 時按角色分類列出."""
@@ -69,7 +69,7 @@ class TestAgentLsCommand:
 
         # Mock Path.home() 返回 temp 目錄
         with patch("cafe.utils.config.Path.home", return_value=temp_global_dir.parent):
-            result = runner.invoke(app, ["agent", "ls"])
+            result = runner.invoke(app, ["role", "ls"])
 
         assert result.exit_code == 0
         # 驗證輸出包含角色分類
@@ -84,7 +84,7 @@ class TestAgentLsCommand:
 
 
 class TestAgentRmCommand:
-    """測試 cafe agent rm 指令."""
+    """測試 cafe role rm 指令."""
 
     def test_agent_rm_success(self, runner, temp_global_dir):
         """測試成功刪除 agent 檔案."""
@@ -100,7 +100,7 @@ class TestAgentRmCommand:
             # 模擬使用者選擇角色and agent
             mock_prompt_list.side_effect = ["developer", "John.md"]
 
-            result = runner.invoke(app, ["agent", "rm"])
+            result = runner.invoke(app, ["role", "rm"])
 
         assert result.exit_code == 0
         assert "deleted successfully" in result.stdout
@@ -113,7 +113,7 @@ class TestAgentRmCommand:
              patch("cafe.ui.cli.prompt_list") as mock_prompt_list:
             mock_prompt_list.return_value = "developer"
 
-            result = runner.invoke(app, ["agent", "rm"])
+            result = runner.invoke(app, ["role", "rm"])
 
         assert result.exit_code == 1
         assert "no agents found" in result.stdout.lower()
@@ -125,14 +125,14 @@ class TestAgentRmCommand:
         agent_file = agents_dir / "developer" / "John.md"
         agent_file.write_text("---\nname: John\n---\nRules")
 
-        # Mock Path.home() and prompt_list and typer.confirm (回傳 False)
+        # Mock Path.home() and prompt_list and prompt_confirm (回傳 False)
         with patch("cafe.utils.config.Path.home", return_value=temp_global_dir.parent), \
              patch("cafe.ui.cli.prompt_list") as mock_prompt_list, \
-             patch("typer.confirm", return_value=False):
+             patch("cafe.ui.cli.prompt_confirm", return_value=False):
             # 模擬使用者選擇角色and agent
             mock_prompt_list.side_effect = ["developer", "John.md"]
 
-            result = runner.invoke(app, ["agent", "rm"])
+            result = runner.invoke(app, ["role", "rm"])
 
         assert result.exit_code == 0
         assert "cancelled" in result.stdout.lower()
@@ -140,7 +140,7 @@ class TestAgentRmCommand:
 
 
 class TestAgentCreateCommand:
-    """測試 cafe agent create 指令."""
+    """測試 cafe role create 指令."""
 
     def test_agent_create_success(self, runner, temp_global_dir):
         """測試成功建立 agent 檔案."""
@@ -167,7 +167,7 @@ class TestAgentCreateCommand:
 
                 mock_run.side_effect = side_effect
 
-                result = runner.invoke(app, ["agent", "create"])
+                result = runner.invoke(app, ["role", "create"])
 
         assert result.exit_code == 0
         assert "created successfully" in result.stdout
@@ -195,15 +195,15 @@ class TestAgentCreateCommand:
             mock_prompt_list.return_value = "developer"
             mock_prompt_text.side_effect = ["Michael", "A developer"]
 
-            result = runner.invoke(app, ["agent", "create"])
+            result = runner.invoke(app, ["role", "create"])
 
         assert result.exit_code == 1
         assert "already exists" in result.stdout
-        assert "cafe agent edit" in result.stdout
+        assert "cafe role edit" in result.stdout
 
 
 class TestAgentEditCommand:
-    """測試 cafe agent edit 指令."""
+    """測試 cafe role edit 指令."""
 
     def test_agent_edit_success(self, runner, temp_global_dir):
         """測試成功編輯 agent 檔案."""
@@ -227,14 +227,14 @@ class TestAgentEditCommand:
             with patch("subprocess.run") as mock_run:
                 mock_run.return_value = Mock(returncode=0)
 
-                result = runner.invoke(app, ["agent", "edit"])
+                result = runner.invoke(app, ["role", "edit"])
 
         assert result.exit_code == 0
         assert "updated successfully" in result.stdout or "Updated" in result.stdout
 
 
 class TestAgentCatCommand:
-    """測試 cafe agent cat 指令."""
+    """測試 cafe role cat 指令."""
 
     def test_agent_cat_with_flags(self, runner, temp_global_dir):
         """測試使用 --role 和 --name 參數查看 agent."""
@@ -249,7 +249,7 @@ class TestAgentCatCommand:
             # Mock less command failure to trigger fallback
             mock_run.side_effect = FileNotFoundError()
 
-            result = runner.invoke(app, ["agent", "cat", "--role", "developer", "--name", "TestAgent"])
+            result = runner.invoke(app, ["role", "cat", "--role", "developer", "--name", "TestAgent"])
 
         assert result.exit_code == 0
         assert "Agent rules here" in result.stdout
@@ -270,7 +270,7 @@ class TestAgentCatCommand:
             # Mock less command failure to trigger fallback
             mock_run.side_effect = FileNotFoundError()
 
-            result = runner.invoke(app, ["agent", "cat"])
+            result = runner.invoke(app, ["role", "cat"])
 
         assert result.exit_code == 0
         assert "Content" in result.stdout
@@ -279,7 +279,7 @@ class TestAgentCatCommand:
         """測試查看不存在的 agent."""
         # Mock Path.home()
         with patch("cafe.utils.config.Path.home", return_value=temp_global_dir.parent):
-            result = runner.invoke(app, ["agent", "cat", "--role", "developer", "--name", "NonExistent"])
+            result = runner.invoke(app, ["role", "cat", "--role", "developer", "--name", "NonExistent"])
 
         assert result.exit_code == 1
         assert "not found" in result.stdout
@@ -288,7 +288,7 @@ class TestAgentCatCommand:
         """測試使用無效的角色."""
         # Mock Path.home()
         with patch("cafe.utils.config.Path.home", return_value=temp_global_dir.parent):
-            result = runner.invoke(app, ["agent", "cat", "--role", "invalid", "--name", "Test"])
+            result = runner.invoke(app, ["role", "cat", "--role", "invalid", "--name", "Test"])
 
         assert result.exit_code == 1
         assert "Invalid role" in result.stdout
@@ -301,7 +301,7 @@ class TestAgentCatCommand:
              patch("cafe.ui.init_helpers.list_available_agents", return_value=[]):
             mock_prompt_list.return_value = "developer"
 
-            result = runner.invoke(app, ["agent", "cat"])
+            result = runner.invoke(app, ["role", "cat"])
 
         assert result.exit_code == 1
         assert "No agents found" in result.stdout

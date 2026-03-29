@@ -2723,8 +2723,8 @@ def ensure_agent_file_exists(agent_name: str, agent_role: str, cafe_dir: Path = 
         from rich.console import Console
         console = Console()
         console.print(f"[red]✗ Agent file not found: {agent_file}[/red]")
-        console.print(f"[yellow]ℹ Please run 'cafe agent default' to reset default agent files[/yellow]")
+        console.print(f"[yellow]ℹ Please run 'cafe role default' to reset default agent files[/yellow]")
         raise FileNotFoundError(
             f"Agent file not found: {agent_file}\n"
-            f"Run 'cafe agent default' to reset default agent files"
+            f"Run 'cafe role default' to reset default agent files"
         )

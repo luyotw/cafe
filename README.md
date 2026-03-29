@@ -213,7 +213,7 @@ cafe --help
 - **Developer**: Analyzes implementation and writes code.
 - **Reviewer**: Reviews code for quality assurance.
 
-You can create and manage custom agents using the `cafe agent` command set. Custom agents are stored globally in `~/.cafe/agents/` and can be reused across all your CAFE projects. See `cafe agent --help` for more details.
+You can create and manage custom agents using the `cafe role` command set. Custom agents are stored globally in `~/.cafe/agents/` and can be reused across all your CAFE projects. See `cafe role --help` for more details.
 
 ### Template System
 - **Spec Template**: Defines the format for requirements clarification and specification documents.
@@ -249,7 +249,7 @@ CAFE provides additional commands for managing issues and viewing execution deta
 
 #### Customization
 - `cafe config` - View and manage CAFE configuration settings
-- `cafe agent create` - Create custom agents with specific behaviors and prompts tailored to your needs
+- `cafe role create` - Create custom agents with specific behaviors and prompts tailored to your needs
 - `cafe template create` - Create custom spec and plan templates for specialized workflows or domain-specific requirements
 
 Use `cafe <command> --help` to see detailed usage for each command.

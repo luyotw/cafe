@@ -53,7 +53,7 @@ class TestAgentWorkflow:
                     return Mock(returncode=0)
 
                 mock_run.side_effect = write_agent_content
-                result = runner.invoke(app, ["agent", "create"])
+                result = runner.invoke(app, ["role", "create"])
 
             assert result.exit_code == 0
             assert "created successfully" in result.stdout
@@ -63,7 +63,7 @@ class TestAgentWorkflow:
             assert agent_file.exists()
 
             # Step 2: List agents - verify the created agent appears
-            result = runner.invoke(app, ["agent", "ls"])
+            result = runner.invoke(app, ["role", "ls"])
             assert result.exit_code == 0
             assert "TestAgent" in result.stdout
 
@@ -71,7 +71,7 @@ class TestAgentWorkflow:
             with patch("cafe.ui.cli.prompt_list", side_effect=["developer", "TestAgent.md"]), \
                  patch("subprocess.run") as mock_run:
                 mock_run.return_value = Mock(returncode=0)
-                result = runner.invoke(app, ["agent", "edit"])
+                result = runner.invoke(app, ["role", "edit"])
 
             assert result.exit_code == 0
             assert "updated successfully" in result.stdout or "Updated" in result.stdout
@@ -79,7 +79,7 @@ class TestAgentWorkflow:
             # Step 4: Delete the agent
             with patch("cafe.ui.cli.prompt_list", side_effect=["developer", "TestAgent.md"]), \
                  patch("cafe.ui.cli.prompt_confirm", return_value=True):
-                result = runner.invoke(app, ["agent", "rm"])
+                result = runner.invoke(app, ["role", "rm"])
 
             assert result.exit_code == 0
             assert "deleted successfully" in result.stdout
@@ -167,7 +167,7 @@ class TestCrossProjectReuse:
                     return Mock(returncode=0)
 
                 mock_run.side_effect = write_content
-                result = runner.invoke(app, ["agent", "create"])
+                result = runner.invoke(app, ["role", "create"])
 
             assert result.exit_code == 0
 
@@ -177,7 +177,7 @@ class TestCrossProjectReuse:
             assert agent_file.exists()
 
             # List agents - should show the agent regardless of current directory
-            result = runner.invoke(app, ["agent", "ls"])
+            result = runner.invoke(app, ["role", "ls"])
             assert result.exit_code == 0
             assert "SharedAgent" in result.stdout
 
@@ -227,18 +227,18 @@ class TestNameConflictHandling:
                     return Mock(returncode=0)
 
                 mock_run.side_effect = write_content
-                result = runner.invoke(app, ["agent", "create"])
+                result = runner.invoke(app, ["role", "create"])
 
             assert result.exit_code == 0
 
             # Try to create another agent with the same name
             with patch("cafe.ui.cli.prompt_list", return_value="developer"), \
                  patch("cafe.ui.cli.prompt_text", side_effect=["DuplicateAgent", "Second agent"]):
-                result = runner.invoke(app, ["agent", "create"])
+                result = runner.invoke(app, ["role", "create"])
 
             assert result.exit_code == 1
             assert "already exists" in result.stdout
-            assert "cafe agent edit" in result.stdout
+            assert "cafe role edit" in result.stdout
 
     def test_template_duplicate_name_error(self, runner, fake_home, tmp_path):
         """Test that adding a template with duplicate name shows error."""

@@ -1,4 +1,4 @@
-"""Tests for cafe agent sync command."""
+"""Tests for cafe role sync command."""
 
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -24,7 +24,7 @@ def temp_cafe_dir(tmp_path):
 
 
 class TestAgentSyncCommand:
-    """Tests for cafe agent sync command."""
+    """Tests for cafe role sync command."""
 
     @patch("cafe.ui.init_helpers.sync_agents")
     @patch("cafe.ui.cli.Path")
@@ -35,7 +35,7 @@ class TestAgentSyncCommand:
         runner: CliRunner,
         tmp_path: Path,
     ) -> None:
-        """Test that agent sync command calls sync_agents function."""
+        """Test that role sync command calls sync_agents function."""
         cafe_dir = tmp_path / ".cafe"
         cafe_dir.mkdir(parents=True)
 
@@ -45,7 +45,7 @@ class TestAgentSyncCommand:
 
         mock_sync_agents.return_value = (2, 0)
 
-        result = runner.invoke(app, ["agent", "sync"])
+        result = runner.invoke(app, ["role", "sync"])
 
         assert result.exit_code == 0
         mock_sync_agents.assert_called_once()
@@ -56,12 +56,12 @@ class TestAgentSyncCommand:
         mock_path_cls: MagicMock,
         runner: CliRunner,
     ) -> None:
-        """Test that agent sync shows error when .cafe directory doesn't exist."""
+        """Test that role sync shows error when .cafe directory doesn't exist."""
         mock_path_instance = MagicMock()
         mock_path_instance.exists.return_value = False
         mock_path_cls.return_value = mock_path_instance
 
-        result = runner.invoke(app, ["agent", "sync"])
+        result = runner.invoke(app, ["role", "sync"])
 
         assert result.exit_code == 1
         assert "not initialized" in result.stdout or "Error" in result.stdout
@@ -77,7 +77,7 @@ class TestAgentSyncCommand:
         runner: CliRunner,
         tmp_path: Path,
     ) -> None:
-        """Test that agent sync displays success message with counts."""
+        """Test that role sync displays success message with counts."""
         cafe_dir = tmp_path / ".cafe"
         cafe_dir.mkdir(parents=True)
 
@@ -87,7 +87,7 @@ class TestAgentSyncCommand:
 
         mock_sync_agents.return_value = (3, 0)
 
-        result = runner.invoke(app, ["agent", "sync"])
+        result = runner.invoke(app, ["role", "sync"])
 
         assert result.exit_code == 0
         # Check that console.print was called with a message containing agent count
@@ -106,7 +106,7 @@ class TestAgentSyncCommand:
         runner: CliRunner,
         tmp_path: Path,
     ) -> None:
-        """Test that agent sync displays warning when some copies fail."""
+        """Test that role sync displays warning when some copies fail."""
         cafe_dir = tmp_path / ".cafe"
         cafe_dir.mkdir(parents=True)
 
@@ -116,7 +116,7 @@ class TestAgentSyncCommand:
 
         mock_sync_agents.return_value = (2, 1)  # 2 success, 1 failure
 
-        result = runner.invoke(app, ["agent", "sync"])
+        result = runner.invoke(app, ["role", "sync"])
 
         assert result.exit_code == 0
         # Check that warning was displayed

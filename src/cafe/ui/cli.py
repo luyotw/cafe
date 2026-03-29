@@ -4700,13 +4700,13 @@ def make(
         raise typer.Exit(1)
 
 
-# Agent management commands (similar to template commands)
-agent_app = typer.Typer(help="Manage agents")
-app.add_typer(agent_app, name="agent")
+# Role management commands (similar to template commands)
+role_app = typer.Typer(help="Manage roles")
+app.add_typer(role_app, name="role")
 
 
-@agent_app.command(name="ls")
-def agent_ls() -> None:
+@role_app.command(name="ls")
+def role_ls() -> None:
     """List all available agents (system and custom)."""
     from rich.table import Table
     from cafe.ui.init_helpers import list_available_agents
@@ -4716,7 +4716,7 @@ def agent_ls() -> None:
     has_agents = False
 
     # Create table
-    table = Table(title="Available Agents", show_header=True, header_style="bold cyan")
+    table = Table(title="Available Roles", show_header=True, header_style="bold cyan")
     table.add_column("Role", style="green")
     table.add_column("Agent", style="yellow")
     table.add_column("Description", style="dim")
@@ -4738,8 +4738,8 @@ def agent_ls() -> None:
     console.print(table)
 
 
-@agent_app.command(name="rm")
-def agent_rm() -> None:
+@role_app.command(name="rm")
+def role_rm() -> None:
     """Remove an agent interactively."""
     from pathlib import Path
     from cafe.utils.config import get_global_cafe_dir
@@ -4801,8 +4801,8 @@ def agent_rm() -> None:
         raise typer.Exit(1)
 
 
-@agent_app.command(name="create")
-def agent_create() -> None:
+@role_app.command(name="create")
+def role_create() -> None:
     """Create a new agent interactively."""
     from pathlib import Path
     import os
@@ -4841,7 +4841,7 @@ def agent_create() -> None:
     agent_file = agents_dir / role / f"{name}.md"
     if agent_file.exists():
         console.print(f"[red]Error: Agent '{role}/{name}.md' already exists[/red]")
-        console.print("[yellow]Use 'cafe agent edit' to modify the existing agent.[/yellow]")
+        console.print("[yellow]Use 'cafe role edit' to modify the existing agent.[/yellow]")
         raise typer.Exit(1)
 
     # Prompt for description
@@ -4921,8 +4921,8 @@ description: {description}
         console.print(f"[green]✓[/green] Agent created successfully: {agent_file}")
 
 
-@agent_app.command(name="edit")
-def agent_edit() -> None:
+@role_app.command(name="edit")
+def role_edit() -> None:
     """Edit an existing agent."""
     from pathlib import Path
     import os
@@ -4992,8 +4992,8 @@ def agent_edit() -> None:
         raise typer.Exit(1)
 
 
-@agent_app.command(name="cat")
-def agent_cat(
+@role_app.command(name="cat")
+def role_cat(
     role: Optional[str] = typer.Option(None, "--role", "-r", help="Agent role: pm, developer, or reviewer"),
     name: Optional[str] = typer.Option(None, "--name", "-n", help="Agent name to view"),
 ) -> None:
@@ -5001,8 +5001,8 @@ def agent_cat(
 
     \b
     Examples:
-        cafe agent cat --role developer --name Nick
-        cafe agent cat  # Interactive mode
+        cafe role cat --role developer --name Nick
+        cafe role cat  # Interactive mode
     """
     from cafe.ui.init_helpers import list_available_agents
 
@@ -5068,8 +5068,8 @@ def agent_cat(
         console.print(content)
 
 
-@agent_app.command(name="sync")
-def agent_sync() -> None:
+@role_app.command(name="sync")
+def role_sync() -> None:
     """Sync agent files from global/system sources to local .cafe directory.
 
     Updates all agent files in .cafe/agents to their latest versions from

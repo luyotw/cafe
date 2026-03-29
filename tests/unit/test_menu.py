@@ -381,7 +381,7 @@ class TestInteractiveMenuSettingsSubmenu:
         assert "setup" in values
         assert "config" in values
         assert "config_edit" in values
-        assert "agent_edit" in values
+        assert "role_edit" in values
         assert "template_edit" in values
         assert "back" in values
 

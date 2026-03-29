@@ -78,7 +78,7 @@ class TestEnsureAgentFileExists:
         # 驗證錯誤訊息包含提示
         error_msg = str(exc_info.value)
         assert "Agent file not found" in error_msg
-        assert "cafe agent default" in error_msg
+        assert "cafe role default" in error_msg
 
     def test_agent_file_not_exists_error_message_content(self, tmp_path: Path) -> None:
         """測試 agent 檔案不存在時錯誤訊息包含完整路徑."""

@@ -205,7 +205,7 @@ class InteractiveMenu:
             {"name": "Agent CLI & model setup", "value": "setup"},
             {"name": "View config", "value": "config"},
             {"name": "Edit config", "value": "config_edit"},
-            {"name": "Manage agents", "value": "agent_edit"},
+            {"name": "Manage roles", "value": "role_edit"},
             {"name": "Manage templates", "value": "template_edit"},
             {"name": "Back", "value": "back"},
         ]
@@ -300,8 +300,8 @@ class InteractiveMenu:
                 _run_command(["config"])
             elif selection == "config_edit":
                 _run_command(["config", "edit"])
-            elif selection == "agent_edit":
-                _run_command(["agent", "edit"])
+            elif selection == "role_edit":
+                _run_command(["role", "edit"])
             elif selection == "template_edit":
                 _run_command(["template", "edit"])
 
