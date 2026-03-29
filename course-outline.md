@@ -56,6 +56,45 @@ AI 沒有事先說清楚它打算改哪些檔案、怎麼改。你一個一個 a
 - 問題 1 & 2：不要在 code 層級 approve，改成在**計畫層級 approve**——讓 AI 先輸出完整計畫（改哪些檔案、怎麼改），你確認方向對了才讓它執行
 - 問題 3：讓 AI 在計畫階段**自己去找相關 snippets**，從現有程式碼推斷命名慣例和既有函式，不靠文件；CLAUDE.md 只放 codebase 看不出來的東西，保持精簡
 
+但計畫是建立在需求上的——如果需求本身就沒釐清，計畫再嚴謹也是建立在沙堆上。
+
+#### 例子：訂單狀態通知
+
+你說：「幫我做訂單狀態通知。」
+
+**沒有 spec，AI 自己腦補：**
+
+Spec（AI 假設）：
+- 訂單狀態變更時寄 email 給使用者
+
+Implementation checklist：
+- [ ] 在 `Order` model 的 `status` 欄位變更時加入 callback
+- [ ] 建立 `OrderNotificationMailer`，實作 `status_changed` method
+- [ ] 寄送 email 至 `order.user.email`
+- [ ] 寫測試確認 email 有被觸發
+
+做完能動，但通知誰、哪些狀態、失敗怎麼處理——全部都是 AI 自己決定的。
+
+---
+
+**有完整 spec（PM 先釐清需求）：**
+
+Spec：
+- `pending→confirmed`、`confirmed→shipped`、`shipped→delivered` 三個狀態變更要通知
+- 客戶收 email、業務收 Slack
+- 退款、取消不通知
+- 發送失敗不能靜默，需要被處理
+
+Implementation checklist：
+- [ ] 在 `Order` model 監聽三個指定的狀態轉換
+- [ ] `email` 通知：呼叫既有 `NotificationService.send_email`，帶入對應狀態的 template key
+- [ ] `slack` 通知：呼叫既有 `NotificationService.send_slack`，頻道指向業務群組
+- [ ] 退款、取消狀態不進入通知流程
+- [ ] 通知失敗時丟出 exception，由上層統一處理，不靜默吞掉
+- [ ] 寫測試覆蓋每個狀態轉換的通知行為，以及失敗情境
+
+---
+
 ---
 
 ## 第三輪：照著做之後，新的問題出現了
