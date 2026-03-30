@@ -115,8 +115,8 @@ class TestAgentRmCommand:
 
             result = runner.invoke(app, ["agent", "rm"])
 
-        assert result.exit_code == 1
-        assert "no agents found" in result.stdout.lower()
+        assert result.exit_code == 0
+        assert "no custom agents" in result.stdout.lower()
 
     def test_agent_rm_user_cancels(self, runner, temp_global_dir):
         """測試使用者取消刪除操作."""

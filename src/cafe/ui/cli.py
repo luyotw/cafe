@@ -4759,14 +4759,11 @@ def agent_rm() -> None:
 
     # Get agents in this role
     role_dir = agents_dir / role
-    if not role_dir.exists():
-        console.print(f"[red]No agents found in role '{role}'[/red]")
-        raise typer.Exit(1)
-
-    agent_files = sorted([f.name for f in role_dir.glob("*.md")])
+    agent_files = sorted([f.name for f in role_dir.glob("*.md")]) if role_dir.exists() else []
     if not agent_files:
-        console.print(f"[red]No agents found in role '{role}'[/red]")
-        raise typer.Exit(1)
+        console.print(f"[yellow]No custom agents found in role '{role}'[/yellow]")
+        console.print(f"[dim]Use 'cafe agent add' to create a custom agent.[/dim]")
+        raise typer.Exit(0)
 
     # Prompt for agent
     try:
@@ -4943,14 +4940,11 @@ def agent_edit() -> None:
 
     # Get agents in this role
     role_dir = agents_dir / role
-    if not role_dir.exists():
-        console.print(f"[red]No agents found in role '{role}'[/red]")
-        raise typer.Exit(1)
-
-    agent_files = sorted([f.name for f in role_dir.glob("*.md")])
+    agent_files = sorted([f.name for f in role_dir.glob("*.md")]) if role_dir.exists() else []
     if not agent_files:
-        console.print(f"[red]No agents found in role '{role}'[/red]")
-        raise typer.Exit(1)
+        console.print(f"[yellow]No custom agents found in role '{role}'[/yellow]")
+        console.print(f"[dim]Use 'cafe agent add' to create a custom agent.[/dim]")
+        raise typer.Exit(0)
 
     # Prompt for agent
     try:
