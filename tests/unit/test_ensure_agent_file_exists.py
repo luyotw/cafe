@@ -14,7 +14,7 @@ class TestEnsureAgentFileExists:
         """測試 Roger agent 檔案存在時不會拋出錯誤."""
         # 建立 agent 目錄結構
         cafe_dir = tmp_path / ".cafe"
-        pm_dir = cafe_dir / "agents" / "pm"
+        pm_dir = cafe_dir / "roles" /"pm"
         pm_dir.mkdir(parents=True)
 
         # 建立 Roger.md
@@ -28,7 +28,7 @@ class TestEnsureAgentFileExists:
         """測試 David agent 檔案存在時不會拋出錯誤."""
         # 建立 agent 目錄結構
         cafe_dir = tmp_path / ".cafe"
-        dev_dir = cafe_dir / "agents" / "developer"
+        dev_dir = cafe_dir / "roles" / "developer"
         dev_dir.mkdir(parents=True)
 
         # 建立 David.md
@@ -42,7 +42,7 @@ class TestEnsureAgentFileExists:
         """測試 John agent 檔案存在時不會拋出錯誤."""
         # 建立 agent 目錄結構
         cafe_dir = tmp_path / ".cafe"
-        dev_dir = cafe_dir / "agents" / "developer"
+        dev_dir = cafe_dir / "roles" / "developer"
         dev_dir.mkdir(parents=True)
 
         # 建立 John.md
@@ -56,7 +56,7 @@ class TestEnsureAgentFileExists:
         """測試 Richard agent 檔案存在時不會拋出錯誤."""
         # 建立 agent 目錄結構
         cafe_dir = tmp_path / ".cafe"
-        reviewer_dir = cafe_dir / "agents" / "reviewer"
+        reviewer_dir = cafe_dir / "roles" /"reviewer"
         reviewer_dir.mkdir(parents=True)
 
         # 建立 Richard.md
@@ -89,7 +89,7 @@ class TestEnsureAgentFileExists:
             ensure_agent_file_exists("David", "developer", cafe_dir)
 
         error_msg = str(exc_info.value)
-        expected_path = str(cafe_dir / "agents" / "developer" / "David.md")
+        expected_path = str(cafe_dir / "roles" / "developer" / "David.md")
         assert expected_path in error_msg
 
     def test_unknown_agent_name_raises_value_error(self, tmp_path: Path) -> None:
@@ -107,7 +107,7 @@ class TestEnsureAgentFileExists:
     def test_agent_directory_exists_but_file_missing(self, tmp_path: Path) -> None:
         """測試 agent 目錄存在但檔案不存在情況."""
         cafe_dir = tmp_path / ".cafe"
-        pm_dir = cafe_dir / "agents" / "pm"
+        pm_dir = cafe_dir / "roles" /"pm"
         pm_dir.mkdir(parents=True)
 
         # 目錄存在但沒有 Roger.md 檔案
@@ -123,9 +123,9 @@ class TestEnsureAgentFileExists:
         # 切換到 tmp_path 目錄
         monkeypatch.chdir(tmp_path)
 
-        # 建立 .cafe/agents/pm/Roger.md
+        # 建立 .cafe/roles/pm/Roger.md
         cafe_dir = tmp_path / ".cafe"
-        pm_dir = cafe_dir / "agents" / "pm"
+        pm_dir = cafe_dir / "roles" / "pm"
         pm_dir.mkdir(parents=True)
         roger_file = pm_dir / "Roger.md"
         roger_file.write_text("# Roger")
@@ -155,7 +155,7 @@ class TestEnsureAgentFileExists:
         }
 
         for agent_name, role in agents_config.items():
-            role_dir = cafe_dir / "agents" / role
+            role_dir = cafe_dir / "roles" /role
             role_dir.mkdir(parents=True, exist_ok=True)
             agent_file = role_dir / f"{agent_name}.md"
             agent_file.write_text(f"# {agent_name}")

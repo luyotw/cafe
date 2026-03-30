@@ -813,7 +813,7 @@ def _interactive_agent_setup(available_clis: list) -> dict:
                 if not agents:
                     console.print(f"[red]Error: Agent files not found for {role_display} role.[/red]")
                     console.print(
-                        f"[yellow]Please ensure valid .md files exist in ~/.cafe/agents/{role_key}/ or src/cafe/data/agents/{role_key}/ directory.[/yellow]"
+                        f"[yellow]Please ensure valid .md files exist in ~/.cafe/roles/{role_key}/ or src/cafe/data/roles/{role_key}/ directory.[/yellow]"
                     )
                     raise typer.Exit(1)
 
@@ -4745,7 +4745,7 @@ def role_rm() -> None:
     from cafe.utils.config import get_global_cafe_dir
 
     # Get global agents directory
-    agents_dir = get_global_cafe_dir() / "agents"
+    agents_dir = get_global_cafe_dir() / "roles"
 
     # Prompt for role
     try:
@@ -4809,7 +4809,7 @@ def role_create() -> None:
     from cafe.utils.config import get_global_cafe_dir
 
     # Get global agents directory
-    agents_dir = get_global_cafe_dir() / "agents"
+    agents_dir = get_global_cafe_dir() / "roles"
 
     # Prompt for role
     try:
@@ -4929,7 +4929,7 @@ def role_edit() -> None:
     from cafe.utils.config import get_global_cafe_dir
 
     # Get global agents directory
-    agents_dir = get_global_cafe_dir() / "agents"
+    agents_dir = get_global_cafe_dir() / "roles"
 
     # Prompt for role
     try:
@@ -5072,8 +5072,8 @@ def role_cat(
 def role_sync() -> None:
     """Sync role definition files from global/system sources to local .cafe directory.
 
-    Updates all role definition files in .cafe/agents to their latest versions from
-    ~/.cafe/agents (custom) or src/cafe/data/agents (system default).
+    Updates all role definition files in .cafe/roles to their latest versions from
+    ~/.cafe/roles (custom) or src/cafe/data/roles (system default).
     Global custom role definitions take precedence over system defaults.
     """
     from cafe.ui.init_helpers import sync_agents

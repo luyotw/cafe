@@ -28,15 +28,15 @@ class TestDirectoryStructure:
     def test_agents_directory_structure_in_package_data(self) -> None:
         """測試 agents 目錄結構符合預期（在 package data 中）."""
         # Check subdirectories exist
-        assert (Path("src/cafe/data/agents/pm")).exists(), "src/cafe/data/agents/pm should exist"
-        assert (Path("src/cafe/data/agents/developer")).exists(), "src/cafe/data/agents/developer should exist"
-        assert (Path("src/cafe/data/agents/reviewer")).exists(), "src/cafe/data/agents/reviewer should exist"
+        assert (Path("src/cafe/data/roles/pm")).exists(), "src/cafe/data/roles/pm should exist"
+        assert (Path("src/cafe/data/roles/developer")).exists(), "src/cafe/data/roles/developer should exist"
+        assert (Path("src/cafe/data/roles/reviewer")).exists(), "src/cafe/data/roles/reviewer should exist"
 
         # Check agent files are in correct subdirectories
-        assert (Path("src/cafe/data/agents/pm/Roger.md")).exists(), "Roger.md should be in src/cafe/data/agents/pm/"
-        assert (Path("src/cafe/data/agents/developer/David.md")).exists(), "David.md should be in src/cafe/data/agents/developer/"
-        assert (Path("src/cafe/data/agents/developer/Nick.md")).exists(), "Nick.md should be in src/cafe/data/agents/developer/"
-        assert (Path("src/cafe/data/agents/reviewer/Richard.md")).exists(), "Richard.md should be in src/cafe/data/agents/reviewer/"
+        assert (Path("src/cafe/data/roles/pm/Roger.md")).exists(), "Roger.md should be in src/cafe/data/roles/pm/"
+        assert (Path("src/cafe/data/roles/developer/David.md")).exists(), "David.md should be in src/cafe/data/roles/developer/"
+        assert (Path("src/cafe/data/roles/developer/Nick.md")).exists(), "Nick.md should be in src/cafe/data/roles/developer/"
+        assert (Path("src/cafe/data/roles/reviewer/Richard.md")).exists(), "Richard.md should be in src/cafe/data/roles/reviewer/"
 
     def test_repo_root_agents_and_templates_do_not_exist(self) -> None:
         """測試 repo root  agents and templates 目錄不存在（已移到 package data）."""

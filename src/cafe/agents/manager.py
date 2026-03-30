@@ -21,7 +21,7 @@ class AgentManager:
 
     # Agent directory constants
     CAFE_DIR = ".cafe"
-    AGENTS_DIR = "agents"
+    AGENTS_DIR = "roles"
 
     def __init__(self, session_manager: Optional[SessionManager] = None, issue_name: Optional[str] = None) -> None:
         """Initialize agent manager.
@@ -473,8 +473,8 @@ class AgentManager:
     def get_agent_file_path(cls, agent_name: str, role: str, cafe_dir: str = None) -> str:
         """Get the path to agent md file (for use in prompts).
 
-        Searches in order: local .cafe/agents/ first, then ~/.cafe/agents/,
-        then falls back to src/cafe/data/agents/.
+        Searches in order: local .cafe/roles/ first, then ~/.cafe/roles/,
+        then falls back to src/cafe/data/roles/.
 
         Args:
             agent_name: Agent name (e.g. "Roger", "David", "Richard", "John")
@@ -488,18 +488,18 @@ class AgentManager:
 
         agent_filename = f"{agent_name}.md"
 
-        # Search upward from cwd for .cafe/agents/ (works in worktrees and subdirectories)
+        # Search upward from cwd for .cafe/roles/ (works in worktrees and subdirectories)
         current = Path.cwd().resolve()
         while current != current.parent:
-            local_path = current / ".cafe" / "agents" / role / agent_filename
+            local_path = current / ".cafe" / "roles" / role / agent_filename
             if local_path.exists():
                 return str(local_path)
             current = current.parent
 
-        # Fall back to global ~/.cafe/agents/
-        home_path = Path.home() / ".cafe" / "agents" / role / agent_filename
+        # Fall back to global ~/.cafe/roles/
+        home_path = Path.home() / ".cafe" / "roles" / role / agent_filename
         if home_path.exists():
             return str(home_path)
 
         # Fall back to system default
-        return f"src/cafe/data/agents/{role}/{agent_name}.md"
+        return f"src/cafe/data/roles/{role}/{agent_name}.md"

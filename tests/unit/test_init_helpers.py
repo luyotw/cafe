@@ -160,7 +160,7 @@ class TestListAvailableAgents:
         monkeypatch.setattr("cafe.utils.config.get_global_cafe_dir", lambda: global_cafe_dir)
 
         # Set up global test directory structure
-        global_pm_dir = global_cafe_dir / "agents" / "pm"
+        global_pm_dir = global_cafe_dir / "roles" / "pm"
         global_pm_dir.mkdir(parents=True)
 
         # Set up test files
@@ -196,7 +196,7 @@ description: 注重細節 PM
         monkeypatch.setattr("cafe.utils.config.get_global_cafe_dir", lambda: global_cafe_dir)
 
         # Set up empty global directory
-        global_pm_dir = global_cafe_dir / "agents" / "pm"
+        global_pm_dir = global_cafe_dir / "roles" / "pm"
         global_pm_dir.mkdir(parents=True)
 
         agents = list_available_agents("pm")
@@ -217,7 +217,7 @@ description: 注重細節 PM
         monkeypatch.setattr("cafe.utils.config.get_global_cafe_dir", lambda: global_cafe_dir)
 
         # Set up global test directory structure
-        global_pm_dir = global_cafe_dir / "agents" / "pm"
+        global_pm_dir = global_cafe_dir / "roles" / "pm"
         global_pm_dir.mkdir(parents=True)
 
         # Create .md file
@@ -326,9 +326,9 @@ class TestCopyAgentsToLocal:
 
         # Set up empty global directory
         global_dir = tmp_path / "global_cafe"
-        (global_dir / "agents" / "pm").mkdir(parents=True)
-        (global_dir / "agents" / "developer").mkdir(parents=True)
-        (global_dir / "agents" / "reviewer").mkdir(parents=True)
+        (global_dir / "roles" / "pm").mkdir(parents=True)
+        (global_dir / "roles" / "developer").mkdir(parents=True)
+        (global_dir / "roles" / "reviewer").mkdir(parents=True)
 
         # Set up local .cafe directory
         cafe_dir = tmp_path / "project" / ".cafe"
@@ -344,9 +344,9 @@ class TestCopyAgentsToLocal:
         results = copy_agents_to_local(cafe_dir)
 
         # Verify all system agents were copied
-        assert (cafe_dir / "agents" / "pm" / "Roger.md").exists()
-        assert (cafe_dir / "agents" / "developer" / "David.md").exists()
-        assert (cafe_dir / "agents" / "reviewer" / "Richard.md").exists()
+        assert (cafe_dir / "roles" / "pm" / "Roger.md").exists()
+        assert (cafe_dir / "roles" / "developer" / "David.md").exists()
+        assert (cafe_dir / "roles" / "reviewer" / "Richard.md").exists()
 
         # Verify results contain correct source types
         for filename, source_type, success in results:
@@ -365,10 +365,10 @@ class TestCopyAgentsToLocal:
 
         # Set up global custom agent with same name as system Roger
         global_dir = tmp_path / "global_cafe"
-        (global_dir / "agents" / "pm").mkdir(parents=True)
-        (global_dir / "agents" / "developer").mkdir(parents=True)
-        (global_dir / "agents" / "reviewer").mkdir(parents=True)
-        (global_dir / "agents" / "pm" / "Roger.md").write_text("# Roger (custom)")
+        (global_dir / "roles" / "pm").mkdir(parents=True)
+        (global_dir / "roles" / "developer").mkdir(parents=True)
+        (global_dir / "roles" / "reviewer").mkdir(parents=True)
+        (global_dir / "roles" / "pm" / "Roger.md").write_text("# Roger (custom)")
 
         # Set up local .cafe directory
         cafe_dir = tmp_path / "project" / ".cafe"
@@ -384,7 +384,7 @@ class TestCopyAgentsToLocal:
         results = copy_agents_to_local(cafe_dir)
 
         # Verify global custom version was used
-        assert (cafe_dir / "agents" / "pm" / "Roger.md").read_text() == "# Roger (custom)"
+        assert (cafe_dir / "roles" / "pm" / "Roger.md").read_text() == "# Roger (custom)"
 
         # Verify Roger's source type is custom
         roger_results = [r for r in results if "Roger.md" in r[0]]
@@ -404,14 +404,14 @@ class TestCopyAgentsToLocal:
 
         # Set up empty global directory
         global_dir = tmp_path / "global_cafe"
-        (global_dir / "agents" / "pm").mkdir(parents=True)
-        (global_dir / "agents" / "developer").mkdir(parents=True)
-        (global_dir / "agents" / "reviewer").mkdir(parents=True)
+        (global_dir / "roles" / "pm").mkdir(parents=True)
+        (global_dir / "roles" / "developer").mkdir(parents=True)
+        (global_dir / "roles" / "reviewer").mkdir(parents=True)
 
         # Set up local .cafe directory with an old version of Roger
         cafe_dir = tmp_path / "project" / ".cafe"
-        (cafe_dir / "agents" / "pm").mkdir(parents=True)
-        (cafe_dir / "agents" / "pm" / "Roger.md").write_text("# Roger (old local)")
+        (cafe_dir / "roles" / "pm").mkdir(parents=True)
+        (cafe_dir / "roles" / "pm" / "Roger.md").write_text("# Roger (old local)")
 
         monkeypatch.setattr(
             "cafe.utils.config.get_global_cafe_dir", lambda: global_dir
@@ -423,7 +423,7 @@ class TestCopyAgentsToLocal:
         copy_agents_to_local(cafe_dir)
 
         # Verify old version was overwritten
-        assert (cafe_dir / "agents" / "pm" / "Roger.md").read_text() == "# Roger (system)"
+        assert (cafe_dir / "roles" / "pm" / "Roger.md").read_text() == "# Roger (system)"
 
     def test_copy_agents_handles_copy_error_gracefully(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -437,9 +437,9 @@ class TestCopyAgentsToLocal:
 
         # Set up empty global directory
         global_dir = tmp_path / "global_cafe"
-        (global_dir / "agents" / "pm").mkdir(parents=True)
-        (global_dir / "agents" / "developer").mkdir(parents=True)
-        (global_dir / "agents" / "reviewer").mkdir(parents=True)
+        (global_dir / "roles" / "pm").mkdir(parents=True)
+        (global_dir / "roles" / "developer").mkdir(parents=True)
+        (global_dir / "roles" / "reviewer").mkdir(parents=True)
 
         # Set up local .cafe directory
         cafe_dir = tmp_path / "project" / ".cafe"

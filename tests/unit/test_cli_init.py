@@ -75,7 +75,7 @@ class TestInitCommandEnvironmentChecks:
         mock_which.return_value = "/usr/bin/claude"
 
         # 模擬 agent 列表
-        mock_list_agents.return_value = [("Roger", "PM agent", Path(".cafe/agents/pm/Roger.md"), "system default")]
+        mock_list_agents.return_value = [("Roger", "PM agent", Path(".cafe/roles/pm/Roger.md"), "system default")]
 
         monkeypatch.chdir(tmp_path)
 
@@ -130,7 +130,7 @@ class TestInitCommandInteractiveFlow:
     ) -> None:
         """測試會為三個角色進行配置"""
         mock_which.return_value = "/usr/bin/claude"
-        mock_list_agents.return_value = [("Roger", "PM agent", Path(".cafe/agents/pm/Roger.md"), "system default")]
+        mock_list_agents.return_value = [("Roger", "PM agent", Path(".cafe/roles/pm/Roger.md"), "system default")]
         monkeypatch.chdir(tmp_path)
 
         with (
@@ -165,7 +165,7 @@ class TestInitCommandInteractiveFlow:
     ) -> None:
         """測試 Ctrl+C 中斷時顯示取消訊息"""
         mock_which.return_value = "/usr/bin/claude"
-        mock_list_agents.return_value = [("Roger", "PM agent", Path(".cafe/agents/pm/Roger.md"), "system default")]
+        mock_list_agents.return_value = [("Roger", "PM agent", Path(".cafe/roles/pm/Roger.md"), "system default")]
         monkeypatch.chdir(tmp_path)
 
         with patch("cafe.ui.cli.prompt_list") as mock_prompt_list:
@@ -213,9 +213,9 @@ class TestInitCommandConfigSaving:
         """測試配置正確儲存到 .cafe/config.yaml"""
         mock_which.return_value = "/usr/bin/claude"
         mock_list_agents.return_value = [
-            ("Roger", "PM agent", Path(".cafe/agents/pm/Roger.md"), "system default"),
-            ("David", "Dev agent", Path(".cafe/agents/developer/David.md"), "custom"),
-            ("Richard", "Reviewer agent", Path(".cafe/agents/reviewer/Richard.md"), "system default"),
+            ("Roger", "PM agent", Path(".cafe/roles/pm/Roger.md"), "system default"),
+            ("David", "Dev agent", Path(".cafe/roles/developer/David.md"), "custom"),
+            ("Richard", "Reviewer agent", Path(".cafe/roles/reviewer/Richard.md"), "system default"),
         ]
         monkeypatch.chdir(tmp_path)
 
@@ -263,7 +263,7 @@ class TestInitCommandConfigSaving:
     ) -> None:
         """測試成功後顯示配置摘要"""
         mock_which.return_value = "/usr/bin/claude"
-        mock_list_agents.return_value = [("Roger", "PM agent", Path(".cafe/agents/pm/Roger.md"), "system default")]
+        mock_list_agents.return_value = [("Roger", "PM agent", Path(".cafe/roles/pm/Roger.md"), "system default")]
         monkeypatch.chdir(tmp_path)
 
         with (
@@ -293,7 +293,7 @@ class TestInitCommandConfigSaving:
     ) -> None:
         """測試 model 為 None 時顯示為「預設」"""
         mock_which.return_value = "/usr/bin/claude"
-        mock_list_agents.return_value = [("Roger", "PM agent", Path(".cafe/agents/pm/Roger.md"), "system default")]
+        mock_list_agents.return_value = [("Roger", "PM agent", Path(".cafe/roles/pm/Roger.md"), "system default")]
         monkeypatch.chdir(tmp_path)
 
         with (
@@ -335,6 +335,6 @@ class TestInitCommandErrorMessages:
 
         assert result.exit_code == 1
         assert "Agent files not found" in result.stdout
-        assert "in .cafe/agents/" not in result.stdout
-        assert "~" in result.stdout and "/.cafe/agents/" in result.stdout
-        assert "src/cafe/data/agents/" in result.stdout
+        assert "in .cafe/roles/" not in result.stdout
+        assert "~" in result.stdout and "/.cafe/roles/" in result.stdout
+        assert "src/cafe/data/roles/" in result.stdout

@@ -75,15 +75,15 @@ def list_available_agents(role: str) -> List[tuple[str, str, Path, str]]:
     agents = {}  # Use dict to handle name collisions
     
     # First, collect system agents (from package data)
-    package_data_dir = Path(__file__).parent.parent / "data" / "agents" / role
+    package_data_dir = Path(__file__).parent.parent / "data" / "roles" / role
     if package_data_dir.exists():
         for agent_file in package_data_dir.glob("*.md"):
             parsed = parse_agent_file(agent_file)
             name = parsed["name"]
             agents[name] = (name, parsed["description"], agent_file, "system default")
-    
+
     # Then, collect global agents (override system if name collision)
-    global_agents_dir = get_global_cafe_dir() / "agents" / role
+    global_agents_dir = get_global_cafe_dir() / "roles" / role
     if global_agents_dir.exists():
         for agent_file in global_agents_dir.glob("*.md"):
             parsed = parse_agent_file(agent_file)
@@ -119,9 +119,9 @@ def _get_system_agents_dir() -> Path:
     """Get the system default agents directory path.
 
     Returns:
-        Path to system agents directory (src/cafe/data/agents/)
+        Path to system roles directory (src/cafe/data/roles/)
     """
-    return Path(__file__).parent.parent / "data" / "agents"
+    return Path(__file__).parent.parent / "data" / "roles"
 
 
 def _get_system_templates_dir() -> Path:
@@ -136,8 +136,8 @@ def _get_system_templates_dir() -> Path:
 def copy_agents_to_local(cafe_dir: Path) -> List[Tuple[str, str, bool]]:
     """Copy agent files from global custom or system default directories to local .cafe.
 
-    Global custom (~/.cafe/agents/<role>/) takes precedence over system default
-    (src/cafe/data/agents/<role>/). Copies to .cafe/agents/<role>/, overwriting
+    Global custom (~/.cafe/roles/<role>/) takes precedence over system default
+    (src/cafe/data/roles/<role>/). Copies to .cafe/roles/<role>/, overwriting
     any existing local files.
 
     Args:
@@ -150,7 +150,7 @@ def copy_agents_to_local(cafe_dir: Path) -> List[Tuple[str, str, bool]]:
 
     results: List[Tuple[str, str, bool]] = []
     system_agents_dir = _get_system_agents_dir()
-    global_agents_dir = get_global_cafe_dir() / "agents"
+    global_agents_dir = get_global_cafe_dir() / "roles"
 
     # Derive roles from the system agents directory structure
     roles = [d.name for d in system_agents_dir.iterdir() if d.is_dir()] if system_agents_dir.exists() else []
@@ -172,11 +172,11 @@ def copy_agents_to_local(cafe_dir: Path) -> List[Tuple[str, str, bool]]:
                 files[agent_file.name] = (agent_file, "custom")
 
         # Copy to local .cafe directory
-        local_role_dir = cafe_dir / "agents" / role
+        local_role_dir = cafe_dir / "roles" / role
         local_role_dir.mkdir(parents=True, exist_ok=True)
 
         for filename, (source_path, source_type) in files.items():
-            relative_path = f"agents/{role}/{filename}"
+            relative_path = f"roles/{role}/{filename}"
             try:
                 shutil.copy2(source_path, local_role_dir / filename)
                 results.append((relative_path, source_type, True))

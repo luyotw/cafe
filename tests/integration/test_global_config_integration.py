@@ -59,7 +59,7 @@ class TestAgentWorkflow:
             assert "created successfully" in result.stdout
 
             # Verify agent file exists in global directory
-            agent_file = fake_home / ".cafe" / "agents" / "developer" / "TestAgent.md"
+            agent_file = fake_home / ".cafe" / "roles" / "developer" / "TestAgent.md"
             assert agent_file.exists()
 
             # Step 2: List agents - verify the created agent appears
@@ -173,7 +173,7 @@ class TestCrossProjectReuse:
 
             # Verify agent is visible from project2 (without changing to that directory)
             # The agent should be in global directory, so it's accessible from anywhere
-            agent_file = fake_home / ".cafe" / "agents" / "developer" / "SharedAgent.md"
+            agent_file = fake_home / ".cafe" / "roles" / "developer" / "SharedAgent.md"
             assert agent_file.exists()
 
             # List agents - should show the agent regardless of current directory

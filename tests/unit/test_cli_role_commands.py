@@ -21,7 +21,7 @@ def runner():
 def temp_global_dir(tmp_path):
     """建立暫時全域 .cafe 目錄結構."""
     global_cafe_dir = tmp_path / ".cafe"
-    agents_dir = global_cafe_dir / "agents"
+    agents_dir = global_cafe_dir / "roles"
 
     # 建立角色目錄
     for role in ["pm", "developer", "reviewer"]:
@@ -47,7 +47,7 @@ class TestAgentLsCommand:
     def test_agent_ls_with_multiple_agents(self, runner, temp_global_dir):
         """測試有多個 agents 時按角色分類列出."""
         # 建立測試用 agent 檔案
-        agents_dir = temp_global_dir / "agents"
+        agents_dir = temp_global_dir / "roles"
 
         # PM agents
         (agents_dir / "pm" / "Roger.md").write_text(
@@ -89,7 +89,7 @@ class TestAgentRmCommand:
     def test_agent_rm_success(self, runner, temp_global_dir):
         """測試成功刪除 agent 檔案."""
         # 建立測試用 agent 檔案
-        agents_dir = temp_global_dir / "agents"
+        agents_dir = temp_global_dir / "roles"
         agent_file = agents_dir / "developer" / "John.md"
         agent_file.write_text("---\nname: John\n---\nRules")
 
@@ -121,7 +121,7 @@ class TestAgentRmCommand:
     def test_agent_rm_user_cancels(self, runner, temp_global_dir):
         """測試使用者取消刪除操作."""
         # 建立測試用 agent 檔案
-        agents_dir = temp_global_dir / "agents"
+        agents_dir = temp_global_dir / "roles"
         agent_file = agents_dir / "developer" / "John.md"
         agent_file.write_text("---\nname: John\n---\nRules")
 
@@ -173,7 +173,7 @@ class TestAgentCreateCommand:
         assert "created successfully" in result.stdout
 
         # 驗證檔案內容
-        agent_file = temp_global_dir / "agents" / "developer" / "Michael.md"
+        agent_file = temp_global_dir / "roles" / "developer" / "Michael.md"
         assert agent_file.exists()
 
         content = agent_file.read_text()
@@ -184,7 +184,7 @@ class TestAgentCreateCommand:
     def test_agent_create_file_already_exists(self, runner, temp_global_dir):
         """測試建立已存在 agent 檔案."""
         # 建立已存在 agent 檔案
-        agents_dir = temp_global_dir / "agents"
+        agents_dir = temp_global_dir / "roles"
         agent_file = agents_dir / "developer" / "Michael.md"
         agent_file.write_text("---\nname: Michael\n---\nExisting")
 
@@ -208,7 +208,7 @@ class TestAgentEditCommand:
     def test_agent_edit_success(self, runner, temp_global_dir):
         """測試成功編輯 agent 檔案."""
         # 建立測試用 agent 檔案
-        agents_dir = temp_global_dir / "agents"
+        agents_dir = temp_global_dir / "roles"
         pm_dir = agents_dir / "pm"
         pm_dir.mkdir(parents=True, exist_ok=True)
         (pm_dir / "Roger.md").write_text("---\nname: Roger\n---\nPM rules")
@@ -239,7 +239,7 @@ class TestAgentCatCommand:
     def test_agent_cat_with_flags(self, runner, temp_global_dir):
         """測試使用 --role 和 --name 參數查看 agent."""
         # 建立測試用 agent 檔案
-        agents_dir = temp_global_dir / "agents"
+        agents_dir = temp_global_dir / "roles"
         agent_content = "---\nname: TestAgent\ndescription: Test agent\n---\n\nAgent rules here"
         (agents_dir / "developer" / "TestAgent.md").write_text(agent_content)
 
@@ -257,7 +257,7 @@ class TestAgentCatCommand:
     def test_agent_cat_interactive_mode(self, runner, temp_global_dir):
         """測試互動式模式查看 agent."""
         # 建立測試用 agent 檔案
-        agents_dir = temp_global_dir / "agents"
+        agents_dir = temp_global_dir / "roles"
         agent_content = "---\nname: InteractiveAgent\ndescription: Interactive test\n---\n\nContent"
         (agents_dir / "pm" / "InteractiveAgent.md").write_text(agent_content)
 

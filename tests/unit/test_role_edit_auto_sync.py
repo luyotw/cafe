@@ -35,7 +35,7 @@ class TestAgentEditAutoSync:
         # Setup global cafe directory
         global_cafe_dir = tmp_path / ".cafe_global"
         global_cafe_dir.mkdir()
-        agents_dir = global_cafe_dir / "agents" / "developer"
+        agents_dir = global_cafe_dir / "roles" / "developer"
         agents_dir.mkdir(parents=True)
         agent_file = agents_dir / "Nick.md"
         agent_file.write_text("test content")
@@ -74,7 +74,7 @@ class TestAgentEditAutoSync:
         # Setup global cafe directory
         global_cafe_dir = tmp_path / ".cafe_global"
         global_cafe_dir.mkdir()
-        agents_dir = global_cafe_dir / "agents" / "developer"
+        agents_dir = global_cafe_dir / "roles" / "developer"
         agents_dir.mkdir(parents=True)
         agent_file = agents_dir / "Nick.md"
         agent_file.write_text("test content")

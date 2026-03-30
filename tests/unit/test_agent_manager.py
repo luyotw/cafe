@@ -404,13 +404,13 @@ class TestGetAgentFilePath:
 
         # Set up repo root with local .cafe agent
         repo_root = tmp_path / "repo"
-        local_agent = repo_root / ".cafe" / "agents" / "pm" / "Roger.md"
+        local_agent = repo_root / ".cafe" / "roles" / "pm" / "Roger.md"
         local_agent.parent.mkdir(parents=True)
         local_agent.write_text("# Roger (local)")
 
         # Set up global agent
         global_home = tmp_path / "global_home"
-        global_agent = global_home / ".cafe" / "agents" / "pm" / "Roger.md"
+        global_agent = global_home / ".cafe" / "roles" / "pm" / "Roger.md"
         global_agent.parent.mkdir(parents=True)
         global_agent.write_text("# Roger (global)")
 
@@ -423,7 +423,7 @@ class TestGetAgentFilePath:
             result = AgentManager.get_agent_file_path("Roger", "pm")
 
         # Local .cafe/ path should be an absolute path under repo root
-        assert result == str(repo_root / ".cafe" / "agents" / "pm" / "Roger.md")
+        assert result == str(repo_root / ".cafe" / "roles" / "pm" / "Roger.md")
 
     def test_falls_back_to_global_when_no_local(
         self, tmp_path, monkeypatch: pytest.MonkeyPatch
@@ -437,7 +437,7 @@ class TestGetAgentFilePath:
 
         # Set up global agent
         global_home = tmp_path / "global_home"
-        global_agent = global_home / ".cafe" / "agents" / "pm" / "Roger.md"
+        global_agent = global_home / ".cafe" / "roles" / "pm" / "Roger.md"
         global_agent.parent.mkdir(parents=True)
         global_agent.write_text("# Roger (global)")
 
@@ -473,4 +473,4 @@ class TestGetAgentFilePath:
             result = AgentManager.get_agent_file_path("Roger", "pm")
 
         # Falls back to system default path
-        assert result == "src/cafe/data/agents/pm/Roger.md"
+        assert result == "src/cafe/data/roles/pm/Roger.md"
