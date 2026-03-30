@@ -116,14 +116,11 @@ class TestTemplateAdd:
 class TestTemplateLs:
     """Test cafe template ls command"""
 
-    def test_template_ls_with_type_flag(self, tmp_path: Path):
-        """Test template ls with --type flag"""
+    def test_template_ls(self, tmp_path: Path):
+        """Test template ls lists all templates"""
         # Mock Path.home() to return tmp_path for global directory
         with patch("cafe.utils.config.Path.home", return_value=tmp_path):
-            result = runner.invoke(app, [
-                "template", "ls",
-                "--type", "plan",
-            ])
+            result = runner.invoke(app, ["template", "ls"])
 
             # Should succeed (even if no templates)
             assert result.exit_code == 0

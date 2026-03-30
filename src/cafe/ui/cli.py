@@ -4216,52 +4216,43 @@ def template_add(
         raise typer.Exit(1)
 
 
+def _print_templates(custom_only: bool = False) -> None:
+    """Print templates table. Used by template ls, edit, rm."""
+    from rich.table import Table
+
+    table = Table(title="Custom Templates" if custom_only else "Available Templates", show_header=True, header_style="bold cyan")
+    table.add_column("Type", style="green")
+    table.add_column("Template", style="yellow")
+    table.add_column("Source", style="dim")
+
+    has_templates = False
+    for template_type in TEMPLATE_TYPES:
+        manager = TemplateManager(template_type=template_type)
+        for name, source_type in manager.list_templates():
+            if custom_only and source_type == "system":
+                continue
+            has_templates = True
+            table.add_row(template_type, name, source_type)
+
+    if not has_templates:
+        console.print(f"[yellow]No {'custom ' if custom_only else ''}templates found.[/yellow]")
+        return
+
+    console.print(table)
+
+
 @template_app.command(name="ls")
 def template_ls(
-    template_type: Optional[str] = typer.Option(None, "--type", "-t", help="Template type: plan or spec"),
-    config_file: str = typer.Option(
-        ".cafe/config.yaml",
-        "--config",
-        "-c",
-        help="Path to configuration file",
-    ),
+    custom_only: bool = typer.Option(False, "--custom-only", help="Show only custom templates"),
 ) -> None:
     """List available templates.
 
     \b
     Examples:
         cafe template ls
-        cafe template ls --type plan
-        cafe template ls --type spec
+        cafe template ls --custom-only
     """
-    config_dir = str(Path(config_file).parent) if config_file != ".cafe/config.yaml" else ".cafe"
-
-    # Interactive prompting if type not provided
-    try:
-        if not template_type:
-            template_type = prompt_list(
-                message="Select template type:",
-                choices=TEMPLATE_TYPES,
-            )
-    except (KeyboardInterrupt, EOFError):
-        console.print("\n[dim]Cancelled[/dim]")
-        raise typer.Exit(0)
-
-    # Validate template type
-    if template_type not in TEMPLATE_TYPES:
-        console.print(f"[red]Error: Invalid template type '{template_type}'. Must be 'plan' or 'spec'.[/red]")
-        raise typer.Exit(1)
-
-    # List templates
-    manager = TemplateManager(template_type=template_type)
-    templates_with_source = manager.list_templates()
-    if not templates_with_source:
-        console.print(f"[dim]No {template_type} templates found[/dim]")
-    else:
-        console.print(f"[bold]{template_type.capitalize()} templates:[/bold]")
-        for name, source_type in templates_with_source:
-            source_label = " (custom)" if source_type == "custom" else ""
-            console.print(f"  • {name}{source_label}")
+    _print_templates(custom_only)
 
 
 @template_app.command(name="rm")
@@ -4286,6 +4277,11 @@ def template_rm(
     """
     config_dir = str(Path(config_file).parent) if config_file != ".cafe/config.yaml" else ".cafe"
 
+    # Show custom templates before prompting
+    if not name:
+        _print_templates(custom_only=True)
+        console.print()
+
     # Interactive prompting for missing arguments
     try:
         if not template_type:
@@ -4303,7 +4299,7 @@ def template_rm(
 
         if not name:
             # Only list custom templates (system templates cannot be deleted)
-            custom_templates = manager.list_custom_templates()
+            custom_templates = [name for name, src in manager.list_templates() if src != "system"]
             if not custom_templates:
                 console.print(f"[yellow]No custom {template_type} templates found[/yellow]")
                 console.print("[dim]System default templates cannot be deleted[/dim]")
@@ -4428,6 +4424,11 @@ def template_edit(
     """
     config_dir = str(Path(config_file).parent) if config_file != ".cafe/config.yaml" else ".cafe"
 
+    # Show custom templates before prompting
+    if not name:
+        _print_templates(custom_only=True)
+        console.print()
+
     # Interactive prompting for missing arguments
     try:
         if not template_type:
@@ -4445,7 +4446,7 @@ def template_edit(
 
         if not name:
             # Only list custom templates (system templates cannot be edited)
-            custom_templates = manager.list_custom_templates()
+            custom_templates = [name for name, src in manager.list_templates() if src != "system"]
             if not custom_templates:
                 console.print(f"[yellow]No custom {template_type} templates found[/yellow]")
                 console.print("[dim]System default templates cannot be edited[/dim]")
@@ -4705,37 +4706,40 @@ agent_app = typer.Typer(help="Manage agents")
 app.add_typer(agent_app, name="agent")
 
 
-@agent_app.command(name="ls")
-def agent_ls() -> None:
-    """List all available agents (system and custom)."""
+def _print_agents(custom_only: bool = False) -> None:
+    """Print agents table. Used by agent ls, edit, rm."""
     from rich.table import Table
     from cafe.ui.init_helpers import list_available_agents
 
-    # Get all role directories
     roles = ["pm", "developer", "reviewer"]
     has_agents = False
 
-    # Create table
-    table = Table(title="Available Agents", show_header=True, header_style="bold cyan")
+    table = Table(title="Custom Agents" if custom_only else "Available Agents", show_header=True, header_style="bold cyan")
     table.add_column("Role", style="green")
     table.add_column("Agent", style="yellow")
     table.add_column("Description", style="dim")
+    table.add_column("Source", style="dim")
 
     for role in roles:
-        # Get agents from both system and custom directories
-        agents = list_available_agents(role)
-
-        for agent_name, description, _, source_type in agents:
+        for agent_name, description, _, source_type in list_available_agents(role):
+            if custom_only and source_type == "system":
+                continue
             has_agents = True
-            # Add (custom) indicator for custom agents
-            display_name = f"{agent_name} (custom)" if source_type == "custom" else agent_name
-            table.add_row(role, display_name, description)
+            table.add_row(role, agent_name, description, source_type)
 
     if not has_agents:
-        console.print("[yellow]No agents found.[/yellow]")
+        console.print(f"[yellow]No {'custom ' if custom_only else ''}agents found.[/yellow]")
         return
 
     console.print(table)
+
+
+@agent_app.command(name="ls")
+def agent_ls(
+    custom_only: bool = typer.Option(False, "--custom-only", help="Show only custom agents"),
+) -> None:
+    """List all available agents (system and custom)."""
+    _print_agents(custom_only)
 
 
 @agent_app.command(name="rm")
@@ -4746,6 +4750,9 @@ def agent_rm() -> None:
 
     # Get global agents directory
     agents_dir = get_global_cafe_dir() / "agents"
+
+    _print_agents(custom_only=True)
+    console.print()
 
     # Prompt for role
     try:
@@ -4927,6 +4934,9 @@ def agent_edit() -> None:
 
     # Get global agents directory
     agents_dir = get_global_cafe_dir() / "agents"
+
+    _print_agents(custom_only=True)
+    console.print()
 
     # Prompt for role
     try:

@@ -64,9 +64,10 @@ class TemplateManager:
         Returns:
             List of (template_name, source_type) tuples where source_type is
             "system", "custom" (global), or "local".
-            Local > global > system priority for name collisions.
+            Local/global files identical to system originals are marked "system".
         """
-        templates = {}  # Use dict to handle name collisions
+        templates = {}  # name -> (source_type, file_path)
+        system_contents = {}  # name -> content (for comparison)
 
         # First, collect system templates (from package data)
         package_data_dir = Path(__file__).parent.parent / "data" / "templates" / self.template_type
@@ -74,23 +75,31 @@ class TemplateManager:
             for file in package_data_dir.glob("*.md"):
                 template_name = file.stem
                 templates[template_name] = ("system", file)
+                system_contents[template_name] = file.read_text()
 
         # Then, collect global templates (override system if name collision)
         global_template_dir = get_global_cafe_dir() / "templates" / self.template_type
         if global_template_dir.exists():
             for file in global_template_dir.glob("*.md"):
                 template_name = file.stem
-                templates[template_name] = ("custom", file)
+                # If content matches system, keep as "system"
+                if template_name in system_contents and file.read_text() == system_contents[template_name]:
+                    templates[template_name] = ("system", file)
+                else:
+                    templates[template_name] = ("custom", file)
 
-        # Finally, collect local templates by searching upward from cwd (override global)
+        # Finally, collect local templates by searching upward from cwd
         current = Path.cwd().resolve()
         while current != current.parent:
             local_dir = current / ".cafe" / "templates" / self.template_type
             if local_dir.exists():
                 for file in local_dir.glob("*.md"):
                     template_name = file.stem
-                    templates[template_name] = ("local", file)
-                break  # Use the nearest .cafe/templates/ found
+                    if template_name in system_contents and file.read_text() == system_contents[template_name]:
+                        templates[template_name] = ("system", file)
+                    else:
+                        templates[template_name] = ("custom", file)
+                break
             current = current.parent
 
         # Return sorted list of (name, source_type) tuples
