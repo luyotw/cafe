@@ -4707,18 +4707,18 @@ app.add_typer(role_app, name="role")
 
 @role_app.command(name="ls")
 def role_ls() -> None:
-    """List all available agents (system and custom)."""
+    """List all available roles (system and custom)."""
     from rich.table import Table
     from cafe.ui.init_helpers import list_available_agents
 
     # Get all role directories
     roles = ["pm", "developer", "reviewer"]
-    has_agents = False
+    has_roles = False
 
     # Create table
     table = Table(title="Available Roles", show_header=True, header_style="bold cyan")
     table.add_column("Role", style="green")
-    table.add_column("Agent", style="yellow")
+    table.add_column("Name", style="yellow")
     table.add_column("Description", style="dim")
 
     for role in roles:
@@ -4726,13 +4726,13 @@ def role_ls() -> None:
         agents = list_available_agents(role)
 
         for agent_name, description, _, source_type in agents:
-            has_agents = True
-            # Add (custom) indicator for custom agents
+            has_roles = True
+            # Add (custom) indicator for custom roles
             display_name = f"{agent_name} (custom)" if source_type == "custom" else agent_name
             table.add_row(role, display_name, description)
 
-    if not has_agents:
-        console.print("[yellow]No agents found.[/yellow]")
+    if not has_roles:
+        console.print("[yellow]No roles found.[/yellow]")
         return
 
     console.print(table)
@@ -4740,7 +4740,7 @@ def role_ls() -> None:
 
 @role_app.command(name="rm")
 def role_rm() -> None:
-    """Remove an agent interactively."""
+    """Remove a role definition interactively."""
     from pathlib import Path
     from cafe.utils.config import get_global_cafe_dir
 
@@ -4750,7 +4750,7 @@ def role_rm() -> None:
     # Prompt for role
     try:
         role = prompt_list(
-            message="Select agent role:",
+            message="Select role:",
             choices=["pm", "developer", "reviewer"],
         )
     except (KeyboardInterrupt, EOFError):
@@ -4760,18 +4760,18 @@ def role_rm() -> None:
     # Get agents in this role
     role_dir = agents_dir / role
     if not role_dir.exists():
-        console.print(f"[red]No agents found in role '{role}'[/red]")
+        console.print(f"[red]No role definitions found for '{role}'[/red]")
         raise typer.Exit(1)
 
     agent_files = sorted([f.name for f in role_dir.glob("*.md")])
     if not agent_files:
-        console.print(f"[red]No agents found in role '{role}'[/red]")
+        console.print(f"[red]No role definitions found for '{role}'[/red]")
         raise typer.Exit(1)
 
-    # Prompt for agent
+    # Prompt for role definition
     try:
         agent_filename = prompt_list(
-            message="Select agent to delete:",
+            message="Select role definition to delete:",
             choices=agent_files,
         )
     except (KeyboardInterrupt, EOFError):
@@ -4783,7 +4783,7 @@ def role_rm() -> None:
 
     # Confirm deletion
     try:
-        confirm = prompt_confirm(f"Are you sure you want to delete agent '{agent_path}'?", default=False)
+        confirm = prompt_confirm(f"Are you sure you want to delete role definition '{agent_path}'?", default=False)
     except (KeyboardInterrupt, EOFError):
         console.print("\n[dim]Cancelled[/dim]")
         raise typer.Exit(0)
@@ -4792,18 +4792,18 @@ def role_rm() -> None:
         console.print("[dim]Cancelled[/dim]")
         raise typer.Exit(0)
 
-    # Delete the agent file
+    # Delete the role definition file
     try:
         agent_file.unlink()
-        console.print(f"[green]✓[/green] Agent '{agent_path}' deleted successfully")
+        console.print(f"[green]✓[/green] Role definition '{agent_path}' deleted successfully")
     except Exception as e:
-        console.print(f"[red]Error: Failed to delete agent: {e}[/red]")
+        console.print(f"[red]Error: Failed to delete role definition: {e}[/red]")
         raise typer.Exit(1)
 
 
 @role_app.command(name="create")
 def role_create() -> None:
-    """Create a new agent interactively."""
+    """Create a new role definition interactively."""
     from pathlib import Path
     import os
     from cafe.utils.config import get_global_cafe_dir
@@ -4814,7 +4814,7 @@ def role_create() -> None:
     # Prompt for role
     try:
         role = prompt_list(
-            message="Select agent role:",
+            message="Select role:",
             choices=["pm", "developer", "reviewer"],
         )
     except (KeyboardInterrupt, EOFError):
@@ -4824,7 +4824,7 @@ def role_create() -> None:
     # Prompt for name
     try:
         name = prompt_text(
-            message="Agent name (eg: Michael):",
+            message="Role definition name (eg: Michael):",
             default="",
         )
     except (KeyboardInterrupt, EOFError):
@@ -4834,14 +4834,14 @@ def role_create() -> None:
     # Strip whitespace from name
     name = name.strip()
     if not name:
-        console.print("[red]Error: Agent name cannot be empty[/red]")
+        console.print("[red]Error: Role definition name cannot be empty[/red]")
         raise typer.Exit(1)
 
-    # Check if agent already exists
+    # Check if role definition already exists
     agent_file = agents_dir / role / f"{name}.md"
     if agent_file.exists():
-        console.print(f"[red]Error: Agent '{role}/{name}.md' already exists[/red]")
-        console.print("[yellow]Use 'cafe role edit' to modify the existing agent.[/yellow]")
+        console.print(f"[red]Error: Role definition '{role}/{name}.md' already exists[/red]")
+        console.print("[yellow]Use 'cafe role edit' to modify the existing role definition.[/yellow]")
         raise typer.Exit(1)
 
     # Prompt for description
@@ -4864,14 +4864,14 @@ def role_create() -> None:
     editor = os.environ.get("EDITOR", "vim")
     import tempfile
 
-    # Create temp file with agent template
+    # Create temp file with role definition template
     template_content = f"""---
 name: {name}
 description: {description}
 ---
 
-# Please write the agent's code of conduct below
-# Delete this comment and write the agent's behavior guidelines and responsibilities
+# Please write the role's code of conduct below
+# Delete this comment and write the role's behavior guidelines and responsibilities
 #
 # IMPORTANT: Each guideline MUST start with "-" to maximize effectiveness
 #
@@ -4899,7 +4899,7 @@ description: {description}
             content = f.read().strip()
 
         # Remove template comments if user didn't modify
-        if "# Please write the agent's code of conduct below" in content:
+        if "# Please write the role's code of conduct below" in content:
             # Remove comment lines
             lines = [line for line in content.split('\n') if not (line.strip().startswith('#') and 'Please write' in line or 'Delete this comment' in line or 'Example:' in line or 'Your responsibilities' in line or line.strip().startswith('# - '))]
             content = '\n'.join(lines).strip()
@@ -4916,14 +4916,14 @@ description: {description}
     # Show path relative to home directory
     try:
         relative_path = agent_file.relative_to(Path.home())
-        console.print(f"[green]✓[/green] Agent created successfully: ~/{relative_path}")
+        console.print(f"[green]✓[/green] Role definition created successfully: ~/{relative_path}")
     except ValueError:
-        console.print(f"[green]✓[/green] Agent created successfully: {agent_file}")
+        console.print(f"[green]✓[/green] Role definition created successfully: {agent_file}")
 
 
 @role_app.command(name="edit")
 def role_edit() -> None:
-    """Edit an existing agent."""
+    """Edit an existing role definition."""
     from pathlib import Path
     import os
     from cafe.utils.config import get_global_cafe_dir
@@ -4934,28 +4934,28 @@ def role_edit() -> None:
     # Prompt for role
     try:
         role = prompt_list(
-            message="Select agent role:",
+            message="Select role:",
             choices=["pm", "developer", "reviewer"],
         )
     except (KeyboardInterrupt, EOFError):
         console.print("\n[dim]Cancelled[/dim]")
         raise typer.Exit(0)
 
-    # Get agents in this role
+    # Get role definitions in this role
     role_dir = agents_dir / role
     if not role_dir.exists():
-        console.print(f"[red]No agents found in role '{role}'[/red]")
+        console.print(f"[red]No role definitions found for '{role}'[/red]")
         raise typer.Exit(1)
 
     agent_files = sorted([f.name for f in role_dir.glob("*.md")])
     if not agent_files:
-        console.print(f"[red]No agents found in role '{role}'[/red]")
+        console.print(f"[red]No role definitions found for '{role}'[/red]")
         raise typer.Exit(1)
 
-    # Prompt for agent
+    # Prompt for role definition
     try:
         agent_filename = prompt_list(
-            message="Select agent to edit:",
+            message="Select role definition to edit:",
             choices=agent_files,
         )
     except (KeyboardInterrupt, EOFError):
@@ -4970,9 +4970,9 @@ def role_edit() -> None:
         # Show path relative to home directory
         try:
             relative_path = agent_file.relative_to(Path.home())
-            console.print(f"[green]✓[/green] Agent updated successfully: ~/{relative_path}")
+            console.print(f"[green]✓[/green] Role definition updated successfully: ~/{relative_path}")
         except ValueError:
-            console.print(f"[green]✓[/green] Agent updated successfully: {agent_file}")
+            console.print(f"[green]✓[/green] Role definition updated successfully: {agent_file}")
 
         # Auto-sync agents to local .cafe directory
         from cafe.ui.init_helpers import sync_agents
@@ -4980,12 +4980,12 @@ def role_edit() -> None:
         if cafe_dir.exists():
             agent_success, agent_failed = sync_agents(cafe_dir)
             if agent_success > 0:
-                console.print(f"  [green]✓[/green] Updated .cafe directory with {agent_success} agent(s)")
+                console.print(f"  [green]✓[/green] Updated .cafe directory with {agent_success} role definition(s)")
             if agent_failed > 0:
-                console.print(f"  [yellow]⚠[/yellow] Warning: Failed to copy {agent_failed} agent file(s)")
+                console.print(f"  [yellow]⚠[/yellow] Warning: Failed to copy {agent_failed} role definition file(s)")
 
     except subprocess.CalledProcessError:
-        console.print("[red]Error: Failed to edit agent[/red]")
+        console.print("[red]Error: Failed to edit role definition[/red]")
         raise typer.Exit(1)
     except FileNotFoundError:
         console.print(f"[red]Error: Editor '{editor}' not found[/red]")
@@ -4994,10 +4994,10 @@ def role_edit() -> None:
 
 @role_app.command(name="cat")
 def role_cat(
-    role: Optional[str] = typer.Option(None, "--role", "-r", help="Agent role: pm, developer, or reviewer"),
-    name: Optional[str] = typer.Option(None, "--name", "-n", help="Agent name to view"),
+    role: Optional[str] = typer.Option(None, "--role", "-r", help="Role: pm, developer, or reviewer"),
+    name: Optional[str] = typer.Option(None, "--name", "-n", help="Role definition name to view"),
 ) -> None:
-    """View agent content.
+    """View role definition content.
 
     \b
     Examples:
@@ -5010,7 +5010,7 @@ def role_cat(
     try:
         if not role:
             role = prompt_list(
-                message="Select agent role:",
+                message="Select role:",
                 choices=["pm", "developer", "reviewer"],
             )
 
@@ -5020,10 +5020,10 @@ def role_cat(
             raise typer.Exit(1)
 
         if not name:
-            # Get all agents for this role (system + custom)
+            # Get all role definitions for this role (system + custom)
             agents = list_available_agents(role)
             if not agents:
-                console.print(f"[red]No agents found for role '{role}'[/red]")
+                console.print(f"[red]No role definitions found for '{role}'[/red]")
                 raise typer.Exit(1)
 
             # Create choices with source indicators
@@ -5038,12 +5038,12 @@ def role_cat(
                 agent_map[display_name] = (agent_name, agent_path)
 
             selected = prompt_list(
-                message="Select agent to view:",
+                message="Select role definition to view:",
                 choices=choices,
             )
             name, agent_path = agent_map[selected]
         else:
-            # Find agent by name
+            # Find role definition by name
             agents = list_available_agents(role)
             agent_path = None
             for agent_name, _, path, _ in agents:
@@ -5052,7 +5052,7 @@ def role_cat(
                     break
 
             if not agent_path:
-                console.print(f"[red]Error: Agent '{name}' not found in role '{role}'[/red]")
+                console.print(f"[red]Error: Role definition '{name}' not found in role '{role}'[/red]")
                 raise typer.Exit(1)
 
     except (KeyboardInterrupt, EOFError):
@@ -5070,11 +5070,11 @@ def role_cat(
 
 @role_app.command(name="sync")
 def role_sync() -> None:
-    """Sync agent files from global/system sources to local .cafe directory.
+    """Sync role definition files from global/system sources to local .cafe directory.
 
-    Updates all agent files in .cafe/agents to their latest versions from
+    Updates all role definition files in .cafe/agents to their latest versions from
     ~/.cafe/agents (custom) or src/cafe/data/agents (system default).
-    Global custom agents take precedence over system defaults.
+    Global custom role definitions take precedence over system defaults.
     """
     from cafe.ui.init_helpers import sync_agents
 
@@ -5090,10 +5090,10 @@ def role_sync() -> None:
 
     # Display summary
     if agent_success > 0:
-        console.print(f"  [green]✓[/green] Updated .cafe directory with {agent_success} agent(s)")
+        console.print(f"  [green]✓[/green] Updated .cafe directory with {agent_success} role definition(s)")
 
     if agent_failed > 0:
-        console.print(f"  [yellow]⚠[/yellow] Warning: Failed to copy {agent_failed} agent file(s)")
+        console.print(f"  [yellow]⚠[/yellow] Warning: Failed to copy {agent_failed} role definition file(s)")
 
 
 @app.command()

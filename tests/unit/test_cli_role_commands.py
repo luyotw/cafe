@@ -116,7 +116,7 @@ class TestAgentRmCommand:
             result = runner.invoke(app, ["role", "rm"])
 
         assert result.exit_code == 1
-        assert "no agents found" in result.stdout.lower()
+        assert "no role definitions found" in result.stdout.lower()
 
     def test_agent_rm_user_cancels(self, runner, temp_global_dir):
         """測試使用者取消刪除操作."""
@@ -304,4 +304,4 @@ class TestAgentCatCommand:
             result = runner.invoke(app, ["role", "cat"])
 
         assert result.exit_code == 1
-        assert "No agents found" in result.stdout
+        assert "no role definitions found" in result.stdout.lower()
