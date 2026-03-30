@@ -245,6 +245,41 @@ description: 注重細節 PM
             assert agent[2].suffix == ".md"
 
 
+    def test_list_available_agents_reads_from_data_roles(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Test that list_available_agents reads system defaults from data/roles/, not data/agents/."""
+        # Replicate the directory structure that Path(__file__).parent.parent / "data" / "roles" resolves to.
+        # fake __file__ = tmp_path/src/cafe/ui/init_helpers.py
+        # => parent.parent = tmp_path/src/cafe
+        # => / "data" / "roles" / "pm" = tmp_path/src/cafe/data/roles/pm
+        fake_data_roles_pm = tmp_path / "src" / "cafe" / "data" / "roles" / "pm"
+        fake_data_roles_pm.mkdir(parents=True)
+        (fake_data_roles_pm / "MockPM.md").write_text(
+            "---\nname: MockPM\ndescription: Mock PM for test\n---\n"
+        )
+
+        # Set up empty global directory
+        global_cafe_dir = tmp_path / "global_cafe"
+        (global_cafe_dir / "roles" / "pm").mkdir(parents=True)
+
+        monkeypatch.setattr("cafe.utils.config.get_global_cafe_dir", lambda: global_cafe_dir)
+        import cafe.ui.init_helpers as ih
+        fake_init_file = str(tmp_path / "src" / "cafe" / "ui" / "init_helpers.py")
+        monkeypatch.setattr(ih, "__file__", fake_init_file)
+
+        agents = list_available_agents("pm")
+
+        names = [agent[0] for agent in agents]
+        assert "MockPM" in names
+
+        # Verify source type is system default
+        mock_pm = [a for a in agents if a[0] == "MockPM"][0]
+        assert mock_pm[3] == "system default"
+        # Verify file path is under data/roles/, not data/agents/
+        assert "data/roles" in str(mock_pm[2])
+
+
 class TestCopyDataDirectory:
     """Tests for copy_data_directory function."""
 

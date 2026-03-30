@@ -95,6 +95,35 @@ class TestAgentSyncCommand:
         call_args = str(mock_console.print.call_args_list)
         assert "3" in call_args or "agent" in call_args
 
+    def test_agent_sync_copies_to_roles_directory(
+        self,
+        runner: CliRunner,
+        tmp_path: Path,
+    ) -> None:
+        """Test that role sync copies files to .cafe/roles/ (not .cafe/agents/)."""
+        # Set up a real system roles directory with a known file
+        system_dir = tmp_path / "system_roles"
+        (system_dir / "developer").mkdir(parents=True)
+        (system_dir / "developer" / "Nick.md").write_text("# Nick")
+        (system_dir / "pm").mkdir(parents=True)
+        (system_dir / "reviewer").mkdir(parents=True)
+
+        # Set up local .cafe and empty global dir
+        local_cafe = tmp_path / "project" / ".cafe"
+        local_cafe.mkdir(parents=True)
+        global_dir = tmp_path / "global_cafe"
+        global_dir.mkdir(parents=True)
+
+        with patch("cafe.ui.cli.Path", return_value=local_cafe), \
+             patch("cafe.utils.config.get_global_cafe_dir", return_value=global_dir), \
+             patch("cafe.ui.init_helpers._get_system_agents_dir", return_value=system_dir):
+            result = runner.invoke(app, ["role", "sync"])
+
+        assert result.exit_code == 0
+        # Files should be under .cafe/roles/, not .cafe/agents/
+        assert (local_cafe / "roles" / "developer" / "Nick.md").exists()
+        assert not (local_cafe / "agents" / "developer" / "Nick.md").exists()
+
     @patch("cafe.ui.cli.console")
     @patch("cafe.ui.init_helpers.sync_agents")
     @patch("cafe.ui.cli.Path")
