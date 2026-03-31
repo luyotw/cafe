@@ -93,7 +93,6 @@ class DevelopPhase(Phase):
 
         # Restore state from last iteration file (if resuming)
         self.iteration = self._load_iteration_counter()
-
     def _check_plan_exists(self) -> bool:
         """Check if plan file exists (versioned or legacy plan.md).
 
@@ -541,10 +540,14 @@ class DevelopPhase(Phase):
 
         # Handle pending NEED_PERMISSION from previous run
         if prev_status == "CAFE_NEED_PERMISSION":
+            recovered_denials = []
+            if self.iteration > 1:
+                recovered_denials = self._extract_codex_permission_denials_from_streaming_file(self.iteration - 1)
+
             # Check if has permission_denials
-            if not prev_data.get("permission_denials"):
-                # Old format without permission_denials, return empty
-                return ""
+            if not prev_data.get("permission_denials") and not recovered_denials:
+                # Fallback for CLIs that do not emit structured permission_denials.
+                return self._handle_need_permission_input(prev_data, agent_display_name="Developer")
 
             # In non-interactive mode, check if user provided approved_denial_indices
             if not self.interactive:
@@ -1291,4 +1294,3 @@ Please return only one status code (example: CAFE_CONFIRMED), with no other cont
         develop_dir = self.issue_dir / "develop"
         develop_file = develop_dir / f"iteration_{self.iteration:03d}" / "output.md"
         return [develop_file] if develop_file.exists() else []
-

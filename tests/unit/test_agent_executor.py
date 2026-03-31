@@ -122,6 +122,29 @@ class TestAgentExecutorErrorHandling:
             assert "Connection timeout" in str(exc_info.value)
 
 
+class TestCodexPermissionExtraction:
+    """Test Codex-specific permission denial extraction."""
+
+    def test_extracts_denied_exec_command_from_stderr(self) -> None:
+        """Sandbox-denied exec_command should become a Bash permission denial."""
+        config = AgentConfig(name="Nick", cli=AgentCLI.CODEX)
+        executor = AgentExecutor(config)
+
+        stderr_text = (
+            "2026-03-30T15:49:39.759351Z ERROR codex_core::tools::router: "
+            "error=exec_command failed for `/bin/zsh -lc 'git add src/cafe/ui/cli.py "
+            "tests/unit/test_cli_setup.py && git commit -m \"feat: support selective role "
+            "updates in cafe setup\"'`: CreateProcess { message: "
+            "\"Codex(Sandbox(Denied { output: ExecToolCallOutput { exit_code: 128 } }))\" }"
+        )
+
+        denials = executor._extract_codex_permission_denials_from_stderr(stderr_text)
+
+        assert len(denials) == 1
+        assert denials[0].tool_name == "Bash"
+        assert denials[0].tool_input["command"].startswith("git add src/cafe/ui/cli.py")
+
+
 class TestTokenUsageTracking:
     """Test token usage tracking functionality."""
 
@@ -1687,4 +1710,3 @@ class TestAllowedDirectoriesParameter:
             # Verify no --add-dir in command when allowed_directories is None
             called_cmd = mock_popen.call_args[0][0]
             assert "--add-dir" not in called_cmd
-

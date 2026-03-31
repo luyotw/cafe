@@ -27,6 +27,7 @@ from cafe.phases.review_phase import ReviewPhase
 from cafe.phases.spec_phase import SpecPhase
 from cafe.templates.manager import TemplateManager
 from cafe.ui import init_helpers
+from cafe.ui.chat import launch_chat_session
 from cafe.ui.display import Display
 from cafe.ui.init_helpers import (
     check_available_clis,
@@ -633,7 +634,7 @@ def init() -> None:
 
         if not available_clis:
             console.print("[red]No supported AI agents found. Please install at least one agent before retrying.[/red]")
-            console.print("[yellow]Supported agents: claude, gemini, cursor-agent, copilot[/yellow]")
+            console.print("[yellow]Supported agents: claude, gemini, cursor-agent, codex, copilot[/yellow]")
             raise typer.Exit(1)
 
         console.print(f"[green]Found available AI agents: {', '.join(available_clis)}[/green]\n")
@@ -691,7 +692,7 @@ def setup() -> None:
 
         if not available_clis:
             console.print("[red]No supported AI agents found. Please install at least one agent before retrying.[/red]")
-            console.print("[yellow]Supported agents: claude, gemini, cursor-agent, copilot[/yellow]")
+            console.print("[yellow]Supported agents: claude, gemini, cursor-agent, codex, copilot[/yellow]")
             raise typer.Exit(1)
 
         console.print(f"[green]Found available AI agents: {', '.join(available_clis)}[/green]\n")
@@ -4674,6 +4675,7 @@ def make(
         console.print("[dim]  • claude: https://github.com/anthropics/anthropic-cli[/dim]")
         console.print("[dim]  • gemini: https://github.com/google-gemini/gemini-cli[/dim]")
         console.print("[dim]  • cursor-agent: https://cursor.com/docs/cli[/dim]")
+        console.print("[dim]  • codex: https://developers.openai.com/codex/cli/reference[/dim]")
         console.print(
             "[dim]  • copilot: https://docs.github.com/en/copilot/using-github-copilot/using-github-copilot-in-the-command-line[/dim]"
         )
@@ -5253,83 +5255,7 @@ def chat_with_agent(
     # 2. Get current branch as issue name
     issue_name = _get_and_validate_branch(ctx, "chat")
 
-    # 3. Load configuration
-    config_manager = ConfigManager()
-
-    # 4. Get agent config for corresponding role from config
-    agent_config = config_manager.get(f"agents.{role}", None)
-
-    if agent_config is None:
-        console.print(f"[red]Error: No agent configured for role '{role}'.[/red]")
-        console.print(f"[yellow]Please configure an agent for '{role}' in .cafe/config.yaml[/yellow]")
-        raise typer.Exit(1)
-
-    agent_name = agent_config.get("name")
-    agent_cli = agent_config.get("cli")
-    agent_model = agent_config.get("model")
-
-    if not agent_name or not agent_cli:
-        console.print(f"[red]Error: Invalid agent configuration for role '{role}'.[/red]")
-        console.print(f"[yellow]Please ensure 'name' and 'cli' are configured in .cafe/config.yaml[/yellow]")
-        raise typer.Exit(1)
-
-    # 5. Set up agent manager (automatically loads session)
-    agent_manager = _setup_agents(config_manager, issue_name=issue_name)
-
-    # 6. Get executor for this agent
-    try:
-        agent_executor = agent_manager.get_agent(agent_name)
-    except Exception as e:
-        console.print(f"[red]Error: Failed to get agent '{agent_name}': {e}[/red]")
-        raise typer.Exit(1)
-
-    # 7. Get session ID (if exists)
-    session_id = agent_executor.config.session_id
-
-    # 8. Build and execute interactive CLI command
-    console.print(f"[bold blue]Opening interactive CLI for {role} ({agent_name})...[/bold blue]")
-    console.print(f"[dim]Issue: {issue_name}[/dim]")
-    console.print(f"[dim]CLI: {agent_cli}[/dim]")
-    if session_id:
-        console.print(f"[dim]Session: {session_id}[/dim]")
-    console.print()
-
-    # Build CLI command
-    cli_command = [agent_cli]
-
-    # Add session parameter (if exists)
-    if session_id:
-        if agent_cli == "claude":
-            cli_command.extend(["--resume", session_id])
-        elif agent_cli == "copilot":
-            cli_command.extend(["--resume", session_id])
-        elif agent_cli == "gemini":
-            cli_command.extend(["--resume", session_id])
-        elif agent_cli == "cursor-agent":
-            cli_command.extend(["--session", session_id])
-
-    # Add model parameter (if exists)
-    if agent_model:
-        if agent_cli == "claude":
-            cli_command.extend(["--model", agent_model])
-        elif agent_cli == "copilot":
-            cli_command.extend(["--model", agent_model])
-        elif agent_cli == "gemini":
-            cli_command.extend(["--model", agent_model])
-
-    # Execute interactive CLI
-    try:
-        result = subprocess.run(cli_command)
-    except FileNotFoundError:
-        console.print(f"[red]Error: CLI tool '{agent_cli}' not found.[/red]")
-        console.print(f"[yellow]Please install '{agent_cli}' CLI tool first.[/yellow]")
-        raise typer.Exit(1)
-    except Exception as e:
-        console.print(f"[red]Error: Failed to execute CLI: {e}[/red]")
-        raise typer.Exit(1)
-
-    # Exit normally, return CLI tool's exit code
-    raise typer.Exit(result.returncode)
+    raise typer.Exit(launch_chat_session(role, issue_name))
 
 
 def main() -> None:

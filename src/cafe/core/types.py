@@ -13,6 +13,7 @@ class AgentCLI(str, Enum):
     CLAUDE = "claude"
     GEMINI = "gemini"
     CURSOR = "cursor-agent"
+    CODEX = "codex"
     COPILOT = "copilot"
 
 
@@ -172,12 +173,8 @@ class PermissionDenial(BaseModel):
 
             return f"{tool_name_lower}({file_path})"
         elif command:
-            # For bash commands, use first two words as pattern
-            cmd_parts = command.split()
-            if len(cmd_parts) >= 2:
-                return f"{tool_name_lower}({cmd_parts[0]} {cmd_parts[1]})"
-            else:
-                return f"{tool_name_lower}({cmd_parts[0]})"
+            # Keep the exact command to avoid broadening Bash permissions.
+            return f"{tool_name_lower}({command})"
         else:
             # If no specific params, just allow the tool
             return tool_name_lower

@@ -10,7 +10,7 @@ import pytest
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
-from cafe.utils.git_utils import get_repo_root, to_git_ignore_path
+from cafe.utils.git_utils import get_git_dir, get_git_toplevel, get_repo_root, to_git_ignore_path
 
 
 class TestGetRepoRoot:
@@ -110,6 +110,59 @@ class TestGetRepoRoot:
         # Execute & Assert
         with pytest.raises(ValueError, match="Not in a Git repository"):
             get_repo_root(non_repo)
+
+
+class TestGetGitDir:
+    """測試 get_git_dir() 函數"""
+
+    def test_normal_repo_returns_dot_git_dir(self, tmp_path):
+        repo_root = tmp_path / "repo"
+        git_dir = repo_root / ".git"
+        git_dir.mkdir(parents=True)
+
+        assert get_git_dir(repo_root) == git_dir
+
+    def test_worktree_returns_worktree_git_dir(self, tmp_path):
+        main_repo = tmp_path / "main-repo"
+        main_git_dir = main_repo / ".git"
+        main_git_dir.mkdir(parents=True)
+
+        worktree_dir = tmp_path / "worktrees" / "feature-branch"
+        worktree_dir.mkdir(parents=True)
+        worktree_git_dir = main_git_dir / "worktrees" / "feature-branch"
+        worktree_git_dir.mkdir(parents=True)
+
+        (worktree_dir / ".git").write_text(f"gitdir: {worktree_git_dir}\n")
+
+        assert get_git_dir(worktree_dir) == worktree_git_dir
+
+
+class TestGetGitToplevel:
+    """測試 get_git_toplevel() 函數"""
+
+    def test_normal_repo_returns_repo_root(self, tmp_path):
+        repo_root = tmp_path / "repo"
+        (repo_root / ".git").mkdir(parents=True)
+
+        with patch("cafe.utils.git_utils.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(stdout=str(repo_root), returncode=0)
+            assert get_git_toplevel(repo_root) == repo_root
+
+    def test_worktree_returns_worktree_root(self, tmp_path):
+        main_repo = tmp_path / "main-repo"
+        main_git_dir = main_repo / ".git"
+        main_git_dir.mkdir(parents=True)
+
+        worktree_dir = tmp_path / "worktrees" / "feature-branch"
+        worktree_dir.mkdir(parents=True)
+        worktree_git_dir = main_git_dir / "worktrees" / "feature-branch"
+        worktree_git_dir.mkdir(parents=True)
+
+        (worktree_dir / ".git").write_text(f"gitdir: {worktree_git_dir}\n")
+
+        with patch("cafe.utils.git_utils.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(stdout=str(worktree_dir), returncode=0)
+            assert get_git_toplevel(worktree_dir) == worktree_dir
 
 
 class TestToGitIgnorePath:
