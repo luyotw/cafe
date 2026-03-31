@@ -806,7 +806,11 @@ def _interactive_agent_setup_selective(existing_agents_config: dict, available_c
             role_display=role_display,
             available_clis=available_clis,
             existing_role_config=staged_agents_config.get(selected_role),
+            allow_back=True,
         )
+        if staged_agents_config[selected_role] == BACK_SENTINEL:
+            staged_agents_config[selected_role] = copy.deepcopy(existing_agents_config.get(selected_role))
+            continue
         console.print("")
 
 
@@ -846,7 +850,8 @@ def _interactive_role_setup(
     role_display: str,
     available_clis: list,
     existing_role_config: Optional[dict] = None,
-) -> dict:
+    allow_back: bool = False,
+) -> dict | str:
     """Run interactive setup for a single role."""
     from InquirerPy.separator import Separator
 
@@ -878,10 +883,19 @@ def _interactive_role_setup(
 
     while step < total_steps:
         if step == 0:
+            cli_choices = list(available_clis)
+            if allow_back:
+                cli_choices.extend([
+                    Separator(),
+                    {"name": "\u2190 Back", "value": BACK_SENTINEL},
+                ])
+
             selected_cli = prompt_list(
                 message=f"Select CLI for {role_display}:",
-                choices=available_clis,
+                choices=cli_choices,
             )
+            if selected_cli == BACK_SENTINEL:
+                return BACK_SENTINEL
             if not selected_cli:
                 console.print("\n[yellow]Configuration incomplete, cancelled.[/yellow]")
                 raise typer.Exit(1)

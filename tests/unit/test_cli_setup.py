@@ -421,6 +421,54 @@ class TestSetupBackNavigation:
 
     @patch("cafe.ui.cli.shutil.which")
     @patch("cafe.ui.cli.list_available_agents")
+    def test_setup_back_from_cli_to_role_menu(
+        self,
+        mock_list_agents: MagicMock,
+        mock_which: MagicMock,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """User can go back from CLI selection to the role menu."""
+        from cafe.ui.cli import BACK_SENTINEL
+
+        cafe_dir = tmp_path / ".cafe"
+        cafe_dir.mkdir()
+        config_file = cafe_dir / "config.yaml"
+        config_file.write_text(yaml.dump({
+            "agents": {
+                "pm": {"name": "Roger", "cli": "claude"},
+                "developer": {"name": "David", "cli": "claude"},
+                "reviewer": {"name": "Richard", "cli": "claude"},
+            },
+        }))
+
+        mock_which.return_value = "/usr/bin/claude"
+        mock_list_agents.return_value = [("Roger", "PM agent", Path("agents/pm/Roger.md"), "system default")]
+        monkeypatch.chdir(tmp_path)
+
+        agent = "Roger: PM agent (system default)"
+        with patch("cafe.ui.cli.prompt_list") as mock_prompt_list:
+            mock_prompt_list.side_effect = [
+                "developer",
+                BACK_SENTINEL,
+                "pm",
+                "claude",
+                agent,
+                "",
+                "save",
+            ]
+            result = runner.invoke(app, ["setup"])
+
+        assert result.exit_code == 0
+
+        with open(config_file) as f:
+            saved_config = yaml.safe_load(f)
+
+        assert saved_config["agents"]["developer"]["cli"] == "claude"
+        assert saved_config["agents"]["pm"]["cli"] == "claude"
+
+    @patch("cafe.ui.cli.shutil.which")
+    @patch("cafe.ui.cli.list_available_agents")
     def test_setup_back_from_agent_to_cli(
         self,
         mock_list_agents: MagicMock,
