@@ -82,31 +82,21 @@ CONTENT_TYPE_FILE_MAP = {
 }
 
 
-def _handle_phase_exception(e: Exception, phase_name: str, auto: bool = False) -> None:
+def _handle_phase_exception(e: Exception, phase_name: str) -> None:
     """Unified exception handling for phase execution.
 
     Args:
         e: Caught exception
         phase_name: Phase name (for error messages)
-        auto: Whether running in auto mode (to reduce redundant output)
 
     Raises:
         typer.Exit: Always raises exit(1)
     """
     from cafe.core.types import CriticalPhaseError
 
-    # In auto mode, suppress output for most errors as they're already reported
-    # BUT always show programming errors (AttributeError, TypeError, NameError, etc.)
-    if auto and not isinstance(e, CriticalPhaseError):
-        # Check if it's a programming error
-        # These indicate bugs in the code, not normal workflow errors
-        programming_errors = (AttributeError, TypeError, NameError, KeyError, IndexError, ImportError, SyntaxError)
-        if isinstance(e, programming_errors):
-            # These are programming/configuration errors - always show them
-            console.print()
-            console.print(f"[bold red]❌ Error in {phase_name} phase[/bold red]")
-            console.print(f"[red]{type(e).__name__}: {e}[/red]")
-        raise typer.Exit(1)
+    # typer.Exit propagating up from a subprocess chain — already handled, just re-raise
+    if isinstance(e, typer.Exit):
+        raise e
 
     console.print()
 
@@ -2738,7 +2728,7 @@ def spec(
             raise typer.Exit(1)
 
     except Exception as e:
-        _handle_phase_exception(e, "spec", auto=auto)
+        _handle_phase_exception(e, "spec")
 
 
 @app.command()
@@ -3096,7 +3086,7 @@ def plan(
             raise typer.Exit(1)
 
     except Exception as e:
-        _handle_phase_exception(e, "plan", auto=auto)
+        _handle_phase_exception(e, "plan")
 
 
 @app.command()
@@ -3306,7 +3296,7 @@ def develop(
                 console.print("[dim]Resume with: cafe develop[/dim]")
 
     except Exception as e:
-        _handle_phase_exception(e, "develop", auto=auto)
+        _handle_phase_exception(e, "develop")
 
 
 # Add "dev" as an alias for "develop"
@@ -3592,7 +3582,7 @@ def review(
             raise typer.Exit(1)
 
     except Exception as e:
-        _handle_phase_exception(e, "review", auto=auto)
+        _handle_phase_exception(e, "review")
 
 
 @app.command()
@@ -3824,7 +3814,7 @@ def pr(
             raise typer.Exit(1)
 
     except Exception as e:
-        _handle_phase_exception(e, "pr", auto=auto)
+        _handle_phase_exception(e, "pr")
 
 
 @app.command()
