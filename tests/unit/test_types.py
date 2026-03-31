@@ -28,6 +28,7 @@ class TestEnums:
         assert AgentCLI.CLAUDE == "claude"
         assert AgentCLI.GEMINI == "gemini"
         assert AgentCLI.CURSOR == "cursor-agent"
+        assert AgentCLI.CODEX == "codex"
 
     def test_phase_status_values(self) -> None:
         """測試 PhaseStatus enum 值是否正確"""
@@ -283,14 +284,14 @@ class TestPermissionDenial:
         assert pattern == "write(/src/main.py)"
 
     def test_to_allowed_tool_pattern_with_bash_command(self) -> None:
-        """測試 bash 命令使用前兩個詞作為 pattern"""
+        """測試 bash 命令保留完整指令作為 pattern"""
         denial = PermissionDenial(
             tool_name="Bash",
             tool_input={"command": "git --no-pager diff HEAD"}
         )
 
         pattern = denial.to_allowed_tool_pattern()
-        assert pattern == "bash(git --no-pager)"
+        assert pattern == "bash(git --no-pager diff HEAD)"
 
     def test_to_allowed_tool_pattern_without_params(self) -> None:
         """測試沒有參數時只返回工具名"""

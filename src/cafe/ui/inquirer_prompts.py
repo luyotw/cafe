@@ -55,16 +55,21 @@ def prompt_text(
 def prompt_multiline(
     message: str,
     default: str = "",
+    preamble: Optional[str] = None,
 ) -> str:
     """Prompt user for multiline text input
 
     Args:
         message: Prompt message
         default: Default value
+        preamble: Optional text printed before the prompt
 
     Returns:
         User's input text (multiline)
     """
+    if preamble:
+        print(preamble)
+
     return inquirer.text(
         message=message,
         default=default,

@@ -152,39 +152,15 @@ class TestChatCommand:
                     assert result.exit_code != 0
 
     def test_chat_loads_agent_config_correctly(self, tmp_path: Path, mock_initialized_branch, config_with_agents):
-        """測試正確從 config 載入 agent 設定"""
+        """測試 chat 指令委派給 launch_chat_session 並傳入正確參數"""
         with patch("cafe.ui.cli.GitOperations") as mock_git_class:
             mock_git = mock_git_class.return_value
             mock_git.is_valid_branch.return_value = True
             mock_git.get_current_branch.return_value = "issue36"
 
             with patch("cafe.ui.cli.is_branch_initialized", return_value=True):
-                with patch("cafe.ui.cli.ConfigManager") as mock_config_class:
-                    mock_config = mock_config_class.return_value
+                with patch("cafe.ui.cli.launch_chat_session", return_value=0) as mock_launch:
+                    result = runner.invoke(app, ["chat", "pm"])
 
-                    # 記錄所有的 get 呼叫
-                    get_calls = []
-                    def track_get(key, default=None):
-                        get_calls.append(key)
-                        return {
-                            "agents.pm": {"name": "Roger", "cli": "claude"},
-                            "agents.developer": {"name": "David", "cli": "copilot"},
-                            "agents.reviewer": {"name": "Richard", "cli": "gemini"}
-                        }.get(key, default)
-
-                    mock_config.get.side_effect = track_get
-
-                    with patch("cafe.ui.cli._setup_agents") as mock_setup:
-                        mock_agent_manager = MagicMock()
-                        mock_executor = MagicMock()
-                        mock_executor.config.session_id = None
-                        mock_agent_manager.get_agent.return_value = mock_executor
-                        mock_setup.return_value = mock_agent_manager
-
-                        with patch("cafe.ui.cli.subprocess.run") as mock_run:
-                            mock_run.return_value = MagicMock(returncode=0)
-
-                            result = runner.invoke(app, ["chat", "pm"])
-
-                            # 驗證有查詢 pm agent 設定
-                            assert "agents.pm" in get_calls
+                    assert result.exit_code == 0
+                    mock_launch.assert_called_once_with("pm", "issue36")

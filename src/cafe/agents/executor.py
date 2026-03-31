@@ -5,7 +5,7 @@ import subprocess
 from pathlib import Path
 from typing import Callable, List, Optional, Tuple
 
-from cafe.agents.cli import AbstractCLI, ClaudeCLI, CopilotCLI, CursorCLI, GeminiCLI
+from cafe.agents.cli import AbstractCLI, ClaudeCLI, CodexCLI, CopilotCLI, CursorCLI, GeminiCLI
 from cafe.core.types import AgentConfig, AgentCLI, AgentResponse, PermissionDenial, TokenUsage
 from cafe.utils.git_utils import get_repo_root, to_git_ignore_path, to_relative_path
 
@@ -76,6 +76,7 @@ class AgentExecutor:
             "web_fetch": "shell(curl)",
             "web_search": "shell(curl)",
         },
+        AgentCLI.CODEX: {},
     }
 
     def __init__(self, config: AgentConfig) -> None:
@@ -102,6 +103,8 @@ class AgentExecutor:
             return GeminiCLI(self.config)
         elif self.config.cli == AgentCLI.CURSOR:
             return CursorCLI(self.config)
+        elif self.config.cli == AgentCLI.CODEX:
+            return CodexCLI(self.config)
         elif self.config.cli == AgentCLI.COPILOT:
             return CopilotCLI(self.config)
         else:
@@ -190,12 +193,27 @@ class AgentExecutor:
 
             # Execute with session recovery if session_id configured
             if self.config.session_id:
+                def extract_codex_content(data: dict) -> Optional[str]:
+                    if data.get("type") != "item.completed":
+                        return None
+                    item = data.get("item", {})
+                    if item.get("type") == "agent_message":
+                        return item.get("text")
+                    return None
+
+                json_content_extractor = (
+                    extract_codex_content if self.config.cli == AgentCLI.CODEX else None
+                )
+
                 def create_session():
                     # Use CLI strategy's create_session method
                     return cli_strategy.create_session()
 
                 def update_cmd_with_session(cmd_list, new_session_id):
-                    if "--resume" in cmd_list:
+                    if "resume" in cmd_list:
+                        resume_idx = cmd_list.index("resume")
+                        cmd_list[resume_idx + 1] = new_session_id
+                    elif "--resume" in cmd_list:
                         resume_idx = cmd_list.index("--resume")
                         cmd_list[resume_idx + 1] = new_session_id
                     return cmd_list
@@ -210,17 +228,31 @@ class AgentExecutor:
                     update_cmd_with_session_fn=update_cmd_with_session,
                     response_parser=parser,
                     parse_stream_json=parse_stream_json,
+                    json_content_extractor=json_content_extractor,
                     streaming_output_file=streaming_output_file,
                 )
             else:
                 # Only use response parser for stream-json formats
                 parser = (lambda lines: self._parse_using_strategy(cli_strategy, lines)) if parse_stream_json else None
 
+                def extract_codex_content(data: dict) -> Optional[str]:
+                    if data.get("type") != "item.completed":
+                        return None
+                    item = data.get("item", {})
+                    if item.get("type") == "agent_message":
+                        return item.get("text")
+                    return None
+
+                json_content_extractor = (
+                    extract_codex_content if self.config.cli == AgentCLI.CODEX else None
+                )
+
                 agent_response = self._execute_with_streaming(
                     cmd=cmd,
                     cli_name=self.config.cli.value.capitalize(),
                     response_parser=parser,
                     parse_stream_json=parse_stream_json,
+                    json_content_extractor=json_content_extractor,
                     streaming_output_file=streaming_output_file,
                 )
 
@@ -380,6 +412,11 @@ class AgentExecutor:
             "status 429",
             "you've hit your usage limit",
         ],
+        "codex": [
+            "rate limit",
+            "status 429",
+            "quota exceeded",
+        ],
     }
 
     def _is_rate_limit_error(self, error_text: str) -> bool:
@@ -451,6 +488,46 @@ class AgentExecutor:
         
         # Only usage summary if it has usage markers and no error found before it
         return has_usage
+
+    def _extract_codex_permission_denials_from_stderr(
+        self,
+        stderr_text: str,
+    ) -> List[PermissionDenial]:
+        """Extract sandbox-denied Codex exec_command calls from stderr."""
+        if self.config.cli != AgentCLI.CODEX or not stderr_text:
+            return []
+
+        import re
+
+        permission_denials: List[PermissionDenial] = []
+        seen_commands = set()
+        pattern = re.compile(
+            r"exec_command failed for `([^`]+)`:.*?Sandbox\(Denied",
+            re.DOTALL,
+        )
+
+        for match in pattern.finditer(stderr_text):
+            raw_command = match.group(1).strip()
+            shell_match = re.fullmatch(
+                r"/bin/(?:zsh|bash)\s+-lc\s+(['\"])(.*)\1",
+                raw_command,
+                re.DOTALL,
+            )
+            command = shell_match.group(2) if shell_match else raw_command
+            command = command.strip()
+
+            if not command or command in seen_commands:
+                continue
+
+            seen_commands.add(command)
+            permission_denials.append(
+                PermissionDenial(
+                    tool_name="Bash",
+                    tool_input={"command": command},
+                )
+            )
+
+        return permission_denials
 
     def _execute_with_streaming(
         self,
@@ -647,6 +724,12 @@ class AgentExecutor:
                             # Extract session_id (from init message for Gemini, or any message for Claude)
                             if "session_id" in data and not session_id:
                                 session_id = data["session_id"]
+                            elif (
+                                data.get("type") == "thread.started"
+                                and "thread_id" in data
+                                and not session_id
+                            ):
+                                session_id = data["thread_id"]
 
                             # Extract token usage (usually in final message)
                             if "usage" in data:
@@ -846,9 +929,22 @@ class AgentExecutor:
         if session_id:
             self.config.session_id = session_id
 
+        codex_permission_denials = self._extract_codex_permission_denials_from_stderr(stderr_output)
+        permission_denials.extend(codex_permission_denials)
+
         # Use custom response parser if provided
         if response_parser:
             parsed_response = response_parser(output_lines)
+            if codex_permission_denials:
+                existing_pairs = {
+                    (denial.tool_name, json.dumps(denial.tool_input, sort_keys=True))
+                    for denial in parsed_response.permission_denials
+                }
+                for denial in codex_permission_denials:
+                    key = (denial.tool_name, json.dumps(denial.tool_input, sort_keys=True))
+                    if key not in existing_pairs:
+                        parsed_response.permission_denials.append(denial)
+                        existing_pairs.add(key)
             # Merge streaming_log from custom parser with accumulated streaming_log
             # If parser doesn't provide streaming_log, use our accumulated one
             if not parsed_response.streaming_log:

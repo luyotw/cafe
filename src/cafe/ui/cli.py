@@ -28,6 +28,7 @@ from cafe.phases.review_phase import ReviewPhase
 from cafe.phases.spec_phase import SpecPhase
 from cafe.templates.manager import TemplateManager
 from cafe.ui import init_helpers
+from cafe.ui.chat import launch_chat_session
 from cafe.ui.display import Display
 from cafe.ui.init_helpers import (
     check_available_clis,
@@ -82,31 +83,21 @@ CONTENT_TYPE_FILE_MAP = {
 }
 
 
-def _handle_phase_exception(e: Exception, phase_name: str, auto: bool = False) -> None:
+def _handle_phase_exception(e: Exception, phase_name: str) -> None:
     """Unified exception handling for phase execution.
 
     Args:
         e: Caught exception
         phase_name: Phase name (for error messages)
-        auto: Whether running in auto mode (to reduce redundant output)
 
     Raises:
         typer.Exit: Always raises exit(1)
     """
     from cafe.core.types import CriticalPhaseError
 
-    # In auto mode, suppress output for most errors as they're already reported
-    # BUT always show programming errors (AttributeError, TypeError, NameError, etc.)
-    if auto and not isinstance(e, CriticalPhaseError):
-        # Check if it's a programming error
-        # These indicate bugs in the code, not normal workflow errors
-        programming_errors = (AttributeError, TypeError, NameError, KeyError, IndexError, ImportError, SyntaxError)
-        if isinstance(e, programming_errors):
-            # These are programming/configuration errors - always show them
-            console.print()
-            console.print(f"[bold red]❌ Error in {phase_name} phase[/bold red]")
-            console.print(f"[red]{type(e).__name__}: {e}[/red]")
-        raise typer.Exit(1)
+    # typer.Exit propagating up from a subprocess chain — already handled, just re-raise
+    if isinstance(e, typer.Exit):
+        raise e
 
     console.print()
 
@@ -634,7 +625,7 @@ def init() -> None:
 
         if not available_clis:
             console.print("[red]No supported AI agents found. Please install at least one agent before retrying.[/red]")
-            console.print("[yellow]Supported agents: claude, gemini, cursor-agent, copilot[/yellow]")
+            console.print("[yellow]Supported agents: claude, gemini, cursor-agent, codex, copilot[/yellow]")
             raise typer.Exit(1)
 
         console.print(f"[green]Found available AI agents: {', '.join(available_clis)}[/green]\n")
@@ -692,7 +683,7 @@ def setup() -> None:
 
         if not available_clis:
             console.print("[red]No supported AI agents found. Please install at least one agent before retrying.[/red]")
-            console.print("[yellow]Supported agents: claude, gemini, cursor-agent, copilot[/yellow]")
+            console.print("[yellow]Supported agents: claude, gemini, cursor-agent, codex, copilot[/yellow]")
             raise typer.Exit(1)
 
         console.print(f"[green]Found available AI agents: {', '.join(available_clis)}[/green]\n")
@@ -2836,7 +2827,7 @@ def spec(
             raise typer.Exit(1)
 
     except Exception as e:
-        _handle_phase_exception(e, "spec", auto=auto)
+        _handle_phase_exception(e, "spec")
 
 
 @app.command()
@@ -3194,7 +3185,7 @@ def plan(
             raise typer.Exit(1)
 
     except Exception as e:
-        _handle_phase_exception(e, "plan", auto=auto)
+        _handle_phase_exception(e, "plan")
 
 
 @app.command()
@@ -3404,7 +3395,7 @@ def develop(
                 console.print("[dim]Resume with: cafe develop[/dim]")
 
     except Exception as e:
-        _handle_phase_exception(e, "develop", auto=auto)
+        _handle_phase_exception(e, "develop")
 
 
 # Add "dev" as an alias for "develop"
@@ -3690,7 +3681,7 @@ def review(
             raise typer.Exit(1)
 
     except Exception as e:
-        _handle_phase_exception(e, "review", auto=auto)
+        _handle_phase_exception(e, "review")
 
 
 @app.command()
@@ -3922,7 +3913,7 @@ def pr(
             raise typer.Exit(1)
 
     except Exception as e:
-        _handle_phase_exception(e, "pr", auto=auto)
+        _handle_phase_exception(e, "pr")
 
 
 @app.command()
@@ -4773,6 +4764,7 @@ def make(
         console.print("[dim]  • claude: https://github.com/anthropics/anthropic-cli[/dim]")
         console.print("[dim]  • gemini: https://github.com/google-gemini/gemini-cli[/dim]")
         console.print("[dim]  • cursor-agent: https://cursor.com/docs/cli[/dim]")
+        console.print("[dim]  • codex: https://developers.openai.com/codex/cli/reference[/dim]")
         console.print(
             "[dim]  • copilot: https://docs.github.com/en/copilot/using-github-copilot/using-github-copilot-in-the-command-line[/dim]"
         )
@@ -5352,83 +5344,7 @@ def chat_with_agent(
     # 2. Get current branch as issue name
     issue_name = _get_and_validate_branch(ctx, "chat")
 
-    # 3. Load configuration
-    config_manager = ConfigManager()
-
-    # 4. Get agent config for corresponding role from config
-    agent_config = config_manager.get(f"agents.{role}", None)
-
-    if agent_config is None:
-        console.print(f"[red]Error: No agent configured for role '{role}'.[/red]")
-        console.print(f"[yellow]Please configure an agent for '{role}' in .cafe/config.yaml[/yellow]")
-        raise typer.Exit(1)
-
-    agent_name = agent_config.get("name")
-    agent_cli = agent_config.get("cli")
-    agent_model = agent_config.get("model")
-
-    if not agent_name or not agent_cli:
-        console.print(f"[red]Error: Invalid agent configuration for role '{role}'.[/red]")
-        console.print(f"[yellow]Please ensure 'name' and 'cli' are configured in .cafe/config.yaml[/yellow]")
-        raise typer.Exit(1)
-
-    # 5. Set up agent manager (automatically loads session)
-    agent_manager = _setup_agents(config_manager, issue_name=issue_name)
-
-    # 6. Get executor for this agent
-    try:
-        agent_executor = agent_manager.get_agent(agent_name)
-    except Exception as e:
-        console.print(f"[red]Error: Failed to get agent '{agent_name}': {e}[/red]")
-        raise typer.Exit(1)
-
-    # 7. Get session ID (if exists)
-    session_id = agent_executor.config.session_id
-
-    # 8. Build and execute interactive CLI command
-    console.print(f"[bold blue]Opening interactive CLI for {role} ({agent_name})...[/bold blue]")
-    console.print(f"[dim]Issue: {issue_name}[/dim]")
-    console.print(f"[dim]CLI: {agent_cli}[/dim]")
-    if session_id:
-        console.print(f"[dim]Session: {session_id}[/dim]")
-    console.print()
-
-    # Build CLI command
-    cli_command = [agent_cli]
-
-    # Add session parameter (if exists)
-    if session_id:
-        if agent_cli == "claude":
-            cli_command.extend(["--resume", session_id])
-        elif agent_cli == "copilot":
-            cli_command.extend(["--resume", session_id])
-        elif agent_cli == "gemini":
-            cli_command.extend(["--resume", session_id])
-        elif agent_cli == "cursor-agent":
-            cli_command.extend(["--session", session_id])
-
-    # Add model parameter (if exists)
-    if agent_model:
-        if agent_cli == "claude":
-            cli_command.extend(["--model", agent_model])
-        elif agent_cli == "copilot":
-            cli_command.extend(["--model", agent_model])
-        elif agent_cli == "gemini":
-            cli_command.extend(["--model", agent_model])
-
-    # Execute interactive CLI
-    try:
-        result = subprocess.run(cli_command)
-    except FileNotFoundError:
-        console.print(f"[red]Error: CLI tool '{agent_cli}' not found.[/red]")
-        console.print(f"[yellow]Please install '{agent_cli}' CLI tool first.[/yellow]")
-        raise typer.Exit(1)
-    except Exception as e:
-        console.print(f"[red]Error: Failed to execute CLI: {e}[/red]")
-        raise typer.Exit(1)
-
-    # Exit normally, return CLI tool's exit code
-    raise typer.Exit(result.returncode)
+    raise typer.Exit(launch_chat_session(role, issue_name))
 
 
 def main() -> None:

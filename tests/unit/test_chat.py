@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from cafe.core.types import AgentCLI
 from cafe.ui.chat import launch_chat_session
 
 
@@ -28,6 +29,7 @@ class TestLaunchChatSession:
         agent_manager = MagicMock()
         agent_manager.agents = {agent_name: executor}
         agent_manager.get_agent.return_value = executor
+        agent_manager.session_manager = MagicMock()
         return agent_manager
 
     @patch("cafe.ui.chat.subprocess.run")
@@ -170,3 +172,63 @@ class TestLaunchChatSession:
         launch_chat_session("developer", "my-issue")
 
         mock_agent_manager_cls.assert_called_once_with(issue_name="my-issue")
+
+    @patch("cafe.ui.chat._extract_latest_codex_session_id", return_value="thread-123")
+    @patch("cafe.ui.chat.subprocess.run")
+    @patch("cafe.ui.chat.ConfigManager")
+    @patch("cafe.ui.chat.AgentManager")
+    def test_codex_chat_saves_new_session(
+        self,
+        mock_agent_manager_cls,
+        mock_config_manager_cls,
+        mock_run,
+        mock_extract_session,
+    ):
+        """Test that Codex chat stores a new session after interactive launch."""
+        mock_config = MagicMock()
+        mock_config.get.return_value = {"name": "Nick", "cli": "codex", "model": "gpt-5.4"}
+        mock_config_manager_cls.return_value = mock_config
+
+        agent_manager = self._make_agent_manager("Nick", "codex", session_id=None, model="gpt-5.4")
+        mock_agent_manager_cls.return_value = agent_manager
+        mock_run.return_value = MagicMock(returncode=0)
+
+        result = launch_chat_session("developer", "issue123")
+
+        assert result == 0
+        mock_run.assert_called_once_with(["codex", "--model", "gpt-5.4"])
+        agent_manager.session_manager.save_session.assert_called_once_with(
+            "Nick",
+            AgentCLI.CODEX,
+            "thread-123",
+            "issue123",
+        )
+
+    @patch("cafe.ui.chat.subprocess.run")
+    @patch("cafe.ui.chat.ConfigManager")
+    @patch("cafe.ui.chat.AgentManager")
+    def test_codex_chat_with_existing_session_uses_resume_and_updates_last_used(
+        self,
+        mock_agent_manager_cls,
+        mock_config_manager_cls,
+        mock_run,
+    ):
+        """Test Codex interactive resume and session persistence."""
+        mock_config = MagicMock()
+        mock_config.get.return_value = {"name": "Nick", "cli": "codex", "model": "gpt-5.4"}
+        mock_config_manager_cls.return_value = mock_config
+
+        agent_manager = self._make_agent_manager("Nick", "codex", session_id="sess-codex", model="gpt-5.4")
+        mock_agent_manager_cls.return_value = agent_manager
+        mock_run.return_value = MagicMock(returncode=0)
+
+        result = launch_chat_session("developer", "issue123")
+
+        assert result == 0
+        mock_run.assert_called_once_with(["codex", "--model", "gpt-5.4", "resume", "sess-codex"])
+        agent_manager.session_manager.save_session.assert_called_once_with(
+            "Nick",
+            AgentCLI.CODEX,
+            "sess-codex",
+            "issue123",
+        )

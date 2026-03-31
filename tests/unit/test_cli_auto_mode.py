@@ -160,8 +160,8 @@ class TestAutoModeConfigPreservation:
                 assert final_config["spec"]["rigor"] == "medium"
 
 class TestAutoModeErrorHandling:
-    def test_handle_phase_exception_suppresses_output_in_auto_mode(self, temp_repo_dir, mock_git_ops, prepared_issue, force_interactive):
-        """測試在 auto mode 下隱藏非必要的錯誤訊息（不應該印出 Normal error）"""
+    def test_handle_phase_exception_shows_errors_in_auto_mode(self, temp_repo_dir, mock_git_ops, prepared_issue, force_interactive):
+        """Test that errors are always shown in auto mode (never silently swallowed)."""
         with patch('cafe.ui.cli.SpecPhase') as MockSpecPhase:
             mock_phase = MagicMock()
             MockSpecPhase.return_value = mock_phase
@@ -174,8 +174,7 @@ class TestAutoModeErrorHandling:
                 result = runner.invoke(app, ["spec", "--auto"])
                 assert result.exit_code != 0
                 assert "Traceback" not in result.output
-                # 在 auto 模式下，非程式錯誤會被靜音，只回傳 exit(1)
-                assert "Normal error" not in result.output
+                assert "Normal error" in result.output
 
     def test_handle_phase_exception_shows_programming_errors_in_auto_mode(self, temp_repo_dir, mock_git_ops, prepared_issue, force_interactive):
         """測試在 auto mode 下仍然顯示程式碼錯誤"""
@@ -228,6 +227,21 @@ class TestAutoModeErrorHandling:
                 result = runner.invoke(app, ["spec"])
                 assert result.exit_code != 0
                 assert "Any error" in result.output
+
+    def test_handle_phase_exception_does_not_print_for_typer_exit(self, temp_repo_dir, mock_git_ops, prepared_issue, force_interactive):
+        """Test that typer.Exit propagating from subprocess chain does not print redundant error."""
+        with patch('cafe.ui.cli.SpecPhase') as MockSpecPhase:
+            mock_phase = MagicMock()
+            MockSpecPhase.return_value = mock_phase
+            mock_phase.execute.side_effect = typer.Exit(1)
+            from typer.testing import CliRunner
+            runner = CliRunner()
+            with patch('cafe.ui.cli.PermissionHandler'), \
+                 patch('cafe.ui.cli._setup_agents'), \
+                 patch('cafe.ui.cli.is_branch_initialized', return_value=True):
+                result = runner.invoke(app, ["spec", "--auto"])
+                assert result.exit_code != 0
+                assert "Error in spec phase" not in result.output
 
     def test_execute_next_phase_auto_does_not_print_redundant_errors(self, temp_repo_dir, mock_git_ops, prepared_issue, force_interactive):
         """測試 _execute_next_phase_auto 不會重覆列印錯誤訊息"""

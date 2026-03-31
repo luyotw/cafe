@@ -205,6 +205,75 @@ def get_repo_root(cwd: Optional[Path] = None) -> Path:
     raise ValueError(f"Not in a Git repository: {cwd}")
 
 
+def get_git_dir(cwd: Optional[Path] = None) -> Path:
+    """Get the active Git metadata directory for the current repo or worktree.
+
+    Args:
+        cwd: Starting directory (default: current directory)
+
+    Returns:
+        Path to the Git metadata directory:
+        - regular repo: <repo>/.git
+        - worktree: <main-repo>/.git/worktrees/<worktree-name>
+
+    Raises:
+        ValueError: If not in a Git repository or .git file format is invalid
+    """
+    if cwd is None:
+        cwd = Path.cwd()
+    else:
+        cwd = Path(cwd)
+
+    current = cwd.resolve()
+    while current != current.parent:
+        git_path = current / ".git"
+        if git_path.exists():
+            if git_path.is_dir():
+                return git_path
+            if git_path.is_file():
+                gitdir_content = git_path.read_text().strip()
+                if gitdir_content.startswith("gitdir: "):
+                    return Path(gitdir_content[8:])
+                raise ValueError(f"Invalid .git file format: {git_path}")
+        current = current.parent
+
+    raise ValueError(f"Not in a Git repository: {cwd}")
+
+
+def get_git_toplevel(cwd: Optional[Path] = None) -> Path:
+    """Get the current Git worktree/repository top-level directory.
+
+    Unlike get_repo_root(), this returns the active checkout root. In a worktree,
+    that is the worktree directory itself rather than the main repository root.
+
+    Args:
+        cwd: Starting directory (default: current directory)
+
+    Returns:
+        Path to the current git top-level directory
+
+    Raises:
+        ValueError: If not in a Git repository
+    """
+    if cwd is None:
+        cwd = Path.cwd()
+    else:
+        cwd = Path(cwd)
+
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError) as e:
+        raise ValueError(f"Not in a Git repository: {cwd}") from e
+
+    return Path(result.stdout.strip())
+
+
 def to_relative_path(file_path: Union[str, Path], repo_root: Union[str, Path]) -> str:
     """Convert absolute path to plain relative path.
 
