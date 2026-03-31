@@ -228,6 +228,21 @@ class TestAutoModeErrorHandling:
                 assert result.exit_code != 0
                 assert "Any error" in result.output
 
+    def test_handle_phase_exception_does_not_print_for_typer_exit(self, temp_repo_dir, mock_git_ops, prepared_issue, force_interactive):
+        """Test that typer.Exit propagating from subprocess chain does not print redundant error."""
+        with patch('cafe.ui.cli.SpecPhase') as MockSpecPhase:
+            mock_phase = MagicMock()
+            MockSpecPhase.return_value = mock_phase
+            mock_phase.execute.side_effect = typer.Exit(1)
+            from typer.testing import CliRunner
+            runner = CliRunner()
+            with patch('cafe.ui.cli.PermissionHandler'), \
+                 patch('cafe.ui.cli._setup_agents'), \
+                 patch('cafe.ui.cli.is_branch_initialized', return_value=True):
+                result = runner.invoke(app, ["spec", "--auto"])
+                assert result.exit_code != 0
+                assert "Error in spec phase" not in result.output
+
     def test_execute_next_phase_auto_does_not_print_redundant_errors(self, temp_repo_dir, mock_git_ops, prepared_issue, force_interactive):
         """測試 _execute_next_phase_auto 不會重覆列印錯誤訊息"""
         with patch('cafe.ui.cli.SpecPhase') as MockSpecPhase:

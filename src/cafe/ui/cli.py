@@ -93,6 +93,10 @@ def _handle_phase_exception(e: Exception, phase_name: str) -> None:
     """
     from cafe.core.types import CriticalPhaseError
 
+    # typer.Exit propagating up from a subprocess chain — already handled, just re-raise
+    if isinstance(e, typer.Exit):
+        raise e
+
     console.print()
 
     # Check if it's a critical error that should stop the entire workflow
