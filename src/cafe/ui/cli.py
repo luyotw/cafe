@@ -876,6 +876,13 @@ def _interactive_role_setup(
     selected_cli = None
     selected_agent_name = None
     phase_models = {}
+    if isinstance(existing_role_config, dict):
+        for phase in phases:
+            phase_config = existing_role_config.get(phase)
+            if isinstance(phase_config, dict):
+                model = phase_config.get("model")
+                if isinstance(model, str) and model.strip():
+                    phase_models[phase] = model.strip()
 
     while step < total_steps:
         if step == 0:
@@ -954,8 +961,6 @@ def _interactive_role_setup(
                 phase_models[phase] = model_name.strip()
             else:
                 phase_models.pop(phase, None)
-        else:
-            phase_models.pop(phase, None)
 
         step += 1
 

@@ -366,6 +366,7 @@ class TestSetupPreservesExistingConfig:
 
         assert saved_config["agents"]["pm"]["backup"] == {"clis": ["gemini"]}
         assert saved_config["agents"]["pm"]["models"] == {"claude": "haiku"}
+        assert saved_config["agents"]["pm"]["spec"]["model"] == "haiku"
 
 
 class TestSetupBackNavigation:
