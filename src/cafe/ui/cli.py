@@ -1,5 +1,6 @@
 """Command-line interface for CAFE."""
 
+import copy
 import json
 import os
 import shutil
@@ -687,14 +688,23 @@ def setup() -> None:
 
         console.print(f"[green]Found available AI agents: {', '.join(available_clis)}[/green]\n")
 
-        # Display current agent configuration
-        if "agents" in existing_config:
-            console.print("[bold]Current agent configuration:[/bold]")
-            _display_agent_summary(existing_config["agents"])
-            console.print()
+        existing_agents = existing_config.get("agents", {})
 
-        # Run interactive agent configuration
-        agents_config = _interactive_agent_setup(available_clis)
+        # Display current agent configuration
+        if _has_complete_agent_setup(existing_agents):
+            console.print("[bold]Current agent configuration:[/bold]")
+            _display_agent_summary(existing_agents)
+            console.print()
+        elif "agents" in existing_config:
+            console.print("[yellow]Current agent configuration is incomplete.[/yellow]\n")
+
+        # Use selective role editing only when existing setup is complete.
+        # Otherwise fall back to the original full setup flow.
+        if _has_complete_agent_setup(existing_agents):
+            agents_config = _interactive_agent_setup_selective(existing_agents, available_clis)
+        else:
+            console.print("[yellow]Incomplete agent configuration detected. Starting full setup flow.[/yellow]\n")
+            agents_config = _interactive_agent_setup(available_clis)
 
         # Merge: update agents section, preserve everything else
         existing_config["agents"] = agents_config
@@ -732,6 +742,76 @@ def _get_version() -> str:
 
 BACK_SENTINEL = "__BACK__"
 CUSTOM_MODEL_SENTINEL = "__CUSTOM__"
+KEEP_MODEL_SENTINEL = "__KEEP__"
+SAVE_SENTINEL = "save"
+ROLE_PHASES = {
+    "pm": ["spec"],
+    "developer": ["plan", "develop", "pr"],
+    "reviewer": ["review"],
+}
+
+
+def _has_complete_agent_setup(agents_config: dict) -> bool:
+    """Return True if role setup has minimum required fields for selective editing."""
+    required_roles = ["pm", "developer", "reviewer"]
+    if not isinstance(agents_config, dict):
+        return False
+
+    for role_key in required_roles:
+        role_config = agents_config.get(role_key)
+        if not isinstance(role_config, dict):
+            return False
+        if not role_config.get("cli") or not role_config.get("name"):
+            return False
+
+    return True
+
+
+def _interactive_agent_setup_selective(existing_agents_config: dict, available_clis: list) -> dict:
+    """Run selective agent configuration with explicit Save action."""
+    from InquirerPy.separator import Separator
+
+    role_choices = [
+        {"name": "PM", "value": "pm"},
+        {"name": "Developer", "value": "developer"},
+        {"name": "Reviewer", "value": "reviewer"},
+        Separator(),
+        {"name": "Save", "value": SAVE_SENTINEL},
+    ]
+
+    role_display_map = {
+        "pm": "PM",
+        "developer": "Developer",
+        "reviewer": "Reviewer",
+    }
+
+    staged_agents_config = copy.deepcopy(existing_agents_config)
+
+    while True:
+        selected_role = prompt_list(
+            message="Select role to update:",
+            choices=role_choices,
+        )
+
+        if selected_role == SAVE_SENTINEL:
+            return staged_agents_config
+
+        role_display = role_display_map.get(selected_role)
+        if not role_display:
+            console.print("\n[yellow]Configuration incomplete, cancelled.[/yellow]")
+            raise typer.Exit(1)
+
+        staged_agents_config[selected_role] = _interactive_role_setup(
+            role_key=selected_role,
+            role_display=role_display,
+            available_clis=available_clis,
+            existing_role_config=staged_agents_config.get(selected_role),
+            allow_back=True,
+        )
+        if staged_agents_config[selected_role] == BACK_SENTINEL:
+            staged_agents_config[selected_role] = copy.deepcopy(existing_agents_config.get(selected_role))
+            continue
+        console.print("")
 
 
 def _interactive_agent_setup(available_clis: list) -> dict:
@@ -752,18 +832,28 @@ def _interactive_agent_setup(available_clis: list) -> dict:
     from InquirerPy.separator import Separator
 
     agents_config = {}
+    roles = [("pm", "PM"), ("developer", "Developer"), ("reviewer", "Reviewer")]
 
-    roles = [
-        ("pm", "PM"),
-        ("developer", "Developer"),
-        ("reviewer", "Reviewer"),
-    ]
+    for role_key, role_display in roles:
+        agents_config[role_key] = _interactive_role_setup(
+            role_key=role_key,
+            role_display=role_display,
+            available_clis=available_clis,
+        )
+        console.print("")
 
-    role_phases = {
-        "pm": ["spec"],
-        "developer": ["plan", "develop", "pr"],
-        "reviewer": ["review"],
-    }
+    return agents_config
+
+
+def _interactive_role_setup(
+    role_key: str,
+    role_display: str,
+    available_clis: list,
+    existing_role_config: Optional[dict] = None,
+    allow_back: bool = False,
+) -> dict | str:
+    """Run interactive setup for a single role."""
+    from InquirerPy.separator import Separator
 
     phase_recommendations = {
         "spec": "high-speed / economical models",
@@ -773,114 +863,143 @@ def _interactive_agent_setup(available_clis: list) -> dict:
         "pr": "high-speed / economical models",
     }
 
-    for role_key, role_display in roles:
-        console.print(f"[bold cyan]Configuring {role_display} role:[/bold cyan]")
+    console.print(f"[bold cyan]Configuring {role_display} role:[/bold cyan]")
 
-        phases = role_phases.get(role_key, [])
+    phases = ROLE_PHASES.get(role_key, [])
 
-        # Steps: 0=CLI, 1=agent, 2..N=phase models
-        step = 0
-        total_steps = 2 + len(phases)
-        selected_cli = None
-        selected_agent_name = None
-        phase_models = {}
+    # Steps: 0=CLI, 1=agent, 2..N=phase models
+    step = 0
+    total_steps = 2 + len(phases)
+    selected_cli = None
+    selected_agent_name = None
+    phase_models = {}
+    if isinstance(existing_role_config, dict):
+        for phase in phases:
+            phase_config = existing_role_config.get(phase)
+            if isinstance(phase_config, dict):
+                model = phase_config.get("model")
+                if isinstance(model, str) and model.strip():
+                    phase_models[phase] = model.strip()
 
-        while step < total_steps:
-            if step == 0:
-                # Step 0: Select CLI
-                selected_cli = prompt_list(
-                    message=f"Select CLI for {role_display}:",
-                    choices=available_clis,
-                )
-                if not selected_cli:
-                    console.print("\n[yellow]Configuration incomplete, cancelled.[/yellow]")
-                    raise typer.Exit(1)
-                step += 1
-
-            elif step == 1:
-                # Step 1: Select agent
-                agents = list_available_agents(role_key)
-
-                if not agents:
-                    console.print(f"[red]Error: Agent files not found for {role_display} role.[/red]")
-                    console.print(
-                        f"[yellow]Please ensure valid .md files exist in ~/.cafe/agents/{role_key}/ or src/cafe/data/agents/{role_key}/ directory.[/yellow]"
-                    )
-                    raise typer.Exit(1)
-
-                agent_choices = []
-                for name, desc, _, source_type in agents:
-                    source_label = " (custom)" if source_type == "custom" else " (system default)"
-                    agent_choices.append(f"{name}: {desc}{source_label}")
-
-                # Add back option
-                agent_choices.append(Separator())
-                agent_choices.append({"name": "\u2190 Back to CLI selection", "value": BACK_SENTINEL})
-
-                selected = prompt_list(
-                    message=f"Select agent for {role_display}:",
-                    choices=agent_choices,
-                )
-
-                if selected == BACK_SENTINEL:
-                    step = 0
-                    continue
-
-                if not selected:
-                    console.print("\n[yellow]Configuration incomplete, cancelled.[/yellow]")
-                    raise typer.Exit(1)
-
-                selected_agent_name = selected.split(":")[0].strip()
-                step += 1
-
-            else:
-                # Steps 2+: Phase model selection
-                phase_idx = step - 2
-                phase = phases[phase_idx]
-                recommendation = phase_recommendations.get(phase, "")
-                recommendation_text = f" (recommended: {recommendation})" if recommendation else ""
-
-                model_choices = [
-                    {"name": f"Use default model", "value": ""},
-                    {"name": f"Custom (type model name)", "value": CUSTOM_MODEL_SENTINEL},
+    while step < total_steps:
+        if step == 0:
+            cli_choices = list(available_clis)
+            if allow_back:
+                cli_choices.extend([
                     Separator(),
-                    {"name": f"\u2190 Back", "value": BACK_SENTINEL},
-                ]
+                    {"name": "\u2190 Back", "value": BACK_SENTINEL},
+                ])
 
-                selected = prompt_list(
-                    message=f"Model for {phase} phase{recommendation_text}:",
-                    choices=model_choices,
+            selected_cli = prompt_list(
+                message=f"Select CLI for {role_display}:",
+                choices=cli_choices,
+            )
+            if selected_cli == BACK_SENTINEL:
+                return BACK_SENTINEL
+            if not selected_cli:
+                console.print("\n[yellow]Configuration incomplete, cancelled.[/yellow]")
+                raise typer.Exit(1)
+            step += 1
+            continue
+
+        if step == 1:
+            agents = list_available_agents(role_key)
+
+            if not agents:
+                console.print(f"[red]Error: Agent files not found for {role_display} role.[/red]")
+                console.print(
+                    f"[yellow]Please ensure valid .md files exist in ~/.cafe/agents/{role_key}/ or src/cafe/data/agents/{role_key}/ directory.[/yellow]"
                 )
+                raise typer.Exit(1)
 
-                if selected == BACK_SENTINEL:
-                    step -= 1
-                    continue
+            agent_choices = []
+            for name, desc, _, source_type in agents:
+                source_label = " (custom)" if source_type == "custom" else " (system default)"
+                agent_choices.append(f"{name}: {desc}{source_label}")
 
-                if selected == CUSTOM_MODEL_SENTINEL:
-                    model_name = prompt_text(
-                        message=f"Enter {selected_cli} model name for {phase} phase:",
-                        default="",
-                    )
-                    if model_name and model_name.strip():
-                        phase_models[phase] = model_name.strip()
-                    else:
-                        phase_models.pop(phase, None)
-                else:
-                    phase_models.pop(phase, None)
+            agent_choices.append(Separator())
+            agent_choices.append({"name": "\u2190 Back to CLI selection", "value": BACK_SENTINEL})
 
-                step += 1
+            selected = prompt_list(
+                message=f"Select agent for {role_display}:",
+                choices=agent_choices,
+            )
 
-        # Store configuration for this role
-        agents_config[role_key] = {
-            "name": selected_agent_name,
-            "cli": selected_cli,
-        }
-        for phase, model in phase_models.items():
-            agents_config[role_key][phase] = {"model": model}
+            if selected == BACK_SENTINEL:
+                step = 0
+                continue
 
-        console.print("")
+            if not selected:
+                console.print("\n[yellow]Configuration incomplete, cancelled.[/yellow]")
+                raise typer.Exit(1)
 
-    return agents_config
+            selected_agent_name = selected.split(":")[0].strip()
+            step += 1
+            continue
+
+        phase_idx = step - 2
+        phase = phases[phase_idx]
+        recommendation = phase_recommendations.get(phase, "")
+        recommendation_text = f" (recommended: {recommendation})" if recommendation else ""
+
+        model_choices = [
+            {"name": "Use default model", "value": ""},
+            {"name": "Keep current setting", "value": KEEP_MODEL_SENTINEL},
+            {"name": "Custom (type model name)", "value": CUSTOM_MODEL_SENTINEL},
+            Separator(),
+            {"name": "\u2190 Back", "value": BACK_SENTINEL},
+        ]
+
+        selected = prompt_list(
+            message=f"Model for {phase} phase{recommendation_text}:",
+            choices=model_choices,
+        )
+
+        if selected == BACK_SENTINEL:
+            step -= 1
+            continue
+
+        if selected == CUSTOM_MODEL_SENTINEL:
+            model_name = prompt_text(
+                message=f"Enter {selected_cli} model name for {phase} phase:",
+                default="",
+            )
+            if model_name and model_name.strip():
+                phase_models[phase] = model_name.strip()
+            else:
+                phase_models.pop(phase, None)
+        elif selected == KEEP_MODEL_SENTINEL:
+            # Preserve current phase override (or default) without changes.
+            pass
+        else:
+            # "Use default model" clears any existing phase-specific override.
+            phase_models.pop(phase, None)
+
+        step += 1
+
+    role_config = {
+        "name": selected_agent_name,
+        "cli": selected_cli,
+    }
+    for phase, model in phase_models.items():
+        role_config[phase] = {"model": model}
+
+    if not isinstance(existing_role_config, dict):
+        return role_config
+
+    # Preserve non-interactive role-level settings (for example backup/models)
+    # while replacing editable fields from the setup flow.
+    merged_role_config = copy.deepcopy(existing_role_config)
+    merged_role_config["name"] = role_config["name"]
+    merged_role_config["cli"] = role_config["cli"]
+
+    for phase in phases:
+        merged_role_config.pop(phase, None)
+    for phase, model_config in role_config.items():
+        if phase in phases:
+            merged_role_config[phase] = model_config
+
+    return merged_role_config
 
 
 def _display_agent_summary(agents_config: dict) -> None:
@@ -895,15 +1014,9 @@ def _display_agent_summary(agents_config: dict) -> None:
         ("reviewer", "Reviewer"),
     ]
 
-    role_phases = {
-        "pm": ["spec"],
-        "developer": ["plan", "develop", "pr"],
-        "reviewer": ["review"],
-    }
-
     for role_key, role_display in roles:
         role_config = agents_config[role_key]
-        phases = role_phases.get(role_key, [])
+        phases = ROLE_PHASES.get(role_key, [])
 
         # Build phase models display
         phase_models = []
