@@ -60,36 +60,57 @@ def parse_agent_file(file_path: Path) -> Dict[str, str]:
 
 
 def list_available_agents(role: str) -> List[tuple[str, str, Path, str]]:
-    """List all available agents for specified role from system and global directories.
+    """List all available agents for specified role from system, global, and local directories.
 
     Args:
         role: Role name (pm, developer, reviewer)
 
     Returns:
         List of (name, description, file_path, source_type) tuples
-        where source_type is "system default" or "custom"
-        Global agents take precedence over system agents with the same name.
+        where source_type is "system" or "custom".
+        Files identical to system originals are marked "system".
+        Priority: local > global > system for name collisions.
     """
     from cafe.utils.config import get_global_cafe_dir
-    
-    agents = {}  # Use dict to handle name collisions
-    
+
+    agents = {}  # name -> (name, description, file_path, source_type)
+    system_contents = {}  # filename -> content (for comparison)
+
     # First, collect system agents (from package data)
     package_data_dir = Path(__file__).parent.parent / "data" / "agents" / role
     if package_data_dir.exists():
         for agent_file in package_data_dir.glob("*.md"):
             parsed = parse_agent_file(agent_file)
             name = parsed["name"]
-            agents[name] = (name, parsed["description"], agent_file, "system default")
-    
+            agents[name] = (name, parsed["description"], agent_file, "system")
+            system_contents[agent_file.name] = agent_file.read_text()
+
     # Then, collect global agents (override system if name collision)
     global_agents_dir = get_global_cafe_dir() / "agents" / role
     if global_agents_dir.exists():
         for agent_file in global_agents_dir.glob("*.md"):
             parsed = parse_agent_file(agent_file)
             name = parsed["name"]
-            agents[name] = (name, parsed["description"], agent_file, "custom")
-    
+            if agent_file.name in system_contents and agent_file.read_text() == system_contents[agent_file.name]:
+                agents[name] = (name, parsed["description"], agent_file, "system")
+            else:
+                agents[name] = (name, parsed["description"], agent_file, "custom")
+
+    # Finally, collect local agents by searching upward from cwd
+    current = Path.cwd().resolve()
+    while current != current.parent:
+        local_dir = current / ".cafe" / "agents" / role
+        if local_dir.exists():
+            for agent_file in local_dir.glob("*.md"):
+                parsed = parse_agent_file(agent_file)
+                name = parsed["name"]
+                if agent_file.name in system_contents and agent_file.read_text() == system_contents[agent_file.name]:
+                    agents[name] = (name, parsed["description"], agent_file, "system")
+                else:
+                    agents[name] = (name, parsed["description"], agent_file, "custom")
+            break
+        current = current.parent
+
     # Return sorted list
     return sorted(agents.values(), key=lambda x: x[0])
 

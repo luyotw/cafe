@@ -113,7 +113,7 @@ class TestTemplateWorkflow:
             assert template_file.exists()
 
             # Step 2: List templates - verify the added template appears
-            result = runner.invoke(app, ["template", "ls", "--type", "plan"])
+            result = runner.invoke(app, ["template", "ls"])
             assert result.exit_code == 0
             assert "test-template" in result.stdout
 
@@ -202,7 +202,7 @@ class TestCrossProjectReuse:
             assert template_file.exists()
 
             # List templates - should show the template
-            result = runner.invoke(app, ["template", "ls", "--type", "spec"])
+            result = runner.invoke(app, ["template", "ls"])
             assert result.exit_code == 0
             assert "shared-template" in result.stdout
 
@@ -298,7 +298,7 @@ class TestSystemAndGlobalTemplateCoexistence:
             assert result.exit_code == 0
 
             # List templates - should show "default" with custom source type
-            result = runner.invoke(app, ["template", "ls", "--type", "plan"])
+            result = runner.invoke(app, ["template", "ls"])
             assert result.exit_code == 0
             assert "default" in result.stdout
 

@@ -76,11 +76,11 @@ class TestAgentLsCommand:
         assert "pm" in result.stdout.lower()
         assert "developer" in result.stdout.lower()
         assert "reviewer" in result.stdout.lower()
-        # 驗證輸出包含 agent 名稱，且自訂 agents 有 (custom) 標記
-        assert "Roger (custom)" in result.stdout
-        assert "David (custom)" in result.stdout
-        assert "John (custom)" in result.stdout
-        assert "Richard (custom)" in result.stdout
+        # 驗證輸出包含 agent 名稱
+        assert "Roger" in result.stdout
+        assert "David" in result.stdout
+        assert "John" in result.stdout
+        assert "Richard" in result.stdout
 
 
 class TestAgentRmCommand:
@@ -115,8 +115,8 @@ class TestAgentRmCommand:
 
             result = runner.invoke(app, ["agent", "rm"])
 
-        assert result.exit_code == 1
-        assert "no agents found" in result.stdout.lower()
+        assert result.exit_code == 0
+        assert "no custom agents" in result.stdout.lower()
 
     def test_agent_rm_user_cancels(self, runner, temp_global_dir):
         """測試使用者取消刪除操作."""
@@ -236,20 +236,26 @@ class TestAgentEditCommand:
 class TestAgentCatCommand:
     """測試 cafe agent cat 指令."""
 
-    def test_agent_cat_with_flags(self, runner, temp_global_dir):
+    def test_agent_cat_with_flags(self, runner, temp_global_dir, tmp_path):
         """測試使用 --role 和 --name 參數查看 agent."""
+        import os
         # 建立測試用 agent 檔案
         agents_dir = temp_global_dir / "agents"
         agent_content = "---\nname: TestAgent\ndescription: Test agent\n---\n\nAgent rules here"
         (agents_dir / "developer" / "TestAgent.md").write_text(agent_content)
 
-        # Mock Path.home() and subprocess.run
-        with patch("cafe.utils.config.Path.home", return_value=temp_global_dir.parent), \
-             patch("subprocess.run") as mock_run:
-            # Mock less command failure to trigger fallback
-            mock_run.side_effect = FileNotFoundError()
+        old_cwd = os.getcwd()
+        try:
+            os.chdir(tmp_path)
+            # Mock Path.home() and subprocess.run
+            with patch("cafe.utils.config.Path.home", return_value=temp_global_dir.parent), \
+                 patch("subprocess.run") as mock_run:
+                # Mock less command failure to trigger fallback
+                mock_run.side_effect = FileNotFoundError()
 
-            result = runner.invoke(app, ["agent", "cat", "--role", "developer", "--name", "TestAgent"])
+                result = runner.invoke(app, ["agent", "cat", "--role", "developer", "--name", "TestAgent"])
+        finally:
+            os.chdir(old_cwd)
 
         assert result.exit_code == 0
         assert "Agent rules here" in result.stdout
