@@ -7,7 +7,7 @@ import pytest
 import yaml
 from typer.testing import CliRunner
 
-from cafe.ui.cli import app, CUSTOM_MODEL_SENTINEL
+from cafe.ui.cli import app, CUSTOM_MODEL_SENTINEL, KEEP_MODEL_SENTINEL
 
 runner = CliRunner()
 
@@ -18,7 +18,8 @@ def _build_prompt_list_side_effect(roles_config):
     Args:
         roles_config: List of (cli, agent_display, model_selections) tuples.
             model_selections is a list of values for each phase's prompt_list call.
-            Use "" for default, CUSTOM_MODEL_SENTINEL for custom model.
+            Use "" for default, KEEP_MODEL_SENTINEL to keep existing,
+            CUSTOM_MODEL_SENTINEL for custom model.
 
     Returns:
         List of return values for prompt_list.side_effect
@@ -354,7 +355,7 @@ class TestSetupPreservesExistingConfig:
                 "pm",
                 "claude",
                 "Roger: PM agent (system default)",
-                "",
+                KEEP_MODEL_SENTINEL,
                 "save",
             ]
             result = runner.invoke(app, ["setup"])
@@ -367,6 +368,52 @@ class TestSetupPreservesExistingConfig:
         assert saved_config["agents"]["pm"]["backup"] == {"clis": ["gemini"]}
         assert saved_config["agents"]["pm"]["models"] == {"claude": "haiku"}
         assert saved_config["agents"]["pm"]["spec"]["model"] == "haiku"
+
+    @patch("cafe.ui.cli.shutil.which")
+    @patch("cafe.ui.cli.list_available_agents")
+    def test_setup_can_reset_existing_phase_override_to_default(
+        self,
+        mock_list_agents: MagicMock,
+        mock_which: MagicMock,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """setup should clear an existing phase model override when default is selected."""
+        cafe_dir = tmp_path / ".cafe"
+        cafe_dir.mkdir()
+        config_file = cafe_dir / "config.yaml"
+        config_file.write_text(yaml.dump({
+            "agents": {
+                "pm": {
+                    "name": "Roger",
+                    "cli": "claude",
+                    "spec": {"model": "haiku"},
+                },
+                "developer": {"name": "David", "cli": "claude"},
+                "reviewer": {"name": "Richard", "cli": "claude"},
+            },
+        }))
+
+        mock_which.return_value = "/usr/bin/claude"
+        mock_list_agents.return_value = [("Roger", "PM agent", Path("agents/pm/Roger.md"), "system default")]
+        monkeypatch.chdir(tmp_path)
+
+        with patch("cafe.ui.cli.prompt_list") as mock_prompt_list:
+            mock_prompt_list.side_effect = [
+                "pm",
+                "claude",
+                "Roger: PM agent (system default)",
+                "",
+                "save",
+            ]
+            result = runner.invoke(app, ["setup"])
+
+        assert result.exit_code == 0
+
+        with open(config_file) as f:
+            saved_config = yaml.safe_load(f)
+
+        assert "spec" not in saved_config["agents"]["pm"] or "model" not in saved_config["agents"]["pm"].get("spec", {})
 
 
 class TestSetupBackNavigation:

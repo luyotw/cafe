@@ -751,6 +751,7 @@ def _get_version() -> str:
 
 BACK_SENTINEL = "__BACK__"
 CUSTOM_MODEL_SENTINEL = "__CUSTOM__"
+KEEP_MODEL_SENTINEL = "__KEEP__"
 SAVE_SENTINEL = "save"
 ROLE_PHASES = {
     "pm": ["spec"],
@@ -938,6 +939,7 @@ def _interactive_role_setup(
 
         model_choices = [
             {"name": "Use default model", "value": ""},
+            {"name": "Keep current setting", "value": KEEP_MODEL_SENTINEL},
             {"name": "Custom (type model name)", "value": CUSTOM_MODEL_SENTINEL},
             Separator(),
             {"name": "\u2190 Back", "value": BACK_SENTINEL},
@@ -961,6 +963,12 @@ def _interactive_role_setup(
                 phase_models[phase] = model_name.strip()
             else:
                 phase_models.pop(phase, None)
+        elif selected == KEEP_MODEL_SENTINEL:
+            # Preserve current phase override (or default) without changes.
+            pass
+        else:
+            # "Use default model" clears any existing phase-specific override.
+            phase_models.pop(phase, None)
 
         step += 1
 
