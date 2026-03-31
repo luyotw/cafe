@@ -60,9 +60,13 @@ class TestCodexCLIBuildCommand:
         cli = CodexCLI(codex_config)
         cmd = cli.build_command("test prompt", allowed_directories=["src", ".cafe"])
 
-        assert cmd.count("--add-dir") == 2
-        assert "src" in cmd
-        assert ".cafe" in cmd
+        add_dir_values = [
+            cmd[index + 1]
+            for index, token in enumerate(cmd)
+            if token == "--add-dir"
+        ]
+        assert "src" in add_dir_values
+        assert ".cafe" in add_dir_values
 
     def test_build_command_ignores_directories_when_resuming(self, codex_config_with_session):
         cli = CodexCLI(codex_config_with_session)
