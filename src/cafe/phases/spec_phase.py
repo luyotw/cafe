@@ -567,6 +567,7 @@ class SpecPhase(Phase):
                     agent_name="PM",
                     role="pm",
                     output_file=prev_spec_file if self.iteration > 1 else None,
+                    edit_option_label="Edit spec directly",
                 )
             else:
                 choice = self.user_input
