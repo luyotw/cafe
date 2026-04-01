@@ -1447,6 +1447,61 @@ class Phase(ABC):
 
         return permission_input
 
+    def _build_host_execution_followup(self, iteration: int) -> str:
+        """Build follow-up guidance from a previous host execution log.
+
+        Returns an empty string when no host execution log exists or when every
+        recorded command succeeded.
+        """
+        if not hasattr(self, "phase_dir"):
+            raise AttributeError("Phase must have 'phase_dir' attribute")
+
+        host_execution_file = self._get_iteration_dir(iteration) / "host_execution.json"
+        if not host_execution_file.exists():
+            return ""
+
+        try:
+            records = json.loads(host_execution_file.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return ""
+
+        if not isinstance(records, list):
+            return ""
+
+        failed_records = [
+            record for record in records
+            if isinstance(record, dict) and not record.get("ok", False)
+        ]
+        if not failed_records:
+            return ""
+
+        from cafe.utils.git_utils import to_cwd_relative_path
+
+        try:
+            display_path = to_cwd_relative_path(host_execution_file)
+        except (ValueError, OSError):
+            display_path = str(host_execution_file.resolve())
+
+        first_failed = failed_records[0]
+        command = str(first_failed.get("command") or "").strip()
+        stderr = str(first_failed.get("stderr") or "").strip()
+        stderr_lines = [line.strip() for line in stderr.splitlines() if line.strip()]
+        stderr_excerpt = "\n".join(stderr_lines[:8])
+
+        lines = [
+            "The host environment already attempted the previously blocked command, but it failed.",
+            f"Review the execution log at {display_path}.",
+        ]
+        if command:
+            lines.append(f"Failed command: {command}")
+        if stderr_excerpt:
+            lines.append("Failure summary:")
+            lines.append(stderr_excerpt)
+        lines.append(
+            "This is not a new permission request. Continue from the current repo state and decide the next step."
+        )
+        return "\n".join(lines)
+
     def _load_previous_iteration_data(self) -> Optional[dict]:
         """Load previous round iteration data (common method).
 

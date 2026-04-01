@@ -32,7 +32,7 @@ fi
 export PYTHONPATH="$REPO_ROOT/src:$PYTHONPATH"
 
 # 只執行一個簡單的測試以加快速度
-python3 -m pytest "$REPO_ROOT/tests/unit/test_check_precommit_env.py" -v -s
+uv run pytest "$REPO_ROOT/tests/unit/test_check_precommit_env.py" -v -s
 
 echo ""
 echo "=== 測試完成 ==="

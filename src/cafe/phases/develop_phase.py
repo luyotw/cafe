@@ -546,6 +546,9 @@ class DevelopPhase(Phase):
 
             # Check if has permission_denials
             if not prev_data.get("permission_denials") and not recovered_denials:
+                host_execution_followup = self._build_host_execution_followup(self.iteration - 1)
+                if host_execution_followup:
+                    return host_execution_followup
                 # Fallback for CLIs that do not emit structured permission_denials.
                 return self._handle_need_permission_input(prev_data, agent_display_name="Developer")
 

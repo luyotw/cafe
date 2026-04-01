@@ -236,6 +236,40 @@ class TestDevelopNeedPermissionFallback:
         assert result.status == PhaseStatus.FAILED
         assert result.data.get("status_code") == "CAFE_NEED_PERMISSION"
 
+    def test_prepare_user_input_uses_host_execution_failure_followup(self, phase, monkeypatch, tmp_path):
+        """Should reuse failed host execution context instead of asking for permission again."""
+        monkeypatch.chdir(tmp_path)
+        phase.iteration = 2
+        prev_iter_dir = phase._get_iteration_dir(1)
+        prev_iter_dir.mkdir(parents=True, exist_ok=True)
+        (prev_iter_dir / "host_execution.json").write_text(
+            json.dumps(
+                [
+                    {
+                        "tool_name": "Bash",
+                        "command": 'git commit -m "feat: test"',
+                        "stdout": "",
+                        "stderr": "ModuleNotFoundError: No module named 'pydantic'\nMore detail",
+                        "returncode": 1,
+                        "ok": False,
+                    }
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        with patch.object(
+            phase,
+            "_load_previous_iteration_data",
+            return_value={"iteration": 1, "status_code": "CAFE_NEED_PERMISSION", "response": "CAFE_NEED_PERMISSION"},
+        ):
+            result = phase._prepare_user_input_for_iteration()
+
+        assert "The host environment already attempted the previously blocked command" in result
+        assert "host_execution.json" in result
+        assert 'git commit -m "feat: test"' in result
+        assert "ModuleNotFoundError" in result
+
     def test_recovers_permission_denials_from_streaming_file(self, phase, monkeypatch, tmp_path):
         """Should recover Codex denied commands from previous streaming.jsonl."""
         monkeypatch.chdir(tmp_path)
@@ -261,7 +295,6 @@ class TestDevelopNeedPermissionFallback:
         assert len(recovered) == 1
         assert recovered[0].tool_name == "Bash"
         assert recovered[0].tool_input["command"] == 'git add src/cafe/ui/cli.py && git commit -m "msg"'
-
 
 class TestCodexPermissionRules:
     """Tests for Codex blocked-command handling."""
