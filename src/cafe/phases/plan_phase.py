@@ -595,7 +595,8 @@ Continue analyzing the latest version of {spec_file_path}.
                     agent_name=self.dev_agent,
                     role="developer",
                     output_file=prev_plan_file if self.iteration > 1 else None,
-                    edit_option_label="Edit plan directly",
+                    display_callback=self._display_iteration_delta if self.iteration > 1 else None,
+                    edit_option_label="Edit manually - Open in editor",
                 )
             else:
                 choice = self.user_input

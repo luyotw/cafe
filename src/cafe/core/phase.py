@@ -824,8 +824,8 @@ class Phase(ABC):
                               to re-display content (e.g. Rich Syntax diff). Takes
                               precedence over output_file when both are provided.
             edit_option_label: Optional label text for Edit option.
-                               When provided with output_file, adds an
-                               "Edit - {label}" option to the review menu.
+                               When provided with output_file, adds the
+                               provided label to the review menu.
 
         Returns:
             str: "confirm" or modification opinion content
@@ -839,11 +839,11 @@ class Phase(ABC):
         while True:
             # Use prompt_list for better UX with arrow keys
             choices = [
-                {"name": "Confirm - Confirm, continue", "value": "c"},
-                {"name": "Modify - Request modification", "value": "m"},
+                {"name": "Confirm - Continue", "value": "c"},
+                {"name": "Request modification - Send feedback", "value": "m"},
             ]
             if edit_option_label and output_file:
-                choices.append({"name": f"Edit - {edit_option_label}", "value": "edit"})
+                choices.append({"name": edit_option_label, "value": "edit"})
             choices.extend([
                 Separator(),
                 {"name": f"Chat with {agent_name}", "value": "chat"},

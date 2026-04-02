@@ -81,7 +81,7 @@ class TestAskUserForReviewDecisionChat:
             agent_name="David",
             role="developer",
             output_file=Path("/tmp/output.md"),
-            edit_option_label="Edit plan directly",
+            edit_option_label="Edit manually - Open in editor",
         )
 
         args, _ = mock_prompt_list.call_args
@@ -91,7 +91,9 @@ class TestAskUserForReviewDecisionChat:
 
         edit_choices = [c for c in choices if isinstance(c, dict) and c.get("value") == "edit"]
         assert len(edit_choices) == 1
-        assert edit_choices[0]["name"] == "Edit - Edit plan directly"
+        assert edit_choices[0]["name"] == "Edit manually - Open in editor"
+        assert choices[0]["name"] == "Confirm - Continue"
+        assert choices[1]["name"] == "Request modification - Send feedback"
 
     @patch("cafe.core.phase.prompt_list")
     def test_choices_do_not_include_edit_option_by_default(self, mock_prompt_list):
@@ -249,7 +251,7 @@ class TestAskUserForReviewDecisionChat:
                 agent_name="David",
                 role="developer",
                 output_file=output_file,
-                edit_option_label="Edit plan directly",
+                edit_option_label="Edit manually - Open in editor",
             )
 
         assert result == "confirm"
@@ -273,7 +275,7 @@ class TestAskUserForReviewDecisionChat:
                 agent_name="David",
                 role="developer",
                 output_file=output_file,
-                edit_option_label="Edit plan directly",
+                edit_option_label="Edit manually - Open in editor",
             )
 
         assert result == "confirm"
