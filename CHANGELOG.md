@@ -2,6 +2,51 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.5]
+
+### Added
+- Added Codex CLI support and worktree execution handling
+- Added interactive menu system — launch interactive menu when `cafe` is run without arguments
+- Added `cafe setup` command with back navigation for agent configuration
+- Added selective role editing flow for `cafe setup`
+- Added edit option to spec and plan review menus
+- Added back option to CLI selection in setup
+- Added chat option to review decision, Q&A summary, clarification fallback, checkbox, and no-changes-needed prompts
+- Added reusable chat launcher module
+- Added PR todo list completion enforcement in review phase
+- Added plan todo list posting as PR comment at PR creation/update
+- Added multi-select (checkbox) support to interactive Q&A for DoD questions
+- Added DoD instruction to spec checklist and templates
+- Added GitHub issue discussion thread inclusion in spec phase
+- Added DoD in spec phase iteration 1 so it is never skipped
+- Added `cafe rm` prompting for issue name when no argument, added Remove issue to menu
+- Added non-fragile test guidelines to developer agents and checklists
+- Added updated simple plan template with Task structure and DoD example
+- Added incremental PR comment filtering via `last_seen_comment_ids`
+
+### Fixed
+- Fixed failed host commit follow-up in develop phase
+- Fixed Codex CLI unit test
+- Fixed typer.Exit cascade in auto mode phase chain without hiding real errors
+- Fixed auto mode error suppression that silently swallowed exceptions
+- Fixed default-model semantics alignment and added reset regression test
+- Fixed phase overrides preservation when default model is selected in setup
+- Fixed archive and restore of config.yaml for worktree issues
+- Fixed snapshot comment IDs after posting todo list to include bot comment
+- Fixed dynamic version number loading
+- Fixed require questions.xml for CAFE_NEED_CLARIFICATION in develop phase
+- Fixed cwd upward search for template/agent file lookup to work in worktrees
+- Fixed support for nested issue names (e.g. `feature/chat-web-ui`) in `cafe ls`
+- Fixed PR todo list posting to only trigger when all items checked
+- Fixed status_code preservation when checklist validation re-extracts from stale context.json
+- Fixed colored diff display restoration after returning from chat in PR phase
+- Fixed error when base_branch equals feature_branch in prepare command
+
+### Changed
+- Refined review menu labels and diff redisplay
+- Cleaned up menu item names, removed misaligned description padding
+- Changed manage agents/templates menu to invoke edit instead of ls
+
 ## [0.1.3]
 
 ### Added
@@ -74,5 +119,8 @@ All notable changes to this project will be documented in this file.
 - Interactive phase management with checklist validation
 - GitHub integration for issue and PR management
 
+[0.1.5]: https://github.com/luyotw/cafe/compare/v0.1.4...v0.1.5
+[0.1.3]: https://github.com/luyotw/cafe/compare/v0.1.2...v0.1.3
+[0.1.2]: https://github.com/luyotw/cafe/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/luyotw/cafe/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/luyotw/cafe/releases/tag/v0.1.0
