@@ -1,5 +1,6 @@
 """Tests for _ask_user_for_review_decision() with chat option."""
 
+from pathlib import Path
 from unittest.mock import MagicMock, call, patch
 
 import pytest
@@ -68,6 +69,44 @@ class TestAskUserForReviewDecisionChat:
         chat_choices = [c for c in choices if isinstance(c, dict) and c.get("value") == "chat"]
         assert len(chat_choices) == 1
         assert "David" in chat_choices[0]["name"]
+
+    @patch("cafe.core.phase.prompt_list")
+    def test_choices_include_edit_option_with_phase_specific_label(self, mock_prompt_list):
+        """Test that edit option appears with provided label and correct order."""
+        mock_prompt_list.return_value = "c"
+        phase = _make_phase(issue_name="test-issue")
+
+        phase._ask_user_for_review_decision(
+            "plan",
+            agent_name="David",
+            role="developer",
+            output_file=Path("/tmp/output.md"),
+            edit_option_label="Edit manually - Open in editor",
+        )
+
+        args, _ = mock_prompt_list.call_args
+        choices = args[1]
+        values = [c["value"] for c in choices if isinstance(c, dict)]
+        assert values == ["c", "m", "edit", "chat"]
+
+        edit_choices = [c for c in choices if isinstance(c, dict) and c.get("value") == "edit"]
+        assert len(edit_choices) == 1
+        assert edit_choices[0]["name"] == "Edit manually - Open in editor"
+        assert choices[0]["name"] == "Confirm - Continue"
+        assert choices[1]["name"] == "Request modification - Send feedback"
+
+    @patch("cafe.core.phase.prompt_list")
+    def test_choices_do_not_include_edit_option_by_default(self, mock_prompt_list):
+        """Test that edit option is not shown when no label is provided."""
+        mock_prompt_list.return_value = "c"
+        phase = _make_phase(issue_name="test-issue")
+
+        phase._ask_user_for_review_decision("plan", agent_name="David", role="developer")
+
+        args, _ = mock_prompt_list.call_args
+        choices = args[1]
+        edit_choices = [c for c in choices if isinstance(c, dict) and c.get("value") == "edit"]
+        assert edit_choices == []
 
     @patch("cafe.core.phase.prompt_multiline")
     @patch("cafe.core.phase.launch_chat_session")
@@ -196,3 +235,51 @@ class TestAskUserForReviewDecisionChat:
         # output_file content should NOT be printed
         printed_text = " ".join(str(a) for call in mock_print.call_args_list for a in call[0])
         assert "file content" not in printed_text
+
+    @patch("cafe.core.phase.subprocess.run")
+    @patch("cafe.core.phase.prompt_list")
+    def test_selecting_edit_opens_editor_then_reprompts(self, mock_prompt_list, mock_subprocess_run, tmp_path):
+        """Test selecting edit opens editor, re-displays file, then prompts again."""
+        output_file = tmp_path / "output.md"
+        output_file.write_text("updated content")
+        mock_prompt_list.side_effect = ["edit", "c"]
+        phase = _make_phase(issue_name="my-issue")
+
+        with patch("builtins.print") as mock_print:
+            result = phase._ask_user_for_review_decision(
+                "Implementation plan",
+                agent_name="David",
+                role="developer",
+                output_file=output_file,
+                edit_option_label="Edit manually - Open in editor",
+            )
+
+        assert result == "confirm"
+        mock_subprocess_run.assert_called_once_with(["vim", str(output_file)], check=True)
+        assert mock_prompt_list.call_count == 2
+        printed_text = " ".join(str(a) for call in mock_print.call_args_list for a in call[0])
+        assert "updated content" in printed_text
+
+    @patch("cafe.core.phase.subprocess.run", side_effect=FileNotFoundError())
+    @patch("cafe.core.phase.prompt_list")
+    def test_edit_editor_not_found_shows_error_and_reprompts(self, mock_prompt_list, mock_subprocess_run, tmp_path):
+        """Test editor-not-found error keeps user in same review menu."""
+        output_file = tmp_path / "output.md"
+        output_file.write_text("content")
+        mock_prompt_list.side_effect = ["edit", "c"]
+        phase = _make_phase(issue_name="my-issue")
+
+        with patch("builtins.print") as mock_print:
+            result = phase._ask_user_for_review_decision(
+                "Implementation plan",
+                agent_name="David",
+                role="developer",
+                output_file=output_file,
+                edit_option_label="Edit manually - Open in editor",
+            )
+
+        assert result == "confirm"
+        assert mock_subprocess_run.call_count == 1
+        assert mock_prompt_list.call_count == 2
+        printed_text = " ".join(str(a) for call in mock_print.call_args_list for a in call[0])
+        assert "Editor 'vim' not found" in printed_text
