@@ -158,10 +158,12 @@ def launch_exec_session(
     session_id: Optional[str] = executor.config.session_id
     codex_history_start_ts = int(time.time())
 
-    # Build CLI command using the established CLI strategy
+    # Build CLI command using the established CLI strategy.
+    # Pass [".cafe"] as allowed_directories so CLIs can access the project's
+    # config and session files (mirrors the phase default in _get_allowed_directories).
     try:
         cli_strategy = _get_cli_strategy(executor.config)
-        cli_command = cli_strategy.build_command(prompt)
+        cli_command = cli_strategy.build_command(prompt, None, [".cafe"])
     except ValueError as e:
         print(f"\n⚠️  {e}. Skipping exec.\n")
         return 0

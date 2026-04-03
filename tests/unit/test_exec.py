@@ -61,7 +61,7 @@ class TestLaunchExecSession:
 
         launch_exec_session("developer", "issue123", "do something")
 
-        mock_strategy.build_command.assert_called_once_with("do something")
+        mock_strategy.build_command.assert_called_once_with("do something", None, [".cafe"])
         mock_run.assert_called_once_with(expected_cmd)
 
     @patch("cafe.ui.exec.subprocess.run")
@@ -88,7 +88,7 @@ class TestLaunchExecSession:
 
         launch_exec_session("developer", "issue123", "do something")
 
-        mock_strategy.build_command.assert_called_once_with("do something")
+        mock_strategy.build_command.assert_called_once_with("do something", None, [".cafe"])
         mock_run.assert_called_once_with(expected_cmd)
 
     @patch("cafe.ui.exec.subprocess.run")
@@ -115,7 +115,7 @@ class TestLaunchExecSession:
 
         launch_exec_session("pm", "issue123", "do something")
 
-        mock_strategy.build_command.assert_called_once_with("do something")
+        mock_strategy.build_command.assert_called_once_with("do something", None, [".cafe"])
         mock_run.assert_called_once_with(expected_cmd)
 
     @patch("cafe.ui.exec.subprocess.run")
@@ -142,7 +142,7 @@ class TestLaunchExecSession:
 
         launch_exec_session("reviewer", "issue123", "do something")
 
-        mock_strategy.build_command.assert_called_once_with("do something")
+        mock_strategy.build_command.assert_called_once_with("do something", None, [".cafe"])
         mock_run.assert_called_once_with(expected_cmd)
 
     @patch("cafe.ui.exec.subprocess.run")
@@ -169,7 +169,7 @@ class TestLaunchExecSession:
 
         launch_exec_session("developer", "issue123", "do something")
 
-        mock_strategy.build_command.assert_called_once_with("do something")
+        mock_strategy.build_command.assert_called_once_with("do something", None, [".cafe"])
         mock_run.assert_called_once_with(expected_cmd)
 
     @patch("cafe.ui.exec.subprocess.run")
@@ -196,7 +196,7 @@ class TestLaunchExecSession:
 
         launch_exec_session("developer", "issue123", "do something")
 
-        mock_strategy.build_command.assert_called_once_with("do something")
+        mock_strategy.build_command.assert_called_once_with("do something", None, [".cafe"])
         mock_run.assert_called_once_with(expected_cmd)
 
     @patch("builtins.print")
