@@ -11,6 +11,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
+from cafe.agents.cli import ClaudeCLI, CodexCLI, CopilotCLI, CursorCLI, GeminiCLI
 from cafe.agents.manager import AgentManager
 from cafe.core.types import AgentCLI, AgentConfig
 from cafe.utils.config import ConfigManager
@@ -47,6 +48,29 @@ def _extract_latest_codex_session_id(
     return latest_session_id
 
 
+def _get_cli_strategy(config: AgentConfig):
+    """Get the CLI strategy instance for the given agent config.
+
+    Args:
+        config: Agent configuration
+
+    Returns:
+        CLI strategy instance
+    """
+    if config.cli == AgentCLI.CLAUDE:
+        return ClaudeCLI(config)
+    elif config.cli == AgentCLI.GEMINI:
+        return GeminiCLI(config)
+    elif config.cli == AgentCLI.CURSOR:
+        return CursorCLI(config)
+    elif config.cli == AgentCLI.CODEX:
+        return CodexCLI(config)
+    elif config.cli == AgentCLI.COPILOT:
+        return CopilotCLI(config)
+    else:
+        raise ValueError(f"Unsupported agent CLI: {config.cli}")
+
+
 def launch_exec_session(
     role: str,
     issue_name: str,
@@ -56,8 +80,8 @@ def launch_exec_session(
     """Execute a single prompt through the agent CLI for the given role.
 
     Resolves agent config from ConfigManager, loads the existing session,
-    builds the CLI command with -p flag, and either executes it or displays
-    the command string (when display_only=True).
+    builds the CLI command using the established CLI strategy, and either
+    executes it or displays the command string (when display_only=True).
 
     Args:
         role: Agent role ("pm", "developer", or "reviewer")
@@ -104,28 +128,15 @@ def launch_exec_session(
         return 0
 
     session_id: Optional[str] = executor.config.session_id
-
-    # Build CLI command
-    cli_command = [agent_cli_str]
     codex_history_start_ts = int(time.time())
 
-    if agent_cli_str == "codex" and agent_model:
-        cli_command.extend(["--model", agent_model])
-
-    if session_id:
-        if agent_cli_str in ("claude", "copilot", "gemini"):
-            cli_command.extend(["--resume", session_id])
-        elif agent_cli_str == "cursor-agent":
-            cli_command.extend(["--session", session_id])
-        elif agent_cli_str == "codex":
-            cli_command.extend(["resume", session_id])
-
-    # Add the prompt flag for non-interactive execution
-    cli_command.extend(["-p", prompt])
-
-    if agent_model:
-        if agent_cli_str in ("claude", "copilot", "gemini"):
-            cli_command.extend(["--model", agent_model])
+    # Build CLI command using the established CLI strategy
+    try:
+        cli_strategy = _get_cli_strategy(executor.config)
+        cli_command = cli_strategy.build_command(prompt)
+    except ValueError as e:
+        print(f"\n⚠️  {e}. Skipping exec.\n")
+        return 0
 
     if display_only:
         print(shlex.join(cli_command))
