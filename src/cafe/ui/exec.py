@@ -9,7 +9,7 @@ import shlex
 import subprocess
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Dict, List, Optional
 
 from cafe.agents.cli import ClaudeCLI, CodexCLI, CopilotCLI, CursorCLI, GeminiCLI
 from cafe.agents.manager import AgentManager
@@ -113,11 +113,39 @@ def launch_exec_session(
         print(f"\n⚠️  Unknown CLI tool '{agent_cli_str}'. Skipping exec.\n")
         return 0
 
+    # Resolve backup CLIs (filter out the primary CLI to avoid duplicates)
+    def _resolve_backup_clis(config: dict, primary_cli: AgentCLI) -> List[AgentCLI]:
+        backup_raw = config.get("backup", [])
+        seen = {primary_cli}
+        result = []
+        for cli_str in backup_raw:
+            try:
+                cli = AgentCLI(cli_str)
+            except ValueError:
+                continue
+            if cli not in seen:
+                seen.add(cli)
+                result.append(cli)
+        return result
+
+    # Resolve per-CLI per-phase models config
+    def _resolve_models_config(config: dict) -> Dict[str, Dict[str, str]]:
+        raw = config.get("models", {})
+        if not isinstance(raw, dict):
+            return {}
+        result: Dict[str, Dict[str, str]] = {}
+        for cli_name, phase_models in raw.items():
+            if isinstance(phase_models, dict):
+                result[cli_name] = {k: str(v) for k, v in phase_models.items()}
+        return result
+
     agent_manager.register_agent(
         AgentConfig(
             name=agent_name,
             cli=agent_cli,
             model=agent_model,
+            backup_clis=_resolve_backup_clis(agent_config, agent_cli),
+            models_config=_resolve_models_config(agent_config),
         )
     )
 

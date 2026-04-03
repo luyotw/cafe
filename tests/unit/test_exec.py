@@ -392,6 +392,46 @@ class TestLaunchExecSession:
         )
 
 
+    @patch("cafe.ui.exec.subprocess.run")
+    @patch("cafe.ui.exec._get_cli_strategy")
+    @patch("cafe.ui.exec.AgentManager")
+    @patch("cafe.ui.exec.ConfigManager")
+    def test_backup_clis_and_models_config_are_loaded(
+        self, mock_config_manager_cls, mock_agent_manager_cls, mock_get_strategy, mock_run
+    ):
+        """Test that backup CLIs and models config are loaded and passed to AgentConfig."""
+        mock_config = MagicMock()
+        mock_config.get.return_value = {
+            "name": "David",
+            "cli": "claude",
+            "model": "sonnet",
+            "backup": ["gemini", "copilot"],
+            "models": {
+                "claude": {"develop": "sonnet"},
+                "gemini": {"develop": "gemini-2.5-pro"},
+            },
+        }
+        mock_config_manager_cls.return_value = mock_config
+
+        agent_manager = self._make_agent_manager("David", "claude", session_id=None, model="sonnet")
+        mock_agent_manager_cls.return_value = agent_manager
+
+        mock_strategy = MagicMock()
+        mock_strategy.build_command.return_value = ["claude", "-p", "do something"]
+        mock_get_strategy.return_value = mock_strategy
+
+        mock_run.return_value = MagicMock(returncode=0)
+
+        launch_exec_session("developer", "issue123", "do something")
+
+        # Verify register_agent was called with backup_clis and models_config
+        call_args = agent_manager.register_agent.call_args[0][0]
+        assert AgentCLI.GEMINI in call_args.backup_clis
+        assert AgentCLI.COPILOT in call_args.backup_clis
+        assert call_args.models_config.get("claude", {}).get("develop") == "sonnet"
+        assert call_args.models_config.get("gemini", {}).get("develop") == "gemini-2.5-pro"
+
+
 class TestExecCommand:
     """Tests for the cafe exec CLI command."""
 
