@@ -29,6 +29,7 @@ from cafe.phases.spec_phase import SpecPhase
 from cafe.templates.manager import TemplateManager
 from cafe.ui import init_helpers
 from cafe.ui.chat import launch_chat_session
+from cafe.ui.exec import launch_exec_session
 from cafe.ui.display import Display
 from cafe.ui.init_helpers import (
     check_available_clis,
@@ -5359,6 +5360,43 @@ def chat_with_agent(
     issue_name = _get_and_validate_branch(ctx, "chat")
 
     raise typer.Exit(launch_chat_session(role, issue_name))
+
+
+@app.command(name="exec", context_settings={"allow_extra_args": False, "ignore_unknown_options": False})
+def exec_with_agent(
+    ctx: typer.Context,
+    role: str = typer.Argument(..., help="Role: pm, developer, or reviewer"),
+    prompt: str = typer.Argument(..., help="Prompt text to send to the agent"),
+    display_only: bool = typer.Option(False, "--display-only", help="Display the CLI command without executing"),
+) -> None:
+    """Execute a single prompt through specified role Agent
+
+    Non-interactive counterpart to 'cafe chat'. Runs a single prompt through
+    the configured role's CLI and model settings (including session ID) and exits.
+    Use --display-only to preview the exact shell command without running it.
+
+    \b
+    Supported roles:
+    - pm: Product Manager Agent
+    - developer: Developer Agent
+    - reviewer: Reviewer Agent
+
+    \b
+    Examples:
+        cafe exec developer "list all TODO comments"
+        cafe exec pm "summarize the current spec" --display-only
+        cafe exec reviewer "review the latest changes"
+    """
+    # 1. Validate role parameter
+    valid_roles = ["pm", "developer", "reviewer"]
+    if role not in valid_roles:
+        console.print(f"[red]Error: Invalid role '{role}'. Must be one of: {', '.join(valid_roles)}[/red]")
+        raise typer.Exit(1)
+
+    # 2. Get current branch as issue name
+    issue_name = _get_and_validate_branch(ctx, "exec")
+
+    raise typer.Exit(launch_exec_session(role, issue_name, prompt, display_only))
 
 
 def main() -> None:

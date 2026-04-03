@@ -4,9 +4,14 @@ import subprocess
 from unittest.mock import MagicMock, patch
 
 import pytest
+from typer.testing import CliRunner
 
 from cafe.core.types import AgentCLI
+from cafe.ui.cli import app
 from cafe.ui.exec import launch_exec_session
+
+
+runner = CliRunner()
 
 
 class TestLaunchExecSession:
@@ -292,3 +297,49 @@ class TestLaunchExecSession:
             "sess-codex",
             "issue123",
         )
+
+
+class TestExecCommand:
+    """Tests for the cafe exec CLI command."""
+
+    def test_invalid_role_shows_error(self):
+        """Test that an invalid role shows an error message."""
+        result = runner.invoke(app, ["exec", "admin", "do something"])
+        assert result.exit_code != 0
+        assert "admin" in result.stdout
+
+    def test_help_flag_shows_usage(self):
+        """Test that --help flag displays usage information."""
+        result = runner.invoke(app, ["exec", "--help"])
+        assert result.exit_code == 0
+        assert "role" in result.stdout.lower() or "prompt" in result.stdout.lower()
+
+    @patch("cafe.ui.cli.is_branch_initialized", return_value=True)
+    @patch("cafe.ui.cli.GitOperations")
+    @patch("cafe.ui.cli.launch_exec_session", return_value=0)
+    def test_valid_role_calls_launch_exec_session(self, mock_launch, mock_git_ops, mock_is_initialized):
+        """Test that a valid role and prompt calls launch_exec_session."""
+        mock_git_instance = MagicMock()
+        mock_git_instance.is_valid_branch.return_value = True
+        mock_git_instance.get_current_branch.return_value = "issue123"
+        mock_git_ops.return_value = mock_git_instance
+
+        result = runner.invoke(app, ["exec", "developer", "do something"])
+
+        assert result.exit_code == 0
+        mock_launch.assert_called_once_with("developer", "issue123", "do something", False)
+
+    @patch("cafe.ui.cli.is_branch_initialized", return_value=True)
+    @patch("cafe.ui.cli.GitOperations")
+    @patch("cafe.ui.cli.launch_exec_session", return_value=0)
+    def test_display_only_flag_passed_through(self, mock_launch, mock_git_ops, mock_is_initialized):
+        """Test that --display-only flag is passed to launch_exec_session."""
+        mock_git_instance = MagicMock()
+        mock_git_instance.is_valid_branch.return_value = True
+        mock_git_instance.get_current_branch.return_value = "issue123"
+        mock_git_ops.return_value = mock_git_instance
+
+        result = runner.invoke(app, ["exec", "developer", "do something", "--display-only"])
+
+        assert result.exit_code == 0
+        mock_launch.assert_called_once_with("developer", "issue123", "do something", True)
