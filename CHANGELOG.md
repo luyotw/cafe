@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.6]
+
+### Added
+- Track per-turn Codex token usage
+
+### Fixed
+- Correct unpack count and missing `compare_content` in spec retry loop
+
+### Changed
+- Speed up pre-commit test hooks
+
 ## [0.1.5]
 
 ### Added
@@ -119,6 +130,7 @@ All notable changes to this project will be documented in this file.
 - Interactive phase management with checklist validation
 - GitHub integration for issue and PR management
 
+[0.1.6]: https://github.com/luyotw/cafe/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/luyotw/cafe/compare/v0.1.4...v0.1.5
 [0.1.3]: https://github.com/luyotw/cafe/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/luyotw/cafe/compare/v0.1.1...v0.1.2
