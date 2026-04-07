@@ -498,6 +498,8 @@ class Phase(ABC):
             target.cache_creation_input_tokens += source.cache_creation_input_tokens
             target.cache_read_input_tokens += source.cache_read_input_tokens
             target.total_cost_usd += source.total_cost_usd
+            if source.turn_usages:
+                target.turn_usages.extend(source.turn_usages)
             if source.duration_ms is not None:
                 if target.duration_ms is None:
                     target.duration_ms = source.duration_ms

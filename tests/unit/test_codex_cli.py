@@ -136,6 +136,74 @@ class TestCodexCLIParseResponse:
         assert token_usage.input_tokens == 100
         assert token_usage.cache_read_input_tokens == 20
         assert token_usage.output_tokens == 30
+        assert token_usage.turn_usages == [
+            {
+                "turn": 1,
+                "input_tokens": 100,
+                "output_tokens": 30,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 20,
+            }
+        ]
+        assert permission_denials == []
+
+    def test_parse_response_extracts_all_turn_usages(self, codex_config):
+        cli = CodexCLI(codex_config)
+        output_lines = [
+            json.dumps({"type": "turn.started"}),
+            json.dumps(
+                {
+                    "type": "turn.completed",
+                    "usage": {
+                        "input_tokens": 80,
+                        "cached_input_tokens": 10,
+                        "output_tokens": 20,
+                    },
+                }
+            ),
+            json.dumps({"type": "turn.started"}),
+            json.dumps(
+                {
+                    "type": "item.completed",
+                    "item": {"id": "item_2", "type": "agent_message", "text": "Final"},
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "turn.completed",
+                    "usage": {
+                        "input_tokens": 120,
+                        "cached_input_tokens": 30,
+                        "output_tokens": 40,
+                        "cache_creation_input_tokens": 5,
+                    },
+                }
+            ),
+        ]
+
+        response, token_usage, permission_denials = cli.parse_response(output_lines)
+
+        assert response == "Final"
+        assert token_usage.input_tokens == 120
+        assert token_usage.output_tokens == 40
+        assert token_usage.cache_read_input_tokens == 30
+        assert token_usage.cache_creation_input_tokens == 5
+        assert token_usage.turn_usages == [
+            {
+                "turn": 1,
+                "input_tokens": 80,
+                "output_tokens": 20,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 10,
+            },
+            {
+                "turn": 2,
+                "input_tokens": 120,
+                "output_tokens": 40,
+                "cache_creation_input_tokens": 5,
+                "cache_read_input_tokens": 30,
+            },
+        ]
         assert permission_denials == []
 
     def test_parse_response_ignores_invalid_json(self, codex_config):

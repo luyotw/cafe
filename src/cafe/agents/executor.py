@@ -271,6 +271,8 @@ class AgentExecutor:
             self._total_token_usage.cache_creation_input_tokens += agent_response.token_usage.cache_creation_input_tokens
             self._total_token_usage.cache_read_input_tokens += agent_response.token_usage.cache_read_input_tokens
             self._total_token_usage.total_cost_usd += agent_response.token_usage.total_cost_usd
+            if agent_response.token_usage.turn_usages:
+                self._total_token_usage.turn_usages.extend(agent_response.token_usage.turn_usages)
 
             return agent_response
         except AgentExecutionError:

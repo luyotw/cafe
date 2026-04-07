@@ -99,6 +99,7 @@ class TokenUsage(BaseModel):
     total_cost_usd: float = 0.0
     duration_ms: Optional[int] = None
     duration_api_ms: Optional[int] = None
+    turn_usages: List[Dict[str, Any]] = Field(default_factory=list)
 
 
 class AgentResponse(BaseModel):

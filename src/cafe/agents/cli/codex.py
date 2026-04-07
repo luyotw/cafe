@@ -3,7 +3,7 @@
 import json
 import subprocess
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from cafe.agents.cli.abstract import AbstractCLI
 from cafe.core.types import PermissionDenial, TokenUsage
@@ -12,6 +12,36 @@ from cafe.utils.git_utils import get_git_dir
 
 class CodexCLI(AbstractCLI):
     """Concrete implementation of Codex CLI tool."""
+
+    @staticmethod
+    def extract_turn_usages(output_lines: List[str]) -> List[Dict[str, Any]]:
+        """Extract per-turn token usage from Codex JSONL output."""
+        turn_usages: List[Dict[str, Any]] = []
+
+        for line in output_lines:
+            try:
+                data = json.loads(line.strip())
+            except json.JSONDecodeError:
+                continue
+
+            if data.get("type") != "turn.completed":
+                continue
+
+            usage_data = data.get("usage", {})
+            if not usage_data:
+                continue
+
+            turn_usages.append(
+                {
+                    "turn": len(turn_usages) + 1,
+                    "input_tokens": usage_data.get("input_tokens", 0),
+                    "output_tokens": usage_data.get("output_tokens", 0),
+                    "cache_creation_input_tokens": usage_data.get("cache_creation_input_tokens", 0),
+                    "cache_read_input_tokens": usage_data.get("cached_input_tokens", 0),
+                }
+            )
+
+        return turn_usages
 
     def build_command(
         self,
@@ -51,6 +81,7 @@ class CodexCLI(AbstractCLI):
         response_text = ""
         token_usage = TokenUsage()
         permission_denials: List[PermissionDenial] = []
+        turn_usages = self.extract_turn_usages(output_lines)
 
         for line in output_lines:
             try:
@@ -69,6 +100,8 @@ class CodexCLI(AbstractCLI):
                     input_tokens=usage_data.get("input_tokens", 0),
                     output_tokens=usage_data.get("output_tokens", 0),
                     cache_read_input_tokens=usage_data.get("cached_input_tokens", 0),
+                    cache_creation_input_tokens=usage_data.get("cache_creation_input_tokens", 0),
+                    turn_usages=turn_usages,
                 )
 
         return response_text, token_usage, permission_denials

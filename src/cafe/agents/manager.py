@@ -204,6 +204,8 @@ class AgentManager:
         self._total_token_usage.cache_creation_input_tokens += token_usage.cache_creation_input_tokens
         self._total_token_usage.cache_read_input_tokens += token_usage.cache_read_input_tokens
         self._total_token_usage.total_cost_usd += token_usage.total_cost_usd
+        if token_usage.turn_usages:
+            self._total_token_usage.turn_usages.extend(token_usage.turn_usages)
 
         # Track latest model (only in execute, not execute_current which doesn't return model)
         if 'model' in locals() and model:
