@@ -11,6 +11,9 @@ from cafe.core.types import PhaseStatus, PhaseResult
 from cafe.core.status_codes import PhaseStatusCode
 
 
+pytestmark = pytest.mark.slow
+
+
 class TestPRPhaseGitHubMode:
     """Test _execute_github_mode flow scenarios."""
 

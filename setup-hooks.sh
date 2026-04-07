@@ -11,4 +11,5 @@ git config --local core.hooksPath .githooks
 echo "✅ Git hooks configured successfully!"
 echo "   Hooks directory: .githooks"
 echo ""
-echo "Pre-commit hook will now run tests in tests/unit/ and tests/integration/"
+echo "Pre-commit hook will now run the fast test suite."
+echo "Pre-push hook will run the full test suite, including slow tests."

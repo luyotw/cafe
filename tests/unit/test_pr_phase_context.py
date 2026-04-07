@@ -7,6 +7,10 @@ import pytest
 
 from cafe.phases.pr_phase import PRPhase
 from cafe.core.types import PhaseResult, PhaseStatus
+from cafe.utils.github import PRComment
+
+
+pytestmark = pytest.mark.slow
 
 
 # Fields that must be present in context.json per issue #142
@@ -139,23 +143,30 @@ class TestPRPhaseContextFields:
         phase.iteration = 1
 
         # Mock GitHub to return comments
-        mock_dependencies["github_ops"].get_pr_comments.return_value = [
-            {"body": "Please fix this", "user": {"login": "reviewer"}, "id": 1}
+        comments = [
+            PRComment(
+                id="1",
+                body="Please fix this",
+                author="reviewer",
+                created_at="2025-01-01T10:00:00Z",
+                comment_type="review",
+            )
         ]
 
-        with patch.object(phase, "_update_iteration_history") as mock_update:
-            phase._save_pr_comments_to_user_input(pr_number=42)
+        with patch("cafe.phases.pr_phase.get_all_pr_comments", return_value=comments):
+            with patch.object(phase, "_update_iteration_history") as mock_update:
+                phase._save_pr_comments_to_user_input(pr_number=42)
 
-            # Verify _update_iteration_history was called (not manual json.dump)
-            mock_update.assert_called_once()
-            call_kwargs = mock_update.call_args[1] if mock_update.call_args[1] else {}
-            call_args = mock_update.call_args
+                # Verify _update_iteration_history was called (not manual json.dump)
+                mock_update.assert_called_once()
+                call_kwargs = mock_update.call_args[1] if mock_update.call_args[1] else {}
+                call_args = mock_update.call_args
 
-            # phase_specific_data should contain pr_number, comment_count, source
-            phase_data = call_args[1].get("phase_specific_data", call_args[0][0] if call_args[0] else {})
-            assert "pr_number" in phase_data
-            assert "comment_count" in phase_data
-            assert "source" in phase_data
+                # phase_specific_data should contain pr_number, comment_count, source
+                phase_data = call_args[1].get("phase_specific_data", call_args[0][0] if call_args[0] else {})
+                assert "pr_number" in phase_data
+                assert "comment_count" in phase_data
+                assert "source" in phase_data
 
     def test_local_review_modification_context_has_all_fields(
         self, tmp_path, mock_dependencies, setup_issue_dir
@@ -244,13 +255,20 @@ class TestPRPhaseContextFields:
         phase.iteration = 1
 
         # Mock GitHub to return comments
-        mock_dependencies["github_ops"].get_pr_comments.return_value = [
-            {"body": "Fix this", "user": {"login": "reviewer"}, "id": 1}
+        comments = [
+            PRComment(
+                id="1",
+                body="Fix this",
+                author="reviewer",
+                created_at="2025-01-01T10:00:00Z",
+                comment_type="review",
+            )
         ]
 
         # Patch _append_iteration_index to avoid side effects
-        with patch.object(phase, "_append_iteration_index"):
-            phase._save_pr_comments_to_user_input(pr_number=42)
+        with patch("cafe.phases.pr_phase.get_all_pr_comments", return_value=comments):
+            with patch.object(phase, "_append_iteration_index"):
+                phase._save_pr_comments_to_user_input(pr_number=42)
 
         # Read context.json
         iter_dir = issue_dir / "pr" / "iteration_001"

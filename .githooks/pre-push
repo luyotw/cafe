@@ -1,0 +1,26 @@
+#!/bin/bash
+
+# Pre-push hook: Run the full test suite, including slow tests.
+
+set -e
+
+echo "🧪 Running full pre-push test suite..."
+echo ""
+
+export PYTHONPATH="src:$PYTHONPATH"
+
+PYTHON_TMPDIR=$(python3 -c "import tempfile, os; print(os.path.dirname(tempfile.gettempdir()))")
+export GIT_CEILING_DIRECTORIES="$PYTHON_TMPDIR"
+
+unset GIT_DIR
+unset GIT_WORK_TREE
+unset GIT_INDEX_FILE
+unset GIT_OBJECT_DIRECTORY
+unset GIT_ALTERNATE_OBJECT_DIRECTORIES
+
+echo "🔒 Git isolation enabled: GIT_CEILING_DIRECTORIES=$GIT_CEILING_DIRECTORIES"
+echo "Running full tests/unit and tests/integration..."
+uv run pytest tests/unit/ tests/integration/ -q --tb=short
+
+echo ""
+echo "✅ Full test suite passed! Proceeding with push..."

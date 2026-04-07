@@ -48,6 +48,9 @@ You can contribute to this project in several ways:
     ```bash
     pytest
     ```
+    Fast local commits use the pre-commit hook's quick suite. A full test run,
+    including slower orchestration-heavy tests, runs on `git push` via the
+    `pre-push` hook.
 
 4.  Commit your changes. Please write a clear commit message.
 

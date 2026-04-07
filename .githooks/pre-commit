@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# Pre-commit hook: Run unit and integration tests
-# All tests in tests/unit/ and tests/integration/ must pass before commit
+# Pre-commit hook: Run the fast local test suite
+# Slow orchestration-heavy tests are deferred to pre-push / full test runs.
 
 set -e
 
@@ -28,8 +28,8 @@ unset GIT_ALTERNATE_OBJECT_DIRECTORIES
 echo "🔒 Git isolation enabled: GIT_CEILING_DIRECTORIES=$GIT_CEILING_DIRECTORIES"
 
 # Run unit and integration tests inside the project-managed Python environment
-echo "Running tests/unit and tests/integration..."
-uv run pytest tests/unit/ tests/integration/ -v --tb=short -q
+echo "Running fast tests/unit and tests/integration (excluding slow tests)..."
+uv run pytest tests/unit/ tests/integration/ -q --tb=short --no-cov -m "not slow"
 
 # Check exit code
 if [ $? -eq 0 ]; then
