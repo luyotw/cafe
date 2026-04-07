@@ -1255,6 +1255,14 @@ class SpecPhase(Phase):
 
         # If content was not updated (identical to comparison), ask agent to update
         if not was_updated:
+            # Resolve compare_content for use in retry loop
+            if self.iteration == 1:
+                user_input_file = self.phase_dir / "iteration_001" / "user_input.md"
+                compare_content = user_input_file.read_text(encoding="utf-8").strip() if user_input_file.exists() else spec_path.read_text(encoding="utf-8").strip()
+            else:
+                prev_output_file = self.phase_dir / f"iteration_{self.iteration - 1:03d}" / "output.md"
+                compare_content = prev_output_file.read_text(encoding="utf-8").strip() if prev_output_file.exists() else spec_path.read_text(encoding="utf-8").strip()
+
             retry_count = 0
 
             while retry_count < max_retries:
@@ -1276,7 +1284,7 @@ Remember: The content must be DIFFERENT from the input. Add your analysis, clari
 
                 try:
                     # Execute retry with agent
-                    retry_response, _ = self.agent_manager.execute(
+                    retry_response, _usage, _denials, _cli_args, _log, _model = self.agent_manager.execute(
                         agent_name=self.pm_agent,
                         prompt=retry_prompt,
                         allowed_tools=allowed_tools,
