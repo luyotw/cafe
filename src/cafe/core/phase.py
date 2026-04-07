@@ -1,6 +1,7 @@
 """Base class for workflow phases."""
 
 import json
+import os
 import shlex
 import subprocess
 from abc import ABC, abstractmethod
@@ -808,6 +809,7 @@ class Phase(ABC):
         role: str = "developer",
         output_file: Optional[Path] = None,
         display_callback: Optional[Callable[[], None]] = None,
+        edit_option_label: Optional[str] = None,
     ) -> str:
         """Ask user for decision on READY_FOR_REVIEW (interactive mode).
 
@@ -821,6 +823,9 @@ class Phase(ABC):
             display_callback: Optional callable to invoke after returning from chat
                               to re-display content (e.g. Rich Syntax diff). Takes
                               precedence over output_file when both are provided.
+            edit_option_label: Optional label text for Edit option.
+                               When provided with output_file, adds the
+                               provided label to the review menu.
 
         Returns:
             str: "confirm" or modification opinion content
@@ -834,11 +839,15 @@ class Phase(ABC):
         while True:
             # Use prompt_list for better UX with arrow keys
             choices = [
-                {"name": "Confirm - Confirm, continue", "value": "c"},
-                {"name": "Modify - Request modification", "value": "m"},
+                {"name": "Confirm - Continue", "value": "c"},
+                {"name": "Request modification - Send feedback", "value": "m"},
+            ]
+            if edit_option_label and output_file:
+                choices.append({"name": edit_option_label, "value": "edit"})
+            choices.extend([
                 Separator(),
                 {"name": f"Chat with {agent_name}", "value": "chat"},
-            ]
+            ])
 
             choice = prompt_list(
                 "Please select an option",
@@ -857,6 +866,21 @@ class Phase(ABC):
                     print(f"{'=' * 60}")
                 continue
 
+            if choice == "edit":
+                if output_file is None or not output_file.exists():
+                    print("\n⚠️  Current output file not found, please try another action.")
+                    continue
+
+                if self._open_file_with_editor(output_file):
+                    if display_callback is not None:
+                        display_callback()
+                    else:
+                        print()
+                        print(f"{'=' * 60}")
+                        print(output_file.read_text())
+                        print(f"{'=' * 60}")
+                continue
+
             if choice == "c":
                 return "confirm"
 
@@ -872,6 +896,28 @@ class Phase(ABC):
             print()
 
             return modification_request
+
+    def _open_file_with_editor(self, file_path: Path) -> bool:
+        """Open a file in user's editor.
+
+        Args:
+            file_path: File path to edit
+
+        Returns:
+            True if editor exits successfully, False otherwise.
+        """
+        editor = os.environ.get("EDITOR", "vim")
+
+        try:
+            subprocess.run([editor, str(file_path)], check=True)
+            return True
+        except subprocess.CalledProcessError:
+            print("Error: Failed to edit file")
+            return False
+        except FileNotFoundError:
+            print(f"Error: Editor '{editor}' not found")
+            print("Set EDITOR environment variable or install vim")
+            return False
 
     def _ask_user_for_clarification(
         self, role: Optional[str] = None, agent_name: Optional[str] = None
