@@ -1903,6 +1903,23 @@ Return ONLY the status code (CAFE_CONFIRMED or CAFE_NEEDS_CHANGES) with no expla
 
 {body_instruction}
 """
+        from cafe.agents.manager import AgentManager
+        from cafe.skills.bridge import try_load_skill_body
+
+        agent_file = AgentManager.get_agent_file_path(self.dev_agent, "developer")
+        skill_body = try_load_skill_body(
+            "pr",
+            context={
+                "agent_file": agent_file,
+                "spec_file": self.spec_file,
+                "plan_file": str(plan_file),
+                "commits": commits,
+                "output_file": str(output_file),
+                "status_code_instruction": "",
+            },
+        )
+        if skill_body:
+            prompt = f"# PR Phase\n\n{skill_body}\n\n{task_instruction}\n\n{checklist_instruction}\n\n**Context:**\n- Requirements Specification: {self.spec_file}\n- Implementation Plan: {plan_file}\n\n**Commits:**\n{commits}\n\n## Requirements\n\n**Title (first line after #):**\n- Concise and clear (max 80 characters)\n- Describe what this PR does\n- Example: \"Add user authentication with OAuth2 support\"\n\n{body_instruction}\n"
 
         # Execute agent
         from cafe.core.status_codes import PhaseStatusCode, generate_status_code_prompt
@@ -2112,4 +2129,3 @@ Please return only one status code (example: CAFE_CONFIRMED), with no other cont
         )
 
         print(f"✅ Rebuilt checklist for PR phase iteration {iteration}")
-

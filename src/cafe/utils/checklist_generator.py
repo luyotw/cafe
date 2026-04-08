@@ -10,6 +10,12 @@ from cafe.utils import checklist_templates
 from cafe.agents.manager import AgentManager
 from cafe.utils.prompt_utils import extract_agent_guidelines_checklist, convert_to_checklist
 from cafe.utils.git_utils import to_cwd_relative_path
+from cafe.skills.bridge import try_load_skill_reference
+
+
+def _load_checklist_template(skill_name: str, ref_name: str, fallback: str) -> str:
+    """Load checklist content from skill references with fallback."""
+    return try_load_skill_reference(skill_name, ref_name) or fallback
 
 
 def generate_spec_checklist(
@@ -41,14 +47,26 @@ def generate_spec_checklist(
 
     # Choose template based on iteration
     if iteration == 1:
-        execution_steps = checklist_templates.SPEC_EXECUTION_STEPS_ITERATION_1
+        execution_steps = _load_checklist_template(
+            "spec_first",
+            "execution_steps_iteration_1.md",
+            checklist_templates.SPEC_EXECUTION_STEPS_ITERATION_1,
+        )
     else:
-        execution_steps = checklist_templates.SPEC_EXECUTION_STEPS_ITERATION_N
+        execution_steps = _load_checklist_template(
+            "spec_revise",
+            "execution_steps_iteration_n.md",
+            checklist_templates.SPEC_EXECUTION_STEPS_ITERATION_N,
+        )
 
     # Add iteration-specific note for iteration 4+
     iteration_note = ""
     if iteration >= 4:
-        iteration_note = checklist_templates.SPEC_IMPORTANT_NOTES_ITERATION_4_PLUS
+        iteration_note = _load_checklist_template(
+            "spec_first",
+            "important_notes_iteration_4_plus.md",
+            checklist_templates.SPEC_IMPORTANT_NOTES_ITERATION_4_PLUS,
+        )
 
     # Add template instruction for iteration 1
     template_instruction = ""
@@ -71,7 +89,11 @@ def generate_spec_checklist(
             # Manual mode: use the specified template
             template_instruction = f"[ ] Read {template_file} as reference for output format and structure\n[ ] Follow template structure when writing analysis results\n"
 
-    dod_instruction = checklist_templates.SPEC_DOD_INSTRUCTION
+    dod_instruction = _load_checklist_template(
+        "spec_first",
+        "dod_instruction.md",
+        checklist_templates.SPEC_DOD_INSTRUCTION,
+    )
 
     # Get agent guidelines checklist
     agent_guidelines = extract_agent_guidelines_checklist(agent_file)
@@ -99,6 +121,13 @@ def generate_spec_checklist(
         # adding it as a placeholder value, since resolve_checklist_placeholders
         # does a single pass and cannot resolve nested placeholders.
         xml_instruction = checklist_templates.SPEC_XML_QUESTIONS_INSTRUCTION.replace(
+            "{questions_xml_file}", questions_xml_file
+        )
+        xml_instruction = _load_checklist_template(
+            "spec_first",
+            "xml_questions_instruction.md",
+            xml_instruction,
+        ).replace(
             "{questions_xml_file}", questions_xml_file
         )
         placeholders["xml_questions_instruction"] = xml_instruction
@@ -143,9 +172,17 @@ def generate_plan_checklist(
 
     # Get templates based on iteration
     if iteration == 1:
-        execution_steps = checklist_templates.PLAN_EXECUTION_STEPS_ITERATION_1
+        execution_steps = _load_checklist_template(
+            "plan",
+            "execution_steps_iteration_1.md",
+            checklist_templates.PLAN_EXECUTION_STEPS_ITERATION_1,
+        )
     else:
-        execution_steps = checklist_templates.PLAN_EXECUTION_STEPS_ITERATION_N
+        execution_steps = _load_checklist_template(
+            "plan",
+            "execution_steps_iteration_n.md",
+            checklist_templates.PLAN_EXECUTION_STEPS_ITERATION_N,
+        )
 
     # Add template instruction
     template_instruction = ""
@@ -198,6 +235,13 @@ def generate_plan_checklist(
         xml_instruction = checklist_templates.XML_QUESTIONS_INSTRUCTION.replace(
             "{questions_xml_file}", questions_xml_file
         )
+        xml_instruction = _load_checklist_template(
+            "plan",
+            "xml_questions_instruction.md",
+            xml_instruction,
+        ).replace(
+            "{questions_xml_file}", questions_xml_file
+        )
         placeholders["xml_questions_instruction"] = xml_instruction
     else:
         placeholders["xml_questions_instruction"] = ""
@@ -240,9 +284,17 @@ def generate_develop_checklist(
 
     # Choose template based on mode
     if correction_mode:
-        execution_steps = checklist_templates.DEVELOP_EXECUTION_STEPS_CORRECTION
+        execution_steps = _load_checklist_template(
+            "develop",
+            "execution_steps_correction.md",
+            checklist_templates.DEVELOP_EXECUTION_STEPS_CORRECTION,
+        )
     else:
-        execution_steps = checklist_templates.DEVELOP_EXECUTION_STEPS_NORMAL
+        execution_steps = _load_checklist_template(
+            "develop",
+            "execution_steps_normal.md",
+            checklist_templates.DEVELOP_EXECUTION_STEPS_NORMAL,
+        )
 
     # Get agent guidelines checklist
     agent_guidelines = extract_agent_guidelines_checklist(agent_file)
@@ -257,7 +309,11 @@ def generate_develop_checklist(
 
     # Build xml_questions_instruction (same pattern as spec/plan phases)
     if questions_xml_file:
-        xml_questions_instruction = checklist_templates.XML_QUESTIONS_INSTRUCTION.replace(
+        xml_questions_instruction = _load_checklist_template(
+            "develop",
+            "xml_questions_instruction.md",
+            checklist_templates.XML_QUESTIONS_INSTRUCTION,
+        ).replace(
             "{questions_xml_file}", str(questions_xml_file)
         )
     else:
@@ -310,7 +366,11 @@ def generate_review_checklist(
     agent_file = AgentManager.get_agent_file_path(agent_name, "reviewer")
 
     # Get templates
-    execution_steps = checklist_templates.REVIEW_EXECUTION_STEPS
+    execution_steps = _load_checklist_template(
+        "review",
+        "execution_steps.md",
+        checklist_templates.REVIEW_EXECUTION_STEPS,
+    )
 
     # Conditionally add PR todo list check section
     pr_todo_list_section = ""
@@ -371,9 +431,17 @@ def generate_pr_checklist(
 
     # Get templates based on iteration
     if iteration == 1:
-        execution_steps = checklist_templates.PR_EXECUTION_STEPS_ITERATION_1
+        execution_steps = _load_checklist_template(
+            "pr",
+            "execution_steps_iteration_1.md",
+            checklist_templates.PR_EXECUTION_STEPS_ITERATION_1,
+        )
     else:
-        execution_steps = checklist_templates.PR_EXECUTION_STEPS_ITERATION_N
+        execution_steps = _load_checklist_template(
+            "pr",
+            "execution_steps_iteration_n.md",
+            checklist_templates.PR_EXECUTION_STEPS_ITERATION_N,
+        )
 
     # Get agent guidelines checklist
     agent_guidelines = extract_agent_guidelines_checklist(agent_file)
@@ -428,7 +496,11 @@ def generate_pr_comments_checklist(
     agent_file = AgentManager.get_agent_file_path(agent_name, "developer")
 
     # Use PR comments organization template
-    execution_steps = checklist_templates.PR_COMMENTS_ORGANIZATION_STEPS
+    execution_steps = _load_checklist_template(
+        "pr",
+        "comments_organization_steps.md",
+        checklist_templates.PR_COMMENTS_ORGANIZATION_STEPS,
+    )
 
     # Get agent guidelines checklist
     agent_guidelines = extract_agent_guidelines_checklist(agent_file)

@@ -728,7 +728,18 @@ class DevelopPhase(Phase):
 
         # Get agent file path
         from cafe.agents.manager import AgentManager
+        from cafe.skills.bridge import try_load_skill_body
         agent_file = AgentManager.get_agent_file_path(self.dev_agent, "developer")
+        skill_body = try_load_skill_body(
+            "develop",
+            context={
+                "agent_file": agent_file,
+                "spec_file": str(self.spec_file),
+                "plan_file": str(self.plan_file),
+                "status_code_instruction": status_code_prompt,
+            },
+        )
+        skill_section = f"{skill_body}\n\n" if skill_body else ""
 
         config_file = self.issue_dir / "issue.yaml"
         base_branch = self._get_issue_config_value(config_file, "base_branch") or "main"
@@ -791,6 +802,7 @@ Steps for requesting clarification:
             checklist_instruction = format_checklist_instruction(checklist_path)
             base_prompt = f"""# Develop Phase (Correction Mode)
 
+{skill_section}\
 **Your Role:** Developer
 Read {agent_file} to understand your complete role definition and responsibilities.
 
@@ -825,6 +837,7 @@ Read {agent_file} to understand your complete role definition and responsibiliti
         checklist_instruction = format_checklist_instruction(checklist_path)
         base_prompt = f"""# Develop Phase (Normal Mode)
 
+{skill_section}\
 **Your Role:** Developer
 Read {agent_file} to understand your complete role definition and responsibilities.
 
