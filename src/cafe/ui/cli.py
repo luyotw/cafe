@@ -87,6 +87,36 @@ CONTENT_TYPE_FILE_MAP = {
 }
 
 
+def _resolve_issue_playbook_name(issue_name: str) -> str:
+    """Resolve the playbook id associated with an issue."""
+    workflow_instance = Path.cwd() / ".cafe" / "issues" / issue_name / "workflow_instance.json"
+    if not workflow_instance.exists():
+        return "default"
+
+    try:
+        raw = json.loads(workflow_instance.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return "default"
+
+    playbook_id = raw.get("playbook_id")
+    return str(playbook_id) if playbook_id else "default"
+
+
+def _load_playbook_step_names(playbook_name: str) -> List[str]:
+    """Load ordered step names from a playbook."""
+    try:
+        playbook = PlaybookLoader().load(playbook_name)
+        return list(playbook["steps"].keys())
+    except Exception:
+        return list(ALL_PHASES)
+
+
+def _load_issue_step_names(issue_name: str) -> List[str]:
+    """Load ordered step names for the current issue playbook."""
+    playbook_name = _resolve_issue_playbook_name(issue_name)
+    return _load_playbook_step_names(playbook_name)
+
+
 def _handle_phase_exception(e: Exception, phase_name: str) -> None:
     """Unified exception handling for phase execution.
 
@@ -5231,7 +5261,7 @@ def agent_sync() -> None:
 def show(
     phase_name: str = typer.Argument(
         ...,
-        help="Phase name (spec, plan, develop, review, pr)"
+        help="Playbook step name"
     ),
     content_type: Optional[str] = typer.Argument(
         None,
@@ -5255,10 +5285,20 @@ def show(
         cafe show spec context -i -1
         cafe show plan status -i -2
     """
+    # Get current branch name (issue_name)
+    try:
+        git_ops = GitOperations()
+        issue_name = git_ops.get_current_branch()
+    except Exception as e:
+        console.print(f"[red]Error: Failed to get current branch: {e}[/red]")
+        raise typer.Exit(1)
+
+    valid_phases = _load_issue_step_names(issue_name)
+
     # Validate phase name
-    if phase_name not in VALID_PHASES:
+    if phase_name not in valid_phases:
         console.print(f"[red]Error: Invalid phase '{phase_name}'[/red]")
-        console.print(f"[dim]Valid phases: {', '.join(VALID_PHASES)}[/dim]")
+        console.print(f"[dim]Valid phases: {', '.join(valid_phases)}[/dim]")
         raise typer.Exit(1)
 
     # Set default content type
@@ -5269,14 +5309,6 @@ def show(
     if content_type not in VALID_CONTENT_TYPES:
         console.print(f"[red]Error: Invalid content type '{content_type}'[/red]")
         console.print(f"[dim]Valid types: {', '.join(VALID_CONTENT_TYPES)}[/dim]")
-        raise typer.Exit(1)
-
-    # Get current branch name (issue_name)
-    try:
-        git_ops = GitOperations()
-        issue_name = git_ops.get_current_branch()
-    except Exception as e:
-        console.print(f"[red]Error: Failed to get current branch: {e}[/red]")
         raise typer.Exit(1)
 
     # Build phase directory path
@@ -5558,12 +5590,13 @@ def summary() -> None:
         # Get current issue from git context
         service = SummaryService()
         issue_name = service.get_current_issue()
+        phase_names = _load_issue_step_names(issue_name)
 
         # Load phase and iteration data
         phase_statuses = {}
         iteration_data = {}
 
-        for phase_name in ["spec", "plan", "develop", "review", "pr"]:
+        for phase_name in phase_names:
             phase_status = service.load_phase_status(issue_name, phase_name)
             if phase_status:
                 phase_statuses[phase_name] = phase_status
@@ -5573,7 +5606,7 @@ def summary() -> None:
                 iteration_data[phase_name] = iterations
 
         # Build timeline
-        builder = TimelineBuilder(issue_name)
+        builder = TimelineBuilder(issue_name, phase_names=phase_names)
         entries = builder.build_timeline_entries(phase_statuses, iteration_data)
 
         # Display as table
@@ -5592,6 +5625,8 @@ def summary() -> None:
 def workflow(
     playbook: str = typer.Option("default", "--playbook", help="Playbook name"),
     issue: Optional[str] = typer.Option(None, "--issue", help="Issue directory name"),
+    start_step: Optional[str] = typer.Option(None, "--start-step", help="Start execution from a specific step"),
+    single_step: bool = typer.Option(False, "--single-step", help="Run only one playbook step"),
     dry_run: bool = typer.Option(True, "--dry-run/--execute", help="Run with built-in dry executor"),
 ) -> None:
     """Run playbook workflow using the new generic runner."""
@@ -5602,6 +5637,8 @@ def workflow(
 
         playbook_loader = PlaybookLoader()
         playbook_data = playbook_loader.load(playbook)
+        if start_step is not None and start_step not in playbook_data["steps"]:
+            raise ValueError(f"Unknown playbook step '{start_step}'")
         generic_phase = GenericPhase(SkillLoader())
 
         def dry_executor(step_name: str, step_def: Dict, blackboard_state: object) -> tuple[str, Dict[str, str]]:
@@ -5680,7 +5717,7 @@ def workflow(
             generic_phase=generic_phase,
             executor=dry_executor if dry_run else execute_step,
         )
-        result = runner.run()
+        result = runner.run(start_step=start_step, single_step=single_step)
         console.print(
             f"[green]Workflow completed[/green] step={result.final_step} status={result.final_status_code}"
         )

@@ -201,6 +201,48 @@ class TestShowCommand:
             assert result.exit_code == 0
             assert "context" in result.stdout
 
+    def test_show_command_accepts_custom_playbook_step(self, tmp_path):
+        """測試 show 命令接受 workflow playbook 中的自訂 step."""
+        cafe_dir = tmp_path / ".cafe"
+        issues_dir = cafe_dir / "issues" / "test-issue" / "qa"
+        issues_dir.mkdir(parents=True)
+        workflow_instance = cafe_dir / "issues" / "test-issue" / "workflow_instance.json"
+        workflow_instance.write_text('{"playbook_id":"custom","current_step":"qa"}')
+
+        playbook_dir = cafe_dir / "playbooks"
+        playbook_dir.mkdir(parents=True)
+        (playbook_dir / "custom.yaml").write_text(
+            """
+playbook:
+  id: custom
+steps:
+  qa:
+    skill: review
+    role: reviewer
+    valid_status_codes: [CAFE_CONFIRMED]
+    on:
+      CAFE_CONFIRMED: _done
+""".strip(),
+            encoding="utf-8",
+        )
+
+        iteration_dir = issues_dir / "iteration_001"
+        iteration_dir.mkdir()
+        (iteration_dir / "context.json").write_text("{}")
+        (iteration_dir / "output.md").write_text("# QA Output")
+
+        with patch("cafe.ui.cli.GitOperations") as mock_git_cls, \
+             patch("cafe.ui.cli.ConfigManager") as mock_config_cls, \
+             patch("cafe.ui.cli.Path.cwd", return_value=tmp_path):
+
+            mock_git = mock_git_cls.return_value
+            mock_git.get_current_branch.return_value = "test-issue"
+
+            result = runner.invoke(app, ["show", "qa"])
+
+            assert result.exit_code == 0
+            assert "QA Output" in result.stdout
+
     def test_show_command_with_iteration(self, tmp_path):
         """測試指定迭代號碼"""
         # 準備測試環境

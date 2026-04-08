@@ -59,6 +59,18 @@ class TestBuildTimelineEntries:
         entries = builder.build_timeline_entries({}, {})
         assert isinstance(entries, list)
 
+    def test_build_timeline_entries_respects_custom_phase_order(self):
+        """Test that builder iterates over playbook-defined phase names."""
+        builder = TimelineBuilder("test-issue", phase_names=["qa"])
+        phase_statuses = {"spec": {"timestamp": "2025-01-01T00:00:00Z", "status": "completed"}}
+        iteration_data = {
+            "qa": [{"iteration": 1, "timestamp": "2025-01-02T00:00:00Z", "status": "completed"}]
+        }
+
+        entries = builder.build_timeline_entries(phase_statuses, iteration_data)
+        assert len(entries) == 1
+        assert entries[0].phase == "qa"
+
     def test_build_timeline_entries_creates_correct_structure(self):
         """Test the data structure of created timeline entries."""
         builder = TimelineBuilder("test-issue")
