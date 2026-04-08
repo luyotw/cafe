@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, Optional
@@ -59,7 +60,7 @@ class PlaybookRunner:
         current_step: str,
         response: str,
         status_code: str,
-    ) -> Optional[str]:
+    ) -> tuple[Optional[str], str]:
         step = self.steps[current_step]
         transitions = step.get("on", {})
         goto_target = self.generic_phase.extract_goto_target(response)
@@ -74,7 +75,7 @@ class PlaybookRunner:
                         "goto_target": goto_target,
                     },
                 )
-                return goto_target
+                return goto_target, "goto"
             self.blackboard_store.record_event(
                 self.blackboard,
                 "goto_ignored",
@@ -86,15 +87,62 @@ class PlaybookRunner:
             )
 
         if status_code not in transitions:
+            return None, "terminal"
+        return str(transitions[status_code]), "status"
+
+    @staticmethod
+    def _resolve_step_iteration_limit(step_def: Dict) -> Optional[int]:
+        raw_limit = step_def.get("max_iterations")
+        if raw_limit is None:
             return None
-        return str(transitions[status_code])
+        if isinstance(raw_limit, int):
+            return raw_limit
+        if isinstance(raw_limit, str) and raw_limit.isdigit():
+            return int(raw_limit)
+        return None
 
-    def run(self, *, max_transitions: int = 30) -> PlaybookRunResult:
-        current_step = self.instance.current_step
+    def run(
+        self,
+        *,
+        max_transitions: int = 30,
+        start_step: Optional[str] = None,
+        single_step: bool = False,
+    ) -> PlaybookRunResult:
+        current_step = start_step or self.instance.current_step
+        if current_step not in self.steps:
+            raise ValueError(f"Unknown playbook step '{current_step}'")
+
         last_status_code = ""
+        step_visits: Counter[str] = Counter()
 
-        for _ in range(max_transitions):
+        for hop_count in range(1, max_transitions + 1):
             step_def = self.steps[current_step]
+            step_visits[current_step] += 1
+            visit_count = step_visits[current_step]
+            max_iterations = self._resolve_step_iteration_limit(step_def)
+            if max_iterations is not None and visit_count > max_iterations:
+                self.blackboard_store.record_event(
+                    self.blackboard,
+                    "loop_detected",
+                    {
+                        "step": current_step,
+                        "visits": visit_count,
+                        "max_iterations": max_iterations,
+                    },
+                )
+                raise RuntimeError(
+                    f"Step '{current_step}' exceeded max_iterations={max_iterations}"
+                )
+
+            self.blackboard_store.record_event(
+                self.blackboard,
+                "step_started",
+                {
+                    "step": current_step,
+                    "visit": visit_count,
+                    "hop": hop_count,
+                },
+            )
             assignee_type = str(step_def.get("assignee_type", "agent"))
             if assignee_type != "agent":
                 raise RuntimeError(
@@ -125,16 +173,42 @@ class PlaybookRunner:
                 {
                     "step": current_step,
                     "status_code": status_code,
+                    "visit": visit_count,
+                    "hop": hop_count,
                 },
             )
 
-            next_step = self._resolve_next_step(
+            next_step, transition_source = self._resolve_next_step(
                 current_step=current_step,
                 response=response,
                 status_code=status_code,
             )
+            if single_step:
+                self.instance.mark_completed(status_code)
+                self.blackboard_store.record_event(
+                    self.blackboard,
+                    "single_step_completed",
+                    {
+                        "step": current_step,
+                        "status_code": status_code,
+                    },
+                )
+                return PlaybookRunResult(
+                    final_step=current_step,
+                    final_status_code=status_code,
+                    completed=True,
+                )
             if next_step is None:
                 self.instance.mark_completed(status_code)
+                self.blackboard_store.record_event(
+                    self.blackboard,
+                    "workflow_completed",
+                    {
+                        "step": current_step,
+                        "status_code": status_code,
+                        "reason": "no_transition",
+                    },
+                )
                 return PlaybookRunResult(
                     final_step=current_step,
                     final_status_code=status_code,
@@ -151,6 +225,16 @@ class PlaybookRunner:
                         "type": "external_handoff",
                     },
                 )
+                self.blackboard_store.record_event(
+                    self.blackboard,
+                    "workflow_completed",
+                    {
+                        "step": current_step,
+                        "status_code": status_code,
+                        "next_step": next_step,
+                        "reason": "external_handoff",
+                    },
+                )
                 return PlaybookRunResult(
                     final_step=current_step,
                     final_status_code=status_code,
@@ -165,8 +249,27 @@ class PlaybookRunner:
                     "status_code": status_code,
                 },
             )
+            self.blackboard_store.record_event(
+                self.blackboard,
+                "transition",
+                {
+                    "from": current_step,
+                    "to": next_step,
+                    "status_code": status_code,
+                    "source": transition_source,
+                },
+            )
             self.blackboard_store.set_current_step(self.blackboard, next_step)
             self.instance.transition_to(next_step, status_code)
             current_step = next_step
 
-        raise RuntimeError("Playbook run reached max transition limit")
+        self.blackboard_store.record_event(
+            self.blackboard,
+            "hop_limit_reached",
+            {
+                "step": current_step,
+                "max_transitions": max_transitions,
+                "last_status_code": last_status_code,
+            },
+        )
+        raise RuntimeError(f"Playbook run reached max transition limit ({max_transitions})")

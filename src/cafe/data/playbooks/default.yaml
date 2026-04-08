@@ -88,6 +88,7 @@ steps:
     valid_status_codes:
       - CAFE_CONFIRMED
       - CAFE_NEEDS_CHANGES
+    max_iterations: 5
     allowed_goto: [spec, develop, plan]
     hooks:
       before_execute: [NewChangesGate]
