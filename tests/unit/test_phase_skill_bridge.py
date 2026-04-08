@@ -4,6 +4,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from cafe.phases.plan_phase import PlanPhase
+from cafe.skills.bridge import load_skill_body
 from cafe.utils.checklist_generator import generate_plan_checklist
 
 
@@ -49,3 +50,17 @@ def test_plan_phase_prompt_includes_skill_body(tmp_path: Path, monkeypatch) -> N
         prompt = phase._generate_prompt("")
 
     assert "Skill prompt injected" in prompt
+
+
+def test_load_skill_body_prefers_project_override(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    skill_dir = tmp_path / ".cafe" / "skills" / "plan"
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: plan\ndescription: custom\n---\n\nCustom project plan skill\n",
+        encoding="utf-8",
+    )
+
+    body = load_skill_body("plan")
+
+    assert "Custom project plan skill" in body

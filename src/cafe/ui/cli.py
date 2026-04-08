@@ -117,6 +117,21 @@ def _load_issue_step_names(issue_name: str) -> List[str]:
     return _load_playbook_step_names(playbook_name)
 
 
+def _resolve_selected_playbook(playbook_name: Optional[str]) -> str:
+    """Resolve workflow playbook from CLI or config."""
+    if playbook_name:
+        return playbook_name
+
+    try:
+        config_manager = ConfigManager(".cafe")
+        config_manager.load_config()
+    except ConfigError:
+        return "default"
+
+    selected = config_manager.get("playbook", "default")
+    return str(selected) if selected else "default"
+
+
 def _handle_phase_exception(e: Exception, phase_name: str) -> None:
     """Unified exception handling for phase execution.
 
@@ -5623,7 +5638,7 @@ def summary() -> None:
 
 @app.command()
 def workflow(
-    playbook: str = typer.Option("default", "--playbook", help="Playbook name"),
+    playbook: Optional[str] = typer.Option(None, "--playbook", help="Playbook name"),
     issue: Optional[str] = typer.Option(None, "--issue", help="Issue directory name"),
     start_step: Optional[str] = typer.Option(None, "--start-step", help="Start execution from a specific step"),
     single_step: bool = typer.Option(False, "--single-step", help="Run only one playbook step"),
@@ -5634,9 +5649,10 @@ def workflow(
         git = GitOperations()
         issue_name = issue or git.get_current_branch()
         issue_dir = Path(".cafe/issues") / issue_name
+        selected_playbook = _resolve_selected_playbook(playbook)
 
         playbook_loader = PlaybookLoader()
-        playbook_data = playbook_loader.load(playbook)
+        playbook_data = playbook_loader.load(selected_playbook)
         if start_step is not None and start_step not in playbook_data["steps"]:
             raise ValueError(f"Unknown playbook step '{start_step}'")
         generic_phase = GenericPhase(SkillLoader())
