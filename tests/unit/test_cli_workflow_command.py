@@ -179,3 +179,35 @@ steps:
         assert mock_run.call_count == 1
         first_cmd = mock_run.call_args_list[0][0][0]
         assert "plan" in first_cmd
+
+
+def test_workflow_command_runs_hotfix_playbook(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-203"
+    for phase in ["develop", "review", "pr"]:
+        phase_dir = issue_dir / phase
+        phase_dir.mkdir(parents=True, exist_ok=True)
+        (phase_dir / "status.json").write_text('{"status_code":"CAFE_CONFIRMED"}', encoding="utf-8")
+        iter_dir = phase_dir / "iteration_001"
+        iter_dir.mkdir(parents=True, exist_ok=True)
+        (iter_dir / "context.json").write_text(
+            '{"response":"CAFE_CONFIRMED\\nstep done"}',
+            encoding="utf-8",
+        )
+
+    with (
+        patch("cafe.ui.cli.GitOperations") as mock_git_cls,
+        patch("cafe.ui.cli.subprocess.run") as mock_run,
+    ):
+        git = MagicMock()
+        git.get_current_branch.return_value = "issue-203"
+        mock_git_cls.return_value = git
+        mock_run.return_value = MagicMock(returncode=0)
+
+        result = runner.invoke(app, ["workflow", "--playbook", "hotfix", "--execute"])
+        assert result.exit_code == 0
+        called = [call[0][0] for call in mock_run.call_args_list]
+        assert len(called) == 3
+        assert "develop" in called[0]
+        assert "review" in called[1]
+        assert "pr" in called[2]

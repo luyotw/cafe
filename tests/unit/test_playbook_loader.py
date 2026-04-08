@@ -263,3 +263,28 @@ steps:
     )
     with pytest.raises(ValueError, match="redundant allowed_tools entry"):
         loader.load_model("custom", strict=True)
+
+
+def test_builtin_catalog_includes_hotfix_and_simple() -> None:
+    loader = PlaybookLoader()
+
+    playbooks = loader.list_playbooks()
+
+    assert "default" in playbooks
+    assert "hotfix" in playbooks
+    assert "simple" in playbooks
+
+
+def test_builtin_hotfix_and_simple_playbooks_load() -> None:
+    loader = PlaybookLoader()
+
+    hotfix = loader.load_model("hotfix").model
+    simple = loader.load_model("simple").model
+
+    assert hotfix.entry_point == "develop"
+    assert list(hotfix.steps.keys()) == ["develop", "review", "pr"]
+    assert hotfix.steps["review"].max_iterations == 1
+
+    assert simple.entry_point == "spec"
+    assert list(simple.steps.keys()) == ["spec", "develop", "pr"]
+    assert simple.steps["develop"].on["CAFE_CONFIRMED"] == "pr"
