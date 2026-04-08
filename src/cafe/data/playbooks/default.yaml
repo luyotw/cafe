@@ -1,0 +1,58 @@
+playbook:
+  id: default
+  name: "Standard Development Workflow"
+
+steps:
+  spec:
+    skill:
+      "1": spec_first
+      default: spec_revise
+    role: pm
+    input_artifacts: []
+    output_artifact: spec
+    valid_status_codes:
+      - CAFE_READY_FOR_REVIEW
+      - CAFE_NEED_CLARIFICATION
+      - CAFE_CONFIRMED
+    "on":
+      CAFE_READY_FOR_REVIEW: spec
+      CAFE_NEED_CLARIFICATION: spec
+      CAFE_CONFIRMED: plan
+
+  plan:
+    skill: plan
+    role: developer
+    input_artifacts: [spec]
+    output_artifact: plan
+    valid_status_codes:
+      - CAFE_READY_FOR_REVIEW
+      - CAFE_NEED_CLARIFICATION
+      - CAFE_CONFIRMED
+    "on":
+      CAFE_READY_FOR_REVIEW: plan
+      CAFE_NEED_CLARIFICATION: plan
+      CAFE_CONFIRMED: develop
+
+  develop:
+    skill: develop
+    role: developer
+    input_artifacts: [spec, plan]
+    output_artifact: code
+    valid_status_codes:
+      - CAFE_CONFIRMED
+      - CAFE_NEED_CLARIFICATION
+    "on":
+      CAFE_CONFIRMED: review
+      CAFE_NEED_CLARIFICATION: develop
+
+  review:
+    skill: review
+    role: reviewer
+    input_artifacts: [spec, plan, code]
+    output_artifact: review
+    valid_status_codes:
+      - CAFE_CONFIRMED
+      - CAFE_NEEDS_CHANGES
+    "on":
+      CAFE_CONFIRMED: pr
+      CAFE_NEEDS_CHANGES: develop
