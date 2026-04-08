@@ -357,6 +357,24 @@ def _get_latest_versioned_file(phase_name: str, issue_name: str) -> Optional[Pat
     return None
 
 
+def _find_latest_iteration_dir(phase_dir: Path) -> Optional[Path]:
+    """Find latest iteration directory by numeric suffix."""
+    iteration_dirs = sorted(phase_dir.glob("iteration_*"))
+    valid: List[tuple[int, Path]] = []
+    for path in iteration_dirs:
+        if not path.is_dir():
+            continue
+        try:
+            number = int(path.name.split("_")[1])
+        except (IndexError, ValueError):
+            continue
+        valid.append((number, path))
+    if not valid:
+        return None
+    valid.sort(key=lambda item: item[0])
+    return valid[-1][1]
+
+
 def _edit_file_with_editor(file_path: Path) -> None:
     """Open a file in the user's editor.
 
@@ -5595,7 +5613,15 @@ def workflow(
 
         def execute_step(step_name: str, step_def: Dict, blackboard_state: object) -> tuple[str, Dict[str, str]]:
             command_map: Dict[str, List[str]] = {
-                "spec": [sys.executable, "-m", "cafe.ui.cli", "spec", "--auto"],
+                "spec": [
+                    sys.executable,
+                    "-m",
+                    "cafe.ui.cli",
+                    "spec",
+                    "--no-interactive",
+                    "--user-input",
+                    "workflow execute",
+                ],
                 "plan": [sys.executable, "-m", "cafe.ui.cli", "plan", "--no-interactive", "--template", "default"],
                 "develop": [
                     sys.executable,
@@ -5615,21 +5641,37 @@ def workflow(
             if result.returncode != 0:
                 raise RuntimeError(f"Step '{step_name}' failed with exit code {result.returncode}")
 
-            status_file = issue_dir / step_name / "status.json"
-            status_code = "CAFE_CONFIRMED"
-            if status_file.exists():
-                try:
-                    status_data = json.loads(status_file.read_text(encoding="utf-8"))
-                    status_code = status_data.get("status_code") or status_code
-                except Exception:
-                    pass
+            # Prefer the latest agent raw response so PlaybookRunner can parse both
+            # status code and optional CAFE_GOTO in real execute mode.
+            response_text = "CAFE_CONFIRMED"
+            latest_iteration = _find_latest_iteration_dir(issue_dir / step_name)
+            if latest_iteration is not None:
+                context_file = latest_iteration / "context.json"
+                if context_file.exists():
+                    try:
+                        context_data = json.loads(context_file.read_text(encoding="utf-8"))
+                        response_text = context_data.get("response") or response_text
+                    except Exception:
+                        pass
+
+            # Fallback to status code if no response is available in context.
+            if response_text == "CAFE_CONFIRMED":
+                status_file = issue_dir / step_name / "status.json"
+                if status_file.exists():
+                    try:
+                        status_data = json.loads(status_file.read_text(encoding="utf-8"))
+                        status_code = status_data.get("status_code")
+                        if status_code:
+                            response_text = status_code
+                    except Exception:
+                        pass
 
             output_key = str(step_def.get("output_artifact", step_name))
             artifact_path = ""
             latest_file = _get_latest_versioned_file(step_name, issue_name)
             if latest_file:
                 artifact_path = str(latest_file)
-            return status_code, {output_key: artifact_path}
+            return response_text, {output_key: artifact_path}
 
         runner = PlaybookRunner(
             issue_dir=issue_dir,
