@@ -19,13 +19,17 @@ from rich.console import Console
 
 from cafe.agents.manager import AgentManager
 from cafe.core.git import GitOperations
+from cafe.core.playbook_runner import PlaybookRunner
 from cafe.core.permission import PermissionHandler
 from cafe.core.types import AgentCLI, AgentConfig
+from cafe.phases.generic_phase import GenericPhase
+from cafe.playbooks.loader import PlaybookLoader
 from cafe.phases.develop_phase import DevelopPhase
 from cafe.phases.plan_phase import PlanPhase
 from cafe.phases.pr_phase import PRPhase
 from cafe.phases.review_phase import ReviewPhase
 from cafe.phases.spec_phase import SpecPhase
+from cafe.skills.loader import SkillLoader
 from cafe.templates.manager import TemplateManager
 from cafe.ui import init_helpers
 from cafe.ui.chat import launch_chat_session
@@ -4748,7 +4752,7 @@ def make(
     \b
     This command will:
     1. Check if all configured agent CLI tools are installed
-    2. If environment check passes, execute `cafe spec --auto` to start automated workflow
+    2. If environment check passes, execute `cafe workflow --execute` to start automated workflow
 
     Please run `cafe prepare` first to initialize issue environment.
 
@@ -4784,14 +4788,14 @@ def make(
         )
         raise typer.Exit(1)
 
-    # All CLIs available, execute cafe spec --auto
+    # All CLIs available, execute cafe workflow --execute
     console.print("[green]✓ All agent CLI tools are installed[/green]")
     console.print()
     console.print("[bold cyan]🚀 Starting automated workflow...[/bold cyan]")
     console.print()
 
     # Build command
-    cmd = [sys.executable, "-m", "cafe.ui.cli", "spec", "--auto"]
+    cmd = [sys.executable, "-m", "cafe.ui.cli", "workflow", "--execute"]
 
     # Execute the command
     try:
@@ -4802,7 +4806,7 @@ def make(
     except typer.Exit:
         raise
     except Exception as e:
-        console.print(f"[red]Error executing spec phase: {e}[/red]")
+        console.print(f"[red]Error executing workflow: {e}[/red]")
         raise typer.Exit(1)
 
 
@@ -5563,6 +5567,82 @@ def summary() -> None:
 
     except Exception as e:
         console.print(f"[red]Error: Failed to display summary: {e}[/red]")
+        raise typer.Exit(1)
+
+
+@app.command()
+def workflow(
+    playbook: str = typer.Option("default", "--playbook", help="Playbook name"),
+    issue: Optional[str] = typer.Option(None, "--issue", help="Issue directory name"),
+    dry_run: bool = typer.Option(True, "--dry-run/--execute", help="Run with built-in dry executor"),
+) -> None:
+    """Run playbook workflow using the new generic runner."""
+    try:
+        git = GitOperations()
+        issue_name = issue or git.get_current_branch()
+        issue_dir = Path(".cafe/issues") / issue_name
+
+        playbook_loader = PlaybookLoader()
+        playbook_data = playbook_loader.load(playbook)
+        generic_phase = GenericPhase(SkillLoader())
+
+        def dry_executor(step_name: str, step_def: Dict, blackboard_state: object) -> tuple[str, Dict[str, str]]:
+            output_key = step_def.get("output_artifact", step_name)
+            output_path = issue_dir / step_name / "output.md"
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_text(f"# {step_name}\n\nDry-run output\n", encoding="utf-8")
+            return "CAFE_CONFIRMED", {str(output_key): str(output_path)}
+
+        def execute_step(step_name: str, step_def: Dict, blackboard_state: object) -> tuple[str, Dict[str, str]]:
+            command_map: Dict[str, List[str]] = {
+                "spec": [sys.executable, "-m", "cafe.ui.cli", "spec", "--auto"],
+                "plan": [sys.executable, "-m", "cafe.ui.cli", "plan", "--no-interactive", "--template", "default"],
+                "develop": [
+                    sys.executable,
+                    "-m",
+                    "cafe.ui.cli",
+                    "develop",
+                    "--no-interactive",
+                    "--user-input",
+                    "workflow execute",
+                ],
+                "review": [sys.executable, "-m", "cafe.ui.cli", "review", "--no-interactive"],
+            }
+            if step_name not in command_map:
+                raise ValueError(f"Unsupported step for execute mode: {step_name}")
+
+            result = subprocess.run(command_map[step_name], check=False)
+            if result.returncode != 0:
+                raise RuntimeError(f"Step '{step_name}' failed with exit code {result.returncode}")
+
+            status_file = issue_dir / step_name / "status.json"
+            status_code = "CAFE_CONFIRMED"
+            if status_file.exists():
+                try:
+                    status_data = json.loads(status_file.read_text(encoding="utf-8"))
+                    status_code = status_data.get("status_code") or status_code
+                except Exception:
+                    pass
+
+            output_key = str(step_def.get("output_artifact", step_name))
+            artifact_path = ""
+            latest_file = _get_latest_versioned_file(step_name, issue_name)
+            if latest_file:
+                artifact_path = str(latest_file)
+            return status_code, {output_key: artifact_path}
+
+        runner = PlaybookRunner(
+            issue_dir=issue_dir,
+            playbook=playbook_data,
+            generic_phase=generic_phase,
+            executor=dry_executor if dry_run else execute_step,
+        )
+        result = runner.run()
+        console.print(
+            f"[green]Workflow completed[/green] step={result.final_step} status={result.final_status_code}"
+        )
+    except Exception as e:
+        console.print(f"[red]Error: workflow run failed: {e}[/red]")
         raise typer.Exit(1)
 
 
