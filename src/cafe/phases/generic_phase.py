@@ -3,21 +3,47 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from cafe.core.hooks import BUILTIN_HOOKS, HookResult
 from cafe.core.questions_schema import validate_questions_xml
 from cafe.core.status_codes import PhaseStatusCode, StatusCodeParser
 from cafe.skills.loader import SkillLoader
 
 
+AgentExecutor = Callable[[str], str]
+
+
+@dataclass
+class GenericPhaseExecution:
+    """Result of one generic phase execution."""
+
+    response: str
+    status_code: Optional[PhaseStatusCode]
+    goto_target: Optional[str]
+    context_updates: Dict[str, str] = field(default_factory=dict)
+    events: List[Dict[str, Any]] = field(default_factory=list)
+    artifact_ready: bool = True
+    published: bool = False
+
+
 class GenericPhase:
-    """Build prompts from skill content and validate phase responses."""
+    """Build prompts from skill content and run lifecycle hooks."""
 
     GOTO_PATTERN = re.compile(r"CAFE_GOTO\s*:\s*([a-zA-Z0-9_-]+)")
 
-    def __init__(self, skill_loader: SkillLoader) -> None:
+    def __init__(
+        self,
+        skill_loader: SkillLoader,
+        *,
+        hook_registry: Optional[Dict[str, type]] = None,
+    ) -> None:
         self.skill_loader = skill_loader
+        self.hook_registry = dict(BUILTIN_HOOKS)
+        if hook_registry:
+            self.hook_registry.update(hook_registry)
 
     def build_prompt(
         self,
@@ -72,3 +98,150 @@ class GenericPhase:
             )
         if not validate_questions_xml(questions_xml_file):
             raise ValueError(f"questions.xml format is invalid: {questions_xml_file}")
+
+    def execute(
+        self,
+        *,
+        skill_name: str,
+        step_def: Dict[str, Any],
+        agent_executor: AgentExecutor,
+        context: Optional[Dict[str, str]] = None,
+        output_file: Optional[Path] = None,
+        checklist_file: Optional[Path] = None,
+        questions_xml_file: Optional[Path] = None,
+        max_retries: int = 3,
+    ) -> GenericPhaseExecution:
+        runtime_context = dict(context or {})
+        events: List[Dict[str, Any]] = []
+        artifact_ready = True
+
+        before = self._run_hook_stage(
+            "before_execute",
+            step_def=step_def,
+            skill_name=skill_name,
+            context=runtime_context,
+        )
+        runtime_context.update(before.context_updates)
+        events.extend(before.events)
+        artifact_ready = artifact_ready and before.artifact_ready
+        if not before.continue_pipeline:
+            return GenericPhaseExecution(
+                response="",
+                status_code=before.override_status_code,
+                goto_target=None,
+                context_updates=runtime_context,
+                events=events,
+                artifact_ready=artifact_ready,
+                published=False,
+            )
+
+        prepared = self._run_hook_stage(
+            "prepare_input",
+            step_def=step_def,
+            skill_name=skill_name,
+            context=runtime_context,
+        )
+        runtime_context.update(prepared.context_updates)
+        events.extend(prepared.events)
+        artifact_ready = artifact_ready and prepared.artifact_ready
+
+        response = ""
+        status_code: Optional[PhaseStatusCode] = None
+        goto_target: Optional[str] = None
+        attempt = 0
+        while True:
+            prompt = self.build_prompt(
+                skill_name=skill_name,
+                context=runtime_context,
+                output_file=output_file,
+                checklist_file=checklist_file,
+                questions_xml_file=questions_xml_file,
+            )
+            response = agent_executor(prompt)
+            valid_codes = [
+                PhaseStatusCode(code)
+                for code in step_def.get("valid_status_codes", [])
+                if code in {item.value for item in PhaseStatusCode}
+            ] or list(PhaseStatusCode)
+            status_code, goto_target = self.parse_response(
+                response=response,
+                valid_status_codes=valid_codes,
+            )
+            if questions_xml_file is not None:
+                self.validate_clarification_output(
+                    status_code=status_code,
+                    questions_xml_file=questions_xml_file,
+                )
+
+            after = self._run_hook_stage(
+                "after_execute",
+                step_def=step_def,
+                skill_name=skill_name,
+                context=runtime_context,
+                response=response,
+                status_code=status_code,
+                goto_target=goto_target,
+            )
+            runtime_context.update(after.context_updates)
+            events.extend(after.events)
+            artifact_ready = artifact_ready and after.artifact_ready
+            if after.override_status_code is not None:
+                status_code = after.override_status_code
+
+            if not after.retry_requested:
+                break
+            attempt += 1
+            if attempt >= max_retries:
+                raise RuntimeError("GenericPhase exceeded max retry attempts")
+
+        published = False
+        if artifact_ready:
+            publish = self._run_hook_stage(
+                "publish_output",
+                step_def=step_def,
+                skill_name=skill_name,
+                context=runtime_context,
+                response=response,
+                status_code=status_code,
+                goto_target=goto_target,
+            )
+            runtime_context.update(publish.context_updates)
+            events.extend(publish.events)
+            published = publish.continue_pipeline
+
+        return GenericPhaseExecution(
+            response=response,
+            status_code=status_code,
+            goto_target=goto_target,
+            context_updates=runtime_context,
+            events=events,
+            artifact_ready=artifact_ready,
+            published=published,
+        )
+
+    def _run_hook_stage(
+        self,
+        stage: str,
+        **kwargs: Any,
+    ) -> HookResult:
+        hook_names = kwargs["step_def"].get("hooks", {}).get(stage, [])
+        aggregate = HookResult()
+
+        for hook_name in hook_names:
+            hook_cls = self.hook_registry.get(str(hook_name))
+            if hook_cls is None:
+                raise ValueError(f"Unknown hook '{hook_name}' in stage '{stage}'")
+
+            hook = hook_cls()
+            result = hook.run(stage=stage, **kwargs)
+            aggregate.context_updates.update(result.context_updates)
+            aggregate.events.extend(result.events)
+            aggregate.artifact_ready = aggregate.artifact_ready and result.artifact_ready
+            aggregate.retry_requested = aggregate.retry_requested or result.retry_requested
+            if result.override_status_code is not None:
+                aggregate.override_status_code = result.override_status_code
+            if not result.continue_pipeline:
+                aggregate.continue_pipeline = False
+                break
+
+        return aggregate
