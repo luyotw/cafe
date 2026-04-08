@@ -66,3 +66,16 @@ def test_activate_replaces_placeholders(tmp_path: Path) -> None:
 
     text = loader.activate("spec_first", context={"name": "World"})
     assert "Hello World" in text
+
+
+def test_builtin_catalog_includes_pr_skill(tmp_path: Path) -> None:
+    builtin_root = Path(__file__).resolve().parents[2] / "src" / "cafe" / "data"
+    loader = SkillLoader(
+        project_root=tmp_path / "project",
+        global_root=tmp_path / "global",
+        builtin_root=builtin_root,
+    )
+
+    items = loader.discover()
+
+    assert any(item.name == "pr" and item.source == "builtin" for item in items)
