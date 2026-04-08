@@ -118,3 +118,30 @@ def test_skill_validate_supports_strict_mode(tmp_path: Path, monkeypatch) -> Non
     assert "warning:" in result.stdout
     assert strict_result.exit_code == 1
     assert "does not match folder" in strict_result.stdout
+
+
+def test_help_lists_dynamic_playbook_steps(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".cafe").mkdir(parents=True, exist_ok=True)
+    (tmp_path / ".cafe" / "config.yaml").write_text("playbook: custom\n", encoding="utf-8")
+    playbook_dir = tmp_path / ".cafe" / "playbooks"
+    playbook_dir.mkdir(parents=True, exist_ok=True)
+    (playbook_dir / "custom.yaml").write_text(
+        """
+playbook:
+  id: custom
+steps:
+  qa:
+    skill: review
+    role: reviewer
+    valid_status_codes: [CAFE_CONFIRMED]
+    on:
+      CAFE_CONFIRMED: _done
+""".strip(),
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["--help"])
+
+    assert result.exit_code == 0
+    assert "qa" in result.stdout

@@ -11,6 +11,8 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 import typer
+import click
+from typer.core import TyperGroup
 
 from cafe.ui.inquirer_prompts import prompt_confirm, prompt_list, prompt_text
 from cafe.ui.menu import InteractiveMenu
@@ -47,8 +49,60 @@ from cafe.utils.config import ConfigManager, ConfigError
 from cafe.utils.git_utils import is_branch_initialized
 from cafe.utils.github import GitHubError, GitHubOps
 
+
+def _resolve_runtime_playbook_name() -> str:
+    """Resolve runtime playbook from current issue state or config."""
+    try:
+        issue_name = GitOperations().get_current_branch()
+    except Exception:
+        issue_name = None
+
+    if issue_name:
+        issue_playbook = _resolve_issue_playbook_name(issue_name)
+        if issue_playbook != "default" or (Path.cwd() / ".cafe" / "issues" / issue_name / "workflow_instance.json").exists():
+            return issue_playbook
+    return _resolve_selected_playbook(None)
+
+
+def _build_dynamic_step_click_command(step_name: str) -> Optional[click.Command]:
+    """Build a dynamic CLI command for one playbook step."""
+    playbook_name = _resolve_runtime_playbook_name()
+    step_names = _load_playbook_step_names(playbook_name)
+    if step_name not in step_names:
+        return None
+
+    @click.command(name=step_name, help=f"Run playbook step '{step_name}' via workflow runtime.")
+    def _dynamic_step_command() -> None:
+        workflow(
+            playbook=playbook_name,
+            issue=None,
+            start_step=step_name,
+            single_step=True,
+            dry_run=False,
+        )
+
+    return _dynamic_step_command
+
+
+class DynamicStepTyperGroup(TyperGroup):
+    """Typer group that resolves playbook-defined step commands on demand."""
+
+    def get_command(self, ctx: click.Context, cmd_name: str) -> Optional[click.Command]:
+        command = super().get_command(ctx, cmd_name)
+        if command is not None:
+            return command
+        return _build_dynamic_step_click_command(cmd_name)
+
+    def list_commands(self, ctx: click.Context) -> List[str]:
+        commands = list(super().list_commands(ctx))
+        for step_name in _load_playbook_step_names(_resolve_runtime_playbook_name()):
+            if step_name not in commands:
+                commands.append(step_name)
+        return sorted(commands)
+
 app = typer.Typer(
     name="cafe",
+    cls=DynamicStepTyperGroup,
     help="AI Agent Flow - Automated development workflow with AI agents",
     no_args_is_help=False,
     context_settings={"help_option_names": ["-h", "--help"]},
@@ -140,6 +194,57 @@ def _build_playbook_loader() -> PlaybookLoader:
 def _build_skill_loader() -> SkillLoader:
     """Build skill loader with cwd-based project root."""
     return SkillLoader(project_root=Path.cwd())
+
+
+def _resolve_step_skill_name(step_def: Dict) -> str:
+    """Resolve the representative skill name for one step."""
+    skill = step_def.get("skill")
+    if isinstance(skill, str):
+        return skill
+    if isinstance(skill, dict):
+        if "default" in skill:
+            return str(skill["default"])
+        if skill:
+            first_key = sorted(skill.keys(), key=str)[0]
+            return str(skill[first_key])
+    return ""
+
+
+def _build_legacy_step_command(step_name: str, step_def: Dict) -> List[str]:
+    """Map a playbook step to the current legacy phase CLI."""
+    skill_name = _resolve_step_skill_name(step_def)
+    phase_name = step_name
+    if skill_name in {"spec_first", "spec_revise"}:
+        phase_name = "spec"
+    elif skill_name in {"plan", "develop", "review", "pr"}:
+        phase_name = skill_name
+
+    command_map: Dict[str, List[str]] = {
+        "spec": [
+            sys.executable,
+            "-m",
+            "cafe.ui.cli",
+            "spec",
+            "--no-interactive",
+            "--user-input",
+            "workflow execute",
+        ],
+        "plan": [sys.executable, "-m", "cafe.ui.cli", "plan", "--no-interactive", "--template", "default"],
+        "develop": [
+            sys.executable,
+            "-m",
+            "cafe.ui.cli",
+            "develop",
+            "--no-interactive",
+            "--user-input",
+            "workflow execute",
+        ],
+        "review": [sys.executable, "-m", "cafe.ui.cli", "review", "--no-interactive"],
+        "pr": [sys.executable, "-m", "cafe.ui.cli", "pr", "--no-interactive"],
+    }
+    if phase_name not in command_map:
+        raise ValueError(f"Unsupported step for execute mode: {step_name}")
+    return command_map[phase_name]
 
 
 def _handle_phase_exception(e: Exception, phase_name: str) -> None:
@@ -5775,33 +5880,8 @@ def workflow(
             return "CAFE_CONFIRMED", {str(output_key): str(output_path)}
 
         def execute_step(step_name: str, step_def: Dict, blackboard_state: object) -> tuple[str, Dict[str, str]]:
-            command_map: Dict[str, List[str]] = {
-                "spec": [
-                    sys.executable,
-                    "-m",
-                    "cafe.ui.cli",
-                    "spec",
-                    "--no-interactive",
-                    "--user-input",
-                    "workflow execute",
-                ],
-                "plan": [sys.executable, "-m", "cafe.ui.cli", "plan", "--no-interactive", "--template", "default"],
-                "develop": [
-                    sys.executable,
-                    "-m",
-                    "cafe.ui.cli",
-                    "develop",
-                    "--no-interactive",
-                    "--user-input",
-                    "workflow execute",
-                ],
-                "review": [sys.executable, "-m", "cafe.ui.cli", "review", "--no-interactive"],
-                "pr": [sys.executable, "-m", "cafe.ui.cli", "pr", "--no-interactive"],
-            }
-            if step_name not in command_map:
-                raise ValueError(f"Unsupported step for execute mode: {step_name}")
-
-            result = subprocess.run(command_map[step_name], check=False)
+            command = _build_legacy_step_command(step_name, step_def)
+            result = subprocess.run(command, check=False)
             if result.returncode != 0:
                 raise RuntimeError(f"Step '{step_name}' failed with exit code {result.returncode}")
 
