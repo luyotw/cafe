@@ -132,6 +132,16 @@ def _resolve_selected_playbook(playbook_name: Optional[str]) -> str:
     return str(selected) if selected else "default"
 
 
+def _build_playbook_loader() -> PlaybookLoader:
+    """Build playbook loader with cwd-based project root."""
+    return PlaybookLoader(project_root=Path.cwd())
+
+
+def _build_skill_loader() -> SkillLoader:
+    """Build skill loader with cwd-based project root."""
+    return SkillLoader(project_root=Path.cwd())
+
+
 def _handle_phase_exception(e: Exception, phase_name: str) -> None:
     """Unified exception handling for phase execution.
 
@@ -4877,6 +4887,12 @@ def make(
 agent_app = typer.Typer(help="Manage agents")
 app.add_typer(agent_app, name="agent")
 
+playbook_app = typer.Typer(help="Inspect and validate playbooks")
+app.add_typer(playbook_app, name="playbook")
+
+skill_app = typer.Typer(help="Inspect and validate skills")
+app.add_typer(skill_app, name="skill")
+
 
 def _print_agents(custom_only: bool = False) -> None:
     """Print agents table. Used by agent ls, edit, rm."""
@@ -4904,6 +4920,100 @@ def _print_agents(custom_only: bool = False) -> None:
         return
 
     console.print(table)
+
+
+@playbook_app.command(name="list")
+def playbook_list() -> None:
+    """List resolved playbooks from builtin/global/project catalogs."""
+    loader = _build_playbook_loader()
+    for name in loader.list_playbooks():
+        loaded = loader.load_model(name)
+        console.print(f"{name}\t{loaded.source}\t{loaded.path}")
+
+
+@playbook_app.command(name="show")
+def playbook_show(
+    name: str = typer.Argument(..., help="Playbook name"),
+) -> None:
+    """Show the resolved playbook definition."""
+    try:
+        loaded = _build_playbook_loader().load_model(name)
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1)
+
+    console.print(yaml.dump(loaded.as_dict(), allow_unicode=True, default_flow_style=False, sort_keys=False))
+    console.print(f"\n[dim]source={loaded.source} path={loaded.path}[/dim]")
+    for warning in loaded.warnings:
+        console.print(f"[yellow]warning:[/yellow] {warning}")
+
+
+@playbook_app.command(name="validate")
+def playbook_validate(
+    name: str = typer.Argument(..., help="Playbook name"),
+    strict: bool = typer.Option(False, "--strict", help="Treat warnings as errors"),
+) -> None:
+    """Validate one playbook and print warnings if present."""
+    try:
+        loaded = _build_playbook_loader().load_model(name, strict=strict)
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1)
+
+    console.print(f"[green]Valid[/green] {name} source={loaded.source}")
+    if loaded.warnings:
+        for warning in loaded.warnings:
+            console.print(f"[yellow]warning:[/yellow] {warning}")
+
+
+@skill_app.command(name="list")
+def skill_list() -> None:
+    """List resolved skills from builtin/global/project catalogs."""
+    try:
+        items = _build_skill_loader().discover()
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1)
+
+    for item in items:
+        console.print(f"{item.name}\t{item.source}\t{item.directory}")
+
+
+@skill_app.command(name="show")
+def skill_show(
+    name: str = typer.Argument(..., help="Skill name"),
+) -> None:
+    """Show resolved skill body and references path."""
+    try:
+        loader = _build_skill_loader()
+        items = {item.name: item for item in loader.discover()}
+        body = loader.activate(name)
+        item = items[name]
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1)
+
+    console.print(body)
+    console.print(f"\n[dim]source={item.source} path={item.directory}[/dim]")
+    if item.warning:
+        console.print(f"[yellow]warning:[/yellow] {item.warning}")
+
+
+@skill_app.command(name="validate")
+def skill_validate(
+    strict: bool = typer.Option(False, "--strict", help="Treat warnings as errors"),
+) -> None:
+    """Validate all discovered skills."""
+    try:
+        items = _build_skill_loader().discover(strict=strict)
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1)
+
+    warnings = [item.warning for item in items if item.warning]
+    console.print(f"[green]Valid[/green] {len(items)} skill(s)")
+    for warning in warnings:
+        console.print(f"[yellow]warning:[/yellow] {warning}")
 
 
 @agent_app.command(name="ls")
