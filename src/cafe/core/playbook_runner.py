@@ -43,7 +43,7 @@ class PlaybookRunner:
         playbook_meta = playbook["playbook"]
         self.playbook_id = str(playbook_meta["id"])
         self.steps: Dict = playbook["steps"]
-        self.start_step = next(iter(self.steps.keys()))
+        self.start_step = str(playbook.get("entry_point") or next(iter(self.steps.keys())))
 
         self.blackboard_store = BlackboardStore(issue_dir)
         self.blackboard = self.blackboard_store.load_or_create(self.start_step)
@@ -64,12 +64,26 @@ class PlaybookRunner:
         transitions = step.get("on", {})
         goto_target = self.generic_phase.extract_goto_target(response)
         if goto_target:
-            allowed_targets = {str(target) for target in transitions.values()}
-            if goto_target not in allowed_targets:
-                raise ValueError(
-                    f"Invalid CAFE_GOTO target '{goto_target}' in step '{current_step}': not in allowed transitions"
+            allowed_targets = {str(target) for target in step.get("allowed_goto", [])}
+            if goto_target in allowed_targets:
+                self.blackboard_store.record_event(
+                    self.blackboard,
+                    "goto",
+                    {
+                        "step": current_step,
+                        "goto_target": goto_target,
+                    },
                 )
-            return goto_target
+                return goto_target
+            self.blackboard_store.record_event(
+                self.blackboard,
+                "goto_ignored",
+                {
+                    "step": current_step,
+                    "goto_target": goto_target,
+                    "reason": "not in allowed_goto",
+                },
+            )
 
         if status_code not in transitions:
             return None
@@ -81,6 +95,12 @@ class PlaybookRunner:
 
         for _ in range(max_transitions):
             step_def = self.steps[current_step]
+            assignee_type = str(step_def.get("assignee_type", "agent"))
+            if assignee_type != "agent":
+                raise RuntimeError(
+                    f"Step '{current_step}' has assignee_type={assignee_type}, which is not supported in v0.2. "
+                    "Use v0.3+ or change to assignee_type=agent."
+                )
             response, artifacts = self.executor(current_step, step_def, self.blackboard)
             valid_codes = [
                 PhaseStatusCode(code)

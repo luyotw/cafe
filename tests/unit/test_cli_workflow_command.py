@@ -32,7 +32,7 @@ def test_workflow_command_runs_dry_mode(tmp_path: Path, monkeypatch) -> None:
 def test_workflow_command_runs_execute_mode(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-200"
-    for phase in ["spec", "plan", "develop", "review"]:
+    for phase in ["spec", "plan", "develop", "review", "pr"]:
         phase_dir = issue_dir / phase
         phase_dir.mkdir(parents=True, exist_ok=True)
         (phase_dir / "status.json").write_text('{"status_code":"CAFE_CONFIRMED"}', encoding="utf-8")
@@ -55,7 +55,7 @@ def test_workflow_command_runs_execute_mode(tmp_path: Path, monkeypatch) -> None
         result = runner.invoke(app, ["workflow", "--playbook", "default", "--execute"])
         assert result.exit_code == 0
         assert "Workflow completed" in result.stdout
-        assert mock_run.call_count >= 4
+        assert mock_run.call_count >= 5
         first_cmd = mock_run.call_args_list[0][0][0]
         assert "spec" in first_cmd
         assert "--auto" not in first_cmd
@@ -89,6 +89,7 @@ steps:
   spec:
     skill: spec_first
     role: pm
+    allowed_goto: [develop]
     valid_status_codes: [CAFE_CONFIRMED, CAFE_NEED_CLARIFICATION]
     on:
       CAFE_CONFIRMED: plan
@@ -98,7 +99,7 @@ steps:
     role: developer
     valid_status_codes: [CAFE_CONFIRMED]
     on:
-      CAFE_CONFIRMED: review
+      CAFE_CONFIRMED: _done
   develop:
     skill: develop
     role: developer

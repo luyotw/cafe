@@ -5633,6 +5633,7 @@ def workflow(
                     "workflow execute",
                 ],
                 "review": [sys.executable, "-m", "cafe.ui.cli", "review", "--no-interactive"],
+                "pr": [sys.executable, "-m", "cafe.ui.cli", "pr", "--no-interactive"],
             }
             if step_name not in command_map:
                 raise ValueError(f"Unsupported step for execute mode: {step_name}")

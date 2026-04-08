@@ -39,7 +39,7 @@ def test_runner_can_advance_and_loop_back(tmp_path: Path) -> None:
                 "skill": "spec_first",
                 "role": "reviewer",
                 "valid_status_codes": ["CAFE_NEEDS_CHANGES", "CAFE_CONFIRMED"],
-                "on": {"CAFE_NEEDS_CHANGES": "develop", "CAFE_CONFIRMED": "pr"},
+                "on": {"CAFE_NEEDS_CHANGES": "develop", "CAFE_CONFIRMED": "_done"},
             },
         },
     }
@@ -67,7 +67,7 @@ def test_runner_can_advance_and_loop_back(tmp_path: Path) -> None:
     assert result.final_status_code == "CAFE_CONFIRMED"
 
 
-def test_runner_rejects_invalid_goto_target(tmp_path: Path) -> None:
+def test_runner_ignores_invalid_goto_target_and_falls_back(tmp_path: Path) -> None:
     playbook = {
         "playbook": {"id": "default"},
         "steps": {
@@ -75,13 +75,22 @@ def test_runner_rejects_invalid_goto_target(tmp_path: Path) -> None:
                 "skill": "spec_first",
                 "role": "developer",
                 "valid_status_codes": ["CAFE_CONFIRMED"],
+                "allowed_goto": ["review"],
                 "on": {"CAFE_CONFIRMED": "review"},
+            },
+            "review": {
+                "skill": "spec_first",
+                "role": "reviewer",
+                "valid_status_codes": ["CAFE_CONFIRMED"],
+                "on": {"CAFE_CONFIRMED": "_done"},
             }
         },
     }
 
     def executor(step_name: str, step_def: dict, state: object) -> tuple[str, dict[str, str]]:
-        return ("CAFE_CONFIRMED\nCAFE_GOTO:not_exist", {})
+        if step_name == "develop":
+            return ("CAFE_CONFIRMED\nCAFE_GOTO:not_exist", {})
+        return ("CAFE_CONFIRMED", {})
 
     runner = PlaybookRunner(
         issue_dir=tmp_path / ".cafe" / "issues" / "demo",
@@ -89,11 +98,12 @@ def test_runner_rejects_invalid_goto_target(tmp_path: Path) -> None:
         generic_phase=_build_loader(tmp_path),
         executor=executor,
     )
-    with pytest.raises(ValueError, match="Invalid CAFE_GOTO target"):
-        runner.run()
+    result = runner.run()
+    assert result.final_step == "review"
+    assert result.final_status_code == "CAFE_CONFIRMED"
 
 
-def test_runner_rejects_goto_to_existing_but_disallowed_step(tmp_path: Path) -> None:
+def test_runner_uses_allowed_goto_target(tmp_path: Path) -> None:
     playbook = {
         "playbook": {"id": "default"},
         "steps": {
@@ -101,6 +111,7 @@ def test_runner_rejects_goto_to_existing_but_disallowed_step(tmp_path: Path) -> 
                 "skill": "spec_first",
                 "role": "developer",
                 "valid_status_codes": ["CAFE_CONFIRMED"],
+                "allowed_goto": ["spec"],
                 "on": {"CAFE_CONFIRMED": "review"},
             },
             "review": {
@@ -127,5 +138,33 @@ def test_runner_rejects_goto_to_existing_but_disallowed_step(tmp_path: Path) -> 
         generic_phase=_build_loader(tmp_path),
         executor=executor,
     )
-    with pytest.raises(ValueError, match="not in allowed transitions"):
+    result = runner.run()
+    assert result.final_step == "spec"
+    assert result.final_status_code == "CAFE_CONFIRMED"
+
+
+def test_runner_rejects_reserved_assignee_type_at_runtime(tmp_path: Path) -> None:
+    playbook = {
+        "playbook": {"id": "default"},
+        "steps": {
+            "develop": {
+                "skill": "spec_first",
+                "role": "developer",
+                "assignee_type": "human",
+                "valid_status_codes": ["CAFE_CONFIRMED"],
+                "on": {"CAFE_CONFIRMED": "_done"},
+            }
+        },
+    }
+
+    def executor(step_name: str, step_def: dict, state: object) -> tuple[str, dict[str, str]]:
+        return ("CAFE_CONFIRMED", {})
+
+    runner = PlaybookRunner(
+        issue_dir=tmp_path / ".cafe" / "issues" / "demo",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        executor=executor,
+    )
+    with pytest.raises(RuntimeError, match="assignee_type=human"):
         runner.run()

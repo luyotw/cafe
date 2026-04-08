@@ -1,12 +1,12 @@
-"""Playbook loader and schema validation."""
+"""Playbook loader compatibility wrapper."""
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
-import yaml
-
+from cafe.core.playbook import LoadedPlaybook, load_playbook_file
+from cafe.skills.loader import SkillLoader
 from cafe.utils.config import get_global_cafe_dir
 
 
@@ -40,6 +40,13 @@ class PlaybookLoader:
             self.project_root / ".cafe" / "playbooks",
         ]
 
+    def _source_roots(self) -> List[Tuple[str, Path]]:
+        return [
+            ("builtin", self.builtin_root / "playbooks"),
+            ("global", self.global_root / "playbooks"),
+            ("project", self.project_root / ".cafe" / "playbooks"),
+        ]
+
     def list_playbooks(self) -> List[str]:
         names = set()
         for root in self._roots():
@@ -49,60 +56,28 @@ class PlaybookLoader:
                 names.add(file.stem)
         return sorted(names)
 
-    def _resolve_path(self, name: str) -> Path:
+    def _resolve_path(self, name: str) -> tuple[str, Path]:
         filename = f"{name}.yaml" if not name.endswith(".yaml") else name
-        for root in reversed(self._roots()):
+        for source, root in reversed(self._source_roots()):
             path = root / filename
             if path.exists():
-                return path
+                return source, path
         raise FileNotFoundError(f"Playbook not found: {name}")
 
-    @staticmethod
-    def _normalize_step_keys(data: Dict) -> Dict:
-        """Normalize YAML 1.1 bool-converted keys like `on` -> True."""
-        steps = data.get("steps")
-        if not isinstance(steps, dict):
-            return data
+    def load_model(self, name: str, *, strict: bool = False) -> LoadedPlaybook:
+        source, path = self._resolve_path(name)
+        skill_loader = SkillLoader(
+            project_root=self.project_root,
+            global_root=self.global_root,
+            builtin_root=self.builtin_root,
+        )
+        skill_loader.discover(strict=strict)
+        return load_playbook_file(
+            path,
+            source=source,
+            skill_loader=skill_loader,
+            strict=strict,
+        )
 
-        for step in steps.values():
-            if not isinstance(step, dict):
-                continue
-            if "on" not in step and True in step and isinstance(step[True], dict):
-                step["on"] = step.pop(True)
-        return data
-
-    @staticmethod
-    def _validate_schema(data: Dict) -> None:
-        if not isinstance(data, dict):
-            raise ValueError("Playbook must be a mapping")
-
-        playbook_meta = data.get("playbook")
-        if not isinstance(playbook_meta, dict):
-            raise ValueError("Missing playbook metadata")
-        if not playbook_meta.get("id"):
-            raise ValueError("playbook.id is required")
-
-        steps = data.get("steps")
-        if not isinstance(steps, dict) or not steps:
-            raise ValueError("steps must be a non-empty mapping")
-
-        for step_name, step in steps.items():
-            if not isinstance(step, dict):
-                raise ValueError(f"Step '{step_name}' must be a mapping")
-            if "role" not in step:
-                raise ValueError(f"Step '{step_name}' missing role")
-            if "skill" not in step:
-                raise ValueError(f"Step '{step_name}' missing skill")
-            if "valid_status_codes" not in step or not isinstance(step["valid_status_codes"], list):
-                raise ValueError(f"Step '{step_name}' missing valid_status_codes list")
-            if "on" not in step or not isinstance(step["on"], dict):
-                raise ValueError(f"Step '{step_name}' missing on transition map")
-
-    def load(self, name: str) -> Dict:
-        path = self._resolve_path(name)
-        data = yaml.safe_load(path.read_text(encoding="utf-8"))
-        if data is None:
-            raise ValueError(f"Playbook is empty: {path}")
-        data = self._normalize_step_keys(data)
-        self._validate_schema(data)
-        return data
+    def load(self, name: str, *, strict: bool = False) -> Dict:
+        return self.load_model(name, strict=strict).as_dict()
