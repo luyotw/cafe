@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from cafe.core.blackboard import BlackboardStore
-from cafe.core.playbook_runner import PlaybookRunner
+from cafe.core.playbook_runner import PlaybookRunner, StepExecutionResult
 from cafe.phases.generic_phase import GenericPhase
 from cafe.skills.loader import SkillLoader
 
@@ -224,6 +224,192 @@ def test_runner_pauses_when_step_needs_clarification(tmp_path: Path) -> None:
     pause_events = [event for event in blackboard.events if event.event_type == "workflow_paused"]
     assert pause_events
     assert pause_events[-1].data["status_code"] == "CAFE_NEED_CLARIFICATION"
+
+
+def test_runner_auto_continues_after_consuming_user_input(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo"
+    playbook = {
+        "playbook": {"id": "default"},
+        "steps": {
+            "spec": {
+                "skill": "spec_first",
+                "role": "pm",
+                "valid_status_codes": ["CAFE_READY_FOR_REVIEW", "CAFE_CONFIRMED"],
+                "on": {"CAFE_READY_FOR_REVIEW": "spec", "CAFE_CONFIRMED": "plan"},
+            },
+            "plan": {
+                "skill": "spec_first",
+                "role": "developer",
+                "valid_status_codes": ["CAFE_CONFIRMED"],
+                "on": {"CAFE_CONFIRMED": "_done"},
+            },
+        },
+    }
+    executed_steps: list[str] = []
+
+    def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
+        executed_steps.append(step_name)
+        if executed_steps == ["spec"]:
+            return StepExecutionResult(
+                response="CAFE_READY_FOR_REVIEW",
+                artifacts={},
+                auto_continue=True,
+            )
+        return StepExecutionResult(response="CAFE_CONFIRMED", artifacts={})
+
+    runner = PlaybookRunner(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        executor=executor,
+    )
+    result = runner.run(max_transitions=5)
+
+    assert result.completed is True
+    assert result.final_step == "plan"
+    assert executed_steps == ["spec", "spec", "plan"]
+
+
+def test_runner_accepts_explicit_status_code_without_response_body(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo"
+    playbook = {
+        "playbook": {"id": "default"},
+        "steps": {
+            "spec": {
+                "skill": "spec_first",
+                "role": "pm",
+                "valid_status_codes": ["CAFE_CONFIRMED"],
+                "on": {"CAFE_CONFIRMED": "plan"},
+            },
+            "plan": {
+                "skill": "spec_first",
+                "role": "developer",
+                "valid_status_codes": ["CAFE_CONFIRMED"],
+                "on": {"CAFE_CONFIRMED": "_done"},
+            },
+        },
+    }
+    executed_steps: list[str] = []
+
+    def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
+        executed_steps.append(step_name)
+        if step_name == "spec":
+            return StepExecutionResult(
+                response="",
+                artifacts={},
+                status_code="CAFE_CONFIRMED",
+            )
+        return StepExecutionResult(
+            response="CAFE_CONFIRMED",
+            artifacts={},
+            status_code="CAFE_CONFIRMED",
+        )
+
+    runner = PlaybookRunner(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        executor=executor,
+    )
+    result = runner.run(max_transitions=5)
+
+    assert result.completed is True
+    assert result.final_step == "plan"
+    assert executed_steps == ["spec", "plan"]
+
+
+def test_runner_resumes_from_next_step_when_current_step_already_confirmed(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo"
+    spec_dir = issue_dir / "spec"
+    spec_dir.mkdir(parents=True, exist_ok=True)
+    (spec_dir / "status.json").write_text(
+        '{"status_code":"CAFE_CONFIRMED","iteration":3}',
+        encoding="utf-8",
+    )
+    plan_dir = issue_dir / "plan"
+    plan_dir.mkdir(parents=True, exist_ok=True)
+
+    playbook = {
+        "playbook": {"id": "default"},
+        "steps": {
+            "spec": {
+                "skill": "spec_first",
+                "role": "pm",
+                "valid_status_codes": ["CAFE_CONFIRMED"],
+                "on": {"CAFE_CONFIRMED": "plan"},
+            },
+            "plan": {
+                "skill": "spec_first",
+                "role": "developer",
+                "valid_status_codes": ["CAFE_CONFIRMED"],
+                "on": {"CAFE_CONFIRMED": "_done"},
+            },
+        },
+    }
+    executed_steps: list[str] = []
+
+    def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
+        executed_steps.append(step_name)
+        return StepExecutionResult(
+            response="CAFE_CONFIRMED",
+            artifacts={},
+            status_code="CAFE_CONFIRMED",
+        )
+
+    runner = PlaybookRunner(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        executor=executor,
+    )
+    result = runner.run(max_transitions=5)
+
+    assert result.completed is True
+    assert result.final_step == "plan"
+    assert executed_steps == ["plan"]
+
+
+def test_runner_does_not_pause_when_interactive_step_requests_review_iteration(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo"
+    playbook = {
+        "playbook": {"id": "default"},
+        "steps": {
+            "plan": {
+                "skill": "spec_first",
+                "role": "developer",
+                "valid_status_codes": ["CAFE_READY_FOR_REVIEW", "CAFE_CONFIRMED"],
+                "on": {"CAFE_READY_FOR_REVIEW": "plan", "CAFE_CONFIRMED": "_done"},
+            },
+        },
+    }
+    executed_steps: list[str] = []
+
+    def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
+        executed_steps.append(step_name)
+        if len(executed_steps) == 1:
+            return StepExecutionResult(
+                response="CAFE_READY_FOR_REVIEW",
+                artifacts={},
+                status_code="CAFE_READY_FOR_REVIEW",
+                auto_continue=True,
+            )
+        return StepExecutionResult(
+            response="CAFE_CONFIRMED",
+            artifacts={},
+            status_code="CAFE_CONFIRMED",
+        )
+
+    runner = PlaybookRunner(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        executor=executor,
+    )
+    result = runner.run(max_transitions=5)
+
+    assert result.completed is True
+    assert result.final_step == "plan"
+    assert executed_steps == ["plan", "plan"]
 
 
 

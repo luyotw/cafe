@@ -102,10 +102,10 @@ def test_generic_workflow_step_executor_writes_iteration_files(tmp_path: Path, m
         role_agent_map={"pm": "Roger"},
     )
 
-    response, artifacts = executor.execute_step("spec", playbook["steps"]["spec"], state)
+    result = executor.execute_step("spec", playbook["steps"]["spec"], state)
 
-    assert response == "CAFE_CONFIRMED"
-    assert "spec" in artifacts
+    assert result.response == "CAFE_CONFIRMED"
+    assert "spec" in result.artifacts
     iteration_dir = issue_dir / "spec" / "iteration_001"
     assert (iteration_dir / "context.json").exists()
     assert (iteration_dir / "checklist.md").exists()
@@ -225,16 +225,17 @@ def test_generic_workflow_step_collects_clarification_before_next_agent_run(
         role_agent_map={"pm": "Roger"},
     )
 
-    first_response, _ = executor.execute_step("spec", playbook["steps"]["spec"], state)
-    assert first_response == "CAFE_NEED_CLARIFICATION"
+    first_result = executor.execute_step("spec", playbook["steps"]["spec"], state)
+    assert first_result.response == "CAFE_NEED_CLARIFICATION"
+    assert first_result.auto_continue is False
 
     with patch(
         "cafe.core.hooks.native.interactive_qa_flow",
         return_value="Q1: Which flow should we support first?\nA1: CLI only",
     ):
-        second_response, _ = executor.execute_step("spec", playbook["steps"]["spec"], state)
+        second_result = executor.execute_step("spec", playbook["steps"]["spec"], state)
 
-    assert second_response == "CAFE_CONFIRMED"
+    assert second_result.response == "CAFE_CONFIRMED"
     assert any(
         "Current user input for this iteration:" in prompt and "A1: CLI only" in prompt
         for prompt in agent_manager.prompts
@@ -243,3 +244,49 @@ def test_generic_workflow_step_collects_clarification_before_next_agent_run(
     assert user_input_file.read_text(encoding="utf-8") == (
         "Q1: Which flow should we support first?\nA1: CLI only"
     )
+
+
+def test_generic_workflow_step_auto_continues_pause_statuses_in_interactive_mode(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-review"
+    spec_dir = issue_dir / "spec" / "iteration_001"
+    spec_dir.mkdir(parents=True, exist_ok=True)
+    (spec_dir / "output.md").write_text("# Spec\n", encoding="utf-8")
+    (spec_dir / "context.json").write_text(
+        '{"iteration":1,"status_code":"CAFE_CONFIRMED"}',
+        encoding="utf-8",
+    )
+    (issue_dir / "spec" / "status.json").write_text(
+        '{"phase":"spec","status":"completed","status_code":"CAFE_CONFIRMED","iteration":1}',
+        encoding="utf-8",
+    )
+    playbook = {
+        "playbook": {"id": "default"},
+        "roles": {"developer": {"default_agent": "David"}},
+        "steps": {
+            "plan": {
+                "skill": "plan",
+                "role": "developer",
+                "output_artifact": "plan",
+                "allowed_tools": ["Read"],
+                "valid_status_codes": ["CAFE_READY_FOR_REVIEW"],
+                "on": {"CAFE_READY_FOR_REVIEW": "plan"},
+            }
+        },
+    }
+    state = BlackboardStore(issue_dir).load_or_create("plan")
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="issue-review",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=FakeAgentManager("CAFE_READY_FOR_REVIEW"),
+        git_ops=FakeGitOperations(),
+        role_agent_map={"developer": "David"},
+        interactive=True,
+    )
+
+    result = executor.execute_step("plan", playbook["steps"]["plan"], state)
+
+    assert result.response == "CAFE_READY_FOR_REVIEW"
+    assert result.auto_continue is True

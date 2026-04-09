@@ -58,7 +58,11 @@ class PRCommentPoster(NoOpHook):
     name = "PRCommentPoster"
 
 
-from cafe.core.hooks.native import GitHubIssueFetcher, UserInputCollector
+class PRLinkOpener(NoOpHook):
+    name = "PRLinkOpener"
+
+
+from cafe.core.hooks.native import GitHubIssueFetcher, PRLinkOpener, UserInputCollector
 
 
 BUILTIN_HOOKS = {
@@ -71,5 +75,6 @@ BUILTIN_HOOKS = {
         NewChangesGate,
         GitHubPRCreator,
         PRCommentPoster,
+        PRLinkOpener,
     ]
 }

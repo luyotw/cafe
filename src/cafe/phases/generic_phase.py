@@ -150,6 +150,16 @@ class GenericPhase:
         runtime_context.update(prepared.context_updates)
         events.extend(prepared.events)
         artifact_ready = artifact_ready and prepared.artifact_ready
+        if not prepared.continue_pipeline:
+            return GenericPhaseExecution(
+                response="",
+                status_code=prepared.override_status_code,
+                goto_target=None,
+                context_updates=runtime_context,
+                events=events,
+                artifact_ready=artifact_ready,
+                published=False,
+            )
 
         response = ""
         status_code: Optional[PhaseStatusCode] = None
