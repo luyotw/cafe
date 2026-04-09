@@ -23,6 +23,8 @@ def test_workflow_command_runs_dry_mode(tmp_path: Path, monkeypatch) -> None:
 
         result = runner.invoke(app, ["workflow", "--playbook", "default", "--dry-run"])
         assert result.exit_code == 0
+        assert "Workflow context" in result.stdout
+        assert "playbook=default step=spec" in result.stdout
         assert "Workflow completed" in result.stdout
         workflow_file = tmp_path / ".cafe" / "issues" / "issue-100" / "workflow_instance.json"
         blackboard_file = tmp_path / ".cafe" / "issues" / "issue-100" / "blackboard.json"
@@ -49,6 +51,8 @@ def test_workflow_command_runs_execute_mode(tmp_path: Path, monkeypatch) -> None
 
         result = runner.invoke(app, ["workflow", "--playbook", "default", "--execute"])
         assert result.exit_code == 0
+        assert "Workflow context" in result.stdout
+        assert "playbook=default step=spec" in result.stdout
         assert "Workflow completed" in result.stdout
         assert mock_builder.called
         assert executed_steps == ["spec", "plan", "develop", "review", "pr"]
@@ -91,6 +95,8 @@ def test_workflow_command_consumes_chat_baton_before_execution(tmp_path: Path, m
         result = runner.invoke(app, ["workflow", "--playbook", "default", "--execute"])
         assert result.exit_code == 0
 
+    assert "Workflow context" in result.stdout
+    assert "playbook=default step=plan" in result.stdout
     assert executed_steps == ["plan", "develop", "review", "pr"]
     assert not next_step_file.exists()
     workflow_data = json.loads((issue_dir / "workflow_instance.json").read_text(encoding="utf-8"))
