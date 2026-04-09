@@ -6,10 +6,11 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from cafe.core.blackboard import BlackboardStore
-from cafe.core.types import TokenUsage
+from cafe.core.types import AgentCLI, TokenUsage
 from cafe.phases.generic_phase import GenericPhase
 from cafe.phases.generic_workflow_step import GenericWorkflowStepExecutor
 from cafe.skills.loader import SkillLoader
+from cafe.skills.native_bridge import NativeSkillBridge
 
 
 class FakeAgentManager:
@@ -22,7 +23,7 @@ class FakeAgentManager:
         self.on_execute = on_execute
 
     def get_agent(self, name: str) -> SimpleNamespace:
-        return SimpleNamespace(config=SimpleNamespace(cli=SimpleNamespace(value="codex"), session_id="session-1"))
+        return SimpleNamespace(config=SimpleNamespace(cli=AgentCLI.CODEX, session_id="session-1"))
 
     def execute(
         self,
@@ -69,7 +70,7 @@ def _build_loader(tmp_path: Path) -> GenericPhase:
         builtin_root=tmp_path / "builtin",
     )
     loader.discover()
-    return GenericPhase(loader)
+    return GenericPhase(loader, skill_bridge=NativeSkillBridge(loader, home_dir=tmp_path / "home"))
 
 
 def test_generic_workflow_step_executor_writes_iteration_files(tmp_path: Path, monkeypatch) -> None:
