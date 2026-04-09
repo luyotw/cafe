@@ -14,12 +14,7 @@ def mock_dependencies():
          patch("cafe.ui.cli._setup_agents") as mock_setup_agents, \
          patch("cafe.ui.cli.GitOperations") as mock_git_ops, \
          patch("cafe.ui.cli._get_latest_versioned_file") as mock_get_latest_file, \
-         patch("cafe.ui.cli.is_branch_initialized", return_value=True), \
-         patch("cafe.ui.cli.SpecPhase"), \
-         patch("cafe.ui.cli.PlanPhase"), \
-         patch("cafe.ui.cli.DevelopPhase"), \
-         patch("cafe.ui.cli.ReviewPhase"), \
-         patch("cafe.ui.cli.PRPhase"):
+         patch("cafe.ui.cli.is_branch_initialized", return_value=True):
         
         # Setup common mocks
         mock_git_instance = MagicMock()
@@ -67,6 +62,7 @@ def test_plan_command_passes_phase_name(mock_dependencies):
         step_name="plan",
         config_manager=ANY,
         role_agent_map_override=None,
+        user_input=None,
         show_prompt=False,
     )
 

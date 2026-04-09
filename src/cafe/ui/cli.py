@@ -14,7 +14,7 @@ import typer
 import click
 from typer.core import TyperGroup
 
-from cafe.ui.inquirer_prompts import prompt_confirm, prompt_list, prompt_text
+from cafe.ui.inquirer_prompts import prompt_confirm, prompt_list, prompt_multiline, prompt_text
 from cafe.ui.menu import InteractiveMenu
 import yaml
 from rich.console import Console
@@ -27,11 +27,6 @@ from cafe.core.types import AgentCLI, AgentConfig
 from cafe.phases.generic_phase import GenericPhase
 from cafe.phases.generic_workflow_step import GenericWorkflowStepExecutor
 from cafe.playbooks.loader import PlaybookLoader
-from cafe.phases.develop_phase import DevelopPhase
-from cafe.phases.plan_phase import PlanPhase
-from cafe.phases.pr_phase import PRPhase
-from cafe.phases.review_phase import ReviewPhase
-from cafe.phases.spec_phase import SpecPhase
 from cafe.skills.loader import SkillLoader
 from cafe.templates.manager import TemplateManager
 from cafe.ui import init_helpers
@@ -357,107 +352,71 @@ def _execute_single_step_alias(
     }
 
 
-def _should_alias_spec_command(
+def _reject_unsupported_phase_options(phase_name: str, unsupported_options: Dict[str, bool]) -> None:
+    """Exit when a legacy-only CLI option is requested."""
+    unsupported = [name for name, enabled in unsupported_options.items() if enabled]
+    if not unsupported:
+        return
+    rendered = ", ".join(f"--{name}" for name in unsupported)
+    console.print(
+        f"[red]Error: {phase_name} no longer supports legacy phase options: {rendered}[/red]"
+    )
+    console.print(
+        "[dim]Use the workflow runtime directly or rerun without those flags.[/dim]"
+    )
+    raise typer.Exit(1)
+
+
+def _run_iterative_alias_step(
     *,
+    issue_name: str,
+    step_name: str,
+    config_manager: ConfigManager,
     interactive: bool,
     auto: bool,
-    issue_id: Optional[str],
-    fetch_issue_id: Optional[int],
-    rigor: Optional[str],
-    template: Optional[str],
-    sync_github: Optional[bool],
-) -> bool:
-    return (
-        not interactive
-        and not auto
-        and issue_id is None
-        and fetch_issue_id is None
-        and rigor is None
-        and template is None
-        and sync_github is None
-    )
+    continuation_statuses: List[str],
+    role_agent_map_override: Optional[Dict[str, str]] = None,
+    user_input: Optional[str] = None,
+    show_prompt: bool = False,
+    clarification_prompt: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Execute one step repeatedly through workflow aliases until it settles."""
+    current_input = user_input
+    iteration_count = 1
 
+    while True:
+        if iteration_count > 1:
+            console.print(f"\n[bold cyan]━━━ Iteration {iteration_count} ━━━[/bold cyan]\n")
 
-def _should_alias_plan_command(
-    *,
-    interactive: bool,
-    auto: bool,
-    issue_id: Optional[str],
-    sync_github: Optional[bool],
-) -> bool:
-    return (
-        not interactive
-        and not auto
-        and issue_id is None
-        and sync_github is None
-    )
+        alias_result = _execute_single_step_alias(
+            issue_name=issue_name,
+            step_name=step_name,
+            config_manager=config_manager,
+            role_agent_map_override=role_agent_map_override,
+            user_input=current_input,
+            show_prompt=show_prompt,
+        )
+        status_code = alias_result["status_code"]
+        if status_code not in continuation_statuses:
+            return alias_result
+        if not interactive:
+            return alias_result
 
+        console.print()
+        if status_code == "CAFE_NEED_CLARIFICATION":
+            console.print("[yellow]💬 Agent needs clarification[/yellow]")
+        else:
+            console.print("[yellow]📝 Draft ready for review[/yellow]")
 
-def _should_alias_develop_command(
-    *,
-    interactive: bool,
-    mode: str,
-    issue_id: Optional[str],
-    approve_denied_tools: Optional[str],
-    pr_number: Optional[int],
-    auto: bool,
-) -> bool:
-    return (
-        not interactive
-        and not auto
-        and mode == "local"
-        and issue_id is None
-        and approve_denied_tools is None
-        and pr_number is None
-    )
+        should_continue = auto or prompt_confirm("Continue to next iteration?", default=True)
+        if not should_continue:
+            console.print("[dim]Stopped by user.[/dim]")
+            return alias_result
 
-
-def _should_alias_review_command(
-    *,
-    interactive: bool,
-    mode: str,
-    issue_id: Optional[str],
-    commit: Optional[str],
-    base_branch: str,
-    pr_number: Optional[int],
-    auto: bool,
-    force: bool,
-) -> bool:
-    return (
-        not interactive
-        and not auto
-        and mode == "local"
-        and issue_id is None
-        and commit is None
-        and base_branch == "main"
-        and pr_number is None
-        and not force
-    )
-
-
-def _should_alias_pr_command(
-    *,
-    interactive: bool,
-    auto: bool,
-    draft: Optional[bool],
-    title: Optional[str],
-    body: Optional[str],
-    update: bool,
-    force: bool,
-    base: str,
-    post_todo_list: Optional[bool],
-) -> bool:
-    return (
-        not interactive
-        and not auto
-        and draft is None
-        and title is None
-        and body is None
-        and not update
-        and not force
-        and base == "main"
-        and post_todo_list is None
-    )
+        if status_code == "CAFE_NEED_CLARIFICATION" and clarification_prompt:
+            current_input = prompt_multiline(clarification_prompt).strip() or current_input
+        iteration_count += 1
+        console.print("[dim]Continuing...[/dim]")
 
 
 def _check_agent_clis_available(config_manager: ConfigManager) -> List[str]:
@@ -2934,298 +2893,72 @@ def spec(
             config_manager.load_config()
         except ConfigError:
             config_manager._config = config_manager.get_default_config()
-
-        if _should_alias_spec_command(
-            interactive=interactive,
-            auto=auto,
-            issue_id=issue_id,
-            fetch_issue_id=fetch_issue_id,
-            rigor=rigor,
-            template=template,
-            sync_github=sync_github,
-        ):
-            alias_result = _execute_single_step_alias(
-                issue_name=issue_name,
-                step_name="spec",
-                config_manager=config_manager,
-                role_agent_map_override={"pm": pm_agent} if pm_agent else None,
-                user_input=user_input,
-                show_prompt=show_prompt,
-            )
-            status_code = alias_result["status_code"]
-            console.print()
-            if status_code == "CAFE_CONFIRMED":
-                console.print("[bold green]✅ Spec clarification completed![/bold green]")
-                console.print(f"Iterations: {alias_result.get('iterations', 'N/A')}")
-                if alias_result.get("output_file"):
-                    console.print(f"Saved to: {alias_result['output_file']}")
-                console.print()
-                console.print("[dim]Next step:[/dim] [bold]cafe plan[/bold]")
-            elif status_code == "CAFE_READY_FOR_REVIEW":
-                console.print("[bold green]✅ Spec draft completed![/bold green]")
-                console.print(f"Iterations: {alias_result.get('iterations', 'N/A')}")
-                if alias_result.get("output_file"):
-                    console.print(f"Saved to: {alias_result['output_file']}")
-                console.print()
-                console.print("[dim]Please review the spec and run:[/dim] [bold]cafe spec[/bold]")
-            elif status_code == "CAFE_NEED_CLARIFICATION":
-                console.print("[bold yellow]💬 Agent needs clarification[/bold yellow]")
-                console.print(f"Iterations: {alias_result.get('iterations', 'N/A')}")
-                if alias_result.get("output_file"):
-                    console.print(f"Saved to: {alias_result['output_file']}")
-                console.print()
-                console.print("[dim]To continue, run:[/dim] [bold]cafe spec[/bold]")
-            else:
-                console.print(f"[bold yellow]Status: {status_code}[/bold yellow]")
-            return
-
-        # Load issue config to get saved rigor and template settings
-        import yaml
-
-        issue_config_file = Path(f".cafe/issues/{issue_name}/issue.yaml")
-        saved_rigor = None
-        saved_template = None
-        if issue_config_file.exists():
-            with open(issue_config_file, "r", encoding="utf-8") as f:
-                config_data = yaml.safe_load(f) or {}
-                spec_config = config_data.get("spec", {})
-                saved_rigor = spec_config.get("rigor")
-                saved_template = spec_config.get("template")
-
-        # Validate rigor (if specified via flag, otherwise use saved value)
-        spec_rigor = None
-        if rigor:
-            # CLI flag takes precedence
-            try:
-                from cafe.core.types import SpecRigor
-
-                spec_rigor = SpecRigor(rigor)
-            except ValueError:
-                console.print(
-                    f"[red]Error: Invalid rigor '{rigor}'. Use 'low', 'medium', or 'high'.[/red]"
-                )
-                raise typer.Exit(1)
-        elif saved_rigor:
-            # Use saved rigor from config
-            try:
-                from cafe.core.types import SpecRigor
-
-                spec_rigor = SpecRigor(saved_rigor)
-            except ValueError:
-                # Ignore invalid saved value
-                pass
-
-        # Determine template to use (CLI flag > saved config > default "auto")
-        spec_template = template if template else (saved_template if saved_template else "auto")
-
-        # Get template path if not "auto"
-        spec_template_path = None
-        if spec_template and spec_template != "auto":
-            template_manager = TemplateManager(template_type="spec")
-            spec_template_path = template_manager.get_template_path(spec_template)
-            if not spec_template_path:
-                console.print(f"[yellow]⚠️  Warning: Template '{spec_template}' not found, using auto mode[/yellow]")
-                spec_template = "auto"
-                spec_template_path = None
-
-        # Create spec directory if it doesn't exist
-        spec_dir = Path(f".cafe/issues/{issue_name}/spec")
-        spec_dir.mkdir(parents=True, exist_ok=True)
-
-        # Initialize components
-        agent_manager = _setup_agents(config_manager, issue_name=issue_name, phase_name="spec")
-        permission_handler = PermissionHandler()
-        git_ops = GitOperations()
-
-        # Set show_prompt flag
-        agent_manager.show_prompt = show_prompt
-
-        # Get PM agent name (from flag or config)
-        if pm_agent is None:
-            pm_agent = config_manager.get("agents.pm.name", "Roger")
-
-        # Get PM agent CLI
-        pm_executor = agent_manager.get_agent(pm_agent)
-        pm_cli = pm_executor.config.cli.value
-        pm_session_id = pm_executor.config.session_id or "(will be created)"
-
-        # Display start message
-        console.print("[bold blue]🎯 Spec Phase: Specification Clarification[/bold blue]")
-        console.print(f"Issue: {issue_name}")
-        console.print(f"PM Agent: {pm_agent}")
-        pm_model = pm_executor.config.model or "default"
-        console.print(f"CLI: {pm_cli}")
-        console.print(f"Model: {pm_model}")
-        console.print(f"Session ID: {pm_session_id}")
-        if spec_rigor:
-            console.print(f"Rigor: {spec_rigor.value}")
-        console.print(f"Spec directory: {spec_dir}")
-        if issue_id:
-            console.print(f"GitHub Issue: #{issue_id}")
-        console.print()
-
-        # Determine if should be interactive
-        import sys
-
         is_interactive = (interactive and sys.stdin.isatty()) or os.getenv("CAFE_FORCE_INTERACTIVE") == "1"
-
-        # Validate auto mode constraints
         if auto and not is_interactive:
             console.print("[red]Error: --auto can only be used in interactive mode[/red]")
             raise typer.Exit(1)
-
-        # Validate user_input in non-interactive mode (unless using --issue-id to fetch)
-        if not is_interactive and not user_input and not fetch_issue_id:
-            console.print(
-                "[red]Error: --user-input is required when using --no-interactive (or use --issue-id to fetch from GitHub)[/red]"
-            )
-            raise typer.Exit(1)
-
-        # Determine template mode
-        template_mode = "auto" if spec_template == "auto" else "manual"
-
-        # Create and execute spec phase
-        phase = SpecPhase(
-            agent_manager=agent_manager,
-            permission_handler=permission_handler,
-            git_ops=git_ops,
-            pm_agent=pm_agent,
-            interactive=is_interactive,
-            rigor=spec_rigor,
-            user_input=user_input or "",
-            issue_name=issue_name,
-            fetch_issue_id=fetch_issue_id,
-            template_path=spec_template_path,
-            template_mode=template_mode,
-            sync_github=sync_github,
+        _reject_unsupported_phase_options(
+            "spec",
+            {
+                "issue": issue_id is not None,
+                "fetch-issue": fetch_issue_id is not None,
+                "rigor": rigor is not None,
+                "template": template is not None,
+                "sync-github": sync_github is not None,
+            },
         )
 
-        console.print("[bold]Starting conversational spec generation...[/bold]")
-        console.print("[dim]The PM will ask questions to clarify all necessary information.[/dim]")
-        console.print("[dim]Focus on WHAT you want, not HOW to implement it.[/dim]")
-        if is_interactive:
-            console.print("[dim]💡 Tip: Press Ctrl+C anytime to pause and save progress.[/dim]")
-        if auto:
-            console.print(
-                "[dim]🤖 Auto mode: will automatically continue iterations until CAFE_CONFIRMED[/dim]"
-            )
-        console.print()
-
-        # Execute phase iterations (with recursion for auto-continue)
-        def execute_iteration(iteration_count=1):
-            """Execute one iteration and optionally continue to next"""
-            if iteration_count > 1:
-                console.print(f"\n[bold cyan]━━━ Iteration {iteration_count} ━━━[/bold cyan]\n")
-
-            # Execute phase
-            result = phase.execute()
-
-            # Check result status
-            if result.status.value not in ["completed", "in_progress"]:
-                return result  # Phase failed
-
-            status_code = result.data.get("status_code")
-            if not status_code:
-                return result  # No valid status code
-
-            # Check if we should continue
-            if status_code == "CAFE_CONFIRMED":
-                return result  # Reached final state
-
-            elif status_code in ["CAFE_NEED_CLARIFICATION", "CAFE_READY_FOR_REVIEW"]:
-                # Only continue iterations in interactive mode (with or without --auto)
-                if not is_interactive:
-                    # Non-interactive mode: stop after first iteration
-                    return result
-
-                # Show brief status
-                console.print()
-                if status_code == "CAFE_NEED_CLARIFICATION":
-                    console.print("[yellow]💬 Agent needs clarification[/yellow]")
-                else:  # CAFE_READY_FOR_REVIEW
-                    console.print("[yellow]📝 Draft ready for review[/yellow]")
-
-                # Decide whether to continue
-                should_continue = False
-                if auto:
-                    # Auto mode: continue automatically
-                    console.print("[dim]Auto mode: continuing to next iteration...[/dim]")
-                    should_continue = True
-                else:
-                    # Interactive mode: ask user
-                    should_continue = prompt_confirm(
-                        message="Continue to next iteration?", default=True
-                    )
-
-                if should_continue:
-                    console.print("[dim]Continuing...[/dim]")
-                    return execute_iteration(iteration_count + 1)
-                else:
-                    console.print("[dim]Stopped by user.[/dim]")
-                    return result
-            else:
-                # Unknown status
-                console.print(f"\n[bold yellow]⚠️  Unknown status code: {status_code}[/bold yellow]")
-                return result
-
-        # Start execution
-        result = execute_iteration()
-
-        # Display result
-        if result.status.value in ["completed", "in_progress"]:
-            console.print()
-            status_code = result.data.get("status_code")
-
-            # If no valid status code, treat as failure
-            if not status_code:
-                console.print(
-                    "[bold red]❌ Spec phase failed: No valid status code returned[/bold red]"
-                )
-                raise typer.Exit(1)
-
-            if status_code == "CAFE_NEED_CLARIFICATION":
-                console.print("[bold yellow]💬 Agent needs clarification[/bold yellow]")
-                console.print(f"Iterations: {result.data.get('iterations', 'N/A')}")
-                spec_file = result.data.get("spec_file")
-                if spec_file:
-                    console.print(f"Saved to: {spec_file}")
-                console.print()
-                console.print("[dim]To continue, run:[/dim] [bold]cafe spec[/bold]")
-            elif status_code == "CAFE_READY_FOR_REVIEW":
-                # Spec draft is ready, but needs user confirmation
-                console.print("[bold green]✅ Spec draft completed![/bold green]")
-                console.print(f"Iterations: {result.data.get('iterations', 'N/A')}")
-                spec_file = result.data.get("spec_file")
-                if spec_file:
-                    console.print(f"Saved to: {spec_file}")
-                console.print()
-                console.print("[dim]Please review the spec and run:[/dim] [bold]cafe spec[/bold]")
-            elif status_code == "CAFE_CONFIRMED":
-                # Spec is confirmed, ready to proceed to plan
-                console.print("[bold green]✅ Spec clarification completed![/bold green]")
-                console.print(f"Iterations: {result.data.get('iterations', 'N/A')}")
-                spec_file = result.data.get("spec_file")
-                if spec_file:
-                    console.print(f"Saved to: {spec_file}")
-                console.print()
-
-                # Auto mode: execute next phase
-                if auto:
-                    _execute_next_phase_auto("plan", issue_name)
-                else:
-                    console.print("[dim]Next step:[/dim] [bold]cafe plan[/bold]")
-            else:
-                # Unknown status code - show generic completion message
-                console.print("[bold green]✅ Spec phase completed![/bold green]")
-                console.print(f"Iterations: {result.data.get('iterations', 'N/A')}")
-                console.print(f"Status: {status_code}")
-                spec_file = result.data.get("spec_file")
-                if spec_file:
-                    console.print(f"Saved to: {spec_file}")
-        else:
-            console.print()
-            console.print(f"[bold red]❌ Spec phase failed: {result.message}[/bold red]")
+        current_input = user_input
+        if is_interactive and not current_input:
+            current_input = prompt_multiline("Requirements:").strip()
+        if not is_interactive and not current_input:
+            console.print("[red]Error: --user-input is required when using --no-interactive[/red]")
             raise typer.Exit(1)
+
+        alias_result = _run_iterative_alias_step(
+            issue_name=issue_name,
+            step_name="spec",
+            config_manager=config_manager,
+            interactive=is_interactive,
+            auto=auto,
+            continuation_statuses=["CAFE_NEED_CLARIFICATION", "CAFE_READY_FOR_REVIEW"],
+            role_agent_map_override={"pm": pm_agent} if pm_agent else None,
+            user_input=current_input,
+            show_prompt=show_prompt,
+            clarification_prompt="Additional details:",
+        )
+        status_code = alias_result["status_code"]
+        console.print()
+        if status_code == "CAFE_CONFIRMED":
+            console.print("[bold green]✅ Spec clarification completed![/bold green]")
+            console.print(f"Iterations: {alias_result.get('iterations', 'N/A')}")
+            if alias_result.get("output_file"):
+                console.print(f"Saved to: {alias_result['output_file']}")
+            console.print()
+            if auto:
+                _execute_next_phase_auto("plan", issue_name)
+            else:
+                console.print("[dim]Next step:[/dim] [bold]cafe plan[/bold]")
+        elif status_code == "CAFE_READY_FOR_REVIEW":
+            console.print("[bold green]✅ Spec draft completed![/bold green]")
+            console.print(f"Iterations: {alias_result.get('iterations', 'N/A')}")
+            if alias_result.get("output_file"):
+                console.print(f"Saved to: {alias_result['output_file']}")
+            console.print()
+            console.print("[dim]Please review the spec and run:[/dim] [bold]cafe spec[/bold]")
+        elif status_code == "CAFE_NEED_CLARIFICATION":
+            console.print("[bold yellow]💬 Agent needs clarification[/bold yellow]")
+            console.print(f"Iterations: {alias_result.get('iterations', 'N/A')}")
+            if alias_result.get("output_file"):
+                console.print(f"Saved to: {alias_result['output_file']}")
+            console.print()
+            console.print("[dim]To continue, run:[/dim] [bold]cafe spec[/bold]")
+        else:
+            console.print(f"[bold yellow]Status: {status_code}[/bold yellow]")
+            if alias_result.get("output_file"):
+                console.print(f"Saved to: {alias_result['output_file']}")
+            raise typer.Exit(1)
+        return
 
     except Exception as e:
         _handle_phase_exception(e, "spec")
@@ -3338,278 +3071,62 @@ def plan(
             console.print(f"[red]Error: No spec file found for issue '{issue_name}'[/red]")
             console.print("[dim]Hint: Run 'cafe spec' first to create the specification.[/dim]")
             raise typer.Exit(1)
+        is_interactive = (interactive and sys.stdin.isatty()) or os.getenv("CAFE_FORCE_INTERACTIVE") == "1"
+        if auto and not is_interactive:
+            console.print("[red]Error: --auto can only be used in interactive mode[/red]")
+            raise typer.Exit(1)
+        _reject_unsupported_phase_options(
+            "plan",
+            {
+                "issue": issue_id is not None,
+                "sync-github": sync_github is not None,
+            },
+        )
 
-        if _should_alias_plan_command(
-            interactive=interactive,
+        if issue_id:
+            console.print(f"GitHub Issue: #{issue_id}")
+
+        alias_result = _run_iterative_alias_step(
+            issue_name=issue_name,
+            step_name="plan",
+            config_manager=config_manager,
+            interactive=is_interactive,
             auto=auto,
-            issue_id=issue_id,
-            sync_github=sync_github,
-        ):
-            alias_result = _execute_single_step_alias(
-                issue_name=issue_name,
-                step_name="plan",
-                config_manager=config_manager,
-                role_agent_map_override={"developer": dev_agent} if dev_agent else None,
-                show_prompt=show_prompt,
-            )
+            continuation_statuses=["CAFE_NEED_CLARIFICATION", "CAFE_READY_FOR_REVIEW"],
+            role_agent_map_override={"developer": dev_agent} if dev_agent else None,
+            show_prompt=show_prompt,
+            clarification_prompt="Additional planning details:",
+        )
+        status_code = alias_result["status_code"]
+        console.print()
+        if status_code == "CAFE_NEED_CLARIFICATION":
+            console.print("[bold yellow]💬 Agent needs clarification[/bold yellow]")
+            console.print(f"Iterations: {alias_result.get('iterations', 'N/A')}")
+            if alias_result.get("output_file"):
+                console.print(f"Saved to: {alias_result['output_file']}")
+            console.print()
+            console.print("[dim]To continue, run:[/dim] [bold]cafe plan[/bold]")
+        elif status_code == "CAFE_READY_FOR_REVIEW":
+            console.print("[bold yellow]📋 Plan ready for review[/bold yellow]")
+            console.print(f"Iterations: {alias_result.get('iterations', 'N/A')}")
+            if alias_result.get("output_file"):
+                console.print(f"Saved to: {alias_result['output_file']}")
+            console.print()
+            console.print("[dim]To review the plan, run:[/dim] [bold]cafe plan[/bold]")
+        elif status_code == "CAFE_CONFIRMED":
             console.print("[bold green]✅ Implementation plan completed![/bold green]")
             console.print(f"Iterations: {alias_result.get('iterations', 'N/A')}")
             if alias_result.get("output_file"):
                 console.print(f"Saved to: {alias_result['output_file']}")
             console.print()
-            console.print("[dim]Next step:[/dim] [bold]cafe develop[/bold]")
-            return
-
-        # Check if plan already exists (any versioned plan file)
-        plan_file_path = _get_latest_versioned_file("plan", issue_name)
-        is_resume = plan_file_path is not None
-
-        # Initialize components
-        agent_manager = _setup_agents(config_manager, issue_name=issue_name, phase_name="plan")
-        permission_handler = PermissionHandler()
-        git_ops = GitOperations()
-
-        # Set show_prompt flag
-        agent_manager.show_prompt = show_prompt
-
-        # Get developer agent name (from flag or config)
-        if dev_agent is None:
-            dev_agent = config_manager.get("agents.developer.name", "David")
-
-        # Get developer agent CLI
-        dev_executor = agent_manager.get_agent(dev_agent)
-        dev_cli = dev_executor.config.cli.value
-        dev_session_id = dev_executor.config.session_id or "(will be created)"
-
-        # Handle template selection
-        template_manager = TemplateManager()
-        selected_template = None
-        template_mode = "auto"  # Track if template is 'auto' or manually specified
-
-        if is_resume:
-            console.print(f"[dim]Resuming existing plan from: {plan_file_path}[/dim]")
-
-        if template:
-            # Template specified via --template option
-            if not template_manager.template_exists(template):
-                console.print(f"[red]Error: Template '{template}' not found[/red]")
-                console.print("[dim]Use 'cafe template list' to see available templates[/dim]")
-                raise typer.Exit(1)
-            selected_template = template
-            template_mode = "manual"
-        elif not is_resume:
-            # No template specified and not resuming
-            # First, try to load template from issue.yaml
-            import yaml
-            issue_config_file = Path(f".cafe/issues/{issue_name}/issue.yaml")
-            template_from_config = None
-
-            if issue_config_file.exists():
-                try:
-                    with open(issue_config_file, "r") as f:
-                        issue_config = yaml.safe_load(f)
-                    template_from_config = issue_config.get("plan", {}).get("template")
-                except Exception:
-                    pass  # Ignore config read errors, will prompt user
-
-            if template_from_config:
-                # Use template from config
-                selected_template = template_from_config
-                if template_from_config == "auto":
-                    template_mode = "auto"
-                else:
-                    template_mode = "manual"
-                console.print(f"[dim]Using template from config: {template_from_config}[/dim]")
+            if auto:
+                _execute_next_phase_auto("develop", issue_name)
             else:
-                # No template in config - need to select one for first iteration
-                if interactive:
-                    # Interactive mode: prompt user to select 'auto' or a specific template
-                    import sys
-                    is_interactive = sys.stdin.isatty() or os.getenv("CAFE_FORCE_INTERACTIVE") == "1"
-
-                    if is_interactive:
-                        from cafe.ui.template_selector import select_template
-
-                        templates_with_source = template_manager.list_templates()
-                        templates = [name for name, _ in templates_with_source]
-                        template_paths = {name: template_manager.get_template_path(name) for name in templates}
-                        selected_template = select_template(templates, template_paths)
-
-                        if selected_template == "auto":
-                            template_mode = "auto"
-                        else:
-                            template_mode = "manual"
-                    else:
-                        # Non-interactive but interactive flag set (piped stdin)
-                        # Default to auto mode
-                        selected_template = "auto"
-                        template_mode = "auto"
-                else:
-                    # Non-interactive mode with no --template: default to auto
-                    selected_template = "auto"
-                    template_mode = "auto"
-
-        # Display start message
-        console.print("[bold blue]📋 Plan Phase: Implementation Planning[/bold blue]")
-        console.print(f"Issue: {issue_name}")
-        console.print(f"Developer Agent: {dev_agent}")
-        dev_model = dev_executor.config.model or "default"
-        console.print(f"CLI: {dev_cli}")
-        console.print(f"Model: {dev_model}")
-        console.print(f"Session ID: {dev_session_id}")
-        console.print(f"Spec file: {spec_file_path}")
-        if issue_id:
-            console.print(f"GitHub Issue: #{issue_id}")
-        if selected_template:
-            if template_mode == "auto":
-                console.print("[dim]Template mode: auto (agent will decide)[/dim]")
-            else:
-                console.print(f"[dim]Template: {selected_template}[/dim]")
-        console.print()
-
-        # Get template path if manually selected (not auto)
-        template_path_str = None
-        if selected_template and template_mode == "manual":
-            template_path_obj = template_manager.get_template_path(selected_template)
-            if template_path_obj:
-                template_path_str = str(template_path_obj)
-
-        # Create and execute plan phase
-        # Note: spec_file parameter is deprecated, PlanPhase computes latest versioned files internally
-        phase = PlanPhase(
-            agent_manager=agent_manager,
-            permission_handler=permission_handler,
-            git_ops=git_ops,
-            spec_file=(
-                str(spec_file_path) if spec_file_path else ""
-            ),  # Deprecated - computed internally
-            issue_name=issue_name,
-            dev_agent=dev_agent,
-            interactive=interactive,
-            template_path=template_path_str,
-            template_mode=template_mode,  # Pass template mode to plan phase
-            sync_github=sync_github,
-        )
-
-        # Determine if should be interactive
-        import sys
-
-        is_interactive = (interactive and sys.stdin.isatty()) or os.getenv("CAFE_FORCE_INTERACTIVE") == "1"
-
-        # Validate auto mode constraints
-        if auto and not is_interactive:
-            console.print("[red]Error: --auto can only be used in interactive mode[/red]")
-            raise typer.Exit(1)
-
-        console.print("[bold]Starting implementation planning...[/bold]")
-        console.print(
-            "[dim]The developer will analyze technical feasibility and create implementation plan.[/dim]"
-        )
-        if auto:
-            console.print(
-                "[dim]🤖 Auto mode: will automatically continue iterations until CAFE_CONFIRMED[/dim]"
-            )
-        console.print()
-
-        # Execute phase iterations (with recursion for auto-continue)
-        def execute_iteration(iteration_count=1):
-            """Execute one iteration and optionally continue to next"""
-            if iteration_count > 1:
-                console.print(f"\n[bold cyan]━━━ Iteration {iteration_count} ━━━[/bold cyan]\n")
-
-            # Execute phase
-            result = phase.execute()
-
-            # Check result status
-            if result.status.value != "completed":
-                return result  # Phase failed
-
-            status_code = result.data.get("status_code")
-            if not status_code:
-                return result  # No valid status code
-
-            # Check if we should continue
-            if status_code == "CAFE_CONFIRMED":
-                return result  # Reached final state
-
-            elif status_code in ["CAFE_NEED_CLARIFICATION", "CAFE_READY_FOR_REVIEW"]:
-                # Only continue iterations in interactive mode (with or without --auto)
-                if not is_interactive:
-                    # Non-interactive mode: stop after first iteration
-                    return result
-
-                # Show brief status
-                console.print()
-                if status_code == "CAFE_NEED_CLARIFICATION":
-                    console.print("[yellow]💬 Agent needs clarification[/yellow]")
-                else:  # CAFE_READY_FOR_REVIEW
-                    console.print("[yellow]📋 Plan ready for review[/yellow]")
-
-                # Decide whether to continue
-                should_continue = False
-                if auto:
-                    # Auto mode: continue automatically
-                    console.print("[dim]Auto mode: continuing to next iteration...[/dim]")
-                    should_continue = True
-                else:
-                    # Interactive mode: ask user
-                    should_continue = prompt_confirm(
-                        message="Continue to next iteration?", default=True
-                    )
-
-                if should_continue:
-                    console.print("[dim]Continuing...[/dim]")
-                    return execute_iteration(iteration_count + 1)
-                else:
-                    console.print("[dim]Stopped by user.[/dim]")
-                    return result
-            else:
-                # Unknown status
-                console.print(f"\n[bold yellow]⚠️  Unknown status code: {status_code}[/bold yellow]")
-                return result
-
-        # Start execution
-        result = execute_iteration()
-
-        # Display result
-        if result.status.value == "completed":
-            console.print()
-            status_code = result.data.get("status_code")
-
-            if status_code == "CAFE_NEED_CLARIFICATION":
-                console.print("[bold yellow]💬 Agent needs clarification[/bold yellow]")
-                console.print(f"Iterations: {result.data.get('iterations', 'N/A')}")
-                plan_file = result.data.get("plan_file")
-                if plan_file:
-                    console.print(f"Saved to: {plan_file}")
-                console.print()
-                console.print("[dim]To continue, run:[/dim] [bold]cafe plan[/bold]")
-            elif status_code == "CAFE_READY_FOR_REVIEW":
-                console.print("[bold yellow]📋 Plan ready for review[/bold yellow]")
-                console.print(f"Iterations: {result.data.get('iterations', 'N/A')}")
-                plan_file = result.data.get("plan_file")
-                if plan_file:
-                    console.print(f"Saved to: {plan_file}")
-                console.print()
-                console.print("[dim]To review the plan, run:[/dim] [bold]cafe plan[/bold]")
-            else:
-                # CAFE_CONFIRMED
-                console.print("[bold green]✅ Implementation plan completed![/bold green]")
-                console.print(f"Iterations: {result.data.get('iterations', 'N/A')}")
-                plan_file = result.data.get("plan_file")
-                if plan_file:
-                    console.print(f"Saved to: {plan_file}")
-                console.print()
-
-                # Auto mode: execute next phase
-                if auto:
-                    _execute_next_phase_auto("develop", issue_name)
-                else:
-                    console.print("[dim]Next step:[/dim] [bold]cafe develop[/bold]")
+                console.print("[dim]Next step:[/dim] [bold]cafe develop[/bold]")
         else:
-            console.print()
-            console.print(f"[bold red]❌ Plan phase failed: {result.message}[/bold red]")
+            console.print(f"[bold yellow]Status: {status_code}[/bold yellow]")
             raise typer.Exit(1)
+        return
 
     except Exception as e:
         _handle_phase_exception(e, "plan")
@@ -3713,149 +3230,51 @@ def develop(
                 "[dim]Hint: Run 'cafe plan' first to create the implementation plan.[/dim]"
             )
             raise typer.Exit(1)
-
-        if _should_alias_develop_command(
-            interactive=interactive,
-            mode=mode,
-            issue_id=issue_id,
-            approve_denied_tools=approve_denied_tools,
-            pr_number=pr_number,
-            auto=auto,
-        ):
-            alias_result = _execute_single_step_alias(
-                issue_name=issue_name,
-                step_name="develop",
-                config_manager=config_manager,
-                role_agent_map_override={"developer": dev_agent} if dev_agent else None,
-                user_input=user_input,
-                show_prompt=show_prompt,
-            )
-            status_code = alias_result["status_code"]
-            console.print()
-            if status_code in {"CAFE_CONFIRMED", "CAFE_CONFIRMED_SKIP_REVIEW"}:
-                console.print("[bold green]✅ Development completed![/bold green]")
-                console.print(f"Iterations: {alias_result.get('iterations', 'N/A')}")
-                console.print()
-                if status_code == "CAFE_CONFIRMED_SKIP_REVIEW":
-                    console.print("[dim]Next step:[/dim] [bold]cafe pr[/bold]")
-                else:
-                    console.print("[dim]Next step:[/dim] [bold]cafe review[/bold]")
-            else:
-                console.print(f"[yellow]⏸️  Development paused: {status_code}[/yellow]")
-                console.print("[dim]Resume with: cafe develop[/dim]")
-            return
-
-        # Convert to strings for compatibility
-        spec_file = str(spec_file_path)
-        plan_file = str(plan_file_path)
-
-        # Initialize components
-        agent_manager = _setup_agents(config_manager, issue_name=issue_name, phase_name="develop")
-        permission_handler = PermissionHandler()
-        git_ops = GitOperations()
-
-        # Set show_prompt flag
-        agent_manager.show_prompt = show_prompt
-
-        # Get developer agent name (from flag or config)
-        if dev_agent is None:
-            dev_agent = config_manager.get("agents.developer.name", "David")
-
-        # Get developer agent CLI
-        dev_executor = agent_manager.get_agent(dev_agent)
-        dev_cli = dev_executor.config.cli.value
-        dev_session_id = dev_executor.config.session_id or "(will be created)"
-
-        # Display start message
-        console.print("[bold blue]🔨 Develop Phase: Development Execution[/bold blue]")
-        console.print(f"Issue: {issue_name}")
-        console.print(f"Developer Agent: {dev_agent}")
-        dev_model = dev_executor.config.model or "default"
-        console.print(f"CLI: {dev_cli}")
-        console.print(f"Model: {dev_model}")
-        console.print(f"Session ID: {dev_session_id}")
-        console.print(f"Spec file: {spec_file}")
-        console.print(f"Plan file: {plan_file}")
-        console.print()
-
-        # Parse approve_denied_tools if provided
-        approved_denial_indices: List[int] = []
-        if approve_denied_tools is not None:
-            try:
-                # Ensure it's a string (defensive programming)
-                tools_str = str(approve_denied_tools)
-                approved_denial_indices = [int(idx.strip()) for idx in tools_str.split(",")]
-            except (ValueError, AttributeError) as e:
-                console.print(
-                    f"[red]Error: --approve-denied-tools must be comma-separated integers (e.g., '0,1,3'). Got: {approve_denied_tools}[/red]"
-                )
-                console.print(f"[dim]Debug: type={type(approve_denied_tools)}, error={e}[/dim]")
-                raise typer.Exit(1)
-
-        # Create and execute develop phase
-        phase = DevelopPhase(
-            agent_manager=agent_manager,
-            permission_handler=permission_handler,
-            git_ops=git_ops,
-            spec_file=spec_file,
-            plan_file=plan_file,
-            issue_id=issue_id,
-            issue_name=issue_name,
-            dev_agent=dev_agent,
-            interactive=interactive,
-            approved_denial_indices=approved_denial_indices if approved_denial_indices else None,
-            user_input=user_input or "",
-            pr_number=pr_number,
+        _reject_unsupported_phase_options(
+            "develop",
+            {
+                "mode": mode != "local",
+                "issue": issue_id is not None,
+                "approve-denied-tools": approve_denied_tools is not None,
+                "pr-number": pr_number is not None,
+            },
         )
 
-        console.print("[bold]Starting development execution...[/bold]")
-        console.print("[dim]The developer will implement features according to the plan.[/dim]")
-        console.print("[dim]💡 Tip: Press Ctrl+C anytime to pause and save progress.[/dim]")
+        alias_result = _execute_single_step_alias(
+            issue_name=issue_name,
+            step_name="develop",
+            config_manager=config_manager,
+            role_agent_map_override={"developer": dev_agent} if dev_agent else None,
+            user_input=user_input,
+            show_prompt=show_prompt,
+        )
+        status_code = alias_result["status_code"]
         console.print()
-
-        result = phase.execute()
-
-        # Display result
-        if result.status.value == "completed":
-            status_code = result.data.get("status_code")
-            skip_review = result.data.get("skip_review", False) or status_code == "CAFE_CONFIRMED_SKIP_REVIEW"
-
+        if status_code in {"CAFE_CONFIRMED", "CAFE_CONFIRMED_SKIP_REVIEW"}:
+            console.print("[bold green]✅ Development completed![/bold green]")
+            console.print(f"Iterations: {alias_result.get('iterations', 'N/A')}")
+            if alias_result.get("output_file"):
+                console.print(f"Saved to: {alias_result['output_file']}")
             console.print()
-            if skip_review:
-                console.print("[bold green]✅ Skipping review phase[/bold green]")
-            else:
-                console.print("[bold green]✅ Development completed![/bold green]")
-            console.print(f"Branch: {result.data.get('branch', 'N/A')}")
-            console.print(f"Iterations: {result.data.get('iterations', 'N/A')}")
-            console.print()
-
-            # Auto mode: execute next phase (skip review if user agreed)
             if auto:
-                if skip_review:
-                    _execute_next_phase_auto("pr", issue_name)
-                else:
-                    _execute_next_phase_auto("review", issue_name)
+                _execute_next_phase_auto(
+                    "pr" if status_code == "CAFE_CONFIRMED_SKIP_REVIEW" else "review",
+                    issue_name,
+                )
+            elif status_code == "CAFE_CONFIRMED_SKIP_REVIEW":
+                console.print("[dim]Next step:[/dim] [bold]cafe pr[/bold]")
             else:
-                if skip_review:
-                    console.print("[dim]Next step: cafe pr[/dim]")
-                else:
-                    console.print("[dim]Next step: cafe review[/dim]")
-        elif result.status.value == "failed":
-            console.print(f"[red]❌ Development failed: {result.message}[/red]")
-            raise typer.Exit(1)
-        elif result.status.value == "in_progress":
-            # Check if user interrupted (Ctrl+C)
-            if result.data.get("user_interrupted", False):
-                console.print(f"[yellow]⏸️  Development paused: {result.message}[/yellow]")
-                console.print("[dim]Resume with: cafe develop[/dim]")
-                return
-            
-            # Development paused (e.g., NEED_CLARIFICATION, NEED_PERMISSION)
+                console.print("[dim]Next step:[/dim] [bold]cafe review[/bold]")
+        elif status_code in {"CAFE_NEED_CLARIFICATION", "CAFE_NEED_PERMISSION"}:
             if auto:
                 _execute_next_phase_auto("develop", issue_name)
             else:
-                console.print(f"[yellow]⏸️  Development paused: {result.message}[/yellow]")
+                console.print(f"[yellow]⏸️  Development paused: {status_code}[/yellow]")
                 console.print("[dim]Resume with: cafe develop[/dim]")
+        else:
+            console.print(f"[bold red]❌ Development failed: {status_code}[/bold red]")
+            raise typer.Exit(1)
+        return
 
     except Exception as e:
         _handle_phase_exception(e, "develop")
@@ -3996,189 +3415,65 @@ def review(
                 "[dim]Hint: Run 'cafe plan' first to create the implementation plan.[/dim]"
             )
             raise typer.Exit(1)
+        _reject_unsupported_phase_options(
+            "review",
+            {
+                "mode": mode != "local",
+                "issue": issue_id is not None,
+                "commit": commit is not None,
+                "base": base_branch != "main",
+                "pr-number": pr_number is not None,
+                "force": force,
+            },
+        )
 
-        if _should_alias_review_command(
-            interactive=interactive,
-            mode=mode,
-            issue_id=issue_id,
-            commit=commit,
-            base_branch=base_branch,
-            pr_number=pr_number,
-            auto=auto,
-            force=force,
-        ):
-            alias_result = _execute_single_step_alias(
-                issue_name=issue_name,
-                step_name="review",
-                config_manager=config_manager,
-                role_agent_map_override={"reviewer": reviewer_agent} if reviewer_agent else None,
-                show_prompt=show_prompt,
-            )
-            status_code = alias_result["status_code"]
+        alias_result = _execute_single_step_alias(
+            issue_name=issue_name,
+            step_name="review",
+            config_manager=config_manager,
+            role_agent_map_override={"reviewer": reviewer_agent} if reviewer_agent else None,
+            show_prompt=show_prompt,
+        )
+        status_code = alias_result["status_code"]
+        console.print()
+        if status_code == "CAFE_CONFIRMED":
+            console.print("[bold green]✅ Code review passed![/bold green]")
+            if alias_result.get("output_file"):
+                console.print(f"Saved to: {alias_result['output_file']}")
             console.print()
-            if status_code == "CAFE_CONFIRMED":
-                console.print("[bold green]✅ Code review passed![/bold green]")
-                console.print()
+            if auto:
+                _execute_next_phase_auto("pr", issue_name)
+            else:
                 console.print("[dim]Next steps:[/dim]")
                 console.print("[dim]  1. Create PR: cafe pr[/dim]")
+        elif status_code == "CAFE_NEEDS_CHANGES":
+            console.print(f"[bold yellow]📝 Code review completed with status: {status_code}[/bold yellow]")
+            if alias_result.get("output_file"):
+                console.print(f"[dim]Review feedback saved to:[/dim] [dim]{alias_result['output_file']}[/dim]")
+            console.print()
+            if auto:
+                max_iterations_value = config_manager.get("auto.max_review_iterations", 5)
+                try:
+                    max_iterations = int(max_iterations_value)
+                except (ValueError, TypeError):
+                    max_iterations = 5
+                current_iteration = _get_latest_review_iteration(issue_name)
+                if current_iteration >= max_iterations:
+                    console.print(f"[bold yellow]⚠️  Review loop limit reached ({max_iterations} times)[/bold yellow]")
+                    console.print("[dim]You can:[/dim]")
+                    console.print("[dim]  • Continue: [bold]cafe review[/bold] (without --auto)[/dim]")
+                    console.print("[dim]  • Adjust limit: [bold]cafe config set auto.max_review_iterations 10[/bold][/dim]")
+                else:
+                    console.print(f"[dim]Review iteration: {current_iteration}/{max_iterations}[/dim]")
+                    _execute_next_phase_auto("develop", issue_name)
             else:
-                console.print(f"[bold yellow]📝 Code review completed with status: {status_code}[/bold yellow]")
-                console.print()
                 console.print("[dim]Next steps:[/dim]")
                 console.print("[dim]  1. Make changes: cafe develop[/dim]")
                 console.print("[dim]  2. Review again: cafe review[/dim]")
-            return
-
-        # Convert to strings for compatibility
-        spec_file = str(spec_file_path)
-        plan_file = str(plan_file_path)
-
-        # Initialize components
-        agent_manager = _setup_agents(config_manager, issue_name=issue_name, phase_name="review")
-        permission_handler = PermissionHandler()
-        git_ops = GitOperations()
-
-        # Set show_prompt flag
-        agent_manager.show_prompt = show_prompt
-
-        # Get reviewer agent name (from flag or config)
-        if reviewer_agent is None:
-            reviewer_agent = config_manager.get("agents.reviewer.name", "Richard")
-
-        # Get reviewer agent CLI
-        reviewer_executor = agent_manager.get_agent(reviewer_agent)
-        reviewer_cli = reviewer_executor.config.cli.value
-        reviewer_session_id = reviewer_executor.config.session_id or "(will be created)"
-
-        # Auto-detect PR number if not provided
-        if pr_number is None:
-            try:
-                from cafe.utils.github import GitHubOps
-                github_ops = GitHubOps()
-                current_branch = git_ops.get_current_branch()
-                pr_data = github_ops.get_pr_for_branch(current_branch)
-                if pr_data:
-                    pr_number = pr_data.get("number")
-                    if pr_number:
-                        console.print(f"[dim]  → Auto-detected PR #{pr_number} for branch {current_branch}[/dim]")
-            except Exception:
-                # Silently ignore if PR detection fails (e.g., not in a GitHub repo)
-                pass
-
-        # Create review phase (this will read base_branch from config if available)
-        phase = ReviewPhase(
-            agent_manager=agent_manager,
-            permission_handler=permission_handler,
-            git_ops=git_ops,
-            spec_file=spec_file,
-            plan_file=plan_file,
-            review_agent=reviewer_agent,
-            target_commit=commit,
-            base_branch=base_branch,
-            interactive=interactive,
-            pr_number=pr_number,
-            force=force,
-        )
-
-        # Display start message (use actual base_branch from phase)
-        console.print("[bold blue]🔍 Review Phase: Code Review[/bold blue]")
-        console.print(f"Issue: {issue_name}")
-        console.print(f"Reviewer Agent: {reviewer_agent}")
-        reviewer_model = reviewer_executor.config.model or "default"
-        console.print(f"CLI: {reviewer_cli}")
-        console.print(f"Model: {reviewer_model}")
-        console.print(f"Session ID: {reviewer_session_id}")
-        console.print(f"Spec file: {spec_file}")
-        console.print(f"Base branch: {phase.base_branch}")
-        if commit:
-            console.print(f"Target commit: {commit}")
         else:
-            console.print(f"Review scope: {phase.base_branch}..HEAD")
-        console.print()
-
-        console.print("[bold]Starting code review...[/bold]")
-        console.print("[dim]The reviewer will analyze code changes and provide feedback.[/dim]")
-        console.print()
-
-        result = phase.execute()
-
-        # Display result
-        if result.status.value == "completed":
-            status_code = result.data.get("status_code")
-            console.print()
-            if status_code == "CAFE_CONFIRMED":
-                console.print("[bold green]✅ Code review passed![/bold green]")
-                console.print()
-
-                # Auto mode: execute PR phase
-                if auto:
-                    _execute_next_phase_auto("pr", issue_name)
-                else:
-                    console.print("[dim]Next steps:[/dim]")
-                    console.print("[dim]  1. Create PR: cafe pr[/dim]")
-            else:
-                # CAFE_NEEDS_CHANGES or other status
-                console.print(
-                    f"[bold yellow]📝 Code review completed with status: {status_code}[/bold yellow]"
-                )
-                console.print()
-
-                # Find latest review file (iteration_XXX/output.md format)
-                review_dir = Path(f".cafe/issues/{issue_name}/review")
-                iteration_files = sorted(review_dir.glob("iteration_*/output.md"))
-                if iteration_files:
-                    latest_review = iteration_files[-1]
-                    review_path = f".cafe/issues/{issue_name}/review/{latest_review.parent.name}/output.md"
-                else:
-                    # Fallback for old format
-                    review_path = f".cafe/issues/{issue_name}/review/review.md"
-
-                console.print("[dim]Review feedback saved to:[/dim]")
-                console.print(f"[dim]  {review_path}[/dim]")
-                console.print()
-
-                # Auto mode: check max_review_iterations and execute develop if not exceeded
-                if auto:
-                    # Read max_review_iterations from global config
-                    max_iterations_value = config_manager.get("auto.max_review_iterations", 5)
-                    # Convert to int if it's a string
-                    try:
-                        max_iterations = int(max_iterations_value)
-                    except (ValueError, TypeError):
-                        max_iterations = 5
-
-                    # Get current review iteration count
-                    current_iteration = _get_latest_review_iteration(issue_name)
-
-                    if current_iteration >= max_iterations:
-                        # Exceeded max iterations
-                        console.print()
-                        console.print(
-                            f"[bold yellow]⚠️  Review loop limit reached ({max_iterations} times)[/bold yellow]"
-                        )
-                        console.print()
-                        console.print("[dim]You can:[/dim]")
-                        console.print(
-                            "[dim]  • Continue: [bold]cafe review[/bold] (without --auto)[/dim]"
-                        )
-                        console.print(
-                            "[dim]  • Adjust limit: [bold]cafe config set auto.max_review_iterations 10[/bold][/dim]"
-                        )
-                    else:
-                        # Continue with develop phase
-                        console.print(
-                            f"[dim]Review iteration: {current_iteration}/{max_iterations}[/dim]"
-                        )
-                        _execute_next_phase_auto("develop", issue_name)
-                else:
-                    console.print("[dim]Next steps:[/dim]")
-                    console.print(f"[dim]  1. Review feedback: cat {review_path}[/dim]")
-                    console.print("[dim]  2. Make changes: cafe develop[/dim]")
-                    console.print("[dim]  3. Review again: cafe review[/dim]")
-        else:
-            console.print()
-            console.print(f"[bold red]❌ Review phase failed: {result.message}[/bold red]")
+            console.print(f"[bold red]❌ Review failed: {status_code}[/bold red]")
             raise typer.Exit(1)
+        return
 
     except Exception as e:
         _handle_phase_exception(e, "review")
@@ -4270,10 +3565,6 @@ def pr(
             console.print("[dim]Hint: Run 'cafe plan' first to create the plan.[/dim]")
             raise typer.Exit(1)
 
-        # Convert to strings for compatibility
-        spec_file = str(spec_file_path)
-        plan_file = str(plan_file_path)
-
         # Initialize components
         config_dir = (
             str(Path(config_file).parent) if config_file != ".cafe/config.yaml" else ".cafe"
@@ -4283,175 +3574,47 @@ def pr(
             config_manager.load_config()
         except ConfigError:
             config_manager._config = config_manager.get_default_config()
-
-        if _should_alias_pr_command(
-            interactive=interactive,
-            auto=auto,
-            draft=draft,
-            title=title,
-            body=body,
-            update=update,
-            force=force,
-            base=base,
-            post_todo_list=post_todo_list,
-        ):
-            dev_agent = config_manager.get("agents.developer.name", "David")
-            alias_result = _execute_single_step_alias(
-                issue_name=issue_name,
-                step_name="pr",
-                config_manager=config_manager,
-                role_agent_map_override={"developer": dev_agent} if dev_agent else None,
-                show_prompt=False,
-            )
-            status_code = alias_result["status_code"]
-            console.print()
-            if status_code == "CAFE_CONFIRMED":
-                console.print("[bold green]✅ PR content completed![/bold green]")
-                console.print(f"Iterations: {alias_result.get('iterations', 'N/A')}")
-                if alias_result.get("output_file"):
-                    console.print(f"Saved to: {alias_result['output_file']}")
-                console.print()
-                console.print("[dim]Next step:[/dim] [bold]Review and submit the PR[/bold]")
-            else:
-                console.print(f"[bold yellow]PR step completed with status: {status_code}[/bold yellow]")
-                if alias_result.get("output_file"):
-                    console.print(f"Saved to: {alias_result['output_file']}")
-                console.print()
-                console.print("[dim]Next step:[/dim] [bold]cafe develop[/bold]")
-            return
-
-        agent_manager = _setup_agents(config_manager, issue_name=issue_name, phase_name="pr")
-        permission_handler = PermissionHandler()
-        git_ops = GitOperations()
-
-        from cafe.utils.github import GitHubOps
-
-        github_ops = GitHubOps()
-
-        # Determine final draft value
-        final_draft = draft if draft is not None else True  # Default to draft
-
-        # In auto mode, automatically update existing PR
-        final_update = update or auto
-
-        # Get developer agent name from config (for PR generation)
-        dev_agent = config_manager.get("agents.developer.name", "David")
-
-        # Create PR phase
-        phase = PRPhase(
-            agent_manager=agent_manager,
-            permission_handler=permission_handler,
-            git_ops=git_ops,
-            github_ops=github_ops,
-            spec_file=spec_file,
-            issue_name=issue_name,
-            dev_agent=dev_agent,
-            draft=final_draft,
-            custom_title=title,
-            custom_body=body,
-            update=final_update,
-            force_push=force,
-            interactive=interactive,
-            base_branch=base if base != "main" else None,  # Pass base only if not default
-            post_todo_list=post_todo_list,
+        _reject_unsupported_phase_options(
+            "pr",
+            {
+                "draft": draft is not None,
+                "title": title is not None,
+                "body": body is not None,
+                "update": update,
+                "force": force,
+                "auto": auto,
+                "base": base != "main",
+                "post-todo-list": post_todo_list is not None,
+            },
         )
 
-        result = phase.execute()
-
-        # Display result
-        if result.status.value == "completed":
-            pr_number = result.data.get("pr_number")
-            pr_url = result.data.get("pr_url")
-            is_local_review = result.data.get("local_review", False)
-            status_code = result.data.get("status_code")
-
-            # Only show success message and details for GitHub PR mode
-            # Local review mode already prints its own messages
-            if not is_local_review:
-                console.print()
-                console.print(f"[bold green]✅ {result.message}![/bold green]")
-                console.print()
-
-            if is_local_review:
-                # Local review mode: Show local-specific next steps
-                if status_code == "CAFE_CONFIRMED":
-                    # Read issue config to get base_branch, feature_branch, worktree_path
-                    import yaml
-
-                    issue_config_file = Path(f".cafe/issues/{issue_name}/issue.yaml")
-                    base_branch = "main"
-                    feature_branch = issue_name
-                    worktree_path = None
-
-                    if issue_config_file.exists():
-                        with open(issue_config_file, "r") as f:
-                            issue_config = yaml.safe_load(f)
-                        base_branch = issue_config.get("base_branch", "main")
-                        feature_branch = issue_config.get("feature_branch", issue_name)
-                        worktree_path = issue_config.get("worktree_path")
-
-                    console.print("[dim]Next step: [bold]cafe close[/bold] - this will do[/dim]")
-                    console.print(f"[dim]  1. checkout branch: {base_branch}[/dim]")
-                    console.print(f"[dim]  2. merge branch: {feature_branch}[/dim]")
-                    console.print(f"[dim]  3. delete branch: {feature_branch}[/dim]")
-                    if worktree_path:
-                        console.print(f"[dim]  4. delete worktree: {worktree_path}[/dim]")
-                    console.print()
-                elif status_code == "CAFE_NEEDS_CHANGES":
-                    # If in auto mode, automatically run develop phase
-                    if auto:
-                        # Get the pr feedback file path from result
-                        pr_file = result.data.get("pr_file")
-                        if pr_file:
-                            console.print(f"[dim]Using modification request from: {pr_file}[/dim]")
-                            console.print()
-
-                        # Execute develop phase in auto mode
-                        _execute_next_phase_auto("develop", issue_name)
-            elif pr_url:
-                # GitHub PR mode: Show PR URL and GitHub-specific next steps
-
-                # Check if this is a comment organization result (NEEDS_CHANGES)
-                if status_code == "CAFE_NEEDS_CHANGES":
-                    # Comment organization completed - ready for develop phase
-                    # If in auto mode, automatically run develop phase
-                    if auto:
-                        console.print("[dim]Auto mode: proceeding to develop phase...[/dim]")
-                        console.print()
-                        _execute_next_phase_auto("develop", issue_name)
-                    else:
-                        # Interactive mode: prompt user to run develop
-                        console.print("[dim]Next steps:[/dim]")
-                        console.print(
-                            "[dim]  1. Run [bold]cafe develop --auto[/bold] (or [bold]cafe make[/bold]) to address the feedback[/dim]"
-                        )
-                else:
-                    # Regular PR creation/update - show review instructions
-                    files_url = pr_url + "/files"
-                    console.print(f"[bold cyan]{files_url}[/bold cyan]")
-                    console.print()
-                    console.print("[dim]Next steps:[/dim]")
-                    console.print(
-                        "[dim]  1. Review PR: open the link above or run [bold]gh pr diff --web[/bold][/dim]"
-                    )
-                    console.print(
-                        "[dim]  2. If OK: [bold]merge[/bold] the PR, then run [bold]cafe close[/bold][/dim]"
-                    )
-                    console.print(
-                        "[dim]  3. If issues found: add comments and submit review, then run [bold]cafe develop --auto[/bold] (or [bold]cafe make[/bold])[/dim]"
-                    )
-
-                    # Automatically open PR diff in browser (only for regular PR, not comment organization)
-                    try:
-                        subprocess.run(["gh", "pr", "diff", "--web"], capture_output=True, check=False, timeout=5)
-                    except (subprocess.TimeoutExpired, FileNotFoundError):
-                        pass  # Silently ignore timeout or gh not found
-                    except Exception:
-                        pass  # Silently ignore any other errors
-        else:
+        dev_agent = config_manager.get("agents.developer.name", "David")
+        alias_result = _execute_single_step_alias(
+            issue_name=issue_name,
+            step_name="pr",
+            config_manager=config_manager,
+            role_agent_map_override={"developer": dev_agent} if dev_agent else None,
+            show_prompt=False,
+        )
+        status_code = alias_result["status_code"]
+        console.print()
+        if status_code == "CAFE_CONFIRMED":
+            console.print("[bold green]✅ PR content completed![/bold green]")
+            console.print(f"Iterations: {alias_result.get('iterations', 'N/A')}")
+            if alias_result.get("output_file"):
+                console.print(f"Saved to: {alias_result['output_file']}")
             console.print()
-            console.print(f"[bold red]❌ PR phase failed: {result.message}[/bold red]")
+            console.print("[dim]Next step:[/dim] [bold]Review and submit the PR[/bold]")
+        elif status_code == "CAFE_NEEDS_CHANGES":
+            console.print(f"[bold yellow]PR step completed with status: {status_code}[/bold yellow]")
+            if alias_result.get("output_file"):
+                console.print(f"Saved to: {alias_result['output_file']}")
+            console.print()
+            console.print("[dim]Next step:[/dim] [bold]cafe develop[/bold]")
+        else:
+            console.print(f"[bold red]❌ PR failed: {status_code}[/bold red]")
             raise typer.Exit(1)
+        return
 
     except Exception as e:
         _handle_phase_exception(e, "pr")
