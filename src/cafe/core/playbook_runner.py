@@ -25,6 +25,13 @@ class PlaybookRunResult:
     completed: bool
 
 
+PAUSE_STATUS_CODES = {
+    PhaseStatusCode.READY_FOR_REVIEW.value,
+    PhaseStatusCode.NEED_CLARIFICATION.value,
+    PhaseStatusCode.NEED_PERMISSION.value,
+}
+
+
 class PlaybookRunner:
     """Run workflow steps based on playbook transition rules."""
 
@@ -177,6 +184,22 @@ class PlaybookRunner:
                     "hop": hop_count,
                 },
             )
+
+            if not single_step and status_code in PAUSE_STATUS_CODES:
+                self.blackboard_store.record_event(
+                    self.blackboard,
+                    "workflow_paused",
+                    {
+                        "step": current_step,
+                        "status_code": status_code,
+                        "reason": "awaiting_user_input",
+                    },
+                )
+                return PlaybookRunResult(
+                    final_step=current_step,
+                    final_status_code=status_code,
+                    completed=False,
+                )
 
             next_step, transition_source = self._resolve_next_step(
                 current_step=current_step,

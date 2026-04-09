@@ -38,14 +38,6 @@ class NoOpHook:
         return HookResult()
 
 
-class GitHubIssueFetcher(NoOpHook):
-    name = "GitHubIssueFetcher"
-
-
-class UserInputCollector(NoOpHook):
-    name = "UserInputCollector"
-
-
 class InteractiveQAHandler(NoOpHook):
     name = "InteractiveQAHandler"
 
@@ -64,6 +56,9 @@ class GitHubPRCreator(NoOpHook):
 
 class PRCommentPoster(NoOpHook):
     name = "PRCommentPoster"
+
+
+from cafe.core.hooks.native import GitHubIssueFetcher, UserInputCollector
 
 
 BUILTIN_HOOKS = {

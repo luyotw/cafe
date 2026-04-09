@@ -126,6 +126,15 @@ class GenericWorkflowStepExecutor(Phase):
             output_file=output_file,
             checklist_file=checklist_file,
             questions_xml_file=questions_xml_file,
+            hook_context={
+                "phase": self,
+                "step_name": step_name,
+                "agent_name": agent_name,
+                "iteration_dir": iteration_dir,
+                "output_file": output_file,
+                "questions_xml_file": questions_xml_file,
+                "blackboard_state": blackboard_state,
+            },
         )
 
         response = execution.response

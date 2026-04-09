@@ -64,6 +64,8 @@ class GenericPhase:
             lines.append("Do NOT return a status code until ALL checklist items are marked as [x].")
         if questions_xml_file is not None:
             lines.append(f"If clarification is needed, write questions.xml to: {questions_xml_file}")
+        if context and context.get("user_input"):
+            lines.extend(["", "Current user input for this iteration:", context["user_input"]])
 
         return "\n".join(lines).strip()
 
@@ -109,17 +111,20 @@ class GenericPhase:
         output_file: Optional[Path] = None,
         checklist_file: Optional[Path] = None,
         questions_xml_file: Optional[Path] = None,
+        hook_context: Optional[Dict[str, Any]] = None,
         max_retries: int = 3,
     ) -> GenericPhaseExecution:
         runtime_context = dict(context or {})
         events: List[Dict[str, Any]] = []
         artifact_ready = True
+        hook_kwargs = dict(hook_context or {})
 
         before = self._run_hook_stage(
             "before_execute",
             step_def=step_def,
             skill_name=skill_name,
             context=runtime_context,
+            **hook_kwargs,
         )
         runtime_context.update(before.context_updates)
         events.extend(before.events)
@@ -140,6 +145,7 @@ class GenericPhase:
             step_def=step_def,
             skill_name=skill_name,
             context=runtime_context,
+            **hook_kwargs,
         )
         runtime_context.update(prepared.context_updates)
         events.extend(prepared.events)
@@ -181,6 +187,7 @@ class GenericPhase:
                 response=response,
                 status_code=status_code,
                 goto_target=goto_target,
+                **hook_kwargs,
             )
             runtime_context.update(after.context_updates)
             events.extend(after.events)
@@ -204,6 +211,7 @@ class GenericPhase:
                 response=response,
                 status_code=status_code,
                 goto_target=goto_target,
+                **hook_kwargs,
             )
             runtime_context.update(publish.context_updates)
             events.extend(publish.events)

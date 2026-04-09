@@ -192,6 +192,42 @@ def test_runner_records_transition_source_events(tmp_path: Path) -> None:
     assert transition_events[0].data["to"] == "review"
 
 
+def test_runner_pauses_when_step_needs_clarification(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo"
+    playbook = {
+        "playbook": {"id": "default"},
+        "steps": {
+            "spec": {
+                "skill": "spec_first",
+                "role": "pm",
+                "valid_status_codes": ["CAFE_NEED_CLARIFICATION"],
+                "on": {"CAFE_NEED_CLARIFICATION": "spec"},
+            }
+        },
+    }
+
+    def executor(step_name: str, step_def: dict, state: object) -> tuple[str, dict[str, str]]:
+        return ("CAFE_NEED_CLARIFICATION", {})
+
+    runner = PlaybookRunner(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        executor=executor,
+    )
+    result = runner.run(max_transitions=5)
+
+    assert result.completed is False
+    assert result.final_step == "spec"
+    assert result.final_status_code == "CAFE_NEED_CLARIFICATION"
+    blackboard = BlackboardStore(issue_dir).load_or_create("spec")
+    pause_events = [event for event in blackboard.events if event.event_type == "workflow_paused"]
+    assert pause_events
+    assert pause_events[-1].data["status_code"] == "CAFE_NEED_CLARIFICATION"
+
+
+
+
 def test_runner_rejects_reserved_assignee_type_at_runtime(tmp_path: Path) -> None:
     playbook = {
         "playbook": {"id": "default"},
