@@ -10,6 +10,8 @@ from typing import Optional
 
 from cafe.agents.manager import AgentManager
 from cafe.core.types import AgentCLI, AgentConfig
+from cafe.core.workflow_instance import WorkflowInstance
+from cafe.playbooks.loader import PlaybookLoader
 from cafe.skills.loader import SkillLoader
 from cafe.skills.native_bridge import NativeSkillBridge
 from cafe.utils.config import ConfigManager
@@ -62,6 +64,20 @@ def get_chat_next_step_path(issue_dir: Path) -> Path:
     return get_chat_handoff_dir(issue_dir) / "next_step.txt"
 
 
+def _load_chat_workflow_context(issue_dir: Path) -> tuple[str, list[str], str]:
+    instance = WorkflowInstance.load(issue_dir)
+    playbook_id = instance.playbook_id if instance is not None else "default"
+    current_step = instance.current_step if instance is not None else "spec"
+
+    try:
+        playbook = PlaybookLoader(project_root=Path.cwd()).load(playbook_id)
+        steps = list(playbook["steps"].keys())
+    except Exception:
+        steps = ["spec", "plan", "develop", "review", "pr"]
+
+    return current_step, steps, playbook_id
+
+
 def _build_chat_seed_prompt(
     *,
     role: str,
@@ -69,10 +85,16 @@ def _build_chat_seed_prompt(
     invocations: dict[str, str],
     blackboard_path: Path,
     next_step_path: Path,
+    current_step: str,
+    valid_steps: list[str],
+    playbook_id: str,
 ) -> str:
     """Build the chat bootstrap prompt for one interactive session."""
+    valid_steps_text = ", ".join(valid_steps)
     return (
         f"You are entering a `cafe chat` session for role `{role}` on issue `{issue_name}`.\n\n"
+        f"This issue is currently running playbook `{playbook_id}` and the current workflow step is `{current_step}`.\n"
+        f"Valid workflow step names for the next baton are: {valid_steps_text}.\n\n"
         "The following CLI-native skills are already installed for this session:\n"
         f"- Shared handoff: {invocations['common-chat-handoff']}\n"
         f"- Develop change: {invocations['chat-develop-change']}\n"
@@ -85,6 +107,8 @@ def _build_chat_seed_prompt(
         f"When you are wrapping up a workflow-related chat, update the shared blackboard directly at `{blackboard_path}`.\n"
         f"Then write the exact next workflow step name into `{next_step_path}` before printing the closing handoff block.\n"
         "Only write one bare step name into the next-step file, such as `spec`, `plan`, `develop`, `review`, or `pr`.\n"
+        "The next-step file should point to the next responsible workflow step after this chat, not necessarily the current one.\n"
+        "If you updated spec in chat, hand off to the next planning step. If you updated plan, hand off to the next development step. If you updated implementation code, hand off to the next review or downstream step allowed by the workflow.\n"
         "Do not hand the user a phase-specific command.\n"
         "For workflow-related chat, end by telling the user to exit chat and run `cafe make`."
     )
@@ -112,6 +136,7 @@ def _prepare_chat_environment(
     for skill_name in CHAT_SKILL_NAMES:
         bridge.install_skill(skill_name, agent_cli)
         invocations[skill_name] = bridge.get_invocation(skill_name, agent_cli)
+    current_step, valid_steps, playbook_id = _load_chat_workflow_context(issue_dir)
 
     prompt = _build_chat_seed_prompt(
         role=role,
@@ -119,6 +144,9 @@ def _prepare_chat_environment(
         invocations=invocations,
         blackboard_path=issue_dir / "blackboard.json",
         next_step_path=get_chat_next_step_path(issue_dir),
+        current_step=current_step,
+        valid_steps=valid_steps,
+        playbook_id=playbook_id,
     )
 
     try:
@@ -191,7 +219,6 @@ def launch_chat_session(role: str, issue_name: str) -> int:
         issue_dir=issue_dir,
     )
     session_id: Optional[str] = executor.config.session_id
-    session_id = executor.config.session_id
 
     print(f"\nOpening chat with {role} ({agent_name})...")
     if session_id:

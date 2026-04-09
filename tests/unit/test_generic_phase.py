@@ -38,7 +38,7 @@ def test_build_prompt_includes_files_and_checklist_guard(tmp_path: Path) -> None
         checklist_file=Path("checklist.md"),
         questions_xml_file=Path("questions.xml"),
     )
-    assert "Use the installed skill /plan." in prompt
+    assert "Skill: /plan" in prompt
     assert "Do NOT return a status code until ALL checklist items are marked as [x]." in prompt
     assert "questions.xml" in prompt
 
@@ -151,8 +151,8 @@ def test_execute_runs_prepare_input_and_after_execute_retry(tmp_path: Path) -> N
     )
 
     assert len(prompts) == 2
-    assert "Use the installed skill /plan." in prompts[0]
-    assert "Use the installed skill /plan." in prompts[1]
+    assert "Skill: /plan" in prompts[0]
+    assert "Skill: /plan" in prompts[1]
     assert result.status_code == PhaseStatusCode.CONFIRMED
 
 

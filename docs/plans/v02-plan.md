@@ -124,14 +124,14 @@ Write spec to: {output_file}
 為了控制 token 消耗，Skill 的載入分三階段：
 
 1. **Startup** — 只載入 name + description（從 frontmatter），用於 Playbook 驗證和 `cafe skill list`
-2. **Activation** — 載入完整 SKILL.md body，解析 placeholder，注入 agent prompt
-3. **On-demand** — agent 自行透過 tool 讀取 references/ 和 scripts/（路徑由 `{skill_references}` 提供）
+2. **Installation** — 在執行前把解析後的 Skill 同步到目前 agent CLI 的 native skills directory
+3. **Invocation / On-demand** — agent 透過 CLI-native skill invocation 使用 skill，並自行透過 tool 讀取 references/ 和 scripts/
 
 ```python
 class SkillLoader:
     def discover() -> List[SkillCatalogEntry]        # 階段 1: 掃描 frontmatter
-    def activate(name: str, context: dict) -> str     # 階段 2: 載入 body + 解析 placeholder
-    def get_reference(name: str, ref: str) -> str     # 階段 3: 載入指定 reference 檔案
+    def get_skill_dir(name: str) -> Path             # 取得已解析來源 skill 目錄
+    def get_reference(name: str, ref: str) -> str    # 讀指定 reference 檔案
 ```
 
 ### scripts/ 的使用層級
@@ -439,12 +439,10 @@ class HookResult:
 
 ```
  1. 從 playbook step config 取得 skill 名稱（根據 iteration 選擇）
- 2. SkillLoader.activate(skill_name, context) → 載入 SKILL.md + 解析 placeholder
+ 2. 將 skill 安裝到當前 agent CLI 的 native skills directory，取得 invocation（例如 `$cafe-plan`）
  3. 執行 before_execute hooks — 任一回傳 continue=False 則中止
- 4. 執行 prepare_input hooks — 收集 context_updates
- 5. 從 Blackboard 讀取 input artifacts
- 6. 產生 Blackboard 摘要（含上次執行以來的事件）
- 7. 合併所有 context_updates，組合 prompt = SKILL.md body（已解析 placeholder + context）
+ 4. 執行 prepare_input hooks — 收集最小 runtime context
+ 5. 組合極薄的 runtime prompt，主要只告知這輪要使用哪個已安裝 skill，以及 output/checklist/questions 檔案位置
  8. 呼叫 _execute_agent_iteration()（現有 Phase base class 基礎設施）
  9. 執行 after_execute hooks — 若 retry_requested 則回到步驟 8
 10. 存 output 到 iteration_XXX/output.md
@@ -907,10 +905,11 @@ Artifact 分工：
 |------|------|
 | `src/cafe/core/blackboard.py` | Blackboard 資料模型（ArtifactKind, ArtifactEntry, EventEntry, DecisionEntry）+ JSON 持久化 + rebuild |
 | `src/cafe/core/playbook.py` | Playbook schema（Pydantic models）、YAML 載入器、驗證器（skill 存在性、allowed_goto 合法性、tool pattern 冗餘） |
-| `src/cafe/core/skill_loader.py` | Skill 發現（掃描 builtin + custom）、frontmatter 解析、SKILL.md body 載入、placeholder 解析、name/folder 一致性檢查 |
-| `src/cafe/core/generic_phase.py` | GenericPhase — lifecycle hooks pipeline + Skill 執行 |
+| `src/cafe/skills/loader.py` | Skill 發現（掃描 builtin + custom）、frontmatter 解析、name/folder 一致性檢查 |
+| `src/cafe/skills/native_bridge.py` | 將 CAFE skill 安裝到 repo-local CLI-native skills 目錄並回傳 invocation |
+| `src/cafe/phases/generic_phase.py` | GenericPhase — lifecycle hooks pipeline + Skill 執行 |
 | `src/cafe/core/hooks/` | Builtin hook 實作（GitHubIssueFetcher, UserInputCollector, InteractiveQAHandler, PermissionRetryHandler, NewChangesGate, GitHubPRCreator, PRCommentPoster） |
-| `src/cafe/core/runner.py` | PlaybookRunner — 編排、status code 轉換、CAFE_GOTO、loop detection |
+| `src/cafe/core/playbook_runner.py` | PlaybookRunner — 編排、status code 轉換、CAFE_GOTO、loop detection |
 | `src/cafe/data/skills/` | Builtin Skills（spec_first, spec_revise, plan, develop, review, pr） |
 | `src/cafe/data/playbooks/` | Builtin Playbooks（default, hotfix） |
 

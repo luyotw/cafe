@@ -285,8 +285,13 @@ def test_build_chat_seed_prompt_includes_common_handoff_and_unified_next_step() 
         },
         blackboard_path="/tmp/issue123/blackboard.json",
         next_step_path="/tmp/issue123/chat/next_step.txt",
+        current_step="review",
+        valid_steps=["spec", "plan", "develop", "review", "pr"],
+        playbook_id="default",
     )
 
+    assert "current workflow step is `review`" in prompt
+    assert "Valid workflow step names for the next baton are: spec, plan, develop, review, pr." in prompt
     assert "$cafe-common-chat-handoff" in prompt
     assert "$cafe-chat-develop-change" in prompt
     assert "$cafe-chat-spec-revision" in prompt
@@ -295,6 +300,7 @@ def test_build_chat_seed_prompt_includes_common_handoff_and_unified_next_step() 
     assert "/tmp/issue123/blackboard.json" in prompt
     assert "/tmp/issue123/chat/next_step.txt" in prompt
     assert "Only write one bare step name" in prompt
+    assert "The next-step file should point to the next responsible workflow step" in prompt
     assert "exit chat and run `cafe make`" in prompt
 
 
