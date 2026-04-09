@@ -72,9 +72,8 @@ def test_workflow_command_consumes_chat_baton_before_execution(tmp_path: Path, m
         ),
         encoding="utf-8",
     )
-    chat_dir = issue_dir / "chat"
-    chat_dir.mkdir(parents=True, exist_ok=True)
-    (chat_dir / "next_step.txt").write_text("plan\n", encoding="utf-8")
+    next_step_file = issue_dir / "next_step.txt"
+    next_step_file.write_text("plan\n", encoding="utf-8")
 
     class FakeExecutor:
         def execute_step(self, step_name: str, step_def: dict, blackboard_state: object) -> tuple[str, dict[str, str]]:
@@ -93,7 +92,7 @@ def test_workflow_command_consumes_chat_baton_before_execution(tmp_path: Path, m
         assert result.exit_code == 0
 
     assert executed_steps == ["plan", "develop", "review", "pr"]
-    assert not (chat_dir / "next_step.txt").exists()
+    assert not next_step_file.exists()
     workflow_data = json.loads((issue_dir / "workflow_instance.json").read_text(encoding="utf-8"))
     assert workflow_data["status"] == "completed"
 
@@ -102,8 +101,8 @@ def test_workflow_command_rejects_invalid_chat_baton_step(tmp_path: Path, monkey
     monkeypatch.chdir(tmp_path)
 
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-206"
-    (issue_dir / "chat").mkdir(parents=True, exist_ok=True)
-    (issue_dir / "chat" / "next_step.txt").write_text("qa\n", encoding="utf-8")
+    issue_dir.mkdir(parents=True, exist_ok=True)
+    (issue_dir / "next_step.txt").write_text("qa\n", encoding="utf-8")
 
     with patch("cafe.ui.cli.GitOperations") as mock_git_cls:
         git = MagicMock()
