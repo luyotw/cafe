@@ -4,9 +4,11 @@ Provides launch_chat_session() which can be called from interactive prompts
 across any workflow phase to open a chat session with the relevant agent.
 """
 
+import io
 import json
 import subprocess
 import time
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from typing import Optional
 
@@ -107,7 +109,8 @@ def _prepare_chat_environment(
     )
 
     try:
-        agent_manager.execute(agent_name, prompt)
+        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            agent_manager.execute(agent_name, prompt)
     except Exception as exc:
         print(f"\n⚠️  Failed to seed chat skills for {agent_name}: {exc}\n")
 
