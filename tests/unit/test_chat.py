@@ -273,17 +273,17 @@ def test_build_chat_seed_prompt_includes_common_handoff_and_unified_next_step() 
         role="developer",
         issue_name="issue123",
         invocations={
-            "common-chat-handoff": "$common-chat-handoff",
-            "chat-develop-change": "$chat-develop-change",
-            "chat-spec-revision": "$chat-spec-revision",
-            "chat-plan-revision": "$chat-plan-revision",
+            "common-chat-handoff": "$cafe-common-chat-handoff",
+            "chat-develop-change": "$cafe-chat-develop-change",
+            "chat-spec-revision": "$cafe-chat-spec-revision",
+            "chat-plan-revision": "$cafe-chat-plan-revision",
         },
     )
 
-    assert "$common-chat-handoff" in prompt
-    assert "$chat-develop-change" in prompt
-    assert "$chat-spec-revision" in prompt
-    assert "$chat-plan-revision" in prompt
+    assert "$cafe-common-chat-handoff" in prompt
+    assert "$cafe-chat-develop-change" in prompt
+    assert "$cafe-chat-spec-revision" in prompt
+    assert "$cafe-chat-plan-revision" in prompt
     assert "exit chat and run `cafe make`" in prompt
 
 
@@ -295,7 +295,7 @@ def test_prepare_chat_environment_suppresses_seed_streaming_output(capsys) -> No
         "cafe.ui.chat.NativeSkillBridge.install_skill"
     ), patch(
         "cafe.ui.chat.NativeSkillBridge.get_invocation",
-        side_effect=lambda name, cli: f"${name}",
+        side_effect=lambda name, cli: f"$cafe-{name}",
     ):
         _prepare_chat_environment(
             executor=MagicMock(),

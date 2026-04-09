@@ -70,7 +70,14 @@ def _build_loader(tmp_path: Path) -> GenericPhase:
         builtin_root=tmp_path / "builtin",
     )
     loader.discover()
-    return GenericPhase(loader, skill_bridge=NativeSkillBridge(loader, home_dir=tmp_path / "home"))
+    return GenericPhase(
+        loader,
+        skill_bridge=NativeSkillBridge(
+            loader,
+            project_root=tmp_path,
+            home_dir=tmp_path / "home",
+        ),
+    )
 
 
 def test_generic_workflow_step_executor_writes_iteration_files(tmp_path: Path, monkeypatch) -> None:
