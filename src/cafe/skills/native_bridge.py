@@ -53,23 +53,16 @@ class NativeSkillBridge:
         """Return the installed skill folder/invocation name."""
         return f"{self.SKILL_NAME_PREFIX}{name}"
 
-    def _copy_skill_dir(self, source_dir: Path, target_dir: Path) -> Path:
+    def install_skill(self, name: str, cli: AgentCLI) -> Path:
+        """Install one resolved skill into the repo-local CLI-native directory."""
+        source_dir = self.skill_loader.get_skill_dir(name)
+        target_dir = self.get_native_skills_dir(cli) / self.get_installed_skill_name(name)
         target_dir.parent.mkdir(parents=True, exist_ok=True)
+
         if target_dir.exists():
             shutil.rmtree(target_dir)
         shutil.copytree(source_dir, target_dir)
         return target_dir
-
-    def install_skill(self, name: str, cli: AgentCLI) -> Path:
-        """Install one resolved skill into repo-local and global CLI-native directories."""
-        source_dir = self.skill_loader.get_skill_dir(name)
-        installed_name = self.get_installed_skill_name(name)
-        project_target_dir = self.get_native_skills_dir(cli) / installed_name
-        global_target_dir = self.get_global_native_skills_dir(cli) / installed_name
-
-        self._copy_skill_dir(source_dir, project_target_dir)
-        self._copy_skill_dir(source_dir, global_target_dir)
-        return project_target_dir
 
     def install_skills(self, names: list[str], cli: AgentCLI) -> list[Path]:
         """Install a list of skills for one CLI."""

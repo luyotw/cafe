@@ -94,35 +94,17 @@ def _build_chat_seed_prompt(
     *,
     role: str,
     issue_name: str,
-    invocations: dict[str, str],
     blackboard_path: Path,
     next_step_path: Path,
     current_step: str,
-    valid_steps: list[str],
     playbook_id: str,
 ) -> str:
     """Build the chat bootstrap prompt for one interactive session."""
-    valid_steps_text = ", ".join(valid_steps)
     return (
-        f"You are entering a `cafe chat` session for role `{role}` on issue `{issue_name}`.\n\n"
-        f"This issue is currently running playbook `{playbook_id}` and the current workflow step is `{current_step}`.\n"
-        f"Valid workflow step names for the next baton are: {valid_steps_text}.\n\n"
-        "The following CLI-native skills are already installed for this session:\n"
-        f"- Shared handoff: {invocations['common-chat-handoff']}\n"
-        f"- Develop change: {invocations['chat-develop-change']}\n"
-        f"- Spec revision: {invocations['chat-spec-revision']}\n"
-        f"- Plan revision: {invocations['chat-plan-revision']}\n\n"
-        "Use the shared handoff skill as the default workflow discipline for project-related chat.\n"
-        "When the conversation turns into code changes, spec revisions, or plan revisions, explicitly use the matching chat skill.\n"
-        "These skills apply to any agent role that encounters those situations.\n"
-        "Do not emit the handoff closing block on every answer; only use it when you are wrapping up or summarizing the session.\n"
-        f"When you are wrapping up a workflow-related chat, update the shared blackboard directly at `{blackboard_path}`.\n"
-        f"Then write the exact next workflow step name into `{next_step_path}` before printing the closing handoff block.\n"
-        "Only write one bare step name into the next-step file, such as `spec`, `plan`, `develop`, `review`, or `pr`.\n"
-        "The next-step file should point to the next responsible workflow step after this chat, not necessarily the current one.\n"
-        "If you updated spec in chat, hand off to the next planning step. If you updated plan, hand off to the next development step. If you updated implementation code, hand off to the next review or downstream step allowed by the workflow.\n"
-        "Do not hand the user a phase-specific command.\n"
-        "For workflow-related chat, end by telling the user to exit chat and run `cafe make`."
+        f"`cafe chat` context for role `{role}` on issue `{issue_name}`.\n"
+        f"Current playbook: `{playbook_id}`. Current workflow step: `{current_step}`.\n"
+        f"Shared blackboard path: `{blackboard_path}`.\n"
+        f"Workflow baton path: `{next_step_path}`."
     )
 
 
@@ -154,11 +136,9 @@ def _prepare_chat_environment(
     prompt = _build_chat_seed_prompt(
         role=role,
         issue_name=issue_name,
-        invocations=invocations,
         blackboard_path=issue_dir / "blackboard.json",
         next_step_path=get_chat_next_step_path(issue_dir),
         current_step=current_step,
-        valid_steps=valid_steps,
         playbook_id=playbook_id,
     )
 

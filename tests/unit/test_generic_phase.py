@@ -195,7 +195,6 @@ def test_prepare_skill_installs_skill_and_returns_cli_invocation(tmp_path: Path)
 
     assert invocation == "$cafe-plan"
     assert (project_root / ".codex" / "skills" / "cafe-plan" / "SKILL.md").exists()
-    assert (tmp_path / "home" / ".codex" / "skills" / "cafe-plan" / "SKILL.md").exists()
 
 
 def test_native_skill_bridge_keeps_global_dir_separate(tmp_path: Path) -> None:

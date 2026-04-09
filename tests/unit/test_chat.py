@@ -278,31 +278,17 @@ def test_build_chat_seed_prompt_includes_common_handoff_and_unified_next_step() 
     prompt = _build_chat_seed_prompt(
         role="developer",
         issue_name="issue123",
-        invocations={
-            "common-chat-handoff": "$cafe-common-chat-handoff",
-            "chat-develop-change": "$cafe-chat-develop-change",
-            "chat-spec-revision": "$cafe-chat-spec-revision",
-            "chat-plan-revision": "$cafe-chat-plan-revision",
-        },
         blackboard_path="/tmp/issue123/blackboard.json",
         next_step_path="/tmp/issue123/chat/next_step.txt",
         current_step="review",
-        valid_steps=["spec", "plan", "develop", "review", "pr"],
         playbook_id="default",
     )
 
-    assert "current workflow step is `review`" in prompt
-    assert "Valid workflow step names for the next baton are: spec, plan, develop, review, pr." in prompt
-    assert "$cafe-common-chat-handoff" in prompt
-    assert "$cafe-chat-develop-change" in prompt
-    assert "$cafe-chat-spec-revision" in prompt
-    assert "$cafe-chat-plan-revision" in prompt
-    assert "Do not emit the handoff closing block on every answer" in prompt
+    assert "Current workflow step: `review`." in prompt
     assert "/tmp/issue123/blackboard.json" in prompt
     assert "/tmp/issue123/chat/next_step.txt" in prompt
-    assert "Only write one bare step name" in prompt
-    assert "The next-step file should point to the next responsible workflow step" in prompt
-    assert "exit chat and run `cafe make`" in prompt
+    assert "Shared blackboard path" in prompt
+    assert "Workflow baton path" in prompt
 
 
 def test_prepare_chat_environment_suppresses_seed_streaming_output(capsys) -> None:
