@@ -6,7 +6,14 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from cafe.core.types import AgentCLI
-from cafe.ui.chat import launch_chat_session
+from cafe.ui.chat import _build_chat_seed_prompt, launch_chat_session
+
+
+@pytest.fixture(autouse=True)
+def mock_chat_environment():
+    """Avoid writing to real native CLI skill directories in unit tests."""
+    with patch("cafe.ui.chat._prepare_chat_environment") as mock_prepare:
+        yield mock_prepare
 
 
 class TestLaunchChatSession:
@@ -173,6 +180,33 @@ class TestLaunchChatSession:
 
         mock_agent_manager_cls.assert_called_once_with(issue_name="my-issue")
 
+    @patch("cafe.ui.chat.subprocess.run")
+    @patch("cafe.ui.chat.ConfigManager")
+    @patch("cafe.ui.chat.AgentManager")
+    def test_prepares_chat_environment_before_launch(
+        self,
+        mock_agent_manager_cls,
+        mock_config_manager_cls,
+        mock_run,
+        mock_chat_environment,
+    ):
+        mock_config = MagicMock()
+        mock_config.get.return_value = {"name": "David", "cli": "claude"}
+        mock_config_manager_cls.return_value = mock_config
+
+        agent_manager = self._make_agent_manager("David", "claude")
+        mock_agent_manager_cls.return_value = agent_manager
+        mock_run.return_value = MagicMock(returncode=0)
+
+        launch_chat_session("developer", "issue123")
+
+        mock_chat_environment.assert_called_once()
+        kwargs = mock_chat_environment.call_args.kwargs
+        assert kwargs["agent_name"] == "David"
+        assert kwargs["agent_cli"] == AgentCLI.CLAUDE
+        assert kwargs["role"] == "developer"
+        assert kwargs["issue_name"] == "issue123"
+
     @patch("cafe.ui.chat._extract_latest_codex_session_id", return_value="thread-123")
     @patch("cafe.ui.chat.subprocess.run")
     @patch("cafe.ui.chat.ConfigManager")
@@ -232,3 +266,22 @@ class TestLaunchChatSession:
             "sess-codex",
             "issue123",
         )
+
+
+def test_build_chat_seed_prompt_includes_common_handoff_and_unified_next_step() -> None:
+    prompt = _build_chat_seed_prompt(
+        role="developer",
+        issue_name="issue123",
+        invocations={
+            "common-chat-handoff": "$common-chat-handoff",
+            "chat-develop-change": "$chat-develop-change",
+            "chat-spec-revision": "$chat-spec-revision",
+            "chat-plan-revision": "$chat-plan-revision",
+        },
+    )
+
+    assert "$common-chat-handoff" in prompt
+    assert "$chat-develop-change" in prompt
+    assert "$chat-spec-revision" in prompt
+    assert "$chat-plan-revision" in prompt
+    assert "exit chat and run `cafe make`" in prompt

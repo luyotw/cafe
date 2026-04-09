@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 from cafe.core.blackboard import BlackboardState, BlackboardStore
 from cafe.core.status_codes import PhaseStatusCode
@@ -13,7 +13,17 @@ from cafe.core.workflow_instance import WorkflowInstance
 from cafe.phases.generic_phase import GenericPhase
 
 
-StepExecutor = Callable[[str, Dict, BlackboardState], tuple[str, Dict[str, str]]]
+StepExecutor = Callable[[str, Dict, BlackboardState], Any]
+
+
+@dataclass
+class StepExecutionResult:
+    """Normalized executor output for one step."""
+
+    response: str
+    artifacts: Dict[str, str]
+    status_code: Optional[str] = None
+    auto_continue: bool = False
 
 
 @dataclass
@@ -23,6 +33,13 @@ class PlaybookRunResult:
     final_step: str
     final_status_code: str
     completed: bool
+
+
+PAUSE_STATUS_CODES = {
+    PhaseStatusCode.READY_FOR_REVIEW.value,
+    PhaseStatusCode.NEED_CLARIFICATION.value,
+    PhaseStatusCode.NEED_PERMISSION.value,
+}
 
 
 class PlaybookRunner:
@@ -53,6 +70,50 @@ class PlaybookRunner:
             playbook_id=self.playbook_id,
             initial_step=self.start_step,
         )
+
+    def _load_step_status_code(self, step_name: str) -> Optional[str]:
+        status_file = self.issue_dir / step_name / "status.json"
+        if not status_file.exists():
+            return None
+        try:
+            import json
+
+            raw = json.loads(status_file.read_text(encoding="utf-8"))
+        except Exception:
+            return None
+        status_code = raw.get("status_code")
+        return str(status_code) if status_code else None
+
+    def _align_current_step_with_saved_progress(self, current_step: str) -> str:
+        """Advance stale workflow pointers before executing any step."""
+        while current_step in self.steps:
+            saved_status_code = self._load_step_status_code(current_step)
+            if not saved_status_code or saved_status_code in PAUSE_STATUS_CODES:
+                return current_step
+
+            next_step, transition_source = self._resolve_next_step(
+                current_step=current_step,
+                response=saved_status_code,
+                status_code=saved_status_code,
+            )
+            if next_step is None or next_step not in self.steps:
+                return current_step
+
+            self.blackboard_store.record_event(
+                self.blackboard,
+                "resume_aligned",
+                {
+                    "from": current_step,
+                    "to": next_step,
+                    "status_code": saved_status_code,
+                    "source": transition_source,
+                },
+            )
+            self.blackboard_store.set_current_step(self.blackboard, next_step)
+            self.instance.transition_to(next_step, saved_status_code)
+            current_step = next_step
+
+        return current_step
 
     def _resolve_next_step(
         self,
@@ -111,6 +172,8 @@ class PlaybookRunner:
         current_step = start_step or self.instance.current_step
         if current_step not in self.steps:
             raise ValueError(f"Unknown playbook step '{current_step}'")
+        if start_step is None:
+            current_step = self._align_current_step_with_saved_progress(current_step)
 
         last_status_code = ""
         step_visits: Counter[str] = Counter()
@@ -149,16 +212,42 @@ class PlaybookRunner:
                     f"Step '{current_step}' has assignee_type={assignee_type}, which is not supported in v0.2. "
                     "Use v0.3+ or change to assignee_type=agent."
                 )
-            response, artifacts = self.executor(current_step, step_def, self.blackboard)
+            execution_result = self.executor(current_step, step_def, self.blackboard)
+            auto_continue = False
+            explicit_status_code: Optional[str] = None
+            if isinstance(execution_result, StepExecutionResult):
+                response = execution_result.response
+                artifacts = execution_result.artifacts
+                explicit_status_code = execution_result.status_code
+                auto_continue = execution_result.auto_continue
+            elif isinstance(execution_result, tuple) and len(execution_result) == 3:
+                response, artifacts, metadata = execution_result
+                if isinstance(metadata, dict):
+                    auto_continue = bool(metadata.get("auto_continue"))
+                    raw_status_code = metadata.get("status_code")
+                    if isinstance(raw_status_code, str):
+                        explicit_status_code = raw_status_code
+            else:
+                response, artifacts = execution_result
             valid_codes = [
                 PhaseStatusCode(code)
                 for code in step_def.get("valid_status_codes", [])
                 if code in {item.value for item in PhaseStatusCode}
             ]
-            status_code_obj, _ = self.generic_phase.parse_response(
+            status_code_obj = (
+                PhaseStatusCode(explicit_status_code)
+                if explicit_status_code in {item.value for item in PhaseStatusCode}
+                else None
+            )
+            _, goto_target = self.generic_phase.parse_response(
                 response=response,
                 valid_status_codes=valid_codes or list(PhaseStatusCode),
             )
+            if status_code_obj is None:
+                status_code_obj, _ = self.generic_phase.parse_response(
+                    response=response,
+                    valid_status_codes=valid_codes or list(PhaseStatusCode),
+                )
             if status_code_obj is None:
                 raise ValueError(f"Step '{current_step}' did not return a valid status code")
             status_code = status_code_obj.value
@@ -178,9 +267,25 @@ class PlaybookRunner:
                 },
             )
 
+            if not single_step and status_code in PAUSE_STATUS_CODES and not auto_continue:
+                self.blackboard_store.record_event(
+                    self.blackboard,
+                    "workflow_paused",
+                    {
+                        "step": current_step,
+                        "status_code": status_code,
+                        "reason": "awaiting_user_input",
+                    },
+                )
+                return PlaybookRunResult(
+                    final_step=current_step,
+                    final_status_code=status_code,
+                    completed=False,
+                )
+
             next_step, transition_source = self._resolve_next_step(
                 current_step=current_step,
-                response=response,
+                response=response if goto_target is None else f"{response}\nCAFE_GOTO:{goto_target}",
                 status_code=status_code,
             )
             if single_step:

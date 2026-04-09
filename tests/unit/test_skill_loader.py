@@ -104,3 +104,21 @@ def test_imported_project_skill_is_discovered_with_project_precedence(tmp_path: 
     assert summary.imported_count == 1
     assert any(item.name == "plan" and item.source == "project" for item in items)
     assert "Imported project body" in loader.activate("plan")
+
+def test_builtin_catalog_includes_chat_handoff_skills(tmp_path: Path) -> None:
+    builtin_root = Path(__file__).resolve().parents[2] / "src" / "cafe" / "data"
+    loader = SkillLoader(
+        project_root=tmp_path / "project",
+        global_root=tmp_path / "global",
+        builtin_root=builtin_root,
+    )
+
+    items = loader.discover()
+    names = {item.name for item in items if item.source == "builtin"}
+
+    assert {
+        "common-chat-handoff",
+        "chat-develop-change",
+        "chat-spec-revision",
+        "chat-plan-revision",
+    }.issubset(names)

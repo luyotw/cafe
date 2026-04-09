@@ -221,6 +221,7 @@ def _build_workflow_step_executor(
     phase_name: Optional[str] = None,
     role_agent_map_override: Optional[Dict[str, str]] = None,
     step_user_inputs: Optional[Dict[str, str]] = None,
+    interactive: bool = False,
 ) -> GenericWorkflowStepExecutor:
     """Create the GenericPhase-backed executor for workflow steps."""
     role_agent_map = _build_workflow_role_agent_map(config_manager, playbook_data)
@@ -235,6 +236,7 @@ def _build_workflow_step_executor(
         git_ops=GitOperations(),
         role_agent_map=role_agent_map,
         step_user_inputs=step_user_inputs,
+        interactive=interactive,
     )
 
 
@@ -406,6 +408,7 @@ def _run_iterative_alias_step(
         console.print()
         if status_code == "CAFE_NEED_CLARIFICATION":
             console.print("[yellow]💬 Agent needs clarification[/yellow]")
+            _display_iteration_questions(issue_name=issue_name, step_name=step_name, alias_result=alias_result)
         else:
             console.print("[yellow]📝 Draft ready for review[/yellow]")
 
@@ -418,6 +421,36 @@ def _run_iterative_alias_step(
             current_input = prompt_multiline(clarification_prompt).strip() or current_input
         iteration_count += 1
         console.print("[dim]Continuing...[/dim]")
+
+
+def _display_iteration_questions(*, issue_name: str, step_name: str, alias_result: Dict[str, Any]) -> None:
+    """Render clarification questions from the latest iteration when available."""
+    iteration = alias_result.get("iterations")
+    if not isinstance(iteration, int) or iteration <= 0:
+        return
+
+    questions_file = Path(".cafe") / "issues" / issue_name / step_name / f"iteration_{iteration:03d}" / "questions.xml"
+    if not questions_file.exists():
+        return
+
+    try:
+        from cafe.core.questions_schema import parse_questions_xml, validate_questions_xml
+
+        if not validate_questions_xml(questions_file):
+            return
+
+        questions = parse_questions_xml(questions_file)
+    except Exception:
+        return
+
+    if not questions:
+        return
+
+    console.print("Questions to confirm:")
+    for idx, question in enumerate(questions, start=1):
+        console.print(f"{idx}. {question.title}")
+        for option in question.options:
+            console.print(f"   - {option}")
 
 
 def _check_agent_clis_available(config_manager: ConfigManager) -> List[str]:
@@ -5437,6 +5470,7 @@ def workflow(
             issue_name=issue_name,
             playbook_data=playbook_data,
             generic_phase=generic_phase,
+            interactive=(sys.stdin.isatty() or os.getenv("CAFE_FORCE_INTERACTIVE") == "1"),
         )
 
         runner = PlaybookRunner(

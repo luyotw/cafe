@@ -220,6 +220,32 @@ class GitHubOps:
         except json.JSONDecodeError as e:
             raise GitHubError(f"Failed to parse PR data: {e}") from e
 
+    def get_current_pr_url(self) -> str:
+        """Get the current branch's PR URL.
+
+        Returns:
+            PR URL
+
+        Raises:
+            GitHubError: If failed to resolve current branch PR
+        """
+        try:
+            result = subprocess.run(
+                ["gh", "pr", "view", "--json", "url"],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            payload = json.loads(result.stdout)
+            pr_url = payload.get("url", "").strip()
+            if not pr_url:
+                raise GitHubError("Current branch PR URL is empty")
+            return pr_url
+        except subprocess.CalledProcessError as e:
+            raise GitHubError(f"Failed to get current PR URL: {e.stderr}") from e
+        except json.JSONDecodeError as e:
+            raise GitHubError(f"Failed to parse current PR URL data: {e}") from e
+
     def extract_pr_number(self, pr_url_or_number: str) -> str:
         """Extract PR number from URL or return the number directly.
 

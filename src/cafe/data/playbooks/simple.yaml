@@ -49,6 +49,7 @@ steps:
       - CAFE_NEED_CLARIFICATION
       - CAFE_NEED_PERMISSION
     hooks:
+      prepare_input: [UserInputCollector]
       after_execute: [PermissionRetryHandler]
     "on":
       CAFE_CONFIRMED: pr
@@ -69,7 +70,8 @@ steps:
       - CAFE_NEEDS_CHANGES
     allowed_goto: [develop]
     hooks:
-      publish_output: [GitHubPRCreator, PRCommentPoster]
+      prepare_input: [UserInputCollector]
+      publish_output: [GitHubPRCreator, PRCommentPoster, PRLinkOpener]
     "on":
       CAFE_CONFIRMED: _done
       CAFE_NEEDS_CHANGES: develop

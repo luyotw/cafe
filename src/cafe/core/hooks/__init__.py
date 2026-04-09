@@ -38,14 +38,6 @@ class NoOpHook:
         return HookResult()
 
 
-class GitHubIssueFetcher(NoOpHook):
-    name = "GitHubIssueFetcher"
-
-
-class UserInputCollector(NoOpHook):
-    name = "UserInputCollector"
-
-
 class InteractiveQAHandler(NoOpHook):
     name = "InteractiveQAHandler"
 
@@ -66,6 +58,13 @@ class PRCommentPoster(NoOpHook):
     name = "PRCommentPoster"
 
 
+class PRLinkOpener(NoOpHook):
+    name = "PRLinkOpener"
+
+
+from cafe.core.hooks.native import GitHubIssueFetcher, PRLinkOpener, UserInputCollector
+
+
 BUILTIN_HOOKS = {
     hook.name: hook
     for hook in [
@@ -76,5 +75,6 @@ BUILTIN_HOOKS = {
         NewChangesGate,
         GitHubPRCreator,
         PRCommentPoster,
+        PRLinkOpener,
     ]
 }

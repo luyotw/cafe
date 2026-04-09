@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional
 
 from cafe.agents.manager import AgentManager
 from cafe.core.blackboard import ArtifactEntry, ArtifactKind, BlackboardState, BlackboardStore
+from cafe.core.playbook_runner import StepExecutionResult
 from cafe.core.git import GitOperations
 from cafe.core.phase import Phase
 from cafe.core.status_codes import PhaseStatusCode, generate_status_code_prompt
@@ -36,8 +37,9 @@ class GenericWorkflowStepExecutor(Phase):
         git_ops: GitOperations,
         role_agent_map: Dict[str, str],
         step_user_inputs: Optional[Dict[str, str]] = None,
+        interactive: bool = False,
     ) -> None:
-        self.interactive = False
+        self.interactive = interactive
         self.issue_dir = issue_dir
         self.issue_name = issue_name
         self.playbook = playbook
@@ -59,7 +61,7 @@ class GenericWorkflowStepExecutor(Phase):
         step_name: str,
         step_def: Dict[str, Any],
         blackboard_state: BlackboardState,
-    ) -> tuple[str, Dict[str, str]]:
+    ) -> StepExecutionResult:
         self.phase_name = step_name
         self.phase_dir = self.issue_dir / step_name
         self.phase_dir.mkdir(parents=True, exist_ok=True)
@@ -80,6 +82,11 @@ class GenericWorkflowStepExecutor(Phase):
         skill_name = self._resolve_skill_name(step_def, self.iteration)
         valid_status_codes = self._resolve_valid_status_codes(step_def)
         agent_name = self._resolve_agent_name(step_def)
+        agent_cli = self.agent_manager.get_agent(agent_name).config.cli
+        skill_invocation = self.generic_phase.prepare_skill(
+            skill_name=skill_name,
+            agent_cli=agent_cli,
+        )
         context = self._build_context(
             step_name=step_name,
             step_def=step_def,
@@ -122,10 +129,20 @@ class GenericWorkflowStepExecutor(Phase):
             skill_name=skill_name,
             step_def=step_def,
             agent_executor=run_agent,
+            skill_invocation=skill_invocation,
             context=context,
             output_file=output_file,
             checklist_file=checklist_file,
             questions_xml_file=questions_xml_file,
+            hook_context={
+                "phase": self,
+                "step_name": step_name,
+                "agent_name": agent_name,
+                "iteration_dir": iteration_dir,
+                "output_file": output_file,
+                "questions_xml_file": questions_xml_file,
+                "blackboard_state": blackboard_state,
+            },
         )
 
         response = execution.response
@@ -133,7 +150,8 @@ class GenericWorkflowStepExecutor(Phase):
         if status_code is None:
             raise ValueError(f"Step '{step_name}' did not return a valid status code")
 
-        if self._should_validate_checklist(status_code):
+        agent_was_invoked = bool(last_prompt)
+        if agent_was_invoked and self._should_validate_checklist(status_code):
             response, validated_status, validation_passed = self._validate_and_retry_checklist_completion(
                 agent_name=agent_name,
                 prompt=last_prompt[0] if last_prompt else "",
@@ -159,7 +177,23 @@ class GenericWorkflowStepExecutor(Phase):
                 updated_by=step_name,
             )
 
-        return response, artifacts
+        auto_continue = any(
+            event.get("type") in {"user_input_collected", "review_modification_requested"}
+            for event in execution.events
+            if isinstance(event, dict)
+        )
+        if self.interactive and status_code in {
+            PhaseStatusCode.NEED_CLARIFICATION,
+            PhaseStatusCode.READY_FOR_REVIEW,
+        }:
+            auto_continue = True
+
+        return StepExecutionResult(
+            response=response,
+            artifacts=artifacts,
+            status_code=status_code.value,
+            auto_continue=auto_continue,
+        )
 
     def _detect_written_output_files(self) -> List[Path]:
         if self._current_output_file and self._current_output_file.exists():

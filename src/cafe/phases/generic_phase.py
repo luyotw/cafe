@@ -11,6 +11,8 @@ from cafe.core.hooks import BUILTIN_HOOKS, HookResult
 from cafe.core.questions_schema import validate_questions_xml
 from cafe.core.status_codes import PhaseStatusCode, StatusCodeParser
 from cafe.skills.loader import SkillLoader
+from cafe.skills.native_bridge import NativeSkillBridge
+from cafe.core.types import AgentCLI
 
 
 AgentExecutor = Callable[[str], str]
@@ -39,23 +41,34 @@ class GenericPhase:
         skill_loader: SkillLoader,
         *,
         hook_registry: Optional[Dict[str, type]] = None,
+        skill_bridge: Optional[NativeSkillBridge] = None,
     ) -> None:
         self.skill_loader = skill_loader
+        self.skill_bridge = skill_bridge or NativeSkillBridge(skill_loader)
         self.hook_registry = dict(BUILTIN_HOOKS)
         if hook_registry:
             self.hook_registry.update(hook_registry)
+
+    def prepare_skill(self, *, skill_name: str, agent_cli: AgentCLI) -> str:
+        """Install a skill for the target CLI and return its invocation syntax."""
+        self.skill_bridge.install_skill(skill_name, agent_cli)
+        return self.skill_bridge.get_invocation(skill_name, agent_cli)
 
     def build_prompt(
         self,
         *,
         skill_name: str,
+        skill_invocation: str,
         context: Optional[Dict[str, str]] = None,
         output_file: Optional[Path] = None,
         checklist_file: Optional[Path] = None,
         questions_xml_file: Optional[Path] = None,
     ) -> str:
-        skill_body = self.skill_loader.activate(skill_name, context=context)
-        lines = [skill_body.strip(), ""]
+        lines = [
+            f"Use the installed skill {skill_invocation}.",
+            "Follow that skill's instructions from the CLI-native skills directory.",
+            "",
+        ]
 
         if output_file is not None:
             lines.append(f"Write output to: {output_file}")
@@ -64,6 +77,8 @@ class GenericPhase:
             lines.append("Do NOT return a status code until ALL checklist items are marked as [x].")
         if questions_xml_file is not None:
             lines.append(f"If clarification is needed, write questions.xml to: {questions_xml_file}")
+        if context and context.get("user_input"):
+            lines.extend(["", "Current user input for this iteration:", context["user_input"]])
 
         return "\n".join(lines).strip()
 
@@ -105,21 +120,25 @@ class GenericPhase:
         skill_name: str,
         step_def: Dict[str, Any],
         agent_executor: AgentExecutor,
+        skill_invocation: str,
         context: Optional[Dict[str, str]] = None,
         output_file: Optional[Path] = None,
         checklist_file: Optional[Path] = None,
         questions_xml_file: Optional[Path] = None,
+        hook_context: Optional[Dict[str, Any]] = None,
         max_retries: int = 3,
     ) -> GenericPhaseExecution:
         runtime_context = dict(context or {})
         events: List[Dict[str, Any]] = []
         artifact_ready = True
+        hook_kwargs = dict(hook_context or {})
 
         before = self._run_hook_stage(
             "before_execute",
             step_def=step_def,
             skill_name=skill_name,
             context=runtime_context,
+            **hook_kwargs,
         )
         runtime_context.update(before.context_updates)
         events.extend(before.events)
@@ -140,10 +159,21 @@ class GenericPhase:
             step_def=step_def,
             skill_name=skill_name,
             context=runtime_context,
+            **hook_kwargs,
         )
         runtime_context.update(prepared.context_updates)
         events.extend(prepared.events)
         artifact_ready = artifact_ready and prepared.artifact_ready
+        if not prepared.continue_pipeline:
+            return GenericPhaseExecution(
+                response="",
+                status_code=prepared.override_status_code,
+                goto_target=None,
+                context_updates=runtime_context,
+                events=events,
+                artifact_ready=artifact_ready,
+                published=False,
+            )
 
         response = ""
         status_code: Optional[PhaseStatusCode] = None
@@ -152,6 +182,7 @@ class GenericPhase:
         while True:
             prompt = self.build_prompt(
                 skill_name=skill_name,
+                skill_invocation=skill_invocation,
                 context=runtime_context,
                 output_file=output_file,
                 checklist_file=checklist_file,
@@ -181,6 +212,7 @@ class GenericPhase:
                 response=response,
                 status_code=status_code,
                 goto_target=goto_target,
+                **hook_kwargs,
             )
             runtime_context.update(after.context_updates)
             events.extend(after.events)
@@ -204,6 +236,7 @@ class GenericPhase:
                 response=response,
                 status_code=status_code,
                 goto_target=goto_target,
+                **hook_kwargs,
             )
             runtime_context.update(publish.context_updates)
             events.extend(publish.events)

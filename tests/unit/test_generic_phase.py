@@ -6,8 +6,10 @@ import pytest
 
 from cafe.core.hooks import HookResult
 from cafe.core.status_codes import PhaseStatusCode
+from cafe.core.types import AgentCLI
 from cafe.phases.generic_phase import GenericPhase
 from cafe.skills.loader import SkillLoader
+from cafe.skills.native_bridge import NativeSkillBridge
 
 
 def _setup_loader(tmp_path: Path) -> SkillLoader:
@@ -30,12 +32,13 @@ def test_build_prompt_includes_files_and_checklist_guard(tmp_path: Path) -> None
     phase = GenericPhase(_setup_loader(tmp_path))
     prompt = phase.build_prompt(
         skill_name="plan",
+        skill_invocation="/plan",
         context={"who": "team"},
         output_file=Path("out.md"),
         checklist_file=Path("checklist.md"),
         questions_xml_file=Path("questions.xml"),
     )
-    assert "Hello team" in prompt
+    assert "Use the installed skill /plan." in prompt
     assert "Do NOT return a status code until ALL checklist items are marked as [x]." in prompt
     assert "questions.xml" in prompt
 
@@ -112,6 +115,7 @@ def test_execute_short_circuits_when_before_execute_stops(tmp_path: Path) -> Non
 
     result = phase.execute(
         skill_name="plan",
+        skill_invocation="/plan",
         step_def={
             "hooks": {"before_execute": ["StopHook"]},
             "valid_status_codes": ["CAFE_NEED_CLARIFICATION"],
@@ -135,6 +139,7 @@ def test_execute_runs_prepare_input_and_after_execute_retry(tmp_path: Path) -> N
 
     result = phase.execute(
         skill_name="plan",
+        skill_invocation="/plan",
         step_def={
             "hooks": {
                 "prepare_input": ["PrepareHook"],
@@ -146,8 +151,8 @@ def test_execute_runs_prepare_input_and_after_execute_retry(tmp_path: Path) -> N
     )
 
     assert len(prompts) == 2
-    assert "Hello prepared" in prompts[0]
-    assert "Hello retried" in prompts[1]
+    assert "Use the installed skill /plan." in prompts[0]
+    assert "Use the installed skill /plan." in prompts[1]
     assert result.status_code == PhaseStatusCode.CONFIRMED
 
 
@@ -159,6 +164,7 @@ def test_execute_skips_publish_when_artifact_not_ready(tmp_path: Path) -> None:
 
     result = phase.execute(
         skill_name="plan",
+        skill_invocation="/plan",
         step_def={
             "hooks": {
                 "after_execute": ["NoArtifactHook"],
@@ -172,3 +178,14 @@ def test_execute_skips_publish_when_artifact_not_ready(tmp_path: Path) -> None:
     assert result.artifact_ready is False
     assert result.published is False
     assert {"type": "published"} not in result.events
+
+
+def test_prepare_skill_installs_skill_and_returns_cli_invocation(tmp_path: Path) -> None:
+    loader = _setup_loader(tmp_path)
+    bridge = NativeSkillBridge(loader, home_dir=tmp_path / "home")
+    phase = GenericPhase(loader, skill_bridge=bridge)
+
+    invocation = phase.prepare_skill(skill_name="plan", agent_cli=AgentCLI.CODEX)
+
+    assert invocation == "$plan"
+    assert (tmp_path / "home" / ".codex" / "skills" / "plan" / "SKILL.md").exists()
