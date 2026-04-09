@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from cafe.core.types import AgentCLI
-from cafe.ui.chat import _build_chat_seed_prompt, launch_chat_session
+from cafe.ui.chat import _build_chat_seed_prompt, _prepare_chat_environment, launch_chat_session
 
 
 @pytest.fixture(autouse=True)
@@ -285,3 +285,26 @@ def test_build_chat_seed_prompt_includes_common_handoff_and_unified_next_step() 
     assert "$chat-spec-revision" in prompt
     assert "$chat-plan-revision" in prompt
     assert "exit chat and run `cafe make`" in prompt
+
+
+def test_prepare_chat_environment_suppresses_seed_streaming_output(capsys) -> None:
+    agent_manager = MagicMock()
+    agent_manager.execute.side_effect = lambda *args, **kwargs: print("Codex Response (streaming):")
+
+    with patch("cafe.ui.chat.SkillLoader.discover"), patch(
+        "cafe.ui.chat.NativeSkillBridge.install_skill"
+    ), patch(
+        "cafe.ui.chat.NativeSkillBridge.get_invocation",
+        side_effect=lambda name, cli: f"${name}",
+    ):
+        _prepare_chat_environment(
+            executor=MagicMock(),
+            agent_manager=agent_manager,
+            agent_name="Roger",
+            agent_cli=AgentCLI.CODEX,
+            role="pm",
+            issue_name="issue123",
+        )
+
+    captured = capsys.readouterr()
+    assert "Codex Response (streaming):" not in captured.out
