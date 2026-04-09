@@ -6,6 +6,7 @@ import os
 import shutil
 import subprocess
 import sys
+import xml.etree.ElementTree as ET
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -305,6 +306,64 @@ def _load_step_progress(issue_name: str, step_name: str) -> Dict[str, Any]:
         return {}
 
 
+def _get_iteration_questions_file(issue_name: str, step_name: str, iteration: Optional[int]) -> Optional[Path]:
+    """Return questions.xml for one iteration when it exists."""
+    if not iteration:
+        return None
+    questions_file = (
+        Path(".cafe/issues")
+        / issue_name
+        / step_name
+        / f"iteration_{int(iteration):03d}"
+        / "questions.xml"
+    )
+    return questions_file if questions_file.exists() else None
+
+
+def _render_questions_for_display(questions_file: Path) -> Optional[str]:
+    """Render questions.xml into a human-readable prompt block."""
+    try:
+        root = ET.fromstring(questions_file.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+    rendered: List[str] = []
+    for index, question in enumerate(root.findall("question"), start=1):
+        title = (question.findtext("title") or "").strip()
+        if not title:
+            continue
+        rendered.append(f"{index}. {title}")
+        options_parent = question.find("options")
+        if options_parent is not None:
+            options = options_parent.findall("option")
+        else:
+            options = question.findall("option")
+        for option in options:
+            option_text = (option.text or "").strip()
+            if option_text:
+                rendered.append(f"   - {option_text}")
+
+    if not rendered:
+        content = questions_file.read_text(encoding="utf-8").strip()
+        return content or None
+    return "\n".join(rendered)
+
+
+def _display_clarification_questions(issue_name: str, step_name: str, iteration: Optional[int]) -> None:
+    """Display clarification questions from questions.xml when present."""
+    questions_file = _get_iteration_questions_file(issue_name, step_name, iteration)
+    if questions_file is None:
+        return
+
+    rendered = _render_questions_for_display(questions_file)
+    if not rendered:
+        return
+
+    console.print("[bold yellow]Questions to confirm:[/bold yellow]")
+    console.print(rendered)
+    console.print(f"[dim]{questions_file}[/dim]")
+
+
 def _execute_single_step_alias(
     *,
     issue_name: str,
@@ -405,6 +464,7 @@ def _run_iterative_alias_step(
         console.print()
         if status_code == "CAFE_NEED_CLARIFICATION":
             console.print("[yellow]💬 Agent needs clarification[/yellow]")
+            _display_clarification_questions(issue_name, step_name, alias_result.get("iterations"))
         else:
             console.print("[yellow]📝 Draft ready for review[/yellow]")
 
