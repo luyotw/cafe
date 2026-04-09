@@ -200,57 +200,6 @@ def _build_skill_loader() -> SkillLoader:
     return SkillLoader(project_root=Path.cwd())
 
 
-def _resolve_step_skill_name(step_def: Dict) -> str:
-    """Resolve the representative skill name for one step."""
-    skill = step_def.get("skill")
-    if isinstance(skill, str):
-        return skill
-    if isinstance(skill, dict):
-        if "default" in skill:
-            return str(skill["default"])
-        if skill:
-            first_key = sorted(skill.keys(), key=str)[0]
-            return str(skill[first_key])
-    return ""
-
-
-def _build_legacy_step_command(step_name: str, step_def: Dict) -> List[str]:
-    """Map a playbook step to the current legacy phase CLI."""
-    skill_name = _resolve_step_skill_name(step_def)
-    phase_name = step_name
-    if skill_name in {"spec_first", "spec_revise"}:
-        phase_name = "spec"
-    elif skill_name in {"plan", "develop", "review", "pr"}:
-        phase_name = skill_name
-
-    command_map: Dict[str, List[str]] = {
-        "spec": [
-            sys.executable,
-            "-m",
-            "cafe.ui.cli",
-            "spec",
-            "--no-interactive",
-            "--user-input",
-            "workflow execute",
-        ],
-        "plan": [sys.executable, "-m", "cafe.ui.cli", "plan", "--no-interactive", "--template", "default"],
-        "develop": [
-            sys.executable,
-            "-m",
-            "cafe.ui.cli",
-            "develop",
-            "--no-interactive",
-            "--user-input",
-            "workflow execute",
-        ],
-        "review": [sys.executable, "-m", "cafe.ui.cli", "review", "--no-interactive"],
-        "pr": [sys.executable, "-m", "cafe.ui.cli", "pr", "--no-interactive"],
-    }
-    if phase_name not in command_map:
-        raise ValueError(f"Unsupported step for execute mode: {step_name}")
-    return command_map[phase_name]
-
-
 def _build_workflow_role_agent_map(config_manager: ConfigManager, playbook_data: Dict[str, Any]) -> Dict[str, str]:
     """Resolve playbook roles to configured agent names."""
     mapping: Dict[str, str] = {
@@ -273,16 +222,23 @@ def _build_workflow_step_executor(
     issue_name: str,
     playbook_data: Dict[str, Any],
     generic_phase: GenericPhase,
+    phase_name: Optional[str] = None,
+    role_agent_map_override: Optional[Dict[str, str]] = None,
+    step_user_inputs: Optional[Dict[str, str]] = None,
 ) -> GenericWorkflowStepExecutor:
     """Create the GenericPhase-backed executor for workflow steps."""
+    role_agent_map = _build_workflow_role_agent_map(config_manager, playbook_data)
+    if role_agent_map_override:
+        role_agent_map.update(role_agent_map_override)
     return GenericWorkflowStepExecutor(
         issue_dir=issue_dir,
         issue_name=issue_name,
         playbook=playbook_data,
         generic_phase=generic_phase,
-        agent_manager=_setup_agents(config_manager, issue_name=issue_name),
+        agent_manager=_setup_agents(config_manager, issue_name=issue_name, phase_name=phase_name),
         git_ops=GitOperations(),
-        role_agent_map=_build_workflow_role_agent_map(config_manager, playbook_data),
+        role_agent_map=role_agent_map,
+        step_user_inputs=step_user_inputs,
     )
 
 
@@ -341,6 +297,142 @@ def _handle_phase_exception(e: Exception, phase_name: str) -> None:
         console.print()
 
     raise typer.Exit(1)
+
+
+def _load_step_progress(issue_name: str, step_name: str) -> Dict[str, Any]:
+    """Load one step status.json payload."""
+    status_file = Path(".cafe/issues") / issue_name / step_name / "status.json"
+    if not status_file.exists():
+        return {}
+    try:
+        return json.loads(status_file.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _execute_single_step_alias(
+    *,
+    issue_name: str,
+    step_name: str,
+    config_manager: ConfigManager,
+    selected_playbook: Optional[str] = None,
+    role_agent_map_override: Optional[Dict[str, str]] = None,
+    user_input: Optional[str] = None,
+    show_prompt: bool = False,
+) -> Dict[str, Any]:
+    """Execute one workflow step directly and return the latest step metadata."""
+    issue_dir = Path(".cafe/issues") / issue_name
+    playbook_name = selected_playbook or _resolve_selected_playbook(None)
+    playbook_data = PlaybookLoader().load(playbook_name)
+    if step_name not in playbook_data["steps"]:
+        raise ValueError(f"Playbook '{playbook_name}' does not define step '{step_name}'")
+
+    generic_phase = GenericPhase(SkillLoader())
+    step_executor = _build_workflow_step_executor(
+        config_manager=config_manager,
+        issue_dir=issue_dir,
+        issue_name=issue_name,
+        playbook_data=playbook_data,
+        generic_phase=generic_phase,
+        phase_name=step_name,
+        role_agent_map_override=role_agent_map_override,
+        step_user_inputs={step_name: user_input or f"{step_name} alias execute"},
+    )
+    step_executor.agent_manager.show_prompt = show_prompt
+
+    runner = PlaybookRunner(
+        issue_dir=issue_dir,
+        playbook=playbook_data,
+        generic_phase=generic_phase,
+        executor=step_executor.execute_step,
+    )
+    result = runner.run(start_step=step_name, single_step=True)
+    status_data = _load_step_progress(issue_name, step_name)
+    output_file = _get_latest_versioned_file(step_name, issue_name)
+    return {
+        "result": result,
+        "status_code": status_data.get("status_code", result.final_status_code),
+        "iterations": status_data.get("iteration"),
+        "output_file": str(output_file) if output_file else None,
+    }
+
+
+def _should_alias_spec_command(
+    *,
+    interactive: bool,
+    auto: bool,
+    issue_id: Optional[str],
+    fetch_issue_id: Optional[int],
+    rigor: Optional[str],
+    template: Optional[str],
+    sync_github: Optional[bool],
+) -> bool:
+    return (
+        not interactive
+        and not auto
+        and issue_id is None
+        and fetch_issue_id is None
+        and rigor is None
+        and template is None
+        and sync_github is None
+    )
+
+
+def _should_alias_plan_command(
+    *,
+    interactive: bool,
+    auto: bool,
+    issue_id: Optional[str],
+    sync_github: Optional[bool],
+) -> bool:
+    return (
+        not interactive
+        and not auto
+        and issue_id is None
+        and sync_github is None
+    )
+
+
+def _should_alias_develop_command(
+    *,
+    interactive: bool,
+    mode: str,
+    issue_id: Optional[str],
+    approve_denied_tools: Optional[str],
+    pr_number: Optional[int],
+    auto: bool,
+) -> bool:
+    return (
+        not interactive
+        and not auto
+        and mode == "local"
+        and issue_id is None
+        and approve_denied_tools is None
+        and pr_number is None
+    )
+
+
+def _should_alias_review_command(
+    *,
+    interactive: bool,
+    mode: str,
+    issue_id: Optional[str],
+    commit: Optional[str],
+    base_branch: str,
+    pr_number: Optional[int],
+    auto: bool,
+    force: bool,
+) -> bool:
+    return (
+        not interactive
+        and not auto
+        and mode == "local"
+        and issue_id is None
+        and commit is None
+        and base_branch == "main"
+        and pr_number is None
+        and not force
+    )
 
 
 def _check_agent_clis_available(config_manager: ConfigManager) -> List[str]:
@@ -2809,6 +2901,59 @@ def spec(
         # Get and validate current branch
         issue_name = _get_and_validate_branch(ctx, "spec")
 
+        config_dir = (
+            str(Path(config_file).parent) if config_file != ".cafe/config.yaml" else ".cafe"
+        )
+        config_manager = ConfigManager(config_dir)
+        try:
+            config_manager.load_config()
+        except ConfigError:
+            config_manager._config = config_manager.get_default_config()
+
+        if _should_alias_spec_command(
+            interactive=interactive,
+            auto=auto,
+            issue_id=issue_id,
+            fetch_issue_id=fetch_issue_id,
+            rigor=rigor,
+            template=template,
+            sync_github=sync_github,
+        ):
+            alias_result = _execute_single_step_alias(
+                issue_name=issue_name,
+                step_name="spec",
+                config_manager=config_manager,
+                role_agent_map_override={"pm": pm_agent} if pm_agent else None,
+                user_input=user_input,
+                show_prompt=show_prompt,
+            )
+            status_code = alias_result["status_code"]
+            console.print()
+            if status_code == "CAFE_CONFIRMED":
+                console.print("[bold green]✅ Spec clarification completed![/bold green]")
+                console.print(f"Iterations: {alias_result.get('iterations', 'N/A')}")
+                if alias_result.get("output_file"):
+                    console.print(f"Saved to: {alias_result['output_file']}")
+                console.print()
+                console.print("[dim]Next step:[/dim] [bold]cafe plan[/bold]")
+            elif status_code == "CAFE_READY_FOR_REVIEW":
+                console.print("[bold green]✅ Spec draft completed![/bold green]")
+                console.print(f"Iterations: {alias_result.get('iterations', 'N/A')}")
+                if alias_result.get("output_file"):
+                    console.print(f"Saved to: {alias_result['output_file']}")
+                console.print()
+                console.print("[dim]Please review the spec and run:[/dim] [bold]cafe spec[/bold]")
+            elif status_code == "CAFE_NEED_CLARIFICATION":
+                console.print("[bold yellow]💬 Agent needs clarification[/bold yellow]")
+                console.print(f"Iterations: {alias_result.get('iterations', 'N/A')}")
+                if alias_result.get("output_file"):
+                    console.print(f"Saved to: {alias_result['output_file']}")
+                console.print()
+                console.print("[dim]To continue, run:[/dim] [bold]cafe spec[/bold]")
+            else:
+                console.print(f"[bold yellow]Status: {status_code}[/bold yellow]")
+            return
+
         # Load issue config to get saved rigor and template settings
         import yaml
 
@@ -2863,10 +3008,6 @@ def spec(
         spec_dir.mkdir(parents=True, exist_ok=True)
 
         # Initialize components
-        config_dir = (
-            str(Path(config_file).parent) if config_file != ".cafe/config.yaml" else ".cafe"
-        )
-        config_manager = ConfigManager(config_dir)
         agent_manager = _setup_agents(config_manager, issue_name=issue_name, phase_name="spec")
         permission_handler = PermissionHandler()
         git_ops = GitOperations()
@@ -3157,6 +3298,15 @@ def plan(
         # Get and validate current branch
         issue_name = _get_and_validate_branch(ctx, "plan")
 
+        config_dir = (
+            str(Path(config_file).parent) if config_file != ".cafe/config.yaml" else ".cafe"
+        )
+        config_manager = ConfigManager(config_dir)
+        try:
+            config_manager.load_config()
+        except ConfigError:
+            config_manager._config = config_manager.get_default_config()
+
         # Check if spec file exists (use latest versioned file)
         spec_file_path = _get_latest_versioned_file("spec", issue_name)
         if spec_file_path is None:
@@ -3164,15 +3314,32 @@ def plan(
             console.print("[dim]Hint: Run 'cafe spec' first to create the specification.[/dim]")
             raise typer.Exit(1)
 
+        if _should_alias_plan_command(
+            interactive=interactive,
+            auto=auto,
+            issue_id=issue_id,
+            sync_github=sync_github,
+        ):
+            alias_result = _execute_single_step_alias(
+                issue_name=issue_name,
+                step_name="plan",
+                config_manager=config_manager,
+                role_agent_map_override={"developer": dev_agent} if dev_agent else None,
+                show_prompt=show_prompt,
+            )
+            console.print("[bold green]✅ Implementation plan completed![/bold green]")
+            console.print(f"Iterations: {alias_result.get('iterations', 'N/A')}")
+            if alias_result.get("output_file"):
+                console.print(f"Saved to: {alias_result['output_file']}")
+            console.print()
+            console.print("[dim]Next step:[/dim] [bold]cafe develop[/bold]")
+            return
+
         # Check if plan already exists (any versioned plan file)
         plan_file_path = _get_latest_versioned_file("plan", issue_name)
         is_resume = plan_file_path is not None
 
         # Initialize components
-        config_dir = (
-            str(Path(config_file).parent) if config_file != ".cafe/config.yaml" else ".cafe"
-        )
-        config_manager = ConfigManager(config_dir)
         agent_manager = _setup_agents(config_manager, issue_name=issue_name, phase_name="plan")
         permission_handler = PermissionHandler()
         git_ops = GitOperations()
@@ -3498,6 +3665,15 @@ def develop(
         # Get and validate current branch
         issue_name = _get_and_validate_branch(ctx, "develop")
 
+        config_dir = (
+            str(Path(config_file).parent) if config_file != ".cafe/config.yaml" else ".cafe"
+        )
+        config_manager = ConfigManager(config_dir)
+        try:
+            config_manager.load_config()
+        except ConfigError:
+            config_manager._config = config_manager.get_default_config()
+
         # Get latest versioned files
         spec_file_path = _get_latest_versioned_file("spec", issue_name)
         if spec_file_path is None:
@@ -3513,15 +3689,42 @@ def develop(
             )
             raise typer.Exit(1)
 
+        if _should_alias_develop_command(
+            interactive=interactive,
+            mode=mode,
+            issue_id=issue_id,
+            approve_denied_tools=approve_denied_tools,
+            pr_number=pr_number,
+            auto=auto,
+        ):
+            alias_result = _execute_single_step_alias(
+                issue_name=issue_name,
+                step_name="develop",
+                config_manager=config_manager,
+                role_agent_map_override={"developer": dev_agent} if dev_agent else None,
+                user_input=user_input,
+                show_prompt=show_prompt,
+            )
+            status_code = alias_result["status_code"]
+            console.print()
+            if status_code in {"CAFE_CONFIRMED", "CAFE_CONFIRMED_SKIP_REVIEW"}:
+                console.print("[bold green]✅ Development completed![/bold green]")
+                console.print(f"Iterations: {alias_result.get('iterations', 'N/A')}")
+                console.print()
+                if status_code == "CAFE_CONFIRMED_SKIP_REVIEW":
+                    console.print("[dim]Next step:[/dim] [bold]cafe pr[/bold]")
+                else:
+                    console.print("[dim]Next step:[/dim] [bold]cafe review[/bold]")
+            else:
+                console.print(f"[yellow]⏸️  Development paused: {status_code}[/yellow]")
+                console.print("[dim]Resume with: cafe develop[/dim]")
+            return
+
         # Convert to strings for compatibility
         spec_file = str(spec_file_path)
         plan_file = str(plan_file_path)
 
         # Initialize components
-        config_dir = (
-            str(Path(config_file).parent) if config_file != ".cafe/config.yaml" else ".cafe"
-        )
-        config_manager = ConfigManager(config_dir)
         agent_manager = _setup_agents(config_manager, issue_name=issue_name, phase_name="develop")
         permission_handler = PermissionHandler()
         git_ops = GitOperations()
@@ -3745,6 +3948,15 @@ def review(
         # Get and validate current branch
         issue_name = _get_and_validate_branch(ctx, "review")
 
+        config_dir = (
+            str(Path(config_file).parent) if config_file != ".cafe/config.yaml" else ".cafe"
+        )
+        config_manager = ConfigManager(config_dir)
+        try:
+            config_manager.load_config()
+        except ConfigError:
+            config_manager._config = config_manager.get_default_config()
+
         # Get latest versioned files
         spec_file_path = _get_latest_versioned_file("spec", issue_name)
         if spec_file_path is None:
@@ -3760,15 +3972,43 @@ def review(
             )
             raise typer.Exit(1)
 
+        if _should_alias_review_command(
+            interactive=interactive,
+            mode=mode,
+            issue_id=issue_id,
+            commit=commit,
+            base_branch=base_branch,
+            pr_number=pr_number,
+            auto=auto,
+            force=force,
+        ):
+            alias_result = _execute_single_step_alias(
+                issue_name=issue_name,
+                step_name="review",
+                config_manager=config_manager,
+                role_agent_map_override={"reviewer": reviewer_agent} if reviewer_agent else None,
+                show_prompt=show_prompt,
+            )
+            status_code = alias_result["status_code"]
+            console.print()
+            if status_code == "CAFE_CONFIRMED":
+                console.print("[bold green]✅ Code review passed![/bold green]")
+                console.print()
+                console.print("[dim]Next steps:[/dim]")
+                console.print("[dim]  1. Create PR: cafe pr[/dim]")
+            else:
+                console.print(f"[bold yellow]📝 Code review completed with status: {status_code}[/bold yellow]")
+                console.print()
+                console.print("[dim]Next steps:[/dim]")
+                console.print("[dim]  1. Make changes: cafe develop[/dim]")
+                console.print("[dim]  2. Review again: cafe review[/dim]")
+            return
+
         # Convert to strings for compatibility
         spec_file = str(spec_file_path)
         plan_file = str(plan_file_path)
 
         # Initialize components
-        config_dir = (
-            str(Path(config_file).parent) if config_file != ".cafe/config.yaml" else ".cafe"
-        )
-        config_manager = ConfigManager(config_dir)
         agent_manager = _setup_agents(config_manager, issue_name=issue_name, phase_name="review")
         permission_handler = PermissionHandler()
         git_ops = GitOperations()

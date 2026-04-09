@@ -35,6 +35,7 @@ class GenericWorkflowStepExecutor(Phase):
         agent_manager: AgentManager,
         git_ops: GitOperations,
         role_agent_map: Dict[str, str],
+        step_user_inputs: Optional[Dict[str, str]] = None,
     ) -> None:
         self.interactive = False
         self.issue_dir = issue_dir
@@ -44,6 +45,7 @@ class GenericWorkflowStepExecutor(Phase):
         self.agent_manager = agent_manager
         self.git_ops = git_ops
         self.role_agent_map = role_agent_map
+        self.step_user_inputs = dict(step_user_inputs or {})
         self.phase_name = ""
         self.phase_dir = issue_dir
         self.iteration = 0
@@ -109,7 +111,7 @@ class GenericWorkflowStepExecutor(Phase):
             response, _ = self._execute_agent_iteration(
                 agent_name=agent_name,
                 prompt=prompt,
-                user_input="workflow execute",
+                user_input=self.step_user_inputs.get(step_name, "workflow execute"),
                 valid_status_codes=valid_status_codes,
                 allowed_tools=allowed_tools,
                 phase_specific_data=phase_specific_data,
@@ -135,7 +137,7 @@ class GenericWorkflowStepExecutor(Phase):
             response, validated_status, validation_passed = self._validate_and_retry_checklist_completion(
                 agent_name=agent_name,
                 prompt=last_prompt[0] if last_prompt else "",
-                user_input="workflow execute",
+                user_input=self.step_user_inputs.get(step_name, "workflow execute"),
                 valid_status_codes=valid_status_codes,
                 allowed_tools=allowed_tools,
                 max_retries=3,

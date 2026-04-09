@@ -10,6 +10,7 @@ runner = CliRunner()
 @pytest.fixture
 def mock_dependencies():
     with patch("cafe.ui.cli.ConfigManager") as mock_config_manager, \
+         patch("cafe.ui.cli._execute_single_step_alias") as mock_execute_alias, \
          patch("cafe.ui.cli._setup_agents") as mock_setup_agents, \
          patch("cafe.ui.cli.GitOperations") as mock_git_ops, \
          patch("cafe.ui.cli._get_latest_versioned_file") as mock_get_latest_file, \
@@ -34,9 +35,11 @@ def mock_dependencies():
         mock_setup_agents.return_value = mock_agent_manager
         
         mock_get_latest_file.return_value = "some/file/path"
+        mock_execute_alias.return_value = {"status_code": "CAFE_CONFIRMED", "iterations": 1}
         
         yield {
             "setup_agents": mock_setup_agents,
+            "execute_alias": mock_execute_alias,
             "git_ops": mock_git_ops
         }
 
@@ -44,10 +47,13 @@ def test_spec_command_passes_phase_name(mock_dependencies):
     """Test spec command passes phase_name='spec'."""
     runner.invoke(app, ["spec", "--no-interactive", "--user-input", "test"])
     
-    mock_dependencies["setup_agents"].assert_called_with(
-        ANY, 
-        issue_name="issue-123", 
-        phase_name="spec"
+    mock_dependencies["execute_alias"].assert_called_with(
+        issue_name="issue-123",
+        step_name="spec",
+        config_manager=ANY,
+        role_agent_map_override=None,
+        user_input="test",
+        show_prompt=False,
     )
 
 def test_plan_command_passes_phase_name(mock_dependencies):
@@ -56,30 +62,37 @@ def test_plan_command_passes_phase_name(mock_dependencies):
          patch("cafe.templates.manager.TemplateManager"):
         runner.invoke(app, ["plan", "--no-interactive", "--template", "default"])
     
-    mock_dependencies["setup_agents"].assert_called_with(
-        ANY, 
-        issue_name="issue-123", 
-        phase_name="plan"
+    mock_dependencies["execute_alias"].assert_called_with(
+        issue_name="issue-123",
+        step_name="plan",
+        config_manager=ANY,
+        role_agent_map_override=None,
+        show_prompt=False,
     )
 
 def test_develop_command_passes_phase_name(mock_dependencies):
     """Test develop command passes phase_name='develop'."""
     runner.invoke(app, ["develop", "--no-interactive", "--user-input", "test"])
     
-    mock_dependencies["setup_agents"].assert_called_with(
-        ANY, 
-        issue_name="issue-123", 
-        phase_name="develop"
+    mock_dependencies["execute_alias"].assert_called_with(
+        issue_name="issue-123",
+        step_name="develop",
+        config_manager=ANY,
+        role_agent_map_override=None,
+        user_input="test",
+        show_prompt=False,
     )
 
 def test_review_command_passes_phase_name(mock_dependencies):
     """Test review command passes phase_name='review'."""
     runner.invoke(app, ["review", "--no-interactive"])
     
-    mock_dependencies["setup_agents"].assert_called_with(
-        ANY, 
-        issue_name="issue-123", 
-        phase_name="review"
+    mock_dependencies["execute_alias"].assert_called_with(
+        issue_name="issue-123",
+        step_name="review",
+        config_manager=ANY,
+        role_agent_map_override=None,
+        show_prompt=False,
     )
 
 def test_pr_command_passes_phase_name(mock_dependencies):

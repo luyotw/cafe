@@ -21,7 +21,7 @@ from cafe.utils.prompt_utils import format_checklist_instruction
 
 
 class DevelopPhase(Phase):
-    """Phase 3: Development with developer agent."""
+    """Legacy compatibility implementation for the develop phase."""
 
     def __init__(
         self,

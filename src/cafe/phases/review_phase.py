@@ -17,7 +17,7 @@ from cafe.utils.prompt_utils import format_checklist_instruction
 
 
 class ReviewPhase(Phase):
-    """Phase 4: Code review with reviewer agent.
+    """Legacy compatibility implementation for the review phase.
 
     Review phase is non-iterative: each execution is a single, independent code review.
     Unlike spec/plan/develop phases, there's no conversational loop.

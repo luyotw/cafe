@@ -55,7 +55,7 @@ def update_github_issue(issue_id: str, content: str) -> None:
 
 
 class SpecPhase(Phase):
-    """Specification phase: Requirements clarification with PM agent."""
+    """Legacy compatibility implementation for the spec phase."""
 
     def __init__(
         self,

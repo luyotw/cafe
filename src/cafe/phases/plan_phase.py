@@ -19,7 +19,7 @@ from cafe.utils.github import GitHubOps, GitHubError
 
 
 class PlanPhase(Phase):
-    """Phase 2: Implementation plan with developer agent."""
+    """Legacy compatibility implementation for the plan phase."""
 
     def __init__(
         self,

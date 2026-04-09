@@ -19,7 +19,7 @@ from cafe.utils.prompt_utils import format_checklist_instruction
 
 
 class PRPhase(Phase):
-    """Phase 5: Pull Request creation."""
+    """Legacy compatibility implementation for the PR phase."""
 
     def __init__(
         self,
