@@ -11,6 +11,19 @@ import yaml
 from cafe.utils.config import get_global_cafe_dir
 
 
+def read_skill_frontmatter(skill_file: Path) -> Dict[str, str]:
+    """Read YAML frontmatter from one skill file."""
+    content = skill_file.read_text(encoding="utf-8")
+    if not content.startswith("---"):
+        return {}
+    end = content.find("\n---", 3)
+    if end == -1:
+        return {}
+    frontmatter = content[3:end]
+    data = yaml.safe_load(frontmatter) or {}
+    return data if isinstance(data, dict) else {}
+
+
 @dataclass(frozen=True)
 class SkillCatalogEntry:
     """Catalog metadata for a skill."""
@@ -55,15 +68,7 @@ class SkillLoader:
 
     @staticmethod
     def _read_skill_frontmatter(skill_file: Path) -> Dict[str, str]:
-        content = skill_file.read_text(encoding="utf-8")
-        if not content.startswith("---"):
-            return {}
-        end = content.find("\n---", 3)
-        if end == -1:
-            return {}
-        frontmatter = content[3:end]
-        data = yaml.safe_load(frontmatter) or {}
-        return data if isinstance(data, dict) else {}
+        return read_skill_frontmatter(skill_file)
 
     def discover(self, *, strict: bool = False) -> List[SkillCatalogEntry]:
         """Discover catalog entries and cache by lookup key (folder name)."""

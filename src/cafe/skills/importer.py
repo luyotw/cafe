@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable, Optional
 
+from cafe.skills.loader import read_skill_frontmatter
+
 
 @dataclass(frozen=True)
 class SkillImportResult:
@@ -89,6 +91,20 @@ def import_skills(
                     destination=destination,
                     status="skipped",
                     reason="missing SKILL.md",
+                )
+            )
+            continue
+
+        metadata = read_skill_frontmatter(skill_file)
+        frontmatter_name = str(metadata.get("name", skill_name))
+        if frontmatter_name != skill_name:
+            results.append(
+                SkillImportResult(
+                    name=skill_name,
+                    source=candidate,
+                    destination=destination,
+                    status="skipped",
+                    reason="frontmatter name does not match folder name",
                 )
             )
             continue

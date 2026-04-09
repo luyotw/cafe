@@ -6,10 +6,15 @@ from typing import List, Optional, Tuple
 
 from cafe.agents.cli.abstract import AbstractCLI
 from cafe.core.types import PermissionDenial, TokenUsage
+from cafe.skills.workspace import ensure_gemini_project_skills
 
 
 class GeminiCLI(AbstractCLI):
     """Concrete implementation of Gemini CLI tool."""
+
+    def prepare_project_workspace(self, project_root: Path) -> None:
+        """Expose project skills to Gemini before execution."""
+        ensure_gemini_project_skills(project_root)
 
     def build_command(
         self,

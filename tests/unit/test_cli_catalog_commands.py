@@ -172,6 +172,24 @@ def test_skill_import_reports_imported_and_skipped_items(tmp_path: Path, monkeyp
     assert (tmp_path / ".cafe" / "skills" / "alpha" / "SKILL.md").exists()
 
 
+def test_skill_import_skips_mismatched_frontmatter_name(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".cafe").mkdir(parents=True, exist_ok=True)
+    source_dir = tmp_path / "incoming-skills" / "alpha"
+    source_dir.mkdir(parents=True, exist_ok=True)
+    (source_dir / "SKILL.md").write_text(
+        "---\nname: beta\ndescription: wrong name\n---\n\n# alpha\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["skill", "import", str(source_dir.parent)])
+
+    assert result.exit_code == 0
+    assert "Skipped 1 item(s)" in result.stdout
+    assert "frontmatter name does not match folder name" in result.stdout
+    assert not (tmp_path / ".cafe" / "skills" / "alpha").exists()
+
+
 def test_skill_import_prompts_before_overwriting_existing_skill(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     existing_dir = tmp_path / ".cafe" / "skills" / "alpha"
