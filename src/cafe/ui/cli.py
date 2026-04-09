@@ -8,7 +8,7 @@ import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import typer
 import click
@@ -25,6 +25,7 @@ from cafe.core.playbook_runner import PlaybookRunner
 from cafe.core.permission import PermissionHandler
 from cafe.core.types import AgentCLI, AgentConfig
 from cafe.phases.generic_phase import GenericPhase
+from cafe.phases.generic_workflow_step import GenericWorkflowStepExecutor
 from cafe.playbooks.loader import PlaybookLoader
 from cafe.phases.develop_phase import DevelopPhase
 from cafe.phases.plan_phase import PlanPhase
@@ -178,7 +179,10 @@ def _resolve_selected_playbook(playbook_name: Optional[str]) -> str:
 
     try:
         config_manager = ConfigManager(".cafe")
-        config_manager.load_config()
+        try:
+            config_manager.load_config()
+        except ConfigError:
+            config_manager._config = config_manager.get_default_config()
     except ConfigError:
         return "default"
 
@@ -245,6 +249,41 @@ def _build_legacy_step_command(step_name: str, step_def: Dict) -> List[str]:
     if phase_name not in command_map:
         raise ValueError(f"Unsupported step for execute mode: {step_name}")
     return command_map[phase_name]
+
+
+def _build_workflow_role_agent_map(config_manager: ConfigManager, playbook_data: Dict[str, Any]) -> Dict[str, str]:
+    """Resolve playbook roles to configured agent names."""
+    mapping: Dict[str, str] = {
+        "pm": str(config_manager.get("agents.pm.name", "Roger")),
+        "developer": str(config_manager.get("agents.developer.name", "David")),
+        "reviewer": str(config_manager.get("agents.reviewer.name", "Richard")),
+    }
+    for role_name, role_def in playbook_data.get("roles", {}).items():
+        if role_name in mapping:
+            continue
+        if isinstance(role_def, dict) and role_def.get("default_agent"):
+            mapping[str(role_name)] = str(role_def["default_agent"])
+    return mapping
+
+
+def _build_workflow_step_executor(
+    *,
+    config_manager: ConfigManager,
+    issue_dir: Path,
+    issue_name: str,
+    playbook_data: Dict[str, Any],
+    generic_phase: GenericPhase,
+) -> GenericWorkflowStepExecutor:
+    """Create the GenericPhase-backed executor for workflow steps."""
+    return GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name=issue_name,
+        playbook=playbook_data,
+        generic_phase=generic_phase,
+        agent_manager=_setup_agents(config_manager, issue_name=issue_name),
+        git_ops=GitOperations(),
+        role_agent_map=_build_workflow_role_agent_map(config_manager, playbook_data),
+    )
 
 
 def _handle_phase_exception(e: Exception, phase_name: str) -> None:
@@ -5865,6 +5904,11 @@ def workflow(
         issue_name = issue or git.get_current_branch()
         issue_dir = Path(".cafe/issues") / issue_name
         selected_playbook = _resolve_selected_playbook(playbook)
+        config_manager = ConfigManager(".cafe")
+        try:
+            config_manager.load_config()
+        except ConfigError:
+            config_manager._config = config_manager.get_default_config()
 
         playbook_loader = PlaybookLoader()
         playbook_data = playbook_loader.load(selected_playbook)
@@ -5878,50 +5922,19 @@ def workflow(
             output_path.parent.mkdir(parents=True, exist_ok=True)
             output_path.write_text(f"# {step_name}\n\nDry-run output\n", encoding="utf-8")
             return "CAFE_CONFIRMED", {str(output_key): str(output_path)}
-
-        def execute_step(step_name: str, step_def: Dict, blackboard_state: object) -> tuple[str, Dict[str, str]]:
-            command = _build_legacy_step_command(step_name, step_def)
-            result = subprocess.run(command, check=False)
-            if result.returncode != 0:
-                raise RuntimeError(f"Step '{step_name}' failed with exit code {result.returncode}")
-
-            # Prefer the latest agent raw response so PlaybookRunner can parse both
-            # status code and optional CAFE_GOTO in real execute mode.
-            response_text = "CAFE_CONFIRMED"
-            latest_iteration = _find_latest_iteration_dir(issue_dir / step_name)
-            if latest_iteration is not None:
-                context_file = latest_iteration / "context.json"
-                if context_file.exists():
-                    try:
-                        context_data = json.loads(context_file.read_text(encoding="utf-8"))
-                        response_text = context_data.get("response") or response_text
-                    except Exception:
-                        pass
-
-            # Fallback to status code if no response is available in context.
-            if response_text == "CAFE_CONFIRMED":
-                status_file = issue_dir / step_name / "status.json"
-                if status_file.exists():
-                    try:
-                        status_data = json.loads(status_file.read_text(encoding="utf-8"))
-                        status_code = status_data.get("status_code")
-                        if status_code:
-                            response_text = status_code
-                    except Exception:
-                        pass
-
-            output_key = str(step_def.get("output_artifact", step_name))
-            artifact_path = ""
-            latest_file = _get_latest_versioned_file(step_name, issue_name)
-            if latest_file:
-                artifact_path = str(latest_file)
-            return response_text, {output_key: artifact_path}
+        step_executor = None if dry_run else _build_workflow_step_executor(
+            config_manager=config_manager,
+            issue_dir=issue_dir,
+            issue_name=issue_name,
+            playbook_data=playbook_data,
+            generic_phase=generic_phase,
+        )
 
         runner = PlaybookRunner(
             issue_dir=issue_dir,
             playbook=playbook_data,
             generic_phase=generic_phase,
-            executor=dry_executor if dry_run else execute_step,
+            executor=dry_executor if dry_run else step_executor.execute_step,
         )
         result = runner.run(start_step=start_step, single_step=single_step)
         console.print(

@@ -16,13 +16,6 @@ def test_custom_step_command_routes_to_workflow_runtime(tmp_path: Path, monkeypa
     (tmp_path / ".cafe").mkdir(parents=True, exist_ok=True)
     (tmp_path / ".cafe" / "config.yaml").write_text("playbook: custom\n", encoding="utf-8")
 
-    issue_dir = tmp_path / ".cafe" / "issues" / "issue-205" / "qa"
-    issue_dir.mkdir(parents=True, exist_ok=True)
-    (issue_dir / "status.json").write_text('{"status_code":"CAFE_CONFIRMED"}', encoding="utf-8")
-    iter_dir = issue_dir / "iteration_001"
-    iter_dir.mkdir(parents=True, exist_ok=True)
-    (iter_dir / "context.json").write_text('{"response":"CAFE_CONFIRMED\\nstep done"}', encoding="utf-8")
-
     playbook_dir = tmp_path / ".cafe" / "playbooks"
     playbook_dir.mkdir(parents=True, exist_ok=True)
     (playbook_dir / "custom.yaml").write_text(
@@ -42,16 +35,17 @@ steps:
 
     with (
         patch("cafe.ui.cli.GitOperations") as mock_git_cls,
-        patch("cafe.ui.cli.subprocess.run") as mock_run,
+        patch("cafe.ui.cli._build_workflow_step_executor") as mock_builder,
     ):
         git = MagicMock()
         git.get_current_branch.return_value = "issue-205"
         mock_git_cls.return_value = git
-        mock_run.return_value = MagicMock(returncode=0)
+        executor = MagicMock()
+        executor.execute_step.return_value = ("CAFE_CONFIRMED", {})
+        mock_builder.return_value = executor
 
         result = runner.invoke(app, ["qa"])
 
         assert result.exit_code == 0
-        called = [call[0][0] for call in mock_run.call_args_list if "cafe.ui.cli" in " ".join(call[0][0])]
-        assert len(called) == 1
-        assert "review" in called[0]
+        executor.execute_step.assert_called_once()
+        assert executor.execute_step.call_args[0][0] == "qa"
