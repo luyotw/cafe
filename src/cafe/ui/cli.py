@@ -24,6 +24,7 @@ from cafe.core.git import GitOperations
 from cafe.core.playbook_runner import PlaybookRunner
 from cafe.core.permission import PermissionHandler
 from cafe.core.types import AgentCLI, AgentConfig
+from cafe.core.workflow_instance import WorkflowInstance
 from cafe.phases.generic_phase import GenericPhase
 from cafe.phases.generic_workflow_step import GenericWorkflowStepExecutor
 from cafe.playbooks.loader import PlaybookLoader
@@ -31,7 +32,7 @@ from cafe.skills.importer import SkillImportSummary, import_skills
 from cafe.skills.loader import SkillLoader
 from cafe.templates.manager import TemplateManager
 from cafe.ui import init_helpers
-from cafe.ui.chat import launch_chat_session
+from cafe.ui.chat import get_chat_next_step_path, launch_chat_session
 from cafe.ui.display import Display
 from cafe.ui.init_helpers import (
     check_available_clis,
@@ -238,6 +239,36 @@ def _build_workflow_step_executor(
         step_user_inputs=step_user_inputs,
         interactive=interactive,
     )
+
+
+def _consume_pending_chat_handoff(
+    *,
+    issue_dir: Path,
+    playbook_data: Dict[str, Any],
+    requested_start_step: Optional[str],
+) -> Optional[str]:
+    """Consume a chat-authored next-step baton before workflow execution."""
+    if requested_start_step is not None:
+        return requested_start_step
+
+    next_step_path = get_chat_next_step_path(issue_dir)
+    if not next_step_path.exists():
+        return None
+
+    target_step = next_step_path.read_text(encoding="utf-8").strip()
+    if not target_step:
+        raise ValueError(f"Chat handoff file is empty: {next_step_path}")
+    if target_step not in playbook_data["steps"]:
+        raise ValueError(f"Chat handoff step '{target_step}' does not exist in playbook")
+
+    instance = WorkflowInstance.load(issue_dir)
+    if instance is not None:
+        instance.current_step = target_step
+        instance.metadata["last_status_code"] = "CHAT_HANDOFF"
+        instance.save()
+
+    next_step_path.unlink()
+    return target_step
 
 
 def _handle_phase_exception(e: Exception, phase_name: str) -> None:
@@ -5454,6 +5485,11 @@ def workflow(
 
         playbook_loader = PlaybookLoader()
         playbook_data = playbook_loader.load(selected_playbook)
+        start_step = _consume_pending_chat_handoff(
+            issue_dir=issue_dir,
+            playbook_data=playbook_data,
+            requested_start_step=start_step,
+        )
         if start_step is not None and start_step not in playbook_data["steps"]:
             raise ValueError(f"Unknown playbook step '{start_step}'")
         generic_phase = GenericPhase(SkillLoader())

@@ -65,8 +65,7 @@ class GenericPhase:
         questions_xml_file: Optional[Path] = None,
     ) -> str:
         lines = [
-            f"Use the installed skill {skill_invocation}.",
-            "Follow that skill's instructions from the CLI-native skills directory.",
+            f"Skill: {skill_invocation}",
             "",
         ]
 

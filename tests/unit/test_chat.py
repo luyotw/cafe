@@ -1,12 +1,18 @@
 """Tests for the reusable chat launcher module."""
 
-import subprocess
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from cafe.core.types import AgentCLI
-from cafe.ui.chat import _build_chat_seed_prompt, _prepare_chat_environment, launch_chat_session
+from cafe.ui.chat import (
+    _build_chat_seed_prompt,
+    _prepare_chat_environment,
+    _prepare_chat_handoff_state,
+    get_chat_next_step_path,
+    launch_chat_session,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -273,17 +279,29 @@ def test_build_chat_seed_prompt_includes_common_handoff_and_unified_next_step() 
         role="developer",
         issue_name="issue123",
         invocations={
-            "common-chat-handoff": "$common-chat-handoff",
-            "chat-develop-change": "$chat-develop-change",
-            "chat-spec-revision": "$chat-spec-revision",
-            "chat-plan-revision": "$chat-plan-revision",
+            "common-chat-handoff": "$cafe-common-chat-handoff",
+            "chat-develop-change": "$cafe-chat-develop-change",
+            "chat-spec-revision": "$cafe-chat-spec-revision",
+            "chat-plan-revision": "$cafe-chat-plan-revision",
         },
+        blackboard_path="/tmp/issue123/blackboard.json",
+        next_step_path="/tmp/issue123/chat/next_step.txt",
+        current_step="review",
+        valid_steps=["spec", "plan", "develop", "review", "pr"],
+        playbook_id="default",
     )
 
-    assert "$common-chat-handoff" in prompt
-    assert "$chat-develop-change" in prompt
-    assert "$chat-spec-revision" in prompt
-    assert "$chat-plan-revision" in prompt
+    assert "current workflow step is `review`" in prompt
+    assert "Valid workflow step names for the next baton are: spec, plan, develop, review, pr." in prompt
+    assert "$cafe-common-chat-handoff" in prompt
+    assert "$cafe-chat-develop-change" in prompt
+    assert "$cafe-chat-spec-revision" in prompt
+    assert "$cafe-chat-plan-revision" in prompt
+    assert "Do not emit the handoff closing block on every answer" in prompt
+    assert "/tmp/issue123/blackboard.json" in prompt
+    assert "/tmp/issue123/chat/next_step.txt" in prompt
+    assert "Only write one bare step name" in prompt
+    assert "The next-step file should point to the next responsible workflow step" in prompt
     assert "exit chat and run `cafe make`" in prompt
 
 
@@ -295,7 +313,7 @@ def test_prepare_chat_environment_suppresses_seed_streaming_output(capsys) -> No
         "cafe.ui.chat.NativeSkillBridge.install_skill"
     ), patch(
         "cafe.ui.chat.NativeSkillBridge.get_invocation",
-        side_effect=lambda name, cli: f"${name}",
+        side_effect=lambda name, cli: f"$cafe-{name}",
     ):
         _prepare_chat_environment(
             executor=MagicMock(),
@@ -304,7 +322,87 @@ def test_prepare_chat_environment_suppresses_seed_streaming_output(capsys) -> No
             agent_cli=AgentCLI.CODEX,
             role="pm",
             issue_name="issue123",
+            issue_dir=Path("/tmp/issue123"),
+            current_step="review",
+            valid_steps=["spec", "plan", "develop", "review", "pr"],
+            playbook_id="default",
         )
 
     captured = capsys.readouterr()
     assert "Codex Response (streaming):" not in captured.out
+
+
+def test_launch_chat_session_prepares_chat_handoff_directory(
+    tmp_path,
+    monkeypatch,
+    mock_chat_environment,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    with (
+        patch("cafe.ui.chat.subprocess.run", return_value=MagicMock(returncode=0)),
+        patch("cafe.ui.chat.ConfigManager") as mock_config_manager_cls,
+        patch("cafe.ui.chat.AgentManager") as mock_agent_manager_cls,
+    ):
+        mock_config = MagicMock()
+        mock_config.get.return_value = {"name": "Roger", "cli": "claude"}
+        mock_config_manager_cls.return_value = mock_config
+
+        agent_manager = MagicMock()
+        executor = MagicMock()
+        executor.config = MagicMock(session_id=None, model=None)
+        agent_manager.get_agent.return_value = executor
+        agent_manager.session_manager = MagicMock()
+        mock_agent_manager_cls.return_value = agent_manager
+
+        result = launch_chat_session("pm", "issue123")
+
+    assert result == 0
+    assert get_chat_next_step_path(tmp_path / ".cafe" / "issues" / "issue123").parent.exists()
+
+
+def test_prepare_chat_handoff_state_creates_blackboard_and_clears_stale_baton(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue123"
+    next_step_path = get_chat_next_step_path(issue_dir)
+    next_step_path.parent.mkdir(parents=True, exist_ok=True)
+    next_step_path.write_text("review\n", encoding="utf-8")
+
+    current_step, valid_steps, playbook_id = _prepare_chat_handoff_state(issue_dir)
+
+    assert current_step == "spec"
+    assert "spec" in valid_steps
+    assert playbook_id == "default"
+    assert (issue_dir / "blackboard.json").exists()
+    assert not next_step_path.exists()
+
+
+def test_launch_chat_session_warns_when_baton_missing(
+    tmp_path,
+    monkeypatch,
+    mock_chat_environment,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    with (
+        patch("builtins.print") as mock_print,
+        patch("cafe.ui.chat.subprocess.run", return_value=MagicMock(returncode=0)),
+        patch("cafe.ui.chat.ConfigManager") as mock_config_manager_cls,
+        patch("cafe.ui.chat.AgentManager") as mock_agent_manager_cls,
+    ):
+        mock_config = MagicMock()
+        mock_config.get.return_value = {"name": "Roger", "cli": "claude"}
+        mock_config_manager_cls.return_value = mock_config
+
+        agent_manager = MagicMock()
+        executor = MagicMock()
+        executor.config = MagicMock(session_id=None, model=None)
+        agent_manager.get_agent.return_value = executor
+        agent_manager.session_manager = MagicMock()
+        mock_agent_manager_cls.return_value = agent_manager
+
+        result = launch_chat_session("pm", "issue123")
+
+    assert result == 0
+    printed = " ".join(str(call) for call in mock_print.call_args_list)
+    assert "did not complete workflow handoff" in printed

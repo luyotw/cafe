@@ -38,7 +38,7 @@ def test_build_prompt_includes_files_and_checklist_guard(tmp_path: Path) -> None
         checklist_file=Path("checklist.md"),
         questions_xml_file=Path("questions.xml"),
     )
-    assert "Use the installed skill /plan." in prompt
+    assert "Skill: /plan" in prompt
     assert "Do NOT return a status code until ALL checklist items are marked as [x]." in prompt
     assert "questions.xml" in prompt
 
@@ -151,8 +151,8 @@ def test_execute_runs_prepare_input_and_after_execute_retry(tmp_path: Path) -> N
     )
 
     assert len(prompts) == 2
-    assert "Use the installed skill /plan." in prompts[0]
-    assert "Use the installed skill /plan." in prompts[1]
+    assert "Skill: /plan" in prompts[0]
+    assert "Skill: /plan" in prompts[1]
     assert result.status_code == PhaseStatusCode.CONFIRMED
 
 
@@ -182,10 +182,31 @@ def test_execute_skips_publish_when_artifact_not_ready(tmp_path: Path) -> None:
 
 def test_prepare_skill_installs_skill_and_returns_cli_invocation(tmp_path: Path) -> None:
     loader = _setup_loader(tmp_path)
-    bridge = NativeSkillBridge(loader, home_dir=tmp_path / "home")
+    project_root = tmp_path / "project"
+    project_root.mkdir(parents=True, exist_ok=True)
+    bridge = NativeSkillBridge(
+        loader,
+        project_root=project_root,
+        home_dir=tmp_path / "home",
+    )
     phase = GenericPhase(loader, skill_bridge=bridge)
 
     invocation = phase.prepare_skill(skill_name="plan", agent_cli=AgentCLI.CODEX)
 
-    assert invocation == "$plan"
-    assert (tmp_path / "home" / ".codex" / "skills" / "plan" / "SKILL.md").exists()
+    assert invocation == "$cafe-plan"
+    assert (project_root / ".codex" / "skills" / "cafe-plan" / "SKILL.md").exists()
+
+
+def test_native_skill_bridge_keeps_global_dir_separate(tmp_path: Path) -> None:
+    loader = _setup_loader(tmp_path)
+    project_root = tmp_path / "project"
+    project_root.mkdir(parents=True, exist_ok=True)
+    bridge = NativeSkillBridge(
+        loader,
+        project_root=project_root,
+        home_dir=tmp_path / "home",
+    )
+
+    assert bridge.get_native_skills_dir(AgentCLI.CODEX) == project_root / ".codex" / "skills"
+    assert bridge.get_global_native_skills_dir(AgentCLI.CODEX) == tmp_path / "home" / ".codex" / "skills"
+    assert bridge.get_installed_skill_name("plan") == "cafe-plan"
