@@ -162,6 +162,7 @@ def _build_chat_seed_prompt(
         "Use the shared handoff skill as the default workflow discipline for project-related chat.\n"
         "When the conversation turns into code changes, spec revisions, or plan revisions, explicitly use the matching chat skill.\n"
         "These skills apply to any agent role that encounters those situations.\n"
+        "Do not emit the handoff closing block on every answer; only use it when you are wrapping up or summarizing the session.\n"
         "Do not hand the user a phase-specific command.\n"
         "For workflow-related chat, end by telling the user to exit chat and run `cafe make`."
     )

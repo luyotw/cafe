@@ -19,7 +19,9 @@ version: 1.0.0
 - If work is completed directly in chat, say so clearly.
 - If the discussion changes spec or plan expectations, say which artifact changed.
 - Do not send the user to phase-specific commands.
-- End every workflow-related chat handoff by telling the user to exit chat and run `cafe make`.
+- Only produce the required closing format when you are explicitly wrapping up the chat, summarizing completed work, or helping the user leave the session.
+- During normal back-and-forth conversation, answer naturally and do not append the closing format to every reply.
+- When you do produce a workflow-related handoff, end by telling the user to exit chat and run `cafe make`.
 
 ## Required Closing Format
 - `Handled in chat: yes|no`

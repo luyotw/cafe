@@ -298,6 +298,7 @@ def test_build_chat_seed_prompt_includes_common_handoff_and_unified_next_step() 
     assert "$cafe-chat-develop-change" in prompt
     assert "$cafe-chat-spec-revision" in prompt
     assert "$cafe-chat-plan-revision" in prompt
+    assert "Do not emit the handoff closing block on every answer" in prompt
     assert "exit chat and run `cafe make`" in prompt
 
 
