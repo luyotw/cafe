@@ -435,6 +435,31 @@ def _should_alias_review_command(
     )
 
 
+def _should_alias_pr_command(
+    *,
+    interactive: bool,
+    auto: bool,
+    draft: Optional[bool],
+    title: Optional[str],
+    body: Optional[str],
+    update: bool,
+    force: bool,
+    base: str,
+    post_todo_list: Optional[bool],
+) -> bool:
+    return (
+        not interactive
+        and not auto
+        and draft is None
+        and title is None
+        and body is None
+        and not update
+        and not force
+        and base == "main"
+        and post_todo_list is None
+    )
+
+
 def _check_agent_clis_available(config_manager: ConfigManager) -> List[str]:
     """Check if all agent CLI tools are installed.
 
@@ -4254,6 +4279,47 @@ def pr(
             str(Path(config_file).parent) if config_file != ".cafe/config.yaml" else ".cafe"
         )
         config_manager = ConfigManager(config_dir)
+        try:
+            config_manager.load_config()
+        except ConfigError:
+            config_manager._config = config_manager.get_default_config()
+
+        if _should_alias_pr_command(
+            interactive=interactive,
+            auto=auto,
+            draft=draft,
+            title=title,
+            body=body,
+            update=update,
+            force=force,
+            base=base,
+            post_todo_list=post_todo_list,
+        ):
+            dev_agent = config_manager.get("agents.developer.name", "David")
+            alias_result = _execute_single_step_alias(
+                issue_name=issue_name,
+                step_name="pr",
+                config_manager=config_manager,
+                role_agent_map_override={"developer": dev_agent} if dev_agent else None,
+                show_prompt=False,
+            )
+            status_code = alias_result["status_code"]
+            console.print()
+            if status_code == "CAFE_CONFIRMED":
+                console.print("[bold green]✅ PR content completed![/bold green]")
+                console.print(f"Iterations: {alias_result.get('iterations', 'N/A')}")
+                if alias_result.get("output_file"):
+                    console.print(f"Saved to: {alias_result['output_file']}")
+                console.print()
+                console.print("[dim]Next step:[/dim] [bold]Review and submit the PR[/bold]")
+            else:
+                console.print(f"[bold yellow]PR step completed with status: {status_code}[/bold yellow]")
+                if alias_result.get("output_file"):
+                    console.print(f"Saved to: {alias_result['output_file']}")
+                console.print()
+                console.print("[dim]Next step:[/dim] [bold]cafe develop[/bold]")
+            return
+
         agent_manager = _setup_agents(config_manager, issue_name=issue_name, phase_name="pr")
         permission_handler = PermissionHandler()
         git_ops = GitOperations()

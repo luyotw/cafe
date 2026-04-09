@@ -99,9 +99,11 @@ def test_pr_command_passes_phase_name(mock_dependencies):
     """Test pr command passes phase_name='pr'."""
     with patch("cafe.ui.cli.GitHubOps"):
         runner.invoke(app, ["pr", "--no-interactive"])
-        
-    mock_dependencies["setup_agents"].assert_called_with(
-        ANY, 
-        issue_name="issue-123", 
-        phase_name="pr"
+
+    mock_dependencies["execute_alias"].assert_called_with(
+        issue_name="issue-123",
+        step_name="pr",
+        config_manager=ANY,
+        role_agent_map_override=ANY,
+        show_prompt=False,
     )
