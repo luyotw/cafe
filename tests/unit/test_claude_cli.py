@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 from cafe.agents.cli.claude import ClaudeCLI
 from cafe.core.types import AgentConfig, AgentCLI, PermissionDenial, TokenUsage
+from cafe.skills.importer import import_skills
 
 
 @pytest.fixture
@@ -202,6 +203,70 @@ class TestClaudeCLIAddDirectories:
 
         # 空列表不應該改變命令
         assert result == cmd
+
+
+class TestClaudeCLIProjectSkills:
+    """測試 Claude 專案技能目錄準備."""
+
+    def test_prepare_project_workspace_creates_skills_symlink(self, claude_config, tmp_path, monkeypatch):
+        """當專案有 .cafe/skills 時，應建立 .claude/skills 軟連結."""
+        monkeypatch.chdir(tmp_path)
+        skill_dir = tmp_path / ".cafe" / "skills" / "alpha"
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        (skill_dir / "SKILL.md").write_text(
+            "---\nname: alpha\ndescription: alpha\n---\n\n# alpha\n",
+            encoding="utf-8",
+        )
+
+        cli = ClaudeCLI(claude_config)
+        cli.prepare_project_workspace(tmp_path)
+
+        link_path = tmp_path / ".claude" / "skills"
+        assert link_path.is_symlink()
+        assert link_path.resolve() == (tmp_path / ".cafe" / "skills").resolve()
+
+    def test_prepare_project_workspace_skips_when_no_project_skills(self, claude_config, tmp_path, monkeypatch):
+        """沒有 .cafe/skills 時，不應建立多餘連結."""
+        monkeypatch.chdir(tmp_path)
+
+        cli = ClaudeCLI(claude_config)
+        cli.prepare_project_workspace(tmp_path)
+
+        assert not (tmp_path / ".claude" / "skills").exists()
+
+    def test_prepare_project_workspace_reuses_existing_symlink(self, claude_config, tmp_path, monkeypatch):
+        """重複執行 workspace 準備時，既有正確連結應可安全重用."""
+        monkeypatch.chdir(tmp_path)
+        skills_root = tmp_path / ".cafe" / "skills"
+        skills_root.mkdir(parents=True, exist_ok=True)
+        link_path = tmp_path / ".claude" / "skills"
+        link_path.parent.mkdir(parents=True, exist_ok=True)
+        link_path.symlink_to(Path("../.cafe/skills"))
+
+        cli = ClaudeCLI(claude_config)
+        cli.prepare_project_workspace(tmp_path)
+
+        assert link_path.is_symlink()
+        assert link_path.resolve() == skills_root.resolve()
+
+    def test_imported_skills_become_available_in_claude_workspace(self, claude_config, tmp_path, monkeypatch):
+        """匯入後重新準備 Claude workspace，應能看到專案技能目錄."""
+        monkeypatch.chdir(tmp_path)
+        source_dir = tmp_path / "incoming" / "alpha"
+        source_dir.mkdir(parents=True, exist_ok=True)
+        (source_dir / "SKILL.md").write_text(
+            "---\nname: alpha\ndescription: alpha\n---\n\n# alpha\n",
+            encoding="utf-8",
+        )
+
+        import_skills(tmp_path / "incoming", tmp_path)
+
+        cli = ClaudeCLI(claude_config)
+        cli.prepare_project_workspace(tmp_path)
+
+        assert (tmp_path / ".claude" / "skills" / "alpha" / "SKILL.md").resolve() == (
+            tmp_path / ".cafe" / "skills" / "alpha" / "SKILL.md"
+        ).resolve()
 
 
 class TestClaudeCLIGetOutputFormat:

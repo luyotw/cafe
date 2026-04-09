@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from cafe.skills.importer import import_skills
 from cafe.skills.loader import SkillLoader
 
 
@@ -79,3 +80,27 @@ def test_builtin_catalog_includes_pr_skill(tmp_path: Path) -> None:
     items = loader.discover()
 
     assert any(item.name == "pr" and item.source == "builtin" for item in items)
+
+
+def test_imported_project_skill_is_discovered_with_project_precedence(tmp_path: Path) -> None:
+    builtin = tmp_path / "builtin" / "skills"
+    project_root = tmp_path / "project"
+    _write_skill(builtin, "plan")
+    source_dir = tmp_path / "incoming" / "plan"
+    source_dir.mkdir(parents=True, exist_ok=True)
+    (source_dir / "SKILL.md").write_text(
+        "---\nname: plan\ndescription: imported plan\n---\n\nImported project body\n",
+        encoding="utf-8",
+    )
+
+    summary = import_skills(tmp_path / "incoming", project_root)
+    loader = SkillLoader(
+        project_root=project_root,
+        global_root=tmp_path / "global",
+        builtin_root=tmp_path / "builtin",
+    )
+    items = loader.discover()
+
+    assert summary.imported_count == 1
+    assert any(item.name == "plan" and item.source == "project" for item in items)
+    assert "Imported project body" in loader.activate("plan")

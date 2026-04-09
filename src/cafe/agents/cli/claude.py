@@ -8,6 +8,7 @@ from typing import List, Optional, Tuple
 
 from cafe.agents.cli.abstract import AbstractCLI
 from cafe.core.types import PermissionDenial, TokenUsage
+from cafe.skills.workspace import ensure_claude_project_skills
 from cafe.utils.git_utils import get_repo_root, to_git_ignore_path
 
 logger = logging.getLogger(__name__)
@@ -15,6 +16,10 @@ logger = logging.getLogger(__name__)
 
 class ClaudeCLI(AbstractCLI):
     """Concrete implementation of Claude CLI tool."""
+
+    def prepare_project_workspace(self, project_root: Path) -> None:
+        """Expose project skills to Claude before execution."""
+        ensure_claude_project_skills(project_root)
 
     def build_command(
         self,

@@ -27,6 +27,7 @@ from cafe.core.types import AgentCLI, AgentConfig
 from cafe.phases.generic_phase import GenericPhase
 from cafe.phases.generic_workflow_step import GenericWorkflowStepExecutor
 from cafe.playbooks.loader import PlaybookLoader
+from cafe.skills.importer import SkillImportSummary, import_skills
 from cafe.skills.loader import SkillLoader
 from cafe.templates.manager import TemplateManager
 from cafe.ui import init_helpers
@@ -4629,6 +4630,45 @@ def skill_validate(
         console.print(f"[yellow]warning:[/yellow] {warning}")
 
 
+def _print_skill_import_summary(summary: SkillImportSummary) -> None:
+    """Print skill import result summary."""
+    console.print(f"[green]Imported {summary.imported_count} skill(s)[/green]")
+    if summary.skipped_count:
+        console.print(f"[yellow]Skipped {summary.skipped_count} item(s)[/yellow]")
+    if summary.failed_count:
+        console.print(f"[red]Failed {summary.failed_count} item(s)[/red]")
+
+    for item in summary.results:
+        if item.status == "imported":
+            reason_suffix = f" ({item.reason})" if item.reason else ""
+            console.print(f"[green]imported:[/green] {item.name}{reason_suffix}")
+        elif item.status == "skipped":
+            console.print(f"[yellow]skipped:[/yellow] {item.name} ({item.reason})")
+        else:
+            console.print(f"[red]failed:[/red] {item.name} ({item.reason})")
+
+
+@skill_app.command(name="import")
+def skill_import(
+    path: str = typer.Argument(..., help="Directory containing one or more skill folders"),
+) -> None:
+    """Import skill folders into the current project's `.cafe/skills` directory."""
+    try:
+        summary = import_skills(
+            Path(path),
+            Path.cwd(),
+            overwrite_decider=lambda name, destination: prompt_confirm(
+                f"Skill '{name}' already exists at '{destination}'. Overwrite?",
+                default=False,
+            ),
+        )
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1)
+
+    _print_skill_import_summary(summary)
+
+
 @agent_app.command(name="ls")
 def agent_ls(
     custom_only: bool = typer.Option(False, "--custom-only", help="Show only custom agents"),
@@ -5406,9 +5446,15 @@ def workflow(
             executor=dry_executor if dry_run else step_executor.execute_step,
         )
         result = runner.run(start_step=start_step, single_step=single_step)
-        console.print(
-            f"[green]Workflow completed[/green] step={result.final_step} status={result.final_status_code}"
-        )
+        if result.completed:
+            console.print(
+                f"[green]Workflow completed[/green] step={result.final_step} status={result.final_status_code}"
+            )
+        else:
+            console.print(
+                f"[yellow]Workflow paused[/yellow] step={result.final_step} status={result.final_status_code}"
+            )
+            console.print("[dim]Resolve the requested input, then run cafe make again to resume.[/dim]")
     except Exception as e:
         console.print(f"[red]Error: workflow run failed: {e}[/red]")
         raise typer.Exit(1)

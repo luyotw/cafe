@@ -1,5 +1,6 @@
 """Abstract base class defining the common interface for all CLI tools."""
 
+from pathlib import Path
 from abc import ABC, abstractmethod
 from typing import List, Optional, Tuple
 
@@ -118,3 +119,7 @@ class AbstractCLI(ABC):
         """
         # Default implementation: return empty string, indicating CLI will auto-create session
         return ""
+
+    def prepare_project_workspace(self, project_root: Path) -> None:
+        """Prepare CLI-specific project workspace before execution."""
+        return None
