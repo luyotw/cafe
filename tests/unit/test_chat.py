@@ -6,13 +6,27 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from cafe.core.types import AgentCLI
-from cafe.ui.chat import _build_chat_seed_prompt, _prepare_chat_environment, launch_chat_session
+from cafe.core.workflow_instance import WorkflowInstance
+from cafe.ui.chat import (
+    _build_chat_seed_prompt,
+    _persist_chat_followup,
+    _prepare_chat_environment,
+    _resolve_chat_followup_step,
+    launch_chat_session,
+)
 
 
 @pytest.fixture(autouse=True)
 def mock_chat_environment():
     """Avoid writing to real native CLI skill directories in unit tests."""
-    with patch("cafe.ui.chat._prepare_chat_environment") as mock_prepare:
+    with patch("cafe.ui.chat._prepare_chat_environment") as mock_prepare, patch(
+        "cafe.ui.chat._capture_chat_state",
+        side_effect=[
+            {"spec_digest": "", "spec_path": "", "plan_digest": "", "plan_path": "", "workspace_signature": ""},
+            {"spec_digest": "", "spec_path": "", "plan_digest": "", "plan_path": "", "workspace_signature": ""},
+        ]
+        * 20,
+    ), patch("cafe.ui.chat._persist_chat_followup") as mock_persist:
         yield mock_prepare
 
 
@@ -308,3 +322,39 @@ def test_prepare_chat_environment_suppresses_seed_streaming_output(capsys) -> No
 
     captured = capsys.readouterr()
     assert "Codex Response (streaming):" not in captured.out
+
+
+def test_resolve_chat_followup_step_prefers_upstream_artifact_changes() -> None:
+    before = {
+        "spec_path": "spec/iteration_001/output.md",
+        "spec_digest": "a",
+        "plan_path": "plan/iteration_001/output.md",
+        "plan_digest": "b",
+        "workspace_signature": "",
+    }
+    after = {
+        "spec_path": "spec/iteration_001/output.md",
+        "spec_digest": "changed",
+        "plan_path": "plan/iteration_001/output.md",
+        "plan_digest": "changed-too",
+        "workspace_signature": " M src/app.py",
+    }
+
+    assert _resolve_chat_followup_step(before, after) == "plan"
+
+
+def test_persist_chat_followup_updates_workflow_instance_and_blackboard(tmp_path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue123"
+    issue_dir.mkdir(parents=True, exist_ok=True)
+    instance = WorkflowInstance.load_or_create(
+        issue_dir=issue_dir,
+        playbook_id="default",
+        initial_step="pr",
+    )
+
+    _persist_chat_followup(issue_dir, "plan")
+
+    reloaded = WorkflowInstance.load(issue_dir)
+    assert reloaded is not None
+    assert reloaded.current_step == "plan"
+    assert reloaded.metadata["last_status_code"] == "CHAT_ARTIFACT_UPDATED"

@@ -9,11 +9,14 @@ import json
 import subprocess
 import time
 from contextlib import redirect_stderr, redirect_stdout
+from hashlib import sha256
 from pathlib import Path
 from typing import Optional
 
 from cafe.agents.manager import AgentManager
+from cafe.core.blackboard import BlackboardStore
 from cafe.core.types import AgentCLI, AgentConfig
+from cafe.core.workflow_instance import WorkflowInstance
 from cafe.skills.loader import SkillLoader
 from cafe.skills.native_bridge import NativeSkillBridge
 from cafe.utils.config import ConfigManager
@@ -25,6 +28,8 @@ CHAT_SKILL_NAMES = [
     "chat-spec-revision",
     "chat-plan-revision",
 ]
+
+CHAT_HANDOFF_STATUS_CODE = "CHAT_ARTIFACT_UPDATED"
 
 
 def _extract_latest_codex_session_id(
@@ -56,6 +61,88 @@ def _extract_latest_codex_session_id(
             latest_session_id = session_id
 
     return latest_session_id
+
+
+def _latest_phase_output(issue_dir: Path, phase_name: str) -> Optional[Path]:
+    phase_dir = issue_dir / phase_name
+    if not phase_dir.exists():
+        return None
+    files = sorted(phase_dir.glob("iteration_*/output.md"))
+    return files[-1] if files else None
+
+
+def _file_digest(path: Optional[Path]) -> str:
+    if path is None or not path.exists():
+        return ""
+    return sha256(path.read_bytes()).hexdigest()
+
+
+def _workspace_signature() -> str:
+    result = subprocess.run(
+        ["git", "status", "--short", ".", ":(exclude).cafe", ":(exclude).codex", ":(exclude).claude", ":(exclude).gemini", ":(exclude).copilot", ":(exclude).cursor-agent"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return ""
+    return result.stdout.strip()
+
+
+def _capture_chat_state(issue_dir: Path) -> dict[str, str]:
+    spec_output = _latest_phase_output(issue_dir, "spec")
+    plan_output = _latest_phase_output(issue_dir, "plan")
+    return {
+        "spec_path": str(spec_output) if spec_output else "",
+        "spec_digest": _file_digest(spec_output),
+        "plan_path": str(plan_output) if plan_output else "",
+        "plan_digest": _file_digest(plan_output),
+        "workspace_signature": _workspace_signature(),
+    }
+
+
+def _resolve_chat_followup_step(before: dict[str, str], after: dict[str, str]) -> Optional[str]:
+    if before.get("spec_digest") != after.get("spec_digest") or before.get("spec_path") != after.get("spec_path"):
+        return "plan"
+    if before.get("plan_digest") != after.get("plan_digest") or before.get("plan_path") != after.get("plan_path"):
+        return "develop"
+    if before.get("workspace_signature") != after.get("workspace_signature"):
+        return "review"
+    return None
+
+
+def _persist_chat_followup(issue_dir: Path, target_step: Optional[str]) -> None:
+    if not target_step:
+        return
+
+    instance = WorkflowInstance.load(issue_dir)
+    if instance is None:
+        return
+
+    blackboard_store = BlackboardStore(issue_dir)
+    blackboard = blackboard_store.load_or_create(instance.current_step)
+    previous_step = instance.current_step
+
+    blackboard_store.record_event(
+        blackboard,
+        "chat_handoff",
+        {
+            "step": previous_step,
+            "from": previous_step,
+            "to": target_step,
+            "status_code": CHAT_HANDOFF_STATUS_CODE,
+        },
+    )
+    blackboard_store.record_decision(
+        blackboard,
+        {
+            "from": previous_step,
+            "to": target_step,
+            "status_code": CHAT_HANDOFF_STATUS_CODE,
+        },
+    )
+    blackboard_store.set_current_step(blackboard, target_step)
+    instance.transition_to(target_step, CHAT_HANDOFF_STATUS_CODE)
 
 
 def _build_chat_seed_prompt(
@@ -166,6 +253,8 @@ def launch_chat_session(role: str, issue_name: str) -> int:
         return 0
 
     session_id: Optional[str] = executor.config.session_id
+    issue_dir = Path.cwd() / ".cafe" / "issues" / issue_name
+    chat_state_before = _capture_chat_state(issue_dir)
 
     _prepare_chat_environment(
         executor=executor,
@@ -221,5 +310,11 @@ def launch_chat_session(role: str, issue_name: str) -> int:
                 resolved_session_id,
                 issue_name,
             )
+
+    chat_state_after = _capture_chat_state(issue_dir)
+    _persist_chat_followup(
+        issue_dir,
+        _resolve_chat_followup_step(chat_state_before, chat_state_after),
+    )
 
     return result.returncode
