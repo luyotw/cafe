@@ -1,22 +1,15 @@
-"""Reusable chat launcher for inline agent chat sessions.
-
-Provides launch_chat_session() which can be called from interactive prompts
-across any workflow phase to open a chat session with the relevant agent.
-"""
+"""Reusable chat launcher for inline agent chat sessions."""
 
 import io
 import json
 import subprocess
 import time
 from contextlib import redirect_stderr, redirect_stdout
-from hashlib import sha256
 from pathlib import Path
 from typing import Optional
 
 from cafe.agents.manager import AgentManager
-from cafe.core.blackboard import BlackboardStore
 from cafe.core.types import AgentCLI, AgentConfig
-from cafe.core.workflow_instance import WorkflowInstance
 from cafe.skills.loader import SkillLoader
 from cafe.skills.native_bridge import NativeSkillBridge
 from cafe.utils.config import ConfigManager
@@ -28,8 +21,6 @@ CHAT_SKILL_NAMES = [
     "chat-spec-revision",
     "chat-plan-revision",
 ]
-
-CHAT_HANDOFF_STATUS_CODE = "CHAT_ARTIFACT_UPDATED"
 
 
 def _extract_latest_codex_session_id(
@@ -63,86 +54,12 @@ def _extract_latest_codex_session_id(
     return latest_session_id
 
 
-def _latest_phase_output(issue_dir: Path, phase_name: str) -> Optional[Path]:
-    phase_dir = issue_dir / phase_name
-    if not phase_dir.exists():
-        return None
-    files = sorted(phase_dir.glob("iteration_*/output.md"))
-    return files[-1] if files else None
+def get_chat_handoff_dir(issue_dir: Path) -> Path:
+    return issue_dir / "chat"
 
 
-def _file_digest(path: Optional[Path]) -> str:
-    if path is None or not path.exists():
-        return ""
-    return sha256(path.read_bytes()).hexdigest()
-
-
-def _workspace_signature() -> str:
-    result = subprocess.run(
-        ["git", "status", "--short", ".", ":(exclude).cafe", ":(exclude).codex", ":(exclude).claude", ":(exclude).gemini", ":(exclude).copilot", ":(exclude).cursor-agent"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if result.returncode != 0:
-        return ""
-    return result.stdout.strip()
-
-
-def _capture_chat_state(issue_dir: Path) -> dict[str, str]:
-    spec_output = _latest_phase_output(issue_dir, "spec")
-    plan_output = _latest_phase_output(issue_dir, "plan")
-    return {
-        "spec_path": str(spec_output) if spec_output else "",
-        "spec_digest": _file_digest(spec_output),
-        "plan_path": str(plan_output) if plan_output else "",
-        "plan_digest": _file_digest(plan_output),
-        "workspace_signature": _workspace_signature(),
-    }
-
-
-def _resolve_chat_followup_step(before: dict[str, str], after: dict[str, str]) -> Optional[str]:
-    if before.get("spec_digest") != after.get("spec_digest") or before.get("spec_path") != after.get("spec_path"):
-        return "plan"
-    if before.get("plan_digest") != after.get("plan_digest") or before.get("plan_path") != after.get("plan_path"):
-        return "develop"
-    if before.get("workspace_signature") != after.get("workspace_signature"):
-        return "review"
-    return None
-
-
-def _persist_chat_followup(issue_dir: Path, target_step: Optional[str]) -> None:
-    if not target_step:
-        return
-
-    instance = WorkflowInstance.load(issue_dir)
-    if instance is None:
-        return
-
-    blackboard_store = BlackboardStore(issue_dir)
-    blackboard = blackboard_store.load_or_create(instance.current_step)
-    previous_step = instance.current_step
-
-    blackboard_store.record_event(
-        blackboard,
-        "chat_handoff",
-        {
-            "step": previous_step,
-            "from": previous_step,
-            "to": target_step,
-            "status_code": CHAT_HANDOFF_STATUS_CODE,
-        },
-    )
-    blackboard_store.record_decision(
-        blackboard,
-        {
-            "from": previous_step,
-            "to": target_step,
-            "status_code": CHAT_HANDOFF_STATUS_CODE,
-        },
-    )
-    blackboard_store.set_current_step(blackboard, target_step)
-    instance.transition_to(target_step, CHAT_HANDOFF_STATUS_CODE)
+def get_chat_next_step_path(issue_dir: Path) -> Path:
+    return get_chat_handoff_dir(issue_dir) / "next_step.txt"
 
 
 def _build_chat_seed_prompt(
@@ -150,6 +67,8 @@ def _build_chat_seed_prompt(
     role: str,
     issue_name: str,
     invocations: dict[str, str],
+    blackboard_path: Path,
+    next_step_path: Path,
 ) -> str:
     """Build the chat bootstrap prompt for one interactive session."""
     return (
@@ -163,6 +82,9 @@ def _build_chat_seed_prompt(
         "When the conversation turns into code changes, spec revisions, or plan revisions, explicitly use the matching chat skill.\n"
         "These skills apply to any agent role that encounters those situations.\n"
         "Do not emit the handoff closing block on every answer; only use it when you are wrapping up or summarizing the session.\n"
+        f"When you are wrapping up a workflow-related chat, update the shared blackboard directly at `{blackboard_path}`.\n"
+        f"Then write the exact next workflow step name into `{next_step_path}` before printing the closing handoff block.\n"
+        "Only write one bare step name into the next-step file, such as `spec`, `plan`, `develop`, `review`, or `pr`.\n"
         "Do not hand the user a phase-specific command.\n"
         "For workflow-related chat, end by telling the user to exit chat and run `cafe make`."
     )
@@ -176,6 +98,7 @@ def _prepare_chat_environment(
     agent_cli: AgentCLI | object,
     role: str,
     issue_name: str,
+    issue_dir: Path,
 ) -> None:
     """Install shared chat skills and seed the interactive session context."""
     if not isinstance(agent_cli, AgentCLI):
@@ -194,6 +117,8 @@ def _prepare_chat_environment(
         role=role,
         issue_name=issue_name,
         invocations=invocations,
+        blackboard_path=issue_dir / "blackboard.json",
+        next_step_path=get_chat_next_step_path(issue_dir),
     )
 
     try:
@@ -253,9 +178,8 @@ def launch_chat_session(role: str, issue_name: str) -> int:
         print(f"\n⚠️  Failed to get agent '{agent_name}': {e}. Skipping chat.\n")
         return 0
 
-    session_id: Optional[str] = executor.config.session_id
     issue_dir = Path.cwd() / ".cafe" / "issues" / issue_name
-    chat_state_before = _capture_chat_state(issue_dir)
+    get_chat_handoff_dir(issue_dir).mkdir(parents=True, exist_ok=True)
 
     _prepare_chat_environment(
         executor=executor,
@@ -264,7 +188,9 @@ def launch_chat_session(role: str, issue_name: str) -> int:
         agent_cli=agent_cli,
         role=role,
         issue_name=issue_name,
+        issue_dir=issue_dir,
     )
+    session_id: Optional[str] = executor.config.session_id
     session_id = executor.config.session_id
 
     print(f"\nOpening chat with {role} ({agent_name})...")
@@ -311,11 +237,5 @@ def launch_chat_session(role: str, issue_name: str) -> int:
                 resolved_session_id,
                 issue_name,
             )
-
-    chat_state_after = _capture_chat_state(issue_dir)
-    _persist_chat_followup(
-        issue_dir,
-        _resolve_chat_followup_step(chat_state_before, chat_state_after),
-    )
 
     return result.returncode

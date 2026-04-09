@@ -18,6 +18,9 @@ version: 1.0.0
 - Keep the conversation grounded in the existing project workflow.
 - If work is completed directly in chat, say so clearly.
 - If the discussion changes spec or plan expectations, say which artifact changed.
+- CAFE will provide the exact blackboard path and next-step file path at runtime.
+- Before you print a workflow handoff closing block, first update the shared blackboard directly.
+- Then write the exact next workflow step name into the provided next-step file.
 - Do not send the user to phase-specific commands.
 - Only produce the required closing format when you are explicitly wrapping up the chat, summarizing completed work, or helping the user leave the session.
 - During normal back-and-forth conversation, answer naturally and do not append the closing format to every reply.
