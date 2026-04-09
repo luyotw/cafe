@@ -279,14 +279,14 @@ def test_build_chat_seed_prompt_includes_common_handoff_and_unified_next_step() 
         role="developer",
         issue_name="issue123",
         blackboard_path="/tmp/issue123/blackboard.json",
-        next_step_path="/tmp/issue123/chat/next_step.txt",
+        next_step_path="/tmp/issue123/next_step.txt",
         current_step="review",
         playbook_id="default",
     )
 
     assert "Current workflow step: `review`." in prompt
     assert "/tmp/issue123/blackboard.json" in prompt
-    assert "/tmp/issue123/chat/next_step.txt" in prompt
+    assert "/tmp/issue123/next_step.txt" in prompt
     assert "Shared blackboard path" in prompt
     assert "Workflow baton path" in prompt
 
@@ -351,7 +351,7 @@ def test_prepare_chat_handoff_state_creates_blackboard_and_clears_stale_baton(tm
     monkeypatch.chdir(tmp_path)
     issue_dir = tmp_path / ".cafe" / "issues" / "issue123"
     next_step_path = get_chat_next_step_path(issue_dir)
-    next_step_path.parent.mkdir(parents=True, exist_ok=True)
+    issue_dir.mkdir(parents=True, exist_ok=True)
     next_step_path.write_text("review\n", encoding="utf-8")
 
     current_step, valid_steps, playbook_id = _prepare_chat_handoff_state(issue_dir)

@@ -56,13 +56,8 @@ def _extract_latest_codex_session_id(
 
     return latest_session_id
 
-
-def get_chat_handoff_dir(issue_dir: Path) -> Path:
-    return issue_dir / "chat"
-
-
 def get_chat_next_step_path(issue_dir: Path) -> Path:
-    return get_chat_handoff_dir(issue_dir) / "next_step.txt"
+    return issue_dir / "next_step.txt"
 
 
 def _load_chat_workflow_context(issue_dir: Path) -> tuple[str, list[str], str]:
@@ -84,7 +79,6 @@ def _prepare_chat_handoff_state(issue_dir: Path) -> tuple[str, list[str], str]:
     issue_dir.mkdir(parents=True, exist_ok=True)
     BlackboardStore(issue_dir).load_or_create(current_step)
     next_step_path = get_chat_next_step_path(issue_dir)
-    next_step_path.parent.mkdir(parents=True, exist_ok=True)
     if next_step_path.exists():
         next_step_path.unlink()
     return current_step, valid_steps, playbook_id
