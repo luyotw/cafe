@@ -5,9 +5,9 @@
 [x] Read feedback todo list in ./.cafe/issues/issue183/review/iteration_001/output.md
 [x] Address each issue raised in the feedback
 [x] Mark completed items in ./.cafe/issues/issue183/review/iteration_001/output.md if applicable (change - [ ] to - [x])
-[ ] Commit changes with descriptive messages
+[x] Commit changes with descriptive messages
 [x] Confirm: Maximized code reuse by looking for existing patterns and utilities
-[ ] Confirm: Commit messages strictly match existing format, language, and structure
+[x] Confirm: Commit messages strictly match existing format, language, and structure
 [x] Confirm: All issues are fixed
 [x] Confirm: All tests pass and are not fragile
 [x] Return status code
@@ -56,6 +56,6 @@ Rules:
 
 [x] Adhere to the project's coding standards.
 [x] Write comments in the project's customary natural language.
-[ ] Follow the project's commit message style.
+[x] Follow the project's commit message style.
 [x] Break down tasks using the TDD approach: for each task, write the corresponding test cases before implementation. Ensure all unit tests pass upon the completion of each task.
 [x] Write robust, non-fragile tests: mock only at boundaries (external APIs, I/O), assert on behavior/outcomes not implementation details, avoid exact string matching on error messages.
