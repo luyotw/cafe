@@ -246,6 +246,8 @@ class GenericPhase:
             runtime_context.update(publish.context_updates)
             events.extend(publish.events)
             published = publish.continue_pipeline
+            if publish.override_status_code is not None:
+                status_code = publish.override_status_code
 
         return GenericPhaseExecution(
             response=response,

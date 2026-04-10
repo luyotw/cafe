@@ -11,7 +11,14 @@ from cafe.core.questions_schema import parse_questions_xml, validate_questions_x
 from cafe.core.status_codes import PhaseStatusCode
 from cafe.ui.interactive_qa import interactive_qa_flow
 from cafe.ui.inquirer_prompts import prompt_multiline
-from cafe.utils.github import GitHubOps, GitHubError
+from cafe.utils.github import (
+    GitHubError,
+    GitHubOps,
+    filter_unresolved_comments,
+    format_comments_for_prompt,
+    get_all_pr_comments,
+    get_processed_comment_ids_from_history,
+)
 
 
 def _get_previous_iteration_status(phase: Any) -> Optional[str]:
@@ -175,6 +182,193 @@ class UserInputCollector(NoOpHook):
 
 class GitHubIssueFetcher(NoOpHook):
     name = "GitHubIssueFetcher"
+
+
+def _parse_pr_output(output_file: Path) -> tuple[str, str]:
+    content = output_file.read_text(encoding="utf-8").strip()
+    if not content:
+        raise GitHubError(f"PR output file is empty: {output_file}")
+
+    lines = content.splitlines()
+    first_line = lines[0].strip()
+    if not first_line.startswith("# "):
+        raise GitHubError(f"PR output file is missing a markdown title: {output_file}")
+
+    title = first_line[2:].strip()
+    body = "\n".join(lines[1:]).strip()
+    if not title:
+        raise GitHubError(f"PR title is empty: {output_file}")
+    return title, body
+
+
+class GitHubPRCreator(NoOpHook):
+    """Prepare generic PR iterations for GitHub mode and sync PR metadata."""
+
+    name = "GitHubPRCreator"
+
+    def run(self, **kwargs: Any) -> HookResult:
+        stage = kwargs.get("stage")
+        if stage == "prepare_input":
+            return self._prepare_input(**kwargs)
+        if stage == "publish_output":
+            return self._publish_output(**kwargs)
+        return HookResult()
+
+    def _prepare_input(self, **kwargs: Any) -> HookResult:
+        phase = kwargs.get("phase")
+        if phase is None:
+            return HookResult()
+
+        try:
+            branch_name = phase.git_ops.get_current_branch()
+        except Exception:
+            return HookResult()
+        if not branch_name:
+            return HookResult()
+
+        try:
+            github_ops = GitHubOps()
+            existing_pr = github_ops.get_pr_for_branch(branch_name)
+        except Exception:
+            return HookResult()
+
+        if not existing_pr:
+            return HookResult()
+
+        try:
+            has_unpushed_commits = phase.git_ops.has_unpushed_commits()
+        except Exception:
+            has_unpushed_commits = False
+
+        context_updates = {
+            "pr_number": str(existing_pr["number"]),
+            "pr_url": str(existing_pr["url"]),
+        }
+        if has_unpushed_commits:
+            return HookResult(context_updates=context_updates)
+
+        try:
+            exclude_ids = get_processed_comment_ids_from_history(phase.phase_dir)
+            comments = get_all_pr_comments(int(existing_pr["number"]), exclude_ids=exclude_ids)
+            unresolved_comments = filter_unresolved_comments(comments)
+        except Exception:
+            return HookResult(context_updates=context_updates)
+
+        if not unresolved_comments:
+            return HookResult(context_updates=context_updates)
+
+        formatted_comments = format_comments_for_prompt(unresolved_comments).strip()
+        if not formatted_comments:
+            return HookResult(context_updates=context_updates)
+
+        phase.step_user_inputs[str(kwargs.get("step_name") or "pr")] = formatted_comments
+        context_updates["user_input"] = formatted_comments
+        context_updates["pr_comment_count"] = str(len(unresolved_comments))
+        context_updates["pr_mode"] = "comments"
+        return HookResult(
+            context_updates=context_updates,
+            events=[
+                {
+                    "type": "pr_comments_loaded",
+                    "count": len(unresolved_comments),
+                    "pr_number": str(existing_pr["number"]),
+                }
+            ],
+        )
+
+    def _publish_output(self, **kwargs: Any) -> HookResult:
+        status_code = kwargs.get("status_code")
+        if status_code not in {PhaseStatusCode.CONFIRMED, PhaseStatusCode.READY_FOR_REVIEW}:
+            return HookResult()
+
+        phase = kwargs.get("phase")
+        output_file = kwargs.get("output_file")
+        if phase is None or not isinstance(output_file, Path) or not output_file.exists():
+            return HookResult()
+
+        try:
+            branch_name = phase.git_ops.get_current_branch()
+            if not branch_name:
+                return HookResult()
+
+            title, body = _parse_pr_output(output_file)
+            github_ops = GitHubOps()
+            existing_pr = github_ops.get_pr_for_branch(branch_name)
+
+            if existing_pr is None or phase.git_ops.has_unpushed_commits():
+                phase.git_ops.push(branch_name, set_upstream=True)
+
+            if existing_pr:
+                github_ops.update_pr(str(existing_pr["number"]), title=title, body=body)
+                pr_number = str(existing_pr["number"])
+                pr_url = str(existing_pr["url"])
+                action = "updated"
+            else:
+                pr_url = github_ops.create_pr(title=title, body=body)
+                pr_number = github_ops.extract_pr_number(pr_url)
+                action = "created"
+        except Exception:
+            return HookResult()
+
+        return HookResult(
+            override_status_code=PhaseStatusCode.READY_FOR_REVIEW,
+            context_updates={"pr_number": pr_number, "pr_url": pr_url},
+            events=[
+                {
+                    "type": "github_pr_synced",
+                    "action": action,
+                    "pr_number": pr_number,
+                    "pr_url": pr_url,
+                }
+            ],
+        )
+
+
+class PRCommentPoster(NoOpHook):
+    """Post generated PR todo lists back to the PR when comments require follow-up."""
+
+    name = "PRCommentPoster"
+
+    def run(self, **kwargs: Any) -> HookResult:
+        if kwargs.get("stage") != "publish_output":
+            return HookResult()
+
+        if kwargs.get("status_code") != PhaseStatusCode.NEEDS_CHANGES:
+            return HookResult()
+
+        phase = kwargs.get("phase")
+        output_file = kwargs.get("output_file")
+        if phase is None or not isinstance(output_file, Path) or not output_file.exists():
+            return HookResult()
+
+        try:
+            branch_name = phase.git_ops.get_current_branch()
+            if not branch_name:
+                return HookResult()
+            github_ops = GitHubOps()
+            existing_pr = github_ops.get_pr_for_branch(branch_name)
+            if not existing_pr:
+                return HookResult()
+            todo_list = output_file.read_text(encoding="utf-8").strip()
+            if not todo_list:
+                return HookResult()
+
+            comment_body = (
+                "> CAFE organized the latest PR feedback into a follow-up todo list.\n\n"
+                f"{todo_list}"
+            )
+            github_ops.add_pr_comment(str(existing_pr["number"]), comment_body)
+        except Exception:
+            return HookResult()
+
+        return HookResult(
+            events=[
+                {
+                    "type": "pr_todo_comment_posted",
+                    "pr_number": str(existing_pr["number"]),
+                }
+            ]
+        )
 
 
 class PRLinkOpener(NoOpHook):

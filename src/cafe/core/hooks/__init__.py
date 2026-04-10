@@ -62,7 +62,13 @@ class PRLinkOpener(NoOpHook):
     name = "PRLinkOpener"
 
 
-from cafe.core.hooks.native import GitHubIssueFetcher, PRLinkOpener, UserInputCollector
+from cafe.core.hooks.native import (
+    GitHubIssueFetcher,
+    GitHubPRCreator,
+    PRCommentPoster,
+    PRLinkOpener,
+    UserInputCollector,
+)
 
 
 BUILTIN_HOOKS = {

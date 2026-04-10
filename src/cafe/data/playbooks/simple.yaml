@@ -68,13 +68,15 @@ steps:
     output_artifact: pr_result
     allowed_tools: [Read, Edit, Write, Grep, Glob, Bash, WebFetch, WebSearch]
     valid_status_codes:
+      - CAFE_READY_FOR_REVIEW
       - CAFE_CONFIRMED
       - CAFE_NEEDS_CHANGES
     allowed_goto: [develop]
     hooks:
-      prepare_input: [UserInputCollector]
+      prepare_input: [GitHubPRCreator, UserInputCollector]
       publish_output: [GitHubPRCreator, PRCommentPoster, PRLinkOpener]
     "on":
+      CAFE_READY_FOR_REVIEW: pr
       CAFE_CONFIRMED: _done
       CAFE_NEEDS_CHANGES: develop
 
