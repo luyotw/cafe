@@ -250,7 +250,19 @@ class PlaybookRunner:
                     valid_status_codes=valid_codes or list(PhaseStatusCode),
                 )
             if status_code_obj is None:
-                raise ValueError(f"Step '{current_step}' did not return a valid status code")
+                self.blackboard_store.record_event(
+                    self.blackboard,
+                    "status_code_missing",
+                    {
+                        "step": current_step,
+                        "response": response,
+                    },
+                )
+                return PlaybookRunResult(
+                    final_step=current_step,
+                    final_status_code="NO_STATUS_CODE",
+                    completed=False,
+                )
             status_code = status_code_obj.value
             last_status_code = status_code
 

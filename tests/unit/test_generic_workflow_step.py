@@ -298,3 +298,40 @@ def test_generic_workflow_step_auto_continues_pause_statuses_in_interactive_mode
 
     assert result.response == "CAFE_READY_FOR_REVIEW"
     assert result.auto_continue is True
+
+
+def test_generic_workflow_step_allows_missing_status_code(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-no-status"
+    playbook = {
+        "playbook": {"id": "default"},
+        "roles": {"pm": {"default_agent": "Roger"}},
+        "steps": {
+            "spec": {
+                "skill": {"1": "spec_first", "default": "spec_first"},
+                "role": "pm",
+                "output_artifact": "spec",
+                "allowed_tools": ["Read"],
+                "valid_status_codes": ["CAFE_CONFIRMED"],
+                "on": {"CAFE_CONFIRMED": "_done"},
+            }
+        },
+    }
+    state = BlackboardStore(issue_dir).load_or_create("spec")
+
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="issue-no-status",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=FakeAgentManager("done without status"),
+        git_ops=FakeGitOperations(),
+        role_agent_map={"pm": "Roger"},
+    )
+
+    result = executor.execute_step("spec", playbook["steps"]["spec"], state)
+
+    assert result.response == "done without status"
+    assert result.status_code is None
+    context_data = (issue_dir / "spec" / "iteration_001" / "context.json").read_text(encoding="utf-8")
+    assert '"status_code": null' in context_data

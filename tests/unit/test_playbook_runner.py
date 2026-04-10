@@ -260,6 +260,36 @@ def test_runner_pauses_when_develop_returns_no_changes_needed(tmp_path: Path) ->
     assert pause_events[-1].data["status_code"] == "CAFE_NO_CHANGES_NEEDED"
 
 
+def test_runner_pauses_instead_of_failing_when_status_code_is_missing(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo"
+    playbook = {
+        "playbook": {"id": "default"},
+        "steps": {
+            "develop": {
+                "skill": "spec_first",
+                "role": "developer",
+                "valid_status_codes": ["CAFE_CONFIRMED"],
+                "on": {"CAFE_CONFIRMED": "_done"},
+            }
+        },
+    }
+
+    def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
+        return StepExecutionResult(response="finished but no code", artifacts={}, status_code=None)
+
+    runner = PlaybookRunner(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        executor=executor,
+    )
+    result = runner.run(max_transitions=5)
+
+    assert result.completed is False
+    assert result.final_step == "develop"
+    assert result.final_status_code == "NO_STATUS_CODE"
+
+
 def test_runner_auto_continues_after_consuming_user_input(tmp_path: Path) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "demo"
     playbook = {

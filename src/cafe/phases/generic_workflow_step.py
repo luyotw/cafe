@@ -120,6 +120,7 @@ class GenericWorkflowStepExecutor(Phase):
                 prompt=prompt,
                 user_input=self.step_user_inputs.get(step_name, "workflow execute"),
                 valid_status_codes=valid_status_codes,
+                require_status_code=False,
                 allowed_tools=allowed_tools,
                 phase_specific_data=phase_specific_data,
             )
@@ -147,11 +148,9 @@ class GenericWorkflowStepExecutor(Phase):
 
         response = execution.response
         status_code = execution.status_code
-        if status_code is None:
-            raise ValueError(f"Step '{step_name}' did not return a valid status code")
 
         agent_was_invoked = bool(last_prompt)
-        if agent_was_invoked and self._should_validate_checklist(status_code):
+        if agent_was_invoked and status_code is not None and self._should_validate_checklist(status_code):
             response, validated_status, validation_passed = self._validate_and_retry_checklist_completion(
                 agent_name=agent_name,
                 prompt=last_prompt[0] if last_prompt else "",
@@ -191,7 +190,7 @@ class GenericWorkflowStepExecutor(Phase):
         return StepExecutionResult(
             response=response,
             artifacts=artifacts,
-            status_code=status_code.value,
+            status_code=status_code.value if status_code is not None else None,
             auto_continue=auto_continue,
         )
 
@@ -403,13 +402,14 @@ class GenericWorkflowStepExecutor(Phase):
 
         checklist_file.write_text("", encoding="utf-8")
 
-    def _persist_final_status(self, status_code: PhaseStatusCode) -> None:
+    def _persist_final_status(self, status_code: Optional[PhaseStatusCode]) -> None:
         context_file = self._get_iteration_dir(self.iteration) / "context.json"
         if context_file.exists():
             context_data = json.loads(context_file.read_text(encoding="utf-8"))
-            context_data["status_code"] = status_code.value
+            context_data["status_code"] = status_code.value if status_code is not None else None
             context_file.write_text(json.dumps(context_data, ensure_ascii=False, indent=2), encoding="utf-8")
-        self._save_progress(status_code)
+        if status_code is not None:
+            self._save_progress(status_code)
 
     def _write_artifact_record(
         self,
