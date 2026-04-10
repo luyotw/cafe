@@ -11,7 +11,6 @@ from typing import Optional
 from cafe.agents.manager import AgentManager
 from cafe.core.blackboard import BlackboardStore
 from cafe.core.types import AgentCLI, AgentConfig
-from cafe.core.workflow_instance import WorkflowInstance
 from cafe.playbooks.loader import PlaybookLoader
 from cafe.skills.loader import SkillLoader
 from cafe.skills.native_bridge import NativeSkillBridge
@@ -61,9 +60,9 @@ def get_chat_next_step_path(issue_dir: Path) -> Path:
 
 
 def _load_chat_workflow_context(issue_dir: Path) -> tuple[str, list[str], str]:
-    instance = WorkflowInstance.load(issue_dir)
-    playbook_id = instance.playbook_id if instance is not None else "default"
-    current_step = instance.current_step if instance is not None else "spec"
+    blackboard = BlackboardStore(issue_dir).load_or_create("spec")
+    playbook_id = getattr(blackboard, "playbook_id", "default") or "default"
+    current_step = blackboard.current_step
 
     try:
         playbook = PlaybookLoader(project_root=Path.cwd()).load(playbook_id)

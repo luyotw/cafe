@@ -206,8 +206,8 @@ class TestShowCommand:
         cafe_dir = tmp_path / ".cafe"
         issues_dir = cafe_dir / "issues" / "test-issue" / "qa"
         issues_dir.mkdir(parents=True)
-        workflow_instance = cafe_dir / "issues" / "test-issue" / "workflow_instance.json"
-        workflow_instance.write_text('{"playbook_id":"custom","current_step":"qa"}')
+        blackboard = cafe_dir / "issues" / "test-issue" / "blackboard.json"
+        blackboard.write_text('{"schema_version":1,"playbook_id":"custom","current_step":"qa","artifacts":{},"events":[],"decisions":[]}')
 
         playbook_dir = cafe_dir / "playbooks"
         playbook_dir.mkdir(parents=True)

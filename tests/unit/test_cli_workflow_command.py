@@ -6,10 +6,50 @@ from unittest.mock import patch, MagicMock
 
 from typer.testing import CliRunner
 
-from cafe.ui.cli import app
+from cafe.ui.cli import app, _execute_single_step_alias
+from cafe.utils.config import ConfigManager
 
 
 runner = CliRunner()
+
+
+def test_single_step_alias_updates_workflow_pointer_to_requested_step(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-210"
+    issue_dir.mkdir(parents=True, exist_ok=True)
+    (issue_dir / "blackboard.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "playbook_id": "default",
+                "current_step": "pr",
+                "artifacts": {},
+                "events": [],
+                "decisions": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    config_manager = ConfigManager(".cafe")
+    config_manager._config = config_manager.get_default_config()
+
+    class FakeExecutor:
+        def __init__(self) -> None:
+            self.agent_manager = MagicMock()
+
+        def execute_step(self, step_name: str, step_def: dict, blackboard_state: object) -> tuple[str, dict[str, str]]:
+            return ("CAFE_NO_CHANGES_NEEDED", {})
+
+    with patch("cafe.ui.cli._build_workflow_step_executor", return_value=FakeExecutor()):
+        result = _execute_single_step_alias(
+            issue_name="issue-210",
+            step_name="develop",
+            config_manager=config_manager,
+        )
+
+    assert result["status_code"] == "CAFE_NO_CHANGES_NEEDED"
+    blackboard_data = json.loads((issue_dir / "blackboard.json").read_text(encoding="utf-8"))
+    assert blackboard_data["current_step"] == "develop"
 
 
 def test_workflow_command_runs_dry_mode(tmp_path: Path, monkeypatch) -> None:
@@ -26,9 +66,7 @@ def test_workflow_command_runs_dry_mode(tmp_path: Path, monkeypatch) -> None:
         assert "Workflow context" in result.stdout
         assert "playbook=default step=spec" in result.stdout
         assert "Workflow completed" in result.stdout
-        workflow_file = tmp_path / ".cafe" / "issues" / "issue-100" / "workflow_instance.json"
         blackboard_file = tmp_path / ".cafe" / "issues" / "issue-100" / "blackboard.json"
-        assert workflow_file.exists()
         assert blackboard_file.exists()
 
 
@@ -64,14 +102,15 @@ def test_workflow_command_consumes_chat_baton_before_execution(tmp_path: Path, m
 
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-205"
     issue_dir.mkdir(parents=True, exist_ok=True)
-    (issue_dir / "workflow_instance.json").write_text(
+    (issue_dir / "blackboard.json").write_text(
         json.dumps(
             {
-                "issue_name": "issue-205",
+                "schema_version": 1,
                 "playbook_id": "default",
                 "current_step": "pr",
-                "status": "in_progress",
-                "metadata": {},
+                "artifacts": {},
+                "events": [],
+                "decisions": [],
             }
         ),
         encoding="utf-8",
@@ -99,8 +138,8 @@ def test_workflow_command_consumes_chat_baton_before_execution(tmp_path: Path, m
     assert "playbook=default step=plan" in result.stdout
     assert executed_steps == ["plan", "develop", "review", "pr"]
     assert not next_step_file.exists()
-    workflow_data = json.loads((issue_dir / "workflow_instance.json").read_text(encoding="utf-8"))
-    assert workflow_data["status"] == "completed"
+    blackboard_data = json.loads((issue_dir / "blackboard.json").read_text(encoding="utf-8"))
+    assert blackboard_data["current_step"] == "pr"
 
 
 def test_workflow_command_rejects_invalid_chat_baton_step(tmp_path: Path, monkeypatch) -> None:

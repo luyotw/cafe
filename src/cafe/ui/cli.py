@@ -20,11 +20,11 @@ import yaml
 from rich.console import Console
 
 from cafe.agents.manager import AgentManager
+from cafe.core.blackboard import BlackboardStore
 from cafe.core.git import GitOperations
 from cafe.core.playbook_runner import PlaybookRunner
 from cafe.core.permission import PermissionHandler
 from cafe.core.types import AgentCLI, AgentConfig
-from cafe.core.workflow_instance import WorkflowInstance
 from cafe.phases.generic_phase import GenericPhase
 from cafe.phases.generic_workflow_step import GenericWorkflowStepExecutor
 from cafe.playbooks.loader import PlaybookLoader
@@ -56,7 +56,8 @@ def _resolve_runtime_playbook_name() -> str:
 
     if issue_name:
         issue_playbook = _resolve_issue_playbook_name(issue_name)
-        if issue_playbook != "default" or (Path.cwd() / ".cafe" / "issues" / issue_name / "workflow_instance.json").exists():
+        blackboard_path = Path.cwd() / ".cafe" / "issues" / issue_name / "blackboard.json"
+        if issue_playbook != "default" or blackboard_path.exists():
             return issue_playbook
     return _resolve_selected_playbook(None)
 
@@ -140,12 +141,12 @@ CONTENT_TYPE_FILE_MAP = {
 
 def _resolve_issue_playbook_name(issue_name: str) -> str:
     """Resolve the playbook id associated with an issue."""
-    workflow_instance = Path.cwd() / ".cafe" / "issues" / issue_name / "workflow_instance.json"
-    if not workflow_instance.exists():
+    blackboard_file = Path.cwd() / ".cafe" / "issues" / issue_name / "blackboard.json"
+    if not blackboard_file.exists():
         return "default"
 
     try:
-        raw = json.loads(workflow_instance.read_text(encoding="utf-8"))
+        raw = json.loads(blackboard_file.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return "default"
 
@@ -260,11 +261,11 @@ def _consume_pending_chat_handoff(
     if target_step not in playbook_data["steps"]:
         raise ValueError(f"Chat handoff step '{target_step}' does not exist in playbook")
 
-    instance = WorkflowInstance.load(issue_dir)
-    if instance is not None:
-        instance.current_step = target_step
-        instance.metadata["last_status_code"] = "CHAT_HANDOFF"
-        instance.save()
+    blackboard = BlackboardStore(issue_dir).load_or_create(
+        str(playbook_data.get("entry_point") or next(iter(playbook_data["steps"].keys()))),
+        playbook_id=str(playbook_data["playbook"]["id"]),
+    )
+    BlackboardStore(issue_dir).set_current_step(blackboard, target_step)
 
     next_step_path.unlink()
     return target_step
@@ -354,6 +355,11 @@ def _execute_single_step_alias(
     playbook_data = PlaybookLoader().load(playbook_name)
     if step_name not in playbook_data["steps"]:
         raise ValueError(f"Playbook '{playbook_name}' does not define step '{step_name}'")
+    blackboard = BlackboardStore(issue_dir).load_or_create(
+        str(playbook_data.get("entry_point") or next(iter(playbook_data["steps"].keys()))),
+        playbook_id=str(playbook_data["playbook"]["id"]),
+    )
+    BlackboardStore(issue_dir).set_current_step(blackboard, step_name)
 
     generic_phase = GenericPhase(SkillLoader())
     step_executor = _build_workflow_step_executor(
@@ -5454,10 +5460,13 @@ def workflow(
             raise ValueError(f"Unknown playbook step '{start_step}'")
         effective_start_step = start_step
         if effective_start_step is None:
-            workflow_instance = WorkflowInstance.load(issue_dir)
+            blackboard = BlackboardStore(issue_dir).load_or_create(
+                str(playbook_data.get("entry_point") or next(iter(playbook_data["steps"].keys()))),
+                playbook_id=str(playbook_data["playbook"]["id"]),
+            )
             effective_start_step = (
-                workflow_instance.current_step
-                if workflow_instance is not None
+                blackboard.current_step
+                if blackboard is not None
                 else str(playbook_data.get("entry_point") or next(iter(playbook_data["steps"].keys())))
             )
         console.print(

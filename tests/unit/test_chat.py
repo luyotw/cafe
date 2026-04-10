@@ -352,11 +352,15 @@ def test_prepare_chat_handoff_state_creates_blackboard_and_clears_stale_baton(tm
     issue_dir = tmp_path / ".cafe" / "issues" / "issue123"
     next_step_path = get_chat_next_step_path(issue_dir)
     issue_dir.mkdir(parents=True, exist_ok=True)
+    (issue_dir / "blackboard.json").write_text(
+        '{"schema_version":1,"playbook_id":"default","current_step":"review","artifacts":{},"events":[],"decisions":[]}',
+        encoding="utf-8",
+    )
     next_step_path.write_text("review\n", encoding="utf-8")
 
     current_step, valid_steps, playbook_id = _prepare_chat_handoff_state(issue_dir)
 
-    assert current_step == "spec"
+    assert current_step == "review"
     assert "spec" in valid_steps
     assert playbook_id == "default"
     assert (issue_dir / "blackboard.json").exists()

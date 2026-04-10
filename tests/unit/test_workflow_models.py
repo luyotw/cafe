@@ -1,23 +1,22 @@
-"""Tests for workflow instance and blackboard."""
+"""Tests for blackboard-backed workflow state."""
 
 import json
 from pathlib import Path
 
 from cafe.core.blackboard import ArtifactEntry, ArtifactKind, BlackboardStore
-from cafe.core.workflow_instance import WorkflowInstance
 
 
-def test_workflow_instance_load_or_create_and_transition(tmp_path: Path) -> None:
+def test_blackboard_load_or_create_persists_current_step_and_playbook(tmp_path: Path) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-1"
-    instance = WorkflowInstance.load_or_create(issue_dir, "default", "spec")
-    assert instance.current_step == "spec"
-    assert instance.file_path.exists()
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("spec", playbook_id="default")
+    assert state.current_step == "spec"
+    assert state.playbook_id == "default"
 
-    instance.transition_to("plan", "CAFE_CONFIRMED")
-    loaded = WorkflowInstance.load(issue_dir)
-    assert loaded is not None
+    store.set_current_step(state, "plan")
+    loaded = store.load_or_create("spec", playbook_id="default")
     assert loaded.current_step == "plan"
-    assert loaded.metadata["last_status_code"] == "CAFE_CONFIRMED"
+    assert loaded.playbook_id == "default"
 
 
 def test_blackboard_store_records_artifacts_events_and_decisions(tmp_path: Path) -> None:
