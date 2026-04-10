@@ -5492,6 +5492,17 @@ def workflow(
         )
         if start_step is not None and start_step not in playbook_data["steps"]:
             raise ValueError(f"Unknown playbook step '{start_step}'")
+        effective_start_step = start_step
+        if effective_start_step is None:
+            workflow_instance = WorkflowInstance.load(issue_dir)
+            effective_start_step = (
+                workflow_instance.current_step
+                if workflow_instance is not None
+                else str(playbook_data.get("entry_point") or next(iter(playbook_data["steps"].keys())))
+            )
+        console.print(
+            f"[dim]Workflow context[/dim] playbook={playbook_data['playbook']['id']} step={effective_start_step}"
+        )
         generic_phase = GenericPhase(SkillLoader())
 
         def dry_executor(step_name: str, step_def: Dict, blackboard_state: object) -> tuple[str, Dict[str, str]]:

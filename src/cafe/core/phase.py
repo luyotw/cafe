@@ -417,6 +417,7 @@ class Phase(ABC):
         prompt: str,
         user_input: str,
         valid_status_codes: List[PhaseStatusCode],
+        require_status_code: bool = True,
         allowed_tools: Optional[List[str]] = None,
         denied_tools: Optional[List[str]] = None,
         phase_specific_data: Optional[Dict[str, Any]] = None,
@@ -438,6 +439,7 @@ class Phase(ABC):
             prompt: Prompt to send to agent
             user_input: User input for this round
             valid_status_codes: Valid status codes accepted by this phase
+            require_status_code: Whether missing/invalid status code should trigger retry/failure
             allowed_tools: Tools available to agent (default None)
             denied_tools: Tools unavailable to agent (default None)
             phase_specific_data: Phase-specific initial data (default None)
@@ -706,7 +708,7 @@ class Phase(ABC):
         max_retries = 5
         retry_count = 0
 
-        if original_status_code_missing:  # Including: no status code or multiple status codes
+        if require_status_code and original_status_code_missing:  # Including: no status code or multiple status codes
             analysis_attempted = True
 
             while retry_count < max_retries and status_code is None:
@@ -754,7 +756,7 @@ class Phase(ABC):
 
         # 6.3. Write error log (if original response has issues: no status code, multiple codes, or still no status code after analysis)
         # Note: Even if analysis successfully finds status code, we still record issues with original response
-        if analysis_attempted or original_status_code_missing:
+        if require_status_code and (analysis_attempted or original_status_code_missing):
             self._write_status_code_error_log(
                 original_response=response,
                 valid_status_codes=valid_status_codes,
@@ -766,7 +768,7 @@ class Phase(ABC):
             )
 
         # 6.4. If still no status code after 5 retries, throw error
-        if original_status_code_missing and status_code is None and retry_count >= max_retries:
+        if require_status_code and original_status_code_missing and status_code is None and retry_count >= max_retries:
             error_msg = f"Agent Still did not return valid status code after {max_retries} attempts"
             print(f"\n❌ {error_msg}")
             raise ValueError(error_msg)
