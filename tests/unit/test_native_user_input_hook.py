@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from cafe.core.hooks.native import PRLinkOpener, UserInputCollector
+from cafe.core.hooks.native import GitHubPRCreator, PRCommentPoster, PRLinkOpener, UserInputCollector
 from cafe.core.playbook_runner import StepExecutionResult
 from cafe.core.status_codes import PhaseStatusCode
 from cafe.phases.generic_phase import GenericPhaseExecution
@@ -169,3 +169,76 @@ def test_pr_link_opener_noops_when_pr_url_unavailable() -> None:
 
     mock_open.assert_not_called()
     assert result.events == []
+
+
+def test_github_pr_creator_prepare_input_loads_unresolved_comments(tmp_path: Path) -> None:
+    phase_dir = tmp_path / "pr"
+    phase_dir.mkdir(parents=True, exist_ok=True)
+    phase = _FakePhase(phase_dir=phase_dir, iteration=2)
+    phase.git_ops = MagicMock()
+    phase.git_ops.get_current_branch.return_value = "issue-183"
+    phase.git_ops.has_unpushed_commits.return_value = False
+
+    hook = GitHubPRCreator()
+
+    with (
+        patch("cafe.core.hooks.native.GitHubOps") as mock_github_ops,
+        patch("cafe.core.hooks.native.get_processed_comment_ids_from_history", return_value=set()),
+        patch("cafe.core.hooks.native.get_all_pr_comments", return_value=["raw-comments"]),
+        patch("cafe.core.hooks.native.filter_unresolved_comments", return_value=["unresolved-comment"]),
+        patch("cafe.core.hooks.native.format_comments_for_prompt", return_value="Comment #1\nPlease fix this"),
+    ):
+        mock_github_ops.return_value.get_pr_for_branch.return_value = {"number": 42, "url": "https://github.com/test/repo/pull/42"}
+        result = hook.run(stage="prepare_input", phase=phase, step_name="pr")
+
+    assert result.context_updates["pr_number"] == "42"
+    assert result.context_updates["user_input"] == "Comment #1\nPlease fix this"
+    assert phase.step_user_inputs["pr"] == "Comment #1\nPlease fix this"
+    assert result.events == [{"type": "pr_comments_loaded", "count": 1, "pr_number": "42"}]
+
+
+def test_github_pr_creator_publish_output_syncs_pr_and_overrides_status(tmp_path: Path) -> None:
+    output_file = tmp_path / "output.md"
+    output_file.write_text("# Test PR\n\n## Summary\nupdated\n", encoding="utf-8")
+
+    phase = MagicMock()
+    phase.git_ops.get_current_branch.return_value = "issue-183"
+    phase.git_ops.has_unpushed_commits.return_value = True
+
+    hook = GitHubPRCreator()
+
+    with patch("cafe.core.hooks.native.GitHubOps") as mock_github_ops:
+        mock_github_ops.return_value.get_pr_for_branch.return_value = {"number": 42, "url": "https://github.com/test/repo/pull/42"}
+        result = hook.run(
+            stage="publish_output",
+            phase=phase,
+            output_file=output_file,
+            status_code=PhaseStatusCode.CONFIRMED,
+        )
+
+    phase.git_ops.push.assert_called_once_with("issue-183", set_upstream=True)
+    mock_github_ops.return_value.update_pr.assert_called_once_with("42", title="Test PR", body="## Summary\nupdated")
+    assert result.override_status_code == PhaseStatusCode.READY_FOR_REVIEW
+    assert result.context_updates["pr_number"] == "42"
+
+
+def test_pr_comment_poster_posts_todo_comment_for_needs_changes(tmp_path: Path) -> None:
+    output_file = tmp_path / "output.md"
+    output_file.write_text("## Todo List\n- [ ] Fix comment\n", encoding="utf-8")
+
+    phase = MagicMock()
+    phase.git_ops.get_current_branch.return_value = "issue-183"
+
+    hook = PRCommentPoster()
+
+    with patch("cafe.core.hooks.native.GitHubOps") as mock_github_ops:
+        mock_github_ops.return_value.get_pr_for_branch.return_value = {"number": 42, "url": "https://github.com/test/repo/pull/42"}
+        result = hook.run(
+            stage="publish_output",
+            phase=phase,
+            output_file=output_file,
+            status_code=PhaseStatusCode.NEEDS_CHANGES,
+        )
+
+    mock_github_ops.return_value.add_pr_comment.assert_called_once()
+    assert result.events == [{"type": "pr_todo_comment_posted", "pr_number": "42"}]

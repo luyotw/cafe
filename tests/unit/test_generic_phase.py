@@ -115,6 +115,13 @@ class PublishHook:
         return HookResult(events=[{"type": "published"}])
 
 
+class PublishOverrideHook:
+    name = "PublishOverrideHook"
+
+    def run(self, **kwargs):
+        return HookResult(override_status_code=PhaseStatusCode.READY_FOR_REVIEW)
+
+
 def test_execute_short_circuits_when_before_execute_stops(tmp_path: Path) -> None:
     phase = GenericPhase(_setup_loader(tmp_path), hook_registry={"StopHook": StopHook})
     calls: list[str] = []
@@ -184,6 +191,28 @@ def test_execute_skips_publish_when_artifact_not_ready(tmp_path: Path) -> None:
     assert result.artifact_ready is False
     assert result.published is False
     assert {"type": "published"} not in result.events
+
+
+def test_execute_applies_publish_output_status_override(tmp_path: Path) -> None:
+    phase = GenericPhase(
+        _setup_loader(tmp_path),
+        hook_registry={"PublishOverrideHook": PublishOverrideHook},
+    )
+
+    result = phase.execute(
+        skill_name="plan",
+        skill_invocation="/plan",
+        step_def={
+            "hooks": {
+                "publish_output": ["PublishOverrideHook"],
+            },
+            "valid_status_codes": ["CAFE_CONFIRMED", "CAFE_READY_FOR_REVIEW"],
+        },
+        output_file=tmp_path / "out.md",
+        agent_executor=lambda prompt: "CAFE_CONFIRMED",
+    )
+
+    assert result.status_code == PhaseStatusCode.READY_FOR_REVIEW
 
 
 def test_prepare_skill_installs_skill_and_returns_cli_invocation(tmp_path: Path) -> None:
