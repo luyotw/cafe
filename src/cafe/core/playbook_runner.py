@@ -39,6 +39,7 @@ PAUSE_STATUS_CODES = {
     PhaseStatusCode.READY_FOR_REVIEW.value,
     PhaseStatusCode.NEED_CLARIFICATION.value,
     PhaseStatusCode.NEED_PERMISSION.value,
+    PhaseStatusCode.NO_CHANGES_NEEDED.value,
 }
 
 

@@ -26,6 +26,7 @@ steps:
       - CAFE_CONFIRMED_SKIP_REVIEW
       - CAFE_NEED_CLARIFICATION
       - CAFE_NEED_PERMISSION
+      - CAFE_NO_CHANGES_NEEDED
     hooks:
       prepare_input: [UserInputCollector]
       after_execute: [PermissionRetryHandler]
@@ -34,6 +35,7 @@ steps:
       CAFE_CONFIRMED_SKIP_REVIEW: pr
       CAFE_NEED_CLARIFICATION: develop
       CAFE_NEED_PERMISSION: develop
+      CAFE_NO_CHANGES_NEEDED: develop
 
   review:
     type: skill

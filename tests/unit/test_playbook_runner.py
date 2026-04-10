@@ -226,6 +226,40 @@ def test_runner_pauses_when_step_needs_clarification(tmp_path: Path) -> None:
     assert pause_events[-1].data["status_code"] == "CAFE_NEED_CLARIFICATION"
 
 
+def test_runner_pauses_when_develop_returns_no_changes_needed(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo"
+    playbook = {
+        "playbook": {"id": "default"},
+        "steps": {
+            "develop": {
+                "skill": "spec_first",
+                "role": "developer",
+                "valid_status_codes": ["CAFE_NO_CHANGES_NEEDED"],
+                "on": {"CAFE_NO_CHANGES_NEEDED": "develop"},
+            }
+        },
+    }
+
+    def executor(step_name: str, step_def: dict, state: object) -> tuple[str, dict[str, str]]:
+        return ("CAFE_NO_CHANGES_NEEDED", {})
+
+    runner = PlaybookRunner(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        executor=executor,
+    )
+    result = runner.run(max_transitions=5)
+
+    assert result.completed is False
+    assert result.final_step == "develop"
+    assert result.final_status_code == "CAFE_NO_CHANGES_NEEDED"
+    blackboard = BlackboardStore(issue_dir).load_or_create("develop")
+    pause_events = [event for event in blackboard.events if event.event_type == "workflow_paused"]
+    assert pause_events
+    assert pause_events[-1].data["status_code"] == "CAFE_NO_CHANGES_NEEDED"
+
+
 def test_runner_auto_continues_after_consuming_user_input(tmp_path: Path) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "demo"
     playbook = {
