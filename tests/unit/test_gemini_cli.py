@@ -109,10 +109,10 @@ class TestGeminiCLIAddDirectories:
 
 
 class TestGeminiCLIProjectSkills:
-    """測試 Gemini 專案技能目錄準備."""
+    """測試 Gemini 已不再依賴專案技能 symlink 準備."""
 
-    def test_prepare_project_workspace_creates_skills_symlink(self, gemini_config, tmp_path, monkeypatch):
-        """當專案有 .cafe/skills 時，應建立 .gemini/skills 軟連結."""
+    def test_prepare_project_workspace_does_not_create_skills_symlink(self, gemini_config, tmp_path, monkeypatch):
+        """即使專案有 .cafe/skills，也不應再建立 .gemini/skills 軟連結."""
         monkeypatch.chdir(tmp_path)
         skill_dir = tmp_path / ".cafe" / "skills" / "alpha"
         skill_dir.mkdir(parents=True, exist_ok=True)
@@ -124,12 +124,10 @@ class TestGeminiCLIProjectSkills:
         cli = GeminiCLI(gemini_config)
         cli.prepare_project_workspace(tmp_path)
 
-        link_path = tmp_path / ".gemini" / "skills"
-        assert link_path.is_symlink()
-        assert link_path.resolve() == (tmp_path / ".cafe" / "skills").resolve()
+        assert not (tmp_path / ".gemini" / "skills").exists()
 
     def test_prepare_project_workspace_skips_when_no_project_skills(self, gemini_config, tmp_path, monkeypatch):
-        """沒有 .cafe/skills 時，不應建立多餘連結."""
+        """沒有 .cafe/skills 時，不應建立多餘目錄或連結."""
         monkeypatch.chdir(tmp_path)
 
         cli = GeminiCLI(gemini_config)

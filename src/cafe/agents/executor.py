@@ -168,8 +168,6 @@ class AgentExecutor:
         try:
             # Get CLI strategy
             cli_strategy = self._get_cli_strategy()
-            cli_strategy.prepare_project_workspace(Path.cwd())
-
             # For Gemini, ensure .geminiignore file exists
             if self.config.cli == AgentCLI.GEMINI:
                 cli_strategy.ensure_geminiignore()
