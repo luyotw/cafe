@@ -266,10 +266,91 @@ def _consume_pending_chat_handoff(
         str(playbook_data.get("entry_point") or next(iter(playbook_data["steps"].keys()))),
         playbook_id=str(playbook_data["playbook"]["id"]),
     )
-    BlackboardStore(issue_dir).set_current_step(blackboard, target_step)
+    store = BlackboardStore(issue_dir)
+    store.set_current_step(blackboard, target_step)
+    role = str(playbook_data["steps"].get(target_step, {}).get("role", "")).strip()
+    store.set_owner(blackboard, f"agent:{role}" if role else "agent")
 
     next_step_path.unlink()
     return target_step
+
+
+def _owner_for_workflow_step(playbook_data: Dict[str, Any], step_name: str) -> str:
+    role = str(playbook_data["steps"].get(step_name, {}).get("role", "")).strip()
+    return f"agent:{role}" if role else "agent"
+
+
+def _handle_user_owned_workflow(
+    *,
+    issue_name: str,
+    issue_dir: Path,
+    playbook_data: Dict[str, Any],
+    blackboard,
+) -> Optional[str]:
+    summary = getattr(blackboard, "handoff_summary", "").strip()
+    console.print(f"[yellow]Workflow is waiting for user input[/yellow] step={blackboard.current_step}")
+    if summary:
+        console.print(f"[dim]{summary}[/dim]")
+
+    action = prompt_list(
+        "Select next action",
+        [
+            "Write blackboard -> set next phase",
+            "Chat with <role>",
+            "Complete workflow",
+            "Exit without action",
+        ],
+    )
+    store = BlackboardStore(issue_dir)
+
+    if action == "Write blackboard -> set next phase":
+        target_step = prompt_list(
+            "Select next phase",
+            list(playbook_data["steps"].keys()),
+            default=blackboard.current_step,
+        )
+        store.set_current_step(blackboard, target_step)
+        store.set_owner(blackboard, _owner_for_workflow_step(playbook_data, target_step))
+        store.set_handoff_summary(
+            blackboard,
+            f"user handed workflow back to {target_step}",
+        )
+        store.record_event(
+            blackboard,
+            "user_handoff",
+            {"from_owner": "user", "to_step": target_step},
+        )
+        return str(target_step)
+
+    if action == "Chat with <role>":
+        role_choices = list(playbook_data.get("roles", {}).keys()) or ["pm", "developer", "reviewer"]
+        role = prompt_list("Select role", role_choices)
+        launch_chat_session(str(role), issue_name)
+        target_step = _consume_pending_chat_handoff(
+            issue_dir=issue_dir,
+            playbook_data=playbook_data,
+            requested_start_step=None,
+        )
+        if target_step is not None:
+            store.set_handoff_summary(
+                blackboard,
+                f"chat handed workflow to {target_step}",
+            )
+        return target_step
+
+    if action == "Complete workflow":
+        store.set_owner(blackboard, "done")
+        store.set_handoff_summary(blackboard, "workflow completed by user")
+        store.record_event(
+            blackboard,
+            "workflow_completed_by_user",
+            {"step": blackboard.current_step},
+        )
+        console.print("[green]Workflow completed by user[/green]")
+        return ""
+
+    console.print("[dim]No workflow action taken.[/dim]")
+    return ""
 
 
 def _handle_phase_exception(e: Exception, phase_name: str) -> None:
@@ -5509,17 +5590,35 @@ def workflow(
         )
         if start_step is not None and start_step not in playbook_data["steps"]:
             raise ValueError(f"Unknown playbook step '{start_step}'")
-        effective_start_step = start_step
-        if effective_start_step is None:
+        blackboard = BlackboardStore(issue_dir).load_or_create(
+            str(playbook_data.get("entry_point") or next(iter(playbook_data["steps"].keys()))),
+            playbook_id=str(playbook_data["playbook"]["id"]),
+        )
+        interactive = sys.stdin.isatty() or os.getenv("CAFE_FORCE_INTERACTIVE") == "1"
+        if not dry_run and start_step is None and blackboard.owner == "done":
+            console.print("[green]Workflow already completed[/green]")
+            return
+        if (
+            not dry_run
+            and start_step is None
+            and blackboard.owner == "user"
+            and interactive
+        ):
+            user_selected_step = _handle_user_owned_workflow(
+                issue_name=issue_name,
+                issue_dir=issue_dir,
+                playbook_data=playbook_data,
+                blackboard=blackboard,
+            )
+            if not user_selected_step:
+                return
+            start_step = user_selected_step
             blackboard = BlackboardStore(issue_dir).load_or_create(
                 str(playbook_data.get("entry_point") or next(iter(playbook_data["steps"].keys()))),
                 playbook_id=str(playbook_data["playbook"]["id"]),
             )
-            effective_start_step = (
-                blackboard.current_step
-                if blackboard is not None
-                else str(playbook_data.get("entry_point") or next(iter(playbook_data["steps"].keys())))
-            )
+
+        effective_start_step = start_step or blackboard.current_step
         console.print(
             f"[dim]Workflow context[/dim] playbook={playbook_data['playbook']['id']} step={effective_start_step}"
         )
@@ -5537,7 +5636,7 @@ def workflow(
             issue_name=issue_name,
             playbook_data=playbook_data,
             generic_phase=generic_phase,
-            interactive=(sys.stdin.isatty() or os.getenv("CAFE_FORCE_INTERACTIVE") == "1"),
+            interactive=interactive,
         )
 
         def wrapped_executor(step_name: str, step_def: Dict, blackboard_state: object) -> Any:
