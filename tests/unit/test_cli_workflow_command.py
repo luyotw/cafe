@@ -145,7 +145,7 @@ def test_workflow_command_consumes_chat_baton_before_execution(tmp_path: Path, m
     assert executed_steps == ["plan", "develop", "review", "pr"]
     assert not next_step_file.exists()
     blackboard_data = json.loads((issue_dir / "blackboard.json").read_text(encoding="utf-8"))
-    assert blackboard_data["current_step"] == "pr"
+    assert blackboard_data["current_step"] == "user"
 
 
 def test_workflow_command_rejects_invalid_chat_baton_step(tmp_path: Path, monkeypatch) -> None:
@@ -199,8 +199,7 @@ def test_workflow_command_user_owner_can_set_next_phase(tmp_path: Path, monkeypa
             {
                 "schema_version": 1,
                 "playbook_id": "default",
-                "current_step": "pr",
-                "owner": "user",
+                "current_step": "user",
                 "handoff_summary": "waiting for user decision",
                 "artifacts": {},
                 "events": [],
@@ -243,8 +242,7 @@ def test_workflow_command_user_owner_can_complete_workflow(tmp_path: Path, monke
             {
                 "schema_version": 1,
                 "playbook_id": "default",
-                "current_step": "pr",
-                "owner": "user",
+                "current_step": "user",
                 "artifacts": {},
                 "events": [],
                 "decisions": [],
@@ -266,7 +264,7 @@ def test_workflow_command_user_owner_can_complete_workflow(tmp_path: Path, monke
     assert result.exit_code == 0
     assert "Workflow completed by user" in result.stdout
     blackboard_data = json.loads((issue_dir / "blackboard.json").read_text(encoding="utf-8"))
-    assert blackboard_data["owner"] == "done"
+    assert blackboard_data["current_step"] == "done"
 
 
 def test_workflow_command_user_owner_can_chat_and_resume_from_baton(tmp_path: Path, monkeypatch) -> None:
@@ -281,8 +279,7 @@ def test_workflow_command_user_owner_can_chat_and_resume_from_baton(tmp_path: Pa
             {
                 "schema_version": 1,
                 "playbook_id": "default",
-                "current_step": "pr",
-                "owner": "user",
+                "current_step": "user",
                 "artifacts": {},
                 "events": [],
                 "decisions": [],

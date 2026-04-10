@@ -24,12 +24,11 @@ Read your agent file: {agent_file}
 - `Summary` 需引用原始需求背景
 - `Changes` 需列出主要變更與相關 commits
 - `Test Plan` 需描述具體驗證方式
-- blackboard `owner` 代表目前 workflow 交在誰手上。
+- blackboard `current_step` 代表目前 workflow 接下來要去哪個 phase。
 - 如果 PR 文案已是最新、沒有新的 branch 進度需要整理，而且接下來應由 user 決定是否還有後續需求：
-  - 把 blackboard `owner` 改成 `user`
-  - 保留 `current_step=pr`
+  - 把 blackboard `current_step` 改成 `user`
   - 在 blackboard summary/event 說明「PR 已是最新，等待 user 決定下一步」
-  - 不要寫新的 next-step baton
+  - 寫入 next-step baton，內容只放 `user`
 - 不要在回應中重述內容，只回傳狀態碼
 
 ## Output
