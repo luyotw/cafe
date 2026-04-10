@@ -48,6 +48,7 @@ steps:
     valid_status_codes:
       - CAFE_CONFIRMED
       - CAFE_NEEDS_CHANGES
+      - CAFE_NEED_CLARIFICATION
     max_iterations: 1
     allowed_goto: [develop]
     hooks:
@@ -56,6 +57,7 @@ steps:
     "on":
       CAFE_CONFIRMED: pr
       CAFE_NEEDS_CHANGES: develop
+      CAFE_NEED_CLARIFICATION: review
 
   pr:
     type: skill

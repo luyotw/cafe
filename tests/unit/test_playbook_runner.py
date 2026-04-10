@@ -539,6 +539,14 @@ def test_runner_stops_when_step_exceeds_max_iterations(tmp_path: Path) -> None:
     assert loop_events[-1].data["max_iterations"] == 2
 
 
+def test_default_review_loop_budget_is_three_rounds() -> None:
+    from cafe.playbooks.loader import PlaybookLoader
+
+    playbook = PlaybookLoader().load_model("default").model
+
+    assert playbook.steps["review"].max_iterations == 3
+
+
 def test_runner_records_hop_limit_event(tmp_path: Path) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "demo"
     playbook = {

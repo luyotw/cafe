@@ -262,6 +262,8 @@ class GenericWorkflowStepExecutor(Phase):
                 blackboard_state,
                 for_step=step_name,
             ),
+            "blackboard_path": self._display_path(self.issue_dir / "blackboard.json"),
+            "next_step_path": self._display_path(self.issue_dir / "next_step.txt"),
             "output_file": self._display_path(output_file),
             "status_code_instruction": generate_status_code_prompt(
                 self._resolve_valid_status_codes(step_def),
