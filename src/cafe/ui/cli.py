@@ -279,6 +279,13 @@ def _handle_user_phase(
     playbook_data: Dict[str, Any],
     blackboard,
 ) -> Optional[str]:
+    phase_labels = {
+        "spec": "Update requirements spec",
+        "plan": "Revise implementation plan",
+        "develop": "Continue implementation",
+        "review": "Run review again",
+        "pr": "Refresh PR output",
+    }
     summary = getattr(blackboard, "handoff_summary", "").strip()
     console.print("[yellow]Workflow is waiting for user input[/yellow] step=user")
     if summary:
@@ -287,33 +294,45 @@ def _handle_user_phase(
     action = prompt_list(
         "Select next action",
         [
-            "Write blackboard -> set next phase",
-            "Chat with <role>",
-            "Complete workflow",
-            "Exit without action",
+            "Leave a note and send the workflow to the next phase",
+            "Open chat with a role",
+            "Mark the workflow complete",
+            "Exit for now",
         ],
     )
     store = BlackboardStore(issue_dir)
 
-    if action == "Write blackboard -> set next phase":
-        target_step = prompt_list(
-            "Select next phase",
-            list(playbook_data["steps"].keys()),
-            default=str(playbook_data.get("entry_point") or next(iter(playbook_data["steps"].keys()))),
+    if action == "Leave a note and send the workflow to the next phase":
+        note = prompt_multiline(
+            "What should be written to the blackboard before continuing?",
+            default=summary,
+        ).strip()
+        if not note:
+            note = "user handed workflow back without additional note"
+
+        step_names = list(playbook_data["steps"].keys())
+        step_labels = [
+            f"{phase_labels.get(step_name, step_name)} ({step_name})"
+            for step_name in step_names
+        ]
+        default_step = str(playbook_data.get("entry_point") or next(iter(playbook_data["steps"].keys())))
+        default_label = f"{phase_labels.get(default_step, default_step)} ({default_step})"
+        selected_label = prompt_list(
+            "Which phase should continue next?",
+            step_labels,
+            default=default_label,
         )
+        target_step = step_names[step_labels.index(selected_label)]
         store.set_current_step(blackboard, target_step)
-        store.set_handoff_summary(
-            blackboard,
-            f"user handed workflow back to {target_step}",
-        )
+        store.set_handoff_summary(blackboard, note)
         store.record_event(
             blackboard,
             "user_handoff",
-            {"from_owner": "user", "to_step": target_step},
+            {"from_phase": "user", "to_step": target_step, "note": note},
         )
         return str(target_step)
 
-    if action == "Chat with <role>":
+    if action == "Open chat with a role":
         role_choices = list(playbook_data.get("roles", {}).keys()) or ["pm", "developer", "reviewer"]
         role = prompt_list("Select role", role_choices)
         launch_chat_session(str(role), issue_name)
@@ -329,7 +348,7 @@ def _handle_user_phase(
             )
         return target_step
 
-    if action == "Complete workflow":
+    if action == "Mark the workflow complete":
         store.set_current_step(blackboard, "done")
         store.set_handoff_summary(blackboard, "workflow completed by user")
         store.record_event(

@@ -216,7 +216,15 @@ def test_workflow_command_user_owner_can_set_next_phase(tmp_path: Path, monkeypa
     with (
         patch("cafe.ui.cli.GitOperations") as mock_git_cls,
         patch("cafe.ui.cli._build_workflow_step_executor", return_value=FakeExecutor()),
-        patch("cafe.ui.cli.prompt_list", side_effect=["Write blackboard -> set next phase", "develop", "Complete workflow"]),
+        patch(
+            "cafe.ui.cli.prompt_list",
+            side_effect=[
+                "Leave a note and send the workflow to the next phase",
+                "Continue implementation (develop)",
+                "Mark the workflow complete",
+            ],
+        ),
+        patch("cafe.ui.cli.prompt_multiline", return_value="Please continue implementation with the new handoff context."),
     ):
         git = MagicMock()
         git.get_current_branch.return_value = "issue-207"
@@ -229,6 +237,10 @@ def test_workflow_command_user_owner_can_set_next_phase(tmp_path: Path, monkeypa
     assert "Executing step=develop iteration=001" in result.stdout
     assert "Workflow completed by user" in result.stdout
     assert executed_steps == ["develop", "review", "pr"]
+    blackboard_data = json.loads((issue_dir / "blackboard.json").read_text(encoding="utf-8"))
+    assert blackboard_data["handoff_summary"] == "workflow completed by user"
+    handoff_event = next(event for event in blackboard_data["events"] if event["event_type"] == "user_handoff")
+    assert handoff_event["data"]["note"] == "Please continue implementation with the new handoff context."
 
 
 def test_workflow_command_user_owner_can_complete_workflow(tmp_path: Path, monkeypatch) -> None:
@@ -253,7 +265,7 @@ def test_workflow_command_user_owner_can_complete_workflow(tmp_path: Path, monke
 
     with (
         patch("cafe.ui.cli.GitOperations") as mock_git_cls,
-        patch("cafe.ui.cli.prompt_list", return_value="Complete workflow"),
+        patch("cafe.ui.cli.prompt_list", return_value="Mark the workflow complete"),
     ):
         git = MagicMock()
         git.get_current_branch.return_value = "issue-208"
@@ -302,7 +314,7 @@ def test_workflow_command_user_owner_can_chat_and_resume_from_baton(tmp_path: Pa
     with (
         patch("cafe.ui.cli.GitOperations") as mock_git_cls,
         patch("cafe.ui.cli._build_workflow_step_executor", return_value=FakeExecutor()),
-        patch("cafe.ui.cli.prompt_list", side_effect=["Chat with <role>", "developer", "Complete workflow"]),
+        patch("cafe.ui.cli.prompt_list", side_effect=["Open chat with a role", "developer", "Mark the workflow complete"]),
         patch("cafe.ui.cli.launch_chat_session", side_effect=fake_launch_chat),
     ):
         git = MagicMock()
@@ -345,7 +357,7 @@ def test_workflow_command_enters_user_phase_immediately_after_agent_handoff(tmp_
     with (
         patch("cafe.ui.cli.GitOperations") as mock_git_cls,
         patch("cafe.ui.cli._build_workflow_step_executor", return_value=FakeExecutor()),
-        patch("cafe.ui.cli.prompt_list", return_value="Complete workflow"),
+        patch("cafe.ui.cli.prompt_list", return_value="Mark the workflow complete"),
     ):
         git = MagicMock()
         git.get_current_branch.return_value = "issue-211"
