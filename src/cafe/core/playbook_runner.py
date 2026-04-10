@@ -65,6 +65,11 @@ class PlaybookRunner:
         self.blackboard_store = BlackboardStore(issue_dir)
         self.blackboard = self.blackboard_store.load_or_create(self.start_step, playbook_id=self.playbook_id)
 
+    def _owner_for_step(self, step_name: str) -> str:
+        step_def = self.steps.get(step_name, {})
+        role = str(step_def.get("role", "")).strip()
+        return f"agent:{role}" if role else "agent"
+
     def _load_step_status_code(self, step_name: str) -> Optional[str]:
         status_file = self.issue_dir / step_name / "status.json"
         if not status_file.exists():
@@ -104,6 +109,7 @@ class PlaybookRunner:
                 },
             )
             self.blackboard_store.set_current_step(self.blackboard, next_step)
+            self.blackboard_store.set_owner(self.blackboard, self._owner_for_step(next_step))
             current_step = next_step
 
         return current_step
@@ -199,6 +205,7 @@ class PlaybookRunner:
                     "hop": hop_count,
                 },
             )
+            self.blackboard_store.set_owner(self.blackboard, self._owner_for_step(current_step))
             assignee_type = str(step_def.get("assignee_type", "agent"))
             if assignee_type != "agent":
                 raise RuntimeError(
@@ -282,6 +289,7 @@ class PlaybookRunner:
                         "reason": "awaiting_user_input",
                     },
                 )
+                self.blackboard_store.set_owner(self.blackboard, "user")
                 return PlaybookRunResult(
                     final_step=current_step,
                     final_status_code=status_code,
@@ -317,6 +325,7 @@ class PlaybookRunner:
                         "reason": "no_transition",
                     },
                 )
+                self.blackboard_store.set_owner(self.blackboard, "user")
                 return PlaybookRunResult(
                     final_step=current_step,
                     final_status_code=status_code,
@@ -342,6 +351,7 @@ class PlaybookRunner:
                         "reason": "external_handoff",
                     },
                 )
+                self.blackboard_store.set_owner(self.blackboard, "user")
                 return PlaybookRunResult(
                     final_step=current_step,
                     final_status_code=status_code,
@@ -367,6 +377,7 @@ class PlaybookRunner:
                 },
             )
             self.blackboard_store.set_current_step(self.blackboard, next_step)
+            self.blackboard_store.set_owner(self.blackboard, self._owner_for_step(next_step))
             current_step = next_step
 
         self.blackboard_store.record_event(
