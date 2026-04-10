@@ -76,6 +76,12 @@ class GenericPhase:
             lines.append("Do NOT return a status code until ALL checklist items are marked as [x].")
         if questions_xml_file is not None:
             lines.append(f"If clarification is needed, write questions.xml to: {questions_xml_file}")
+        if context and context.get("blackboard_path"):
+            lines.append(f"Shared workflow blackboard: {context['blackboard_path']}")
+        if context and context.get("next_step_path"):
+            lines.append(
+                f"If you need an explicit workflow handoff, write the next step name to: {context['next_step_path']}"
+            )
         if context and context.get("user_input"):
             lines.extend(["", "Current user input for this iteration:", context["user_input"]])
 

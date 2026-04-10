@@ -93,7 +93,8 @@ steps:
     valid_status_codes:
       - CAFE_CONFIRMED
       - CAFE_NEEDS_CHANGES
-    max_iterations: 5
+      - CAFE_NEED_CLARIFICATION
+    max_iterations: 3
     allowed_goto: [spec, develop, plan]
     hooks:
       prepare_input: [UserInputCollector]
@@ -101,6 +102,7 @@ steps:
     "on":
       CAFE_CONFIRMED: pr
       CAFE_NEEDS_CHANGES: develop
+      CAFE_NEED_CLARIFICATION: review
 
   pr:
     type: skill

@@ -33,7 +33,11 @@ def test_build_prompt_includes_files_and_checklist_guard(tmp_path: Path) -> None
     prompt = phase.build_prompt(
         skill_name="plan",
         skill_invocation="/plan",
-        context={"who": "team"},
+        context={
+            "who": "team",
+            "blackboard_path": ".cafe/issues/demo/blackboard.json",
+            "next_step_path": ".cafe/issues/demo/next_step.txt",
+        },
         output_file=Path("out.md"),
         checklist_file=Path("checklist.md"),
         questions_xml_file=Path("questions.xml"),
@@ -41,6 +45,8 @@ def test_build_prompt_includes_files_and_checklist_guard(tmp_path: Path) -> None
     assert "Skill: /plan" in prompt
     assert "Do NOT return a status code until ALL checklist items are marked as [x]." in prompt
     assert "questions.xml" in prompt
+    assert "blackboard.json" in prompt
+    assert "next_step.txt" in prompt
 
 
 def test_parse_response_extracts_status_and_goto(tmp_path: Path) -> None:
