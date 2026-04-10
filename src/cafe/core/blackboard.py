@@ -131,6 +131,7 @@ class BlackboardState:
     """Shared state across workflow steps."""
 
     current_step: str
+    playbook_id: str = "default"
     schema_version: int = BLACKBOARD_SCHEMA_VERSION
     artifacts: Dict[str, ArtifactEntry] = field(default_factory=dict)
     events: List[EventEntry] = field(default_factory=list)
@@ -141,6 +142,7 @@ class BlackboardState:
         return {
             "schema_version": self.schema_version,
             "current_step": self.current_step,
+            "playbook_id": self.playbook_id,
             "artifacts": {name: entry.to_dict() for name, entry in self.artifacts.items()},
             "events": [entry.to_dict() for entry in self.events],
             "decisions": [entry.to_dict() for entry in self.decisions],
@@ -167,6 +169,7 @@ class BlackboardState:
 
         return cls(
             current_step=str(data.get("current_step", initial_step)),
+            playbook_id=str(data.get("playbook_id", "default")),
             schema_version=int(data.get("schema_version", BLACKBOARD_SCHEMA_VERSION)),
             artifacts=artifacts,
             events=[EventEntry.from_dict(entry) for entry in data.get("events", [])],
@@ -182,12 +185,16 @@ class BlackboardStore:
         self.issue_dir = issue_dir
         self.file_path = issue_dir / BLACKBOARD_FILENAME
 
-    def load_or_create(self, initial_step: str) -> BlackboardState:
+    def load_or_create(self, initial_step: str, playbook_id: str = "default") -> BlackboardState:
         if self.file_path.exists():
             raw = json.loads(self.file_path.read_text(encoding="utf-8"))
-            return BlackboardState.from_dict(raw, initial_step=initial_step)
+            state = BlackboardState.from_dict(raw, initial_step=initial_step)
+            if not getattr(state, "playbook_id", None):
+                state.playbook_id = playbook_id
+                self.save(state)
+            return state
 
-        state = BlackboardState(current_step=initial_step)
+        state = BlackboardState(current_step=initial_step, playbook_id=playbook_id)
         self.save(state)
         return state
 

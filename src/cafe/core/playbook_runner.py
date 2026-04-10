@@ -9,7 +9,6 @@ from typing import Any, Callable, Dict, Optional
 
 from cafe.core.blackboard import BlackboardState, BlackboardStore
 from cafe.core.status_codes import PhaseStatusCode
-from cafe.core.workflow_instance import WorkflowInstance
 from cafe.phases.generic_phase import GenericPhase
 
 
@@ -65,12 +64,7 @@ class PlaybookRunner:
         self.start_step = str(playbook.get("entry_point") or next(iter(self.steps.keys())))
 
         self.blackboard_store = BlackboardStore(issue_dir)
-        self.blackboard = self.blackboard_store.load_or_create(self.start_step)
-        self.instance = WorkflowInstance.load_or_create(
-            issue_dir=issue_dir,
-            playbook_id=self.playbook_id,
-            initial_step=self.start_step,
-        )
+        self.blackboard = self.blackboard_store.load_or_create(self.start_step, playbook_id=self.playbook_id)
 
     def _load_step_status_code(self, step_name: str) -> Optional[str]:
         status_file = self.issue_dir / step_name / "status.json"
@@ -111,7 +105,6 @@ class PlaybookRunner:
                 },
             )
             self.blackboard_store.set_current_step(self.blackboard, next_step)
-            self.instance.transition_to(next_step, saved_status_code)
             current_step = next_step
 
         return current_step
@@ -170,7 +163,7 @@ class PlaybookRunner:
         start_step: Optional[str] = None,
         single_step: bool = False,
     ) -> PlaybookRunResult:
-        current_step = start_step or self.instance.current_step
+        current_step = start_step or self.blackboard.current_step
         if current_step not in self.steps:
             raise ValueError(f"Unknown playbook step '{current_step}'")
         if start_step is None:
@@ -302,7 +295,6 @@ class PlaybookRunner:
                 status_code=status_code,
             )
             if single_step:
-                self.instance.mark_completed(status_code)
                 self.blackboard_store.record_event(
                     self.blackboard,
                     "single_step_completed",
@@ -317,7 +309,6 @@ class PlaybookRunner:
                     completed=True,
                 )
             if next_step is None:
-                self.instance.mark_completed(status_code)
                 self.blackboard_store.record_event(
                     self.blackboard,
                     "workflow_completed",
@@ -333,7 +324,6 @@ class PlaybookRunner:
                     completed=True,
                 )
             if next_step not in self.steps:
-                self.instance.mark_completed(status_code)
                 self.blackboard_store.record_decision(
                     self.blackboard,
                     {
@@ -378,7 +368,6 @@ class PlaybookRunner:
                 },
             )
             self.blackboard_store.set_current_step(self.blackboard, next_step)
-            self.instance.transition_to(next_step, status_code)
             current_step = next_step
 
         self.blackboard_store.record_event(
