@@ -22,15 +22,14 @@ version: 1.0.0
 - Before you print a workflow handoff closing block, first update the shared blackboard directly.
 - Preserve valid JSON when editing the blackboard. Do not replace the whole file with prose.
 - Append a concise natural-language handoff event to `events`.
-- Use blackboard `owner` to show who owns the workflow after chat:
-  - If chat is handing work back to an agent phase, set `owner` to the matching `agent:<role>`.
-  - If chat concludes the workflow should wait for the user, set `owner` to `user`.
-  - If chat concludes the workflow is fully done, set `owner` to `done`.
-- If this chat decides the next responsible step, update `current_step` in the blackboard to match that baton.
-- Only write the next-step file when the next owner is an agent phase.
+- Use blackboard `current_step` to show where the workflow should go after chat.
+- If this chat decides the next responsible phase, update blackboard `current_step` to that phase.
+- If the workflow should wait for the user, set blackboard `current_step` to `user`.
+- If the workflow is fully complete, set blackboard `current_step` to `done`.
+- Write the same phase name into the provided next-step file when you want `cafe make` to consume it immediately.
 - The next-step file must contain only one valid workflow step name, with no explanation around it.
 - Choose the next responsible step after this chat. If you updated spec, hand off to planning. If you updated plan, hand off to development. If you updated code, hand off to review or the next downstream step allowed by the workflow.
-- If the correct outcome is "wait for the user", do not write a baton. Set `owner=user`, leave `current_step` on the relevant phase, and summarize why the workflow is waiting.
+- `user` and `done` are valid built-in handoff phases.
 - Do not send the user to phase-specific commands.
 - Only produce the required closing format when you are explicitly wrapping up the chat, summarizing completed work, or helping the user leave the session.
 - During normal back-and-forth conversation, answer naturally and do not append the closing format to every reply.

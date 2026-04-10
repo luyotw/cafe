@@ -17,9 +17,8 @@ Read your agent file: {agent_file}
 - 嚴格遵守 TDD，避免直接寫程式碼
 - 延續既有計畫格式與使用者需求
 - 若計畫仍需要 user 決定或補充資訊：
-  - 把 blackboard `owner` 改成 `user`
-  - 保留 `current_step=plan`
-  - 不要寫新的 next-step baton
+  - 把 blackboard `current_step` 改成 `user`
+  - 寫入 next-step baton，內容只放 `user`
 
 ## Output
 Write plan to: {output_file}

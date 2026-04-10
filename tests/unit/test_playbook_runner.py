@@ -224,7 +224,7 @@ def test_runner_pauses_when_step_needs_clarification(tmp_path: Path) -> None:
     pause_events = [event for event in blackboard.events if event.event_type == "workflow_paused"]
     assert pause_events
     assert pause_events[-1].data["status_code"] == "CAFE_NEED_CLARIFICATION"
-    assert blackboard.owner == "user"
+    assert blackboard.current_step == "user"
 
 
 def test_runner_transitions_when_develop_returns_no_changes_needed(tmp_path: Path) -> None:
@@ -268,7 +268,7 @@ def test_runner_transitions_when_develop_returns_no_changes_needed(tmp_path: Pat
     assert transition_events
     assert transition_events[0].data["from"] == "develop"
     assert transition_events[0].data["to"] == "review"
-    assert blackboard.owner == "user"
+    assert blackboard.current_step == "user"
 
 
 def test_runner_pauses_instead_of_failing_when_status_code_is_missing(tmp_path: Path) -> None:

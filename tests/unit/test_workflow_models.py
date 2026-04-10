@@ -12,14 +12,11 @@ def test_blackboard_load_or_create_persists_current_step_and_playbook(tmp_path: 
     state = store.load_or_create("spec", playbook_id="default")
     assert state.current_step == "spec"
     assert state.playbook_id == "default"
-    assert state.owner == "agent"
 
     store.set_current_step(state, "plan")
-    store.set_owner(state, "agent:developer")
     loaded = store.load_or_create("spec", playbook_id="default")
     assert loaded.current_step == "plan"
     assert loaded.playbook_id == "default"
-    assert loaded.owner == "agent:developer"
 
 
 def test_blackboard_store_records_artifacts_events_and_decisions(tmp_path: Path) -> None:
@@ -40,12 +37,10 @@ def test_blackboard_store_records_artifacts_events_and_decisions(tmp_path: Path)
     store.log_event(state, "spec", "step_completed", '"spec" updated', {"step": "spec"})
     store.record_decision(state, "spec", "transition", "advance to plan", "spec")
     store.set_current_step(state, "plan")
-    store.set_owner(state, "agent:developer")
     store.set_handoff_summary(state, "developer owns the next step")
 
     reloaded = store.load_or_create("spec")
     assert reloaded.current_step == "plan"
-    assert reloaded.owner == "agent:developer"
     assert reloaded.schema_version == 1
     assert reloaded.handoff_summary == "developer owns the next step"
     assert reloaded.artifacts["spec"].path == "spec/output.md"
