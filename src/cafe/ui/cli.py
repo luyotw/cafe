@@ -5575,56 +5575,7 @@ def workflow(
 
         playbook_loader = PlaybookLoader()
         playbook_data = playbook_loader.load(selected_playbook)
-        start_step = _consume_pending_chat_handoff(
-            issue_dir=issue_dir,
-            playbook_data=playbook_data,
-            requested_start_step=start_step,
-        )
-        if start_step is not None and start_step not in playbook_data["steps"] and start_step not in {"user", "done"}:
-            raise ValueError(f"Unknown playbook step '{start_step}'")
-        blackboard = BlackboardStore(issue_dir).load_or_create(
-            str(playbook_data.get("entry_point") or next(iter(playbook_data["steps"].keys()))),
-            playbook_id=str(playbook_data["playbook"]["id"]),
-        )
         interactive = sys.stdin.isatty() or os.getenv("CAFE_FORCE_INTERACTIVE") == "1"
-        if not dry_run and ((start_step is None and blackboard.current_step == "done") or start_step == "done"):
-            console.print("[green]Workflow already completed[/green]")
-            return
-        if (
-            not dry_run
-            and ((start_step is None and blackboard.current_step == "user") or start_step == "user")
-            and interactive
-        ):
-            if start_step == "user":
-                blackboard = BlackboardStore(issue_dir).load_or_create(
-                    str(playbook_data.get("entry_point") or next(iter(playbook_data["steps"].keys()))),
-                    playbook_id=str(playbook_data["playbook"]["id"]),
-                )
-            user_selected_step = _handle_user_phase(
-                issue_name=issue_name,
-                issue_dir=issue_dir,
-                playbook_data=playbook_data,
-                blackboard=blackboard,
-            )
-            if not user_selected_step:
-                return
-            start_step = user_selected_step
-            blackboard = BlackboardStore(issue_dir).load_or_create(
-                str(playbook_data.get("entry_point") or next(iter(playbook_data["steps"].keys()))),
-                playbook_id=str(playbook_data["playbook"]["id"]),
-            )
-        if (
-            not dry_run
-            and ((start_step is None and blackboard.current_step == "user") or start_step == "user")
-            and not interactive
-        ):
-            console.print("[yellow]Workflow is waiting for user input[/yellow] step=user")
-            return
-
-        effective_start_step = start_step or blackboard.current_step
-        console.print(
-            f"[dim]Workflow context[/dim] playbook={playbook_data['playbook']['id']} step={effective_start_step}"
-        )
         generic_phase = GenericPhase(SkillLoader())
 
         def dry_executor(step_name: str, step_def: Dict, blackboard_state: object) -> tuple[str, Dict[str, str]]:
@@ -5650,22 +5601,74 @@ def workflow(
             assert step_executor is not None
             return step_executor.execute_step(step_name, step_def, blackboard_state)
 
-        runner = PlaybookRunner(
-            issue_dir=issue_dir,
-            playbook=playbook_data,
-            generic_phase=generic_phase,
-            executor=wrapped_executor,
-        )
-        result = runner.run(start_step=start_step, single_step=single_step)
-        if result.completed:
-            console.print(
-                f"[green]Workflow completed[/green] step={result.final_step} status={result.final_status_code}"
+        pending_start_step = start_step
+        while True:
+            if dry_run:
+                pending_start_step = pending_start_step or str(
+                    playbook_data.get("entry_point") or next(iter(playbook_data["steps"].keys()))
+                )
+            else:
+                pending_start_step = _consume_pending_chat_handoff(
+                    issue_dir=issue_dir,
+                    playbook_data=playbook_data,
+                    requested_start_step=pending_start_step,
+                )
+            if pending_start_step is not None and pending_start_step not in playbook_data["steps"] and pending_start_step not in {"user", "done"}:
+                raise ValueError(f"Unknown playbook step '{pending_start_step}'")
+
+            blackboard = BlackboardStore(issue_dir).load_or_create(
+                str(playbook_data.get("entry_point") or next(iter(playbook_data["steps"].keys()))),
+                playbook_id=str(playbook_data["playbook"]["id"]),
             )
-        else:
+
+            active_step = pending_start_step or blackboard.current_step
+            if not dry_run and active_step == "done":
+                console.print("[green]Workflow already completed[/green] step=done")
+                return
+            if not dry_run and active_step == "user":
+                if not interactive:
+                    console.print("[yellow]Workflow is waiting for user input[/yellow] step=user")
+                    return
+                user_selected_step = _handle_user_phase(
+                    issue_name=issue_name,
+                    issue_dir=issue_dir,
+                    playbook_data=playbook_data,
+                    blackboard=blackboard,
+                )
+                if not user_selected_step:
+                    return
+                pending_start_step = user_selected_step
+                continue
+
+            effective_start_step = active_step
             console.print(
-                f"[yellow]Workflow paused[/yellow] step={result.final_step} status={result.final_status_code}"
+                f"[dim]Workflow context[/dim] playbook={playbook_data['playbook']['id']} step={effective_start_step}"
             )
-            console.print("[dim]Resolve the requested input, then run cafe make again to resume.[/dim]")
+
+            runner = PlaybookRunner(
+                issue_dir=issue_dir,
+                playbook=playbook_data,
+                generic_phase=generic_phase,
+                executor=wrapped_executor,
+            )
+            result = runner.run(start_step=effective_start_step, single_step=single_step)
+            latest_blackboard = BlackboardStore(issue_dir).load_or_create(
+                str(playbook_data.get("entry_point") or next(iter(playbook_data["steps"].keys()))),
+                playbook_id=str(playbook_data["playbook"]["id"]),
+            )
+            if not dry_run and not single_step and latest_blackboard.current_step == "user":
+                pending_start_step = "user"
+                continue
+            if result.completed:
+                console.print(
+                    f"[green]Workflow completed[/green] step={result.final_step} status={result.final_status_code} next={latest_blackboard.current_step}"
+                )
+            else:
+                console.print(
+                    f"[yellow]Workflow paused[/yellow] step={result.final_step} status={result.final_status_code} next={latest_blackboard.current_step}"
+                )
+                console.print("[dim]Resolve the requested input, then run cafe make again to resume.[/dim]")
+            return
     except Exception as e:
         console.print(f"[red]Error: workflow run failed: {e}[/red]")
         raise typer.Exit(1)
