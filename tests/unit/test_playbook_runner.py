@@ -226,7 +226,7 @@ def test_runner_pauses_when_step_needs_clarification(tmp_path: Path) -> None:
     assert pause_events[-1].data["status_code"] == "CAFE_NEED_CLARIFICATION"
 
 
-def test_runner_pauses_when_develop_returns_no_changes_needed(tmp_path: Path) -> None:
+def test_runner_transitions_when_develop_returns_no_changes_needed(tmp_path: Path) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "demo"
     playbook = {
         "playbook": {"id": "default"},
@@ -235,13 +235,21 @@ def test_runner_pauses_when_develop_returns_no_changes_needed(tmp_path: Path) ->
                 "skill": "spec_first",
                 "role": "developer",
                 "valid_status_codes": ["CAFE_NO_CHANGES_NEEDED"],
-                "on": {"CAFE_NO_CHANGES_NEEDED": "develop"},
+                "on": {"CAFE_NO_CHANGES_NEEDED": "review"},
+            },
+            "review": {
+                "skill": "spec_first",
+                "role": "reviewer",
+                "valid_status_codes": ["CAFE_CONFIRMED"],
+                "on": {"CAFE_CONFIRMED": "_done"},
             }
         },
     }
 
     def executor(step_name: str, step_def: dict, state: object) -> tuple[str, dict[str, str]]:
-        return ("CAFE_NO_CHANGES_NEEDED", {})
+        if step_name == "develop":
+            return ("CAFE_NO_CHANGES_NEEDED", {})
+        return ("CAFE_CONFIRMED", {})
 
     runner = PlaybookRunner(
         issue_dir=issue_dir,
@@ -251,13 +259,14 @@ def test_runner_pauses_when_develop_returns_no_changes_needed(tmp_path: Path) ->
     )
     result = runner.run(max_transitions=5)
 
-    assert result.completed is False
-    assert result.final_step == "develop"
-    assert result.final_status_code == "CAFE_NO_CHANGES_NEEDED"
+    assert result.completed is True
+    assert result.final_step == "review"
+    assert result.final_status_code == "CAFE_CONFIRMED"
     blackboard = BlackboardStore(issue_dir).load_or_create("develop")
-    pause_events = [event for event in blackboard.events if event.event_type == "workflow_paused"]
-    assert pause_events
-    assert pause_events[-1].data["status_code"] == "CAFE_NO_CHANGES_NEEDED"
+    transition_events = [event for event in blackboard.events if event.event_type == "transition"]
+    assert transition_events
+    assert transition_events[0].data["from"] == "develop"
+    assert transition_events[0].data["to"] == "review"
 
 
 def test_runner_pauses_instead_of_failing_when_status_code_is_missing(tmp_path: Path) -> None:

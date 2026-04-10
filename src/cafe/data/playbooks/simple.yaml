@@ -57,7 +57,7 @@ steps:
       CAFE_CONFIRMED_SKIP_REVIEW: pr
       CAFE_NEED_CLARIFICATION: develop
       CAFE_NEED_PERMISSION: develop
-      CAFE_NO_CHANGES_NEEDED: develop
+      CAFE_NO_CHANGES_NEEDED: pr
 
   pr:
     type: skill
