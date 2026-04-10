@@ -91,6 +91,11 @@ def test_workflow_command_runs_execute_mode(tmp_path: Path, monkeypatch) -> None
         assert result.exit_code == 0
         assert "Workflow context" in result.stdout
         assert "playbook=default step=spec" in result.stdout
+        assert "Executing step=spec iteration=001" in result.stdout
+        assert "Executing step=plan iteration=001" in result.stdout
+        assert "Executing step=develop iteration=001" in result.stdout
+        assert "Executing step=review iteration=001" in result.stdout
+        assert "Executing step=pr iteration=001" in result.stdout
         assert "Workflow completed" in result.stdout
         assert mock_builder.called
         assert executed_steps == ["spec", "plan", "develop", "review", "pr"]
@@ -136,6 +141,7 @@ def test_workflow_command_consumes_chat_baton_before_execution(tmp_path: Path, m
 
     assert "Workflow context" in result.stdout
     assert "playbook=default step=plan" in result.stdout
+    assert "Executing step=plan iteration=001" in result.stdout
     assert executed_steps == ["plan", "develop", "review", "pr"]
     assert not next_step_file.exists()
     blackboard_data = json.loads((issue_dir / "blackboard.json").read_text(encoding="utf-8"))

@@ -5479,6 +5479,17 @@ def workflow(
 ) -> None:
     """Run playbook workflow using the new generic runner."""
     try:
+        def _predict_next_iteration(issue_root: Path, step_name: str) -> int:
+            step_dir = issue_root / step_name
+            iteration_dirs = sorted(path for path in step_dir.glob("iteration_*") if path.is_dir())
+            if not iteration_dirs:
+                return 1
+            last_dir = iteration_dirs[-1]
+            try:
+                return int(last_dir.name.split("_", 1)[1]) + 1
+            except (IndexError, ValueError):
+                return len(iteration_dirs) + 1
+
         git = GitOperations()
         issue_name = issue or git.get_current_branch()
         issue_dir = Path(".cafe/issues") / issue_name
@@ -5529,11 +5540,19 @@ def workflow(
             interactive=(sys.stdin.isatty() or os.getenv("CAFE_FORCE_INTERACTIVE") == "1"),
         )
 
+        def wrapped_executor(step_name: str, step_def: Dict, blackboard_state: object) -> Any:
+            iteration = _predict_next_iteration(issue_dir, step_name)
+            console.print(f"[dim]Executing[/dim] step={step_name} iteration={iteration:03d}")
+            if dry_run:
+                return dry_executor(step_name, step_def, blackboard_state)
+            assert step_executor is not None
+            return step_executor.execute_step(step_name, step_def, blackboard_state)
+
         runner = PlaybookRunner(
             issue_dir=issue_dir,
             playbook=playbook_data,
             generic_phase=generic_phase,
-            executor=dry_executor if dry_run else step_executor.execute_step,
+            executor=wrapped_executor,
         )
         result = runner.run(start_step=start_step, single_step=single_step)
         if result.completed:
