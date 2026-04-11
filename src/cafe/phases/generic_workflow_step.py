@@ -26,6 +26,8 @@ from cafe.utils.git_utils import to_cwd_relative_path
 class GenericWorkflowStepExecutor(Phase):
     """Execute one playbook step without shelling out to legacy CLI commands."""
 
+    SHARED_WORKFLOW_SKILLS = ["workflow-common"]
+
     def __init__(
         self,
         *,
@@ -83,10 +85,11 @@ class GenericWorkflowStepExecutor(Phase):
         valid_status_codes = self._resolve_valid_status_codes(step_def)
         agent_name = self._resolve_agent_name(step_def)
         agent_cli = self.agent_manager.get_agent(agent_name).config.cli
-        skill_invocation = self.generic_phase.prepare_skill(
-            skill_name=skill_name,
+        shared_skill_invocations = self.generic_phase.prepare_skills(
+            skill_names=self.SHARED_WORKFLOW_SKILLS,
             agent_cli=agent_cli,
         )
+        skill_invocation = self.generic_phase.prepare_skill(skill_name=skill_name, agent_cli=agent_cli)
         context = self._build_context(
             step_name=step_name,
             step_def=step_def,
@@ -131,6 +134,7 @@ class GenericWorkflowStepExecutor(Phase):
             step_def=step_def,
             agent_executor=run_agent,
             skill_invocation=skill_invocation,
+            shared_skill_invocations=shared_skill_invocations,
             context=context,
             output_file=output_file,
             checklist_file=checklist_file,

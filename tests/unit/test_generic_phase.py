@@ -13,12 +13,18 @@ from cafe.skills.native_bridge import NativeSkillBridge
 
 
 def _setup_loader(tmp_path: Path) -> SkillLoader:
-    builtin = tmp_path / "builtin" / "skills" / "plan"
-    builtin.mkdir(parents=True, exist_ok=True)
-    (builtin / "SKILL.md").write_text(
-        "---\nname: plan\ndescription: desc\n---\n\nHello {who}\n",
-        encoding="utf-8",
-    )
+    skill_root = tmp_path / "builtin" / "skills"
+    for name, body in {
+        "plan": "Hello {who}\n",
+        "workflow-common": "Read blackboard first.\n",
+        "review": "Review the latest changes.\n",
+    }.items():
+        builtin = skill_root / name
+        builtin.mkdir(parents=True, exist_ok=True)
+        (builtin / "SKILL.md").write_text(
+            f"---\nname: {name}\ndescription: desc\n---\n\n{body}",
+            encoding="utf-8",
+        )
     loader = SkillLoader(
         project_root=tmp_path / "project",
         global_root=tmp_path / "global",
@@ -33,6 +39,7 @@ def test_build_prompt_includes_files_and_checklist_guard(tmp_path: Path) -> None
     prompt = phase.build_prompt(
         skill_name="plan",
         skill_invocation="/plan",
+        shared_skill_invocations=["/workflow-common"],
         context={
             "who": "team",
             "blackboard_path": ".cafe/issues/demo/blackboard.json",
@@ -42,7 +49,9 @@ def test_build_prompt_includes_files_and_checklist_guard(tmp_path: Path) -> None
         checklist_file=Path("checklist.md"),
         questions_xml_file=Path("questions.xml"),
     )
-    assert "Skill: /plan" in prompt
+    assert "Shared skills:" in prompt
+    assert "/workflow-common" in prompt
+    assert "Phase skill: /plan" in prompt
     assert "Do NOT return a status code until ALL checklist items are marked as [x]." in prompt
     assert "questions.xml" in prompt
     assert "blackboard.json" in prompt
@@ -129,6 +138,7 @@ def test_execute_short_circuits_when_before_execute_stops(tmp_path: Path) -> Non
     result = phase.execute(
         skill_name="plan",
         skill_invocation="/plan",
+        shared_skill_invocations=["/workflow-common"],
         step_def={
             "hooks": {"before_execute": ["StopHook"]},
             "valid_status_codes": ["CAFE_NEED_CLARIFICATION"],
@@ -153,6 +163,7 @@ def test_execute_runs_prepare_input_and_after_execute_retry(tmp_path: Path) -> N
     result = phase.execute(
         skill_name="plan",
         skill_invocation="/plan",
+        shared_skill_invocations=["/workflow-common"],
         step_def={
             "hooks": {
                 "prepare_input": ["PrepareHook"],
@@ -164,8 +175,10 @@ def test_execute_runs_prepare_input_and_after_execute_retry(tmp_path: Path) -> N
     )
 
     assert len(prompts) == 2
-    assert "Skill: /plan" in prompts[0]
-    assert "Skill: /plan" in prompts[1]
+    assert "Shared skills:" in prompts[0]
+    assert "Phase skill: /plan" in prompts[0]
+    assert "Shared skills:" in prompts[1]
+    assert "Phase skill: /plan" in prompts[1]
     assert result.status_code == PhaseStatusCode.CONFIRMED
 
 
@@ -178,6 +191,7 @@ def test_execute_skips_publish_when_artifact_not_ready(tmp_path: Path) -> None:
     result = phase.execute(
         skill_name="plan",
         skill_invocation="/plan",
+        shared_skill_invocations=["/workflow-common"],
         step_def={
             "hooks": {
                 "after_execute": ["NoArtifactHook"],
@@ -202,6 +216,7 @@ def test_execute_applies_publish_output_status_override(tmp_path: Path) -> None:
     result = phase.execute(
         skill_name="plan",
         skill_invocation="/plan",
+        shared_skill_invocations=["/workflow-common"],
         step_def={
             "hooks": {
                 "publish_output": ["PublishOverrideHook"],
@@ -230,6 +245,27 @@ def test_prepare_skill_installs_skill_and_returns_cli_invocation(tmp_path: Path)
 
     assert invocation == "$cafe-plan"
     assert (project_root / ".codex" / "skills" / "cafe-plan" / "SKILL.md").exists()
+
+
+def test_prepare_skills_installs_shared_and_phase_skills(tmp_path: Path) -> None:
+    loader = _setup_loader(tmp_path)
+    project_root = tmp_path / "project"
+    project_root.mkdir(parents=True, exist_ok=True)
+    bridge = NativeSkillBridge(
+        loader,
+        project_root=project_root,
+        home_dir=tmp_path / "home",
+    )
+    phase = GenericPhase(loader, skill_bridge=bridge)
+
+    invocations = phase.prepare_skills(
+        skill_names=["workflow-common", "review"],
+        agent_cli=AgentCLI.CODEX,
+    )
+
+    assert invocations == ["$cafe-workflow-common", "$cafe-review"]
+    assert (project_root / ".codex" / "skills" / "cafe-workflow-common" / "SKILL.md").exists()
+    assert (project_root / ".codex" / "skills" / "cafe-review" / "SKILL.md").exists()
 
 
 def test_native_skill_bridge_keeps_global_dir_separate(tmp_path: Path) -> None:

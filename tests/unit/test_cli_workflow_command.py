@@ -219,12 +219,13 @@ def test_workflow_command_user_owner_can_set_next_phase(tmp_path: Path, monkeypa
         patch(
             "cafe.ui.cli.prompt_list",
             side_effect=[
-                "Leave a note and send the workflow to the next phase",
+                "Leave a handoff note and continue the workflow",
                 "Continue implementation (develop)",
                 "Mark the workflow complete",
             ],
         ),
         patch("cafe.ui.cli.prompt_multiline", return_value="Please continue implementation with the new handoff context."),
+        patch("cafe.ui.cli.prompt_confirm", return_value=True),
     ):
         git = MagicMock()
         git.get_current_branch.return_value = "issue-207"
