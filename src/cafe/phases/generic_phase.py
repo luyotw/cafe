@@ -50,24 +50,37 @@ class GenericPhase:
             self.hook_registry.update(hook_registry)
 
     def prepare_skill(self, *, skill_name: str, agent_cli: AgentCLI) -> str:
-        """Install a skill for the target CLI and return its invocation syntax."""
+        """Install one skill for the target CLI and return its invocation syntax."""
         self.skill_bridge.install_skill(skill_name, agent_cli)
         return self.skill_bridge.get_invocation(skill_name, agent_cli)
+
+    def prepare_skills(self, *, skill_names: list[str], agent_cli: AgentCLI) -> list[str]:
+        """Install a list of skills for the target CLI and return invocation syntax."""
+        self.skill_bridge.install_skills(skill_names, agent_cli)
+        return [self.skill_bridge.get_invocation(name, agent_cli) for name in skill_names]
 
     def build_prompt(
         self,
         *,
         skill_name: str,
         skill_invocation: str,
+        shared_skill_invocations: Optional[List[str]] = None,
         context: Optional[Dict[str, str]] = None,
         output_file: Optional[Path] = None,
         checklist_file: Optional[Path] = None,
         questions_xml_file: Optional[Path] = None,
     ) -> str:
-        lines = [
-            f"Skill: {skill_invocation}",
-            "",
-        ]
+        lines = []
+        if shared_skill_invocations:
+            lines.append("Shared skills:")
+            lines.extend(f"- {invocation}" for invocation in shared_skill_invocations)
+            lines.append("")
+        lines.extend(
+            [
+                f"Phase skill: {skill_invocation}",
+                "",
+            ]
+        )
 
         if output_file is not None:
             lines.append(f"Write output to: {output_file}")
@@ -126,6 +139,7 @@ class GenericPhase:
         step_def: Dict[str, Any],
         agent_executor: AgentExecutor,
         skill_invocation: str,
+        shared_skill_invocations: Optional[List[str]] = None,
         context: Optional[Dict[str, str]] = None,
         output_file: Optional[Path] = None,
         checklist_file: Optional[Path] = None,
@@ -188,6 +202,7 @@ class GenericPhase:
             prompt = self.build_prompt(
                 skill_name=skill_name,
                 skill_invocation=skill_invocation,
+                shared_skill_invocations=shared_skill_invocations,
                 context=runtime_context,
                 output_file=output_file,
                 checklist_file=checklist_file,

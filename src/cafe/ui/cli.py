@@ -294,15 +294,15 @@ def _handle_user_phase(
     action = prompt_list(
         "Select next action",
         [
-            "Leave a note and send the workflow to the next phase",
+            "Leave a handoff note and continue the workflow",
             "Open chat with a role",
             "Mark the workflow complete",
-            "Exit for now",
+            "Leave it for now",
         ],
     )
     store = BlackboardStore(issue_dir)
 
-    if action == "Leave a note and send the workflow to the next phase":
+    if action == "Leave a handoff note and continue the workflow":
         note = prompt_multiline(
             "What should be written to the blackboard before continuing?",
             default=summary,
@@ -323,6 +323,14 @@ def _handle_user_phase(
             default=default_label,
         )
         target_step = step_names[step_labels.index(selected_label)]
+        console.print()
+        console.print("[bold]Handoff summary[/bold]")
+        console.print(f"  Next phase: {selected_label}")
+        console.print(f"  Note: {note}")
+        console.print()
+        if not prompt_confirm("Write this handoff to the blackboard and continue now?"):
+            console.print("[dim]No workflow action taken.[/dim]")
+            return ""
         store.set_current_step(blackboard, target_step)
         store.set_handoff_summary(blackboard, note)
         store.record_event(

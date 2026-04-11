@@ -57,6 +57,8 @@ def _build_loader(tmp_path: Path) -> GenericPhase:
     for name, body in {
         "spec_first": "## Role\nRead your agent file: {agent_file}\n\n## Context\n{blackboard_digest}\n",
         "plan": "Write plan to: {output_file}\n\n{status_code_instruction}\n",
+        "workflow-common": "Read blackboard first.\n",
+        "review": "Review the latest changes.\n",
     }.items():
         skill_dir = skill_root / name
         skill_dir.mkdir(parents=True, exist_ok=True)
@@ -172,6 +174,50 @@ def test_generic_workflow_step_executor_uses_iteration_specific_skill_mapping(tm
     executor.execute_step("spec", playbook["steps"]["spec"], state)
 
     assert generic_phase.skill_names == ["plan"]
+
+
+def test_generic_workflow_step_executor_installs_workflow_common_and_phase_skill(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-review-skill"
+    playbook = {
+        "playbook": {"id": "default"},
+        "roles": {"reviewer": {"default_agent": "Richard"}},
+        "steps": {
+            "review": {
+                "skill": "review",
+                "role": "reviewer",
+                "output_artifact": "review_feedback",
+                "allowed_tools": ["Read"],
+                "valid_status_codes": ["CAFE_CONFIRMED"],
+                "on": {"CAFE_CONFIRMED": "_done"},
+            }
+        },
+    }
+    state = BlackboardStore(issue_dir).load_or_create("review")
+    spec_file = issue_dir / "spec" / "iteration_001" / "output.md"
+    plan_file = issue_dir / "plan" / "iteration_001" / "output.md"
+    spec_file.parent.mkdir(parents=True, exist_ok=True)
+    plan_file.parent.mkdir(parents=True, exist_ok=True)
+    spec_file.write_text("# Spec\n", encoding="utf-8")
+    plan_file.write_text("# Plan\n", encoding="utf-8")
+    store = BlackboardStore(issue_dir)
+    store.set_artifact(state, "spec", str(spec_file))
+    store.set_artifact(state, "plan", str(plan_file))
+    generic_phase = _build_loader(tmp_path)
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="issue-review-skill",
+        playbook=playbook,
+        generic_phase=generic_phase,
+        agent_manager=FakeAgentManager("CAFE_CONFIRMED"),
+        git_ops=FakeGitOperations(),
+        role_agent_map={"reviewer": "Richard"},
+    )
+
+    executor.execute_step("review", playbook["steps"]["review"], state)
+
+    assert (tmp_path / ".codex" / "skills" / "cafe-workflow-common" / "SKILL.md").exists()
+    assert (tmp_path / ".codex" / "skills" / "cafe-review" / "SKILL.md").exists()
 
 
 def test_generic_workflow_step_collects_clarification_before_next_agent_run(
