@@ -345,7 +345,9 @@ class AgentExecutor:
             session_error_phrases = [
                 "no conversation found",
                 "session not found",
-                "conversation does not exist"
+                "conversation does not exist",
+                "thread/resume failed",
+                "no rollout found",
             ]
 
             # Check for prompt too long error
