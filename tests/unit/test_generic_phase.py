@@ -54,13 +54,17 @@ def test_build_prompt_includes_files_and_checklist_guard(tmp_path: Path) -> None
     assert "Shared skills:" in prompt
     assert "/workflow-common" in prompt
     assert "Phase skill: /plan" in prompt
+    assert "Runtime files:" in prompt
+    assert "output_file=out.md" in prompt
+    assert "checklist_file=checklist.md" in prompt
+    assert "questions_file=questions.xml" in prompt
+    assert "blackboard_file=.cafe/issues/demo/blackboard.json" in prompt
+    assert "next_step_file=.cafe/issues/demo/next_step.txt" in prompt
+    assert "Runtime context:" in prompt
     assert "Do NOT return a status code until ALL checklist items are marked as [x]." in prompt
-    assert "questions.xml" in prompt
-    assert "blackboard.json" in prompt
     assert "Latest workflow handoff from blackboard:" in prompt
     assert "Implement cafe skill rm" in prompt
     assert "Blackboard digest:" in prompt
-    assert "next_step.txt" in prompt
 
 
 def test_parse_response_extracts_status_and_goto(tmp_path: Path) -> None:
