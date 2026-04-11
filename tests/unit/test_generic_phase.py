@@ -43,6 +43,8 @@ def test_build_prompt_includes_files_and_checklist_guard(tmp_path: Path) -> None
         context={
             "who": "team",
             "blackboard_path": ".cafe/issues/demo/blackboard.json",
+            "handoff_summary": "Implement cafe skill rm with interactive multi-select and confirmation.",
+            "blackboard_digest": "## Blackboard\n- latest user request",
             "next_step_path": ".cafe/issues/demo/next_step.txt",
         },
         output_file=Path("out.md"),
@@ -55,6 +57,9 @@ def test_build_prompt_includes_files_and_checklist_guard(tmp_path: Path) -> None
     assert "Do NOT return a status code until ALL checklist items are marked as [x]." in prompt
     assert "questions.xml" in prompt
     assert "blackboard.json" in prompt
+    assert "Latest workflow handoff from blackboard:" in prompt
+    assert "Implement cafe skill rm" in prompt
+    assert "Blackboard digest:" in prompt
     assert "next_step.txt" in prompt
 
 

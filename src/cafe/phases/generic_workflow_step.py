@@ -262,6 +262,7 @@ class GenericWorkflowStepExecutor(Phase):
         role_dir = {"pm": "pm", "reviewer": "reviewer"}.get(role, "developer")
         context = {
             "agent_file": AgentManager.get_agent_file_path(agent_name, role_dir),
+            "handoff_summary": getattr(blackboard_state, "handoff_summary", ""),
             "blackboard_digest": BlackboardStore(self.issue_dir).generate_digest(
                 blackboard_state,
                 for_step=step_name,
