@@ -4,6 +4,7 @@ from collections.abc import Iterator
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
+import pytest
 
 from cafe.core.blackboard import BlackboardStore
 from cafe.core.types import AgentCLI, TokenUsage
@@ -11,6 +12,7 @@ from cafe.phases.generic_phase import GenericPhase
 from cafe.phases.generic_workflow_step import GenericWorkflowStepExecutor
 from cafe.skills.loader import SkillLoader
 from cafe.skills.native_bridge import NativeSkillBridge
+from cafe.agents.executor import AgentExecutionError
 
 
 class FakeAgentManager:
@@ -57,6 +59,7 @@ def _build_loader(tmp_path: Path) -> GenericPhase:
     for name, body in {
         "spec_first": "## Role\nRead your agent file: {agent_file}\n\n## Context\n{blackboard_digest}\n",
         "plan": "Write plan to: {output_file}\n\n{status_code_instruction}\n",
+        "develop": "Implement the current request.\n",
         "workflow-common": "Read blackboard first.\n",
         "review": "Review the latest changes.\n",
     }.items():
@@ -429,3 +432,50 @@ def test_generic_workflow_step_allows_missing_status_code(tmp_path: Path, monkey
     assert result.status_code is None
     context_data = (issue_dir / "spec" / "iteration_001" / "context.json").read_text(encoding="utf-8")
     assert '"status_code": null' in context_data
+
+
+def test_generic_workflow_step_does_not_recover_from_unchanged_output(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-stale-output"
+    playbook = {
+        "playbook": {"id": "default"},
+        "roles": {"developer": {"default_agent": "David"}},
+        "steps": {
+            "develop": {
+                "skill": "develop",
+                "role": "developer",
+                "output_artifact": "code",
+                "allowed_tools": ["Read"],
+                "valid_status_codes": ["CAFE_CONFIRMED", "CAFE_NO_CHANGES_NEEDED"],
+                "on": {"CAFE_CONFIRMED": "review", "CAFE_NO_CHANGES_NEEDED": "review"},
+            }
+        },
+    }
+
+    class FailingAgentManager(FakeAgentManager):
+        def execute(self, *args, **kwargs):
+            raise AgentExecutionError("Codex execution failed: thread/resume failed")
+
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("develop")
+    spec_file = issue_dir / "spec" / "iteration_001" / "output.md"
+    plan_file = issue_dir / "plan" / "iteration_001" / "output.md"
+    spec_file.parent.mkdir(parents=True, exist_ok=True)
+    plan_file.parent.mkdir(parents=True, exist_ok=True)
+    spec_file.write_text("# Spec\n", encoding="utf-8")
+    plan_file.write_text("# Plan\n", encoding="utf-8")
+    store.set_artifact(state, "spec", str(spec_file))
+    store.set_artifact(state, "plan", str(plan_file))
+
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="issue-stale-output",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=FailingAgentManager("unused"),
+        git_ops=FakeGitOperations(),
+        role_agent_map={"developer": "David"},
+    )
+
+    with pytest.raises(AgentExecutionError):
+        executor.execute_step("develop", playbook["steps"]["develop"], state)
