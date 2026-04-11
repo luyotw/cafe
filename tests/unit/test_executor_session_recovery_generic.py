@@ -115,6 +115,54 @@ class TestGenericSessionRecovery:
         # Copilot 會自動偵測新 session
         assert call_count[0] == 2
 
+    def test_codex_thread_resume_failure_triggers_session_recovery(self):
+        """Codex thread/resume no rollout errors should create a fresh session."""
+        config = AgentConfig(
+            name="TestAgent",
+            cli=AgentCLI.CODEX,
+            session_id="old-codex-thread",
+        )
+        executor = AgentExecutor(config)
+
+        call_count = [0]
+
+        def mock_popen(*args, **kwargs):
+            call_count[0] += 1
+            mock_proc = MagicMock()
+
+            if call_count[0] == 1:
+                mock_proc.stdout.readline.side_effect = [""]
+                mock_proc.stderr = MagicMock()
+                mock_proc.stderr.read.return_value = (
+                    "Error: thread/resume: thread/resume failed: "
+                    "no rollout found for thread id old-codex-thread"
+                )
+                mock_proc.wait.return_value = 1
+            else:
+                mock_proc.stdout.readline.side_effect = [
+                    '{"type":"item.completed","item":{"type":"agent_message","text":"Recovered"}}\n',
+                    "",
+                ]
+                mock_proc.stderr = MagicMock()
+                mock_proc.stderr.read.return_value = ""
+                mock_proc.wait.return_value = 0
+
+            return mock_proc
+
+        with patch("subprocess.Popen", side_effect=mock_popen):
+            with patch("subprocess.run") as mock_run:
+                mock_run.return_value = MagicMock(
+                    returncode=0,
+                    stdout='{"type":"thread.started","thread_id":"new-codex-thread"}',
+                    stderr="",
+                )
+                with patch("sys.platform", "win32"):
+                    response = executor.execute("Test prompt")
+
+        assert response.response == "Recovered"
+        assert executor.config.session_id == "new-codex-thread"
+        assert call_count[0] == 2
+
 
     def test_non_session_error_still_raises(self):
         """測試非 session 錯誤仍然正常拋出"""
