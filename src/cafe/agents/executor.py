@@ -182,6 +182,7 @@ class AgentExecutor:
 
             # Build command using strategy
             cmd = cli_strategy.build_command(prompt, cli_translated_tools, allowed_directories)
+            env = cli_strategy.build_environment()
 
             # Execute with streaming
             if self.config.cli == AgentCLI.COPILOT:
@@ -230,6 +231,7 @@ class AgentExecutor:
                     parse_stream_json=parse_stream_json,
                     json_content_extractor=json_content_extractor,
                     streaming_output_file=streaming_output_file,
+                    env=env,
                 )
             else:
                 # Only use response parser for stream-json formats
@@ -254,6 +256,7 @@ class AgentExecutor:
                     parse_stream_json=parse_stream_json,
                     json_content_extractor=json_content_extractor,
                     streaming_output_file=streaming_output_file,
+                    env=env,
                 )
 
             # Extract session ID if needed
@@ -535,6 +538,7 @@ class AgentExecutor:
         self,
         cmd: List[str],
         cli_name: str,
+        env: Optional[dict[str, str]] = None,
         response_parser: Optional[Callable[[List[str]], AgentResponse]] = None,
         parse_stream_json: bool = False,
         json_content_extractor: Optional[Callable[[dict], Optional[str]]] = None,
@@ -565,6 +569,7 @@ class AgentExecutor:
                 stdin=subprocess.DEVNULL,  # Close stdin to prevent CLI from waiting for input
                 text=True,
                 bufsize=1,  # Line buffered
+                env=env,
             )
         except FileNotFoundError as e:
             # CLI command not found - provide user-friendly error

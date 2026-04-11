@@ -1,5 +1,6 @@
 """Tests for AgentExecutor."""
 
+from pathlib import Path
 import pytest
 from unittest.mock import MagicMock, patch
 
@@ -143,6 +144,24 @@ class TestCodexPermissionExtraction:
         assert len(denials) == 1
         assert denials[0].tool_name == "Bash"
         assert denials[0].tool_input["command"].startswith("git add src/cafe/ui/cli.py")
+
+    def test_codex_exec_uses_repo_local_codex_home(self) -> None:
+        """Codex executions should point at the repo-local .codex directory."""
+        config = AgentConfig(name="Nick", cli=AgentCLI.CODEX)
+        executor = AgentExecutor(config)
+
+        mock_process = MagicMock()
+        mock_process.stdout.readline.side_effect = [
+            '{"type":"item.completed","item":{"type":"agent_message","text":"done"}}\n',
+            "",
+        ]
+        mock_process.stderr.read.return_value = ""
+        mock_process.wait.return_value = 0
+
+        with patch("subprocess.Popen", return_value=mock_process) as mock_popen, patch("sys.platform", "win32"):
+            executor.execute("Test prompt")
+
+        assert mock_popen.call_args.kwargs["env"]["CODEX_HOME"] == str(Path.cwd().resolve() / ".codex")
 
 
 class TestTokenUsageTracking:

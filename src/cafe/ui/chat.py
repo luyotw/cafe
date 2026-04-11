@@ -191,6 +191,7 @@ def launch_chat_session(role: str, issue_name: str) -> int:
     except Exception as e:
         print(f"\n⚠️  Failed to get agent '{agent_name}': {e}. Skipping chat.\n")
         return 0
+    cli_strategy = executor._get_cli_strategy()
 
     issue_dir = Path.cwd() / ".cafe" / "issues" / issue_name
     current_step, valid_steps, playbook_id = _prepare_chat_handoff_state(issue_dir)
@@ -235,7 +236,7 @@ def launch_chat_session(role: str, issue_name: str) -> int:
 
     # Execute interactive CLI (blocks until user exits)
     try:
-        result = subprocess.run(cli_command)
+        result = subprocess.run(cli_command, env=cli_strategy.build_environment())
     except FileNotFoundError:
         print(f"\n⚠️  CLI tool '{agent_cli_str}' not found. Please install it first.\n")
         return 1
