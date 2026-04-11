@@ -71,6 +71,9 @@ class GenericPhase:
         questions_xml_file: Optional[Path] = None,
     ) -> str:
         lines = []
+        runtime_files: list[str] = []
+        runtime_context: list[str] = []
+
         if shared_skill_invocations:
             lines.append("Shared skills:")
             lines.extend(f"- {invocation}" for invocation in shared_skill_invocations)
@@ -83,31 +86,41 @@ class GenericPhase:
         )
 
         if output_file is not None:
-            lines.append(f"Write output to: {output_file}")
+            runtime_files.append(f"output_file={output_file}")
         if checklist_file is not None:
-            lines.append(f"Mark checklist items in: {checklist_file}")
-            lines.append("Do NOT return a status code until ALL checklist items are marked as [x].")
+            runtime_files.append(f"checklist_file={checklist_file}")
         if questions_xml_file is not None:
-            lines.append(f"If clarification is needed, write questions.xml to: {questions_xml_file}")
+            runtime_files.append(f"questions_file={questions_xml_file}")
         if context and context.get("blackboard_path"):
-            lines.append(f"Shared workflow blackboard: {context['blackboard_path']}")
+            runtime_files.append(f"blackboard_file={context['blackboard_path']}")
+        if context and context.get("next_step_path"):
+            runtime_files.append(f"next_step_file={context['next_step_path']}")
+
+        if runtime_files:
+            lines.extend(["Runtime files:"])
+            lines.extend(runtime_files)
+            lines.append("")
+
         if context and context.get("handoff_summary"):
-            lines.extend(
+            runtime_context.extend(
                 [
-                    "",
                     "Latest workflow handoff from blackboard:",
                     context["handoff_summary"],
                     "Treat this handoff as the highest-priority current request unless current files prove it is already completed.",
                 ]
             )
         if context and context.get("blackboard_digest"):
-            lines.extend(["", "Blackboard digest:", context["blackboard_digest"]])
-        if context and context.get("next_step_path"):
-            lines.append(
-                f"If you need an explicit workflow handoff, write the next step name to: {context['next_step_path']}"
-            )
+            runtime_context.extend(["Blackboard digest:", context["blackboard_digest"]])
         if context and context.get("user_input"):
-            lines.extend(["", "Current user input for this iteration:", context["user_input"]])
+            runtime_context.extend(["Current user input for this iteration:", context["user_input"]])
+
+        if runtime_context:
+            lines.extend(["Runtime context:"])
+            lines.extend(runtime_context)
+            lines.append("")
+
+        if checklist_file is not None:
+            lines.append("Do NOT return a status code until ALL checklist items are marked as [x].")
 
         return "\n".join(lines).strip()
 
