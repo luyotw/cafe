@@ -89,6 +89,13 @@ class TestCodexCLIBuildCommand:
         assert ".cafe" in add_dir_values
         assert str(worktree_git_dir) in add_dir_values
 
+    def test_build_environment_uses_repo_local_codex_home(self, codex_config):
+        cli = CodexCLI(codex_config)
+
+        env = cli.build_environment()
+
+        assert env["CODEX_HOME"] == str(Path.cwd().resolve() / ".codex")
+
 
 class TestCodexCLITranslateAllowedTools:
     """Test translate_allowed_tools()."""

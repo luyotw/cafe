@@ -1,5 +1,6 @@
 """Tests for the reusable chat launcher module."""
 
+import os
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -38,6 +39,10 @@ class TestLaunchChatSession:
         config = self._make_agent_config(cli, session_id, model)
         executor = MagicMock()
         executor.config = config
+        env = dict(os.environ)
+        if cli == "codex":
+            env["CODEX_HOME"] = str(Path.cwd().resolve() / ".codex")
+        executor._get_cli_strategy.return_value.build_environment.return_value = env
 
         agent_manager = MagicMock()
         agent_manager.agents = {agent_name: executor}
@@ -61,7 +66,8 @@ class TestLaunchChatSession:
 
         launch_chat_session("developer", "issue123")
 
-        mock_run.assert_called_once_with(["claude"])
+        assert mock_run.call_args.args[0] == ["claude"]
+        assert "env" in mock_run.call_args.kwargs
 
     @patch("cafe.ui.chat.subprocess.run")
     @patch("cafe.ui.chat.ConfigManager")
@@ -79,7 +85,8 @@ class TestLaunchChatSession:
 
         launch_chat_session("developer", "issue123")
 
-        mock_run.assert_called_once_with(["claude", "--resume", "sess-abc", "--model", "sonnet"])
+        assert mock_run.call_args.args[0] == ["claude", "--resume", "sess-abc", "--model", "sonnet"]
+        assert "env" in mock_run.call_args.kwargs
 
     @patch("cafe.ui.chat.subprocess.run")
     @patch("cafe.ui.chat.ConfigManager")
@@ -97,7 +104,8 @@ class TestLaunchChatSession:
 
         launch_chat_session("pm", "issue123")
 
-        mock_run.assert_called_once_with(["copilot", "--resume", "sess-xyz"])
+        assert mock_run.call_args.args[0] == ["copilot", "--resume", "sess-xyz"]
+        assert "env" in mock_run.call_args.kwargs
 
     @patch("cafe.ui.chat.subprocess.run")
     @patch("cafe.ui.chat.ConfigManager")
@@ -115,7 +123,8 @@ class TestLaunchChatSession:
 
         launch_chat_session("reviewer", "issue123")
 
-        mock_run.assert_called_once_with(["gemini", "--resume", "sess-gem", "--model", "gemini-2.5-pro"])
+        assert mock_run.call_args.args[0] == ["gemini", "--resume", "sess-gem", "--model", "gemini-2.5-pro"]
+        assert "env" in mock_run.call_args.kwargs
 
     @patch("cafe.ui.chat.subprocess.run")
     @patch("cafe.ui.chat.ConfigManager")
@@ -133,7 +142,8 @@ class TestLaunchChatSession:
 
         launch_chat_session("developer", "issue123")
 
-        mock_run.assert_called_once_with(["cursor-agent", "--session", "sess-cursor"])
+        assert mock_run.call_args.args[0] == ["cursor-agent", "--session", "sess-cursor"]
+        assert "env" in mock_run.call_args.kwargs
 
     @patch("builtins.print")
     @patch("cafe.ui.chat.ConfigManager")
@@ -236,7 +246,8 @@ class TestLaunchChatSession:
         result = launch_chat_session("developer", "issue123")
 
         assert result == 0
-        mock_run.assert_called_once_with(["codex", "--model", "gpt-5.4"])
+        assert mock_run.call_args.args[0] == ["codex", "--model", "gpt-5.4"]
+        assert mock_run.call_args.kwargs["env"]["CODEX_HOME"] == str(Path.cwd().resolve() / ".codex")
         agent_manager.session_manager.save_session.assert_called_once_with(
             "Nick",
             AgentCLI.CODEX,
@@ -265,7 +276,8 @@ class TestLaunchChatSession:
         result = launch_chat_session("developer", "issue123")
 
         assert result == 0
-        mock_run.assert_called_once_with(["codex", "--model", "gpt-5.4", "resume", "sess-codex"])
+        assert mock_run.call_args.args[0] == ["codex", "--model", "gpt-5.4", "resume", "sess-codex"]
+        assert mock_run.call_args.kwargs["env"]["CODEX_HOME"] == str(Path.cwd().resolve() / ".codex")
         agent_manager.session_manager.save_session.assert_called_once_with(
             "Nick",
             AgentCLI.CODEX,

@@ -220,6 +220,54 @@ def test_generic_workflow_step_executor_installs_workflow_common_and_phase_skill
     assert (tmp_path / ".codex" / "skills" / "cafe-review" / "SKILL.md").exists()
 
 
+def test_generic_workflow_step_prompt_includes_latest_blackboard_handoff(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-handoff"
+    playbook = {
+        "playbook": {"id": "default"},
+        "roles": {"developer": {"default_agent": "David"}},
+        "steps": {
+            "develop": {
+                "skill": "plan",
+                "role": "developer",
+                "output_artifact": "code",
+                "allowed_tools": ["Read"],
+                "valid_status_codes": ["CAFE_CONFIRMED"],
+                "on": {"CAFE_CONFIRMED": "_done"},
+            }
+        },
+    }
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("develop")
+    spec_file = issue_dir / "spec" / "iteration_001" / "output.md"
+    plan_file = issue_dir / "plan" / "iteration_001" / "output.md"
+    spec_file.parent.mkdir(parents=True, exist_ok=True)
+    plan_file.parent.mkdir(parents=True, exist_ok=True)
+    spec_file.write_text("# Spec\n", encoding="utf-8")
+    plan_file.write_text("# Plan\n", encoding="utf-8")
+    store.set_artifact(state, "spec", str(spec_file))
+    store.set_artifact(state, "plan", str(plan_file))
+    store.set_handoff_summary(
+        state,
+        "還要再實作 cafe skill rm，支援批次刪除、interactive 多選與 confirm。",
+    )
+    agent_manager = FakeAgentManager("CAFE_CONFIRMED")
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="issue-handoff",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=agent_manager,
+        git_ops=FakeGitOperations(),
+        role_agent_map={"developer": "David"},
+    )
+
+    executor.execute_step("develop", playbook["steps"]["develop"], state)
+
+    assert any("Latest workflow handoff from blackboard:" in prompt for prompt in agent_manager.prompts)
+    assert any("還要再實作 cafe skill rm" in prompt for prompt in agent_manager.prompts)
+
+
 def test_generic_workflow_step_collects_clarification_before_next_agent_run(
     tmp_path: Path,
     monkeypatch,

@@ -91,6 +91,17 @@ class GenericPhase:
             lines.append(f"If clarification is needed, write questions.xml to: {questions_xml_file}")
         if context and context.get("blackboard_path"):
             lines.append(f"Shared workflow blackboard: {context['blackboard_path']}")
+        if context and context.get("handoff_summary"):
+            lines.extend(
+                [
+                    "",
+                    "Latest workflow handoff from blackboard:",
+                    context["handoff_summary"],
+                    "Treat this handoff as the highest-priority current request unless current files prove it is already completed.",
+                ]
+            )
+        if context and context.get("blackboard_digest"):
+            lines.extend(["", "Blackboard digest:", context["blackboard_digest"]])
         if context and context.get("next_step_path"):
             lines.append(
                 f"If you need an explicit workflow handoff, write the next step name to: {context['next_step_path']}"
