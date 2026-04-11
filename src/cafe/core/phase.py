@@ -488,6 +488,7 @@ class Phase(ABC):
         # 4. Execute agent (with error recovery)
         # Prepare streaming.jsonl file path for real-time writing
         streaming_jsonl_file = iteration_dir / "streaming.jsonl"
+        pre_execution_output_snapshot = self._snapshot_output_files(self._detect_written_output_files())
 
         # Initialize cumulative token usage for this iteration
         from cafe.core.types import TokenUsage
@@ -571,10 +572,14 @@ class Phase(ABC):
 
             # 4b. Check if agent wrote output files
             written_files = self._detect_written_output_files()
+            changed_written_files = self._filter_changed_output_files(
+                written_files,
+                pre_execution_output_snapshot,
+            )
 
             # 4c. Attempt to recover response from written files
             recovered_response, recovered_status_code = self._recover_from_written_files(
-                written_files,
+                changed_written_files,
                 valid_status_codes,
             )
 
@@ -588,6 +593,7 @@ class Phase(ABC):
                 "is_critical": isinstance(e, CriticalPhaseError),
                 "timestamp": datetime.now().astimezone().isoformat(),
                 "written_files": [str(f) for f in written_files],
+                "changed_written_files": [str(f) for f in changed_written_files],
                 "recovered_response": bool(recovered_response),
                 "recovered_status": recovered_status_code.value if recovered_status_code else None,
             }
@@ -596,7 +602,7 @@ class Phase(ABC):
 
             if recovered_response and recovered_status_code:
                 # 4e. Recovery successful - treat as partial success
-                print(f"✅ Recovered response from {written_files[0].name}")
+                print(f"✅ Recovered response from {changed_written_files[0].name}")
                 print(f"   Status code: {recovered_status_code.value}")
 
                 response = recovered_response
@@ -1105,6 +1111,33 @@ class Phase(ABC):
             List[Path]: List of file paths written by agent
         """
         return []
+
+    @staticmethod
+    def _snapshot_output_files(files: List[Path]) -> Dict[Path, Optional[str]]:
+        """Capture file contents before agent execution."""
+        snapshot: Dict[Path, Optional[str]] = {}
+        for file_path in files:
+            if file_path.exists():
+                snapshot[file_path] = file_path.read_text(encoding="utf-8")
+            else:
+                snapshot[file_path] = None
+        return snapshot
+
+    @staticmethod
+    def _filter_changed_output_files(
+        files: List[Path],
+        snapshot: Dict[Path, Optional[str]],
+    ) -> List[Path]:
+        """Keep only files whose contents changed during this execution."""
+        changed: List[Path] = []
+        for file_path in files:
+            if not file_path.exists():
+                continue
+            previous_content = snapshot.get(file_path)
+            current_content = file_path.read_text(encoding="utf-8")
+            if previous_content != current_content:
+                changed.append(file_path)
+        return changed
 
     def _recover_from_written_files(
         self,
