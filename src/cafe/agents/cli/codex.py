@@ -165,7 +165,14 @@ class CodexCLI(AbstractCLI):
 
     def create_session(self) -> str:
         """Create a new Codex exec session and return its thread ID."""
-        cmd = ["codex", "exec", "--json", "--skip-git-repo-check", "Say 'hi'"]
+        cwd = Path.cwd().resolve()
+        cmd = ["codex", "-C", str(cwd), "-a", "never", "exec"]
+
+        if self.config.model:
+            cmd.extend(["--model", self.config.model])
+
+        cmd.extend(self.get_output_format())
+        cmd.append("Say 'hi'")
 
         result = subprocess.run(
             cmd,
