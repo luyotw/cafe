@@ -19,6 +19,8 @@ version: 1.0.0
 - If work is completed directly in chat, say so clearly.
 - If the discussion changes spec or plan expectations, say which artifact changed.
 - CAFE will provide the exact blackboard path and next-step file path at runtime.
+- If this chat changed tracked project files and the work is complete enough to hand off, commit those changes before you update the blackboard or write the next-step file.
+- The blackboard handoff and next-step baton must describe committed state, not uncommitted workspace-only state.
 - Before you print a workflow handoff closing block, first update the shared blackboard directly.
 - Preserve valid JSON when editing the blackboard. Do not replace the whole file with prose.
 - Append a concise natural-language handoff event to `events`.

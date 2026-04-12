@@ -134,6 +134,7 @@ def test_workflow_command_consumes_chat_baton_before_execution(tmp_path: Path, m
     ):
         git = MagicMock()
         git.get_current_branch.return_value = "issue-205"
+        git.has_uncommitted_changes.return_value = False
         mock_git_cls.return_value = git
 
         result = runner.invoke(app, ["workflow", "--playbook", "default", "--execute"])
@@ -144,6 +145,52 @@ def test_workflow_command_consumes_chat_baton_before_execution(tmp_path: Path, m
     assert "Executing step=plan iteration=001" in result.stdout
     assert executed_steps == ["plan", "develop", "review", "pr"]
     assert not next_step_file.exists()
+    blackboard_data = json.loads((issue_dir / "blackboard.json").read_text(encoding="utf-8"))
+    assert blackboard_data["current_step"] == "user"
+
+
+def test_workflow_command_does_not_consume_chat_baton_with_uncommitted_changes(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    executed_steps: list[str] = []
+
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-205b"
+    issue_dir.mkdir(parents=True, exist_ok=True)
+    (issue_dir / "blackboard.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "playbook_id": "default",
+                "current_step": "user",
+                "artifacts": {},
+                "events": [],
+                "decisions": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    next_step_file = issue_dir / "next_step.txt"
+    next_step_file.write_text("develop\n", encoding="utf-8")
+
+    class FakeExecutor:
+        def execute_step(self, step_name: str, step_def: dict, blackboard_state: object) -> tuple[str, dict[str, str]]:
+            executed_steps.append(step_name)
+            return ("CAFE_CONFIRMED", {})
+
+    with (
+        patch("cafe.ui.cli.GitOperations") as mock_git_cls,
+        patch("cafe.ui.cli._build_workflow_step_executor", return_value=FakeExecutor()),
+    ):
+        git = MagicMock()
+        git.get_current_branch.return_value = "issue-205b"
+        git.has_uncommitted_changes.return_value = True
+        mock_git_cls.return_value = git
+
+        result = runner.invoke(app, ["workflow", "--playbook", "default", "--execute"])
+
+    assert result.exit_code == 0
+    assert "uncommitted \nchanges" in result.stdout
+    assert not executed_steps
+    assert next_step_file.exists()
     blackboard_data = json.loads((issue_dir / "blackboard.json").read_text(encoding="utf-8"))
     assert blackboard_data["current_step"] == "user"
 
@@ -320,6 +367,7 @@ def test_workflow_command_user_owner_can_chat_and_resume_from_baton(tmp_path: Pa
     ):
         git = MagicMock()
         git.get_current_branch.return_value = "issue-209"
+        git.has_uncommitted_changes.return_value = False
         mock_git_cls.return_value = git
 
         result = runner.invoke(app, ["workflow", "--playbook", "default", "--execute"])

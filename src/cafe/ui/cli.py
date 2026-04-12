@@ -260,6 +260,14 @@ def _consume_pending_chat_handoff(
         raise ValueError(f"Chat handoff file is empty: {next_step_path}")
     if target_step not in playbook_data["steps"] and target_step not in {"user", "done"}:
         raise ValueError(f"Chat handoff step '{target_step}' does not exist in playbook")
+    if target_step not in {"user", "done"} and GitOperations().has_uncommitted_changes():
+        console.print(
+            "[yellow]Chat handoff was not consumed because the worktree still has uncommitted changes.[/yellow]"
+        )
+        console.print(
+            "[yellow]Commit or stash the chat changes first, then run `cafe make` again.[/yellow]"
+        )
+        return None
 
     blackboard = BlackboardStore(issue_dir).load_or_create(
         str(playbook_data.get("entry_point") or next(iter(playbook_data["steps"].keys()))),

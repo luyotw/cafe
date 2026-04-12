@@ -13,6 +13,7 @@ version: 1.0.0
 
 ## Instructions
 - Make the requested implementation change when it is appropriate to do so in chat.
+- If you changed code and are ready to hand work back to the workflow, create the relevant commit before you update the blackboard or write the baton.
 - Be explicit about whether the code change was completed in chat or whether follow-up work is still needed.
 - If the change affects broader workflow expectations, say that clearly in the closing handoff.
 - Finish with the required common chat handoff format.
