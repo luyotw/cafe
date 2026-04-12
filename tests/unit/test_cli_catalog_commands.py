@@ -309,6 +309,40 @@ def test_skill_rm_reports_missing_skills_when_none_exist(tmp_path: Path, monkeyp
     assert "not found" in result.stdout
 
 
+def test_skill_rm_rejects_parent_path_segments(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".cafe" / "skills").mkdir(parents=True, exist_ok=True)
+    victim_dir = tmp_path / "victim-skill"
+    victim_dir.mkdir(parents=True, exist_ok=True)
+    (victim_dir / "SKILL.md").write_text(
+        "---\nname: victim\ndescription: victim\n---\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["skill", "rm", "../victim-skill", "--force"])
+
+    assert result.exit_code == 1
+    assert "invalid skill name" in result.stdout
+    assert victim_dir.exists()
+
+
+def test_skill_rm_rejects_absolute_paths(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".cafe" / "skills").mkdir(parents=True, exist_ok=True)
+    victim_dir = tmp_path / "absolute-target"
+    victim_dir.mkdir(parents=True, exist_ok=True)
+    (victim_dir / "SKILL.md").write_text(
+        "---\nname: absolute-target\ndescription: victim\n---\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["skill", "rm", str(victim_dir), "--force"])
+
+    assert result.exit_code == 1
+    assert "invalid skill name" in result.stdout
+    assert victim_dir.exists()
+
+
 def test_help_lists_dynamic_playbook_steps(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     (tmp_path / ".cafe").mkdir(parents=True, exist_ok=True)

@@ -4919,7 +4919,10 @@ def skill_rm(
     summary = remove_skills(names, project_root)
     _print_skill_remove_summary(summary)
 
-    if summary.removed_count == 0 and summary.failed_count == 0:
+    if summary.failed_count:
+        raise typer.Exit(1)
+
+    if summary.removed_count == 0:
         raise typer.Exit(1)
 
 

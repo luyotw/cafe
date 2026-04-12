@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import shutil
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Optional
 
 
@@ -13,8 +13,8 @@ class SkillRemoveResult:
     """One removed, skipped, or failed skill item."""
 
     name: str
-    destination: Path
     status: str
+    destination: Optional[Path] = None
     reason: Optional[str] = None
 
 
@@ -45,6 +45,20 @@ def _remove_existing_path(path: Path) -> None:
     shutil.rmtree(path)
 
 
+def _is_safe_skill_name(name: str) -> bool:
+    if not name:
+        return False
+    if any(separator in name for separator in ("/", "\\")):
+        return False
+
+    posix_path = PurePosixPath(name)
+    windows_path = PureWindowsPath(name)
+    if posix_path.is_absolute() or windows_path.is_absolute():
+        return False
+
+    return all(part not in {"", ".", ".."} for part in posix_path.parts)
+
+
 def remove_skills(
     names: list[str],
     project_root: Path,
@@ -59,6 +73,16 @@ def remove_skills(
         if name in seen:
             continue
         seen.add(name)
+
+        if not _is_safe_skill_name(name):
+            results.append(
+                SkillRemoveResult(
+                    name=name,
+                    status="failed",
+                    reason="invalid skill name",
+                )
+            )
+            continue
 
         destination = destination_root / name
         if not destination.exists() and not destination.is_symlink():
