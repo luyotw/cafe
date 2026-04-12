@@ -417,7 +417,6 @@ class Phase(ABC):
         prompt: str,
         user_input: str,
         valid_status_codes: List[PhaseStatusCode],
-        require_status_code: bool = True,
         allowed_tools: Optional[List[str]] = None,
         denied_tools: Optional[List[str]] = None,
         phase_specific_data: Optional[Dict[str, Any]] = None,
@@ -439,7 +438,6 @@ class Phase(ABC):
             prompt: Prompt to send to agent
             user_input: User input for this round
             valid_status_codes: Valid status codes accepted by this phase
-            require_status_code: Whether missing/invalid status code should trigger retry/failure
             allowed_tools: Tools available to agent (default None)
             denied_tools: Tools unavailable to agent (default None)
             phase_specific_data: Phase-specific initial data (default None)
@@ -470,19 +468,6 @@ class Phase(ABC):
         agent_executor = self.agent_manager.get_agent(agent_name)
         agent_cli = agent_executor.config.cli.value
         agent_session_id = agent_executor.config.session_id
-        allowed_directories = self._get_allowed_directories()
-        cli_command_args = self.agent_manager.preview_cli_command_args(
-            agent_name,
-            prompt,
-            allowed_tools=allowed_tools,
-            allowed_directories=allowed_directories,
-        )
-        cli_environment = self.agent_manager.preview_cli_environment(agent_name) or {}
-        cli_environment_preview = {
-            key: value
-            for key, value in cli_environment.items()
-            if key in {"CODEX_HOME", "CLAUDE_CONFIG_DIR", "GEMINI_HOME", "COPILOT_HOME"}
-        }
 
         # 3. Save prompt to context.json (before executing agent)
         iteration_dir = self._get_iteration_dir(self.iteration)
@@ -495,15 +480,12 @@ class Phase(ABC):
             context_data["session_id"] = agent_session_id
             context_data["allowed_tools"] = allowed_tools
             context_data["denied_tools"] = denied_tools
-            context_data["cli_command_args"] = cli_command_args
-            context_data["cli_environment"] = cli_environment_preview
             with open(context_file, "w", encoding="utf-8") as f:
                 json.dump(context_data, f, ensure_ascii=False, indent=2)
 
         # 4. Execute agent (with error recovery)
         # Prepare streaming.jsonl file path for real-time writing
         streaming_jsonl_file = iteration_dir / "streaming.jsonl"
-        pre_execution_output_snapshot = self._snapshot_output_files(self._detect_written_output_files())
 
         # Initialize cumulative token usage for this iteration
         from cafe.core.types import TokenUsage
@@ -537,7 +519,7 @@ class Phase(ABC):
                 agent_name,
                 prompt,
                 allowed_tools=allowed_tools,
-                allowed_directories=allowed_directories,
+                allowed_directories=self._get_allowed_directories(),
                 streaming_output_file=str(streaming_jsonl_file),
             )
 
@@ -587,14 +569,10 @@ class Phase(ABC):
 
             # 4b. Check if agent wrote output files
             written_files = self._detect_written_output_files()
-            changed_written_files = self._filter_changed_output_files(
-                written_files,
-                pre_execution_output_snapshot,
-            )
 
             # 4c. Attempt to recover response from written files
             recovered_response, recovered_status_code = self._recover_from_written_files(
-                changed_written_files,
+                written_files,
                 valid_status_codes,
             )
 
@@ -608,7 +586,6 @@ class Phase(ABC):
                 "is_critical": isinstance(e, CriticalPhaseError),
                 "timestamp": datetime.now().astimezone().isoformat(),
                 "written_files": [str(f) for f in written_files],
-                "changed_written_files": [str(f) for f in changed_written_files],
                 "recovered_response": bool(recovered_response),
                 "recovered_status": recovered_status_code.value if recovered_status_code else None,
             }
@@ -617,7 +594,7 @@ class Phase(ABC):
 
             if recovered_response and recovered_status_code:
                 # 4e. Recovery successful - treat as partial success
-                print(f"✅ Recovered response from {changed_written_files[0].name}")
+                print(f"✅ Recovered response from {written_files[0].name}")
                 print(f"   Status code: {recovered_status_code.value}")
 
                 response = recovered_response
@@ -729,7 +706,7 @@ class Phase(ABC):
         max_retries = 5
         retry_count = 0
 
-        if require_status_code and original_status_code_missing:  # Including: no status code or multiple status codes
+        if original_status_code_missing:  # Including: no status code or multiple status codes
             analysis_attempted = True
 
             while retry_count < max_retries and status_code is None:
@@ -744,7 +721,7 @@ class Phase(ABC):
                         agent_name,
                         continue_prompt,
                         allowed_tools=allowed_tools,
-                        allowed_directories=allowed_directories,
+                        allowed_directories=self._get_allowed_directories(),
                     )
 
                     # Update model if returned (use latest value)
@@ -777,7 +754,7 @@ class Phase(ABC):
 
         # 6.3. Write error log (if original response has issues: no status code, multiple codes, or still no status code after analysis)
         # Note: Even if analysis successfully finds status code, we still record issues with original response
-        if require_status_code and (analysis_attempted or original_status_code_missing):
+        if analysis_attempted or original_status_code_missing:
             self._write_status_code_error_log(
                 original_response=response,
                 valid_status_codes=valid_status_codes,
@@ -789,7 +766,7 @@ class Phase(ABC):
             )
 
         # 6.4. If still no status code after 5 retries, throw error
-        if require_status_code and original_status_code_missing and status_code is None and retry_count >= max_retries:
+        if original_status_code_missing and status_code is None and retry_count >= max_retries:
             error_msg = f"Agent Still did not return valid status code after {max_retries} attempts"
             print(f"\n❌ {error_msg}")
             raise ValueError(error_msg)
@@ -1126,33 +1103,6 @@ class Phase(ABC):
             List[Path]: List of file paths written by agent
         """
         return []
-
-    @staticmethod
-    def _snapshot_output_files(files: List[Path]) -> Dict[Path, Optional[str]]:
-        """Capture file contents before agent execution."""
-        snapshot: Dict[Path, Optional[str]] = {}
-        for file_path in files:
-            if file_path.exists():
-                snapshot[file_path] = file_path.read_text(encoding="utf-8")
-            else:
-                snapshot[file_path] = None
-        return snapshot
-
-    @staticmethod
-    def _filter_changed_output_files(
-        files: List[Path],
-        snapshot: Dict[Path, Optional[str]],
-    ) -> List[Path]:
-        """Keep only files whose contents changed during this execution."""
-        changed: List[Path] = []
-        for file_path in files:
-            if not file_path.exists():
-                continue
-            previous_content = snapshot.get(file_path)
-            current_content = file_path.read_text(encoding="utf-8")
-            if previous_content != current_content:
-                changed.append(file_path)
-        return changed
 
     def _recover_from_written_files(
         self,

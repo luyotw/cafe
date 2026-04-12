@@ -19,7 +19,7 @@ from cafe.utils.github import GitHubOps, GitHubError
 
 
 class PlanPhase(Phase):
-    """Legacy compatibility implementation for the plan phase."""
+    """Phase 2: Implementation plan with developer agent."""
 
     def __init__(
         self,
@@ -418,22 +418,12 @@ class PlanPhase(Phase):
                 PhaseStatusCode.NEED_CLARIFICATION: "Need more information or confirmation",
             },
         )
-        from cafe.agents.manager import AgentManager
-        from cafe.skills.bridge import try_load_skill_body
-
-        agent_file = AgentManager.get_agent_file_path(self.dev_agent, "developer")
-        skill_body = try_load_skill_body(
-            "plan",
-            context={
-                "agent_file": agent_file,
-                "spec_file": str(spec_file_path),
-                "output_file": str(plan_file_path),
-                "status_code_instruction": status_code_prompt,
-            },
-        )
-        skill_section = f"{skill_body}\n\n" if skill_body else ""
 
         if self.iteration == 1:
+            from cafe.agents.manager import AgentManager
+
+            agent_file = AgentManager.get_agent_file_path(self.dev_agent, "developer")
+
             # Get checklist file path
             iteration_dir = self._get_iteration_dir(self.iteration)
             checklist_file = iteration_dir / "checklist.md"
@@ -446,7 +436,6 @@ class PlanPhase(Phase):
             checklist_instruction = format_checklist_instruction(checklist_path)
             base_prompt = f"""# Plan Phase
 
-{skill_section}\
 **Your Role:** Developer (Planning)
 Read {agent_file} to understand your complete role definition and responsibilities.
 
@@ -465,6 +454,10 @@ Analyze {spec_file_path} and plan implementation steps.
             return base_prompt
         else:
             # Iteration 2+
+            from cafe.agents.manager import AgentManager
+
+            agent_file = AgentManager.get_agent_file_path(self.dev_agent, "developer")
+
             # Get checklist file path
             iteration_dir = self._get_iteration_dir(self.iteration)
             checklist_file = iteration_dir / "checklist.md"
@@ -484,7 +477,6 @@ Analyze {spec_file_path} and plan implementation steps.
             checklist_instruction = format_checklist_instruction(checklist_path)
             base_prompt = f"""# Plan Phase
 
-{skill_section}\
 **Your Role:** Developer (Planning)
 Read {agent_file} to understand your complete role definition and responsibilities.
 

@@ -128,8 +128,8 @@ class TestMakeCommand:
             assert result.exit_code == 1
             assert "claude" in result.stdout.lower()
 
-    def test_make_command_executes_workflow_when_clis_available(self) -> None:
-        """測試 cafe make 指令在環境檢查通過後執行 cafe workflow --execute."""
+    def test_make_command_executes_spec_auto_when_clis_available(self) -> None:
+        """測試 cafe make 指令在環境檢查通過後執行 cafe spec --auto."""
         from typer.testing import CliRunner
 
         from cafe.ui.cli import app
@@ -163,8 +163,8 @@ class TestMakeCommand:
             mock_run.assert_called_once()
             call_args = mock_run.call_args[0][0]
             assert "cafe.ui.cli" in " ".join(call_args)
-            assert "workflow" in call_args
-            assert "--execute" in call_args
+            assert "spec" in call_args
+            assert "--auto" in call_args
 
     def test_make_command_displays_correct_error_message(self) -> None:
         """測試 cafe make 指令顯示正確錯誤提示訊息."""

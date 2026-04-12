@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from cafe.ui.inquirer_prompts import prompt_checkbox, prompt_confirm, prompt_list, prompt_text
+from cafe.ui.inquirer_prompts import prompt_confirm, prompt_list, prompt_text
 
 
 class TestPromptList:
@@ -111,42 +111,3 @@ class TestPromptConfirm:
             message="Continue?",
             default=False,
         )
-
-
-class TestPromptCheckbox:
-    """測試 prompt_checkbox 函式"""
-
-    @patch("cafe.ui.inquirer_prompts.inquirer.checkbox")
-    def test_prompt_checkbox_calls_inquirer_checkbox(self, mock_checkbox):
-        """測試 prompt_checkbox 正確呼叫 inquirer.checkbox"""
-        mock_instance = MagicMock()
-        mock_instance.execute.return_value = ["choice1"]
-        mock_checkbox.return_value = mock_instance
-
-        result = prompt_checkbox("Select options", ["choice1", "choice2"])
-
-        assert result == ["choice1"]
-        mock_checkbox.assert_called_once_with(
-            message="Select options",
-            choices=["choice1", "choice2"],
-        )
-        mock_instance.execute.assert_called_once()
-
-    @patch("cafe.ui.inquirer_prompts.inquirer.checkbox")
-    def test_prompt_checkbox_supports_default_selection(self, mock_checkbox):
-        """測試 prompt_checkbox 支援預設勾選項目"""
-        mock_instance = MagicMock()
-        mock_instance.execute.return_value = ["choice2"]
-        mock_checkbox.return_value = mock_instance
-
-        result = prompt_checkbox("Select options", ["choice1", "choice2"], default=["choice2"])
-
-        assert result == ["choice2"]
-        mock_checkbox.assert_called_once_with(
-            message="Select options",
-            choices=[
-                {"name": "choice1", "value": "choice1", "enabled": False},
-                {"name": "choice2", "value": "choice2", "enabled": True},
-            ],
-        )
-        mock_instance.execute.assert_called_once()

@@ -5,6 +5,4 @@
 .pytest_cache/
 .coverage
 .cafe
-.claude
-.codex
 dist/

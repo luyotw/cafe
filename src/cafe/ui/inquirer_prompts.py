@@ -95,27 +95,3 @@ def prompt_confirm(
         message=message,
         default=default,
     ).execute()
-
-
-def prompt_checkbox(
-    message: str,
-    choices: list[Any],
-    default: Optional[list[Any]] = None,
-) -> list[Any]:
-    """Prompt user to select multiple items via checkbox list."""
-    checkbox_choices: list[Any] = choices
-    if default is not None:
-        default_set = set(default)
-        checkbox_choices = [
-            {
-                "name": choice,
-                "value": choice,
-                "enabled": choice in default_set,
-            }
-            for choice in choices
-        ]
-
-    return inquirer.checkbox(
-        message=message,
-        choices=checkbox_choices,
-    ).execute()

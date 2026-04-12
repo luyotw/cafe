@@ -1,6 +1,5 @@
 """Tests for AgentExecutor."""
 
-from pathlib import Path
 import pytest
 from unittest.mock import MagicMock, patch
 
@@ -144,24 +143,6 @@ class TestCodexPermissionExtraction:
         assert len(denials) == 1
         assert denials[0].tool_name == "Bash"
         assert denials[0].tool_input["command"].startswith("git add src/cafe/ui/cli.py")
-
-    def test_codex_exec_does_not_override_codex_home(self) -> None:
-        """Codex executions should inherit the default environment."""
-        config = AgentConfig(name="Nick", cli=AgentCLI.CODEX)
-        executor = AgentExecutor(config)
-
-        mock_process = MagicMock()
-        mock_process.stdout.readline.side_effect = [
-            '{"type":"item.completed","item":{"type":"agent_message","text":"done"}}\n',
-            "",
-        ]
-        mock_process.stderr.read.return_value = ""
-        mock_process.wait.return_value = 0
-
-        with patch("subprocess.Popen", return_value=mock_process) as mock_popen, patch("sys.platform", "win32"):
-            executor.execute("Test prompt")
-
-        assert "CODEX_HOME" not in mock_popen.call_args.kwargs["env"]
 
 
 class TestTokenUsageTracking:
@@ -556,28 +537,6 @@ class TestStreamingExecution:
                     parse_stream_json=True,
                 )
 
-    def test_execute_with_streaming_handles_early_stderr_failure(self, capsys) -> None:
-        """Early fatal stderr should still raise an execution error."""
-        config = AgentConfig(name="Roger", cli=AgentCLI.CLAUDE)
-        executor = AgentExecutor(config)
-
-        mock_process = MagicMock()
-        mock_process.stderr.readline.return_value = "Error: session not found\n"
-        mock_process.stderr.read.return_value = ""
-        mock_process.kill.return_value = None
-
-        with patch("subprocess.Popen", return_value=mock_process), \
-             patch("select.select", return_value=([mock_process.stderr], [], [])), \
-             patch("sys.platform", "darwin"):
-            with pytest.raises(AgentExecutionError):
-                executor._execute_with_streaming(
-                    cmd=["claude", "--resume", "abc", "-p", "test"],
-                    cli_name="Claude",
-                    parse_stream_json=True,
-                )
-
-        assert capsys.readouterr().out == ""
-
     def test_execute_with_streaming_handles_malformed_json(self, capsys) -> None:
         """測試處理格式錯誤 JSON（回退到 plain text）"""
         config = AgentConfig(name="David", cli=AgentCLI.CLAUDE)
@@ -654,25 +613,6 @@ class TestStreamingExecution:
         # duration_ms from streaming should be preserved
         assert agent_response.token_usage.duration_ms == 12345
         assert agent_response.token_usage.duration_api_ms == 12000
-
-
-class TestProjectSkillWorkspacePreparation:
-    """Test deprecated workspace preparation is skipped during execution."""
-
-    def test_execute_skips_cli_workspace_preparation_before_running(self) -> None:
-        """Claude execution should no longer prepare CLI workspace before build_command."""
-        config = AgentConfig(name="Roger", cli=AgentCLI.CLAUDE, session_id="session-123")
-        executor = AgentExecutor(config)
-        mock_cli = MagicMock()
-        mock_cli.build_command.return_value = ["claude", "-p", "Test prompt"]
-        mock_cli.translate_allowed_tools.return_value = []
-        mock_cli.parse_response.return_value = ("done", TokenUsage(), [])
-
-        with patch.object(executor, "_get_cli_strategy", return_value=mock_cli), \
-             patch.object(executor, "_execute_with_session_recovery", return_value=AgentResponse(response="done", token_usage=TokenUsage(), permission_denials=[])):
-            executor.execute("Test prompt")
-
-        mock_cli.prepare_project_workspace.assert_not_called()
 
 
 class TestCLICommandArgsGeneration:

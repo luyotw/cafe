@@ -17,7 +17,7 @@ from cafe.utils.prompt_utils import format_checklist_instruction
 
 
 class ReviewPhase(Phase):
-    """Legacy compatibility implementation for the review phase.
+    """Phase 4: Code review with reviewer agent.
 
     Review phase is non-iterative: each execution is a single, independent code review.
     Unlike spec/plan/develop phases, there's no conversational loop.
@@ -460,20 +460,8 @@ class ReviewPhase(Phase):
         # Build prompt
         try:
             from cafe.agents.manager import AgentManager
-            from cafe.skills.bridge import try_load_skill_body
 
             agent_file = AgentManager.get_agent_file_path(self.review_agent, "reviewer")
-            skill_body = try_load_skill_body(
-                "review",
-                context={
-                    "agent_file": agent_file,
-                    "spec_file": str(self.spec_file),
-                    "plan_file": str(self.plan_file),
-                    "output_file": str(review_file_path),
-                    "status_code_instruction": status_code_prompt,
-                },
-            )
-            skill_section = f"{skill_body}\n\n" if skill_body else ""
 
             # Get checklist file path
             iteration_dir = self._get_iteration_dir(self.iteration)
@@ -495,7 +483,6 @@ class ReviewPhase(Phase):
             checklist_instruction = format_checklist_instruction(checklist_path)
             base_prompt = f"""# Review Phase
 
-{skill_section}\
 **Your Role:** Reviewer
 Read {agent_file} to understand your complete role definition and responsibilities.
 
@@ -553,3 +540,4 @@ Please only return one status code (e.g., CAFE_CONFIRMED) without any other cont
         iteration_dir = self.review_dir / f"iteration_{self.iteration:03d}"
         review_file = iteration_dir / "output.md"
         return [review_file] if review_file.exists() else []
+

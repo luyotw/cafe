@@ -1,26 +1,12 @@
 """Tests for the reusable chat launcher module."""
 
-import os
-from pathlib import Path
+import subprocess
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from cafe.core.types import AgentCLI
-from cafe.ui.chat import (
-    _build_chat_seed_prompt,
-    _prepare_chat_environment,
-    _prepare_chat_handoff_state,
-    get_chat_next_step_path,
-    launch_chat_session,
-)
-
-
-@pytest.fixture(autouse=True)
-def mock_chat_environment():
-    """Avoid writing to real native CLI skill directories in unit tests."""
-    with patch("cafe.ui.chat._prepare_chat_environment") as mock_prepare:
-        yield mock_prepare
+from cafe.ui.chat import launch_chat_session
 
 
 class TestLaunchChatSession:
@@ -39,8 +25,6 @@ class TestLaunchChatSession:
         config = self._make_agent_config(cli, session_id, model)
         executor = MagicMock()
         executor.config = config
-        env = dict(os.environ)
-        executor._get_cli_strategy.return_value.build_environment.return_value = env
 
         agent_manager = MagicMock()
         agent_manager.agents = {agent_name: executor}
@@ -64,8 +48,7 @@ class TestLaunchChatSession:
 
         launch_chat_session("developer", "issue123")
 
-        assert mock_run.call_args.args[0] == ["claude"]
-        assert "env" in mock_run.call_args.kwargs
+        mock_run.assert_called_once_with(["claude"])
 
     @patch("cafe.ui.chat.subprocess.run")
     @patch("cafe.ui.chat.ConfigManager")
@@ -83,8 +66,7 @@ class TestLaunchChatSession:
 
         launch_chat_session("developer", "issue123")
 
-        assert mock_run.call_args.args[0] == ["claude", "--resume", "sess-abc", "--model", "sonnet"]
-        assert "env" in mock_run.call_args.kwargs
+        mock_run.assert_called_once_with(["claude", "--resume", "sess-abc", "--model", "sonnet"])
 
     @patch("cafe.ui.chat.subprocess.run")
     @patch("cafe.ui.chat.ConfigManager")
@@ -102,8 +84,7 @@ class TestLaunchChatSession:
 
         launch_chat_session("pm", "issue123")
 
-        assert mock_run.call_args.args[0] == ["copilot", "--resume", "sess-xyz"]
-        assert "env" in mock_run.call_args.kwargs
+        mock_run.assert_called_once_with(["copilot", "--resume", "sess-xyz"])
 
     @patch("cafe.ui.chat.subprocess.run")
     @patch("cafe.ui.chat.ConfigManager")
@@ -121,8 +102,7 @@ class TestLaunchChatSession:
 
         launch_chat_session("reviewer", "issue123")
 
-        assert mock_run.call_args.args[0] == ["gemini", "--resume", "sess-gem", "--model", "gemini-2.5-pro"]
-        assert "env" in mock_run.call_args.kwargs
+        mock_run.assert_called_once_with(["gemini", "--resume", "sess-gem", "--model", "gemini-2.5-pro"])
 
     @patch("cafe.ui.chat.subprocess.run")
     @patch("cafe.ui.chat.ConfigManager")
@@ -140,8 +120,7 @@ class TestLaunchChatSession:
 
         launch_chat_session("developer", "issue123")
 
-        assert mock_run.call_args.args[0] == ["cursor-agent", "--session", "sess-cursor"]
-        assert "env" in mock_run.call_args.kwargs
+        mock_run.assert_called_once_with(["cursor-agent", "--session", "sess-cursor"])
 
     @patch("builtins.print")
     @patch("cafe.ui.chat.ConfigManager")
@@ -194,33 +173,6 @@ class TestLaunchChatSession:
 
         mock_agent_manager_cls.assert_called_once_with(issue_name="my-issue")
 
-    @patch("cafe.ui.chat.subprocess.run")
-    @patch("cafe.ui.chat.ConfigManager")
-    @patch("cafe.ui.chat.AgentManager")
-    def test_prepares_chat_environment_before_launch(
-        self,
-        mock_agent_manager_cls,
-        mock_config_manager_cls,
-        mock_run,
-        mock_chat_environment,
-    ):
-        mock_config = MagicMock()
-        mock_config.get.return_value = {"name": "David", "cli": "claude"}
-        mock_config_manager_cls.return_value = mock_config
-
-        agent_manager = self._make_agent_manager("David", "claude")
-        mock_agent_manager_cls.return_value = agent_manager
-        mock_run.return_value = MagicMock(returncode=0)
-
-        launch_chat_session("developer", "issue123")
-
-        mock_chat_environment.assert_called_once()
-        kwargs = mock_chat_environment.call_args.kwargs
-        assert kwargs["agent_name"] == "David"
-        assert kwargs["agent_cli"] == AgentCLI.CLAUDE
-        assert kwargs["role"] == "developer"
-        assert kwargs["issue_name"] == "issue123"
-
     @patch("cafe.ui.chat._extract_latest_codex_session_id", return_value="thread-123")
     @patch("cafe.ui.chat.subprocess.run")
     @patch("cafe.ui.chat.ConfigManager")
@@ -244,8 +196,7 @@ class TestLaunchChatSession:
         result = launch_chat_session("developer", "issue123")
 
         assert result == 0
-        assert mock_run.call_args.args[0] == ["codex", "--model", "gpt-5.4"]
-        assert "CODEX_HOME" not in mock_run.call_args.kwargs["env"]
+        mock_run.assert_called_once_with(["codex", "--model", "gpt-5.4"])
         agent_manager.session_manager.save_session.assert_called_once_with(
             "Nick",
             AgentCLI.CODEX,
@@ -274,135 +225,10 @@ class TestLaunchChatSession:
         result = launch_chat_session("developer", "issue123")
 
         assert result == 0
-        assert mock_run.call_args.args[0] == ["codex", "--model", "gpt-5.4", "resume", "sess-codex"]
-        assert "CODEX_HOME" not in mock_run.call_args.kwargs["env"]
+        mock_run.assert_called_once_with(["codex", "--model", "gpt-5.4", "resume", "sess-codex"])
         agent_manager.session_manager.save_session.assert_called_once_with(
             "Nick",
             AgentCLI.CODEX,
             "sess-codex",
             "issue123",
         )
-
-
-def test_build_chat_seed_prompt_includes_common_handoff_and_unified_next_step() -> None:
-    prompt = _build_chat_seed_prompt(
-        role="developer",
-        issue_name="issue123",
-        blackboard_path="/tmp/issue123/blackboard.json",
-        next_step_path="/tmp/issue123/next_step.txt",
-        current_step="review",
-        playbook_id="default",
-    )
-
-    assert "Current workflow step: `review`." in prompt
-    assert "/tmp/issue123/blackboard.json" in prompt
-    assert "/tmp/issue123/next_step.txt" in prompt
-    assert "Shared blackboard path" in prompt
-    assert "Workflow baton path" in prompt
-
-
-def test_prepare_chat_environment_suppresses_seed_streaming_output(capsys) -> None:
-    agent_manager = MagicMock()
-    agent_manager.execute.side_effect = lambda *args, **kwargs: print("Codex Response (streaming):")
-
-    with patch("cafe.ui.chat.SkillLoader.discover"), patch(
-        "cafe.ui.chat.NativeSkillBridge.install_skill"
-    ), patch(
-        "cafe.ui.chat.NativeSkillBridge.get_invocation",
-        side_effect=lambda name, cli: f"$cafe-{name}",
-    ):
-        _prepare_chat_environment(
-            executor=MagicMock(),
-            agent_manager=agent_manager,
-            agent_name="Roger",
-            agent_cli=AgentCLI.CODEX,
-            role="pm",
-            issue_name="issue123",
-            issue_dir=Path("/tmp/issue123"),
-            current_step="review",
-            valid_steps=["spec", "plan", "develop", "review", "pr"],
-            playbook_id="default",
-        )
-
-    captured = capsys.readouterr()
-    assert "Codex Response (streaming):" not in captured.out
-
-
-def test_launch_chat_session_prepares_chat_handoff_directory(
-    tmp_path,
-    monkeypatch,
-    mock_chat_environment,
-) -> None:
-    monkeypatch.chdir(tmp_path)
-
-    with (
-        patch("cafe.ui.chat.subprocess.run", return_value=MagicMock(returncode=0)),
-        patch("cafe.ui.chat.ConfigManager") as mock_config_manager_cls,
-        patch("cafe.ui.chat.AgentManager") as mock_agent_manager_cls,
-    ):
-        mock_config = MagicMock()
-        mock_config.get.return_value = {"name": "Roger", "cli": "claude"}
-        mock_config_manager_cls.return_value = mock_config
-
-        agent_manager = MagicMock()
-        executor = MagicMock()
-        executor.config = MagicMock(session_id=None, model=None)
-        agent_manager.get_agent.return_value = executor
-        agent_manager.session_manager = MagicMock()
-        mock_agent_manager_cls.return_value = agent_manager
-
-        result = launch_chat_session("pm", "issue123")
-
-    assert result == 0
-    assert get_chat_next_step_path(tmp_path / ".cafe" / "issues" / "issue123").parent.exists()
-
-
-def test_prepare_chat_handoff_state_creates_blackboard_and_clears_stale_baton(tmp_path, monkeypatch) -> None:
-    monkeypatch.chdir(tmp_path)
-    issue_dir = tmp_path / ".cafe" / "issues" / "issue123"
-    next_step_path = get_chat_next_step_path(issue_dir)
-    issue_dir.mkdir(parents=True, exist_ok=True)
-    (issue_dir / "blackboard.json").write_text(
-        '{"schema_version":1,"playbook_id":"default","current_step":"review","artifacts":{},"events":[],"decisions":[]}',
-        encoding="utf-8",
-    )
-    next_step_path.write_text("review\n", encoding="utf-8")
-
-    current_step, valid_steps, playbook_id = _prepare_chat_handoff_state(issue_dir)
-
-    assert current_step == "review"
-    assert "spec" in valid_steps
-    assert playbook_id == "default"
-    assert (issue_dir / "blackboard.json").exists()
-    assert not next_step_path.exists()
-
-
-def test_launch_chat_session_warns_when_baton_missing(
-    tmp_path,
-    monkeypatch,
-    mock_chat_environment,
-) -> None:
-    monkeypatch.chdir(tmp_path)
-
-    with (
-        patch("builtins.print") as mock_print,
-        patch("cafe.ui.chat.subprocess.run", return_value=MagicMock(returncode=0)),
-        patch("cafe.ui.chat.ConfigManager") as mock_config_manager_cls,
-        patch("cafe.ui.chat.AgentManager") as mock_agent_manager_cls,
-    ):
-        mock_config = MagicMock()
-        mock_config.get.return_value = {"name": "Roger", "cli": "claude"}
-        mock_config_manager_cls.return_value = mock_config
-
-        agent_manager = MagicMock()
-        executor = MagicMock()
-        executor.config = MagicMock(session_id=None, model=None)
-        agent_manager.get_agent.return_value = executor
-        agent_manager.session_manager = MagicMock()
-        mock_agent_manager_cls.return_value = agent_manager
-
-        result = launch_chat_session("pm", "issue123")
-
-    assert result == 0
-    printed = " ".join(str(call) for call in mock_print.call_args_list)
-    assert "did not complete workflow handoff" in printed

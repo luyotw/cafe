@@ -1,10 +1,14 @@
 import os
+import sys
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 import yaml
 import pytest
 import typer
 
 from cafe.ui.cli import app
+from cafe.core.status_codes import PhaseStatusCode
+from cafe.core.types import PhaseResult, PhaseStatus
 
 @pytest.fixture
 def temp_repo_dir(tmp_path):
@@ -63,28 +67,35 @@ def force_interactive(monkeypatch):
 class TestAutoModeVariableScope:
     def test_spec_auto_uses_correct_variable_name(self, temp_repo_dir, mock_git_ops, prepared_issue, force_interactive):
         """測試 spec --auto 使用正確的變數名稱"""
-        with patch('cafe.ui.cli._execute_single_step_alias') as mock_execute_alias, \
+        with patch('cafe.ui.cli.SpecPhase') as MockSpecPhase, \
              patch('cafe.ui.cli.subprocess.run') as mock_run:
             mock_run.return_value = MagicMock(returncode=0)
-            mock_execute_alias.side_effect = [
-                {
-                    "status_code": "CAFE_READY_FOR_REVIEW",
-                    "iterations": 1,
-                    "output_file": str(prepared_issue / "spec" / "iteration_001" / "output.md"),
-                },
-                {
-                    "status_code": "CAFE_CONFIRMED",
-                    "iterations": 2,
-                    "output_file": str(prepared_issue / "spec" / "iteration_001" / "output.md"),
-                },
-            ]
+            mock_phase = MagicMock()
+            MockSpecPhase.return_value = mock_phase
+            mock_result_ready = MagicMock()
+            mock_result_ready.status.value = "completed"
+            mock_result_ready.data = {
+                "status_code": "CAFE_READY_FOR_REVIEW",
+                "iterations": 1,
+                "spec_file": str(prepared_issue / "spec" / "iteration_001" / "output.md")
+            }
+            mock_result_confirmed = MagicMock()
+            mock_result_confirmed.status.value = "completed"
+            mock_result_confirmed.data = {
+                "status_code": "CAFE_CONFIRMED",
+                "iterations": 2,
+                "spec_file": str(prepared_issue / "spec" / "iteration_001" / "output.md")
+            }
+            mock_phase.execute.side_effect = [mock_result_ready, mock_result_confirmed]
             from typer.testing import CliRunner
             runner = CliRunner()
-            with patch('cafe.ui.cli.is_branch_initialized', return_value=True), \
-                 patch('cafe.ui.cli.prompt_multiline', return_value="Initial requirements"):
+            with patch('cafe.ui.cli.PermissionHandler'), \
+                 patch('cafe.ui.cli._setup_agents'), \
+                 patch('cafe.ui.cli.is_branch_initialized', return_value=True):
                 result = runner.invoke(app, ["spec", "--auto"])
                 assert result.exit_code == 0, f"Output: {result.output}"
                 assert "✅ Spec clarification completed!" in result.output
+                # 驗證是否有呼叫下一階段 (plan)
                 assert mock_run.called
                 args = mock_run.call_args[0][0]
                 assert "plan" in args
@@ -117,8 +128,8 @@ class TestAutoModeConfigPreservation:
         assert final_config["auto"]["max_review_iterations"] == 5
         assert final_config["spec"]["rigor"] == "medium"
 
-    def test_plan_command_preserves_issue_config(self, temp_repo_dir, mock_git_ops, prepared_issue, force_interactive):
-        """測試 plan command 不會覆寫 issue config"""
+    def test_plan_phase_preserves_issue_config(self, temp_repo_dir, mock_git_ops, prepared_issue, force_interactive):
+        """測試 plan phase 不會覆寫 issue config"""
         config_file = prepared_issue / "issue.yaml"
         with open(config_file, 'r') as f:
             config_data = yaml.safe_load(f)
@@ -128,15 +139,19 @@ class TestAutoModeConfigPreservation:
         spec_iter_dir = prepared_issue / "spec" / "iteration_001"
         spec_iter_dir.mkdir(parents=True, exist_ok=True)
         (spec_iter_dir / "output.md").write_text("# Test Spec")
-        with patch('cafe.ui.cli._execute_single_step_alias') as mock_execute_alias:
-            mock_execute_alias.return_value = {
-                "status_code": "CAFE_CONFIRMED",
-                "iterations": 2,
-                "output_file": str(prepared_issue / "plan" / "iteration_002" / "output.md"),
-            }
-            from typer.testing import CliRunner
-            runner = CliRunner()
-            with patch('cafe.ui.cli.is_branch_initialized', return_value=True):
+        with patch('cafe.ui.cli.PlanPhase') as MockPlanPhase:
+            mock_phase = MagicMock()
+            MockPlanPhase.return_value = mock_phase
+            mock_result = MagicMock()
+            mock_result.status.value = "completed"
+            mock_result.data = {"status_code": "CAFE_CONFIRMED", "iterations": 2}
+            mock_phase.execute.return_value = mock_result
+            with patch('cafe.ui.cli.PermissionHandler'), \
+                 patch('cafe.ui.cli._setup_agents'), \
+                 patch('cafe.ui.cli.typer.confirm', return_value=True), \
+                 patch('cafe.ui.cli.is_branch_initialized', return_value=True):
+                from typer.testing import CliRunner
+                runner = CliRunner()
                 result = runner.invoke(app, ["plan"])
                 assert result.exit_code == 0, f"Output: {result.output}"
                 with open(config_file, 'r') as f:
@@ -147,11 +162,15 @@ class TestAutoModeConfigPreservation:
 class TestAutoModeErrorHandling:
     def test_handle_phase_exception_shows_errors_in_auto_mode(self, temp_repo_dir, mock_git_ops, prepared_issue, force_interactive):
         """Test that errors are always shown in auto mode (never silently swallowed)."""
-        with patch('cafe.ui.cli._execute_single_step_alias', side_effect=Exception("Normal error")):
+        with patch('cafe.ui.cli.SpecPhase') as MockSpecPhase:
+            mock_phase = MagicMock()
+            MockSpecPhase.return_value = mock_phase
+            mock_phase.execute.side_effect = Exception("Normal error")
             from typer.testing import CliRunner
             runner = CliRunner()
-            with patch('cafe.ui.cli.is_branch_initialized', return_value=True), \
-                 patch('cafe.ui.cli.prompt_multiline', return_value="Initial requirements"):
+            with patch('cafe.ui.cli.PermissionHandler'), \
+                 patch('cafe.ui.cli._setup_agents'), \
+                 patch('cafe.ui.cli.is_branch_initialized', return_value=True):
                 result = runner.invoke(app, ["spec", "--auto"])
                 assert result.exit_code != 0
                 assert "Traceback" not in result.output
@@ -159,11 +178,15 @@ class TestAutoModeErrorHandling:
 
     def test_handle_phase_exception_shows_programming_errors_in_auto_mode(self, temp_repo_dir, mock_git_ops, prepared_issue, force_interactive):
         """測試在 auto mode 下仍然顯示程式碼錯誤"""
-        with patch('cafe.ui.cli._execute_single_step_alias', side_effect=NameError("name 'undefined_var' is not defined")):
+        with patch('cafe.ui.cli.SpecPhase') as MockSpecPhase:
+            mock_phase = MagicMock()
+            MockSpecPhase.return_value = mock_phase
+            mock_phase.execute.side_effect = NameError("name 'undefined_var' is not defined")
             from typer.testing import CliRunner
             runner = CliRunner()
-            with patch('cafe.ui.cli.is_branch_initialized', return_value=True), \
-                 patch('cafe.ui.cli.prompt_multiline', return_value="Initial requirements"):
+            with patch('cafe.ui.cli.PermissionHandler'), \
+                 patch('cafe.ui.cli._setup_agents'), \
+                 patch('cafe.ui.cli.is_branch_initialized', return_value=True):
                 result = runner.invoke(app, ["spec", "--auto"])
                 assert result.exit_code != 0
                 assert "undefined_var" in result.output
@@ -171,16 +194,20 @@ class TestAutoModeErrorHandling:
     def test_handle_phase_exception_shows_critical_errors_in_auto_mode(self, temp_repo_dir, mock_git_ops, prepared_issue, force_interactive):
         """測試在 auto mode 下仍然顯示 CriticalPhaseError"""
         from cafe.core.types import CriticalPhaseError
-        with patch('cafe.ui.cli._execute_single_step_alias') as mock_execute_alias:
-            mock_execute_alias.side_effect = CriticalPhaseError(
+        with patch('cafe.ui.cli.SpecPhase') as MockSpecPhase:
+            mock_phase = MagicMock()
+            MockSpecPhase.return_value = mock_phase
+            mock_phase.execute.side_effect = CriticalPhaseError(
                 message="Something critical", error_type="rate_limit", phase_name="SpecPhase"
             )
             from typer.testing import CliRunner
             runner = CliRunner()
-            with patch('cafe.ui.cli.is_branch_initialized', return_value=True), \
-                 patch('cafe.ui.cli.prompt_multiline', return_value="Initial requirements"):
+            with patch('cafe.ui.cli.PermissionHandler'), \
+                 patch('cafe.ui.cli._setup_agents'), \
+                 patch('cafe.ui.cli.is_branch_initialized', return_value=True):
                 result = runner.invoke(app, ["spec", "--auto"])
                 assert result.exit_code != 0
+                # _handle_phase_exception 對 rate_limit 會印出特定訊息
                 assert "API rate limit reached" in result.output
 
     def test_handle_phase_exception_shows_errors_in_non_auto_mode(self, temp_repo_dir, mock_git_ops, prepared_issue, force_interactive):
@@ -188,34 +215,49 @@ class TestAutoModeErrorHandling:
         spec_iter_dir = prepared_issue / "spec" / "iteration_001"
         spec_iter_dir.mkdir(parents=True, exist_ok=True)
         (spec_iter_dir / "output.md").write_text("# Test Spec")
-        with patch('cafe.ui.cli._execute_single_step_alias', side_effect=Exception("Any error")):
+        with patch('cafe.ui.cli.SpecPhase') as MockSpecPhase:
+            mock_phase = MagicMock()
+            MockSpecPhase.return_value = mock_phase
+            mock_phase.execute.side_effect = Exception("Any error")
             from typer.testing import CliRunner
             runner = CliRunner()
-            with patch('cafe.ui.cli.is_branch_initialized', return_value=True), \
-                 patch('cafe.ui.cli.prompt_multiline', return_value="Initial requirements"):
+            with patch('cafe.ui.cli.PermissionHandler'), \
+                 patch('cafe.ui.cli._setup_agents'), \
+                 patch('cafe.ui.cli.is_branch_initialized', return_value=True):
                 result = runner.invoke(app, ["spec"])
                 assert result.exit_code != 0
                 assert "Any error" in result.output
 
     def test_handle_phase_exception_does_not_print_for_typer_exit(self, temp_repo_dir, mock_git_ops, prepared_issue, force_interactive):
         """Test that typer.Exit propagating from subprocess chain does not print redundant error."""
-        with patch('cafe.ui.cli._execute_single_step_alias', side_effect=typer.Exit(1)):
+        with patch('cafe.ui.cli.SpecPhase') as MockSpecPhase:
+            mock_phase = MagicMock()
+            MockSpecPhase.return_value = mock_phase
+            mock_phase.execute.side_effect = typer.Exit(1)
             from typer.testing import CliRunner
             runner = CliRunner()
-            with patch('cafe.ui.cli.is_branch_initialized', return_value=True), \
-                 patch('cafe.ui.cli.prompt_multiline', return_value="Initial requirements"):
+            with patch('cafe.ui.cli.PermissionHandler'), \
+                 patch('cafe.ui.cli._setup_agents'), \
+                 patch('cafe.ui.cli.is_branch_initialized', return_value=True):
                 result = runner.invoke(app, ["spec", "--auto"])
                 assert result.exit_code != 0
                 assert "Error in spec phase" not in result.output
 
     def test_execute_next_phase_auto_does_not_print_redundant_errors(self, temp_repo_dir, mock_git_ops, prepared_issue, force_interactive):
         """測試 _execute_next_phase_auto 不會重覆列印錯誤訊息"""
-        with patch('cafe.ui.cli._execute_single_step_alias', side_effect=Exception("Execution failed")):
+        with patch('cafe.ui.cli.SpecPhase') as MockSpecPhase:
+            mock_phase = MagicMock()
+            MockSpecPhase.return_value = mock_phase
+            mock_result = MagicMock()
+            mock_result.status.value = "failed"
+            mock_result.message = "Execution failed"
+            mock_phase.execute.return_value = mock_result
             from typer.testing import CliRunner
             runner = CliRunner()
-            with patch('cafe.ui.cli.console.print') as mock_print, \
-                 patch('cafe.ui.cli.is_branch_initialized', return_value=True), \
-                 patch('cafe.ui.cli.prompt_multiline', return_value="Initial requirements"):
+            with patch('cafe.ui.cli.PermissionHandler'), \
+                 patch('cafe.ui.cli._setup_agents'), \
+                 patch('cafe.ui.cli.console.print') as mock_print, \
+                 patch('cafe.ui.cli.is_branch_initialized', return_value=True):
                 result = runner.invoke(app, ["spec", "--auto"])
                 assert result.exit_code != 0
                 print_calls = [args[0] for args, kwargs in mock_print.call_args_list if len(args) > 0 and isinstance(args[0], str)]
@@ -239,20 +281,20 @@ class TestReviewMaxIterationsConfig:
         plan_iter_dir = prepared_issue / "plan" / "iteration_001"
         plan_iter_dir.mkdir(parents=True, exist_ok=True)
         (plan_iter_dir / "output.md").write_text("# Test Plan")
-        with patch('cafe.ui.cli._execute_single_step_alias') as mock_execute_alias, \
-             patch('cafe.ui.cli.subprocess.run') as mock_run:
-            mock_run.return_value = MagicMock(returncode=0)
-            mock_execute_alias.return_value = {
-                "status_code": "CAFE_CONFIRMED",
-                "iterations": 1,
-                "output_file": str(prepared_issue / "review" / "iteration_001" / "output.md"),
-            }
+        with patch('cafe.ui.cli.ReviewPhase') as MockReviewPhase:
+            mock_phase = MagicMock()
+            MockReviewPhase.return_value = mock_phase
+            mock_result = MagicMock()
+            mock_result.status.value = "completed"
+            mock_result.data = {"status_code": "CAFE_CONFIRMED"}
+            mock_phase.execute.return_value = mock_result
             from typer.testing import CliRunner
             runner = CliRunner()
-            with patch('cafe.ui.cli.is_branch_initialized', return_value=True):
+            with patch('cafe.ui.cli.PermissionHandler'), \
+                 patch('cafe.ui.cli._setup_agents'), \
+                 patch('cafe.ui.cli.is_branch_initialized', return_value=True):
                 result = runner.invoke(app, ["review", "--auto"])
-                assert result.exit_code == 0, f"Output: {result.output}"
-                assert mock_run.called
+                assert MockReviewPhase.called, f"Output: {result.output}"
 
     def test_review_respects_config_limit_when_exceeded(self, temp_repo_dir, mock_git_ops, prepared_issue):
         """測試 review phase 達到上限後停止"""
@@ -267,15 +309,18 @@ class TestReviewMaxIterationsConfig:
         review_iter_dir = prepared_issue / "review" / "iteration_001"
         review_iter_dir.mkdir(parents=True, exist_ok=True)
         (review_iter_dir / "output.md").write_text("# Test Review")
-        with patch('cafe.ui.cli._execute_single_step_alias') as mock_execute_alias:
-            mock_execute_alias.return_value = {
-                "status_code": "CAFE_NEEDS_CHANGES",
-                "iterations": 1,
-                "output_file": str(review_iter_dir / "output.md"),
-            }
+        with patch('cafe.ui.cli.ReviewPhase') as MockReviewPhase:
+            mock_phase = MagicMock()
+            MockReviewPhase.return_value = mock_phase
+            mock_result = MagicMock()
+            mock_result.status.value = "completed"
+            mock_result.data = {"status_code": "CAFE_NEED_CHANGES"}
+            mock_phase.execute.return_value = mock_result
             from typer.testing import CliRunner
             runner = CliRunner()
-            with patch('cafe.ui.cli.is_branch_initialized', return_value=True):
+            with patch('cafe.ui.cli.PermissionHandler'), \
+                 patch('cafe.ui.cli._setup_agents'), \
+                 patch('cafe.ui.cli.is_branch_initialized', return_value=True):
                 result = runner.invoke(app, ["review", "--auto"])
                 assert "Review loop limit reached" in result.output
-                assert mock_execute_alias.call_count == 1
+                assert mock_phase.execute.call_count == 1
