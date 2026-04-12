@@ -375,7 +375,14 @@ class AgentExecutor:
                     print(f"\n⚠️  Session {old_session_id} not found, creating new session...\n")
 
                 # Create new session
-                new_session_id = create_new_session_fn()
+                try:
+                    new_session_id = create_new_session_fn()
+                except Exception as create_error:
+                    wrapped_error = AgentExecutionError(
+                        f"Failed to create {cli_name} session: {create_error}"
+                    )
+                    wrapped_error.cli_command_args = cmd[1:]
+                    raise wrapped_error from create_error
 
                 # Update command with new session
                 cmd = update_cmd_with_session_fn(cmd, new_session_id)

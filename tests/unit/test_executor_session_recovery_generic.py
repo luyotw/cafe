@@ -163,6 +163,49 @@ class TestGenericSessionRecovery:
         assert executor.config.session_id == "new-codex-thread"
         assert call_count[0] == 2
 
+    def test_codex_session_creation_failure_preserves_cli_command_args(self):
+        """Codex create_session failures should still expose CLI args for context.json."""
+        config = AgentConfig(
+            name="TestAgent",
+            cli=AgentCLI.CODEX,
+            session_id="old-codex-thread",
+            model="gpt-5.3-codex",
+        )
+        executor = AgentExecutor(config)
+
+        def mock_popen(*args, **kwargs):
+            mock_proc = MagicMock()
+            mock_proc.stdout.readline.side_effect = [""]
+            mock_proc.stderr = MagicMock()
+            mock_proc.stderr.read.return_value = (
+                "Error: thread/resume: thread/resume failed: "
+                "no rollout found for thread id old-codex-thread"
+            )
+            mock_proc.wait.return_value = 1
+            return mock_proc
+
+        with patch("subprocess.Popen", side_effect=mock_popen):
+            with patch("subprocess.run", side_effect=RuntimeError("websocket 500")):
+                with patch("sys.platform", "win32"):
+                    with pytest.raises(Exception) as exc_info:
+                        executor.execute("Test prompt")
+
+        err = exc_info.value
+        assert "Failed to create Codex session" in str(err)
+        assert getattr(err, "cli_command_args", None) == [
+            "-C",
+            str(Path.cwd().resolve()),
+            "-a",
+            "never",
+            "exec",
+            "resume",
+            "--model",
+            "gpt-5.3-codex",
+            "--json",
+            "old-codex-thread",
+            "Test prompt",
+        ]
+
 
     def test_non_session_error_still_raises(self):
         """測試非 session 錯誤仍然正常拋出"""
