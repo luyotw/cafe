@@ -239,6 +239,76 @@ def test_skill_import_overwrites_existing_skill_when_confirmed(tmp_path: Path, m
     assert (existing_dir / "SKILL.md").read_text(encoding="utf-8").endswith("New body\n")
 
 
+def test_skill_rm_deletes_named_skills_when_confirmed(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    alpha_dir = tmp_path / ".cafe" / "skills" / "alpha"
+    beta_dir = tmp_path / ".cafe" / "skills" / "beta"
+    for skill_dir in (alpha_dir, beta_dir):
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        (skill_dir / "SKILL.md").write_text(
+            f"---\nname: {skill_dir.name}\ndescription: {skill_dir.name}\n---\n",
+            encoding="utf-8",
+        )
+
+    with patch("cafe.ui.cli.prompt_confirm", return_value=True) as mock_confirm:
+        result = runner.invoke(app, ["skill", "rm", "alpha", "beta"])
+
+    assert result.exit_code == 0
+    assert mock_confirm.call_count == 1
+    assert "Removed 2 skill(s)" in result.stdout
+    assert not alpha_dir.exists()
+    assert not beta_dir.exists()
+
+
+def test_skill_rm_interactive_uses_checkbox_selection(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    alpha_dir = tmp_path / ".cafe" / "skills" / "alpha"
+    beta_dir = tmp_path / ".cafe" / "skills" / "beta"
+    for skill_dir in (alpha_dir, beta_dir):
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        (skill_dir / "SKILL.md").write_text(
+            f"---\nname: {skill_dir.name}\ndescription: {skill_dir.name}\n---\n",
+            encoding="utf-8",
+        )
+
+    with patch("cafe.ui.cli.prompt_checkbox", return_value=["beta"]) as mock_checkbox, \
+         patch("cafe.ui.cli.prompt_confirm", return_value=True):
+        result = runner.invoke(app, ["skill", "rm"])
+
+    assert result.exit_code == 0
+    mock_checkbox.assert_called_once()
+    assert alpha_dir.exists()
+    assert not beta_dir.exists()
+    assert "Removed 1 skill(s)" in result.stdout
+
+
+def test_skill_rm_cancelled_when_confirmation_declined(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    alpha_dir = tmp_path / ".cafe" / "skills" / "alpha"
+    alpha_dir.mkdir(parents=True, exist_ok=True)
+    (alpha_dir / "SKILL.md").write_text(
+        "---\nname: alpha\ndescription: alpha\n---\n",
+        encoding="utf-8",
+    )
+
+    with patch("cafe.ui.cli.prompt_confirm", return_value=False):
+        result = runner.invoke(app, ["skill", "rm", "alpha"])
+
+    assert result.exit_code == 0
+    assert "Cancelled" in result.stdout
+    assert alpha_dir.exists()
+
+
+def test_skill_rm_reports_missing_skills_when_none_exist(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".cafe" / "skills").mkdir(parents=True, exist_ok=True)
+
+    result = runner.invoke(app, ["skill", "rm", "missing"])
+
+    assert result.exit_code == 1
+    assert "not found" in result.stdout
+
+
 def test_help_lists_dynamic_playbook_steps(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     (tmp_path / ".cafe").mkdir(parents=True, exist_ok=True)

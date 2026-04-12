@@ -14,7 +14,7 @@ import typer
 import click
 from typer.core import TyperGroup
 
-from cafe.ui.inquirer_prompts import prompt_confirm, prompt_list, prompt_multiline, prompt_text
+from cafe.ui.inquirer_prompts import prompt_checkbox, prompt_confirm, prompt_list, prompt_multiline, prompt_text
 from cafe.ui.menu import InteractiveMenu
 import yaml
 from rich.console import Console
@@ -30,6 +30,7 @@ from cafe.phases.generic_workflow_step import GenericWorkflowStepExecutor
 from cafe.playbooks.loader import PlaybookLoader
 from cafe.skills.importer import SkillImportSummary, import_skills
 from cafe.skills.loader import SkillLoader
+from cafe.skills.remover import SkillRemoveSummary, remove_skills
 from cafe.templates.manager import TemplateManager
 from cafe.ui import init_helpers
 from cafe.ui.chat import get_chat_next_step_path, launch_chat_session
@@ -4818,6 +4819,23 @@ def _print_skill_import_summary(summary: SkillImportSummary) -> None:
             console.print(f"[red]failed:[/red] {item.name} ({item.reason})")
 
 
+def _print_skill_remove_summary(summary: SkillRemoveSummary) -> None:
+    """Print skill removal result summary."""
+    console.print(f"[green]Removed {summary.removed_count} skill(s)[/green]")
+    if summary.skipped_count:
+        console.print(f"[yellow]Skipped {summary.skipped_count} item(s)[/yellow]")
+    if summary.failed_count:
+        console.print(f"[red]Failed {summary.failed_count} item(s)[/red]")
+
+    for item in summary.results:
+        if item.status == "removed":
+            console.print(f"[green]removed:[/green] {item.name}")
+        elif item.status == "skipped":
+            console.print(f"[yellow]skipped:[/yellow] {item.name} ({item.reason})")
+        else:
+            console.print(f"[red]failed:[/red] {item.name} ({item.reason})")
+
+
 @skill_app.command(name="import")
 def skill_import(
     path: str = typer.Argument(..., help="Directory containing one or more skill folders"),
@@ -4837,6 +4855,72 @@ def skill_import(
         raise typer.Exit(1)
 
     _print_skill_import_summary(summary)
+
+
+@skill_app.command(name="rm")
+def skill_rm(
+    names: Optional[list[str]] = typer.Argument(None, help="Names of skills to remove"),
+    force: bool = typer.Option(False, "--force", "-f", help="Skip confirmation prompt"),
+) -> None:
+    """Remove one or more project skills."""
+    project_root = Path.cwd()
+    skills_root = project_root / ".cafe" / "skills"
+
+    try:
+        if not names:
+            available_skills = sorted(
+                item.name for item in skills_root.iterdir()
+                if item.is_dir() or item.is_symlink()
+            ) if skills_root.exists() else []
+            if not available_skills:
+                console.print("[yellow]No project skills found[/yellow]")
+                raise typer.Exit(0)
+
+            selected = prompt_checkbox(
+                message="Select skill(s) to delete:",
+                choices=available_skills,
+            )
+            if not selected:
+                console.print("[dim]Cancelled[/dim]")
+                raise typer.Exit(0)
+            names = selected
+    except (KeyboardInterrupt, EOFError):
+        console.print("\n[dim]Cancelled[/dim]")
+        raise typer.Exit(0)
+
+    names = list(dict.fromkeys(names))
+    existing_names = [
+        name for name in names
+        if (skills_root / name).exists() or (skills_root / name).is_symlink()
+    ]
+
+    if not existing_names:
+        summary = remove_skills(names, project_root)
+        _print_skill_remove_summary(summary)
+        raise typer.Exit(1)
+
+    if not force:
+        console.print(f"[yellow]About to delete {len(existing_names)} skill(s):[/yellow]")
+        for name in existing_names:
+            console.print(f"  • {name} [dim]({skills_root / name})[/dim]")
+        console.print()
+        try:
+            confirm = prompt_confirm(
+                f"Are you sure you want to delete {len(existing_names)} skill(s)?",
+                default=False,
+            )
+        except (KeyboardInterrupt, EOFError):
+            console.print("\n[dim]Cancelled[/dim]")
+            raise typer.Exit(0)
+        if not confirm:
+            console.print("[dim]Cancelled[/dim]")
+            raise typer.Exit(0)
+
+    summary = remove_skills(names, project_root)
+    _print_skill_remove_summary(summary)
+
+    if summary.removed_count == 0 and summary.failed_count == 0:
+        raise typer.Exit(1)
 
 
 @agent_app.command(name="ls")

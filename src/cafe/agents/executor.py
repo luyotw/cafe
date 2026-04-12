@@ -407,26 +407,33 @@ class AgentExecutor:
                     # Handle prompt too long error: create fresh session
                     old_session_id = self.config.session_id
                     print(f"\n⚠️  Prompt is too long for session {old_session_id}, creating fresh session...\n")
+                    # Create new session
+                    try:
+                        new_session_id = create_new_session_fn()
+                    except Exception as create_error:
+                        wrapped_error = AgentExecutionError(
+                            f"Failed to create {cli_name} session: {create_error}"
+                        )
+                        wrapped_error.cli_command_args = cmd[1:]
+                        raise wrapped_error from create_error
+
+                    # Update command with new session
+                    cmd = update_cmd_with_session_fn(cmd, new_session_id)
+
+                    # Update config
+                    self.config.session_id = new_session_id
                 else:
                     # Handle stale/invalid resume state
                     old_session_id = self.config.session_id
                     print(f"\n⚠️  Resume failed for session {old_session_id}, retrying without resume...\n")
-
-                # Create new session
-                try:
-                    new_session_id = create_new_session_fn()
-                except Exception as create_error:
-                    wrapped_error = AgentExecutionError(
-                        f"Failed to create {cli_name} session: {create_error}"
-                    )
-                    wrapped_error.cli_command_args = cmd[1:]
-                    raise wrapped_error from create_error
-
-                # Update command with new session
-                cmd = update_cmd_with_session_fn(cmd, new_session_id)
-
-                # Update config
-                self.config.session_id = new_session_id
+                    cmd = list(cmd)
+                    if "resume" in cmd:
+                        resume_idx = cmd.index("resume")
+                        del cmd[resume_idx:resume_idx + 2]
+                    elif "--resume" in cmd:
+                        resume_idx = cmd.index("--resume")
+                        del cmd[resume_idx:resume_idx + 2]
+                    self.config.session_id = ""
 
                 # Retry recursively to support multiple recovery attempts
                 return self._execute_with_session_recovery(
