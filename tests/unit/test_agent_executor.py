@@ -656,6 +656,25 @@ class TestStreamingExecution:
         assert agent_response.token_usage.duration_api_ms == 12000
 
 
+class TestProjectSkillWorkspacePreparation:
+    """Test deprecated workspace preparation is skipped during execution."""
+
+    def test_execute_skips_cli_workspace_preparation_before_running(self) -> None:
+        """Claude execution should no longer prepare CLI workspace before build_command."""
+        config = AgentConfig(name="Roger", cli=AgentCLI.CLAUDE, session_id="session-123")
+        executor = AgentExecutor(config)
+        mock_cli = MagicMock()
+        mock_cli.build_command.return_value = ["claude", "-p", "Test prompt"]
+        mock_cli.translate_allowed_tools.return_value = []
+        mock_cli.parse_response.return_value = ("done", TokenUsage(), [])
+
+        with patch.object(executor, "_get_cli_strategy", return_value=mock_cli), \
+             patch.object(executor, "_execute_with_session_recovery", return_value=AgentResponse(response="done", token_usage=TokenUsage(), permission_denials=[])):
+            executor.execute("Test prompt")
+
+        mock_cli.prepare_project_workspace.assert_not_called()
+
+
 class TestCLICommandArgsGeneration:
     """測試 CLI command args 生成功能"""
 
