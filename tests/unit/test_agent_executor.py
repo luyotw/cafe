@@ -145,8 +145,8 @@ class TestCodexPermissionExtraction:
         assert denials[0].tool_name == "Bash"
         assert denials[0].tool_input["command"].startswith("git add src/cafe/ui/cli.py")
 
-    def test_codex_exec_uses_repo_local_codex_home(self) -> None:
-        """Codex executions should point at the repo-local .codex directory."""
+    def test_codex_exec_does_not_override_codex_home(self) -> None:
+        """Codex executions should inherit the default environment."""
         config = AgentConfig(name="Nick", cli=AgentCLI.CODEX)
         executor = AgentExecutor(config)
 
@@ -161,7 +161,7 @@ class TestCodexPermissionExtraction:
         with patch("subprocess.Popen", return_value=mock_process) as mock_popen, patch("sys.platform", "win32"):
             executor.execute("Test prompt")
 
-        assert mock_popen.call_args.kwargs["env"]["CODEX_HOME"] == str(Path.cwd().resolve() / ".codex")
+        assert "CODEX_HOME" not in mock_popen.call_args.kwargs["env"]
 
 
 class TestTokenUsageTracking:

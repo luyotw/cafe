@@ -40,8 +40,6 @@ class TestLaunchChatSession:
         executor = MagicMock()
         executor.config = config
         env = dict(os.environ)
-        if cli == "codex":
-            env["CODEX_HOME"] = str(Path.cwd().resolve() / ".codex")
         executor._get_cli_strategy.return_value.build_environment.return_value = env
 
         agent_manager = MagicMock()
@@ -247,7 +245,7 @@ class TestLaunchChatSession:
 
         assert result == 0
         assert mock_run.call_args.args[0] == ["codex", "--model", "gpt-5.4"]
-        assert mock_run.call_args.kwargs["env"]["CODEX_HOME"] == str(Path.cwd().resolve() / ".codex")
+        assert "CODEX_HOME" not in mock_run.call_args.kwargs["env"]
         agent_manager.session_manager.save_session.assert_called_once_with(
             "Nick",
             AgentCLI.CODEX,
@@ -277,7 +275,7 @@ class TestLaunchChatSession:
 
         assert result == 0
         assert mock_run.call_args.args[0] == ["codex", "--model", "gpt-5.4", "resume", "sess-codex"]
-        assert mock_run.call_args.kwargs["env"]["CODEX_HOME"] == str(Path.cwd().resolve() / ".codex")
+        assert "CODEX_HOME" not in mock_run.call_args.kwargs["env"]
         agent_manager.session_manager.save_session.assert_called_once_with(
             "Nick",
             AgentCLI.CODEX,
