@@ -23,18 +23,21 @@ class TestGenericSessionRecovery:
 
         def mock_popen(*args, **kwargs):
             call_count[0] += 1
+            cmd = args[0]
             mock_proc = MagicMock()
 
             if call_count[0] == 1:
+                assert "--resume" in cmd
                 # 第一次：session 不存在
                 mock_proc.stdout.readline.side_effect = ['']
                 mock_proc.stderr = MagicMock()
                 mock_proc.stderr.read.return_value = "Conversation does not exist"
                 mock_proc.wait.return_value = 1
             else:
+                assert "--resume" not in cmd
                 # 第二次：成功
                 mock_proc.stdout.readline.side_effect = [
-                    '{"message":{"content":[{"type":"text","text":"Success"}]}}\n',
+                    '{"session_id":"new-session","message":{"content":[{"type":"text","text":"Success"}]}}\n',
                     ''
                 ]
                 mock_proc.stderr = MagicMock()
@@ -44,14 +47,8 @@ class TestGenericSessionRecovery:
             return mock_proc
 
         with patch("subprocess.Popen", side_effect=mock_popen):
-            with patch("subprocess.run") as mock_run:
-                mock_run.return_value = MagicMock(
-                    returncode=0,
-                    stdout='{"session_id": "new-session"}',
-                    stderr=""
-                )
-                with patch("sys.platform", "win32"):
-                    response = executor.execute("Test prompt")
+            with patch("sys.platform", "win32"):
+                response = executor.execute("Test prompt")
 
         # 驗證成功恢復
         assert response is not None
@@ -115,6 +112,138 @@ class TestGenericSessionRecovery:
         # Copilot 會自動偵測新 session
         assert call_count[0] == 2
 
+    def test_codex_thread_resume_failure_retries_without_resume(self):
+        """Codex thread/resume no rollout errors should retry the real prompt without resume."""
+        config = AgentConfig(
+            name="TestAgent",
+            cli=AgentCLI.CODEX,
+            session_id="old-codex-thread",
+        )
+        executor = AgentExecutor(config)
+
+        call_count = [0]
+
+        def mock_popen(*args, **kwargs):
+            call_count[0] += 1
+            cmd = args[0]
+            mock_proc = MagicMock()
+
+            if call_count[0] == 1:
+                assert "resume" in cmd
+                mock_proc.stdout.readline.side_effect = [""]
+                mock_proc.stderr = MagicMock()
+                mock_proc.stderr.read.return_value = (
+                    "Error: thread/resume: thread/resume failed: "
+                    "no rollout found for thread id old-codex-thread"
+                )
+                mock_proc.wait.return_value = 1
+            else:
+                assert "resume" not in cmd
+                mock_proc.stdout.readline.side_effect = [
+                    '{"type":"thread.started","thread_id":"new-codex-thread"}\n',
+                    '{"type":"item.completed","item":{"type":"agent_message","text":"Recovered"}}\n',
+                    "",
+                ]
+                mock_proc.stderr = MagicMock()
+                mock_proc.stderr.read.return_value = ""
+                mock_proc.wait.return_value = 0
+
+            return mock_proc
+
+        with patch("subprocess.Popen", side_effect=mock_popen):
+            with patch("sys.platform", "win32"):
+                response = executor.execute("Test prompt")
+
+        assert response.response == "Recovered"
+        assert executor.config.session_id == "new-codex-thread"
+        assert call_count[0] == 2
+
+    def test_codex_stale_resume_message_mentions_retry_without_resume(self, capsys):
+        """Codex stale resume logs should reflect the actual retry behavior."""
+        config = AgentConfig(
+            name="TestAgent",
+            cli=AgentCLI.CODEX,
+            session_id="old-codex-thread",
+        )
+        executor = AgentExecutor(config)
+
+        call_count = [0]
+
+        def mock_popen(*args, **kwargs):
+            call_count[0] += 1
+            cmd = args[0]
+            mock_proc = MagicMock()
+
+            if call_count[0] == 1:
+                assert "resume" in cmd
+                mock_proc.stdout.readline.side_effect = [""]
+                mock_proc.stderr = MagicMock()
+                mock_proc.stderr.read.return_value = (
+                    "Error: thread/resume: thread/resume failed: "
+                    "no rollout found for thread id old-codex-thread"
+                )
+                mock_proc.wait.return_value = 1
+            else:
+                assert "resume" not in cmd
+                mock_proc.stdout.readline.side_effect = [
+                    '{"type":"thread.started","thread_id":"new-codex-thread"}\n',
+                    '{"type":"item.completed","item":{"type":"agent_message","text":"Recovered"}}\n',
+                    "",
+                ]
+                mock_proc.stderr = MagicMock()
+                mock_proc.stderr.read.return_value = ""
+                mock_proc.wait.return_value = 0
+
+            return mock_proc
+
+        with patch("subprocess.Popen", side_effect=mock_popen):
+            with patch("sys.platform", "win32"):
+                executor.execute("Test prompt")
+
+        captured = capsys.readouterr()
+        assert "retrying without resume" in captured.out.lower()
+        assert "creating new session" not in captured.out.lower()
+
+    def test_codex_session_recovery_preserves_cli_command_args(self):
+        """Codex stale session errors should still expose CLI args for context.json."""
+        config = AgentConfig(
+            name="TestAgent",
+            cli=AgentCLI.CODEX,
+            session_id="old-codex-thread",
+            model="gpt-5.3-codex",
+        )
+        executor = AgentExecutor(config)
+
+        def mock_popen(*args, **kwargs):
+            mock_proc = MagicMock()
+            mock_proc.stdout.readline.side_effect = [""]
+            mock_proc.stderr = MagicMock()
+            mock_proc.stderr.read.return_value = (
+                "Error: thread/resume: thread/resume failed: "
+                "no rollout found for thread id old-codex-thread"
+            )
+            mock_proc.wait.return_value = 1
+            return mock_proc
+
+        with patch("subprocess.Popen", side_effect=mock_popen):
+            with patch("sys.platform", "win32"):
+                with pytest.raises(Exception) as exc_info:
+                    executor.execute("Test prompt")
+
+        err = exc_info.value
+        assert "no rollout found" in str(err).lower()
+        assert getattr(err, "cli_command_args", None) == [
+            "-C",
+            str(Path.cwd().resolve()),
+            "-a",
+            "never",
+            "exec",
+            "Test prompt",
+            "--model",
+            "gpt-5.3-codex",
+            "--json",
+        ]
+
 
     def test_non_session_error_still_raises(self):
         """測試非 session 錯誤仍然正常拋出"""
@@ -158,16 +287,19 @@ class TestGenericSessionRecovery:
 
         def mock_popen(*args, **kwargs):
             call_count[0] += 1
+            cmd = args[0]
             mock_proc = MagicMock()
 
             if call_count[0] == 1:
+                assert "--resume" in cmd
                 mock_proc.stdout.readline.side_effect = ['']
                 mock_proc.stderr = MagicMock()
                 mock_proc.stderr.read.return_value = "No conversation found"
                 mock_proc.wait.return_value = 1
             else:
+                assert "--resume" not in cmd
                 mock_proc.stdout.readline.side_effect = [
-                    '{"message":{"content":[{"type":"text","text":"OK"}]}}\n',
+                    '{"session_id":"fresh-session","message":{"content":[{"type":"text","text":"OK"}]}}\n',
                     ''
                 ]
                 mock_proc.stderr = MagicMock()
@@ -177,14 +309,8 @@ class TestGenericSessionRecovery:
             return mock_proc
 
         with patch("subprocess.Popen", side_effect=mock_popen):
-            with patch("subprocess.run") as mock_run:
-                mock_run.return_value = MagicMock(
-                    returncode=0,
-                    stdout='{"session_id": "fresh-session"}',
-                    stderr=""
-                )
-                with patch("sys.platform", "win32"):
-                    executor.execute("Test prompt")
+            with patch("sys.platform", "win32"):
+                executor.execute("Test prompt")
 
         # 驗證 session_id 已更新
         assert executor.config.session_id == "fresh-session"
@@ -199,22 +325,26 @@ class TestGenericSessionRecovery:
         executor = AgentExecutor(config)
 
         call_count = [0]
-        session_creation_count = [0]
-
         def mock_popen(*args, **kwargs):
             call_count[0] += 1
+            cmd = args[0]
             mock_proc = MagicMock()
 
             if call_count[0] <= 2:
+                if call_count[0] == 1:
+                    assert "--resume" in cmd
+                else:
+                    assert "--resume" not in cmd
                 # 前兩次：session 不存在
                 mock_proc.stdout.readline.side_effect = ['']
                 mock_proc.stderr = MagicMock()
                 mock_proc.stderr.read.return_value = "No conversation found"
                 mock_proc.wait.return_value = 1
             else:
+                assert "--resume" not in cmd
                 # 第三次：成功
                 mock_proc.stdout.readline.side_effect = [
-                    '{"message":{"content":[{"type":"text","text":"Success"}]}}\n',
+                    '{"session_id":"session-3","message":{"content":[{"type":"text","text":"Success"}]}}\n',
                     ''
                 ]
                 mock_proc.stderr = MagicMock()
@@ -223,24 +353,13 @@ class TestGenericSessionRecovery:
 
             return mock_proc
 
-        def mock_run_for_session_creation(*args, **kwargs):
-            session_creation_count[0] += 1
-            return MagicMock(
-                returncode=0,
-                stdout=f'{{"session_id": "session-{session_creation_count[0] + 1}"}}',
-                stderr=""
-            )
-
         with patch("subprocess.Popen", side_effect=mock_popen):
-            with patch("subprocess.run", side_effect=mock_run_for_session_creation):
-                with patch("sys.platform", "win32"):
-                    response = executor.execute("Test prompt")
+            with patch("sys.platform", "win32"):
+                response = executor.execute("Test prompt")
 
         # 驗證成功執行
         assert response.response == "Success"
 
-        # 驗證經過 2 次 session 創建（session-1 → session-2 → session-3）
-        assert session_creation_count[0] == 2
         assert executor.config.session_id == "session-3"
 
         # 驗證執行了 3 次（2 次失敗 + 1 次成功）
@@ -264,23 +383,12 @@ class TestGenericSessionRecovery:
             mock_proc.wait.return_value = 1
             return mock_proc
 
-        session_creation_count = [0]
-
-        def mock_run_for_session_creation(*args, **kwargs):
-            session_creation_count[0] += 1
-            return MagicMock(
-                returncode=0,
-                stdout=f'{{"session_id": "session-{session_creation_count[0] + 1}"}}',
-                stderr=""
-            )
-
         from cafe.agents.executor import AgentExecutionError
 
         with patch("subprocess.Popen", side_effect=mock_popen):
-            with patch("subprocess.run", side_effect=mock_run_for_session_creation):
-                with patch("sys.platform", "win32"):
-                    with pytest.raises(AgentExecutionError):
-                        executor.execute("Test prompt")
+            with patch("sys.platform", "win32"):
+                with pytest.raises(AgentExecutionError):
+                    executor.execute("Test prompt")
 
         # 驗證達到最大 retry 次數（3 次, 因為 max_retries=3）
-        assert session_creation_count[0] == 3
+        assert executor.config.session_id == ""

@@ -1,0 +1,83 @@
+playbook:
+  id: hotfix
+  name: "Hotfix Workflow"
+
+roles:
+  developer:
+    description: "Developer"
+    default_agent: "David"
+    default_cli: "claude"
+  reviewer:
+    description: "Code Reviewer"
+    default_agent: "Richard"
+    default_cli: "gemini"
+
+steps:
+  develop:
+    type: skill
+    skill: develop
+    role: developer
+    assignee_type: agent
+    input_artifacts: []
+    output_artifact: code
+    allowed_tools: [Read, Edit, Write, Grep, Glob, Bash, WebFetch, WebSearch]
+    valid_status_codes:
+      - CAFE_CONFIRMED
+      - CAFE_CONFIRMED_SKIP_REVIEW
+      - CAFE_NEED_CLARIFICATION
+      - CAFE_NEED_PERMISSION
+      - CAFE_NO_CHANGES_NEEDED
+    hooks:
+      prepare_input: [UserInputCollector]
+      after_execute: [PermissionRetryHandler]
+    "on":
+      CAFE_CONFIRMED: review
+      CAFE_CONFIRMED_SKIP_REVIEW: pr
+      CAFE_NEED_CLARIFICATION: develop
+      CAFE_NEED_PERMISSION: develop
+      CAFE_NO_CHANGES_NEEDED: review
+
+  review:
+    type: skill
+    skill: review
+    role: reviewer
+    assignee_type: agent
+    input_artifacts: [code]
+    output_artifact: review_feedback
+    allowed_tools: [Read, Grep, Glob, "Bash(git:*)"]
+    valid_status_codes:
+      - CAFE_CONFIRMED
+      - CAFE_NEEDS_CHANGES
+      - CAFE_NEED_CLARIFICATION
+    max_iterations: 1
+    allowed_goto: [develop]
+    hooks:
+      prepare_input: [UserInputCollector]
+      before_execute: [NewChangesGate]
+    "on":
+      CAFE_CONFIRMED: pr
+      CAFE_NEEDS_CHANGES: develop
+      CAFE_NEED_CLARIFICATION: review
+
+  pr:
+    type: skill
+    skill: pr
+    role: developer
+    assignee_type: agent
+    input_artifacts: [code, review_feedback]
+    output_artifact: pr_result
+    allowed_tools: [Read, Edit, Write, Grep, Glob, Bash, WebFetch, WebSearch]
+    valid_status_codes:
+      - CAFE_READY_FOR_REVIEW
+      - CAFE_CONFIRMED
+      - CAFE_NEEDS_CHANGES
+    allowed_goto: [develop, review]
+    hooks:
+      prepare_input: [GitHubPRCreator, UserInputCollector]
+      publish_output: [GitHubPRCreator, PRCommentPoster, PRLinkOpener]
+    "on":
+      CAFE_READY_FOR_REVIEW: pr
+      CAFE_CONFIRMED: _done
+      CAFE_NEEDS_CHANGES: develop
+
+entry_point: develop

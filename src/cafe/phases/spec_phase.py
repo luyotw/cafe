@@ -55,7 +55,7 @@ def update_github_issue(issue_id: str, content: str) -> None:
 
 
 class SpecPhase(Phase):
-    """Specification phase: Requirements clarification with PM agent."""
+    """Legacy compatibility implementation for the spec phase."""
 
     def __init__(
         self,
@@ -1096,7 +1096,20 @@ class SpecPhase(Phase):
 
         # --- 4. Build prompt ---
         checklist_instruction = format_checklist_instruction(checklist_path)
-        base_prompt = f"""# Specification Phase\n\n{checklist_instruction}\n\n{initial_instruction}\n{context_section}\n{rigor_guidelines}\n\n{status_code_prompt}\n"""
+        from cafe.skills.bridge import try_load_skill_body
+
+        skill_name = "spec_first" if self.iteration == 1 else "spec_revise"
+        skill_body = try_load_skill_body(
+            skill_name,
+            context={
+                "agent_file": agent_file,
+                "blackboard_digest": "",
+                "output_file": current_spec_file,
+                "status_code_instruction": status_code_prompt,
+            },
+        )
+        skill_section = f"{skill_body}\n\n" if skill_body else ""
+        base_prompt = f"""# Specification Phase\n\n{skill_section}{checklist_instruction}\n\n{initial_instruction}\n{context_section}\n{rigor_guidelines}\n\n{status_code_prompt}\n"""
 
         # --- 5. Return the final prompt ---
         return base_prompt

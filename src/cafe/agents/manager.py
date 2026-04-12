@@ -225,6 +225,22 @@ class AgentManager:
 
         return response, token_usage, permission_denials, cli_command_args, streaming_log, model
 
+    def preview_cli_command_args(
+        self,
+        agent_name: str,
+        prompt: str,
+        allowed_tools: Optional[List[str]] = None,
+        allowed_directories: Optional[List[str]] = None,
+    ) -> Optional[List[str]]:
+        """Preview CLI command args before execution starts."""
+        executor = self.get_agent(agent_name)
+        return executor.preview_cli_command_args(prompt, allowed_tools, allowed_directories)
+
+    def preview_cli_environment(self, agent_name: str) -> Optional[dict[str, str]]:
+        """Build the CLI environment that would be used for execution."""
+        executor = self.get_agent(agent_name)
+        return executor.preview_cli_environment()
+
     def _try_backup_agents(
         self,
         primary_error: "AgentExecutionError",

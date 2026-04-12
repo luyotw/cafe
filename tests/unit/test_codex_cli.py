@@ -28,6 +28,17 @@ def codex_config_with_model():
     return AgentConfig(name="test_codex", cli=AgentCLI.CODEX, model="gpt-5-codex")
 
 
+@pytest.fixture
+def codex_config_with_session_and_model():
+    """Create a Codex config with session ID and model."""
+    return AgentConfig(
+        name="test_codex",
+        cli=AgentCLI.CODEX,
+        session_id="session-123",
+        model="gpt-5-codex",
+    )
+
+
 class TestCodexCLIBuildCommand:
     """Test build_command()."""
 
@@ -37,7 +48,7 @@ class TestCodexCLIBuildCommand:
 
         assert cmd[:6] == ["codex", "-C", str(Path.cwd().resolve()), "-a", "never", "exec"]
         assert "--json" in cmd
-        assert cmd[-1] == "test prompt"
+        assert cmd[6] == "test prompt"
 
     def test_build_command_with_session(self, codex_config_with_session):
         cli = CodexCLI(codex_config_with_session)
@@ -45,15 +56,27 @@ class TestCodexCLIBuildCommand:
 
         assert cmd[:7] == ["codex", "-C", str(Path.cwd().resolve()), "-a", "never", "exec", "resume"]
         assert "--json" in cmd
-        assert cmd[-2] == "session-123"
-        assert cmd[-1] == "test prompt"
+        assert cmd[7] == "session-123"
+        assert cmd[8] == "test prompt"
 
     def test_build_command_with_model(self, codex_config_with_model):
         cli = CodexCLI(codex_config_with_model)
         cmd = cli.build_command("test prompt")
 
+        assert cmd[6] == "test prompt"
         assert "--model" in cmd
         model_idx = cmd.index("--model")
+        assert cmd[model_idx + 1] == "gpt-5-codex"
+
+    def test_build_command_with_session_places_model_after_prompt(self, codex_config_with_session_and_model):
+        cli = CodexCLI(codex_config_with_session_and_model)
+        cmd = cli.build_command("test prompt")
+
+        assert "resume" in cmd
+        assert cmd[7] == "session-123"
+        assert cmd[8] == "test prompt"
+        model_idx = cmd.index("--model")
+        assert model_idx > 8
         assert cmd[model_idx + 1] == "gpt-5-codex"
 
     def test_build_command_adds_directories(self, codex_config):
@@ -88,6 +111,13 @@ class TestCodexCLIBuildCommand:
         ]
         assert ".cafe" in add_dir_values
         assert str(worktree_git_dir) in add_dir_values
+
+    def test_build_environment_does_not_override_codex_home(self, codex_config):
+        cli = CodexCLI(codex_config)
+
+        env = cli.build_environment()
+
+        assert "CODEX_HOME" not in env
 
 
 class TestCodexCLITranslateAllowedTools:
@@ -239,3 +269,16 @@ class TestCodexCLIExtractSessionId:
     def test_extract_session_id_returns_none_when_missing(self, codex_config):
         cli = CodexCLI(codex_config)
         assert cli.extract_session_id([json.dumps({"type": "turn.started"})]) is None
+
+
+class TestCodexCLICreateSession:
+    """Test create_session()."""
+
+    def test_create_session_is_noop_for_codex(self, codex_config_with_model):
+        cli = CodexCLI(codex_config_with_model)
+
+        with patch("subprocess.run") as mock_run:
+            session_id = cli.create_session()
+
+        assert session_id == ""
+        mock_run.assert_not_called()

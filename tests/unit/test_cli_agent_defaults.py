@@ -10,7 +10,6 @@ import pytest
 from typer.testing import CliRunner
 
 from cafe.core.status_codes import PhaseStatusCode
-from cafe.core.types import PhaseResult, PhaseStatus
 from cafe.ui.cli import app
 
 
@@ -115,18 +114,12 @@ class TestPlanCommandAgentDefault:
         with patch("cafe.ui.cli._setup_agents") as mock_setup:
             mock_setup.return_value = mock_agent_manager.return_value
 
-            # Mock PlanPhase
-            with patch("cafe.ui.cli.PlanPhase") as mock_plan_phase:
-                mock_phase_instance = Mock()
-                mock_phase_instance.execute.return_value = PhaseResult(
-                    status=PhaseStatus.COMPLETED,
-                    message="Plan completed",
-                    data={
-                        "iterations": 1,
-                        "status_code": PhaseStatusCode.CONFIRMED.value,
-                    },
-                )
-                mock_plan_phase.return_value = mock_phase_instance
+            with patch("cafe.ui.cli._execute_single_step_alias") as mock_execute_alias:
+                mock_execute_alias.return_value = {
+                    "iterations": 1,
+                    "status_code": PhaseStatusCode.CONFIRMED.value,
+                    "output_file": ".cafe/issues/test-branch/plan/iteration_001/output.md",
+                }
 
                 # Mock get_agent to track which agent name is requested
                 mock_executor = Mock()
@@ -137,10 +130,8 @@ class TestPlanCommandAgentDefault:
                 # Execute plan command WITHOUT --dev flag
                 result = runner.invoke(app, ["plan", "--interactive"])
 
-                # Verify: Should have called get_agent with 'John' (from config), not 'David'
-                mock_agent_manager.return_value.get_agent.assert_called_once()
-                called_agent_name = mock_agent_manager.return_value.get_agent.call_args[0][0]
-                assert called_agent_name == "John", f"Expected 'John' but got '{called_agent_name}'"
+                call_kwargs = mock_execute_alias.call_args.kwargs
+                assert call_kwargs["role_agent_map_override"] is None
 
     def test_plan_uses_flag_value_when_dev_flag_provided(
         self,
@@ -156,18 +147,12 @@ class TestPlanCommandAgentDefault:
         with patch("cafe.ui.cli._setup_agents") as mock_setup:
             mock_setup.return_value = mock_agent_manager.return_value
 
-            # Mock PlanPhase
-            with patch("cafe.ui.cli.PlanPhase") as mock_plan_phase:
-                mock_phase_instance = Mock()
-                mock_phase_instance.execute.return_value = PhaseResult(
-                    status=PhaseStatus.COMPLETED,
-                    message="Plan completed",
-                    data={
-                        "iterations": 1,
-                        "status_code": PhaseStatusCode.CONFIRMED.value,
-                    },
-                )
-                mock_plan_phase.return_value = mock_phase_instance
+            with patch("cafe.ui.cli._execute_single_step_alias") as mock_execute_alias:
+                mock_execute_alias.return_value = {
+                    "iterations": 1,
+                    "status_code": PhaseStatusCode.CONFIRMED.value,
+                    "output_file": ".cafe/issues/test-branch/plan/iteration_001/output.md",
+                }
 
                 # Mock get_agent
                 mock_executor = Mock()
@@ -178,10 +163,8 @@ class TestPlanCommandAgentDefault:
                 # Execute plan command WITH --dev flag
                 result = runner.invoke(app, ["plan", "--dev", "CustomDev", "--interactive"])
 
-                # Verify: Should have called get_agent with 'CustomDev' (from flag)
-                mock_agent_manager.return_value.get_agent.assert_called_once()
-                called_agent_name = mock_agent_manager.return_value.get_agent.call_args[0][0]
-                assert called_agent_name == "CustomDev", f"Expected 'CustomDev' but got '{called_agent_name}'"
+                call_kwargs = mock_execute_alias.call_args.kwargs
+                assert call_kwargs["role_agent_map_override"] == {"developer": "CustomDev"}
 
 
 class TestDevelopCommandAgentDefault:
@@ -207,18 +190,12 @@ class TestDevelopCommandAgentDefault:
         with patch("cafe.ui.cli._setup_agents") as mock_setup:
             mock_setup.return_value = mock_agent_manager.return_value
 
-            # Mock DevelopPhase
-            with patch("cafe.ui.cli.DevelopPhase") as mock_develop_phase:
-                mock_phase_instance = Mock()
-                mock_phase_instance.execute.return_value = PhaseResult(
-                    status=PhaseStatus.COMPLETED,
-                    message="Development completed",
-                    data={
-                        "iterations": 1,
-                        "status_code": PhaseStatusCode.CONFIRMED.value,
-                    },
-                )
-                mock_develop_phase.return_value = mock_phase_instance
+            with patch("cafe.ui.cli._execute_single_step_alias") as mock_execute_alias:
+                mock_execute_alias.return_value = {
+                    "iterations": 1,
+                    "status_code": PhaseStatusCode.CONFIRMED.value,
+                    "output_file": ".cafe/issues/test-branch/develop/iteration_001/output.md",
+                }
 
                 # Mock get_agent
                 mock_executor = Mock()
@@ -229,11 +206,8 @@ class TestDevelopCommandAgentDefault:
                 # Execute develop command WITHOUT --dev flag
                 result = runner.invoke(app, ["develop", "--interactive", "--user-input", "start"])
 
-                # Verify: Should have called get_agent with 'John' (from config), not 'David'
-                mock_agent_manager.return_value.get_agent.assert_called()
-                # get_agent may be called multiple times, check the first call
-                called_agent_name = mock_agent_manager.return_value.get_agent.call_args_list[0][0][0]
-                assert called_agent_name == "John", f"Expected 'John' but got '{called_agent_name}'"
+                call_kwargs = mock_execute_alias.call_args.kwargs
+                assert call_kwargs["role_agent_map_override"] is None
 
 
 class TestSpecCommandAgentDefault:
@@ -274,18 +248,12 @@ class TestSpecCommandAgentDefault:
             with patch("cafe.ui.cli._setup_agents") as mock_setup:
                 mock_setup.return_value = mock_agent_manager.return_value
 
-                # Mock SpecPhase
-                with patch("cafe.ui.cli.SpecPhase") as mock_spec_phase:
-                    mock_phase_instance = Mock()
-                    mock_phase_instance.execute.return_value = PhaseResult(
-                        status=PhaseStatus.COMPLETED,
-                        message="Spec completed",
-                        data={
-                            "iterations": 1,
-                            "status_code": PhaseStatusCode.CONFIRMED.value,
-                        },
-                    )
-                    mock_spec_phase.return_value = mock_phase_instance
+                with patch("cafe.ui.cli._execute_single_step_alias") as mock_execute_alias:
+                    mock_execute_alias.return_value = {
+                        "iterations": 1,
+                        "status_code": PhaseStatusCode.CONFIRMED.value,
+                        "output_file": ".cafe/issues/test-branch/spec/iteration_001/output.md",
+                    }
 
                     # Mock get_agent
                     mock_executor = Mock()
@@ -296,14 +264,5 @@ class TestSpecCommandAgentDefault:
                     # Execute spec command WITHOUT --pm flag
                     result = runner.invoke(app, ["spec", "--interactive", "--user-input", "test spec"])
 
-                    # Verify: Should have called get_agent with 'Alice' (from config), not 'Roger'
-                    mock_agent_manager.return_value.get_agent.assert_called_once()
-                    called_agent_name = mock_agent_manager.return_value.get_agent.call_args[0][0]
-                    assert called_agent_name == "Alice", f"Expected 'Alice' but got '{called_agent_name}'"
-
-
-# Note: Review command test requires additional setup (spec/plan files) - tested manually
-# The fix is identical to spec/plan/develop commands above
-
-# Note: PR command doesn't expose dev_agent parameter in CLI
-# It uses developer agent internally through PRPhase, which should be fixed in the phase itself
+                    call_kwargs = mock_execute_alias.call_args.kwargs
+                    assert call_kwargs["role_agent_map_override"] is None

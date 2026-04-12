@@ -23,6 +23,8 @@ class TestContextSessionIDUpdate:
         executor.config.cli.value = "copilot"
         
         manager.get_agent.return_value = executor
+        manager.preview_cli_command_args = MagicMock(return_value=["--model", "claude-sonnet-4.5"])
+        manager.preview_cli_environment = MagicMock(return_value={"CODEX_HOME": "/tmp/.codex"})
         
         # Simulate agent execution creates a session
         def mock_execute(*args, **kwargs):
@@ -95,3 +97,5 @@ class TestContextSessionIDUpdate:
         # Verify other agent fields are also populated
         assert context_data["cli"] == "copilot"
         assert context_data["model"] == "claude-sonnet-4.5"
+        assert context_data["cli_command_args"] == ["--model", "claude-sonnet-4.5"]
+        assert context_data["cli_environment"] == {"CODEX_HOME": "/tmp/.codex"}
