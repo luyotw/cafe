@@ -133,9 +133,14 @@ def test_skill_import_copies_multiple_valid_skill_folders(tmp_path: Path, monkey
             encoding="utf-8",
         )
 
-    result = runner.invoke(app, ["skill", "import", str(source_dir)])
+    with patch("cafe.ui.cli.prompt_confirm", return_value=True) as mock_confirm:
+        result = runner.invoke(app, ["skill", "import", str(source_dir)])
 
     assert result.exit_code == 0
+    assert mock_confirm.call_count == 1
+    assert "Found 2 skill(s) to import:" in result.stdout
+    assert "alpha" in result.stdout
+    assert "beta" in result.stdout
     assert "Imported 2 skill(s)" in result.stdout
     assert (tmp_path / ".cafe" / "skills" / "alpha" / "SKILL.md").exists()
     assert (tmp_path / ".cafe" / "skills" / "beta" / "SKILL.md").exists()
@@ -163,7 +168,8 @@ def test_skill_import_reports_imported_and_skipped_items(tmp_path: Path, monkeyp
     )
     (source_dir / "broken").mkdir(parents=True, exist_ok=True)
 
-    result = runner.invoke(app, ["skill", "import", str(source_dir)])
+    with patch("cafe.ui.cli.prompt_confirm", return_value=True):
+        result = runner.invoke(app, ["skill", "import", str(source_dir)])
 
     assert result.exit_code == 0
     assert "Imported 1 skill(s)" in result.stdout
@@ -182,7 +188,8 @@ def test_skill_import_skips_mismatched_frontmatter_name(tmp_path: Path, monkeypa
         encoding="utf-8",
     )
 
-    result = runner.invoke(app, ["skill", "import", str(source_dir.parent)])
+    with patch("cafe.ui.cli.prompt_confirm", return_value=True):
+        result = runner.invoke(app, ["skill", "import", str(source_dir.parent)])
 
     assert result.exit_code == 0
     assert "Skipped 1 item(s)" in result.stdout
@@ -205,11 +212,11 @@ def test_skill_import_prompts_before_overwriting_existing_skill(tmp_path: Path, 
         encoding="utf-8",
     )
 
-    with patch("cafe.ui.cli.prompt_confirm", return_value=False) as mock_confirm:
+    with patch("cafe.ui.cli.prompt_confirm", side_effect=[True, False]) as mock_confirm:
         result = runner.invoke(app, ["skill", "import", str(source_dir.parent)])
 
     assert result.exit_code == 0
-    assert mock_confirm.call_count == 1
+    assert mock_confirm.call_count == 2
     assert "Skipped 1 item(s)" in result.stdout
     assert "already exists" in result.stdout
     assert (existing_dir / "SKILL.md").read_text(encoding="utf-8").endswith("Old body\n")
@@ -230,13 +237,33 @@ def test_skill_import_overwrites_existing_skill_when_confirmed(tmp_path: Path, m
         encoding="utf-8",
     )
 
-    with patch("cafe.ui.cli.prompt_confirm", return_value=True):
+    with patch("cafe.ui.cli.prompt_confirm", side_effect=[True, True]):
         result = runner.invoke(app, ["skill", "import", str(source_dir.parent)])
 
     assert result.exit_code == 0
     assert "Imported 1 skill(s)" in result.stdout
     assert "overwritten" in result.stdout
     assert (existing_dir / "SKILL.md").read_text(encoding="utf-8").endswith("New body\n")
+
+
+def test_skill_import_cancelled_when_initial_confirmation_declined(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".cafe").mkdir(parents=True, exist_ok=True)
+    source_dir = tmp_path / "incoming-skills" / "alpha"
+    source_dir.mkdir(parents=True, exist_ok=True)
+    (source_dir / "SKILL.md").write_text(
+        "---\nname: alpha\ndescription: alpha\n---\n\n# alpha\n",
+        encoding="utf-8",
+    )
+
+    with patch("cafe.ui.cli.prompt_confirm", return_value=False) as mock_confirm:
+        result = runner.invoke(app, ["skill", "import", str(source_dir.parent)])
+
+    assert result.exit_code == 0
+    assert mock_confirm.call_count == 1
+    assert "Found 1 skill(s) to import:" in result.stdout
+    assert "Cancelled" in result.stdout
+    assert not (tmp_path / ".cafe" / "skills" / "alpha").exists()
 
 
 def test_skill_rm_deletes_named_skills_when_confirmed(tmp_path: Path, monkeypatch) -> None:

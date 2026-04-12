@@ -28,7 +28,7 @@ from cafe.core.types import AgentCLI, AgentConfig
 from cafe.phases.generic_phase import GenericPhase
 from cafe.phases.generic_workflow_step import GenericWorkflowStepExecutor
 from cafe.playbooks.loader import PlaybookLoader
-from cafe.skills.importer import SkillImportSummary, import_skills
+from cafe.skills.importer import SkillImportSummary, import_skills, preview_importable_skills
 from cafe.skills.loader import SkillLoader
 from cafe.skills.remover import SkillRemoveSummary, remove_skills
 from cafe.templates.manager import TemplateManager
@@ -4842,6 +4842,19 @@ def skill_import(
 ) -> None:
     """Import skill folders into the current project's `.cafe/skills` directory."""
     try:
+        skill_names = preview_importable_skills(Path(path))
+        console.print(f"[yellow]Found {len(skill_names)} skill(s) to import:[/yellow]")
+        for name in skill_names:
+            console.print(f"  • {name}")
+        console.print()
+
+        if not prompt_confirm(
+            f"Continue importing {len(skill_names)} skill(s)?",
+            default=False,
+        ):
+            console.print("[dim]Cancelled[/dim]")
+            raise typer.Exit(0)
+
         summary = import_skills(
             Path(path),
             Path.cwd(),
@@ -4850,6 +4863,8 @@ def skill_import(
                 default=False,
             ),
         )
+    except typer.Exit:
+        raise
     except Exception as e:
         console.print(f"[red]Error: {e}[/red]")
         raise typer.Exit(1)
@@ -4877,7 +4892,7 @@ def skill_rm(
                 raise typer.Exit(0)
 
             selected = prompt_checkbox(
-                message="Select skill(s) to delete:",
+                message="Select skill(s) to delete: (Press space to select, enter to confirm)",
                 choices=available_skills,
             )
             if not selected:
