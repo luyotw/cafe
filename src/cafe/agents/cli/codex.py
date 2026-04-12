@@ -1,7 +1,6 @@
 """Codex CLI tool implementation."""
 
 import json
-import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -12,12 +11,6 @@ from cafe.utils.git_utils import get_git_dir
 
 class CodexCLI(AbstractCLI):
     """Concrete implementation of Codex CLI tool."""
-
-    def build_environment(self) -> dict[str, str]:
-        """Point Codex at the repo-local skill and state directory."""
-        env = dict(os.environ)
-        env["CODEX_HOME"] = str(Path.cwd().resolve() / ".codex")
-        return env
 
     @staticmethod
     def extract_turn_usages(output_lines: List[str]) -> List[Dict[str, Any]]:
