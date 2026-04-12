@@ -28,6 +28,17 @@ def codex_config_with_model():
     return AgentConfig(name="test_codex", cli=AgentCLI.CODEX, model="gpt-5-codex")
 
 
+@pytest.fixture
+def codex_config_with_session_and_model():
+    """Create a Codex config with session ID and model."""
+    return AgentConfig(
+        name="test_codex",
+        cli=AgentCLI.CODEX,
+        session_id="session-123",
+        model="gpt-5-codex",
+    )
+
+
 class TestCodexCLIBuildCommand:
     """Test build_command()."""
 
@@ -55,6 +66,13 @@ class TestCodexCLIBuildCommand:
         assert "--model" in cmd
         model_idx = cmd.index("--model")
         assert cmd[model_idx + 1] == "gpt-5-codex"
+
+    def test_build_command_with_session_does_not_pass_model(self, codex_config_with_session_and_model):
+        cli = CodexCLI(codex_config_with_session_and_model)
+        cmd = cli.build_command("test prompt")
+
+        assert "resume" in cmd
+        assert "--model" not in cmd
 
     def test_build_command_adds_directories(self, codex_config):
         cli = CodexCLI(codex_config)
