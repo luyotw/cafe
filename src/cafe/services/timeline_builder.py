@@ -52,18 +52,16 @@ class TimelineEntry:
 class TimelineBuilder:
     """Builder for creating workflow timeline from phase and iteration data."""
 
-    DEFAULT_PHASES = ["spec", "plan", "develop", "review", "pr"]
+    PHASES = ["spec", "plan", "develop", "review", "pr"]
 
-    def __init__(self, issue_name: str, phase_names: Optional[List[str]] = None):
+    def __init__(self, issue_name: str):
         """Initialize timeline builder.
 
         Args:
             issue_name: Name of the issue to build timeline for
-            phase_names: Ordered playbook steps to display
         """
         self.issue_name = issue_name
         self.base_dir = Path(".cafe/issues") / issue_name
-        self.phase_names = list(phase_names or self.DEFAULT_PHASES)
 
     def build_timeline_entries(
         self, phase_statuses: Dict[str, Dict[str, Any]], iteration_data: Dict[str, List[Dict[str, Any]]]
@@ -80,7 +78,7 @@ class TimelineBuilder:
         entries: List[TimelineEntry] = []
 
         # Process each phase
-        for phase_name in self.phase_names:
+        for phase_name in self.PHASES:
             phase_status = phase_statuses.get(phase_name)
             iterations = iteration_data.get(phase_name, [])
 

@@ -168,6 +168,7 @@ class AgentExecutor:
         try:
             # Get CLI strategy
             cli_strategy = self._get_cli_strategy()
+
             # For Gemini, ensure .geminiignore file exists
             if self.config.cli == AgentCLI.GEMINI:
                 cli_strategy.ensure_geminiignore()
@@ -181,7 +182,6 @@ class AgentExecutor:
 
             # Build command using strategy
             cmd = cli_strategy.build_command(prompt, cli_translated_tools, allowed_directories)
-            env = cli_strategy.build_environment()
 
             # Execute with streaming
             if self.config.cli == AgentCLI.COPILOT:
@@ -210,20 +210,6 @@ class AgentExecutor:
                     return cli_strategy.create_session()
 
                 def update_cmd_with_session(cmd_list, new_session_id):
-                    if not new_session_id:
-                        if self.config.cli == AgentCLI.CODEX and "resume" in cmd_list:
-                            resume_idx = cmd_list.index("resume")
-                            del cmd_list[resume_idx]
-                            if self.config.session_id and self.config.session_id in cmd_list:
-                                cmd_list.remove(self.config.session_id)
-                            return cmd_list
-                        if "resume" in cmd_list:
-                            resume_idx = cmd_list.index("resume")
-                            del cmd_list[resume_idx:resume_idx + 2]
-                        elif "--resume" in cmd_list:
-                            resume_idx = cmd_list.index("--resume")
-                            del cmd_list[resume_idx:resume_idx + 2]
-                        return cmd_list
                     if "resume" in cmd_list:
                         resume_idx = cmd_list.index("resume")
                         cmd_list[resume_idx + 1] = new_session_id
@@ -244,7 +230,6 @@ class AgentExecutor:
                     parse_stream_json=parse_stream_json,
                     json_content_extractor=json_content_extractor,
                     streaming_output_file=streaming_output_file,
-                    env=env,
                 )
             else:
                 # Only use response parser for stream-json formats
@@ -269,7 +254,6 @@ class AgentExecutor:
                     parse_stream_json=parse_stream_json,
                     json_content_extractor=json_content_extractor,
                     streaming_output_file=streaming_output_file,
-                    env=env,
                 )
 
             # Extract session ID if needed
@@ -295,30 +279,6 @@ class AgentExecutor:
             raise
         except Exception as e:
             raise AgentExecutionError(f"Agent execution failed: {e}") from e
-
-    def preview_cli_command_args(
-        self,
-        prompt: str,
-        allowed_tools: Optional[List[str]] = None,
-        allowed_directories: Optional[List[str]] = None,
-    ) -> List[str]:
-        """Build the CLI arguments that would be used for execution.
-
-        Returns command arguments excluding the executable itself so callers can
-        persist them before the subprocess starts.
-        """
-        cli_strategy = self._get_cli_strategy()
-        translated_tools = self._translate_tool_names(allowed_tools)
-        cli_translated_tools = (
-            cli_strategy.translate_allowed_tools(translated_tools) if translated_tools else None
-        )
-        cmd = cli_strategy.build_command(prompt, cli_translated_tools, allowed_directories)
-        return cmd[1:]
-
-    def preview_cli_environment(self) -> dict[str, str]:
-        """Build the CLI environment that would be used for execution."""
-        cli_strategy = self._get_cli_strategy()
-        return cli_strategy.build_environment()
 
     def _parse_using_strategy(self, cli_strategy: AbstractCLI, output_lines: List[str]) -> AgentResponse:
         """Parse response using the CLI strategy.
@@ -383,9 +343,7 @@ class AgentExecutor:
             session_error_phrases = [
                 "no conversation found",
                 "session not found",
-                "conversation does not exist",
-                "thread/resume failed",
-                "no rollout found",
+                "conversation does not exist"
             ]
 
             # Check for prompt too long error
@@ -406,33 +364,19 @@ class AgentExecutor:
                     # Handle prompt too long error: create fresh session
                     old_session_id = self.config.session_id
                     print(f"\n⚠️  Prompt is too long for session {old_session_id}, creating fresh session...\n")
-                    # Create new session
-                    try:
-                        new_session_id = create_new_session_fn()
-                    except Exception as create_error:
-                        wrapped_error = AgentExecutionError(
-                            f"Failed to create {cli_name} session: {create_error}"
-                        )
-                        wrapped_error.cli_command_args = cmd[1:]
-                        raise wrapped_error from create_error
-
-                    # Update command with new session
-                    cmd = update_cmd_with_session_fn(cmd, new_session_id)
-
-                    # Update config
-                    self.config.session_id = new_session_id
                 else:
-                    # Handle stale/invalid resume state
+                    # Handle session not found error
                     old_session_id = self.config.session_id
-                    print(f"\n⚠️  Resume failed for session {old_session_id}, retrying without resume...\n")
-                    cmd = list(cmd)
-                    if "resume" in cmd:
-                        resume_idx = cmd.index("resume")
-                        del cmd[resume_idx:resume_idx + 2]
-                    elif "--resume" in cmd:
-                        resume_idx = cmd.index("--resume")
-                        del cmd[resume_idx:resume_idx + 2]
-                    self.config.session_id = ""
+                    print(f"\n⚠️  Session {old_session_id} not found, creating new session...\n")
+
+                # Create new session
+                new_session_id = create_new_session_fn()
+
+                # Update command with new session
+                cmd = update_cmd_with_session_fn(cmd, new_session_id)
+
+                # Update config
+                self.config.session_id = new_session_id
 
                 # Retry recursively to support multiple recovery attempts
                 return self._execute_with_session_recovery(
@@ -591,7 +535,6 @@ class AgentExecutor:
         self,
         cmd: List[str],
         cli_name: str,
-        env: Optional[dict[str, str]] = None,
         response_parser: Optional[Callable[[List[str]], AgentResponse]] = None,
         parse_stream_json: bool = False,
         json_content_extractor: Optional[Callable[[dict], Optional[str]]] = None,
@@ -622,7 +565,6 @@ class AgentExecutor:
                 stdin=subprocess.DEVNULL,  # Close stdin to prevent CLI from waiting for input
                 text=True,
                 bufsize=1,  # Line buffered
-                env=env,
             )
         except FileNotFoundError as e:
             # CLI command not found - provide user-friendly error

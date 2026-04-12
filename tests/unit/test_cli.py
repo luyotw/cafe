@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, Mock, patch
 
 from cafe.ui.cli import app, _setup_agents
 from cafe.core.git import GitOperations
-from cafe.core.types import AgentCLI
+from cafe.core.types import AgentCLI, PhaseResult, PhaseStatus
 from cafe.utils.config import ConfigManager
 
 
@@ -232,10 +232,10 @@ class TestPlanCommand:
 
     @patch("cafe.ui.cli.GitOperations")
     @patch("cafe.ui.cli.select_template")
-    @patch("cafe.ui.cli._execute_single_step_alias")
+    @patch("cafe.ui.cli.PlanPhase")
     def test_plan_local_mode_success(
         self,
-        mock_execute_alias: Mock,
+        mock_plan_phase: Mock,
         mock_select_template: Mock,
         mock_git_ops: Mock,
         tmp_path: Path,
@@ -266,11 +266,14 @@ class TestPlanCommand:
         # Mock template selection
         mock_select_template.return_value = "default"
 
-        mock_execute_alias.return_value = {
-            "status_code": "CAFE_CONFIRMED",
-            "iterations": 2,
-            "output_file": str(spec_file),
-        }
+        # Mock phase execution
+        mock_phase_instance = MagicMock()
+        mock_phase_instance.execute.return_value = PhaseResult(
+            status=PhaseStatus.COMPLETED,
+            message="Plan completed",
+            data={"iterations": 2}
+        )
+        mock_plan_phase.return_value = mock_phase_instance
 
         # Execute
         import os
@@ -285,17 +288,19 @@ class TestPlanCommand:
         assert result.exit_code == 0
         assert "Implementation plan completed" in result.stdout
         assert "Iterations: 2" in result.stdout
-        mock_execute_alias.assert_called_once()
+        mock_plan_phase.assert_called_once()
 
     @patch("cafe.ui.cli.GitOperations")
     @patch("cafe.ui.cli.select_template")
-    def test_plan_github_mode_with_issue_is_unsupported(
+    @patch("cafe.ui.cli.PlanPhase")
+    def test_plan_github_mode_with_issue(
         self,
+        mock_plan_phase: Mock,
         mock_select_template: Mock,
         mock_git_ops: Mock,
         tmp_path: Path,
     ) -> None:
-        """測試 plan 指令不再支援 legacy GitHub issue mode."""
+        """測試 plan 指令使用 issue ID"""
         # Setup: Create config.yaml
         _create_minimal_config(tmp_path)
 
@@ -321,6 +326,15 @@ class TestPlanCommand:
         # Mock template selection
         mock_select_template.return_value = "default"
 
+        # Mock phase execution
+        mock_phase_instance = MagicMock()
+        mock_phase_instance.execute.return_value = PhaseResult(
+            status=PhaseStatus.COMPLETED,
+            message="Plan completed",
+            data={"iterations": 1}
+        )
+        mock_plan_phase.return_value = mock_phase_instance
+
         # Execute
         import os
         old_cwd = os.getcwd()
@@ -331,15 +345,16 @@ class TestPlanCommand:
             os.chdir(old_cwd)
 
         # Verify
-        assert result.exit_code == 1
-        assert "no longer supports legacy phase options" in result.stdout
+        assert result.exit_code == 0
+        assert "GitHub Issue: #123" in result.stdout
+        mock_plan_phase.assert_called_once()
 
     @patch("cafe.ui.cli.GitOperations")
     @patch("cafe.ui.cli.select_template")
-    @patch("cafe.ui.cli._execute_single_step_alias")
+    @patch("cafe.ui.cli.PlanPhase")
     def test_plan_fails_with_error(
         self,
-        mock_execute_alias: Mock,
+        mock_plan_phase: Mock,
         mock_select_template: Mock,
         mock_git_ops: Mock,
         tmp_path: Path,
@@ -370,7 +385,13 @@ class TestPlanCommand:
         # Mock template selection
         mock_select_template.return_value = "default"
 
-        mock_execute_alias.side_effect = RuntimeError("Missing dev guide")
+        # Mock phase execution failure
+        mock_phase_instance = MagicMock()
+        mock_phase_instance.execute.return_value = PhaseResult(
+            status=PhaseStatus.FAILED,
+            message="Missing dev guide"
+        )
+        mock_plan_phase.return_value = mock_phase_instance
 
         # Execute
         import os
@@ -383,15 +404,15 @@ class TestPlanCommand:
 
         # Verify
         assert result.exit_code == 1
-        assert "Error in plan phase" in result.stdout
+        assert "Plan phase failed" in result.stdout
 
 
     @patch("cafe.ui.cli.GitOperations")
     @patch("cafe.ui.cli.select_template")
-    @patch("cafe.ui.cli._execute_single_step_alias")
+    @patch("cafe.ui.cli.PlanPhase")
     def test_plan_loads_template_from_issue_config(
         self,
-        mock_execute_alias: Mock,
+        mock_plan_phase: Mock,
         mock_select_template: Mock,
         mock_git_ops: Mock,
         tmp_path: Path,
@@ -423,11 +444,14 @@ class TestPlanCommand:
         mock_git_instance.get_current_branch.return_value = branch_name
         mock_git_ops.return_value = mock_git_instance
 
-        mock_execute_alias.return_value = {
-            "status_code": "CAFE_CONFIRMED",
-            "iterations": 1,
-            "output_file": str(spec_file),
-        }
+        # Mock phase execution
+        mock_phase_instance = MagicMock()
+        mock_phase_instance.execute.return_value = PhaseResult(
+            status=PhaseStatus.COMPLETED,
+            message="Plan completed",
+            data={"iterations": 1, "status_code": "CAFE_CONFIRMED"}
+        )
+        mock_plan_phase.return_value = mock_phase_instance
 
         # Execute
         import os
@@ -441,20 +465,25 @@ class TestPlanCommand:
         # Verify: Should not call select_template because config has template setting
         mock_select_template.assert_not_called()
 
-        mock_execute_alias.assert_called_once()
+        # Verify: PlanPhase should be called with template_mode="auto"
+        mock_plan_phase.assert_called_once()
+        call_kwargs = mock_plan_phase.call_args[1]
+        assert call_kwargs["template_mode"] == "auto"
+        assert call_kwargs["template_path"] is None
 
         # Verify: Command succeeded
         assert result.exit_code == 0
-        assert "Implementation plan completed" in result.stdout
+        # Verify auto mode is indicated in output
+        assert "Template mode: auto" in result.stdout
 
     @patch("cafe.ui.cli.GitOperations")
     @patch("cafe.ui.cli.select_template")
-    @patch("cafe.ui.cli._execute_single_step_alias")
+    @patch("cafe.ui.cli.PlanPhase")
     @patch("sys.stdin.isatty")
     def test_plan_loads_template_from_issue_config_interactive(
         self,
         mock_isatty: Mock,
-        mock_execute_alias: Mock,
+        mock_plan_phase: Mock,
         mock_select_template: Mock,
         mock_git_ops: Mock,
         tmp_path: Path,
@@ -489,11 +518,14 @@ class TestPlanCommand:
         # Mock isatty to simulate interactive mode
         mock_isatty.return_value = True
 
-        mock_execute_alias.return_value = {
-            "status_code": "CAFE_CONFIRMED",
-            "iterations": 1,
-            "output_file": str(spec_file),
-        }
+        # Mock phase execution
+        mock_phase_instance = MagicMock()
+        mock_phase_instance.execute.return_value = PhaseResult(
+            status=PhaseStatus.COMPLETED,
+            message="Plan completed",
+            data={"iterations": 1, "status_code": "CAFE_CONFIRMED"}
+        )
+        mock_plan_phase.return_value = mock_phase_instance
 
         # Execute in interactive mode (default)
         import os
@@ -506,7 +538,12 @@ class TestPlanCommand:
 
         # Verify: Should not call select_template because config has template setting
         mock_select_template.assert_not_called()
-        mock_execute_alias.assert_called_once()
+
+        # Verify: PlanPhase should be called with template_mode="auto"
+        mock_plan_phase.assert_called_once()
+        call_kwargs = mock_plan_phase.call_args[1]
+        assert call_kwargs["template_mode"] == "auto"
+        assert call_kwargs["template_path"] is None
 
         # Verify: Command succeeded
         assert result.exit_code == 0
