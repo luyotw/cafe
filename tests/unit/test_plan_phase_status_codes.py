@@ -51,6 +51,7 @@ class TestPlanPhaseWithStatusCodes:
 
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = ("CAFE_READY_FOR_REVIEW\n實作分析已完成.", TokenUsage(), [], None, [], None)
+        agent_manager.preview_cli_command_args.return_value = ["--model", "copilot"]
 
         # Mock get_agent to return agent with config
         mock_agent = MagicMock()
@@ -98,6 +99,7 @@ class TestPlanPhaseWithStatusCodes:
         agent_manager = MagicMock(spec=AgentManager)
         # After removing while loop, only executes once and returns IN_PROGRESS
         agent_manager.execute.return_value = ("CAFE_NEED_CLARIFICATION\n請補充更多資訊.", TokenUsage(), [], None, [], None)
+        agent_manager.preview_cli_command_args.return_value = ["--model", "copilot"]
 
         # Mock get_agent to return agent with config
         mock_agent = MagicMock()
@@ -150,6 +152,7 @@ class TestPlanPhaseWithStatusCodes:
 
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = ("分析結果：\nCAFE_READY_FOR_REVIEW\n實作分析已完成.", TokenUsage(), [], None, [], None)
+        agent_manager.preview_cli_command_args.return_value = ["--model", "copilot"]
 
         # Mock get_agent to return agent with config
         mock_agent = MagicMock()
@@ -202,6 +205,7 @@ class TestPlanPhaseWithStatusCodes:
             ("這是一般回應, 沒有狀態碼.", TokenUsage(), [], None, [], None),
             ("CAFE_NEED_CLARIFICATION\n請補充技術選型.", TokenUsage(), [], None, [], None),
         ]
+        agent_manager.preview_cli_command_args.return_value = ["--model", "claude"]
 
         # Mock get_agent to return agent with config
         mock_agent = MagicMock()
@@ -252,6 +256,7 @@ class TestPlanPhaseWithStatusCodes:
 
         agent_manager = MagicMock(spec=AgentManager)
         agent_manager.execute.return_value = ("cafe_ready_for_review\n實作分析已完成.", TokenUsage(), [], None, [], None)
+        agent_manager.preview_cli_command_args.return_value = ["--model", "claude"]
 
         # Mock get_agent to return agent with config
         mock_agent = MagicMock()

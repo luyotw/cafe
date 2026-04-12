@@ -283,6 +283,25 @@ class AgentExecutor:
         except Exception as e:
             raise AgentExecutionError(f"Agent execution failed: {e}") from e
 
+    def preview_cli_command_args(
+        self,
+        prompt: str,
+        allowed_tools: Optional[List[str]] = None,
+        allowed_directories: Optional[List[str]] = None,
+    ) -> List[str]:
+        """Build the CLI arguments that would be used for execution.
+
+        Returns command arguments excluding the executable itself so callers can
+        persist them before the subprocess starts.
+        """
+        cli_strategy = self._get_cli_strategy()
+        translated_tools = self._translate_tool_names(allowed_tools)
+        cli_translated_tools = (
+            cli_strategy.translate_allowed_tools(translated_tools) if translated_tools else None
+        )
+        cmd = cli_strategy.build_command(prompt, cli_translated_tools, allowed_directories)
+        return cmd[1:]
+
     def _parse_using_strategy(self, cli_strategy: AbstractCLI, output_lines: List[str]) -> AgentResponse:
         """Parse response using the CLI strategy.
 

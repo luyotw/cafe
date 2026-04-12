@@ -470,6 +470,13 @@ class Phase(ABC):
         agent_executor = self.agent_manager.get_agent(agent_name)
         agent_cli = agent_executor.config.cli.value
         agent_session_id = agent_executor.config.session_id
+        allowed_directories = self._get_allowed_directories()
+        cli_command_args = self.agent_manager.preview_cli_command_args(
+            agent_name,
+            prompt,
+            allowed_tools=allowed_tools,
+            allowed_directories=allowed_directories,
+        )
 
         # 3. Save prompt to context.json (before executing agent)
         iteration_dir = self._get_iteration_dir(self.iteration)
@@ -482,6 +489,7 @@ class Phase(ABC):
             context_data["session_id"] = agent_session_id
             context_data["allowed_tools"] = allowed_tools
             context_data["denied_tools"] = denied_tools
+            context_data["cli_command_args"] = cli_command_args
             with open(context_file, "w", encoding="utf-8") as f:
                 json.dump(context_data, f, ensure_ascii=False, indent=2)
 
@@ -522,7 +530,7 @@ class Phase(ABC):
                 agent_name,
                 prompt,
                 allowed_tools=allowed_tools,
-                allowed_directories=self._get_allowed_directories(),
+                allowed_directories=allowed_directories,
                 streaming_output_file=str(streaming_jsonl_file),
             )
 
@@ -729,7 +737,7 @@ class Phase(ABC):
                         agent_name,
                         continue_prompt,
                         allowed_tools=allowed_tools,
-                        allowed_directories=self._get_allowed_directories(),
+                        allowed_directories=allowed_directories,
                     )
 
                     # Update model if returned (use latest value)
