@@ -477,6 +477,12 @@ class Phase(ABC):
             allowed_tools=allowed_tools,
             allowed_directories=allowed_directories,
         )
+        cli_environment = self.agent_manager.preview_cli_environment(agent_name) or {}
+        cli_environment_preview = {
+            key: value
+            for key, value in cli_environment.items()
+            if key in {"CODEX_HOME", "CLAUDE_CONFIG_DIR", "GEMINI_HOME", "COPILOT_HOME"}
+        }
 
         # 3. Save prompt to context.json (before executing agent)
         iteration_dir = self._get_iteration_dir(self.iteration)
@@ -490,6 +496,7 @@ class Phase(ABC):
             context_data["allowed_tools"] = allowed_tools
             context_data["denied_tools"] = denied_tools
             context_data["cli_command_args"] = cli_command_args
+            context_data["cli_environment"] = cli_environment_preview
             with open(context_file, "w", encoding="utf-8") as f:
                 json.dump(context_data, f, ensure_ascii=False, indent=2)
 

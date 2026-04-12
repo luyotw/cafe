@@ -36,6 +36,9 @@ class FakeAgentManager:
     ) -> list[str]:
         return ["-C", str(Path.cwd().resolve()), "-a", "never", "exec", "--json", prompt]
 
+    def preview_cli_environment(self, agent_name: str) -> dict[str, str]:
+        return {"CODEX_HOME": str(Path.cwd().resolve() / ".codex")}
+
     def execute(
         self,
         agent_name: str,
