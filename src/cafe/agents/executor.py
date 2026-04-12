@@ -608,6 +608,8 @@ class AgentExecutor:
         Raises:
             AgentExecutionError: If execution fails
         """
+        print(f"CLI command: {shlex.join(cmd)}")
+
         try:
             process = subprocess.Popen(
                 cmd,
@@ -673,9 +675,6 @@ class AgentExecutor:
                     # Exclude executable itself (e.g. 'gemini' / 'claude')
                     err.cli_command_args = cmd[1:]
                     raise err
-
-        # Print execution context
-        print(f"CLI command: {shlex.join(cmd)}")
 
         # Print header
         print(f"\n{'='*80}")
