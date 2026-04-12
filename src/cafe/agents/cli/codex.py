@@ -64,9 +64,12 @@ class CodexCLI(AbstractCLI):
         else:
             cmd.append("exec")
 
-        # Codex resume should reuse the existing thread's model configuration.
-        # Passing --model on resume can cause divergence from a manually resumable session.
-        if self.config.model and not self.config.session_id:
+        if self.config.session_id:
+            cmd.append(self.config.session_id)
+
+        cmd.append(prompt)
+
+        if self.config.model:
             cmd.extend(["--model", self.config.model])
 
         cmd.extend(self.get_output_format())
@@ -74,10 +77,6 @@ class CodexCLI(AbstractCLI):
         if allowed_directories and not self.config.session_id:
             cmd = self.add_directories(cmd, self._expand_initial_allowed_directories(allowed_directories, cwd))
 
-        if self.config.session_id:
-            cmd.append(self.config.session_id)
-
-        cmd.append(prompt)
         return cmd
 
     def parse_response(

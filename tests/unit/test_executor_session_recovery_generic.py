@@ -238,8 +238,10 @@ class TestGenericSessionRecovery:
             "-a",
             "never",
             "exec",
-            "--json",
             "Test prompt",
+            "--model",
+            "gpt-5.3-codex",
+            "--json",
         ]
 
 
