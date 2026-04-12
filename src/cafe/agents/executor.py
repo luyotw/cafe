@@ -315,6 +315,11 @@ class AgentExecutor:
         cmd = cli_strategy.build_command(prompt, cli_translated_tools, allowed_directories)
         return cmd[1:]
 
+    def preview_cli_environment(self) -> dict[str, str]:
+        """Build the CLI environment that would be used for execution."""
+        cli_strategy = self._get_cli_strategy()
+        return cli_strategy.build_environment()
+
     def _parse_using_strategy(self, cli_strategy: AbstractCLI, output_lines: List[str]) -> AgentResponse:
         """Parse response using the CLI strategy.
 
@@ -402,9 +407,9 @@ class AgentExecutor:
                     old_session_id = self.config.session_id
                     print(f"\n⚠️  Prompt is too long for session {old_session_id}, creating fresh session...\n")
                 else:
-                    # Handle session not found error
+                    # Handle stale/invalid resume state
                     old_session_id = self.config.session_id
-                    print(f"\n⚠️  Session {old_session_id} not found, creating new session...\n")
+                    print(f"\n⚠️  Resume failed for session {old_session_id}, retrying without resume...\n")
 
                 # Create new session
                 try:

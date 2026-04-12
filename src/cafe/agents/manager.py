@@ -236,6 +236,11 @@ class AgentManager:
         executor = self.get_agent(agent_name)
         return executor.preview_cli_command_args(prompt, allowed_tools, allowed_directories)
 
+    def preview_cli_environment(self, agent_name: str) -> Optional[dict[str, str]]:
+        """Build the CLI environment that would be used for execution."""
+        executor = self.get_agent(agent_name)
+        return executor.preview_cli_environment()
+
     def _try_backup_agents(
         self,
         primary_error: "AgentExecutionError",

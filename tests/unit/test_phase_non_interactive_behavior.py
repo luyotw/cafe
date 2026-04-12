@@ -105,6 +105,7 @@ class TestNonInteractiveModeWithNeedClarification:
         agent_manager = AgentManager()
         agent_manager.register_agent(AgentConfig(name="David", cli=AgentCLI.CLAUDE))
         agent_manager.preview_cli_command_args = MagicMock(return_value=["--print", "prompt"])
+        agent_manager.preview_cli_environment = MagicMock(return_value={})
         permission_handler = PermissionHandler()
 
         # Act - non-interactive 且沒有提供 user_input
@@ -142,6 +143,7 @@ class TestNonInteractiveModeWithNeedClarification:
         agent_manager = AgentManager()
         agent_manager.register_agent(AgentConfig(name="David", cli=AgentCLI.CLAUDE))
         agent_manager.preview_cli_command_args = MagicMock(return_value=["--print", "prompt"])
+        agent_manager.preview_cli_environment = MagicMock(return_value={})
         permission_handler = PermissionHandler()
 
         # Act - Round 1執行：提供 user_input
@@ -183,6 +185,7 @@ class TestNonInteractiveModeCompleteImmediately:
         agent_manager = AgentManager()
         agent_manager.register_agent(AgentConfig(name="David", cli=AgentCLI.CLAUDE))
         agent_manager.preview_cli_command_args = MagicMock(return_value=["--print", "prompt"])
+        agent_manager.preview_cli_environment = MagicMock(return_value={})
         permission_handler = PermissionHandler()
 
         # Mock checklist validation to always return success
