@@ -109,8 +109,6 @@ class GenericPhase:
                     "Treat this handoff as the highest-priority current request unless current files prove it is already completed.",
                 ]
             )
-        if context and context.get("blackboard_digest"):
-            runtime_context.extend(["Blackboard digest:", context["blackboard_digest"]])
         if context and context.get("user_input"):
             runtime_context.extend(["Current user input for this iteration:", context["user_input"]])
 

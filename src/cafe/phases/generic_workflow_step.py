@@ -263,10 +263,6 @@ class GenericWorkflowStepExecutor(Phase):
         context = {
             "agent_file": AgentManager.get_agent_file_path(agent_name, role_dir),
             "handoff_summary": getattr(blackboard_state, "handoff_summary", ""),
-            "blackboard_digest": BlackboardStore(self.issue_dir).generate_digest(
-                blackboard_state,
-                for_step=step_name,
-            ),
             "blackboard_path": self._display_path(self.issue_dir / "blackboard.json"),
             "next_step_path": self._display_path(self.issue_dir / "next_step.txt"),
             "output_file": self._display_path(output_file),
