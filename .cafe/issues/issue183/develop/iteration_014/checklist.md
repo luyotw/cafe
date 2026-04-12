@@ -19,7 +19,7 @@
 
 ## Interactive Q&A Questions
 
-[ ] If returning CAFE_NEED_CLARIFICATION: Write questions to ./.cafe/issues/issue183/develop/iteration_014/questions.xml in the following XML format:
+[x] If returning CAFE_NEED_CLARIFICATION: Write questions to ./.cafe/issues/issue183/develop/iteration_014/questions.xml in the following XML format:
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
