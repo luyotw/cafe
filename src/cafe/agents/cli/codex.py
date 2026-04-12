@@ -2,7 +2,6 @@
 
 import json
 import os
-import subprocess
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -164,29 +163,5 @@ class CodexCLI(AbstractCLI):
         return None
 
     def create_session(self) -> str:
-        """Create a new Codex exec session and return its thread ID."""
-        cwd = Path.cwd().resolve()
-        cmd = ["codex", "-C", str(cwd), "-a", "never", "exec"]
-
-        if self.config.model:
-            cmd.extend(["--model", self.config.model])
-
-        cmd.extend(self.get_output_format())
-        cmd.append("Say 'hi'")
-
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            check=False,
-            env=self.build_environment(),
-        )
-
-        if result.returncode != 0:
-            raise RuntimeError(f"Failed to create Codex session: {result.stderr}")
-
-        session_id = self.extract_session_id(result.stdout.splitlines())
-        if not session_id:
-            raise RuntimeError("Could not extract Codex session ID from output")
-
-        return session_id
+        """Codex sessions are created by the real exec command itself."""
+        return ""

@@ -27,6 +27,15 @@ class FakeAgentManager:
     def get_agent(self, name: str) -> SimpleNamespace:
         return SimpleNamespace(config=SimpleNamespace(cli=AgentCLI.CODEX, session_id="session-1"))
 
+    def preview_cli_command_args(
+        self,
+        agent_name: str,
+        prompt: str,
+        allowed_tools=None,
+        allowed_directories=None,
+    ) -> list[str]:
+        return ["-C", str(Path.cwd().resolve()), "-a", "never", "exec", "--json", prompt]
+
     def execute(
         self,
         agent_name: str,

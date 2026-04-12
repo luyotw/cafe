@@ -210,6 +210,20 @@ class AgentExecutor:
                     return cli_strategy.create_session()
 
                 def update_cmd_with_session(cmd_list, new_session_id):
+                    if not new_session_id:
+                        if self.config.cli == AgentCLI.CODEX and "resume" in cmd_list:
+                            resume_idx = cmd_list.index("resume")
+                            del cmd_list[resume_idx]
+                            if self.config.session_id and self.config.session_id in cmd_list:
+                                cmd_list.remove(self.config.session_id)
+                            return cmd_list
+                        if "resume" in cmd_list:
+                            resume_idx = cmd_list.index("resume")
+                            del cmd_list[resume_idx:resume_idx + 2]
+                        elif "--resume" in cmd_list:
+                            resume_idx = cmd_list.index("--resume")
+                            del cmd_list[resume_idx:resume_idx + 2]
+                        return cmd_list
                     if "resume" in cmd_list:
                         resume_idx = cmd_list.index("resume")
                         cmd_list[resume_idx + 1] = new_session_id
@@ -281,6 +295,25 @@ class AgentExecutor:
             raise
         except Exception as e:
             raise AgentExecutionError(f"Agent execution failed: {e}") from e
+
+    def preview_cli_command_args(
+        self,
+        prompt: str,
+        allowed_tools: Optional[List[str]] = None,
+        allowed_directories: Optional[List[str]] = None,
+    ) -> List[str]:
+        """Build the CLI arguments that would be used for execution.
+
+        Returns command arguments excluding the executable itself so callers can
+        persist them before the subprocess starts.
+        """
+        cli_strategy = self._get_cli_strategy()
+        translated_tools = self._translate_tool_names(allowed_tools)
+        cli_translated_tools = (
+            cli_strategy.translate_allowed_tools(translated_tools) if translated_tools else None
+        )
+        cmd = cli_strategy.build_command(prompt, cli_translated_tools, allowed_directories)
+        return cmd[1:]
 
     def _parse_using_strategy(self, cli_strategy: AbstractCLI, output_lines: List[str]) -> AgentResponse:
         """Parse response using the CLI strategy.
