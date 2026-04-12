@@ -558,6 +558,29 @@ class TestStreamingExecution:
                     parse_stream_json=True,
                 )
 
+    def test_execute_with_streaming_prints_cli_command_before_early_stderr_failure(self, capsys) -> None:
+        """Early fatal stderr should still print the attempted CLI command."""
+        config = AgentConfig(name="Roger", cli=AgentCLI.CLAUDE)
+        executor = AgentExecutor(config)
+
+        mock_process = MagicMock()
+        mock_process.stderr.readline.return_value = "Error: session not found\n"
+        mock_process.stderr.read.return_value = ""
+        mock_process.kill.return_value = None
+
+        with patch("subprocess.Popen", return_value=mock_process), \
+             patch("select.select", return_value=([mock_process.stderr], [], [])), \
+             patch("sys.platform", "darwin"):
+            with pytest.raises(AgentExecutionError):
+                executor._execute_with_streaming(
+                    cmd=["claude", "--resume", "abc", "-p", "test"],
+                    cli_name="Claude",
+                    parse_stream_json=True,
+                )
+
+        captured = capsys.readouterr()
+        assert "CLI command: claude --resume abc -p test" in captured.out
+
     def test_execute_with_streaming_handles_malformed_json(self, capsys) -> None:
         """測試處理格式錯誤 JSON（回退到 plain text）"""
         config = AgentConfig(name="David", cli=AgentCLI.CLAUDE)
