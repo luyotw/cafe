@@ -2,7 +2,6 @@
 
 import json
 from pathlib import Path
-from subprocess import CompletedProcess
 from unittest.mock import patch
 
 import pytest
@@ -252,20 +251,11 @@ class TestCodexCLIExtractSessionId:
 class TestCodexCLICreateSession:
     """Test create_session()."""
 
-    def test_create_session_uses_repo_local_command_shape(self, codex_config_with_model):
+    def test_create_session_is_noop_for_codex(self, codex_config_with_model):
         cli = CodexCLI(codex_config_with_model)
-        expected_stdout = json.dumps({"type": "thread.started", "thread_id": "thread-123"}) + "\n"
 
-        with patch("subprocess.run", return_value=CompletedProcess(args=[], returncode=0, stdout=expected_stdout, stderr="")) as mock_run:
+        with patch("subprocess.run") as mock_run:
             session_id = cli.create_session()
 
-        assert session_id == "thread-123"
-        _, kwargs = mock_run.call_args
-        cmd = kwargs["args"] if "args" in kwargs else mock_run.call_args[0][0]
-        assert cmd[:6] == ["codex", "-C", str(Path.cwd().resolve()), "-a", "never", "exec"]
-        assert "--model" in cmd
-        model_idx = cmd.index("--model")
-        assert cmd[model_idx + 1] == "gpt-5-codex"
-        assert "--json" in cmd
-        assert cmd[-1] == "Say 'hi'"
-        assert kwargs["env"]["CODEX_HOME"] == str(Path.cwd().resolve() / ".codex")
+        assert session_id == ""
+        mock_run.assert_not_called()

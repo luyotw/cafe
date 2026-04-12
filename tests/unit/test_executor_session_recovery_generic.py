@@ -115,8 +115,8 @@ class TestGenericSessionRecovery:
         # Copilot 會自動偵測新 session
         assert call_count[0] == 2
 
-    def test_codex_thread_resume_failure_triggers_session_recovery(self):
-        """Codex thread/resume no rollout errors should create a fresh session."""
+    def test_codex_thread_resume_failure_retries_without_resume(self):
+        """Codex thread/resume no rollout errors should retry the real prompt without resume."""
         config = AgentConfig(
             name="TestAgent",
             cli=AgentCLI.CODEX,
@@ -128,9 +128,11 @@ class TestGenericSessionRecovery:
 
         def mock_popen(*args, **kwargs):
             call_count[0] += 1
+            cmd = args[0]
             mock_proc = MagicMock()
 
             if call_count[0] == 1:
+                assert "resume" in cmd
                 mock_proc.stdout.readline.side_effect = [""]
                 mock_proc.stderr = MagicMock()
                 mock_proc.stderr.read.return_value = (
@@ -139,7 +141,9 @@ class TestGenericSessionRecovery:
                 )
                 mock_proc.wait.return_value = 1
             else:
+                assert "resume" not in cmd
                 mock_proc.stdout.readline.side_effect = [
+                    '{"type":"thread.started","thread_id":"new-codex-thread"}\n',
                     '{"type":"item.completed","item":{"type":"agent_message","text":"Recovered"}}\n',
                     "",
                 ]
@@ -150,21 +154,15 @@ class TestGenericSessionRecovery:
             return mock_proc
 
         with patch("subprocess.Popen", side_effect=mock_popen):
-            with patch("subprocess.run") as mock_run:
-                mock_run.return_value = MagicMock(
-                    returncode=0,
-                    stdout='{"type":"thread.started","thread_id":"new-codex-thread"}',
-                    stderr="",
-                )
-                with patch("sys.platform", "win32"):
-                    response = executor.execute("Test prompt")
+            with patch("sys.platform", "win32"):
+                response = executor.execute("Test prompt")
 
         assert response.response == "Recovered"
         assert executor.config.session_id == "new-codex-thread"
         assert call_count[0] == 2
 
-    def test_codex_session_creation_failure_preserves_cli_command_args(self):
-        """Codex create_session failures should still expose CLI args for context.json."""
+    def test_codex_session_recovery_preserves_cli_command_args(self):
+        """Codex stale session errors should still expose CLI args for context.json."""
         config = AgentConfig(
             name="TestAgent",
             cli=AgentCLI.CODEX,
@@ -185,24 +183,21 @@ class TestGenericSessionRecovery:
             return mock_proc
 
         with patch("subprocess.Popen", side_effect=mock_popen):
-            with patch("subprocess.run", side_effect=RuntimeError("websocket 500")):
-                with patch("sys.platform", "win32"):
-                    with pytest.raises(Exception) as exc_info:
-                        executor.execute("Test prompt")
+            with patch("sys.platform", "win32"):
+                with pytest.raises(Exception) as exc_info:
+                    executor.execute("Test prompt")
 
         err = exc_info.value
-        assert "Failed to create Codex session" in str(err)
+        assert "no rollout found" in str(err).lower()
         assert getattr(err, "cli_command_args", None) == [
             "-C",
             str(Path.cwd().resolve()),
             "-a",
             "never",
             "exec",
-            "resume",
             "--model",
             "gpt-5.3-codex",
             "--json",
-            "old-codex-thread",
             "Test prompt",
         ]
 

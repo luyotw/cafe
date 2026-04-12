@@ -211,6 +211,20 @@ class AgentExecutor:
                     return cli_strategy.create_session()
 
                 def update_cmd_with_session(cmd_list, new_session_id):
+                    if not new_session_id:
+                        if self.config.cli == AgentCLI.CODEX and "resume" in cmd_list:
+                            resume_idx = cmd_list.index("resume")
+                            del cmd_list[resume_idx]
+                            if self.config.session_id and self.config.session_id in cmd_list:
+                                cmd_list.remove(self.config.session_id)
+                            return cmd_list
+                        if "resume" in cmd_list:
+                            resume_idx = cmd_list.index("resume")
+                            del cmd_list[resume_idx:resume_idx + 2]
+                        elif "--resume" in cmd_list:
+                            resume_idx = cmd_list.index("--resume")
+                            del cmd_list[resume_idx:resume_idx + 2]
+                        return cmd_list
                     if "resume" in cmd_list:
                         resume_idx = cmd_list.index("resume")
                         cmd_list[resume_idx + 1] = new_session_id
