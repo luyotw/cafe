@@ -64,6 +64,11 @@ class CodexCLI(AbstractCLI):
         else:
             cmd.append("exec")
 
+        if self.config.session_id:
+            cmd.append(self.config.session_id)
+
+        cmd.append(prompt)
+
         if self.config.model:
             cmd.extend(["--model", self.config.model])
 
@@ -72,10 +77,6 @@ class CodexCLI(AbstractCLI):
         if allowed_directories and not self.config.session_id:
             cmd = self.add_directories(cmd, self._expand_initial_allowed_directories(allowed_directories, cwd))
 
-        if self.config.session_id:
-            cmd.append(self.config.session_id)
-
-        cmd.append(prompt)
         return cmd
 
     def parse_response(
