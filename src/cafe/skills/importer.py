@@ -55,6 +55,37 @@ def _remove_existing_path(path: Path) -> None:
     shutil.rmtree(path)
 
 
+def _validate_candidate(candidate: Path) -> Optional[str]:
+    skill_name = candidate.name
+    skill_file = candidate / "SKILL.md"
+
+    if not skill_file.is_file():
+        return "missing SKILL.md"
+
+    metadata = read_skill_frontmatter(skill_file)
+    frontmatter_name = str(metadata.get("name", skill_name))
+    if frontmatter_name != skill_name:
+        return "frontmatter name does not match folder name"
+
+    return None
+
+
+def preview_importable_skills(source_root: Path) -> list[str]:
+    """Return discovered skill folder names from a source path for preview."""
+    source_root = source_root.expanduser().resolve()
+
+    if not source_root.exists():
+        raise FileNotFoundError(f"Skill source path not found: {source_root}")
+    if not source_root.is_dir():
+        raise NotADirectoryError(f"Skill source path is not a directory: {source_root}")
+
+    candidates = list(_iter_skill_candidates(source_root))
+    if not candidates:
+        raise ValueError(f"No skill folders found under: {source_root}")
+
+    return [candidate.name for candidate in candidates]
+
+
 def import_skills(
     source_root: Path,
     project_root: Path,
@@ -80,31 +111,17 @@ def import_skills(
 
     for candidate in candidates:
         skill_name = candidate.name
-        skill_file = candidate / "SKILL.md"
         destination = destination_root / skill_name
 
-        if not skill_file.is_file():
+        validation_error = _validate_candidate(candidate)
+        if validation_error is not None:
             results.append(
                 SkillImportResult(
                     name=skill_name,
                     source=candidate,
                     destination=destination,
                     status="skipped",
-                    reason="missing SKILL.md",
-                )
-            )
-            continue
-
-        metadata = read_skill_frontmatter(skill_file)
-        frontmatter_name = str(metadata.get("name", skill_name))
-        if frontmatter_name != skill_name:
-            results.append(
-                SkillImportResult(
-                    name=skill_name,
-                    source=candidate,
-                    destination=destination,
-                    status="skipped",
-                    reason="frontmatter name does not match folder name",
+                    reason=validation_error,
                 )
             )
             continue
