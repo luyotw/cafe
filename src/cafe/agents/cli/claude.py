@@ -2,7 +2,6 @@
 
 import json
 import logging
-import subprocess
 from pathlib import Path
 from typing import List, Optional, Tuple
 
@@ -224,37 +223,5 @@ class ClaudeCLI(AbstractCLI):
         return None
 
     def create_session(self) -> str:
-        """Create new Claude session.
-
-        Execute a simple Claude command to create new session, and extract session ID from response.
-
-        Returns:
-            New session ID
-
-        Raises:
-            Exception: If session creation fails or session ID cannot be extracted
-        """
-        cmd = ["claude", "-p", "Say 'hi'", "--output-format", "json"]
-
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-
-        try:
-            response_data = json.loads(result.stdout)
-
-            # Check for errors (e.g. usage limit reached)
-            if response_data.get("is_error"):
-                error_msg = response_data.get("result", "Unknown error")
-                print(f"\n⚠️  Claude API Error: {error_msg}\n")
-                raise Exception(f"Claude API error: {error_msg}")
-
-            session_id = response_data.get("session_id")
-            if not session_id:
-                raise Exception("No session_id in response")
-            return session_id
-        except json.JSONDecodeError as e:
-            raise Exception(f"Failed to parse Claude response: {e}") from e
+        """Claude sessions are created by the real prompt execution."""
+        return ""

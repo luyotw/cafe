@@ -1,9 +1,9 @@
 """測試 ClaudeCLI 實作."""
 
-import json
-import pytest
 from pathlib import Path
 from unittest.mock import patch
+import json
+import pytest
 
 from cafe.agents.cli.claude import ClaudeCLI
 from cafe.core.types import AgentConfig, AgentCLI, PermissionDenial, TokenUsage
@@ -215,6 +215,19 @@ class TestClaudeCLIGetOutputFormat:
         assert "--output-format" in result
         assert "stream-json" in result
         assert "--verbose" in result
+
+
+class TestClaudeCLICreateSession:
+    """測試 create_session()."""
+
+    def test_create_session_is_noop(self, claude_config_with_model):
+        cli = ClaudeCLI(claude_config_with_model)
+
+        with patch("subprocess.run") as mock_run:
+            session_id = cli.create_session()
+
+        assert session_id == ""
+        mock_run.assert_not_called()
 
 
 class TestClaudeCLIParseResponse:
