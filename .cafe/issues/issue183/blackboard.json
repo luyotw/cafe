@@ -29,21 +29,21 @@
     "code": {
       "name": "code",
       "kind": "document",
-      "version": 15,
+      "version": 16,
       "updated_by": "develop",
-      "path": ".cafe/issues/issue183/develop/iteration_014/output.md",
-      "updated_at": "2026-04-12T15:05:03+08:00",
-      "summary": "Fixed review iteration 007 by rejecting unsafe skill removal names and adding regression coverage for traversal attempts.",
+      "path": ".cafe/issues/issue183/develop/iteration_015/output.md",
+      "updated_at": "2026-04-12T15:13:33+08:00",
+      "summary": "Confirmed the skill-rm handoff was already implemented and committed the pending workflow artifacts so the tracked worktree is clean again.",
       "base_sha": null,
       "head_sha": null
     },
     "review_feedback": {
       "name": "review_feedback",
       "kind": "document",
-      "version": 7,
+      "version": 8,
       "updated_by": "review",
-      "path": ".cafe/issues/issue183/review/iteration_007/output.md",
-      "updated_at": "2026-04-12T14:59:51.533845+08:00",
+      "path": ".cafe/issues/issue183/review/iteration_008/output.md",
+      "updated_at": "2026-04-12T15:12:14.252077+08:00",
       "summary": "",
       "base_sha": null,
       "head_sha": null
@@ -2486,6 +2486,100 @@
         "visit": 2,
         "hop": 3
       }
+    },
+    {
+      "timestamp": "2026-04-12T15:09:09.700396+08:00",
+      "step": "develop",
+      "event_type": "step_completed",
+      "message": "{\"step\": \"develop\", \"status_code\": \"CAFE_CONFIRMED\", \"visit\": 2, \"hop\": 3}",
+      "data": {
+        "step": "develop",
+        "status_code": "CAFE_CONFIRMED",
+        "visit": 2,
+        "hop": 3
+      }
+    },
+    {
+      "timestamp": "2026-04-12T15:09:09.719527+08:00",
+      "step": "develop",
+      "event_type": "transition",
+      "message": "{\"from\": \"develop\", \"to\": \"review\", \"status_code\": \"CAFE_CONFIRMED\", \"source\": \"status\"}",
+      "data": {
+        "from": "develop",
+        "to": "review",
+        "status_code": "CAFE_CONFIRMED",
+        "source": "status"
+      }
+    },
+    {
+      "timestamp": "2026-04-12T15:09:09.737453+08:00",
+      "step": "review",
+      "event_type": "step_started",
+      "message": "{\"step\": \"review\", \"visit\": 2, \"hop\": 4}",
+      "data": {
+        "step": "review",
+        "visit": 2,
+        "hop": 4
+      }
+    },
+    {
+      "timestamp": "2026-04-12T15:12:14.263712+08:00",
+      "step": "review",
+      "event_type": "step_completed",
+      "message": "{\"step\": \"review\", \"status_code\": \"CAFE_NEEDS_CHANGES\", \"visit\": 2, \"hop\": 4}",
+      "data": {
+        "step": "review",
+        "status_code": "CAFE_NEEDS_CHANGES",
+        "visit": 2,
+        "hop": 4
+      }
+    },
+    {
+      "timestamp": "2026-04-12T15:12:14.286811+08:00",
+      "step": "review",
+      "event_type": "transition",
+      "message": "{\"from\": \"review\", \"to\": \"develop\", \"status_code\": \"CAFE_NEEDS_CHANGES\", \"source\": \"status\"}",
+      "data": {
+        "from": "review",
+        "to": "develop",
+        "status_code": "CAFE_NEEDS_CHANGES",
+        "source": "status"
+      }
+    },
+    {
+      "timestamp": "2026-04-12T15:12:14.306675+08:00",
+      "step": "develop",
+      "event_type": "step_started",
+      "message": "{\"step\": \"develop\", \"visit\": 3, \"hop\": 5}",
+      "data": {
+        "step": "develop",
+        "visit": 3,
+        "hop": 5
+      }
+    },
+    {
+      "timestamp": "2026-04-12T15:13:33+08:00",
+      "step": "develop",
+      "event_type": "step_completed",
+      "message": "{\"step\": \"develop\", \"status_code\": \"CAFE_CONFIRMED\", \"visit\": 3, \"hop\": 5}",
+      "data": {
+        "step": "develop",
+        "status_code": "CAFE_CONFIRMED",
+        "visit": 3,
+        "hop": 5
+      }
+    },
+    {
+      "timestamp": "2026-04-12T15:13:33+08:00",
+      "step": "develop",
+      "event_type": "transition",
+      "message": "{\"from\": \"develop\", \"to\": \"review\", \"status_code\": \"CAFE_CONFIRMED\", \"source\": \"status\"}",
+      "data": {
+        "from": "develop",
+        "to": "review",
+        "status_code": "CAFE_CONFIRMED",
+        "source": "status"
+      }
     }
   ],
   "decisions": [
@@ -2833,13 +2927,27 @@
       "made_by": "review"
     },
     {
-      "timestamp": "2026-04-12T15:05:03+08:00",
+      "timestamp": "2026-04-12T15:09:09.710136+08:00",
+      "step": "develop",
+      "decision": "transition",
+      "rationale": "{\"from\": \"develop\", \"to\": \"review\", \"status_code\": \"CAFE_CONFIRMED\"}",
+      "made_by": "develop"
+    },
+    {
+      "timestamp": "2026-04-12T15:12:14.276644+08:00",
+      "step": "review",
+      "decision": "transition",
+      "rationale": "{\"from\": \"review\", \"to\": \"develop\", \"status_code\": \"CAFE_NEEDS_CHANGES\"}",
+      "made_by": "review"
+    },
+    {
+      "timestamp": "2026-04-12T15:13:33+08:00",
       "step": "develop",
       "decision": "transition",
       "rationale": "{\"from\": \"develop\", \"to\": \"review\", \"status_code\": \"CAFE_CONFIRMED\"}",
       "made_by": "develop"
     }
   ],
-  "handoff_summary": "已修正 `cafe skill rm` 的危險路徑刪除問題，並補上拒絕 `..` 與絕對路徑的回歸測試，待 review 重新確認。",
-  "updated_at": "2026-04-12T15:05:03+08:00"
+  "handoff_summary": "已確認 `cafe skill rm` 功能早已完成；本輪補交 shared workflow blackboard 與 baton 的追蹤變更，工作樹已恢復乾淨，待 review 重新確認。",
+  "updated_at": "2026-04-12T15:13:33+08:00"
 }
