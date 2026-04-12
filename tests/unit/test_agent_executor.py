@@ -481,6 +481,7 @@ class TestStreamingExecution:
 
         # Check output was printed
         captured = capsys.readouterr()
+        assert "CLI command: test cmd" in captured.out
         assert "TestCLI Response (streaming):" in captured.out
         assert "Line 1" in captured.out
         assert "Line 2" in captured.out
@@ -531,6 +532,7 @@ class TestStreamingExecution:
 
         # Check output was printed (with newlines between chunks)
         captured = capsys.readouterr()
+        assert "CLI command: claude --print test" in captured.out
         assert "Claude Response (streaming):" in captured.out
         assert "Hello" in captured.out
         assert "world" in captured.out
