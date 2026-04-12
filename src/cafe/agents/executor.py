@@ -1,6 +1,7 @@
 """Agent executor for running AI agents."""
 
 import json
+import shlex
 import subprocess
 from pathlib import Path
 from typing import Callable, List, Optional, Tuple
@@ -673,6 +674,9 @@ class AgentExecutor:
                     # Exclude executable itself (e.g. 'gemini' / 'claude')
                     err.cli_command_args = cmd[1:]
                     raise err
+
+        # Print execution context
+        print(f"CLI command: {shlex.join(cmd)}")
 
         # Print header
         print(f"\n{'='*80}")
