@@ -481,7 +481,6 @@ class TestStreamingExecution:
 
         # Check output was printed
         captured = capsys.readouterr()
-        assert "CLI command: test cmd" in captured.out
         assert "TestCLI Response (streaming):" in captured.out
         assert "Line 1" in captured.out
         assert "Line 2" in captured.out
@@ -532,7 +531,6 @@ class TestStreamingExecution:
 
         # Check output was printed (with newlines between chunks)
         captured = capsys.readouterr()
-        assert "CLI command: claude --print test" in captured.out
         assert "Claude Response (streaming):" in captured.out
         assert "Hello" in captured.out
         assert "world" in captured.out
@@ -558,8 +556,8 @@ class TestStreamingExecution:
                     parse_stream_json=True,
                 )
 
-    def test_execute_with_streaming_prints_cli_command_before_early_stderr_failure(self, capsys) -> None:
-        """Early fatal stderr should still print the attempted CLI command."""
+    def test_execute_with_streaming_handles_early_stderr_failure(self, capsys) -> None:
+        """Early fatal stderr should still raise an execution error."""
         config = AgentConfig(name="Roger", cli=AgentCLI.CLAUDE)
         executor = AgentExecutor(config)
 
@@ -578,8 +576,7 @@ class TestStreamingExecution:
                     parse_stream_json=True,
                 )
 
-        captured = capsys.readouterr()
-        assert "CLI command: claude --resume abc -p test" in captured.out
+        assert capsys.readouterr().out == ""
 
     def test_execute_with_streaming_handles_malformed_json(self, capsys) -> None:
         """測試處理格式錯誤 JSON（回退到 plain text）"""

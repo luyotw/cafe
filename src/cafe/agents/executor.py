@@ -1,7 +1,6 @@
 """Agent executor for running AI agents."""
 
 import json
-import shlex
 import subprocess
 from pathlib import Path
 from typing import Callable, List, Optional, Tuple
@@ -609,8 +608,6 @@ class AgentExecutor:
         Raises:
             AgentExecutionError: If execution fails
         """
-        print(f"CLI command: {shlex.join(cmd)}")
-
         try:
             process = subprocess.Popen(
                 cmd,
