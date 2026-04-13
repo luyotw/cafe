@@ -138,7 +138,10 @@ class UserInputCollector(NoOpHook):
                 return HookResult(
                     continue_pipeline=False,
                     override_status_code=PhaseStatusCode.CONFIRMED,
-                    events=[{"type": "review_confirmed", "step": step_name}],
+                    events=[
+                        {"type": "review_confirmed", "step": step_name},
+                        {"type": "review_confirmed_advance", "step": step_name},
+                    ],
                 )
 
             phase.step_user_inputs[step_name] = str(result_or_input)

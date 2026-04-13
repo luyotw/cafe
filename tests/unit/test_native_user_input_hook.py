@@ -56,7 +56,10 @@ def test_user_input_collector_confirms_ready_for_review_without_running_agent(tm
 
     assert result.continue_pipeline is False
     assert result.override_status_code == PhaseStatusCode.CONFIRMED
-    assert result.events == [{"type": "review_confirmed", "step": "spec"}]
+    assert result.events == [
+        {"type": "review_confirmed", "step": "spec"},
+        {"type": "review_confirmed_advance", "step": "spec"},
+    ]
     mock_display_output.assert_called_once()
     mock_display_delta.assert_called_once()
     phase._ask_user_for_review_decision.assert_called_once()

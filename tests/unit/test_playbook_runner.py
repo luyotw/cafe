@@ -103,6 +103,52 @@ def test_runner_ignores_invalid_goto_target_and_falls_back(tmp_path: Path) -> No
     assert result.final_status_code == "CAFE_CONFIRMED"
 
 
+def test_runner_advances_after_review_confirmed_without_reinvoking_same_step(tmp_path: Path) -> None:
+    playbook = {
+        "playbook": {"id": "default"},
+        "steps": {
+            "spec": {
+                "skill": "spec_first",
+                "role": "pm",
+                "valid_status_codes": ["CAFE_READY_FOR_REVIEW", "CAFE_CONFIRMED"],
+                "on": {"CAFE_READY_FOR_REVIEW": "spec", "CAFE_CONFIRMED": "plan"},
+            },
+            "plan": {
+                "skill": "spec_first",
+                "role": "developer",
+                "valid_status_codes": ["CAFE_CONFIRMED"],
+                "on": {"CAFE_CONFIRMED": "_done"},
+            },
+        },
+    }
+
+    calls: list[str] = []
+
+    def executor(step_name: str, step_def: dict, state: object):
+        calls.append(step_name)
+        if step_name == "spec":
+            return StepExecutionResult(
+                response="",
+                artifacts={},
+                status_code="CAFE_CONFIRMED",
+                auto_continue=False,
+                events=[{"type": "review_confirmed_advance", "step": "spec"}],
+            )
+        return ("CAFE_CONFIRMED", {})
+
+    runner = PlaybookRunner(
+        issue_dir=tmp_path / ".cafe" / "issues" / "demo",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        executor=executor,
+    )
+
+    result = runner.run(max_transitions=5)
+
+    assert result.final_step == "plan"
+    assert calls == ["spec", "plan"]
+
+
 def test_runner_uses_allowed_goto_target(tmp_path: Path) -> None:
     playbook = {
         "playbook": {"id": "default"},
