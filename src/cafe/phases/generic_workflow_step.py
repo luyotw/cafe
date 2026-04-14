@@ -196,6 +196,11 @@ class GenericWorkflowStepExecutor(Phase):
             artifacts=artifacts,
             status_code=status_code.value if status_code is not None else None,
             auto_continue=auto_continue,
+            events=[
+                event
+                for event in execution.events
+                if isinstance(event, dict)
+            ],
         )
 
     def _detect_written_output_files(self) -> List[Path]:

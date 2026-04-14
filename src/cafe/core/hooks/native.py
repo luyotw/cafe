@@ -6,6 +6,8 @@ import webbrowser
 from pathlib import Path
 from typing import Any, Optional
 
+import yaml
+
 from cafe.core.hooks import HookResult, NoOpHook
 from cafe.core.questions_schema import parse_questions_xml, validate_questions_xml
 from cafe.core.status_codes import PhaseStatusCode
@@ -138,7 +140,10 @@ class UserInputCollector(NoOpHook):
                 return HookResult(
                     continue_pipeline=False,
                     override_status_code=PhaseStatusCode.CONFIRMED,
-                    events=[{"type": "review_confirmed", "step": step_name}],
+                    events=[
+                        {"type": "review_confirmed", "step": step_name},
+                        {"type": "review_confirmed_advance", "step": step_name},
+                    ],
                 )
 
             phase.step_user_inputs[step_name] = str(result_or_input)
@@ -199,6 +204,31 @@ def _parse_pr_output(output_file: Path) -> tuple[str, str]:
     if not title:
         raise GitHubError(f"PR title is empty: {output_file}")
     return title, body
+
+
+def _get_issue_base_branch(phase: Any) -> Optional[str]:
+    issue_dir = getattr(phase, "issue_dir", None)
+    issue_yaml = Path(issue_dir) / "issue.yaml" if issue_dir else None
+
+    getter = getattr(phase, "_get_issue_config_value", None)
+    if callable(getter) and issue_yaml is not None:
+        try:
+            value = getter(issue_yaml, "base_branch")
+            if isinstance(value, str) and value.strip():
+                return str(value)
+        except Exception:
+            pass
+
+    if issue_yaml is not None and issue_yaml.exists():
+        try:
+            raw = yaml.safe_load(issue_yaml.read_text(encoding="utf-8")) or {}
+        except Exception:
+            return None
+        value = raw.get("base_branch")
+        if value:
+            return str(value)
+
+    return None
 
 
 class GitHubPRCreator(NoOpHook):
@@ -304,7 +334,11 @@ class GitHubPRCreator(NoOpHook):
                 pr_url = str(existing_pr["url"])
                 action = "updated"
             else:
-                pr_url = github_ops.create_pr(title=title, body=body)
+                pr_url = github_ops.create_pr(
+                    title=title,
+                    body=body,
+                    base=_get_issue_base_branch(phase),
+                )
                 pr_number = github_ops.extract_pr_number(pr_url)
                 action = "created"
         except Exception:

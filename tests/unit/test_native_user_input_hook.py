@@ -56,7 +56,10 @@ def test_user_input_collector_confirms_ready_for_review_without_running_agent(tm
 
     assert result.continue_pipeline is False
     assert result.override_status_code == PhaseStatusCode.CONFIRMED
-    assert result.events == [{"type": "review_confirmed", "step": "spec"}]
+    assert result.events == [
+        {"type": "review_confirmed", "step": "spec"},
+        {"type": "review_confirmed_advance", "step": "spec"},
+    ]
     mock_display_output.assert_called_once()
     mock_display_delta.assert_called_once()
     phase._ask_user_for_review_decision.assert_called_once()
@@ -220,6 +223,42 @@ def test_github_pr_creator_publish_output_syncs_pr_and_overrides_status(tmp_path
     mock_github_ops.return_value.update_pr.assert_called_once_with("42", title="Test PR", body="## Summary\nupdated")
     assert result.override_status_code == PhaseStatusCode.READY_FOR_REVIEW
     assert result.context_updates["pr_number"] == "42"
+
+
+def test_github_pr_creator_publish_output_uses_issue_base_branch_when_creating_pr(tmp_path: Path) -> None:
+    output_file = tmp_path / "output.md"
+    output_file.write_text("# Test PR\n\n## Summary\ncreated\n", encoding="utf-8")
+
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo"
+    issue_dir.mkdir(parents=True, exist_ok=True)
+    (issue_dir / "issue.yaml").write_text("base_branch: v02\n", encoding="utf-8")
+
+    phase = MagicMock()
+    phase.issue_dir = issue_dir
+    phase.git_ops.get_current_branch.return_value = "issue-222"
+    phase.git_ops.has_unpushed_commits.return_value = False
+
+    hook = GitHubPRCreator()
+
+    with patch("cafe.core.hooks.native.GitHubOps") as mock_github_ops:
+        mock_github_ops.return_value.get_pr_for_branch.return_value = None
+        mock_github_ops.return_value.create_pr.return_value = "https://github.com/test/repo/pull/99"
+        mock_github_ops.return_value.extract_pr_number.return_value = "99"
+
+        result = hook.run(
+            stage="publish_output",
+            phase=phase,
+            output_file=output_file,
+            status_code=PhaseStatusCode.CONFIRMED,
+        )
+
+    mock_github_ops.return_value.create_pr.assert_called_once_with(
+        title="Test PR",
+        body="## Summary\ncreated",
+        base="v02",
+    )
+    assert result.context_updates["pr_number"] == "99"
+    assert result.context_updates["pr_url"] == "https://github.com/test/repo/pull/99"
 
 
 def test_pr_comment_poster_posts_todo_comment_for_needs_changes(tmp_path: Path) -> None:

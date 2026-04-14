@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
@@ -23,6 +23,7 @@ class StepExecutionResult:
     artifacts: Dict[str, str]
     status_code: Optional[str] = None
     auto_continue: bool = False
+    events: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -143,6 +144,21 @@ class PlaybookRunner:
         if status_code not in transitions:
             return None, "terminal"
         return str(transitions[status_code]), "status"
+
+    def _resolve_review_confirmed_successor(self, current_step: str) -> Optional[str]:
+        step = self.steps[current_step]
+        transitions = step.get("on", {})
+        if not isinstance(transitions, dict):
+            return None
+
+        confirmed_target = transitions.get(PhaseStatusCode.CONFIRMED.value)
+        if confirmed_target and confirmed_target != current_step:
+            return str(confirmed_target)
+
+        for target in transitions.values():
+            if target != current_step:
+                return str(target)
+        return None
 
     @staticmethod
     def _resolve_step_iteration_limit(step_def: Dict) -> Optional[int]:
@@ -272,6 +288,13 @@ class PlaybookRunner:
                 },
             )
 
+            review_confirmed_advance = False
+            if hasattr(execution_result, "events"):
+                review_confirmed_advance = any(
+                    isinstance(event, dict) and event.get("type") == "review_confirmed_advance"
+                    for event in execution_result.events
+                )
+
             if not single_step and status_code in PAUSE_STATUS_CODES and not auto_continue:
                 self.blackboard_store.record_event(
                     self.blackboard,
@@ -294,6 +317,11 @@ class PlaybookRunner:
                 response=response if goto_target is None else f"{response}\nCAFE_GOTO:{goto_target}",
                 status_code=status_code,
             )
+            if review_confirmed_advance and next_step == current_step:
+                advanced_step = self._resolve_review_confirmed_successor(current_step)
+                if advanced_step is not None:
+                    next_step = advanced_step
+                    transition_source = "review_confirmed_advance"
             if single_step:
                 self.blackboard_store.record_event(
                     self.blackboard,
