@@ -423,6 +423,60 @@ def test_workflow_command_enters_user_phase_immediately_after_agent_handoff(tmp_
     assert blackboard_data["current_step"] == "done"
 
 
+def test_workflow_command_done_phase_can_restart_workflow(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("CAFE_FORCE_INTERACTIVE", "1")
+    executed_steps: list[str] = []
+
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-222"
+    issue_dir.mkdir(parents=True, exist_ok=True)
+    (issue_dir / "blackboard.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "playbook_id": "default",
+                "current_step": "done",
+                "handoff_summary": "workflow completed",
+                "artifacts": {},
+                "events": [],
+                "decisions": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    class FakeExecutor:
+        def execute_step(self, step_name: str, step_def: dict, blackboard_state: object) -> tuple[str, dict[str, str]]:
+            executed_steps.append(step_name)
+            return ("CAFE_CONFIRMED", {})
+
+    with (
+        patch("cafe.ui.cli.GitOperations") as mock_git_cls,
+        patch("cafe.ui.cli._build_workflow_step_executor", return_value=FakeExecutor()),
+        patch(
+            "cafe.ui.cli.prompt_list",
+            side_effect=[
+                "Leave a handoff note and continue the workflow",
+                "Continue implementation (develop)",
+                "Mark the workflow complete",
+            ],
+        ),
+        patch("cafe.ui.cli.prompt_multiline", return_value="Implement the new follow-up request."),
+        patch("cafe.ui.cli.prompt_confirm", return_value=True),
+    ):
+        git = MagicMock()
+        git.get_current_branch.return_value = "issue-222"
+        mock_git_cls.return_value = git
+
+        result = runner.invoke(app, ["workflow", "--playbook", "default", "--execute"])
+
+    assert result.exit_code == 0
+    assert "Workflow already completed" in result.stdout
+    assert "Workflow is waiting for user input" in result.stdout
+    assert "Executing step=develop iteration=001" in result.stdout
+    assert executed_steps == ["develop", "review", "pr"]
+
+
 def test_workflow_execute_uses_context_response_for_goto(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     executed_steps: list[str] = []

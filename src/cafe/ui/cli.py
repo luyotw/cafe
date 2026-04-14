@@ -288,6 +288,7 @@ def _handle_user_phase(
     issue_dir: Path,
     playbook_data: Dict[str, Any],
     blackboard,
+    phase_name: str = "user",
 ) -> Optional[str]:
     phase_labels = {
         "spec": "Update requirements spec",
@@ -297,7 +298,11 @@ def _handle_user_phase(
         "pr": "Refresh PR output",
     }
     summary = getattr(blackboard, "handoff_summary", "").strip()
-    console.print("[yellow]Workflow is waiting for user input[/yellow] step=user")
+    if phase_name == "done":
+        console.print("[green]Workflow already completed[/green] step=done")
+        console.print("[yellow]Workflow is waiting for user input[/yellow] step=user")
+    else:
+        console.print("[yellow]Workflow is waiting for user input[/yellow] step=user")
     if summary:
         console.print(f"[dim]{summary}[/dim]")
 
@@ -5759,11 +5764,10 @@ def workflow(
             )
 
             active_step = pending_start_step or blackboard.current_step
-            if not dry_run and active_step == "done":
-                console.print("[green]Workflow already completed[/green] step=done")
-                return
-            if not dry_run and active_step == "user":
+            if not dry_run and active_step in {"user", "done"}:
                 if not interactive:
+                    if active_step == "done":
+                        console.print("[green]Workflow already completed[/green] step=done")
                     console.print("[yellow]Workflow is waiting for user input[/yellow] step=user")
                     return
                 user_selected_step = _handle_user_phase(
@@ -5771,6 +5775,7 @@ def workflow(
                     issue_dir=issue_dir,
                     playbook_data=playbook_data,
                     blackboard=blackboard,
+                    phase_name=active_step,
                 )
                 if not user_selected_step:
                     return
