@@ -123,7 +123,7 @@ class GenericWorkflowStepExecutor(Phase):
                 prompt=prompt,
                 user_input=self.step_user_inputs.get(step_name, "workflow execute"),
                 valid_status_codes=valid_status_codes,
-                require_status_code=False,
+                require_status_code=True,
                 allowed_tools=allowed_tools,
                 phase_specific_data=phase_specific_data,
             )

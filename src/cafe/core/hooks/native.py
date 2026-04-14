@@ -117,6 +117,23 @@ class UserInputCollector(NoOpHook):
         previous_output_file = self._get_previous_output_file(phase, step_name)
         self._display_previous_output(phase, step_name, previous_output_file)
 
+        current_iter_dir = phase._get_iteration_dir(phase.iteration)
+        current_user_input_file = current_iter_dir / "user_input.md"
+        if current_user_input_file.exists():
+            existing_user_input = current_user_input_file.read_text(encoding="utf-8").strip()
+            if existing_user_input:
+                phase.step_user_inputs[step_name] = existing_user_input
+                return HookResult(
+                    context_updates={"user_input": existing_user_input},
+                    events=[
+                        {
+                            "type": "user_input_collected",
+                            "step": step_name,
+                            "source": "user_input_file",
+                        }
+                    ],
+                )
+
         if previous_status == "CAFE_READY_FOR_REVIEW":
             self._display_previous_iteration_delta(phase, previous_output_file)
             prev_data = phase._load_previous_iteration_data() or {}

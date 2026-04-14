@@ -139,6 +139,42 @@ def test_generic_workflow_step_executor_writes_iteration_files(tmp_path: Path, m
     assert (issue_dir / "spec" / "status.json").exists()
 
 
+def test_generic_workflow_step_retries_agent_when_status_code_is_invalid(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-status-retry"
+    playbook = {
+        "playbook": {"id": "default"},
+        "roles": {"pm": {"default_agent": "Roger"}},
+        "steps": {
+            "spec": {
+                "skill": {"1": "spec_first", "default": "spec_first"},
+                "role": "pm",
+                "output_artifact": "spec",
+                "allowed_tools": ["Read"],
+                "valid_status_codes": ["CAFE_CONFIRMED"],
+                "on": {"CAFE_CONFIRMED": "_done"},
+            }
+        },
+    }
+    state = BlackboardStore(issue_dir).load_or_create("spec")
+    agent_manager = FakeAgentManager(["CAFE_SPEC_READY", "CAFE_CONFIRMED"])
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="issue-status-retry",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=agent_manager,
+        git_ops=FakeGitOperations(),
+        role_agent_map={"pm": "Roger"},
+    )
+
+    result = executor.execute_step("spec", playbook["steps"]["spec"], state)
+
+    assert result.status_code == "CAFE_CONFIRMED"
+    assert len(agent_manager.prompts) >= 2
+    assert any("If completed respond with status code" in prompt for prompt in agent_manager.prompts)
+
+
 def test_generic_workflow_step_executor_uses_iteration_specific_skill_mapping(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-2"
@@ -409,7 +445,7 @@ def test_generic_workflow_step_auto_continues_pause_statuses_in_interactive_mode
     assert result.auto_continue is True
 
 
-def test_generic_workflow_step_allows_missing_status_code(tmp_path: Path, monkeypatch) -> None:
+def test_generic_workflow_step_recovers_missing_status_code_with_continue_prompt(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-no-status"
     playbook = {
@@ -433,17 +469,17 @@ def test_generic_workflow_step_allows_missing_status_code(tmp_path: Path, monkey
         issue_name="issue-no-status",
         playbook=playbook,
         generic_phase=_build_loader(tmp_path),
-        agent_manager=FakeAgentManager("done without status"),
+        agent_manager=FakeAgentManager(["done without status", "CAFE_CONFIRMED"]),
         git_ops=FakeGitOperations(),
         role_agent_map={"pm": "Roger"},
     )
 
     result = executor.execute_step("spec", playbook["steps"]["spec"], state)
 
-    assert result.response == "done without status"
-    assert result.status_code is None
+    assert "done without status" in result.response
+    assert result.status_code == "CAFE_CONFIRMED"
     context_data = (issue_dir / "spec" / "iteration_001" / "context.json").read_text(encoding="utf-8")
-    assert '"status_code": null' in context_data
+    assert '"status_code": "CAFE_CONFIRMED"' in context_data
 
 
 def test_generic_workflow_step_does_not_recover_from_unchanged_output(tmp_path: Path, monkeypatch) -> None:

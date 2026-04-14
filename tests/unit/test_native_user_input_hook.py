@@ -107,6 +107,44 @@ def test_user_input_collector_loads_interactive_qa_for_need_clarification(tmp_pa
     mock_qa.assert_called_once()
 
 
+def test_user_input_collector_reuses_existing_user_input_file_without_reasking(tmp_path: Path) -> None:
+    phase_dir = tmp_path / "spec"
+    prev_iter_dir = phase_dir / "iteration_001"
+    current_iter_dir = phase_dir / "iteration_002"
+    prev_iter_dir.mkdir(parents=True, exist_ok=True)
+    current_iter_dir.mkdir(parents=True, exist_ok=True)
+    (prev_iter_dir / "context.json").write_text(
+        json.dumps({"status_code": "CAFE_NEED_CLARIFICATION"}),
+        encoding="utf-8",
+    )
+    (prev_iter_dir / "output.md").write_text("# Spec\n", encoding="utf-8")
+    (current_iter_dir / "user_input.md").write_text(
+        "Q1: Question?\nA1: Confirmed answer",
+        encoding="utf-8",
+    )
+
+    phase = _FakePhase(phase_dir=phase_dir, iteration=2)
+    hook = UserInputCollector()
+
+    with (
+        patch.object(hook, "_display_previous_output") as mock_display_output,
+        patch("cafe.core.hooks.native.interactive_qa_flow") as mock_qa,
+    ):
+        result = hook.run(
+            stage="prepare_input",
+            phase=phase,
+            step_name="spec",
+            step_def={"role": "pm"},
+            agent_name="Roger",
+        )
+
+    assert result.context_updates["user_input"] == "Q1: Question?\nA1: Confirmed answer"
+    assert result.events == [{"type": "user_input_collected", "step": "spec", "source": "user_input_file"}]
+    assert phase.step_user_inputs["spec"] == "Q1: Question?\nA1: Confirmed answer"
+    mock_display_output.assert_called_once()
+    mock_qa.assert_not_called()
+
+
 def test_execute_step_skips_checklist_validation_when_confirmed_without_agent_run(tmp_path: Path) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "demo"
     issue_dir.mkdir(parents=True, exist_ok=True)

@@ -184,6 +184,23 @@ class TestStatusCodeParser:
 
         assert code == PhaseStatusCode.NEED_CLARIFICATION
 
+    def test_extract_maps_legacy_ready_alias_to_ready_for_review(self) -> None:
+        """測試舊版 ready 類別名可映射為合法狀態碼"""
+        response = "CAFE_SPEC_READY\nChecklist all done."
+        valid_codes = [PhaseStatusCode.READY_FOR_REVIEW]
+
+        code = StatusCodeParser.extract(response, valid_codes)
+
+        assert code == PhaseStatusCode.READY_FOR_REVIEW
+
+    def test_extract_all_maps_legacy_ready_alias_to_ready_for_review(self) -> None:
+        """測試 extract_all 也會正規化 legacy ready 別名"""
+        response = "CAFE_SPEC_READY\nCAFE_PLAN_READY\nDone"
+
+        codes = StatusCodeParser.extract_all(response)
+
+        assert codes == {PhaseStatusCode.READY_FOR_REVIEW}
+
     def test_extract_handles_edge_case_with_valid_codes(self) -> None:
         """測試 extract 使用 valid_codes 過濾後, 若仍有多種狀態碼則回傳 None"""
         response = "CAFE_CONFIRMED\nCAFE_NEED_CLARIFICATION\nCAFE_REJECTED\nContent..."

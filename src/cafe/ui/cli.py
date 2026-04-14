@@ -282,6 +282,38 @@ def _consume_pending_chat_handoff(
     return target_step
 
 
+def _find_incomplete_workflow_step(*, issue_dir: Path, playbook_data: Dict[str, Any]) -> Optional[str]:
+    """Return the most recent workflow step with an unfinished iteration context."""
+    latest_incomplete: tuple[float, str] | None = None
+
+    for step_name in playbook_data["steps"].keys():
+        step_dir = issue_dir / step_name
+        if not step_dir.exists():
+            continue
+
+        iteration_dirs = sorted(path for path in step_dir.glob("iteration_*") if path.is_dir())
+        if not iteration_dirs:
+            continue
+
+        context_file = iteration_dirs[-1] / "context.json"
+        if not context_file.exists():
+            continue
+
+        try:
+            context_data = json.loads(context_file.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+
+        if context_data.get("end_time") or context_data.get("status_code") is not None:
+            continue
+
+        timestamp = context_file.stat().st_mtime
+        if latest_incomplete is None or timestamp > latest_incomplete[0]:
+            latest_incomplete = (timestamp, step_name)
+
+    return latest_incomplete[1] if latest_incomplete is not None else None
+
+
 def _handle_user_phase(
     *,
     issue_name: str,
@@ -5807,6 +5839,18 @@ def workflow(
 
             active_step = pending_start_step or blackboard.current_step
             if not dry_run and active_step in {"user", "done"}:
+                incomplete_step = _find_incomplete_workflow_step(
+                    issue_dir=issue_dir,
+                    playbook_data=playbook_data,
+                )
+                if incomplete_step is not None:
+                    pending_start_step = incomplete_step
+                    BlackboardStore(issue_dir).set_current_step(blackboard, incomplete_step)
+                    console.print(
+                        f"[yellow]Resuming unfinished iteration[/yellow] step={incomplete_step}"
+                    )
+                    continue
+            if not dry_run and active_step in {"user", "done"}:
                 if not interactive:
                     if active_step == "done":
                         console.print("[green]Workflow already completed[/green] step=done")
@@ -5851,7 +5895,13 @@ def workflow(
                 console.print(
                     f"[yellow]Workflow paused[/yellow] step={result.final_step} status={result.final_status_code} next={latest_blackboard.current_step}"
                 )
-                console.print("[dim]Resolve the requested input, then run cafe make again to resume.[/dim]")
+                if result.final_status_code == "INVALID_STATUS_CODE":
+                    console.print(
+                        "[dim]Agent returned an invalid CAFE status code for this step. "
+                        "Fix prompt/agent output and run cafe make again to resume.[/dim]"
+                    )
+                else:
+                    console.print("[dim]Resolve the requested input, then run cafe make again to resume.[/dim]")
             return
     except Exception as e:
         console.print(f"[red]Error: workflow run failed: {e}[/red]")

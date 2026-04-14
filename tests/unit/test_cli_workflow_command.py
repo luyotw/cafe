@@ -477,6 +477,77 @@ def test_workflow_command_done_phase_can_restart_workflow(tmp_path: Path, monkey
     assert executed_steps == ["develop", "review", "pr"]
 
 
+def test_workflow_command_resumes_incomplete_iteration_before_user_phase(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    executed_steps: list[str] = []
+
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-224"
+    spec_iteration = issue_dir / "spec" / "iteration_002"
+    spec_iteration.mkdir(parents=True, exist_ok=True)
+    (issue_dir / "blackboard.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "playbook_id": "default",
+                "current_step": "user",
+                "handoff_summary": "clarification answers confirmed",
+                "artifacts": {},
+                "events": [],
+                "decisions": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (spec_iteration / "context.json").write_text(
+        json.dumps(
+            {
+                "iteration": 2,
+                "step_name": "spec",
+                "skill_name": "spec_revise",
+                "user_input": "confirmed clarification answers",
+                "timestamp": "2026-04-14T10:00:00+08:00",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    class FakeExecutor:
+        def execute_step(self, step_name: str, step_def: dict, blackboard_state: object) -> tuple[str, dict[str, str]]:
+            executed_steps.append(step_name)
+            completed_iteration = issue_dir / "spec" / "iteration_003"
+            completed_iteration.mkdir(parents=True, exist_ok=True)
+            (completed_iteration / "context.json").write_text(
+                json.dumps(
+                    {
+                        "iteration": 3,
+                        "step_name": "spec",
+                        "status_code": "CAFE_READY_FOR_REVIEW",
+                        "end_time": "2026-04-14T10:05:00+08:00",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            return ("CAFE_READY_FOR_REVIEW", {})
+
+    with (
+        patch("cafe.ui.cli.GitOperations") as mock_git_cls,
+        patch("cafe.ui.cli._build_workflow_step_executor", return_value=FakeExecutor()),
+        patch("cafe.ui.cli.prompt_list", return_value="Leave it for now"),
+    ):
+        git = MagicMock()
+        git.get_current_branch.return_value = "issue-224"
+        mock_git_cls.return_value = git
+
+        result = runner.invoke(app, ["workflow", "--playbook", "default", "--execute"])
+
+    assert result.exit_code == 0
+    assert "Resuming unfinished iteration" in result.stdout
+    assert "step=spec" in result.stdout
+    assert "Executing step=spec iteration=003" in result.stdout
+    assert "Workflow is waiting for user input" in result.stdout
+    assert executed_steps == ["spec"]
+
+
 def test_workflow_execute_uses_context_response_for_goto(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     executed_steps: list[str] = []

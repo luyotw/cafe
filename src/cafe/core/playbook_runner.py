@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
+import re
 from typing import Any, Callable, Dict, Optional
 
 from cafe.core.blackboard import BlackboardState, BlackboardStore
@@ -40,6 +41,7 @@ PAUSE_STATUS_CODES = {
     PhaseStatusCode.NEED_CLARIFICATION.value,
     PhaseStatusCode.NEED_PERMISSION.value,
 }
+STATUS_TOKEN_PATTERN = re.compile(r"\bCAFE_[A-Z0-9_]+\b")
 
 
 class PlaybookRunner:
@@ -108,6 +110,13 @@ class PlaybookRunner:
             current_step = next_step
 
         return current_step
+
+    @staticmethod
+    def _extract_status_like_tokens(*, response: str, explicit_status_code: Optional[str]) -> set[str]:
+        tokens = set(STATUS_TOKEN_PATTERN.findall(response or ""))
+        if explicit_status_code and explicit_status_code.startswith("CAFE_"):
+            tokens.add(explicit_status_code)
+        return tokens
 
     def _resolve_next_step(
         self,
@@ -243,6 +252,9 @@ class PlaybookRunner:
                 for code in step_def.get("valid_status_codes", [])
                 if code in {item.value for item in PhaseStatusCode}
             ]
+            allowed_status_codes = {
+                code.value for code in (valid_codes or list(PhaseStatusCode))
+            }
             status_code_obj = (
                 PhaseStatusCode(explicit_status_code)
                 if explicit_status_code in {item.value for item in PhaseStatusCode}
@@ -258,21 +270,59 @@ class PlaybookRunner:
                     valid_status_codes=valid_codes or list(PhaseStatusCode),
                 )
             if status_code_obj is None:
-                self.blackboard_store.record_event(
-                    self.blackboard,
-                    "status_code_missing",
-                    {
-                        "step": current_step,
-                        "response": response,
-                    },
-                )
-                return PlaybookRunResult(
-                    final_step=current_step,
-                    final_status_code="NO_STATUS_CODE",
-                    completed=False,
-                )
-            status_code = status_code_obj.value
-            last_status_code = status_code
+                handoff_next_step: Optional[str] = None
+                handoff_transition_source = "terminal"
+                if goto_target:
+                    handoff_next_step, handoff_transition_source = self._resolve_next_step(
+                        current_step=current_step,
+                        response=f"{response}\nCAFE_GOTO:{goto_target}",
+                        status_code="",
+                    )
+                if handoff_next_step is not None:
+                    status_code = "NO_STATUS_CODE"
+                    last_status_code = status_code
+                else:
+                    status_like_tokens = self._extract_status_like_tokens(
+                        response=response,
+                        explicit_status_code=explicit_status_code,
+                    )
+                    invalid_status_codes = sorted(
+                        token for token in status_like_tokens if token not in allowed_status_codes
+                    )
+                    if invalid_status_codes:
+                        self.blackboard_store.record_event(
+                            self.blackboard,
+                            "status_code_invalid",
+                            {
+                                "step": current_step,
+                                "invalid_status_codes": invalid_status_codes,
+                                "allowed_status_codes": sorted(allowed_status_codes),
+                                "response": response,
+                            },
+                        )
+                        return PlaybookRunResult(
+                            final_step=current_step,
+                            final_status_code="INVALID_STATUS_CODE",
+                            completed=False,
+                        )
+                    self.blackboard_store.record_event(
+                        self.blackboard,
+                        "status_code_missing",
+                        {
+                            "step": current_step,
+                            "response": response,
+                        },
+                    )
+                    return PlaybookRunResult(
+                        final_step=current_step,
+                        final_status_code="NO_STATUS_CODE",
+                        completed=False,
+                    )
+            else:
+                handoff_next_step = None
+                handoff_transition_source = "terminal"
+                status_code = status_code_obj.value
+                last_status_code = status_code
 
             for key, value in artifacts.items():
                 self.blackboard_store.set_artifact(self.blackboard, key, value)
@@ -312,11 +362,14 @@ class PlaybookRunner:
                     completed=False,
                 )
 
-            next_step, transition_source = self._resolve_next_step(
-                current_step=current_step,
-                response=response if goto_target is None else f"{response}\nCAFE_GOTO:{goto_target}",
-                status_code=status_code,
-            )
+            if handoff_next_step is not None:
+                next_step, transition_source = handoff_next_step, handoff_transition_source
+            else:
+                next_step, transition_source = self._resolve_next_step(
+                    current_step=current_step,
+                    response=response if goto_target is None else f"{response}\nCAFE_GOTO:{goto_target}",
+                    status_code=status_code,
+                )
             if review_confirmed_advance and next_step == current_step:
                 advanced_step = self._resolve_review_confirmed_successor(current_step)
                 if advanced_step is not None:
