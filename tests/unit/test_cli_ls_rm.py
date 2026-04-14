@@ -5,6 +5,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+import yaml
 from typer.testing import CliRunner
 
 from cafe.ui.cli import app
@@ -218,6 +219,7 @@ class TestRmCommand:
         result = runner.invoke(app, ["rm", "test-issue"])
 
         assert result.exit_code == 0
+        assert "Backup: none" in result.stdout
         assert "deleted successfully" in result.stdout
         assert not issue.exists()
 
@@ -246,6 +248,7 @@ class TestRmCommand:
         result = runner.invoke(app, ["rm", "--force", "test-issue"])
 
         assert result.exit_code == 0
+        assert "Backup: none" in result.stdout
         assert "deleted successfully" in result.stdout
         assert not issue.exists()
 
@@ -340,3 +343,63 @@ class TestRmCommand:
         assert "Cancelled" in result.stdout
         assert issue1.exists()
         assert issue2.exists()
+
+    def test_rm_worktree_issue_backs_up_and_removes_worktree(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        issue_name = "issue-wt"
+
+        issue_dir = tmp_path / ".cafe" / "issues" / issue_name
+        issue_dir.mkdir(parents=True, exist_ok=True)
+        worktree_path = tmp_path / ".cafe" / "worktrees" / issue_name
+        worktree_issue_dir = worktree_path / ".cafe" / "issues" / issue_name
+        worktree_issue_dir.mkdir(parents=True, exist_ok=True)
+
+        (worktree_issue_dir / "spec").mkdir(parents=True, exist_ok=True)
+        (worktree_issue_dir / "spec" / "output.md").write_text("spec", encoding="utf-8")
+        (issue_dir / "issue.yaml").write_text(
+            yaml.safe_dump(
+                {
+                    "base_branch": "v02",
+                    "feature_branch": issue_name,
+                    "worktree_path": str(worktree_path),
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        result = runner.invoke(app, ["rm", "--force", issue_name])
+
+        assert result.exit_code == 0
+        assert "Backup:" in result.stdout
+        assert not issue_dir.exists()
+        assert not worktree_path.exists()
+
+        project_path = str(tmp_path.resolve()).lstrip("/").replace("/", "-")
+        archive_path = Path.home() / ".cafe" / "projects" / project_path / "archived" / issue_name
+        assert archive_path.exists()
+        assert (archive_path / "spec" / "output.md").read_text(encoding="utf-8") == "spec"
+
+    def test_rm_worktree_issue_skips_backup_when_worktree_missing(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        issue_name = "issue-wt-missing"
+
+        issue_dir = tmp_path / ".cafe" / "issues" / issue_name
+        issue_dir.mkdir(parents=True, exist_ok=True)
+        worktree_path = tmp_path / ".cafe" / "worktrees" / issue_name
+        (issue_dir / "issue.yaml").write_text(
+            yaml.safe_dump(
+                {
+                    "base_branch": "v02",
+                    "feature_branch": issue_name,
+                    "worktree_path": str(worktree_path),
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        result = runner.invoke(app, ["rm", "--force", issue_name])
+
+        assert result.exit_code == 0
+        assert "Backup: none" in result.stdout
+        assert not issue_dir.exists()
+        assert "deleted successfully" in result.stdout

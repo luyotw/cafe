@@ -709,7 +709,8 @@ worktree_path: {worktree_path}
         assert "Failed to update base branch" in result.stdout
         assert "Remaining steps" in result.stdout
         assert "git pull" in result.stdout
-        assert "git branch -d test-issue" in result.stdout
+        assert "git branch -D test-issue" in result.stdout
+        assert "cafe rm test-issue" in result.stdout
 
         # Verify delete was not called
         mock_git_instance.delete_branch.assert_not_called()
@@ -808,7 +809,8 @@ worktree_path: {worktree_path}
         assert "Failed to remove worktree" in result.stdout
         assert "Remaining steps" in result.stdout
         assert f"git worktree remove {worktree_path}" in result.stdout
-        assert "git branch -d test-issue" in result.stdout
+        assert "git branch -D test-issue" in result.stdout
+        assert "cafe rm test-issue" in result.stdout
 
         # Verify delete_branch was not called
         mock_git_instance.delete_branch.assert_not_called()

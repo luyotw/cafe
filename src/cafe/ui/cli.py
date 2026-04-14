@@ -2163,6 +2163,22 @@ def _get_project_path() -> str:
     return project_path
 
 
+def _get_issue_archive_path(issue_name: str) -> Path:
+    project_path = _get_project_path()
+    home_dir = Path.home()
+    return home_dir / ".cafe" / "projects" / project_path / "archived" / issue_name
+
+
+def _backup_issue_directory(issue_dir: Path, issue_name: str) -> Path:
+    archive_path = _get_issue_archive_path(issue_name)
+    archive_base = archive_path.parent
+    archive_base.mkdir(parents=True, exist_ok=True)
+    if archive_path.exists():
+        shutil.rmtree(archive_path)
+    shutil.copytree(issue_dir, archive_path)
+    return archive_path
+
+
 @app.command()
 def close() -> None:
     """Close current feature and return to base branch.
@@ -2283,7 +2299,8 @@ def close() -> None:
                 console.print(f"  1. git checkout {base_branch}")
                 console.print("  2. git pull")
                 console.print(f"  3. git worktree remove {worktree_path}")
-                console.print(f"  4. git branch -d {feature_branch}")
+                console.print(f"  4. git branch -D {feature_branch}  # Force delete if needed")
+                console.print(f"  5. cafe rm {issue_name}")
                 console.print()
                 raise typer.Exit(1)
 
@@ -2309,7 +2326,8 @@ def close() -> None:
                 else:
                     console.print("  1. git pull")
                 console.print(f"  2. git worktree remove {worktree_path}")
-                console.print(f"  3. git branch -d {feature_branch}")
+                console.print(f"  3. git branch -D {feature_branch}  # Force delete if needed")
+                console.print(f"  4. cafe rm {issue_name}")
                 console.print()
                 raise typer.Exit(1)
 
@@ -2359,7 +2377,8 @@ def close() -> None:
                 console.print()
                 console.print("[yellow]Remaining steps (please execute manually):[/yellow]")
                 console.print(f"  1. git worktree remove {worktree_path}")
-                console.print(f"  2. git branch -d {feature_branch}")
+                console.print(f"  2. git branch -D {feature_branch}  # Force delete if needed")
+                console.print(f"  3. cafe rm {issue_name}")
                 console.print()
                 raise typer.Exit(1)
 
@@ -2373,7 +2392,9 @@ def close() -> None:
                 console.print("[yellow]The branch may not be fully merged.[/yellow]")
                 console.print()
                 console.print("[yellow]Remaining steps (please execute manually):[/yellow]")
-                console.print(f"  1. git branch -D {feature_branch}  # Force delete if needed")
+                console.print(f"  1. cd {Path.cwd()}")
+                console.print(f"  2. git branch -D {feature_branch}  # Force delete if needed")
+                console.print(f"  3. cafe rm {issue_name}")
                 console.print()
                 raise typer.Exit(1)
 
@@ -2418,7 +2439,8 @@ def close() -> None:
                     console.print(f"  1. git merge {feature_branch}")
                 else:
                     console.print("  1. git pull")
-                console.print(f"  2. git branch -d {feature_branch}")
+                console.print(f"  2. git branch -D {feature_branch}  # Force delete if needed")
+                console.print(f"  3. cafe rm {issue_name}")
                 console.print()
                 raise typer.Exit(1)
 
@@ -2433,6 +2455,7 @@ def close() -> None:
                 console.print()
                 console.print("[yellow]Remaining steps (please execute manually):[/yellow]")
                 console.print(f"  1. git branch -D {feature_branch}  # Force delete if needed")
+                console.print(f"  2. cafe rm {issue_name}")
                 console.print()
                 raise typer.Exit(1)
 
@@ -2441,12 +2464,8 @@ def close() -> None:
             console.print("[dim]Archiving issue data...[/dim]")
 
             # Get project path in ~/.claude/projects/ naming format
-            project_path = _get_project_path()
-
-            # Construct archive path
-            home_dir = Path.home()
-            archive_base = home_dir / ".cafe" / "projects" / project_path / "archived"
-            archive_path = archive_base / issue_name
+            archive_path = _get_issue_archive_path(issue_name)
+            archive_base = archive_path.parent
 
             # Ensure archive directory exists
             archive_base.mkdir(parents=True, exist_ok=True)
@@ -4019,7 +4038,6 @@ def remove_issue(
 ) -> None:
     """Remove one or more issues and all their data."""
     import fnmatch
-    import shutil
 
     # If no arguments, show issue list and prompt for issue name
     if not issue_names:
@@ -4100,7 +4118,31 @@ def remove_issue(
     success_count = 0
     for issue_name, issue_path in existing_issues:
         try:
+            worktree_path: Optional[Path] = None
+            backup_info = "none"
+            issue_yaml = issue_path / "issue.yaml"
+            if issue_yaml.exists():
+                try:
+                    config_data = yaml.safe_load(issue_yaml.read_text(encoding="utf-8")) or {}
+                except Exception:
+                    config_data = {}
+                raw_worktree_path = config_data.get("worktree_path")
+                if isinstance(raw_worktree_path, str) and raw_worktree_path.strip():
+                    worktree_path = Path(raw_worktree_path)
+                    if not worktree_path.is_absolute():
+                        worktree_path = (Path.cwd() / worktree_path).resolve()
+
+            if worktree_path is not None and worktree_path.exists():
+                worktree_issue_dir = worktree_path / ".cafe" / "issues" / issue_name
+                if worktree_issue_dir.exists():
+                    archive_path = _backup_issue_directory(worktree_issue_dir, issue_name)
+                    backup_info = str(archive_path)
+                    console.print(f"[green]✓[/green] Backed up issue '{issue_name}' to {archive_path}")
+                shutil.rmtree(worktree_path)
+                console.print(f"[green]✓[/green] Removed worktree '{worktree_path}'")
+
             shutil.rmtree(issue_path)
+            console.print(f"[dim]  Backup: {backup_info}[/dim]")
             console.print(f"[green]✓[/green] Issue '{issue_name}' deleted successfully")
             success_count += 1
         except Exception as e:

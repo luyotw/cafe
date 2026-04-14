@@ -376,6 +376,8 @@ class TestCloseCommandWorktree:
         assert result.exit_code in [0, 1]
         # 驗證 branch 刪除被嘗試
         mock_git_ops.delete_branch.assert_called_once()
+        assert "git branch -D test-worktree-issue" in result.stdout
+        assert "cafe rm test-worktree-issue" in result.stdout
 
     def test_close_without_worktree_normal_flow(
         self, temp_repo_dir, mock_git_ops, mock_github_ops_no_pr
@@ -404,6 +406,29 @@ class TestCloseCommandWorktree:
         mock_git_ops.delete_branch.assert_called_once_with("normal-issue")
         # 驗證 worktree 方法沒有被呼叫
         assert not hasattr(mock_git_ops, 'remove_worktree') or not mock_git_ops.remove_worktree.called
+
+    def test_close_without_worktree_branch_delete_fails_shows_rm_step(
+        self, temp_repo_dir, mock_git_ops, mock_github_ops_no_pr
+    ):
+        issue_dir = temp_repo_dir / ".cafe" / "issues" / "normal-issue"
+        issue_dir.mkdir(parents=True)
+
+        config_file = issue_dir / "issue.yaml"
+        config_data = {
+            "base_branch": "main",
+            "feature_branch": "normal-issue",
+        }
+        with open(config_file, 'w', encoding='utf-8') as f:
+            yaml.dump(config_data, f)
+
+        mock_git_ops.get_current_branch.return_value = "normal-issue"
+        mock_git_ops.delete_branch.side_effect = GitError("The branch 'normal-issue' is not fully merged")
+
+        result = runner.invoke(app, ["close"])
+
+        assert result.exit_code in [0, 1]
+        assert "git branch -D normal-issue" in result.stdout
+        assert "cafe rm normal-issue" in result.stdout
 
     def test_close_worktree_success_message(
         self, temp_repo_dir, mock_git_ops, mock_github_ops_no_pr, issue_with_worktree_config
