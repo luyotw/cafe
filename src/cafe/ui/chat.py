@@ -1,10 +1,8 @@
 """Reusable chat launcher for inline agent chat sessions."""
 
-import io
 import json
 import subprocess
 import time
-from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from typing import Optional
 
@@ -83,38 +81,11 @@ def _prepare_chat_handoff_state(issue_dir: Path) -> tuple[str, list[str], str]:
     return current_step, valid_steps, playbook_id
 
 
-def _build_chat_seed_prompt(
-    *,
-    role: str,
-    issue_name: str,
-    blackboard_path: Path,
-    next_step_path: Path,
-    current_step: str,
-    playbook_id: str,
-) -> str:
-    """Build the chat bootstrap prompt for one interactive session."""
-    return (
-        f"`cafe chat` context for role `{role}` on issue `{issue_name}`.\n"
-        f"Current playbook: `{playbook_id}`. Current workflow step: `{current_step}`.\n"
-        f"Shared blackboard path: `{blackboard_path}`.\n"
-        f"Workflow baton path: `{next_step_path}`."
-    )
-
-
 def _prepare_chat_environment(
     *,
-    executor,
-    agent_manager: AgentManager,
-    agent_name: str,
     agent_cli: AgentCLI | object,
-    role: str,
-    issue_name: str,
-    issue_dir: Path,
-    current_step: str,
-    valid_steps: list[str],
-    playbook_id: str,
 ) -> None:
-    """Install shared chat skills and seed the interactive session context."""
+    """Install shared chat skills for the target CLI."""
     if not isinstance(agent_cli, AgentCLI):
         return
 
@@ -122,24 +93,8 @@ def _prepare_chat_environment(
     loader.discover()
     bridge = NativeSkillBridge(loader)
 
-    invocations: dict[str, str] = {}
     for skill_name in CHAT_SKILL_NAMES:
         bridge.install_skill(skill_name, agent_cli)
-        invocations[skill_name] = bridge.get_invocation(skill_name, agent_cli)
-    prompt = _build_chat_seed_prompt(
-        role=role,
-        issue_name=issue_name,
-        blackboard_path=issue_dir / "blackboard.json",
-        next_step_path=get_chat_next_step_path(issue_dir),
-        current_step=current_step,
-        playbook_id=playbook_id,
-    )
-
-    try:
-        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
-            agent_manager.execute(agent_name, prompt)
-    except Exception as exc:
-        print(f"\n⚠️  Failed to seed chat skills for {agent_name}: {exc}\n")
 
 
 def launch_chat_session(role: str, issue_name: str) -> int:
@@ -194,19 +149,10 @@ def launch_chat_session(role: str, issue_name: str) -> int:
     cli_strategy = executor._get_cli_strategy()
 
     issue_dir = Path.cwd() / ".cafe" / "issues" / issue_name
-    current_step, valid_steps, playbook_id = _prepare_chat_handoff_state(issue_dir)
+    _current_step, _valid_steps, _playbook_id = _prepare_chat_handoff_state(issue_dir)
 
     _prepare_chat_environment(
-        executor=executor,
-        agent_manager=agent_manager,
-        agent_name=agent_name,
         agent_cli=agent_cli,
-        role=role,
-        issue_name=issue_name,
-        issue_dir=issue_dir,
-        current_step=current_step,
-        valid_steps=valid_steps,
-        playbook_id=playbook_id,
     )
     session_id: Optional[str] = executor.config.session_id
 

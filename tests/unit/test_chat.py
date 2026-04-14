@@ -8,7 +8,6 @@ import pytest
 
 from cafe.core.types import AgentCLI
 from cafe.ui.chat import (
-    _build_chat_seed_prompt,
     _prepare_chat_environment,
     _prepare_chat_handoff_state,
     get_chat_next_step_path,
@@ -216,10 +215,7 @@ class TestLaunchChatSession:
 
         mock_chat_environment.assert_called_once()
         kwargs = mock_chat_environment.call_args.kwargs
-        assert kwargs["agent_name"] == "David"
         assert kwargs["agent_cli"] == AgentCLI.CLAUDE
-        assert kwargs["role"] == "developer"
-        assert kwargs["issue_name"] == "issue123"
 
     @patch("cafe.ui.chat._extract_latest_codex_session_id", return_value="thread-123")
     @patch("cafe.ui.chat.subprocess.run")
@@ -284,48 +280,21 @@ class TestLaunchChatSession:
         )
 
 
-def test_build_chat_seed_prompt_includes_common_handoff_and_unified_next_step() -> None:
-    prompt = _build_chat_seed_prompt(
-        role="developer",
-        issue_name="issue123",
-        blackboard_path="/tmp/issue123/blackboard.json",
-        next_step_path="/tmp/issue123/next_step.txt",
-        current_step="review",
-        playbook_id="default",
-    )
-
-    assert "Current workflow step: `review`." in prompt
-    assert "/tmp/issue123/blackboard.json" in prompt
-    assert "/tmp/issue123/next_step.txt" in prompt
-    assert "Shared blackboard path" in prompt
-    assert "Workflow baton path" in prompt
-
-
-def test_prepare_chat_environment_suppresses_seed_streaming_output(capsys) -> None:
-    agent_manager = MagicMock()
-    agent_manager.execute.side_effect = lambda *args, **kwargs: print("Codex Response (streaming):")
-
+def test_prepare_chat_environment_installs_chat_skills_only() -> None:
     with patch("cafe.ui.chat.SkillLoader.discover"), patch(
         "cafe.ui.chat.NativeSkillBridge.install_skill"
-    ), patch(
-        "cafe.ui.chat.NativeSkillBridge.get_invocation",
-        side_effect=lambda name, cli: f"$cafe-{name}",
-    ):
+    ) as mock_install:
         _prepare_chat_environment(
-            executor=MagicMock(),
-            agent_manager=agent_manager,
-            agent_name="Roger",
             agent_cli=AgentCLI.CODEX,
-            role="pm",
-            issue_name="issue123",
-            issue_dir=Path("/tmp/issue123"),
-            current_step="review",
-            valid_steps=["spec", "plan", "develop", "review", "pr"],
-            playbook_id="default",
         )
 
-    captured = capsys.readouterr()
-    assert "Codex Response (streaming):" not in captured.out
+    installed = [call.args[0] for call in mock_install.call_args_list]
+    assert installed == [
+        "common-chat-handoff",
+        "chat-develop-change",
+        "chat-spec-revision",
+        "chat-plan-revision",
+    ]
 
 
 def test_launch_chat_session_prepares_chat_handoff_directory(
