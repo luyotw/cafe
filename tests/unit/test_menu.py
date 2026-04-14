@@ -173,6 +173,7 @@ class TestInteractiveMenuMainMenu:
         assert "prepare" in values
         assert "ls" in values
         assert "restore" in values
+        assert "rm" in values
         assert "settings" in values
         assert "exit" in values
         # Init project should NOT be shown in NO_ACTIVE_ISSUE state
@@ -263,6 +264,7 @@ class TestInteractiveMenuIssueMenu:
         assert "chat" in values
         assert "summary" in values
         assert "reset" in values
+        assert "rm" in values
         assert "close" in values
         assert "settings" in values
         assert "exit" in values
@@ -318,7 +320,7 @@ class TestInteractiveMenuIssueMenu:
         assert "summary" in call_cmd
 
     def test_issue_menu_dispatches_close_command(self):
-        """測試選擇 Close issue 時執行 cafe close"""
+        """測試選擇 Close current issue 時執行 cafe close"""
         detector = MagicMock(spec=MenuStateDetector)
         # After close, state changes to NO_ACTIVE_ISSUE
         detector.detect_state.side_effect = [
@@ -340,6 +342,29 @@ class TestInteractiveMenuIssueMenu:
         mock_run.assert_called_once()
         call_cmd = mock_run.call_args[0][0]
         assert "close" in call_cmd
+
+    def test_issue_menu_dispatches_rm_and_returns_to_menu(self):
+        """測試選擇 Remove issues 時執行 cafe rm，之後回到選單"""
+        detector = MagicMock(spec=MenuStateDetector)
+        detector.detect_state.side_effect = [
+            MenuState.ACTIVE_ISSUE,
+            MenuState.ACTIVE_ISSUE,
+        ]
+        detector.get_current_issue_name.return_value = "my-issue"
+
+        menu = InteractiveMenu(state_detector=detector)
+
+        with (
+            patch("cafe.ui.menu.prompt_list") as mock_prompt,
+            patch("cafe.ui.menu.subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(returncode=0)
+            mock_prompt.side_effect = ["rm", "exit"]
+            menu.run()
+
+        mock_run.assert_called_once()
+        call_cmd = mock_run.call_args[0][0]
+        assert "rm" in call_cmd
 
     def test_close_exits_menu_immediately(self):
         """測試 close 指令執行後直接退出，不回主選單"""

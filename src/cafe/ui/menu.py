@@ -169,7 +169,7 @@ class InteractiveMenu:
             choices += [
                 {"name": "New issue", "value": "prepare"},
                 {"name": "List issues", "value": "ls"},
-                {"name": "Remove issue", "value": "rm"},
+                {"name": "Remove issues", "value": "rm"},
                 {"name": "Restore archived issue", "value": "restore"},
             ]
 
@@ -190,7 +190,8 @@ class InteractiveMenu:
             {"name": "Chat with agent", "value": "chat"},
             {"name": "Show status", "value": "summary"},
             {"name": "Reset iteration", "value": "reset"},
-            {"name": "Close issue", "value": "close"},
+            {"name": "Close current issue", "value": "close"},
+            {"name": "Remove issues", "value": "rm"},
             {"name": "Settings", "value": "settings"},
             {"name": "Exit", "value": "exit"},
         ]
@@ -276,6 +277,8 @@ class InteractiveMenu:
             _run_command(["summary"])
         elif selection == "reset":
             _run_command(["reset"])
+        elif selection == "rm":
+            _run_command(["rm"])
         elif selection == "close":
             _run_command(["close"])
             return _EXIT_SENTINEL
