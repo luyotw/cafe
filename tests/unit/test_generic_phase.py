@@ -289,3 +289,51 @@ def test_native_skill_bridge_keeps_global_dir_separate(tmp_path: Path) -> None:
     assert bridge.get_native_skills_dir(AgentCLI.CODEX) == project_root / ".codex" / "skills"
     assert bridge.get_global_native_skills_dir(AgentCLI.CODEX) == tmp_path / "home" / ".codex" / "skills"
     assert bridge.get_installed_skill_name("plan") == "cafe-plan"
+
+
+# --- Task 4: validate_skills on NativeSkillBridge ---
+
+
+def _make_bridge(tmp_path: Path) -> NativeSkillBridge:
+    loader = _setup_loader(tmp_path)
+    project_root = tmp_path / "project"
+    project_root.mkdir(parents=True, exist_ok=True)
+    return NativeSkillBridge(loader, project_root=project_root, home_dir=tmp_path / "home")
+
+
+def test_validate_skills_all_available(tmp_path: Path) -> None:
+    bridge = _make_bridge(tmp_path)
+    result = bridge.validate_skills(["plan", "workflow-common"], AgentCLI.CLAUDE)
+    assert result.valid
+    assert set(result.available) == {"plan", "workflow-common"}
+    assert result.missing == []
+
+
+def test_validate_skills_reports_missing_skill(tmp_path: Path) -> None:
+    bridge = _make_bridge(tmp_path)
+    result = bridge.validate_skills(["plan", "ghost"], AgentCLI.CLAUDE)
+    assert not result.valid
+    assert "ghost" in result.missing
+    assert "plan" in result.available
+
+
+def test_validate_skills_empty_list_is_valid(tmp_path: Path) -> None:
+    bridge = _make_bridge(tmp_path)
+    result = bridge.validate_skills([], AgentCLI.CLAUDE)
+    assert result.valid
+    assert result.available == []
+    assert result.missing == []
+
+
+@pytest.mark.parametrize("cli", list(AgentCLI))
+def test_validate_skills_all_clis(tmp_path: Path, cli: AgentCLI) -> None:
+    bridge = _make_bridge(tmp_path)
+    result = bridge.validate_skills(["plan"], cli)
+    assert result.valid
+    assert result.cli == cli
+
+
+def test_validate_skills_does_not_install_any_files(tmp_path: Path) -> None:
+    bridge = _make_bridge(tmp_path)
+    bridge.validate_skills(["plan", "workflow-common"], AgentCLI.CLAUDE)
+    assert not (tmp_path / "project" / ".claude" / "skills").exists()

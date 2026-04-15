@@ -9,6 +9,7 @@ from typing import Dict, List, Literal, Optional, Union
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from cafe.skills.exceptions import SkillDiscoveryError
 from cafe.skills.loader import SkillLoader
 
 
@@ -231,7 +232,7 @@ def _validate_step_skills(step_name: str, step: StepConfig, skill_loader: SkillL
     for skill_name in selectors:
         try:
             skill_loader.get_skill_dir(skill_name)
-        except FileNotFoundError as exc:
+        except (SkillDiscoveryError, FileNotFoundError) as exc:
             raise ValueError(
                 f"Step '{step_name}' references unknown skill '{skill_name}'"
             ) from exc

@@ -8,6 +8,7 @@ from typing import Dict, List, Optional
 
 import yaml
 
+from cafe.skills.exceptions import SkillDiscoveryError
 from cafe.utils.config import get_global_cafe_dir
 
 
@@ -115,7 +116,7 @@ class SkillLoader:
     def get_skill_dir(self, name: str) -> Path:
         self._ensure_catalog()
         if name not in self._catalog:
-            raise FileNotFoundError(f"Skill not found: {name}")
+            raise SkillDiscoveryError(name)
         return self._catalog[name].directory
 
     def activate(self, name: str, context: Optional[Dict[str, str]] = None) -> str:
