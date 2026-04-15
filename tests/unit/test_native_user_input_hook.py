@@ -60,10 +60,41 @@ def test_user_input_collector_confirms_ready_for_review_without_running_agent(tm
         {"type": "review_confirmed", "step": "spec"},
         {"type": "review_confirmed_advance", "step": "spec"},
     ]
-    mock_display_output.assert_called_once()
+    mock_display_output.assert_not_called()
     mock_display_delta.assert_called_once()
     phase._ask_user_for_review_decision.assert_called_once()
     phase._process_review_decision.assert_called_once()
+
+
+def test_user_input_collector_plan_ready_for_review_skips_full_output_display(tmp_path: Path) -> None:
+    phase_dir = tmp_path / "plan"
+    prev_iter_dir = phase_dir / "iteration_001"
+    prev_iter_dir.mkdir(parents=True, exist_ok=True)
+    (prev_iter_dir / "context.json").write_text(
+        json.dumps({"status_code": "CAFE_READY_FOR_REVIEW"}),
+        encoding="utf-8",
+    )
+    (prev_iter_dir / "output.md").write_text("# Plan\n", encoding="utf-8")
+
+    phase = _FakePhase(phase_dir=phase_dir, iteration=2)
+    phase._ask_user_for_review_decision = MagicMock(return_value="confirm")
+    phase._process_review_decision = MagicMock()
+
+    hook = UserInputCollector()
+    with patch.object(hook, "_display_previous_output") as mock_display_output, \
+         patch.object(hook, "_display_previous_iteration_delta") as mock_display_delta:
+        result = hook.run(
+            stage="prepare_input",
+            phase=phase,
+            step_name="plan",
+            step_def={"role": "developer"},
+            agent_name="David",
+        )
+
+    assert result.continue_pipeline is False
+    assert result.override_status_code == PhaseStatusCode.CONFIRMED
+    mock_display_output.assert_not_called()
+    mock_display_delta.assert_called_once()
 
 
 def test_user_input_collector_loads_interactive_qa_for_need_clarification(tmp_path: Path) -> None:

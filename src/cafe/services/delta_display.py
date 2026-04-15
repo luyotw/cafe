@@ -101,14 +101,17 @@ class DeltaDisplay:
         display_data = diff_data[:max_lines] if is_truncated else diff_data
         for operation, old_line, new_line in display_data:
             if operation == "equal":
-                # Unchanged line - no special styling
-                text.append(new_line if new_line else "")
+                # Keep an explicit prefix so plain-text logs remain readable.
+                line = new_line if new_line is not None else ""
+                text.append(f"  {line}")
             elif operation == "delete":
                 # Deleted line - red
-                text.append(old_line if old_line else "", style="red")
+                line = old_line if old_line is not None else ""
+                text.append(f"- {line}", style="red")
             elif operation == "insert":
                 # Added line - green
-                text.append(new_line if new_line else "", style="green")
+                line = new_line if new_line is not None else ""
+                text.append(f"+ {line}", style="green")
 
         console.print(text)
         console.print()

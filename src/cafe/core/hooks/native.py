@@ -138,7 +138,12 @@ class UserInputCollector(NoOpHook):
 
         prompt_role = {"pm": "pm", "reviewer": "reviewer"}.get(role, "developer")
         previous_output_file = self._get_previous_output_file(phase, step_name)
-        self._display_previous_output(phase, step_name, previous_output_file)
+        # For spec/plan READY_FOR_REVIEW flow, delta view is sufficient and less noisy.
+        if not (
+            step_name in {"spec", "plan"}
+            and previous_status == "CAFE_READY_FOR_REVIEW"
+        ):
+            self._display_previous_output(phase, step_name, previous_output_file)
 
         current_iter_dir = phase._get_iteration_dir(phase.iteration)
         current_user_input_file = current_iter_dir / "user_input.md"
@@ -160,14 +165,16 @@ class UserInputCollector(NoOpHook):
         if previous_status == "CAFE_READY_FOR_REVIEW":
             self._display_previous_iteration_delta(phase, previous_output_file)
             prev_data = phase._load_previous_iteration_data() or {}
+            # Show diff again after returning from chat/edit, but never print full output.
+            redisplay_callback = (
+                lambda: self._display_previous_iteration_delta(phase, previous_output_file)
+            )
             choice = phase._ask_user_for_review_decision(
                 self._resolve_review_item_name(step_name),
                 agent_name=agent_name,
                 role=prompt_role,
                 output_file=previous_output_file,
-                display_callback=(
-                    lambda: self._display_previous_iteration_delta(phase, previous_output_file)
-                ),
+                display_callback=redisplay_callback,
                 edit_option_label="Edit manually - Open in editor",
             )
             result_or_input = phase._process_review_decision(
