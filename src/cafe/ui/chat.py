@@ -197,7 +197,7 @@ def launch_chat_session(role: str, issue_name: str) -> int:
         if agent_cli_str in ("claude", "copilot", "gemini"):
             cli_command.extend(["--resume", session_id])
         elif agent_cli_str == "cursor-agent":
-            cli_command.extend(["--session", session_id])
+            cli_command.extend(["--resume", session_id])
         elif agent_cli_str == "codex":
             cli_command.extend(["resume", session_id])
 

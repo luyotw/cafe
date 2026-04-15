@@ -127,7 +127,7 @@ class TestLaunchChatSession:
     @patch("cafe.ui.chat.ConfigManager")
     @patch("cafe.ui.chat.AgentManager")
     def test_cursor_agent_cli_with_session(self, mock_agent_manager_cls, mock_config_manager_cls, mock_run):
-        """Test building CLI command for cursor-agent with session (uses --session flag)."""
+        """Test building CLI command for cursor-agent with session (uses --resume flag)."""
         mock_config = MagicMock()
         mock_config.get.return_value = {"name": "David", "cli": "cursor-agent"}
         mock_config_manager_cls.return_value = mock_config
@@ -139,7 +139,7 @@ class TestLaunchChatSession:
 
         launch_chat_session("developer", "issue123")
 
-        assert mock_run.call_args.args[0] == ["cursor-agent", "--session", "sess-cursor"]
+        assert mock_run.call_args.args[0] == ["cursor-agent", "--resume", "sess-cursor"]
         assert "env" in mock_run.call_args.kwargs
 
     @patch("builtins.print")
