@@ -4,8 +4,11 @@ from pathlib import Path
 
 import pytest
 
+from cafe.core.types import AgentCLI
+from cafe.skills.exceptions import SkillDiscoveryError
 from cafe.skills.importer import import_skills
 from cafe.skills.loader import SkillLoader
+from cafe.skills.native_bridge import NativeSkillBridge
 
 
 def _write_skill(root: Path, name: str, *, frontmatter_name: str | None = None) -> None:
@@ -122,3 +125,110 @@ def test_builtin_catalog_includes_chat_handoff_skills(tmp_path: Path) -> None:
         "chat-spec-revision",
         "chat-plan-revision",
     }.issubset(names)
+
+
+# --- Task 1: SkillDiscoveryError ---
+
+
+def test_skill_discovery_error_is_lookup_error() -> None:
+    err = SkillDiscoveryError("my-skill")
+    assert isinstance(err, LookupError)
+    assert err.skill_name == "my-skill"
+    assert "my-skill" in str(err)
+
+
+def test_skill_discovery_error_without_cli_has_no_cli_context() -> None:
+    err = SkillDiscoveryError("my-skill")
+    assert err.cli is None
+    assert "cli=" not in str(err)
+
+
+def test_skill_discovery_error_with_cli_includes_cli_context() -> None:
+    err = SkillDiscoveryError("my-skill", cli=AgentCLI.CLAUDE)
+    assert err.cli == AgentCLI.CLAUDE
+    assert AgentCLI.CLAUDE.value in str(err)
+
+
+# --- Task 2: SkillLoader raises SkillDiscoveryError ---
+
+
+def test_get_skill_dir_raises_skill_discovery_error_for_unknown_skill(tmp_path: Path) -> None:
+    loader = SkillLoader(
+        project_root=tmp_path / "project",
+        global_root=tmp_path / "global",
+        builtin_root=tmp_path / "builtin",
+    )
+    loader.discover()
+
+    with pytest.raises(SkillDiscoveryError) as exc_info:
+        loader.get_skill_dir("nonexistent-skill")
+    assert "nonexistent-skill" in str(exc_info.value)
+
+
+# --- Task 5: Resolution order ---
+
+
+def test_all_three_roots_same_skill_project_wins(tmp_path: Path) -> None:
+    """Explicitly documents project > global > builtin precedence."""
+    builtin = tmp_path / "builtin" / "skills"
+    global_root = tmp_path / "global" / "skills"
+    project = tmp_path / "project" / ".cafe" / "skills"
+    for root in (builtin, global_root, project):
+        _write_skill(root, "plan")
+
+    loader = SkillLoader(
+        project_root=tmp_path / "project",
+        global_root=tmp_path / "global",
+        builtin_root=tmp_path / "builtin",
+    )
+    items = loader.discover()
+
+    assert len(items) == 1
+    assert items[0].source == "project"
+
+
+def test_global_overrides_builtin_when_no_project_skill(tmp_path: Path) -> None:
+    builtin = tmp_path / "builtin" / "skills"
+    global_root = tmp_path / "global" / "skills"
+    _write_skill(builtin, "plan")
+    _write_skill(global_root, "plan")
+
+    loader = SkillLoader(
+        project_root=tmp_path / "project",
+        global_root=tmp_path / "global",
+        builtin_root=tmp_path / "builtin",
+    )
+    items = loader.discover()
+
+    assert len(items) == 1
+    assert items[0].source == "global"
+
+
+
+def test_install_skill_uses_project_version_over_global(tmp_path: Path) -> None:
+    """When a project skill overrides a global skill, install_skill uses the project version."""
+    global_root = tmp_path / "global" / "skills"
+    project = tmp_path / "project" / ".cafe" / "skills"
+    _write_skill(global_root, "plan")
+    project_skill_dir = project / "plan"
+    project_skill_dir.mkdir(parents=True, exist_ok=True)
+    (project_skill_dir / "SKILL.md").write_text(
+        "---\nname: plan\ndescription: project plan\n---\n\nProject version\n",
+        encoding="utf-8",
+    )
+
+    loader = SkillLoader(
+        project_root=tmp_path / "project",
+        global_root=tmp_path / "global",
+        builtin_root=tmp_path / "builtin",
+    )
+    loader.discover()
+    bridge = NativeSkillBridge(
+        loader,
+        project_root=tmp_path / "project",
+        home_dir=tmp_path / "home",
+    )
+    bridge.install_skill("plan", AgentCLI.CLAUDE)
+
+    installed = tmp_path / "project" / ".claude" / "skills" / "cafe-plan" / "SKILL.md"
+    assert "Project version" in installed.read_text(encoding="utf-8")

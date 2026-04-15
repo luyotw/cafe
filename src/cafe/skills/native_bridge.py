@@ -3,10 +3,26 @@
 from __future__ import annotations
 
 import shutil
+from dataclasses import dataclass
 from pathlib import Path
 
 from cafe.core.types import AgentCLI
+from cafe.skills.exceptions import SkillDiscoveryError
 from cafe.skills.loader import SkillLoader
+
+
+@dataclass(frozen=True)
+class SkillValidationResult:
+    """Result of validating skill availability for a given CLI."""
+
+    cli: AgentCLI
+    available: list[str]
+    missing: list[str]
+
+    @property
+    def valid(self) -> bool:
+        """Return True when every requested skill is available."""
+        return not self.missing
 
 
 class NativeSkillBridge:
@@ -79,3 +95,15 @@ class NativeSkillBridge:
         """Return the CLI-native invocation syntax for one skill."""
         prefix = self.CLI_PREFIXES[cli]
         return f"{prefix}{self.get_installed_skill_name(name)}"
+
+    def validate_skills(self, names: list[str], cli: AgentCLI) -> SkillValidationResult:
+        """Check which skills are discoverable for a given CLI without installing anything."""
+        available: list[str] = []
+        missing: list[str] = []
+        for name in names:
+            try:
+                self.skill_loader.get_skill_dir(name)
+                available.append(name)
+            except (SkillDiscoveryError, FileNotFoundError):
+                missing.append(name)
+        return SkillValidationResult(cli=cli, available=available, missing=missing)
