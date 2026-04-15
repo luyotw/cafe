@@ -6,7 +6,6 @@ import webbrowser
 from pathlib import Path
 from typing import Any, Optional
 
-import yaml
 
 from cafe.core.hooks import HookResult, NoOpHook
 from cafe.core.questions_schema import parse_questions_xml, validate_questions_xml
@@ -211,48 +210,6 @@ class GitHubIssueFetcher(NoOpHook):
     name = "GitHubIssueFetcher"
 
 
-def _parse_pr_output(output_file: Path) -> tuple[str, str]:
-    content = output_file.read_text(encoding="utf-8").strip()
-    if not content:
-        raise GitHubError(f"PR output file is empty: {output_file}")
-
-    lines = content.splitlines()
-    first_line = lines[0].strip()
-    if not first_line.startswith("# "):
-        raise GitHubError(f"PR output file is missing a markdown title: {output_file}")
-
-    title = first_line[2:].strip()
-    body = "\n".join(lines[1:]).strip()
-    if not title:
-        raise GitHubError(f"PR title is empty: {output_file}")
-    return title, body
-
-
-def _get_issue_base_branch(phase: Any) -> Optional[str]:
-    issue_dir = getattr(phase, "issue_dir", None)
-    issue_yaml = Path(issue_dir) / "issue.yaml" if issue_dir else None
-
-    getter = getattr(phase, "_get_issue_config_value", None)
-    if callable(getter) and issue_yaml is not None:
-        try:
-            value = getter(issue_yaml, "base_branch")
-            if isinstance(value, str) and value.strip():
-                return str(value)
-        except Exception:
-            pass
-
-    if issue_yaml is not None and issue_yaml.exists():
-        try:
-            raw = yaml.safe_load(issue_yaml.read_text(encoding="utf-8")) or {}
-        except Exception:
-            return None
-        value = raw.get("base_branch")
-        if value:
-            return str(value)
-
-    return None
-
-
 class GitHubPRCreator(NoOpHook):
     """Prepare generic PR iterations for GitHub mode and sync PR metadata."""
 
@@ -329,55 +286,8 @@ class GitHubPRCreator(NoOpHook):
         )
 
     def _publish_output(self, **kwargs: Any) -> HookResult:
-        status_code = kwargs.get("status_code")
-        if status_code not in {PhaseStatusCode.CONFIRMED, PhaseStatusCode.READY_FOR_REVIEW}:
-            return HookResult()
-
-        phase = kwargs.get("phase")
-        output_file = kwargs.get("output_file")
-        if phase is None or not isinstance(output_file, Path) or not output_file.exists():
-            return HookResult()
-
-        try:
-            branch_name = phase.git_ops.get_current_branch()
-            if not branch_name:
-                return HookResult()
-
-            title, body = _parse_pr_output(output_file)
-            github_ops = GitHubOps()
-            existing_pr = github_ops.get_pr_for_branch(branch_name)
-
-            if existing_pr is None or phase.git_ops.has_unpushed_commits():
-                phase.git_ops.push(branch_name, set_upstream=True)
-
-            if existing_pr:
-                github_ops.update_pr(str(existing_pr["number"]), title=title, body=body)
-                pr_number = str(existing_pr["number"])
-                pr_url = str(existing_pr["url"])
-                action = "updated"
-            else:
-                pr_url = github_ops.create_pr(
-                    title=title,
-                    body=body,
-                    base=_get_issue_base_branch(phase),
-                )
-                pr_number = github_ops.extract_pr_number(pr_url)
-                action = "created"
-        except Exception:
-            return HookResult()
-
-        return HookResult(
-            override_status_code=PhaseStatusCode.READY_FOR_REVIEW,
-            context_updates={"pr_number": pr_number, "pr_url": pr_url},
-            events=[
-                {
-                    "type": "github_pr_synced",
-                    "action": action,
-                    "pr_number": pr_number,
-                    "pr_url": pr_url,
-                }
-            ],
-        )
+        # PR creation/update is now handled by scripts/sync_pr.sh in the pr skill.
+        return HookResult()
 
 
 class PRCommentPoster(NoOpHook):

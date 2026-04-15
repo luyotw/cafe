@@ -231,19 +231,6 @@ class TestSelfLoop:
         assert subsequent.get("pr", 0) >= 1
         assert result.completed is True
 
-    def test_pr_self_loop_then_confirms(self, tmp_path: Path) -> None:
-        """pr CAFE_READY_FOR_REVIEW×2 後 CAFE_CONFIRMED。"""
-        result, calls, _ = self._run_single_step_loop(
-            tmp_path,
-            start_step="pr",
-            loop_status="CAFE_READY_FOR_REVIEW",
-            loop_count=2,
-            final_status="CAFE_CONFIRMED",
-            expected_next_step="_done",
-        )
-        assert calls["pr"] == 3
-        assert result.completed is True
-
     def test_review_exceeds_max_iterations_raises(self, tmp_path: Path) -> None:
         """review 超過 max_iterations=3 應拋出 RuntimeError。"""
         issue_dir = tmp_path / ".cafe" / "issues" / "issue-loop-overflow"
