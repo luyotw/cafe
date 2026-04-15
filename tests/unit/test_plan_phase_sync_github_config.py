@@ -113,74 +113,7 @@ class TestLoadPlanConfigSyncGithub:
 
 
 class TestSyncGuard:
-    """Test sync guard in _prepare_user_input_for_iteration()."""
+    """Legacy sync moved to skill scripts; phase no longer owns hook."""
 
-    def test_sync_skipped_when_sync_github_false(self, plan_phase, tmp_path):
-        """Test _sync_plan_to_github() is not called when sync_github=False."""
-        # Setup
-        plan_phase._sync_github = False
-
-        # Create a plan file
-        plan_file = tmp_path / ".cafe" / "issues" / "test-issue" / "plan" / "plan_001.md"
-        plan_file.parent.mkdir(parents=True, exist_ok=True)
-        plan_file.write_text("# Test Plan")
-        plan_phase.plan_file = plan_file
-
-        with patch.object(plan_phase, '_sync_plan_to_github') as mock_sync:
-            # The guard should prevent sync when _sync_github is False
-            if plan_phase._sync_github:
-                plan_phase._sync_plan_to_github()
-
-            # Verify: sync method should not be called
-            mock_sync.assert_not_called()
-
-    def test_sync_called_when_sync_github_true(self, plan_phase, tmp_path):
-        """Test _sync_plan_to_github() is called when sync_github=True."""
-        # Setup
-        plan_phase._sync_github = True
-
-        # Create a plan file
-        plan_file = tmp_path / ".cafe" / "issues" / "test-issue" / "plan" / "plan_001.md"
-        plan_file.parent.mkdir(parents=True, exist_ok=True)
-        plan_file.write_text("# Test Plan")
-        plan_phase.plan_file = plan_file
-
-        with patch.object(plan_phase, '_sync_plan_to_github') as mock_sync:
-            # The guard should allow sync when _sync_github is True
-            if plan_phase._sync_github:
-                plan_phase._sync_plan_to_github()
-
-            # Verify: sync method should be called
-            mock_sync.assert_called_once()
-
-    def test_sync_works_normally_when_enabled(self, plan_phase, tmp_path):
-        """Test that sync still works as before when sync_github=True."""
-        # Setup
-        plan_phase._sync_github = True
-
-        # Create issue.yaml with issue_id
-        config_file = tmp_path / ".cafe" / "issues" / "test-issue" / "issue.yaml"
-        config_file.write_text("spec:\n  issue_id: '123'\n")
-
-        # Create a plan file
-        plan_file = tmp_path / ".cafe" / "issues" / "test-issue" / "plan" / "plan_001.md"
-        plan_file.parent.mkdir(parents=True, exist_ok=True)
-        plan_content = "# Test Plan\n\nImplementation details"
-        plan_file.write_text(plan_content)
-        plan_phase.plan_file = plan_file
-
-        # Execute with mocked GitHub operations
-        with patch("cafe.phases.plan_phase.GitHubOps") as mock_gh_ops_cls:
-            mock_gh_ops = MagicMock()
-            mock_gh_ops.check_gh_installed.return_value = True
-            mock_gh_ops.check_gh_auth.return_value = True
-            mock_gh_ops_cls.return_value = mock_gh_ops
-
-            plan_phase._sync_plan_to_github()
-
-            # Verify: Should add comment with plan content
-            mock_gh_ops.add_issue_comment.assert_called_once()
-            args, kwargs = mock_gh_ops.add_issue_comment.call_args
-            assert args[0] == "123"
-            assert "### 📝 Implementation Plan (Confirmed)" in args[1]
-            assert plan_content in args[1]
+    def test_phase_no_longer_has_internal_confirmed_sync_method(self, plan_phase):
+        assert not hasattr(plan_phase, "_sync_plan_to_github")

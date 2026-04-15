@@ -15,7 +15,6 @@ from cafe.ui.display import Display
 from cafe.ui.interactive_qa import interactive_qa_flow
 from cafe.utils.git_utils import get_repo_root
 from cafe.utils.prompt_utils import format_checklist_instruction
-from cafe.utils.github import GitHubOps, GitHubError
 
 
 class PlanPhase(Phase):
@@ -631,13 +630,6 @@ Continue analyzing the latest version of {spec_file_path}.
                 {"dev_agent": self.dev_agent},
             )
             
-            # If user confirmed (returned PhaseResult with CONFIRMED status),
-            # sync plan to GitHub before returning (if sync is enabled)
-            if isinstance(result_or_input, PhaseResult):
-                if result_or_input.data.get("status_code") == PhaseStatusCode.CONFIRMED.value:
-                    if self._sync_github:
-                        self._sync_plan_to_github()
-
             return result_or_input
 
         elif prev_status == "CAFE_NEED_CLARIFICATION":
@@ -772,57 +764,3 @@ Please only return one status code (e.g., CAFE_READY_FOR_REVIEW) without any oth
                 has_issue_id=False
             )
 
-    def _sync_plan_to_github(self) -> None:
-        """Sync confirmed plan to GitHub issue as a comment.
-
-        Only syncs when:
-        1. An associated GitHub issue ID exists in issue.yaml
-        2. User has confirmed the plan (CAFE_CONFIRMED status)
-        """
-        # Path: .cafe/issues/{issue_name}/issue.yaml
-        config_file = self.issue_dir / "issue.yaml"
-        
-        # Try to get issue_id from top level first, then from spec section
-        issue_id = self._get_issue_config_value(config_file, "issue_id")
-        if not issue_id:
-            issue_id = self._get_issue_config_value(config_file, "spec.issue_id")
-            
-        if not issue_id:
-            return
-
-        try:
-            # Get latest plan file content
-            # If self.plan_file is set, use it; otherwise find the latest versioned file
-            plan_path = None
-            if hasattr(self, 'plan_file') and self.plan_file and self.plan_file.exists():
-                plan_path = self.plan_file
-            else:
-                plan_path = self._get_latest_versioned_file("plan", self.phase_dir)
-                
-            if not plan_path or not plan_path.exists():
-                return
-
-            plan_content = plan_path.read_text(encoding="utf-8")
-            
-            # Format comment body
-            comment_body = f"### 📝 Implementation Plan (Confirmed)\n\n{plan_content}"
-
-            # Post comment to GitHub issue
-            gh_ops = GitHubOps()
-            if not gh_ops.check_gh_installed():
-                return
-                
-            if not gh_ops.check_gh_auth():
-                self.display.console.print(f"[yellow]Warning: gh CLI not authenticated, skipping plan sync to GitHub issue #{issue_id}[/yellow]")
-                return
-
-            self.display.console.print(f"Syncing plan to GitHub issue #{issue_id}...")
-            gh_ops.add_issue_comment(str(issue_id), comment_body)
-            self.display.console.print(f"[green]✅ Plan synced to GitHub issue #{issue_id} as a comment.[/green]")
-
-        except GitHubError as e:
-            # Log error but don't fail the phase
-            self.display.console.print(f"[yellow]Warning: Failed to sync plan to GitHub: {e}[/yellow]")
-        except Exception as e:
-            # Log unexpected errors but don't fail
-            self.display.console.print(f"[yellow]Warning: Unexpected error during GitHub sync: {e}[/yellow]")
