@@ -462,7 +462,7 @@ class TestChatBaton:
             )
 
         assert result == "develop"
-        assert not next_step_path.exists(), "next_step.txt should be deleted after consumption"
+        assert next_step_path.exists(), "next_step.txt should remain as persistent baton"
 
         blackboard = BlackboardStore(issue_dir).load_or_create("spec")
         assert blackboard.current_step == "develop"

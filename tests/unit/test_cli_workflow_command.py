@@ -144,7 +144,7 @@ def test_workflow_command_consumes_chat_baton_before_execution(tmp_path: Path, m
     assert "playbook=default step=plan" in result.stdout
     assert "Executing step=plan iteration=001" in result.stdout
     assert executed_steps == ["plan", "develop", "review", "pr"]
-    assert not next_step_file.exists()
+    assert next_step_file.exists()
     blackboard_data = json.loads((issue_dir / "blackboard.json").read_text(encoding="utf-8"))
     assert blackboard_data["current_step"] == "user"
 
@@ -210,7 +210,25 @@ def test_workflow_command_rejects_invalid_chat_baton_step(tmp_path: Path, monkey
         result = runner.invoke(app, ["workflow", "--playbook", "default", "--execute"])
 
     assert result.exit_code == 1
-    assert "Chat handoff step 'qa' does not exist in playbook" in result.stdout
+    assert "Baton contract step 'qa' is not valid" in result.stdout
+
+
+def test_workflow_command_rejects_malformed_baton_json(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-206b"
+    issue_dir.mkdir(parents=True, exist_ok=True)
+    (issue_dir / "next_step.txt").write_text("{not-json", encoding="utf-8")
+
+    with patch("cafe.ui.cli.GitOperations") as mock_git_cls:
+        git = MagicMock()
+        git.get_current_branch.return_value = "issue-206b"
+        mock_git_cls.return_value = git
+
+        result = runner.invoke(app, ["workflow", "--playbook", "default", "--execute"])
+
+    assert result.exit_code == 1
+    assert "Baton contract step '{not-json' is not valid" in result.stdout
 
 
 def test_workflow_command_prints_paused_when_human_input_is_needed(tmp_path: Path, monkeypatch) -> None:
@@ -375,7 +393,7 @@ def test_workflow_command_user_owner_can_chat_and_resume_from_baton(tmp_path: Pa
     assert result.exit_code == 0
     assert executed_steps == ["develop", "review", "pr"]
     assert "Workflow completed by user" in result.stdout
-    assert not (issue_dir / "next_step.txt").exists()
+    assert (issue_dir / "next_step.txt").exists()
 
 
 def test_workflow_command_enters_user_phase_immediately_after_agent_handoff(tmp_path: Path, monkeypatch) -> None:

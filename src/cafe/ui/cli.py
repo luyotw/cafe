@@ -20,7 +20,7 @@ import yaml
 from rich.console import Console
 
 from cafe.agents.manager import AgentManager
-from cafe.core.blackboard import BlackboardStore
+from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
 from cafe.core.git import GitOperations
 from cafe.core.playbook_runner import PlaybookRunner
 from cafe.core.permission import PermissionHandler
@@ -253,15 +253,17 @@ def _consume_pending_chat_handoff(
     if requested_start_step is not None:
         return requested_start_step
 
-    next_step_path = get_chat_next_step_path(issue_dir)
-    if not next_step_path.exists():
-        return None
-
-    target_step = next_step_path.read_text(encoding="utf-8").strip()
-    if not target_step:
-        raise ValueError(f"Chat handoff file is empty: {next_step_path}")
-    if target_step not in playbook_data["steps"] and target_step not in {"user", "done"}:
-        raise ValueError(f"Chat handoff step '{target_step}' does not exist in playbook")
+    store = BlackboardStore(issue_dir)
+    blackboard = store.load_or_create(
+        str(playbook_data.get("entry_point") or next(iter(playbook_data["steps"].keys()))),
+        playbook_id=str(playbook_data["playbook"]["id"]),
+    )
+    contract = store.load_handoff_contract(
+        blackboard,
+        allowed_steps=list(playbook_data["steps"].keys()),
+        allow_legacy_text=True,
+    )
+    target_step = contract.to_step
     if target_step not in {"user", "done"} and GitOperations().has_uncommitted_changes():
         console.print(
             "[yellow]Chat handoff was not consumed because the worktree still has uncommitted changes.[/yellow]"
@@ -271,14 +273,37 @@ def _consume_pending_chat_handoff(
         )
         return None
 
-    blackboard = BlackboardStore(issue_dir).load_or_create(
-        str(playbook_data.get("entry_point") or next(iter(playbook_data["steps"].keys()))),
-        playbook_id=str(playbook_data["playbook"]["id"]),
-    )
-    store = BlackboardStore(issue_dir)
     store.set_current_step(blackboard, target_step)
-
-    next_step_path.unlink()
+    if target_step == "done":
+        store.update_handoff_contract(
+            blackboard,
+            from_step=contract.from_step,
+            to_owner=HandoffOwner.DONE,
+            to_step="done",
+            intent=HandoffIntent.WORKFLOW_COMPLETE,
+            status_code=contract.status_code,
+            source="workflow.consume_handoff",
+        )
+    elif target_step == "user":
+        store.update_handoff_contract(
+            blackboard,
+            from_step=contract.from_step,
+            to_owner=HandoffOwner.USER,
+            to_step="user",
+            intent=contract.intent,
+            status_code=contract.status_code,
+            source="workflow.consume_handoff",
+        )
+    else:
+        store.update_handoff_contract(
+            blackboard,
+            from_step=contract.from_step,
+            to_owner=HandoffOwner.AGENT,
+            to_step=target_step,
+            intent=HandoffIntent.AWAIT_AGENT,
+            status_code=contract.status_code,
+            source="workflow.consume_handoff",
+        )
     return target_step
 
 
@@ -380,6 +405,14 @@ def _handle_user_phase(
             return ""
         store.set_current_step(blackboard, target_step)
         store.set_handoff_summary(blackboard, note)
+        store.update_handoff_contract(
+            blackboard,
+            from_step="user",
+            to_owner=HandoffOwner.AGENT,
+            to_step=target_step,
+            intent=HandoffIntent.MANUAL_HANDOFF,
+            source="user.phase",
+        )
         store.record_event(
             blackboard,
             "user_handoff",
@@ -406,6 +439,14 @@ def _handle_user_phase(
     if action == "Mark the workflow complete":
         store.set_current_step(blackboard, "done")
         store.set_handoff_summary(blackboard, "workflow completed by user")
+        store.update_handoff_contract(
+            blackboard,
+            from_step="user",
+            to_owner=HandoffOwner.DONE,
+            to_step="done",
+            intent=HandoffIntent.WORKFLOW_COMPLETE,
+            source="user.phase",
+        )
         store.record_event(
             blackboard,
             "workflow_completed_by_user",
@@ -506,7 +547,16 @@ def _execute_single_step_alias(
         str(playbook_data.get("entry_point") or next(iter(playbook_data["steps"].keys()))),
         playbook_id=str(playbook_data["playbook"]["id"]),
     )
-    BlackboardStore(issue_dir).set_current_step(blackboard, step_name)
+    store = BlackboardStore(issue_dir)
+    store.set_current_step(blackboard, step_name)
+    store.update_handoff_contract(
+        blackboard,
+        from_step=step_name,
+        to_owner=HandoffOwner.AGENT,
+        to_step=step_name,
+        intent=HandoffIntent.AWAIT_AGENT,
+        source="single_step_alias",
+    )
 
     generic_phase = GenericPhase(SkillLoader())
     step_executor = _build_workflow_step_executor(
@@ -5849,7 +5899,16 @@ def workflow(
                 )
                 if incomplete_step is not None:
                     pending_start_step = incomplete_step
-                    BlackboardStore(issue_dir).set_current_step(blackboard, incomplete_step)
+                    store = BlackboardStore(issue_dir)
+                    store.set_current_step(blackboard, incomplete_step)
+                    store.update_handoff_contract(
+                        blackboard,
+                        from_step=incomplete_step,
+                        to_owner=HandoffOwner.AGENT,
+                        to_step=incomplete_step,
+                        intent=HandoffIntent.AWAIT_AGENT,
+                        source="workflow.resume_incomplete",
+                    )
                     console.print(
                         f"[yellow]Resuming unfinished iteration[/yellow] step={incomplete_step}"
                     )

@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Optional
 
 from cafe.agents.manager import AgentManager
-from cafe.core.blackboard import BlackboardStore
+from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
 from cafe.core.types import AgentCLI, AgentConfig
 from cafe.playbooks.loader import PlaybookLoader
 from cafe.skills.loader import SkillLoader
@@ -74,10 +74,35 @@ def _load_chat_workflow_context(issue_dir: Path) -> tuple[str, list[str], str]:
 def _prepare_chat_handoff_state(issue_dir: Path) -> tuple[str, list[str], str]:
     current_step, valid_steps, playbook_id = _load_chat_workflow_context(issue_dir)
     issue_dir.mkdir(parents=True, exist_ok=True)
-    BlackboardStore(issue_dir).load_or_create(current_step)
-    next_step_path = get_chat_next_step_path(issue_dir)
-    if next_step_path.exists():
-        next_step_path.unlink()
+    store = BlackboardStore(issue_dir)
+    blackboard = store.load_or_create(current_step)
+    if current_step == "done":
+        store.update_handoff_contract(
+            blackboard,
+            from_step=current_step,
+            to_owner=HandoffOwner.DONE,
+            to_step="done",
+            intent=HandoffIntent.WORKFLOW_COMPLETE,
+            source="chat.bootstrap",
+        )
+    elif current_step == "user":
+        store.update_handoff_contract(
+            blackboard,
+            from_step=current_step,
+            to_owner=HandoffOwner.USER,
+            to_step="user",
+            intent=HandoffIntent.MANUAL_HANDOFF,
+            source="chat.bootstrap",
+        )
+    else:
+        store.update_handoff_contract(
+            blackboard,
+            from_step=current_step,
+            to_owner=HandoffOwner.AGENT,
+            to_step=current_step,
+            intent=HandoffIntent.AWAIT_AGENT,
+            source="chat.bootstrap",
+        )
     return current_step, valid_steps, playbook_id
 
 
@@ -201,7 +226,14 @@ def launch_chat_session(role: str, issue_name: str) -> int:
                 issue_name,
             )
 
-    if not get_chat_next_step_path(issue_dir).exists():
+    store = BlackboardStore(issue_dir)
+    blackboard = store.load_or_create(_current_step)
+    contract = store.load_handoff_contract(
+        blackboard,
+        allowed_steps=_valid_steps,
+        allow_legacy_text=True,
+    )
+    if contract.source == "chat.bootstrap":
         print("\n⚠️  Chat ended without writing a next-step baton. The agent did not complete workflow handoff.\n")
 
     return result.returncode

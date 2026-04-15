@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from cafe.core.blackboard import BlackboardStore
+from cafe.core.blackboard import BlackboardStore, HandoffIntent
 from cafe.core.playbook_runner import PlaybookRunner, StepExecutionResult
 from cafe.phases.generic_phase import GenericPhase
 from cafe.skills.loader import SkillLoader
@@ -824,3 +824,79 @@ def test_runner_records_hop_limit_event(tmp_path: Path) -> None:
     hop_events = [event for event in blackboard.events if event.event_type == "hop_limit_reached"]
     assert hop_events
     assert hop_events[-1].data["max_transitions"] == 2
+
+
+def test_runner_writes_confirm_output_intent_on_spec_ready_for_review(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo"
+    playbook = {
+        "playbook": {"id": "default"},
+        "steps": {
+            "spec": {
+                "skill": "spec_first",
+                "role": "pm",
+                "valid_status_codes": ["CAFE_READY_FOR_REVIEW"],
+                "on": {"CAFE_READY_FOR_REVIEW": "spec"},
+            }
+        },
+    }
+
+    def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
+        return StepExecutionResult(
+            response="CAFE_READY_FOR_REVIEW",
+            artifacts={},
+            status_code="CAFE_READY_FOR_REVIEW",
+            auto_continue=False,
+        )
+
+    runner = PlaybookRunner(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        executor=executor,
+    )
+    result = runner.run(max_transitions=3)
+
+    assert result.completed is False
+    blackboard = BlackboardStore(issue_dir).load_or_create("spec")
+    contract = blackboard.handoff_contract
+    assert contract is not None
+    assert contract.intent == HandoffIntent.CONFIRM_OUTPUT
+    assert contract.to_step == "user"
+
+
+def test_runner_writes_need_clarification_intent_for_non_confirm_user_handoff(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo"
+    playbook = {
+        "playbook": {"id": "default"},
+        "steps": {
+            "develop": {
+                "skill": "spec_first",
+                "role": "developer",
+                "valid_status_codes": ["CAFE_NEED_CLARIFICATION"],
+                "on": {"CAFE_NEED_CLARIFICATION": "develop"},
+            }
+        },
+    }
+
+    def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
+        return StepExecutionResult(
+            response="CAFE_NEED_CLARIFICATION",
+            artifacts={},
+            status_code="CAFE_NEED_CLARIFICATION",
+            auto_continue=False,
+        )
+
+    runner = PlaybookRunner(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        executor=executor,
+    )
+    result = runner.run(max_transitions=3)
+
+    assert result.completed is False
+    blackboard = BlackboardStore(issue_dir).load_or_create("develop")
+    contract = blackboard.handoff_contract
+    assert contract is not None
+    assert contract.intent == HandoffIntent.NEED_CLARIFICATION
+    assert contract.to_step == "user"

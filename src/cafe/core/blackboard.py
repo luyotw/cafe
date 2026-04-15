@@ -12,6 +12,8 @@ from typing import Any, Dict, List, Optional
 
 BLACKBOARD_FILENAME = "blackboard.json"
 BLACKBOARD_SCHEMA_VERSION = 1
+NEXT_STEP_FILENAME = "next_step.txt"
+HANDOFF_CONTRACT_VERSION = 1
 
 
 def _now_iso() -> str:
@@ -24,6 +26,26 @@ class ArtifactKind(str, Enum):
     DOCUMENT = "document"
     WORKSPACE = "workspace"
     METADATA = "metadata"
+
+
+class HandoffOwner(str, Enum):
+    """Allowed baton owners."""
+
+    AGENT = "agent"
+    USER = "user"
+    DONE = "done"
+
+
+class HandoffIntent(str, Enum):
+    """Supported baton intents."""
+
+    AWAIT_AGENT = "await_agent"
+    CONFIRM_OUTPUT = "confirm_output"
+    NEED_CLARIFICATION = "need_clarification"
+    NEED_PERMISSION = "need_permission"
+    CHAT_HANDOFF = "chat_handoff"
+    MANUAL_HANDOFF = "manual_handoff"
+    WORKFLOW_COMPLETE = "workflow_complete"
 
 
 @dataclass
@@ -127,6 +149,91 @@ class DecisionEntry:
 
 
 @dataclass
+class HandoffContract:
+    """Structured baton contract persisted in next_step.txt."""
+
+    version: int
+    from_step: str
+    to_owner: HandoffOwner
+    to_step: str
+    intent: HandoffIntent
+    status_code: str
+    created_at: str
+    source: str
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "version": self.version,
+            "from_step": self.from_step,
+            "to_owner": self.to_owner.value,
+            "to_step": self.to_step,
+            "intent": self.intent.value,
+            "status_code": self.status_code,
+            "created_at": self.created_at,
+            "source": self.source,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "HandoffContract":
+        try:
+            return cls(
+                version=int(data["version"]),
+                from_step=str(data["from_step"]),
+                to_owner=HandoffOwner(str(data["to_owner"])),
+                to_step=str(data["to_step"]),
+                intent=HandoffIntent(str(data["intent"])),
+                status_code=str(data.get("status_code", "")),
+                created_at=str(data.get("created_at", _now_iso())),
+                source=str(data.get("source", "unknown")),
+            )
+        except KeyError as exc:
+            raise ValueError(f"Baton contract missing required field: {exc}") from exc
+        except ValueError as exc:
+            raise ValueError(f"Baton contract contains invalid enum value: {exc}") from exc
+
+    @classmethod
+    def from_legacy_step(
+        cls,
+        *,
+        step: str,
+        from_step: str,
+        status_code: str = "",
+        source: str = "legacy_text",
+    ) -> "HandoffContract":
+        owner = HandoffOwner.AGENT if step not in {"user", "done"} else HandoffOwner(step)
+        intent = HandoffIntent.AWAIT_AGENT if owner == HandoffOwner.AGENT else HandoffIntent.MANUAL_HANDOFF
+        if owner == HandoffOwner.DONE:
+            intent = HandoffIntent.WORKFLOW_COMPLETE
+        return cls(
+            version=HANDOFF_CONTRACT_VERSION,
+            from_step=from_step,
+            to_owner=owner,
+            to_step=step,
+            intent=intent,
+            status_code=status_code,
+            created_at=_now_iso(),
+            source=source,
+        )
+
+    def validate(self, *, allowed_steps: List[str]) -> None:
+        allowed_targets = set(allowed_steps) | {"user", "done"}
+        if self.version != HANDOFF_CONTRACT_VERSION:
+            raise ValueError(
+                f"Unsupported baton contract version {self.version}; expected {HANDOFF_CONTRACT_VERSION}"
+            )
+        if self.to_step not in allowed_targets:
+            raise ValueError(f"Baton contract step '{self.to_step}' is not valid in this playbook")
+
+        if self.to_owner == HandoffOwner.AGENT and self.to_step in {"user", "done"}:
+            raise ValueError("Baton owner mismatch: agent owner cannot target user/done")
+        if self.to_owner in {HandoffOwner.USER, HandoffOwner.DONE} and self.to_step not in {"user", "done"}:
+            raise ValueError("Baton owner mismatch: user/done owner must target user or done")
+
+        if self.intent == HandoffIntent.CONFIRM_OUTPUT and self.from_step not in {"spec", "plan"}:
+            raise ValueError("intent=confirm_output is only valid when from_step is spec or plan")
+
+
+@dataclass
 class BlackboardState:
     """Shared state across workflow steps."""
 
@@ -138,6 +245,7 @@ class BlackboardState:
     events: List[EventEntry] = field(default_factory=list)
     decisions: List[DecisionEntry] = field(default_factory=list)
     handoff_summary: str = ""
+    handoff_contract: Optional[HandoffContract] = None
     updated_at: str = field(default_factory=_now_iso)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -150,6 +258,9 @@ class BlackboardState:
             "events": [entry.to_dict() for entry in self.events],
             "decisions": [entry.to_dict() for entry in self.decisions],
             "handoff_summary": self.handoff_summary,
+            "handoff_contract": (
+                self.handoff_contract.to_dict() if self.handoff_contract is not None else None
+            ),
             "updated_at": self.updated_at,
         }
 
@@ -180,6 +291,11 @@ class BlackboardState:
             events=[EventEntry.from_dict(entry) for entry in data.get("events", [])],
             decisions=[DecisionEntry.from_dict(entry) for entry in data.get("decisions", [])],
             handoff_summary=str(data.get("handoff_summary", "")),
+            handoff_contract=(
+                HandoffContract.from_dict(dict(data["handoff_contract"]))
+                if isinstance(data.get("handoff_contract"), dict)
+                else None
+            ),
             updated_at=str(data.get("updated_at", _now_iso())),
         )
 
@@ -190,6 +306,7 @@ class BlackboardStore:
     def __init__(self, issue_dir: Path) -> None:
         self.issue_dir = issue_dir
         self.file_path = issue_dir / BLACKBOARD_FILENAME
+        self.next_step_path = issue_dir / NEXT_STEP_FILENAME
 
     def load_or_create(self, initial_step: str, playbook_id: str = "default") -> BlackboardState:
         if self.file_path.exists():
@@ -198,10 +315,12 @@ class BlackboardStore:
             if not getattr(state, "playbook_id", None):
                 state.playbook_id = playbook_id
                 self.save(state)
+            self.ensure_baton(state)
             return state
 
         state = BlackboardState(current_step=initial_step, playbook_id=playbook_id)
         self.save(state)
+        self.ensure_baton(state)
         return state
 
     def save(self, state: BlackboardState) -> None:
@@ -211,6 +330,101 @@ class BlackboardStore:
             json.dumps(state.to_dict(), ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
+
+    def ensure_baton(self, state: BlackboardState) -> HandoffContract:
+        """Ensure a persistent baton file exists for this issue."""
+        if self.next_step_path.exists():
+            contract = self.load_handoff_contract(state, allowed_steps=[])
+            state.handoff_contract = contract
+            self.save(state)
+            return contract
+
+        contract = HandoffContract(
+            version=HANDOFF_CONTRACT_VERSION,
+            from_step=state.current_step,
+            to_owner=HandoffOwner.AGENT if state.current_step not in {"user", "done"} else HandoffOwner(state.current_step),
+            to_step=state.current_step,
+            intent=(
+                HandoffIntent.AWAIT_AGENT
+                if state.current_step not in {"user", "done"}
+                else (HandoffIntent.MANUAL_HANDOFF if state.current_step == "user" else HandoffIntent.WORKFLOW_COMPLETE)
+            ),
+            status_code="",
+            created_at=_now_iso(),
+            source="bootstrap",
+        )
+        self.write_handoff_contract(state, contract)
+        return contract
+
+    def load_handoff_contract(
+        self,
+        state: BlackboardState,
+        *,
+        allowed_steps: List[str],
+        allow_legacy_text: bool = True,
+    ) -> HandoffContract:
+        """Load and parse baton contract from next_step.txt."""
+        if not self.next_step_path.exists():
+            raise ValueError(f"Baton file is missing: {self.next_step_path}")
+
+        raw = self.next_step_path.read_text(encoding="utf-8").strip()
+        if not raw:
+            raise ValueError(f"Baton file is empty: {self.next_step_path}")
+
+        try:
+            payload = json.loads(raw)
+            if not isinstance(payload, dict):
+                raise ValueError("Baton payload must be a JSON object")
+            contract = HandoffContract.from_dict(payload)
+        except (json.JSONDecodeError, ValueError) as exc:
+            if not allow_legacy_text:
+                raise ValueError(f"Invalid baton contract payload: {exc}") from exc
+            legacy_step = raw.strip()
+            if not legacy_step:
+                raise ValueError(f"Baton file is empty: {self.next_step_path}") from exc
+            contract = HandoffContract.from_legacy_step(
+                step=legacy_step,
+                from_step=state.current_step,
+                source="legacy_text",
+            )
+
+        if allowed_steps:
+            contract.validate(allowed_steps=allowed_steps)
+        return contract
+
+    def write_handoff_contract(self, state: BlackboardState, contract: HandoffContract) -> None:
+        """Persist baton contract to next_step.txt and blackboard."""
+        self.issue_dir.mkdir(parents=True, exist_ok=True)
+        self.next_step_path.write_text(
+            json.dumps(contract.to_dict(), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        state.handoff_contract = contract
+        self.save(state)
+
+    def update_handoff_contract(
+        self,
+        state: BlackboardState,
+        *,
+        from_step: str,
+        to_owner: HandoffOwner,
+        to_step: str,
+        intent: HandoffIntent,
+        status_code: str = "",
+        source: str = "workflow",
+    ) -> HandoffContract:
+        contract = HandoffContract(
+            version=HANDOFF_CONTRACT_VERSION,
+            from_step=from_step,
+            to_owner=to_owner,
+            to_step=to_step,
+            intent=intent,
+            status_code=status_code,
+            created_at=_now_iso(),
+            source=source,
+        )
+        self.write_handoff_contract(state, contract)
+        return contract
 
     def get_artifact(self, state: BlackboardState, name: str) -> Optional[ArtifactEntry]:
         return state.artifacts.get(name)

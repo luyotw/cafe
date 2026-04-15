@@ -191,16 +191,28 @@ class GenericWorkflowStepExecutor(Phase):
         }:
             auto_continue = True
 
+        events = [
+            event
+            for event in execution.events
+            if isinstance(event, dict)
+        ]
+        if status_code is not None:
+            handoff_intent = self._resolve_handoff_intent(step_name, status_code)
+            if handoff_intent is not None:
+                events.append(
+                    {
+                        "type": "handoff_intent",
+                        "step": step_name,
+                        "intent": handoff_intent,
+                    }
+                )
+
         return StepExecutionResult(
             response=response,
             artifacts=artifacts,
             status_code=status_code.value if status_code is not None else None,
             auto_continue=auto_continue,
-            events=[
-                event
-                for event in execution.events
-                if isinstance(event, dict)
-            ],
+            events=events,
         )
 
     def _detect_written_output_files(self) -> List[Path]:
@@ -446,6 +458,18 @@ class GenericWorkflowStepExecutor(Phase):
     @staticmethod
     def _should_validate_checklist(status_code: PhaseStatusCode) -> bool:
         return status_code in {PhaseStatusCode.CONFIRMED, PhaseStatusCode.READY_FOR_REVIEW}
+
+    @staticmethod
+    def _resolve_handoff_intent(step_name: str, status_code: PhaseStatusCode) -> Optional[str]:
+        if status_code == PhaseStatusCode.READY_FOR_REVIEW:
+            if step_name in {"spec", "plan"}:
+                return "confirm_output"
+            return "manual_handoff"
+        if status_code == PhaseStatusCode.NEED_CLARIFICATION:
+            return "need_clarification"
+        if status_code == PhaseStatusCode.NEED_PERMISSION:
+            return "need_permission"
+        return None
 
     def _artifact_path(self, blackboard_state: BlackboardState, name: str) -> Optional[str]:
         entry = blackboard_state.artifacts.get(name)

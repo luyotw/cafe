@@ -343,7 +343,7 @@ def test_prepare_chat_handoff_state_creates_blackboard_and_clears_stale_baton(tm
     assert "spec" in valid_steps
     assert playbook_id == "default"
     assert (issue_dir / "blackboard.json").exists()
-    assert not next_step_path.exists()
+    assert next_step_path.exists()
 
 
 def test_launch_chat_session_warns_when_baton_missing(
