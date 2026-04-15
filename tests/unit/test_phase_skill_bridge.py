@@ -3,8 +3,11 @@
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from cafe.phases.plan_phase import PlanPhase
-from cafe.skills.bridge import load_skill_body
+from cafe.skills.bridge import load_skill_body, try_load_skill_body, try_load_skill_reference
+from cafe.skills.exceptions import SkillDiscoveryError
 from cafe.utils.checklist_generator import generate_plan_checklist
 
 
@@ -64,3 +67,40 @@ def test_load_skill_body_prefers_project_override(tmp_path: Path, monkeypatch) -
     body = load_skill_body("plan")
 
     assert "Custom project plan skill" in body
+
+
+# --- Task 3: Narrowed exception handling ---
+
+
+def test_try_load_skill_body_returns_empty_string_on_skill_discovery_error() -> None:
+    with patch("cafe.skills.bridge.load_skill_body", side_effect=SkillDiscoveryError("missing")):
+        result = try_load_skill_body("missing")
+    assert result == ""
+
+
+def test_try_load_skill_body_returns_empty_string_on_file_not_found_error() -> None:
+    with patch("cafe.skills.bridge.load_skill_body", side_effect=FileNotFoundError("gone")):
+        result = try_load_skill_body("gone")
+    assert result == ""
+
+
+def test_try_load_skill_body_propagates_unexpected_errors() -> None:
+    with patch("cafe.skills.bridge.load_skill_body", side_effect=RuntimeError("boom")):
+        with pytest.raises(RuntimeError):
+            try_load_skill_body("plan")
+
+
+def test_try_load_skill_reference_returns_empty_string_on_skill_discovery_error() -> None:
+    with patch(
+        "cafe.skills.bridge.load_skill_reference", side_effect=SkillDiscoveryError("missing")
+    ):
+        result = try_load_skill_reference("missing", "checklist.md")
+    assert result == ""
+
+
+def test_try_load_skill_reference_propagates_unexpected_errors() -> None:
+    with patch(
+        "cafe.skills.bridge.load_skill_reference", side_effect=RuntimeError("boom")
+    ):
+        with pytest.raises(RuntimeError):
+            try_load_skill_reference("plan", "checklist.md")
