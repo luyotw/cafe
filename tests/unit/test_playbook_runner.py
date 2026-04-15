@@ -437,6 +437,92 @@ def test_runner_handoff_goto_advances_even_when_status_code_is_invalid(tmp_path:
     assert calls == ["develop", "review"]
 
 
+def test_runner_uses_default_transition_when_invalid_status_code(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo"
+    playbook = {
+        "playbook": {"id": "default"},
+        "steps": {
+            "develop": {
+                "skill": "spec_first",
+                "role": "developer",
+                "valid_status_codes": ["CAFE_CONFIRMED"],
+                "on": {"CAFE_CONFIRMED": "_done", "default": "review"},
+            },
+            "review": {
+                "skill": "spec_first",
+                "role": "reviewer",
+                "valid_status_codes": ["CAFE_CONFIRMED"],
+                "on": {"CAFE_CONFIRMED": "_done"},
+            },
+        },
+    }
+    calls: list[str] = []
+
+    def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
+        calls.append(step_name)
+        if step_name == "develop":
+            return StepExecutionResult(
+                response="Development done.\n\nCAFE_DEVELOP_DONE",
+                artifacts={},
+                status_code=None,
+            )
+        return StepExecutionResult(response="CAFE_CONFIRMED", artifacts={})
+
+    runner = PlaybookRunner(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        executor=executor,
+    )
+    result = runner.run(max_transitions=5)
+
+    assert result.completed is True
+    assert calls == ["develop", "review"]
+
+
+def test_runner_uses_default_transition_when_status_code_missing(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo"
+    playbook = {
+        "playbook": {"id": "default"},
+        "steps": {
+            "develop": {
+                "skill": "spec_first",
+                "role": "developer",
+                "valid_status_codes": ["CAFE_CONFIRMED"],
+                "on": {"CAFE_CONFIRMED": "_done", "default": "review"},
+            },
+            "review": {
+                "skill": "spec_first",
+                "role": "reviewer",
+                "valid_status_codes": ["CAFE_CONFIRMED"],
+                "on": {"CAFE_CONFIRMED": "_done"},
+            },
+        },
+    }
+    calls: list[str] = []
+
+    def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
+        calls.append(step_name)
+        if step_name == "develop":
+            return StepExecutionResult(
+                response="Development complete, no status code provided.",
+                artifacts={},
+                status_code=None,
+            )
+        return StepExecutionResult(response="CAFE_CONFIRMED", artifacts={})
+
+    runner = PlaybookRunner(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        executor=executor,
+    )
+    result = runner.run(max_transitions=5)
+
+    assert result.completed is True
+    assert calls == ["develop", "review"]
+
+
 def test_runner_auto_continues_after_consuming_user_input(tmp_path: Path) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "demo"
     playbook = {

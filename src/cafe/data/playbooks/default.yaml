@@ -81,6 +81,7 @@ steps:
       CAFE_NEED_CLARIFICATION: develop
       CAFE_NEED_PERMISSION: develop
       CAFE_NO_CHANGES_NEEDED: review
+      default: review
 
   review:
     type: skill

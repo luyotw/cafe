@@ -151,6 +151,9 @@ class PlaybookRunner:
             )
 
         if status_code not in transitions:
+            default_target = transitions.get("default")
+            if default_target:
+                return str(default_target), "default"
             return None, "terminal"
         return str(transitions[status_code]), "status"
 
@@ -289,7 +292,25 @@ class PlaybookRunner:
                     invalid_status_codes = sorted(
                         token for token in status_like_tokens if token not in allowed_status_codes
                     )
-                    if invalid_status_codes:
+                    # Try default transition before failing
+                    default_next_step, _ = self._resolve_next_step(
+                        current_step=current_step,
+                        response="",
+                        status_code="",
+                    )
+                    if default_next_step is not None:
+                        event_name = "status_code_invalid" if invalid_status_codes else "status_code_missing"
+                        event_data: Dict[str, Any] = {"step": current_step, "response": response}
+                        if invalid_status_codes:
+                            event_data["invalid_status_codes"] = invalid_status_codes
+                            event_data["allowed_status_codes"] = sorted(allowed_status_codes)
+                        event_data["default_transition"] = default_next_step
+                        self.blackboard_store.record_event(self.blackboard, event_name, event_data)
+                        handoff_next_step = default_next_step
+                        handoff_transition_source = "default"
+                        status_code = "NO_STATUS_CODE"
+                        last_status_code = status_code
+                    elif invalid_status_codes:
                         self.blackboard_store.record_event(
                             self.blackboard,
                             "status_code_invalid",
@@ -305,19 +326,20 @@ class PlaybookRunner:
                             final_status_code="INVALID_STATUS_CODE",
                             completed=False,
                         )
-                    self.blackboard_store.record_event(
-                        self.blackboard,
-                        "status_code_missing",
-                        {
-                            "step": current_step,
-                            "response": response,
-                        },
-                    )
-                    return PlaybookRunResult(
-                        final_step=current_step,
-                        final_status_code="NO_STATUS_CODE",
-                        completed=False,
-                    )
+                    else:
+                        self.blackboard_store.record_event(
+                            self.blackboard,
+                            "status_code_missing",
+                            {
+                                "step": current_step,
+                                "response": response,
+                            },
+                        )
+                        return PlaybookRunResult(
+                            final_step=current_step,
+                            final_status_code="NO_STATUS_CODE",
+                            completed=False,
+                        )
             else:
                 handoff_next_step = None
                 handoff_transition_source = "terminal"
