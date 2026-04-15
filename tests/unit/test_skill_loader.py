@@ -8,6 +8,7 @@ from cafe.core.types import AgentCLI
 from cafe.skills.exceptions import SkillDiscoveryError
 from cafe.skills.importer import import_skills
 from cafe.skills.loader import SkillLoader
+from cafe.skills.native_bridge import NativeSkillBridge
 
 
 def _write_skill(root: Path, name: str, *, frontmatter_name: str | None = None) -> None:
@@ -202,3 +203,32 @@ def test_global_overrides_builtin_when_no_project_skill(tmp_path: Path) -> None:
     assert len(items) == 1
     assert items[0].source == "global"
 
+
+
+def test_install_skill_uses_project_version_over_global(tmp_path: Path) -> None:
+    """When a project skill overrides a global skill, install_skill uses the project version."""
+    global_root = tmp_path / "global" / "skills"
+    project = tmp_path / "project" / ".cafe" / "skills"
+    _write_skill(global_root, "plan")
+    project_skill_dir = project / "plan"
+    project_skill_dir.mkdir(parents=True, exist_ok=True)
+    (project_skill_dir / "SKILL.md").write_text(
+        "---\nname: plan\ndescription: project plan\n---\n\nProject version\n",
+        encoding="utf-8",
+    )
+
+    loader = SkillLoader(
+        project_root=tmp_path / "project",
+        global_root=tmp_path / "global",
+        builtin_root=tmp_path / "builtin",
+    )
+    loader.discover()
+    bridge = NativeSkillBridge(
+        loader,
+        project_root=tmp_path / "project",
+        home_dir=tmp_path / "home",
+    )
+    bridge.install_skill("plan", AgentCLI.CLAUDE)
+
+    installed = tmp_path / "project" / ".claude" / "skills" / "cafe-plan" / "SKILL.md"
+    assert "Project version" in installed.read_text(encoding="utf-8")
