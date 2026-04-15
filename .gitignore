@@ -7,4 +7,7 @@
 .cafe
 .claude
 .codex
+.copilot
+.gemini
+.cursor
 dist/
