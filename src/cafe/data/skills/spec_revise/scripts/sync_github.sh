@@ -54,16 +54,6 @@ if ! command -v python3 >/dev/null 2>&1; then
   exit 1
 fi
 
-if ! command -v gh >/dev/null 2>&1; then
-  echo "Error: gh CLI is required for GitHub sync." >&2
-  exit 1
-fi
-
-if ! gh auth status >/dev/null 2>&1; then
-  echo "Error: gh CLI is not authenticated." >&2
-  exit 1
-fi
-
 ISSUE_DIR=$(python3 - "$OUTPUT_FILE" <<'PY'
 from pathlib import Path
 import sys
@@ -112,6 +102,16 @@ fi
 if [[ -z "$ISSUE_ID" ]]; then
   echo '{"action":"skipped","reason":"missing_issue_id"}'
   exit 0
+fi
+
+if ! command -v gh >/dev/null 2>&1; then
+  echo "Error: gh CLI is required for GitHub sync." >&2
+  exit 1
+fi
+
+if ! gh auth status >/dev/null 2>&1; then
+  echo "Error: gh CLI is not authenticated." >&2
+  exit 1
 fi
 
 CONTENT=$(python3 - "$OUTPUT_FILE" <<'PY'

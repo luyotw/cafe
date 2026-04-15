@@ -1,0 +1,53 @@
+import json
+import os
+import subprocess
+from pathlib import Path
+
+import pytest
+
+
+@pytest.mark.parametrize(
+    "script_rel_path,phase",
+    [
+        ("src/cafe/data/skills/spec_first/scripts/sync_github.sh", "spec"),
+        ("src/cafe/data/skills/spec_revise/scripts/sync_github.sh", "spec"),
+        ("src/cafe/data/skills/plan/scripts/sync_github.sh", "plan"),
+    ],
+)
+def test_sync_script_skips_when_sync_disabled_without_gh(
+    tmp_path: Path, script_rel_path: str, phase: str
+) -> None:
+    project_root = Path(__file__).resolve().parents[2]
+    script_path = project_root / script_rel_path
+
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo"
+    output_file = issue_dir / phase / "iteration_001" / "output.md"
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    output_file.write_text("# Output\n\ncontent", encoding="utf-8")
+
+    issue_yaml = issue_dir / "issue.yaml"
+    issue_yaml.write_text(
+        f"spec:\n  issue_id: 123\n{phase}:\n  sync_github: false\n",
+        encoding="utf-8",
+    )
+
+    python_path = subprocess.check_output(["which", "python3"], text=True).strip()
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "python3").symlink_to(python_path)
+
+    env = os.environ.copy()
+    env["PATH"] = str(bin_dir)
+
+    result = subprocess.run(
+        ["/bin/bash", str(script_path), "--phase", phase, "--output", str(output_file)],
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    payload = json.loads(result.stdout.strip())
+    assert payload["action"] == "skipped"
+    assert payload["reason"] == "sync_disabled"
