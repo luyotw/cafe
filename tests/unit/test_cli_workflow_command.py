@@ -543,7 +543,7 @@ def test_workflow_command_resumes_incomplete_iteration_before_user_phase(tmp_pat
     assert result.exit_code == 0
     assert "Resuming unfinished iteration" in result.stdout
     assert "step=spec" in result.stdout
-    assert "Executing step=spec iteration=003" in result.stdout
+    assert "Executing step=spec iteration=002" in result.stdout
     assert "Workflow is waiting for user input" in result.stdout
     assert executed_steps == ["spec"]
 

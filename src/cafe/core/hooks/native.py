@@ -113,6 +113,11 @@ class UserInputCollector(NoOpHook):
         if previous_status not in {"CAFE_NEED_CLARIFICATION", "CAFE_READY_FOR_REVIEW"}:
             return HookResult()
 
+        # PR step uses CAFE_READY_FOR_REVIEW to loop back and check for new comments,
+        # not to request user confirmation — skip the review prompt entirely.
+        if step_name == "pr" and previous_status == "CAFE_READY_FOR_REVIEW":
+            return HookResult()
+
         prompt_role = {"pm": "pm", "reviewer": "reviewer"}.get(role, "developer")
         previous_output_file = self._get_previous_output_file(phase, step_name)
         self._display_previous_output(phase, step_name, previous_output_file)

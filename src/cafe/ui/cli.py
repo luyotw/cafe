@@ -5770,14 +5770,18 @@ def workflow(
     try:
         def _predict_next_iteration(issue_root: Path, step_name: str) -> int:
             step_dir = issue_root / step_name
-            iteration_dirs = sorted(path for path in step_dir.glob("iteration_*") if path.is_dir())
-            if not iteration_dirs:
+            existing = sorted(step_dir.glob("iteration_*/context.json"))
+            if not existing:
                 return 1
-            last_dir = iteration_dirs[-1]
+            count = len(existing)
             try:
-                return int(last_dir.name.split("_", 1)[1]) + 1
-            except (IndexError, ValueError):
-                return len(iteration_dirs) + 1
+                import json as _json
+                last_data = _json.loads(existing[-1].read_text(encoding="utf-8"))
+                if not last_data.get("status_code"):
+                    return last_data.get("iteration", count)
+            except Exception:
+                return count
+            return count + 1
 
         git = GitOperations()
         issue_name = issue or git.get_current_branch()
