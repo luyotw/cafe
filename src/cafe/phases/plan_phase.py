@@ -549,7 +549,15 @@ Continue analyzing the latest version of {spec_file_path}.
 
         # Get development guide using prompt_multiline for better UX
         from cafe.ui.inquirer_prompts import prompt_multiline
-        dev_guide = prompt_multiline("Please enter development guide (can be left empty)").strip()
+        dev_guide = prompt_multiline(
+            "Please enter development guide (can be left empty)\n"
+            "Suggested content:\n"
+            "- Technical solution/direction\n"
+            "- Related code locations\n"
+            "- Technical constraints or dependencies\n"
+            "- Key background information\n"
+            "(Press Esc + Enter to finish)"
+        ).strip()
 
         if dev_guide:
             self.display.console.print()

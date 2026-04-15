@@ -68,16 +68,23 @@ class UserInputCollector(NoOpHook):
             print()
 
     @staticmethod
-    def _display_previous_iteration_delta(phase: Any, previous_output_file: Optional[Path]) -> None:
+    def _display_previous_iteration_delta(phase: Any, previous_output_file: Optional[Path]) -> bool:
         if previous_output_file is None:
-            return
+            return False
         from cafe.ui.cli import _display_iteration_delta, console
+
+        # Delta view requires at least two historical snapshots.
+        # If current review target is the first iteration output, there is no
+        # meaningful "previous iteration" to diff against.
+        if (phase.iteration - 1) <= 1:
+            return False
 
         _display_iteration_delta(
             phase.iteration - 1,
             str(previous_output_file),
             console,
         )
+        return True
 
     @staticmethod
     def _resolve_review_item_name(step_name: str) -> str:
@@ -112,8 +119,17 @@ class UserInputCollector(NoOpHook):
         # Restore plan phase iteration-1 initial user input (development guide).
         if step_name == "plan" and getattr(phase, "iteration", 0) == 1:
             if step_name not in phase.step_user_inputs:
+                development_guide_prompt = (
+                    "Please enter development guide (can be left empty)\n"
+                    "Suggested content:\n"
+                    "- Technical solution/direction\n"
+                    "- Related code locations\n"
+                    "- Technical constraints or dependencies\n"
+                    "- Key background information\n"
+                    "(Press Esc + Enter to finish)"
+                )
                 user_input = prompt_multiline(
-                    "Please enter development guide (can be left empty)"
+                    development_guide_prompt
                 ).strip()
                 phase.step_user_inputs[step_name] = user_input
             return HookResult(
@@ -163,12 +179,19 @@ class UserInputCollector(NoOpHook):
                 )
 
         if previous_status == "CAFE_READY_FOR_REVIEW":
-            self._display_previous_iteration_delta(phase, previous_output_file)
+            delta_displayed = self._display_previous_iteration_delta(phase, previous_output_file)
+            if not delta_displayed:
+                self._display_previous_output(phase, step_name, previous_output_file)
             prev_data = phase._load_previous_iteration_data() or {}
             # Show diff again after returning from chat/edit, but never print full output.
-            redisplay_callback = (
-                lambda: self._display_previous_iteration_delta(phase, previous_output_file)
-            )
+            if delta_displayed:
+                redisplay_callback = (
+                    lambda: self._display_previous_iteration_delta(phase, previous_output_file)
+                )
+            else:
+                redisplay_callback = (
+                    lambda: self._display_previous_output(phase, step_name, previous_output_file)
+                )
             choice = phase._ask_user_for_review_decision(
                 self._resolve_review_item_name(step_name),
                 agent_name=agent_name,

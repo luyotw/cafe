@@ -66,17 +66,21 @@ def test_user_input_collector_confirms_ready_for_review_without_running_agent(tm
     phase._process_review_decision.assert_called_once()
 
 
-def test_user_input_collector_plan_ready_for_review_skips_full_output_display(tmp_path: Path) -> None:
+def test_user_input_collector_plan_ready_for_review_skips_full_output_display_when_delta_available(tmp_path: Path) -> None:
     phase_dir = tmp_path / "plan"
-    prev_iter_dir = phase_dir / "iteration_001"
+    prev_prev_iter_dir = phase_dir / "iteration_001"
+    prev_prev_iter_dir.mkdir(parents=True, exist_ok=True)
+    (prev_prev_iter_dir / "output.md").write_text("# Plan v1\n", encoding="utf-8")
+
+    prev_iter_dir = phase_dir / "iteration_002"
     prev_iter_dir.mkdir(parents=True, exist_ok=True)
     (prev_iter_dir / "context.json").write_text(
         json.dumps({"status_code": "CAFE_READY_FOR_REVIEW"}),
         encoding="utf-8",
     )
-    (prev_iter_dir / "output.md").write_text("# Plan\n", encoding="utf-8")
+    (prev_iter_dir / "output.md").write_text("# Plan v2\n", encoding="utf-8")
 
-    phase = _FakePhase(phase_dir=phase_dir, iteration=2)
+    phase = _FakePhase(phase_dir=phase_dir, iteration=3)
     phase._ask_user_for_review_decision = MagicMock(return_value="confirm")
     phase._process_review_decision = MagicMock()
 
@@ -95,6 +99,38 @@ def test_user_input_collector_plan_ready_for_review_skips_full_output_display(tm
     assert result.override_status_code == PhaseStatusCode.CONFIRMED
     mock_display_output.assert_not_called()
     mock_display_delta.assert_called_once()
+
+
+def test_user_input_collector_plan_ready_for_review_falls_back_to_full_output_without_delta(tmp_path: Path) -> None:
+    phase_dir = tmp_path / "plan"
+    prev_iter_dir = phase_dir / "iteration_001"
+    prev_iter_dir.mkdir(parents=True, exist_ok=True)
+    (prev_iter_dir / "context.json").write_text(
+        json.dumps({"status_code": "CAFE_READY_FOR_REVIEW"}),
+        encoding="utf-8",
+    )
+    (prev_iter_dir / "output.md").write_text("# Plan\n", encoding="utf-8")
+
+    phase = _FakePhase(phase_dir=phase_dir, iteration=2)
+    phase._ask_user_for_review_decision = MagicMock(return_value="confirm")
+    phase._process_review_decision = MagicMock()
+
+    hook = UserInputCollector()
+    with patch.object(hook, "_display_previous_output") as mock_display_output, \
+         patch.object(hook, "_display_previous_iteration_delta") as mock_display_delta:
+        mock_display_delta.return_value = False
+        result = hook.run(
+            stage="prepare_input",
+            phase=phase,
+            step_name="plan",
+            step_def={"role": "developer"},
+            agent_name="David",
+        )
+
+    assert result.continue_pipeline is False
+    assert result.override_status_code == PhaseStatusCode.CONFIRMED
+    mock_display_delta.assert_called_once()
+    mock_display_output.assert_called_once()
 
 
 def test_user_input_collector_loads_interactive_qa_for_need_clarification(tmp_path: Path) -> None:
@@ -182,7 +218,7 @@ def test_user_input_collector_prompts_initial_plan_user_input_on_first_iteration
     phase = _FakePhase(phase_dir=phase_dir, iteration=1)
     hook = UserInputCollector()
 
-    with patch("cafe.core.hooks.native.prompt_multiline", return_value="Follow strict TDD first"):
+    with patch("cafe.core.hooks.native.prompt_multiline", return_value="Follow strict TDD first") as mock_prompt:
         result = hook.run(
             stage="prepare_input",
             phase=phase,
@@ -194,6 +230,9 @@ def test_user_input_collector_prompts_initial_plan_user_input_on_first_iteration
     assert result.context_updates["user_input"] == "Follow strict TDD first"
     assert result.events == [{"type": "user_input_collected", "step": "plan", "source": "initial_prompt"}]
     assert phase.step_user_inputs["plan"] == "Follow strict TDD first"
+    prompt_text = mock_prompt.call_args.args[0]
+    assert "Suggested content:" in prompt_text
+    assert "Technical solution/direction" in prompt_text
 
 
 def test_execute_step_skips_checklist_validation_when_confirmed_without_agent_run(tmp_path: Path) -> None:
