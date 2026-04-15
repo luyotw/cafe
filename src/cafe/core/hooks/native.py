@@ -108,6 +108,25 @@ class UserInputCollector(NoOpHook):
         step_name = str(kwargs.get("step_name") or kwargs["step_def"].get("name") or "")
         agent_name = str(kwargs.get("agent_name") or "")
         role = str(kwargs["step_def"].get("role", "developer"))
+
+        # Restore plan phase iteration-1 initial user input (development guide).
+        if step_name == "plan" and getattr(phase, "iteration", 0) == 1:
+            if step_name not in phase.step_user_inputs:
+                user_input = prompt_multiline(
+                    "Please enter development guide (can be left empty)"
+                ).strip()
+                phase.step_user_inputs[step_name] = user_input
+            return HookResult(
+                context_updates={"user_input": phase.step_user_inputs.get(step_name, "")},
+                events=[
+                    {
+                        "type": "user_input_collected",
+                        "step": step_name,
+                        "source": "initial_prompt",
+                    }
+                ],
+            )
+
         previous_status = _get_previous_iteration_status(phase)
         if previous_status not in {"CAFE_NEED_CLARIFICATION", "CAFE_READY_FOR_REVIEW"}:
             return HookResult()

@@ -118,10 +118,11 @@ class GenericWorkflowStepExecutor(Phase):
 
         def run_agent(prompt: str) -> str:
             last_prompt[:] = [prompt]
+            resolved_user_input = self._resolve_iteration_user_input(step_name)
             response, _ = self._execute_agent_iteration(
                 agent_name=agent_name,
                 prompt=prompt,
-                user_input=self.step_user_inputs.get(step_name, "workflow execute"),
+                user_input=resolved_user_input,
                 valid_status_codes=valid_status_codes,
                 require_status_code=True,
                 allowed_tools=allowed_tools,
@@ -155,10 +156,11 @@ class GenericWorkflowStepExecutor(Phase):
 
         agent_was_invoked = bool(last_prompt)
         if agent_was_invoked and status_code is not None and self._should_validate_checklist(status_code):
+            resolved_user_input = self._resolve_iteration_user_input(step_name)
             response, validated_status, validation_passed = self._validate_and_retry_checklist_completion(
                 agent_name=agent_name,
                 prompt=last_prompt[0] if last_prompt else "",
-                user_input=self.step_user_inputs.get(step_name, "workflow execute"),
+                user_input=resolved_user_input,
                 valid_status_codes=valid_status_codes,
                 allowed_tools=allowed_tools,
                 max_retries=3,
@@ -214,6 +216,14 @@ class GenericWorkflowStepExecutor(Phase):
             auto_continue=auto_continue,
             events=events,
         )
+
+    def _resolve_iteration_user_input(self, step_name: str) -> str:
+        """Resolve user_input sent to agent for this step iteration."""
+        if step_name in self.step_user_inputs:
+            return self.step_user_inputs[step_name]
+        if step_name == "plan" and self.iteration == 1:
+            return ""
+        return "workflow execute"
 
     def _detect_written_output_files(self) -> List[Path]:
         if self._current_output_file and self._current_output_file.exists():

@@ -145,6 +145,26 @@ def test_user_input_collector_reuses_existing_user_input_file_without_reasking(t
     mock_qa.assert_not_called()
 
 
+def test_user_input_collector_prompts_initial_plan_user_input_on_first_iteration(tmp_path: Path) -> None:
+    phase_dir = tmp_path / "plan"
+    phase_dir.mkdir(parents=True, exist_ok=True)
+    phase = _FakePhase(phase_dir=phase_dir, iteration=1)
+    hook = UserInputCollector()
+
+    with patch("cafe.core.hooks.native.prompt_multiline", return_value="Follow strict TDD first"):
+        result = hook.run(
+            stage="prepare_input",
+            phase=phase,
+            step_name="plan",
+            step_def={"role": "developer"},
+            agent_name="David",
+        )
+
+    assert result.context_updates["user_input"] == "Follow strict TDD first"
+    assert result.events == [{"type": "user_input_collected", "step": "plan", "source": "initial_prompt"}]
+    assert phase.step_user_inputs["plan"] == "Follow strict TDD first"
+
+
 def test_execute_step_skips_checklist_validation_when_confirmed_without_agent_run(tmp_path: Path) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "demo"
     issue_dir.mkdir(parents=True, exist_ok=True)
