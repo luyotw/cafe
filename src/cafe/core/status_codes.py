@@ -40,6 +40,8 @@ class StatusCodeParser:
     STATUS_CODE_ALIASES = {
         "CAFE_SPEC_READY": PhaseStatusCode.READY_FOR_REVIEW.value,
         "CAFE_PLAN_READY": PhaseStatusCode.READY_FOR_REVIEW.value,
+        "CAFE_DEVELOP_DONE": PhaseStatusCode.CONFIRMED.value,
+        "CAFE_PR_READY": PhaseStatusCode.READY_FOR_REVIEW.value,
     }
 
     @classmethod

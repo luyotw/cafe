@@ -462,7 +462,7 @@ def test_runner_uses_default_transition_when_invalid_status_code(tmp_path: Path)
         calls.append(step_name)
         if step_name == "develop":
             return StepExecutionResult(
-                response="Development done.\n\nCAFE_DEVELOP_DONE",
+                response="Development done.\n\nCAFE_UNKNOWN_SIGNAL",
                 artifacts={},
                 status_code=None,
             )

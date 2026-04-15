@@ -118,14 +118,12 @@ class GenericWorkflowStepExecutor(Phase):
 
         def run_agent(prompt: str) -> str:
             last_prompt[:] = [prompt]
-            has_default_transition = bool(step_def.get("on", {}).get("default"))
             response, _ = self._execute_agent_iteration(
                 agent_name=agent_name,
                 prompt=prompt,
                 user_input=self.step_user_inputs.get(step_name, "workflow execute"),
                 valid_status_codes=valid_status_codes,
                 require_status_code=True,
-                allow_default_fallback=has_default_transition,
                 allowed_tools=allowed_tools,
                 phase_specific_data=phase_specific_data,
             )

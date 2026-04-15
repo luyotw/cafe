@@ -418,7 +418,6 @@ class Phase(ABC):
         user_input: str,
         valid_status_codes: List[PhaseStatusCode],
         require_status_code: bool = True,
-        allow_default_fallback: bool = False,
         allowed_tools: Optional[List[str]] = None,
         denied_tools: Optional[List[str]] = None,
         phase_specific_data: Optional[Dict[str, Any]] = None,
@@ -731,11 +730,12 @@ class Phase(ABC):
         retry_count = 0
 
         # If the response already contains any CAFE_* token (even an unrecognized one),
-        # skip the retry loop — the playbook runner's default transition will handle it.
+        # skip the retry loop entirely — retrying won't change the agent's signal.
+        # The playbook runner's default transition (or alias) will handle unrecognized codes.
         import re as _re
         _has_cafe_token = bool(_re.search(r"\bCAFE_[A-Z0-9_]+\b", response or ""))
 
-        if require_status_code and original_status_code_missing and not (allow_default_fallback and _has_cafe_token):  # Including: no status code or multiple status codes
+        if require_status_code and original_status_code_missing and not _has_cafe_token:
             analysis_attempted = True
 
             while retry_count < max_retries and status_code is None:
@@ -774,8 +774,8 @@ class Phase(ABC):
                         analysis_response = continue_response
                         break
                     else:
-                        # If continue response also contains a CAFE_* token and default fallback is allowed, stop retrying
-                        if allow_default_fallback and _re.search(r"\bCAFE_[A-Z0-9_]+\b", continue_response or ""):
+                        # If continue response also contains a CAFE_* token, stop retrying
+                        if _re.search(r"\bCAFE_[A-Z0-9_]+\b", continue_response or ""):
                             print(f"⚠️  Still no valid status code but CAFE token found, deferring to playbook runner")
                             response = response + "\n\n" + continue_response
                             analysis_response = continue_response

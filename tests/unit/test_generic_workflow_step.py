@@ -139,7 +139,7 @@ def test_generic_workflow_step_executor_writes_iteration_files(tmp_path: Path, m
     assert (issue_dir / "spec" / "status.json").exists()
 
 
-def test_generic_workflow_step_retries_agent_when_status_code_is_invalid(tmp_path: Path, monkeypatch) -> None:
+def test_generic_workflow_step_does_not_retry_when_agent_returns_any_cafe_token(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-status-retry"
     playbook = {
@@ -170,9 +170,11 @@ def test_generic_workflow_step_retries_agent_when_status_code_is_invalid(tmp_pat
 
     result = executor.execute_step("spec", playbook["steps"]["spec"], state)
 
-    assert result.status_code == "CAFE_CONFIRMED"
-    assert len(agent_manager.prompts) >= 2
-    assert any("If completed respond with status code" in prompt for prompt in agent_manager.prompts)
+    # Agent returned CAFE_SPEC_READY (unrecognized but a CAFE_* token) — no retry should occur
+    assert len(agent_manager.prompts) == 1
+    assert not any("If completed respond with status code" in prompt for prompt in agent_manager.prompts)
+    # status_code is None; the playbook runner will handle it via default/alias
+    assert result.status_code is None
 
 
 def test_generic_workflow_step_executor_uses_iteration_specific_skill_mapping(tmp_path: Path, monkeypatch) -> None:
