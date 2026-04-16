@@ -1,4 +1,5 @@
 """Tests for playbook runner."""
+import json
 from pathlib import Path
 
 import pytest
@@ -900,3 +901,105 @@ def test_runner_writes_need_clarification_intent_for_non_confirm_user_handoff(tm
     assert contract is not None
     assert contract.intent == HandoffIntent.NEED_CLARIFICATION
     assert contract.to_step == "user"
+
+
+def test_runner_rejects_baton_owner_mismatch_before_step_execution(tmp_path: Path) -> None:
+    """If baton owner is not `agent`, the runner should fail before executing the step."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo-owner-mismatch"
+    issue_dir.mkdir(parents=True, exist_ok=True)
+    (issue_dir / "next_step.txt").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "from_step": "spec",
+                "to_owner": "user",
+                "to_step": "user",
+                "intent": "manual_handoff",
+                "status_code": "",
+                "source": "test",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    playbook = {
+        "playbook": {"id": "default"},
+        "steps": {
+            "spec": {
+                "skill": "spec_first",
+                "role": "pm",
+                "valid_status_codes": ["CAFE_CONFIRMED"],
+                "on": {"CAFE_CONFIRMED": "plan"},
+            },
+            "plan": {
+                "skill": "spec_first",
+                "role": "developer",
+                "valid_status_codes": ["CAFE_CONFIRMED"],
+                "on": {"CAFE_CONFIRMED": "_done"},
+            },
+        },
+    }
+
+    def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
+        raise AssertionError("executor should not run when baton ownership is invalid")
+
+    runner = PlaybookRunner(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        executor=executor,
+    )
+
+    with pytest.raises(RuntimeError, match=r"expected agent, got user"):
+        runner.run(max_transitions=2)
+
+
+def test_runner_rejects_baton_target_mismatch_before_step_execution(tmp_path: Path) -> None:
+    """If baton target is not equal to the current step, the runner should fail early."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo-target-mismatch"
+    issue_dir.mkdir(parents=True, exist_ok=True)
+    (issue_dir / "next_step.txt").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "from_step": "spec",
+                "to_owner": "agent",
+                "to_step": "plan",
+                "intent": "await_agent",
+                "status_code": "",
+                "source": "test",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    playbook = {
+        "playbook": {"id": "default"},
+        "steps": {
+            "spec": {
+                "skill": "spec_first",
+                "role": "pm",
+                "valid_status_codes": ["CAFE_CONFIRMED"],
+                "on": {"CAFE_CONFIRMED": "plan"},
+            },
+            "plan": {
+                "skill": "spec_first",
+                "role": "developer",
+                "valid_status_codes": ["CAFE_CONFIRMED"],
+                "on": {"CAFE_CONFIRMED": "_done"},
+            },
+        },
+    }
+
+    def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
+        raise AssertionError("executor should not run when baton target is invalid")
+
+    runner = PlaybookRunner(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        executor=executor,
+    )
+
+    with pytest.raises(RuntimeError, match=r"baton points to 'plan'"):
+        runner.run(max_transitions=2)
