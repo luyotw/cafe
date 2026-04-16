@@ -254,6 +254,11 @@ def _consume_pending_chat_handoff(
         return requested_start_step
 
     store = BlackboardStore(issue_dir)
+    # Do not call load_or_create before this check: it bootstraps next_step.txt via
+    # ensure_baton(), which would falsely look like a chat handoff existed.
+    if not store.next_step_path.exists():
+        return None
+
     blackboard = store.load_or_create(
         str(playbook_data.get("entry_point") or next(iter(playbook_data["steps"].keys()))),
         playbook_id=str(playbook_data["playbook"]["id"]),
