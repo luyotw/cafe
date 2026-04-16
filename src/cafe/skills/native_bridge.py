@@ -73,7 +73,14 @@ class NativeSkillBridge:
         """Install one resolved skill into the repo-local CLI-native directory."""
         source_dir = self.skill_loader.get_skill_dir(name)
         target_dir = self.get_native_skills_dir(cli) / self.get_installed_skill_name(name)
-        target_dir.parent.mkdir(parents=True, exist_ok=True)
+        skills_root = target_dir.parent
+        # Recover from invalid roots (regular file or dangling symlink), which can
+        # otherwise raise FileExistsError even with exist_ok=True.
+        if skills_root.is_symlink() and not skills_root.exists():
+            skills_root.unlink()
+        elif skills_root.exists() and not skills_root.is_dir():
+            skills_root.unlink()
+        skills_root.mkdir(parents=True, exist_ok=True)
 
         if target_dir.exists():
             shutil.rmtree(target_dir)
