@@ -324,9 +324,11 @@ class GenericWorkflowStepExecutor(Phase):
 
         if self._resolve_skill_name(step_def, self.iteration) == "pr":
             base_branch = self._get_issue_config_value(self.issue_dir / "issue.yaml", "base_branch")
+            resolved_base = str(base_branch or self.git_ops.get_main_branch())
+            context["base_branch"] = resolved_base
             context["commits"] = self._get_current_branch_commits(
                 self.git_ops,
-                str(base_branch or self.git_ops.get_main_branch()),
+                resolved_base,
             )
 
         return context

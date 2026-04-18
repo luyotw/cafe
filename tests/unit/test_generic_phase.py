@@ -252,7 +252,7 @@ def test_prepare_skill_installs_skill_and_returns_cli_invocation(tmp_path: Path)
     invocation = phase.prepare_skill(skill_name="plan", agent_cli=AgentCLI.CODEX)
 
     assert invocation == "$cafe-plan"
-    assert (project_root / ".codex" / "skills" / "cafe-plan" / "SKILL.md").exists()
+    assert (tmp_path / "home" / ".codex" / "skills" / "cafe-plan" / "SKILL.md").exists()
 
 
 def test_prepare_skills_installs_shared_and_phase_skills(tmp_path: Path) -> None:
@@ -272,8 +272,8 @@ def test_prepare_skills_installs_shared_and_phase_skills(tmp_path: Path) -> None
     )
 
     assert invocations == ["$cafe-workflow-common", "$cafe-review"]
-    assert (project_root / ".codex" / "skills" / "cafe-workflow-common" / "SKILL.md").exists()
-    assert (project_root / ".codex" / "skills" / "cafe-review" / "SKILL.md").exists()
+    assert (tmp_path / "home" / ".codex" / "skills" / "cafe-workflow-common" / "SKILL.md").exists()
+    assert (tmp_path / "home" / ".codex" / "skills" / "cafe-review" / "SKILL.md").exists()
 
 
 def test_native_skill_bridge_keeps_global_dir_separate(tmp_path: Path) -> None:
