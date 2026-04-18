@@ -41,9 +41,8 @@ bash scripts/sync_pr.sh --help
    - Body 維持 `Summary`、`Changes`、`Test Plan` 結構
 3. 執行 sync script 把 PR 推上 GitHub：
    ```bash
-   bash scripts/sync_pr.sh --output {output_file}
+   bash scripts/sync_pr.sh --output {output_file} --base {base_branch}
    ```
-   - 如果 issue.yaml 有 `base_branch`，加上 `--base <base_branch>`
    - Script 輸出 JSON 到 stdout（`{"action":"created"|"updated","pr_number":"...","pr_url":"..."}`）
 4. 把 PR URL 寫到 blackboard（`current_step` 改成 `user`，summary 說明 PR 已同步）
 5. 寫入 next-step baton，內容只放 `user`
