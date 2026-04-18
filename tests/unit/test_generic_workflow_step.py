@@ -269,8 +269,8 @@ def test_generic_workflow_step_executor_installs_workflow_common_and_phase_skill
 
     executor.execute_step("review", playbook["steps"]["review"], state)
 
-    assert (tmp_path / ".codex" / "skills" / "cafe-workflow-common" / "SKILL.md").exists()
-    assert (tmp_path / ".codex" / "skills" / "cafe-review" / "SKILL.md").exists()
+    assert (tmp_path / "home" / ".codex" / "skills" / "cafe-workflow-common" / "SKILL.md").exists()
+    assert (tmp_path / "home" / ".codex" / "skills" / "cafe-review" / "SKILL.md").exists()
 
 
 def test_generic_workflow_step_prompt_includes_latest_blackboard_handoff(tmp_path: Path, monkeypatch) -> None:
