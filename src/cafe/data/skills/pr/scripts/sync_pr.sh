@@ -64,18 +64,32 @@ echo "Pushing branch: $BRANCH" >&2
 git push --set-upstream origin "$BRANCH" 2>&1 >&2 || true
 
 # Create or update PR
-EXISTING_PR=$(gh pr view --json number,url 2>/dev/null || echo "")
+EXISTING_PR=$(gh pr view --json number,url,state,baseRefName 2>/dev/null || echo "")
 
 if [[ -n "$EXISTING_PR" ]]; then
+  PR_STATE=$(echo "$EXISTING_PR" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['state'])")
+else
+  PR_STATE=""
+fi
+
+if [[ "$PR_STATE" == "OPEN" ]]; then
   PR_NUMBER=$(echo "$EXISTING_PR" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['number'])")
   PR_URL=$(echo "$EXISTING_PR" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['url'])")
+  PR_BASE=$(echo "$EXISTING_PR" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('baseRefName', ''))")
   echo "Updating PR #$PR_NUMBER..." >&2
   gh pr edit "$PR_NUMBER" --title "$TITLE" --body "$BODY" >&2
+  if [[ -n "$BASE_BRANCH" && "$PR_BASE" != "$BASE_BRANCH" ]]; then
+    echo "Retargeting PR #$PR_NUMBER base to $BASE_BRANCH..." >&2
+    gh pr edit "$PR_NUMBER" --base "$BASE_BRANCH" >&2
+  fi
   echo '{"action":"updated","pr_number":"'"$PR_NUMBER"'","pr_url":"'"$PR_URL"'"}'
 else
   CREATE_ARGS=(--title "$TITLE" --body "$BODY")
   if [[ -n "$BASE_BRANCH" ]]; then
     CREATE_ARGS+=(--base "$BASE_BRANCH")
+  fi
+  if [[ -n "$PR_STATE" ]]; then
+    echo "Existing PR is $PR_STATE; creating a new PR instead..." >&2
   fi
   echo "Creating PR..." >&2
   PR_URL=$(gh pr create "${CREATE_ARGS[@]}")
