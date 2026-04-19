@@ -46,7 +46,13 @@ from cafe.ui.template_selector import select_template
 from cafe.services.delta_display import DeltaDisplay
 from cafe.utils.config import ConfigManager, ConfigError
 from cafe.utils.git_utils import is_branch_initialized
-from cafe.utils.github import GitHubError, GitHubOps
+from cafe.utils.github import (
+    GitHubError,
+    GitHubOps,
+    filter_unresolved_comments,
+    get_all_pr_comments,
+    get_processed_comment_ids_from_history,
+)
 
 
 def _resolve_runtime_playbook_name() -> str:
@@ -342,6 +348,58 @@ def _find_incomplete_workflow_step(*, issue_dir: Path, playbook_data: Dict[str, 
             latest_incomplete = (timestamp, step_name)
 
     return latest_incomplete[1] if latest_incomplete is not None else None
+
+
+def _find_external_resume_step(
+    *,
+    issue_dir: Path,
+    playbook_data: Dict[str, Any],
+    git_ops: GitOperations,
+) -> Optional[str]:
+    """Return a workflow step that should resume due to new external PR feedback.
+
+    This restores the legacy behavior where `cafe make` could auto-resume the PR
+    phase after new GitHub PR comments arrived, even when the workflow was
+    currently paused at `user` or `done`.
+    """
+    for step_name, step_def in playbook_data["steps"].items():
+        hooks = step_def.get("hooks", {})
+        prepare_hooks = hooks.get("prepare_input", [])
+        if "GitHubPRCreator" not in prepare_hooks:
+            continue
+
+        try:
+            branch_name = git_ops.get_current_branch()
+        except Exception:
+            return None
+        if not branch_name:
+            return None
+
+        try:
+            existing_pr = GitHubOps().get_pr_for_branch(branch_name)
+        except Exception:
+            return None
+        if not existing_pr:
+            return None
+
+        try:
+            has_unpushed_commits = git_ops.has_unpushed_commits()
+        except Exception:
+            has_unpushed_commits = False
+        if has_unpushed_commits:
+            return None
+
+        try:
+            exclude_ids = get_processed_comment_ids_from_history(issue_dir / step_name)
+            comments = get_all_pr_comments(int(existing_pr["number"]), exclude_ids=exclude_ids)
+            unresolved_comments = filter_unresolved_comments(comments)
+        except Exception:
+            return None
+
+        if unresolved_comments:
+            return step_name
+
+    return None
 
 
 def _handle_user_phase(
@@ -5916,6 +5974,27 @@ def workflow(
                     )
                     console.print(
                         f"[yellow]Resuming unfinished iteration[/yellow] step={incomplete_step}"
+                    )
+                    continue
+                external_step = _find_external_resume_step(
+                    issue_dir=issue_dir,
+                    playbook_data=playbook_data,
+                    git_ops=git,
+                )
+                if external_step is not None:
+                    pending_start_step = external_step
+                    store = BlackboardStore(issue_dir)
+                    store.set_current_step(blackboard, external_step)
+                    store.update_handoff_contract(
+                        blackboard,
+                        from_step=external_step,
+                        to_owner=HandoffOwner.AGENT,
+                        to_step=external_step,
+                        intent=HandoffIntent.AWAIT_AGENT,
+                        source="workflow.resume_external_feedback",
+                    )
+                    console.print(
+                        f"[yellow]Detected external workflow feedback[/yellow] step={external_step}"
                     )
                     continue
             if not dry_run and active_step in {"user", "done"}:

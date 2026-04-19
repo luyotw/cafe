@@ -6,7 +6,7 @@ from unittest.mock import patch, MagicMock
 
 from typer.testing import CliRunner
 
-from cafe.ui.cli import app, _execute_single_step_alias
+from cafe.ui.cli import app, _execute_single_step_alias, _find_external_resume_step
 from cafe.utils.config import ConfigManager
 
 
@@ -564,6 +564,86 @@ def test_workflow_command_resumes_incomplete_iteration_before_user_phase(tmp_pat
     assert "Executing step=spec iteration=002" in result.stdout
     assert "Workflow is waiting for user input" in result.stdout
     assert executed_steps == ["spec"]
+
+
+def test_find_external_resume_step_returns_pr_when_new_pr_comments_exist(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-238"
+    (issue_dir / "pr").mkdir(parents=True, exist_ok=True)
+    playbook_data = {
+        "steps": {
+            "pr": {
+                "hooks": {
+                    "prepare_input": ["GitHubPRCreator", "UserInputCollector"],
+                }
+            }
+        }
+    }
+    git_ops = MagicMock()
+    git_ops.get_current_branch.return_value = "issue-238"
+    git_ops.has_unpushed_commits.return_value = False
+
+    with (
+        patch("cafe.ui.cli.GitHubOps") as mock_github_ops,
+        patch("cafe.ui.cli.get_processed_comment_ids_from_history", return_value=set()),
+        patch("cafe.ui.cli.get_all_pr_comments", return_value=["comment-1"]),
+        patch("cafe.ui.cli.filter_unresolved_comments", return_value=["comment-1"]),
+    ):
+        mock_github_ops.return_value.get_pr_for_branch.return_value = {
+            "number": 238,
+            "url": "https://github.com/test/repo/pull/238",
+        }
+
+        result = _find_external_resume_step(
+            issue_dir=issue_dir,
+            playbook_data=playbook_data,
+            git_ops=git_ops,
+        )
+
+    assert result == "pr"
+
+
+def test_workflow_command_resumes_pr_when_external_feedback_arrives_while_done(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    executed_steps: list[str] = []
+
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-238"
+    issue_dir.mkdir(parents=True, exist_ok=True)
+    (issue_dir / "blackboard.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "playbook_id": "default",
+                "current_step": "done",
+                "handoff_summary": "workflow completed",
+                "artifacts": {},
+                "events": [],
+                "decisions": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    class FakeExecutor:
+        def execute_step(self, step_name: str, step_def: dict, blackboard_state: object) -> tuple[str, dict[str, str]]:
+            executed_steps.append(step_name)
+            return ("CAFE_CONFIRMED", {})
+
+    with (
+        patch("cafe.ui.cli.GitOperations") as mock_git_cls,
+        patch("cafe.ui.cli._build_workflow_step_executor", return_value=FakeExecutor()),
+        patch("cafe.ui.cli._find_external_resume_step", side_effect=["pr", None]),
+        patch("cafe.ui.cli._find_incomplete_workflow_step", return_value=None),
+    ):
+        git = MagicMock()
+        git.get_current_branch.return_value = "issue-238"
+        mock_git_cls.return_value = git
+
+        result = runner.invoke(app, ["workflow", "--playbook", "default", "--execute"])
+
+    assert result.exit_code == 0
+    assert "Detected external workflow feedback" in result.stdout
+    assert "Executing step=pr iteration=001" in result.stdout
+    assert executed_steps == ["pr"]
 
 
 def test_workflow_execute_uses_context_response_for_goto(tmp_path: Path, monkeypatch) -> None:
