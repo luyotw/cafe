@@ -280,6 +280,35 @@ class TestTokenUsageTracking:
             assert total_usage.total_cost_usd == 0.03
 
 
+class TestClaudeAllowedToolsFormatting:
+    """Test Claude allowed-tools normalization."""
+
+    def test_claude_keeps_expected_tool_casing(self) -> None:
+        config = AgentConfig(name="Roger", cli=AgentCLI.CLAUDE)
+        executor = AgentExecutor(config)
+
+        result = executor.preview_cli_command_args(
+            "Test prompt",
+            allowed_tools=[
+                "read",
+                "ls",
+                "web_fetch",
+                "web_search",
+                "edit(./.cafe/issues/test/spec/output.md)",
+            ],
+        )
+
+        assert "--allowed-tools" in result
+        allowed_tools_value = result[result.index("--allowed-tools") + 1]
+        assert "Read" in allowed_tools_value
+        assert "LS" in allowed_tools_value
+        assert "WebFetch" in allowed_tools_value
+        assert "WebSearch" in allowed_tools_value
+        assert "Edit(.cafe/issues/test/spec/output.md)" in allowed_tools_value
+        assert "Webfetch" not in allowed_tools_value
+        assert "Websearch" not in allowed_tools_value
+
+
 class TestCopilotTokenUsageExtraction:
     """Test Copilot CLI token usage extraction in executor."""
 

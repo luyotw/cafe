@@ -1,13 +1,14 @@
-"""Tests for spec phase GitHub synchronization."""
+"""Tests for spec phase behavior around confirmed sync flow."""
+
+import json
+from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
-from pathlib import Path
-from unittest.mock import MagicMock, patch, call
 
 from cafe.phases.spec_phase import SpecPhase
 from cafe.core.types import PhaseResult, PhaseStatus
 from cafe.core.status_codes import PhaseStatusCode
-from cafe.utils.github import GitHubError
 
 
 @pytest.fixture
@@ -52,94 +53,11 @@ def spec_phase(tmp_path, mock_dependencies):
     return phase
 
 
-class TestSyncConfirmedSpecToGitHub:
-    """Test _sync_confirmed_spec_to_github method."""
-
-    def test_sync_when_fetched_from_github(self, spec_phase):
-        """Test sync adds comment to issue when spec was fetched from GitHub."""
-        # Setup: Create spec file and set _config_issue_id
-        spec_content = "# Confirmed Requirements\n\nTest spec content"
-        Path(spec_phase.spec_file).write_text(spec_content)
-        spec_phase._config_issue_id = 123
-
-        # Execute
-        with patch("cafe.phases.spec_phase.GitHubOps") as mock_gh_ops_cls:
-            mock_gh_ops = MagicMock()
-            mock_gh_ops.check_gh_installed.return_value = True
-            mock_gh_ops.check_gh_auth.return_value = True
-            mock_gh_ops_cls.return_value = mock_gh_ops
-
-            spec_phase._sync_confirmed_spec_to_github()
-
-            # Verify: Should add comment with spec content, not update issue body
-            mock_gh_ops.add_issue_comment.assert_called_once()
-            args, kwargs = mock_gh_ops.add_issue_comment.call_args
-            assert args[0] == "123"
-            assert "### 📋 Requirements Specification (Confirmed)" in args[1]
-            assert spec_content in args[1]
-            mock_gh_ops.update_issue.assert_not_called()
-    
-    def test_no_sync_without_config_issue_id(self, spec_phase):
-        """Test no sync when spec was not fetched from GitHub."""
-        # Setup: Create spec file but no _config_issue_id
-        Path(spec_phase.spec_file).write_text("# Test spec")
-
-        # Execute
-        with patch("cafe.phases.spec_phase.GitHubOps") as mock_gh_ops_cls:
-            mock_gh_ops = MagicMock()
-            mock_gh_ops_cls.return_value = mock_gh_ops
-
-            spec_phase._sync_confirmed_spec_to_github()
-
-            # Verify: No API call made
-            mock_gh_ops.update_issue.assert_not_called()
-            mock_gh_ops.add_issue_comment.assert_not_called()
-    
-    def test_no_sync_when_spec_file_missing(self, spec_phase):
-        """Test no sync when spec file doesn't exist."""
-        # Setup: Set _config_issue_id but no spec file
-        spec_phase._config_issue_id = 123
-
-        # Execute
-        with patch("cafe.phases.spec_phase.GitHubOps") as mock_gh_ops_cls:
-            mock_gh_ops = MagicMock()
-            mock_gh_ops_cls.return_value = mock_gh_ops
-
-            spec_phase._sync_confirmed_spec_to_github()
-
-            # Verify: No API call made
-            mock_gh_ops.update_issue.assert_not_called()
-            mock_gh_ops.add_issue_comment.assert_not_called()
-    
-    def test_handles_github_error_gracefully(self, spec_phase, capsys):
-        """Test graceful error handling when GitHub API fails."""
-        # Setup
-        spec_content = "# Test spec"
-        Path(spec_phase.spec_file).write_text(spec_content)
-        spec_phase._config_issue_id = 123
-
-        # Execute
-        with patch("cafe.phases.spec_phase.GitHubOps") as mock_gh_ops_cls:
-            mock_gh_ops = MagicMock()
-            mock_gh_ops.check_gh_installed.return_value = True
-            mock_gh_ops.check_gh_auth.return_value = True
-            mock_gh_ops.add_issue_comment.side_effect = GitHubError("API rate limit exceeded")
-            mock_gh_ops_cls.return_value = mock_gh_ops
-
-            # Should not raise exception
-            spec_phase._sync_confirmed_spec_to_github()
-
-            # Verify warning message contains error details
-            captured = capsys.readouterr()
-            assert "Warning" in captured.out or "warning" in captured.out.lower()
-            assert "API rate limit exceeded" in captured.out
-
-
 class TestConfirmedSyncInWorkflow:
-    """Test that sync is triggered correctly in the confirmation workflow."""
+    """Test confirmation flow now delegates sync to skill scripts."""
     
-    def test_sync_triggered_on_user_confirmation(self, spec_phase, tmp_path):
-        """Test sync is called when user confirms spec."""
+    def test_confirmation_returns_result_without_phase_sync_hook(self, spec_phase):
+        """Spec phase should not call internal GitHub sync on confirmation."""
         # Setup: Create previous iteration with READY_FOR_REVIEW status
         prev_iteration_dir = spec_phase.phase_dir / "iteration_001"
         prev_iteration_dir.mkdir(parents=True, exist_ok=True)
@@ -150,7 +68,6 @@ class TestConfirmedSyncInWorkflow:
             "status_code": "CAFE_READY_FOR_REVIEW",
             "phase_specific_data": {"pm_agent": "Roger"}
         }
-        import json
         (prev_iteration_dir / "context.json").write_text(json.dumps(prev_context))
         
         # Create spec file
@@ -172,18 +89,13 @@ class TestConfirmedSyncInWorkflow:
                 }
             )
             mock_process.return_value = confirmed_result
-            
-            with patch.object(spec_phase, '_sync_confirmed_spec_to_github') as mock_sync:
-                # Call the method that handles user confirmation
-                result = spec_phase._prepare_user_input_for_iteration()
-                
-                # Verify sync was called
-                assert isinstance(result, PhaseResult)
-                assert result.data.get("status_code") == PhaseStatusCode.CONFIRMED.value
-                mock_sync.assert_called_once()
+
+            result = spec_phase._prepare_user_input_for_iteration()
+            assert isinstance(result, PhaseResult)
+            assert result.data.get("status_code") == PhaseStatusCode.CONFIRMED.value
     
     def test_no_sync_on_modification_request(self, spec_phase):
-        """Test sync is NOT called when user requests modifications."""
+        """Modification request still returns user feedback as plain text."""
         # Setup: Create previous iteration with READY_FOR_REVIEW status
         prev_iteration_dir = spec_phase.phase_dir / "iteration_001"
         prev_iteration_dir.mkdir(parents=True, exist_ok=True)
@@ -194,7 +106,6 @@ class TestConfirmedSyncInWorkflow:
             "status_code": "CAFE_READY_FOR_REVIEW",
             "phase_specific_data": {"pm_agent": "Roger"}
         }
-        import json
         (prev_iteration_dir / "context.json").write_text(json.dumps(prev_context))
         
         spec_phase._config_issue_id = "123"
@@ -204,34 +115,19 @@ class TestConfirmedSyncInWorkflow:
         with patch.object(spec_phase, '_process_review_decision') as mock_process:
             # Mock _process_review_decision to return modification request (string)
             mock_process.return_value = "Please add more details about authentication"
-            
-            with patch.object(spec_phase, '_sync_confirmed_spec_to_github') as mock_sync:
-                result = spec_phase._prepare_user_input_for_iteration()
-                
-                # Verify sync was NOT called (returned string, not PhaseResult)
-                assert isinstance(result, str)
-                mock_sync.assert_not_called()
+            result = spec_phase._prepare_user_input_for_iteration()
+            assert isinstance(result, str)
 
 
 class TestGetCompletionDataNoSync:
-    """Test that _get_completion_data no longer syncs to GitHub."""
+    """_get_completion_data should remain data-only and side-effect free."""
 
     def test_get_completion_data_does_not_sync(self, spec_phase):
-        """Test _get_completion_data no longer posts to GitHub."""
+        """_get_completion_data should only return metadata."""
         # Setup
         Path(spec_phase.spec_file).write_text("# Test spec")
         spec_phase._config_issue_id = 123
 
         # Execute
-        with patch("cafe.phases.spec_phase.GitHubOps") as mock_gh_ops_cls:
-            mock_gh_ops = MagicMock()
-            mock_gh_ops_cls.return_value = mock_gh_ops
-
-            data = spec_phase._get_completion_data()
-
-            # Verify: No GitHub API call made
-            mock_gh_ops.update_issue.assert_not_called()
-            mock_gh_ops.add_issue_comment.assert_not_called()
-
-            # Verify: Still returns spec_file path
-            assert "spec_file" in data
+        data = spec_phase._get_completion_data()
+        assert "spec_file" in data

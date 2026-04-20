@@ -26,7 +26,7 @@ from cafe.utils.git_utils import to_cwd_relative_path
 class GenericWorkflowStepExecutor(Phase):
     """Execute one playbook step without shelling out to legacy CLI commands."""
 
-    SHARED_WORKFLOW_SKILLS = ["workflow-common"]
+    SHARED_WORKFLOW_SKILLS = ["workflow-common", "github_sync"]
 
     def __init__(
         self,
@@ -38,6 +38,7 @@ class GenericWorkflowStepExecutor(Phase):
         agent_manager: AgentManager,
         git_ops: GitOperations,
         role_agent_map: Dict[str, str],
+        role_configs: Optional[Dict[str, Dict[str, Any]]] = None,
         step_user_inputs: Optional[Dict[str, str]] = None,
         interactive: bool = False,
     ) -> None:
@@ -49,6 +50,7 @@ class GenericWorkflowStepExecutor(Phase):
         self.agent_manager = agent_manager
         self.git_ops = git_ops
         self.role_agent_map = role_agent_map
+        self.role_configs = dict(role_configs or {})
         self.step_user_inputs = dict(step_user_inputs or {})
         self.phase_name = ""
         self.phase_dir = issue_dir
@@ -84,6 +86,7 @@ class GenericWorkflowStepExecutor(Phase):
         skill_name = self._resolve_skill_name(step_def, self.iteration)
         valid_status_codes = self._resolve_valid_status_codes(step_def)
         agent_name = self._resolve_agent_name(step_def)
+        self._apply_step_agent_model(step_name=step_name, step_def=step_def, agent_name=agent_name)
         agent_cli = self.agent_manager.get_agent(agent_name).config.cli
         shared_skill_invocations = self.generic_phase.prepare_skills(
             skill_names=self.SHARED_WORKFLOW_SKILLS,
@@ -263,6 +266,25 @@ class GenericWorkflowStepExecutor(Phase):
             return str(playbook_role["default_agent"])
 
         raise ValueError(f"Unsupported playbook role '{role}' for workflow execution")
+
+    def _apply_step_agent_model(self, *, step_name: str, step_def: Dict[str, Any], agent_name: str) -> None:
+        model = self._resolve_step_model(step_name=step_name, step_def=step_def)
+        self.agent_manager.get_agent(agent_name).config.model = model
+
+    def _resolve_step_model(self, *, step_name: str, step_def: Dict[str, Any]) -> Optional[str]:
+        role = str(step_def.get("role", "developer"))
+        config = self.role_configs.get(role, {})
+        if not isinstance(config, dict):
+            return None
+
+        phase_config = config.get(step_name)
+        if isinstance(phase_config, dict):
+            model = phase_config.get("model")
+            if model:
+                return str(model)
+
+        model = config.get("model")
+        return str(model) if model else None
 
     @staticmethod
     def _resolve_valid_status_codes(step_def: Dict[str, Any]) -> List[PhaseStatusCode]:

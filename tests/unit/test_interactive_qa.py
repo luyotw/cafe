@@ -67,27 +67,26 @@ class TestInteractiveQaFlowBasic:
 class TestInteractiveQaFlowOther:
     """測試 'Other' 自由文字輸入流程"""
 
+    @patch("cafe.ui.interactive_qa.prompt_multiline")
     @patch("cafe.ui.interactive_qa.inquirer")
-    def test_other_option_triggers_text_input(self, mock_inquirer):
+    def test_other_option_triggers_text_input(self, mock_inquirer, mock_prompt_multiline):
         """測試選擇 Other 時觸發文字輸入"""
         questions = _make_questions(1)
 
         mock_select = MagicMock()
-        mock_text = MagicMock()
 
         # Q1 選 OTHER_SENTINEL, 文字輸入 "My custom answer", 確認
         mock_select.execute = MagicMock(
             side_effect=[OTHER_SENTINEL, "Confirm and continue"]
         )
-        mock_text.execute = MagicMock(return_value="My custom answer")
+        mock_prompt_multiline.return_value = "My custom answer\nWith detail"
 
         mock_inquirer.select.return_value = mock_select
-        mock_inquirer.text.return_value = mock_text
 
         result = interactive_qa_flow(questions)
 
-        assert "A1: My custom answer" in result
-        mock_inquirer.text.assert_called_once()
+        assert "A1: My custom answer\nWith detail" in result
+        mock_prompt_multiline.assert_called_once_with("Type your answer:", default="")
 
 
 class TestInteractiveQaFlowBack:
@@ -170,13 +169,13 @@ class TestInteractiveQaFlowBack:
 class TestInteractiveQaFlowOtherAnswerMemorization:
     """測試 'Other' 自由文字答案在返回時被記憶"""
 
+    @patch("cafe.ui.interactive_qa.prompt_multiline")
     @patch("cafe.ui.interactive_qa.inquirer")
-    def test_other_answer_memorized_when_back_navigation(self, mock_inquirer):
+    def test_other_answer_memorized_when_back_navigation(self, mock_inquirer, mock_prompt_multiline):
         """測試使用 Back 返回時，先前透過 Other 輸入的答案會預填到文字輸入框"""
         questions = _make_questions(2)
 
         mock_select = MagicMock()
-        mock_text = MagicMock()
 
         # Q1 選 OTHER_SENTINEL, 文字輸入 "custom answer"
         # Q2 選 BACK_SENTINEL (回到 Q1)
@@ -193,31 +192,26 @@ class TestInteractiveQaFlowOtherAnswerMemorization:
                 "Confirm and continue",
             ]
         )
-        mock_text.execute = MagicMock(
-            side_effect=["custom answer", "modified answer"]
-        )
+        mock_prompt_multiline.side_effect = ["custom answer", "modified answer"]
 
         mock_inquirer.select.return_value = mock_select
-        mock_inquirer.text.return_value = mock_text
 
         result = interactive_qa_flow(questions)
 
-        # 檢查第二次 inquirer.text 呼叫時有傳入 default 參數
-        assert mock_inquirer.text.call_count == 2
-        second_text_call = mock_inquirer.text.call_args_list[1]
-        assert "default" in second_text_call.kwargs
+        assert mock_prompt_multiline.call_count == 2
+        second_text_call = mock_prompt_multiline.call_args_list[1]
         assert second_text_call.kwargs["default"] == "custom answer"
 
         # 最終結果應為修改後的答案
         assert "A1: modified answer" in result
 
+    @patch("cafe.ui.interactive_qa.prompt_multiline")
     @patch("cafe.ui.interactive_qa.inquirer")
-    def test_other_answer_memorized_in_modify_flow(self, mock_inquirer):
+    def test_other_answer_memorized_in_modify_flow(self, mock_inquirer, mock_prompt_multiline):
         """測試在修改流程中，先前透過 Other 輸入的答案會預填到文字輸入框"""
         questions = _make_questions(2)
 
         mock_select = MagicMock()
-        mock_text = MagicMock()
 
         # Q1 選 OTHER_SENTINEL, 文字輸入 "first answer"
         # Q2 選 "Option 2A"
@@ -236,19 +230,14 @@ class TestInteractiveQaFlowOtherAnswerMemorization:
                 "Confirm and continue",
             ]
         )
-        mock_text.execute = MagicMock(
-            side_effect=["first answer", "modified answer"]
-        )
+        mock_prompt_multiline.side_effect = ["first answer", "modified answer"]
 
         mock_inquirer.select.return_value = mock_select
-        mock_inquirer.text.return_value = mock_text
 
         result = interactive_qa_flow(questions)
 
-        # 檢查第二次 inquirer.text 呼叫時有傳入 default 參數
-        assert mock_inquirer.text.call_count == 2
-        second_text_call = mock_inquirer.text.call_args_list[1]
-        assert "default" in second_text_call.kwargs
+        assert mock_prompt_multiline.call_count == 2
+        second_text_call = mock_prompt_multiline.call_args_list[1]
         assert second_text_call.kwargs["default"] == "first answer"
 
         # 最終結果應為修改後的答案
@@ -280,8 +269,9 @@ class TestInteractiveQaFlowCheckbox:
         mock_inquirer.text.assert_not_called()
         assert "A1: A, C" in result
 
+    @patch("cafe.ui.interactive_qa.prompt_multiline")
     @patch("cafe.ui.interactive_qa.inquirer")
-    def test_checkbox_custom_input_when_other_selected(self, mock_inquirer):
+    def test_checkbox_custom_input_when_other_selected(self, mock_inquirer, mock_prompt_multiline):
         """測試 checkbox 選了 Other 才跳出文字輸入"""
         questions = [
             Question(id="1", title="Select items?", options=["A", "B"], multi_select=True),
@@ -291,9 +281,7 @@ class TestInteractiveQaFlowCheckbox:
         mock_checkbox.execute = MagicMock(return_value=["A", OTHER_SENTINEL])
         mock_inquirer.checkbox.return_value = mock_checkbox
 
-        mock_text = MagicMock()
-        mock_text.execute = MagicMock(return_value="Custom item")
-        mock_inquirer.text.return_value = mock_text
+        mock_prompt_multiline.return_value = "Custom item\nSecond line"
 
         mock_select = MagicMock()
         # action prompt "continue", then summary "Confirm and continue"
@@ -302,8 +290,8 @@ class TestInteractiveQaFlowCheckbox:
 
         result = interactive_qa_flow(questions)
 
-        mock_inquirer.text.assert_called_once()
-        assert "A1: A, Custom item" in result
+        mock_prompt_multiline.assert_called_once_with("Type your answer:", default="")
+        assert "A1: A, Custom item\nSecond line" in result
 
     @patch("cafe.ui.interactive_qa.inquirer")
     def test_checkbox_no_text_prompt_when_other_not_selected(self, mock_inquirer):
@@ -323,11 +311,11 @@ class TestInteractiveQaFlowCheckbox:
 
         result = interactive_qa_flow(questions)
 
-        mock_inquirer.text.assert_not_called()
         assert "A1: (none selected)" in result
 
+    @patch("cafe.ui.interactive_qa.prompt_multiline")
     @patch("cafe.ui.interactive_qa.inquirer")
-    def test_checkbox_only_other_selected(self, mock_inquirer):
+    def test_checkbox_only_other_selected(self, mock_inquirer, mock_prompt_multiline):
         """測試 checkbox 只選 Other 並輸入自定義內容"""
         questions = [
             Question(id="1", title="Select items?", options=["A", "B"], multi_select=True),
@@ -337,9 +325,7 @@ class TestInteractiveQaFlowCheckbox:
         mock_checkbox.execute = MagicMock(return_value=[OTHER_SENTINEL])
         mock_inquirer.checkbox.return_value = mock_checkbox
 
-        mock_text = MagicMock()
-        mock_text.execute = MagicMock(return_value="My custom item")
-        mock_inquirer.text.return_value = mock_text
+        mock_prompt_multiline.return_value = "My custom item\nLine 2"
 
         mock_select = MagicMock()
         # action prompt "continue", then summary "Confirm and continue"
@@ -348,7 +334,8 @@ class TestInteractiveQaFlowCheckbox:
 
         result = interactive_qa_flow(questions)
 
-        assert "A1: My custom item" in result
+        mock_prompt_multiline.assert_called_once_with("Type your answer:", default="")
+        assert "A1: My custom item\nLine 2" in result
 
     @patch("cafe.ui.interactive_qa.inquirer")
     def test_mixed_select_and_checkbox_questions(self, mock_inquirer):

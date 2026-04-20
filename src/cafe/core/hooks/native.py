@@ -498,19 +498,43 @@ class PRCommentPoster(NoOpHook):
 
     name = "PRCommentPoster"
 
+    @staticmethod
+    def _is_post_todo_enabled(phase: Any) -> bool:
+        issue_dir = getattr(phase, "issue_dir", None)
+        if not isinstance(issue_dir, Path):
+            return True
+        issue_yaml = issue_dir / "issue.yaml"
+        if not issue_yaml.exists():
+            return True
+        try:
+            import yaml
+
+            data = yaml.safe_load(issue_yaml.read_text(encoding="utf-8")) or {}
+            pr_cfg = data.get("pr") or {}
+            value = pr_cfg.get("post_todo_list")
+            if value is None:
+                return True
+            return bool(value)
+        except Exception:
+            return True
+
     def run(self, **kwargs: Any) -> HookResult:
         if kwargs.get("stage") != "publish_output":
             return HookResult()
 
-        if kwargs.get("status_code") != PhaseStatusCode.NEEDS_CHANGES:
+        if kwargs.get("status_code") != PhaseStatusCode.CONFIRMED:
             return HookResult()
 
         phase = kwargs.get("phase")
         output_file = kwargs.get("output_file")
         if phase is None or not isinstance(output_file, Path) or not output_file.exists():
             return HookResult()
+        if not self._is_post_todo_enabled(phase):
+            return HookResult()
 
         try:
+            from cafe.utils.checklist_validator import validate_checklist
+
             branch_name = phase.git_ops.get_current_branch()
             if not branch_name:
                 return HookResult()
@@ -520,6 +544,16 @@ class PRCommentPoster(NoOpHook):
                 return HookResult()
             todo_list = output_file.read_text(encoding="utf-8").strip()
             if not todo_list:
+                return HookResult()
+            is_todo_list = (
+                "## Todo List" in todo_list
+                or "## Todo" in todo_list
+                or "- [ ]" in todo_list
+                or "- [x]" in todo_list
+            )
+            if not is_todo_list:
+                return HookResult()
+            if not validate_checklist(output_file).is_complete:
                 return HookResult()
 
             comment_body = (

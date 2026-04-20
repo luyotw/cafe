@@ -596,13 +596,6 @@ class SpecPhase(Phase):
                 {"pm_agent": self.pm_agent},
             )
 
-            # If user confirmed (returned PhaseResult with CONFIRMED status),
-            # sync spec to GitHub before returning (if sync is enabled)
-            if isinstance(result_or_input, PhaseResult):
-                if result_or_input.data.get("status_code") == PhaseStatusCode.CONFIRMED.value:
-                    if self._sync_github:
-                        self._sync_confirmed_spec_to_github()
-
             return result_or_input
 
         elif prev_status == "CAFE_NEED_CLARIFICATION":
@@ -884,47 +877,6 @@ class SpecPhase(Phase):
         """
         # No-op: GitHub mode has been removed
         pass
-
-    def _sync_confirmed_spec_to_github(self) -> None:
-        """Sync confirmed spec to GitHub issue as a comment.
-
-        Only syncs when:
-        1. Spec was loaded from GitHub issue (has _config_issue_id)
-        2. User has confirmed the spec (CAFE_CONFIRMED status)
-        """
-        if not self._config_issue_id:
-            return
-
-        try:
-            # Get latest versioned spec file (the confirmed spec)
-            latest_spec_path = self._get_latest_versioned_file("spec", self.phase_dir)
-            if not latest_spec_path:
-                return
-
-            spec_content = latest_spec_path.read_text(encoding="utf-8")
-
-            # Format comment body
-            comment_body = f"### 📋 Requirements Specification (Confirmed)\n\n{spec_content}"
-
-            # Post comment to GitHub issue
-            gh_ops = GitHubOps()
-            if not gh_ops.check_gh_installed():
-                return
-
-            if not gh_ops.check_gh_auth():
-                self.display.console.print(f"[yellow]Warning: gh CLI not authenticated, skipping spec sync to GitHub issue #{self._config_issue_id}[/yellow]")
-                return
-
-            self.display.console.print(f"Syncing spec to GitHub issue #{self._config_issue_id}...")
-            gh_ops.add_issue_comment(str(self._config_issue_id), comment_body)
-            self.display.console.print(f"[green]✅ Spec synced to GitHub issue #{self._config_issue_id} as a comment.[/green]")
-
-        except GitHubError as e:
-            # Log error but don't fail the phase
-            self.display.console.print(f"[yellow]Warning: Failed to sync spec to GitHub: {e}[/yellow]")
-        except Exception as e:
-            # Log unexpected errors but don't fail
-            self.display.console.print(f"[yellow]Warning: Unexpected error during GitHub sync: {e}[/yellow]")
 
     def _create_github_issue(self, content: str) -> str:
         """Create a new GitHub issue with requirements.
