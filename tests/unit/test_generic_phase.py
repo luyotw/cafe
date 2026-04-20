@@ -63,6 +63,8 @@ def test_build_prompt_includes_files_and_checklist_guard(tmp_path: Path) -> None
     assert "Do NOT return a status code until ALL checklist items are marked as [x]." in prompt
     assert "Latest workflow handoff from blackboard:" in prompt
     assert "Implement cafe skill rm" in prompt
+    assert "verify whether the requested state change has actually happened" in prompt
+    assert "do not treat an old artifact or a closed external object as completion" in prompt
     assert "Blackboard digest:" not in prompt
 
 

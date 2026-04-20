@@ -44,6 +44,8 @@ bash scripts/sync_pr.sh --help
    bash scripts/sync_pr.sh --output {output_file} --base {base_branch}
    ```
    - Script 輸出 JSON 到 stdout（`{"action":"created"|"updated","pr_number":"...","pr_url":"..."}`）
+   - 若 handoff 要求「重發 PR / 重開 PR / 重新同步 PR」，必須確認最後 GitHub 上存在符合目前 branch 與 `{base_branch}` 的 open/draft PR
+   - 已關閉的舊 PR 不算完成 handoff；如果目前只剩 closed PR，應建立新的 PR
 4. 把 PR URL 寫到 blackboard（`current_step` 改成 `user`，summary 說明 PR 已同步）
 5. 寫入 next-step baton，內容只放 `user`
 6. 回傳 `CAFE_CONFIRMED`

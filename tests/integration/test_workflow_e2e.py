@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import List
 from unittest.mock import MagicMock, patch
@@ -434,6 +435,64 @@ class TestUserHandoff:
 
 
 # ---------------------------------------------------------------------------
+# Task 5.0: next_step.txt Lifecycle
+# ---------------------------------------------------------------------------
+
+class TestNextStepLifecycle:
+    def test_workflow_initializes_next_step_txt_when_missing(self, tmp_path: Path, monkeypatch) -> None:
+        """next_step.txt missing initially should be created once workflow starts."""
+        monkeypatch.chdir(tmp_path)
+
+        issue_dir = tmp_path / ".cafe" / "issues" / "issue-nextstep-missing"
+        issue_dir.mkdir(parents=True, exist_ok=True)
+        (issue_dir / "blackboard.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "playbook_id": "default",
+                    "current_step": "spec",
+                    "artifacts": {},
+                    "events": [],
+                    "decisions": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        next_step_path = issue_dir / "next_step.txt"
+        assert not next_step_path.exists()
+
+        class FakeExecutor:
+            def execute_step(
+                self, step_name: str, step_def: dict, blackboard_state: object
+            ) -> tuple[str, dict[str, str]]:
+                return (
+                    "CAFE_CONFIRMED",
+                    {str(step_def.get("output_artifact", step_name)): f"{step_name}/output.md"},
+                )
+
+        cli_runner = CliRunner()
+        with (
+            patch("cafe.ui.cli.GitOperations") as mock_git_cls,
+            patch("cafe.ui.cli._build_workflow_step_executor", return_value=FakeExecutor()),
+        ):
+            git = MagicMock()
+            git.get_current_branch.return_value = "issue-nextstep-missing"
+            git.has_uncommitted_changes.return_value = False
+            mock_git_cls.return_value = git
+
+            result = cli_runner.invoke(app, ["workflow", "--playbook", "default", "--execute"])
+
+        assert result.exit_code == 0, result.output
+        assert next_step_path.exists()
+
+        # Validate JSON baton contract structure.
+        payload = json.loads(next_step_path.read_text(encoding="utf-8"))
+        assert payload["version"] == 1
+        assert payload["to_step"] in {"spec", "plan", "develop", "review", "pr", "user", "done"}
+
+
+# ---------------------------------------------------------------------------
 # Task 5: Chat Baton 消費測試
 # ---------------------------------------------------------------------------
 
@@ -466,6 +525,41 @@ class TestChatBaton:
 
         blackboard = BlackboardStore(issue_dir).load_or_create("spec")
         assert blackboard.current_step == "develop"
+
+    def test_chat_baton_bootstrap_not_consumed(self, tmp_path: Path) -> None:
+        """bootstrap/persistent baton should not be treated as pending chat handoff."""
+        issue_dir = tmp_path / ".cafe" / "issues" / "issue-baton-bootstrap"
+        issue_dir.mkdir(parents=True, exist_ok=True)
+        next_step_path = issue_dir / "next_step.txt"
+        next_step_path.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "from_step": "spec",
+                    "to_owner": "agent",
+                    "to_step": "spec",
+                    "intent": "await_agent",
+                    "status_code": "",
+                    "created_at": "2026-04-16T00:00:00+00:00",
+                    "source": "bootstrap",
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        playbook_data = self._make_playbook_data()
+        with patch("cafe.ui.cli.GitOperations") as mock_git_cls:
+            git = MagicMock()
+            git.has_uncommitted_changes.return_value = False
+            mock_git_cls.return_value = git
+
+            result = _consume_pending_chat_handoff(
+                issue_dir=issue_dir,
+                playbook_data=playbook_data,
+                requested_start_step=None,
+            )
+
+        assert result is None
 
     def test_chat_baton_empty_raises_error(self, tmp_path: Path) -> None:
         """空的 next_step.txt 應拋出 ValueError。"""
