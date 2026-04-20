@@ -22,6 +22,7 @@ class FakeAgentManager:
         else:
             self._responses = iter([response])
         self.prompts: list[str] = []
+        self.allowed_tools_calls: list[list[str] | None] = []
         self.on_execute = on_execute
 
     def get_agent(self, name: str) -> SimpleNamespace:
@@ -48,6 +49,7 @@ class FakeAgentManager:
         streaming_output_file=None,
     ):
         self.prompts.append(prompt)
+        self.allowed_tools_calls.append(list(allowed_tools) if allowed_tools is not None else None)
         response = next(self._responses)
         if self.on_execute is not None:
             self.on_execute(
@@ -74,6 +76,7 @@ def _build_loader(tmp_path: Path) -> GenericPhase:
         "develop": "Implement the current request.\n",
         "workflow-common": "Read blackboard first.\n",
         "review": "Review the latest changes.\n",
+        "pr": "Write PR content to: {output_file}\n",
     }.items():
         skill_dir = skill_root / name
         skill_dir.mkdir(parents=True, exist_ok=True)
@@ -529,3 +532,213 @@ def test_generic_workflow_step_does_not_recover_from_unchanged_output(tmp_path: 
 
     with pytest.raises(AgentExecutionError):
         executor.execute_step("develop", playbook["steps"]["develop"], state)
+
+
+def test_generic_workflow_step_restores_spec_runtime_allowed_tools(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-spec-tools"
+    playbook = {
+        "playbook": {"id": "default"},
+        "roles": {"pm": {"default_agent": "Roger"}},
+        "steps": {
+            "spec": {
+                "skill": {"1": "spec_first", "default": "spec_first"},
+                "role": "pm",
+                "output_artifact": "spec",
+                "allowed_tools": ["Read", "Grep", "Glob", "WebFetch", "WebSearch"],
+                "valid_status_codes": ["CAFE_CONFIRMED"],
+                "on": {"CAFE_CONFIRMED": "_done"},
+            }
+        },
+    }
+    state = BlackboardStore(issue_dir).load_or_create("spec")
+    agent_manager = FakeAgentManager("CAFE_CONFIRMED")
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="issue-spec-tools",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=agent_manager,
+        git_ops=FakeGitOperations(),
+        role_agent_map={"pm": "Roger"},
+    )
+
+    executor.execute_step("spec", playbook["steps"]["spec"], state)
+
+    allowed_tools = agent_manager.allowed_tools_calls[0] or []
+    assert "read" in allowed_tools
+    assert "grep" in allowed_tools
+    assert "glob" in allowed_tools
+    assert "ls" in allowed_tools
+    assert "web_fetch" in allowed_tools
+    assert "web_search" in allowed_tools
+    assert "edit(./.cafe/issues/issue-spec-tools/spec/iteration_001/output.md)" in allowed_tools
+    assert "edit(./.cafe/issues/issue-spec-tools/spec/iteration_001/checklist.md)" in allowed_tools
+    assert "edit(./.cafe/issues/issue-spec-tools/spec/iteration_001/questions.xml)" in allowed_tools
+
+
+def test_generic_workflow_step_restores_develop_runtime_allowed_tools(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-develop-tools"
+    playbook = {
+        "playbook": {"id": "default"},
+        "roles": {"developer": {"default_agent": "David"}},
+        "steps": {
+            "develop": {
+                "skill": "develop",
+                "role": "developer",
+                "output_artifact": "code",
+                "allowed_tools": ["Read", "Edit", "Write", "Grep", "Glob", "Bash", "WebFetch", "WebSearch"],
+                "valid_status_codes": ["CAFE_CONFIRMED"],
+                "on": {"CAFE_CONFIRMED": "_done"},
+            }
+        },
+    }
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("develop")
+    spec_file = issue_dir / "spec" / "iteration_001" / "output.md"
+    plan_file = issue_dir / "plan" / "iteration_001" / "output.md"
+    spec_file.parent.mkdir(parents=True, exist_ok=True)
+    plan_file.parent.mkdir(parents=True, exist_ok=True)
+    spec_file.write_text("# Spec\n", encoding="utf-8")
+    plan_file.write_text("# Plan\n", encoding="utf-8")
+    store.set_artifact(state, "spec", str(spec_file))
+    store.set_artifact(state, "plan", str(plan_file))
+    agent_manager = FakeAgentManager("CAFE_CONFIRMED")
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="issue-develop-tools",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=agent_manager,
+        git_ops=FakeGitOperations(),
+        role_agent_map={"developer": "David"},
+    )
+
+    executor.execute_step("develop", playbook["steps"]["develop"], state)
+
+    allowed_tools = agent_manager.allowed_tools_calls[0] or []
+    assert "read" in allowed_tools
+    assert "edit" in allowed_tools
+    assert "write" in allowed_tools
+    assert "grep" in allowed_tools
+    assert "glob" in allowed_tools
+    assert "bash" in allowed_tools
+    assert "ls" in allowed_tools
+    assert "web_fetch" in allowed_tools
+    assert "web_search" in allowed_tools
+
+
+def test_generic_workflow_step_restores_review_runtime_allowed_tools(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-review-tools"
+    playbook = {
+        "playbook": {"id": "default"},
+        "roles": {"reviewer": {"default_agent": "Richard"}},
+        "steps": {
+            "review": {
+                "skill": "review",
+                "role": "reviewer",
+                "output_artifact": "review_feedback",
+                "allowed_tools": ["Read", "Grep", "Glob", "Bash(git:*)"],
+                "valid_status_codes": ["CAFE_CONFIRMED"],
+                "on": {"CAFE_CONFIRMED": "_done"},
+            }
+        },
+    }
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("review")
+    spec_file = issue_dir / "spec" / "iteration_001" / "output.md"
+    plan_file = issue_dir / "plan" / "iteration_001" / "output.md"
+    spec_file.parent.mkdir(parents=True, exist_ok=True)
+    plan_file.parent.mkdir(parents=True, exist_ok=True)
+    spec_file.write_text("# Spec\n", encoding="utf-8")
+    plan_file.write_text("# Plan\n", encoding="utf-8")
+    store.set_artifact(state, "spec", str(spec_file))
+    store.set_artifact(state, "plan", str(plan_file))
+    agent_manager = FakeAgentManager("CAFE_CONFIRMED")
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="issue-review-tools",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=agent_manager,
+        git_ops=FakeGitOperations(),
+        role_agent_map={"reviewer": "Richard"},
+    )
+
+    executor.execute_step("review", playbook["steps"]["review"], state)
+
+    allowed_tools = agent_manager.allowed_tools_calls[0] or []
+    assert "read" in allowed_tools
+    assert "grep" in allowed_tools
+    assert "glob" in allowed_tools
+    assert "ls" in allowed_tools
+    assert "web_fetch" in allowed_tools
+    assert "web_search" in allowed_tools
+    assert "bash(git:*)" in allowed_tools
+    assert "bash(git log)" in allowed_tools
+    assert "bash(git diff)" in allowed_tools
+    assert "bash(git show)" in allowed_tools
+    assert "bash(git status)" in allowed_tools
+    assert "edit(./.cafe/issues/issue-review-tools/review/iteration_001/output.md)" in allowed_tools
+    assert "edit(./.cafe/issues/issue-review-tools/review/iteration_001/checklist.md)" in allowed_tools
+
+
+def test_generic_workflow_step_restores_pr_runtime_allowed_tools(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-pr-tools"
+    playbook = {
+        "playbook": {"id": "default"},
+        "roles": {"developer": {"default_agent": "David"}},
+        "steps": {
+            "pr": {
+                "skill": "pr",
+                "role": "developer",
+                "input_artifacts": ["spec", "plan", "review_feedback"],
+                "output_artifact": "pr_result",
+                "allowed_tools": ["Read", "Edit", "Write", "Grep", "Glob", "Bash", "WebFetch", "WebSearch"],
+                "valid_status_codes": ["CAFE_CONFIRMED"],
+                "on": {"CAFE_CONFIRMED": "_done"},
+            }
+        },
+    }
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("pr")
+    spec_file = issue_dir / "spec" / "iteration_001" / "output.md"
+    plan_file = issue_dir / "plan" / "iteration_001" / "output.md"
+    review_file = issue_dir / "review" / "iteration_001" / "output.md"
+    spec_file.parent.mkdir(parents=True, exist_ok=True)
+    plan_file.parent.mkdir(parents=True, exist_ok=True)
+    review_file.parent.mkdir(parents=True, exist_ok=True)
+    spec_file.write_text("# Spec\n", encoding="utf-8")
+    plan_file.write_text("# Plan\n", encoding="utf-8")
+    review_file.write_text("# Review\n", encoding="utf-8")
+    store.set_artifact(state, "spec", str(spec_file))
+    store.set_artifact(state, "plan", str(plan_file))
+    store.set_artifact(state, "review_feedback", str(review_file))
+    agent_manager = FakeAgentManager("CAFE_CONFIRMED")
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="issue-pr-tools",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=agent_manager,
+        git_ops=FakeGitOperations(),
+        role_agent_map={"developer": "David"},
+    )
+
+    executor.execute_step("pr", playbook["steps"]["pr"], state)
+
+    allowed_tools = agent_manager.allowed_tools_calls[0] or []
+    assert "read" in allowed_tools
+    assert "edit" in allowed_tools
+    assert "write" in allowed_tools
+    assert "grep" in allowed_tools
+    assert "glob" in allowed_tools
+    assert "bash" in allowed_tools
+    assert "ls" in allowed_tools
+    assert "web_fetch" in allowed_tools
+    assert "web_search" in allowed_tools
+    assert "edit(./.cafe/issues/issue-pr-tools/pr/iteration_001/output.md)" in allowed_tools
+    assert "edit(./.cafe/issues/issue-pr-tools/pr/iteration_001/checklist.md)" in allowed_tools

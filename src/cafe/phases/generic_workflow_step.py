@@ -109,7 +109,13 @@ class GenericWorkflowStepExecutor(Phase):
         )
 
         last_prompt: List[str] = []
-        allowed_tools = self._normalize_allowed_tools(step_def.get("allowed_tools", []))
+        allowed_tools = self._build_allowed_tools(
+            step_name=step_name,
+            step_def=step_def,
+            output_file=output_file,
+            checklist_file=checklist_file,
+            questions_xml_file=questions_xml_file,
+        )
         phase_specific_data = {
             "step_name": step_name,
             "skill_name": skill_name,
@@ -269,12 +275,63 @@ class GenericWorkflowStepExecutor(Phase):
 
     @staticmethod
     def _normalize_allowed_tools(raw_tools: List[str]) -> List[str]:
+        tool_name_map = {
+            "Read": "read",
+            "Edit": "edit",
+            "Write": "write",
+            "Grep": "grep",
+            "Glob": "glob",
+            "LS": "ls",
+            "Ls": "ls",
+            "Bash": "bash",
+            "WebFetch": "web_fetch",
+            "WebSearch": "web_search",
+        }
         normalized = []
         for tool in raw_tools:
             if not tool:
                 continue
-            normalized.append(tool[:1].lower() + tool[1:])
+            if "(" in tool:
+                tool_name, remainder = tool.split("(", 1)
+                normalized_name = tool_name_map.get(tool_name, tool_name[:1].lower() + tool_name[1:])
+                normalized.append(f"{normalized_name}({remainder}")
+                continue
+            normalized.append(tool_name_map.get(tool, tool[:1].lower() + tool[1:]))
         return normalized
+
+    def _build_allowed_tools(
+        self,
+        *,
+        step_name: str,
+        step_def: Dict[str, Any],
+        output_file: Path,
+        checklist_file: Path,
+        questions_xml_file: Path,
+    ) -> List[str]:
+        allowed_tools = self._normalize_allowed_tools(step_def.get("allowed_tools", []))
+
+        def add(tool: Optional[str]) -> None:
+            if tool and tool not in allowed_tools:
+                allowed_tools.append(tool)
+
+        add("ls")
+
+        if step_name in {"spec", "plan", "review", "pr"}:
+            add(f"edit({self._display_path(output_file)})")
+            add(f"edit({self._display_path(checklist_file)})")
+
+        if step_name in {"spec", "plan"}:
+            add(f"edit({self._display_path(questions_xml_file)})")
+
+        if step_name == "review":
+            add("web_fetch")
+            add("web_search")
+            add("bash(git log)")
+            add("bash(git diff)")
+            add("bash(git show)")
+            add("bash(git status)")
+
+        return allowed_tools
 
     def _build_context(
         self,
