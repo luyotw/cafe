@@ -10,5 +10,6 @@
 .copilot
 .gemini
 .cursor
+.cursor-agent
 dist/
 configs/
