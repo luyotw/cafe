@@ -73,6 +73,7 @@ def _build_loader(tmp_path: Path) -> GenericPhase:
         "plan": "Write plan to: {output_file}\n\n{status_code_instruction}\n",
         "develop": "Implement the current request.\n",
         "workflow-common": "Read blackboard first.\n",
+        "github_sync": "Shared GitHub sync helper.\n",
         "review": "Review the latest changes.\n",
     }.items():
         skill_dir = skill_root / name
@@ -270,6 +271,7 @@ def test_generic_workflow_step_executor_installs_workflow_common_and_phase_skill
     executor.execute_step("review", playbook["steps"]["review"], state)
 
     assert (tmp_path / ".codex" / "skills" / "cafe-workflow-common" / "SKILL.md").exists()
+    assert (tmp_path / ".codex" / "skills" / "cafe-github_sync" / "SKILL.md").exists()
     assert (tmp_path / ".codex" / "skills" / "cafe-review" / "SKILL.md").exists()
 
 

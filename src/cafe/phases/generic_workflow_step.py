@@ -26,7 +26,7 @@ from cafe.utils.git_utils import to_cwd_relative_path
 class GenericWorkflowStepExecutor(Phase):
     """Execute one playbook step without shelling out to legacy CLI commands."""
 
-    SHARED_WORKFLOW_SKILLS = ["workflow-common"]
+    SHARED_WORKFLOW_SKILLS = ["workflow-common", "github_sync"]
 
     def __init__(
         self,

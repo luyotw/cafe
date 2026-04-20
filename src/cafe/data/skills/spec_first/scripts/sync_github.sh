@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Wrapper script. Shared implementation is maintained in one place:
-# src/cafe/data/skills/shared/scripts/sync_github.sh
+# src/cafe/data/skills/github_sync/scripts/sync_github.sh
 
 set -euo pipefail
 SCRIPT_DIR="$(cd "${BASH_SOURCE[0]%/*}" && pwd)"
-SHARED_SCRIPT="$SCRIPT_DIR/../../shared/scripts/sync_github.sh"
+SHARED_SCRIPT="$SCRIPT_DIR/../../github_sync/scripts/sync_github.sh"
 
 if [[ ! -f "$SHARED_SCRIPT" ]]; then
   echo "Error: shared sync script not found: $SHARED_SCRIPT" >&2

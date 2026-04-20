@@ -8,7 +8,7 @@ import pytest
 
 def test_phase_scripts_delegate_to_shared_implementation() -> None:
     project_root = Path(__file__).resolve().parents[2]
-    shared = project_root / "src/cafe/data/skills/shared/scripts/sync_github.sh"
+    shared = project_root / "src/cafe/data/skills/github_sync/scripts/sync_github.sh"
     assert shared.exists()
 
     wrappers = [
@@ -19,7 +19,7 @@ def test_phase_scripts_delegate_to_shared_implementation() -> None:
 
     for wrapper in wrappers:
         content = wrapper.read_text(encoding="utf-8")
-        assert "../../shared/scripts/sync_github.sh" in content
+        assert "../../github_sync/scripts/sync_github.sh" in content
         assert "exec /bin/bash" in content
 
 
