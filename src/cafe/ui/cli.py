@@ -268,6 +268,13 @@ def _consume_pending_chat_handoff(
         allowed_steps=list(playbook_data["steps"].keys()),
         allow_legacy_text=True,
     )
+
+    # `next_step.txt` is now persistent from workflow initialization onward.
+    # Ignore the bootstrap/persistent baton itself; only consume a chat-authored
+    # pending handoff (or legacy step-name text) when the baton meaning is real.
+    if contract.source in {"bootstrap", "chat.bootstrap"}:
+        return None
+
     target_step = contract.to_step
     if target_step not in {"user", "done"} and GitOperations().has_uncommitted_changes():
         console.print(

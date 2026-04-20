@@ -135,12 +135,15 @@ class TestLaunchChatSession:
         agent_manager = self._make_agent_manager("David", "cursor-agent", session_id="sess-cursor")
         mock_agent_manager_cls.return_value = agent_manager
 
-        mock_run.return_value = MagicMock(returncode=0)
+        mock_run.side_effect = [
+            MagicMock(returncode=0, stdout="1.0.0", stderr=""),
+            MagicMock(returncode=0),
+        ]
 
         launch_chat_session("developer", "issue123")
 
-        assert mock_run.call_args.args[0] == ["cursor-agent", "--resume", "sess-cursor"]
-        assert "env" in mock_run.call_args.kwargs
+        assert mock_run.call_args_list[1].args[0] == ["cursor-agent", "--resume", "sess-cursor"]
+        assert "env" in mock_run.call_args_list[1].kwargs
 
     @patch("builtins.print")
     @patch("cafe.ui.chat.ConfigManager")
@@ -375,3 +378,110 @@ def test_launch_chat_session_warns_when_baton_missing(
     assert result == 0
     printed = " ".join(str(call) for call in mock_print.call_args_list)
     assert "did not complete workflow handoff" in printed
+
+
+def test_launch_chat_session_returns_preflight_error_for_broken_cursor_cli(
+    tmp_path,
+    monkeypatch,
+    mock_chat_environment,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    with (
+        patch("builtins.print") as mock_print,
+        patch("cafe.ui.chat.subprocess.run") as mock_run,
+        patch("cafe.ui.chat.ConfigManager") as mock_config_manager_cls,
+        patch("cafe.ui.chat.AgentManager") as mock_agent_manager_cls,
+    ):
+        mock_config = MagicMock()
+        mock_config.get.return_value = {"name": "David", "cli": "cursor-agent"}
+        mock_config_manager_cls.return_value = mock_config
+
+        agent_manager = MagicMock()
+        executor = MagicMock()
+        executor.config = MagicMock(session_id="sess-cursor", model=None)
+        executor._get_cli_strategy.return_value.build_environment.return_value = dict(os.environ)
+        agent_manager.get_agent.return_value = executor
+        agent_manager.session_manager = MagicMock()
+        mock_agent_manager_cls.return_value = agent_manager
+
+        mock_run.return_value = MagicMock(
+            returncode=1,
+            stdout="",
+            stderr="Error: Cannot find module '@anysphere/file-service-darwin-x64'",
+        )
+
+        result = launch_chat_session("developer", "issue123")
+
+    assert result == 1
+    mock_run.assert_called_once()
+    printed = " ".join(str(call) for call in mock_print.call_args_list)
+    assert "missing native module" in printed
+    assert "did not complete workflow handoff" not in printed
+
+
+def test_launch_chat_session_nonzero_exit_skips_baton_warning(
+    tmp_path,
+    monkeypatch,
+    mock_chat_environment,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    with (
+        patch("builtins.print") as mock_print,
+        patch("cafe.ui.chat.subprocess.run", return_value=MagicMock(returncode=1)),
+        patch("cafe.ui.chat.ConfigManager") as mock_config_manager_cls,
+        patch("cafe.ui.chat.AgentManager") as mock_agent_manager_cls,
+    ):
+        mock_config = MagicMock()
+        mock_config.get.return_value = {"name": "Roger", "cli": "claude"}
+        mock_config_manager_cls.return_value = mock_config
+
+        agent_manager = MagicMock()
+        executor = MagicMock()
+        executor.config = MagicMock(session_id=None, model=None)
+        executor._get_cli_strategy.return_value.build_environment.return_value = dict(os.environ)
+        agent_manager.get_agent.return_value = executor
+        agent_manager.session_manager = MagicMock()
+        mock_agent_manager_cls.return_value = agent_manager
+
+        result = launch_chat_session("pm", "issue123")
+
+    assert result == 1
+    printed = " ".join(str(call) for call in mock_print.call_args_list)
+    assert "did not complete workflow handoff" not in printed
+
+
+def test_launch_chat_session_nonzero_exit_reports_generic_cli_error(
+    tmp_path,
+    monkeypatch,
+    mock_chat_environment,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    with (
+        patch("builtins.print") as mock_print,
+        patch(
+            "cafe.ui.chat.subprocess.run",
+            return_value=MagicMock(returncode=2, stderr="authentication failed\nextra detail"),
+        ),
+        patch("cafe.ui.chat.ConfigManager") as mock_config_manager_cls,
+        patch("cafe.ui.chat.AgentManager") as mock_agent_manager_cls,
+    ):
+        mock_config = MagicMock()
+        mock_config.get.return_value = {"name": "Roger", "cli": "claude"}
+        mock_config_manager_cls.return_value = mock_config
+
+        agent_manager = MagicMock()
+        executor = MagicMock()
+        executor.config = MagicMock(session_id=None, model=None)
+        executor._get_cli_strategy.return_value.build_environment.return_value = dict(os.environ)
+        agent_manager.get_agent.return_value = executor
+        agent_manager.session_manager = MagicMock()
+        mock_agent_manager_cls.return_value = agent_manager
+
+        result = launch_chat_session("pm", "issue123")
+
+    assert result == 2
+    printed = " ".join(str(call) for call in mock_print.call_args_list)
+    assert "Chat CLI exited with code 2: authentication failed" in printed
