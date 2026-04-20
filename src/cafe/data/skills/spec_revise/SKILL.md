@@ -39,5 +39,5 @@ bash scripts/sync_github.sh --help
 ## Output
 Write spec to: {output_file}
 
-## Status Code
-{status_code_instruction}
+## Handoff
+- 依照本輪結果更新 blackboard 與 next-step baton。

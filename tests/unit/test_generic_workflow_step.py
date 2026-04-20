@@ -81,7 +81,7 @@ def _build_loader(tmp_path: Path) -> GenericPhase:
     skill_root = tmp_path / "builtin" / "skills"
     for name, body in {
         "spec_first": "## Role\nRead your agent file: {agent_file}\n\n## Context\n{blackboard_digest}\n",
-        "plan": "Write plan to: {output_file}\n\n{status_code_instruction}\n",
+        "plan": "Write plan to: {output_file}\n",
         "develop": "Implement the current request.\n",
         "workflow-common": "Read blackboard first.\n",
         "github_sync": "Shared GitHub sync helper.\n",
@@ -152,7 +152,7 @@ def test_generic_workflow_step_executor_writes_iteration_files(tmp_path: Path, m
     assert (issue_dir / "spec" / "status.json").exists()
 
 
-def test_generic_workflow_step_does_not_retry_when_agent_returns_any_cafe_token(tmp_path: Path, monkeypatch) -> None:
+def test_generic_workflow_step_retries_until_agent_returns_supported_status(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-status-retry"
     playbook = {
@@ -183,11 +183,9 @@ def test_generic_workflow_step_does_not_retry_when_agent_returns_any_cafe_token(
 
     result = executor.execute_step("spec", playbook["steps"]["spec"], state)
 
-    # Agent returned CAFE_SPEC_READY (unrecognized but a CAFE_* token) — no retry should occur
-    assert len(agent_manager.prompts) == 1
-    assert not any("If completed respond with status code" in prompt for prompt in agent_manager.prompts)
-    # status_code is None; the playbook runner will handle it via default/alias
-    assert result.status_code is None
+    # Agent returned an unsupported CAFE_* token first, then a valid one.
+    assert len(agent_manager.prompts) >= 2
+    assert result.status_code in {"CAFE_CONFIRMED", "CAFE_READY_FOR_REVIEW"}
 
 
 def test_generic_workflow_step_executor_uses_iteration_specific_skill_mapping(tmp_path: Path, monkeypatch) -> None:
@@ -217,8 +215,8 @@ def test_generic_workflow_step_executor_uses_iteration_specific_skill_mapping(tm
     }
 
     class RecordingPhase(GenericPhase):
-        def __init__(self, loader):
-            super().__init__(loader)
+        def __init__(self, loader, bridge):
+            super().__init__(loader, skill_bridge=bridge)
             self.skill_names: list[str] = []
 
         def execute(self, **kwargs):
@@ -226,7 +224,8 @@ def test_generic_workflow_step_executor_uses_iteration_specific_skill_mapping(tm
             return super().execute(**kwargs)
 
     state = BlackboardStore(issue_dir).load_or_create("spec")
-    generic_phase = RecordingPhase(_build_loader(tmp_path).skill_loader)
+    phase_for_loader = _build_loader(tmp_path)
+    generic_phase = RecordingPhase(phase_for_loader.skill_loader, phase_for_loader.skill_bridge)
     executor = GenericWorkflowStepExecutor(
         issue_dir=issue_dir,
         issue_name="issue-2",

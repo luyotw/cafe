@@ -27,11 +27,6 @@ steps:
     input_artifacts: []
     output_artifact: spec
     allowed_tools: [Read, Grep, Glob, WebFetch, WebSearch]
-    valid_status_codes:
-      - CAFE_READY_FOR_REVIEW
-      - CAFE_NEED_CLARIFICATION
-      - CAFE_NEED_PERMISSION
-      - CAFE_CONFIRMED
     hooks:
       prepare_input: [GitHubIssueFetcher, UserInputCollector]
       after_execute: [InteractiveQAHandler]
@@ -49,11 +44,6 @@ steps:
     input_artifacts: [spec]
     output_artifact: plan
     allowed_tools: [Read, Grep, Glob, WebFetch, WebSearch]
-    valid_status_codes:
-      - CAFE_READY_FOR_REVIEW
-      - CAFE_NEED_CLARIFICATION
-      - CAFE_NEED_PERMISSION
-      - CAFE_CONFIRMED
     hooks:
       prepare_input: [UserInputCollector]
     "on":
@@ -70,12 +60,6 @@ steps:
     input_artifacts: [spec, plan]
     output_artifact: code
     allowed_tools: [Read, Edit, Write, Grep, Glob, Bash, WebFetch, WebSearch]
-    valid_status_codes:
-      - CAFE_CONFIRMED
-      - CAFE_CONFIRMED_SKIP_REVIEW
-      - CAFE_NEED_CLARIFICATION
-      - CAFE_NEED_PERMISSION
-      - CAFE_NO_CHANGES_NEEDED
     hooks:
       prepare_input: [UserInputCollector]
       after_execute: [PermissionRetryHandler]
@@ -85,7 +69,6 @@ steps:
       CAFE_NEED_CLARIFICATION: develop
       CAFE_NEED_PERMISSION: develop
       CAFE_NO_CHANGES_NEEDED: review
-      default: review
 
   review:
     type: skill
@@ -95,10 +78,6 @@ steps:
     input_artifacts: [spec, plan, code]
     output_artifact: review_feedback
     allowed_tools: [Read, Grep, Glob, "Bash(git:*)"]
-    valid_status_codes:
-      - CAFE_CONFIRMED
-      - CAFE_NEEDS_CHANGES
-      - CAFE_NEED_CLARIFICATION
     max_iterations: 3
     allowed_goto: [spec, develop, plan]
     hooks:
@@ -117,10 +96,6 @@ steps:
     input_artifacts: [spec, code, review_feedback]
     output_artifact: pr_result
     allowed_tools: [Read, Edit, Write, Grep, Glob, Bash, WebFetch, WebSearch]
-    valid_status_codes:
-      - CAFE_CONFIRMED
-      - CAFE_NEED_PERMISSION
-      - CAFE_NEEDS_CHANGES
     allowed_goto: [develop, review]
     hooks:
       prepare_input: [GitHubPRCreator, UserInputCollector]

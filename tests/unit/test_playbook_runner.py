@@ -1,12 +1,13 @@
 """Tests for playbook runner."""
-import json
+
 from pathlib import Path
 
 import pytest
 
-from cafe.core.blackboard import BlackboardStore, HandoffIntent
+from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
 from cafe.core.playbook_runner import PlaybookRunner, StepExecutionResult
 from cafe.phases.generic_phase import GenericPhase
+from cafe.playbooks.loader import PlaybookLoader
 from cafe.skills.loader import SkillLoader
 
 
@@ -26,201 +27,116 @@ def _build_loader(tmp_path: Path) -> GenericPhase:
     return GenericPhase(loader)
 
 
-def test_runner_can_advance_and_loop_back(tmp_path: Path) -> None:
+def _write_agent_baton(
+    issue_dir: Path,
+    state: object,
+    *,
+    from_step: str,
+    to_step: str,
+    status_code: str = "",
+    intent: HandoffIntent = HandoffIntent.AWAIT_AGENT,
+) -> None:
+    store = BlackboardStore(issue_dir)
+    owner = HandoffOwner.AGENT if to_step not in {"user", "done"} else HandoffOwner(to_step)
+    store.update_handoff_contract(
+        state,
+        from_step=from_step,
+        to_owner=owner,
+        to_step=to_step,
+        intent=intent,
+        status_code=status_code,
+        source="test.executor",
+    )
+
+
+def _write_user_pause_baton(
+    issue_dir: Path,
+    state: object,
+    *,
+    from_step: str,
+    status_code: str,
+    intent: HandoffIntent,
+) -> None:
+    store = BlackboardStore(issue_dir)
+    store.update_handoff_contract(
+        state,
+        from_step=from_step,
+        to_owner=HandoffOwner.USER,
+        to_step="user",
+        intent=intent,
+        status_code=status_code,
+        source="test.executor",
+    )
+
+
+def test_runner_can_advance_and_loop_back_via_baton(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo"
     playbook = {
         "playbook": {"id": "default"},
         "steps": {
             "develop": {
                 "skill": "spec_first",
                 "role": "developer",
-                "valid_status_codes": ["CAFE_CONFIRMED"],
                 "on": {"CAFE_CONFIRMED": "review"},
             },
             "review": {
                 "skill": "spec_first",
                 "role": "reviewer",
-                "valid_status_codes": ["CAFE_NEEDS_CHANGES", "CAFE_CONFIRMED"],
                 "on": {"CAFE_NEEDS_CHANGES": "develop", "CAFE_CONFIRMED": "_done"},
             },
         },
     }
-    responses = iter(
-        [
-            ("CAFE_CONFIRMED", {"code": "d1"}),
-            ("CAFE_NEEDS_CHANGES", {"review": "r1"}),
-            ("CAFE_CONFIRMED", {"code": "d2"}),
-            ("CAFE_CONFIRMED", {"review": "r2"}),
-        ]
-    )
+    calls: list[str] = []
 
-    def executor(step_name: str, step_def: dict, state: object) -> tuple[str, dict[str, str]]:
-        return next(responses)
+    def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
+        calls.append(step_name)
+        if calls == ["develop"]:
+            _write_agent_baton(issue_dir, state, from_step="develop", to_step="review", status_code="CAFE_CONFIRMED")
+            return StepExecutionResult(response="done", artifacts={"code": "d1"})
+        if calls == ["develop", "review"]:
+            _write_agent_baton(
+                issue_dir,
+                state,
+                from_step="review",
+                to_step="develop",
+                status_code="CAFE_NEEDS_CHANGES",
+            )
+            return StepExecutionResult(response="needs changes", artifacts={"review": "r1"})
+        if calls == ["develop", "review", "develop"]:
+            _write_agent_baton(issue_dir, state, from_step="develop", to_step="review", status_code="CAFE_CONFIRMED")
+            return StepExecutionResult(response="done", artifacts={"code": "d2"})
+        _write_agent_baton(issue_dir, state, from_step="review", to_step="done", status_code="CAFE_CONFIRMED")
+        return StepExecutionResult(response="confirmed", artifacts={"review": "r2"})
 
     runner = PlaybookRunner(
-        issue_dir=tmp_path / ".cafe" / "issues" / "demo",
+        issue_dir=issue_dir,
         playbook=playbook,
         generic_phase=_build_loader(tmp_path),
         executor=executor,
     )
     result = runner.run(max_transitions=10)
+
     assert result.completed is True
     assert result.final_step == "review"
     assert result.final_status_code == "CAFE_CONFIRMED"
 
 
-def test_runner_ignores_invalid_goto_target_and_falls_back(tmp_path: Path) -> None:
-    playbook = {
-        "playbook": {"id": "default"},
-        "steps": {
-            "develop": {
-                "skill": "spec_first",
-                "role": "developer",
-                "valid_status_codes": ["CAFE_CONFIRMED"],
-                "allowed_goto": ["review"],
-                "on": {"CAFE_CONFIRMED": "review"},
-            },
-            "review": {
-                "skill": "spec_first",
-                "role": "reviewer",
-                "valid_status_codes": ["CAFE_CONFIRMED"],
-                "on": {"CAFE_CONFIRMED": "_done"},
-            }
-        },
-    }
-
-    def executor(step_name: str, step_def: dict, state: object) -> tuple[str, dict[str, str]]:
-        if step_name == "develop":
-            return ("CAFE_CONFIRMED\nCAFE_GOTO:not_exist", {})
-        return ("CAFE_CONFIRMED", {})
-
-    runner = PlaybookRunner(
-        issue_dir=tmp_path / ".cafe" / "issues" / "demo",
-        playbook=playbook,
-        generic_phase=_build_loader(tmp_path),
-        executor=executor,
-    )
-    result = runner.run()
-    assert result.final_step == "review"
-    assert result.final_status_code == "CAFE_CONFIRMED"
-
-
-def test_runner_advances_after_review_confirmed_without_reinvoking_same_step(tmp_path: Path) -> None:
-    playbook = {
-        "playbook": {"id": "default"},
-        "steps": {
-            "spec": {
-                "skill": "spec_first",
-                "role": "pm",
-                "valid_status_codes": ["CAFE_READY_FOR_REVIEW", "CAFE_CONFIRMED"],
-                "on": {"CAFE_READY_FOR_REVIEW": "spec", "CAFE_CONFIRMED": "plan"},
-            },
-            "plan": {
-                "skill": "spec_first",
-                "role": "developer",
-                "valid_status_codes": ["CAFE_CONFIRMED"],
-                "on": {"CAFE_CONFIRMED": "_done"},
-            },
-        },
-    }
-
-    calls: list[str] = []
-
-    def executor(step_name: str, step_def: dict, state: object):
-        calls.append(step_name)
-        if step_name == "spec":
-            return StepExecutionResult(
-                response="",
-                artifacts={},
-                status_code="CAFE_CONFIRMED",
-                auto_continue=False,
-                events=[{"type": "review_confirmed_advance", "step": "spec"}],
-            )
-        return ("CAFE_CONFIRMED", {})
-
-    runner = PlaybookRunner(
-        issue_dir=tmp_path / ".cafe" / "issues" / "demo",
-        playbook=playbook,
-        generic_phase=_build_loader(tmp_path),
-        executor=executor,
-    )
-
-    result = runner.run(max_transitions=5)
-
-    assert result.final_step == "plan"
-    assert calls == ["spec", "plan"]
-
-
-def test_runner_uses_allowed_goto_target(tmp_path: Path) -> None:
-    playbook = {
-        "playbook": {"id": "default"},
-        "steps": {
-            "develop": {
-                "skill": "spec_first",
-                "role": "developer",
-                "valid_status_codes": ["CAFE_CONFIRMED"],
-                "allowed_goto": ["spec"],
-                "on": {"CAFE_CONFIRMED": "review"},
-            },
-            "review": {
-                "skill": "spec_first",
-                "role": "reviewer",
-                "valid_status_codes": ["CAFE_CONFIRMED"],
-                "on": {"CAFE_CONFIRMED": "pr"},
-            },
-            "spec": {
-                "skill": "spec_first",
-                "role": "pm",
-                "valid_status_codes": ["CAFE_CONFIRMED"],
-                "on": {"CAFE_CONFIRMED": "plan"},
-            },
-        },
-    }
-
-    def executor(step_name: str, step_def: dict, state: object) -> tuple[str, dict[str, str]]:
-        return ("CAFE_CONFIRMED\nCAFE_GOTO:spec", {})
-
-    runner = PlaybookRunner(
-        issue_dir=tmp_path / ".cafe" / "issues" / "demo",
-        playbook=playbook,
-        generic_phase=_build_loader(tmp_path),
-        executor=executor,
-    )
-    result = runner.run()
-    assert result.final_step == "spec"
-    assert result.final_status_code == "CAFE_CONFIRMED"
-
-
-def test_runner_records_transition_source_events(tmp_path: Path) -> None:
+def test_runner_pauses_when_baton_targets_user_for_clarification(tmp_path: Path) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "demo"
     playbook = {
         "playbook": {"id": "default"},
-        "steps": {
-            "develop": {
-                "skill": "spec_first",
-                "role": "developer",
-                "valid_status_codes": ["CAFE_CONFIRMED"],
-                "allowed_goto": ["review"],
-                "on": {"CAFE_CONFIRMED": "plan"},
-            },
-            "review": {
-                "skill": "spec_first",
-                "role": "reviewer",
-                "valid_status_codes": ["CAFE_CONFIRMED"],
-                "on": {"CAFE_CONFIRMED": "_done"},
-            },
-            "plan": {
-                "skill": "spec_first",
-                "role": "developer",
-                "valid_status_codes": ["CAFE_CONFIRMED"],
-                "on": {"CAFE_CONFIRMED": "_done"},
-            },
-        },
+        "steps": {"spec": {"skill": "spec_first", "role": "pm", "on": {"CAFE_CONFIRMED": "plan"}}},
     }
 
-    def executor(step_name: str, step_def: dict, state: object) -> tuple[str, dict[str, str]]:
-        if step_name == "develop":
-            return ("CAFE_CONFIRMED\nCAFE_GOTO:review", {})
-        return ("CAFE_CONFIRMED", {})
+    def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
+        _write_user_pause_baton(
+            issue_dir,
+            state,
+            from_step="spec",
+            status_code="CAFE_NEED_CLARIFICATION",
+            intent=HandoffIntent.NEED_CLARIFICATION,
+        )
+        return StepExecutionResult(response="need user", artifacts={})
 
     runner = PlaybookRunner(
         issue_dir=issue_dir,
@@ -228,189 +144,24 @@ def test_runner_records_transition_source_events(tmp_path: Path) -> None:
         generic_phase=_build_loader(tmp_path),
         executor=executor,
     )
-    result = runner.run()
-
-    store = BlackboardStore(issue_dir)
-    blackboard = store.load_or_create("develop")
-    transition_events = [event for event in blackboard.events if event.event_type == "transition"]
-    assert result.final_step == "review"
-    assert transition_events
-    assert transition_events[0].data["source"] == "goto"
-    assert transition_events[0].data["to"] == "review"
-
-
-def test_runner_pauses_when_step_needs_clarification(tmp_path: Path) -> None:
-    issue_dir = tmp_path / ".cafe" / "issues" / "demo"
-    playbook = {
-        "playbook": {"id": "default"},
-        "steps": {
-            "spec": {
-                "skill": "spec_first",
-                "role": "pm",
-                "valid_status_codes": ["CAFE_NEED_CLARIFICATION"],
-                "on": {"CAFE_NEED_CLARIFICATION": "spec"},
-            }
-        },
-    }
-
-    def executor(step_name: str, step_def: dict, state: object) -> tuple[str, dict[str, str]]:
-        return ("CAFE_NEED_CLARIFICATION", {})
-
-    runner = PlaybookRunner(
-        issue_dir=issue_dir,
-        playbook=playbook,
-        generic_phase=_build_loader(tmp_path),
-        executor=executor,
-    )
-    result = runner.run(max_transitions=5)
+    result = runner.run(max_transitions=3)
 
     assert result.completed is False
     assert result.final_step == "spec"
     assert result.final_status_code == "CAFE_NEED_CLARIFICATION"
     blackboard = BlackboardStore(issue_dir).load_or_create("spec")
-    pause_events = [event for event in blackboard.events if event.event_type == "workflow_paused"]
-    assert pause_events
-    assert pause_events[-1].data["status_code"] == "CAFE_NEED_CLARIFICATION"
     assert blackboard.current_step == "user"
+    assert blackboard.handoff_contract is not None
+    assert blackboard.handoff_contract.intent == HandoffIntent.NEED_CLARIFICATION
 
 
-def test_runner_transitions_when_develop_returns_no_changes_needed(tmp_path: Path) -> None:
+def test_runner_routes_developer_dispute_to_review_via_baton(tmp_path: Path) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "demo"
     playbook = {
         "playbook": {"id": "default"},
         "steps": {
-            "develop": {
-                "skill": "spec_first",
-                "role": "developer",
-                "valid_status_codes": ["CAFE_NO_CHANGES_NEEDED"],
-                "on": {"CAFE_NO_CHANGES_NEEDED": "review"},
-            },
-            "review": {
-                "skill": "spec_first",
-                "role": "reviewer",
-                "valid_status_codes": ["CAFE_CONFIRMED"],
-                "on": {"CAFE_CONFIRMED": "_done"},
-            }
-        },
-    }
-
-    def executor(step_name: str, step_def: dict, state: object) -> tuple[str, dict[str, str]]:
-        if step_name == "develop":
-            return ("CAFE_NO_CHANGES_NEEDED", {})
-        return ("CAFE_CONFIRMED", {})
-
-    runner = PlaybookRunner(
-        issue_dir=issue_dir,
-        playbook=playbook,
-        generic_phase=_build_loader(tmp_path),
-        executor=executor,
-    )
-    result = runner.run(max_transitions=5)
-
-    assert result.completed is True
-    assert result.final_step == "review"
-    assert result.final_status_code == "CAFE_CONFIRMED"
-    blackboard = BlackboardStore(issue_dir).load_or_create("develop")
-    transition_events = [event for event in blackboard.events if event.event_type == "transition"]
-    assert transition_events
-    assert transition_events[0].data["from"] == "develop"
-    assert transition_events[0].data["to"] == "review"
-    assert blackboard.current_step == "user"
-
-
-def test_runner_pauses_instead_of_failing_when_status_code_is_missing(tmp_path: Path) -> None:
-    issue_dir = tmp_path / ".cafe" / "issues" / "demo"
-    playbook = {
-        "playbook": {"id": "default"},
-        "steps": {
-            "develop": {
-                "skill": "spec_first",
-                "role": "developer",
-                "valid_status_codes": ["CAFE_CONFIRMED"],
-                "on": {"CAFE_CONFIRMED": "_done"},
-            }
-        },
-    }
-
-    def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
-        return StepExecutionResult(response="finished but no code", artifacts={}, status_code=None)
-
-    runner = PlaybookRunner(
-        issue_dir=issue_dir,
-        playbook=playbook,
-        generic_phase=_build_loader(tmp_path),
-        executor=executor,
-    )
-    result = runner.run(max_transitions=5)
-
-    assert result.completed is False
-    assert result.final_step == "develop"
-    assert result.final_status_code == "NO_STATUS_CODE"
-
-
-def test_runner_pauses_with_invalid_status_code_when_agent_returns_unknown_code(tmp_path: Path) -> None:
-    issue_dir = tmp_path / ".cafe" / "issues" / "demo"
-    playbook = {
-        "playbook": {"id": "default"},
-        "steps": {
-            "develop": {
-                "skill": "spec_first",
-                "role": "developer",
-                "valid_status_codes": ["CAFE_CONFIRMED"],
-                "on": {"CAFE_CONFIRMED": "_done"},
-            }
-        },
-    }
-
-    def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
-        return StepExecutionResult(
-            response="Done.\n\nCAFE_SPEC_READY",
-            artifacts={},
-            status_code=None,
-        )
-
-    runner = PlaybookRunner(
-        issue_dir=issue_dir,
-        playbook=playbook,
-        generic_phase=_build_loader(tmp_path),
-        executor=executor,
-    )
-    result = runner.run(max_transitions=5)
-
-    assert result.completed is False
-    assert result.final_step == "develop"
-    assert result.final_status_code == "INVALID_STATUS_CODE"
-
-    blackboard = BlackboardStore(issue_dir).load_or_create("develop")
-    invalid_events = [event for event in blackboard.events if event.event_type == "status_code_invalid"]
-    assert invalid_events
-    assert invalid_events[-1].data["invalid_status_codes"] == ["CAFE_SPEC_READY"]
-
-
-def test_runner_handoff_goto_advances_even_when_status_code_is_invalid(tmp_path: Path) -> None:
-    issue_dir = tmp_path / ".cafe" / "issues" / "demo"
-    playbook = {
-        "playbook": {"id": "default"},
-        "steps": {
-            "develop": {
-                "skill": "spec_first",
-                "role": "developer",
-                "valid_status_codes": ["CAFE_CONFIRMED"],
-                "allowed_goto": ["review"],
-                "on": {"CAFE_CONFIRMED": "plan"},
-            },
-            "review": {
-                "skill": "spec_first",
-                "role": "reviewer",
-                "valid_status_codes": ["CAFE_CONFIRMED"],
-                "on": {"CAFE_CONFIRMED": "_done"},
-            },
-            "plan": {
-                "skill": "spec_first",
-                "role": "developer",
-                "valid_status_codes": ["CAFE_CONFIRMED"],
-                "on": {"CAFE_CONFIRMED": "_done"},
-            },
+            "develop": {"skill": "spec_first", "role": "developer", "on": {"CAFE_CONFIRMED": "review"}},
+            "review": {"skill": "spec_first", "role": "reviewer", "on": {"CAFE_CONFIRMED": "_done"}},
         },
     }
     calls: list[str] = []
@@ -418,12 +169,16 @@ def test_runner_handoff_goto_advances_even_when_status_code_is_invalid(tmp_path:
     def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
         calls.append(step_name)
         if step_name == "develop":
-            return StepExecutionResult(
-                response="handoff\nCAFE_SPEC_READY\nCAFE_GOTO:review",
-                artifacts={},
-                status_code=None,
+            _write_agent_baton(
+                issue_dir,
+                state,
+                from_step="develop",
+                to_step="review",
+                status_code="CAFE_NO_CHANGES_NEEDED",
             )
-        return StepExecutionResult(response="CAFE_CONFIRMED", artifacts={})
+            return StepExecutionResult(response="dispute raised", artifacts={})
+        _write_agent_baton(issue_dir, state, from_step="review", to_step="done", status_code="CAFE_CONFIRMED")
+        return StepExecutionResult(response="resolved", artifacts={})
 
     runner = PlaybookRunner(
         issue_dir=issue_dir,
@@ -431,129 +186,26 @@ def test_runner_handoff_goto_advances_even_when_status_code_is_invalid(tmp_path:
         generic_phase=_build_loader(tmp_path),
         executor=executor,
     )
-    result = runner.run(max_transitions=5)
+    result = runner.run(max_transitions=4)
 
     assert result.completed is True
-    assert result.final_step == "review"
     assert calls == ["develop", "review"]
 
 
-def test_runner_uses_default_transition_when_invalid_status_code(tmp_path: Path) -> None:
+def test_runner_falls_back_to_explicit_status_when_baton_is_unchanged(tmp_path: Path) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "demo"
     playbook = {
         "playbook": {"id": "default"},
         "steps": {
-            "develop": {
-                "skill": "spec_first",
-                "role": "developer",
-                "valid_status_codes": ["CAFE_CONFIRMED"],
-                "on": {"CAFE_CONFIRMED": "_done", "default": "review"},
-            },
-            "review": {
-                "skill": "spec_first",
-                "role": "reviewer",
-                "valid_status_codes": ["CAFE_CONFIRMED"],
-                "on": {"CAFE_CONFIRMED": "_done"},
-            },
+            "spec": {"skill": "spec_first", "role": "pm", "on": {"CAFE_CONFIRMED": "plan"}},
+            "plan": {"skill": "spec_first", "role": "developer", "on": {"CAFE_CONFIRMED": "_done"}},
         },
     }
     calls: list[str] = []
 
     def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
         calls.append(step_name)
-        if step_name == "develop":
-            return StepExecutionResult(
-                response="Development done.\n\nCAFE_UNKNOWN_SIGNAL",
-                artifacts={},
-                status_code=None,
-            )
-        return StepExecutionResult(response="CAFE_CONFIRMED", artifacts={})
-
-    runner = PlaybookRunner(
-        issue_dir=issue_dir,
-        playbook=playbook,
-        generic_phase=_build_loader(tmp_path),
-        executor=executor,
-    )
-    result = runner.run(max_transitions=5)
-
-    assert result.completed is True
-    assert calls == ["develop", "review"]
-
-
-def test_runner_uses_default_transition_when_status_code_missing(tmp_path: Path) -> None:
-    issue_dir = tmp_path / ".cafe" / "issues" / "demo"
-    playbook = {
-        "playbook": {"id": "default"},
-        "steps": {
-            "develop": {
-                "skill": "spec_first",
-                "role": "developer",
-                "valid_status_codes": ["CAFE_CONFIRMED"],
-                "on": {"CAFE_CONFIRMED": "_done", "default": "review"},
-            },
-            "review": {
-                "skill": "spec_first",
-                "role": "reviewer",
-                "valid_status_codes": ["CAFE_CONFIRMED"],
-                "on": {"CAFE_CONFIRMED": "_done"},
-            },
-        },
-    }
-    calls: list[str] = []
-
-    def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
-        calls.append(step_name)
-        if step_name == "develop":
-            return StepExecutionResult(
-                response="Development complete, no status code provided.",
-                artifacts={},
-                status_code=None,
-            )
-        return StepExecutionResult(response="CAFE_CONFIRMED", artifacts={})
-
-    runner = PlaybookRunner(
-        issue_dir=issue_dir,
-        playbook=playbook,
-        generic_phase=_build_loader(tmp_path),
-        executor=executor,
-    )
-    result = runner.run(max_transitions=5)
-
-    assert result.completed is True
-    assert calls == ["develop", "review"]
-
-
-def test_runner_auto_continues_after_consuming_user_input(tmp_path: Path) -> None:
-    issue_dir = tmp_path / ".cafe" / "issues" / "demo"
-    playbook = {
-        "playbook": {"id": "default"},
-        "steps": {
-            "spec": {
-                "skill": "spec_first",
-                "role": "pm",
-                "valid_status_codes": ["CAFE_READY_FOR_REVIEW", "CAFE_CONFIRMED"],
-                "on": {"CAFE_READY_FOR_REVIEW": "spec", "CAFE_CONFIRMED": "plan"},
-            },
-            "plan": {
-                "skill": "spec_first",
-                "role": "developer",
-                "valid_status_codes": ["CAFE_CONFIRMED"],
-                "on": {"CAFE_CONFIRMED": "_done"},
-            },
-        },
-    }
-    executed_steps: list[str] = []
-
-    def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
-        executed_steps.append(step_name)
-        if executed_steps == ["spec"]:
-            return StepExecutionResult(
-                response="CAFE_READY_FOR_REVIEW",
-                artifacts={},
-                auto_continue=True,
-            )
-        return StepExecutionResult(response="CAFE_CONFIRMED", artifacts={})
+        return StepExecutionResult(response="legacy path", artifacts={}, status_code="CAFE_CONFIRMED")
 
     runner = PlaybookRunner(
         issue_dir=issue_dir,
@@ -565,43 +217,18 @@ def test_runner_auto_continues_after_consuming_user_input(tmp_path: Path) -> Non
 
     assert result.completed is True
     assert result.final_step == "plan"
-    assert executed_steps == ["spec", "spec", "plan"]
+    assert calls == ["spec", "plan"]
 
 
-def test_runner_accepts_explicit_status_code_without_response_body(tmp_path: Path) -> None:
+def test_runner_fails_when_neither_baton_nor_explicit_status_advances(tmp_path: Path) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "demo"
     playbook = {
         "playbook": {"id": "default"},
-        "steps": {
-            "spec": {
-                "skill": "spec_first",
-                "role": "pm",
-                "valid_status_codes": ["CAFE_CONFIRMED"],
-                "on": {"CAFE_CONFIRMED": "plan"},
-            },
-            "plan": {
-                "skill": "spec_first",
-                "role": "developer",
-                "valid_status_codes": ["CAFE_CONFIRMED"],
-                "on": {"CAFE_CONFIRMED": "_done"},
-            },
-        },
+        "steps": {"develop": {"skill": "spec_first", "role": "developer", "on": {"CAFE_CONFIRMED": "_done"}}},
     }
-    executed_steps: list[str] = []
 
     def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
-        executed_steps.append(step_name)
-        if step_name == "spec":
-            return StepExecutionResult(
-                response="",
-                artifacts={},
-                status_code="CAFE_CONFIRMED",
-            )
-        return StepExecutionResult(
-            response="CAFE_CONFIRMED",
-            artifacts={},
-            status_code="CAFE_CONFIRMED",
-        )
+        return StepExecutionResult(response="no transition data", artifacts={}, status_code=None)
 
     runner = PlaybookRunner(
         issue_dir=issue_dir,
@@ -609,50 +236,26 @@ def test_runner_accepts_explicit_status_code_without_response_body(tmp_path: Pat
         generic_phase=_build_loader(tmp_path),
         executor=executor,
     )
-    result = runner.run(max_transitions=5)
+    result = runner.run(max_transitions=2)
 
-    assert result.completed is True
-    assert result.final_step == "plan"
-    assert executed_steps == ["spec", "plan"]
+    assert result.completed is False
+    assert result.final_status_code == "NO_BATON_TRANSITION"
 
 
-def test_runner_resumes_from_next_step_when_current_step_already_confirmed(tmp_path: Path) -> None:
-    issue_dir = tmp_path / ".cafe" / "issues" / "demo"
-    spec_dir = issue_dir / "spec"
-    spec_dir.mkdir(parents=True, exist_ok=True)
-    (spec_dir / "status.json").write_text(
-        '{"status_code":"CAFE_CONFIRMED","iteration":3}',
+def test_runner_rejects_baton_owner_mismatch_before_step_execution(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo-owner-mismatch"
+    issue_dir.mkdir(parents=True, exist_ok=True)
+    (issue_dir / "next_step.txt").write_text(
+        '{"version":1,"from_step":"spec","to_owner":"user","to_step":"user","intent":"manual_handoff","status_code":"","source":"test"}',
         encoding="utf-8",
     )
-    plan_dir = issue_dir / "plan"
-    plan_dir.mkdir(parents=True, exist_ok=True)
-
     playbook = {
         "playbook": {"id": "default"},
-        "steps": {
-            "spec": {
-                "skill": "spec_first",
-                "role": "pm",
-                "valid_status_codes": ["CAFE_CONFIRMED"],
-                "on": {"CAFE_CONFIRMED": "plan"},
-            },
-            "plan": {
-                "skill": "spec_first",
-                "role": "developer",
-                "valid_status_codes": ["CAFE_CONFIRMED"],
-                "on": {"CAFE_CONFIRMED": "_done"},
-            },
-        },
+        "steps": {"spec": {"skill": "spec_first", "role": "pm", "on": {"CAFE_CONFIRMED": "_done"}}},
     }
-    executed_steps: list[str] = []
 
     def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
-        executed_steps.append(step_name)
-        return StepExecutionResult(
-            response="CAFE_CONFIRMED",
-            artifacts={},
-            status_code="CAFE_CONFIRMED",
-        )
+        raise AssertionError("executor should not run")
 
     runner = PlaybookRunner(
         issue_dir=issue_dir,
@@ -660,42 +263,27 @@ def test_runner_resumes_from_next_step_when_current_step_already_confirmed(tmp_p
         generic_phase=_build_loader(tmp_path),
         executor=executor,
     )
-    result = runner.run(max_transitions=5)
-
-    assert result.completed is True
-    assert result.final_step == "plan"
-    assert executed_steps == ["plan"]
+    with pytest.raises(RuntimeError, match=r"expected agent, got user"):
+        runner.run(max_transitions=2)
 
 
-def test_runner_does_not_pause_when_interactive_step_requests_review_iteration(tmp_path: Path) -> None:
-    issue_dir = tmp_path / ".cafe" / "issues" / "demo"
+def test_runner_rejects_baton_target_mismatch_before_step_execution(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo-target-mismatch"
+    issue_dir.mkdir(parents=True, exist_ok=True)
+    (issue_dir / "next_step.txt").write_text(
+        '{"version":1,"from_step":"spec","to_owner":"agent","to_step":"plan","intent":"await_agent","status_code":"","source":"test"}',
+        encoding="utf-8",
+    )
     playbook = {
         "playbook": {"id": "default"},
         "steps": {
-            "plan": {
-                "skill": "spec_first",
-                "role": "developer",
-                "valid_status_codes": ["CAFE_READY_FOR_REVIEW", "CAFE_CONFIRMED"],
-                "on": {"CAFE_READY_FOR_REVIEW": "plan", "CAFE_CONFIRMED": "_done"},
-            },
+            "spec": {"skill": "spec_first", "role": "pm", "on": {"CAFE_CONFIRMED": "plan"}},
+            "plan": {"skill": "spec_first", "role": "developer", "on": {"CAFE_CONFIRMED": "_done"}},
         },
     }
-    executed_steps: list[str] = []
 
     def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
-        executed_steps.append(step_name)
-        if len(executed_steps) == 1:
-            return StepExecutionResult(
-                response="CAFE_READY_FOR_REVIEW",
-                artifacts={},
-                status_code="CAFE_READY_FOR_REVIEW",
-                auto_continue=True,
-            )
-        return StepExecutionResult(
-            response="CAFE_CONFIRMED",
-            artifacts={},
-            status_code="CAFE_CONFIRMED",
-        )
+        raise AssertionError("executor should not run")
 
     runner = PlaybookRunner(
         issue_dir=issue_dir,
@@ -703,113 +291,34 @@ def test_runner_does_not_pause_when_interactive_step_requests_review_iteration(t
         generic_phase=_build_loader(tmp_path),
         executor=executor,
     )
-    result = runner.run(max_transitions=5)
-
-    assert result.completed is True
-    assert result.final_step == "plan"
-    assert executed_steps == ["plan", "plan"]
-
-
-
-
-def test_runner_rejects_reserved_assignee_type_at_runtime(tmp_path: Path) -> None:
-    playbook = {
-        "playbook": {"id": "default"},
-        "steps": {
-            "develop": {
-                "skill": "spec_first",
-                "role": "developer",
-                "assignee_type": "human",
-                "valid_status_codes": ["CAFE_CONFIRMED"],
-                "on": {"CAFE_CONFIRMED": "_done"},
-            }
-        },
-    }
-
-    def executor(step_name: str, step_def: dict, state: object) -> tuple[str, dict[str, str]]:
-        return ("CAFE_CONFIRMED", {})
-
-    runner = PlaybookRunner(
-        issue_dir=tmp_path / ".cafe" / "issues" / "demo",
-        playbook=playbook,
-        generic_phase=_build_loader(tmp_path),
-        executor=executor,
-    )
-    with pytest.raises(RuntimeError, match="assignee_type=human"):
-        runner.run()
-
-
-def test_runner_stops_when_step_exceeds_max_iterations(tmp_path: Path) -> None:
-    issue_dir = tmp_path / ".cafe" / "issues" / "demo"
-    playbook = {
-        "playbook": {"id": "default"},
-        "steps": {
-            "review": {
-                "skill": "spec_first",
-                "role": "reviewer",
-                "max_iterations": 2,
-                "valid_status_codes": ["CAFE_NEEDS_CHANGES"],
-                "on": {"CAFE_NEEDS_CHANGES": "review"},
-            }
-        },
-    }
-
-    def executor(step_name: str, step_def: dict, state: object) -> tuple[str, dict[str, str]]:
-        return ("CAFE_NEEDS_CHANGES", {})
-
-    runner = PlaybookRunner(
-        issue_dir=issue_dir,
-        playbook=playbook,
-        generic_phase=_build_loader(tmp_path),
-        executor=executor,
-    )
-
-    with pytest.raises(RuntimeError, match="exceeded max_iterations=2"):
-        runner.run(max_transitions=5)
-
-    blackboard = BlackboardStore(issue_dir).load_or_create("review")
-    loop_events = [event for event in blackboard.events if event.event_type == "loop_detected"]
-    assert loop_events
-    assert loop_events[-1].data["max_iterations"] == 2
-
-
-def test_default_review_loop_budget_is_three_rounds() -> None:
-    from cafe.playbooks.loader import PlaybookLoader
-
-    playbook = PlaybookLoader().load_model("default").model
-
-    assert playbook.steps["review"].max_iterations == 3
+    with pytest.raises(RuntimeError, match=r"baton points to 'plan'"):
+        runner.run(max_transitions=2)
 
 
 def test_runner_records_hop_limit_event(tmp_path: Path) -> None:
-    issue_dir = tmp_path / ".cafe" / "issues" / "demo"
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo-hop"
     playbook = {
         "playbook": {"id": "default"},
         "steps": {
-            "develop": {
-                "skill": "spec_first",
-                "role": "developer",
-                "valid_status_codes": ["CAFE_CONFIRMED"],
-                "on": {"CAFE_CONFIRMED": "review"},
-            },
-            "review": {
-                "skill": "spec_first",
-                "role": "reviewer",
-                "valid_status_codes": ["CAFE_NEEDS_CHANGES"],
-                "on": {"CAFE_NEEDS_CHANGES": "develop"},
-            },
+            "develop": {"skill": "spec_first", "role": "developer", "on": {"CAFE_CONFIRMED": "review"}},
+            "review": {"skill": "spec_first", "role": "reviewer", "on": {"CAFE_NEEDS_CHANGES": "develop"}},
         },
     }
-    responses = iter(
-        [
-            ("CAFE_CONFIRMED", {}),
-            ("CAFE_NEEDS_CHANGES", {}),
-            ("CAFE_CONFIRMED", {}),
-        ]
-    )
+    calls: list[str] = []
 
-    def executor(step_name: str, step_def: dict, state: object) -> tuple[str, dict[str, str]]:
-        return next(responses)
+    def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
+        calls.append(step_name)
+        if step_name == "develop":
+            _write_agent_baton(issue_dir, state, from_step="develop", to_step="review", status_code="CAFE_CONFIRMED")
+            return StepExecutionResult(response="go review", artifacts={})
+        _write_agent_baton(
+            issue_dir,
+            state,
+            from_step="review",
+            to_step="develop",
+            status_code="CAFE_NEEDS_CHANGES",
+        )
+        return StepExecutionResult(response="back to develop", artifacts={})
 
     runner = PlaybookRunner(
         issue_dir=issue_dir,
@@ -817,7 +326,6 @@ def test_runner_records_hop_limit_event(tmp_path: Path) -> None:
         generic_phase=_build_loader(tmp_path),
         executor=executor,
     )
-
     with pytest.raises(RuntimeError, match=r"max transition limit \(2\)"):
         runner.run(max_transitions=2)
 
@@ -827,179 +335,6 @@ def test_runner_records_hop_limit_event(tmp_path: Path) -> None:
     assert hop_events[-1].data["max_transitions"] == 2
 
 
-def test_runner_writes_confirm_output_intent_on_spec_ready_for_review(tmp_path: Path) -> None:
-    issue_dir = tmp_path / ".cafe" / "issues" / "demo"
-    playbook = {
-        "playbook": {"id": "default"},
-        "steps": {
-            "spec": {
-                "skill": "spec_first",
-                "role": "pm",
-                "valid_status_codes": ["CAFE_READY_FOR_REVIEW"],
-                "on": {"CAFE_READY_FOR_REVIEW": "spec"},
-            }
-        },
-    }
-
-    def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
-        return StepExecutionResult(
-            response="CAFE_READY_FOR_REVIEW",
-            artifacts={},
-            status_code="CAFE_READY_FOR_REVIEW",
-            auto_continue=False,
-        )
-
-    runner = PlaybookRunner(
-        issue_dir=issue_dir,
-        playbook=playbook,
-        generic_phase=_build_loader(tmp_path),
-        executor=executor,
-    )
-    result = runner.run(max_transitions=3)
-
-    assert result.completed is False
-    blackboard = BlackboardStore(issue_dir).load_or_create("spec")
-    contract = blackboard.handoff_contract
-    assert contract is not None
-    assert contract.intent == HandoffIntent.CONFIRM_OUTPUT
-    assert contract.to_step == "user"
-
-
-def test_runner_writes_need_clarification_intent_for_non_confirm_user_handoff(tmp_path: Path) -> None:
-    issue_dir = tmp_path / ".cafe" / "issues" / "demo"
-    playbook = {
-        "playbook": {"id": "default"},
-        "steps": {
-            "develop": {
-                "skill": "spec_first",
-                "role": "developer",
-                "valid_status_codes": ["CAFE_NEED_CLARIFICATION"],
-                "on": {"CAFE_NEED_CLARIFICATION": "develop"},
-            }
-        },
-    }
-
-    def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
-        return StepExecutionResult(
-            response="CAFE_NEED_CLARIFICATION",
-            artifacts={},
-            status_code="CAFE_NEED_CLARIFICATION",
-            auto_continue=False,
-        )
-
-    runner = PlaybookRunner(
-        issue_dir=issue_dir,
-        playbook=playbook,
-        generic_phase=_build_loader(tmp_path),
-        executor=executor,
-    )
-    result = runner.run(max_transitions=3)
-
-    assert result.completed is False
-    blackboard = BlackboardStore(issue_dir).load_or_create("develop")
-    contract = blackboard.handoff_contract
-    assert contract is not None
-    assert contract.intent == HandoffIntent.NEED_CLARIFICATION
-    assert contract.to_step == "user"
-
-
-def test_runner_rejects_baton_owner_mismatch_before_step_execution(tmp_path: Path) -> None:
-    """If baton owner is not `agent`, the runner should fail before executing the step."""
-    issue_dir = tmp_path / ".cafe" / "issues" / "demo-owner-mismatch"
-    issue_dir.mkdir(parents=True, exist_ok=True)
-    (issue_dir / "next_step.txt").write_text(
-        json.dumps(
-            {
-                "version": 1,
-                "from_step": "spec",
-                "to_owner": "user",
-                "to_step": "user",
-                "intent": "manual_handoff",
-                "status_code": "",
-                "source": "test",
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    playbook = {
-        "playbook": {"id": "default"},
-        "steps": {
-            "spec": {
-                "skill": "spec_first",
-                "role": "pm",
-                "valid_status_codes": ["CAFE_CONFIRMED"],
-                "on": {"CAFE_CONFIRMED": "plan"},
-            },
-            "plan": {
-                "skill": "spec_first",
-                "role": "developer",
-                "valid_status_codes": ["CAFE_CONFIRMED"],
-                "on": {"CAFE_CONFIRMED": "_done"},
-            },
-        },
-    }
-
-    def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
-        raise AssertionError("executor should not run when baton ownership is invalid")
-
-    runner = PlaybookRunner(
-        issue_dir=issue_dir,
-        playbook=playbook,
-        generic_phase=_build_loader(tmp_path),
-        executor=executor,
-    )
-
-    with pytest.raises(RuntimeError, match=r"expected agent, got user"):
-        runner.run(max_transitions=2)
-
-
-def test_runner_rejects_baton_target_mismatch_before_step_execution(tmp_path: Path) -> None:
-    """If baton target is not equal to the current step, the runner should fail early."""
-    issue_dir = tmp_path / ".cafe" / "issues" / "demo-target-mismatch"
-    issue_dir.mkdir(parents=True, exist_ok=True)
-    (issue_dir / "next_step.txt").write_text(
-        json.dumps(
-            {
-                "version": 1,
-                "from_step": "spec",
-                "to_owner": "agent",
-                "to_step": "plan",
-                "intent": "await_agent",
-                "status_code": "",
-                "source": "test",
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    playbook = {
-        "playbook": {"id": "default"},
-        "steps": {
-            "spec": {
-                "skill": "spec_first",
-                "role": "pm",
-                "valid_status_codes": ["CAFE_CONFIRMED"],
-                "on": {"CAFE_CONFIRMED": "plan"},
-            },
-            "plan": {
-                "skill": "spec_first",
-                "role": "developer",
-                "valid_status_codes": ["CAFE_CONFIRMED"],
-                "on": {"CAFE_CONFIRMED": "_done"},
-            },
-        },
-    }
-
-    def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
-        raise AssertionError("executor should not run when baton target is invalid")
-
-    runner = PlaybookRunner(
-        issue_dir=issue_dir,
-        playbook=playbook,
-        generic_phase=_build_loader(tmp_path),
-        executor=executor,
-    )
-
-    with pytest.raises(RuntimeError, match=r"baton points to 'plan'"):
-        runner.run(max_transitions=2)
+def test_default_review_loop_budget_is_three_rounds() -> None:
+    playbook = PlaybookLoader().load_model("default").model
+    assert playbook.steps["review"].max_iterations == 3

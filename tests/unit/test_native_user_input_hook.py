@@ -258,7 +258,6 @@ def test_execute_step_skips_checklist_validation_when_confirmed_without_agent_ru
         )
     )
     executor._resolve_skill_name = MagicMock(return_value="spec_revise")
-    executor._resolve_valid_status_codes = MagicMock(return_value=[PhaseStatusCode.CONFIRMED])
     executor._resolve_agent_name = MagicMock(return_value="Roger")
     executor._build_context = MagicMock(return_value={})
     executor._generate_checklist = MagicMock()

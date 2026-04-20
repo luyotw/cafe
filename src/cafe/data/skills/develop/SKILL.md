@@ -38,5 +38,5 @@ Read your agent file: {agent_file}
 - 如果這輪開發工作已經真的完成，而且接下來應由 user 決定是否還要繼續，允許把 blackboard `current_step` 改成 `user`，並在 blackboard summary/event 說明目前已完成、等待 user 決策。
 - 不要讓同一個 reviewer/developer 爭議在沒有新資訊的情況下無限往返。
 
-## Status Code
-{status_code_instruction}
+## Handoff
+- 依照本輪結果更新 blackboard 與 next-step baton。

@@ -38,5 +38,5 @@ Read your agent file: {agent_file}
 ## Output
 Write review result to: {output_file}
 
-## Status Code
-{status_code_instruction}
+## Handoff
+- 依照本輪結果更新 blackboard 與 next-step baton。

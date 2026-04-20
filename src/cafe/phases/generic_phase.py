@@ -135,9 +135,10 @@ class GenericPhase:
         self,
         *,
         response: str,
-        valid_status_codes: List[PhaseStatusCode],
+        valid_status_codes: Optional[List[PhaseStatusCode]] = None,
     ) -> Tuple[Optional[PhaseStatusCode], Optional[str]]:
-        status = StatusCodeParser.extract(response, valid_codes=valid_status_codes)
+        resolved_codes = valid_status_codes or list(PhaseStatusCode)
+        status = StatusCodeParser.extract(response, valid_codes=resolved_codes)
         goto_target = self.extract_goto_target(response)
         return status, goto_target
 
@@ -233,14 +234,9 @@ class GenericPhase:
                 questions_xml_file=questions_xml_file,
             )
             response = agent_executor(prompt)
-            valid_codes = [
-                PhaseStatusCode(code)
-                for code in step_def.get("valid_status_codes", [])
-                if code in {item.value for item in PhaseStatusCode}
-            ] or list(PhaseStatusCode)
             status_code, goto_target = self.parse_response(
                 response=response,
-                valid_status_codes=valid_codes,
+                valid_status_codes=list(PhaseStatusCode),
             )
             if questions_xml_file is not None:
                 self.validate_clarification_output(

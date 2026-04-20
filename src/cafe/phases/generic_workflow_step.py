@@ -11,7 +11,7 @@ from cafe.core.blackboard import ArtifactEntry, ArtifactKind, BlackboardState, B
 from cafe.core.playbook_runner import StepExecutionResult
 from cafe.core.git import GitOperations
 from cafe.core.phase import Phase
-from cafe.core.status_codes import PhaseStatusCode, generate_status_code_prompt
+from cafe.core.status_codes import PhaseStatusCode
 from cafe.phases.generic_phase import GenericPhase
 from cafe.utils.checklist_generator import (
     generate_develop_checklist,
@@ -84,7 +84,6 @@ class GenericWorkflowStepExecutor(Phase):
         self._ensure_output_file_initialized(step_name, output_file)
 
         skill_name = self._resolve_skill_name(step_def, self.iteration)
-        valid_status_codes = self._resolve_valid_status_codes(step_def)
         agent_name = self._resolve_agent_name(step_def)
         self._apply_step_agent_model(step_name=step_name, step_def=step_def, agent_name=agent_name)
         agent_cli = self.agent_manager.get_agent(agent_name).config.cli
@@ -132,7 +131,7 @@ class GenericWorkflowStepExecutor(Phase):
                 agent_name=agent_name,
                 prompt=prompt,
                 user_input=resolved_user_input,
-                valid_status_codes=valid_status_codes,
+                valid_status_codes=list(PhaseStatusCode),
                 require_status_code=True,
                 allowed_tools=allowed_tools,
                 phase_specific_data=phase_specific_data,
@@ -170,7 +169,7 @@ class GenericWorkflowStepExecutor(Phase):
                 agent_name=agent_name,
                 prompt=last_prompt[0] if last_prompt else "",
                 user_input=resolved_user_input,
-                valid_status_codes=valid_status_codes,
+                valid_status_codes=list(PhaseStatusCode),
                 allowed_tools=allowed_tools,
                 max_retries=3,
             )
@@ -287,15 +286,6 @@ class GenericWorkflowStepExecutor(Phase):
         return str(model) if model else None
 
     @staticmethod
-    def _resolve_valid_status_codes(step_def: Dict[str, Any]) -> List[PhaseStatusCode]:
-        valid = []
-        known_values = {item.value for item in PhaseStatusCode}
-        for code in step_def.get("valid_status_codes", []):
-            if code in known_values:
-                valid.append(PhaseStatusCode(code))
-        return valid or list(PhaseStatusCode)
-
-    @staticmethod
     def _normalize_allowed_tools(raw_tools: List[str]) -> List[str]:
         tool_name_map = {
             "Read": "read",
@@ -372,10 +362,6 @@ class GenericWorkflowStepExecutor(Phase):
             "blackboard_path": self._display_path(self.issue_dir / "blackboard.json"),
             "next_step_path": self._display_path(self.issue_dir / "next_step.txt"),
             "output_file": self._display_path(output_file),
-            "status_code_instruction": generate_status_code_prompt(
-                self._resolve_valid_status_codes(step_def),
-                {},
-            ),
         }
 
         for artifact_name in step_def.get("input_artifacts", []):
