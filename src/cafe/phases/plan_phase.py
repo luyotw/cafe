@@ -295,10 +295,11 @@ class PlanPhase(Phase):
                 valid_status_codes=[
                     PhaseStatusCode.READY_FOR_REVIEW,
                     PhaseStatusCode.NEED_CLARIFICATION,
+                    PhaseStatusCode.NEED_PERMISSION,
                 ],
                 allowed_tools=allowed_tools,
                 complete_codes=[PhaseStatusCode.READY_FOR_REVIEW],
-                continue_codes=[PhaseStatusCode.NEED_CLARIFICATION],
+                continue_codes=[PhaseStatusCode.NEED_CLARIFICATION, PhaseStatusCode.NEED_PERMISSION],
                 phase_specific_data={"dev_agent": self.dev_agent},
             )
 
