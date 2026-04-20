@@ -416,10 +416,11 @@ class SpecPhase(Phase):
                 valid_status_codes=[
                     PhaseStatusCode.READY_FOR_REVIEW,
                     PhaseStatusCode.NEED_CLARIFICATION,
+                    PhaseStatusCode.NEED_PERMISSION,
                 ],
                 allowed_tools=allowed_tools,
                 complete_codes=[PhaseStatusCode.READY_FOR_REVIEW, PhaseStatusCode.NEED_CLARIFICATION],
-                continue_codes=[],
+                continue_codes=[PhaseStatusCode.NEED_PERMISSION],
             )
 
             # In mock mode or if agent doesn't use write tool, write spec from response
@@ -992,6 +993,13 @@ class SpecPhase(Phase):
                 except (ValueError, OSError):
                     prev_spec_file = str(prev_spec_path)
 
+        rewrite_guardrails = """**Output Guardrails (must follow):**
+- In-place rewrite only: edit the existing output file, do not append a second full draft.
+- Each H1 section (for example `# Initial Requirements`) must appear at most once in the final file.
+- If old and new content conflict, keep the latest approved intent and remove superseded text.
+- Do not include "old version/new version", history logs, or duplicated requirement blocks.
+- Before finalizing, self-check and merge any duplicated headings or semantically duplicated paragraphs."""
+
         # --- 1. Determine context-specific sections ---
         initial_instruction = ""
         context_section = ""
@@ -1061,7 +1069,7 @@ class SpecPhase(Phase):
             },
         )
         skill_section = f"{skill_body}\n\n" if skill_body else ""
-        base_prompt = f"""# Specification Phase\n\n{skill_section}{checklist_instruction}\n\n{initial_instruction}\n{context_section}\n{rigor_guidelines}\n\n{status_code_prompt}\n"""
+        base_prompt = f"""# Specification Phase\n\n{skill_section}{checklist_instruction}\n\n{initial_instruction}\n{context_section}\n{rewrite_guardrails}\n\n{rigor_guidelines}\n\n{status_code_prompt}\n"""
 
         # --- 5. Return the final prompt ---
         return base_prompt

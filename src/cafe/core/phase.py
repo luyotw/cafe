@@ -715,6 +715,16 @@ class Phase(ABC):
             response,
             valid_codes=valid_status_codes,
         )
+        if (
+            status_code is None
+            and permission_denials
+            and PhaseStatusCode.NEED_PERMISSION in valid_status_codes
+        ):
+            status_code = PhaseStatusCode.NEED_PERMISSION
+        elif status_code is None:
+            inferred_human_input_status = self._infer_human_input_status_from_response(response)
+            if inferred_human_input_status in valid_status_codes:
+                status_code = inferred_human_input_status
 
         # 6.1. Check if there are multiple different status codes
         all_status_codes = StatusCodeParser.extract_all(response, valid_codes=valid_status_codes)
@@ -2971,6 +2981,30 @@ The system will verify checklist completion. If unchecked items remain, you will
         # Extract status code from response
         from cafe.core.status_codes import StatusCodeParser
         return StatusCodeParser.extract(response, valid_codes=valid_status_codes)
+
+    @staticmethod
+    def _infer_human_input_status_from_response(response: str) -> Optional[PhaseStatusCode]:
+        """Infer human-input status codes from plain-text agent replies."""
+        normalized = (response or "").lower()
+        if not normalized.strip():
+            return None
+
+        permission_markers = (
+            "請允許",
+            "授權",
+            "權限提示",
+            "allow",
+            "permission",
+            "adjust permission",
+            "調整權限",
+            "需要您授權",
+            "需要你授權",
+            "claude code",
+        )
+        if any(marker in normalized for marker in permission_markers):
+            return PhaseStatusCode.NEED_PERMISSION
+
+        return None
 
     def _analyze_missing_status_code_with_logging(
         self,

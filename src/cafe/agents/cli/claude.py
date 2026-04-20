@@ -129,18 +129,32 @@ class ClaudeCLI(AbstractCLI):
             List of converted tool names (e.g. ["Read", "Write(/.cafe/config.yaml)"])
         """
         processed_tools = []
+        tool_name_map = {
+            "bash": "Bash",
+            "read": "Read",
+            "write": "Write",
+            "edit": "Edit",
+            "grep": "Grep",
+            "glob": "Glob",
+            "ls": "LS",
+            "webfetch": "WebFetch",
+            "web_fetch": "WebFetch",
+            "websearch": "WebSearch",
+            "web_search": "WebSearch",
+        }
 
         for tool in tools:
             # Handle tools with paths or commands (e.g. write(/path) or bash(git status))
             if "(" in tool and ")" in tool:
                 tool_name = tool.split("(")[0].lower()
                 path_or_cmd = tool.split("(")[1].rstrip(")")
+                display_tool_name = tool_name_map.get(tool_name, tool.split("(")[0])
 
                 # Determine if it's a path or command
                 # If tool_name is bash, treat as command, don't convert path format
                 if tool_name == "bash":
                     # Command parameter, use directly, don't add / prefix
-                    processed_tool = f"{tool_name.capitalize()}({path_or_cmd})"
+                    processed_tool = f"{display_tool_name}({path_or_cmd})"
                 else:
                     # Path parameter, needs conversion to git-ignore format
                     path_obj = Path(path_or_cmd)
@@ -153,28 +167,28 @@ class ClaudeCLI(AbstractCLI):
 
                     if is_git_ignore_format:
                         # Already git ignore format, keep unchanged
-                        processed_tool = f"{tool_name.capitalize()}({path_or_cmd})"
+                        processed_tool = f"{display_tool_name}({path_or_cmd})"
                     elif path_obj.is_absolute():
                         # Absolute path, convert to git ignore format
                         try:
                             repo_root = get_repo_root()
                             git_ignore_path = to_git_ignore_path(path_obj, repo_root)
-                            processed_tool = f"{tool_name.capitalize()}({git_ignore_path})"
+                            processed_tool = f"{display_tool_name}({git_ignore_path})"
                         except (ValueError, OSError) as e:
                             # Conversion failed, use original path and log warning
                             logger.warning(
                                 f"Failed to convert path to git-ignore format: {path_or_cmd}. "
                                 f"Error: {e}. Using original path."
                             )
-                            processed_tool = f"{tool_name.capitalize()}({path_or_cmd})"
+                            processed_tool = f"{display_tool_name}({path_or_cmd})"
                     else:
                         # Relative path, remove ./ prefix if present
                         if path_or_cmd.startswith("./"):
                             path_or_cmd = path_or_cmd[2:]
-                        processed_tool = f"{tool_name.capitalize()}({path_or_cmd})"
+                        processed_tool = f"{display_tool_name}({path_or_cmd})"
             else:
-                # Tool has no path parameter, just capitalize first letter
-                processed_tool = tool.capitalize()
+                # Tool has no path parameter, normalize known Claude tool names.
+                processed_tool = tool_name_map.get(tool.lower(), tool)
 
             # Remove duplicates
             if processed_tool not in processed_tools:

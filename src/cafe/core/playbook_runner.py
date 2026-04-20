@@ -8,7 +8,7 @@ from pathlib import Path
 import re
 from typing import Any, Callable, Dict, Optional
 
-from cafe.core.blackboard import BlackboardState, BlackboardStore
+from cafe.core.blackboard import BlackboardState, BlackboardStore, HandoffIntent, HandoffOwner
 from cafe.core.status_codes import PhaseStatusCode
 from cafe.phases.generic_phase import GenericPhase
 
@@ -68,6 +68,50 @@ class PlaybookRunner:
         self.blackboard_store = BlackboardStore(issue_dir)
         self.blackboard = self.blackboard_store.load_or_create(self.start_step, playbook_id=self.playbook_id)
 
+    @staticmethod
+    def _default_pause_intent(current_step: str, status_code: str) -> HandoffIntent:
+        if status_code == PhaseStatusCode.READY_FOR_REVIEW.value and current_step in {"spec", "plan"}:
+            return HandoffIntent.CONFIRM_OUTPUT
+        if status_code == PhaseStatusCode.NEED_CLARIFICATION.value:
+            return HandoffIntent.NEED_CLARIFICATION
+        if status_code == PhaseStatusCode.NEED_PERMISSION.value:
+            return HandoffIntent.NEED_PERMISSION
+        return HandoffIntent.MANUAL_HANDOFF
+
+    @staticmethod
+    def _extract_handoff_intent(execution_result: Any) -> Optional[HandoffIntent]:
+        events = getattr(execution_result, "events", None)
+        if not isinstance(events, list):
+            return None
+        for event in events:
+            if not isinstance(event, dict):
+                continue
+            if event.get("type") != "handoff_intent":
+                continue
+            raw_intent = event.get("intent")
+            if not isinstance(raw_intent, str):
+                continue
+            try:
+                return HandoffIntent(raw_intent)
+            except ValueError:
+                continue
+        return None
+
+    def _validate_agent_baton(self, *, current_step: str) -> None:
+        contract = self.blackboard_store.load_handoff_contract(
+            self.blackboard,
+            allowed_steps=list(self.steps.keys()),
+            allow_legacy_text=True,
+        )
+        if contract.to_owner != HandoffOwner.AGENT:
+            raise RuntimeError(
+                f"Baton owner mismatch before step '{current_step}': expected agent, got {contract.to_owner.value}"
+            )
+        if contract.to_step != current_step:
+            raise RuntimeError(
+                f"Baton target mismatch before step '{current_step}': baton points to '{contract.to_step}'"
+            )
+
     def _load_step_status_code(self, step_name: str) -> Optional[str]:
         status_file = self.issue_dir / step_name / "status.json"
         if not status_file.exists():
@@ -107,6 +151,15 @@ class PlaybookRunner:
                 },
             )
             self.blackboard_store.set_current_step(self.blackboard, next_step)
+            self.blackboard_store.update_handoff_contract(
+                self.blackboard,
+                from_step=current_step,
+                to_owner=HandoffOwner.AGENT,
+                to_step=next_step,
+                intent=HandoffIntent.AWAIT_AGENT,
+                status_code=saved_status_code,
+                source="workflow.resume_aligned",
+            )
             current_step = next_step
 
         return current_step
@@ -195,12 +248,23 @@ class PlaybookRunner:
             raise ValueError(f"Unknown playbook step '{current_step}'")
         if start_step is None:
             current_step = self._align_current_step_with_saved_progress(current_step)
+        else:
+            self.blackboard_store.set_current_step(self.blackboard, current_step)
+            self.blackboard_store.update_handoff_contract(
+                self.blackboard,
+                from_step=current_step,
+                to_owner=HandoffOwner.AGENT,
+                to_step=current_step,
+                intent=HandoffIntent.AWAIT_AGENT,
+                source="workflow.start_step_override",
+            )
 
         last_status_code = ""
         step_visits: Counter[str] = Counter()
 
         for hop_count in range(1, max_transitions + 1):
             step_def = self.steps[current_step]
+            self._validate_agent_baton(current_step=current_step)
             step_visits[current_step] += 1
             visit_count = step_visits[current_step]
             max_iterations = self._resolve_step_iteration_limit(step_def)
@@ -361,6 +425,7 @@ class PlaybookRunner:
             )
 
             review_confirmed_advance = False
+            handoff_intent = self._extract_handoff_intent(execution_result)
             if hasattr(execution_result, "events"):
                 review_confirmed_advance = any(
                     isinstance(event, dict) and event.get("type") == "review_confirmed_advance"
@@ -368,6 +433,16 @@ class PlaybookRunner:
                 )
 
             if not single_step and status_code in PAUSE_STATUS_CODES and not auto_continue:
+                pause_intent = handoff_intent or self._default_pause_intent(current_step, status_code)
+                self.blackboard_store.update_handoff_contract(
+                    self.blackboard,
+                    from_step=current_step,
+                    to_owner=HandoffOwner.USER,
+                    to_step="user",
+                    intent=pause_intent,
+                    status_code=status_code,
+                    source="workflow.pause",
+                )
                 self.blackboard_store.record_event(
                     self.blackboard,
                     "workflow_paused",
@@ -398,6 +473,15 @@ class PlaybookRunner:
                     next_step = advanced_step
                     transition_source = "review_confirmed_advance"
             if single_step:
+                self.blackboard_store.update_handoff_contract(
+                    self.blackboard,
+                    from_step=current_step,
+                    to_owner=HandoffOwner.AGENT,
+                    to_step=current_step,
+                    intent=HandoffIntent.AWAIT_AGENT,
+                    status_code=status_code,
+                    source="workflow.single_step",
+                )
                 self.blackboard_store.record_event(
                     self.blackboard,
                     "single_step_completed",
@@ -412,6 +496,15 @@ class PlaybookRunner:
                     completed=True,
                 )
             if next_step is None:
+                self.blackboard_store.update_handoff_contract(
+                    self.blackboard,
+                    from_step=current_step,
+                    to_owner=HandoffOwner.USER,
+                    to_step="user",
+                    intent=HandoffIntent.WORKFLOW_COMPLETE,
+                    status_code=status_code,
+                    source="workflow.completed_no_transition",
+                )
                 self.blackboard_store.record_event(
                     self.blackboard,
                     "workflow_completed",
@@ -428,6 +521,17 @@ class PlaybookRunner:
                     completed=True,
                 )
             if next_step not in self.steps:
+                final_owner = HandoffOwner.DONE if next_step == "done" else HandoffOwner.USER
+                final_step = "done" if next_step == "done" else "user"
+                self.blackboard_store.update_handoff_contract(
+                    self.blackboard,
+                    from_step=current_step,
+                    to_owner=final_owner,
+                    to_step=final_step,
+                    intent=HandoffIntent.WORKFLOW_COMPLETE,
+                    status_code=status_code,
+                    source="workflow.external_handoff",
+                )
                 self.blackboard_store.record_decision(
                     self.blackboard,
                     {
@@ -476,6 +580,15 @@ class PlaybookRunner:
                 },
             )
             self.blackboard_store.set_current_step(self.blackboard, next_step)
+            self.blackboard_store.update_handoff_contract(
+                self.blackboard,
+                from_step=current_step,
+                to_owner=HandoffOwner.AGENT,
+                to_step=next_step,
+                intent=HandoffIntent.AWAIT_AGENT,
+                status_code=status_code,
+                source="workflow.transition",
+            )
             current_step = next_step
 
         self.blackboard_store.record_event(

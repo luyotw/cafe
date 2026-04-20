@@ -12,6 +12,7 @@ from InquirerPy.separator import Separator
 
 from cafe.core.questions_schema import Question
 from cafe.ui.chat import launch_chat_session
+from cafe.ui.inquirer_prompts import prompt_multiline
 
 # Sentinel values for special choices
 OTHER_SENTINEL = "__OTHER__"
@@ -81,10 +82,7 @@ def interactive_qa_flow(
         _print_summary(questions, answers)
 
         summary_choices: list = ["Confirm and continue", "Modify an answer..."]
-        if role and issue_name:
-            summary_choices.append(Separator())
-            chat_label = agent_name or role
-            summary_choices.append({"name": f"Chat with {chat_label}", "value": "chat"})
+        _append_chat_choice(summary_choices, role, issue_name, agent_name)
 
         action = inquirer.select(
             message="Confirm answers?",
@@ -114,20 +112,16 @@ def interactive_qa_flow(
         previous_answer = answers.get(modify_idx)
 
         if q.multi_select:
-            answer = _ask_checkbox(q, modify_idx, total, previous_answer, force_no_back=True)
+            answer = _ask_checkbox(
+                q, modify_idx, total, previous_answer, force_no_back=True,
+                role=role, issue_name=issue_name, agent_name=agent_name,
+            )
         else:
-            choices = _build_choices(q, modify_idx, total, previous_answer, force_no_back=True)
-            answer = inquirer.select(
-                message=f"[{modify_idx + 1}/{total}] {q.title}",
-                choices=choices,
-                default=previous_answer,
-            ).execute()
-
-            if answer == OTHER_SENTINEL:
-                text_kwargs = {"message": "Type your answer:"}
-                if previous_answer is not None:
-                    text_kwargs["default"] = previous_answer
-                answer = inquirer.text(**text_kwargs).execute()
+            answer = _ask_select(
+                q, modify_idx, total, previous_answer,
+                force_no_back=True,
+                role=role, issue_name=issue_name, agent_name=agent_name,
+            )
 
         answers[modify_idx] = answer
 
@@ -139,6 +133,7 @@ def _ask_select(
     idx: int,
     total: int,
     previous_answer: str | None = None,
+    force_no_back: bool = False,
     role: Optional[str] = None,
     issue_name: Optional[str] = None,
     agent_name: Optional[str] = None,
@@ -151,6 +146,7 @@ def _ask_select(
     while True:
         choices = _build_choices(
             question, idx, total, previous_answer,
+            force_no_back=force_no_back,
             role=role, issue_name=issue_name, agent_name=agent_name,
         )
 
@@ -168,10 +164,7 @@ def _ask_select(
             return BACK_SENTINEL
 
         if answer == OTHER_SENTINEL:
-            text_kwargs = {"message": "Type your answer:"}
-            if previous_answer is not None:
-                text_kwargs["default"] = previous_answer
-            answer = inquirer.text(**text_kwargs).execute()
+            answer = _prompt_other_answer(previous_answer)
 
         return answer
 
@@ -227,10 +220,7 @@ def _ask_checkbox(
 
         # Prompt for custom input only if user selected "Other"
         if has_other:
-            text_kwargs = {"message": "Type your answer:"}
-            if prev_other_text is not None:
-                text_kwargs["default"] = prev_other_text
-            custom = inquirer.text(**text_kwargs).execute()
+            custom = _prompt_other_answer(prev_other_text)
             if custom and custom.strip():
                 result_items.append(custom.strip())
 
@@ -274,16 +264,8 @@ def _ask_checkbox_action(
         {"name": "Reselect", "value": "redo"},
     ]
 
-    if idx > 0 and not force_no_back:
-        action_choices.append(Separator())
-        action_choices.append(
-            {"name": f"← Back to [{idx}/{total}]", "value": BACK_SENTINEL}
-        )
-
-    if role and issue_name:
-        action_choices.append(Separator())
-        chat_label = agent_name or role
-        action_choices.append({"name": f"Chat with {chat_label}", "value": "chat"})
+    _append_back_choice(action_choices, idx, total, force_no_back)
+    _append_chat_choice(action_choices, role, issue_name, agent_name)
 
     action = inquirer.select(
         message="Action:",
@@ -332,20 +314,45 @@ def _build_choices(
         for opt in choices
     ]
 
-    # Add Back option for question 2+ (not in modify flow)
-    if idx > 0 and not force_no_back:
-        choices_with_values.append(Separator())
-        choices_with_values.append(
-            {"name": f"← Back to [{idx}/{total}]", "value": BACK_SENTINEL}
-        )
-
-    # Add chat option when role and issue_name are provided
-    if role and issue_name:
-        choices_with_values.append(Separator())
-        chat_label = agent_name or role
-        choices_with_values.append({"name": f"Chat with {chat_label}", "value": "chat"})
+    _append_back_choice(choices_with_values, idx, total, force_no_back)
+    _append_chat_choice(choices_with_values, role, issue_name, agent_name)
 
     return choices_with_values
+
+
+def _prompt_other_answer(default: str | None = None) -> str:
+    """Prompt for a free-form Other answer, allowing multiline input."""
+    return prompt_multiline(
+        "Type your answer:",
+        default=default or "",
+    )
+
+
+def _append_back_choice(
+    choices: list,
+    idx: int,
+    total: int,
+    force_no_back: bool,
+) -> None:
+    """Append a Back choice when the current flow allows it."""
+    if idx <= 0 or force_no_back:
+        return
+    choices.append(Separator())
+    choices.append({"name": f"← Back to [{idx}/{total}]", "value": BACK_SENTINEL})
+
+
+def _append_chat_choice(
+    choices: list,
+    role: Optional[str],
+    issue_name: Optional[str],
+    agent_name: Optional[str],
+) -> None:
+    """Append a Chat choice when inline chat is available."""
+    if not (role and issue_name):
+        return
+    chat_label = agent_name or role
+    choices.append(Separator())
+    choices.append({"name": f"Chat with {chat_label}", "value": "chat"})
 
 
 def _parse_previous_checkbox_answer(answer: str, known_options: list[str]) -> list[str]:

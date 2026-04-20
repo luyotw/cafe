@@ -20,9 +20,9 @@ import yaml
 from rich.console import Console
 
 from cafe.agents.manager import AgentManager
-from cafe.core.blackboard import BlackboardStore
+from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
 from cafe.core.git import GitOperations
-from cafe.core.playbook_runner import PlaybookRunner
+from cafe.core.playbook_runner import PlaybookRunner, StepExecutionResult
 from cafe.core.permission import PermissionHandler
 from cafe.core.types import AgentCLI, AgentConfig
 from cafe.phases.generic_phase import GenericPhase
@@ -46,7 +46,13 @@ from cafe.ui.template_selector import select_template
 from cafe.services.delta_display import DeltaDisplay
 from cafe.utils.config import ConfigManager, ConfigError
 from cafe.utils.git_utils import is_branch_initialized
-from cafe.utils.github import GitHubError, GitHubOps
+from cafe.utils.github import (
+    GitHubError,
+    GitHubOps,
+    filter_unresolved_comments,
+    get_all_pr_comments,
+    get_processed_comment_ids_from_history,
+)
 
 
 def _resolve_runtime_playbook_name() -> str:
@@ -230,6 +236,11 @@ def _build_workflow_step_executor(
     role_agent_map = _build_workflow_role_agent_map(config_manager, playbook_data)
     if role_agent_map_override:
         role_agent_map.update(role_agent_map_override)
+    role_configs = {
+        "pm": config_manager.get("agents.pm", {}),
+        "developer": config_manager.get("agents.developer", {}),
+        "reviewer": config_manager.get("agents.reviewer", {}),
+    }
     return GenericWorkflowStepExecutor(
         issue_dir=issue_dir,
         issue_name=issue_name,
@@ -238,6 +249,7 @@ def _build_workflow_step_executor(
         agent_manager=_setup_agents(config_manager, issue_name=issue_name, phase_name=phase_name),
         git_ops=GitOperations(),
         role_agent_map=role_agent_map,
+        role_configs=role_configs,
         step_user_inputs=step_user_inputs,
         interactive=interactive,
     )
@@ -253,15 +265,29 @@ def _consume_pending_chat_handoff(
     if requested_start_step is not None:
         return requested_start_step
 
-    next_step_path = get_chat_next_step_path(issue_dir)
-    if not next_step_path.exists():
+    store = BlackboardStore(issue_dir)
+    # Do not call load_or_create before this check: it bootstraps next_step.txt via
+    # ensure_baton(), which would falsely look like a chat handoff existed.
+    if not store.next_step_path.exists():
         return None
 
-    target_step = next_step_path.read_text(encoding="utf-8").strip()
-    if not target_step:
-        raise ValueError(f"Chat handoff file is empty: {next_step_path}")
-    if target_step not in playbook_data["steps"] and target_step not in {"user", "done"}:
-        raise ValueError(f"Chat handoff step '{target_step}' does not exist in playbook")
+    blackboard = store.load_or_create(
+        str(playbook_data.get("entry_point") or next(iter(playbook_data["steps"].keys()))),
+        playbook_id=str(playbook_data["playbook"]["id"]),
+    )
+    contract = store.load_handoff_contract(
+        blackboard,
+        allowed_steps=list(playbook_data["steps"].keys()),
+        allow_legacy_text=True,
+    )
+
+    # `next_step.txt` is now persistent from workflow initialization onward.
+    # Ignore the bootstrap/persistent baton itself; only consume a chat-authored
+    # pending handoff (or legacy step-name text) when the baton meaning is real.
+    if contract.source in {"bootstrap", "chat.bootstrap"}:
+        return None
+
+    target_step = contract.to_step
     if target_step not in {"user", "done"} and GitOperations().has_uncommitted_changes():
         console.print(
             "[yellow]Chat handoff was not consumed because the worktree still has uncommitted changes.[/yellow]"
@@ -271,14 +297,37 @@ def _consume_pending_chat_handoff(
         )
         return None
 
-    blackboard = BlackboardStore(issue_dir).load_or_create(
-        str(playbook_data.get("entry_point") or next(iter(playbook_data["steps"].keys()))),
-        playbook_id=str(playbook_data["playbook"]["id"]),
-    )
-    store = BlackboardStore(issue_dir)
     store.set_current_step(blackboard, target_step)
-
-    next_step_path.unlink()
+    if target_step == "done":
+        store.update_handoff_contract(
+            blackboard,
+            from_step=contract.from_step,
+            to_owner=HandoffOwner.DONE,
+            to_step="done",
+            intent=HandoffIntent.WORKFLOW_COMPLETE,
+            status_code=contract.status_code,
+            source="workflow.consume_handoff",
+        )
+    elif target_step == "user":
+        store.update_handoff_contract(
+            blackboard,
+            from_step=contract.from_step,
+            to_owner=HandoffOwner.USER,
+            to_step="user",
+            intent=contract.intent,
+            status_code=contract.status_code,
+            source="workflow.consume_handoff",
+        )
+    else:
+        store.update_handoff_contract(
+            blackboard,
+            from_step=contract.from_step,
+            to_owner=HandoffOwner.AGENT,
+            to_step=target_step,
+            intent=HandoffIntent.AWAIT_AGENT,
+            status_code=contract.status_code,
+            source="workflow.consume_handoff",
+        )
     return target_step
 
 
@@ -312,6 +361,58 @@ def _find_incomplete_workflow_step(*, issue_dir: Path, playbook_data: Dict[str, 
             latest_incomplete = (timestamp, step_name)
 
     return latest_incomplete[1] if latest_incomplete is not None else None
+
+
+def _find_external_resume_step(
+    *,
+    issue_dir: Path,
+    playbook_data: Dict[str, Any],
+    git_ops: GitOperations,
+) -> Optional[str]:
+    """Return a workflow step that should resume due to new external PR feedback.
+
+    This restores the legacy behavior where `cafe make` could auto-resume the PR
+    phase after new GitHub PR comments arrived, even when the workflow was
+    currently paused at `user` or `done`.
+    """
+    for step_name, step_def in playbook_data["steps"].items():
+        hooks = step_def.get("hooks", {})
+        prepare_hooks = hooks.get("prepare_input", [])
+        if "GitHubPRCreator" not in prepare_hooks:
+            continue
+
+        try:
+            branch_name = git_ops.get_current_branch()
+        except Exception:
+            return None
+        if not branch_name:
+            return None
+
+        try:
+            existing_pr = GitHubOps().get_pr_for_branch(branch_name)
+        except Exception:
+            return None
+        if not existing_pr:
+            return None
+
+        try:
+            has_unpushed_commits = git_ops.has_unpushed_commits()
+        except Exception:
+            has_unpushed_commits = False
+        if has_unpushed_commits:
+            return None
+
+        try:
+            exclude_ids = get_processed_comment_ids_from_history(issue_dir / step_name)
+            comments = get_all_pr_comments(int(existing_pr["number"]), exclude_ids=exclude_ids)
+            unresolved_comments = filter_unresolved_comments(comments)
+        except Exception:
+            return None
+
+        if unresolved_comments:
+            return step_name
+
+    return None
 
 
 def _handle_user_phase(
@@ -380,6 +481,14 @@ def _handle_user_phase(
             return ""
         store.set_current_step(blackboard, target_step)
         store.set_handoff_summary(blackboard, note)
+        store.update_handoff_contract(
+            blackboard,
+            from_step="user",
+            to_owner=HandoffOwner.AGENT,
+            to_step=target_step,
+            intent=HandoffIntent.MANUAL_HANDOFF,
+            source="user.phase",
+        )
         store.record_event(
             blackboard,
             "user_handoff",
@@ -406,6 +515,14 @@ def _handle_user_phase(
     if action == "Mark the workflow complete":
         store.set_current_step(blackboard, "done")
         store.set_handoff_summary(blackboard, "workflow completed by user")
+        store.update_handoff_contract(
+            blackboard,
+            from_step="user",
+            to_owner=HandoffOwner.DONE,
+            to_step="done",
+            intent=HandoffIntent.WORKFLOW_COMPLETE,
+            source="user.phase",
+        )
         store.record_event(
             blackboard,
             "workflow_completed_by_user",
@@ -506,7 +623,16 @@ def _execute_single_step_alias(
         str(playbook_data.get("entry_point") or next(iter(playbook_data["steps"].keys()))),
         playbook_id=str(playbook_data["playbook"]["id"]),
     )
-    BlackboardStore(issue_dir).set_current_step(blackboard, step_name)
+    store = BlackboardStore(issue_dir)
+    store.set_current_step(blackboard, step_name)
+    store.update_handoff_contract(
+        blackboard,
+        from_step=step_name,
+        to_owner=HandoffOwner.AGENT,
+        to_step=step_name,
+        intent=HandoffIntent.AWAIT_AGENT,
+        source="single_step_alias",
+    )
 
     generic_phase = GenericPhase(SkillLoader())
     step_executor = _build_workflow_step_executor(
@@ -5819,7 +5945,16 @@ def workflow(
             if dry_run:
                 return dry_executor(step_name, step_def, blackboard_state)
             assert step_executor is not None
-            return step_executor.execute_step(step_name, step_def, blackboard_state)
+            result = step_executor.execute_step(step_name, step_def, blackboard_state)
+            if isinstance(result, StepExecutionResult):
+                for event in result.events:
+                    if not isinstance(event, dict) or event.get("type") != "pr_synced":
+                        continue
+                    pr_url = str(event.get("url", "")).strip()
+                    if pr_url:
+                        console.print(f"[green]PR synced[/green]")
+                        console.print(f"  URL: {pr_url}")
+            return result
 
         pending_start_step = start_step
         while True:
@@ -5849,9 +5984,39 @@ def workflow(
                 )
                 if incomplete_step is not None:
                     pending_start_step = incomplete_step
-                    BlackboardStore(issue_dir).set_current_step(blackboard, incomplete_step)
+                    store = BlackboardStore(issue_dir)
+                    store.set_current_step(blackboard, incomplete_step)
+                    store.update_handoff_contract(
+                        blackboard,
+                        from_step=incomplete_step,
+                        to_owner=HandoffOwner.AGENT,
+                        to_step=incomplete_step,
+                        intent=HandoffIntent.AWAIT_AGENT,
+                        source="workflow.resume_incomplete",
+                    )
                     console.print(
                         f"[yellow]Resuming unfinished iteration[/yellow] step={incomplete_step}"
+                    )
+                    continue
+                external_step = _find_external_resume_step(
+                    issue_dir=issue_dir,
+                    playbook_data=playbook_data,
+                    git_ops=git,
+                )
+                if external_step is not None:
+                    pending_start_step = external_step
+                    store = BlackboardStore(issue_dir)
+                    store.set_current_step(blackboard, external_step)
+                    store.update_handoff_contract(
+                        blackboard,
+                        from_step=external_step,
+                        to_owner=HandoffOwner.AGENT,
+                        to_step=external_step,
+                        intent=HandoffIntent.AWAIT_AGENT,
+                        source="workflow.resume_external_feedback",
+                    )
+                    console.print(
+                        f"[yellow]Detected external workflow feedback[/yellow] step={external_step}"
                     )
                     continue
             if not dry_run and active_step in {"user", "done"}:
@@ -5888,9 +6053,12 @@ def workflow(
                 str(playbook_data.get("entry_point") or next(iter(playbook_data["steps"].keys()))),
                 playbook_id=str(playbook_data["playbook"]["id"]),
             )
-            if not dry_run and not single_step and latest_blackboard.current_step == "user":
+            if interactive and not dry_run and not single_step and latest_blackboard.current_step == "user":
                 pending_start_step = "user"
                 continue
+            if not interactive and not dry_run and not single_step and latest_blackboard.current_step == "user":
+                console.print("[yellow]Workflow is waiting for user input[/yellow] step=user")
+                return
             if result.completed:
                 console.print(
                     f"[green]Workflow completed[/green] step={result.final_step} status={result.final_status_code} next={latest_blackboard.current_step}"

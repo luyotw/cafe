@@ -294,10 +294,11 @@ class PlanPhase(Phase):
                 valid_status_codes=[
                     PhaseStatusCode.READY_FOR_REVIEW,
                     PhaseStatusCode.NEED_CLARIFICATION,
+                    PhaseStatusCode.NEED_PERMISSION,
                 ],
                 allowed_tools=allowed_tools,
                 complete_codes=[PhaseStatusCode.READY_FOR_REVIEW],
-                continue_codes=[PhaseStatusCode.NEED_CLARIFICATION],
+                continue_codes=[PhaseStatusCode.NEED_CLARIFICATION, PhaseStatusCode.NEED_PERMISSION],
                 phase_specific_data={"dev_agent": self.dev_agent},
             )
 
@@ -432,6 +433,13 @@ class PlanPhase(Phase):
         )
         skill_section = f"{skill_body}\n\n" if skill_body else ""
 
+        rewrite_guardrails = """**Output Guardrails (must follow):**
+- In-place rewrite only: edit the existing output file, do not append a second full draft.
+- Each H1 section must appear at most once in the final file.
+- If old and new content conflict, keep the latest approved intent and remove superseded text.
+- Do not include "old version/new version", history logs, or duplicated plan blocks.
+- Before finalizing, self-check and merge any duplicated headings or semantically duplicated paragraphs."""
+
         if self.iteration == 1:
             # Get checklist file path
             iteration_dir = self._get_iteration_dir(self.iteration)
@@ -453,6 +461,8 @@ Read {agent_file} to understand your complete role definition and responsibiliti
 
 This is iteration {self.iteration} of implementation analysis.
 Analyze {spec_file_path} and plan implementation steps.
+
+{rewrite_guardrails}
 
 **Output Format:**
 - **CAFE_NEED_CLARIFICATION**: Append \"## Implementation Plan\" and \"## Questions to Confirm\" sections
@@ -492,6 +502,8 @@ Read {agent_file} to understand your complete role definition and responsibiliti
 This is iteration {self.iteration} of implementation analysis.
 Continue analyzing the latest version of {spec_file_path}.
 {user_request_section}
+
+{rewrite_guardrails}
 
 **Output Format:**
 - **CAFE_NEED_CLARIFICATION**: Update relevant sections and list questions in \"## Questions to Confirm\"
@@ -537,7 +549,15 @@ Continue analyzing the latest version of {spec_file_path}.
 
         # Get development guide using prompt_multiline for better UX
         from cafe.ui.inquirer_prompts import prompt_multiline
-        dev_guide = prompt_multiline("Please enter development guide (can be left empty)").strip()
+        dev_guide = prompt_multiline(
+            "Please enter development guide (can be left empty)\n"
+            "Suggested content:\n"
+            "- Technical solution/direction\n"
+            "- Related code locations\n"
+            "- Technical constraints or dependencies\n"
+            "- Key background information\n"
+            "(Press Esc + Enter to finish)"
+        ).strip()
 
         if dev_guide:
             self.display.console.print()

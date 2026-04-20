@@ -68,16 +68,23 @@ class UserInputCollector(NoOpHook):
             print()
 
     @staticmethod
-    def _display_previous_iteration_delta(phase: Any, previous_output_file: Optional[Path]) -> None:
+    def _display_previous_iteration_delta(phase: Any, previous_output_file: Optional[Path]) -> bool:
         if previous_output_file is None:
-            return
+            return False
         from cafe.ui.cli import _display_iteration_delta, console
+
+        # Delta view requires at least two historical snapshots.
+        # If current review target is the first iteration output, there is no
+        # meaningful "previous iteration" to diff against.
+        if (phase.iteration - 1) <= 1:
+            return False
 
         _display_iteration_delta(
             phase.iteration - 1,
             str(previous_output_file),
             console,
         )
+        return True
 
     @staticmethod
     def _resolve_review_item_name(step_name: str) -> str:
@@ -108,6 +115,34 @@ class UserInputCollector(NoOpHook):
         step_name = str(kwargs.get("step_name") or kwargs["step_def"].get("name") or "")
         agent_name = str(kwargs.get("agent_name") or "")
         role = str(kwargs["step_def"].get("role", "developer"))
+
+        # Restore plan phase iteration-1 initial user input (development guide).
+        if step_name == "plan" and getattr(phase, "iteration", 0) == 1:
+            if step_name not in phase.step_user_inputs:
+                development_guide_prompt = (
+                    "Please enter development guide (can be left empty)\n"
+                    "Suggested content:\n"
+                    "- Technical solution/direction\n"
+                    "- Related code locations\n"
+                    "- Technical constraints or dependencies\n"
+                    "- Key background information\n"
+                    "(Press Esc + Enter to finish)"
+                )
+                user_input = prompt_multiline(
+                    development_guide_prompt
+                ).strip()
+                phase.step_user_inputs[step_name] = user_input
+            return HookResult(
+                context_updates={"user_input": phase.step_user_inputs.get(step_name, "")},
+                events=[
+                    {
+                        "type": "user_input_collected",
+                        "step": step_name,
+                        "source": "initial_prompt",
+                    }
+                ],
+            )
+
         previous_status = _get_previous_iteration_status(phase)
         if previous_status not in {"CAFE_NEED_CLARIFICATION", "CAFE_READY_FOR_REVIEW"}:
             return HookResult()
@@ -119,7 +154,12 @@ class UserInputCollector(NoOpHook):
 
         prompt_role = {"pm": "pm", "reviewer": "reviewer"}.get(role, "developer")
         previous_output_file = self._get_previous_output_file(phase, step_name)
-        self._display_previous_output(phase, step_name, previous_output_file)
+        # For spec/plan READY_FOR_REVIEW flow, delta view is sufficient and less noisy.
+        if not (
+            step_name in {"spec", "plan"}
+            and previous_status == "CAFE_READY_FOR_REVIEW"
+        ):
+            self._display_previous_output(phase, step_name, previous_output_file)
 
         current_iter_dir = phase._get_iteration_dir(phase.iteration)
         current_user_input_file = current_iter_dir / "user_input.md"
@@ -139,16 +179,25 @@ class UserInputCollector(NoOpHook):
                 )
 
         if previous_status == "CAFE_READY_FOR_REVIEW":
-            self._display_previous_iteration_delta(phase, previous_output_file)
+            delta_displayed = self._display_previous_iteration_delta(phase, previous_output_file)
+            if not delta_displayed:
+                self._display_previous_output(phase, step_name, previous_output_file)
             prev_data = phase._load_previous_iteration_data() or {}
+            # Show diff again after returning from chat/edit, but never print full output.
+            if delta_displayed:
+                redisplay_callback = (
+                    lambda: self._display_previous_iteration_delta(phase, previous_output_file)
+                )
+            else:
+                redisplay_callback = (
+                    lambda: self._display_previous_output(phase, step_name, previous_output_file)
+                )
             choice = phase._ask_user_for_review_decision(
                 self._resolve_review_item_name(step_name),
                 agent_name=agent_name,
                 role=prompt_role,
                 output_file=previous_output_file,
-                display_callback=(
-                    lambda: self._display_previous_iteration_delta(phase, previous_output_file)
-                ),
+                display_callback=redisplay_callback,
                 edit_option_label="Edit manually - Open in editor",
             )
             result_or_input = phase._process_review_decision(
@@ -207,7 +256,161 @@ class UserInputCollector(NoOpHook):
 
 
 class GitHubIssueFetcher(NoOpHook):
+    """Collect initial requirements for spec iteration 1.
+
+    Reads issue.yaml to determine the input method (manual / github).
+    When no config exists, prompts the user to choose.  Writes the
+    initial requirements into the output file so the agent has content
+    to analyze.
+    """
+
     name = "GitHubIssueFetcher"
+
+    def run(self, **kwargs: Any) -> HookResult:
+        stage = kwargs.get("stage")
+        if stage != "prepare_input":
+            return HookResult()
+
+        phase = kwargs.get("phase")
+        if phase is None:
+            return HookResult()
+
+        if getattr(phase, "iteration", 0) > 1:
+            return HookResult()
+
+        step_name = str(kwargs.get("step_name") or "")
+        if step_name != "spec":
+            return HookResult()
+
+        output_file: Optional[Path] = kwargs.get("output_file")
+        if output_file is None:
+            return HookResult()
+
+        if output_file.exists() and output_file.read_text(encoding="utf-8").strip():
+            return HookResult()
+
+        config_file = phase.issue_dir / "issue.yaml"
+        input_method, issue_id = self._load_input_config(config_file)
+
+        if input_method is None:
+            input_method, issue_id = self._prompt_input_method()
+            self._save_input_config(config_file, input_method, issue_id)
+
+        if input_method == "github" and issue_id is not None:
+            content = self._fetch_github_issue(issue_id)
+        else:
+            content = self._prompt_manual_input()
+
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+        output_file.write_text(
+            f"# Initial Requirements\n\n{content}\n", encoding="utf-8"
+        )
+
+        return HookResult(
+            context_updates={"user_input": content},
+            events=[
+                {
+                    "type": "user_input_collected",
+                    "step": step_name,
+                    "source": "github" if input_method == "github" else "manual",
+                }
+            ],
+        )
+
+    @staticmethod
+    def _load_input_config(config_file: Path) -> tuple[Optional[str], Optional[int]]:
+        if not config_file.exists():
+            return None, None
+        try:
+            import yaml
+
+            data = yaml.safe_load(config_file.read_text(encoding="utf-8")) or {}
+        except Exception:
+            return None, None
+        spec = data.get("spec", {})
+        method = spec.get("input_method")
+        raw_id = spec.get("issue_id")
+        return method, int(raw_id) if raw_id else None
+
+    @staticmethod
+    def _save_input_config(
+        config_file: Path, method: str, issue_id: Optional[int]
+    ) -> None:
+        import yaml
+
+        try:
+            data = (
+                yaml.safe_load(config_file.read_text(encoding="utf-8")) or {}
+                if config_file.exists()
+                else {}
+            )
+        except Exception:
+            data = {}
+        if "spec" not in data:
+            data["spec"] = {}
+        data["spec"]["input_method"] = method
+        if issue_id is not None:
+            data["spec"]["issue_id"] = issue_id
+        config_file.parent.mkdir(parents=True, exist_ok=True)
+        config_file.write_text(
+            yaml.dump(data, allow_unicode=True, default_flow_style=False),
+            encoding="utf-8",
+        )
+
+    @staticmethod
+    def _prompt_input_method() -> tuple[str, Optional[int]]:
+        from cafe.ui.display import Display
+        from cafe.ui.phase_prompts import prompt_for_input_method
+
+        return prompt_for_input_method(Display(), GitHubOps())
+
+    @staticmethod
+    def _prompt_manual_input() -> str:
+        print()
+        print("=" * 70)
+        print("Please describe your requirements:")
+        print("=" * 70)
+        print()
+        print("Recommended to write as user stories:")
+        print("   Format: As a [role], I want [feature], so that [purpose/value]")
+        print()
+        print("Or describe requirements in general terms:")
+        print("   - Add a CSV export feature")
+        print("   - Fix bug where login page cannot submit")
+        print()
+
+        content = prompt_multiline("Please enter your requirements").strip()
+        if not content:
+            raise ValueError("No requirements provided, cannot continue")
+        print()
+        print("\u2705 Requirements recorded, starting clarification...")
+        print()
+        return content
+
+    @staticmethod
+    def _fetch_github_issue(issue_id: int) -> str:
+        from cafe.ui.phase_prompts import fetch_github_issue as _fetch
+
+        gh_ops = GitHubOps()
+        fetched_content, _image_urls = _fetch(gh_ops, issue_id)
+
+        lines = fetched_content.split("\n", 1)
+        if lines[0].startswith("# "):
+            title = lines[0][2:].strip()
+            body = lines[1].strip() if len(lines) > 1 else ""
+            content = (
+                f"**Issue Title:** {title}\n\n{body}"
+                if body
+                else f"**Issue Title:** {title}"
+            )
+        else:
+            content = fetched_content
+
+        print()
+        print(f"\u2705 Requirements loaded from GitHub Issue #{issue_id}")
+        print("   Starting clarification...")
+        print()
+        return content
 
 
 class GitHubPRCreator(NoOpHook):
@@ -391,9 +594,12 @@ class PRLinkOpener(NoOpHook):
         except Exception:
             return HookResult()
 
+        events = [{"type": "pr_synced", "url": pr_url}]
+
         try:
             webbrowser.open(pr_url)
         except Exception:
-            return HookResult()
+            return HookResult(events=events)
 
-        return HookResult(events=[{"type": "pr_link_opened", "url": pr_url}])
+        events.append({"type": "pr_link_opened", "url": pr_url})
+        return HookResult(events=events)

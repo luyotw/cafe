@@ -107,6 +107,8 @@ class GenericPhase:
                     "Latest workflow handoff from blackboard:",
                     context["handoff_summary"],
                     "Treat this handoff as the highest-priority current request unless current files prove it is already completed.",
+                    "Before returning a status code, verify whether the requested state change has actually happened in files or external state relevant to this phase.",
+                    "If the handoff asks for a retry, re-run, re-sync, or re-open action, do not treat an old artifact or a closed external object as completion.",
                 ]
             )
         if context and context.get("user_input"):

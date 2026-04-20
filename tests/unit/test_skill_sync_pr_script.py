@@ -27,7 +27,7 @@ def _write_fake_gh(bin_dir: Path, log_file: Path) -> None:
         f"""#!/usr/bin/env bash
 set -euo pipefail
 if [[ "$1" == "pr" && "$2" == "view" ]]; then
-  echo '{{"number":77,"url":"https://github.com/demo/repo/pull/77"}}'
+  echo '{{"number":77,"url":"https://github.com/demo/repo/pull/77","state":"OPEN","baseRefName":"dev"}}'
   exit 0
 fi
 if [[ "$1" == "pr" && "$2" == "edit" ]]; then

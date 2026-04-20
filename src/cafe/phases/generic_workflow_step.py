@@ -38,6 +38,7 @@ class GenericWorkflowStepExecutor(Phase):
         agent_manager: AgentManager,
         git_ops: GitOperations,
         role_agent_map: Dict[str, str],
+        role_configs: Optional[Dict[str, Dict[str, Any]]] = None,
         step_user_inputs: Optional[Dict[str, str]] = None,
         interactive: bool = False,
     ) -> None:
@@ -49,6 +50,7 @@ class GenericWorkflowStepExecutor(Phase):
         self.agent_manager = agent_manager
         self.git_ops = git_ops
         self.role_agent_map = role_agent_map
+        self.role_configs = dict(role_configs or {})
         self.step_user_inputs = dict(step_user_inputs or {})
         self.phase_name = ""
         self.phase_dir = issue_dir
@@ -84,6 +86,7 @@ class GenericWorkflowStepExecutor(Phase):
         skill_name = self._resolve_skill_name(step_def, self.iteration)
         valid_status_codes = self._resolve_valid_status_codes(step_def)
         agent_name = self._resolve_agent_name(step_def)
+        self._apply_step_agent_model(step_name=step_name, step_def=step_def, agent_name=agent_name)
         agent_cli = self.agent_manager.get_agent(agent_name).config.cli
         shared_skill_invocations = self.generic_phase.prepare_skills(
             skill_names=self.SHARED_WORKFLOW_SKILLS,
@@ -109,7 +112,13 @@ class GenericWorkflowStepExecutor(Phase):
         )
 
         last_prompt: List[str] = []
-        allowed_tools = self._normalize_allowed_tools(step_def.get("allowed_tools", []))
+        allowed_tools = self._build_allowed_tools(
+            step_name=step_name,
+            step_def=step_def,
+            output_file=output_file,
+            checklist_file=checklist_file,
+            questions_xml_file=questions_xml_file,
+        )
         phase_specific_data = {
             "step_name": step_name,
             "skill_name": skill_name,
@@ -118,10 +127,11 @@ class GenericWorkflowStepExecutor(Phase):
 
         def run_agent(prompt: str) -> str:
             last_prompt[:] = [prompt]
+            resolved_user_input = self._resolve_iteration_user_input(step_name)
             response, _ = self._execute_agent_iteration(
                 agent_name=agent_name,
                 prompt=prompt,
-                user_input=self.step_user_inputs.get(step_name, "workflow execute"),
+                user_input=resolved_user_input,
                 valid_status_codes=valid_status_codes,
                 require_status_code=True,
                 allowed_tools=allowed_tools,
@@ -155,10 +165,11 @@ class GenericWorkflowStepExecutor(Phase):
 
         agent_was_invoked = bool(last_prompt)
         if agent_was_invoked and status_code is not None and self._should_validate_checklist(status_code):
+            resolved_user_input = self._resolve_iteration_user_input(step_name)
             response, validated_status, validation_passed = self._validate_and_retry_checklist_completion(
                 agent_name=agent_name,
                 prompt=last_prompt[0] if last_prompt else "",
-                user_input=self.step_user_inputs.get(step_name, "workflow execute"),
+                user_input=resolved_user_input,
                 valid_status_codes=valid_status_codes,
                 allowed_tools=allowed_tools,
                 max_retries=3,
@@ -191,17 +202,37 @@ class GenericWorkflowStepExecutor(Phase):
         }:
             auto_continue = True
 
+        events = [
+            event
+            for event in execution.events
+            if isinstance(event, dict)
+        ]
+        if status_code is not None:
+            handoff_intent = self._resolve_handoff_intent(step_name, status_code)
+            if handoff_intent is not None:
+                events.append(
+                    {
+                        "type": "handoff_intent",
+                        "step": step_name,
+                        "intent": handoff_intent,
+                    }
+                )
+
         return StepExecutionResult(
             response=response,
             artifacts=artifacts,
             status_code=status_code.value if status_code is not None else None,
             auto_continue=auto_continue,
-            events=[
-                event
-                for event in execution.events
-                if isinstance(event, dict)
-            ],
+            events=events,
         )
+
+    def _resolve_iteration_user_input(self, step_name: str) -> str:
+        """Resolve user_input sent to agent for this step iteration."""
+        if step_name in self.step_user_inputs:
+            return self.step_user_inputs[step_name]
+        if step_name == "plan" and self.iteration == 1:
+            return ""
+        return "workflow execute"
 
     def _detect_written_output_files(self) -> List[Path]:
         if self._current_output_file and self._current_output_file.exists():
@@ -236,6 +267,25 @@ class GenericWorkflowStepExecutor(Phase):
 
         raise ValueError(f"Unsupported playbook role '{role}' for workflow execution")
 
+    def _apply_step_agent_model(self, *, step_name: str, step_def: Dict[str, Any], agent_name: str) -> None:
+        model = self._resolve_step_model(step_name=step_name, step_def=step_def)
+        self.agent_manager.get_agent(agent_name).config.model = model
+
+    def _resolve_step_model(self, *, step_name: str, step_def: Dict[str, Any]) -> Optional[str]:
+        role = str(step_def.get("role", "developer"))
+        config = self.role_configs.get(role, {})
+        if not isinstance(config, dict):
+            return None
+
+        phase_config = config.get(step_name)
+        if isinstance(phase_config, dict):
+            model = phase_config.get("model")
+            if model:
+                return str(model)
+
+        model = config.get("model")
+        return str(model) if model else None
+
     @staticmethod
     def _resolve_valid_status_codes(step_def: Dict[str, Any]) -> List[PhaseStatusCode]:
         valid = []
@@ -247,12 +297,63 @@ class GenericWorkflowStepExecutor(Phase):
 
     @staticmethod
     def _normalize_allowed_tools(raw_tools: List[str]) -> List[str]:
+        tool_name_map = {
+            "Read": "read",
+            "Edit": "edit",
+            "Write": "write",
+            "Grep": "grep",
+            "Glob": "glob",
+            "LS": "ls",
+            "Ls": "ls",
+            "Bash": "bash",
+            "WebFetch": "web_fetch",
+            "WebSearch": "web_search",
+        }
         normalized = []
         for tool in raw_tools:
             if not tool:
                 continue
-            normalized.append(tool[:1].lower() + tool[1:])
+            if "(" in tool:
+                tool_name, remainder = tool.split("(", 1)
+                normalized_name = tool_name_map.get(tool_name, tool_name[:1].lower() + tool_name[1:])
+                normalized.append(f"{normalized_name}({remainder}")
+                continue
+            normalized.append(tool_name_map.get(tool, tool[:1].lower() + tool[1:]))
         return normalized
+
+    def _build_allowed_tools(
+        self,
+        *,
+        step_name: str,
+        step_def: Dict[str, Any],
+        output_file: Path,
+        checklist_file: Path,
+        questions_xml_file: Path,
+    ) -> List[str]:
+        allowed_tools = self._normalize_allowed_tools(step_def.get("allowed_tools", []))
+
+        def add(tool: Optional[str]) -> None:
+            if tool and tool not in allowed_tools:
+                allowed_tools.append(tool)
+
+        add("ls")
+
+        if step_name in {"spec", "plan", "review", "pr"}:
+            add(f"edit({self._display_path(output_file)})")
+            add(f"edit({self._display_path(checklist_file)})")
+
+        if step_name in {"spec", "plan"}:
+            add(f"edit({self._display_path(questions_xml_file)})")
+
+        if step_name == "review":
+            add("web_fetch")
+            add("web_search")
+            add("bash(git log)")
+            add("bash(git diff)")
+            add("bash(git show)")
+            add("bash(git status)")
+
+        return allowed_tools
 
     def _build_context(
         self,
@@ -302,9 +403,11 @@ class GenericWorkflowStepExecutor(Phase):
 
         if self._resolve_skill_name(step_def, self.iteration) == "pr":
             base_branch = self._get_issue_config_value(self.issue_dir / "issue.yaml", "base_branch")
+            resolved_base = str(base_branch or self.git_ops.get_main_branch())
+            context["base_branch"] = resolved_base
             context["commits"] = self._get_current_branch_commits(
                 self.git_ops,
-                str(base_branch or self.git_ops.get_main_branch()),
+                resolved_base,
             )
 
         return context
@@ -446,6 +549,18 @@ class GenericWorkflowStepExecutor(Phase):
     @staticmethod
     def _should_validate_checklist(status_code: PhaseStatusCode) -> bool:
         return status_code in {PhaseStatusCode.CONFIRMED, PhaseStatusCode.READY_FOR_REVIEW}
+
+    @staticmethod
+    def _resolve_handoff_intent(step_name: str, status_code: PhaseStatusCode) -> Optional[str]:
+        if status_code == PhaseStatusCode.READY_FOR_REVIEW:
+            if step_name in {"spec", "plan"}:
+                return "confirm_output"
+            return "manual_handoff"
+        if status_code == PhaseStatusCode.NEED_CLARIFICATION:
+            return "need_clarification"
+        if status_code == PhaseStatusCode.NEED_PERMISSION:
+            return "need_permission"
+        return None
 
     def _artifact_path(self, blackboard_state: BlackboardState, name: str) -> Optional[str]:
         entry = blackboard_state.artifacts.get(name)

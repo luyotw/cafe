@@ -70,6 +70,7 @@ steps:
     allowed_tools: [Read, Edit, Write, Grep, Glob, Bash, WebFetch, WebSearch]
     valid_status_codes:
       - CAFE_CONFIRMED
+      - CAFE_NEED_PERMISSION
       - CAFE_NEEDS_CHANGES
     allowed_goto: [develop, review]
     hooks:
@@ -77,6 +78,7 @@ steps:
       publish_output: [PRLinkOpener]
     "on":
       CAFE_CONFIRMED: _done
+      CAFE_NEED_PERMISSION: pr
       CAFE_NEEDS_CHANGES: develop
 
 entry_point: develop

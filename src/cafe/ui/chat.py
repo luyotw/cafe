@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Optional
 
 from cafe.agents.manager import AgentManager
-from cafe.core.blackboard import BlackboardStore
+from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
 from cafe.core.types import AgentCLI, AgentConfig
 from cafe.playbooks.loader import PlaybookLoader
 from cafe.skills.loader import SkillLoader
@@ -21,6 +21,8 @@ CHAT_SKILL_NAMES = [
     "chat-spec-revision",
     "chat-plan-revision",
 ]
+
+CURSOR_NATIVE_MODULE_HINT = "@anysphere/file-service-"
 
 
 def _extract_latest_codex_session_id(
@@ -74,10 +76,35 @@ def _load_chat_workflow_context(issue_dir: Path) -> tuple[str, list[str], str]:
 def _prepare_chat_handoff_state(issue_dir: Path) -> tuple[str, list[str], str]:
     current_step, valid_steps, playbook_id = _load_chat_workflow_context(issue_dir)
     issue_dir.mkdir(parents=True, exist_ok=True)
-    BlackboardStore(issue_dir).load_or_create(current_step)
-    next_step_path = get_chat_next_step_path(issue_dir)
-    if next_step_path.exists():
-        next_step_path.unlink()
+    store = BlackboardStore(issue_dir)
+    blackboard = store.load_or_create(current_step)
+    if current_step == "done":
+        store.update_handoff_contract(
+            blackboard,
+            from_step=current_step,
+            to_owner=HandoffOwner.DONE,
+            to_step="done",
+            intent=HandoffIntent.WORKFLOW_COMPLETE,
+            source="chat.bootstrap",
+        )
+    elif current_step == "user":
+        store.update_handoff_contract(
+            blackboard,
+            from_step=current_step,
+            to_owner=HandoffOwner.USER,
+            to_step="user",
+            intent=HandoffIntent.MANUAL_HANDOFF,
+            source="chat.bootstrap",
+        )
+    else:
+        store.update_handoff_contract(
+            blackboard,
+            from_step=current_step,
+            to_owner=HandoffOwner.AGENT,
+            to_step=current_step,
+            intent=HandoffIntent.AWAIT_AGENT,
+            source="chat.bootstrap",
+        )
     return current_step, valid_steps, playbook_id
 
 
@@ -95,6 +122,35 @@ def _prepare_chat_environment(
 
     for skill_name in CHAT_SKILL_NAMES:
         bridge.install_skill(skill_name, agent_cli)
+
+
+def _format_cli_specific_error(agent_cli: AgentCLI, stderr: str, stdout: str) -> Optional[str]:
+    """Translate known CLI-specific failures into user-facing diagnostics."""
+    combined = f"{stderr}\n{stdout}"
+    if agent_cli == AgentCLI.CURSOR and CURSOR_NATIVE_MODULE_HINT in combined:
+        return (
+            "Cursor CLI is installed but broken: missing native module "
+            "`@anysphere/file-service-darwin-x64`. Reinstall or repair Cursor CLI, "
+            "or switch this role to another agent before opening chat."
+        )
+    return None
+
+
+def _handle_chat_launch_failure(agent_cli: AgentCLI, result: subprocess.CompletedProcess[object]) -> int:
+    """Print a concise launch failure and return the CLI's exit code."""
+    stderr = (getattr(result, "stderr", None) or "").strip()
+    stdout = (getattr(result, "stdout", None) or "").strip()
+    specific_error = _format_cli_specific_error(agent_cli, stderr, stdout)
+    if specific_error:
+        print(f"\n⚠️  {specific_error}\n")
+        return result.returncode
+
+    detail = stderr or stdout
+    if detail:
+        lines = [line.strip() for line in detail.splitlines() if line.strip()]
+        summary = lines[0] if lines else detail
+        print(f"\n⚠️  Chat CLI exited with code {result.returncode}: {summary}\n")
+    return result.returncode
 
 
 def launch_chat_session(role: str, issue_name: str) -> int:
@@ -156,12 +212,6 @@ def launch_chat_session(role: str, issue_name: str) -> int:
     )
     session_id: Optional[str] = executor.config.session_id
 
-    print(f"\nOpening chat with {role} ({agent_name})...")
-    if session_id:
-        print(f"Resuming session: {session_id}")
-    print()
-
-    # Build CLI command
     cli_command = [agent_cli_str]
     codex_history_start_ts = int(time.time())
 
@@ -172,7 +222,7 @@ def launch_chat_session(role: str, issue_name: str) -> int:
         if agent_cli_str in ("claude", "copilot", "gemini"):
             cli_command.extend(["--resume", session_id])
         elif agent_cli_str == "cursor-agent":
-            cli_command.extend(["--session", session_id])
+            cli_command.extend(["--resume", session_id])
         elif agent_cli_str == "codex":
             cli_command.extend(["resume", session_id])
 
@@ -180,9 +230,15 @@ def launch_chat_session(role: str, issue_name: str) -> int:
         if agent_cli_str in ("claude", "copilot", "gemini"):
             cli_command.extend(["--model", agent_model])
 
+    env = cli_strategy.build_environment()
+    print(f"\nOpening chat with {role} ({agent_name})...")
+    if session_id:
+        print(f"Resuming session: {session_id}")
+    print()
+
     # Execute interactive CLI (blocks until user exits)
     try:
-        result = subprocess.run(cli_command, env=cli_strategy.build_environment())
+        result = subprocess.run(cli_command, env=env)
     except FileNotFoundError:
         print(f"\n⚠️  CLI tool '{agent_cli_str}' not found. Please install it first.\n")
         return 1
@@ -201,7 +257,17 @@ def launch_chat_session(role: str, issue_name: str) -> int:
                 issue_name,
             )
 
-    if not get_chat_next_step_path(issue_dir).exists():
+    if result.returncode != 0:
+        return _handle_chat_launch_failure(agent_cli, result)
+
+    store = BlackboardStore(issue_dir)
+    blackboard = store.load_or_create(_current_step)
+    contract = store.load_handoff_contract(
+        blackboard,
+        allowed_steps=_valid_steps,
+        allow_legacy_text=True,
+    )
+    if contract.source == "chat.bootstrap":
         print("\n⚠️  Chat ended without writing a next-step baton. The agent did not complete workflow handoff.\n")
 
     return result.returncode
