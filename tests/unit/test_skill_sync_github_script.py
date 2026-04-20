@@ -6,6 +6,23 @@ from pathlib import Path
 import pytest
 
 
+def test_phase_scripts_delegate_to_shared_implementation() -> None:
+    project_root = Path(__file__).resolve().parents[2]
+    shared = project_root / "src/cafe/data/skills/shared/scripts/sync_github.sh"
+    assert shared.exists()
+
+    wrappers = [
+        project_root / "src/cafe/data/skills/spec_first/scripts/sync_github.sh",
+        project_root / "src/cafe/data/skills/spec_revise/scripts/sync_github.sh",
+        project_root / "src/cafe/data/skills/plan/scripts/sync_github.sh",
+    ]
+
+    for wrapper in wrappers:
+        content = wrapper.read_text(encoding="utf-8")
+        assert "../../shared/scripts/sync_github.sh" in content
+        assert "exec /bin/bash" in content
+
+
 @pytest.mark.parametrize(
     "script_rel_path,phase",
     [
