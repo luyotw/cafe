@@ -6,6 +6,7 @@ from unittest.mock import patch, MagicMock
 
 from typer.testing import CliRunner
 
+from cafe.core.playbook_runner import StepExecutionResult
 from cafe.ui.cli import app, _execute_single_step_alias, _find_external_resume_step
 from cafe.utils.config import ConfigManager
 
@@ -99,6 +100,39 @@ def test_workflow_command_runs_execute_mode(tmp_path: Path, monkeypatch) -> None
         assert "Workflow is waiting for user input" in result.stdout
         assert mock_builder.called
         assert executed_steps == ["spec", "plan", "develop", "review", "pr"]
+
+
+def test_workflow_command_prints_pr_url_when_pr_step_reports_sync_event(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    executed_steps: list[str] = []
+
+    class FakeExecutor:
+        def execute_step(self, step_name: str, step_def: dict, blackboard_state: object):
+            executed_steps.append(step_name)
+            events = []
+            if step_name == "pr":
+                events = [{"type": "pr_synced", "url": "https://github.com/test/repo/pull/238"}]
+            return StepExecutionResult(
+                response="CAFE_CONFIRMED",
+                artifacts={str(step_def.get("output_artifact", step_name)): f"{step_name}/output.md"},
+                status_code="CAFE_CONFIRMED",
+                events=events,
+            )
+
+    with (
+        patch("cafe.ui.cli.GitOperations") as mock_git_cls,
+        patch("cafe.ui.cli._build_workflow_step_executor", return_value=FakeExecutor()),
+    ):
+        git = MagicMock()
+        git.get_current_branch.return_value = "issue-238"
+        mock_git_cls.return_value = git
+
+        result = runner.invoke(app, ["workflow", "--playbook", "default", "--execute"])
+
+    assert result.exit_code == 0
+    assert "PR synced" in result.stdout
+    assert "https://github.com/test/repo/pull/238" in result.stdout
+    assert executed_steps == ["spec", "plan", "develop", "review", "pr"]
 
 
 def test_workflow_command_consumes_chat_baton_before_execution(tmp_path: Path, monkeypatch) -> None:

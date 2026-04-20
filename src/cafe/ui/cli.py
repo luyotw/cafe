@@ -22,7 +22,7 @@ from rich.console import Console
 from cafe.agents.manager import AgentManager
 from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
 from cafe.core.git import GitOperations
-from cafe.core.playbook_runner import PlaybookRunner
+from cafe.core.playbook_runner import PlaybookRunner, StepExecutionResult
 from cafe.core.permission import PermissionHandler
 from cafe.core.types import AgentCLI, AgentConfig
 from cafe.phases.generic_phase import GenericPhase
@@ -5932,7 +5932,16 @@ def workflow(
             if dry_run:
                 return dry_executor(step_name, step_def, blackboard_state)
             assert step_executor is not None
-            return step_executor.execute_step(step_name, step_def, blackboard_state)
+            result = step_executor.execute_step(step_name, step_def, blackboard_state)
+            if isinstance(result, StepExecutionResult):
+                for event in result.events:
+                    if not isinstance(event, dict) or event.get("type") != "pr_synced":
+                        continue
+                    pr_url = str(event.get("url", "")).strip()
+                    if pr_url:
+                        console.print(f"[green]PR synced[/green]")
+                        console.print(f"  URL: {pr_url}")
+            return result
 
         pending_start_step = start_step
         while True:
