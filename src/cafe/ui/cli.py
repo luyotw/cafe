@@ -6047,9 +6047,12 @@ def workflow(
                 str(playbook_data.get("entry_point") or next(iter(playbook_data["steps"].keys()))),
                 playbook_id=str(playbook_data["playbook"]["id"]),
             )
-            if not dry_run and not single_step and latest_blackboard.current_step == "user":
+            if interactive and not dry_run and not single_step and latest_blackboard.current_step == "user":
                 pending_start_step = "user"
                 continue
+            if not interactive and not dry_run and not single_step and latest_blackboard.current_step == "user":
+                console.print("[yellow]Workflow is waiting for user input[/yellow] step=user")
+                return
             if result.completed:
                 console.print(
                     f"[green]Workflow completed[/green] step={result.final_step} status={result.final_status_code} next={latest_blackboard.current_step}"

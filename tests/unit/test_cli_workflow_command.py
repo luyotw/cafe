@@ -475,6 +475,47 @@ def test_workflow_command_enters_user_phase_immediately_after_agent_handoff(tmp_
     assert blackboard_data["current_step"] == "done"
 
 
+def test_workflow_command_noninteractive_stops_after_agent_handoff_to_user(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-211b"
+    issue_dir.mkdir(parents=True, exist_ok=True)
+    (issue_dir / "blackboard.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "playbook_id": "default",
+                "current_step": "pr",
+                "artifacts": {},
+                "events": [],
+                "decisions": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    class FakeExecutor:
+        def execute_step(self, step_name: str, step_def: dict, blackboard_state: object) -> tuple[str, dict[str, str]]:
+            assert step_name == "pr"
+            return ("CAFE_CONFIRMED", {})
+
+    with (
+        patch("cafe.ui.cli.GitOperations") as mock_git_cls,
+        patch("cafe.ui.cli._build_workflow_step_executor", return_value=FakeExecutor()),
+        patch("cafe.ui.cli._find_external_resume_step") as mock_external_resume,
+    ):
+        git = MagicMock()
+        git.get_current_branch.return_value = "issue-211b"
+        mock_git_cls.return_value = git
+
+        result = runner.invoke(app, ["workflow", "--playbook", "default", "--execute"])
+
+    assert result.exit_code == 0
+    assert "Executing step=pr iteration=001" in result.stdout
+    assert "Workflow is waiting for user input" in result.stdout
+    assert mock_external_resume.call_count == 0
+
+
 def test_workflow_command_done_phase_can_restart_workflow(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("CAFE_FORCE_INTERACTIVE", "1")
