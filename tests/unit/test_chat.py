@@ -135,15 +135,12 @@ class TestLaunchChatSession:
         agent_manager = self._make_agent_manager("David", "cursor-agent", session_id="sess-cursor")
         mock_agent_manager_cls.return_value = agent_manager
 
-        mock_run.side_effect = [
-            MagicMock(returncode=0, stdout="1.0.0", stderr=""),
-            MagicMock(returncode=0),
-        ]
+        mock_run.return_value = MagicMock(returncode=0)
 
         launch_chat_session("developer", "issue123")
 
-        assert mock_run.call_args_list[1].args[0] == ["cursor-agent", "--resume", "sess-cursor"]
-        assert "env" in mock_run.call_args_list[1].kwargs
+        assert mock_run.call_args.args[0] == ["cursor-agent", "--resume", "sess-cursor"]
+        assert "env" in mock_run.call_args.kwargs
 
     @patch("builtins.print")
     @patch("cafe.ui.chat.ConfigManager")
@@ -380,7 +377,7 @@ def test_launch_chat_session_warns_when_baton_missing(
     assert "did not complete workflow handoff" in printed
 
 
-def test_launch_chat_session_returns_preflight_error_for_broken_cursor_cli(
+def test_launch_chat_session_reports_broken_cursor_cli_on_launch_failure(
     tmp_path,
     monkeypatch,
     mock_chat_environment,

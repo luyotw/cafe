@@ -136,30 +136,6 @@ def _format_cli_specific_error(agent_cli: AgentCLI, stderr: str, stdout: str) ->
     return None
 
 
-def _preflight_chat_cli(agent_cli: AgentCLI, cli_command: list[str], env: dict[str, str]) -> Optional[str]:
-    """Return a user-facing error when a CLI is installed but obviously broken."""
-    try:
-        result = subprocess.run(
-            [cli_command[0], "--version"],
-            env=env,
-            capture_output=True,
-            text=True,
-        )
-    except FileNotFoundError:
-        return f"CLI tool '{cli_command[0]}' not found. Please install it first."
-    except Exception as exc:
-        return f"Failed to execute CLI preflight: {exc}"
-
-    stderr = result.stderr or ""
-    stdout = result.stdout or ""
-    if result.returncode == 0:
-        return None
-    specific_error = _format_cli_specific_error(agent_cli, stderr, stdout)
-    if specific_error:
-        return specific_error
-    return f"CLI preflight failed with exit code {result.returncode}."
-
-
 def _handle_chat_launch_failure(agent_cli: AgentCLI, result: subprocess.CompletedProcess[object]) -> int:
     """Print a concise launch failure and return the CLI's exit code."""
     stderr = (getattr(result, "stderr", None) or "").strip()
@@ -255,12 +231,6 @@ def launch_chat_session(role: str, issue_name: str) -> int:
             cli_command.extend(["--model", agent_model])
 
     env = cli_strategy.build_environment()
-    if agent_cli == AgentCLI.CURSOR:
-        preflight_error = _preflight_chat_cli(agent_cli, cli_command, env)
-        if preflight_error:
-            print(f"\n⚠️  {preflight_error}\n")
-            return 1
-
     print(f"\nOpening chat with {role} ({agent_name})...")
     if session_id:
         print(f"Resuming session: {session_id}")
