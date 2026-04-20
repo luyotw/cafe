@@ -18,7 +18,7 @@ Read your agent file: {agent_file}
 
 ## Available scripts
 
-- **`scripts/sync_pr.sh`** — Push branch and create/update GitHub PR from output file
+- **`scripts/sync_pr.sh`** — Push branch, create/update GitHub PR, and (when enabled) post completed todo list comment
 
 ```bash
 bash scripts/sync_pr.sh --help
@@ -44,7 +44,8 @@ bash scripts/sync_pr.sh --help
    bash scripts/sync_pr.sh --output {output_file}
    ```
    - 如果 issue.yaml 有 `base_branch`，加上 `--base <base_branch>`
-   - Script 輸出 JSON 到 stdout（`{"action":"created"|"updated","pr_number":"...","pr_url":"..."}`）
+  - Script 輸出 JSON 到 stdout（`{"action":"created"|"updated","pr_number":"...","pr_url":"..."}`）
+  - 若 `issue.yaml` 的 `pr.post_todo_list=true`，script 會在 PR create/update 時自動檢查最新 todo list iteration，只有在全部項目都已完成 `[x]` 才會貼到 PR comment
 4. 把 PR URL 寫到 blackboard（`current_step` 改成 `user`，summary 說明 PR 已同步）
 5. 寫入 next-step baton，內容只放 `user`
 6. 回傳 `CAFE_CONFIRMED`

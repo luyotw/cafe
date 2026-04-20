@@ -238,7 +238,29 @@ def test_github_pr_creator_prepare_input_loads_unresolved_comments(tmp_path: Pat
     assert result.events == [{"type": "pr_comments_loaded", "count": 1, "pr_number": "42"}]
 
 
-def test_pr_comment_poster_posts_todo_comment_for_needs_changes(tmp_path: Path) -> None:
+def test_pr_comment_poster_posts_todo_comment_only_when_confirmed_and_complete(tmp_path: Path) -> None:
+    output_file = tmp_path / "output.md"
+    output_file.write_text("## Todo List\n- [x] Fix comment\n", encoding="utf-8")
+
+    phase = MagicMock()
+    phase.git_ops.get_current_branch.return_value = "issue-183"
+
+    hook = PRCommentPoster()
+
+    with patch("cafe.core.hooks.native.GitHubOps") as mock_github_ops:
+        mock_github_ops.return_value.get_pr_for_branch.return_value = {"number": 42, "url": "https://github.com/test/repo/pull/42"}
+        result = hook.run(
+            stage="publish_output",
+            phase=phase,
+            output_file=output_file,
+            status_code=PhaseStatusCode.CONFIRMED,
+        )
+
+    mock_github_ops.return_value.add_pr_comment.assert_called_once()
+    assert result.events == [{"type": "pr_todo_comment_posted", "pr_number": "42"}]
+
+
+def test_pr_comment_poster_skips_when_unchecked_items_exist(tmp_path: Path) -> None:
     output_file = tmp_path / "output.md"
     output_file.write_text("## Todo List\n- [ ] Fix comment\n", encoding="utf-8")
 
@@ -253,8 +275,29 @@ def test_pr_comment_poster_posts_todo_comment_for_needs_changes(tmp_path: Path) 
             stage="publish_output",
             phase=phase,
             output_file=output_file,
+            status_code=PhaseStatusCode.CONFIRMED,
+        )
+
+    mock_github_ops.return_value.add_pr_comment.assert_not_called()
+    assert result.events == []
+
+
+def test_pr_comment_poster_skips_for_needs_changes_status(tmp_path: Path) -> None:
+    output_file = tmp_path / "output.md"
+    output_file.write_text("## Todo List\n- [x] Fix comment\n", encoding="utf-8")
+
+    phase = MagicMock()
+    phase.git_ops.get_current_branch.return_value = "issue-183"
+
+    hook = PRCommentPoster()
+
+    with patch("cafe.core.hooks.native.GitHubOps") as mock_github_ops:
+        result = hook.run(
+            stage="publish_output",
+            phase=phase,
+            output_file=output_file,
             status_code=PhaseStatusCode.NEEDS_CHANGES,
         )
 
-    mock_github_ops.return_value.add_pr_comment.assert_called_once()
-    assert result.events == [{"type": "pr_todo_comment_posted", "pr_number": "42"}]
+    mock_github_ops.return_value.add_pr_comment.assert_not_called()
+    assert result.events == []
