@@ -11,6 +11,7 @@ from cafe.core.types import PhaseStatus, TokenUsage
 from cafe.core.git import GitOperations
 from cafe.phases.plan_phase import PlanPhase
 from cafe.utils.checklist_validator import ChecklistValidationResult
+from cafe.core.types import PermissionDenial
 
 
 
@@ -306,6 +307,54 @@ class TestPlanPhaseWithStatusCodes:
             "請允許寫入 spec 檔案，讓我繼續完成工作流程。\n\n需要您授權寫入 `.cafe/issues/issue21/spec/` 目錄下的檔案。\n請在 Claude Code 的權限提示中點擊「Allow」。",
             TokenUsage(),
             [],
+            None,
+            [],
+            None,
+        )
+        agent_manager.preview_cli_command_args.return_value = ["--model", "claude"]
+
+        mock_agent = MagicMock()
+        mock_agent.config.cli.value = "claude"
+        mock_agent.config.session_id = "test_session"
+        agent_manager.get_agent.return_value = mock_agent
+        agent_manager.get_total_token_usage.return_value = TokenUsage()
+
+        permission_handler = MagicMock(spec=PermissionHandler)
+
+        phase = PlanPhase(
+            agent_manager=agent_manager,
+            permission_handler=permission_handler,
+            git_ops=mock_git_ops,
+            spec_file=str(requirements_file),
+            interactive=False,
+            template_path=create_template_file(tmp_path),
+        )
+
+        with patch("builtins.print"):
+            result = phase.execute()
+
+        assert result.status == PhaseStatus.COMPLETED
+        assert result.data.get("status_code") == "CAFE_NEED_PERMISSION"
+        assert agent_manager.execute.call_count == 1
+
+    def test_structured_permission_denial_maps_to_need_permission_without_retry(
+        self, tmp_path: Path, mock_git_ops, monkeypatch
+    ) -> None:
+        """有 structured permission_denials 時，應直接視為 NEED_PERMISSION。"""
+        monkeypatch.chdir(tmp_path)
+        requirements_file = tmp_path / ".cafe" / "issues" / "test-feature" / "spec" / "spec.md"
+        requirements_file.parent.mkdir(parents=True, exist_ok=True)
+        requirements_file.write_text("# 需求\n\n## 開發指南\nSome guide")
+
+        plan_file = requirements_file.parent.parent / "plan" / "plan.md"
+        plan_file.parent.mkdir(parents=True, exist_ok=True)
+        plan_file.write_text("## 開發指南\nSome guide\n\n## 實作計畫\nTODO")
+
+        agent_manager = MagicMock(spec=AgentManager)
+        agent_manager.execute.return_value = (
+            "請允許寫入 spec 檔案，讓我繼續完成工作流程。",
+            TokenUsage(),
+            [PermissionDenial(tool_name="Write", tool_input={"file_path": str(requirements_file)})],
             None,
             [],
             None,

@@ -715,7 +715,13 @@ class Phase(ABC):
             response,
             valid_codes=valid_status_codes,
         )
-        if status_code is None:
+        if (
+            status_code is None
+            and permission_denials
+            and PhaseStatusCode.NEED_PERMISSION in valid_status_codes
+        ):
+            status_code = PhaseStatusCode.NEED_PERMISSION
+        elif status_code is None:
             inferred_human_input_status = self._infer_human_input_status_from_response(response)
             if inferred_human_input_status in valid_status_codes:
                 status_code = inferred_human_input_status
