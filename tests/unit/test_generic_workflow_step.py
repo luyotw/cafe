@@ -23,10 +23,14 @@ class FakeAgentManager:
             self._responses = iter([response])
         self.prompts: list[str] = []
         self.allowed_tools_calls: list[list[str] | None] = []
+        self.preview_calls: list[list[str] | None] = []
+        self.agent = SimpleNamespace(
+            config=SimpleNamespace(cli=AgentCLI.CODEX, session_id="session-1", model=None)
+        )
         self.on_execute = on_execute
 
     def get_agent(self, name: str) -> SimpleNamespace:
-        return SimpleNamespace(config=SimpleNamespace(cli=AgentCLI.CODEX, session_id="session-1"))
+        return self.agent
 
     def preview_cli_command_args(
         self,
@@ -35,7 +39,12 @@ class FakeAgentManager:
         allowed_tools=None,
         allowed_directories=None,
     ) -> list[str]:
-        return ["-C", str(Path.cwd().resolve()), "-a", "never", "exec", "--json", prompt]
+        args = ["-C", str(Path.cwd().resolve()), "-a", "never", "exec", "--json"]
+        if self.agent.config.model:
+            args.extend(["--model", self.agent.config.model])
+        args.append(prompt)
+        self.preview_calls.append(args)
+        return args
 
     def preview_cli_environment(self, agent_name: str) -> dict[str, str]:
         return {"CODEX_HOME": str(Path.cwd().resolve() / ".codex")}
@@ -742,3 +751,67 @@ def test_generic_workflow_step_restores_pr_runtime_allowed_tools(tmp_path: Path,
     assert "web_search" in allowed_tools
     assert "edit(./.cafe/issues/issue-pr-tools/pr/iteration_001/output.md)" in allowed_tools
     assert "edit(./.cafe/issues/issue-pr-tools/pr/iteration_001/checklist.md)" in allowed_tools
+
+
+def test_generic_workflow_step_applies_phase_specific_model_per_step(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-models"
+    playbook = {
+        "playbook": {"id": "default"},
+        "roles": {"pm": {"default_agent": "Roger"}, "developer": {"default_agent": "David"}},
+        "steps": {
+            "spec": {
+                "skill": {"1": "spec_first", "default": "spec_first"},
+                "role": "pm",
+                "output_artifact": "spec",
+                "allowed_tools": ["Read"],
+                "valid_status_codes": ["CAFE_CONFIRMED"],
+                "on": {"CAFE_CONFIRMED": "plan"},
+            },
+            "plan": {
+                "skill": "plan",
+                "role": "developer",
+                "output_artifact": "plan",
+                "allowed_tools": ["Read"],
+                "input_artifacts": ["spec"],
+                "valid_status_codes": ["CAFE_CONFIRMED"],
+                "on": {"CAFE_CONFIRMED": "_done"},
+            },
+        },
+    }
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("spec")
+
+    def _mark_checklist_complete(*, streaming_output_file, **kwargs) -> None:
+        iteration_dir = Path(streaming_output_file).parent
+        checklist_file = iteration_dir / "checklist.md"
+        checklist_file.write_text("- [x] completed\n", encoding="utf-8")
+
+    agent_manager = FakeAgentManager(
+        ["CAFE_CONFIRMED", "CAFE_CONFIRMED"],
+        on_execute=_mark_checklist_complete,
+    )
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="issue-models",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=agent_manager,
+        git_ops=FakeGitOperations(),
+        role_agent_map={"pm": "Roger", "developer": "David"},
+        role_configs={
+            "pm": {"spec": {"model": "gpt-5.4"}},
+            "developer": {"plan": {"model": "claude-opus-4.6"}},
+        },
+    )
+
+    executor.execute_step("spec", playbook["steps"]["spec"], state)
+
+    spec_file = issue_dir / "spec" / "iteration_001" / "output.md"
+    store.set_artifact(state, "spec", str(spec_file))
+    executor.execute_step("plan", playbook["steps"]["plan"], state)
+
+    assert "--model" in (agent_manager.preview_calls[0] or [])
+    assert "gpt-5.4" in (agent_manager.preview_calls[0] or [])
+    assert "--model" in (agent_manager.preview_calls[1] or [])
+    assert "claude-opus-4.6" in (agent_manager.preview_calls[1] or [])

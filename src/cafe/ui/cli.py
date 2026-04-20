@@ -236,6 +236,11 @@ def _build_workflow_step_executor(
     role_agent_map = _build_workflow_role_agent_map(config_manager, playbook_data)
     if role_agent_map_override:
         role_agent_map.update(role_agent_map_override)
+    role_configs = {
+        "pm": config_manager.get("agents.pm", {}),
+        "developer": config_manager.get("agents.developer", {}),
+        "reviewer": config_manager.get("agents.reviewer", {}),
+    }
     return GenericWorkflowStepExecutor(
         issue_dir=issue_dir,
         issue_name=issue_name,
@@ -244,6 +249,7 @@ def _build_workflow_step_executor(
         agent_manager=_setup_agents(config_manager, issue_name=issue_name, phase_name=phase_name),
         git_ops=GitOperations(),
         role_agent_map=role_agent_map,
+        role_configs=role_configs,
         step_user_inputs=step_user_inputs,
         interactive=interactive,
     )
