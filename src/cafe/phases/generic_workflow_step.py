@@ -393,6 +393,8 @@ class GenericWorkflowStepExecutor(Phase):
                 context["develop_file"] = artifact_path
             elif artifact_name == "review_feedback":
                 context["feedback_file"] = artifact_path
+            elif artifact_name == "pr_result":
+                context["feedback_file"] = artifact_path
 
         if "spec_file" not in context:
             latest_spec = self._get_latest_versioned_file("spec", self.issue_dir / "spec")
@@ -402,6 +404,10 @@ class GenericWorkflowStepExecutor(Phase):
             latest_plan = self._get_latest_versioned_file("plan", self.issue_dir / "plan")
             if latest_plan:
                 context["plan_file"] = self._display_path(latest_plan)
+        if step_name == "develop" and "feedback_file" not in context:
+            pr_feedback = blackboard_state.artifacts.get("pr_result")
+            if pr_feedback:
+                context["feedback_file"] = self._display_path(Path(pr_feedback.path))
 
         if self._resolve_skill_name(step_def, self.iteration) == "pr":
             base_branch = self._get_issue_config_value(self.issue_dir / "issue.yaml", "base_branch")
@@ -430,7 +436,10 @@ class GenericWorkflowStepExecutor(Phase):
         questions_display = self._display_path(questions_xml_file)
         spec_path = self._artifact_or_latest_path(blackboard_state, "spec", "spec")
         plan_path = self._artifact_or_latest_path(blackboard_state, "plan", "plan")
-        review_feedback = self._artifact_path(blackboard_state, "review_feedback")
+        review_feedback = (
+            self._artifact_path(blackboard_state, "review_feedback")
+            or self._artifact_path(blackboard_state, "pr_result")
+        )
 
         if skill_name in {"spec_first", "spec_revise"}:
             prev_spec = None

@@ -574,6 +574,114 @@ class PRCommentPoster(NoOpHook):
         )
 
 
+class LocalPRReviewer(NoOpHook):
+    """Display local code diff and collect user confirmation for local PR mode."""
+
+    name = "LocalPRReviewer"
+
+    @staticmethod
+    def _is_local_pr_mode(phase: Any) -> bool:
+        issue_dir = getattr(phase, "issue_dir", None)
+        if not isinstance(issue_dir, Path):
+            return False
+        try:
+            value = phase._get_issue_config_value(issue_dir / "issue.yaml", "pr.auto_create")
+        except Exception:
+            return False
+        return value is False
+
+    @staticmethod
+    def _format_todo_feedback(feedback: str) -> str:
+        lines = [line.strip() for line in feedback.splitlines() if line.strip()]
+        todos = []
+        for line in lines:
+            normalized = line
+            for prefix in ("- [ ]", "- [x]", "-", "*"):
+                if normalized.startswith(prefix):
+                    normalized = normalized[len(prefix):].strip()
+                    break
+            if normalized:
+                todos.append(f"- [ ] {normalized}")
+        if not todos:
+            todos.append("- [ ] Address local review feedback")
+        return "# Local review feedback\n\n## Todo List\n" + "\n".join(todos) + "\n"
+
+    def run(self, **kwargs: Any) -> HookResult:
+        if kwargs.get("stage") != "publish_output":
+            return HookResult()
+        if kwargs.get("status_code") != PhaseStatusCode.CONFIRMED:
+            return HookResult()
+
+        phase = kwargs.get("phase")
+        output_file = kwargs.get("output_file")
+        if phase is None or not isinstance(output_file, Path):
+            return HookResult()
+        if str(kwargs.get("step_name") or "") != "pr":
+            return HookResult()
+        if not self._is_local_pr_mode(phase):
+            return HookResult()
+        if not getattr(phase, "interactive", False):
+            return HookResult(
+                override_status_code=PhaseStatusCode.NEED_CLARIFICATION,
+                events=[{"type": "local_pr_review_required", "reason": "non_interactive"}],
+            )
+
+        try:
+            base_branch = phase._get_issue_config_value(phase.issue_dir / "issue.yaml", "base_branch")
+            resolved_base = str(base_branch or phase.git_ops.get_main_branch())
+            diff_output = phase.git_ops.get_diff(resolved_base, "HEAD")
+        except Exception:
+            return HookResult()
+
+        from rich.console import Console
+        from rich.panel import Panel
+        from rich.syntax import Syntax
+
+        console = Console()
+
+        def _display_diff() -> None:
+            console.print()
+            console.print(Panel.fit("Local Review Mode - Code Changes", style="bold cyan"))
+            console.print()
+            if diff_output.strip():
+                console.print(Syntax(diff_output, "diff", theme="monokai", line_numbers=False))
+            else:
+                console.print("[yellow]No changes to review[/yellow]")
+            console.print()
+
+        _display_diff()
+        choice = phase._ask_user_for_review_decision(
+            "code changes",
+            agent_name=str(kwargs.get("agent_name") or ""),
+            role="developer",
+            output_file=output_file,
+            display_callback=_display_diff if diff_output.strip() else None,
+        )
+        result_or_input = phase._process_review_decision(
+            choice=choice,
+            prev_data={},
+            phase_name="Local review",
+            phase_specific_data={"local_review": True},
+        )
+
+        if choice == "confirm":
+            return HookResult(events=[{"type": "local_pr_review_confirmed"}])
+
+        feedback = str(result_or_input).strip()
+        output_file.write_text(self._format_todo_feedback(feedback), encoding="utf-8")
+        user_input_file = output_file.parent / "user_input.md"
+        user_input_file.write_text(feedback, encoding="utf-8")
+        return HookResult(
+            override_status_code=PhaseStatusCode.NEEDS_CHANGES,
+            events=[
+                {
+                    "type": "local_pr_review_changes_requested",
+                    "user_input_file": str(user_input_file),
+                }
+            ],
+        )
+
+
 class PRLinkOpener(NoOpHook):
     """Open the created/updated PR in the user's browser."""
 
