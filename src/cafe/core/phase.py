@@ -709,6 +709,25 @@ class Phase(ABC):
             )
             return response, no_response_status
 
+        if not require_status_code:
+            self._update_iteration_history(
+                phase_specific_data={
+                    "response": response,
+                    "permission_denials": [denial.model_dump() for denial in permission_denials],
+                    "streaming_log": streaming_log,
+                },
+                prompt=prompt,
+                agent_cli=agent_cli,
+                agent_session_id=agent_session_id,
+                allowed_tools=allowed_tools,
+                denied_tools=denied_tools,
+                cli_command_args=cli_command_args,
+                status_code=None,
+                token_usage=cumulative_token_usage,
+                model=model,
+            )
+            return response, None
+
         # 6. Extract status code
         from cafe.core.status_codes import StatusCodeParser
         status_code = StatusCodeParser.extract(

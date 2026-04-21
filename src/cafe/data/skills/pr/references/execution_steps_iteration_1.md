@@ -8,5 +8,5 @@
 [ ] Ensure PR title is concise and descriptive (max 80 characters)
 [ ] Include reference to original requirements
 [ ] List all major changes and commits in the Changes section
-[ ] Return ONLY the status code in your response
-[ ] Return appropriate status code
+[ ] Update blackboard and next-step baton to hand off to the next workflow target
+[ ] Keep the response brief; workflow transitions are controlled by the baton

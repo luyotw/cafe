@@ -94,13 +94,23 @@ class DynamicStepTyperGroup(TyperGroup):
     """Typer group that resolves playbook-defined step commands on demand."""
 
     def get_command(self, ctx: click.Context, cmd_name: str) -> Optional[click.Command]:
+        if cmd_name == "dev":
+            return None
+        if cmd_name in ALL_PHASES:
+            dynamic_command = _build_dynamic_step_click_command(cmd_name)
+            if dynamic_command is not None:
+                return dynamic_command
         command = super().get_command(ctx, cmd_name)
         if command is not None:
             return command
         return _build_dynamic_step_click_command(cmd_name)
 
     def list_commands(self, ctx: click.Context) -> List[str]:
-        commands = list(super().list_commands(ctx))
+        commands = [
+            command
+            for command in super().list_commands(ctx)
+            if command != "dev" and command not in ALL_PHASES
+        ]
         for step_name in _load_playbook_step_names(_resolve_runtime_playbook_name()):
             if step_name not in commands:
                 commands.append(step_name)
@@ -5924,12 +5934,16 @@ def workflow(
         interactive = sys.stdin.isatty() or os.getenv("CAFE_FORCE_INTERACTIVE") == "1"
         generic_phase = GenericPhase(SkillLoader())
 
-        def dry_executor(step_name: str, step_def: Dict, blackboard_state: object) -> tuple[str, Dict[str, str]]:
+        def dry_executor(step_name: str, step_def: Dict, blackboard_state: object) -> StepExecutionResult:
             output_key = step_def.get("output_artifact", step_name)
             output_path = issue_dir / step_name / "output.md"
             output_path.parent.mkdir(parents=True, exist_ok=True)
             output_path.write_text(f"# {step_name}\n\nDry-run output\n", encoding="utf-8")
-            return "CAFE_CONFIRMED", {str(output_key): str(output_path)}
+            return StepExecutionResult(
+                response="dry-run",
+                artifacts={str(output_key): str(output_path)},
+                status_code="CAFE_CONFIRMED",
+            )
         step_executor = None if dry_run else _build_workflow_step_executor(
             config_manager=config_manager,
             issue_dir=issue_dir,

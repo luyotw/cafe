@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from cafe.core.hooks import BUILTIN_HOOKS, HookResult
 from cafe.core.questions_schema import validate_questions_xml
-from cafe.core.status_codes import PhaseStatusCode, StatusCodeParser
+from cafe.core.status_codes import PhaseStatusCode
 from cafe.skills.loader import SkillLoader
 from cafe.skills.native_bridge import NativeSkillBridge
 from cafe.core.types import AgentCLI
@@ -33,8 +32,6 @@ class GenericPhaseExecution:
 
 class GenericPhase:
     """Build prompts from skill content and run lifecycle hooks."""
-
-    GOTO_PATTERN = re.compile(r"CAFE_GOTO\s*:\s*([a-zA-Z0-9_-]+)")
 
     def __init__(
         self,
@@ -107,7 +104,7 @@ class GenericPhase:
                     "Latest workflow handoff from blackboard:",
                     context["handoff_summary"],
                     "Treat this handoff as the highest-priority current request unless current files prove it is already completed.",
-                    "Before returning a status code, verify whether the requested state change has actually happened in files or external state relevant to this phase.",
+                    "Before updating the workflow baton, verify whether the requested state change has actually happened in files or external state relevant to this phase.",
                     "If the handoff asks for a retry, re-run, re-sync, or re-open action, do not treat an old artifact or a closed external object as completion.",
                 ]
             )
@@ -120,16 +117,13 @@ class GenericPhase:
             lines.append("")
 
         if checklist_file is not None:
-            lines.append("Do NOT return a status code until ALL checklist items are marked as [x].")
+            lines.append("Do NOT update the workflow baton until ALL checklist items are marked as [x].")
 
         return "\n".join(lines).strip()
 
     @classmethod
     def extract_goto_target(cls, response: str) -> Optional[str]:
-        match = cls.GOTO_PATTERN.search(response)
-        if not match:
-            return None
-        return match.group(1)
+        return None
 
     def parse_response(
         self,
@@ -137,10 +131,7 @@ class GenericPhase:
         response: str,
         valid_status_codes: Optional[List[PhaseStatusCode]] = None,
     ) -> Tuple[Optional[PhaseStatusCode], Optional[str]]:
-        resolved_codes = valid_status_codes or list(PhaseStatusCode)
-        status = StatusCodeParser.extract(response, valid_codes=resolved_codes)
-        goto_target = self.extract_goto_target(response)
-        return status, goto_target
+        return None, None
 
     def validate_clarification_output(
         self,
@@ -234,15 +225,6 @@ class GenericPhase:
                 questions_xml_file=questions_xml_file,
             )
             response = agent_executor(prompt)
-            status_code, goto_target = self.parse_response(
-                response=response,
-                valid_status_codes=list(PhaseStatusCode),
-            )
-            if questions_xml_file is not None:
-                self.validate_clarification_output(
-                    status_code=status_code,
-                    questions_xml_file=questions_xml_file,
-                )
 
             after = self._run_hook_stage(
                 "after_execute",

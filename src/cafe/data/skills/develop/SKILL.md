@@ -26,16 +26,15 @@ Read your agent file: {agent_file}
 - 第一次對 reviewer 提出異議時：
   - 把 blackboard `current_step` 改成 `review`
   - 寫入 next-step baton，內容只放 `review`
-  - 然後回傳 `CAFE_NO_CHANGES_NEEDED`
 - develop/review 對同一個爭議最多往返 3 輪。
-- 如果 blackboard 已經顯示同一個 review feedback 已經往返到第 3 輪，且 reviewer 仍未接受，就不要再回新的 `CAFE_NO_CHANGES_NEEDED`。
+- 如果 blackboard 已經顯示同一個 review feedback 已經往返到第 3 輪，且 reviewer 仍未接受，就不要再把 baton 寫回 `review`。
 - 遇到重複爭議時，改成請 user 仲裁：
   - 在 `questions.xml` 清楚列出雙方分歧與需要 user 決定的點
   - 在 blackboard 記錄「developer requests user arbitration」
   - 把 blackboard `current_step` 改成 `user`
   - 寫入 next-step baton，內容只放 `user`
-  - 回傳 `CAFE_NEED_CLARIFICATION`
 - 如果這輪開發工作已經真的完成，而且接下來應由 user 決定是否還要繼續，允許把 blackboard `current_step` 改成 `user`，並在 blackboard summary/event 說明目前已完成、等待 user 決策。
+- 如果這輪開發工作已經完成且應進入 review，把 next-step baton 寫成 `review`。
 - 不要讓同一個 reviewer/developer 爭議在沒有新資訊的情況下無限往返。
 
 ## Handoff

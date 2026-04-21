@@ -30,7 +30,7 @@ bash scripts/sync_pr.sh --help
 如果 `Current user input for this iteration` 內是 PR review comments：
 - 把 comments 整理成 developer 可執行的 todo list
 - 只把 todo list 寫到輸出檔，不要混入原始 PR comments
-- 回傳 `CAFE_NEEDS_CHANGES`
+- 把 next-step baton 寫成 `develop`
 
 ### PR content mode
 其他情況（沒有 PR review comments）：
@@ -50,12 +50,11 @@ bash scripts/sync_pr.sh --help
    - 已關閉的舊 PR 不算完成 handoff；如果目前只剩 closed PR，應建立新的 PR
 4. 把 PR URL 寫到 blackboard（`current_step` 改成 `user`，summary 說明 PR 已同步）
 5. 寫入 next-step baton，內容只放 `user`
-6. 回傳 `CAFE_CONFIRMED`
 
 ### Gotchas
 - Script 的 progress/error 輸出在 stderr，JSON result 在 stdout
 - PR 已存在時 script 會 update（idempotent），不會重複建立
-- 不要在回應中重述 PR 內容，只回傳狀態碼
+- 不要在回應中重述 PR 內容；用 blackboard 與 next-step baton 表達 handoff。
 
 ## Output
 Write PR content to: {output_file}

@@ -60,7 +60,7 @@ def test_build_prompt_includes_files_and_checklist_guard(tmp_path: Path) -> None
     assert "blackboard_file=.cafe/issues/demo/blackboard.json" in prompt
     assert "next_step_file=.cafe/issues/demo/next_step.txt" in prompt
     assert "Runtime context:" in prompt
-    assert "Do NOT return a status code until ALL checklist items are marked as [x]." in prompt
+    assert "Do NOT update the workflow baton until ALL checklist items are marked as [x]." in prompt
     assert "Latest workflow handoff from blackboard:" in prompt
     assert "Implement cafe skill rm" in prompt
     assert "verify whether the requested state change has actually happened" in prompt
@@ -74,8 +74,8 @@ def test_parse_response_extracts_status_and_goto(tmp_path: Path) -> None:
         response="CAFE_CONFIRMED\nCAFE_GOTO:review",
         valid_status_codes=[PhaseStatusCode.CONFIRMED],
     )
-    assert status == PhaseStatusCode.CONFIRMED
-    assert goto_target == "review"
+    assert status is None
+    assert goto_target is None
 
 
 def test_validate_clarification_output_requires_valid_xml(tmp_path: Path) -> None:
@@ -189,7 +189,7 @@ def test_execute_runs_prepare_input_and_after_execute_retry(tmp_path: Path) -> N
     assert "Phase skill: /plan" in prompts[0]
     assert "Shared skills:" in prompts[1]
     assert "Phase skill: /plan" in prompts[1]
-    assert result.status_code == PhaseStatusCode.CONFIRMED
+    assert result.status_code is None
 
 
 def test_execute_skips_publish_when_artifact_not_ready(tmp_path: Path) -> None:

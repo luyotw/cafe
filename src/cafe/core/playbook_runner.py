@@ -147,34 +147,6 @@ class PlaybookRunner:
             return None, "terminal"
         return str(transitions[status_code]), "status"
 
-    def _resolve_allowed_goto(
-        self,
-        *,
-        current_step: str,
-        response: str,
-    ) -> Optional[str]:
-        goto_target = self.generic_phase.extract_goto_target(response)
-        if not goto_target:
-            return None
-        allowed_targets = {str(target) for target in self.steps[current_step].get("allowed_goto", [])}
-        if goto_target in allowed_targets:
-            self.blackboard_store.record_event(
-                self.blackboard,
-                "goto",
-                {"step": current_step, "goto_target": goto_target},
-            )
-            return goto_target
-        self.blackboard_store.record_event(
-            self.blackboard,
-            "goto_ignored",
-            {
-                "step": current_step,
-                "goto_target": goto_target,
-                "reason": "not in allowed_goto",
-            },
-        )
-        return None
-
     def _align_current_step_with_saved_progress(self, current_step: str) -> str:
         """Advance stale workflow pointers before executing any step."""
         while current_step in self.steps:
@@ -336,19 +308,6 @@ class PlaybookRunner:
                 transition_source = "baton"
             else:
                 if explicit_status_code is None:
-                    parsed_status, _ = self.generic_phase.parse_response(response=response)
-                    if parsed_status is not None:
-                        explicit_status_code = parsed_status.value
-
-                goto_next_step = self._resolve_allowed_goto(
-                    current_step=current_step,
-                    response=response,
-                )
-                if goto_next_step is not None:
-                    status_code = explicit_status_code or "NO_STATUS_CODE"
-                    next_step = goto_next_step
-                    transition_source = "goto"
-                elif explicit_status_code is None:
                     self.blackboard_store.record_event(
                         self.blackboard,
                         "baton_missing_transition",
@@ -359,27 +318,27 @@ class PlaybookRunner:
                         final_status_code="NO_BATON_TRANSITION",
                         completed=False,
                     )
-                else:
-                    status_code = explicit_status_code
-                    next_step, transition_source = self._resolve_next_step_from_status(
-                        current_step=current_step,
-                        status_code=status_code,
+
+                status_code = explicit_status_code
+                next_step, transition_source = self._resolve_next_step_from_status(
+                    current_step=current_step,
+                    status_code=status_code,
+                )
+                if next_step is None:
+                    self.blackboard_store.record_event(
+                        self.blackboard,
+                        "status_code_missing_transition",
+                        {
+                            "step": current_step,
+                            "status_code": status_code,
+                            "response": response,
+                        },
                     )
-                    if next_step is None:
-                        self.blackboard_store.record_event(
-                            self.blackboard,
-                            "status_code_missing_transition",
-                            {
-                                "step": current_step,
-                                "status_code": status_code,
-                                "response": response,
-                            },
-                        )
-                        return PlaybookRunResult(
-                            final_step=current_step,
-                            final_status_code="NO_STATUS_TRANSITION",
-                            completed=False,
-                        )
+                    return PlaybookRunResult(
+                        final_step=current_step,
+                        final_status_code="NO_STATUS_TRANSITION",
+                        completed=False,
+                    )
 
             last_status_code = status_code
             for key, value in artifacts.items():

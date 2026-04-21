@@ -1,7 +1,7 @@
 
 ## Interactive Q&A Questions
 
-[ ] If returning CAFE_NEED_CLARIFICATION: Write questions to {questions_xml_file} in the following XML format:
+[ ] If user clarification is needed: write questions to {questions_xml_file} in the following XML format and hand off to `user`:
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>

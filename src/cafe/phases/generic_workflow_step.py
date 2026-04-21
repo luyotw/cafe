@@ -132,7 +132,7 @@ class GenericWorkflowStepExecutor(Phase):
                 prompt=prompt,
                 user_input=resolved_user_input,
                 valid_status_codes=list(PhaseStatusCode),
-                require_status_code=True,
+                require_status_code=False,
                 allowed_tools=allowed_tools,
                 phase_specific_data=phase_specific_data,
             )
