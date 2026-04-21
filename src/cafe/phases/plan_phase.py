@@ -9,7 +9,7 @@ from typing import List, Optional, Dict, Any
 from cafe.agents.manager import AgentManager
 from cafe.core.permission import PermissionHandler
 from cafe.core.phase import Phase
-from cafe.core.status_codes import PhaseStatusCode, StatusCodeParser, generate_status_code_prompt
+from cafe.core.status_codes import PhaseStatusCode, StatusCodeParser
 from cafe.core.types import PhaseProgress, PhaseResult, PhaseStatus
 from cafe.ui.display import Display
 from cafe.ui.interactive_qa import interactive_qa_flow
@@ -408,16 +408,7 @@ class PlanPhase(Phase):
         else:
             template_path = None
 
-        status_code_prompt = generate_status_code_prompt(
-            valid_codes=[
-                PhaseStatusCode.READY_FOR_REVIEW,
-                PhaseStatusCode.NEED_CLARIFICATION,
-            ],
-            descriptions={
-                PhaseStatusCode.READY_FOR_REVIEW: "Implementation analysis completed, ready for user review",
-                PhaseStatusCode.NEED_CLARIFICATION: "Need more information or confirmation",
-            },
-        )
+        status_code_prompt = ""
         from cafe.agents.manager import AgentManager
         from cafe.skills.bridge import try_load_skill_body
 
@@ -783,4 +774,3 @@ Please only return one status code (e.g., CAFE_READY_FOR_REVIEW) without any oth
                 config_value=None,
                 has_issue_id=False
             )
-

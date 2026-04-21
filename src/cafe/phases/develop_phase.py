@@ -12,7 +12,7 @@ from cafe.agents.manager import AgentManager
 from cafe.core.git import GitOperations
 from cafe.core.permission import PermissionHandler
 from cafe.core.phase import Phase
-from cafe.core.status_codes import PhaseStatusCode, StatusCodeParser, generate_status_code_prompt
+from cafe.core.status_codes import PhaseStatusCode, StatusCodeParser
 from cafe.core.types import PhaseProgress, PhaseResult, PhaseStatus
 from cafe.ui.chat import launch_chat_session
 from cafe.ui.display import Display
@@ -689,20 +689,7 @@ class DevelopPhase(Phase):
         Returns:
             Prompt string
         """
-        status_code_prompt = generate_status_code_prompt(
-            valid_codes=[
-                PhaseStatusCode.CONFIRMED,
-                PhaseStatusCode.NEED_PERMISSION,
-                PhaseStatusCode.NEED_CLARIFICATION,
-                PhaseStatusCode.NO_CHANGES_NEEDED,
-            ],
-            descriptions={
-                PhaseStatusCode.CONFIRMED: "Development work completed",
-                PhaseStatusCode.NEED_PERMISSION: "Need to request tool usage permissions",
-                PhaseStatusCode.NEED_CLARIFICATION: "Need user to clarify next steps",
-                PhaseStatusCode.NO_CHANGES_NEEDED: "You believe reviewer's feedback is incorrect/unnecessary and have valid technical reasons to disagree",
-            },
-        )
+        status_code_prompt = ""
 
         # Load PR feedback (either from GitHub comments or local pr_XXX.md files)
         config_file = self.issue_dir / "issue.yaml"

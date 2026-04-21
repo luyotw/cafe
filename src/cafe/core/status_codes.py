@@ -37,20 +37,6 @@ class PhaseStatusCode(str, Enum):
 class StatusCodeParser:
     """Parser for extracting status codes from agent responses."""
 
-    STATUS_CODE_ALIASES = {
-        "CAFE_SPEC_READY": PhaseStatusCode.READY_FOR_REVIEW.value,
-        "CAFE_PLAN_READY": PhaseStatusCode.READY_FOR_REVIEW.value,
-        "CAFE_DEVELOP_DONE": PhaseStatusCode.CONFIRMED.value,
-        "CAFE_PR_READY": PhaseStatusCode.READY_FOR_REVIEW.value,
-    }
-
-    @classmethod
-    def _normalize_aliases(cls, response: str) -> str:
-        normalized = response
-        for alias, canonical in cls.STATUS_CODE_ALIASES.items():
-            normalized = normalized.replace(alias, canonical)
-        return normalized
-
     @staticmethod
     def extract(response: str, valid_codes: Optional[List[PhaseStatusCode]] = None) -> Optional[PhaseStatusCode]:
         """Extract status code from agent response.
@@ -74,7 +60,7 @@ class StatusCodeParser:
         """
         if not response:
             return None
-        response = StatusCodeParser._normalize_aliases(response.upper())
+        response = response.upper()
 
         # First, check if there are multiple different status codes
         all_codes = StatusCodeParser.extract_all(response, valid_codes)
@@ -142,7 +128,7 @@ class StatusCodeParser:
             return set()
 
         found_codes: Set[PhaseStatusCode] = set()
-        response_upper = StatusCodeParser._normalize_aliases(response.upper())
+        response_upper = response.upper()
 
         # Search for all status codes in the response
         # Sort by length descending so longer (more specific) codes are checked first

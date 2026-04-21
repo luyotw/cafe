@@ -745,93 +745,21 @@ class Phase(ABC):
             if inferred_human_input_status in valid_status_codes:
                 status_code = inferred_human_input_status
 
-        # 6.1. Check if there are multiple different status codes
-        all_status_codes = StatusCodeParser.extract_all(response, valid_codes=valid_status_codes)
-        has_multiple_codes = len(all_status_codes) > 1
-
-        # 6.2. If no status code (including case of multiple status codes), send continue message
-        # Because multiple status codes also means status is unclear, needs agent confirmation
-        # Maximum 5 retries
-        analysis_attempted = False
-        analysis_response = None
-        original_status_code_missing = (status_code is None)  # Record original status
-        max_retries = 5
-        retry_count = 0
-
-        # If the response already contains any CAFE_* token (even an unrecognized one),
-        # skip the retry loop entirely — retrying won't change the agent's signal.
-        # The playbook runner's default transition (or alias) will handle unrecognized codes.
-        import re as _re
-        _has_cafe_token = bool(_re.search(r"\bCAFE_[A-Z0-9_]+\b", response or ""))
-
-        if require_status_code and original_status_code_missing and not _has_cafe_token:
-            analysis_attempted = True
-
-            while retry_count < max_retries and status_code is None:
-                retry_count += 1
-                print(f"\n⚠️  Agent response has no status code, sending continue message... (attempt {retry_count}/{max_retries})")
-
-                try:
-                    # Send continue prompt and attach original prompt as reference
-                    # This way even if session is recreated, agent can understand complete context
-                    continue_prompt = f"If completed respond with status code, if not continue\n\nBelow is the original task description for reference:\n\n{prompt}"
-                    continue_response, continue_token_usage, _, _, _, continue_model = self.agent_manager.execute(
-                        agent_name,
-                        continue_prompt,
-                        allowed_tools=allowed_tools,
-                        allowed_directories=allowed_directories,
-                    )
-
-                    # Update model if returned (use latest value)
-                    if continue_model:
-                        model = continue_model
-
-                    # Accumulate token usage from continue prompt
-                    accumulate_token_usage(cumulative_token_usage, continue_token_usage)
-
-                    # Try to extract status code from continue response
-                    continue_status_code = StatusCodeParser.extract(
-                        continue_response,
-                        valid_codes=valid_status_codes,
-                    )
-
-                    if continue_status_code:
-                        print(f"✅ Obtained status code after continue execution: {continue_status_code.value}")
-                        # Merge original response and continue response
-                        response = response + "\n\n" + continue_response
-                        status_code = continue_status_code
-                        analysis_response = continue_response
-                        break
-                    else:
-                        # If continue response also contains a CAFE_* token, stop retrying
-                        if _re.search(r"\bCAFE_[A-Z0-9_]+\b", continue_response or ""):
-                            print(f"⚠️  Still no valid status code but CAFE token found, deferring to playbook runner")
-                            response = response + "\n\n" + continue_response
-                            analysis_response = continue_response
-                            break
-                        print(f"⚠️  Still no status code after continue execution")
-                        analysis_response = continue_response
-
-                except Exception as e:
-                    print(f"⚠️  Failed to send continue message: {e}")
-                    analysis_response = None
-
-        # 6.3. Write error log (if original response has issues: no status code, multiple codes, or still no status code after analysis)
-        # Note: Even if analysis successfully finds status code, we still record issues with original response
-        if require_status_code and (analysis_attempted or original_status_code_missing):
+        # 6.1. Record missing status code in error log (single-pass mode, no retry loop)
+        if require_status_code and status_code is None:
             self._write_status_code_error_log(
                 original_response=response,
                 valid_status_codes=valid_status_codes,
                 status_code=status_code,
-                analysis_attempted=analysis_attempted,
-                analysis_response=analysis_response,
+                analysis_attempted=False,
+                analysis_response=None,
                 cli_command_args=cli_command_args,
-                multiple_codes_found=list(all_status_codes) if has_multiple_codes else None,
+                multiple_codes_found=None,
             )
 
-        # 6.4. If still no status code after 5 retries, throw error
-        if require_status_code and original_status_code_missing and status_code is None and retry_count >= max_retries:
-            error_msg = f"Agent Still did not return valid status code after {max_retries} attempts"
+        # 6.2. Missing required status code is now a hard failure in single-pass mode.
+        if require_status_code and status_code is None:
+            error_msg = "Agent did not return a valid status code"
             print(f"\n❌ {error_msg}")
             raise ValueError(error_msg)
 
@@ -842,12 +770,6 @@ class Phase(ABC):
             "permission_denials": [denial.model_dump() for denial in permission_denials],
             "streaming_log": streaming_log
         }
-
-        # If status code analysis was performed, record to history
-        if analysis_attempted:
-            phase_data["status_code_analyzed"] = True
-            if analysis_response:
-                phase_data["status_code_analysis_response"] = analysis_response
 
         # Note: streaming.jsonl is already written in real-time by executor
         self._update_iteration_history(

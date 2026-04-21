@@ -12,6 +12,7 @@ from cafe.agents.manager import AgentManager
 from cafe.core.git import GitOperations
 from cafe.core.permission import PermissionHandler
 from cafe.core.phase import Phase
+from cafe.core.status_codes import PhaseStatusCode
 from cafe.core.types import PhaseResult, PhaseStatus
 from cafe.ui.inquirer_prompts import prompt_confirm
 from cafe.utils.github import GitHubOps, GitHubError, get_all_pr_comments
@@ -1263,14 +1264,7 @@ class PRPhase(Phase):
             image_list = "\n".join(f"  - `{p}`" for p in image_paths)
             images_instruction = f"\n\n**Images:** PR comments include screenshots/images. Use the Read tool to view these images for visual context:\n{image_list}"
 
-        from cafe.core.status_codes import generate_status_code_prompt
-        status_code_prompt = generate_status_code_prompt(
-            valid_codes=[PhaseStatusCode.NEEDS_CHANGES, PhaseStatusCode.CONFIRMED],
-            descriptions={
-                PhaseStatusCode.NEEDS_CHANGES: "Todo list created/updated with pending items",
-                PhaseStatusCode.CONFIRMED: "All todo items are completed (all marked with [x])",
-            },
-        )
+        status_code_prompt = ""
 
         prompt = f"""# PR Comment Organization
 
@@ -1922,14 +1916,7 @@ Return ONLY the status code (CAFE_CONFIRMED or CAFE_NEEDS_CHANGES) with no expla
             prompt = f"# PR Phase\n\n{skill_body}\n\n{task_instruction}\n\n{checklist_instruction}\n\n**Context:**\n- Requirements Specification: {self.spec_file}\n- Implementation Plan: {plan_file}\n\n**Commits:**\n{commits}\n\n## Requirements\n\n**Title (first line after #):**\n- Concise and clear (max 80 characters)\n- Describe what this PR does\n- Example: \"Add user authentication with OAuth2 support\"\n\n{body_instruction}\n"
 
         # Execute agent
-        from cafe.core.status_codes import PhaseStatusCode, generate_status_code_prompt
-
-        status_code_prompt = generate_status_code_prompt(
-            valid_codes=[PhaseStatusCode.CONFIRMED],
-            descriptions={
-                PhaseStatusCode.CONFIRMED: "PR content generation completed",
-            },
-        )
+        status_code_prompt = ""
 
         checklist_reminder = self._get_checklist_completion_reminder()
 

@@ -12,7 +12,7 @@ from cafe.agents.manager import AgentManager
 from cafe.core.git import GitOperations
 from cafe.core.permission import PermissionHandler
 from cafe.core.phase import Phase
-from cafe.core.status_codes import PhaseStatusCode, StatusCodeParser, generate_status_code_prompt
+from cafe.core.status_codes import PhaseStatusCode, StatusCodeParser
 from cafe.core.types import PhaseProgress, PhaseResult, PhaseStatus
 from cafe.ui.display import Display
 from cafe.ui.phase_prompts import prompt_for_input_method, prompt_for_rigor, fetch_github_issue
@@ -922,16 +922,7 @@ class SpecPhase(Phase):
         Returns:
             Status code prompt string
         """
-        return generate_status_code_prompt(
-            valid_codes=[
-                PhaseStatusCode.READY_FOR_REVIEW,
-                PhaseStatusCode.NEED_CLARIFICATION,
-            ],
-            descriptions={
-                PhaseStatusCode.READY_FOR_REVIEW: "Requirements specification completed, ready for user confirmation",
-                PhaseStatusCode.NEED_CLARIFICATION: "Requirements have unclear parts that need clarification",
-            },
-        )
+        return ""
 
     def _get_rigor_guidelines(self) -> str:
         """Get rigor level guidelines for PM.

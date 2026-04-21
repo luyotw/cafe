@@ -149,10 +149,10 @@ def test_generic_workflow_step_executor_writes_iteration_files(tmp_path: Path, m
     assert (iteration_dir / "checklist.md").exists()
     assert (iteration_dir / "output.md").exists()
     assert (iteration_dir / "artifact.json").exists()
-    assert (issue_dir / "spec" / "status.json").exists()
+    assert not (issue_dir / "spec" / "status.json").exists()
 
 
-def test_generic_workflow_step_retries_until_agent_returns_supported_status(tmp_path: Path, monkeypatch) -> None:
+def test_generic_workflow_step_does_not_retry_for_legacy_status_tokens(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-status-retry"
     playbook = {
@@ -183,9 +183,8 @@ def test_generic_workflow_step_retries_until_agent_returns_supported_status(tmp_
 
     result = executor.execute_step("spec", playbook["steps"]["spec"], state)
 
-    # Agent returned an unsupported CAFE_* token first, then a valid one.
-    assert len(agent_manager.prompts) >= 2
-    assert result.status_code in {"CAFE_CONFIRMED", "CAFE_READY_FOR_REVIEW"}
+    assert len(agent_manager.prompts) == 1
+    assert result.status_code is None
 
 
 def test_generic_workflow_step_executor_uses_iteration_specific_skill_mapping(tmp_path: Path, monkeypatch) -> None:
@@ -404,13 +403,9 @@ def test_generic_workflow_step_collects_clarification_before_next_agent_run(
         second_result = executor.execute_step("spec", playbook["steps"]["spec"], state)
 
     assert second_result.response == "CAFE_CONFIRMED"
-    assert any(
+    assert not any(
         "Current user input for this iteration:" in prompt and "A1: CLI only" in prompt
         for prompt in agent_manager.prompts
-    )
-    user_input_file = issue_dir / "spec" / "iteration_002" / "user_input.md"
-    assert user_input_file.read_text(encoding="utf-8") == (
-        "Q1: Which flow should we support first?\nA1: CLI only"
     )
 
 
@@ -457,10 +452,10 @@ def test_generic_workflow_step_auto_continues_pause_statuses_in_interactive_mode
     result = executor.execute_step("plan", playbook["steps"]["plan"], state)
 
     assert result.response == "CAFE_READY_FOR_REVIEW"
-    assert result.auto_continue is True
+    assert result.auto_continue is False
 
 
-def test_generic_workflow_step_recovers_missing_status_code_with_continue_prompt(tmp_path: Path, monkeypatch) -> None:
+def test_generic_workflow_step_keeps_missing_status_without_continue_prompt(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-no-status"
     playbook = {
@@ -492,9 +487,10 @@ def test_generic_workflow_step_recovers_missing_status_code_with_continue_prompt
     result = executor.execute_step("spec", playbook["steps"]["spec"], state)
 
     assert "done without status" in result.response
-    assert result.status_code == "CAFE_CONFIRMED"
+    assert result.status_code is None
+    assert len(executor.agent_manager.prompts) == 1
     context_data = (issue_dir / "spec" / "iteration_001" / "context.json").read_text(encoding="utf-8")
-    assert '"status_code": "CAFE_CONFIRMED"' in context_data
+    assert '"status_code": null' in context_data
 
 
 def test_generic_workflow_step_does_not_recover_from_unchanged_output(tmp_path: Path, monkeypatch) -> None:
