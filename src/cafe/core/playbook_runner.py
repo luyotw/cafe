@@ -9,7 +9,7 @@ import re
 from typing import Any, Callable, Dict, Optional
 
 from cafe.core.blackboard import BlackboardState, BlackboardStore, HandoffIntent, HandoffOwner
-from cafe.core.status_codes import PhaseStatusCode
+from cafe.core.status_codes import PhaseStatusCode, StatusCodeParser
 from cafe.phases.generic_phase import GenericPhase
 
 
@@ -335,6 +335,11 @@ class PlaybookRunner:
                 status_code_obj, _ = self.generic_phase.parse_response(
                     response=response,
                     valid_status_codes=valid_codes or list(PhaseStatusCode),
+                )
+            if status_code_obj is None:
+                status_code_obj = StatusCodeParser.coerce_completion_alias(
+                    response,
+                    valid_codes or list(PhaseStatusCode),
                 )
             if status_code_obj is None:
                 handoff_next_step: Optional[str] = None

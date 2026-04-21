@@ -1,7 +1,10 @@
 """Status codes for phase execution control."""
 
 from enum import Enum
+import re
 from typing import List, Optional, Set
+
+STATUS_TOKEN_PATTERN = re.compile(r"\bCAFE_[A-Z0-9_]+\b")
 
 
 class PhaseStatusCode(str, Enum):
@@ -226,6 +229,29 @@ class StatusCodeParser:
             PhaseStatusCode.READY_FOR_REVIEW,
         }
         return code in human_input_codes
+
+    @staticmethod
+    def coerce_completion_alias(
+        response: str,
+        valid_codes: List[PhaseStatusCode],
+    ) -> Optional[PhaseStatusCode]:
+        """Coerce legacy/generic completion tokens to a valid completion code.
+
+        Some agents use CAFE_READY_FOR_REVIEW as a generic "my work is ready"
+        completion token. For phases where READY_FOR_REVIEW is not valid, accepting
+        it directly would incorrectly trigger user-review pause semantics. When the
+        phase allows CONFIRMED and the response contains only READY_FOR_REVIEW, treat
+        it as CONFIRMED instead.
+        """
+        if PhaseStatusCode.CONFIRMED not in valid_codes:
+            return None
+        if PhaseStatusCode.READY_FOR_REVIEW in valid_codes:
+            return None
+
+        raw_tokens = set(STATUS_TOKEN_PATTERN.findall(response.upper()))
+        if raw_tokens == {PhaseStatusCode.READY_FOR_REVIEW.value}:
+            return PhaseStatusCode.CONFIRMED
+        return None
 
 
 def generate_status_code_prompt(valid_codes: List[PhaseStatusCode], descriptions: dict) -> str:

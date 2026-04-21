@@ -817,3 +817,59 @@ def test_generic_workflow_step_applies_phase_specific_model_per_step(tmp_path: P
     assert "gpt-5.4" in (agent_manager.preview_calls[0] or [])
     assert "--model" in (agent_manager.preview_calls[1] or [])
     assert "claude-opus-4.6" in (agent_manager.preview_calls[1] or [])
+
+
+def test_generic_workflow_step_persists_ready_for_review_as_confirmed_for_develop(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-develop-ready"
+    playbook = {
+        "playbook": {"id": "default"},
+        "roles": {"developer": {"default_agent": "David"}},
+        "steps": {
+            "develop": {
+                "skill": "develop",
+                "role": "developer",
+                "output_artifact": "code",
+                "allowed_tools": ["Read"],
+                "valid_status_codes": ["CAFE_CONFIRMED", "CAFE_NEED_CLARIFICATION"],
+                "on": {"CAFE_CONFIRMED": "review", "CAFE_NEED_CLARIFICATION": "develop"},
+            },
+        },
+    }
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("develop")
+    spec_file = issue_dir / "spec" / "iteration_001" / "output.md"
+    plan_file = issue_dir / "plan" / "iteration_001" / "output.md"
+    spec_file.parent.mkdir(parents=True, exist_ok=True)
+    plan_file.parent.mkdir(parents=True, exist_ok=True)
+    spec_file.write_text("# Spec\n", encoding="utf-8")
+    plan_file.write_text("# Plan\n", encoding="utf-8")
+    store.set_artifact(state, "spec", str(spec_file))
+    store.set_artifact(state, "plan", str(plan_file))
+
+    def _mark_checklist_complete(*, streaming_output_file, **kwargs) -> None:
+        iteration_dir = Path(streaming_output_file).parent
+        checklist_file = iteration_dir / "checklist.md"
+        checklist_file.write_text("- [x] completed\n", encoding="utf-8")
+
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="issue-develop-ready",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=FakeAgentManager(
+            "CAFE_READY_FOR_REVIEW",
+            on_execute=_mark_checklist_complete,
+        ),
+        git_ops=FakeGitOperations(),
+        role_agent_map={"developer": "David"},
+    )
+
+    result = executor.execute_step("develop", playbook["steps"]["develop"], state)
+
+    assert result.status_code == "CAFE_CONFIRMED"
+    status_data = (issue_dir / "develop" / "status.json").read_text(encoding="utf-8")
+    assert '"status_code": "CAFE_CONFIRMED"' in status_data

@@ -386,3 +386,39 @@ class TestNewStatusCodes:
         code = StatusCodeParser.extract(response, valid_codes)
 
         assert code == PhaseStatusCode.NO_CHANGES_NEEDED
+
+    def test_ready_for_review_can_be_coerced_to_confirmed_when_not_valid(self) -> None:
+        """READY_FOR_REVIEW can mean generic completion outside reviewable phases."""
+        code = StatusCodeParser.coerce_completion_alias(
+            "CAFE_READY_FOR_REVIEW",
+            [PhaseStatusCode.CONFIRMED, PhaseStatusCode.NEED_CLARIFICATION],
+        )
+
+        assert code == PhaseStatusCode.CONFIRMED
+
+    def test_ready_for_review_is_not_coerced_when_it_is_valid(self) -> None:
+        """Spec/plan review loops should keep READY_FOR_REVIEW semantics."""
+        code = StatusCodeParser.coerce_completion_alias(
+            "CAFE_READY_FOR_REVIEW",
+            [PhaseStatusCode.CONFIRMED, PhaseStatusCode.READY_FOR_REVIEW],
+        )
+
+        assert code is None
+
+    def test_ready_for_review_is_not_coerced_with_multiple_status_tokens(self) -> None:
+        """Ambiguous responses should remain invalid instead of being guessed."""
+        code = StatusCodeParser.coerce_completion_alias(
+            "CAFE_READY_FOR_REVIEW\nCAFE_NEEDS_CHANGES",
+            [PhaseStatusCode.CONFIRMED, PhaseStatusCode.NEEDS_CHANGES],
+        )
+
+        assert code is None
+
+    def test_phase_specific_ready_alias_is_not_coerced_to_confirmed(self) -> None:
+        """Legacy phase-specific aliases should not become generic completion."""
+        code = StatusCodeParser.coerce_completion_alias(
+            "CAFE_SPEC_READY",
+            [PhaseStatusCode.CONFIRMED],
+        )
+
+        assert code is None

@@ -11,7 +11,7 @@ from cafe.core.blackboard import ArtifactEntry, ArtifactKind, BlackboardState, B
 from cafe.core.playbook_runner import StepExecutionResult
 from cafe.core.git import GitOperations
 from cafe.core.phase import Phase
-from cafe.core.status_codes import PhaseStatusCode, generate_status_code_prompt
+from cafe.core.status_codes import PhaseStatusCode, StatusCodeParser, generate_status_code_prompt
 from cafe.phases.generic_phase import GenericPhase
 from cafe.utils.checklist_generator import (
     generate_develop_checklist,
@@ -162,6 +162,8 @@ class GenericWorkflowStepExecutor(Phase):
 
         response = execution.response
         status_code = execution.status_code
+        if status_code is None:
+            status_code = StatusCodeParser.coerce_completion_alias(response, valid_status_codes)
 
         agent_was_invoked = bool(last_prompt)
         if agent_was_invoked and status_code is not None and self._should_validate_checklist(status_code):

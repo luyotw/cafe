@@ -710,6 +710,50 @@ def test_runner_does_not_pause_when_interactive_step_requests_review_iteration(t
     assert executed_steps == ["plan", "plan"]
 
 
+def test_runner_treats_ready_for_review_as_confirmed_when_confirmed_is_valid(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo"
+    playbook = {
+        "playbook": {"id": "default"},
+        "steps": {
+            "develop": {
+                "skill": "spec_first",
+                "role": "developer",
+                "valid_status_codes": ["CAFE_CONFIRMED", "CAFE_NEED_CLARIFICATION"],
+                "on": {"CAFE_CONFIRMED": "review", "CAFE_NEED_CLARIFICATION": "develop"},
+            },
+            "review": {
+                "skill": "spec_first",
+                "role": "reviewer",
+                "valid_status_codes": ["CAFE_CONFIRMED", "CAFE_NEEDS_CHANGES"],
+                "on": {"CAFE_CONFIRMED": "_done", "CAFE_NEEDS_CHANGES": "develop"},
+            },
+        },
+    }
+    responses = iter(["CAFE_READY_FOR_REVIEW", "CAFE_CONFIRMED"])
+    executed_steps: list[str] = []
+
+    def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
+        executed_steps.append(step_name)
+        return StepExecutionResult(response=next(responses), artifacts={})
+
+    runner = PlaybookRunner(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        executor=executor,
+    )
+
+    result = runner.run(max_transitions=3)
+
+    assert result.completed is True
+    assert executed_steps == ["develop", "review"]
+    blackboard = BlackboardStore(issue_dir).load_or_create("develop")
+    transitions = [event for event in blackboard.events if event.event_type == "transition"]
+    assert transitions[0].data["from"] == "develop"
+    assert transitions[0].data["to"] == "review"
+    assert transitions[0].data["status_code"] == "CAFE_CONFIRMED"
+
+
 
 
 def test_runner_rejects_reserved_assignee_type_at_runtime(tmp_path: Path) -> None:
