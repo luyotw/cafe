@@ -24,7 +24,7 @@ from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
 from cafe.core.git import GitOperations
 from cafe.core.playbook_runner import PlaybookRunner, StepExecutionResult
 from cafe.core.permission import PermissionHandler
-from cafe.core.types import AgentCLI, AgentConfig
+from cafe.core.types import AgentCLI, AgentConfig, CriticalPhaseError
 from cafe.phases.generic_phase import GenericPhase
 from cafe.phases.generic_workflow_step import GenericWorkflowStepExecutor
 from cafe.playbooks.loader import PlaybookLoader
@@ -567,6 +567,7 @@ def _handle_phase_exception(e: Exception, phase_name: str) -> None:
                 console.print()
                 console.print(f"[dim]{error_msg}[/dim]")
             else:
+                console.print(f"[dim]{error_msg}[/dim]")
                 console.print("[dim]The workflow has been stopped to prevent wasting resources.[/dim]")
             console.print()
             console.print("[bold]Next steps (choose one):[/bold]")
@@ -6075,6 +6076,8 @@ def workflow(
                 else:
                     console.print("[dim]Resolve the requested input, then run cafe make again to resume.[/dim]")
             return
+    except CriticalPhaseError as e:
+        _handle_phase_exception(e, "workflow")
     except Exception as e:
         console.print(f"[red]Error: workflow run failed: {e}[/red]")
         raise typer.Exit(1)

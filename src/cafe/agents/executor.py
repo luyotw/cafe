@@ -1,21 +1,28 @@
 """Agent executor for running AI agents."""
 
 import json
+import re
 import subprocess
 from pathlib import Path
 from typing import Callable, List, Optional, Tuple
 
 from cafe.agents.cli import AbstractCLI, ClaudeCLI, CodexCLI, CopilotCLI, CursorCLI, GeminiCLI
-from cafe.core.types import AgentConfig, AgentCLI, AgentResponse, PermissionDenial, TokenUsage
+from cafe.core.types import AgentCLI, AgentConfig, AgentResponse, PermissionDenial, TokenUsage
 from cafe.utils.git_utils import get_repo_root, to_git_ignore_path, to_relative_path
 
 
 class AgentExecutionError(Exception):
     """Agent execution error."""
-    
-    def __init__(self, message: str, error_type: Optional[str] = None):
+
+    def __init__(
+        self,
+        message: str,
+        error_type: Optional[str] = None,
+        display_message: Optional[str] = None,
+    ):
         super().__init__(message)
         self.error_type = error_type
+        self.display_message = display_message
 
 
 class AgentExecutor:
@@ -508,6 +515,21 @@ class AgentExecutor:
 
         return False
 
+    def _format_rate_limit_display_message(self, cli_name: str, error_text: str) -> str:
+        """Return a concise user-facing message for noisy rate-limit errors."""
+        reset_matches = re.findall(
+            r"quota will reset after ([^.\n]+)",
+            error_text,
+            flags=re.IGNORECASE,
+        )
+        reset_suffix = f" Quota resets after {reset_matches[-1].strip()}." if reset_matches else ""
+
+        policy_suffix = ""
+        if "tool execution denied by policy" in error_text.lower():
+            policy_suffix = " Some tool calls were also denied by CLI policy."
+
+        return f"{cli_name} API rate limit reached.{reset_suffix}{policy_suffix}"
+
     def _is_usage_summary_only(self, stderr_text: str) -> bool:
         """Check if stderr only contains usage summary (not a real error).
 
@@ -664,14 +686,15 @@ class AgentExecutor:
 
                     # Check if it's a rate limit error
                     is_rate_limit = self._is_rate_limit_error(full_stderr)
-                    if is_rate_limit:
-                        print(f"\n❌ {cli_name} API rate limit reached\n")
-                        print(f"Error message: {full_stderr.strip()}\n")
-                        print(f"{'='*80}\n")
+                    display_message = (
+                        self._format_rate_limit_display_message(cli_name, full_stderr)
+                        if is_rate_limit else None
+                    )
 
                     # Attach actual CLI arguments to error object for history recording
                     err = AgentExecutionError(
-                        f"{cli_name} execution failed: {full_stderr}"
+                        f"{cli_name} execution failed: {full_stderr}",
+                        display_message=display_message,
                     )
                     # Set error_type for rate limit errors
                     if is_rate_limit:
@@ -949,12 +972,14 @@ class AgentExecutor:
             if returncode != 0:
                 # Check if it's a rate limit error
                 is_rate_limit = stderr_output and self._is_rate_limit_error(stderr_output)
-                if is_rate_limit:
-                    print(f"\n❌ {cli_name} API rate limit reached\n")
-                    print(f"Error message: {stderr_output.strip()}\n")
+                display_message = (
+                    self._format_rate_limit_display_message(cli_name, stderr_output)
+                    if is_rate_limit else None
+                )
 
                 err = AgentExecutionError(
-                    f"{cli_name} execution failed with code {returncode}: {stderr_output}"
+                    f"{cli_name} execution failed with code {returncode}: {stderr_output}",
+                    display_message=display_message,
                 )
                 # Set error_type for rate limit errors
                 if is_rate_limit:
