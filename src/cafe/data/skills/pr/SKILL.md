@@ -24,6 +24,10 @@ Read your agent file: {agent_file}
 bash scripts/sync_pr.sh --help
 ```
 
+In workflow mode, do not run this script directly from the agent. The CAFE
+host-side `GitHubPRCreator` publish hook runs it after the PR artifact is ready,
+so GitHub/network access happens outside the agent sandbox.
+
 ## Instructions
 
 ### PR review comments mode
@@ -39,22 +43,15 @@ bash scripts/sync_pr.sh --help
 2. 編輯 `{output_file}`，產出 PR title 與 description：
    - Title 必須放在第一行 `#` 標題，精簡清楚，不超過 80 字元
    - Body 維持 `Summary`、`Changes`、`Test Plan` 結構
-3. 執行 sync script 把 PR 推上 GitHub：
-   ```bash
-   bash scripts/sync_pr.sh --output {output_file} --base {base_branch}
-   ```
-   - 如果 issue.yaml 有 `base_branch`，加上 `--base <base_branch>`
-  - Script 輸出 JSON 到 stdout（`{"action":"created"|"updated","pr_number":"...","pr_url":"..."}`）
-  - 若 `issue.yaml` 的 `pr.post_todo_list=true`，script 會在 PR create/update 時自動檢查最新 todo list iteration，只有在全部項目都已完成 `[x]` 才會貼到 PR comment
-   - 若 handoff 要求「重發 PR / 重開 PR / 重新同步 PR」，必須確認最後 GitHub 上存在符合目前 branch 與 `{base_branch}` 的 open/draft PR
-   - 已關閉的舊 PR 不算完成 handoff；如果目前只剩 closed PR，應建立新的 PR
-4. 把 PR URL 寫到 blackboard（`current_step` 改成 `user`，summary 說明 PR 已同步）
-5. 寫入 next-step baton，內容只放 `user`
-6. 回傳 `CAFE_CONFIRMED`
+3. 不要直接呼叫 GitHub connector、GitHub API、`gh pr create`，也不要自行執行 `scripts/sync_pr.sh`
+4. 確認 checklist 都完成後回傳 `CAFE_CONFIRMED`
+5. CAFE host-side hook 會執行 `scripts/sync_pr.sh --output {output_file}`，依 `issue.yaml` 的 `base_branch` 自動加上 `--base`
+6. Hook 會把 PR URL 作為 `pr_synced` event 回傳，CLI 會印出 PR URL
 
 ### Gotchas
 - Script 的 progress/error 輸出在 stderr，JSON result 在 stdout
 - PR 已存在時 script 會 update（idempotent），不會重複建立
+- 對外網路、GitHub 憑證、push/create/update PR 都由 host-side hook 處理，避免 agent sandbox 阻擋
 - 不要在回應中重述 PR 內容，只回傳狀態碼
 
 ## Output
