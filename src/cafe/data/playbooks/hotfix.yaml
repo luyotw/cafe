@@ -75,7 +75,7 @@ steps:
     allowed_goto: [develop, review]
     hooks:
       prepare_input: [GitHubPRCreator, UserInputCollector]
-      publish_output: [LocalPRReviewer, PRLinkOpener]
+      publish_output: [GitHubPRCreator, LocalPRReviewer, PRLinkOpener]
     "on":
       CAFE_CONFIRMED: _done
       CAFE_NEED_PERMISSION: pr
