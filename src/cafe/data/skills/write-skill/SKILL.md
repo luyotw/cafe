@@ -38,8 +38,9 @@ version: 1.0.0
 3. Add only the always-needed workflow steps to `SKILL.md`.
 4. If detailed material is only needed conditionally, move it to `references/` and say exactly when to read it.
 5. If the task needs deterministic or repeated command execution, add a script under `scripts/` instead of embedding a long fragile command.
-6. Add a concrete output template only when output shape matters.
-7. Re-read the draft and cut anything that is obvious model knowledge or duplicated elsewhere.
+6. If the task needs external network access, credentials, GitHub/API mutation, or other operations likely to be blocked by agent sandboxing, put the operation behind a skill script and document whether workflow hooks should call that script host-side.
+7. Add a concrete output template only when output shape matters.
+8. Re-read the draft and cut anything that is obvious model knowledge or duplicated elsewhere.
 
 ## SKILL.md Checklist
 - `name` matches the folder name.
@@ -58,9 +59,11 @@ version: 1.0.0
 
 ## When To Add Scripts
 - Add `scripts/` when the same command or transformation would otherwise be rewritten repeatedly.
+- Add `scripts/` when the workflow must access external services, use credentials, push branches, create/update PRs, or mutate remote state; do not rely on the agent process doing those operations directly from inside its sandbox.
 - Keep script inputs and outputs simple and explicit.
 - Prefer structured output if the script will feed later agent steps.
 - Make the script safe to rerun when possible.
+- For scripts that publish external state, design them to be idempotent and suitable for host-side hook execution. The agent should prepare local artifacts; the script or hook should perform the external mutation and return a concise structured result.
 
 ## Output Expectations
 - Produce the skill folder with `SKILL.md`.
