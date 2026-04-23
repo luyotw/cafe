@@ -96,21 +96,13 @@ class DynamicStepTyperGroup(TyperGroup):
     def get_command(self, ctx: click.Context, cmd_name: str) -> Optional[click.Command]:
         if cmd_name == "dev":
             return None
-        if cmd_name in ALL_PHASES:
-            dynamic_command = _build_dynamic_step_click_command(cmd_name)
-            if dynamic_command is not None:
-                return dynamic_command
         command = super().get_command(ctx, cmd_name)
         if command is not None:
             return command
         return _build_dynamic_step_click_command(cmd_name)
 
     def list_commands(self, ctx: click.Context) -> List[str]:
-        commands = [
-            command
-            for command in super().list_commands(ctx)
-            if command != "dev" and command not in ALL_PHASES
-        ]
+        commands = [command for command in super().list_commands(ctx) if command != "dev"]
         for step_name in _load_playbook_step_names(_resolve_runtime_playbook_name()):
             if step_name not in commands:
                 commands.append(step_name)
