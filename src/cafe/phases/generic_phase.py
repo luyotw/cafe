@@ -9,6 +9,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from cafe.core.hooks import BUILTIN_HOOKS, HookResult
 from cafe.core.questions_schema import validate_questions_xml
 from cafe.core.status_codes import PhaseStatusCode
+from cafe.skills.exceptions import SkillDiscoveryError
 from cafe.skills.loader import SkillLoader
 from cafe.skills.native_bridge import NativeSkillBridge
 from cafe.core.types import AgentCLI
@@ -62,6 +63,8 @@ class GenericPhase:
         skill_name: str,
         skill_invocation: str,
         shared_skill_invocations: Optional[List[str]] = None,
+        skill_body: str = "",
+        shared_skill_bodies: Optional[List[str]] = None,
         context: Optional[Dict[str, str]] = None,
         output_file: Optional[Path] = None,
         checklist_file: Optional[Path] = None,
@@ -75,12 +78,26 @@ class GenericPhase:
             lines.append("Shared skills:")
             lines.extend(f"- {invocation}" for invocation in shared_skill_invocations)
             lines.append("")
+        if shared_skill_bodies:
+            lines.append("Shared skill instructions:")
+            for body in shared_skill_bodies:
+                if body.strip():
+                    lines.append(body.strip())
+                    lines.append("")
         lines.extend(
             [
                 f"Phase skill: {skill_invocation}",
                 "",
             ]
         )
+        if skill_body.strip():
+            lines.extend(
+                [
+                    "Phase skill instructions:",
+                    skill_body.strip(),
+                    "",
+                ]
+            )
 
         if output_file is not None:
             runtime_files.append(f"output_file={output_file}")
@@ -104,10 +121,23 @@ class GenericPhase:
                     "Latest workflow handoff from blackboard:",
                     context["handoff_summary"],
                     "Treat this handoff as the highest-priority current request unless current files prove it is already completed.",
-                    "Before updating the workflow baton, verify whether the requested state change has actually happened in files or external state relevant to this phase.",
-                    "If the handoff asks for a retry, re-run, re-sync, or re-open action, do not treat an old artifact or a closed external object as completion.",
                 ]
             )
+            if skill_name == "pr":
+                runtime_context.extend(
+                    [
+                        "For the PR phase, completion is local-only: finish the PR artifact and checklist, then update the workflow baton.",
+                        "Do not wait for, verify, or require a remote GitHub branch/PR before updating the workflow baton.",
+                        "Remote PR publish happens later in the host-side publish_output hook.",
+                    ]
+                )
+            else:
+                runtime_context.extend(
+                    [
+                        "Before updating the workflow baton, verify whether the requested state change has actually happened in files or external state relevant to this phase.",
+                        "If the handoff asks for a retry, re-run, re-sync, or re-open action, do not treat an old artifact or a closed external object as completion.",
+                    ]
+                )
         if context and context.get("user_input"):
             runtime_context.extend(["Current user input for this iteration:", context["user_input"]])
 
@@ -120,6 +150,13 @@ class GenericPhase:
             lines.append("Do NOT update the workflow baton until ALL checklist items are marked as [x].")
 
         return "\n".join(lines).strip()
+
+    def load_skill_body(self, *, skill_name: str, context: Optional[Dict[str, str]] = None) -> str:
+        """Best-effort skill body expansion for generic workflow prompts."""
+        try:
+            return self.skill_loader.activate(skill_name, context=context).strip()
+        except (SkillDiscoveryError, FileNotFoundError, OSError):
+            return ""
 
     @classmethod
     def extract_goto_target(cls, response: str) -> Optional[str]:
@@ -219,6 +256,8 @@ class GenericPhase:
                 skill_name=skill_name,
                 skill_invocation=skill_invocation,
                 shared_skill_invocations=shared_skill_invocations,
+                skill_body=runtime_context.get("skill_body", ""),
+                shared_skill_bodies=runtime_context.get("shared_skill_bodies"),
                 context=runtime_context,
                 output_file=output_file,
                 checklist_file=checklist_file,

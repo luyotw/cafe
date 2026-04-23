@@ -99,6 +99,16 @@ class GenericWorkflowStepExecutor(Phase):
             agent_name=agent_name,
             output_file=output_file,
         )
+        context["status_code_instruction"] = ""
+        context["skill_body"] = self.generic_phase.load_skill_body(skill_name=skill_name, context=context)
+        context["shared_skill_bodies"] = [
+            body
+            for body in (
+                self.generic_phase.load_skill_body(skill_name=name, context=context)
+                for name in self.SHARED_WORKFLOW_SKILLS
+            )
+            if body
+        ]
         self._generate_checklist(
             step_name=step_name,
             skill_name=skill_name,

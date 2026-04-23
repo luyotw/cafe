@@ -333,6 +333,100 @@ def test_generic_workflow_step_prompt_includes_latest_blackboard_handoff(tmp_pat
     assert any("還要再實作 cafe skill rm" in prompt for prompt in agent_manager.prompts)
 
 
+def test_generic_workflow_step_prompt_embeds_skill_bodies(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-pr-skill-body"
+    playbook = {
+        "playbook": {"id": "default"},
+        "roles": {"developer": {"default_agent": "David"}},
+        "steps": {
+            "pr": {
+                "skill": "pr",
+                "role": "developer",
+                "output_artifact": "pr",
+                "allowed_tools": ["Read"],
+                "valid_status_codes": ["CAFE_CONFIRMED"],
+                "on": {"CAFE_CONFIRMED": "_done"},
+            }
+        },
+    }
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("pr")
+    spec_file = issue_dir / "spec" / "iteration_001" / "output.md"
+    plan_file = issue_dir / "plan" / "iteration_001" / "output.md"
+    spec_file.parent.mkdir(parents=True, exist_ok=True)
+    plan_file.parent.mkdir(parents=True, exist_ok=True)
+    spec_file.write_text("# Spec\n", encoding="utf-8")
+    plan_file.write_text("# Plan\n", encoding="utf-8")
+    store.set_artifact(state, "spec", str(spec_file))
+    store.set_artifact(state, "plan", str(plan_file))
+    agent_manager = FakeAgentManager("CAFE_CONFIRMED")
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="issue-pr-skill-body",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=agent_manager,
+        git_ops=FakeGitOperations(),
+        role_agent_map={"developer": "David"},
+    )
+
+    executor.execute_step("pr", playbook["steps"]["pr"], state)
+
+    prompt = agent_manager.prompts[-1]
+    assert "Shared skill instructions:" in prompt
+    assert "Read blackboard first." in prompt
+    assert "Phase skill instructions:" in prompt
+    assert "Write PR content to:" in prompt
+
+
+def test_generic_workflow_step_pr_prompt_overrides_external_state_guardrail(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-pr-guardrail"
+    playbook = {
+        "playbook": {"id": "default"},
+        "roles": {"developer": {"default_agent": "David"}},
+        "steps": {
+            "pr": {
+                "skill": "pr",
+                "role": "developer",
+                "output_artifact": "pr",
+                "allowed_tools": ["Read"],
+                "valid_status_codes": ["CAFE_CONFIRMED"],
+                "on": {"CAFE_CONFIRMED": "_done"},
+            }
+        },
+    }
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("pr")
+    spec_file = issue_dir / "spec" / "iteration_001" / "output.md"
+    plan_file = issue_dir / "plan" / "iteration_001" / "output.md"
+    spec_file.parent.mkdir(parents=True, exist_ok=True)
+    plan_file.parent.mkdir(parents=True, exist_ok=True)
+    spec_file.write_text("# Spec\n", encoding="utf-8")
+    plan_file.write_text("# Plan\n", encoding="utf-8")
+    store.set_artifact(state, "spec", str(spec_file))
+    store.set_artifact(state, "plan", str(plan_file))
+    store.set_handoff_summary(state, "原本的 pr script 有問題，我把 pr 砍掉了麻煩重發一次")
+    agent_manager = FakeAgentManager("CAFE_CONFIRMED")
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="issue-pr-guardrail",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=agent_manager,
+        git_ops=FakeGitOperations(),
+        role_agent_map={"developer": "David"},
+    )
+
+    executor.execute_step("pr", playbook["steps"]["pr"], state)
+
+    prompt = agent_manager.prompts[-1]
+    assert "Do not wait for, verify, or require a remote GitHub branch/PR" in prompt
+    assert "Remote PR publish happens later in the host-side publish_output hook." in prompt
+    assert "Before updating the workflow baton, verify whether the requested state change has actually happened in files or external state relevant to this phase." not in prompt
+
+
 def test_generic_workflow_step_collects_clarification_before_next_agent_run(
     tmp_path: Path,
     monkeypatch,
