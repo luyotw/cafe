@@ -69,7 +69,7 @@ steps:
     assignee_type: agent
     input_artifacts: [spec, code]
     output_artifact: pr_result
-    allowed_tools: [Read, Edit, Write, Grep, Glob, Bash, WebFetch, WebSearch]
+    allowed_tools: [Read, Edit, Write, Grep, Glob]
     valid_status_codes:
       - CAFE_CONFIRMED
       - CAFE_NEED_PERMISSION
