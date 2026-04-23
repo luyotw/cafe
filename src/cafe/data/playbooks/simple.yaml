@@ -57,7 +57,7 @@ steps:
     assignee_type: agent
     input_artifacts: [spec, code]
     output_artifact: pr_result
-    allowed_tools: [Read, Edit, Write, Grep, Glob, Bash, WebFetch, WebSearch]
+    allowed_tools: [Read, Edit, Write, Grep, Glob]
     allowed_goto: [develop]
     hooks:
       prepare_input: [GitHubPRCreator, UserInputCollector]
