@@ -4,5 +4,5 @@
 [ ] Read {prev_pr_file} to review previous PR content
 [ ] Review unpushed commits to identify new changes
 [ ] Edit {current_pr_file} to update PR content based on new changes (NOT in your response)
-[ ] Return ONLY the status code in your response
-[ ] Return appropriate status code
+[ ] Do not query or wait for a remote GitHub branch/PR; host-side publish runs after this phase returns
+[ ] Mark this checklist complete before returning CAFE_CONFIRMED

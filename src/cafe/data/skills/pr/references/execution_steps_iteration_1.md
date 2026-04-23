@@ -8,5 +8,5 @@
 [ ] Ensure PR title is concise and descriptive (max 80 characters)
 [ ] Include reference to original requirements
 [ ] List all major changes and commits in the Changes section
-[ ] Return ONLY the status code in your response
-[ ] Return appropriate status code
+[ ] Do not query or wait for a remote GitHub branch/PR; host-side publish runs after this phase returns
+[ ] Mark this checklist complete before returning CAFE_CONFIRMED
