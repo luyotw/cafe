@@ -333,7 +333,7 @@ def test_generic_workflow_step_prompt_includes_latest_blackboard_handoff(tmp_pat
     assert any("還要再實作 cafe skill rm" in prompt for prompt in agent_manager.prompts)
 
 
-def test_generic_workflow_step_prompt_embeds_skill_bodies(tmp_path: Path, monkeypatch) -> None:
+def test_generic_workflow_step_prompt_keeps_skill_invocations_only(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-pr-skill-body"
     playbook = {
@@ -374,10 +374,12 @@ def test_generic_workflow_step_prompt_embeds_skill_bodies(tmp_path: Path, monkey
     executor.execute_step("pr", playbook["steps"]["pr"], state)
 
     prompt = agent_manager.prompts[-1]
-    assert "Shared skill instructions:" in prompt
-    assert "Read blackboard first." in prompt
-    assert "Phase skill instructions:" in prompt
-    assert "Write PR content to:" in prompt
+    assert "Shared skills:" in prompt
+    assert "Phase skill: " in prompt
+    assert "Shared skill instructions:" not in prompt
+    assert "Phase skill instructions:" not in prompt
+    assert "Read blackboard first." not in prompt
+    assert "Write PR content to:" not in prompt
 
 
 def test_generic_workflow_step_pr_prompt_overrides_external_state_guardrail(tmp_path: Path, monkeypatch) -> None:
