@@ -24,6 +24,9 @@ if [[ "$1" == "rev-parse" ]]; then
   echo "issue231"
   exit 0
 fi
+if [[ "$1" == "status" && "$2" == "--porcelain" ]]; then
+  exit 0
+fi
 if [[ "$1" == "push" ]]; then
   exit 0
 fi
@@ -116,5 +119,5 @@ def test_sync_pr_creates_new_pr_when_existing_pr_is_closed(tmp_path: Path) -> No
     assert '"action":"created"' in result.stdout
     log_lines = gh_log.read_text().splitlines()
     assert "pr view --json number,url,state,baseRefName" in log_lines[0]
-    assert any("pr create --title Test PR Title --body PR body --base v02" in line for line in log_lines)
+    assert any("pr create --title Test PR Title --body PR body --head issue231 --base v02" in line for line in log_lines)
     assert not any("pr edit 236 --title Test PR Title --body PR body" in line for line in log_lines)

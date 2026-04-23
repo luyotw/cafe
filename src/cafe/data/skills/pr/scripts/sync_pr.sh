@@ -58,6 +58,17 @@ fi
 # Body = everything after first line
 BODY=$(tail -n +2 "$OUTPUT_FILE" | sed '/./,$!d')
 
+ensure_clean_worktree() {
+  local dirty
+  dirty=$(git status --porcelain)
+  if [[ -n "$dirty" ]]; then
+    echo "Error: cannot sync PR with uncommitted changes." >&2
+    echo "Commit or stash changes first, then run cafe make again." >&2
+    echo "$dirty" >&2
+    exit 1
+  fi
+}
+
 post_todo_comment() {
   local pr_number="$1"
   local issue_dir issue_yaml
@@ -155,9 +166,13 @@ PY
 }
 
 # Push branch
+ensure_clean_worktree
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
 echo "Pushing branch: $BRANCH" >&2
-git push --set-upstream origin "$BRANCH" 2>&1 >&2 || true
+if ! git push --set-upstream origin "$BRANCH" 2>&1 >&2; then
+  echo "Error: failed to push branch '$BRANCH' to origin." >&2
+  exit 1
+fi
 
 # Create or update PR
 EXISTING_PR=$(gh pr view --json number,url,state,baseRefName 2>/dev/null || echo "")
@@ -181,7 +196,7 @@ if [[ "$PR_STATE" == "OPEN" ]]; then
   fi
   echo '{"action":"updated","pr_number":"'"$PR_NUMBER"'","pr_url":"'"$PR_URL"'"}'
 else
-  CREATE_ARGS=(--title "$TITLE" --body "$BODY")
+  CREATE_ARGS=(--title "$TITLE" --body "$BODY" --head "$BRANCH")
   if [[ -n "$BASE_BRANCH" ]]; then
     CREATE_ARGS+=(--base "$BASE_BRANCH")
   fi

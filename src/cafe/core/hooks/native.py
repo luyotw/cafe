@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import subprocess
 import webbrowser
 from pathlib import Path
 from typing import Any, Optional
@@ -10,6 +12,7 @@ from typing import Any, Optional
 from cafe.core.hooks import HookResult, NoOpHook
 from cafe.core.questions_schema import parse_questions_xml, validate_questions_xml
 from cafe.core.status_codes import PhaseStatusCode
+from cafe.skills.loader import SkillLoader
 from cafe.ui.interactive_qa import interactive_qa_flow
 from cafe.ui.inquirer_prompts import prompt_multiline
 from cafe.utils.github import (
@@ -489,8 +492,126 @@ class GitHubPRCreator(NoOpHook):
         )
 
     def _publish_output(self, **kwargs: Any) -> HookResult:
-        # PR creation/update is now handled by scripts/sync_pr.sh in the pr skill.
-        return HookResult()
+        if kwargs.get("status_code") != PhaseStatusCode.CONFIRMED:
+            return HookResult()
+        if str(kwargs.get("step_name") or "") != "pr":
+            return HookResult()
+
+        phase = kwargs.get("phase")
+        output_file = kwargs.get("output_file")
+        if phase is None or not isinstance(output_file, Path) or not output_file.exists():
+            return HookResult()
+        if self._is_local_pr_mode(phase):
+            return HookResult()
+
+        repo_root = self._resolve_repo_root(phase)
+        script_path = self._resolve_sync_script(repo_root)
+        base_branch = self._resolve_base_branch(phase)
+
+        cmd = ["/bin/bash", str(script_path), "--output", str(output_file)]
+        if base_branch:
+            cmd.extend(["--base", base_branch])
+
+        result = subprocess.run(
+            cmd,
+            cwd=str(repo_root),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            details = (result.stderr or result.stdout or "").strip()
+            raise RuntimeError(f"PR sync script failed: {details}")
+
+        payload = self._parse_sync_result(result.stdout)
+        pr_url = str(payload.get("pr_url") or "").strip()
+        pr_number = str(payload.get("pr_number") or "").strip()
+        action = str(payload.get("action") or "synced").strip()
+        events = [
+            {
+                "type": "pr_synced",
+                "url": pr_url,
+                "pr_number": pr_number,
+                "action": action,
+                "source": "skill_script",
+            }
+        ]
+        return HookResult(
+            context_updates={
+                key: value
+                for key, value in {
+                    "pr_url": pr_url,
+                    "pr_number": pr_number,
+                    "pr_sync_action": action,
+                }.items()
+                if value
+            },
+            events=events,
+        )
+
+    @staticmethod
+    def _is_local_pr_mode(phase: Any) -> bool:
+        try:
+            value = phase._get_issue_config_value(
+                phase.issue_dir / "issue.yaml",
+                "pr.auto_create",
+            )
+        except Exception:
+            return False
+        return value is False
+
+    @staticmethod
+    def _resolve_repo_root(phase: Any) -> Path:
+        try:
+            repo_root = phase.git_ops.get_repo_root()
+        except Exception:
+            repo_root = Path.cwd()
+        return Path(repo_root).resolve()
+
+    @staticmethod
+    def _resolve_sync_script(repo_root: Path) -> Path:
+        loader = SkillLoader(project_root=repo_root)
+        skill_dir = loader.get_skill_dir("pr")
+        script_path = skill_dir / "scripts" / "sync_pr.sh"
+        if script_path.exists():
+            return script_path
+
+        fallback = (
+            Path(__file__).resolve().parents[2]
+            / "data"
+            / "skills"
+            / "pr"
+            / "scripts"
+            / "sync_pr.sh"
+        )
+        if fallback.exists():
+            return fallback
+        raise FileNotFoundError(f"PR sync script not found: {script_path}")
+
+    @staticmethod
+    def _resolve_base_branch(phase: Any) -> Optional[str]:
+        try:
+            value = phase._get_issue_config_value(
+                phase.issue_dir / "issue.yaml",
+                "base_branch",
+            )
+        except Exception:
+            return None
+        return str(value).strip() if value else None
+
+    @staticmethod
+    def _parse_sync_result(stdout: str) -> dict[str, Any]:
+        for line in reversed(stdout.splitlines()):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                parsed = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(parsed, dict):
+                return parsed
+        raise RuntimeError("PR sync script did not return JSON result")
 
 
 class PRCommentPoster(NoOpHook):
