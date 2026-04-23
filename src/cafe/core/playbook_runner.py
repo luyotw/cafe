@@ -17,7 +17,6 @@ from cafe.core.blackboard import (
 from cafe.core.status_codes import PhaseStatusCode
 from cafe.phases.generic_phase import GenericPhase
 
-
 StepExecutor = Callable[[str, Dict, BlackboardState], Any]
 
 
@@ -291,7 +290,6 @@ class PlaybookRunner:
                         explicit_status_code = raw_status_code
             else:
                 response, artifacts = execution_result
-
             post_contract = self.blackboard_store.load_handoff_contract(
                 self.blackboard,
                 allowed_steps=list(self.steps.keys()),

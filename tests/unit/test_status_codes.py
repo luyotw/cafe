@@ -57,5 +57,4 @@ class TestPhaseStatusExtraction:
                 PhaseStatusCode.NEED_CLARIFICATION,
             ],
         )
-
         assert code is None

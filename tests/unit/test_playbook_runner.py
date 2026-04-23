@@ -293,6 +293,77 @@ def test_runner_rejects_baton_target_mismatch_before_step_execution(tmp_path: Pa
     )
     with pytest.raises(RuntimeError, match=r"baton points to 'plan'"):
         runner.run(max_transitions=2)
+def test_runner_rejects_reserved_assignee_type_at_runtime(tmp_path: Path) -> None:
+    playbook = {
+        "playbook": {"id": "default"},
+        "steps": {
+            "develop": {
+                "skill": "spec_first",
+                "role": "developer",
+                "assignee_type": "human",
+                "valid_status_codes": ["CAFE_CONFIRMED"],
+                "on": {"CAFE_CONFIRMED": "_done"},
+            }
+        },
+    }
+
+    def executor(step_name: str, step_def: dict, state: object) -> tuple[str, dict[str, str]]:
+        return ("CAFE_CONFIRMED", {})
+
+    runner = PlaybookRunner(
+        issue_dir=tmp_path / ".cafe" / "issues" / "demo",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        executor=executor,
+    )
+    with pytest.raises(RuntimeError, match="assignee_type=human"):
+        runner.run()
+
+
+def test_runner_stops_when_step_exceeds_max_iterations(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo"
+    playbook = {
+        "playbook": {"id": "default"},
+        "steps": {
+            "review": {
+                "skill": "spec_first",
+                "role": "reviewer",
+                "max_iterations": 2,
+                "valid_status_codes": ["CAFE_NEEDS_CHANGES"],
+                "on": {"CAFE_NEEDS_CHANGES": "review"},
+            }
+        },
+    }
+
+    def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
+        return StepExecutionResult(
+            response="repeat review",
+            artifacts={},
+            status_code="CAFE_NEEDS_CHANGES",
+        )
+
+    runner = PlaybookRunner(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        executor=executor,
+    )
+
+    with pytest.raises(RuntimeError, match="exceeded max_iterations=2"):
+        runner.run(max_transitions=5)
+
+    blackboard = BlackboardStore(issue_dir).load_or_create("review")
+    loop_events = [event for event in blackboard.events if event.event_type == "loop_detected"]
+    assert loop_events
+    assert loop_events[-1].data["max_iterations"] == 2
+
+
+def test_default_review_loop_budget_is_three_rounds() -> None:
+    from cafe.playbooks.loader import PlaybookLoader
+
+    playbook = PlaybookLoader().load_model("default").model
+
+    assert playbook.steps["review"].max_iterations == 3
 
 
 def test_runner_records_hop_limit_event(tmp_path: Path) -> None:
@@ -333,8 +404,3 @@ def test_runner_records_hop_limit_event(tmp_path: Path) -> None:
     hop_events = [event for event in blackboard.events if event.event_type == "hop_limit_reached"]
     assert hop_events
     assert hop_events[-1].data["max_transitions"] == 2
-
-
-def test_default_review_loop_budget_is_three_rounds() -> None:
-    playbook = PlaybookLoader().load_model("default").model
-    assert playbook.steps["review"].max_iterations == 3

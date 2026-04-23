@@ -578,7 +578,8 @@ class Phase(ABC):
             from cafe.agents.executor import AgentExecutionError
             from cafe.core.types import CriticalPhaseError
 
-            print(f"⚠️  Agent execution failed: {e}")
+            display_error = getattr(e, "display_message", None) or str(e)
+            print(f"⚠️  Agent execution failed: {display_error}")
 
             # 4a. Check if it's a critical error - fail immediately without recovery
             is_critical_error = (
@@ -598,6 +599,7 @@ class Phase(ABC):
                     context_data["response"] = None
                     context_data["status_code"] = None
                     context_data["error"] = str(e)
+                    context_data["display_error"] = display_error
                     context_data["error_type"] = e.error_type
                     context_data["is_critical"] = True
 
@@ -606,7 +608,7 @@ class Phase(ABC):
 
                 # Create a CriticalError wrapper to signal this should stop the workflow
                 raise CriticalPhaseError(
-                    message=str(e),
+                    message=display_error,
                     error_type=e.error_type,
                     phase_name=getattr(self, '__class__', type(self)).__name__
                 ) from e

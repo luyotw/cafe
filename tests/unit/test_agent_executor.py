@@ -122,6 +122,27 @@ class TestAgentExecutorErrorHandling:
             # The error message should contain details
             assert "Connection timeout" in str(exc_info.value)
 
+    def test_rate_limit_display_message_summarizes_noisy_gemini_error(self) -> None:
+        """Gemini quota errors should be concise for terminal display."""
+        config = AgentConfig(name="David", cli=AgentCLI.GEMINI, session_id="test-session")
+        executor = AgentExecutor(config)
+        stderr = (
+            "Warning: --allowed-tools cli argument and tools.allowed in settings.json are deprecated\n"
+            "Error executing tool run_shell_command: Tool execution denied by policy.\n"
+            "TerminalQuotaError: You have exhausted your capacity on this model. "
+            "Your quota will reset after 12h49m8s.\n"
+            "    at classifyGoogleError (file:///usr/local/Cellar/gemini-cli/bundle/chunk.js:1:1)\n"
+        )
+
+        display_message = executor._format_rate_limit_display_message("Gemini", stderr)
+
+        assert display_message == (
+            "Gemini API rate limit reached. Quota resets after 12h49m8s. "
+            "Some tool calls were also denied by CLI policy."
+        )
+        assert "TerminalQuotaError" not in display_message
+        assert "classifyGoogleError" not in display_message
+
 
 class TestCodexPermissionExtraction:
     """Test Codex-specific permission denial extraction."""

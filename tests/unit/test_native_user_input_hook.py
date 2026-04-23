@@ -4,7 +4,13 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from cafe.core.hooks.native import GitHubPRCreator, PRCommentPoster, PRLinkOpener, UserInputCollector
+from cafe.core.hooks.native import (
+    GitHubPRCreator,
+    LocalPRReviewer,
+    PRCommentPoster,
+    PRLinkOpener,
+    UserInputCollector,
+)
 from cafe.core.playbook_runner import StepExecutionResult
 from cafe.core.status_codes import PhaseStatusCode
 from cafe.phases.generic_phase import GenericPhaseExecution
@@ -14,8 +20,10 @@ from cafe.phases.generic_workflow_step import GenericWorkflowStepExecutor
 class _FakePhase:
     def __init__(self, phase_dir: Path, iteration: int, issue_name: str = "demo") -> None:
         self.phase_dir = phase_dir
+        self.issue_dir = phase_dir.parent
         self.iteration = iteration
         self.issue_name = issue_name
+        self.interactive = True
         self.step_user_inputs: dict[str, str] = {}
 
     def _get_iteration_dir(self, iteration: int) -> Path:
@@ -27,6 +35,19 @@ class _FakePhase:
     def _load_previous_iteration_data(self) -> dict:
         context_file = self._get_iteration_dir(self.iteration - 1) / "context.json"
         return json.loads(context_file.read_text(encoding="utf-8"))
+
+    def _get_issue_config_value(self, config_file: Path, key: str):
+        import yaml
+
+        if not config_file.exists():
+            return None
+        data = yaml.safe_load(config_file.read_text(encoding="utf-8")) or {}
+        value = data
+        for part in key.split("."):
+            if not isinstance(value, dict) or part not in value:
+                return None
+            value = value[part]
+        return value
 
 
 def test_user_input_collector_confirms_ready_for_review_without_running_agent(tmp_path: Path) -> None:
@@ -317,6 +338,72 @@ def test_pr_link_opener_returns_pr_synced_even_when_browser_open_fails() -> None
     assert result.events == [{"type": "pr_synced", "url": "https://github.com/test/repo/pull/123"}]
 
 
+def test_local_pr_reviewer_displays_diff_and_confirms_local_mode(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo"
+    phase_dir = issue_dir / "pr"
+    phase_dir.mkdir(parents=True, exist_ok=True)
+    (issue_dir / "issue.yaml").write_text(
+        "base_branch: develop\npr:\n  auto_create: false\n",
+        encoding="utf-8",
+    )
+    output_file = phase_dir / "iteration_001" / "output.md"
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    output_file.write_text("# PR title\n", encoding="utf-8")
+    phase = _FakePhase(phase_dir=phase_dir, iteration=1)
+    phase.git_ops = MagicMock()
+    phase.git_ops.get_diff.return_value = "diff --git a/app.py b/app.py\n+change\n"
+    phase._ask_user_for_review_decision = MagicMock(return_value="confirm")
+    phase._process_review_decision = MagicMock(return_value=MagicMock())
+
+    hook = LocalPRReviewer()
+    result = hook.run(
+        stage="publish_output",
+        phase=phase,
+        step_name="pr",
+        agent_name="Nick",
+        output_file=output_file,
+        status_code=PhaseStatusCode.CONFIRMED,
+    )
+
+    phase.git_ops.get_diff.assert_called_once_with("develop", "HEAD")
+    phase._ask_user_for_review_decision.assert_called_once()
+    assert result.override_status_code is None
+    assert result.events == [{"type": "local_pr_review_confirmed"}]
+
+
+def test_local_pr_reviewer_writes_feedback_todo_and_requests_changes(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo"
+    phase_dir = issue_dir / "pr"
+    phase_dir.mkdir(parents=True, exist_ok=True)
+    (issue_dir / "issue.yaml").write_text(
+        "base_branch: develop\npr:\n  auto_create: false\n",
+        encoding="utf-8",
+    )
+    output_file = phase_dir / "iteration_001" / "output.md"
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    output_file.write_text("# PR title\n", encoding="utf-8")
+    phase = _FakePhase(phase_dir=phase_dir, iteration=1)
+    phase.git_ops = MagicMock()
+    phase.git_ops.get_diff.return_value = "diff --git a/app.py b/app.py\n+change\n"
+    phase._ask_user_for_review_decision = MagicMock(return_value="modify")
+    phase._process_review_decision = MagicMock(return_value="Please fix the failing test")
+
+    hook = LocalPRReviewer()
+    result = hook.run(
+        stage="publish_output",
+        phase=phase,
+        step_name="pr",
+        agent_name="Nick",
+        output_file=output_file,
+        status_code=PhaseStatusCode.CONFIRMED,
+    )
+
+    assert result.override_status_code == PhaseStatusCode.NEEDS_CHANGES
+    assert "- [ ] Please fix the failing test" in output_file.read_text(encoding="utf-8")
+    assert (output_file.parent / "user_input.md").read_text(encoding="utf-8") == "Please fix the failing test"
+    assert result.events[0]["type"] == "local_pr_review_changes_requested"
+
+
 def test_github_pr_creator_prepare_input_loads_unresolved_comments(tmp_path: Path) -> None:
     phase_dir = tmp_path / "pr"
     phase_dir.mkdir(parents=True, exist_ok=True)
@@ -341,6 +428,77 @@ def test_github_pr_creator_prepare_input_loads_unresolved_comments(tmp_path: Pat
     assert result.context_updates["user_input"] == "Comment #1\nPlease fix this"
     assert phase.step_user_inputs["pr"] == "Comment #1\nPlease fix this"
     assert result.events == [{"type": "pr_comments_loaded", "count": 1, "pr_number": "42"}]
+
+
+def test_github_pr_creator_publish_output_runs_sync_pr_script(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo"
+    phase_dir = issue_dir / "pr"
+    output_file = phase_dir / "iteration_001" / "output.md"
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    output_file.write_text("# Test PR\n\nBody\n", encoding="utf-8")
+    (issue_dir / "issue.yaml").write_text("base_branch: develop\n", encoding="utf-8")
+
+    phase = _FakePhase(phase_dir=phase_dir, iteration=1)
+    phase.git_ops = MagicMock()
+    phase.git_ops.get_repo_root.return_value = tmp_path
+
+    completed = MagicMock()
+    completed.returncode = 0
+    completed.stdout = (
+        '{"action":"created","pr_number":"42",'
+        '"pr_url":"https://github.com/test/repo/pull/42"}\n'
+    )
+    completed.stderr = ""
+
+    hook = GitHubPRCreator()
+    with patch("cafe.core.hooks.native.subprocess.run", return_value=completed) as mock_run:
+        result = hook.run(
+            stage="publish_output",
+            phase=phase,
+            step_name="pr",
+            output_file=output_file,
+            status_code=PhaseStatusCode.CONFIRMED,
+        )
+
+    cmd = mock_run.call_args.args[0]
+    assert cmd[:3] == ["/bin/bash", str(hook._resolve_sync_script(tmp_path)), "--output"]
+    assert str(output_file) in cmd
+    assert cmd[-2:] == ["--base", "develop"]
+    assert result.context_updates["pr_url"] == "https://github.com/test/repo/pull/42"
+    assert result.events == [
+        {
+            "type": "pr_synced",
+            "url": "https://github.com/test/repo/pull/42",
+            "pr_number": "42",
+            "action": "created",
+            "source": "skill_script",
+        }
+    ]
+
+
+def test_github_pr_creator_publish_output_skips_local_pr_mode(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo"
+    phase_dir = issue_dir / "pr"
+    output_file = phase_dir / "iteration_001" / "output.md"
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    output_file.write_text("# Test PR\n\nBody\n", encoding="utf-8")
+    (issue_dir / "issue.yaml").write_text("pr:\n  auto_create: false\n", encoding="utf-8")
+
+    phase = _FakePhase(phase_dir=phase_dir, iteration=1)
+    phase.git_ops = MagicMock()
+
+    hook = GitHubPRCreator()
+    with patch("cafe.core.hooks.native.subprocess.run") as mock_run:
+        result = hook.run(
+            stage="publish_output",
+            phase=phase,
+            step_name="pr",
+            output_file=output_file,
+            status_code=PhaseStatusCode.CONFIRMED,
+        )
+
+    mock_run.assert_not_called()
+    assert result.events == []
 
 
 def test_pr_comment_poster_posts_todo_comment_only_when_confirmed_and_complete(tmp_path: Path) -> None:

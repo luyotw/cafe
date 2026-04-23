@@ -171,6 +171,11 @@ class GenericWorkflowStepExecutor(Phase):
 
         response = execution.response
         status_code = execution.status_code
+        if status_code is None:
+            status_code = self._coerce_ready_for_review_completion(
+                response=response,
+                step_def=step_def,
+            )
 
         agent_was_invoked = bool(last_prompt)
         if agent_was_invoked and status_code is not None and self._should_validate_checklist(status_code):
@@ -185,6 +190,15 @@ class GenericWorkflowStepExecutor(Phase):
             )
             if validation_passed and validated_status is not None:
                 status_code = validated_status
+        status_code = status_code or self._coerce_ready_for_review_completion(
+            response=response,
+            step_def=step_def,
+        )
+        if status_code == PhaseStatusCode.READY_FOR_REVIEW:
+            status_code = self._coerce_ready_for_review_completion(
+                response=response,
+                step_def=step_def,
+            ) or status_code
 
         self._persist_final_status(status_code)
 
@@ -387,6 +401,8 @@ class GenericWorkflowStepExecutor(Phase):
                 context["develop_file"] = artifact_path
             elif artifact_name == "review_feedback":
                 context["feedback_file"] = artifact_path
+            elif artifact_name == "pr_result":
+                context["feedback_file"] = artifact_path
 
         if "spec_file" not in context:
             latest_spec = self._get_latest_versioned_file("spec", self.issue_dir / "spec")
@@ -396,6 +412,10 @@ class GenericWorkflowStepExecutor(Phase):
             latest_plan = self._get_latest_versioned_file("plan", self.issue_dir / "plan")
             if latest_plan:
                 context["plan_file"] = self._display_path(latest_plan)
+        if step_name == "develop" and "feedback_file" not in context:
+            pr_feedback = blackboard_state.artifacts.get("pr_result")
+            if pr_feedback:
+                context["feedback_file"] = self._display_path(Path(pr_feedback.path))
 
         if self._resolve_skill_name(step_def, self.iteration) == "pr":
             base_branch = self._get_issue_config_value(self.issue_dir / "issue.yaml", "base_branch")
@@ -424,7 +444,10 @@ class GenericWorkflowStepExecutor(Phase):
         questions_display = self._display_path(questions_xml_file)
         spec_path = self._artifact_or_latest_path(blackboard_state, "spec", "spec")
         plan_path = self._artifact_or_latest_path(blackboard_state, "plan", "plan")
-        review_feedback = self._artifact_path(blackboard_state, "review_feedback")
+        review_feedback = (
+            self._artifact_path(blackboard_state, "review_feedback")
+            or self._artifact_path(blackboard_state, "pr_result")
+        )
 
         if skill_name in {"spec_first", "spec_revise"}:
             prev_spec = None
@@ -545,6 +568,25 @@ class GenericWorkflowStepExecutor(Phase):
     @staticmethod
     def _should_validate_checklist(status_code: PhaseStatusCode) -> bool:
         return status_code in {PhaseStatusCode.CONFIRMED, PhaseStatusCode.READY_FOR_REVIEW}
+
+    @staticmethod
+    def _coerce_ready_for_review_completion(
+        *,
+        response: str,
+        step_def: Dict[str, Any],
+    ) -> Optional[PhaseStatusCode]:
+        valid_codes = {
+            code
+            for code in step_def.get("valid_status_codes", [])
+            if isinstance(code, str)
+        }
+        if PhaseStatusCode.CONFIRMED.value not in valid_codes:
+            return None
+        if PhaseStatusCode.READY_FOR_REVIEW.value in valid_codes:
+            return None
+        if response.strip().upper() != PhaseStatusCode.READY_FOR_REVIEW.value:
+            return None
+        return PhaseStatusCode.CONFIRMED
 
     @staticmethod
     def _resolve_handoff_intent(step_name: str, status_code: PhaseStatusCode) -> Optional[str]:
