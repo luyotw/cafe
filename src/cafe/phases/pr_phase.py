@@ -1334,7 +1334,6 @@ The system will verify checklist completion. If unchecked items remain, you will
 
         # Validate checklist and output.md with retry loop
         from cafe.utils.checklist_validator import validate_checklist
-        from cafe.core.status_codes import StatusCodeParser
 
         max_retries = 3
         for retry in range(max_retries + 1):  # 0 = first check, 1-3 = retries
@@ -1392,7 +1391,7 @@ The system will verify checklist completion. If unchecked items remain, you will
                 )
 
                 # Extract status code from retry response
-                retry_status_code = StatusCodeParser.extract(
+                retry_status_code = self._extract_status_code_from_response(
                     retry_response,
                     valid_codes=[PhaseStatusCode.NEEDS_CHANGES, PhaseStatusCode.CONFIRMED],
                 )

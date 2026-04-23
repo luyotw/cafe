@@ -12,7 +12,7 @@ from cafe.agents.manager import AgentManager
 from cafe.core.git import GitOperations
 from cafe.core.permission import PermissionHandler
 from cafe.core.phase import Phase
-from cafe.core.status_codes import PhaseStatusCode, StatusCodeParser
+from cafe.core.status_codes import PhaseStatusCode
 from cafe.core.types import PhaseProgress, PhaseResult, PhaseStatus
 from cafe.ui.chat import launch_chat_session
 from cafe.ui.display import Display
@@ -1063,7 +1063,7 @@ Read {agent_file} to understand your complete role definition and responsibiliti
 
             # Handle NEED_PERMISSION, NEED_CLARIFICATION, NO_CHANGES_NEEDED specially - return and wait for next invocation
             if response:
-                response_status = StatusCodeParser.extract(
+                response_status = self._extract_status_code_from_response(
                     response,
                     valid_codes=[
                         PhaseStatusCode.CONFIRMED,
@@ -1133,7 +1133,7 @@ Do NOT return any other status code until you have written your reasoning."""
                             )
 
                             # Extract status code from continuation response
-                            continuation_status = StatusCodeParser.extract(
+                            continuation_status = self._extract_status_code_from_response(
                                 continuation_response,
                                 valid_codes=[PhaseStatusCode.NO_CHANGES_NEEDED],
                             )

@@ -12,7 +12,7 @@ from cafe.agents.manager import AgentManager
 from cafe.core.git import GitOperations
 from cafe.core.permission import PermissionHandler
 from cafe.core.phase import Phase
-from cafe.core.status_codes import PhaseStatusCode, StatusCodeParser
+from cafe.core.status_codes import PhaseStatusCode
 from cafe.core.types import PhaseProgress, PhaseResult, PhaseStatus
 from cafe.ui.display import Display
 from cafe.ui.phase_prompts import prompt_for_input_method, prompt_for_rigor, fetch_github_issue
@@ -444,8 +444,7 @@ class SpecPhase(Phase):
             self._save_issue_config()
 
             # Validate questions.xml when agent returns CAFE_NEED_CLARIFICATION
-            from cafe.core.status_codes import StatusCodeParser
-            status_code = StatusCodeParser.extract(response)
+            status_code = self._extract_status_code_from_response(response)
             if status_code == PhaseStatusCode.NEED_CLARIFICATION:
                 self._validate_and_retry_questions_xml(
                     xml_path=questions_xml_path,
@@ -1197,10 +1196,8 @@ class SpecPhase(Phase):
             - verification_result: PhaseResult if verification failed, None if ok
             - final_response: Updated response if agent corrected the output, None to use original
         """
-        from cafe.core.status_codes import StatusCodeParser
-
         # Extract status code from response
-        status_code = StatusCodeParser.extract(response)
+        status_code = self._extract_status_code_from_response(response)
         if not status_code:
             return None, None
 
@@ -1263,7 +1260,7 @@ Remember: The content must be DIFFERENT from the input. Add your analysis, clari
                         print(f"✓ Agent successfully updated the spec content")
 
                         # Extract status code from retry response
-                        retry_status = StatusCodeParser.extract(retry_response)
+                        retry_status = self._extract_status_code_from_response(retry_response)
                         if retry_status:
                             return None, retry_response.strip()
                         else:

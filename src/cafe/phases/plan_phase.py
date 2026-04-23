@@ -9,7 +9,7 @@ from typing import List, Optional, Dict, Any
 from cafe.agents.manager import AgentManager
 from cafe.core.permission import PermissionHandler
 from cafe.core.phase import Phase
-from cafe.core.status_codes import PhaseStatusCode, StatusCodeParser
+from cafe.core.status_codes import PhaseStatusCode
 from cafe.core.types import PhaseProgress, PhaseResult, PhaseStatus
 from cafe.ui.display import Display
 from cafe.ui.interactive_qa import interactive_qa_flow
@@ -303,7 +303,7 @@ class PlanPhase(Phase):
             )
 
             # Validate questions.xml when agent returns NEED_CLARIFICATION
-            status_code = StatusCodeParser.extract(response)
+            status_code = self._extract_status_code_from_response(response)
             if status_code == PhaseStatusCode.NEED_CLARIFICATION:
                 self._validate_and_retry_questions_xml(
                     xml_path=questions_xml_file_path,

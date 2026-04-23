@@ -411,6 +411,32 @@ class Phase(ABC):
             return PhaseStatusCode.NO_RESPONSE
         return None
 
+    @staticmethod
+    def _extract_status_code_from_response(
+        response: str,
+        valid_codes: Optional[List[PhaseStatusCode]] = None,
+    ) -> Optional[PhaseStatusCode]:
+        """Extract a single status code from plain text response.
+
+        Returns None when no status code is found or when multiple different
+        status codes appear in the same response.
+        """
+        if not response:
+            return None
+
+        response_upper = response.upper()
+        candidates = list(valid_codes) if valid_codes else list(PhaseStatusCode)
+
+        found_codes = [
+            code for code in sorted(candidates, key=lambda item: len(item.value), reverse=True)
+            if code.value in response_upper
+        ]
+        unique_codes = list(dict.fromkeys(found_codes))
+        if len(unique_codes) != 1:
+            return None
+
+        return unique_codes[0]
+
     def _execute_agent_iteration(
         self,
         agent_name: str,
@@ -729,8 +755,7 @@ class Phase(ABC):
             return response, None
 
         # 6. Extract status code
-        from cafe.core.status_codes import StatusCodeParser
-        status_code = StatusCodeParser.extract(
+        status_code = self._extract_status_code_from_response(
             response,
             valid_codes=valid_status_codes,
         )
@@ -1143,8 +1168,7 @@ class Phase(ABC):
             recovered_response = primary_file.read_text(encoding="utf-8")
 
             # Extract status code from file content
-            from cafe.core.status_codes import StatusCodeParser
-            status_code = StatusCodeParser.extract(
+            status_code = self._extract_status_code_from_response(
                 recovered_response,
                 valid_codes=valid_status_codes,
             )
@@ -2651,7 +2675,6 @@ class Phase(ABC):
             AttributeError: If phase lacks required attributes
         """
         from cafe.utils.checklist_validator import validate_checklist
-        from cafe.core.status_codes import StatusCodeParser
 
         # Check required attributes
         if not hasattr(self, "phase_dir"):
@@ -2684,7 +2707,10 @@ class Phase(ABC):
                 with open(context_file, "r", encoding="utf-8") as f:
                     context_data = json.load(f)
                     response = context_data.get("response", "")
-                    status_code = StatusCodeParser.extract(response, valid_codes=valid_status_codes)
+                    status_code = self._extract_status_code_from_response(
+                        response,
+                        valid_codes=valid_status_codes,
+                    )
                     return response, status_code, True
             return "", None, True
 
@@ -2696,7 +2722,10 @@ class Phase(ABC):
                 with open(context_file, "r", encoding="utf-8") as f:
                     context_data = json.load(f)
                     response = context_data.get("response", "")
-                    status_code = StatusCodeParser.extract(response, valid_codes=valid_status_codes)
+                    status_code = self._extract_status_code_from_response(
+                        response,
+                        valid_codes=valid_status_codes,
+                    )
                     return response, status_code, True
             return "", None, True
 
@@ -2733,7 +2762,7 @@ Do NOT return a status code until ALL checklist items are marked as complete [x]
                 )
 
                 # Extract status code from retry response
-                retry_status_code = StatusCodeParser.extract(
+                retry_status_code = self._extract_status_code_from_response(
                     retry_response,
                     valid_codes=valid_status_codes,
                 )
@@ -2803,7 +2832,10 @@ Do NOT return a status code until ALL checklist items are marked as complete [x]
             with open(context_file, "r", encoding="utf-8") as f:
                 context_data = json.load(f)
                 response = context_data.get("response", "")
-                status_code = StatusCodeParser.extract(response, valid_codes=valid_status_codes)
+                status_code = self._extract_status_code_from_response(
+                    response,
+                    valid_codes=valid_status_codes,
+                )
                 return response, status_code, False
 
         return "", None, False
@@ -2920,8 +2952,7 @@ The system will verify checklist completion. If unchecked items remain, you will
         )
 
         # Extract status code from response
-        from cafe.core.status_codes import StatusCodeParser
-        return StatusCodeParser.extract(response, valid_codes=valid_status_codes)
+        return self._extract_status_code_from_response(response, valid_codes=valid_status_codes)
 
     @staticmethod
     def _infer_human_input_status_from_response(response: str) -> Optional[PhaseStatusCode]:
@@ -2983,8 +3014,10 @@ The system will verify checklist completion. If unchecked items remain, you will
             )
 
             # Extract status code from response
-            from cafe.core.status_codes import StatusCodeParser
-            status_code = StatusCodeParser.extract(response, valid_codes=valid_status_codes)
+            status_code = self._extract_status_code_from_response(
+                response,
+                valid_codes=valid_status_codes,
+            )
 
             return response, status_code
         except Exception as e:
