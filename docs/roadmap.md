@@ -106,16 +106,56 @@ CAFE 長期採 **repo-first** 的 definition model，但不預設最終所有流
 
 核心能力：
 - custom hooks / scripts automation
+- host-side capability execution 雛型
 - playbook / skill tooling
 - validation / simulation / dry-run 強化
 - 更多 custom playbook 驗證樣本
 
 完成標準：
 - `scripts/` 可透過 hooks 自動觸發
+- 至少一條流程可用 **host-side capability contract** 觸發受信任 script，而不是讓 agent 直接在 sandbox 內執行對外 mutation
 - `cafe skill` / `cafe playbook` tooling 足以支撐自訂流程開發
 - 至少支援 `cafe playbook validate`
 - 若範圍允許，支援 `cafe playbook simulate <playbook>` 走 transition graph 而不真的呼叫 agent
 - 可用至少一條非軟體開發流程做 validate / dry-run 驗證
+
+建議先用 `pr` phase 做雛型：
+- agent 只負責產生本地 artifact 與 `publish_request.json`
+- host-side hook 讀 contract 後才執行受信任 script（例如 `sync_pr.sh`）
+- 第一期只允許 **agent 選擇既有 trusted script 並填參數**
+- 不在 v0.2.x 直接開放 agent 任意新寫 script 後自動拿 host 權限執行
+
+這版的核心立場：
+- agent 可以決定「要什麼結果」
+- host capability 決定「用什麼系統權限去做」
+- workflow 產物必須是 declarative contract，不是直接的 shell privilege
+
+### v0.3 前置：Agent-Written Automation Boundary
+
+目標：
+讓 CAFE 能走向「agent 可擴充自己的 automation」，但不把 host execution 退化成任意 RCE。
+
+需要建立的邊界：
+- **Agent layer**
+  - 負責撰寫 workflow、skills、artifacts、contracts
+  - 可在 sandbox 內撰寫與測試 script
+- **Contract layer**
+  - 宣告 capability、script、args、預期輸入輸出、所需權限
+  - 例如 `publish_pr`, `sync_issue`, `deploy_preview`
+- **Host capability layer**
+  - 只執行被 policy 接受的 contract
+  - 負責 network、credentials、GitHub mutation、browser opening、deploy 等特權操作
+
+這層分界的原因：
+- skill script 只要由 agent 自己直接呼叫，本質上仍然是 sandbox execution，不會自動變成 host scope
+- 若 agent 寫完 script 就能直接用 host 權限執行，等於把 workflow authoring 變成 privilege escalation 機制
+- 非技術使用者無法判斷自己究竟授權了哪種外部 mutation
+
+因此 v3 應區分兩種 script execution：
+- **sandbox execution**
+  - agent 自己在受限環境執行，用於開發、測試、dry-run
+- **host execution**
+  - host 根據 contract / manifest / policy 執行，用於 GitHub、deploy、外部 API、系統寫入
 
 ### v0.3
 
@@ -128,18 +168,85 @@ CAFE 長期採 **repo-first** 的 definition model，但不預設最終所有流
 - inbox / pending task view
 - reminders / due dates / SLA 基礎
 - playbook step 可明確宣告 human-owned / agent-owned / hybrid
+- trusted capability contract registry
+- host-executed script policy / approval flow
 
 建議新增抽象：
 - `HumanTask`
 - `TaskResult`
 - `WaitState`
 - `Assignment`
+- `CapabilityContract`
+- `CapabilityPolicy`
+- `ExecutionRequest`
 
 完成標準：
 - 一條流程中可同時混合 agent steps 與 human tasks
 - human 完成任務後，流程可自動接續
 - 不需要靠模糊的 `NEED_CLARIFICATION` 承載所有人工介入情境
 - 可用招募 / onboarding / content 類流程驗證 human-agent collaboration
+- 至少一條 host mutation 流程可透過 contract registry 執行，而不是把 script path 直接當作可執行權限
+
+這版先做到：
+- **agent-selectable trusted scripts**
+  - agent 可以在 workflow 中要求執行已註冊 capability
+  - host 驗證 capability 名稱、script path、args schema、權限需求後再執行
+
+這版先不直接做到：
+- **agent-authored script auto-trust**
+  - agent 任意新寫 script 後，不會直接自動取得 host 權限
+  - 新 script 仍需 manifest、policy 驗證、必要時人工批准
+
+## Agent-Written Script 長期模型
+
+若 CAFE 要支撐「一人公司」模式，長期不是禁止 agent 寫 script，而是把 agent-authored automation 正式產品化：
+
+### 1. Script Manifest
+
+每個可被 host 執行的 script，不應只有檔案本身，還要有機器可讀的 manifest，例如：
+- `name`
+- `capability`
+- `entrypoint`
+- `args schema`
+- `expected outputs`
+- `writes`
+- `network destinations`
+- `idempotent`
+- `requires approval`
+
+### 2. Capability Registry
+
+workflow / hook 不直接執行任意檔案路徑，而是引用 registry 內的 capability：
+- `publish_pr`
+- `sync_github_issue`
+- `open_pr_link`
+- `deploy_preview`
+
+registry 決定：
+- 哪個 script 或執行器負責 capability
+- 允許哪些 arguments
+- 允許哪些副作用
+
+### 3. Policy / Approval Engine
+
+host 是否執行，不由 agent 決定，而由 policy 決定：
+- 低風險 capability 可自動執行
+- 中風險 capability 要先 ask for approval
+- 超出 policy 的 capability 不執行
+
+### 4. Promotion Flow
+
+agent-authored script 若要變成可重複使用的 host capability，需要 promotion：
+1. agent 先產生 script
+2. agent 或 host 產生 manifest
+3. host 做 schema / static checks
+4. user 或 policy 批准
+5. script 進入 trusted registry
+6. 後續 workflow 才能穩定引用
+
+這樣才同時滿足兩件事：
+- agent 可以自我擴充 automation
+- host execution 仍可審計、可限制、可回收
 
 ### v0.4
 
