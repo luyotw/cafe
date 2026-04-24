@@ -293,6 +293,99 @@ def test_runner_rejects_baton_target_mismatch_before_step_execution(tmp_path: Pa
     )
     with pytest.raises(RuntimeError, match=r"baton points to 'plan'"):
         runner.run(max_transitions=2)
+
+
+def test_runner_blocks_pr_done_without_publish_receipt(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo-pr"
+    playbook = {
+        "playbook": {"id": "default"},
+        "steps": {
+            "pr": {"skill": "spec_first", "role": "developer", "on": {"CAFE_CONFIRMED": "_done"}},
+        },
+    }
+
+    def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
+        _write_agent_baton(issue_dir, state, from_step="pr", to_step="done", status_code="CAFE_CONFIRMED")
+        return StepExecutionResult(response="local only", artifacts={"pr_result": "p1"})
+
+    runner = PlaybookRunner(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        executor=executor,
+    )
+    result = runner.run(max_transitions=2)
+
+    assert result.completed is False
+    assert result.final_step == "pr"
+    assert result.final_status_code == "MISSING_CAPABILITY_RECEIPT"
+    blackboard = BlackboardStore(issue_dir).load_or_create("pr")
+    assert blackboard.current_step == "pr"
+    assert blackboard.handoff_contract is not None
+    assert blackboard.handoff_contract.to_owner == HandoffOwner.AGENT
+    assert blackboard.handoff_contract.to_step == "pr"
+    assert any(
+        event.event_type == "workflow_blocked" and event.data.get("required_event") == "pr_synced"
+        for event in blackboard.events
+    )
+
+
+def test_runner_allows_local_pr_done_without_publish_receipt(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo-local-pr"
+    issue_dir.mkdir(parents=True, exist_ok=True)
+    (issue_dir / "issue.yaml").write_text("pr:\n  auto_create: false\n", encoding="utf-8")
+    playbook = {
+        "playbook": {"id": "default"},
+        "steps": {
+            "pr": {"skill": "spec_first", "role": "developer", "on": {"CAFE_CONFIRMED": "_done"}},
+        },
+    }
+
+    def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
+        _write_agent_baton(issue_dir, state, from_step="pr", to_step="done", status_code="CAFE_CONFIRMED")
+        return StepExecutionResult(response="local review done", artifacts={"pr_result": "p1"})
+
+    runner = PlaybookRunner(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        executor=executor,
+    )
+    result = runner.run(max_transitions=2)
+
+    assert result.completed is True
+    assert result.final_step == "pr"
+    assert result.final_status_code == "CAFE_CONFIRMED"
+
+
+def test_runner_allows_remote_pr_done_with_publish_receipt(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo-remote-pr"
+    playbook = {
+        "playbook": {"id": "default"},
+        "steps": {
+            "pr": {"skill": "spec_first", "role": "developer", "on": {"CAFE_CONFIRMED": "_done"}},
+        },
+    }
+
+    def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
+        _write_agent_baton(issue_dir, state, from_step="pr", to_step="done", status_code="CAFE_CONFIRMED")
+        return StepExecutionResult(
+            response="published",
+            artifacts={"pr_result": "p1"},
+            events=[{"type": "pr_synced", "url": "https://github.com/example/repo/pull/1"}],
+        )
+
+    runner = PlaybookRunner(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        executor=executor,
+    )
+    result = runner.run(max_transitions=2)
+
+    assert result.completed is True
+    assert result.final_step == "pr"
+    assert result.final_status_code == "CAFE_CONFIRMED"
 def test_runner_rejects_reserved_assignee_type_at_runtime(tmp_path: Path) -> None:
     playbook = {
         "playbook": {"id": "default"},

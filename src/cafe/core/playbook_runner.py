@@ -7,6 +7,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
+import yaml
+
 from cafe.core.blackboard import (
     BlackboardState,
     BlackboardStore,
@@ -205,6 +207,26 @@ class PlaybookRunner:
             if target != current_step:
                 return str(target)
         return None
+
+    @staticmethod
+    def _has_event(execution_result: Any, event_type: str) -> bool:
+        events = getattr(execution_result, "events", None)
+        if not isinstance(events, list):
+            return False
+        return any(isinstance(event, dict) and event.get("type") == event_type for event in events)
+
+    def _pr_step_requires_publish_receipt(self, current_step: str) -> bool:
+        if current_step != "pr":
+            return False
+        issue_yaml = self.issue_dir / "issue.yaml"
+        if not issue_yaml.exists():
+            return True
+        try:
+            data = yaml.safe_load(issue_yaml.read_text(encoding="utf-8")) or {}
+        except Exception:
+            return True
+        pr_cfg = data.get("pr") or {}
+        return pr_cfg.get("auto_create", True) is not False
 
     @staticmethod
     def _resolve_step_iteration_limit(step_def: Dict) -> Optional[int]:
@@ -449,6 +471,36 @@ class PlaybookRunner:
                 )
 
             if next_step not in self.steps:
+                if (
+                    next_step == "done"
+                    and self._pr_step_requires_publish_receipt(current_step)
+                    and not self._has_event(execution_result, "pr_synced")
+                ):
+                    self.blackboard_store.update_handoff_contract(
+                        self.blackboard,
+                        from_step=current_step,
+                        to_owner=HandoffOwner.AGENT,
+                        to_step=current_step,
+                        intent=HandoffIntent.AWAIT_AGENT,
+                        status_code=status_code,
+                        source="workflow.capability_receipt_required",
+                    )
+                    self.blackboard_store.record_event(
+                        self.blackboard,
+                        "workflow_blocked",
+                        {
+                            "step": current_step,
+                            "status_code": status_code,
+                            "reason": "missing_capability_receipt",
+                            "required_event": "pr_synced",
+                        },
+                    )
+                    self.blackboard_store.set_current_step(self.blackboard, current_step)
+                    return PlaybookRunResult(
+                        final_step=current_step,
+                        final_status_code="MISSING_CAPABILITY_RECEIPT",
+                        completed=False,
+                    )
                 final_owner = HandoffOwner.DONE if next_step == "done" else HandoffOwner.USER
                 final_step = "done" if next_step == "done" else "user"
                 self.blackboard_store.update_handoff_contract(
