@@ -1,6 +1,7 @@
 """Tests for direct workflow step execution."""
 
 from collections.abc import Iterator
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -427,6 +428,61 @@ def test_generic_workflow_step_pr_prompt_overrides_external_state_guardrail(tmp_
     assert "Do not wait for, verify, or require a remote GitHub branch/PR" in prompt
     assert "Remote PR publish happens later in the host-side publish_output hook." in prompt
     assert "Before updating the workflow baton, verify whether the requested state change has actually happened in files or external state relevant to this phase." not in prompt
+
+
+def test_generic_workflow_step_writes_pr_publish_request_contract(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-pr-contract"
+    playbook = {
+        "playbook": {"id": "default"},
+        "roles": {"developer": {"default_agent": "David"}},
+        "steps": {
+            "pr": {
+                "skill": "pr",
+                "role": "developer",
+                "output_artifact": "pr",
+                "allowed_tools": ["Read"],
+                "valid_status_codes": ["CAFE_CONFIRMED"],
+                "on": {"CAFE_CONFIRMED": "_done"},
+            }
+        },
+    }
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("pr")
+    spec_file = issue_dir / "spec" / "iteration_001" / "output.md"
+    plan_file = issue_dir / "plan" / "iteration_001" / "output.md"
+    issue_yaml = issue_dir / "issue.yaml"
+    spec_file.parent.mkdir(parents=True, exist_ok=True)
+    plan_file.parent.mkdir(parents=True, exist_ok=True)
+    spec_file.write_text("# Spec\n", encoding="utf-8")
+    plan_file.write_text("# Plan\n", encoding="utf-8")
+    issue_yaml.write_text("base_branch: v02\n", encoding="utf-8")
+    store.set_artifact(state, "spec", str(spec_file))
+    store.set_artifact(state, "plan", str(plan_file))
+    agent_manager = FakeAgentManager("CAFE_CONFIRMED")
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="issue-pr-contract",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=agent_manager,
+        git_ops=FakeGitOperations(),
+        role_agent_map={"developer": "David"},
+    )
+
+    executor.execute_step("pr", playbook["steps"]["pr"], state)
+
+    publish_request = json.loads(
+        (issue_dir / "pr" / "iteration_001" / "publish_request.json").read_text(encoding="utf-8")
+    )
+    assert publish_request["capability"] == "publish_pr"
+    assert publish_request["script"] == "src/cafe/data/skills/pr/scripts/sync_pr.sh"
+    assert publish_request["args"] == {
+        "output": ".cafe/issues/issue-pr-contract/pr/iteration_001/output.md",
+        "base": "v02",
+    }
+    assert publish_request["permissions"]["network"] == ["github.com", "api.github.com"]
+    assert publish_request["permissions"]["writes"] == [".git", ".cafe/issues/issue-pr-contract"]
 
 
 def test_generic_workflow_step_collects_clarification_before_next_agent_run(

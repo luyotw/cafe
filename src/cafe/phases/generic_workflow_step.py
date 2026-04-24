@@ -77,11 +77,17 @@ class GenericWorkflowStepExecutor(Phase):
         output_file = self._get_versioned_file_path(step_name, self.iteration, self.phase_dir)
         checklist_file = iteration_dir / "checklist.md"
         questions_xml_file = iteration_dir / "questions.xml"
+        publish_request_file = iteration_dir / "publish_request.json"
         self._current_output_file = output_file
 
         if self.iteration > 1:
             self._copy_previous_version(step_name, self.iteration, self.phase_dir)
         self._ensure_output_file_initialized(step_name, output_file)
+        if step_name == "pr":
+            self._write_publish_request(
+                output_file=output_file,
+                publish_request_file=publish_request_file,
+            )
 
         skill_name = self._resolve_skill_name(step_def, self.iteration)
         agent_name = self._resolve_agent_name(step_def)
@@ -155,6 +161,7 @@ class GenericWorkflowStepExecutor(Phase):
                 "iteration_dir": iteration_dir,
                 "output_file": output_file,
                 "questions_xml_file": questions_xml_file,
+                "publish_request_file": publish_request_file if step_name == "pr" else None,
                 "blackboard_state": blackboard_state,
             },
         )
@@ -621,6 +628,55 @@ class GenericWorkflowStepExecutor(Phase):
             )
             return
         output_file.write_text("", encoding="utf-8")
+
+    def _write_publish_request(
+        self,
+        *,
+        output_file: Path,
+        publish_request_file: Path,
+    ) -> None:
+        publish_request_file.write_text(
+            json.dumps(
+                self._build_publish_request(output_file=output_file),
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+
+    def _build_publish_request(self, *, output_file: Path) -> Dict[str, Any]:
+        base_branch = self._get_issue_config_value(self.issue_dir / "issue.yaml", "base_branch")
+        resolved_base = str(base_branch or self.git_ops.get_main_branch())
+        return {
+            "capability": "publish_pr",
+            "script": "src/cafe/data/skills/pr/scripts/sync_pr.sh",
+            "args": {
+                "output": self._repo_relative_path(output_file),
+                "base": resolved_base,
+            },
+            "permissions": {
+                "network": ["github.com", "api.github.com"],
+                "writes": [
+                    ".git",
+                    self._repo_relative_path(self.issue_dir),
+                ],
+            },
+        }
+
+    def _repo_relative_path(self, path: Path) -> str:
+        repo_root = self._resolve_repo_root()
+        resolved = path.resolve()
+        try:
+            return str(resolved.relative_to(repo_root))
+        except ValueError:
+            return str(resolved)
+
+    def _resolve_repo_root(self) -> Path:
+        try:
+            repo_root = self.git_ops.get_repo_root()
+        except Exception:
+            repo_root = Path.cwd()
+        return Path(repo_root).resolve()
 
     @staticmethod
     def _display_path(path: Path) -> str:
