@@ -1,24 +1,47 @@
 """Blackboard-first workflow runtime.
 
-This runtime is introduced as a migration layer away from status-code-driven
-control flow. It currently handles the PR step through baton contracts and host
-capability receipts, while delegating legacy steps to ``PlaybookRunner``.
+This runtime is the new workflow-core entry point. It keeps blackboard/baton
+state as the primary source of truth, while temporarily delegating non-migrated
+steps to the legacy ``PlaybookRunner`` until they are rewritten.
 """
 
 from __future__ import annotations
 
 from collections import Counter
+from pathlib import Path
 from typing import Any, Dict, Optional
 
-from cafe.core.blackboard import HandoffIntent, HandoffOwner
+from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
 from cafe.core.playbook_runner import PlaybookRunResult, PlaybookRunner, StepExecutionResult
 from cafe.core.status_codes import PhaseStatusCode, StatusCodeParser
+from cafe.phases.generic_phase import GenericPhase
 
 
-class BlackboardWorkflowRuntime(PlaybookRunner):
+class BlackboardWorkflowRuntime:
     """Workflow runtime that prefers blackboard/baton-driven transitions."""
 
     BATON_DRIVEN_STEPS = {"pr"}
+
+    def __init__(
+        self,
+        *,
+        issue_dir: Path,
+        playbook: Dict,
+        generic_phase: GenericPhase,
+        executor: Any,
+    ) -> None:
+        self.issue_dir = issue_dir
+        self.playbook = playbook
+        self.generic_phase = generic_phase
+        self.executor = executor
+
+        playbook_meta = playbook["playbook"]
+        self.playbook_id = str(playbook_meta["id"])
+        self.steps: Dict = playbook["steps"]
+        self.start_step = str(playbook.get("entry_point") or next(iter(self.steps.keys())))
+
+        self.blackboard_store = BlackboardStore(issue_dir)
+        self.blackboard = self.blackboard_store.load_or_create(self.start_step, playbook_id=self.playbook_id)
 
     @staticmethod
     def _has_event(execution_result: Any, event_type: str) -> bool:
@@ -26,6 +49,68 @@ class BlackboardWorkflowRuntime(PlaybookRunner):
         if not isinstance(events, list):
             return False
         return any(isinstance(event, dict) and event.get("type") == event_type for event in events)
+
+    @staticmethod
+    def _default_pause_intent(current_step: str, status_code: str) -> HandoffIntent:
+        return PlaybookRunner._default_pause_intent(current_step, status_code)
+
+    def _validate_agent_baton(self, *, current_step: str) -> None:
+        contract = self.blackboard_store.load_handoff_contract(
+            self.blackboard,
+            allowed_steps=list(self.steps.keys()),
+            allow_legacy_text=True,
+        )
+        if contract.to_owner != HandoffOwner.AGENT:
+            raise RuntimeError(
+                f"Baton owner mismatch before step '{current_step}': expected agent, got {contract.to_owner.value}"
+            )
+        if contract.to_step != current_step:
+            raise RuntimeError(
+                f"Baton target mismatch before step '{current_step}': baton points to '{contract.to_step}'"
+            )
+
+    def _resolve_next_step(
+        self,
+        *,
+        current_step: str,
+        response: str,
+        status_code: str,
+    ) -> tuple[Optional[str], str]:
+        step = self.steps[current_step]
+        transitions = step.get("on", {})
+        goto_target = self.generic_phase.extract_goto_target(response)
+        if goto_target:
+            allowed_targets = {str(target) for target in step.get("allowed_goto", [])}
+            if goto_target in allowed_targets:
+                self.blackboard_store.record_event(
+                    self.blackboard,
+                    "goto",
+                    {
+                        "step": current_step,
+                        "goto_target": goto_target,
+                    },
+                )
+                return goto_target, "goto"
+            self.blackboard_store.record_event(
+                self.blackboard,
+                "goto_ignored",
+                {
+                    "step": current_step,
+                    "goto_target": goto_target,
+                    "reason": "not in allowed_goto",
+                },
+            )
+
+        if status_code not in transitions:
+            default_target = transitions.get("default")
+            if default_target:
+                return str(default_target), "default"
+            return None, "terminal"
+        return str(transitions[status_code]), "status"
+
+    @staticmethod
+    def _extract_handoff_intent(execution_result: Any) -> Optional[HandoffIntent]:
+        return PlaybookRunner._extract_handoff_intent(execution_result)
 
     def _pr_step_requires_publish_receipt(self, current_step: str) -> bool:
         if current_step != "pr":
@@ -65,9 +150,6 @@ class BlackboardWorkflowRuntime(PlaybookRunner):
         step_visits: Counter[str] = Counter()
 
         for hop_count in range(1, max_transitions + 1):
-            if current_step not in self.BATON_DRIVEN_STEPS:
-                return super().run(start_step=current_step, max_transitions=max_transitions - hop_count + 1)
-
             step_def = self.steps[current_step]
             self._validate_agent_baton(current_step=current_step)
             step_visits[current_step] += 1
@@ -459,7 +541,12 @@ class BlackboardWorkflowRuntime(PlaybookRunner):
         single_step: bool = False,
     ) -> PlaybookRunResult:
         if single_step:
-            return super().run(max_transitions=max_transitions, start_step=start_step, single_step=single_step)
+            return PlaybookRunner(
+                issue_dir=self.issue_dir,
+                playbook=self.playbook,
+                generic_phase=self.generic_phase,
+                executor=self.executor,
+            ).run(max_transitions=max_transitions, start_step=start_step, single_step=single_step)
 
         current_step = start_step or self.blackboard.current_step
         if current_step not in self.steps:
