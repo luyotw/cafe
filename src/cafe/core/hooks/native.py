@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 
+from cafe.core.blackboard import HandoffContract, HandoffIntent
 from cafe.core.hooks import HookResult, NoOpHook
 from cafe.core.questions_schema import parse_questions_xml, validate_questions_xml
 from cafe.core.status_codes import PhaseStatusCode
@@ -41,6 +42,33 @@ def _get_previous_iteration_status(phase: Any) -> Optional[str]:
     except Exception:
         return None
     return raw.get("status_code")
+
+
+def _is_publish_transition_confirmed(kwargs: dict[str, Any]) -> bool:
+    status_code = kwargs.get("status_code")
+    if status_code == PhaseStatusCode.CONFIRMED:
+        return True
+
+    if str(kwargs.get("step_name") or "") != "pr":
+        return False
+
+    context = kwargs.get("context")
+    if not isinstance(context, dict):
+        return False
+    next_step_path = context.get("next_step_path")
+    if not next_step_path:
+        return False
+
+    next_step_file = Path(str(next_step_path))
+    if not next_step_file.exists():
+        return False
+
+    try:
+        contract = HandoffContract.from_dict(json.loads(next_step_file.read_text(encoding="utf-8")))
+    except Exception:
+        return False
+
+    return contract.to_step == "done" and contract.intent == HandoffIntent.WORKFLOW_COMPLETE
 
 
 class UserInputCollector(NoOpHook):
@@ -493,7 +521,7 @@ class GitHubPRCreator(NoOpHook):
         )
 
     def _publish_output(self, **kwargs: Any) -> HookResult:
-        if kwargs.get("status_code") != PhaseStatusCode.CONFIRMED:
+        if not _is_publish_transition_confirmed(kwargs):
             return HookResult()
         if str(kwargs.get("step_name") or "") != "pr":
             return HookResult()
@@ -818,7 +846,7 @@ class LocalPRReviewer(NoOpHook):
     def run(self, **kwargs: Any) -> HookResult:
         if kwargs.get("stage") != "publish_output":
             return HookResult()
-        if kwargs.get("status_code") != PhaseStatusCode.CONFIRMED:
+        if not _is_publish_transition_confirmed(kwargs):
             return HookResult()
 
         phase = kwargs.get("phase")
@@ -900,8 +928,7 @@ class PRLinkOpener(NoOpHook):
         if kwargs.get("stage") != "publish_output":
             return HookResult()
 
-        status_code = kwargs.get("status_code")
-        if status_code != PhaseStatusCode.CONFIRMED:
+        if not _is_publish_transition_confirmed(kwargs):
             return HookResult()
 
         try:
