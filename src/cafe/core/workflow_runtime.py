@@ -9,12 +9,16 @@ from __future__ import annotations
 
 from collections import Counter
 from pathlib import Path
+import re
 from typing import Any, Dict, Optional
 
 from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
-from cafe.core.playbook_runner import PlaybookRunResult, PlaybookRunner, StepExecutionResult
+from cafe.core.playbook_runner import PlaybookRunResult, StepExecutionResult
 from cafe.core.status_codes import PhaseStatusCode, StatusCodeParser
 from cafe.phases.generic_phase import GenericPhase
+
+
+STATUS_TOKEN_PATTERN = re.compile(r"\bCAFE_[A-Z0-9_]+\b")
 
 
 class BlackboardWorkflowRuntime:
@@ -52,7 +56,13 @@ class BlackboardWorkflowRuntime:
 
     @staticmethod
     def _default_pause_intent(current_step: str, status_code: str) -> HandoffIntent:
-        return PlaybookRunner._default_pause_intent(current_step, status_code)
+        if status_code == PhaseStatusCode.READY_FOR_REVIEW.value and current_step in {"spec", "plan"}:
+            return HandoffIntent.CONFIRM_OUTPUT
+        if status_code == PhaseStatusCode.NEED_CLARIFICATION.value:
+            return HandoffIntent.NEED_CLARIFICATION
+        if status_code == PhaseStatusCode.NEED_PERMISSION.value:
+            return HandoffIntent.NEED_PERMISSION
+        return HandoffIntent.MANUAL_HANDOFF
 
     def _validate_agent_baton(self, *, current_step: str) -> None:
         contract = self.blackboard_store.load_handoff_contract(
@@ -110,7 +120,22 @@ class BlackboardWorkflowRuntime:
 
     @staticmethod
     def _extract_handoff_intent(execution_result: Any) -> Optional[HandoffIntent]:
-        return PlaybookRunner._extract_handoff_intent(execution_result)
+        events = getattr(execution_result, "events", None)
+        if not isinstance(events, list):
+            return None
+        for event in events:
+            if not isinstance(event, dict):
+                continue
+            if event.get("type") != "handoff_intent":
+                continue
+            raw_intent = event.get("intent")
+            if not isinstance(raw_intent, str):
+                continue
+            try:
+                return HandoffIntent(raw_intent)
+            except ValueError:
+                continue
+        return None
 
     def _pr_step_requires_publish_receipt(self, current_step: str) -> bool:
         if current_step != "pr":
@@ -142,14 +167,21 @@ class BlackboardWorkflowRuntime:
 
     @staticmethod
     def _resolve_step_iteration_limit(step_def: Dict) -> Optional[int]:
-        return PlaybookRunner._resolve_step_iteration_limit(step_def)
+        raw_limit = step_def.get("max_iterations")
+        if raw_limit is None:
+            return None
+        if isinstance(raw_limit, int):
+            return raw_limit
+        if isinstance(raw_limit, str) and raw_limit.isdigit():
+            return int(raw_limit)
+        return None
 
     @staticmethod
     def _extract_status_like_tokens(*, response: str, explicit_status_code: Optional[str]) -> set[str]:
-        return PlaybookRunner._extract_status_like_tokens(
-            response=response,
-            explicit_status_code=explicit_status_code,
-        )
+        tokens = set(STATUS_TOKEN_PATTERN.findall(response or ""))
+        if explicit_status_code and explicit_status_code.startswith("CAFE_"):
+            tokens.add(explicit_status_code)
+        return tokens
 
     def _resolve_review_confirmed_successor(self, current_step: str) -> Optional[str]:
         step = self.steps[current_step]
