@@ -239,3 +239,93 @@ def test_runtime_single_step_executes_pr_without_legacy_runner(tmp_path: Path) -
     blackboard = BlackboardStore(issue_dir).load_or_create("pr")
     assert blackboard.current_step == "pr"
     assert blackboard.artifacts["pr_result"].path == "p1"
+
+
+def test_runtime_legacy_step_uses_default_transition_when_status_missing(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo-default"
+    playbook = {
+        "playbook": {"id": "default"},
+        "steps": {
+            "spec": {
+                "skill": "spec_first",
+                "role": "pm",
+                "valid_status_codes": ["CAFE_CONFIRMED"],
+                "on": {"default": "plan"},
+            },
+            "plan": {
+                "skill": "spec_first",
+                "role": "developer",
+                "valid_status_codes": ["CAFE_CONFIRMED"],
+                "on": {"CAFE_CONFIRMED": "_done"},
+            },
+        },
+    }
+    calls: list[str] = []
+
+    def executor(step_name: str, step_def: dict, state: object):
+        calls.append(step_name)
+        if step_name == "spec":
+            return ("no explicit cafe code here", {})
+        return ("CAFE_CONFIRMED", {})
+
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        executor=executor,
+    )
+    result = runtime.run(start_step="spec")
+
+    assert result.completed is True
+    assert result.final_step == "plan"
+    assert result.final_status_code == "CAFE_CONFIRMED"
+    assert calls == ["spec", "plan"]
+
+
+def test_runtime_legacy_step_honors_review_confirmed_advance(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo-review-advance"
+    playbook = {
+        "playbook": {"id": "default"},
+        "steps": {
+            "review": {
+                "skill": "spec_first",
+                "role": "reviewer",
+                "valid_status_codes": ["CAFE_CONFIRMED"],
+                "on": {"CAFE_CONFIRMED": "review", "default": "pr"},
+            },
+            "pr": {
+                "skill": "spec_first",
+                "role": "developer",
+                "on": {"CAFE_CONFIRMED": "_done"},
+            },
+        },
+    }
+
+    def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
+        if step_name == "review":
+            return StepExecutionResult(
+                response="CAFE_CONFIRMED",
+                artifacts={},
+                status_code="CAFE_CONFIRMED",
+                events=[{"type": "review_confirmed_advance"}],
+            )
+        _write_baton(issue_dir, from_step="pr", to_owner="done", to_step="done", intent="workflow_complete")
+        return StepExecutionResult(
+            response="done",
+            artifacts={"pr_result": "p1"},
+            events=[{"type": "pr_synced", "url": "https://github.com/test/repo/pull/240"}],
+        )
+
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        executor=executor,
+    )
+    result = runtime.run(start_step="review")
+
+    assert result.completed is False
+    assert result.final_step == "review"
+    assert result.final_status_code == "CAFE_CONFIRMED"
+    blackboard = BlackboardStore(issue_dir).load_or_create("review")
+    assert blackboard.current_step == "pr"

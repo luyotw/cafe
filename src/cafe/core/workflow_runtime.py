@@ -466,15 +466,85 @@ class BlackboardWorkflowRuntime:
                 response=response,
                 explicit_status_code=explicit_status_code,
             )
+            allowed_status_codes = {
+                code.value for code in (valid_codes or list(PhaseStatusCode))
+            }
             if status_code_obj is None:
-                return PlaybookRunResult(
-                    final_step=current_step,
-                    final_status_code="NO_STATUS_CODE",
-                    completed=False,
-                )
+                handoff_next_step: Optional[str] = None
+                handoff_transition_source = "terminal"
+                if goto_target:
+                    handoff_next_step, handoff_transition_source = self._resolve_next_step(
+                        current_step=current_step,
+                        response=f"{response}\nCAFE_GOTO:{goto_target}",
+                        status_code="",
+                    )
+                if handoff_next_step is not None:
+                    status_code = "NO_STATUS_CODE"
+                    last_status_code = status_code
+                else:
+                    status_like_tokens = self._extract_status_like_tokens(
+                        response=response,
+                        explicit_status_code=explicit_status_code,
+                    )
+                    invalid_status_codes = sorted(
+                        token for token in status_like_tokens if token not in allowed_status_codes
+                    )
+                    default_next_step, _ = self._resolve_next_step(
+                        current_step=current_step,
+                        response="",
+                        status_code="",
+                    )
+                    if default_next_step is not None:
+                        event_name = "status_code_invalid" if invalid_status_codes else "status_code_missing"
+                        event_data: Dict[str, Any] = {"step": current_step, "response": response}
+                        if invalid_status_codes:
+                            event_data["invalid_status_codes"] = invalid_status_codes
+                            event_data["allowed_status_codes"] = sorted(allowed_status_codes)
+                        event_data["default_transition"] = default_next_step
+                        event_data["runtime"] = "legacy_until_boundary"
+                        self.blackboard_store.record_event(self.blackboard, event_name, event_data)
+                        handoff_next_step = default_next_step
+                        handoff_transition_source = "default"
+                        status_code = "NO_STATUS_CODE"
+                        last_status_code = status_code
+                    elif invalid_status_codes:
+                        self.blackboard_store.record_event(
+                            self.blackboard,
+                            "status_code_invalid",
+                            {
+                                "step": current_step,
+                                "invalid_status_codes": invalid_status_codes,
+                                "allowed_status_codes": sorted(allowed_status_codes),
+                                "response": response,
+                                "runtime": "legacy_until_boundary",
+                            },
+                        )
+                        return PlaybookRunResult(
+                            final_step=current_step,
+                            final_status_code="INVALID_STATUS_CODE",
+                            completed=False,
+                        )
+                    else:
+                        self.blackboard_store.record_event(
+                            self.blackboard,
+                            "status_code_missing",
+                            {
+                                "step": current_step,
+                                "response": response,
+                                "runtime": "legacy_until_boundary",
+                            },
+                        )
+                        return PlaybookRunResult(
+                            final_step=current_step,
+                            final_status_code="NO_STATUS_CODE",
+                            completed=False,
+                        )
+            else:
+                handoff_next_step = None
+                handoff_transition_source = "terminal"
+                status_code = status_code_obj.value
+                last_status_code = status_code
 
-            status_code = status_code_obj.value
-            last_status_code = status_code
             for key, value in artifacts.items():
                 self.blackboard_store.set_artifact(self.blackboard, key, value)
 
@@ -514,11 +584,26 @@ class BlackboardWorkflowRuntime:
                     completed=False,
                 )
 
-            next_step, transition_source = self._resolve_next_step(
-                current_step=current_step,
-                response=response if goto_target is None else f"{response}\nCAFE_GOTO:{goto_target}",
-                status_code=status_code,
-            )
+            review_confirmed_advance = False
+            if hasattr(execution_result, "events"):
+                review_confirmed_advance = any(
+                    isinstance(event, dict) and event.get("type") == "review_confirmed_advance"
+                    for event in execution_result.events
+                )
+
+            if handoff_next_step is not None:
+                next_step, transition_source = handoff_next_step, handoff_transition_source
+            else:
+                next_step, transition_source = self._resolve_next_step(
+                    current_step=current_step,
+                    response=response if goto_target is None else f"{response}\nCAFE_GOTO:{goto_target}",
+                    status_code=status_code,
+                )
+            if review_confirmed_advance and next_step == current_step:
+                advanced_step = self._resolve_review_confirmed_successor(current_step)
+                if advanced_step is not None:
+                    next_step = advanced_step
+                    transition_source = "review_confirmed_advance"
             if next_step is None:
                 return PlaybookRunResult(
                     final_step=current_step,
