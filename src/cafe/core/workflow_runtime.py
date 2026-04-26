@@ -140,6 +140,96 @@ class BlackboardWorkflowRuntime:
             return "NO_BATON_TRANSITION"
         return contract.status_code or f"BATON_{contract.intent.value.upper()}"
 
+    @staticmethod
+    def _resolve_step_iteration_limit(step_def: Dict) -> Optional[int]:
+        return PlaybookRunner._resolve_step_iteration_limit(step_def)
+
+    @staticmethod
+    def _extract_status_like_tokens(*, response: str, explicit_status_code: Optional[str]) -> set[str]:
+        return PlaybookRunner._extract_status_like_tokens(
+            response=response,
+            explicit_status_code=explicit_status_code,
+        )
+
+    def _resolve_review_confirmed_successor(self, current_step: str) -> Optional[str]:
+        step = self.steps[current_step]
+        transitions = step.get("on", {})
+        if not isinstance(transitions, dict):
+            return None
+
+        confirmed_target = transitions.get(PhaseStatusCode.CONFIRMED.value)
+        if confirmed_target and confirmed_target != current_step:
+            return str(confirmed_target)
+
+        for target in transitions.values():
+            if target != current_step:
+                return str(target)
+        return None
+
+    @staticmethod
+    def _normalize_execution_result(execution_result: Any) -> tuple[str, Dict[str, str], Optional[str], bool]:
+        auto_continue = False
+        explicit_status_code: Optional[str] = None
+        if isinstance(execution_result, StepExecutionResult):
+            return (
+                execution_result.response,
+                execution_result.artifacts,
+                execution_result.status_code,
+                execution_result.auto_continue,
+            )
+        if isinstance(execution_result, tuple) and len(execution_result) == 3:
+            response, artifacts, metadata = execution_result
+            if isinstance(metadata, dict):
+                auto_continue = bool(metadata.get("auto_continue"))
+                raw_status_code = metadata.get("status_code")
+                if isinstance(raw_status_code, str):
+                    explicit_status_code = raw_status_code
+            return response, artifacts, explicit_status_code, auto_continue
+        response, artifacts = execution_result
+        return response, artifacts, explicit_status_code, auto_continue
+
+    def _parse_legacy_status(
+        self,
+        *,
+        step_def: Dict,
+        response: str,
+        explicit_status_code: Optional[str],
+    ) -> tuple[Optional[PhaseStatusCode], Optional[str], list[PhaseStatusCode]]:
+        valid_codes = [
+            PhaseStatusCode(code)
+            for code in step_def.get("valid_status_codes", [])
+            if code in {item.value for item in PhaseStatusCode}
+        ]
+        status_code_obj = (
+            PhaseStatusCode(explicit_status_code)
+            if explicit_status_code in {item.value for item in PhaseStatusCode}
+            else None
+        )
+        _, goto_target = self.generic_phase.parse_response(
+            response=response,
+            valid_status_codes=valid_codes or list(PhaseStatusCode),
+        )
+        if status_code_obj is None:
+            status_code_obj, _ = self.generic_phase.parse_response(
+                response=response,
+                valid_status_codes=valid_codes or list(PhaseStatusCode),
+            )
+        if status_code_obj is None:
+            status_code_obj = StatusCodeParser.coerce_completion_alias(
+                response,
+                valid_codes or list(PhaseStatusCode),
+            )
+        return status_code_obj, goto_target, valid_codes
+
+    @staticmethod
+    def _validate_assignee_type(step_name: str, step_def: Dict) -> None:
+        assignee_type = str(step_def.get("assignee_type", "agent"))
+        if assignee_type != "agent":
+            raise RuntimeError(
+                f"Step '{step_name}' has assignee_type={assignee_type}, which is not supported in v0.2. "
+                "Use v0.3+ or change to assignee_type=agent."
+            )
+
     def _run_baton_driven_pr(
         self,
         *,
@@ -341,6 +431,19 @@ class BlackboardWorkflowRuntime:
             self._validate_agent_baton(current_step=current_step)
             step_visits[current_step] += 1
             visit_count = step_visits[current_step]
+            max_iterations = self._resolve_step_iteration_limit(step_def)
+            if max_iterations is not None and visit_count > max_iterations:
+                self.blackboard_store.record_event(
+                    self.blackboard,
+                    "loop_detected",
+                    {
+                        "step": current_step,
+                        "visits": visit_count,
+                        "max_iterations": max_iterations,
+                        "runtime": "legacy_until_boundary",
+                    },
+                )
+                raise RuntimeError(f"Step '{current_step}' exceeded max_iterations={max_iterations}")
 
             self.blackboard_store.record_event(
                 self.blackboard,
@@ -354,47 +457,15 @@ class BlackboardWorkflowRuntime:
             )
 
             execution_result = self.executor(current_step, step_def, self.blackboard)
-            auto_continue = False
-            explicit_status_code: Optional[str] = None
-            if isinstance(execution_result, StepExecutionResult):
-                response = execution_result.response
-                artifacts = execution_result.artifacts
-                explicit_status_code = execution_result.status_code
-                auto_continue = execution_result.auto_continue
-            elif isinstance(execution_result, tuple) and len(execution_result) == 3:
-                response, artifacts, metadata = execution_result
-                if isinstance(metadata, dict):
-                    auto_continue = bool(metadata.get("auto_continue"))
-                    raw_status_code = metadata.get("status_code")
-                    if isinstance(raw_status_code, str):
-                        explicit_status_code = raw_status_code
-            else:
-                response, artifacts = execution_result
-
-            valid_codes = [
-                PhaseStatusCode(code)
-                for code in step_def.get("valid_status_codes", [])
-                if code in {item.value for item in PhaseStatusCode}
-            ]
-            status_code_obj = (
-                PhaseStatusCode(explicit_status_code)
-                if explicit_status_code in {item.value for item in PhaseStatusCode}
-                else None
+            self._validate_assignee_type(current_step, step_def)
+            response, artifacts, explicit_status_code, auto_continue = self._normalize_execution_result(
+                execution_result
             )
-            _, goto_target = self.generic_phase.parse_response(
+            status_code_obj, goto_target, valid_codes = self._parse_legacy_status(
+                step_def=step_def,
                 response=response,
-                valid_status_codes=valid_codes or list(PhaseStatusCode),
+                explicit_status_code=explicit_status_code,
             )
-            if status_code_obj is None:
-                status_code_obj, _ = self.generic_phase.parse_response(
-                    response=response,
-                    valid_status_codes=valid_codes or list(PhaseStatusCode),
-                )
-            if status_code_obj is None:
-                status_code_obj = StatusCodeParser.coerce_completion_alias(
-                    response,
-                    valid_codes or list(PhaseStatusCode),
-                )
             if status_code_obj is None:
                 return PlaybookRunResult(
                     final_step=current_step,
@@ -533,6 +604,81 @@ class BlackboardWorkflowRuntime:
         )
         raise RuntimeError(f"Playbook run reached max transition limit ({max_transitions})")
 
+    def _run_single_step(self, *, current_step: str) -> PlaybookRunResult:
+        step_def = self.steps[current_step]
+        self._validate_agent_baton(current_step=current_step)
+        self._validate_assignee_type(current_step, step_def)
+        self.blackboard_store.record_event(
+            self.blackboard,
+            "step_started",
+            {
+                "step": current_step,
+                "visit": 1,
+                "hop": 1,
+                "runtime": "single_step",
+            },
+        )
+        execution_result = self.executor(current_step, step_def, self.blackboard)
+
+        if current_step in self.BATON_DRIVEN_STEPS:
+            if isinstance(execution_result, StepExecutionResult):
+                artifacts = execution_result.artifacts
+            elif isinstance(execution_result, tuple) and len(execution_result) >= 2:
+                _, artifacts = execution_result[:2]
+            else:
+                _, artifacts = execution_result
+            status_code = self._status_from_contract(current_step, execution_result)
+        else:
+            response, artifacts, explicit_status_code, _ = self._normalize_execution_result(execution_result)
+            status_code_obj, _, _ = self._parse_legacy_status(
+                step_def=step_def,
+                response=response,
+                explicit_status_code=explicit_status_code,
+            )
+            if status_code_obj is None:
+                self.blackboard_store.record_event(
+                    self.blackboard,
+                    "status_code_missing",
+                    {
+                        "step": current_step,
+                        "response": response,
+                        "runtime": "single_step",
+                    },
+                )
+                return PlaybookRunResult(
+                    final_step=current_step,
+                    final_status_code="NO_STATUS_CODE",
+                    completed=False,
+                )
+            status_code = status_code_obj.value
+
+        for key, value in artifacts.items():
+            self.blackboard_store.set_artifact(self.blackboard, key, value)
+
+        self.blackboard_store.update_handoff_contract(
+            self.blackboard,
+            from_step=current_step,
+            to_owner=HandoffOwner.AGENT,
+            to_step=current_step,
+            intent=HandoffIntent.AWAIT_AGENT,
+            status_code=status_code,
+            source="workflow.single_step",
+        )
+        self.blackboard_store.record_event(
+            self.blackboard,
+            "single_step_completed",
+            {
+                "step": current_step,
+                "status_code": status_code,
+                "runtime": "single_step",
+            },
+        )
+        return PlaybookRunResult(
+            final_step=current_step,
+            final_status_code=status_code,
+            completed=True,
+        )
+
     def run(
         self,
         *,
@@ -541,12 +687,20 @@ class BlackboardWorkflowRuntime:
         single_step: bool = False,
     ) -> PlaybookRunResult:
         if single_step:
-            return PlaybookRunner(
-                issue_dir=self.issue_dir,
-                playbook=self.playbook,
-                generic_phase=self.generic_phase,
-                executor=self.executor,
-            ).run(max_transitions=max_transitions, start_step=start_step, single_step=single_step)
+            current_step = start_step or self.blackboard.current_step
+            if current_step not in self.steps:
+                raise ValueError(f"Unknown playbook step '{current_step}'")
+            if start_step is not None:
+                self.blackboard_store.set_current_step(self.blackboard, current_step)
+                self.blackboard_store.update_handoff_contract(
+                    self.blackboard,
+                    from_step=current_step,
+                    to_owner=HandoffOwner.AGENT,
+                    to_step=current_step,
+                    intent=HandoffIntent.AWAIT_AGENT,
+                    source="workflow.start_step_override",
+                )
+            return self._run_single_step(current_step=current_step)
 
         current_step = start_step or self.blackboard.current_step
         if current_step not in self.steps:
