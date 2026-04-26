@@ -12,6 +12,7 @@ from typing import Any, Dict, Optional
 
 from cafe.core.blackboard import HandoffIntent, HandoffOwner
 from cafe.core.playbook_runner import PlaybookRunResult, PlaybookRunner, StepExecutionResult
+from cafe.core.status_codes import PhaseStatusCode, StatusCodeParser
 
 
 class BlackboardWorkflowRuntime(PlaybookRunner):
@@ -241,6 +242,215 @@ class BlackboardWorkflowRuntime(PlaybookRunner):
         )
         raise RuntimeError(f"Playbook run reached max transition limit ({max_transitions})")
 
+    def _run_legacy_until_boundary(
+        self,
+        *,
+        current_step: str,
+        max_transitions: int,
+    ) -> PlaybookRunResult:
+        last_status_code = ""
+        step_visits: Counter[str] = Counter()
+
+        for hop_count in range(1, max_transitions + 1):
+            if current_step in self.BATON_DRIVEN_STEPS:
+                return self._run_baton_driven_pr(current_step=current_step, max_transitions=max_transitions - hop_count + 1)
+
+            step_def = self.steps[current_step]
+            self._validate_agent_baton(current_step=current_step)
+            step_visits[current_step] += 1
+            visit_count = step_visits[current_step]
+
+            self.blackboard_store.record_event(
+                self.blackboard,
+                "step_started",
+                {
+                    "step": current_step,
+                    "visit": visit_count,
+                    "hop": hop_count,
+                    "runtime": "legacy_until_boundary",
+                },
+            )
+
+            execution_result = self.executor(current_step, step_def, self.blackboard)
+            auto_continue = False
+            explicit_status_code: Optional[str] = None
+            if isinstance(execution_result, StepExecutionResult):
+                response = execution_result.response
+                artifacts = execution_result.artifacts
+                explicit_status_code = execution_result.status_code
+                auto_continue = execution_result.auto_continue
+            elif isinstance(execution_result, tuple) and len(execution_result) == 3:
+                response, artifacts, metadata = execution_result
+                if isinstance(metadata, dict):
+                    auto_continue = bool(metadata.get("auto_continue"))
+                    raw_status_code = metadata.get("status_code")
+                    if isinstance(raw_status_code, str):
+                        explicit_status_code = raw_status_code
+            else:
+                response, artifacts = execution_result
+
+            valid_codes = [
+                PhaseStatusCode(code)
+                for code in step_def.get("valid_status_codes", [])
+                if code in {item.value for item in PhaseStatusCode}
+            ]
+            status_code_obj = (
+                PhaseStatusCode(explicit_status_code)
+                if explicit_status_code in {item.value for item in PhaseStatusCode}
+                else None
+            )
+            _, goto_target = self.generic_phase.parse_response(
+                response=response,
+                valid_status_codes=valid_codes or list(PhaseStatusCode),
+            )
+            if status_code_obj is None:
+                status_code_obj, _ = self.generic_phase.parse_response(
+                    response=response,
+                    valid_status_codes=valid_codes or list(PhaseStatusCode),
+                )
+            if status_code_obj is None:
+                status_code_obj = StatusCodeParser.coerce_completion_alias(
+                    response,
+                    valid_codes or list(PhaseStatusCode),
+                )
+            if status_code_obj is None:
+                return PlaybookRunResult(
+                    final_step=current_step,
+                    final_status_code="NO_STATUS_CODE",
+                    completed=False,
+                )
+
+            status_code = status_code_obj.value
+            last_status_code = status_code
+            for key, value in artifacts.items():
+                self.blackboard_store.set_artifact(self.blackboard, key, value)
+
+            self.blackboard_store.record_event(
+                self.blackboard,
+                "step_completed",
+                {
+                    "step": current_step,
+                    "status_code": status_code,
+                    "visit": visit_count,
+                    "hop": hop_count,
+                    "runtime": "legacy_until_boundary",
+                },
+            )
+
+            if not auto_continue and status_code in {
+                PhaseStatusCode.READY_FOR_REVIEW.value,
+                PhaseStatusCode.NEED_CLARIFICATION.value,
+                PhaseStatusCode.NEED_PERMISSION.value,
+            }:
+                pause_intent = self._extract_handoff_intent(execution_result) or self._default_pause_intent(
+                    current_step, status_code
+                )
+                self.blackboard_store.update_handoff_contract(
+                    self.blackboard,
+                    from_step=current_step,
+                    to_owner=HandoffOwner.USER,
+                    to_step="user",
+                    intent=pause_intent,
+                    status_code=status_code,
+                    source="workflow.pause",
+                )
+                self.blackboard_store.set_current_step(self.blackboard, "user")
+                return PlaybookRunResult(
+                    final_step=current_step,
+                    final_status_code=status_code,
+                    completed=False,
+                )
+
+            next_step, transition_source = self._resolve_next_step(
+                current_step=current_step,
+                response=response if goto_target is None else f"{response}\nCAFE_GOTO:{goto_target}",
+                status_code=status_code,
+            )
+            if next_step is None:
+                return PlaybookRunResult(
+                    final_step=current_step,
+                    final_status_code=status_code,
+                    completed=False,
+                )
+            if next_step in self.BATON_DRIVEN_STEPS:
+                self.blackboard_store.record_decision(
+                    self.blackboard,
+                    {"from": current_step, "to": next_step, "status_code": status_code},
+                )
+                self.blackboard_store.record_event(
+                    self.blackboard,
+                    "transition",
+                    {
+                        "from": current_step,
+                        "to": next_step,
+                        "status_code": status_code,
+                        "source": transition_source,
+                        "runtime": "boundary_handoff",
+                    },
+                )
+                self.blackboard_store.set_current_step(self.blackboard, next_step)
+                self.blackboard_store.update_handoff_contract(
+                    self.blackboard,
+                    from_step=current_step,
+                    to_owner=HandoffOwner.AGENT,
+                    to_step=next_step,
+                    intent=HandoffIntent.AWAIT_AGENT,
+                    status_code=status_code,
+                    source="workflow.transition",
+                )
+                return PlaybookRunResult(
+                    final_step=current_step,
+                    final_status_code=status_code,
+                    completed=False,
+                )
+
+            if next_step not in self.steps:
+                final_step = "done" if next_step == "done" else "user"
+                self.blackboard_store.set_current_step(self.blackboard, final_step)
+                return PlaybookRunResult(
+                    final_step=current_step,
+                    final_status_code=status_code,
+                    completed=True,
+                )
+
+            self.blackboard_store.record_decision(
+                self.blackboard,
+                {"from": current_step, "to": next_step, "status_code": status_code},
+            )
+            self.blackboard_store.record_event(
+                self.blackboard,
+                "transition",
+                {
+                    "from": current_step,
+                    "to": next_step,
+                    "status_code": status_code,
+                    "source": transition_source,
+                    "runtime": "legacy_until_boundary",
+                },
+            )
+            self.blackboard_store.set_current_step(self.blackboard, next_step)
+            self.blackboard_store.update_handoff_contract(
+                self.blackboard,
+                from_step=current_step,
+                to_owner=HandoffOwner.AGENT,
+                to_step=next_step,
+                intent=HandoffIntent.AWAIT_AGENT,
+                status_code=status_code,
+                source="workflow.transition",
+            )
+            current_step = next_step
+
+        self.blackboard_store.record_event(
+            self.blackboard,
+            "hop_limit_reached",
+            {
+                "step": current_step,
+                "max_transitions": max_transitions,
+                "last_status_code": last_status_code,
+            },
+        )
+        raise RuntimeError(f"Playbook run reached max transition limit ({max_transitions})")
+
     def run(
         self,
         *,
@@ -267,6 +477,6 @@ class BlackboardWorkflowRuntime(PlaybookRunner):
             )
 
         if current_step not in self.BATON_DRIVEN_STEPS:
-            return super().run(max_transitions=max_transitions, start_step=start_step, single_step=single_step)
+            return self._run_legacy_until_boundary(current_step=current_step, max_transitions=max_transitions)
 
         return self._run_baton_driven_pr(current_step=current_step, max_transitions=max_transitions)

@@ -33,6 +33,11 @@ def _write_baton(issue_dir: Path, *, from_step: str, to_owner: str, to_step: str
     )
 
 
+def _pr_user_handoff(issue_dir: Path) -> StepExecutionResult:
+    _write_baton(issue_dir, from_step="pr", to_owner="user", to_step="user", intent="manual_handoff")
+    return StepExecutionResult(response="done", artifacts={})
+
+
 def test_single_step_alias_updates_workflow_pointer_to_requested_step(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-210"
@@ -93,10 +98,13 @@ def test_workflow_command_runs_dry_mode(tmp_path: Path, monkeypatch) -> None:
 def test_workflow_command_runs_execute_mode(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     executed_steps: list[str] = []
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-200"
 
     class FakeExecutor:
         def execute_step(self, step_name: str, step_def: dict, blackboard_state: object):
             executed_steps.append(step_name)
+            if step_name == "pr":
+                return _pr_user_handoff(issue_dir)
             return ("CAFE_CONFIRMED", {str(step_def.get("output_artifact", step_name)): f"{step_name}/output.md"})
 
     with (
@@ -154,6 +162,38 @@ def test_workflow_command_prints_pr_url_when_pr_step_reports_sync_event(tmp_path
     assert executed_steps == ["spec", "plan", "develop", "review", "pr"]
 
 
+def test_workflow_command_reenters_with_pr_runtime_after_boundary_handoff(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    executed_steps: list[str] = []
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-242"
+
+    class FakeExecutor:
+        def execute_step(self, step_name: str, step_def: dict, blackboard_state: object):
+            executed_steps.append(step_name)
+            if step_name == "pr":
+                _write_baton(issue_dir, from_step="pr", to_owner="done", to_step="done", intent="workflow_complete")
+                return StepExecutionResult(
+                    response="done",
+                    artifacts={str(step_def.get("output_artifact", step_name)): f"{step_name}/output.md"},
+                    events=[{"type": "pr_synced", "url": "https://github.com/test/repo/pull/242"}],
+                )
+            return ("CAFE_CONFIRMED", {str(step_def.get("output_artifact", step_name)): f"{step_name}/output.md"})
+
+    with (
+        patch("cafe.ui.cli.GitOperations") as mock_git_cls,
+        patch("cafe.ui.cli._build_workflow_step_executor", return_value=FakeExecutor()),
+    ):
+        git = MagicMock()
+        git.get_current_branch.return_value = "issue-242"
+        mock_git_cls.return_value = git
+
+        result = runner.invoke(app, ["workflow", "--playbook", "default", "--execute"])
+
+    assert result.exit_code == 0
+    assert "PR synced" in result.stdout
+    assert executed_steps == ["spec", "plan", "develop", "review", "pr"]
+
+
 def test_workflow_command_consumes_chat_baton_before_execution(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     executed_steps: list[str] = []
@@ -179,6 +219,8 @@ def test_workflow_command_consumes_chat_baton_before_execution(tmp_path: Path, m
     class FakeExecutor:
         def execute_step(self, step_name: str, step_def: dict, blackboard_state: object) -> tuple[str, dict[str, str]]:
             executed_steps.append(step_name)
+            if step_name == "pr":
+                return _pr_user_handoff(issue_dir)
             return ("CAFE_CONFIRMED", {str(step_def.get("output_artifact", step_name)): f"{step_name}/output.md"})
 
     with (
@@ -227,6 +269,8 @@ def test_workflow_command_does_not_consume_chat_baton_with_uncommitted_changes(t
     class FakeExecutor:
         def execute_step(self, step_name: str, step_def: dict, blackboard_state: object) -> tuple[str, dict[str, str]]:
             executed_steps.append(step_name)
+            if step_name == "pr":
+                return _pr_user_handoff(issue_dir)
             return ("CAFE_CONFIRMED", {})
 
     with (
@@ -329,6 +373,8 @@ def test_workflow_command_user_owner_can_set_next_phase(tmp_path: Path, monkeypa
     class FakeExecutor:
         def execute_step(self, step_name: str, step_def: dict, blackboard_state: object) -> tuple[str, dict[str, str]]:
             executed_steps.append(step_name)
+            if step_name == "pr":
+                return _pr_user_handoff(issue_dir)
             return ("CAFE_CONFIRMED", {})
 
     with (
@@ -420,8 +466,10 @@ def test_workflow_command_user_owner_can_chat_and_resume_from_baton(tmp_path: Pa
     )
 
     class FakeExecutor:
-        def execute_step(self, step_name: str, step_def: dict, blackboard_state: object) -> tuple[str, dict[str, str]]:
+        def execute_step(self, step_name: str, step_def: dict, blackboard_state: object):
             executed_steps.append(step_name)
+            if step_name == "pr":
+                return _pr_user_handoff(issue_dir)
             return ("CAFE_CONFIRMED", {})
 
     def fake_launch_chat(role: str, issue_name: str) -> int:
@@ -562,6 +610,8 @@ def test_workflow_command_done_phase_can_restart_workflow(tmp_path: Path, monkey
     class FakeExecutor:
         def execute_step(self, step_name: str, step_def: dict, blackboard_state: object):
             executed_steps.append(step_name)
+            if step_name == "pr":
+                return _pr_user_handoff(issue_dir)
             return ("CAFE_CONFIRMED", {})
 
     with (

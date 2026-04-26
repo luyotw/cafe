@@ -5931,6 +5931,25 @@ def workflow(
             output_path = issue_dir / step_name / "output.md"
             output_path.parent.mkdir(parents=True, exist_ok=True)
             output_path.write_text(f"# {step_name}\n\nDry-run output\n", encoding="utf-8")
+            if step_name == "pr":
+                store = BlackboardStore(issue_dir)
+                blackboard = store.load_or_create(
+                    str(playbook_data.get("entry_point") or next(iter(playbook_data["steps"].keys()))),
+                    playbook_id=str(playbook_data["playbook"]["id"]),
+                )
+                store.update_handoff_contract(
+                    blackboard,
+                    from_step="pr",
+                    to_owner=HandoffOwner.DONE,
+                    to_step="done",
+                    intent=HandoffIntent.WORKFLOW_COMPLETE,
+                    source="workflow.dry_run",
+                )
+                return StepExecutionResult(
+                    response="dry run",
+                    artifacts={str(output_key): str(output_path)},
+                    events=[{"type": "pr_synced", "url": "https://example.com/dry-run-pr"}],
+                )
             return "CAFE_CONFIRMED", {str(output_key): str(output_path)}
         step_executor = None if dry_run else _build_workflow_step_executor(
             config_manager=config_manager,
@@ -6055,6 +6074,13 @@ def workflow(
                 str(playbook_data.get("entry_point") or next(iter(playbook_data["steps"].keys()))),
                 playbook_id=str(playbook_data["playbook"]["id"]),
             )
+            if (
+                not single_step
+                and latest_blackboard.current_step == "pr"
+                and effective_start_step != "pr"
+            ):
+                pending_start_step = "pr"
+                continue
             if interactive and not dry_run and not single_step and latest_blackboard.current_step == "user":
                 pending_start_step = "user"
                 continue
