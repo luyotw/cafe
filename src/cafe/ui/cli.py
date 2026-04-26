@@ -22,7 +22,8 @@ from rich.console import Console
 from cafe.agents.manager import AgentManager
 from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
 from cafe.core.git import GitOperations
-from cafe.core.playbook_runner import PlaybookRunner, StepExecutionResult
+from cafe.core.playbook_runner import StepExecutionResult
+from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
 from cafe.core.permission import PermissionHandler
 from cafe.core.types import AgentCLI, AgentConfig, CriticalPhaseError
 from cafe.phases.generic_phase import GenericPhase
@@ -648,7 +649,7 @@ def _execute_single_step_alias(
     )
     step_executor.agent_manager.show_prompt = show_prompt
 
-    runner = PlaybookRunner(
+    runner = BlackboardWorkflowRuntime(
         issue_dir=issue_dir,
         playbook=playbook_data,
         generic_phase=generic_phase,
@@ -6043,7 +6044,7 @@ def workflow(
                 f"[dim]Workflow context[/dim] playbook={playbook_data['playbook']['id']} step={effective_start_step}"
             )
 
-            runner = PlaybookRunner(
+            runner = BlackboardWorkflowRuntime(
                 issue_dir=issue_dir,
                 playbook=playbook_data,
                 generic_phase=generic_phase,

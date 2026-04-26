@@ -14,6 +14,25 @@ from cafe.utils.config import ConfigManager
 runner = CliRunner()
 
 
+def _write_baton(issue_dir: Path, *, from_step: str, to_owner: str, to_step: str, intent: str) -> None:
+    issue_dir.mkdir(parents=True, exist_ok=True)
+    (issue_dir / "next_step.txt").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "from_step": from_step,
+                "to_owner": to_owner,
+                "to_step": to_step,
+                "intent": intent,
+                "status_code": "",
+                "created_at": "2026-04-26T23:00:00+08:00",
+                "source": "test",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
 def test_single_step_alias_updates_workflow_pointer_to_requested_step(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-210"
@@ -76,7 +95,7 @@ def test_workflow_command_runs_execute_mode(tmp_path: Path, monkeypatch) -> None
     executed_steps: list[str] = []
 
     class FakeExecutor:
-        def execute_step(self, step_name: str, step_def: dict, blackboard_state: object) -> tuple[str, dict[str, str]]:
+        def execute_step(self, step_name: str, step_def: dict, blackboard_state: object):
             executed_steps.append(step_name)
             return ("CAFE_CONFIRMED", {str(step_def.get("output_artifact", step_name)): f"{step_name}/output.md"})
 
@@ -451,9 +470,10 @@ def test_workflow_command_enters_user_phase_immediately_after_agent_handoff(tmp_
     )
 
     class FakeExecutor:
-        def execute_step(self, step_name: str, step_def: dict, blackboard_state: object) -> tuple[str, dict[str, str]]:
+        def execute_step(self, step_name: str, step_def: dict, blackboard_state: object):
             assert step_name == "pr"
-            return ("CAFE_CONFIRMED", {})
+            _write_baton(issue_dir, from_step="pr", to_owner="user", to_step="user", intent="manual_handoff")
+            return StepExecutionResult(response="done", artifacts={})
 
     with (
         patch("cafe.ui.cli.GitOperations") as mock_git_cls,
@@ -495,9 +515,10 @@ def test_workflow_command_noninteractive_stops_after_agent_handoff_to_user(tmp_p
     )
 
     class FakeExecutor:
-        def execute_step(self, step_name: str, step_def: dict, blackboard_state: object) -> tuple[str, dict[str, str]]:
+        def execute_step(self, step_name: str, step_def: dict, blackboard_state: object):
             assert step_name == "pr"
-            return ("CAFE_CONFIRMED", {})
+            _write_baton(issue_dir, from_step="pr", to_owner="user", to_step="user", intent="manual_handoff")
+            return StepExecutionResult(response="done", artifacts={})
 
     with (
         patch("cafe.ui.cli.GitOperations") as mock_git_cls,
@@ -539,7 +560,7 @@ def test_workflow_command_done_phase_can_restart_workflow(tmp_path: Path, monkey
     )
 
     class FakeExecutor:
-        def execute_step(self, step_name: str, step_def: dict, blackboard_state: object) -> tuple[str, dict[str, str]]:
+        def execute_step(self, step_name: str, step_def: dict, blackboard_state: object):
             executed_steps.append(step_name)
             return ("CAFE_CONFIRMED", {})
 
